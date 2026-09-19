@@ -514,10 +514,15 @@ function base64Decode(input: string): Uint8Array {
  * Split a raw RFC 5322 message into raw header lines and a raw body.
  *
  * RFC 5322 mandates CRLF, but messages that round-tripped through mailbox
- * storage often carry bare LF, so either separator is accepted. A folded
- * continuation (a line ending followed by WSP) is never a header/body
- * boundary: the boundary is two consecutive line endings whose following
- * character is not WSP.
+ * storage often carry bare LF, so either separator is accepted.
+ *
+ * RFC 5322 §2.2 ends the header section at the **first** empty line,
+ * unconditionally. What follows that empty line is body, WSP or not: a fold
+ * cannot open there, because §2.2.3 defines a fold as a line ending that is
+ * itself followed by WSP, with no empty line in between. Requiring the
+ * character after the empty line to be non-WSP swallowed every body beginning
+ * with SP or HTAB into the header region, where it was never hashed — and
+ * RFC 6376 §3.4.5 Example 1's own body begins with a space.
  */
 export function splitMessage(raw: string): { headers: string[]; body: string } {
   let headerEnd = -1
@@ -535,15 +540,11 @@ export function splitMessage(raw: string): { headers: string[]; body: string } {
     else if (at(j) === 0x0a) len2 = 1
     if (!len2) continue
 
-    // Two consecutive line endings. The boundary only holds when the next
-    // character does not open a folded continuation.
-    const after = at(j + len2)
-    if (after !== 0x20 && after !== 0x09) {
-      headerEnd = i
-      sepLen = len1 + len2
-      break
-    }
-    i = j + len2
+    // Two consecutive line endings: the header section ends here, whatever
+    // the next character is.
+    headerEnd = i
+    sepLen = len1 + len2
+    break
   }
 
   if (headerEnd === -1) {

@@ -122,6 +122,8 @@ interface SignOptions {
   names?: string[]
   /** Extra tags before b=, e.g. `l=17` or `x=1800000000`. */
   extraTags?: string
+  /** Tags placed *after* b=, which §3.7 step 2 leaves inside the signed bytes. */
+  afterB?: string
   ed25519?: boolean
   foldSignature?: boolean
 }
@@ -160,7 +162,8 @@ async function sign(
   // that followed it. Simple canonicalization keeps that byte verbatim (dkimpy:
   // `DKIM-Signature: v=1; …`), and relaxed mode strips it again, so one call
   // shape serves both modes.
-  const field = canonHeader("DKIM-Signature", ` ${stub}; b=`, mode).replace(/\r\n$/, "")
+  const tail = options.afterB ?? ""
+  const field = canonHeader("DKIM-Signature", ` ${stub}; b=${tail}`, mode).replace(/\r\n$/, "")
   const input = head.join("") + field
 
   const pair = options.ed25519 ? await ed25519() : await rsa()
@@ -177,7 +180,7 @@ async function sign(
       : await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, pair.privateKey, message),
   )
 
-  const rendered = `${stub}; b=${base64(signature)}`
+  const rendered = `${stub}; b=${base64(signature)}${tail}`
   const block = options.foldSignature ? rendered.replace(/; /g, "; \r\n\t") : rendered
   const publicKey = options.ed25519 ? await ed25519Key(await ed25519()) : await rsaKey(await rsa())
   return {
@@ -289,6 +292,19 @@ const DKIMPY_VERIFIED = [
   "dkimpy-l25",
 ]
 
+/**
+ * Messages signed by `fixtures/SOURCES.md`'s OpenSSL-only script: no dkimpy, a
+ * canonicalizer written from the RFC text, and the signature checked with
+ * `openssl dgst -sha256 -verify` before the fixture was written. They pin the
+ * §2.2 header/body boundary: a body that starts with SP or HTAB.
+ */
+const OPENSSL_VERIFIED = [
+  "openssl-sp-body-simple",
+  "openssl-sp-body-relaxed",
+  "openssl-tab-body-simple",
+  "openssl-tab-body-relaxed",
+]
+
 describe("differential: messages dkimpy signs and itself verifies", () => {
   for (const name of DKIMPY_VERIFIED) {
     it(`verifies ${name}`, async () => {
@@ -309,6 +325,20 @@ describe("differential: messages dkimpy signs and itself verifies", () => {
     assertEquals(result.parsed?.expiration, 1800000000n)
   })
 
+  it("verifies a signature whose x= tag follows b= under simple", async () => {
+    // The claim that a `b=` tag which is not final cannot be emptied byte-exactly
+    // was false in either mode: the deletion is bounded by the parsed value, so
+    // what follows `b=` stays inside the signed field and is authenticated.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
+      mode: "simple",
+      extraTags: "l=17",
+      afterB: "; x=1800000000",
+    })
+    const result = await verifyDkim(raw, publicKey, { now: 1700001000n })
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.parsed?.expiration, 1800000000n)
+  })
+
   for (const attack of ["; x=9999999999", "; i=@attacker.invalid", "; l=1"]) {
     it(`rejects ${attack} appended to a genuine signature`, async () => {
       // The payload lands inside the hashed field, so it changes the signed
@@ -324,6 +354,96 @@ describe("differential: messages dkimpy signs and itself verifies", () => {
       assertEquals(result.reason, "signature did not verify against public key")
     })
   }
+})
+
+describe("differential: openssl-signed vectors for the §2.2 boundary", () => {
+  // §3.4.5 Example 1's own body begins with a space, so these are the ordinary
+  // case, not an exotic one. Every message here was signed by an independent
+  // script (`fixtures/SOURCES.md`) whose canonicalization shares no code with
+  // this package, and each signature was checked with `openssl dgst -verify`
+  // before the fixture was written.
+  for (const name of OPENSSL_VERIFIED) {
+    it(`verifies ${name}`, async () => {
+      const { raw, record } = await fixture(name)
+      const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
+      assert(result.valid, `reason=${result.reason}`)
+      assert(result.computedBodyHash === result.parsed?.bodyHash)
+    })
+  }
+})
+
+describe("header/body boundary (§2.2)", () => {
+  it("rejects a body smuggled in behind a leading SP", async () => {
+    // The forgery this pins: `dkimpy-empty-body-simple` signs an empty body, so
+    // its bh= is the §3.4.5 empty-body digest. Injecting " \r\n<payload>" after
+    // the first empty line used to leave the boundary unfound, the whole message
+    // classified as headers and the body hashed as empty — the attacker's text
+    // verified with the originally signed digest, i.e. was never hashed.
+    const { raw, record } = await fixture("dkimpy-empty-body-simple")
+    const key = parseDkimPublicKey(record) ?? undefined
+    assert((await verifyDkim(raw, key)).valid)
+
+    const payload = " \r\nPlease send the payment to attacker.example\r\n"
+    const boundary = raw.indexOf("\r\n\r\n") + 4
+    const forged = raw.slice(0, boundary) + payload + raw.slice(boundary)
+    assert(forged.includes("attacker.example"), "the payload must be in the message")
+    assertEquals(splitMessage(forged).body, payload)
+
+    const result = await verifyDkim(forged, key)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "body hash mismatch (body modified after signing)")
+    assert(
+      result.computedBodyHash !== "frcCV1k9oG9oKj3dpUqdJg1PxRT2RSN/XKdLCPjaYaY=",
+      "the payload must not hash to the empty-body digest",
+    )
+  })
+})
+
+// --- verifier policy RFC 6376 leaves to the caller -------------------------
+
+describe("policy RFC 6376 leaves to the caller", () => {
+  it("accepts an l= bound longer than the body without enlarging what it covers", async () => {
+    // §3.5: "the signer MUST NOT use a value in the l= tag that is greater than
+    // the actual body length". That binds the signer. Verifier-side, §3.7 step 1
+    // truncates to l=, and truncating past the end covers the whole body, so the
+    // bound cannot buy an extra acceptance path.
+    const { raw, record } = await fixture("dkimpy-l25")
+    const key = parseDkimPublicKey(record) ?? undefined
+    const result = await verifyDkim(raw, key)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.parsed?.bodyLength, 25)
+    assertEquals(result.computedBodyHash, await sha256Base64("0123456789abcdef\r\n"))
+
+    const grown = raw.replace("0123456789abcdef\r\n", "0123456789abcdefg\r\n")
+    assertEquals(grown.length, raw.length + 1)
+    const tampered = await verifyDkim(grown, key)
+    assertEquals(tampered.valid, false)
+    assertEquals(tampered.reason, "body hash mismatch (body modified after signing)")
+  })
+
+  it("verifies an unsigned From: — §5.4 binds the signer, not the verifier", async () => {
+    // §5.4 requires a signer to include From in h=; §6.1.1 and §6.1.2 add no
+    // verifier check that it did. Requiring it here would reject conformant
+    // verification results, so it is caller policy: read `h=` yourself.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
+      names: ["to", "subject"],
+    })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.parsed?.signedHeaders.includes("from"), false)
+  })
+
+  it("verifies a message that has no From: at all", async () => {
+    // RFC 5322 requires From:, but DKIM verification is not where it is enforced:
+    // a From-less message is malformed mail, not an invalid signature.
+    const headers = ["To: recipient@example.org", "Subject: DKIM port smoke test"]
+    const { raw, publicKey } = await sign(headers, "This is a test.\r\n", {
+      names: ["to", "subject"],
+    })
+    assert(!raw.includes("From:"))
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
 })
 
 // --- splitMessage ----------------------------------------------------------
@@ -357,6 +477,17 @@ describe("splitMessage", () => {
     assertEquals(headers.length, 1)
     assertEquals(headers[0], "H1: v1\r\n\tcontinuation")
     assertEquals(body, "body\r\n")
+  })
+
+  it("ends the header section at the first empty line, WSP-led body and all", () => {
+    // RFC 5322 §2.2 ends the header section at the first empty line, whatever
+    // follows it. A fold is a line ending *directly* followed by WSP (§2.2.3),
+    // never an empty line followed by WSP, so a body beginning with SP or HTAB
+    // is body. Treating it as headers left it outside the body hash entirely.
+    assertEquals(splitMessage("H: v\r\n\r\n body\r\n").body, " body\r\n")
+    assertEquals(splitMessage("H: v\r\n\r\n\tbody\r\n").body, "\tbody\r\n")
+    assertEquals(splitMessage("H: v\n\n body\n").body, " body\n")
+    assertEquals(splitMessage("H: v\r\n\r\n \r\nmore\r\n").body, " \r\nmore\r\n")
   })
 
   it("returns an empty body for a message with no body separator", () => {
@@ -419,6 +550,12 @@ describe("canonicalizeHeader", () => {
       [...canonicalizeHeader("X-Cr", "a\rb", "relaxed")].map((c) => c.charCodeAt(0)),
       [120, 45, 99, 114, 58, 97, 13, 98, 13, 10],
     )
+    // At the ends of the value it is a different story: the relaxed path trims
+    // with `String.trim()`, for which CR is whitespace, so a trailing lone CR is
+    // stripped there and kept by simple.
+    assertEquals(canonicalizeHeader("X-Cr", "a\r", "simple"), "X-Cr:a\r\r\n")
+    assertEquals(canonicalizeHeader("X-Cr", "a\r", "relaxed"), "x-cr:a\r\n")
+    assertEquals(canonicalizeHeader("X-Cr", "\ra", "relaxed"), "x-cr:a\r\n")
   })
 })
 

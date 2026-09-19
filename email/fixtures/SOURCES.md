@@ -94,6 +94,12 @@ What each fixture pins:
 | `dkimpy-l0`, `dkimpy-l8`, `dkimpy-l18`, `dkimpy-l25`        | `l=` truncation of the canonical body, including a bound longer than the body |
 | `dkimpy-unsigned-trailing-tag`                              | **valid**: its `x=` tag after `b=` is inside the signed bytes                 |
 
+Plus the four `openssl-*` vectors described below, which the dkimpy set does not
+reach: bodies beginning with SP or HTAB. Twenty-five `*.msg` in total, every one
+expected valid: eighteen built with dkimpy 1.1.8's canonicalizers plus OpenSSL,
+four from the OpenSSL-only script below, and three with a standards-document provenance (RFC
+6376's example message in LF and CRLF form, RFC 8463 Appendix A.3).
+
 ## Why `dkimpy-unsigned-trailing-tag` is valid
 
 §3.7 step 2 deletes the _value_ of `b=`, not the rest of the field. The short input
@@ -105,3 +111,70 @@ refused.
 The same property protects the other direction: appending `; x=9999999999` or
 `; i=@attacker.invalid` to a genuine message lands inside the hashed field and
 **fails** verification. Both payloads are tested against `dkimpy-relaxed`.
+
+## `openssl-*.msg` — the RFC 5322 §2.2 boundary and the field name
+
+Four vectors built by an **OpenSSL-only** script: no dkimpy, a canonicalizer
+written from the RFC 6376 text, and every signature checked with
+`openssl dgst -sha256 -verify` before the fixture was written. They cover cases the
+dkimpy set cannot: RFC 5322 §2.2 ends the header section at the first empty line
+whatever follows it, so a body beginning with SP or HTAB is body.
+
+| Fixture                                               | What it pins                                                        |
+| ----------------------------------------------------- | ------------------------------------------------------------------- |
+| `openssl-sp-body-simple`, `openssl-tab-body-simple`   | `c=simple/simple`, body whose first line starts with SP / with HTAB |
+| `openssl-sp-body-relaxed`, `openssl-tab-body-relaxed` | the same bodies under `c=relaxed/relaxed`                           |
+
+The forgery these pin is a mutation, not a fixture: injecting `" \r\n<payload>"`
+behind the first empty line of `dkimpy-empty-body-simple` used to verify, because
+the boundary was not found and the whole message was hashed as an empty body.
+
+The runnable recipe (`key.pem` is any RSA key, e.g. `openssl genrsa -out key.pem 2048`):
+
+```python
+import base64, hashlib, re, subprocess
+
+def canon_header(name, value, mode):                    # §3.4.1 / §3.4.2
+    if mode == "simple":
+        return name + b":" + value + b"\r\n"
+    unfolded = value.replace(b"\r\n", b"")
+    return name.lower().strip() + b":" + re.sub(rb"[ \t]+", b" ", unfolded).strip() + b"\r\n"
+
+def canon_body(body, mode):                             # §3.4.3 / §3.4.4
+    crlf = re.sub(rb"\r\n|\r|\n", b"\r\n", body)
+    if mode == "simple":
+        stripped = re.sub(rb"(?:\r\n)+$", b"", crlf)
+        return b"\r\n" if stripped == b"" else stripped + b"\r\n"
+    prepared = re.sub(rb"[ \t]+", b" ", re.sub(rb"[ \t]+\r\n", b"\r\n", crlf))
+    stripped = re.sub(rb"(?:\r\n)+$", b"", prepared)
+    return b"" if stripped == b"" else stripped + b"\r\n"
+
+mode, field_name = "simple", b"DKIM-Signature"          # or "relaxed", b"dkim-signature"
+headers = [(b"From", b" a@example.com"), (b"To", b" b@example.com"), (b"Subject", b" s")]
+body = b" Leading space body\r\nsecond line\r\n"
+bh = base64.b64encode(hashlib.sha256(canon_body(body, mode)).digest()).decode()
+stub = (f"v=1; a=rsa-sha256; c={mode}/{mode}; d=example.com; s=sel; t=1700000000; "
+        f"h=from:to:subject; bh={bh}; b=").encode()
+
+# §3.7 step 2: the h= headers, then the field with b= emptied in place and no
+# trailing CRLF. The field value carries the SP that followed the colon, which
+# `simple` keeps verbatim.
+signed_input = b"".join(canon_header(n, v, mode) for n, v in headers) + \
+    canon_header(field_name, b" " + stub, mode).rstrip(b"\r\n")
+
+sig = subprocess.run(["openssl", "dgst", "-sha256", "-sign", "key.pem"],
+                     input=signed_input, capture_output=True, check=True).stdout
+msg = (b"From: a@example.com\r\nTo: b@example.com\r\nSubject: s\r\n" + field_name +
+       b": " + stub + base64.b64encode(sig) + b"\r\n\r\n" + body)
+```
+
+Verify independently before committing, and note that OpenSSL 3.x prints
+`Verified OK` where 1.1.1 printed `Verified Successfully`:
+
+```bash
+openssl dgst -sha256 -verify pub.pem -signature sig.bin input.bin
+```
+
+The `*.key` beside each is `v=DKIM1; k=rsa; p=` plus the base64 of
+`openssl rsa -in key.pem -RSAPublicKey_out -outform DER` — the bare PKCS#1 shape
+§3.6.1 specifies.
