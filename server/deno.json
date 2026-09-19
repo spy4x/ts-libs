@@ -23,6 +23,10 @@
     "./auth/otp": "./auth/providers/otp.ts",
     "./auth/oauth2": "./auth/providers/oauth2.ts",
     "./auth/postgres-adapter": "./auth/postgres-adapter.ts",
-    "./auth/testing/memory-adapter": "./auth/testing/memory-adapter.ts"
+    "./auth/testing/memory-adapter": "./auth/testing/memory-adapter.ts",
+    "./jwt": "./jwt.ts",
+    "./crypto": "./crypto.ts",
+    "./user-secrets": "./user-secrets.ts",
+    "./quota": "./quota.ts"
   }
 }
