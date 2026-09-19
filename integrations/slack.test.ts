@@ -5,6 +5,19 @@ import type { Clock, Sleeper } from "./retry.ts"
 
 const WEBHOOK = "https://hooks.slack.invalid/services/T000/B000/fake-not-a-token"
 
+/**
+ * An `Error` whose `name` getter throws the text the platform throws — URL and
+ * all. `name` is a writable property on `Error`, so a caller's payload can hand
+ * `JSON.stringify` an error like this one, and every unguarded read of
+ * `cause.name` becomes an escape route for that text.
+ */
+const hostileError = (url: string): Error =>
+  new (class extends Error {
+    override get name(): string {
+      throw new TypeError(`Invalid URL: '${url}'`)
+    }
+  })("boom")
+
 interface RecordedRequest {
   url: string
   method: string | undefined
@@ -215,6 +228,116 @@ describe("SlackClient.send", () => {
     expect(result.ok === false && result.message).toBe(
       "TypeError: transport failure (url withheld)",
     )
+  })
+
+  it("returns a result, never a rejection, when the thrown error's name getter throws", async () => {
+    // The verifier's reproduction. `describeErrorKind` read `cause.name` without
+    // a guard, and `name` is not a data property: this error's getter throws,
+    // so the read propagated out of `send` and the caller got a rejected
+    // promise where the signature and the docstring promise a `SlackResult`.
+    // `hostileError` reads the token out of the webhook URL and puts it in the
+    // getter's message, so an unguarded read also forwards the credential.
+    const client = new SlackClient({
+      // The token sits in the path, which is where a webhook credential lives,
+      // so an unguarded read has a real secret to forward.
+      webhookUrl: `https://hooks.slack.example.invalid/services/T000/B000/${"REALTOKENISH"}`,
+      // The webhook URL above is only a label here: `send` never reaches the
+      // transport, so nothing is fetched and no request is recorded.
+    }, {
+      fetcher: () => Promise.reject(new Error("this test never sends a request")),
+      retry: { maxAttempts: 1 },
+    })
+    const result = await client.send({
+      toJSON: () => {
+        throw hostileError(`https://hooks.slack.example.invalid/services/T000/B000/REALTOKENISH`)
+      },
+    })
+    expect(result).toEqual({
+      ok: false,
+      code: "invalid_payload",
+      message: "payload is not JSON-serialisable (Error)",
+      attempts: 0,
+    })
+    expect(JSON.stringify(result)).not.toContain("REALTOKENISH")
+    // The class is still named when the error is an ordinary one, so the guard
+    // above is not "refuse everything".
+    const ordinary = await client.send({
+      toJSON: () => {
+        throw new TypeError("boom")
+      },
+    })
+    expect(ordinary.ok === false && ordinary.message).toBe(
+      "payload is not JSON-serialisable (TypeError)",
+    )
+  })
+
+  it("does not report a caller-set error name as the error class", async () => {
+    // `name` is writable, so it is caller text, not a platform constant: a
+    // payload that throws `e` after `name = "REALTOKENISH"` used to put those 12
+    // caller-chosen characters into a returned, loggable result. A closed
+    // allowlist of platform classes is what makes the reported kind safe.
+    const client = new SlackClient({ webhookUrl: WEBHOOK }, {
+      fetcher: () => Promise.reject(new Error("this test never sends a request")),
+      retry: { maxAttempts: 1 },
+    })
+    const forgedName = () => {
+      const error = new TypeError("boom")
+      Object.defineProperty(error, "name", { value: "REALTOKENISH" })
+      return error
+    }
+    // An enumerable getter, not `toJSON`: when `JSON.stringify` calls a `toJSON`
+    // that throws, the spec says the result is `undefined` rather than a
+    // propagation, and `send` reads that as a payload that serialised to
+    // nothing. A getter's throw escapes `stringify` and reaches the catch.
+    const spelled = await client.send({
+      get boom() {
+        throw forgedName()
+      },
+    })
+    expect(spelled.ok === false && spelled.message).toBe(
+      "payload is not JSON-serialisable (Error)",
+    )
+    // A URL-shaped name is refused too — it was before this change and still is.
+    const urlShaped = () => {
+      const error = new TypeError("boom")
+      Object.defineProperty(error, "name", {
+        value: "https://hooks.slack.invalid/T/B/REALTOKENISH",
+      })
+      return error
+    }
+    const shaped = await client.send({
+      get boom() {
+        throw urlShaped()
+      },
+    })
+    expect(shaped.ok === false && shaped.message).toBe("payload is not JSON-serialisable (Error)")
+    expect(JSON.stringify([spelled, shaped])).not.toContain("REALTOKENISH")
+  })
+
+  it("does not reject when a transport error's name getter throws", async () => {
+    // The same unguarded read, on the transport path: `describeTransportError`
+    // read `cause.name` too. A `fetch` that rejects with such an error used to
+    // reject `send` instead of returning a `network_error` result.
+    const timer = recordingTimer()
+    const client = new SlackClient({
+      webhookUrl: `https://hooks.slack.example.invalid/services/T000/B000/${"REALTOKENISH"}`,
+    }, {
+      fetcher: () =>
+        Promise.reject(
+          hostileError("https://hooks.slack.example.invalid/services/T000/B000/REALTOKENISH"),
+        ),
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1 },
+    })
+    const result = await client.send({ text: "hello" })
+    expect(result).toEqual({
+      ok: false,
+      code: "network_error",
+      message: "transport failure (url withheld)",
+      attempts: 1,
+    })
+    expect(JSON.stringify(result)).not.toContain("REALTOKENISH")
   })
 
   it("rejects an undefined payload without calling the network", async () => {

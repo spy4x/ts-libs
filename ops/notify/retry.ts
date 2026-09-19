@@ -8,8 +8,10 @@
  *
  * The two packages are owned by different issues (#16 and #18) and deliberately
  * do not import from a packages directory neither owns, so the module is
- * copied rather than shared. `ops/notify/retry-drift.test.ts` is the only reader:
- * it hashes both files and fails if the bytes differ, so the duplication cannot
+ * copied rather than shared. `ops/notify/retry-drift.test.ts` is the only reader
+ * that reads *both* copies — `integrations/retry.test.ts` reads the
+ * `integrations/` copy and nothing else. The drift test compares the bytes of
+ * every copy it finds and fails if any two differ, so the duplication cannot
  * silently diverge: the four ways it had already diverged (jitter honoured in
  * one copy and ignored in the other, `isPermanentStatus` present in one only, a
  * different backoff signature, and a disagreeing `maxAttempts: 0` guard) are all
@@ -131,26 +133,66 @@ export const isPermanentStatus = (status: number): boolean => status >= 400 && s
  * rendered into a UI or pasted into an issue.
  */
 export const describeTransportError = (cause: unknown): string => {
-  if (cause instanceof Error && cause.name !== "Error") {
-    return `${cause.name}: transport failure (url withheld)`
+  const name = readErrorName(cause)
+  if (name !== undefined && name !== "Error") {
+    return `${name}: transport failure (url withheld)`
   }
   return "transport failure (url withheld)"
 }
 
 /**
+ * The error-class names `describeErrorKind` may report.
+ *
+ * A closed set, so the value cannot carry caller text; see the docstring below.
+ */
+const ERROR_CLASS_NAMES: ReadonlySet<string> = new Set([
+  "AggregateError",
+  "EvalError",
+  "RangeError",
+  "ReferenceError",
+  "SyntaxError",
+  "TypeError",
+  "URIError",
+])
+
+/**
  * Names an error's class without its message.
  *
  * For failures where the message is caller-controlled text — a `JSON.stringify`
- * that hit a hostile `toJSON` or getter — the class is the safe half: it is one
- * of a handful of platform constants and cannot carry a payload. Anything not
- * an `Error` is reported as `Error`, never stringified, because `String(value)`
- * on an arbitrary thrown value can run a `toString` the caller supplied.
+ * that hit a hostile `toJSON` or getter — the class is the safe half. What
+ * makes it safe is the **allowlist** below, not the fact that it is a name:
+ * `name` is a writable property, so an `Error` the caller crafted can carry an
+ * arbitrary string in it. An earlier version of this function admitted any
+ * `/^[A-Za-z]{1,32}$/` instead, which let 32 caller-chosen letters
+ * (`name: "REALTOKENISH"`) reach a returned, loggable result; only the classes
+ * the platform itself throws may be reported now. Anything not an `Error` is
+ * reported as `Error`, never stringified, because `String(value)` on an
+ * arbitrary thrown value can run a `toString` the caller supplied.
  */
 export const describeErrorKind = (cause: unknown): string => {
-  if (cause instanceof Error && /^[A-Za-z]{1,32}$/.test(cause.name)) {
-    return cause.name
+  const name = readErrorName(cause)
+  if (name !== undefined && ERROR_CLASS_NAMES.has(name)) {
+    return name
   }
   return "Error"
+}
+
+/**
+ * Reads `cause.name`, or `undefined` when that read does not yield a string.
+ *
+ * The read is guarded because `name` is not a data property: a hostile `Error`
+ * subclass can define it as a throwing getter, and an ordinary property read
+ * would then propagate that throw out of a function whose whole contract is to
+ * *return* a description. `send` promises a `SlackResult` and never a
+ * rejection, so an unguarded read here is the difference between a failure
+ * result and an exception on the caller's stack.
+ */
+const readErrorName = (cause: unknown): string | undefined => {
+  try {
+    return cause instanceof Error ? cause.name : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export interface RetryRunResult<R> {
