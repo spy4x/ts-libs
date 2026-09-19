@@ -19,6 +19,7 @@ mcp/          jsonrpc core, stdio + http transports, tool registry
 caldav/       ical, xml, client, query
 email/        smtp transport, dkim-verify
 ops/          backup contract, offline-backup, deploy, age64 env, type-check
+validation/   arktype validate helpers, validation model
 ```
 
 ## Rules
@@ -28,7 +29,7 @@ ops/          backup contract, offline-backup, deploy, age64 env, type-check
   validator.
 - **Deno is the only runtime.** No Node.js, npm, pnpm, Yarn or Bun commands. `npm:` specifiers run
   through Deno where unavoidable.
-- **Source repos are read-only.** Bugs in the repos this code is extracted from are fixed *here*,
+- **Source repos are read-only.** Bugs in the repos this code is extracted from are fixed _here_,
   at extraction time. No module is published while it still carries a known bug.
 - **MIT.**
 
