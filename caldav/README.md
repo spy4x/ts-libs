@@ -99,14 +99,25 @@ These are the load-bearing bits; each one is a test, and each was a source bug.
   the server sent, so a corrupt byte becomes a visible `U+FFFD` instead of vanishing. `escapeXml`, on
   the request-writing side, **removes** what it cannot write, except for an unpaired surrogate, which
   it also replaces.
-- **Credentials go only to the origin the caller configured.** A server-named `calendar-home-set` is
-  resolved and then checked against `baseUrl`'s `scheme://host:port`; a cross-origin value is refused
-  with a warning and the `/username/` convention is used in its place, exactly as for a missing home
-  set. It is not followed with the header stripped: a request an attacker still gets to answer is not
-  a safe outcome. The check covers absolute URLs, protocol-relative `//host/path`, and a same-host URL
-  on another port. This bounds what a _server_ can redirect a credential to; it does not vet the
-  `baseUrl` a caller chose, and a consumer that takes a server URL from an untrusted user should vet
-  it with `validatePublicUrl` from `@ts-libs/net/url-policy`.
+- **Credentials go only to the origin the caller configured, enforced at one point.** Every request
+  the client builds takes its `Authorization` from `CalDavClient`'s single header gate, which is handed
+  the **destination URL** and compares `scheme://host:port` against `baseUrl`; a request to another
+  origin is sent **without** the header (or, for a server-named URL, not sent at all). The comparison
+  fails closed: a URL that is not `http(s)` — a `file://` root, a `mailto:` root, a relative path — has
+  no origin to compare, so it carries no credential either.
+  A URL a _server_ named is refused outright rather than followed unauthenticated, because a request
+  an attacker still gets to answer is not a safe outcome. Three entry points, three refusals: a
+  cross-origin `calendar-home-set` yields a warning and the `/username/` fallback; a cross-origin
+  calendar collection in the calendars PROPFIND yields a warning and is skipped, so it never reaches
+  the `REPORT` the engine would otherwise issue; a `URL:` property inside `calendar-data` is ignored
+  and reported in `parseTodos`/`parseEvents` `issues`, so `Todo.url` and `Event.url` stay on the
+  calendar's origin. The check covers absolute URLs, protocol-relative `//host/path`, a same-host URL
+  on another port, a different scheme, and a `host@attacker` userinfo lookalike.
+  A redirect from the configured origin to another one happens inside the transport, where this gate
+  cannot see it: `fetch` deletes `Authorization` on a cross-origin redirect (Fetch §4.4), and a
+  caller-supplied transport must do the same. This bounds what a _server_ can redirect a credential
+  to; it does not vet the `baseUrl` a caller chose, and a consumer that takes a server URL from an
+  untrusted user should vet it with `validatePublicUrl` from `@ts-libs/net/url-policy`.
 - **`If-Match` must be echoed exactly**, weak marker and quotes included; the server's ETag is opaque.
 - **A `STATUS` the RFC does not define is preserved.** `Todo.status` falls back to `NEEDS-ACTION` so
   the enum stays total, but `Todo.statusLabel` carries the wire value and the aggregator counts by it.
@@ -151,12 +162,14 @@ The credential itself is reachable through `client.authorizationHeader()` — a 
 because the source's `QueryEngine` read `this.client["username"]` and `this.client["password"]`
 through bracket syntax to build its own header.
 
-That accessor is why the origin rule lives in the client rather than in a caller: every request the
-client builds takes its `Authorization` from the same place, so the rule "credentials only ever go to
-the configured origin" is enforceable at one point. A cross-origin `calendar-home-set` is refused
-with a warning and the `/username/` fallback is used, which keeps the second PROPFIND on the
-configured origin; a caller that passes a foreign `calendarUrl` to `queryTodos` is sending its own
-credential somewhere it chose, which is not this rule's business.
+The credential is attached in one place inside the client — not at the call sites that build URLs,
+which is the distinction that mattered: a call site knows the URL it just built, and nothing about the
+URL a _response_ will name in the next paragraph. The gate takes the destination as an argument, so a
+`<D:href>` from a PROPFIND body, a `REPORT` target, a resource URL a caller passed and a `URL:`
+property read out of `calendar-data` are all compared with `baseUrl` before the header is set. A
+caller that passes a foreign `calendarUrl` to `queryTodos` still gets its request — the URL is the
+caller's own input — but that request carries no credential; one client is therefore bound to one
+origin, and a caller that needs two must build two clients.
 
 ## Out of scope
 
@@ -195,3 +208,11 @@ credential somewhere it chose, which is not this rule's business.
   deliberate one; honouring the refusal would mean parsing that body and treating its absence as an
   answer, which is a different contract.
 - `PRODID` defaults to `-//ts-libs//caldav//EN` and is overridable, where the source hard-coded it.
+- **DEL (`#x7F`) is dropped by `escapeXml` and substituted by `decodeXmlEntities`, though XML 1.0
+  gives it a representation** (`Char` includes `[#x20-#xD7FF]`). The pattern that treats it as illegal
+  also covers values that genuinely are, and the behaviour is pinned as it stands; the documentation
+  in `xml.ts` says so. Parked, not fixed.
+- **A `URL:` property the server named off the calendar's origin is ignored**, and the resource URL is
+  derived from the calendar instead, so `Todo.url`/`Event.url` are always on the origin of the
+  calendar they came from. `parseTodos`/`parseEvents` report the refusal in `issues`;
+  `QueryEngine` does not surface `issues`, so a caller of `queryTodos` sees only the derived URL.

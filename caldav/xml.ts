@@ -100,11 +100,20 @@ export function isXmlChar(code: number): boolean {
 }
 
 /**
- * The code units XML 1.0 cannot carry that are always illegal on their own.
+ * The code units this module refuses to carry in either direction.
  *
- * The two non-characters `#xFFFE`/`#xFFFF` are included for the same reason as
- * the C0 controls: XML 1.0 §2.2 excludes them from **Char**, so a literal one is
- * as unacceptable as a NUL. DEL is excluded by the same production.
+ * The two non-characters `#xFFFE`/`#xFFFF` and the C0 controls other than
+ * tab/CR/LF are outside XML 1.0's **Char** production (§2.2), so a literal one is
+ * as unacceptable as a NUL and neither has a numeric reference to escape to.
+ *
+ * **DEL does not belong to that set, and the pattern includes it anyway.** `#x7F`
+ * is inside `Char` (`[#x20-#xD7FF]`), so XML 1.0 gives it a representation: the
+ * treatment below is a deliberate deviation, not a consequence of the `Char`
+ * rule. `escapeXml("a\u007Fb")` is `"ab"` and `decodeXmlEntities("&#x7F;")` is
+ * `U+FFFD` — a legal character dropped or substituted with nothing in the result
+ * to say so. Behaviour is pinned as it stands (see the `&#x7F;` case in
+ * `xml.test.ts`, which rests on the same mistaken premise); correcting it is a
+ * parked follow-up, not part of the credential work.
  */
 // The control-character range is the point of this pattern, as in `net/url-shape`.
 // deno-lint-ignore no-control-regex
@@ -197,6 +206,11 @@ function replaceIllegalXmlCharacters(value: string): string {
  * and silently shortening the string hides more than it protects. Note the
  * consequence for a caller: a `displayname` of `"a\u0000b"` is sent as `"ab"`,
  * and nothing reports the loss.
+ *
+ * One character is removed that XML 1.0 does **not** forbid: DEL (`#x7F`), which
+ * is inside `Char`. The deviation is inherited from the `ILLEGAL_CODE_UNIT`
+ * pattern and is documented there; this JSDoc's rule sentence is therefore
+ * narrower than the code — the code also removes DEL.
  *
  * @param value Text to place in an XML body.
  * @returns Markup-safe text containing no non-`Char` code point.
