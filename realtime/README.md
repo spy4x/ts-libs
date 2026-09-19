@@ -224,7 +224,7 @@ the broadcast — here a throwing socket is reaped and the loop continues.
   they know their upgrade path and their cookie handling.
 - **Hint coalescing.** The design doc leaves it open whether a group under rapid
   writes should emit at most one hint per client per interval
-  (`docs/design/realtime-websockets.md:131-133`). `AggregateNotifier` sends one
+  (`docs/design/realtime-websockets.md:131-132`). `AggregateNotifier` sends one
   hint per committed change; a host that wants coalescing can batch before
   calling it, and the client is unaffected because it pulls the latest state
   either way. Deliberately not built on speculation.
