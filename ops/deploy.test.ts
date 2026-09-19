@@ -13,6 +13,7 @@ import {
   bumpServiceWorkerCacheVersion,
   deploy,
   type DeployTarget,
+  deriveStagingEnv,
   extractVolumePaths,
   generateDeployScript,
   getRemoteChecksums,
@@ -309,6 +310,69 @@ Deno.test("warns instead of failing when the service worker pattern is missing",
     `no service worker cache version for "site" in /app/static/sw.js`,
   ])
   assertEquals(outcome.serviceWorkerVersion, null)
+})
+
+Deno.test("derives the staging env by rewriting only the named keys", async () => {
+  const fs = new FakeFileSystem()
+  fs.seed(
+    "/app/.env.prod",
+    ["DOMAIN=antonshubin.com", "WWW_DOMAIN=www.antonshubin.com", "TZ=Asia/Singapore", ""].join(
+      "\n",
+    ),
+  )
+
+  const staging = await deriveStagingEnv({
+    fs,
+    prodPath: "/app/.env.prod",
+    stagingPath: "/app/.env.staging",
+    replacements: {
+      DOMAIN: "website-stag.antonshubin.com",
+      WWW_DOMAIN: "website-stag.antonshubin.com",
+    },
+  })
+
+  assertEquals(
+    staging,
+    [
+      "DOMAIN=website-stag.antonshubin.com",
+      "WWW_DOMAIN=website-stag.antonshubin.com",
+      "TZ=Asia/Singapore",
+      "",
+    ].join("\n"),
+  )
+  assertEquals(fs.text("/app/.env.staging"), staging)
+  assertEquals(fs.text("/app/.env.prod").includes("DOMAIN=antonshubin.com"), true)
+})
+
+Deno.test("staging derivation does not clobber WWW_DOMAIN when only DOMAIN is rewritten", async () => {
+  const fs = new FakeFileSystem()
+  fs.seed("/app/.env.prod", "DOMAIN=antonshubin.com\nWWW_DOMAIN=www.antonshubin.com\n")
+
+  const staging = await deriveStagingEnv({
+    fs,
+    prodPath: "/app/.env.prod",
+    stagingPath: "/app/.env.staging",
+    replacements: { DOMAIN: "website-stag.antonshubin.com" },
+  })
+
+  assertEquals(staging, "DOMAIN=website-stag.antonshubin.com\nWWW_DOMAIN=www.antonshubin.com\n")
+})
+
+Deno.test("staging derivation fails when the production env has no such key", async () => {
+  const fs = new FakeFileSystem()
+  fs.seed("/app/.env.prod", "DOMAIN=antonshubin.com\n")
+  await assertRejects(
+    () =>
+      deriveStagingEnv({
+        fs,
+        prodPath: "/app/.env.prod",
+        stagingPath: "/app/.env.staging",
+        replacements: { PROTOCOL: "https" },
+      }),
+    MissingEnvError,
+    "no line for PROTOCOL",
+  )
+  assertEquals(fs.writes, [])
 })
 
 const STACKS: readonly StackConfig[] = [

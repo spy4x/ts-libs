@@ -30,7 +30,7 @@
 import type { Logger } from "./console.ts"
 import type { FileSystem } from "./fs.ts"
 import type { EnvReader } from "./env.ts"
-import { readEnvVar, substituteEnvVars } from "./env.ts"
+import { readEnvVar, rewriteEnvValues, substituteEnvVars } from "./env.ts"
 import type { CommandOptions, CommandResult, CommandRunner } from "./run-command.ts"
 import { CommandError, runCommand } from "./run-command.ts"
 import { assertSafeRemoteArg, buildSshArgv } from "./remote.ts"
@@ -650,6 +650,48 @@ export async function getRemoteChecksums(
   }
 
   return checksums
+}
+
+/** Options for {@link deriveStagingEnv}. */
+export interface StagingEnvOptions {
+  /** Filesystem port. */
+  fs: FileSystem
+  /** Path of the production env file to derive from. */
+  prodPath: string
+  /** Path to write the derived env to. */
+  stagingPath: string
+  /**
+   * Values to rewrite, keyed by variable name. Every key must exist in the
+   * production file — see {@link rewriteEnvValues}.
+   */
+  replacements: Record<string, string>
+  /** Logger. Defaults to silence. */
+  logger?: Logger
+}
+
+/**
+ * Derive a staging env file from the production one by rewriting named keys.
+ *
+ * The shape comes from `antonshubin.com/scripts/deploy.ts:42-54`, including the
+ * reason its comment gives: the rewrite must be **anchored per line**, because an
+ * unanchored `DOMAIN=…` replacement also matches the tail of `WWW_DOMAIN=`, which
+ * points the staging `www` host at a name with no DNS record — Traefik then asks
+ * Let's Encrypt for a certificate it cannot get, and the failed order leaves
+ * staging with no certificate at all.
+ *
+ * Two changes: a key that is absent from the production file throws instead of
+ * silently doing nothing, and the file is written through the injected
+ * filesystem, so a test asserts the derived text without `--allow-write`.
+ *
+ * @returns The derived content.
+ * @throws {MissingEnvError} From `rewriteEnvValues` for a missing or invalid key.
+ */
+export async function deriveStagingEnv(options: StagingEnvOptions): Promise<string> {
+  const prod = await options.fs.readTextFile(options.prodPath)
+  const staging = rewriteEnvValues(prod, options.replacements)
+  await options.fs.writeTextFile(options.stagingPath, staging)
+  options.logger?.info(`derived ${options.stagingPath} from ${options.prodPath}`)
+  return staging
 }
 
 /** Everything {@link deploy} takes. */
