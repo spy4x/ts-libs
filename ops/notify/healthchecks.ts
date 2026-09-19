@@ -51,11 +51,16 @@ export interface HealthchecksClientConfig {
   pingUrl: string
 }
 
-export type HealthchecksErrorCode =
-  | "not_configured"
-  | "http_error"
-  | "network_error"
-  | "invalid_ping_url"
+/**
+ * Failure reasons `ping` can report.
+ *
+ * There is deliberately no `not_configured` or `invalid_ping_url` code: an
+ * unconfigured or unparseable URL is rejected at construction, so it cannot
+ * reach a result. `healthchecksConfigFromEnv` returning `null` is how "not
+ * configured" reaches the caller, as an explicit decision. A member that no
+ * code path produces is a member a caller will branch on forever and never see.
+ */
+export type HealthchecksErrorCode = "http_error" | "network_error"
 
 export interface HealthchecksSuccess {
   ok: true
@@ -143,8 +148,9 @@ export class HealthchecksClient {
     // A URL the platform cannot parse can never be pinged, and the failure it
     // used to produce was `{ ok: true, httpStatus: 200 }` from a stubbed
     // transport. Refused at construction so a typo cannot look like a healthy
-    // dead-man's switch. `invalid_ping_url` stays an error code because a
-    // caller-supplied URL is the only thing that reaches this point.
+    // dead-man's switch. Refused at construction, matching how an empty URL is
+    // refused, so no error code has to exist for a state that cannot produce a
+    // result.
     if (!URL.canParse(pingUrl)) {
       throw new Error("HealthchecksClient: pingUrl is not a valid absolute URL")
     }

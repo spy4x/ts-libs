@@ -107,8 +107,23 @@ const payload = JSON.parse(new TextDecoder().decode(result.body))
   verified. Pinned by `rejects a forgery signed with the HMAC key \`null\``and`does not throw \`DataError: Key length is zero\` for an empty or absent secret`.
 - The body must be the raw bytes off the wire. Parsing and re-serialising JSON changes the hash.
 
-Headers default to `X-Signature-256` and `X-Signature-Timestamp`, both overridable, so a
-GitHub-shaped sender (`X-Hub-Signature-256: sha256=<hex>`) works unchanged.
+Headers default to `X-Signature-256` and `X-Signature-Timestamp`, both overridable, and the
+`algorithm` prefix is configurable (`sha256=<hex>` is accepted as well as a bare hex digest).
+
+**This is not a drop-in verifier for GitHub, Slack or Stripe.** None of them signs
+`<timestamp>.<raw body>` with the timestamp in a header:
+
+| provider | its actual scheme                                                                | this module                                  |
+| -------- | -------------------------------------------------------------------------------- | -------------------------------------------- |
+| GitHub   | `X-Hub-Signature-256: sha256=<hmac-of-body>`, no timestamp, no replay protection | needs an adapter: sign the body alone        |
+| Slack    | `X-Slack-Signature: v0=<hmac-of-"v0:<ts>:<body>">`                               | needs an adapter: the signed string differs  |
+| Stripe   | `Stripe-Signature: t=<ts>,v1=<hmac-of-"<ts>.<body>">`                            | equivalent scheme, different header encoding |
+| generic  | `<ts>.<raw body>`                                                                | supported directly                           |
+
+What is worth reusing regardless of provider is the part that is easy to get wrong: signing the raw
+bytes, comparing with `crypto.subtle.verify`, failing closed on an unusable secret, and refusing a
+stale or future-dated timestamp. A provider with a different signed-string construction needs a thin
+adapter that builds that string; the verification here is the reusable half.
 
 ## Injectable transport
 

@@ -79,6 +79,45 @@ describe("HealthchecksClient construction", () => {
   it("refuses an empty ping URL instead of retrying into nothing", () => {
     expect(() => new HealthchecksClient({ pingUrl: "" })).toThrow("pingUrl is empty")
   })
+
+  it("refuses a URL the platform cannot parse, rather than pinging into nothing", () => {
+    // Before the guard this constructed happily and the first ping reported
+    // `{ ok: true, httpStatus: 200 }` from a stubbed transport, so a typo looked
+    // like a healthy dead-man's switch.
+    for (const pingUrl of ["hc-ping.example.invalid/abc", "not a url at all", "://missing-host"]) {
+      let threw = false
+      try {
+        new HealthchecksClient({ pingUrl })
+      } catch {
+        threw = true
+      }
+      expect({ pingUrl, threw }).toEqual({ pingUrl, threw: true })
+      expect({ pingUrl, parseable: URL.canParse(pingUrl) }).toEqual({ pingUrl, parseable: false })
+    }
+  })
+
+  it("does not echo the capability key into the rejection it throws", () => {
+    // The path is the credential, so the message must name the shape problem
+    // and not the value.
+    for (const bad of [`hcp.example.invalid/${"REALTOKENISH"}`, `://${"REALTOKENISH"}`]) {
+      let message = "did not throw"
+      try {
+        new HealthchecksClient({ pingUrl: bad })
+      } catch (cause) {
+        message = cause instanceof Error ? cause.message : String(cause)
+      }
+      expect({ bad, leaks: message.includes("REALTOKENISH") }).toEqual({ bad, leaks: false })
+      expect({ bad, useful: message.includes("not a valid absolute URL") }).toEqual({
+        bad,
+        useful: true,
+      })
+    }
+  })
+
+  it("still accepts a well-formed URL, so the guard is not unconditional", () => {
+    expect(() => new HealthchecksClient({ pingUrl: PING_URL })).not.toThrow()
+    expect(() => new HealthchecksClient({ pingUrl: `${PING_URL}/` })).not.toThrow()
+  })
 })
 
 describe("HealthchecksClient.urlFor", () => {

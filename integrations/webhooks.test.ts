@@ -4,7 +4,25 @@ import { verifyWebhookRequest } from "./webhooks.ts"
 import type { WebhookRejectReason } from "./webhooks.ts"
 
 const SECRET = "test-secret-not-real"
-const BODY = new TextEncoder().encode('{"event":"ping","n":1}')
+
+/**
+ * Deliberately chosen so it does **not** survive a JSON round trip.
+ *
+ * The verifier signs the raw bytes off the wire, so a body that
+ * `JSON.stringify(JSON.parse(...))` reproduces byte-for-byte cannot distinguish
+ * raw-body signing from re-serialised signing: the mutation is a no-op against
+ * such a fixture and the suite stays green. Whitespace and key order are what
+ * the round trip destroys, so both are in here. The `does not survive a
+ * re-serialisation round trip` test below is the sentinel that keeps this
+ * fixture honest — if someone normalises it back to the canonical single-line
+ * form, that test fails rather than the property quietly becoming untested.
+ */
+const BODY_TEXT = `{
+  "n": 1,
+  "event": "ping",
+  "tags": ["a", "b"]
+}`
+const BODY = new TextEncoder().encode(BODY_TEXT)
 
 /** Signer that mirrors what a sender does: HMAC-SHA256 over `<ts>.<raw body>`. */
 const sign = async (secret: string, timestampSeconds: number, body: Uint8Array) => {
@@ -45,6 +63,14 @@ const rejection = async (
 }
 
 describe("verifyWebhookRequest", () => {
+  it("does not survive a re-serialisation round trip, so raw-body signing is really tested", () => {
+    // Without this, the re-serialising mutation is a no-op and every signature
+    // assertion below passes for the wrong reason.
+    const roundTripped = JSON.stringify(JSON.parse(BODY_TEXT))
+    expect(roundTripped).not.toBe(BODY_TEXT)
+    expect(roundTripped.length).not.toBe(BODY_TEXT.length)
+  })
+
   it("accepts a delivery signed with the shared secret", async () => {
     const signature = await sign(SECRET, AT_SECONDS, BODY)
     const result = await verifyWebhookRequest(BODY, headersFor(signature, AT_SECONDS), config)
@@ -199,7 +225,7 @@ describe("verifyWebhookRequest", () => {
 })
 
 describe("verifyWebhookRequest secret handling", () => {
-  const FORGERY = new TextEncoder().encode('{"event":"admin_granted"}')
+  const FORGERY = new TextEncoder().encode('{ "event" : "admin_granted" }')
   const clock = clockAt(AT_SECONDS * 1000)
 
   /** Signs with an arbitrary value, the way a forger who knows the weakness would. */

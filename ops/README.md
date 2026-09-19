@@ -51,6 +51,14 @@ failures it was retrying. A total budget bounds the whole operation; it is set a
 waits, because a budget of exactly 10 minutes aborted after the 4th attempt and silently delivered 4
 retries instead of the 10 the policy promises.
 
+**Known debt: the retry core is a byte-identical copy, not shared code.** The reviewer accepted the
+duplication **with an objection**, recorded here so the next person knows it is debt rather than a
+settled design: the drift guard reads across a package boundary (`ops/notify/retry-drift.test.ts`
+imports `../../integrations/retry.ts`), which is what makes `ops/notify/**` unlandable alone — #39 had
+to merge before #50 for exactly this reason. A shared `libs/` module is the required end state, and
+**a third copy will be rejected**. The duplication exists only because no shared ancestor directory
+belongs to this issue; the mechanical guard keeps it honest in the meantime.
+
 **No backup coupling.** Nothing here imports or references `BackupResult` or any backup type. A
 notifier that only works while a backup runs is a notifier nobody can reuse.
 
