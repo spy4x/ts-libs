@@ -17,6 +17,19 @@
  * not mutate arktype's config — and throws nothing: {@link MessageCodec.decode} returns a result.
  * The message types are declared explicitly rather than inferred, so the published protocol shape is
  * readable without arktype's type machinery.
+ *
+ * **Undeclared properties are rejected, not ignored.** arktype's default is `onUndeclaredKey:
+ * "ignore"`, which accepts an object carrying extra properties and *preserves* them on the parsed
+ * value — so `{"kind":"change.hint", …, "payload":{…}}` would decode, survive {@link
+ * MessageCodec.encode}, and reach a host's `onFrame` handler. Rejecting unknown keys is what makes
+ * "no mutations over the socket" a property of the protocol rather than a remark about the frame
+ * kinds this file happens to declare. Every object schema below therefore sets `"+": "reject"`,
+ * including the nested cursor snapshot.
+ *
+ * `validation/` leaves strictness to the host ("Strictness (`onUndeclaredKey`) is the host
+ * application's decision, not a library's side effect" — `validation/validate.ts:7-8`). A wire
+ * protocol is the opposite case: the library owns the wire, an unrecognised property is a protocol
+ * violation, and a host that never sees it cannot act on it.
  */
 
 import { type Type, type } from "arktype"
@@ -81,18 +94,21 @@ export type WireMessage = ClientMessage | ServerMessage
 const cursorSnapshotSchema = type({
   groupId: "string",
   sequence: "number",
+  "+": "reject",
 })
 
 /** Client half of the protocol. */
 export const clientMessageSchema: Type<ClientMessage> = type({
   kind: "'client.ping' | 'client.pong'",
   "id?": "string",
+  "+": "reject",
 }).or(
   type({
     kind: "'client.sync'",
     cursors: cursorSnapshotSchema.array(),
     fromStart: "boolean",
     "id?": "string",
+    "+": "reject",
   }),
 )
 
@@ -100,10 +116,12 @@ export const clientMessageSchema: Type<ClientMessage> = type({
 export const serverMessageSchema: Type<ServerMessage> = type({
   kind: "'server.ping' | 'server.pong'",
   "id?": "string",
+  "+": "reject",
 }).or(
   type({
     kind: "'server.ack'",
     ackId: "string",
+    "+": "reject",
   }),
 ).or(
   type({
@@ -111,6 +129,7 @@ export const serverMessageSchema: Type<ServerMessage> = type({
     groupId: "string",
     "aggregate?": "string",
     sequence: "number",
+    "+": "reject",
   }),
 )
 

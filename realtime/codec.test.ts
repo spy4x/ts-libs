@@ -83,6 +83,70 @@ describe("createJsonCodec", () => {
     expect(codec.decode(codec.encode(hint))).toEqual({ ok: true, message: hint })
   })
 
+  it("rejects an undeclared property on a hint frame", () => {
+    const result = codec.decode(
+      JSON.stringify({
+        kind: "change.hint",
+        groupId: "group-1",
+        sequence: 4,
+        payload: { total: 100 },
+      }),
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error("expected a rejection")
+    expect(result.reason).toContain("payload")
+  })
+
+  it("rejects an undeclared property nested inside a handshake cursor", () => {
+    const result = codec.decode(
+      JSON.stringify({
+        kind: "client.sync",
+        cursors: [{ groupId: "group-1", sequence: 4, payload: { total: 100 } }],
+        fromStart: false,
+      }),
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error("expected a rejection")
+    expect(result.reason).toContain("payload")
+  })
+
+  it("rejects an undeclared property on a liveness frame in either direction", () => {
+    expect(codec.decode(JSON.stringify({ kind: "client.ping", payload: {} })).ok).toBe(false)
+    expect(codec.decode(JSON.stringify({ kind: "server.ack", ackId: "frame-1", payload: {} })).ok)
+      .toBe(false)
+  })
+
+  it("still accepts a well-formed frame, so the guard is not rejecting everything", () => {
+    expect(codec.decode(JSON.stringify({ kind: "change.hint", groupId: "group-1", sequence: 4 })))
+      .toEqual({
+        ok: true,
+        message: { kind: "change.hint", groupId: "group-1", sequence: 4 },
+      })
+    expect(
+      codec.decode(
+        JSON.stringify({
+          kind: "client.sync",
+          cursors: [{ groupId: "group-1", sequence: 4 }],
+          fromStart: false,
+          id: "frame-1",
+        }),
+      ).ok,
+    ).toBe(true)
+  })
+
+  it("refuses to encode a frame that carries an undeclared property", () => {
+    const withPayload = {
+      kind: "change.hint",
+      groupId: "group-1",
+      sequence: 4,
+      payload: { total: 100 },
+    } as unknown as Parameters<typeof codec.encode>[0]
+
+    expect(() => codec.encode(withPayload)).toThrow("Refusing to send a frame that is not protocol")
+  })
+
   it("rejects a hint whose sequence is not a number", () => {
     const result = codec.decode(
       JSON.stringify({
