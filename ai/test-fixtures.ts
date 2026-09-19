@@ -197,7 +197,6 @@ export function createFakeTimer(): FakeTimer {
       // deadline. Releasing settles the wait, which is exactly what a cancelled
       // deadline does to a request that is awaiting it.
       const wait = token as FakeWait
-      console.log("DBG cancel", wait?.ms, "live", live.size, "kind", wait?.kind)
       const control = live.get(wait)
       if (!control) return
       live.delete(wait)
