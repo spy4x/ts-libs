@@ -561,25 +561,60 @@ function ownStatuses(block: string): string[] {
     .map((match) => match[1]!.trim())
 }
 
+/** Any `prop` element, namespaced or not: the full form captures its inner XML. */
+function propElementPattern(): RegExp {
+  return new RegExp(
+    `<${PREFIX}prop(?:\\s[^>]*)?>([\\s\\S]*?)</${PREFIX}prop\\s*>|<${PREFIX}prop(?:\\s[^>]*)?/>`,
+    "gis",
+  )
+}
+
+/**
+ * The names of the property elements inside a `<prop>`'s inner XML.
+ *
+ * Two shapes count, and both must: `<D:getetag>"x"</D:getetag>` and the
+ * **self-closing** `<D:getetag/>` a server writes when the property is present
+ * but carries no value of its own — which is exactly how a real server writes
+ * the property whose status the group is reporting. A name ends at whitespace,
+ * `/` or `>`, so `<D:getetag-foo>` is a different name and a closing tag
+ * (`</D:prop>`) is not a name at all.
+ */
+function propertyNames(propXml: string): Set<string> {
+  return new Set(
+    [...propXml.matchAll(new RegExp(`<${PREFIX}([A-Za-z_][\\w.-]*)[\\s/>]`, "g"))]
+      .map((inner) => localName(inner[1]!)),
+  )
+}
+
 /**
  * Split a `<response>` block's `propstat` children into names and status.
  *
- * The `propstat` split is non-greedy, and the `<status>` search inside one is
- * restricted to the `</prop>`-to-`</propstat>` remainder: a `propstat` never
- * nests another `propstat`, and the remainder cannot reach into a sibling.
+ * The `<prop>` boundary is matched as an **element**, never as the literal
+ * string `</prop>`. A server writes `</D:prop>`, so the literal split this
+ * replaced never matched a real body: `status` came back `undefined` for every
+ * group, rules 2 and 3 of {@link responseStatusFor} were inert, and a member
+ * whose own group answered `calendar-data` with `404`/`403`/`500` was dropped
+ * from both `resources` and `failures` by {@link readReportResources}.
+ *
+ * The `<status>` search is restricted to what follows the group's own `<prop>`,
+ * so it cannot reach into a sibling: a `propstat` never nests another one, and
+ * the remainder is that group's own XML. A group with a self-closing
+ * `<D:prop/>` has no names and a status that still counts.
  */
 function propstatBlocks(response: string): PropstatBlock[] {
   const blocks: PropstatBlock[] = []
   for (const match of response.matchAll(elementPattern("propstat", "gi"))) {
     const body = match[1]!
-    const propEnd = body.lastIndexOf("</prop>")
-    const propXml = propEnd === -1 ? body : body.slice(0, propEnd + "</prop>".length)
-    const afterProp = propEnd === -1 ? "" : body.slice(propEnd + "</prop>".length)
-    const names = new Set(
-      [...propXml.matchAll(new RegExp(`<${PREFIX}([A-Za-z_][\\w.-]*)(?:\\s[^>]*)?>`, "g"))]
-        .map((inner) => localName(inner[1]!)),
-    )
-    blocks.push({ names, status: ownStatuses(afterProp)[0] })
+    // The last `prop` wins, as the `lastIndexOf` this replaced did: a `prop`
+    // never nests another `prop`, so the last one separates the property list
+    // from the status that follows it.
+    let propXml = ""
+    let afterProp = body
+    for (const prop of body.matchAll(propElementPattern())) {
+      propXml = prop[1] ?? ""
+      afterProp = body.slice(prop.index! + prop[0].length)
+    }
+    blocks.push({ names: propertyNames(propXml), status: ownStatuses(afterProp)[0] })
   }
   return blocks
 }
@@ -629,6 +664,26 @@ function responseStatusFor(response: string, name: string): string | undefined {
     if (propstat.names.has(name) && propstat.status !== undefined) return propstat.status
   }
   return propstats.find((propstat) => propstat.status !== undefined)?.status
+}
+
+/**
+ * Rule 2 of {@link responseStatusFor} alone: the status of the group that
+ * answers for `name`, with no fallback to a group that answers for nothing.
+ *
+ * For a reader that asks about **one** property, rule 3 is a safe reading of a
+ * single-group response. For a reader that asks about *several* — a PROPFIND
+ * member, whose response carries a group per status — rule 3 hands back the
+ * status of whichever group came first, and `listCalendars()` then loses a
+ * calendar depending on the server's group order. That is the order dependence
+ * `responseStatusFor` exists to remove, so this reader does not use rule 3.
+ *
+ * @returns the answering group's status, or `undefined` when no group mentions
+ * `name` or the mentioning group carries no status of its own.
+ */
+function groupStatusFor(response: string, name: string): string | undefined {
+  return propstatBlocks(response)
+    .find((propstat) => propstat.names.has(name) && propstat.status !== undefined)
+    ?.status
 }
 
 /**
@@ -739,8 +794,17 @@ export function parseCalendarPropfind(
   const calendars: Calendar[] = []
   const warnings: string[] = []
   for (const block of blocks) {
-    const responseStatus = responseStatusFor(block, "displayname")
+    // Rule 1 alone: the `<status>` a `<response>` itself carries is the status
+    // of the request *for that member* (RFC 4918 §14.24). The group-level
+    // answer is read below and **reported**, never turned into a silent drop —
+    // a member whose `resourcetype` group failed while another group answered
+    // `supported-calendar-component-set` is still a collection the server
+    // declares as a calendar, and losing it here would be the quiet data loss
+    // this reader exists to avoid.
+    const responseStatus = ownStatus(block)
     if (responseStatus !== undefined && isFailureStatus(responseStatus)) continue
+
+    const resourcetypeStatus = groupStatusFor(block, "resourcetype")
 
     const href = extractElementText(block, "href")
     if (href === undefined || href === "") continue
@@ -772,6 +836,16 @@ export function parseCalendarPropfind(
 
     const displayName = extractElementText(scope, "displayname") || lastPathSegment(href) ||
       "Unnamed"
+    if (resourcetypeStatus !== undefined && isFailureStatus(resourcetypeStatus)) {
+      // The group that answers for `resourcetype` — RFC 4791 §5.2's marker of a
+      // calendar collection — reported a failure, yet another group declared
+      // `supported-calendar-component-set`. The member is kept on that declared
+      // set, and the disagreement is reported: silently dropping it would lose a
+      // calendar, silently keeping it would hide an inconsistent server.
+      warnings.push(
+        `${href}: resourcetype answered ${resourcetypeStatus}; kept on its declared component set`,
+      )
+    }
     if (!declared && isCalendarResource) {
       warnings.push(
         `${displayName} declares no supported-calendar-component-set; assumed VEVENT and VTODO`,

@@ -658,6 +658,93 @@ Deno.test("readReportResources reports a failure whose own response status faile
   assertEquals(failures, [{ href: "/c/gone.ics", status: "HTTP/1.1 404 Not Found" }])
 })
 
+// ---------------------------------------------------------------------------
+// BLOCKER E1 — the status of a **group**, not a response-level one.
+//
+// Every reader above is exercised against a group-level status here, and in the
+// namespaced shape a real server writes (`</D:prop>`, `<D:getetag/>`). The
+// readers used to split a `propstat` on the literal string `</prop>`, which no
+// server writes, so every group's status came back `undefined`: a member whose
+// own group answered `404` was dropped from `resources` **and** `failures` at
+// once and could not be reported by any caller.
+// ---------------------------------------------------------------------------
+
+Deno.test("parseCalendarPropfind reports a failed resourcetype group instead of silence", () => {
+  // The group answering `resourcetype` — RFC 4791 §5.2's marker of a calendar
+  // collection — failed, while the group beside it answered 200 and declared
+  // the component set. The member is kept on that declaration (a silent drop
+  // here would lose a calendar), and the disagreement is reported.
+  const xml = multistatus(
+    `<D:response><D:href>/user/calendars/gone/</D:href>` +
+      `<D:propstat><D:prop><D:resourcetype><D:collection/><C:calendar/></D:resourcetype></D:prop>` +
+      `<D:status>HTTP/1.1 403 Forbidden</D:status></D:propstat>` +
+      `<D:propstat><D:prop><C:supported-calendar-component-set>` +
+      `<C:comp name="VTODO"/></C:supported-calendar-component-set></D:prop>` +
+      `<D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`,
+    `xmlns:D="DAV:" xmlns:C="${CALDAV_NAMESPACE}"`,
+  )
+  const parsed = parseCalendarPropfind(xml, BASE)
+  assert(parsed.success)
+  assertEquals(parsed.output.calendars.length, 1)
+  assertEquals(parsed.output.calendars[0]!.components, [ComponentType.VTODO])
+  assertEquals(parsed.output.warnings.length, 1)
+  assertStringIncludes(
+    parsed.output.warnings[0]!,
+    "/user/calendars/gone/: resourcetype answered HTTP/1.1 403 Forbidden",
+  )
+})
+
+Deno.test("extractEtags drops a value that sits in a failed group", () => {
+  // The ETag is in the group whose own status says the property is not
+  // available. Reading it from there would send a stale `If-Match` — and it did:
+  // the failed group was excluded from the answering groups, the reader fell
+  // back to the whole `<response>`, and found the value anyway.
+  const xml = multistatus(
+    `<D:response><D:href>/user/calendars/tasks/a.ics</D:href>` +
+      `<D:propstat><D:prop><D:getetag>"stale"</D:getetag></D:prop>` +
+      `<D:status>HTTP/1.1 403 Forbidden</D:status></D:propstat>` +
+      `<D:propstat><D:prop><D:displayname>a</D:displayname></D:prop>` +
+      `<D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`,
+  )
+  assertEquals(extractEtags(xml).size, 0)
+})
+
+Deno.test("readReportResources reports a member whose own group failed for calendar-data", () => {
+  // BLOCKER E1, the regression itself: this returned `{resources: [], failures:
+  // []}` — the member was unreportable, and `queryTodos` returned `total: 0`
+  // with `failures: []` for a collection that had answered with a failure.
+  for (
+    const status of [
+      "HTTP/1.1 404 Not Found",
+      "HTTP/1.1 403 Forbidden",
+      "HTTP/1.1 500 Internal Server Error",
+    ]
+  ) {
+    const xml = multistatus(
+      `<D:response><D:href>/c/gone.ics</D:href>` +
+        `<D:propstat><D:prop><C:calendar-data/></D:prop>` +
+        `<D:status>${status}</D:status></D:propstat></D:response>`,
+      `xmlns:D="DAV:" xmlns:C="${CALDAV_NAMESPACE}"`,
+    )
+    const { resources, failures } = readReportResources(xml)
+    assertEquals(resources, [])
+    assertEquals(failures, [{ href: "/c/gone.ics", status }])
+  }
+})
+
+Deno.test("readReportResources keeps the readable member beside a member whose group failed", () => {
+  const ok = `<D:response><D:href>/c/a.ics</D:href><D:propstat><D:prop>` +
+    `<D:getetag>"e1"</D:getetag><C:calendar-data>BEGIN:VCALENDAR&#13;&#10;END:VCALENDAR&#13;&#10;</C:calendar-data>` +
+    `</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`
+  const failed = `<D:response><D:href>/c/gone.ics</D:href><D:propstat><D:prop>` +
+    `<D:getetag/>` +
+    `<C:calendar-data/></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat></D:response>`
+  const { resources, failures } = readReportResources(multistatus(ok + failed))
+  assertEquals(resources.length, 1)
+  assertEquals(resources[0]!.href, "/c/a.ics")
+  assertEquals(failures, [{ href: "/c/gone.ics", status: "HTTP/1.1 404 Not Found" }])
+})
+
 Deno.test("resolveUrl handles absolute URLs, absolute paths and relative paths", () => {
   assertEquals(
     resolveUrl("/user/calendars/a/", BASE),
@@ -748,7 +835,6 @@ Deno.test("decodeXmlEntities substitutes an illegal code point with U+FFFD", () 
     "&#x8;",
     "&#xB;",
     "&#x1F;",
-    "&#x7F;",
     "&#xD800;",
     "&#xDFFF;",
     "&#xFFFE;",
@@ -757,6 +843,13 @@ Deno.test("decodeXmlEntities substitutes an illegal code point with U+FFFD", () 
   for (const reference of illegal) {
     assertEquals(decodeXmlEntities(reference), XML_ILLEGAL_REPLACEMENT, reference)
   }
+  // DEL is *not* one of them, and this package substitutes it anyway. `#x7F` is
+  // inside `[#x20-#xD7FF]`, so `isXmlChar(0x7F)` is true and XML 1.0 gives it a
+  // representation: the substitution is a recorded deviation, not a consequence
+  // of the `Char` rule, and this test pins it as the deviation it is. See
+  // `caldav/README.md` and the pattern's own note in `xml.ts`.
+  assert(isXmlChar(0x7f))
+  assertEquals(decodeXmlEntities("&#x7F;"), XML_ILLEGAL_REPLACEMENT)
   // Legal ones still decode exactly, including at both ends of each range.
   assertEquals(decodeXmlEntities("&#x9;&#xA;&#xD;"), "\t\n\r")
   assertEquals(
