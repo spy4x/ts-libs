@@ -14,5 +14,8 @@
     "./progress-parse": "./progress-parse.ts",
     "./sse-frame": "./sse-frame.ts",
     "./timers": "./timers.ts"
+  },
+  "publish": {
+    "exclude": ["**/*.test.ts", "test-doubles.ts"]
   }
 }

@@ -24,8 +24,11 @@ why the suite runs under `deno test --allow-read --allow-env` with no `--allow-r
 | `./atomic-rewrite`  | `withAtomicRewrite`, `tempSiblingPath`, `sizeDeltaBounds`, `verdictSizeDelta`, `RewriteFileSystem`, `denoFileSystem`                                                                            |
 | `./binary-lookup`   | `createBinaryFinder`, `findFfmpeg`, `BinaryFinderDeps`, `EnvironmentReader`                                                                                                                     |
 
-`test-doubles.ts` holds the fakes and is deliberately **not** an export: a JSR publish ships the
-graph reachable from `exports`, so the fakes stay out of the published package.
+`test-doubles.ts` holds the fakes, beside the colocated `*.test.ts` files. Neither is an export entry
+point, and neither is published: a `deno publish` manifest lists every file in the package directory,
+so `media/deno.json` excludes them through `publish.exclude`. Verified — `deno publish --dry-run`
+lists the media manifest as exactly the modules in the export table, with no `*.test.ts` and no
+`test-doubles.ts`.
 
 ## External binary contract
 
