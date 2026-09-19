@@ -16,6 +16,11 @@ which is already pinned in the root import map and used only for the `hono/cors`
 | `@ts-libs/server/static`            | Static-file serving with a MIME table and path-traversal protection                 |
 | `@ts-libs/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                 |
 
+**Merge order:** the three issues that added these files (`#28`, `#30`, `#35`) were cut from one
+`main` and each carries the earlier ones, so the second and third to merge rebase with a **union** on
+`server/deno.json` exports and this README. `server/http/bounded-body.ts` is byte-identical on all
+three branches, so there is nothing to reconcile in the code itself.
+
 ## `server/http/bounded-body`
 
 `readBoundedBody`, `readBoundedText`, `parseBoundedFormData`, `readContentLength`,
@@ -25,10 +30,11 @@ Every function takes `{ maxBytes, timeoutMs? }`. The cap is enforced on the stre
 `content-length` over the cap is rejected without reading the body, and the reader is cancelled on
 any failure — including a stalled body whose deadline passes.
 
-**Canonical home pending.** This is a temporary duplicate of `net/bounded-body.ts` (issue #1). When
-that lands, this module collapses to `export * from "@ts-libs/net/bounded-body"` plus
-`parseBoundedFormData`. `PayloadTooLargeError` must remain a single class, so callers keep catching
-the same identity.
+**Canonical home pending.** This is a temporary duplicate of `net/bounded-body.ts` (issue #1, which
+has not landed — `net/` holds only `url-shape.ts` today). When it does, this module collapses to
+`export * from "@ts-libs/net/bounded-body"` plus `parseBoundedFormData`. `PayloadTooLargeError` must
+remain a single class with a single identity, so a caller catching it from `net` catches the one
+thrown here; two same-named classes would be a real bug.
 
 ## `server/http/cors`
 
