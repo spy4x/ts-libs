@@ -21,15 +21,20 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@ts-libs/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
 | `@ts-libs/server/storage`           | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning |
 | `@ts-libs/server/auth`              | Multi-provider auth (`#6`): see the `server/auth` section below                      |
+| `@ts-libs/server/jwt`               | Zero-dependency HS256 JWT: `sign`, `verify`, typed claims, fail-closed secret        |
+| `@ts-libs/server/crypto`            | AES-256-GCM at-rest cipher, hex-key constructor, `maskKey` display hint              |
+| `@ts-libs/server/user-secrets`      | BYOK store pattern over an injected port: validate, encrypt, mask, upsert, delete    |
+| `@ts-libs/server/quota`             | Usage metering with 429/503 semantics — not a rate limiter                           |
 
 **Merge order:** the four issues that added files here (`#28`, `#30`, `#35`, `#6`) were cut from
 different points on `main` and each carries the earlier ones, so whoever merges later rebases with a
 **union** on `server/deno.json` exports and this README — never by dropping another package's entries.
 `server/http/bounded-body.ts` is the exception: `#28`/`#30` carried a byte-identical copy of
 `net/bounded-body.ts` (`sha256 5fc55e75`) and that copy has since collapsed into the canonical module
-(`#43`), so this file no longer matches the pre-collapse branches by design. This branch adds `./auth*`
-and the `server/auth` section; resolving the conflict by keeping one side would silently drop either the
-export/static/healthcheck entries or the auth ones.
+(`#43`), so this file no longer matches the pre-collapse branches by design. `#6` added `./auth*`
+and the `server/auth` section; `#17` adds `./jwt`, `./crypto`, `./user-secrets` and `./quota` plus the
+four sections below. Resolving the conflict by keeping one side would silently drop the
+`export`/`static`/`healthcheck` entries, the `auth` ones, or these four.
 
 The union is asserted rather than trusted: `server/auth/packaging.test.ts` fails on a conflict marker
 anywhere in this file, on a duplicated heading, on a table with two header rows, on an export target
@@ -424,3 +429,93 @@ then Facebook, then a password ends up as one account with four credentials.
 instead of bcrypt on every validation. `index.ts` (SvelteKit cookie glue) is not ported — the
 transport supplies a `SessionSink` instead. `KeyKind.OAuth2` replaces the separate `GOOGLE` and
 `FACEBOOK` kinds, so the two OAuth2 providers keep provider-scoped identifications.
+
+## `server/jwt`
+
+`JwtSigner`, `assertJwtSecret`, `constantTimeEquals`, `JwtError`, `JwtErrorCode`, `JWT_ALGORITHM`,
+`JWT_TYPE`, `MIN_SECRET_LENGTH`, `DEFAULT_TTL_SECONDS`, `PLACEHOLDER_SECRETS`,
+`PLACEHOLDER_SECRET_MARKERS`.
+
+HS256 only, over Web Crypto, with no dependency and **no environment read**: the secret is a
+constructor option, validated once at construction. `sign(claims, { expiresInSeconds })` stamps
+`iat`/`exp` from the injected clock, so a caller cannot backdate a token or extend its life;
+`verify(token)` validates the header _by value_ first (`alg` exactly `HS256`, `typ` exactly `JWT`),
+then the HMAC tag in constant time, then the claim shapes through arktype, then `exp`/`nbf` and the
+optional `iss`/`aud`. Failures are typed `JwtError`s carrying a `JwtErrorCode` — branch on the code,
+never on the message, because no message in the module interpolates the token, the secret, the header
+or the payload. `assertJwtSecret` fails closed on the three unusable kinds of secret: absent, shorter
+than 32 characters, or recognisable as a placeholder (exact-match set plus marker substrings, which is
+what catches the source's own 39-character default).
+
+**On the constant-time guarantee — do not infer timing safety from a green suite.** `constantTimeEquals`
+here (and its twin in `platform/tokens.ts`, whose package README arrives with the sibling `platform/`
+PRs) digests both sides to a fixed 32 bytes and then compares with `timingSafeEqual` from `@std/crypto`.
+Two tests pin that: the compare is reached on the verify path, and the primitive delegates instead of
+hand-rolling. They are **shape tripwires, not timing proofs**. A hand-rolled comparison that avoids the
+marker shapes they look for, or a helper defined outside the primitive, still passes them — an
+`Object.is` early-return loop is measured at 1 iteration on a mismatch against 32 on a match, and
+`platform/tokens.test.ts` asserts that this variant is _still undetected_, so the limitation cannot
+silently become a claim of coverage. The guards detect the mutation classes they name; they do not
+establish that no run time depends on the compared values.
+
+## `server/crypto`
+
+`CryptoService`, `CryptoError`, `CryptoErrorCode`, `SecretCipher`, `maskKey`, `isHexKey`,
+`AES_ALGORITHM`, `AES_KEY_BYTES`, `KEY_BITS`, `IV_LENGTH`, `HEX_KEY_LENGTH`, `DEFAULT_MASK_VISIBLE`.
+
+The scheme is `template/libs/server/crypto`'s, folded in unchanged: AES-256-GCM, the key derived as
+`SHA-256(utf8(secret))`, a 12-byte IV per call, wire format standard base64 of `[IV][ciphertext+tag]`
+— so a ciphertext written by that module stays readable. `CryptoService.fromHexKey` is the second
+entry point: 64 hex characters are decoded and imported as the 32 raw key bytes, never hashed, so the
+two constructors produce different keys for the same characters. AES-128 (32 hex characters) is
+rejected with `CryptoErrorCode.InvalidHexKey`. `maskKey` is the display hint: it keeps the trailing
+code points and never returns the whole key.
+
+## `server/user-secrets`
+
+`createUserSecretStore`, `UserSecretError`, `UserSecretErrorCode`, `UserSecretPort`,
+`StoredUserSecret`, `SaveUserSecretInput`, `UserSecretSummary`, `PROVIDER_PATTERN`,
+`MIN_API_KEY_LENGTH`, `MAX_API_KEY_LENGTH`, `MAX_PROVIDER_LENGTH`.
+
+The BYOK pattern: validate → `cipher.encrypt` at rest → keep `maskKey`'s hint → upsert per
+`(user, provider)` → delete, with persistence behind an injected `UserSecretPort` (no SQL, no driver)
+and the cipher behind `SecretCipher`. `save` returns a summary, `list` returns summaries only — the
+ciphertext has no field to travel in — and `openSecret` is the single call that yields a plaintext,
+for the outbound provider request. The port's `upsert` contract is the source's
+`ON CONFLICT (user_id, provider) DO UPDATE`: replace the secret and hint, force `isActive`, bump
+`updatedAt`, preserve `createdAt`. Neither the cipher nor the mask is re-implemented here; both come
+from `server/crypto.ts`.
+
+## `server/quota`
+
+`createQuotaMeter`, `quotaKey`, `quotaHttpStatus`, `resolveQuotaPrincipal`, `QuotaError`,
+`QuotaErrorCode`, `QuotaDecision`, `QuotaPrincipalKind`, `QuotaPolicy`, `QuotaPrincipal`, `QuotaState`,
+`QuotaStore`, `QuotaKey`, `QuotaMeter`, `QuotaMeterOptions`.
+
+A countable budget per principal, decremented by units of _business work_: `check` (per-user limit,
+session fallback, BYOK bypass), `record` (after the work, may overshoot), `get` (read-only).
+`QuotaDecision` maps to 200/429/503 through `quotaHttpStatus`; `Unavailable` is the service condition
+(no metered provider key configured) and is deliberately not the source's `limit === 0` sentinel,
+because 0 is also a legitimate disabled budget. State lives in the injected `QuotaStore`, so two
+processes share one budget and a restart cannot reset usage. The policy and the recorded count parse
+through arktype; the failures map to constant messages, because an arktype summary echoes the value.
+
+**This is not a rate limiter.** A quota counts business work in a long window, keyed by principal,
+enforced at the costly action _after_ authentication and recorded after the fact; a rate limiter
+counts requests per second, keyed by whatever is cheap and not attacker-controlled, and runs as
+middleware before routing. `429` here means "this principal has spent their budget", never "you are
+going too fast". Request smoothing is `platform/rate-limit` (issue #4), which does not live here.
+
+### Fixes applied at extraction time (`server/jwt`, `server/crypto`, `server/user-secrets`, `server/quota`)
+
+| Source                                         | Bug                                                                                 | Pinned by                                                                           |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `offer-lens/libs/auth/mod.ts:10-14`            | `getJwtSecret()` fell back to `DEMO_OPENAI_API_KEY`, then a public dev string       | `rejects the source's hardcoded default even though it is 39 characters`            |
+| `offer-lens/libs/auth/mod.ts:115`              | `sigB64 !== expectedSig` — a non-constant-time signature compare                    | `goes through the constant-time comparison`                                         |
+| `offer-lens/libs/auth/mod.ts:109-116`          | the header was never decoded, so `alg`/`typ` were unvalidated                       | `refuses an alg none forgery on the algorithm, with or without a signature segment` |
+| `offer-lens/libs/encrypt/mod.ts:13-18`         | a 16-byte AES-128 key was accepted next to AES-256                                  | `fromHexKey rejects a 32-hex-character AES-128 key`                                 |
+| `offer-lens/libs/scraper/mod.ts:132`           | failures classified with `msg.includes("abort")`                                    | `reports DecryptionFailed for any cipher rejection, classified by type not message` |
+| `offer-lens/apps/api/routes/keys.ts:93,133`    | the provider name and a raw `err.message` were echoed into a response               | `never echoes the apiKey in a validation message`                                   |
+| `offer-lens/apps/api/services/auth.ts:157-164` | the per-user quota used `ANONYMOUS_LIMIT = 3` while sessions used `DEMO_LIMIT = 50` | `quota: a limit of 0 is a disabled budget, not an error` + the window tests         |
+| `mig/routes/api/_validators.ts:35`             | the honeypot was `z.string()`: required, never checked                              | `honeypotField accepts only the empty string`                                       |
+| `mig/lib/tokens.ts:38-44`                      | no secret check, so a missing secret hashed against `"undefined"`                   | `newCancelToken — a blank secret fails closed`                                      |
