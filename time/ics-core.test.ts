@@ -136,7 +136,19 @@ Deno.test("foldLine counts a lone surrogate as its encoder replacement width", (
 })
 
 Deno.test("CONTINUATION_LIMIT reserves one octet for the continuation space", () => {
-  assertEquals(CONTINUATION_LIMIT, FOLD_LIMIT - 1)
+  // Literal 74, not FOLD_LIMIT - 1: the constant is defined as that same
+  // expression, so asserting it would restate the definition and could never
+  // fail. The behaviour the name promises is checked below on a real fold.
+  assertEquals(CONTINUATION_LIMIT, 74)
+
+  const folded = physicalLines(foldLine("C".repeat(300)))
+  assertEquals(octets(folded[0]!), 75)
+  for (const continuation of folded.slice(1)) {
+    assertEquals(continuation.startsWith(" "), true)
+    // 74 octets of content + the 1-octet continuation space.
+    assertEquals(octets(continuation) <= CONTINUATION_LIMIT + 1, true)
+    assertEquals(octets(continuation.slice(1)) <= CONTINUATION_LIMIT, true)
+  }
 })
 
 Deno.test("unfoldLines rejoins a fold sequence and ignores a bare LF", () => {
@@ -199,6 +211,50 @@ Deno.test("icsEscape strips NUL, BEL and DEL but keeps HTAB", () => {
   assertEquals(icsEscape("Tab\tkept"), "Tab\tkept")
   assertEquals(icsEscape("Del\u007Feted"), "Del" + "eted")
   assertEquals(stripControlCharacters("\u0000\u0007\u007F"), "")
+})
+
+Deno.test("icsUnescape decodes hand-written wire escapes literally", () => {
+  // Literal expectations against escapes written by hand, NOT produced by
+  // icsEscape. A round-trip alone cannot catch a symmetric error (encoder and
+  // its inverse agreeing on the wrong thing), and #13 uses this function to
+  // decode documents this package did not write.
+  assertEquals(icsUnescape("a\\nb"), `a${LF}b`)
+  assertEquals(icsUnescape("a\\Nb"), `a${LF}b`)
+  assertEquals(icsUnescape("a\\,b"), "a,b")
+  assertEquals(icsUnescape("a\\;b"), "a;b")
+  assertEquals(icsUnescape("a\\\\b"), "a\\b")
+  assertEquals(icsUnescape("a\\qb"), "aqb")
+  // A trailing backslash has no successor to consume.
+  assertEquals(icsUnescape("trailing\\"), "trailing\\")
+  // A hand-written DESCRIPTION as it appears on the wire, folded and escaped.
+  const wire = "DESCRIPTION:Agenda for Q3\\, review\\; bring notes\\nRoom 1"
+  assertEquals(
+    icsUnescape(wire.slice("DESCRIPTION:".length)),
+    `Agenda for Q3, review; bring notes${LF}Room 1`,
+  )
+  assertEquals(
+    icsUnescape(
+      unfoldLines(`DESCRIPTION:Agenda for Q3\\, review\\; bring no${CRLF} tes\\nRoom 1`).slice(
+        "DESCRIPTION:".length,
+      ),
+    ),
+    `Agenda for Q3, review; bring notes${LF}Room 1`,
+  )
+})
+
+Deno.test("icsEscapeParameter decodes a hand-written RFC 6868 parameter value", () => {
+  // Same reasoning as icsUnescape above: literal expectations for the decoder of
+  // a foreign document.
+  assertEquals(icsUnescapeParameter("Lastname^, Firstname"), "Lastname^, Firstname")
+  assertEquals(icsUnescapeParameter("a^'b"), `a"b`)
+  assertEquals(icsUnescapeParameter("a^nb"), `a${LF}b`)
+  assertEquals(icsUnescapeParameter("a^Nb"), `a${LF}b`)
+  assertEquals(icsUnescapeParameter("a^^b"), "a^b")
+  // `^'` is the double-quote escape, NOT an apostrophe: "O^'Brien" stays as
+  // written, which is why a name with an apostrophe needs no RFC 6868 encoding.
+  assertEquals(icsUnescapeParameter("Smith^'s, John^^"), `Smith"s, John^`)
+  assertEquals(icsUnescapeParameter("O'Brien"), "O'Brien")
+  assertEquals(icsUnescapeParameter("Mary ^'Jane^' Doe"), `Mary "Jane" Doe`)
 })
 
 Deno.test("icsUnescape is the exact inverse of icsEscape", () => {

@@ -159,9 +159,15 @@ export interface IcsOptions {
   /** Instant stamped into `DTSTAMP`; pass the same value for reproducible output. */
   dtstamp: Date
   /**
-   * Emitted as `METHOD`; defaults to `REQUEST` for a `CONFIRMED` event and
-   * `CANCEL` for a `CANCELLED` one. An explicit value that contradicts
+   * Emitted as `METHOD`; defaults to `REQUEST` for a `CONFIRMED` or `TENTATIVE`
+   * event and `CANCEL` for a `CANCELLED` one. An explicit value that contradicts
    * `event.status` throws rather than emitting a document clients ignore.
+   *
+   * Consequence worth knowing: only those two pairings are reachable, so
+   * `IcsMethod.PUBLISH` and `IcsMethod.REPLY` cannot be combined with a VEVENT
+   * here. A published event with no organizer is out of scope — add it as a
+   * separate code path if a caller needs it, rather than relaxing the check and
+   * letting a contradiction through.
    */
   method?: IcsMethod
 }
@@ -183,6 +189,28 @@ function enumName<T extends number>(names: Record<T, string>, value: T, property
     throw new TypeError(`${property} is not a recognised value: ${String(value)}`)
   }
   return name
+}
+
+/**
+ * Validate a `SEQUENCE` value and return its decimal form.
+ *
+ * RFC 5545 §3.8.7.4 defines `SEQUENCE` as a non-negative integer. `NaN`,
+ * `Infinity`, `1.5` and `-3` are all type-legal `number`s, so the compiler will
+ * not stop them and they serialize to values a strict parser rejects; a JS
+ * caller can pass a string, whose CRLF would forge a content line. Both are
+ * rejected here rather than quietly written, the same rationale as
+ * {@link enumName}.
+ *
+ * @throws {TypeError} for anything that is not a non-negative integer.
+ */
+function sequenceValue(sequence: number): string {
+  if (
+    typeof sequence !== "number" || !Number.isInteger(sequence) || sequence < 0 ||
+    sequence > 2147483647
+  ) {
+    throw new TypeError(`event.sequence must be a non-negative integer: ${String(sequence)}`)
+  }
+  return String(sequence)
 }
 
 /** Default iTIP method implied by an event status. */
@@ -319,7 +347,7 @@ export function buildVEventLines(event: IcsEvent, dtstamp: Date, method: IcsMeth
     `STATUS:${statusName}`,
     "TRANSP:OPAQUE",
   )
-  if (event.sequence !== undefined) lines.push(`SEQUENCE:${event.sequence}`)
+  if (event.sequence !== undefined) lines.push(`SEQUENCE:${sequenceValue(event.sequence)}`)
   lines.push("END:VEVENT")
   return lines
 }

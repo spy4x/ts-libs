@@ -6,6 +6,8 @@
 import { assertEquals, assertThrows } from "@std/assert"
 import { CRLF, FOLD_LIMIT, formatIcsUtc, LF, unfoldLines } from "./ics-core.ts"
 import {
+  attendeeLine,
+  buildVEventLines,
   generateIcs,
   type IcsEvent,
   IcsEventStatus,
@@ -13,6 +15,7 @@ import {
   type IcsOptions,
   IcsPartStat,
   IcsRole,
+  organizerLine,
 } from "./ics.ts"
 
 const PRODID = "-//ts-libs//time//EN"
@@ -358,6 +361,147 @@ Deno.test("generateIcs emits SEQUENCE only when supplied, and it increments the 
 
   const zero = unfoldLines(generateIcs(makeEvent({ sequence: 0 }), makeOptions()))
   assertEquals(zero.includes(`SEQUENCE:0${CRLF}`), true)
+})
+
+Deno.test("generateIcs rejects a SEQUENCE that is not a non-negative integer", () => {
+  // RFC 5545 §3.8.7.4: SEQUENCE is a non-negative integer. NaN, Infinity, 1.5
+  // and -3 are all type-legal `number`s, so nothing but an explicit guard stops
+  // them reaching the wire as SEQUENCE:NaN, SEQUENCE:1.5 and so on.
+  for (
+    const sequence of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 1.5, -3, -1]
+  ) {
+    assertThrows(
+      () => generateIcs(makeEvent({ sequence }), makeOptions()),
+      TypeError,
+      "event.sequence must be a non-negative integer",
+      `${String(sequence)} must be rejected`,
+    )
+  }
+
+  // A JS caller can pass a string; its CRLF would become a real content line.
+  const injected = "1\r\nX-INJECTED:1"
+  assertThrows(
+    () => generateIcs(makeEvent({ sequence: injected as unknown as number }), makeOptions()),
+    TypeError,
+    "event.sequence must be a non-negative integer",
+  )
+  // And the value RFC 5545 permits must still be accepted.
+  for (const sequence of [0, 1, 2147483647]) {
+    assertEquals(
+      unfoldLines(generateIcs(makeEvent({ sequence }), makeOptions()))
+        .includes(`SEQUENCE:${sequence}${CRLF}`),
+      true,
+    )
+  }
+  assertThrows(
+    () => generateIcs(makeEvent({ sequence: 2147483648 }), makeOptions()),
+    TypeError,
+    "non-negative integer",
+  )
+})
+
+Deno.test("generateIcs keeps the SEQUENCE guard in buildVEventLines, the exported entry", () => {
+  // buildVEventLines is exported for #13, so the guard must live there and not
+  // only in generateIcs.
+  assertThrows(
+    () => buildVEventLines(makeEvent({ sequence: 1.5 }), DTSTAMP, IcsMethod.REQUEST),
+    TypeError,
+    "event.sequence must be a non-negative integer",
+  )
+  assertEquals(
+    buildVEventLines(makeEvent({ sequence: 2 }), DTSTAMP, IcsMethod.REQUEST).includes("SEQUENCE:2"),
+    true,
+  )
+})
+
+Deno.test("buildVEventLines emits a foldable VEVENT block with the RFC 5545 property order", () => {
+  const lines = buildVEventLines(
+    makeEvent({
+      description: "Agenda",
+      location: "Room 1",
+      url: "https://meet.example.com/room/1",
+      organizer: { email: "jane@example.com", name: "Jane Doe" },
+      attendees: [{ email: "client@example.com", name: "Client", rsvp: true }],
+    }),
+    DTSTAMP,
+    IcsMethod.REQUEST,
+  )
+
+  assertEquals(lines[0], "BEGIN:VEVENT")
+  assertEquals(lines.at(-1), "END:VEVENT")
+  assertEquals(
+    lines.indexOf("DTSTART:20260828T080000Z") < lines.indexOf("SUMMARY:Meeting with Jane Doe"),
+    true,
+  )
+  assertEquals(
+    lines.indexOf("DTSTAMP:20260825T164200Z") < lines.indexOf("DTSTART:20260828T080000Z"),
+    true,
+  )
+  assertEquals(lines.indexOf("STATUS:CONFIRMED") < lines.indexOf("END:VEVENT"), true)
+  // Every line is foldable on its own, and the block carries no line break of
+  // its own — the caller joins it.
+  for (const line of lines) {
+    assertEquals(utf8.encode(line).length <= FOLD_LIMIT, true, `unfoldable: ${line.slice(0, 40)}`)
+    assertEquals(line.includes("\r"), false)
+    assertEquals(line.includes("\n"), false)
+  }
+  assertThrows(
+    () => buildVEventLines(makeEvent(), DTSTAMP, IcsMethod.CANCEL),
+    TypeError,
+    "contradicts",
+  )
+})
+
+Deno.test("organizerLine quotes and escapes the CN parameter", () => {
+  assertEquals(
+    organizerLine({ email: "jane@example.com", name: "Jane Doe" }),
+    'ORGANIZER;CN="Jane Doe":mailto:jane@example.com',
+  )
+  assertEquals(
+    organizerLine({ email: "jane@example.com" }),
+    "ORGANIZER:mailto:jane@example.com",
+  )
+  // RFC 6868 escaping inside the quoted value, no backslash escaping.
+  assertEquals(
+    organizerLine({ email: "jane@example.com", name: `Jane "JD"${LF}Doe` }),
+    `ORGANIZER;CN="Jane ^'JD^'^nDoe":mailto:jane@example.com`,
+  )
+  assertEquals(
+    organizerLine({ email: "  jane@example.com  " }),
+    "ORGANIZER:mailto:jane@example.com",
+  )
+  assertThrows(() => organizerLine({ email: "\r\n" }), TypeError, "ORGANIZER")
+})
+
+Deno.test("attendeeLine emits parameters in RFC 5545 order and defaults ROLE away", () => {
+  assertEquals(
+    attendeeLine({ email: "client@example.com", name: "Client", rsvp: true }),
+    'ATTENDEE;CN="Client";RSVP=TRUE:mailto:client@example.com',
+  )
+  assertEquals(
+    attendeeLine({
+      email: "chair@example.com",
+      name: "Chair",
+      role: IcsRole.CHAIR,
+      partStat: IcsPartStat.ACCEPTED,
+      rsvp: false,
+    }),
+    'ATTENDEE;CN="Chair";ROLE=CHAIR;PARTSTAT=ACCEPTED;RSVP=FALSE:mailto:chair@example.com',
+  )
+  // REQ-PARTICIPANT is RFC 5545's default, so it emits no parameter.
+  assertEquals(
+    attendeeLine({ email: "a@example.com", role: IcsRole.REQ_PARTICIPANT }),
+    "ATTENDEE:mailto:a@example.com",
+  )
+  assertEquals(
+    attendeeLine({ email: "a@example.com", partStat: IcsPartStat.NEEDS_ACTION }),
+    "ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:a@example.com",
+  )
+  // A CN carrying RFC 6868 or TEXT metacharacters stays inside the quoted value.
+  assertEquals(
+    attendeeLine({ email: "a@example.com", name: "Last, First; PhD" }),
+    `ATTENDEE;CN="Last, First; PhD":mailto:a@example.com`,
+  )
 })
 
 Deno.test("generateIcs emits SEQUENCE after STATUS so clients read the revision with the status", () => {

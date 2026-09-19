@@ -9,7 +9,12 @@
 // The folding algorithm originates in `mig/lib/ics.ts` (fold) and this port
 // keeps its UTF-8 boundary handling unchanged.
 
-/** Maximum octets of a content line including its line break, per RFC 5545 §3.1. */
+/**
+ * Maximum octets of a content line *excluding* its CRLF line break, per RFC 5545
+ * §3.1 ("Lines of text SHOULD NOT be longer than 75 octets, excluding the line
+ * break"). A physical line on the wire is therefore at most 77 octets: 75 plus
+ * the two-octet separator {@link CRLF}.
+ */
 export const FOLD_LIMIT = 75
 
 /**
