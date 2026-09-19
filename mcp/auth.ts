@@ -76,14 +76,12 @@ export function createTokenVerifier(token: string): TokenVerifier {
 }
 
 /**
- * Read a bearer token from the environment. Called from an entry point, never at
- * module scope. Throws on a missing or empty value so a misconfigured server fails at
- * startup instead of serving unauthenticated.
+ * Read a bearer token from the environment. The environment is passed in explicitly —
+ * there is no `Deno.env` default — so an entry point has to opt in at startup and no
+ * import can pick up a credential as a side effect. Throws on a missing or empty value,
+ * so a misconfigured server fails at startup instead of serving unauthenticated.
  */
-export function bearerTokenFromEnv(
-  name: string,
-  env: Pick<typeof Deno.env, "get"> = Deno.env,
-): string {
+export function bearerTokenFromEnv(name: string, env: Pick<typeof Deno.env, "get">): string {
   const value = env.get(name)
   if (value === undefined || value.length === 0) {
     throw new Error(`${name} is not set: refusing to start an authenticated transport without it`)

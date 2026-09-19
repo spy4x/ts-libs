@@ -1,7 +1,7 @@
 // Tests for token auth. The two behaviours that matter: a token is compared in
 // constant time, and a token never reaches a log line.
 
-import { assert, assertEquals, assertNotMatch } from "@std/assert"
+import { assert, assertEquals, assertNotMatch, assertThrows } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import {
   bearerTokenFromEnv,
@@ -128,6 +128,15 @@ describe("bearerTokenFromHeaders", () => {
 })
 
 describe("bearerTokenFromEnv", () => {
+  it("takes the environment as a required argument, so no import reads it", () => {
+    // The one assertion that keeps a credential read out of module scope: calling it
+    // without an environment is a type error and a runtime failure, never a silent
+    // read of the ambient process environment.
+    // deno-lint-ignore no-explicit-any
+    const call = bearerTokenFromEnv as any
+    assertThrows(() => call("MCP_BEARER_TOKEN"), TypeError)
+  })
+
   it("reads the value of the named variable", () => {
     const env = { get: (name: string) => (name === "MCP_BEARER_TOKEN" ? FAKE_TOKEN : undefined) }
     assertEquals(bearerTokenFromEnv("MCP_BEARER_TOKEN", env), FAKE_TOKEN)

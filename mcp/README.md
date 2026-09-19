@@ -108,8 +108,10 @@ accepted) and **from nowhere else**.
 - `X-Api-Key` is **not** accepted. It was a third source on the same endpoint, and a
   caller that needs a second header can wrap `createHttpTransport`. Accepting fewer
   places is the point.
-- No token is read from `$env` at module scope. An entry point calls
-  `bearerTokenFromEnv("MCP_BEARER_TOKEN")` (throws when unset) and
+- No token is read from `$env` at module scope, and `bearerTokenFromEnv(name, env)`
+  takes the environment as a **required** argument — there is no `Deno.env` default, so
+  importing this module can never read a credential as a side effect. An entry point
+  calls `bearerTokenFromEnv("MCP_BEARER_TOKEN", Deno.env)` (throws when unset) and
   `createTokenVerifier(token)` (throws on an empty secret) at startup.
 - `bearerTokenFromHeaders` returns `undefined` for a missing or blank header; there is no
   "no token configured means open" path in the verifier.
