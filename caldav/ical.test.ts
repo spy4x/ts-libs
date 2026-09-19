@@ -620,6 +620,46 @@ Deno.test("resourceUrl honours a declared URL only on the calendar's origin", ()
   )
 })
 
+Deno.test("resourceUrl refuses a network-path reference and shows the origin it keeps", () => {
+  // BLOCKER E3. `declaredUrl.startsWith("/")` accepted `//attacker.example.net/x`
+  // as a rooted path and returned it verbatim. A rooted path resolves onto the
+  // calendar's own origin; a network-path reference resolves to *another* one,
+  // and the two differ by a single character. The guarantee below is the one the
+  // module and the README publish, so it is asserted as an origin, not as a
+  // string.
+  const attacker = "//attacker.example.net/evil/u3.ics"
+  assertEquals(new URL(attacker, CALENDAR_URL).origin, "https://attacker.example.net")
+  assertEquals(resourceUrl(CALENDAR_URL, "u3", attacker), `${CALENDAR_URL}u3.ics`)
+
+  // Rooted and absolute same-origin: both kept, both on the calendar's origin
+  // once resolved.
+  for (const declared of ["/dav/u3.ics", "https://caldav.example.com/other/u3.ics"]) {
+    const url = resourceUrl(CALENDAR_URL, "u3", declared)
+    assertEquals(url, declared)
+    assertEquals(new URL(url, CALENDAR_URL).origin, new URL(CALENDAR_URL).origin)
+  }
+})
+
+Deno.test("parseTodos reports a refused network-path URL in issues", () => {
+  const todos = parseTodos(
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VTODO",
+      "UID:u3",
+      "SUMMARY:s",
+      "URL://attacker.example.net/evil/u3.ics",
+      "END:VTODO",
+      "END:VCALENDAR",
+      "",
+    ].join("\r\n"),
+    { calendarUrl: CALENDAR_URL, calendarName: "Tasks" },
+  )
+  assert(todos.success)
+  assertEquals(todos.output.todos[0]!.url, `${CALENDAR_URL}u3.ics`)
+  assertEquals(todos.output.issues.length, 1)
+  assertEquals(todos.output.issues[0]!.property, "URL")
+})
+
 Deno.test("parseTodos reports a declared URL off the calendar's origin and uses the derived one", () => {
   const document = [
     "BEGIN:VCALENDAR",

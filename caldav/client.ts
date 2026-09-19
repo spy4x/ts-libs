@@ -45,9 +45,13 @@
  *  - a calendar collection `<D:href>` in the calendars PROPFIND → a warning, and
  *    the collection is skipped, so it never reaches a `REPORT` and never appears
  *    in `CalendarListing.calendars`;
- *  - a `URL:` property inside `calendar-data` → ignored in `ical.ts`'s
- *    `resourceUrl`, which keeps the derived URL, so `Todo.url` and `Event.url` are
- *    always on the configured origin and a caller may rely on that.
+ *  - a `URL:` property inside `calendar-data` → refused in `ical.ts`'s
+ *    `resourceUrl` unless it can be shown to resolve onto the calendar's own
+ *    origin: an absolute URL must prove its origin, and a rooted path is
+ *    *resolved* first, which is what separates `/dav/u.ics` from the
+ *    network-path reference `//attacker.example.net/u.ics`. So every returned
+ *    `Todo.url`/`Event.url` is either an absolute URL on the calendar's origin
+ *    or a rooted path that resolves to it, and a caller may rely on that.
  *
  * A redirect is the one hop this gate cannot see, because it happens inside the
  * transport; `fetch` deletes `Authorization` from a request it redirects to

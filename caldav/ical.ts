@@ -759,15 +759,20 @@ function withTrailingSlash(url: string): string {
  * percent-encoded and the base is normalised, so the URL's shape depends only on
  * the base's path.
  *
- * **A declared `URL` is a server-named URL, so it is honoured only where its
- * origin can be shown to be the calendar's own.** A rooted path (`/dav/u.ics`) is
- * on that origin by construction and is kept; an absolute URL is kept only when
- * it shares an `http(s)` origin with `calendarUrl` ({@link sameOrigin}, which
- * fails closed). Anything else — another origin, or an origin that cannot be
- * compared because `calendarUrl` is empty or not `http(s)` — is ignored and the
- * URL is derived from `calendarUrl` exactly as for a component with no `URL` at
- * all. A caller may therefore rely on `Todo.url` and `Event.url` staying on the
- * origin of the calendar they came from, whatever the server wrote; the cost is
+ * **A declared `URL` is a server-named URL, so it is honoured only where it can
+ * be shown to resolve onto the calendar's own origin.** An absolute URL must
+ * share an `http(s)` origin with `calendarUrl`; a rooted path (`/dav/u.ics`) is
+ * *resolved* against `calendarUrl` and kept only when the result is on that
+ * origin — which is what separates it from the network-path reference
+ * `//attacker.example.net/u.ics`, another origin wearing the same first
+ * character. Anything else — another origin, a relative reference, or an origin
+ * that cannot be compared because `calendarUrl` is empty or not `http(s)` — is
+ * ignored and the URL is derived from `calendarUrl` exactly as for a component
+ * with no `URL` at all.
+ *
+ * The guarantee that buys, stated exactly: **every returned URL is either an
+ * absolute URL on the calendar's own origin, or a rooted path that resolves to
+ * it.** It is never a reference that resolves to another origin. The cost is
  * that a task whose `URL` really did point at another origin loses that URL —
  * silently in this function, reported through `parseTodos`/`parseEvents`
  * `issues`.
@@ -787,14 +792,35 @@ export function resourceUrl(calendarUrl: string, uid: string, declaredUrl?: stri
 /**
  * True when a server-declared `URL` may stand in for the resource location.
  *
- * Rooted paths inherit the calendar's origin; absolute URLs must prove it. An
- * `http(s)`-vs-`ftp` mismatch, a relative URL that is not rooted, and the empty
- * `calendarUrl` a caller gets when it parses a document with no options all
- * return `false`, because none of them can be *shown* to be same-origin.
+ * The reference is **resolved** and its origin compared, never pattern-matched
+ * on its first character. `//host/x` starts with `/` exactly as `/dav/x` does,
+ * and it is a *network-path reference*: resolved against the calendar it lands
+ * on `https://host/x`, another origin. Prefix matching accepted it, `resourceUrl`
+ * handed it back verbatim, and `Todo.url` then had an attacker's origin — which
+ * falsified the guarantee both this file and the README publish.
+ *
+ * What is accepted, and why:
+ *
+ *  - an absolute URL, kept only when it shares an `http(s)` origin with
+ *    `calendarUrl` ({@link sameOrigin}, which fails closed);
+ *  - a **rooted** path, resolved against `calendarUrl` first and kept only when
+ *    the resolved origin is the calendar's;
+ *  - nothing else. A relative reference (`u.ics`) is refused: it is not an
+ *    absolute URL a caller can use, and the derived URL is absolute. A
+ *    non-`http(s)` scheme, the empty `calendarUrl` a caller gets when it parses
+ *    a document with no options, and unparseable text all return `false`,
+ *    because none of them can be *shown* to be same-origin.
  */
 function isUsableDeclaredUrl(declaredUrl: string, calendarUrl: string): boolean {
-  if (declaredUrl.startsWith("/")) return true
-  return /^[a-z][a-z0-9+.-]*:/i.test(declaredUrl) && sameOrigin(declaredUrl, calendarUrl)
+  if (/^[a-z][a-z0-9+.-]*:/i.test(declaredUrl)) return sameOrigin(declaredUrl, calendarUrl)
+  if (!declaredUrl.startsWith("/")) return false
+  let resolved: string
+  try {
+    resolved = new URL(declaredUrl, new URL(calendarUrl)).toString()
+  } catch {
+    return false
+  }
+  return sameOrigin(resolved, calendarUrl)
 }
 
 /**
