@@ -131,6 +131,12 @@ export const isPermanentStatus = (status: number): boolean => status >= 400 && s
  * `name` and a fixed description are enough to diagnose a transport failure;
  * the URL belongs in the caller's debugger, not in a value that gets logged,
  * rendered into a UI or pasted into an issue.
+ *
+ * Only a `name` that is a string at runtime is interpolated. `Error.name` is a
+ * writable property, so a caller controls the value as well as the text: a
+ * non-string falls back to the plain description instead of becoming
+ * `"null: …"` or `"42: …"`, and a `Symbol` cannot throw out of the template
+ * literal. See `readErrorName`.
  */
 export const describeTransportError = (cause: unknown): string => {
   const name = readErrorName(cause)
@@ -178,18 +184,37 @@ export const describeErrorKind = (cause: unknown): string => {
 }
 
 /**
- * Reads `cause.name`, or `undefined` when that read does not yield a string.
+ * Reads `cause.name`, or `undefined` unless that read yields a string.
  *
- * The read is guarded because `name` is not a data property: a hostile `Error`
- * subclass can define it as a throwing getter, and an ordinary property read
- * would then propagate that throw out of a function whose whole contract is to
- * *return* a description. `send` promises a `SlackResult` and never a
- * rejection, so an unguarded read here is the difference between a failure
- * result and an exception on the caller's stack.
+ * Both halves are load-bearing. The **read** is guarded because `name` is not a
+ * data property: a hostile `Error` subclass can define it as a throwing getter,
+ * and an ordinary property read would then propagate that throw out of a
+ * function whose whole contract is to *return* a description. `send` promises a
+ * `SlackResult` and never a rejection, so an unguarded read here is the
+ * difference between a failure result and an exception on the caller's stack.
+ *
+ * The **value** is type-checked because `Error.name`'s `string` is a
+ * declaration, not a runtime invariant — the property is writable, so whatever
+ * the caller stored arrives here. A `Symbol` is the sharpest case: `${name}`
+ * throws `TypeError: Cannot convert a Symbol value to a string`, which
+ * re-opened the rejection the guard above exists to close. A
+ * non-string-but-stringifiable value (`null`, `42`, an object) is refused too
+ * rather than coerced, and the ruling is the same one `describeErrorKind`
+ * follows: `name` is caller text and the field it feeds is a returned, loggable
+ * string, so "not a string" means the plain `transport failure (url withheld)`
+ * wording rather than `"null: transport failure (url withheld)"` or `"42: …"`.
+ * The only name either caller interpolates is one that was a string to begin
+ * with.
  */
 const readErrorName = (cause: unknown): string | undefined => {
   try {
-    return cause instanceof Error ? cause.name : undefined
+    if (!(cause instanceof Error)) {
+      return undefined
+    }
+    // Annotated `unknown`: the declared type would make the check below a
+    // compile-time no-op instead of a runtime one.
+    const name: unknown = cause.name
+    return typeof name === "string" ? name : undefined
   } catch {
     return undefined
   }

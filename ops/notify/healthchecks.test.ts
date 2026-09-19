@@ -48,6 +48,17 @@ const recordingTimer = () => {
   return { delays, clock, sleep }
 }
 
+/**
+ * An `Error` whose `name` is not a string at all, which the `string`
+ * declaration on `Error.name` does not prevent — the property is writable. A
+ * `Symbol` throws inside a template literal and so does a `toString`.
+ */
+const errorWithRawName = (value: unknown): Error => {
+  const error = new Error("boom")
+  Object.defineProperty(error, "name", { value })
+  return error
+}
+
 const clientFor = (responses: FakeResponse[], overrides: { pingUrl?: string } = {}) => {
   const transport = fakeTransport(responses)
   const timer = recordingTimer()
@@ -288,6 +299,62 @@ describe("HealthchecksClient.ping", () => {
       attempts: 2,
       waitedMs: 10,
     })
+  })
+
+  it("does not reject when a transport error's name is a Symbol", async () => {
+    // The value was unvalidated even after the read was guarded: `${name}` on a
+    // Symbol throws `TypeError: Cannot convert a Symbol value to a string`, so
+    // `ping` rejected from inside its own description helper instead of
+    // returning a `network_error`.
+    const timer = recordingTimer()
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: () => Promise.reject(errorWithRawName(Symbol("not a string"))),
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1 },
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Fail })
+    expect(result.ok === false && result.message).toBe("transport failure (url withheld)")
+    expect(result.ok === false && result.code).toBe("network_error")
+    expect(result.ok === false && result.attempts).toBe(1)
+  })
+
+  it("does not reject when a transport error's name has a throwing toString", async () => {
+    // Interpolating this name runs the caller's `toString`, whose text would
+    // then have reached a returned, loggable result.
+    const timer = recordingTimer()
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: () =>
+        Promise.reject(
+          errorWithRawName({
+            toString() {
+              throw new Error("caller text")
+            },
+          }),
+        ),
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1 },
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Fail })
+    expect(result.ok === false && result.message).toBe("transport failure (url withheld)")
+    expect(JSON.stringify(result)).not.toContain("caller text")
+  })
+
+  it("keeps a stringifiable but non-string transport name out of the result", async () => {
+    // `null` and `42` stringify, so an unvalidated read interpolated them into
+    // the message. A non-string is refused instead of coerced.
+    const timer = recordingTimer()
+    for (const rawName of [null, 42]) {
+      const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+        fetcher: () => Promise.reject(errorWithRawName(rawName)),
+        sleep: timer.sleep,
+        clock: timer.clock,
+        retry: { maxAttempts: 1 },
+      })
+      const result = await client.ping({ outcome: HealthchecksOutcome.Fail })
+      expect(result.ok === false && result.message).toBe("transport failure (url withheld)")
+    }
   })
 
   it("writes nothing to the console on success or failure", async () => {
