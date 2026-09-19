@@ -1,0 +1,13 @@
+{
+  "name": "@ts-libs/realtime",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./mod.ts",
+    "./client": "./client-transport.ts",
+    "./registry": "./registry.ts",
+    "./notify": "./notify.ts",
+    "./cursor": "./cursor.ts",
+    "./protocol": "./codec.ts",
+    "./testing": "./testing.ts"
+  }
+}
