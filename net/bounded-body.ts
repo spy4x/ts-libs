@@ -1,0 +1,233 @@
+/**
+ * Bounded body reading — a hard byte cap plus a stalled-body timeout.
+ *
+ * Merges two behaviours that lived in separate source repos:
+ *  - `offer-lens/libs/scraper/mod.ts` streamed a `Response` body and threw the
+ *    moment the accumulated bytes passed a hard cap.
+ *  - `warthunder-stats/libs/server/http/body.ts` read a `Request` body with the
+ *    same cap and pre-checked a declared `Content-Length`.
+ *  - The stalled-body half — a timer that cancels the reader — was
+ *    `offer-lens`-only and applies to both here.
+ *
+ * Zero dependencies: `ReadableStream`, `TextDecoder` and `setTimeout` are all
+ * platform APIs. Bodies are decoded incrementally so a huge payload never lands
+ * in memory as one string, and the reader is always cancelled and unlocked.
+ */
+
+/** Finite failure kinds a bounded read can raise. */
+export enum BodyReadErrorCode {
+  PayloadTooLarge = "payload_too_large",
+  BodyReadTimeout = "body_read_timeout",
+}
+
+/** Body exceeded the byte cap. */
+export class PayloadTooLargeError extends Error {
+  readonly code = BodyReadErrorCode.PayloadTooLarge
+  constructor(public readonly maxBytes: number) {
+    super(`Payload exceeds ${maxBytes} bytes`)
+    this.name = "PayloadTooLargeError"
+  }
+}
+
+/**
+ * No chunk arrived within the stall budget.
+ *
+ * Thrown for both a body that never produced a first chunk and one that went
+ * quiet midway. The read is abandoned — a stalled stream cannot be drained, so
+ * the body is cancelled instead.
+ */
+export class BodyReadTimeoutError extends Error {
+  readonly code = BodyReadErrorCode.BodyReadTimeout
+  constructor(public readonly timeoutMs: number) {
+    super(`Body read stalled for ${timeoutMs}ms`)
+    this.name = "BodyReadTimeoutError"
+  }
+}
+
+/** Default ceiling for a body read: 5 MiB. */
+export const DEFAULT_MAX_BYTES = 5 * 1024 * 1024
+
+/** Default stall budget: 10s without a chunk. */
+export const DEFAULT_BODY_TIMEOUT_MS = 10_000
+
+/**
+ * The read surface shared by `Request` and `Response`.
+ *
+ * Structural on purpose: both platform types carry these two members, so one
+ * reader serves an inbound request body and an outbound response body. Only the
+ * members this module touches are named, which keeps `Headers` out of the
+ * module's public surface.
+ */
+export interface BodySource {
+  readonly headers: { get(name: string): string | null }
+  readonly body: ReadableStream<Uint8Array> | null
+}
+
+export interface BodyReadOptions {
+  /**
+   * Stall budget in ms: the maximum time to wait for the next chunk. `0` or
+   * omitted disables the timeout entirely and the cap alone governs.
+   */
+  timeoutMs?: number
+  /** Byte cap for this read. Defaults to `DEFAULT_MAX_BYTES`. */
+  maxBytes?: number
+}
+
+/**
+ * Read the declared `Content-Length`, if the sender provided a usable one.
+ *
+ * The value must be bare decimal digits. `Number()` alone also accepts `1e3`,
+ * `0x10`, `+5` and `" 5"`, none of which are legal field values (RFC 9110
+ * §8.6) — and a pre-check that reads a bogus header as a number is a pre-check
+ * that can be talked out of doing its job.
+ *
+ * @returns The declared length, or `null` when the header is absent, not a
+ * non-negative integer, or malformed. A malformed length is treated as
+ * "unknown" rather than as zero, so it never becomes an accidental allowance.
+ */
+export function readContentLength(headers: { get(name: string): string | null }): number | null {
+  const raw = headers.get("content-length")
+  if (!raw || !/^\d+$/.test(raw)) return null
+  const n = Number(raw)
+  if (!Number.isSafeInteger(n)) return null
+  return n
+}
+
+/**
+ * Read a body into chunks, enforcing the hard cap and the stall budget.
+ *
+ * The cap is checked against the declared `Content-Length` before a single byte
+ * is read, and again against the running total while streaming, so a lying or
+ * absent header cannot get past it. The stall budget covers waiting for the
+ * *next* chunk, so a slow-but-live transfer may take as long as it needs while
+ * a hung one fails fast.
+ *
+ * The reader is cancelled and unlocked on every exit path, including the two
+ * throws — a failed bounded read must not leave the socket open.
+ *
+ * @throws `PayloadTooLargeError` when the body exceeds `maxBytes`.
+ * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
+ */
+async function* readBoundedChunks(
+  source: BodySource,
+  options: BodyReadOptions,
+): AsyncGenerator<Uint8Array> {
+  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
+  const timeoutMs = options.timeoutMs ?? 0
+
+  const declaredLength = readContentLength(source.headers)
+  if (declaredLength !== null && declaredLength > maxBytes) {
+    throw new PayloadTooLargeError(maxBytes)
+  }
+
+  if (!source.body) return
+
+  const reader = source.body.getReader()
+  let total = 0
+
+  /** `Promise.race` against a per-chunk timer; the timer covers one read only. */
+  const readNext = (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    if (timeoutMs <= 0) return reader.read()
+    let timer: number | undefined
+    return Promise.race([
+      reader.read(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new BodyReadTimeoutError(timeoutMs)), timeoutMs)
+      }),
+    ]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer)
+    })
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await readNext()
+      if (done) return
+      if (!value) continue
+      total += value.byteLength
+      if (total > maxBytes) throw new PayloadTooLargeError(maxBytes)
+      yield value
+    }
+  } catch (error) {
+    // An abandoned read must not keep the socket alive: cancel, then rethrow.
+    await cancelQuietly(reader)
+    throw error
+  } finally {
+    // `releaseLock` throws while a read is still pending, which is exactly the
+    // stalled case, so it stays best-effort.
+    try {
+      reader.releaseLock()
+    } catch {
+      // Pending read on an abandoned stream.
+    }
+  }
+}
+
+/**
+ * Read a body into bytes under the hard cap and stall budget.
+ *
+ * @throws `PayloadTooLargeError` when the body exceeds `maxBytes`.
+ * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
+ */
+export async function readBoundedBody(
+  source: BodySource,
+  options: BodyReadOptions = {},
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for await (const chunk of readBoundedChunks(source, options)) {
+    chunks.push(chunk)
+    total += chunk.byteLength
+  }
+
+  const body = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    body.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return body
+}
+
+/**
+ * Read a body as text, decoding incrementally so the cap is enforced before the
+ * whole payload is materialised as one string.
+ *
+ * @throws `PayloadTooLargeError` when the body exceeds `maxBytes`.
+ * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
+ */
+export async function readBoundedText(
+  source: BodySource,
+  options: BodyReadOptions = {},
+): Promise<string> {
+  const decoder = new TextDecoder("utf-8", { fatal: false })
+  let text = ""
+  for await (const chunk of readBoundedChunks(source, options)) {
+    text += decoder.decode(chunk, { stream: true })
+  }
+  return text + decoder.decode()
+}
+
+/**
+ * Read a body as JSON under the same cap and stall budget as
+ * `readBoundedText`.
+ *
+ * Lets the platform `SyntaxError` from `JSON.parse` escape on malformed JSON,
+ * so callers do not need a third error type to branch on.
+ */
+export async function readBoundedJson<T = unknown>(
+  source: BodySource,
+  options: BodyReadOptions = {},
+): Promise<T> {
+  return JSON.parse(await readBoundedText(source, options)) as T
+}
+
+async function cancelQuietly(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+  try {
+    await reader.cancel()
+  } catch {
+    // Already errored or cancelled; nothing to clean up.
+  }
+}

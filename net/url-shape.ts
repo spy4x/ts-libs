@@ -28,14 +28,53 @@ export interface UrlShapeOk {
 
 export type NormalizeUrlShapeResult = UrlShapeOk | UrlShapeError
 
-const ALLOWED_PROTOCOLS = new Set(["http:", "https:"])
+/**
+ * Narrow a `normalizeUrlShape` result to its success branch.
+ *
+ * Exported so `net/url-policy` — which forks the shape rules it needs to keep —
+ * can assert the shape contract on the input it shares with this module.
+ */
+export function isUrlShapeOk(result: NormalizeUrlShapeResult): result is UrlShapeOk {
+  return result.ok
+}
 
-/** Any `scheme:` prefix, with or without `//`, so `javascript:` is caught too. */
-const EXPLICIT_SCHEME = /^([a-z][a-z0-9+.-]*):/i
+export const ALLOWED_PROTOCOLS = new Set(["http:", "https:"])
+
+/**
+ * Any `scheme:` prefix, with or without `//`, so `javascript:` is caught too.
+ *
+ * Shared with `net/url-policy` so both layers agree on what counts as an
+ * explicit scheme — a scheme-less `example.com:8443` must not be read as one.
+ * The pattern carries no `/g` flag, so `.exec()` holds no `lastIndex` state.
+ */
+export const EXPLICIT_SCHEME = /^([a-z][a-z0-9+.-]*):/i
+
+/** A hostname that is a plain DNS label run: no `:`, no brackets, no dots. */
+export const PLAIN_HOSTNAME = /^[a-z0-9_-]+$/i
 
 // The control-character range is the point of this pattern.
 // deno-lint-ignore no-control-regex
-const INVALID_CHARACTERS = /[\s\u0000-\u001f\u007f]/
+export const INVALID_CHARACTERS = /[\s\u0000-\u001f\u007f]/
+
+export const EMPTY_MESSAGE = "Enter a URL"
+export const UNSUPPORTED_PROTOCOL_MESSAGE = "URL must start with http:// or https://"
+export const INVALID_FORMAT_MESSAGE = "Invalid URL format"
+export const INVALID_CHARACTERS_MESSAGE = "URL contains invalid characters"
+
+/**
+ * Split an explicit `scheme:` prefix off the raw input.
+ *
+ * A dotted candidate is a host with a port, not a scheme: `example.com:8443` is
+ * scheme-less input, while `javascript:` and `data:` are schemes.
+ *
+ * @param raw Trimmed input.
+ * @returns Whether a scheme was written, and its lowercased name without `:`.
+ */
+export function detectScheme(raw: string): { hadScheme: boolean; scheme: string } {
+  const candidate = EXPLICIT_SCHEME.exec(raw)?.[1]
+  const hadScheme = candidate !== undefined && !candidate.includes(".")
+  return { hadScheme, scheme: hadScheme ? candidate.toLowerCase() : "" }
+}
 
 /**
  * Normalise the shape of a user-entered URL.
@@ -46,8 +85,10 @@ const INVALID_CHARACTERS = /[\s\u0000-\u001f\u007f]/
  *  - Accepts only `http://` and `https://`. `javascript:`, `data:`, `file:` and
  *    friends are rejected, never rewritten.
  *  - Requires a hostname containing at least one dot, so `localhost` and bare
- *    IPs-shaped typos such as `.com` are refused. This is a shape check, not a
- *    safety check.
+ *    IPs-shaped typos such as `.com` are refused, as are bracketed IPv6
+ *    literals. This is a shape check for user-entered public origins, not a
+ *    safety check — `net/url-policy` accepts those forms on purpose so it can
+ *    reject them with a policy code instead.
  *  - Lowercases the scheme and the host; path, query and fragment keep their case.
  *  - Strips a default port (`:443` on https, `:80` on http) and keeps any other.
  *  - Preserves the absence of a trailing slash when the input had no path.
@@ -63,24 +104,21 @@ const INVALID_CHARACTERS = /[\s\u0000-\u001f\u007f]/
 export function normalizeUrlShape(input: string): NormalizeUrlShapeResult {
   const raw = input.trim()
   if (!raw) {
-    return { ok: false, code: "empty", message: "Enter a URL" }
+    return { ok: false, code: "empty", message: EMPTY_MESSAGE }
   }
 
   // Control characters and embedded whitespace are never valid in a URL.
   if (INVALID_CHARACTERS.test(raw)) {
-    return { ok: false, code: "invalid_format", message: "URL contains invalid characters" }
+    return { ok: false, code: "invalid_format", message: INVALID_CHARACTERS_MESSAGE }
   }
 
-  // A dotted candidate is a host with a port, not a scheme: `example.com:8443`
-  // is scheme-less input, while `javascript:` and `data:` are schemes.
-  const candidate = EXPLICIT_SCHEME.exec(raw)?.[1]
-  const hadScheme = candidate !== undefined && !candidate.includes(".")
+  const { hadScheme, scheme } = detectScheme(raw)
 
-  if (hadScheme && !ALLOWED_PROTOCOLS.has(`${candidate.toLowerCase()}:`)) {
+  if (hadScheme && !ALLOWED_PROTOCOLS.has(`${scheme}:`)) {
     return {
       ok: false,
       code: "unsupported_protocol",
-      message: "URL must start with http:// or https://",
+      message: UNSUPPORTED_PROTOCOL_MESSAGE,
     }
   }
 
@@ -88,14 +126,14 @@ export function normalizeUrlShape(input: string): NormalizeUrlShapeResult {
   try {
     parsed = new URL(hadScheme ? raw : `https://${raw}`)
   } catch {
-    return { ok: false, code: "invalid_format", message: "Invalid URL format" }
+    return { ok: false, code: "invalid_format", message: INVALID_FORMAT_MESSAGE }
   }
 
   if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) {
     return {
       ok: false,
       code: "unsupported_protocol",
-      message: "URL must start with http:// or https://",
+      message: UNSUPPORTED_PROTOCOL_MESSAGE,
     }
   }
 
