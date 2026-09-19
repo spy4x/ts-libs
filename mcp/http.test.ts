@@ -70,6 +70,45 @@ function createTransport(options: {
   return { transport, logs }
 }
 
+/**
+ * Run `action` with the console intercepted, and report every line it wrote. The transport
+ * logs through an injected sink, but the default sink *is* `console.error`
+ * (`mcp/http.ts:78`), so an injected logger is not the only way a value reaches an
+ * operator's log — a `console.*` call added anywhere on the path would be. Restores the
+ * real methods afterwards; assertions run after the restore, so a failure still reports
+ * normally.
+ */
+async function recordConsole(
+  action: () => Promise<unknown>,
+): Promise<{ lines: string[]; result: unknown }> {
+  const real = {
+    log: console.log,
+    warn: console.warn,
+    error: console.error,
+    info: console.info,
+    debug: console.debug,
+  }
+  const lines: string[] = []
+  const capture = (...args: unknown[]): void => {
+    lines.push(args.map((arg) => typeof arg === "string" ? arg : String(arg)).join(" "))
+  }
+  Object.assign(console, {
+    log: capture,
+    warn: capture,
+    error: capture,
+    info: capture,
+    debug: capture,
+  })
+
+  let result: unknown
+  try {
+    result = await action()
+  } finally {
+    Object.assign(console, real)
+  }
+  return { lines, result }
+}
+
 /** A transport whose handler has already completed the MCP handshake. */
 function createInitializedTransport() {
   const logs: string[] = []
@@ -189,27 +228,34 @@ describe("log redaction", () => {
   it("never logs the token value when the header, the api key and the query all carry it", async () => {
     const logs: string[] = []
     const { transport } = createTransport({ logs })
-    const response = await transport(
-      new Request(
-        `https://mcp.example.invalid/mcp?api_key=${FAKE_TOKEN}&token=${FAKE_TOKEN}`,
-        {
-          method: "POST",
-          headers: {
-            // A wrong bearer token, so the auth-failure path runs while the real token
-            // is present in the query string and in the alternate header.
-            Authorization: `Bearer ${FAKE_TOKEN_WRONG}`,
-            "X-Api-Key": FAKE_TOKEN,
-            "X-Forwarded-For": "203.0.113.7",
+    // The injected logger is not the only sink on the path, so the console is intercepted
+    // for the length of the call: a `console.error(token)` added anywhere between the
+    // request and the response has to redden this test too.
+    const { lines: consoleLines, result } = await recordConsole(() =>
+      transport(
+        new Request(
+          `https://mcp.example.invalid/mcp?api_key=${FAKE_TOKEN}&token=${FAKE_TOKEN}`,
+          {
+            method: "POST",
+            headers: {
+              // A wrong bearer token, so the auth-failure path runs while the real token
+              // is present in the query string and in the alternate header.
+              Authorization: `Bearer ${FAKE_TOKEN_WRONG}`,
+              "X-Api-Key": FAKE_TOKEN,
+              "X-Forwarded-For": "203.0.113.7",
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "initialize",
+              params: { apiKey: FAKE_TOKEN },
+            }),
           },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "initialize",
-            params: { apiKey: FAKE_TOKEN },
-          }),
-        },
-      ),
+        ),
+      )
     )
+    const response = result as Response
+
     assertEquals(response.status, 401)
 
     // The failure must actually have been logged: a test that only checks "nothing
@@ -219,15 +265,23 @@ describe("log redaction", () => {
     assertNotMatch(logged, new RegExp(FAKE_TOKEN))
     assertNotMatch(logged, new RegExp(FAKE_TOKEN_WRONG))
     assert(logged.includes("Auth failed"), logged)
+
+    // Neither sink may carry it. Nothing is asserted about console *emission*: the
+    // transport is given a logger here, so a console line would itself be the defect.
+    assertNotMatch(consoleLines.join("\n"), new RegExp(FAKE_TOKEN))
+    assertNotMatch(consoleLines.join("\n"), new RegExp(FAKE_TOKEN_WRONG))
   })
 
   it("never logs the token when a wrong token is presented", async () => {
     const logs: string[] = []
     const { transport } = createTransport({ logs })
-    await transport(mcpPost({ Authorization: `Bearer ${FAKE_TOKEN_WRONG}` }))
+    const { lines: consoleLines } = await recordConsole(() =>
+      transport(mcpPost({ Authorization: `Bearer ${FAKE_TOKEN_WRONG}` }))
+    )
     assert(logs.length > 0)
     assertNotMatch(logs.join("\n"), new RegExp(FAKE_TOKEN_WRONG))
     assert(logs.join("\n").includes(REDACTED_TOKEN) || logs.join("\n").includes("Auth failed"))
+    assertNotMatch(consoleLines.join("\n"), new RegExp(FAKE_TOKEN_WRONG))
   })
 
   it("does not log the request body, which may carry a credential", async () => {
