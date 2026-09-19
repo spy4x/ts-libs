@@ -20,13 +20,20 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@ts-libs/server/static`            | Static-file serving with a MIME table and path-traversal protection                  |
 | `@ts-libs/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
 | `@ts-libs/server/storage`           | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning |
+| `@ts-libs/server/auth`              | Multi-provider auth (`#6`): see the `server/auth` section below                     |
 
-**Merge order:** the three issues that added these files (`#28`, `#30`, `#35`) were cut from one
-`main` and each carries the earlier ones, so whoever merges second rebases with a **union** on
-`server/deno.json` exports and this README — never by dropping another package's entries.
+**Merge order:** the four issues that added files here (`#28`, `#30`, `#35`, `#6`) were cut from
+different points on `main` and each carries the earlier ones, so whoever merges later rebases with a
+**union** on `server/deno.json` exports and this README — never by dropping another package's entries.
 `server/http/bounded-body.ts` is the exception: `#28`/`#30` carried a byte-identical copy of
-`net/bounded-body.ts` (`sha256 5fc55e75`) and that copy has since collapsed into the canonical
-module, so this file no longer matches the pre-collapse branches by design.
+`net/bounded-body.ts` (`sha256 5fc55e75`) and that copy has since collapsed into the canonical module
+(`#43`), so this file no longer matches the pre-collapse branches by design. This branch adds `./auth*`
+and the `server/auth` section; resolving the conflict by keeping one side would silently drop either the
+export/static/healthcheck entries or the auth ones.
+
+The union is asserted rather than trusted: `server/auth/packaging.test.ts` fails on a conflict marker
+anywhere in this file, on a duplicated heading, on a table with two header rows, on an export target
+that does not resolve, and on any `main` entry missing from `server/deno.json`.
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
 
@@ -328,3 +335,92 @@ unvalidated string yields an unvalidated path, by contract.
   identifiers (`user_id`, `expires_at`) into a client configured with a camel-case
   transform; with the function out of scope there is no mixed convention here, and
   the package reads no database at all.
+
+## `server/auth`
+
+A pluggable multi-provider authentication system, ported from `roley` (issue #6). Providers:
+email + password (with password reset), magic link, email OTP, OAuth2 (Google and Facebook are one
+implementation with two configurations) and anonymous guest accounts. Persistence is an `Adapter`
+interface, so Postgres, SQLite, KV or an in-memory fake are interchangeable.
+
+```ts
+import { createAuth, PostgresAdapter } from "@ts-libs/server/auth"
+
+const auth = createAuth({
+  // Required and non-blank. Throws MissingPepperError otherwise.
+  passwordPepper: Deno.env.get("PASSWORD_PEPPER") ?? "",
+  adapter: new PostgresAdapter(postgres(connectionString)),
+  appUrl: "https://app.example.com",
+  oauth2: {
+    google: {
+      provider: OAuth2Provider.Google,
+      authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+      tokenUrl: "https://oauth2.googleapis.com/token",
+      userInfoUrl: "https://www.googleapis.com/oauth2/v3/userinfo",
+      scope: "email profile",
+      clientId: Deno.env.get("AUTH_GOOGLE_CLIENT_ID") ?? "",
+      clientSecret: Deno.env.get("AUTH_GOOGLE_CLIENT_SECRET") ?? "",
+      redirectUri: "https://app.example.com/api/keys/google/callback",
+      stateCookieName: "google_auth_state",
+      subjectField: "sub",
+      emailField: "email",
+      firstNameField: "given_name",
+      lastNameField: "family_name",
+      pictureField: "picture",
+    },
+  },
+})
+```
+
+Nothing in the package reads the environment, imports a framework type, performs a session write
+inside a provider or logs a secret. The adapter, the clock, the randomness source, the HTTP client,
+the cookie jar and the session sink are all injected, which is why the suite runs under
+`--allow-read --allow-env` with no network and no database.
+
+### Subpaths
+
+| Export                                        | What it is                                                             |
+| --------------------------------------------- | ---------------------------------------------------------------------- |
+| `@ts-libs/server/auth/types`                  | `Adapter`, `KeyKind`, `User`/`Key`/`Session`, the provider interfaces  |
+| `@ts-libs/server/auth/crypto`                 | `CryptoContext`: PBKDF2 with an injected pepper, constant-time compare |
+| `@ts-libs/server/auth/random`                 | Codes and tokens from the platform CSPRNG, rejection-sampled           |
+| `@ts-libs/server/auth/session`                | Session mint, validate, refresh and revoke, with a negative cache      |
+| `@ts-libs/server/auth/cache`                  | TTL cache in milliseconds, with a correct falsy read path              |
+| `@ts-libs/server/auth/account-linking`        | The `MethodConnected` handlers that link sibling methods               |
+| `@ts-libs/server/auth/email-password`         | Password sign-up, sign-in, reset and change                            |
+| `@ts-libs/server/auth/magic-link`             | Single-use emailed links                                               |
+| `@ts-libs/server/auth/otp`                    | Single-use emailed codes                                               |
+| `@ts-libs/server/auth/oauth2`                 | One configurable authorization-code provider                           |
+| `@ts-libs/server/auth/postgres-adapter`       | `PostgresAdapter` over `npm:postgres`                                  |
+| `@ts-libs/server/auth/testing/memory-adapter` | In-memory `Adapter` with database-like constraints                     |
+
+`@ts-libs/server/auth` re-exports all of the above; `./auth` itself is in the Subpaths table at the top
+of this file.
+
+### Security fixes applied at extraction time
+
+| Source bug                                                                    | Fix                                                                             |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `helpers.ts:84` OTP drawn from the non-cryptographic generator                | `crypto.getRandomValues` with rejection sampling, so digits are exactly uniform |
+| `magicLink.ts:37,50,63,152,192` token stored plaintext, compared `===`        | stored as a PBKDF2 digest, compared with `timingSafeEqual` over digests         |
+| `otp.ts:97` a consumed code stayed valid forever                              | `expiresAt`, an attempt counter with a lockout, and delete-on-use               |
+| `misc/types.ts:18` `KeyKind.EMAIL_PASSWORD = 0` is falsy                      | kinds numbered from 1                                                           |
+| `cache.ts:23,36,55` `ttl * 1000` → ≈19-year TTL; `if (fromCache)` loses falsy | milliseconds end to end, and `undefined` alone is a miss                        |
+| `helpers.ts:7` + `misc/constants.ts:4` two peppers, one a literal             | one injected pepper that throws at construction when absent                     |
+| `google.ts:195,226,265` providers called `setSession`                         | an injected `SessionSink` and a generic `CookieJar`; no framework type anywhere |
+| `magicLink.ts:133,185` stub methods returning `null`                          | implemented, or removed from the interface                                      |
+
+### Account linking
+
+An account is a bag of `KeyKind`-keyed credentials, each with an `identification` and the `email` it
+was established with. A credential for an address that already exists attaches to that account
+instead of founding a second one, and the `MethodConnected` handlers then attach the sibling methods
+for the same address and drop the anonymous key. This is why one address signing in with Google,
+then Facebook, then a password ends up as one account with four credentials.
+
+### Differences from the source, by design
+
+`managers/session.ts` is the template's, not `roley`'s: PBKDF2-WebCrypto with a negative cache
+instead of bcrypt on every validation. `index.ts` (SvelteKit cookie glue) is not ported — the
+transport supplies a `SessionSink` instead. `KeyKind.OAuth2` replaces the separate `GOOGLE` and
+`FACEBOOK` kinds, so the two OAuth2 providers keep provider-scoped identifications.

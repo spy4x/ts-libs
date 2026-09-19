@@ -10,6 +10,20 @@
     "./export-client": "./export-client.ts",
     "./static": "./static.ts",
     "./healthcheck": "./healthcheck.ts",
-    "./storage": "./storage/index.ts"
+    "./storage": "./storage/index.ts",
+    "./auth": "./auth/mod.ts",
+    "./auth/types": "./auth/types.ts",
+    "./auth/crypto": "./auth/crypto.ts",
+    "./auth/random": "./auth/random.ts",
+    "./auth/session": "./auth/session.ts",
+    "./auth/cache": "./auth/cache.ts",
+    "./auth/account-linking": "./auth/account-linking.ts",
+    "./auth/email-password": "./auth/providers/email-password.ts",
+    "./auth/magic-link": "./auth/providers/magic-link.ts",
+    "./auth/otp": "./auth/providers/otp.ts",
+    "./auth/oauth2": "./auth/providers/oauth2.ts",
+    "./auth/postgres-adapter": "./auth/postgres-adapter.ts",
+    "./auth/testing/memory-adapter": "./auth/testing/memory-adapter.ts"
   }
 }
+
