@@ -447,6 +447,17 @@ or the payload. `assertJwtSecret` fails closed on the three unusable kinds of se
 than 32 characters, or recognisable as a placeholder (exact-match set plus marker substrings, which is
 what catches the source's own 39-character default).
 
+**On the constant-time guarantee — do not infer timing safety from a green suite.** `constantTimeEquals`
+here (and its twin in `platform/tokens.ts`, whose package README arrives with the sibling `platform/`
+PRs) digests both sides to a fixed 32 bytes and then compares with `timingSafeEqual` from `@std/crypto`.
+Two tests pin that: the compare is reached on the verify path, and the primitive delegates instead of
+hand-rolling. They are **shape tripwires, not timing proofs**. A hand-rolled comparison that avoids the
+marker shapes they look for, or a helper defined outside the primitive, still passes them — an
+`Object.is` early-return loop is measured at 1 iteration on a mismatch against 32 on a match, and
+`platform/tokens.test.ts` asserts that this variant is _still undetected_, so the limitation cannot
+silently become a claim of coverage. The guards detect the mutation classes they name; they do not
+establish that no run time depends on the compared values.
+
 ## `server/crypto`
 
 `CryptoService`, `CryptoError`, `CryptoErrorCode`, `SecretCipher`, `maskKey`, `isHexKey`,
