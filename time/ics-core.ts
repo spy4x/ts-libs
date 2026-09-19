@@ -28,9 +28,6 @@ export const CRLF = "\r\n"
  */
 export const LF = "\n"
 
-/** A logical (unfolded) iCalendar content line, e.g. `SUMMARY:Standup`. */
-export type ContentLine = string
-
 /**
  * Remove characters RFC 5545 does not allow in content lines: C0 controls
  * except HTAB, LF and CR, plus DEL. The three survivors are structural — HTAB
@@ -174,7 +171,7 @@ export function formatIcsUtc(instant: Date): string {
  * length is already at or under the limit is returned untouched, which is also
  * what keeps `BEGIN:VCALENDAR` and friends byte-exact.
  */
-export function foldLine(line: ContentLine): string {
+export function foldLine(line: string): string {
   const encoder = new TextEncoder()
   if (encoder.encode(line).length <= FOLD_LIMIT) return line
 
@@ -219,7 +216,7 @@ export function unfoldLines(text: string): string {
  * Returns an empty string for an empty input, so a caller that assembles no
  * lines does not emit a stray blank content line.
  */
-export function joinContentLines(lines: readonly ContentLine[]): string {
+export function joinContentLines(lines: readonly string[]): string {
   if (lines.length === 0) return ""
   return lines.map(foldLine).join(CRLF) + CRLF
 }
@@ -230,7 +227,7 @@ export function joinContentLines(lines: readonly ContentLine[]): string {
  * Cheap ingress check for callers that hand-write a line: throws instead of
  * silently emitting a document a strict parser will reject.
  */
-export function assertFoldable(line: ContentLine): void {
+export function assertFoldable(line: string): void {
   const octets = new TextEncoder().encode(line).length
   if (octets > FOLD_LIMIT) {
     throw new RangeError(`content line is ${octets} octets; fold it to <= ${FOLD_LIMIT}`)

@@ -9,14 +9,7 @@
 // RECURRENCE-ID, VTIMEZONE/TZID, VALARM/DURATION, VTODO, multiple VEVENTs, and
 // any parsing of existing calendars.
 
-import {
-  type ContentLine,
-  formatIcsUtc,
-  icsEscape,
-  icsEscapeParameter,
-  joinContentLines,
-  stripControlCharacters,
-} from "./ics-core.ts"
+import { formatIcsUtc, icsEscape, icsEscapeParameter, joinContentLines } from "./ics-core.ts"
 
 /** RFC 5545 §3.7.2 iTIP method carried by the `METHOD` property. */
 export enum IcsMethod {
@@ -74,6 +67,22 @@ const PARTSTAT_NAMES: Record<IcsPartStat, string> = {
   [IcsPartStat.DELEGATED]: "DELEGATED",
 }
 
+/** RFC 5545 §3.2.16 `ROLE` parameter values for an attendee. */
+export enum IcsRole {
+  CHAIR = 1,
+  REQ_PARTICIPANT = 2,
+  OPT_PARTICIPANT = 3,
+  NON_PARTICIPANT = 4,
+}
+
+/** `ROLE` name for each {@link IcsRole} member. */
+const ROLE_NAMES: Record<IcsRole, string> = {
+  [IcsRole.CHAIR]: "CHAIR",
+  [IcsRole.REQ_PARTICIPANT]: "REQ-PARTICIPANT",
+  [IcsRole.OPT_PARTICIPANT]: "OPT-PARTICIPANT",
+  [IcsRole.NON_PARTICIPANT]: "NON-PARTICIPANT",
+}
+
 /**
  * A calendar address: a bare mailbox address, e.g. `jane@example.com`.
  *
@@ -94,8 +103,13 @@ export interface IcsAttendee extends IcsAddress {
   rsvp?: boolean
   /** Emitted as `PARTSTAT=<value>`. */
   partStat?: IcsPartStat
-  /** Emitted as `ROLE=<value>`, already in RFC 5545 form, e.g. `REQ-PARTICIPANT`. */
-  role?: string
+  /**
+   * Emitted as `ROLE=<value>`; omitted for `REQ-PARTICIPANT`, which is RFC 5545's
+   * default. An enum rather than a free string: the value lands in the parameter
+   * list, where an interpolated `X;CN="Evil";RSVP=TRUE:mailto:attacker@…` would
+   * forge parameters and replace the address.
+   */
+  role?: IcsRole
 }
 
 /**
@@ -152,28 +166,63 @@ export interface IcsOptions {
   method?: IcsMethod
 }
 
+/**
+ * Look up a finite-constant enum's wire name, rejecting anything that is not a
+ * member.
+ *
+ * The writer is called from JavaScript as often as from TypeScript, where the
+ * enum is only a convention: `role: "X;CN=..."` or a missing key would otherwise
+ * interpolate `undefined` — or the attacker's string — straight into the
+ * parameter list.
+ *
+ * @throws {TypeError} for a value outside the enum.
+ */
+function enumName<T extends number>(names: Record<T, string>, value: T, property: string): string {
+  const name = names[value]
+  if (typeof name !== "string") {
+    throw new TypeError(`${property} is not a recognised value: ${String(value)}`)
+  }
+  return name
+}
+
 /** Default iTIP method implied by an event status. */
 function defaultMethod(status: IcsEventStatus): IcsMethod {
   return status === IcsEventStatus.CANCELLED ? IcsMethod.CANCEL : IcsMethod.REQUEST
 }
 
 /**
- * Strip control characters from a mail address and reject an empty result.
+ * Remove every control character from a value that occupies the property *value*
+ * position and return `undefined` when nothing usable is left.
  *
- * Addresses are emitted in the property *value* position (`mailto:...`), which
- * no escaping helper covers: a CR or LF that survives into the value ends the
- * content line and lets the rest of the address become a property of its own
- * (`jane\r\nX-INJECTED:1@example.com` yields a real `X-INJECTED` property), and
- * a comma would turn one ATTENDEE into two addresses. HTAB is allowed — but as
- * a value's leading octet it would be read back as a fold continuation, so
- * nothing in the C0 range survives here.
+ * This is stricter than `ics-core`'s `stripControlCharacters`, which
+ * deliberately keeps LF and CR so RFC 5545 §3.1 folding still has them. A value
+ * in the value position is never folded on its own line breaks: a surviving CR
+ * or LF ends the content line and lets the rest of the value become a property
+ * of the attacker's choosing. HTAB goes too — as a value's leading octet a
+ * parser reads it back as a fold continuation.
  */
-function addressValue(address: IcsAddress, property: string): string {
-  const value = [...address.email].filter((character) => {
+function sanitizeValue(value: string): string | undefined {
+  const sanitized = [...value].filter((character) => {
     const code = character.codePointAt(0)!
     return code > 31 && code !== 127
   }).join("").trim()
-  if (value === "") {
+  return sanitized === "" ? undefined : sanitized
+}
+
+/**
+ * Normalise a mail address for the `mailto:` value of `ORGANIZER`/`ATTENDEE`.
+ *
+ * Addresses are emitted in the property *value* position, which no escaping
+ * helper covers: a CR or LF that survives ends the content line and lets the
+ * rest of the address become a property of its own
+ * (`jane\r\nX-INJECTED:1@example.com` yields a real `X-INJECTED` property), and
+ * a comma would turn one ATTENDEE into two addresses.
+ *
+ * @throws {TypeError} when nothing usable survives.
+ */
+function addressValue(address: IcsAddress, property: string): string {
+  const value = sanitizeValue(address.email)
+  if (value === undefined) {
     throw new TypeError(`${property} requires a non-empty email address`)
   }
   return value
@@ -183,7 +232,7 @@ function addressValue(address: IcsAddress, property: string): string {
  * Build the `ORGANIZER` property for an address, quoting `CN` per RFC 5545
  * §3.2.5 and escaping it per RFC 6868.
  */
-export function organizerLine(address: IcsAddress): ContentLine {
+export function organizerLine(address: IcsAddress): string {
   const parameters = address.name ? `;CN="${icsEscapeParameter(address.name)}"` : ""
   return `ORGANIZER${parameters}:mailto:${addressValue(address, "ORGANIZER")}`
 }
@@ -192,12 +241,15 @@ export function organizerLine(address: IcsAddress): ContentLine {
  * Build the `ATTENDEE` property for an attendee, including whichever of
  * `CN`, `ROLE`, `PARTSTAT` and `RSVP` the caller supplied.
  */
-export function attendeeLine(attendee: IcsAttendee): ContentLine {
+export function attendeeLine(attendee: IcsAttendee): string {
   let parameters = ""
   if (attendee.name) parameters += `;CN="${icsEscapeParameter(attendee.name)}"`
-  if (attendee.role) parameters += `;ROLE=${attendee.role}`
+  // REQ-PARTICIPANT is RFC 5545's default, so it emits no parameter.
+  if (attendee.role !== undefined && attendee.role !== IcsRole.REQ_PARTICIPANT) {
+    parameters += `;ROLE=${enumName(ROLE_NAMES, attendee.role, "attendee.role")}`
+  }
   if (attendee.partStat !== undefined) {
-    parameters += `;PARTSTAT=${PARTSTAT_NAMES[attendee.partStat]}`
+    parameters += `;PARTSTAT=${enumName(PARTSTAT_NAMES, attendee.partStat, "attendee.partStat")}`
   }
   if (attendee.rsvp !== undefined) parameters += `;RSVP=${attendee.rsvp ? "TRUE" : "FALSE"}`
   return `ATTENDEE${parameters}:mailto:${addressValue(attendee, "ATTENDEE")}`
@@ -208,12 +260,17 @@ export function attendeeLine(attendee: IcsAttendee): ContentLine {
  *
  * `UID` is a TEXT property, but escaping it would change the identifier the
  * caller hands out — a UID containing `,` would come back as a different string
- * on the next envelope. Control characters are stripped instead, which is all
- * that is needed to make the value safe on one content line.
+ * on the next envelope. Every control character is dropped instead, CR and LF
+ * included: a UID of `abc\r\nUID:forged` would otherwise emit a second, forged
+ * `UID` line, and a `UID` is not a value that can legitimately contain a line
+ * break, so nothing of value is lost. Every other octet is preserved verbatim,
+ * which keeps the identifier byte-exact across envelopes.
+ *
+ * @throws {TypeError} when nothing usable survives the filter.
  */
 function uidValue(uid: string): string {
-  const value = stripControlCharacters(uid).trim()
-  if (value === "") {
+  const value = sanitizeValue(uid)
+  if (value === undefined) {
     throw new TypeError("event.uid is required")
   }
   return value
@@ -226,7 +283,7 @@ function uidValue(uid: string): string {
  * `start`, or on any optional TEXT property whose value cannot round-trip —
  * an explicit throw beats a silently malformed calendar a client drops.
  */
-export function buildVEventLines(event: IcsEvent, dtstamp: Date, method: IcsMethod): ContentLine[] {
+export function buildVEventLines(event: IcsEvent, dtstamp: Date, method: IcsMethod): string[] {
   if (Number.isNaN(event.start.getTime()) || Number.isNaN(event.end.getTime())) {
     throw new TypeError("event.start and event.end must be valid Dates")
   }
@@ -235,15 +292,16 @@ export function buildVEventLines(event: IcsEvent, dtstamp: Date, method: IcsMeth
   }
 
   const status = event.status ?? IcsEventStatus.CONFIRMED
+  const statusName = enumName(STATUS_NAMES, status, "event.status")
   const expected = defaultMethod(status)
   if (method !== expected) {
     throw new TypeError(
-      `method ${METHOD_NAMES[method]} contradicts a ${STATUS_NAMES[status]} event; ` +
-        `use ${METHOD_NAMES[expected]}`,
+      `method ${enumName(METHOD_NAMES, method, "method")} contradicts a ${statusName} event; ` +
+        `use ${enumName(METHOD_NAMES, expected, "method")}`,
     )
   }
 
-  const lines: ContentLine[] = [
+  const lines: string[] = [
     "BEGIN:VEVENT",
     `UID:${uidValue(event.uid)}`,
     `DTSTAMP:${formatIcsUtc(dtstamp)}`,
@@ -258,7 +316,7 @@ export function buildVEventLines(event: IcsEvent, dtstamp: Date, method: IcsMeth
   if (event.organizer) lines.push(organizerLine(event.organizer))
   for (const attendee of event.attendees ?? []) lines.push(attendeeLine(attendee))
   lines.push(
-    `STATUS:${STATUS_NAMES[status]}`,
+    `STATUS:${statusName}`,
     "TRANSP:OPAQUE",
   )
   if (event.sequence !== undefined) lines.push(`SEQUENCE:${event.sequence}`)
@@ -287,12 +345,12 @@ export function generateIcs(event: IcsEvent, options: IcsOptions): string {
   const status = event.status ?? IcsEventStatus.CONFIRMED
   const method = options.method ?? defaultMethod(status)
 
-  const lines: ContentLine[] = [
+  const lines: string[] = [
     "BEGIN:VCALENDAR",
     `PRODID:${icsEscape(prodid)}`,
     "VERSION:2.0",
     "CALSCALE:GREGORIAN",
-    `METHOD:${METHOD_NAMES[method]}`,
+    `METHOD:${enumName(METHOD_NAMES, method, "method")}`,
     ...buildVEventLines(event, options.dtstamp, method),
     "END:VCALENDAR",
   ]

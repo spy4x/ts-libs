@@ -4,7 +4,7 @@
 // suite is independent of the host clock and of the host `TZ`.
 
 import { assertEquals, assertThrows } from "@std/assert"
-import { CRLF, FOLD_LIMIT, LF, unfoldLines } from "./ics-core.ts"
+import { CRLF, FOLD_LIMIT, formatIcsUtc, LF, unfoldLines } from "./ics-core.ts"
 import {
   generateIcs,
   type IcsEvent,
@@ -12,6 +12,7 @@ import {
   IcsMethod,
   type IcsOptions,
   IcsPartStat,
+  IcsRole,
 } from "./ics.ts"
 
 const PRODID = "-//ts-libs//time//EN"
@@ -99,11 +100,77 @@ Deno.test("generateIcs keeps UID stable and unescaped so it round-trips", () => 
   const flat = unfoldLines(generateIcs(makeEvent({ uid }), makeOptions()))
 
   assertEquals(flat.includes(`UID:${uid}${CRLF}`), true)
-  // Two calls with the same arguments produce the same UID, byte for byte.
+  // A UID holding RFC 5545 TEXT metacharacters must come back byte-exact: the
+  // identifier is handed out to clients and compared on the next envelope, so
+  // escaping it would change the event's identity.
+  const metacharacters = "a,b;c\\d@example.com"
   assertEquals(
-    generateIcs(makeEvent({ uid }), makeOptions()),
-    generateIcs(makeEvent({ uid }), makeOptions()),
+    unfoldLines(generateIcs(makeEvent({ uid: metacharacters }), makeOptions()))
+      .includes(`UID:${metacharacters}${CRLF}`),
+    true,
   )
+})
+
+Deno.test("generateIcs emits a byte-exact document for fixed arguments", () => {
+  // The whole document, asserted literally. This is what makes the writer's
+  // output reproducible: `dtstamp` is caller-supplied, so nothing here can
+  // depend on the wall clock, the host TZ or a locale.
+  //
+  // The DTSTAMP line is built from a hardcoded literal + formatIcsUtc(DTSTAMP)
+  // rather than an interpolated string: a writer that ignored options.dtstamp
+  // and read the clock instead then fails here, whereas a plain
+  // `DTSTAMP:20260825T164200Z` literal is only pinned by the sibling test above
+  // and leaves this one passing under that mutation.
+  const expectedDtstamp = `DTSTAMP:${formatIcsUtc(DTSTAMP)}`
+  assertEquals(expectedDtstamp, "DTSTAMP:20260825T164200Z")
+
+  assertEquals(
+    generateIcs(makeEvent(), makeOptions()),
+    [
+      "BEGIN:VCALENDAR",
+      `PRODID:${PRODID}`,
+      "VERSION:2.0",
+      "CALSCALE:GREGORIAN",
+      "METHOD:REQUEST",
+      "BEGIN:VEVENT",
+      "UID:01HXYZBK8M@calendar.example.com",
+      expectedDtstamp,
+      "DTSTART:20260828T080000Z",
+      "DTEND:20260828T083000Z",
+      "SUMMARY:Meeting with Jane Doe",
+      "STATUS:CONFIRMED",
+      "TRANSP:OPAQUE",
+      "END:VEVENT",
+      "END:VCALENDAR",
+      "",
+    ].join("\r\n"),
+  )
+})
+
+Deno.test("generateIcs drops CR and LF from a UID instead of emitting injected properties", () => {
+  const injected = "abc\r\nX-INJECTED:1\r\nUID:forged"
+  const document = generateIcs(makeEvent({ uid: injected }), makeOptions())
+
+  // The UID occupies a property value, so a surviving CR or LF ends the content
+  // line and the remainder becomes a property of the attacker's choosing. Every
+  // C0 control goes, and the filter must not rely on stripControlCharacters —
+  // that helper keeps LF and CR on purpose, for RFC 5545 §3.1 folding.
+  for (const line of physicalLines(document)) {
+    assertEquals(line.startsWith("X-INJECTED"), false, "injected an X-INJECTED property")
+    assertEquals(
+      line.startsWith("UID:"),
+      line === "UID:abcX-INJECTED:1UID:forged",
+      `unexpected UID line ${line}`,
+    )
+  }
+  assertEquals(document.split(`${CRLF}UID:`).length - 1, 1)
+  assertEquals(unfoldLines(document).includes(`UID:abcX-INJECTED:1UID:forged${CRLF}`), true)
+})
+
+Deno.test("generateIcs rejects a UID that is nothing but control characters", () => {
+  assertThrows(() => generateIcs(makeEvent({ uid: "\r\n" }), makeOptions()), TypeError, "uid")
+  assertThrows(() => generateIcs(makeEvent({ uid: "\u0000" }), makeOptions()), TypeError, "uid")
+  assertThrows(() => generateIcs(makeEvent({ uid: "\t " }), makeOptions()), TypeError, "uid")
 })
 
 Deno.test("generateIcs quotes and RFC 6868-escapes the ORGANIZER CN parameter", () => {
@@ -126,7 +193,7 @@ Deno.test("generateIcs emits one ATTENDEE line per attendee with its parameters"
           {
             email: "chair@example.com",
             name: "Chair",
-            role: "CHAIR",
+            role: IcsRole.CHAIR,
             partStat: IcsPartStat.ACCEPTED,
             rsvp: false,
           },
@@ -432,6 +499,59 @@ Deno.test("generateIcs folds every line to 75 octets and unfolds back to the log
   assertEquals(flat.includes(`DESCRIPTION:${event.description}${CRLF}`), true)
   assertEquals(flat.includes(`LOCATION:${event.location}${CRLF}`), true)
   assertEquals(flat.includes(`CN="Client 訪";RSVP=TRUE`), true)
+})
+
+Deno.test("generateIcs rejects a ROLE or PARTSTAT outside its enum", () => {
+  // JavaScript callers bypass the enum, and the value lands in the parameter
+  // list, so an unvalidated string forges parameters or rewrites the address.
+  const hostile = 'X;CN="Evil";RSVP=TRUE:mailto:attacker@example.com'
+
+  assertEquals(
+    unfoldLines(
+      generateIcs(
+        makeEvent({ attendees: [{ email: "victim@example.com", name: "V", role: IcsRole.CHAIR }] }),
+        makeOptions(),
+      ),
+    ).includes(`ATTENDEE;CN="V";ROLE=CHAIR:mailto:victim@example.com${CRLF}`),
+    true,
+  )
+  const asRole = hostile as unknown as IcsRole
+  const asPartStat = 99 as unknown as IcsPartStat
+  assertThrows(
+    () =>
+      generateIcs(
+        makeEvent({ attendees: [{ email: "v@example.com", role: asRole }] }),
+        makeOptions(),
+      ),
+    TypeError,
+    "attendee.role",
+  )
+  assertThrows(
+    () =>
+      generateIcs(
+        makeEvent({ attendees: [{ email: "v@example.com", partStat: asPartStat }] }),
+        makeOptions(),
+      ),
+    TypeError,
+    "attendee.partStat",
+  )
+  assertThrows(
+    () => generateIcs(makeEvent(), makeOptions({ method: 99 as unknown as IcsMethod })),
+    TypeError,
+    "method",
+  )
+})
+
+Deno.test("generateIcs omits the ROLE parameter for the RFC 5545 default", () => {
+  const flat = unfoldLines(
+    generateIcs(
+      makeEvent({ attendees: [{ email: "a@example.com", role: IcsRole.REQ_PARTICIPANT }] }),
+      makeOptions(),
+    ),
+  )
+
+  assertEquals(flat.includes("ROLE="), false)
+  assertEquals(flat.includes(`ATTENDEE:mailto:a@example.com${CRLF}`), true)
 })
 
 Deno.test("generateIcs never emits an empty line or a continuation for a short document", () => {
