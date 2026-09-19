@@ -9,6 +9,7 @@
     "./export": "./export.ts",
     "./export-client": "./export-client.ts",
     "./static": "./static.ts",
-    "./healthcheck": "./healthcheck.ts"
+    "./healthcheck": "./healthcheck.ts",
+    "./storage": "./storage/index.ts"
   }
 }
