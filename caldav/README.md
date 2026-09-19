@@ -108,7 +108,7 @@ holding no tasks all arrived as "no tasks". Here:
 ## Injected transport and clock
 
 `CalDavClient` takes everything it needs as options — `baseUrl`, `username`, `password`, `fetch`,
-`prodid`, `now`. Nothing is read from `Deno.env` (the source's `client.ts` imported `../env.ts` at
+`now`. Nothing is read from `Deno.env` (the source's `client.ts` imported `../env.ts` at
 module scope, which is why it was untestable) and nothing is read from the global `fetch`
 unconditionally: the default is `(input, init) => fetch(input, init)`, so a test that passes a stub
 never touches a socket and the suite runs under `deno test --allow-read --allow-env` with no

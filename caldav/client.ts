@@ -69,8 +69,6 @@ export interface CalDavClientOptions {
   password: string
   /** Transport. Defaults to the global `fetch`; tests pass a stub. */
   fetch?: FetchLike
-  /** `PRODID` written by this client's builders; defaults to the builder's own. */
-  prodid?: string
   /**
    * Clock used for builder timestamps. Injected so a test gets byte-identical
    * documents; defaults to `new Date()`.
@@ -162,7 +160,6 @@ export class CalDavClient {
   private readonly username: string
   private readonly password: string
   private readonly transport: FetchLike
-  private readonly prodid: string | undefined
   private readonly clock: () => Date
 
   constructor(options: CalDavClientOptions) {
@@ -174,7 +171,6 @@ export class CalDavClient {
     this.username = options.username
     this.password = options.password
     this.transport = options.fetch ?? ((input, init) => fetch(input, init))
-    this.prodid = options.prodid
     const now = options.now
     this.clock = typeof now === "function" ? now : () => now ?? new Date()
   }
