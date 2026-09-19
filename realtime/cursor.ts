@@ -156,11 +156,18 @@ export class CursorTracker {
   /**
    * Move a group's cursor to a sequence a pull reported.
    *
-   * Monotonic: a pull that answers a gap may carry a lower sequence if another pull already moved
-   * the cursor forward, and that must not be a regression. Returns whether the cursor moved.
+   * Monotonic for a group that already has a cursor: a pull answering a gap may carry a lower
+   * sequence if another pull already moved forward, and that must not be a regression. A group with
+   * no cursor yet accepts any sequence from {@link SEQUENCE_START} up, so a pull that reports `0` for
+   * an empty group is recorded rather than silently dropped — which is what makes "this group is at
+   * 0" distinguishable from "this client has never seen the group" in the next handshake.
+   *
+   * Returns whether the cursor moved.
    */
   advanceTo(groupId: string, sequence: number): boolean {
-    if (sequence <= this.cursorFor(groupId)) return false
+    if (sequence < SEQUENCE_START) return false
+    const known = this.#cursors.has(groupId)
+    if (known && sequence <= this.cursorFor(groupId)) return false
     this.#cursors.set(groupId, sequence)
     return true
   }
@@ -248,7 +255,12 @@ export class PersistentCursorStore {
     return outcome
   }
 
-  /** Apply a sequence a pull reported, persisting it only when it moved forward. */
+  /**
+   * Apply a sequence a pull reported, persisting it only when the cursor moved.
+   *
+   * A pull that reports `0` for a group this client has not seen is recorded, so the next handshake
+   * says "group-1 at 0" instead of reporting a cold start for it.
+   */
   advanceTo(groupId: string, sequence: number): boolean {
     this.#ensureLoaded()
     if (!this.#tracker.advanceTo(groupId, sequence)) return false
@@ -271,8 +283,15 @@ export class PersistentCursorStore {
     return value
   }
 
-  /** Drop every cursor and the timestamp. The next connect is a cold start again. */
+  /**
+   * Drop every cursor and the timestamp. The next connect is a cold start again.
+   *
+   * Reads durable state first: without that, a fresh instance that had never called another method
+   * would iterate an empty in-memory map and leave every stored cursor behind as an orphan key,
+   * which is precisely the stale-checkpoint state this store exists to prevent.
+   */
   clear(): void {
+    this.#ensureLoaded()
     for (const groupId of this.#tracker.groups()) {
       this.#storage.removeItem(this.#cursorKey(groupId))
     }
@@ -283,8 +302,9 @@ export class PersistentCursorStore {
     this.#loaded = true
   }
 
-  /** Storage keys this store owns, sorted. Debug and test affordance. */
+  /** Storage keys this store owns, sorted. Reads durable state first. */
   keys(): string[] {
+    this.#ensureLoaded()
     return this.#tracker.groups().map((groupId) => this.#cursorKey(groupId))
   }
 

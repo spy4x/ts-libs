@@ -124,6 +124,23 @@ describe("CursorTracker", () => {
     expect(tracker.cursorFor("group-1")).toBe(9)
   })
 
+  it("records a zero cursor for a group a pull reports as empty", () => {
+    const tracker = new CursorTracker()
+
+    expect(tracker.advanceTo("group-1", 0)).toBe(true)
+    expect(tracker.hasCursor("group-1")).toBe(true)
+    expect(tracker.cursorFor("group-1")).toBe(SEQUENCE_START)
+  })
+
+  it("still refuses to regress a group that has a cursor, and refuses a negative sequence", () => {
+    const tracker = new CursorTracker()
+
+    expect(tracker.advanceTo("group-1", 5)).toBe(true)
+    expect(tracker.advanceTo("group-1", 0)).toBe(false)
+    expect(tracker.advanceTo("group-1", -1)).toBe(false)
+    expect(tracker.cursorFor("group-1")).toBe(5)
+  })
+
   it("snapshots cursors sorted by group id", () => {
     const tracker = new CursorTracker()
     tracker.apply({ groupId: "group-2", sequence: 1 })
@@ -173,15 +190,31 @@ describe("PersistentCursorStore", () => {
 
   it("distinguishes a durably stored cursor of zero from a cold start", () => {
     const storage = new MemoryKeyValueStore()
-    storage.setItem("realtime:groups", JSON.stringify(["group-1"]))
-    storage.setItem("realtime:cursor:group-1", "0")
-
     const store = new PersistentCursorStore({ storage })
+    expect(store.advanceTo("group-1", 0)).toBe(true)
 
-    expect(store.syncRequest()).toEqual({
+    const afterReload = new PersistentCursorStore({ storage })
+
+    expect(afterReload.syncRequest()).toEqual({
       cursors: [{ groupId: "group-1", sequence: 0 }],
       fromStart: false,
     })
+    expect(store.syncRequest().fromStart).toBe(false)
+  })
+
+  it("clears durable state from an instance that never read it", () => {
+    const storage = new MemoryKeyValueStore()
+    const writer = new PersistentCursorStore({ storage, namespace: "client-a" })
+    writer.advanceTo("group-1", 9)
+    writer.markSynced(1_000)
+
+    const fresh = new PersistentCursorStore({ storage, namespace: "client-a" })
+    expect(fresh.keys()).toEqual(["client-a:cursor:group-1"])
+
+    fresh.clear()
+
+    expect(storage.keys()).toEqual([])
+    expect(new PersistentCursorStore({ storage, namespace: "client-a" }).cursors()).toEqual([])
   })
 
   it("reports the cursor it holds after a reload", () => {

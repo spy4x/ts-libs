@@ -452,14 +452,23 @@ export class ClientTransport {
     this.#socket = null
   }
 
-  /** The socket opened: reset the attempt counter, start the heartbeat, handshake. */
+  /**
+   * The socket opened: reset the attempt counter, start the heartbeat, handshake.
+   *
+   * The handshake is *not* put on {@link #enqueue}'s chain. That chain serialises cursor decisions so
+   * hints are applied in arrival order; a handshake touches no cursor, and chaining it would delay
+   * every inbound hint until the server acknowledged the handshake — up to
+   * `handshakeAttempts × handshakeAckTimeout`, ten seconds by default. A hint that arrives while the
+   * handshake is unanswered is decided immediately, and the handshake's cursor snapshot is simply
+   * taken later, which can only make it fresher.
+   */
   #handleOpen(socket: ManagedSocket): void {
     if (this.#socket !== socket) return
     this.#clearConnectTimer()
     this.#attempt = 0
     this.#setStatus(TransportStatus.Open)
     this.#startHeartbeat()
-    this.#enqueue(() => this.#handshake())
+    void this.#handshake().catch((error: unknown) => this.#report(toError(error)))
   }
 
   /** The socket never opened in time. Abandon the attempt and let the close path reconnect. */

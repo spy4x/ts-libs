@@ -282,6 +282,30 @@ describe("ClientTransport sync handshake", () => {
     expect(harness.degraded).toEqual([])
   })
 
+  it("decides a hint while the handshake is still unacknowledged", async () => {
+    const harness = createHarness({
+      cursors: { "group-1": 4 },
+      handshakeAckTimeoutMs: 10_000,
+      handshakeAttempts: 2,
+      // Wide enough that only the handshake could delay the hint.
+      heartbeatIntervalMs: 60_000,
+      pongTimeoutMs: 60_000,
+    })
+    const cursors: number[] = []
+    harness.transport.onChange((_hint, outcome) => cursors.push(outcome.cursor))
+    harness.transport.connect()
+    await drainMicrotasks()
+
+    harness.factory.latest.receive(hintFrame("group-1", 5))
+    await drainMicrotasks()
+
+    // The handshake is unanswered and the clock has not moved, yet the hint is decided: cursors are
+    // decided in arrival order, not behind an ack that may take ten seconds.
+    expect(harness.transport.pendingRequests).toBe(1)
+    expect(harness.clock.now()).toBe(0)
+    expect(cursors).toEqual([5])
+  })
+
   it("retries an unacknowledged handshake and then reports the sync lane as degraded", async () => {
     const harness = createHarness({
       handshakeAttempts: 2,
