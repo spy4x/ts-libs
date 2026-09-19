@@ -182,6 +182,24 @@ function collectionUrlOfResource(url: string): string {
 }
 
 /**
+ * Attach a fan-out's failures and warnings to its aggregate.
+ *
+ * Omitted rather than empty, so `output.failures !== undefined` is the test for
+ * "something went missing" and an aggregate with nothing to report is exactly
+ * what the aggregator returned.
+ */
+function withNotices<T extends { failures?: CalendarFailure[]; warnings?: string[] }>(
+  aggregate: T,
+  failures: readonly CalendarFailure[],
+  warnings: readonly string[],
+): T {
+  const notices: { failures?: CalendarFailure[]; warnings?: string[] } = {}
+  if (failures.length > 0) notices.failures = [...failures]
+  if (warnings.length > 0) notices.warnings = [...warnings]
+  return { ...aggregate, ...notices }
+}
+
+/**
  * Count tasks by status, priority band and overdue state, then cap the list.
  *
  * `byStatus` is keyed by the label the server reported, so an unknown `STATUS`
@@ -336,17 +354,28 @@ export class QueryEngine {
     return this.client.listCalendars()
   }
 
-  /** The collections to fan out over, honouring an explicit URL override. */
+  /**
+   * The collections to fan out over, honouring an explicit URL override.
+   *
+   * The listing's own `warnings` travel with the collections rather than being
+   * dropped here. `listCalendars()` reports a collection it refused to return —
+   * an off-origin one — **only** in that list, so a fan-out that discarded it
+   * could not tell a caller "you have no tasks" from "your only collection was
+   * skipped": both arrived as `{ total: 0 }` with nothing beside it.
+   */
   private async targetCalendars(
     component: ComponentType.VTODO | ComponentType.VEVENT,
     calendarUrl?: string,
-  ): Promise<CalDavResult<Calendar[]>> {
+  ): Promise<CalDavResult<{ calendars: Calendar[]; warnings: string[] }>> {
     if (calendarUrl !== undefined) {
-      return ok([{
-        url: calendarUrl,
-        displayName: this.nameOf(calendarUrl),
-        components: [component],
-      }])
+      return ok({
+        calendars: [{
+          url: calendarUrl,
+          displayName: this.nameOf(calendarUrl),
+          components: [component],
+        }],
+        warnings: [],
+      })
     }
     const listed = await this.client.listCalendars()
     // `reshapeFailure` drops the listing's own partial `{calendars, warnings}`:
@@ -354,7 +383,12 @@ export class QueryEngine {
     // caller an object whose `todos` field does not exist. The listing's own
     // `listCalendars()` call still returns it for a caller that wants it.
     if (!listed.success) return reshapeFailure(listed)
-    return ok(listed.output.calendars.filter((calendar) => calendar.components.includes(component)))
+    return ok({
+      calendars: listed.output.calendars.filter((calendar) =>
+        calendar.components.includes(component)
+      ),
+      warnings: [...listed.output.warnings],
+    })
   }
 
   /**
@@ -371,7 +405,7 @@ export class QueryEngine {
     if (!calendars.success) return reshapeFailure(calendars)
 
     const outcomes = await Promise.all(
-      calendars.output.map(async (calendar): Promise<CalendarOutcome<Todo>> => {
+      calendars.output.calendars.map(async (calendar): Promise<CalendarOutcome<Todo>> => {
         const response = await this.client.queryTodos(calendar.url, {
           status: options.status,
           text: options.text,
@@ -421,8 +455,10 @@ export class QueryEngine {
 
     const filtered = options.priority ? filterByPriority(tasks, options.priority) : tasks
     const aggregate = aggregateTodos(filtered, this.clock(), options.limit)
-    const output: TodoQueryResult = failures.length === 0 ? aggregate : { ...aggregate, failures }
-    if (failures.length === calendars.output.length && calendars.output.length > 0) {
+    const output = withNotices(aggregate, failures, calendars.output.warnings)
+    if (
+      failures.length === calendars.output.calendars.length && calendars.output.calendars.length > 0
+    ) {
       return partial(
         {
           code: CalDavErrorCode.TRANSPORT,
@@ -480,7 +516,7 @@ export class QueryEngine {
     if (!calendars.success) return reshapeFailure(calendars)
 
     const outcomes = await Promise.all(
-      calendars.output.map(async (calendar): Promise<CalendarOutcome<Event>> => {
+      calendars.output.calendars.map(async (calendar): Promise<CalendarOutcome<Event>> => {
         const response = await this.client.queryEvents(calendar.url, {
           dateFrom: options.dateFrom,
           dateTo: options.dateTo,
@@ -529,8 +565,10 @@ export class QueryEngine {
     }
 
     const aggregate = aggregateEvents(events, this.clock(), options.limit)
-    const output: EventQueryResult = failures.length === 0 ? aggregate : { ...aggregate, failures }
-    if (failures.length === calendars.output.length && calendars.output.length > 0) {
+    const output = withNotices(aggregate, failures, calendars.output.warnings)
+    if (
+      failures.length === calendars.output.calendars.length && calendars.output.calendars.length > 0
+    ) {
       return partial(
         {
           code: CalDavErrorCode.TRANSPORT,

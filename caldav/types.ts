@@ -316,6 +316,16 @@ export interface TodoQueryResult {
    * lost part of the answer — the other calendars' tasks are still in `todos`.
    */
   failures?: CalendarFailure[]
+  /**
+   * Notices from the calendar listing the fan-out used, present only when there
+   * is one: a collection that was skipped because it is off the configured
+   * origin, a `/username/` fallback that had to be used.
+   *
+   * Independent of `failures`, and load-bearing: without it, a query whose only
+   * collection was skipped is indistinguishable from a query over an account
+   * with no calendars — both are `{ total: 0 }` with nothing else set.
+   */
+  warnings?: string[]
 }
 
 /** A {@link Todo} projected down to the fields a caller acts on. */
@@ -345,6 +355,8 @@ export interface EventQueryResult {
   events: EventSummary[]
   /** Calendars whose query failed; see {@link TodoQueryResult.failures}. */
   failures?: CalendarFailure[]
+  /** Listing notices; see {@link TodoQueryResult.warnings}. */
+  warnings?: string[]
 }
 
 /** An {@link Event} projected down to the fields a caller acts on. */

@@ -225,6 +225,68 @@ Deno.test("queryTodos distinguishes an empty calendar from a failed one", async 
   assertEquals(result.output.failures?.[0]?.error.code, CalDavErrorCode.HTTP_STATUS)
 })
 
+// ---------------------------------------------------------------------------
+// BLOCKER E2 — a collection the client skipped as off-origin is visible through
+// the primary API, not only in the listing it was dropped from.
+// ---------------------------------------------------------------------------
+
+Deno.test("queryTodos reports a collection the client skipped as off-origin", async () => {
+  // BLOCKER E2. The warning existed, but only in `listCalendars()` — which
+  // `QueryEngine` discards — so a caller could not tell "your calendar was
+  // skipped" from "you have no tasks". Both are `total: 0`; only one carries
+  // `warnings`.
+  const skipped = await engine([
+    response(207, homeSetBody()),
+    response(
+      207,
+      calendarsBody([{
+        href: "https://attacker.example.net/user/calendars/tasks/",
+        name: "Tasks",
+        components: ["VTODO"],
+      }]),
+    ),
+  ]).engine.queryTodos()
+  assert(skipped.success)
+  assertEquals(skipped.output.total, 0)
+  assertEquals(skipped.output.todos, [])
+  assertEquals(skipped.output.failures, undefined)
+  assertEquals(skipped.output.warnings?.length, 1)
+  assertStringIncludes(skipped.output.warnings![0]!, "is not on the configured origin")
+  assertStringIncludes(skipped.output.warnings![0]!, "skipping it")
+
+  // An account whose only calendar is on the configured origin and advertises no
+  // `VTODO`: the answer the one above must not be confused with.
+  const empty = await engine([
+    response(207, homeSetBody()),
+    response(
+      207,
+      calendarsBody([
+        { href: "/user/calendars/events/", name: "Events", components: ["VEVENT"] },
+      ]),
+    ),
+  ]).engine.queryTodos()
+  assert(empty.success)
+  assertEquals(empty.output.total, 0)
+  assertEquals(empty.output.warnings, undefined)
+})
+
+Deno.test("queryEvents carries the same listing warning as queryTodos", async () => {
+  const result = await engine([
+    response(207, homeSetBody()),
+    response(
+      207,
+      calendarsBody([{
+        href: "https://attacker.example.net/user/calendars/work/",
+        name: "Work",
+        components: ["VEVENT"],
+      }]),
+    ),
+  ]).engine.queryEvents()
+  assert(result.success)
+  assertEquals(result.output.total, 0)
+  assertEquals(result.output.warnings?.length, 1)
+})
+
 Deno.test("queryTodos requires no listCalendars call when a URL is given explicitly", async () => {
   const { engine: query, transport } = engine([
     response(
