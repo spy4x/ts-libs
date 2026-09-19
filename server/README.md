@@ -394,8 +394,8 @@ the cookie jar and the session sink are all injected, which is why the suite run
 | `@ts-libs/server/auth/postgres-adapter`       | `PostgresAdapter` over `npm:postgres`                                  |
 | `@ts-libs/server/auth/testing/memory-adapter` | In-memory `Adapter` with database-like constraints                     |
 
-`@ts-libs/server/auth` re-exports all of the above; `./auth` itself is in the Subpaths table at the top
-of this file.
+`@ts-libs/server/auth` re-exports all of the above. `./auth` itself is listed in the Subpaths table at
+the top of this file.
 
 ### Security fixes applied at extraction time
 
