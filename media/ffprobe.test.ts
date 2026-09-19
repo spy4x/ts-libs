@@ -295,26 +295,105 @@ describe("mp4 path branding", () => {
   })
 })
 
+/**
+ * Verbatim stdout of the argv `getAudioDuration` builds — ffprobe 8.1.2,
+ * `-v 0 -hide_banner -of compact=p=0:nk=1 -show_entries packet=pts_time -read_intervals 99999%+#1000 -i <fixture>` —
+ * on audio fixtures generated from the same ffmpeg 8.1.2:
+ *
+ * ```sh
+ * ffmpeg -v error -y -f lavfi -i sine=frequency=440:duration=5 -f lavfi -i sine=frequency=880:duration=5 \
+ *   -filter_complex "[0:a][1:a]amerge=inputs=2[a]" -map "[a]" -ar 44100 -ac 2 t.wav
+ * ffmpeg -v error -y -i t.wav -c:a libmp3lame -b:a 128k t.mp3
+ * ffmpeg -v error -y -i t.wav -c:a libopus -b:a 96k t.opus
+ * ffmpeg -v error -y -i t.wav -c:a aac -b:a 128k t.aac
+ * ffmpeg -v error -y -i t.wav -c:a flac t.flac
+ * ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 t.mp3   # ground truth
+ * ```
+ *
+ * Nothing here is hand-written: the compact writer's punctuation is the point of
+ * the tests, and a fixture the binary does not produce would hide it — which is
+ * how `getAudioDuration` shipped throwing on every real ffprobe response.
+ *
+ * Ground truth from `ffprobe -show_format`, in seconds: mp3 5.000000,
+ * opus 5.006500, aac 5.076617, flac 5.000000.
+ */
+const MP3_PACKET_TAIL = "5.015510|\n"
+/** 51 lines; only the tail packet carries side data, hence the trailing separator. */
+const OPUS_PACKET_TAIL =
+  "3.993500\n4.013500\n4.033500\n4.053500\n4.073500\n4.093500\n4.113500\n4.133500\n4.153500\n4.173500\n4.193500\n4.213500\n4.233500\n4.253500\n4.273500\n4.293500\n4.313500\n4.333500\n4.353500\n4.373500\n4.393500\n4.413500\n4.433500\n4.453500\n4.473500\n4.493500\n4.513500\n4.533500\n4.553500\n4.573500\n4.593500\n4.613500\n4.633500\n4.653500\n4.673500\n4.693500\n4.713500\n4.733500\n4.753500\n4.773500\n4.793500\n4.813500\n4.833500\n4.853500\n4.873500\n4.893500\n4.913500\n4.933500\n4.953500\n4.973500\n4.993500|\n"
+/** No side data in an adts stream, so no separator: why aac happened to work. */
+const AAC_PACKET_TAIL = "5.015510\n"
+const FLAC_PACKET_TAIL = "4.702041\n4.806531\n4.911020\n"
+/** The same file and argv as `MP3_PACKET_TAIL`, with `-of default` instead of compact. */
+const MP3_PACKET_TAIL_DEFAULT_FORMAT =
+  "[PACKET]\npts_time=5.015510\n[SIDE_DATA]\n[/SIDE_DATA]\n[/PACKET]\n"
+/** A raw h264 elementary stream whose packets carry no presentation time. */
+const RAW_H264_PACKET_NA = "N/A\nN/A\nN/A\nN/A\nN/A\n"
+/** The read interval lands past the end of a wav, so ffprobe prints nothing at all. */
+const WAV_PACKET_TAIL = ""
+
 describe("getAudioDuration", () => {
   const audioRunner = (stdout: string) => new FakeProcessRunner(() => ({ stdout }))
 
-  it("returns the last packet time in milliseconds, not the first number in the response", async () => {
-    const runner = audioRunner("8.266304\n8.333333\n8.466667\n")
-    expect(await getAudioDuration("/media/track.mp4", { runner })).toBe(8467)
+  it("reads the value an mp3 response trails with the compact separator", async () => {
+    // Pre-fix: `Number("5.015510|")` is NaN, every line was discarded, and this
+    // threw `no packet timestamps returned`.
+    const runner = audioRunner(MP3_PACKET_TAIL)
+    expect(await getAudioDuration("/media/track.mp3", { runner })).toBe(5016)
+  })
+
+  it("returns the tail packet of an opus file whose last line is separator-trailed", async () => {
+    // Pre-fix: the trailing separator made the last line NaN, so the answer was
+    // the previous packet, 4974.
+    const runner = audioRunner(OPUS_PACKET_TAIL)
+    expect(await getAudioDuration("/media/track.opus", { runner })).toBe(4994)
+  })
+
+  it("reads a compact value that carries no separator", async () => {
+    const runner = audioRunner(AAC_PACKET_TAIL)
+    expect(await getAudioDuration("/media/track.aac", { runner })).toBe(5016)
+  })
+
+  it("returns the last value of a multi-line response, not the first", async () => {
+    // 4911, not 4702: the source's `parseFloat` over the whole stdout took the first.
+    const runner = audioRunner(FLAC_PACKET_TAIL)
+    expect(await getAudioDuration("/media/track.flac", { runner })).toBe(4911)
+  })
+
+  it("reads the default writer's key=value shape and skips its section markers", async () => {
+    const runner = audioRunner(MP3_PACKET_TAIL_DEFAULT_FORMAT)
+    expect(await getAudioDuration("/media/track.mp3", { runner })).toBe(5016)
+  })
+
+  it("skips ffprobe's N/A sentinel and still throws when no packet has a time", async () => {
+    const runner = audioRunner(RAW_H264_PACKET_NA)
+    await expect(getAudioDuration("/media/raw.h264", { runner }))
+      .rejects.toThrow("no packet timestamps returned")
   })
 
   it("asks ffprobe for the tail of the file", async () => {
-    const runner = audioRunner("1.0\n")
-    await getAudioDuration("/media/track.mp4", { runner })
+    const runner = audioRunner(MP3_PACKET_TAIL)
+    await getAudioDuration("/media/track.mp3", { runner })
     const argv = runner.argvOf(0) ?? []
     expect(argv).toContain("-read_intervals")
-    expect(argv.slice(-2)).toEqual(["-i", "/media/track.mp4"])
+    expect(argv.slice(-2)).toEqual(["-i", "/media/track.mp3"])
   })
 
   it("throws when ffprobe returns no packet timestamps", async () => {
-    const runner = audioRunner("\n")
-    await expect(getAudioDuration("/media/silent.mp4", { runner }))
+    const runner = audioRunner(WAV_PACKET_TAIL)
+    await expect(getAudioDuration("/media/silent.wav", { runner }))
       .rejects.toThrow("no packet timestamps returned")
+  })
+
+  it("throws, naming the field, when a field is not a number", async () => {
+    // Synthetic on purpose: no ffprobe release produces this. It pins the rule
+    // that an unreadable field is reported, not dropped — dropping fields in
+    // silence is what hid the separator bug.
+    const runner = audioRunner(`${MP3_PACKET_TAIL}not-a-time\n`)
+    await expect(getAudioDuration("/media/track.mp3", { runner }))
+      .rejects.toThrow(
+        'ffprobe returned a packet field that is not a timestamp for /media/track.mp3: "not-a-time"',
+      )
   })
 
   it("throws a ProcessExecutionError when ffprobe fails", async () => {
@@ -332,7 +411,7 @@ describe("getAudioDuration", () => {
     // own diagnostic, and because `getMeta`'s slot (`ffprobe.ts:180`) really is
     // an option list, where the same token answers exit 1,
     // `Missing argument for option 'read_intervals'`.
-    const runner = new FakeProcessRunner(() => ({ stdout: "1.0\n" }))
+    const runner = new FakeProcessRunner(() => ({ stdout: MP3_PACKET_TAIL }))
     const error = await getAudioDuration("-read_intervals", { runner })
       .catch((thrown: unknown) => thrown)
     expect(error instanceof TypeError).toBe(true)
@@ -346,7 +425,7 @@ describe("getAudioDuration", () => {
     // Without the guard this reached `Deno.Command`, which threw its own
     // `nul byte found in provided data` from inside the spawn, naming neither
     // the argument nor the caller.
-    const runner = new FakeProcessRunner(() => ({ stdout: "1.0\n" }))
+    const runner = new FakeProcessRunner(() => ({ stdout: MP3_PACKET_TAIL }))
     const error = await getAudioDuration("/media/tra\u0000ck.mp4", { runner })
       .catch((thrown: unknown) => thrown)
     expect(error instanceof TypeError).toBe(true)

@@ -357,6 +357,23 @@ export async function getDuration(mp4Path: Mp4Path, deps: MediaDeps): Promise<nu
 }
 
 /**
+ * One field of an ffprobe `-show_entries` line as ffprobe prints it: a decimal
+ * number, with an optional sign and exponent, and **nothing else**.
+ *
+ * Anchored deliberately. `Number("5.015510|")` is `NaN` and `Number("5.015510x")`
+ * is `NaN`, so an unanchored or lenient read (`parseFloat`) either discards a
+ * real value or accepts a truncated one; both are worse than saying which field
+ * this parser could not read.
+ */
+const PACKET_FIELD_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
+
+/** A section marker of the default writer: `[PACKET]`, `[SIDE_DATA]`, `[/SIDE_DATA]`. */
+const SECTION_MARKER = /^\[.*\]$/
+
+/** The key the default writer puts in front of a value, e.g. `pts_time=5.015510`. */
+const KEY_PREFIX = /^[A-Za-z_][A-Za-z0-9_]*=/
+
+/**
  * Last packet presentation time of an audio file, in milliseconds.
  *
  * ffprobe is asked to start reading at ~27 h and to return at most 1000
@@ -364,11 +381,35 @@ export async function getDuration(mp4Path: Mp4Path, deps: MediaDeps): Promise<nu
  * ran `parseFloat` over the whole stdout (`helpers.ts:125`), which reads the
  * *first* number of the response and is only right because of that seek; an
  * empty response (a track shorter than the seek window, a wrong path) became
- * `NaN` and propagated into every duration arithmetic downstream. This parses
- * every line and returns the last finite value, and throws when there is none.
+ * `NaN` and propagated into every duration arithmetic downstream. This reads
+ * every value in the response and returns the last one, and throws when there
+ * is none.
+ *
+ * Parsing rule, pinned line by line in `ffprobe.test.ts`. ffprobe's two writers
+ * are both read, because the punctuation differs and the numbers do not:
+ *
+ * - Lines end with `\n`, `\r\n` or `\r`. A blank line and the default writer's
+ *   section markers carry no value and are skipped.
+ * - A line is split on `|`, the compact writer's field separator. It also
+ *   *trails* the last field of a packet whose `[SIDE_DATA]` section has no
+ *   selected field — measured on ffmpeg 8.1.2, every mp3 packet prints
+ *   `5.015510|` (its Skip Samples side data), the tail packet of an opus file
+ *   prints `4.993500|` (its end trim), while aac and flac print bare numbers.
+ *   Empty fields are dropped, which is what makes the trailing separator
+ *   harmless.
+ * - `N/A`, ffprobe's own sentinel for a field it has no value for, is skipped:
+ *   `ffprobe -of compact=p=0:nk=1 -show_entries packet=pts_time` on a raw h264
+ *   elementary stream answers `N/A` per packet. Under this wrapper's far seek
+ *   that same file produces no line at all, so the sentinel is defence in
+ *   depth — and it is still not a duration: no timestamp means the error below.
+ * - What is left is one value, with the default writer's `pts_time=` prefix
+ *   stripped. A field that is none of the above — the separator left inside a
+ *   value, a truncated number, an entry this argv never asked for — throws
+ *   rather than being dropped in silence: dropping fields in silence is exactly
+ *   what made this function throw on every real ffprobe run.
  *
  * @throws {ProcessExecutionError} when ffprobe exits non-zero.
- * @throws {Error} when ffprobe returns no packet time.
+ * @throws {Error} when ffprobe returns no packet time, or a field that is not a number.
  */
 export async function getAudioDuration(path: string, deps: MediaDeps): Promise<number> {
   assertUsablePath(path)
@@ -378,10 +419,24 @@ export async function getAudioDuration(path: string, deps: MediaDeps): Promise<n
     throw new ProcessExecutionError(`ffprobe failed for ${path}`, output, argv)
   }
   let last: number | null = null
-  for (const line of output.stdout.split(/\r\n|\n|\r/)) {
-    const value = Number(line.trim())
-    if (line.trim() !== "" && Number.isFinite(value)) {
-      last = value
+  for (const rawLine of output.stdout.split(/\r\n|\n|\r/)) {
+    const line = rawLine.trim()
+    if (line === "" || SECTION_MARKER.test(line)) {
+      continue
+    }
+    for (const rawField of line.split("|")) {
+      const field = rawField.trim().replace(KEY_PREFIX, "")
+      if (field === "" || field === "N/A") {
+        continue
+      }
+      if (!PACKET_FIELD_VALUE.test(field)) {
+        throw new Error(
+          `ffprobe returned a packet field that is not a timestamp for ${path}: ${
+            JSON.stringify(field)
+          }`,
+        )
+      }
+      last = Number(field)
     }
   }
   if (last === null) {
