@@ -1,0 +1,16 @@
+{
+  "name": "@ts-libs/mcp",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./mod.ts",
+    "./handler": "./handler.ts",
+    "./jsonrpc": "./jsonrpc.ts",
+    "./tools": "./tools.ts",
+    "./schema": "./schema.ts",
+    "./auth": "./auth.ts",
+    "./rate-limit": "./rate-limit.ts",
+    "./stdio": "./stdio.ts",
+    "./http": "./http.ts",
+    "./types": "./types.ts"
+  }
+}
