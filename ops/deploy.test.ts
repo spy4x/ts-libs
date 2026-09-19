@@ -396,6 +396,83 @@ Deno.test("refuses a hostile stack directory name even when deployAs is benign",
   )
 })
 
+/**
+ * Offsets where `needle` occurs outside a single-quoted region.
+ *
+ * Only a single-quoted string is inert in bash: double quotes still expand `$`,
+ * backticks and `\`, so a configuration value inside them is *not* neutralised.
+ * This is the executable form of the site-by-site inventory — a grep for
+ * `shellQuote` would miss a site that simply forgot to call it, which is exactly
+ * what the reviewer found at the stale-container message.
+ */
+function unquotedOccurrences(script: string, needle: string): number[] {
+  const found: number[] = []
+  let inSingleQuotes = false
+  for (let i = 0; i < script.length; i++) {
+    const char = script[i]
+    if (char === "'") {
+      inSingleQuotes = !inSingleQuotes
+      continue
+    }
+    if (!inSingleQuotes && char === "\\") {
+      i++
+      continue
+    }
+    if (!inSingleQuotes && script.startsWith(needle, i)) found.push(i)
+  }
+  return found
+}
+
+Deno.test("no configuration value appears outside a single-quoted region", () => {
+  const script = generateDeployScript([{ name: "web", deployAs: "hl-web" }], {
+    containerPrefix: "hl-acme",
+    envFiles: [".env.prod"],
+    composeFile: "compose.prod.yml",
+  })
+
+  for (const value of ["web", "hl-web", "hl-acme", ".env.prod", "compose.prod.yml"]) {
+    assertEquals(
+      unquotedOccurrences(script, value),
+      [],
+      `${value} must only ever appear inside a single-quoted literal`,
+    )
+  }
+})
+
+Deno.test("quotes the expected project name into the stale-container message", () => {
+  // The site the reviewer executed: `expected=${deployAs}` sat inside a
+  // double-quoted echo, so the quoting layer was bypassed at exactly one place.
+  const script = generateDeployScript([{ name: "web", deployAs: "hl-web" }], {
+    containerPrefix: "hl",
+  })
+  assertEquals(script.includes(`expected="'hl-web'"`), true)
+  assertEquals(script.includes("expected=${"), false)
+})
+
+Deno.test("allows key names that merely contain a bounded token", () => {
+  assertNoSecretEnvKeys({
+    MONKEY: "banana",
+    AUTHOR: "anton",
+    PUBKEY: "ssh-ed25519 AAAA",
+    BYPASS_PROXY: "127.0.0.1",
+    COMPASS: "north",
+    TOKENIZER: "words",
+  })
+})
+
+Deno.test("refuses a build id that looks like a credential unless the caller vouches", () => {
+  // The trade-off is deliberate and pinned: a 40-character hex build id, and a
+  // base64 public key, are refused by default because the value-shape pass cannot
+  // tell them from a token. `allowEnvKeys` is the sanctioned answer.
+  const sha = "0123456789abcdef0123456789abcdef01234567"
+  assertThrows(
+    () => assertNoSecretEnvKeys({ GIT_SHA: sha }),
+    CommandError,
+    "credential-shaped value",
+  )
+  assertNoSecretEnvKeys({ GIT_SHA: sha }, { allowKeys: ["GIT_SHA"] })
+})
+
 /** Key spellings that leaked through the first version of the guard (reviewer's matrix). */
 const LEAKY_KEYS: readonly string[] = [
   "API-KEY",

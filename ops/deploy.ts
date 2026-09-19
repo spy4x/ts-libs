@@ -76,10 +76,37 @@ export interface DeployTarget {
  * key is called.
  */
 export const SECRETISH_KEY: RegExp = new RegExp(
-  "SECRET|TOKEN|PASSWORD|PASSWD|PASSCODE|PASSPHRASE|PASS|PWD|PRIVATE|CREDENTIAL|" +
-    "AUTH|BEARER|JWT|SESSION|ACCESS_KEY|API[-_]?KEY|KEY",
+  [
+    // Generic words are matched with word boundaries. Without them the first
+    // version refused `MONKEY`, `AUTHOR`, `PUBKEY` and `BYPASS_PROXY` — real
+    // configuration that has nothing to do with a credential — while the whole
+    // point of this pass is to catch *spellings of credentials*, and the
+    // value-shape pass below catches credentials whoever named them.
+    bounded("SECRET"),
+    bounded("TOKEN"),
+    "PASSWORD",
+    "PASSWD",
+    "PASSCODE",
+    "PASSPHRASE",
+    bounded("PASS"),
+    bounded("PWD"),
+    "PRIVATE",
+    "CREDENTIAL",
+    bounded("AUTH"),
+    "BEARER",
+    "JWT",
+    bounded("SESSION"),
+    "ACCESS_KEY",
+    "API[-_]?KEY",
+    bounded("KEY"),
+  ].join("|"),
   "i",
 )
+
+/** A token that counts only as a whole word — `_`, `-`, a digit or an end. */
+function bounded(token: string): string {
+  return `(?:^|[^A-Za-z0-9])${token}(?:$|[^A-Za-z0-9])`
+}
 
 /**
  * Value shapes that are credentials whoever wrote the key.
@@ -642,7 +669,8 @@ export function generateDeployScript(
     lines.push(`  while read -r id project; do`)
     lines.push(`    if [ "$project" != ${project} ] && [ -n "$id" ]; then`)
     lines.push(
-      `      echo "  removing stale container $id (project=$project, expected=${deployAs})"`,
+      `      echo "  removing stale container $id (project=$project, expected="` +
+        `${shellQuote(deployAs)}")"`,
     )
     lines.push(`      docker rm -f "$id" >/dev/null 2>&1 || true`)
     lines.push(`    fi`)

@@ -88,12 +88,12 @@ Deno.test(
     runner.respond({ success: true, output: "" })
 
     await manageComposeStack(
-      { runner, ...STACK, env: { HOME: "/home/anton" } },
+      { runner, ...STACK, env: { HOME: "/home/operator" } },
       ComposeAction.START,
     )
 
     assertEquals(runner.calls[0].options.env, undefined)
-    assertEquals(runner.calls[1].options.env, { HOME: "/home/anton" })
+    assertEquals(runner.calls[1].options.env, { HOME: "/home/operator" })
   },
 )
 

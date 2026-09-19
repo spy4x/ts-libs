@@ -469,8 +469,10 @@ export interface ResolveMountPointOptions extends DriveOptions {
 /**
  * Decide where the backup tree lives: an existing mount, or a fresh one.
  *
- * Extracted from the near-identical block the source repeated in `create.ts`,
- * `restore.ts` and `verify-mode.ts` — three copies that had already drifted.
+ * Extracted from the block the source repeated in `create.ts:154-170`,
+ * `restore.ts:66-82` and `verify-mode.ts:59-75` — byte-identical per the reviewer
+ * of #50, so the duplication is the reason this owns the behaviour once, not
+ * evidence of drift.
  * With no `confirm` port and the device already mounted, the existing mount
  * point is used: that is the conservative choice, it is what the operator
  * already set up, and nothing is written outside it.

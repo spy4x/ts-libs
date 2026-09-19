@@ -10,17 +10,17 @@ import {
 
 Deno.test("absPath expands a leading tilde-slash against the given home", () => {
   assertEquals(
-    absPath("~/backups/restic", "/home/anton"),
-    "/home/anton/backups/restic",
+    absPath("~/backups/restic", "/home/operator"),
+    "/home/operator/backups/restic",
   )
 })
 
 Deno.test("absPath leaves an absolute path alone", () => {
-  assertEquals(absPath("/srv/backups", "/home/anton"), "/srv/backups")
+  assertEquals(absPath("/srv/backups", "/home/operator"), "/srv/backups")
 })
 
 Deno.test("absPath leaves a bare tilde alone rather than guessing a home", () => {
-  assertEquals(absPath("~anton/x", "/home/anton"), "~anton/x")
+  assertEquals(absPath("~anton/x", "/home/operator"), "~anton/x")
 })
 
 Deno.test("absPath refuses to expand a tilde with no home directory", () => {

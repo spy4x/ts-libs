@@ -524,3 +524,20 @@ Deno.test("remounts when the caller declines the existing mount point", async ()
   assertEquals(runner.argvOf(1), ["udisksctl", "unmount", "-b", "/dev/sdb1"])
   assertEquals(runner.argvOf(2), ["udisksctl", "mount", "-b", "/dev/sdb1"])
 })
+
+Deno.test("treats a blank home as missing, not as the filesystem root", async () => {
+  const fs = new FakeFileSystem().seedDirectory("/media/tester/OfflineBackups")
+  await assertRejects(
+    () =>
+      unmountDrive({
+        device: "/dev/sdb1",
+        mountPoint: "/media/tester/OfflineBackups",
+        removeMountPoint: true,
+        home: "",
+        ...ports(createFakeRunner(), fs),
+      }),
+    BackupError,
+    "needs an explicit home directory",
+  )
+  assertEquals(fs.has("/media/tester/OfflineBackups"), true)
+})
