@@ -322,6 +322,34 @@ describe("getAudioDuration", () => {
     await expect(getAudioDuration("/media/gone.mp4", { runner }))
       .rejects.toThrow(ProcessExecutionError)
   })
+
+  it("refuses a dash-leading path that would land in ffprobe's option list", async () => {
+    // `getAudioDuration` appends its own `-i` before the path, so the path lands
+    // in an option slot: `-read_intervals` reached ffprobe 8.1.2 in a hand run
+    // and it answered exit 1, `Missing argument for option 'read_intervals'`.
+    const runner = new FakeProcessRunner(() => ({ stdout: "1.0\n" }))
+    const error = await getAudioDuration("-read_intervals", { runner })
+      .catch((thrown: unknown) => thrown)
+    expect(error instanceof TypeError).toBe(true)
+    expect((error as TypeError).message).toBe(
+      'media path must not start with "-": "-read_intervals"',
+    )
+    expect(runner.callCount).toBe(0)
+  })
+
+  it("refuses a NUL byte in the path before creating any process", async () => {
+    // Without the guard this reached `Deno.Command`, which threw its own
+    // `nul byte found in provided data` from inside the spawn, naming neither
+    // the argument nor the caller.
+    const runner = new FakeProcessRunner(() => ({ stdout: "1.0\n" }))
+    const error = await getAudioDuration("/media/tra\u0000ck.mp4", { runner })
+      .catch((thrown: unknown) => thrown)
+    expect(error instanceof TypeError).toBe(true)
+    expect((error as TypeError).message).toBe(
+      'media path must not contain a NUL byte: "/media/tra\\u0000ck.mp4"',
+    )
+    expect(runner.callCount).toBe(0)
+  })
 })
 
 describe("getImageDimensions", () => {
