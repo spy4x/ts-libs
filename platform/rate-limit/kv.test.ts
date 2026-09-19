@@ -8,18 +8,25 @@ import {
   type RateLimitKvEntry,
   RateLimitStoreOverKv,
 } from "./kv.ts"
-import { createStoreLimiter } from "./memory.ts"
+import { createMemoryRateLimiter, createStoreLimiter, type RateLimitStore } from "./memory.ts"
 
 /** Fixed start instant. Nothing here reads `Date.now()`. */
 const T0 = 1_700_000_000_000
 
 /** Manual clock. */
-function fakeClock(start = T0): { clock: () => number; advance: (ms: number) => void } {
+function fakeClock(start = T0): {
+  clock: () => number
+  advance: (ms: number) => void
+  advanceTo: (at: number) => void
+} {
   let now = start
   return {
     clock: () => now,
     advance: (ms: number) => {
       now += ms
+    },
+    advanceTo: (at: number) => {
+      now = at
     },
   }
 }
@@ -167,6 +174,124 @@ describe("createKvStore", () => {
     await store.write("user:42", [T0], T0, 1000)
     assertEquals([...kv.entries.keys()], ["auth:user:42"])
     assertEquals(entryOf(kv, "auth:user:42")?.events, [T0])
+  })
+})
+
+describe("StoreRateLimiter parity with MemoryRateLimiter", () => {
+  /**
+   * KV fake that honours the TTL it is handed, the way a real backend does.
+   *
+   * `expiresAt` is expressed on the same virtual timeline the limiter uses, so the entry's absolute
+   * lifetime is offset into wall time before the backend stores it; that way the backend's own
+   * `Date.now()` comparison agrees with the injected clock without the test reading real time.
+   */
+  function ttlAwareKv(): RateLimitKv {
+    const skew = Date.now() - T0
+    const entries = new Map<string, { expiresAt: number; events: number[] }>()
+    return {
+      get: (key: string) => Promise.resolve(entries.get(key)),
+      set: (key: string, value: unknown, options?: { expireIn?: number }) => {
+        const entry = value as { events: number[]; expiresAt: number }
+        const ttlDeadline = options?.expireIn === undefined
+          ? Infinity
+          : Date.now() + options.expireIn
+        entries.set(key, {
+          expiresAt: Math.min(entry.expiresAt + skew, ttlDeadline),
+          events: entry.events,
+        })
+        return Promise.resolve()
+      },
+      delete: (key: string) => {
+        entries.delete(key)
+        return Promise.resolve()
+      },
+    }
+  }
+
+  it("matches the memory limiter decision for decision across a window boundary", async () => {
+    // The conformance test the "same window semantics" claim never had. Every other case here uses a
+    // single-event bucket, where a TTL taken from the *oldest* event happens to be right because
+    // oldest == newest. With three events the two diverge: an oldest-derived TTL lets the entry go
+    // absent while newer events are still inside the window, so the store path hands out `limit`
+    // extra requests. Measured before the fix at limit 3 / windowMs 1000: memory 3 in the window,
+    // store 5.
+    //
+    // Deterministic: one injected clock drives both limiters, and the backend converts the entry's
+    // lifetime into wall time only so its own `Date.now()` comparison agrees with the injected one.
+    // No sleeping, no timing assertion — the advance is arithmetic.
+    const kv = ttlAwareKv()
+    const { clock, advanceTo } = fakeClock()
+    const memory = createMemoryRateLimiter({ windowMs: 1000, limit: 3, clock })
+    const store = createStoreLimiter(createKvStore({ backend: kv, clock }), {
+      windowMs: 1000,
+      limit: 3,
+      clock,
+    })
+
+    const trace: string[] = []
+    for (const at of [0, 997, 998, 1000, 1001, 1002, 1003]) {
+      advanceTo(T0 + at)
+      const fromMemory = memory.check("ip:203.0.113.9")
+      const fromStore = await store.check("ip:203.0.113.9")
+      trace.push(`${at} allowed=${fromMemory.allowed} remaining=${fromMemory.remaining}`)
+      assertEquals(fromStore.allowed, fromMemory.allowed, `allowed diverged at +${at}ms`)
+      assertEquals(fromStore.remaining, fromMemory.remaining, `remaining diverged at +${at}ms`)
+    }
+
+    assertEquals(trace, [
+      "0 allowed=true remaining=2",
+      "997 allowed=true remaining=1",
+      "998 allowed=true remaining=0",
+      "1000 allowed=true remaining=0",
+      "1001 allowed=false remaining=0",
+      "1002 allowed=false remaining=0",
+      "1003 allowed=false remaining=0",
+    ])
+  })
+
+  it("hands the backend a TTL covering the newest event, not the oldest", async () => {
+    // Pins the derivation directly, through both branches: three accepted requests 150 ms apart
+    // inside a 1000 ms window, then rejections. An oldest-derived TTL writes 700 or 500 on the last
+    // two writes instead of 800, so the entry lapses while its newest event is still live.
+    const writes: { events: number[]; ttlMs: number }[] = []
+    let state: number[] = []
+    const store: RateLimitStore = {
+      read: () => Promise.resolve(state),
+      write: (_key: string, events: number[], _now: number, ttlMs: number) => {
+        writes.push({ events: [...events], ttlMs })
+        state = [...events]
+        return Promise.resolve()
+      },
+      delete: () => {
+        state = []
+        return Promise.resolve()
+      },
+    }
+    const limiter = createStoreLimiter(store, { windowMs: 1000, limit: 3, clock: () => T0 })
+
+    for (const at of [T0, T0 + 150, T0 + 300, T0 + 450, T0 + 500]) {
+      await limiter.check("a", at)
+    }
+
+    assertEquals(writes.length, 5)
+    assertEquals(writes[2]?.events, [T0, T0 + 150, T0 + 300])
+    assertEquals(writes[2]?.ttlMs, 1000)
+    // newest event is T0 + 300, checked at T0 + 500 → 800. Oldest (T0) would give 500.
+    assertEquals(writes.at(-1)?.ttlMs, 800)
+  })
+
+  it("keeps a stored entry past the oldest event's expiry while a newer one is live", async () => {
+    const kv = fakeKv()
+    const store = createKvStore({ backend: kv, clock: () => T0 })
+
+    // Two events inside a 1000 ms window, written with the TTL the limiter now derives.
+    await store.write("a", [T0, T0 + 300], T0 + 300, 800)
+
+    // The oldest event expired at T0 + 1000; the newer one has not, so the entry must survive.
+    // This is exactly the moment an oldest-derived TTL threw it away and restarted the window.
+    assertEquals(await store.read("a", T0 + 1000), [T0, T0 + 300])
+    assertEquals(await store.read("a", T0 + 1100), undefined)
+    assertEquals(kv.entries.has("ratelimit:a"), false)
   })
 })
 
