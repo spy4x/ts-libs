@@ -287,12 +287,39 @@ export function surfacedStrings(value: unknown, seen: unknown[] = []): string[] 
   return found
 }
 
-/** Everything a route could put on the wire for an error, as one string. */
+/**
+ * Frame-shaped text: what a stack trace's frames look like, whichever way the
+ * runtime formatted them.
+ *
+ * `at fn (path:line:col)`, `at path:line:col`, and a bare `file.ts:12:3` all
+ * match, so a message that had a stack appended, or a path quoted into it, is
+ * caught either way.
+ */
+const FRAME_PATTERN = /(?:^|\s)at\s+\S|\.[cm]?tsx?:\d+:\d+/
+
+/** Whether a string carries stack-frame text or a source-file path. */
+export function hasFrameText(value: string): boolean {
+  return FRAME_PATTERN.test(value)
+}
+
+/**
+ * Everything a route could put on the wire for an error, as one string.
+ *
+ * `Object.getOwnPropertyNames` alone is not enough: `message` on an `Error` is
+ * not enumerable, so a mutation that appends a stack to the message would slip
+ * past a payload built from enumerable keys only. `stack` is still excluded —
+ * it is the runtime's own addition and this package never copies it — so the
+ * assertion stays about what the library surfaces.
+ */
 export function serialized(error: unknown): string {
   const record: Record<string, unknown> = {}
   for (const entry of Object.getOwnPropertyNames(error)) {
     if (entry === "stack") continue
     record[entry] = (error as Record<string, unknown>)[entry]
+  }
+  if (error instanceof Error) {
+    record.name = error.name
+    record.message = error.message
   }
   return JSON.stringify(record)
 }

@@ -26,6 +26,7 @@ import {
   FAKE_API_KEY,
   FAKE_BASE_URL,
   type FakeReply,
+  hasFrameText,
   serialized,
   surfacedStrings,
 } from "./test-fixtures.ts"
@@ -530,6 +531,19 @@ describe("chatCompletion request shape", () => {
     assertEquals(JSON.stringify(fake.requests[0].body).includes(FAKE_API_KEY), false)
   })
 
+  it("sends no field the request type does not declare", async () => {
+    const { client, fake } = harness([{ body: completionBody("ok") }])
+    await client.chatCompletion(ASK)
+    const request = fake.requests[0]
+
+    // A per-request key would arrive as an extra body field or an extra header.
+    // Pinning the exact key set is what makes that inexpressible in practice,
+    // not just in the type.
+    assertEquals(Object.keys(request.body).sort(), ["messages"])
+    assertEquals(Object.keys(request.headers).sort(), ["authorization", "content-type"])
+    assertEquals(request.headers.authorization, `Bearer ${FAKE_API_KEY}`)
+  })
+
   it("cannot express a per-request API key", () => {
     const client = createChatClient({ apiKey: FAKE_API_KEY })
     // @ts-expect-error a per-request key must not be part of the request type
@@ -539,6 +553,32 @@ describe("chatCompletion request shape", () => {
 
 describe("errors never carry a stack, a path or a credential", () => {
   const leakyKey = "sk-live-looking-key-that-must-not-travel"
+
+  it("keeps frame text and paths out of everything a route would surface", async () => {
+    const { client } = harness([{ status: 500, body: { error: { message: "internal" } } }])
+    const error = await assertRejects(() => client.chatCompletion(ASK))
+    const payload = serialized(error)
+
+    // The contract: a route that puts the error on the wire — `JSON.stringify`
+    // of the error, or of a hand-picked `{ error, detail }` — cannot carry a
+    // stack frame, a source path or a credential. `serialized` is the enumerable
+    // surface plus `name` and `message`; `stack` is the runtime's own
+    // non-enumerable addition and is never copied into any of those fields.
+    assertEquals(payload.includes("stack"), false, payload)
+    assertEquals(hasFrameText(payload), false, payload)
+    assertEquals(payload.includes(".ts:"), false, payload)
+    assertEquals(payload.includes("/srv/"), false, payload)
+  })
+
+  it("reports a transport failure without its stack", async () => {
+    const { client } = harness([{ networkError: new TypeError("error sending request for url") }])
+    const error = await assertRejects(() => client.chatCompletion(ASK))
+    const payload = serialized(error)
+
+    assertEquals(payload.includes("stack"), false, payload)
+    assertEquals(hasFrameText(payload), false, payload)
+    assertEquals(payload.includes("chat.test.ts"), false, payload)
+  })
 
   it("keeps a provider message from leaking a key or a frame", async () => {
     const { client } = harness([
