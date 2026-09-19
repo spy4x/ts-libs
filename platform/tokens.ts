@@ -26,6 +26,20 @@ export const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 /** Default raw-token width: 128 bits, which base64url renders as 22 characters. */
 export const DEFAULT_TOKEN_BYTES = 16
 
+/**
+ * Smallest accepted secret length, in characters, measured on the trimmed value.
+ *
+ * A cancel-token hash is a plain `sha256Hex(raw + secret)` and the digest is
+ * stored, so the secret is not protected by any rate limit: an attacker holding a
+ * stored digest can search the whole keyspace offline. 32 characters removes a
+ * dictionary-sized search; it does not replace real entropy, which the caller
+ * must inject. Same rule, same number, same reasoning as `server/jwt.ts`'s own
+ * `MIN_SECRET_LENGTH` — a short secret is brute-forceable offline in both
+ * modules, so both fail closed at the same floor rather than one of them
+ * silently accepting `"a"`.
+ */
+export const MIN_SECRET_LENGTH = 32
+
 /** Widest buffer `crypto.getRandomValues` accepts in one call (65536 bytes). */
 const MAX_RANDOM_BYTES = 65_536
 
@@ -280,18 +294,44 @@ export function randomBase64Url(bytes: number = DEFAULT_TOKEN_BYTES): string {
 }
 
 /**
- * Rejects any secret that would make the digest meaningless.
+ * Rejects any secret that would make the digest meaningless or brute-forceable.
  *
  * The source did not check at all (`tokens.ts:38-44`), so `newCancelToken()` with
  * no argument hashed against the literal `"undefined"` and produced a token any
- * caller could forge. Fail closed instead: a blank secret is a programming error.
+ * caller could forge. Fail closed instead: an unusable secret is a programming
+ * error, not a warning.
  *
- * @throws {TokenError} `InvalidSecret` when the secret is missing, blank or not a string.
+ * Two ways a secret is unusable, both checked on the trimmed value so a secret of
+ * nothing but whitespace cannot pass on length alone: 1) absent, or not a
+ * printable string — the value may arrive from untyped configuration, and a
+ * secret made of NUL bytes or other control characters is a placeholder, not
+ * entropy, so `"\u0000".repeat(64)` is rejected even though it is long enough;
+ * 2) shorter than {@link MIN_SECRET_LENGTH}.
+ *
+ * @throws {TokenError} `InvalidSecret` when the secret is missing, blank, not a
+ *         string, not printable, or below {@link MIN_SECRET_LENGTH} characters.
+ *         Messages are constants — the rejected value is never echoed.
  */
 function assertUsableSecret(secret: string): void {
-  if (typeof secret !== "string" || secret.trim() === "") {
+  if (typeof secret !== "string") {
     throw new TokenError(TokenErrorCode.InvalidSecret, "secret must be a non-empty string")
   }
+  const trimmed = secret.trim()
+  if (trimmed === "" || !isPrintable(trimmed)) {
+    throw new TokenError(TokenErrorCode.InvalidSecret, "secret must be a non-empty string")
+  }
+  if (trimmed.length < MIN_SECRET_LENGTH) {
+    throw new TokenError(TokenErrorCode.InvalidSecret, "secret must be at least 32 characters")
+  }
+}
+
+/** True when every character is printable ASCII (`0x20`-`0x7E`). */
+function isPrintable(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) as number
+    if (code < 0x20 || code > 0x7e) return false
+  }
+  return true
 }
 
 /**
@@ -309,8 +349,9 @@ function assertUsableSecret(secret: string): void {
  * forge a token: an attacker would still have to reproduce a digest they cannot
  * see. Revisit only with a versioned hash column and a migration.
  *
- * @param secret Non-empty server-side secret. Never logged, never stored in the result.
- * @throws {TokenError} `InvalidSecret` when the secret is blank.
+ * @param secret Server-side secret of at least {@link MIN_SECRET_LENGTH} characters. Never logged,
+ *     never stored in the result.
+ * @throws {TokenError} `InvalidSecret` when the secret is blank or too short.
  */
 export async function newCancelToken(secret: string): Promise<{ raw: string; hash: string }> {
   assertUsableSecret(secret)
@@ -331,8 +372,8 @@ export async function newCancelToken(secret: string): Promise<{ raw: string; has
  *
  * @param raw The token from the caller's link.
  * @param hash The stored digest.
- * @param secret Non-empty server-side secret.
- * @throws {TokenError} `InvalidSecret` when the secret is blank.
+ * @param secret Server-side secret of at least {@link MIN_SECRET_LENGTH} characters.
+ * @throws {TokenError} `InvalidSecret` when the secret is blank or too short.
  */
 export async function verifyCancelToken(
   raw: string,

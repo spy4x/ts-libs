@@ -167,14 +167,21 @@ const policySchema = type({
 const limitOnlySchema = type({ limit: "number.integer >= 0" })
 
 /**
- * The shape of one unit-of-work count: a positive integer.
+ * The shape of one unit-of-work count: an integer inside a bounded range.
  *
  * A fractional or negative count would corrupt a counter that every later read
- * divides into `remaining`, so it is refused at the boundary. `allows` is used
- * rather than a parsed result because the count is consumed as the caller's own
- * value, never as a copy.
+ * divides into `remaining`, so it is refused at the boundary. So is an absurd
+ * *large* one: one recorded unit of work is one billable action or one batch of
+ * them, and a call spending a million units at once is a caller bug — a swapped
+ * argument, or an unbounded batch size — that would otherwise silently drain a
+ * principal's whole budget in a single request. The ceiling is set far above any
+ * real batch on purpose, so it rejects bugs and never rejects real work;
+ * `1e9` is not a batch, it is a budget.
+ *
+ * `allows` is used rather than a parsed result because the count is consumed as
+ * the caller's own value, never as a copy.
  */
-const countSchema = type("number.integer > 0")
+const countSchema = type("1 <= number.integer <= 1000000")
 
 /** A `limit` that is not a counter at all, refused at construction. */
 const POLICY_LIMIT_MESSAGE = "QuotaPolicy.limit must be a non-negative safe integer"
@@ -182,8 +189,12 @@ const POLICY_LIMIT_MESSAGE = "QuotaPolicy.limit must be a non-negative safe inte
 const POLICY_WINDOW_MESSAGE = "QuotaPolicy.windowSeconds must be a positive safe integer when set"
 /** A principal that cannot be keyed — refused rather than billed to `""`. */
 const NO_PRINCIPAL_MESSAGE = "A userId or a sessionId is required"
-/** A `count` that is not a quantity of work — refused rather than corrupting a counter. */
-const INVALID_COUNT_MESSAGE = "count must be a positive safe integer"
+/**
+ * A `count` that is not a quantity of work — refused rather than corrupting a
+ * counter or draining a budget in one call. The ceiling is named so a caller
+ * knows what to split; the offending value is deliberately not echoed.
+ */
+const INVALID_COUNT_MESSAGE = "count must be an integer between 1 and 1000000"
 /** The injected persistence port is missing or half-wired. */
 const STORE_PORT_MESSAGE = "QuotaStore must provide read and increment functions"
 
@@ -220,7 +231,7 @@ export enum QuotaPrincipalKind {
 export enum QuotaErrorCode {
   /** Neither a user nor a session id was supplied — a caller error (`400`). */
   NoPrincipal = 1,
-  /** `count` was not a positive safe integer — refusing beats writing a corrupt total. */
+  /** `count` was not a bounded positive integer — refusing beats a corrupt or drained counter. */
   InvalidCount = 2,
   /** The policy is unusable (bad `limit`, bad `windowSeconds`, or a broken store port). */
   InvalidPolicyLimit = 3,
@@ -356,7 +367,19 @@ export interface QuotaMeter {
    * *after* the work: the result may be `Exhausted` with `used > limit`, and
    * that overshoot is reported, never clamped away.
    *
-   * @throws {QuotaError} `InvalidCount` when `count` is not a positive safe integer.
+   * There is deliberately no BYOK parameter here. A BYOK request never reaches
+   * this method: the caller records only on the path where {@link check}
+   * returned `Allowed`, and `check` is where the own-key bypass lives — the
+   * source returned from `checkDemoUsage` before any recording was reached
+   * (`apps/api/services/demo-usage.ts:19-24`), so the same call site skipped
+   * `recordDemoUsage` entirely. This meter cannot tell on its own whether the
+   * work it is being told about was paid for by the caller's key or by the
+   * metered one, so a call site that records unconditionally charges the
+   * metered budget for BYOK work. That is the caller's invariant to keep, and
+   * this contract is stated rather than silently assumed.
+   *
+   * @throws {QuotaError} `InvalidCount` when `count` is not an integer between 1
+   * and 1_000_000.
    */
   record(principal: QuotaPrincipal, count?: number): Promise<QuotaState>
   /**
@@ -401,17 +424,29 @@ export function quotaHttpStatus(decision: QuotaDecision): 200 | 429 | 503 {
  * Blank/whitespace ids count as absent; neither present throws
  * `QuotaError(NoPrincipal)` (source `apps/api/routes/usage.ts:14-16` → 400).
  *
- * @throws {QuotaError} `NoPrincipal` when both inputs are absent or whitespace.
+ * Both fields are typed `unknown` on purpose. This function's whole job is to
+ * read identity out of *untrusted* request input — an `X-Session-Id` header, a
+ * decoded JWT claim — where a number, an object or an array can arrive despite
+ * any static type. A value that is not a string is therefore treated as absent
+ * rather than trimmed, so the outcome is always either a real principal or the
+ * typed `NoPrincipal`; a raw `TypeError` from `.trim()` would be an untyped
+ * failure escaping a function whose entire contract is typed errors. In
+ * particular `{ userId: 12345, sessionId: "s-1" }` resolves to the *session*:
+ * a non-string user id does not shadow a usable session id, and it does not
+ * become a counter key of `"12345"` either.
+ *
+ * @throws {QuotaError} `NoPrincipal` when neither input is a non-blank string.
  */
 export function resolveQuotaPrincipal(
-  input: { userId?: string | null; sessionId?: string | null },
+  input: { userId?: unknown; sessionId?: unknown },
 ): QuotaPrincipal {
-  // `??` first, then a truthiness test on the trimmed value: `""` is treated
-  // exactly like `undefined`, so a header that is present but empty does not
-  // become a principal whose counter every anonymous request shares.
-  const userId = input.userId?.trim() ?? ""
+  // `typeof` before `trim`, then a truthiness test on the trimmed value: a
+  // non-string and an empty/whitespace string are both "absent", so a header
+  // that is present but empty (or wrong-typed) never becomes a principal whose
+  // counter every anonymous request shares.
+  const userId = typeof input.userId === "string" ? input.userId.trim() : ""
   if (userId) return { kind: QuotaPrincipalKind.User, id: userId }
-  const sessionId = input.sessionId?.trim() ?? ""
+  const sessionId = typeof input.sessionId === "string" ? input.sessionId.trim() : ""
   if (sessionId) return { kind: QuotaPrincipalKind.Session, id: sessionId }
   throw new QuotaError(QuotaErrorCode.NoPrincipal, NO_PRINCIPAL_MESSAGE)
 }

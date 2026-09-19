@@ -5,16 +5,10 @@
  * the environment, the network or the filesystem.
  */
 
-import {
-  assertEquals,
-  assertFalse,
-  assertInstanceOf,
-  assertNotEquals,
-  assertStrictEquals,
-} from "@std/assert"
+import { assertEquals, assertFalse, assertInstanceOf, assertNotEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 
-import { CryptoService, maskKey } from "./crypto.ts"
+import { CryptoError, CryptoErrorCode, CryptoService, maskKey } from "./crypto.ts"
 import type { SecretCipher } from "./crypto.ts"
 import {
   createUserSecretStore,
@@ -159,6 +153,102 @@ class FailingPort implements UserSecretPort {
   }
 }
 
+/**
+ * A rejection that quotes everything it was handed, with its class name set to the plaintext.
+ *
+ * This is the shape of a real leak in the wild: a driver or HTTP client builds its failure message
+ * from the values it was working on, and `name` is attacker-influenced too (a subclass, a proxy, a
+ * deserialised error). Everything here must stop at the boundary.
+ */
+function hostileRejection(context: string, name: string = FAKE_API_KEY): Error {
+  const failure = new Error(
+    `${context} failed for ${FAKE_API_KEY} (ciphertext enc:${FAKE_API_KEY})`,
+  )
+  failure.name = name
+  return failure
+}
+
+/** Adversarial port: its rejection echoes the ciphertext it was handed on every method. */
+class EchoingPort implements UserSecretPort {
+  constructor(private readonly context: string) {}
+
+  upsert(record: StoredUserSecret): Promise<void> {
+    return Promise.reject(hostileRejection(`${this.context} upsert ${record.secretEncrypted}`))
+  }
+
+  listByUser(_userId: string): Promise<StoredUserSecret[]> {
+    return Promise.reject(hostileRejection(`${this.context} list`))
+  }
+
+  findActive(userId: string, provider: string): Promise<StoredUserSecret | null> {
+    return Promise.reject(hostileRejection(`${this.context} findActive ${userId} ${provider}`))
+  }
+
+  remove(_userId: string, _provider: string): Promise<void> {
+    return Promise.reject(hostileRejection(`${this.context} remove`))
+  }
+}
+
+/** Adversarial cipher: refuses to decrypt, quoting the plaintext and the ciphertext it was handed. */
+class EchoingCipher implements SecretCipher {
+  encrypt(_plaintext: string): Promise<string> {
+    return Promise.reject(hostileRejection("echoing encrypt"))
+  }
+
+  decrypt(ciphertext: string): Promise<string> {
+    return Promise.reject(hostileRejection(`echoing decrypt ${ciphertext}`))
+  }
+}
+
+/** Adversarial port that rejects with whatever `make` builds, so a test controls the shape. */
+class HostilePort implements UserSecretPort {
+  constructor(private readonly make: (context: string) => unknown) {}
+
+  upsert(record: StoredUserSecret): Promise<void> {
+    return Promise.reject(this.make(`hostile upsert ${record.secretEncrypted}`))
+  }
+
+  listByUser(_userId: string): Promise<StoredUserSecret[]> {
+    return Promise.reject(this.make("hostile list"))
+  }
+
+  findActive(userId: string, provider: string): Promise<StoredUserSecret | null> {
+    return Promise.reject(this.make(`hostile findActive ${userId} ${provider}`))
+  }
+
+  remove(_userId: string, _provider: string): Promise<void> {
+    return Promise.reject(this.make("hostile remove"))
+  }
+}
+
+/** Adversarial cipher that rejects with whatever `make` builds. */
+class HostileCipher implements SecretCipher {
+  constructor(private readonly make: (context: string) => unknown) {}
+
+  encrypt(plaintext: string): Promise<string> {
+    return Promise.reject(this.make(`hostile encrypt ${plaintext}`))
+  }
+
+  decrypt(ciphertext: string): Promise<string> {
+    return Promise.reject(this.make(`hostile decrypt ${ciphertext}`))
+  }
+}
+
+/** A stored, active row for {@link USER_ID}/{@link PROVIDER}, seeded straight into the fake port. */
+function seedActiveRow(port: FakePort): void {
+  port.seed({
+    userId: USER_ID,
+    provider: PROVIDER,
+    secretEncrypted: `enc:${FAKE_API_KEY}`,
+    keyHint: maskKey(FAKE_API_KEY, 4),
+    baseUrl: "",
+    model: "",
+    isActive: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  })
+}
+
 interface Harness {
   store: UserSecretStore
   port: FakePort
@@ -208,6 +298,46 @@ function assertNoKeyMaterial(message: string): void {
   assertFalse(message.includes(FAKE_API_KEY))
   assertFalse(message.includes("test-secret"))
   assertFalse(message.includes("1234"))
+}
+
+/**
+ * Everything a caller, a logger or a serialiser can reach from a thrown value, in one string.
+ *
+ * Deliberately broader than `error.message`: own enumerable properties (`code`, `rejectionName`),
+ * `name`, `message` — including when `message` is non-enumerable — and a walk of the whole `cause`
+ * chain, which must be `undefined` at every link. A `cause`-carrying error that looks clean at
+ * `.message` is exactly the leak this pins down.
+ */
+function reachableText(thrown: unknown): string {
+  const parts: string[] = []
+  const seen = new Set<unknown>()
+  let current: unknown = thrown
+  while (current !== null && current !== undefined && !seen.has(current)) {
+    seen.add(current)
+    if (current instanceof Error) {
+      parts.push(`name=${current.name}`, `message=${current.message}`)
+      for (const [key, value] of Object.entries(current)) {
+        parts.push(`${key}=${String(value)}`)
+      }
+      current = current.cause
+    } else {
+      parts.push(`non-error=${String(current)}`)
+      break
+    }
+  }
+  return parts.join("\n")
+}
+
+/** Asserts no probe string is reachable from the thrown error, and that no `cause` is attached. */
+function assertNothingReachable(error: UserSecretError, probes: string[]): void {
+  assertEquals(error.cause, undefined)
+  const reachable = reachableText(error)
+  for (const probe of probes) {
+    assertFalse(
+      reachable.includes(probe),
+      `rejection detail reached the thrown error: ${probe}`,
+    )
+  }
 }
 
 // ── Save: encryption at rest and the masked hint ─────────────────────────────────────────────
@@ -473,6 +603,7 @@ describe("save validation", () => {
 describe("save failures", () => {
   it("reports PortFailure without the plaintext when the cipher cannot encrypt", async () => {
     const failure = new Error(`cipher exploded on ${FAKE_API_KEY}`)
+    failure.name = "CryptoError"
     const { store } = createHarness(new FailingCipher(failure))
 
     const error = await rejectionWith(
@@ -481,7 +612,22 @@ describe("save failures", () => {
     )
 
     assertNoKeyMaterial(error.message)
-    assertStrictEquals(error.cause, failure)
+    // The name is a string the rejection chose, so it is ignored: this is a plain `Error`.
+    assertEquals(error.rejectionName, "Error")
+    assertNothingReachable(error, [FAKE_API_KEY, `enc:${FAKE_API_KEY}`, failure.message])
+  })
+
+  it("reports our own CryptoError by identity, not by its name", async () => {
+    const failure = new CryptoError(CryptoErrorCode.EncryptionFailed, "cipher rejected the input")
+    const { store } = createHarness(new FailingCipher(failure))
+
+    const error = await rejectionWith(
+      () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY }),
+      UserSecretErrorCode.PortFailure,
+    )
+
+    assertEquals(error.rejectionName, "CryptoError")
+    assertNothingReachable(error, [FAKE_API_KEY, `enc:${FAKE_API_KEY}`, failure.message])
   })
 
   it("reports PortFailure without the ciphertext when the port cannot upsert", async () => {
@@ -495,6 +641,30 @@ describe("save failures", () => {
 
     assertFalse(error.message.includes(`enc:${FAKE_API_KEY}`))
     assertNoKeyMaterial(error.message)
+    assertNothingReachable(error, [FAKE_API_KEY, `enc:${FAKE_API_KEY}`, "connection refused"])
+  })
+
+  it("keeps the plaintext, the ciphertext and the rejection out of a hostile PortFailure", async () => {
+    const store = createUserSecretStore({
+      port: new EchoingPort("hostile"),
+      cipher: new FakeCipher(),
+    })
+
+    const error = await rejectionWith(
+      () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY }),
+      UserSecretErrorCode.PortFailure,
+    )
+
+    // The hostile port's rejection names the plaintext, the ciphertext and the key again; the
+    // identity of a known error type is the only survivor — never a string the rejection chose.
+    assertNothingReachable(error, [
+      FAKE_API_KEY,
+      `enc:${FAKE_API_KEY}`,
+      "hostile upsert failed",
+      "ciphertext",
+    ])
+    assertEquals(error.rejectionName, "Error")
+    assertEquals(error.message, "the user secret port failed")
   })
 })
 
@@ -573,7 +743,8 @@ describe("list", () => {
       UserSecretErrorCode.PortFailure,
     )
 
-    assertStrictEquals(error.cause, failure)
+    assertNothingReachable(error, ["connection refused"])
+    assertEquals(error.rejectionName, "Error")
   })
 })
 
@@ -643,7 +814,30 @@ describe("openSecret", () => {
     assertFalse(error.message.includes("something else entirely"))
     assertFalse(error.message.includes(ciphertext))
     assertNoKeyMaterial(error.message)
-    assertStrictEquals(error.cause, failure)
+    assertEquals(error.rejectionName, "Error")
+    assertNothingReachable(error, [FAKE_API_KEY, ciphertext, "something else entirely"])
+  })
+
+  it("keeps the plaintext, the ciphertext and the rejection out of a hostile DecryptionFailed", async () => {
+    const { store, port } = createHarness(new EchoingCipher())
+    seedActiveRow(port)
+
+    const error = await rejectionWith(
+      () => store.openSecret(USER_ID, PROVIDER),
+      UserSecretErrorCode.DecryptionFailed,
+    )
+
+    // The hostile cipher's rejection quotes the plaintext, the ciphertext it was handed, and sets
+    // its own `name` to the plaintext. Only a known type identity survives; nothing reachable from
+    // the thrown error — message, own properties, `cause` chain — carries any of it.
+    assertNothingReachable(error, [
+      FAKE_API_KEY,
+      `enc:${FAKE_API_KEY}`,
+      "echoing decrypt failed",
+      "ciphertext",
+    ])
+    assertEquals(error.rejectionName, "Error")
+    assertEquals(error.message, "the stored secret could not be decrypted")
   })
 
   it("reports PortFailure when the port cannot be read", async () => {
@@ -658,7 +852,8 @@ describe("openSecret", () => {
       UserSecretErrorCode.PortFailure,
     )
 
-    assertStrictEquals(error.cause, failure)
+    assertNothingReachable(error, ["connection refused"])
+    assertEquals(error.rejectionName, "Error")
   })
 })
 
@@ -702,7 +897,151 @@ describe("remove", () => {
       UserSecretErrorCode.PortFailure,
     )
 
-    assertStrictEquals(error.cause, failure)
+    assertNothingReachable(error, ["connection refused"])
+    assertEquals(error.rejectionName, "Error")
+  })
+})
+
+// ── Provider normalisation: one provider, one row ────────────────────────────────────────────
+
+describe("provider normalisation", () => {
+  it("stores a provider lower-cased and finds it with any casing", async () => {
+    const { store, port } = createHarness()
+
+    await store.save(USER_ID, { provider: "OpenAI", apiKey: FAKE_API_KEY })
+
+    assertEquals(port.rows[0].provider, "openai")
+    assertEquals(await store.openSecret(USER_ID, "openai"), FAKE_API_KEY)
+    assertEquals(await store.openSecret(USER_ID, "OpenAI"), FAKE_API_KEY)
+    assertEquals(await store.openSecret(USER_ID, "OPENAI"), FAKE_API_KEY)
+    // One read-back from `save`, then one per `openSecret` — every one of them normalised.
+    assertEquals(port.findActiveCalls.map((call) => call.provider), [
+      "openai",
+      "openai",
+      "openai",
+      "openai",
+    ])
+  })
+
+  it("replaces the same row when the same provider is saved in a different casing", async () => {
+    const { store, port } = createHarness()
+
+    await store.save(USER_ID, { provider: "openai", apiKey: FAKE_API_KEY })
+    await store.save(USER_ID, { provider: "OpenAI", apiKey: OTHER_FAKE_API_KEY })
+
+    assertEquals(port.upserted.length, 2)
+    assertEquals(port.rows.length, 1)
+    assertEquals(port.rows[0].secretEncrypted, `enc:${OTHER_FAKE_API_KEY}`)
+    assertEquals((await store.list(USER_ID)).length, 1)
+    assertEquals(await store.openSecret(USER_ID, "openai"), OTHER_FAKE_API_KEY)
+  })
+
+  it("removes a row stored under a different casing", async () => {
+    const { store, port } = createHarness()
+    await store.save(USER_ID, { provider: "openai", apiKey: FAKE_API_KEY })
+
+    await store.remove(USER_ID, "OPENAI")
+
+    assertEquals(port.removals, [{ userId: USER_ID, provider: "openai" }])
+    assertEquals(port.rows.length, 0)
+  })
+
+  it("still rejects a provider whose shape is invalid in any casing", async () => {
+    const { store } = createHarness()
+
+    await rejectionWith(
+      () => store.save(USER_ID, { provider: "OpenAI Inc", apiKey: FAKE_API_KEY }),
+      UserSecretErrorCode.InvalidProvider,
+    )
+    await rejectionWith(
+      () => store.openSecret(USER_ID, "OpenAI Inc"),
+      UserSecretErrorCode.InvalidProvider,
+    )
+    await rejectionWith(
+      () => store.remove(USER_ID, "OpenAI Inc"),
+      UserSecretErrorCode.InvalidProvider,
+    )
+  })
+})
+
+// ── Rejection classification: identity only, never an implementation-supplied string ─────────
+
+describe("rejection classification", () => {
+  /** The plaintext key with its separators removed — the shape the old name filter let through. */
+  const ALPHANUMERIC_SECRET = FAKE_API_KEY.replace(/-/g, "")
+  /** 64 hex characters: a plausible key length, and alphanumeric-only. */
+  const HEX_SECRET = "0123456789abcdef".repeat(4)
+
+  /**
+   * Drives the same hostile rejection through both paths the store wraps: a port rejection
+   * (`PortFailure`) and a cipher rejection (`DecryptionFailed`), and returns both errors.
+   */
+  async function bothPaths(
+    make: (context: string) => unknown,
+  ): Promise<{ portError: UserSecretError; cipherError: UserSecretError }> {
+    const portError = await rejectionWith(
+      () =>
+        createUserSecretStore({ port: new HostilePort(make), cipher: new FakeCipher() })
+          .save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY }),
+      UserSecretErrorCode.PortFailure,
+    )
+    const { store, port } = createHarness(new HostileCipher(make))
+    seedActiveRow(port)
+    const cipherError = await rejectionWith(
+      () => store.openSecret(USER_ID, PROVIDER),
+      UserSecretErrorCode.DecryptionFailed,
+    )
+    return { portError, cipherError }
+  }
+
+  it("classifies a rejection whose name is an alphanumeric secret by type, not by name", async () => {
+    const { portError, cipherError } = await bothPaths((context) =>
+      hostileRejection(context, ALPHANUMERIC_SECRET)
+    )
+
+    assertEquals(portError.rejectionName, "Error")
+    assertEquals(cipherError.rejectionName, "Error")
+    assertNothingReachable(portError, [
+      ALPHANUMERIC_SECRET,
+      FAKE_API_KEY,
+      `enc:${FAKE_API_KEY}`,
+    ])
+    assertNothingReachable(cipherError, [
+      ALPHANUMERIC_SECRET,
+      FAKE_API_KEY,
+      `enc:${FAKE_API_KEY}`,
+    ])
+  })
+
+  it("classifies a rejection whose name is a 64-character hex string by type, not by name", async () => {
+    const { portError, cipherError } = await bothPaths((context) =>
+      hostileRejection(context, HEX_SECRET)
+    )
+
+    assertEquals(portError.rejectionName, "Error")
+    assertEquals(cipherError.rejectionName, "Error")
+    assertNothingReachable(portError, [HEX_SECRET, FAKE_API_KEY, `enc:${FAKE_API_KEY}`])
+    assertNothingReachable(cipherError, [HEX_SECRET, FAKE_API_KEY, `enc:${FAKE_API_KEY}`])
+  })
+
+  it("classifies a thrown non-Error by typeof and never its value", async () => {
+    const stringFailure = `thrown ${FAKE_API_KEY}`
+    const objectFailure = { name: FAKE_API_KEY, secret: FAKE_API_KEY }
+
+    const stringThrown = await bothPaths(() => stringFailure)
+    assertEquals(stringThrown.portError.rejectionName, "string")
+    assertEquals(stringThrown.cipherError.rejectionName, "string")
+    assertNothingReachable(stringThrown.portError, [FAKE_API_KEY, `enc:${FAKE_API_KEY}`])
+    assertNothingReachable(stringThrown.cipherError, [FAKE_API_KEY, `enc:${FAKE_API_KEY}`])
+
+    const objectThrown = await bothPaths(() => objectFailure)
+    assertEquals(objectThrown.portError.rejectionName, "object")
+    assertEquals(objectThrown.cipherError.rejectionName, "object")
+    assertNothingReachable(objectThrown.portError, [FAKE_API_KEY, `enc:${FAKE_API_KEY}`])
+    assertNothingReachable(objectThrown.cipherError, [FAKE_API_KEY, `enc:${FAKE_API_KEY}`])
+    // Both of the thrown object's properties hold the key, so the probes above already cover it;
+    // the object itself is never reachable, only its `typeof`.
+    assertFalse(reachableText(objectThrown.portError).includes(FAKE_API_KEY))
   })
 })
 

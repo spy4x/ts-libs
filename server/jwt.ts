@@ -304,13 +304,31 @@ function splitToken(token: string): [string, string, string] {
 /**
  * Strict base64url decode whose failures are typed rather than raw `TypeError`/`RangeError`.
  *
- * `""` decodes to zero bytes rather than throwing, which is what carries the empty-signature case
- * into {@link constantTimeEquals} instead of turning it into a raw error.
+ * Two rules, both needed:
+ *
+ * 1. The segment must be decodable base64url.
+ * 2. It must be its **own canonical encoding**: re-encoding the decoded bytes has to reproduce the
+ *    segment exactly. `@std/encoding`'s decoder tolerates `=` padding, so without this check a token
+ *    would verify under several distinct spellings — `h.p.s`, `h.p.s=` and `h.p.s==` all decode to
+ *    the same tag. Any caller that keys a revocation denylist, a replay cache or an audit record on
+ *    the token *string* would then be bypassable by appending `=`. This is token-string
+ *    malleability, not a signature forgery: the tag still has to be correct.
+ *
+ * `""` decodes to zero bytes and re-encodes to `""`, so it stays canonical and carries the
+ * empty-signature case into {@link constantTimeEquals} instead of turning it into a raw error.
+ *
+ * Every non-canonical segment — a padded one, or one using the standard (non-url) alphabet's `+`/`/`
+ * — is `MalformedToken`, whichever of the three segments it is.
  */
 function decodeSegment(segment: string): Uint8Array {
   try {
-    return decodeBase64Url(segment)
+    const bytes = decodeBase64Url(segment)
+    if (encodeBase64Url(bytes) !== segment) {
+      throw new JwtError(JwtErrorCode.MalformedToken, MESSAGES.malformedToken)
+    }
+    return bytes
   } catch (error) {
+    if (error instanceof JwtError) throw error
     throw new JwtError(JwtErrorCode.MalformedToken, MESSAGES.malformedToken, { cause: error })
   }
 }

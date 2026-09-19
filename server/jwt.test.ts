@@ -3,8 +3,8 @@ import {
   assertEquals,
   assertFalse,
   assertInstanceOf,
+  assertMatch,
   assertRejects,
-  assertStringIncludes,
   assertThrows,
 } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
@@ -110,6 +110,37 @@ function segments(token: string): [string, string, string] {
   const parts = token.split(".")
   if (parts.length !== 3) throw new Error("test helper expected a three-segment token")
   return [parts[0], parts[1], parts[2]]
+}
+
+/**
+ * Slice the body of a function or method out of the module's own source, by brace matching.
+ *
+ * Used by the source-inspection tests below, which exist because a *behavioural* test cannot tell
+ * `timingSafeEqual` from a byte loop that returns the same answers — every one of those assertions
+ * passes either way. Anchoring on the source is the only thing that distinguishes them.
+ *
+ * The body is opened by the first `{` **after** the name, not the last one before it: JSDoc contains
+ * braces of its own (`{@link constantTimeEquals}`), and those precede the declaration.
+ */
+async function sliceBody(name: string): Promise<string> {
+  const source = await Deno.readTextFile(new URL("./jwt.ts", import.meta.url))
+  const at = source.indexOf(name)
+  assert(at >= 0, `${name} not found in jwt.ts`)
+  const bodyStart = source.indexOf("{", at)
+  assert(bodyStart >= 0, `could not find the body of ${name}`)
+  let depth = 0
+  for (let i = bodyStart; i < source.length; i++) {
+    if (source[i] === "{") depth++
+    else if (source[i] === "}") {
+      depth--
+      if (depth === 0) {
+        const body = source.slice(bodyStart + 1, i)
+        assert(body.trim().length > 0, `sliced an empty body for ${name}`)
+        return body
+      }
+    }
+  }
+  throw new Error(`could not slice the body of ${name}`)
 }
 
 /** Strip block and line comments, so a source-inspection test reads code and not prose. */
@@ -315,6 +346,39 @@ describe("JwtSigner.verify token structure", () => {
       JwtErrorCode.MalformedToken,
     )
     assertFalse(error instanceof TypeError)
+  })
+
+  it("rejects a non-canonical base64url segment, so one token has one spelling", async () => {
+    const signer = makeSigner()
+    const token = await signer.sign({ sub: "u" })
+    const [header, payload, signature] = segments(token)
+
+    // The decoder tolerates `=` padding, so `h.p.s`, `h.p.s=` and `h.p.s==` used to be three
+    // accepted spellings of one token — which defeats any denylist, replay cache or audit record
+    // keyed on the token string. Padding must be structural, not a second valid encoding.
+    for (const padded of [`${signature}=`, `${signature}==`, `${signature}===`]) {
+      const error = await assertJwtError(
+        signer.verify(`${header}.${payload}.${padded}`),
+        JwtErrorCode.MalformedToken,
+      )
+      assertEquals(error.code, JwtErrorCode.MalformedToken, padded)
+    }
+
+    // A padded *header* is refused structurally, because the header is decoded before the tag is
+    // computed. A padded *payload* cannot be: it changes the signing input, so the recomputed tag
+    // already differs and the payload is never parsed — rejected either way, one code earlier than
+    // the structural rule.
+    await assertJwtError(
+      signer.verify(`${header}=.${payload}.${signature}`),
+      JwtErrorCode.MalformedToken,
+    )
+    await assertJwtError(
+      signer.verify(`${header}.${payload}=.${signature}`),
+      JwtErrorCode.InvalidSignature,
+    )
+
+    // The canonical spelling still verifies: the rule rejects other encodings, not this one.
+    assertEquals((await signer.verify(`${header}.${payload}.${signature}`)).sub, "u")
   })
 
   it("rejects a header that is not JSON", async () => {
@@ -642,29 +706,53 @@ describe("constantTimeEquals", () => {
     assertEquals(await constantTimeEquals(new Uint8Array(16), new Uint8Array(32)), false)
     assertEquals(await constantTimeEquals(new Uint8Array(4096), new Uint8Array(1)), false)
   })
+
+  it("is the only comparison the primitive performs", async () => {
+    // The behavioural tests above cannot pin this: a plain byte loop answers every one of those
+    // assertions identically, so the constant-time property would rest on nothing but the import.
+    // The body is read with comments stripped, so quoting `timingSafeEqual(` in a comment while
+    // looping over the bytes does not satisfy it either.
+    const body = stripComments(await sliceBody("export async function constantTimeEquals("))
+
+    assertMatch(body, /return timingSafeEqual\(/)
+
+    // The primitive must be the imported one, not something shadowed locally.
+    const module = await Deno.readTextFile(new URL("./jwt.ts", import.meta.url))
+    assertMatch(
+      stripComments(module),
+      /import \{[^}]*\btimingSafeEqual\b[^}]*\} from "@std\/crypto\/timing-safe-equal"/,
+    )
+
+    // No manual byte work: no per-byte read, no accumulation with XOR/OR.
+    assertFalse(body.includes("charCodeAt"), "the primitive reads bytes by hand")
+    assertFalse(body.includes("^="), "the primitive accumulates differences with ^=")
+    assertFalse(body.includes("|="), "the primitive accumulates differences with |=")
+
+    // Exactly one comparison operator per line is expected — the length guard — so anything beyond
+    // it is a second, hand-rolled comparison of the digest bytes. Asserted precisely rather than as
+    // a blanket ban, because the early return on unequal length is allowed and required.
+    const comparisons = body.match(/(?<![=!])(?:===|!==)(?!=)/g) ?? []
+    assertEquals(comparisons.length, 1, `unexpected comparison operators: ${comparisons.join(" ")}`)
+    assertMatch(body, /if \(a\.length !== b\.length\) return false/)
+  })
 })
 
 describe("verify call site", () => {
   it("goes through the constant-time comparison", async () => {
-    const source = await Deno.readTextFile(new URL("./jwt.ts", import.meta.url))
-    const start = source.indexOf("async verify(")
-    assert(start > 0, "verify method not found in jwt.ts")
-    const bodyStart = source.indexOf("{", start)
-    let depth = 0
-    let end = -1
-    for (let i = bodyStart; i < source.length; i++) {
-      if (source[i] === "{") depth++
-      else if (source[i] === "}") {
-        depth--
-        if (depth === 0) {
-          end = i + 1
-          break
-        }
-      }
+    // Comments are stripped first, on purpose: a mutation that replaces the compare with a string
+    // equality *and adds a comment mentioning* `constantTimeEquals(` satisfied the previous version
+    // of this test (11/11 green with production no longer using the primitive).
+    const body = stripComments(await sliceBody("async verify("))
+    assertMatch(
+      body,
+      /!await constantTimeEquals\(\s*receivedSignature\s*,\s*expectedTag\s*\)/,
+    )
+    // Belt and braces: the tag must not be compared by value with either operator.
+    for (const operator of ["===", "!=="]) {
+      assertFalse(
+        new RegExp(`(receivedSignature|expectedTag)[^\\n]*${operator}`).test(body),
+        `verify compares the tag with ${operator}`,
+      )
     }
-    assert(end > bodyStart, "could not slice the verify method body")
-    const body = source.slice(bodyStart, end)
-    assertStringIncludes(body, "constantTimeEquals(")
-    assertFalse(body.includes("=== expectedSig"))
   })
 })

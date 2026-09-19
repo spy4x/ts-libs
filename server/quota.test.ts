@@ -2,6 +2,7 @@ import {
   assertEquals,
   assertFalse,
   assertInstanceOf,
+  AssertionError,
   assertRejects,
   assertStrictEquals,
   assertThrows,
@@ -77,6 +78,17 @@ function makeMeter(
     now: () => 0,
   })
   return { meter: created, calls: spy.calls }
+}
+
+/** The error a call rejects with, asserted to be an `Error` so its fields are readable. */
+async function rejectedError(fn: () => unknown): Promise<Error> {
+  try {
+    await fn()
+  } catch (error) {
+    assertInstanceOf(error, Error)
+    return error
+  }
+  throw new AssertionError("expected the call to reject")
 }
 
 /**
@@ -191,6 +203,41 @@ Deno.test("record: a rejected count never reaches the store", async () => {
   await assertRejects(() => meter.record(USER, 0), QuotaError)
   assertEquals(calls.increment, 0)
   assertEquals(calls.read, 0)
+})
+
+Deno.test("record: a count above the ceiling is InvalidCount, at the ceiling it succeeds", async () => {
+  const { meter, calls } = makeMeter({ policy: { limit: 1_000_000 } })
+  const message = "count must be an integer between 1 and 1000000"
+
+  // 1e9 in one call is a caller bug (a swapped argument, an unbounded batch),
+  // not a batch: it would drain a whole budget in one request.
+  for (const count of [1e9, 1_000_001]) {
+    const thrown = await rejectedError(() => meter.record(USER, count))
+    assertInstanceOf(thrown, QuotaError)
+    assertEquals(thrown.code, QuotaErrorCode.InvalidCount)
+    assertEquals(thrown.message, message)
+    assertFalse(thrown.message.includes("1000001"))
+    assertFalse(thrown.message.includes("1000000000"))
+    assertFalse(thrown.message.includes("was "))
+  }
+  assertEquals(calls.increment, 0)
+
+  // The ceiling itself is legal, and it is spent exactly, never clamped.
+  const state = await meter.record(USER, 1_000_000)
+  assertEquals(state.used, 1_000_000)
+  assertEquals(state.limit, 1_000_000)
+  assertEquals(state.remaining, 0)
+  assertEquals(state.decision, QuotaDecision.Exhausted)
+  assertEquals(calls.increment, 1)
+})
+
+Deno.test("record: the ceiling is a limit on one call, not a cap on the counter", async () => {
+  const { meter } = makeMeter({ policy: { limit: 100 } })
+  await meter.record(USER, 1_000_000)
+  const state = await meter.record(USER, 1_000_000)
+  assertEquals(state.used, 2_000_000)
+  assertEquals(state.limit, 100)
+  assertEquals(state.remaining, 0)
 })
 
 // ── BYOK / own key ─────────────────────────────────────────────────────────
@@ -466,6 +513,53 @@ Deno.test("resolveQuotaPrincipal: neither principal is a NoPrincipal error", asy
   }
 })
 
+Deno.test("resolveQuotaPrincipal: a non-string id is absent, never a raw TypeError", () => {
+  // Request input is untrusted: a header or a decoded claim can carry a number,
+  // an object or an array. Each must resolve to a typed failure, not a crash.
+  const inputs: unknown[] = [
+    { userId: 12345 },
+    { userId: {} },
+    { userId: [] },
+    { sessionId: 42 },
+    { userId: 12345, sessionId: 42 },
+    { userId: true, sessionId: false },
+    { userId: ["user-1"], sessionId: { id: "session-1" } },
+  ]
+  for (const input of inputs) {
+    let thrown: unknown
+    try {
+      resolveQuotaPrincipal(input as { userId?: unknown; sessionId?: unknown })
+    } catch (error) {
+      thrown = error
+    }
+    assertInstanceOf(thrown, QuotaError)
+    assertFalse(thrown instanceof TypeError)
+    assertEquals(thrown.code, QuotaErrorCode.NoPrincipal)
+  }
+})
+
+Deno.test("resolveQuotaPrincipal: a non-string user id does not shadow a usable session", () => {
+  assertEquals(resolveQuotaPrincipal({ userId: 12345, sessionId: "s-1" }), {
+    kind: QuotaPrincipalKind.Session,
+    id: "s-1",
+  })
+  assertEquals(resolveQuotaPrincipal({ userId: {}, sessionId: " s-1 " }), {
+    kind: QuotaPrincipalKind.Session,
+    id: "s-1",
+  })
+})
+
+Deno.test("resolveQuotaPrincipal: a valid string id still resolves through the unknown-typed input", () => {
+  assertEquals(resolveQuotaPrincipal({ userId: "user-1", sessionId: "session-1" }), {
+    kind: QuotaPrincipalKind.User,
+    id: "user-1",
+  })
+  assertEquals(resolveQuotaPrincipal({ userId: null, sessionId: "session-1" }), {
+    kind: QuotaPrincipalKind.Session,
+    id: "session-1",
+  })
+})
+
 // ── construction validation ────────────────────────────────────────────────
 
 Deno.test("createQuotaMeter: rejects a limit that is not a non-negative safe integer", async () => {
@@ -567,14 +661,11 @@ Deno.test("QuotaError: an arktype-shaped policy failure never echoes the value",
     assertFalse(thrown.message.includes("was "))
   }
 
-  const countThrown = await assertRejects(
-    () => makeMeter().meter.record(USER, 1.5),
-    QuotaError,
-  )
-  assertInstanceOf(countThrown, QuotaError)
-  assertEquals(countThrown.code, QuotaErrorCode.InvalidCount)
-  assertEquals(countThrown.message, "count must be a positive safe integer")
-  assertFalse(countThrown.message.includes("1.5"))
+  const countError = await rejectedError(() => makeMeter().meter.record(USER, 1.5))
+  assertInstanceOf(countError, QuotaError)
+  assertEquals(countError.code, QuotaErrorCode.InvalidCount)
+  assertEquals(countError.message, "count must be an integer between 1 and 1000000")
+  assertFalse(countError.message.includes("1.5"))
 })
 
 // ── get ────────────────────────────────────────────────────────────────────

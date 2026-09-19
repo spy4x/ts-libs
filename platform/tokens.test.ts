@@ -2,8 +2,8 @@
 //
 // Every test injects the clock and the randomness: no `Date.now()` in an
 // assertion path, no sleeps, no network, no writes, no env reads. The suite
-// needs `--allow-read` only because one case reads this module's own source to
-// pin the constant-time call site.
+// needs `--allow-read` only because two cases read this module's own source to
+// pin the constant-time primitive and its call site.
 
 import {
   assert,
@@ -17,6 +17,8 @@ import {
   constantTimeEquals,
   createUlidFactory,
   DEFAULT_TOKEN_BYTES,
+  MIN_SECRET_LENGTH,
+  monotonicUlid,
   newCancelToken,
   randomBase64Url,
   sha256Hex,
@@ -34,7 +36,9 @@ const FIXED_MS = 1_700_000_000_000
 /** The first id a frozen-clock, all-zero-randomness factory must produce. Computed once, pinned forever. */
 const FIRST_FIXED_ULID = "065WZSB8000000000000000000"
 
-const SECRET = "test-secret-not-real-0123456789"
+/** Obviously fake secret fixtures. Long enough for `MIN_SECRET_LENGTH`, never a realistic key shape. */
+const SECRET = "test-secret-not-real-0123456789abcdef"
+const OTHER_SECRET = "another-test-secret-0123456789abcdef"
 
 const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/
 
@@ -83,6 +87,88 @@ function largestIdForMs(ms: number): string {
   return base32((BigInt(ms) << 80n) | ((1n << 80n) - 1n))
 }
 
+/**
+ * Strips block and line comments from source text.
+ *
+ * Source-reading assertions must never be satisfiable by a comment: a reviewer
+ * can add `// timingSafeEqual(leftDigest, rightDigest)` or comment out a
+ * hand-rolled loop, and a naive `includes()` would stay green while the
+ * implementation got weaker. String and template literals are preserved.
+ */
+function stripComments(source: string): string {
+  let out = ""
+  let i = 0
+  while (i < source.length) {
+    const char = source[i]
+    const next = source[i + 1]
+    if (char === "/" && next === "/") {
+      while (i < source.length && source[i] !== "\n") i += 1
+    } else if (char === "/" && next === "*") {
+      i += 2
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i += 1
+      i += 2
+    } else if (char === '"' || char === "'" || char === "`") {
+      const quote = char
+      out += char
+      i += 1
+      while (i < source.length) {
+        if (source[i] === "\\") {
+          out += source[i] + (source[i + 1] ?? "")
+          i += 2
+          continue
+        }
+        out += source[i]
+        if (source[i] === quote) {
+          i += 1
+          break
+        }
+        i += 1
+      }
+    } else {
+      out += char
+      i += 1
+    }
+  }
+  return out
+}
+
+/** Reads `./tokens.ts` next to this test file with its comments removed. */
+async function readModuleSourceWithoutComments(): Promise<string> {
+  const source = await Deno.readTextFile(new URL("./tokens.ts", import.meta.url))
+  return stripComments(source)
+}
+
+/**
+ * Slices a function declaration's body out of source text by brace matching.
+ *
+ * @param source Source text, expected comment-free.
+ * @param signature The declaration line prefix, e.g. `export async function x(`.
+ * @returns The text from the opening brace to its matching close.
+ */
+function sliceFunctionBody(source: string, signature: string): string {
+  const start = source.indexOf(signature)
+  assert(start >= 0, `${signature} is no longer declared`)
+  const bodyStart = source.indexOf("{", start)
+  assert(bodyStart >= 0, `${signature} has no body`)
+  let depth = 0
+  for (let i = bodyStart; i < source.length; i++) {
+    if (source[i] === "{") depth += 1
+    else if (source[i] === "}") {
+      depth -= 1
+      if (depth === 0) return source.slice(bodyStart, i + 1)
+    }
+  }
+  throw new Error(`unbalanced braces in ${signature}`)
+}
+
+/** Every line of a code snippet that uses `===` or `!==` (not `==`/`!=`, which are separate faults). */
+function strictComparisons(code: string): string[] {
+  return code
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.includes("===") || line.includes("!=="))
+}
+
 Deno.test("monotonicUlid — id is 26 Crockford base32 characters", () => {
   const id = fixedFactory().monotonicUlid()
   assertEquals(id.length, ULID_LENGTH)
@@ -91,6 +177,20 @@ Deno.test("monotonicUlid — id is 26 Crockford base32 characters", () => {
     assertFalse(id.includes(excluded), `excluded character ${excluded} appeared in ${id}`)
   }
   assertEquals(ULID_ALPHABET.length, 32)
+})
+
+Deno.test("monotonicUlid — the module-level source yields ordered distinct 26-character ids", () => {
+  const first = monotonicUlid()
+  const second = monotonicUlid()
+  for (const id of [first, second]) {
+    assertEquals(id.length, ULID_LENGTH)
+    assertEquals(ULID_PATTERN.test(id), true)
+  }
+  // The default clock and randomness are real, so assert the ordering property
+  // rather than a value. `>=` is the contract: strictly increasing in practice,
+  // never decreasing.
+  assert(first !== second, `two module-level ids were identical: ${first}`)
+  assert(second >= first, `${second} sorted below ${first}`)
 })
 
 Deno.test("monotonicUlid — 100 ids in one frozen millisecond are strictly increasing and distinct", () => {
@@ -250,6 +350,34 @@ Deno.test("newCancelToken — a blank secret fails closed", async () => {
   }
 })
 
+Deno.test("newCancelToken — a secret below the 32-character floor fails closed", async () => {
+  assertEquals(MIN_SECRET_LENGTH, 32)
+  const tooShort = ["a", "a".repeat(MIN_SECRET_LENGTH - 1)]
+  for (const secret of tooShort) {
+    const error = await assertRejects(() => newCancelToken(secret), Error)
+    assertEquals((error as TokenError).code, TokenErrorCode.InvalidSecret)
+    assertEquals(error.message, "secret must be at least 32 characters")
+  }
+  // Length is measured on the trimmed value, so padding cannot smuggle a short
+  // secret past the floor.
+  const padded = " ".repeat(40) + "a".repeat(MIN_SECRET_LENGTH - 1)
+  const paddedError = await assertRejects(() => newCancelToken(padded), Error)
+  assertEquals((paddedError as TokenError).code, TokenErrorCode.InvalidSecret)
+
+  const accepted = await newCancelToken("a".repeat(MIN_SECRET_LENGTH))
+  assert(/^[0-9a-f]{64}$/.test(accepted.hash))
+})
+
+Deno.test("newCancelToken — a NUL or control-character secret fails closed whatever its length", async () => {
+  for (
+    const secret of ["\u0000", "\u0000".repeat(64), `test-secret-not-real${"\u0007"}0123456789`]
+  ) {
+    const error = await assertRejects(() => newCancelToken(secret), Error)
+    assertEquals((error as TokenError).code, TokenErrorCode.InvalidSecret)
+    assertEquals(error.message, "secret must be a non-empty string")
+  }
+})
+
 Deno.test("verifyCancelToken — accepts a round-tripped token", async () => {
   const { raw, hash } = await newCancelToken(SECRET)
   assertEquals(await verifyCancelToken(raw, hash, SECRET), true)
@@ -257,8 +385,8 @@ Deno.test("verifyCancelToken — accepts a round-tripped token", async () => {
 
 Deno.test("verifyCancelToken — rejects a wrong secret, a wrong raw token and a tampered hash", async () => {
   const { raw, hash } = await newCancelToken(SECRET)
-  assertEquals(await verifyCancelToken(raw, hash, "test-secret-not-real-other"), false)
-  assertEquals(await verifyCancelToken("test-secret-not-real-raw", hash, SECRET), false)
+  assertEquals(await verifyCancelToken(raw, hash, OTHER_SECRET), false)
+  assertEquals(await verifyCancelToken("test-secret-not-real-raw-0123456789", hash, SECRET), false)
   const tampered = flipHex(hash)
   assertEquals(await verifyCancelToken(raw, tampered, SECRET), false)
   assertEquals(await verifyCancelToken(raw, hash.toUpperCase(), SECRET), false)
@@ -280,6 +408,27 @@ Deno.test("verifyCancelToken — a blank secret fails closed", async () => {
     )
     assertEquals((error as TokenError).code, TokenErrorCode.InvalidSecret)
   }
+})
+
+Deno.test("verifyCancelToken — a secret below the 32-character floor fails closed", async () => {
+  for (const secret of ["a", "a".repeat(MIN_SECRET_LENGTH - 1)]) {
+    const error = await assertRejects(
+      () => verifyCancelToken("any-raw", "a".repeat(64), secret),
+      Error,
+    )
+    assertEquals((error as TokenError).code, TokenErrorCode.InvalidSecret)
+    assertEquals(error.message, "secret must be at least 32 characters")
+  }
+  const nulError = await assertRejects(
+    () => verifyCancelToken("any-raw", "a".repeat(64), "\u0000"),
+    Error,
+  )
+  assertEquals((nulError as TokenError).code, TokenErrorCode.InvalidSecret)
+  // Exactly the floor is accepted, so the rule is a floor and not an off-by-one.
+  assertEquals(
+    await verifyCancelToken("any-raw", "a".repeat(64), "a".repeat(MIN_SECRET_LENGTH)),
+    false,
+  )
 })
 
 Deno.test("constantTimeEquals — true for equal digests, false for one differing character", async () => {
@@ -310,26 +459,64 @@ Deno.test("constantTimeEquals — false for unusual lengths instead of throwing"
   }
 })
 
-Deno.test("verifyCancelToken — the production call site goes through the constant-time primitive", async () => {
-  const source = await Deno.readTextFile(new URL("./tokens.ts", import.meta.url))
-  const signature = "export async function verifyCancelToken("
-  const start = source.indexOf(signature)
-  assert(start >= 0, "verifyCancelToken is no longer an exported async function")
-  const bodyStart = source.indexOf("{", start)
-  let depth = 0
-  let end = -1
-  for (let i = bodyStart; i < source.length; i++) {
-    if (source[i] === "{") depth += 1
-    else if (source[i] === "}") {
-      depth -= 1
-      if (depth === 0) {
-        end = i + 1
-        break
-      }
+Deno.test("constantTimeEquals — delegates the comparison to timingSafeEqual and hand-rolls nothing", async () => {
+  const module = await readModuleSourceWithoutComments()
+  const body = sliceFunctionBody(module, "export async function constantTimeEquals(")
+
+  // The one and only comparison primitive.
+  assert(
+    body.includes("timingSafeEqual("),
+    "constantTimeEquals must call timingSafeEqual",
+  )
+  assert(
+    module.includes('import { timingSafeEqual } from "@std/crypto/timing-safe-equal"'),
+    "timingSafeEqual must be imported from @std/crypto/timing-safe-equal",
+  )
+
+  // No manual comparison anywhere in the primitive. `===`/`!==` are covered by
+  // the allowance list below instead, because four of them are legitimate.
+  for (const forbidden of ["charCodeAt", "codePointAt", "^=", "|="]) {
+    assertFalse(
+      body.includes(forbidden),
+      `constantTimeEquals must not compare bytes by hand: found ${forbidden}`,
+    )
+  }
+
+  // `===` and `!==` are allowed only where the decision cannot depend on digest
+  // content: the input type checks, the input emptiness checks, the decoded-digest
+  // length check, and the `null` results of the hex decode. Every other strict
+  // comparison — in particular any comparison of `leftDigest`/`rightDigest`, the
+  // values the constant-time call is supposed to own — is a leak.
+  const allowed = [
+    'typeof a !== "string"',
+    'typeof b !== "string"',
+    'a === ""',
+    'b === ""',
+    "left === null",
+    "right === null",
+    "left.length !== right.length",
+  ]
+  const comparisons = strictComparisons(body)
+  assertEquals(comparisons.length, 4, `unexpected strict comparisons: ${comparisons.join(" | ")}`)
+  for (const comparison of comparisons) {
+    assert(
+      allowed.some((permitted) => comparison.includes(permitted)),
+      `constantTimeEquals has a strict comparison that is not a type, emptiness, length or decode check: ${comparison}`,
+    )
+  }
+  for (const digest of ["leftDigest", "rightDigest"]) {
+    for (const operator of ["===", "!==", "==", "!="]) {
+      assertFalse(
+        body.includes(`${digest} ${operator}`) || body.includes(`${operator} ${digest}`),
+        `constantTimeEquals must not compare ${digest} with ${operator}`,
+      )
     }
   }
-  assert(end > bodyStart, "unbalanced braces in verifyCancelToken")
-  const body = source.slice(bodyStart, end)
+})
+
+Deno.test("verifyCancelToken — the production call site goes through the constant-time primitive", async () => {
+  const module = await readModuleSourceWithoutComments()
+  const body = sliceFunctionBody(module, "export async function verifyCancelToken(")
   assert(
     body.includes("constantTimeEquals("),
     "verifyCancelToken must compare through constantTimeEquals",

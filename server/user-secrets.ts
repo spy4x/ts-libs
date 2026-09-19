@@ -13,8 +13,14 @@
  *   provider into a user-facing message. Here every failure is a {@link UserSecretError} with a
  *   **constant** message: no caller value is ever echoed.
  * - `keys.ts:133` returned `err.message` — in the encrypt/decrypt path that message can be a
- *   cipher error naming key material. Nothing here surfaces a raw message, a plaintext, a
- *   ciphertext or a hint outside {@link openSecret}, which returns the plaintext and nothing else.
+ *   cipher error naming key material. Here a thrown {@link UserSecretError} carries a code, a
+ *   constant message and the identity of a known rejection type — never the rejection itself, its
+ *   `message`, its `stack`, its `cause` or any string it chose (including its `name`). A port or a
+ *   cipher that echoes its input (a driver quoting the row it failed on, a cipher quoting the value
+ *   it refused) therefore cannot leak a plaintext or a ciphertext through this module's error
+ *   object.
+ * - Provider names are normalised to lower case at this boundary, so `OpenAI` and `openai` cannot
+ *   become two rows of one user (see {@link PROVIDER_PATTERN}).
  * - Failures are classified by **type and position, never by message text** (the
  *   `offer-lens/libs/scraper/mod.ts:132` anti-pattern): any cipher rejection becomes
  *   {@link UserSecretErrorCode.DecryptionFailed}, whatever the underlying error says.
@@ -27,15 +33,16 @@
 
 import { type } from "arktype"
 
-import { maskKey } from "./crypto.ts"
+import { CryptoError, maskKey } from "./crypto.ts"
 import type { SecretCipher } from "./crypto.ts"
 
 /**
  * Failure codes, stable integers so a caller can switch without string matching.
  *
  * `1`-`4` are input rejections, `5` a missing (or inactive) row, `6` a stored secret the cipher
- * could not open, `7` a rejection from the injected port or cipher that carries no secret and no
- * cause for the caller to act on beyond "retry or fail closed".
+ * could not open, `7` a rejection from the injected port or cipher. `6`-`7` report the identity of
+ * a known rejection type and nothing else the rejection carried — no message, no stack, no cause,
+ * no implementation-supplied name.
  */
 export enum UserSecretErrorCode {
   InvalidUserId = 1,
@@ -48,20 +55,37 @@ export enum UserSecretErrorCode {
 }
 
 /**
- * The only error this module throws — a code plus a constant message.
+ * The only error this module throws — a code, a constant message and a rejection type identity.
  *
  * The message is deliberately not parameterised: a caller value in a message is how a provider
  * name (`keys.ts:93`) or a raw driver message (`keys.ts:133`) ends up rendered to a user next to
- * secret material. The underlying error, when there is one, rides along as `cause` for the log
- * line the application owns.
+ * secret material. The error therefore carries **no `cause`** either: `cause` is a live handle on
+ * a rejection that a driver or cipher may have populated with the value it failed on, and the
+ * reviewer recovered a plaintext api key from exactly that handle. `server/http/redact.ts:50-57`
+ * is the house rule — only the error's *name* crosses a boundary, never `message`, `stack`,
+ * `cause` or any field of the error.
+ *
+ * What a caller gets for an underlying failure is {@link UserSecretError.rejectionName}: one of a
+ * closed set of known type identities, or a primitive `typeof` for a non-`Error` throw (see
+ * {@link rejectionNameOf}). Enough to tell a `TypeError` from a `CryptoError` in a log or a metric
+ * label; not enough to carry a payload, because no string the rejection supplied is ever read.
  */
 export class UserSecretError extends Error {
   readonly code: UserSecretErrorCode
 
-  constructor(code: UserSecretErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message, options)
+  /**
+   * Identity of the known error type this error stands in for — one of `"CryptoError"`,
+   * `"DOMException"`, `"TypeError"`, `"RangeError"`, `"SyntaxError"`, `"Error"`, or a primitive
+   * `typeof` — or `undefined` when the failure was raised here (validation, `NotFound`). Never a
+   * message, never a string the rejection supplied, never the rejection object.
+   */
+  readonly rejectionName: string | undefined
+
+  constructor(code: UserSecretErrorCode, message: string, rejectionName?: string) {
+    super(message)
     this.name = "UserSecretError"
     this.code = code
+    this.rejectionName = rejectionName
   }
 }
 
@@ -86,8 +110,21 @@ export const MAX_PROVIDER_LENGTH = 64
  * out of any URL path or query unescaped, and makes an adapter lookup a pure switch instead of a
  * normalising hunt. Deliberately not anchored to a known list: a custom OpenAI-compatible
  * endpoint is a legitimate provider, so this validates shape, not membership.
+ *
+ * The pattern accepting both cases is a promise about the *row key*, not just about the check, so
+ * the store normalises with {@link providerKey} on every path that touches the port: a caller can
+ * `save("OpenAI", …)` and `openSecret(userId, "openai")`, and `OpenAI` cannot be a second row
+ * beside `openai` (the same provider would otherwise hold two secrets, one of them unreadable).
  */
 export const PROVIDER_PATTERN: RegExp = /^[a-z0-9][a-z0-9._-]*$/i
+
+/**
+ * The provider as it is keyed: lower case, locale-independent (`toLowerCase`, never
+ * `toLocaleLowerCase` — a Turkish locale would map `I` to a dotless `ı` and split a row).
+ */
+function providerKey(provider: string): string {
+  return provider.toLowerCase()
+}
 
 /** A stored row, as the port sees it. `secretEncrypted` is the only place a secret may live. */
 export interface StoredUserSecret {
@@ -277,18 +314,47 @@ function assertBaseUrl(baseUrl: string): void {
 }
 
 /**
- * Runs one port (or cipher) call and translates any rejection into `PortFailure` with the original
- * as `cause`. Used narrowly — wrapping a whole operation would swallow the codes of this module's
- * own typed errors and report them as a port failure.
+ * Runs one port (or cipher) call and translates any rejection into `PortFailure`.
+ *
+ * The rejection itself is dropped: only the identity of a known error type is kept (see
+ * `rejectionNameOf`). A `cause` would hand the caller a live object whose `message` may quote the
+ * row, the ciphertext or the plaintext the injected implementation was working on. Used narrowly —
+ * wrapping a whole operation would swallow the codes of this module's own typed errors.
  */
 async function callPort<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation()
   } catch (error) {
-    throw new UserSecretError(UserSecretErrorCode.PortFailure, PORT_FAILURE_MESSAGE, {
-      cause: error,
-    })
+    throw new UserSecretError(
+      UserSecretErrorCode.PortFailure,
+      PORT_FAILURE_MESSAGE,
+      rejectionNameOf(error),
+    )
   }
+}
+
+/**
+ * The one thing that may cross from a rejection to a `UserSecretError`: the **identity** of a known
+ * error type, resolved by `instanceof` against a closed whitelist.
+ *
+ * Never a string the injected implementation supplies. `error.name` is attacker-controlled text —
+ * a driver can set it to the api key it failed on, and an earlier revision of this helper filtered
+ * `name` to `[A-Za-z0-9_]`, which stopped punctuation but let an alphanumeric-only secret straight
+ * through. Identity cannot carry a payload: the result is always one of `"CryptoError"`,
+ * `"DOMException"`, `"TypeError"`, `"RangeError"`, `"SyntaxError"`, `"Error"`, or a primitive
+ * `typeof` such as `"string"`.
+ *
+ * `server/http/redact.ts:50-57` is the house precedent — identify a failure by type, never by
+ * `message`, `stack`, `cause` or any field of the error. Nothing else from the rejection is copied.
+ */
+function rejectionNameOf(error: unknown): string {
+  if (error instanceof CryptoError) return "CryptoError"
+  if (error instanceof DOMException) return "DOMException"
+  if (error instanceof TypeError) return "TypeError"
+  if (error instanceof RangeError) return "RangeError"
+  if (error instanceof SyntaxError) return "SyntaxError"
+  if (error instanceof Error) return "Error"
+  return typeof error
 }
 
 /**
@@ -325,6 +391,8 @@ function toSummary(row: StoredUserSecret): UserSecretSummary {
  *   exchange for a summary that never lies about when the secret was first stored. A port that
  *   returns nothing on the re-read falls back to the record just written, so a lagging read cannot
  *   fail a save that succeeded.
+ * - every provider that reaches the port is normalised with `providerKey`, in `save`, `openSecret`
+ *   and `remove` alike, so the row key is one provider and not one per casing.
  * - `list` — `keys.ts:49-67` + `db/mod.ts:262-280`: metadata and the hint only, never the
  *   ciphertext, and the port's order is preserved (the source's `ORDER BY created_at DESC` is the
  *   port's job).
@@ -332,7 +400,8 @@ function toSummary(row: StoredUserSecret): UserSecretSummary {
  *   deleting what was never stored is not an error.
  * - `openSecret` — `keys.ts:88-98` + `db/mod.ts:281-295`: opens the active row for an outbound
  *   call, reports a missing or unknown provider as `NotFound` (never a hint in its place), and
- *   reports any cipher rejection as `DecryptionFailed` — classified by type, never by message.
+ *   reports any cipher rejection as `DecryptionFailed` — classified by type, never by message, and
+ *   described by the identity of a known rejection type rather than the rejection.
  */
 export function createUserSecretStore(options: UserSecretStoreOptions): UserSecretStore {
   const { port, cipher } = options
@@ -353,7 +422,7 @@ export function createUserSecretStore(options: UserSecretStoreOptions): UserSecr
       const timestamp = now().toISOString()
       const record: StoredUserSecret = {
         userId,
-        provider: shape.provider,
+        provider: providerKey(shape.provider),
         secretEncrypted,
         keyHint: maskKey(shape.apiKey, maskVisible),
         baseUrl,
@@ -377,7 +446,8 @@ export function createUserSecretStore(options: UserSecretStoreOptions): UserSecr
     async openSecret(userId, provider) {
       assertUserId(userId)
       assertProvider(provider)
-      const row = await callPort(() => port.findActive(userId, provider))
+      const key = providerKey(provider)
+      const row = await callPort(() => port.findActive(userId, key))
       if (row === null || !row.isActive) {
         throw new UserSecretError(UserSecretErrorCode.NotFound, NOT_FOUND_MESSAGE)
       }
@@ -385,17 +455,20 @@ export function createUserSecretStore(options: UserSecretStoreOptions): UserSecr
         return await cipher.decrypt(row.secretEncrypted)
       } catch (error) {
         // Type-only classification: the cipher is the only thing in this block, so its rejection
-        // is a decryption failure no matter what its message claims.
-        throw new UserSecretError(UserSecretErrorCode.DecryptionFailed, DECRYPTION_FAILED_MESSAGE, {
-          cause: error,
-        })
+        // is a decryption failure no matter what its message claims. Only the identity of a known
+        // error type travels — the rejection object itself, and every string it carries, stay here.
+        throw new UserSecretError(
+          UserSecretErrorCode.DecryptionFailed,
+          DECRYPTION_FAILED_MESSAGE,
+          rejectionNameOf(error),
+        )
       }
     },
 
     async remove(userId, provider) {
       assertUserId(userId)
       assertProvider(provider)
-      await callPort(() => port.remove(userId, provider))
+      await callPort(() => port.remove(userId, providerKey(provider)))
     },
   }
 }
