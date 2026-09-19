@@ -104,6 +104,50 @@ describe("NtfyClient construction", () => {
     expect(() => new NtfyClient({ baseUrl: BASE_URL, topic: "  " })).toThrow("topic is empty")
   })
 
+  it("refuses a base URL the platform cannot parse, rather than pushing into nothing", () => {
+    // Before the guard all four of these constructed, reached fetch with the
+    // malformed URL, and reported `network_error` — a misconfiguration
+    // indistinguishable from a provider outage.
+    for (const baseUrl of ["ntfy.example.invalid", "not a url at all", "https://", "//x"]) {
+      expect({
+        baseUrl,
+        throws: (() => {
+          try {
+            new NtfyClient({ baseUrl, topic: TOPIC })
+            return false
+          } catch {
+            return true
+          }
+        })(),
+      }).toEqual({ baseUrl, throws: true })
+      // The platform agrees it is unparseable, so the guard is not generous.
+      expect({ baseUrl, parseable: URL.canParse(baseUrl) }).toEqual({ baseUrl, parseable: false })
+    }
+  })
+
+  it("does not echo the base URL into the rejection it throws", () => {
+    // The path is a credential position, so the message names the shape problem.
+    for (const bad of [`ntfy.example.invalid/${"REALTOKENISH"}`, `://${"REALTOKENISH"}`]) {
+      let message = "did not throw"
+      try {
+        new NtfyClient({ baseUrl: bad, topic: TOPIC })
+      } catch (cause) {
+        message = cause instanceof Error ? cause.message : String(cause)
+      }
+      expect({ bad, leaks: message.includes("REALTOKENISH") }).toEqual({ bad, leaks: false })
+      expect({ bad, useful: message.includes("not a valid absolute URL") }).toEqual({
+        bad,
+        useful: true,
+      })
+    }
+  })
+
+  it("still accepts a well-formed base URL, so the guard is not unconditional", () => {
+    expect(() => new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC })).not.toThrow()
+    expect(() => new NtfyClient({ baseUrl: `${BASE_URL}/`, topic: TOPIC })).not.toThrow()
+    expect(() => new NtfyClient({ baseUrl: "http://127.0.0.1:2586", topic: TOPIC })).not.toThrow()
+  })
+
   it("normalises the endpoint and encodes the topic", () => {
     const client = new NtfyClient({ baseUrl: `${BASE_URL}/`, topic: "my topic" })
     expect(client.endpoint).toBe(`${BASE_URL}/my%20topic`)
@@ -234,10 +278,12 @@ describe("NtfyClient.push", () => {
     expect(transport.requests.length).toBe(1)
   })
 
-  it("reports a transport throw as a network_error", async () => {
+  it("reports a transport throw as a network_error without echoing the URL", async () => {
     const timer = recordingTimer()
+    // The platform's real shape: `fetch` puts the whole URL — whose path can
+    // carry the token — into the error text.
     const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
-      fetcher: () => Promise.reject(new Error("connection reset")),
+      fetcher: () => Promise.reject(new TypeError(`Invalid URL: '${ENDPOINT}'`)),
       sleep: timer.sleep,
       clock: timer.clock,
       retry: { maxAttempts: 2, baseDelayMs: 10, maxDelayMs: 10, totalBudgetMs: 1000 },
@@ -250,7 +296,7 @@ describe("NtfyClient.push", () => {
     expect(result).toEqual({
       ok: false,
       code: "network_error",
-      message: "connection reset",
+      message: "TypeError: transport failure (url withheld)",
       attempts: 2,
     })
   })

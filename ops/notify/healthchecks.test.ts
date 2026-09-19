@@ -150,6 +150,41 @@ describe("HealthchecksClient.ping", () => {
     ])
   })
 
+  it("needs 65 minutes across 9 retries if the per-wait cap were 10 minutes", async () => {
+    // The comparison figure quoted in `ops/README.md` and `policy.ts`. It was
+    // prose only; asserting it is what makes "both figures are asserted" true
+    // rather than an overclaim about this suite's own coverage.
+    const transport = fakeTransport([{ status: 500 }])
+    const timer = recordingTimer()
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: transport.fetcher,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: {
+        maxAttempts: 10,
+        baseDelayMs: 60_000,
+        maxDelayMs: 600_000,
+        totalBudgetMs: 4_500_000,
+      },
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    const waitedMs = result.ok === false ? result.waitedMs : 0
+    expect(timer.delays).toEqual([
+      60_000,
+      120_000,
+      240_000,
+      480_000,
+      600_000,
+      600_000,
+      600_000,
+      600_000,
+      600_000,
+    ])
+    expect(waitedMs).toBe(3_900_000)
+    expect(waitedMs / 60_000).toBe(65)
+    expect(result.ok === false && result.attempts).toBe(10)
+  })
+
   it("recovers on the second attempt of a transient failure", async () => {
     const { client, transport, timer } = clientFor([{ status: 503 }, { status: 200 }])
     const result = await client.ping({ outcome: HealthchecksOutcome.Fail })

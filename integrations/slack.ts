@@ -17,6 +17,7 @@ import {
   type BackoffFn,
   type Clock,
   createExponentialBackoff,
+  describeErrorKind,
   describeTransportError,
   isTransientStatus,
   parseRetryAfterMs,
@@ -173,10 +174,17 @@ export class SlackClient {
     try {
       body = JSON.stringify(payload)
     } catch (cause) {
+      // A serialisation failure is a caller bug, not a provider problem, so it
+      // reports as `invalid_payload` with a fixed description. The raw message
+      // is not returned: what `JSON.stringify` throws on a payload with a
+      // hostile `toJSON` or getter is caller-controlled text, and a result is
+      // the kind of value that gets logged. The error's class still tells the
+      // caller whether it was a cycle (`TypeError`) or a BigInt (`TypeError`) —
+      // both `TypeError` here, which is why the description carries the weight.
       return {
         ok: false,
         code: "invalid_payload",
-        message: cause instanceof Error ? cause.message : String(cause),
+        message: `payload is not JSON-serialisable (${describeErrorKind(cause)})`,
         attempts: 0,
       }
     }

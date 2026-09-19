@@ -30,6 +30,7 @@ import {
   type BackoffFn,
   type Clock,
   createExponentialBackoff,
+  describeTransportError,
   isTransientStatus,
   parseRetryAfterMs,
   type RetryPolicy,
@@ -82,7 +83,17 @@ export interface NtfyPush {
   gate?: NotificationSeverity
 }
 
-export type NtfyErrorCode = "not_configured" | "http_error" | "network_error" | "invalid_base_url"
+/**
+ * Failure reasons `push` can report.
+ *
+ * There is deliberately no `not_configured` or `invalid_base_url` member: a
+ * blank or unparseable base URL is rejected at construction, so neither can
+ * reach a result. `ntfyConfigFromEnv` returning `null` is how "not configured"
+ * reaches the caller, as an explicit decision. A member no code path produces
+ * is one a caller branches on forever and never sees — the same defect as an
+ * unreachable validator.
+ */
+export type NtfyErrorCode = "http_error" | "network_error"
 
 export interface NtfyPushed {
   ok: true
@@ -157,6 +168,22 @@ const DEFAULT_RETRY: RetryPolicy = {
  * collapsed it into a silent no-op, which means a typo'd variable name looks
  * exactly like a deliberate disable.
  */
+/**
+ * Describes why a URL string is unusable, without echoing it.
+ *
+ * A base URL can carry a token in its path, so the rejection names the shape
+ * problem and never the value.
+ */
+const describeUrlShape = (value: string): string => {
+  if (value === "") {
+    return "it is empty"
+  }
+  if (value.includes("://")) {
+    return "it has a scheme but no host"
+  }
+  return "no absolute scheme"
+}
+
 export const ntfyConfigFromEnv = (
   read: (name: string) => string | undefined = (name) => Deno.env.get(name),
 ): NtfyClientConfig | null => {
@@ -197,6 +224,16 @@ export class NtfyClient {
     }
     if (topic === "") {
       throw new Error("NtfyClient: topic is empty — a push without a topic has nowhere to go")
+    }
+    // The base URL is the push endpoint's origin, so a URL the platform cannot
+    // parse can never deliver a push. Before this guard all four malformed
+    // shapes below constructed happily and every push came back
+    // `network_error` after the transport failed on the garbage URL — a
+    // misconfiguration that looked like a provider outage.
+    if (!URL.canParse(baseUrl)) {
+      throw new Error(
+        `NtfyClient: baseUrl is not a valid absolute URL: ${describeUrlShape(baseUrl)}`,
+      )
     }
     this.config = { ...config, baseUrl, topic }
     this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init))
@@ -317,7 +354,10 @@ export class NtfyClient {
       return {
         ok: false,
         code: "network_error",
-        message: cause instanceof Error ? cause.message : String(cause),
+        // The base URL can carry a token in its path, and `fetch` puts the whole
+        // URL in its error text. Same defect as Slack's and healthchecks', and
+        // the same helper closes it.
+        message: describeTransportError(cause),
         attempts: attempt,
         retryable: true,
       }

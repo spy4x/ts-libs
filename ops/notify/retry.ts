@@ -8,12 +8,12 @@
  *
  * The two packages are owned by different issues (#16 and #18) and deliberately
  * do not import from a packages directory neither owns, so the module is
- * copied rather than shared. `integrations/retry-drift.test.ts` and
- * `ops/notify/retry-drift.test.ts` read both files and fail if the bytes differ,
- * so the duplication cannot silently diverge: the four ways it had already
- * diverged (jitter honoured in one copy and ignored in the other,
- * `isPermanentStatus` present in one only, a different backoff signature, and a
- * disagreeing `maxAttempts: 0` guard) are all covered by that one assertion.
+ * copied rather than shared. `ops/notify/retry-drift.test.ts` is the only reader:
+ * it hashes both files and fails if the bytes differ, so the duplication cannot
+ * silently diverge: the four ways it had already diverged (jitter honoured in
+ * one copy and ignored in the other, `isPermanentStatus` present in one only, a
+ * different backoff signature, and a disagreeing `maxAttempts: 0` guard) are all
+ * covered by that one assertion.
  *
  * Everything a test needs is injectable: the delay function (`backoff`), the
  * waiter (`sleep`) and the elapsed-time source (`clock`). Production defaults
@@ -135,6 +135,22 @@ export const describeTransportError = (cause: unknown): string => {
     return `${cause.name}: transport failure (url withheld)`
   }
   return "transport failure (url withheld)"
+}
+
+/**
+ * Names an error's class without its message.
+ *
+ * For failures where the message is caller-controlled text — a `JSON.stringify`
+ * that hit a hostile `toJSON` or getter — the class is the safe half: it is one
+ * of a handful of platform constants and cannot carry a payload. Anything not
+ * an `Error` is reported as `Error`, never stringified, because `String(value)`
+ * on an arbitrary thrown value can run a `toString` the caller supplied.
+ */
+export const describeErrorKind = (cause: unknown): string => {
+  if (cause instanceof Error && /^[A-Za-z]{1,32}$/.test(cause.name)) {
+    return cause.name
+  }
+  return "Error"
 }
 
 export interface RetryRunResult<R> {
