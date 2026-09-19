@@ -64,14 +64,16 @@ NUL-bearing path throws a `TypeError` naming the path — before any process is 
 
 The slots are not equally exposed, measured on ffmpeg/ffprobe 8.1.2:
 
-- **Load-bearing:** the thumbnail **output**, and `getAudioDuration`'s trailing slot. `output:
-  "-y.webp"` made ffmpeg answer `Unrecognized option 'y.webp'` with exit 8 instead of writing a file,
-  and `getAudioDuration("-read_intervals")` made ffprobe answer exit 1, `Missing argument for option
-  'read_intervals'`. A caller-supplied path was a command-line flag in both.
-- **Defence in depth:** the thumbnail **input**. ffmpeg consumes the token after `-i` as a filename
-  whatever it starts with — `-i -y.webp` exits 254, `Error opening input file -y.webp` — so that
-  guard is not the live injection vector. It stays, because a filename ffmpeg will never open deserves
-  the caller's own diagnostic rather than an exit code.
+- **Load-bearing:** the two slots the binaries read as options. `output: "-y.webp"` made ffmpeg
+  answer `Unrecognized option 'y.webp'` with exit 8 instead of writing a file, and `getMeta`'s slot —
+  the trailing path `runProbe` appends (`ffprobe.ts:180`) — made ffprobe answer exit 1, `Missing
+  argument for option 'read_intervals'`. A caller-supplied path was a command-line flag in both.
+- **Defence in depth:** the two slots behind the binaries' own `-i`. ffmpeg consumes the token after
+  `-i` as a filename whatever it starts with — `-i -y.webp` exits 254, `Error opening input file
+  -y.webp` — and ffprobe does the same: a file literally named `-read_intervals` is **opened** when
+  it is passed as `getAudioDuration`'s path. Neither guard is the live injection vector. They stay,
+  because a filename the binary will never open deserves the caller's own diagnostic rather than an
+  exit code.
 - **Neither, and not the binary's business:** a NUL byte. `Deno.Command` throws its own
   `nul byte found in provided data` from inside the spawn, naming neither the argument nor the caller,
   so the check keeps the failure in this package.

@@ -323,10 +323,15 @@ describe("getAudioDuration", () => {
       .rejects.toThrow(ProcessExecutionError)
   })
 
-  it("refuses a dash-leading path that would land in ffprobe's option list", async () => {
-    // `getAudioDuration` appends its own `-i` before the path, so the path lands
-    // in an option slot: `-read_intervals` reached ffprobe 8.1.2 in a hand run
-    // and it answered exit 1, `Missing argument for option 'read_intervals'`.
+  it("refuses a dash-leading path before creating any process", async () => {
+    // Defence in depth, not the live injection vector: `getAudioDuration`
+    // appends its own `-i` before the path, so ffprobe 8.1.2 reads the token as
+    // a filename — a file literally named `-read_intervals` is opened, and an
+    // absent one answers `-read_intervals: No such file or directory`. The guard
+    // is kept because a filename ffprobe will never open deserves the caller's
+    // own diagnostic, and because `getMeta`'s slot (`ffprobe.ts:180`) really is
+    // an option list, where the same token answers exit 1,
+    // `Missing argument for option 'read_intervals'`.
     const runner = new FakeProcessRunner(() => ({ stdout: "1.0\n" }))
     const error = await getAudioDuration("-read_intervals", { runner })
       .catch((thrown: unknown) => thrown)

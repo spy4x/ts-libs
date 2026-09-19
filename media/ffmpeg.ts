@@ -67,13 +67,19 @@ export const DEFAULT_THUMBNAIL_AT_MS = 1300
  *   after `-i` as a filename whatever it starts with: `-i -y.webp` exits 254,
  *   `Error opening input file -y.webp`. The guard is kept anyway — the slot is
  *   one option-reordering away from being an option list, and a filename ffmpeg
- *   will never open deserves the caller's own diagnostic. The same distinction
- *   holds in `ffprobe.ts:374` (`getAudioDuration`), where the path lands in a
- *   trailing option slot and `-read_intervals` does reach ffprobe as an option —
- *   exit 1, `Missing argument for option 'read_intervals'`.
+ *   will never open deserves the caller's own diagnostic.
  * - **NUL byte — neither, and not ffmpeg's business.** `Deno.Command` throws its
  *   own `nul byte found in provided data` from inside the spawn, naming neither
  *   the argument nor the caller, so the check keeps that failure ours.
+ *
+ * The same split holds in `ffprobe.ts` on the other binary's argument order. The
+ * genuinely injectable slot there is the trailing path `runProbe` appends after
+ * the option list (`ffprobe.ts:180`), where `-read_intervals` reaches ffprobe as
+ * an option and it answers `Missing argument for option 'read_intervals'`.
+ * `getAudioDuration` appends its own `-i` first (`ffprobe.ts:375`), so its path
+ * sits behind `-i` like ffmpeg's input, and a file literally named
+ * `-read_intervals` is opened there. Its guard at `ffprobe.ts:374` is therefore
+ * defence in depth for the same reasons, not protection against a live injection.
  *
  * @throws {TypeError} when either path begins with `-` or contains a NUL byte,
  * or when the output is not `.webp`. Thrown before any process is created.
