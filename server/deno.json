@@ -5,6 +5,10 @@
     ".": "./http/bounded-body.ts",
     "./http/bounded-body": "./http/bounded-body.ts",
     "./http/cors": "./http/cors.ts",
-    "./http/redact": "./http/redact.ts"
+    "./http/redact": "./http/redact.ts",
+    "./export": "./export.ts",
+    "./export-client": "./export-client.ts",
+    "./static": "./static.ts",
+    "./healthcheck": "./healthcheck.ts"
   }
 }

@@ -10,11 +10,12 @@
  * return `undefined` (no CORS headers), which is not a rejection — browsers only
  * enforce CORS when an `Origin` is present.
  *
- * Deviations from the `offer-lens` source, all covered by tests below:
- *  - the allowlist is configuration, not a module constant baked to one product
- *    origin, and a resolver built from an empty allowlist refuses every origin
- *    instead of quietly accepting all of them;
- *  - `chrome-extension://` shape validation runs before the WHATWG round-trip, so
+ * Deviations from the `offer-lens` source, both covered by tests below:
+ *  - the allowed origins are a required argument rather than a module constant
+ *    baked to one product, and a resolver built from an empty allowlist throws
+ *    instead of accepting every origin — the "no config" default must be refuse,
+ *    and for a factory "refuse" means refusing to build;
+ *  - `chrome-extension://` is validated by shape before the WHATWG round-trip, so
  *    a non-origin scheme cannot be smuggled through `URL`.
  */
 
