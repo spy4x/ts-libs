@@ -246,6 +246,9 @@ Deno.test("crossOriginHomeSetWarning states the rule and stays silent on a match
   // Case, default port and IDN are all folded by `URL` before the comparison.
   assertEquals(crossOriginHomeSetWarning("https://A.EXAMPLE/", "https://a.example/"), undefined)
   assertEquals(crossOriginHomeSetWarning("https://a.example:443/", "https://a.example/"), undefined)
+  // Fails closed when there is no origin to compare on either side.
+  assertEquals(typeof crossOriginHomeSetWarning("not a url", "https://a.example/"), "string")
+  assertEquals(typeof crossOriginHomeSetWarning("https://a.example/", "ftp://a.example/"), "string")
 })
 
 Deno.test("listCalendars falls back to /{username}/ when discovery is refused", async () => {

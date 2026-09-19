@@ -600,6 +600,11 @@ function originOf(url: string): string | undefined {
  * differently: `new URL` lowercases the host, punycodes an IDN, resolves `..`
  * and drops a default port before this comparison ever runs.
  *
+ * Fails closed. When either URL has no origin to compare — the constructor
+ * accepts any absolute URL, so a non-`http(s)` `baseUrl` is possible — the
+ * server-named URL is refused rather than used, because "cannot tell" must never
+ * read as "same origin".
+ *
  * @param namedUrl The resolved URL the server named.
  * @param configuredUrl The URL the caller configured the client with.
  * @returns the warning to record before falling back, or `undefined` when the
@@ -611,7 +616,12 @@ export function crossOriginHomeSetWarning(
 ): string | undefined {
   const named = originOf(namedUrl)
   const configured = originOf(configuredUrl)
-  if (named !== undefined && named === configured) return undefined
+  // Both sides must produce an origin for a match. `originOf` returns
+  // `undefined` for a non-`http(s)` URL, so a client configured with an exotic
+  // scheme refuses every server-named URL rather than skipping the check.
+  if (named !== undefined && configured !== undefined && named === configured) {
+    return undefined
+  }
   return `calendar-home-set ${namedUrl} is not on the configured origin ${
     configured ?? configuredUrl
   }; using the /username/ convention instead, because credentials are sent only to the origin the caller configured`
