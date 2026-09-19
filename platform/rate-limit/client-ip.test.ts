@@ -9,21 +9,44 @@ function request(headers: Record<string, string> = {}): Request {
 }
 
 describe("clientIp", () => {
-  it("reads CF-Connecting-IP", () => {
-    assertEquals(clientIp(request({ "cf-connecting-ip": "203.0.113.9" })), "203.0.113.9")
+  it("ignores every forwarding header by default, so a client cannot pick its bucket", () => {
+    const req = request({
+      "cf-connecting-ip": "203.0.113.9",
+      "x-forwarded-for": "198.51.100.7",
+      "x-real-ip": "192.0.2.1",
+    })
+    assertEquals(clientIp(req, "192.0.2.1"), "192.0.2.1")
+  })
+
+  it("returns the transport peer address by default", () => {
+    assertEquals(clientIp(request(), "192.0.2.1"), "192.0.2.1")
+  })
+
+  it("falls back to the placeholder by default when there is no peer address", () => {
+    assertEquals(clientIp(request({ "x-forwarded-for": "203.0.113.9" })), UNKNOWN_CLIENT_IP)
+  })
+
+  it("reads CF-Connecting-IP when the proxy is trusted", () => {
+    assertEquals(
+      clientIp(request({ "cf-connecting-ip": "203.0.113.9" }), undefined, true),
+      "203.0.113.9",
+    )
   })
 
   it("reads the first X-Forwarded-For hop, not the last and not the whole list", () => {
     const req = request({ "x-forwarded-for": "203.0.113.9, 198.51.100.7, 192.0.2.1" })
-    assertEquals(clientIp(req), "203.0.113.9")
+    assertEquals(clientIp(req, undefined, true), "203.0.113.9")
   })
 
-  it("reads X-Real-IP", () => {
-    assertEquals(clientIp(request({ "x-real-ip": "198.51.100.7" })), "198.51.100.7")
+  it("reads X-Real-IP when the proxy is trusted", () => {
+    assertEquals(
+      clientIp(request({ "x-real-ip": "198.51.100.7" }), undefined, true),
+      "198.51.100.7",
+    )
   })
 
-  it("falls back to the transport peer address", () => {
-    assertEquals(clientIp(request(), "192.0.2.1"), "192.0.2.1")
+  it("falls back to the transport peer address with no headers", () => {
+    assertEquals(clientIp(request(), "192.0.2.1", true), "192.0.2.1")
   })
 
   it("prefers CF-Connecting-IP over every other source", () => {
@@ -32,7 +55,7 @@ describe("clientIp", () => {
       "x-forwarded-for": "198.51.100.7",
       "x-real-ip": "192.0.2.1",
     })
-    assertEquals(clientIp(req, "127.0.0.1"), "203.0.113.9")
+    assertEquals(clientIp(req, "127.0.0.1", true), "203.0.113.9")
   })
 
   it("prefers the first X-Forwarded-For hop over X-Real-IP and the peer address", () => {
@@ -40,11 +63,14 @@ describe("clientIp", () => {
       "x-forwarded-for": "203.0.113.9, 198.51.100.7",
       "x-real-ip": "192.0.2.1",
     })
-    assertEquals(clientIp(req, "127.0.0.1"), "203.0.113.9")
+    assertEquals(clientIp(req, "127.0.0.1", true), "203.0.113.9")
   })
 
   it("prefers X-Real-IP over the peer address", () => {
-    assertEquals(clientIp(request({ "x-real-ip": "198.51.100.7" }), "127.0.0.1"), "198.51.100.7")
+    assertEquals(
+      clientIp(request({ "x-real-ip": "198.51.100.7" }), "127.0.0.1", true),
+      "198.51.100.7",
+    )
   })
 
   it("ignores forwarding headers when the proxy is not trusted", () => {
@@ -54,18 +80,22 @@ describe("clientIp", () => {
 
   it("falls through a blank header to the next source", () => {
     const req = request({ "cf-connecting-ip": "   ", "x-forwarded-for": " 203.0.113.9 " })
-    assertEquals(clientIp(req), "203.0.113.9")
+    assertEquals(clientIp(req, undefined, true), "203.0.113.9")
   })
 
   it("falls through an empty first hop to X-Real-IP", () => {
     assertEquals(
-      clientIp(request({ "x-forwarded-for": ", 198.51.100.7", "x-real-ip": "192.0.2.1" })),
+      clientIp(
+        request({ "x-forwarded-for": ", 198.51.100.7", "x-real-ip": "192.0.2.1" }),
+        undefined,
+        true,
+      ),
       "192.0.2.1",
     )
   })
 
   it("returns a garbage header verbatim rather than inventing a bucket", () => {
-    assertEquals(clientIp(request({ "x-real-ip": "not-an-ip" })), "not-an-ip")
+    assertEquals(clientIp(request({ "x-real-ip": "not-an-ip" }), undefined, true), "not-an-ip")
   })
 
   it("returns the placeholder when there is no header and no peer address", () => {

@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd"
 
 import {
   createKvStore,
+  denoKvBackend,
   type RateLimitKv,
   type RateLimitKvEntry,
   RateLimitStoreOverKv,
@@ -47,6 +48,38 @@ function fakeKv(): RateLimitKv & {
     },
     delete: (key: string) => {
       entries.delete(key)
+      return Promise.resolve()
+    },
+  }
+}
+
+/**
+ * Stand-in for a `Deno.Kv` handle, exposing exactly the three operations `DenoKvLike` names.
+ *
+ * This is what makes the adapter itself testable: `denoKvBackend` consumes a port, not the global,
+ * so no `--unstable-kv` and no writable path are needed to cover it.
+ */
+function fakeDenoKv() {
+  const entries = new Map<string, { value: unknown; expireIn?: number }>()
+  return {
+    /** Raw keys, `[namespace, id]` joined, so key shape is assertable. */
+    keys: () => [...entries.keys()],
+    /** Number of raw keys held. */
+    size: () => entries.size,
+    /** TTL handed to the backend for a raw key (the `[namespace, id]` path joined with `|`). */
+    ttl: (path: readonly string[] | string) =>
+      entries.get(typeof path === "string" ? path : path.join("|"))?.expireIn,
+    /** Place a value without going through the adapter. */
+    setRaw: (key: string, value: unknown) => entries.set(key, { value }),
+    get(path: readonly string[]) {
+      return Promise.resolve(entries.get(path.join("|")) ?? { value: null })
+    },
+    set(path: readonly string[], value: unknown, options?: { expireIn?: number }) {
+      entries.set(path.join("|"), { value, expireIn: options?.expireIn })
+      return Promise.resolve({ ok: true })
+    },
+    delete(path: readonly string[]) {
+      entries.delete(path.join("|"))
       return Promise.resolve()
     },
   }
@@ -138,7 +171,10 @@ describe("createKvStore", () => {
 })
 
 describe("StoreRateLimiter over the KV store", () => {
-  it("enforces the limit across instances sharing one backend", async () => {
+  it("draws two limiters on one key from a single shared counter", async () => {
+    // Sequential on purpose: this pins shared-store accounting, not concurrency. True interleaving
+    // is deliberately not atomic — see `kv.ts` and the README — so a test claiming otherwise would
+    // claim a guarantee this package does not make.
     const kv = fakeKv()
     const { clock } = fakeClock()
     const store = createKvStore({ backend: kv, clock })
@@ -149,19 +185,122 @@ describe("StoreRateLimiter over the KV store", () => {
     assertEquals((await second.check("user:42")).allowed, true)
     assertEquals((await first.check("user:42")).allowed, false)
     assertEquals((await second.check("user:42")).allowed, false)
+    assertEquals((await second.check("other")).allowed, true)
   })
 
-  it("lets a key through again once the stored entry has expired", async () => {
+  it("denies a replayed request while the stored entry is still current", async () => {
     const kv = fakeKv()
-    const { clock, advance } = fakeClock()
-    const store = createKvStore({ backend: kv, clock })
-    const limiter = createStoreLimiter(store, { windowMs: 1000, limit: 1, clock })
+    const { clock } = fakeClock()
+    const limiter = createStoreLimiter(createKvStore({ backend: kv, clock }), {
+      windowMs: 1000,
+      limit: 1,
+      clock,
+    })
 
     assertEquals((await limiter.check("a")).allowed, true)
     assertEquals((await limiter.check("a")).allowed, false)
+  })
 
-    advance(2000)
-    kv.expireAll()
-    assertEquals((await limiter.check("a")).allowed, true)
+  it("reports a stored entry as absent once its own clock passes its expiry", async () => {
+    // The store decides expiry from its clock, the limiter takes an explicit `now`. Advancing the
+    // store's clock past `expiresAt` is what the assertions depend on, so removing the expiry check
+    // fails this test; the earlier version advanced the *window* instead and passed either way.
+    const kv = fakeKv()
+    const clockFn = fakeClock()
+    const store = createKvStore({ backend: kv, clock: clockFn.clock })
+
+    await store.write("a", [T0], T0, 1000)
+    assertEquals(await store.read("a"), [T0])
+
+    // Past expiry but still inside the window, so only the expiry check can explain the result.
+    clockFn.advance(1000)
+    assertEquals(await store.read("a"), undefined)
+    assertEquals(kv.entries.has("ratelimit:a"), false)
+  })
+
+  it("keeps serving an entry one millisecond short of its expiry", async () => {
+    const kv = fakeKv()
+    const clockFn = fakeClock()
+    const store = createKvStore({ backend: kv, clock: clockFn.clock })
+
+    await store.write("a", [T0], T0, 1000)
+    clockFn.advance(999)
+    assertEquals(await store.read("a"), [T0])
+    assertEquals(kv.entries.has("ratelimit:a"), true)
+  })
+})
+
+describe("denoKvBackend", () => {
+  it("segments keys as [namespace, id]", async () => {
+    const raw = fakeDenoKv()
+    const backend = denoKvBackend(raw, "app")
+
+    await backend.set("auth:user:42", { events: [T0], expiresAt: T0 + 1000 })
+    assertEquals([...raw.keys()], ["app|auth:user:42"])
+  })
+
+  it("unwraps { value } and reports a missing key as undefined", async () => {
+    const raw = fakeDenoKv()
+    const backend = denoKvBackend(raw)
+
+    assertEquals(await backend.get("absent"), undefined)
+    await backend.set("present", 1)
+    assertEquals(await backend.get("present"), 1)
+  })
+
+  it("treats a null value as absent, the way Deno KV reports a dropped key", async () => {
+    const raw = fakeDenoKv()
+    const backend = denoKvBackend(raw)
+
+    raw.setRaw("rate-limit|gone", null)
+    assertEquals(await backend.get("gone"), undefined)
+  })
+
+  it("passes the TTL through, and omits it when none was asked for", async () => {
+    const raw = fakeDenoKv()
+    const backend = denoKvBackend(raw)
+
+    await backend.set("a", 1, { expireIn: 1000 })
+    assertEquals(raw.ttl("rate-limit|a"), 1000)
+
+    // No TTL is not a TTL of zero milliseconds.
+    await backend.set("b", 1)
+    assertEquals(raw.ttl("rate-limit|b"), undefined)
+  })
+
+  it("deletes through the adapter", async () => {
+    const raw = fakeDenoKv()
+    const backend = denoKvBackend(raw)
+
+    await backend.set("a", 1)
+    await backend.delete("a")
+    assertEquals(raw.size(), 0)
+  })
+
+  it("drives a limiter end to end under the repo's test grants", async () => {
+    // The adapter consumes its own port, so it is coverable with a fake; only `Deno.openKv()`
+    // itself needs `--unstable-kv` and cannot run under this repo's test grants.
+    const raw = fakeDenoKv()
+    const { clock } = fakeClock()
+    const limiter = createStoreLimiter(createKvStore({ backend: denoKvBackend(raw), clock }), {
+      windowMs: 60_000,
+      limit: 2,
+      clock,
+    })
+
+    assertEquals((await limiter.check("user:42")).allowed, true)
+    assertEquals((await limiter.check("user:42")).allowed, true)
+    assertEquals((await limiter.check("user:42")).allowed, false)
+
+    // One key in the backend, under the adapter's namespace, and visible to a second limiter that
+    // shares the handle — which is the whole point of a KV-backed store.
+    assertEquals(raw.size(), 1)
+    assertEquals(raw.keys()[0].startsWith("rate-limit|"), true)
+    const second = createStoreLimiter(createKvStore({ backend: denoKvBackend(raw), clock }), {
+      windowMs: 60_000,
+      limit: 2,
+      clock,
+    })
+    assertEquals((await second.check("user:42")).allowed, false)
   })
 })

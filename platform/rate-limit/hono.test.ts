@@ -5,6 +5,7 @@ import { Hono } from "hono"
 import {
   createRateLimitMiddleware,
   decisionHeaders,
+  type KeyResolver,
   type RejectionStatus,
   userThenIp,
 } from "./hono.ts"
@@ -87,7 +88,9 @@ describe("rate limiting (ported from gb, skip removed)", () => {
 
 describe("createRateLimitMiddleware", () => {
   /** App with a 2-per-1000 ms limiter on the given key resolver. */
-  function buildApp(keyResolver = (req: Request) => req.headers.get("x-real-ip") ?? "unknown") {
+  function buildApp(
+    keyResolver: KeyResolver = (req: Request) => req.headers.get("x-real-ip") ?? "unknown",
+  ) {
     const clock = () => T0
     const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 2, clock })
     const app = new Hono()
@@ -147,8 +150,104 @@ describe("createRateLimitMiddleware", () => {
     ) {
       const value = res.headers.get(name) ?? ""
       assertEquals(/^\d+$/.test(value), true, `${name} was ${JSON.stringify(value)}`)
-      assertEquals(Number(value) >= 0, true)
     }
+    // A 1500 ms window would render as "1.5" if the conversion ever stopped rounding.
+    assertEquals(res.headers.get("RateLimit-Reset"), "2")
+    assertEquals(res.headers.get("Retry-After"), "2")
+  })
+
+  it("hands the connection's peer address to the key resolver", async () => {
+    // Regression guard: `keyResolver` used to receive only a `Request`, which carries no peer
+    // address, so the README's "key on the peer address instead" mitigation could not be wired at
+    // all. Without this test, dropping the second argument again passes the whole suite.
+    const seen: (string | undefined)[] = []
+    const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 1, clock: () => T0 })
+    const app = new Hono<{ Variables: never; Bindings: { remoteAddr?: string } }>()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => "192.0.2.1",
+        keyResolver: userThenIp((req, context) => {
+          seen.push((context as { remoteAddr?: string }).remoteAddr)
+          return req.headers.get("x-user-id") ?? undefined
+        }),
+      }),
+    )
+    app.get("/", (c) => c.text("ok"))
+
+    const res = await app.request(
+      new Request("http://localhost/", { headers: { "x-user-id": "42" } }),
+    )
+
+    assertEquals(res.status, 200)
+    assertEquals(seen, ["192.0.2.1"])
+  })
+
+  it("keys two unrelated clients apart when the peer address is wired", async () => {
+    const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 1, clock: () => T0 })
+    // Stands in for the runtime's connection info — `Deno.serve`'s `remoteAddr`, exposed through
+    // Hono's env or a `c.get` an earlier middleware set.
+    let peer = "192.0.2.1"
+    const app = new Hono()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => peer,
+        keyResolver: userThenIp(() => undefined),
+      }),
+    )
+    app.get("/", (c) => c.text("ok"))
+
+    const send = () => app.request(new Request("http://localhost/"))
+
+    // Same peer, second request: one bucket, so this is the denied one.
+    assertEquals((await send()).status, 200)
+    assertEquals((await send()).status, 429)
+
+    // A different peer sending no forwarding header at all is a different bucket. Keying on the
+    // placeholder instead would make it inherit the first client's rejection.
+    peer = "192.0.2.2"
+    assertEquals((await send()).status, 200)
+  })
+
+  it("cannot be defeated by rotating X-Forwarded-For with no proxy in front", async () => {
+    // The attack the reviewer constructed against the previous revision: 200 requests, a fresh
+    // header value each, all allowed because every value minted its own bucket.
+    const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 3, clock: () => T0 })
+    const app = new Hono<{ Variables: never; Bindings: { remoteAddr?: string } }>()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => "192.0.2.1",
+        keyResolver: userThenIp(() => undefined),
+      }),
+    )
+    app.get("/", (c) => c.text("ok"))
+
+    const statuses: number[] = []
+    for (let i = 0; i < 200; i++) {
+      const headers = {
+        "x-forwarded-for": `203.0.113.${i % 250}`,
+        "cf-connecting-ip": `198.51.100.${i % 250}`,
+      }
+      statuses.push((await app.request(new Request("http://localhost/", { headers }))).status)
+    }
+    assertEquals(statuses.filter((status: number) => status === 200), [200, 200, 200])
+    assertEquals(statuses.filter((status: number) => status === 429).length, 197)
+  })
+
+  it("honours the forwarding header only when the caller opts in", async () => {
+    const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 1, clock: () => T0 })
+    const app = new Hono()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        keyResolver: userThenIp(() => undefined, { trustedProxy: true }),
+      }),
+    )
+    app.get("/", (c) => c.text("ok"))
+
+    const from = (ip: string) =>
+      app.request(new Request("http://localhost/", { headers: { "x-forwarded-for": ip } }))
+    assertEquals((await from("203.0.113.9")).status, 200)
+    assertEquals((await from("203.0.113.9")).status, 429)
+    assertEquals((await from("198.51.100.7")).status, 200)
   })
 
   it("keys on the authenticated user when the resolver finds one", async () => {

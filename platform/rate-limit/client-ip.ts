@@ -1,14 +1,16 @@
 /**
- * Client IP extraction from proxy headers.
+ * Client IP extraction from the transport peer address and optional proxy headers.
  *
- * The order is the one `mig/lib/ratelimit.ts` used: Cloudflare's own header first, then the first
- * `X-Forwarded-For` hop, then `X-Real-IP`, then the transport peer address.
+ * With `trustedProxy: false` (the default) only `remoteAddr` is consulted, so the returned value is
+ * the address of whoever actually opened the connection — unspoofable. With `trustedProxy: true`
+ * the order is the one `mig/lib/ratelimit.ts` used: `CF-Connecting-IP`, then the first
+ * `X-Forwarded-For` hop, then `X-Real-IP`, then `remoteAddr`.
  *
- * **Trust boundary:** every header here is client-controlled unless a reverse proxy strips and
- * rewrites it. A client that reaches the origin directly can forge `X-Forwarded-For` (or
- * `CF-Connecting-IP`) and therefore forge its rate-limit key, so the caller owns that boundary:
- * terminate at a proxy that overwrites these headers, or call this with `trustedProxy: false` and
- * key on the peer address alone.
+ * **Trust boundary:** those three headers are client-controlled unless a reverse proxy strips and
+ * rewrites them. With no proxy in front and `trustedProxy: true`, a caller rotating
+ * `X-Forwarded-For` produces a new bucket per request and the limiter is defeated; a self-set
+ * `CF-Connecting-IP` lets it choose its own bucket. Turn the flag on only behind a proxy that
+ * overwrites both.
  */
 
 /** Fallback when no header and no peer address is available. */
@@ -37,9 +39,9 @@ function firstHop(value: string | null): string | undefined {
  *
  * @param req Request whose headers are inspected.
  * @param remoteAddr Peer address from the transport, when the runtime exposes one.
- * @param trustedProxy When false, headers are ignored and only `remoteAddr` is used.
+ * @param trustedProxy When true, forwarding headers win; when false (default), only `remoteAddr`.
  */
-export function clientIp(req: Request, remoteAddr?: string, trustedProxy = true): string {
+export function clientIp(req: Request, remoteAddr?: string, trustedProxy = false): string {
   if (trustedProxy) {
     const cf = firstHop(req.headers.get(CONNECTING_IP))
     if (cf !== undefined) return cf

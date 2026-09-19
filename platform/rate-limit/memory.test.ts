@@ -153,7 +153,9 @@ describe("MemoryRateLimiter", () => {
 
     for (let i = 0; i < 500; i++) {
       limiter.check(`key-${i}`)
-      assertEquals(limiter.size <= 500, true)
+      // No sweep is due yet, so every distinct key is a new bucket: the map grows by exactly one
+      // per key and cannot lag behind.
+      assertEquals(limiter.size, i + 1)
     }
     assertEquals(limiter.size, 500)
 
@@ -220,6 +222,27 @@ describe("MemoryRateLimiter", () => {
     advance(2000)
     limiter.check("fresh")
     assertEquals(limiter.size, 1)
+  })
+
+  it("holds a bucket with a live event for a full window plus the idle grace", () => {
+    // Pins the sweep's own return value and the exact retention: a no-op `sweep()` (an early
+    // `return 0`, for instance) would never reach the second assertion. Advances stay below
+    // `windowMs` so no automatic sweep can fire first and make the return value unobservable.
+    const { clock, advance } = fakeClock()
+    const limiter = new MemoryRateLimiter({ windowMs: 10_000, limit: 1, idleMs: 500, clock })
+
+    limiter.check("a")
+    advance(200)
+    assertEquals(limiter.sweep(), 0)
+    assertEquals(limiter.size, 1)
+
+    // Past `idleMs` on the last check, but the recorded event is not yet `windowMs + idleMs` old.
+    assertEquals(limiter.sweep(), 0)
+    assertEquals(limiter.size, 1)
+
+    advance(10_500 - 200)
+    assertEquals(limiter.sweep(), 1)
+    assertEquals(limiter.size, 0)
   })
 
   it("sweeps on its own once the window has elapsed", () => {

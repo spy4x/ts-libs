@@ -238,8 +238,13 @@ export class MemoryRateLimiter {
  * hard dependency of the limiter.
  */
 export interface RateLimitStore {
-  /** Read the recorded timestamps for `key`, or `undefined` when the key is absent or expired. */
-  read(key: string, now: number): Promise<number[] | undefined>
+  /**
+   * Read the recorded timestamps for `key`, or `undefined` when the key is absent or expired.
+   *
+   * `now` is optional so a caller walking a store by hand (`await store.read(key)`) does not have
+   * to invent a timestamp; a store that owns a clock falls back to it.
+   */
+  read(key: string, now?: number): Promise<number[] | undefined>
   /** Record `events` for `key`, expiring them at least `ttlMs` from `now`. */
   write(key: string, events: number[], now: number, ttlMs: number): Promise<void>
   /** Drop `key`. */

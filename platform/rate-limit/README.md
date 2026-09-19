@@ -26,9 +26,19 @@ import {
 } from "@ts-libs/platform/rate-limit"
 
 const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 10 })
-const app = new Hono()
-app.use(createRateLimitMiddleware(limiter, { keyResolver: userThenIp((req) => userIdFrom(req)) }))
+const app = new Hono<{ Bindings: { remoteAddr?: string } }>()
+
+// `remoteAddr` reads the connection's own peer address from whatever the runtime exposes —
+// `Deno.serve`'s `server.requestIP(req)`, `Bun.serve`'s `server.requestIP(req)`, or a value an
+// earlier middleware stored. It reaches the resolver as `context.remoteAddr`.
+app.use(createRateLimitMiddleware(limiter, {
+  remoteAddr: ({ env }) => env?.remoteAddr,
+  keyResolver: userThenIp((req) => userIdFrom(req)),
+}))
 ```
+
+Leave `trustedProxy` off (the default) unless a proxy in front strips and rewrites the forwarding
+headers; with it on and no proxy, the limiter is trivially defeated — see the trust boundary below.
 
 Several instances share one store:
 
@@ -42,6 +52,14 @@ const limiter = createStoreLimiter(store, { windowMs: 60_000, limit: 10 })
 
 Redis or Postgres reach the same limiter by implementing `RateLimitStore` (`read`, `write`,
 `delete`) — `createStoreLimiter` is the only thing the core needs.
+
+**Read-modify-write is not atomic across instances.** Two isolates can read the same value and both
+accept, so the effective limit under concurrency is `limit + (concurrent isolates - 1)`. The
+3-method port is what forecloses a Deno KV `atomic().check()` compare-and-swap: that is a deliberate
+design choice, not a backend limitation — a cross-instance lock per request would serialise the API
+on the limiter, and a limiter that errs one request generous is better than one that is down. If you
+need an exact count, put the counter behind a store that has an atomic increment and accept the
+round-trip.
 
 ## Sliding window, not fixed
 
@@ -59,8 +77,18 @@ A bucket is dropped only when **both** hold:
 - nothing has been checked against the key for `idleMs` (`seenAt <= now - idleMs`), and
 - its newest recorded event is older than `now - windowMs - idleMs`.
 
-The sweep runs when `windowMs` has elapsed since the last one, or every `SWEEP_EVERY_CHECKS` (512)
-checks, whichever comes first — so a client that sends one request per key cannot outrun it.
+So a bucket that ever recorded an event is retained for `windowMs + idleMs`, and the idle grace
+alone only retires a bucket that has no events left (every recorded event already outside its
+window). The sweep runs when `windowMs` has elapsed since the last one, or every
+`SWEEP_EVERY_CHECKS` (512) checks, whichever comes first — so a client that sends one request per key
+cannot outrun it.
+
+**Memory envelope.** At the defaults (`windowMs` 60 s, `idleMs` 600 s) a bucket lives 660 s, so
+steady-state retention is `request_rate × 660` keys — about 660k keys at 1,000 req/s. Measured on
+this implementation: ~349 bytes per bucket, so roughly 230 MB at that rate. That is the price of the
+10-minute grace, and `idleMs` is the knob: the `mig` implementation this replaces pruned at
+`request_rate × windowMs` (60 s), i.e. 11× tighter, at the cost of dropping a bucket the moment its
+window closed. Lower `idleMs` towards `windowMs` to trade memory for extra sweep churn.
 
 Two consequences worth stating, because both are security properties:
 
@@ -86,14 +114,26 @@ was `c.get?.("auth")`, and its optional chaining silently degraded every request
 
 ## `clientIp` trust boundary
 
-Order: `CF-Connecting-IP` > first `X-Forwarded-For` hop > `X-Real-IP` > the transport peer address.
-`X-Forwarded-For` is read hop by hop, never as a whole string, because a client controls the leading
-part of that list.
+With `trustedProxy: false` (the default) only the transport peer address is used. With
+`trustedProxy: true` the order is `CF-Connecting-IP` > first `X-Forwarded-For` hop > `X-Real-IP` >
+peer address. `X-Forwarded-For` is read hop by hop, never as a whole string, because a client
+controls the leading part of that list.
 
 **Every one of those headers is client-controlled unless a proxy strips and rewrites it.** A client
 that reaches the origin directly can forge `X-Forwarded-For` and choose its own bucket, so the
-trusted-proxy boundary is the caller's responsibility: terminate at a proxy that overwrites these
-headers, or pass `trustedProxy: false` (and a `remoteAddr`) and key on the peer address alone.
+trusted-proxy boundary is the caller's responsibility. The middleware supports both ends of that
+choice:
+
+- **Behind a proxy that rewrites the headers:** pass `trustedProxy: true` to `userThenIp`. Nothing
+  else is needed; the headers are trustworthy because the proxy set them last.
+- **No such proxy:** leave `trustedProxy` at its default (`false`) and wire `remoteAddr`, which
+  `keyResolver` receives as `context.remoteAddr` (see Usage). Keys then follow the connection's own
+  peer address, which a client cannot set.
+
+Without a `remoteAddr` accessor the resolver has no peer address at all and falls back to the
+placeholder `clientIp` returns, `0.0.0.0` — and **every** header-less client then shares one bucket,
+so one caller exhausting it denies the rest. If you cannot obtain a peer address, treat the shared
+bucket as a backstop and front the service with a proxy.
 
 ## Headers
 
@@ -121,6 +161,8 @@ combined `RateLimit` field is not emitted.
 - **Not installed:** `hono-rate-limiter` and `rate-limit-redis`. The first is this middleware; the
   second would make a Redis client a hard dependency of the limiter core, which is what the
   `RateLimitStore` port avoids.
-- `denoKvBackend` is the one path with no test: the repo's `deno test` grants only `--allow-read
-  --allow-env`, and `Deno.openKv()` needs `--unstable-kv` (plus a writable path). The store logic it
-  feeds is covered against an in-memory fake implementing the same port.
+- `Deno.openKv()` is the one call with no test: it needs `--unstable-kv` (plus a writable path), and
+  the repo's `deno test` grants only `--allow-read --allow-env`. Everything around it is covered —
+  `denoKvBackend` consumes a `DenoKvLike` port, so it is tested against a fake handle (namespace key
+  shape, `{ value: null }` treated as absent, `expireIn` pass-through, delete, and a limiter driven
+  end to end through it), and so is the store logic on top.

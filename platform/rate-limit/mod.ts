@@ -41,6 +41,7 @@ export {
 export {
   createRateLimitMiddleware,
   decisionHeaders,
+  type KeyResolver,
   RATE_LIMIT_HEADERS,
   type RateLimitContext,
   type RateLimitErrorBody,
@@ -50,6 +51,7 @@ export {
   type RateLimitMiddlewareOptions,
   REJECTION_STATUSES,
   type RejectionStatus,
+  type RemoteAddrResolver,
   userThenIp,
 } from "./hono.ts"
 

@@ -30,10 +30,10 @@ export interface RateLimitErrorBody {
 /**
  * Statuses a rejection may use.
  *
- * Spelled out instead of importing Hono's `ContentfulStatusCode`: that type is not re-exported from
- * `hono`'s root module and reaching for `hono/utils/http-status` is not a resolvable specifier
- * under this workspace's import map. A literal union is also the honest shape — a limiter rejects
- * with a client or server error and nothing else.
+ * Spelled out instead of importing Hono's `ContentfulStatusCode`: `hono`'s root module does not
+ * re-export that type (`TS2305`), and this workspace's import map has no entry for the deep
+ * `hono/utils/http-status` path it lives in. A literal union is also the honest shape — a limiter
+ * rejects with a client or server error and nothing else.
  */
 export type RejectionStatus =
   | 400
@@ -99,19 +99,69 @@ export const RATE_LIMIT_HEADERS: RateLimitHeaderNames = {
 const optionsSchema = arkType({
   "+": "reject",
   "keyResolver?": "Function",
+  "remoteAddr?": "Function",
   "errorMessage?": "string>0",
   "status?": "400 <= number.integer <= 599",
   "keyPrefix?": "string",
   "headers?": "object",
 })
 
+/**
+ * The framework context handed to a key resolver and to a {@link RemoteAddrResolver}.
+ *
+ * Generic over the caller's Hono `Env` so `context.env` keeps its type. Everything is optional
+ * except `req`: this is exactly the surface the middleware can guarantee, and a resolver written
+ * against it stays testable with a bare object literal.
+ */
+export interface RateLimitContext<E extends Env = Record<string, never>> {
+  /** The underlying request, headers included. */
+  req: Request
+  /** Hono's environment for this request — `c.env`, where a peer-address accessor is usually put. */
+  env?: E
+  /** Read a Hono context variable, e.g. the authenticated user set by an earlier middleware. */
+  get?: (key: string) => unknown
+}
+
+/**
+ * Resolve a client's peer address from a runtime handle, for {@link RateLimitMiddlewareOptions}.
+ *
+ * The parameter is whatever the caller's runtime exposes — `Deno.serve`'s `server`,
+ * `Bun.serve`'s `server`, or a Node adapter. Only `address` is read, so a structural handle is
+ * enough and no runtime type has to be imported. Returning `undefined` is fine: the resolver then
+ * falls back to `clientIp`'s placeholder.
+ */
+export type RemoteAddrResolver<E extends Env = Record<string, never>> = (
+  context: RateLimitContext<E>,
+) => string | undefined
+
+/**
+ * Key the current request. Receives the request and, since that carries no peer address, the
+ * framework context as a second parameter.
+ */
+export type KeyResolver<E extends Env = Record<string, never>> = (
+  req: Request,
+  context: RateLimitContext<E>,
+) => string | Promise<string>
+
 /** Options for {@link createRateLimitMiddleware}. */
-export interface RateLimitMiddlewareOptions {
+export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never>> {
   /**
-   * Bucket the request. Takes the framework request, because the request is all a key needs and
-   * reaching into framework context for app state is what made `gb`'s version uncopyable.
+   * Bucket the request. Given the request plus the context, because a request alone carries no peer
+   * address and reaching into Hono context for app state was what made `gb`'s version uncopyable.
    */
-  keyResolver: (req: Request) => string | Promise<string>
+  keyResolver: KeyResolver<E>
+  /**
+   * Where to read the connection's peer address, for resolvers that want it. Returned value is
+   * exposed to `keyResolver` as `context.remoteAddr`.
+   *
+   * ```ts
+   * app.use(createRateLimitMiddleware(limiter, {
+   *   remoteAddr: ({ env }) => env?.remoteAddr,
+   *   keyResolver: userThenIp(() => undefined, { trustedProxy: false }),
+   * }))
+   * ```
+   */
+  remoteAddr?: RemoteAddrResolver<E>
   /** Rejection body. Defaults to `"Too many requests, please try again later."` */
   errorMessage?: string
   /** Status for a rejection. Defaults to 429. */
@@ -120,13 +170,6 @@ export interface RateLimitMiddlewareOptions {
   keyPrefix?: string
   /** Header names to write. Defaults to {@link RATE_LIMIT_HEADERS}. */
   headers?: Partial<RateLimitHeaderNames>
-}
-
-/** The slice of Hono's context this middleware touches. */
-export interface RateLimitContext {
-  req: { raw: Request; header(name: string): string | undefined }
-  header(name: string, value: string): void
-  json(body: RateLimitErrorBody, status: number): Response
 }
 
 /**
@@ -154,7 +197,7 @@ export type RateLimitHonoContext<E extends Env = Record<string, never>> = Contex
  */
 export function createRateLimitMiddleware<E extends Env = Record<string, never>>(
   rateLimiter: RateLimiter,
-  options: RateLimitMiddlewareOptions,
+  options: RateLimitMiddlewareOptions<E>,
 ): MiddlewareHandler<E> {
   const parsed = optionsSchema(options)
   if (parsed instanceof arkType.errors) {
@@ -169,7 +212,8 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
     )
   }
 
-  const keyResolver = parsed.keyResolver as (req: Request) => string | Promise<string>
+  const keyResolver = parsed.keyResolver as KeyResolver<E>
+  const remoteAddrResolver = parsed.remoteAddr as RemoteAddrResolver<E> | undefined
   const message = parsed.errorMessage ??
     "Too many requests, please try again later."
   // The schema has already bounded this to an integer in 400..599; the cast only names it.
@@ -178,8 +222,18 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
   const headers: RateLimitHeaderNames = { ...RATE_LIMIT_HEADERS, ...options.headers }
 
   return async (c, next) => {
-    const raw = c.req.raw
-    const key = `${prefix}${await keyResolver(raw)}`
+    const request = c.req.raw
+    const { env } = c as { env?: E }
+    const context: RateLimitContext<E> & { remoteAddr?: string } = {
+      req: request,
+      env,
+      get: (key: string) => c.get?.(key as never),
+    }
+    // Resolved before the key, so `keyResolver` can bucket on the connection's own address rather
+    // than on a header the client set.
+    context.remoteAddr = remoteAddrResolver?.(context)
+
+    const key = `${prefix}${await keyResolver(request, context)}`
     const decision = await rateLimiter.check(key)
 
     for (const [name, value] of Object.entries(decisionHeaders(decision, headers))) {
@@ -224,16 +278,28 @@ export function decisionHeaders(
 /**
  * Key a request on the authenticated user when the caller can find one, else on the client IP.
  *
- * Exported because it is the resolver every caller writes: `resolveKeyFromContext(c, idFromAuth)`
- * covers the `user:<id>` / `ip:<addr>` shape and keeps the "what is a user" decision in the app.
+ * Exported because it is the resolver nearly every caller wants: it covers the `user:<id>` /
+ * `ip:<addr>` shape and leaves "what is a user" in the app. The peer address, when the caller wired
+ * a {@link RateLimitMiddlewareOptions.remoteAddr} accessor, arrives as `context.remoteAddr`.
+ *
+ * `trustedProxy` defaults to **false** here: with no proxy in front, trusting `X-Forwarded-For` or
+ * `CF-Connecting-IP` lets a caller rotate the header and mint a fresh bucket per request, which
+ * defeats the limiter entirely. Set it to true only behind a proxy that strips and rewrites them.
  */
-export function userThenIp(
-  userId: (req: Request) => string | undefined | Promise<string | undefined>,
-  options: { remoteAddr?: (req: Request) => string | undefined; trustedProxy?: boolean } = {},
-): (req: Request) => Promise<string> {
-  return async (req: Request): Promise<string> => {
-    const id = await userId(req)
+export function userThenIp<E extends Env = Record<string, never>>(
+  userId: (req: Request, context: RateLimitContext<E>) =>
+    | string
+    | undefined
+    | Promise<
+      string | undefined
+    >,
+  options: { trustedProxy?: boolean } = {},
+): KeyResolver<E> {
+  const trustedProxy = options.trustedProxy ?? false
+  return async (req, context) => {
+    const id = await userId(req, context)
     if (id !== undefined && id !== "") return `user:${id}`
-    return `ip:${clientIp(req, options.remoteAddr?.(req), options.trustedProxy ?? true)}`
+    const remoteAddr = (context as { remoteAddr?: string }).remoteAddr
+    return `ip:${clientIp(req, remoteAddr, trustedProxy)}`
   }
 }
