@@ -117,3 +117,77 @@ through a new call site. Both halves are pinned by tests, including the body rou
 - **Email, SMTP, webhooks, Slack, Mailchimp** — `@ts-libs/integrations`.
 - **Gatus, VictoriaMetrics and the rest of the shared platform.** These clients talk to a provider;
   they do not run one.
+
+# `@ts-libs/ops`
+
+Deploy, git-hook and backup tooling as a **library with ports**, extracted from
+`rostok` and `antonshubin.com` (issue #18).
+
+## Why it lives here
+
+`ops/` lives in this repository, with three constraints:
+
+1. `@rostok/cli` keeps its **CLI** — an argument parser and command wiring are not
+   library concerns. `jsr:@rostok/cli@1.0.3` is the published CLI; nothing
+   CLI-only is duplicated here.
+2. This package takes the **shared contract and the clients** — the
+   `BackupConfig` contract, the hook installer, the deploy helpers — as a library
+   with **ports**. No `Deno.args`, no `Deno.exit`, no `prompt()`, no TTY handling.
+3. Every external process, filesystem write and network call goes through an
+   injected port, because the workspace test task grants only `--allow-read` and
+   `--allow-env`. The real adapters (`createDenoCommandRunner`,
+   `createDenoFileSystem`, `systemEnv`) are thin and untested by design; the
+   decision logic is tested against the fakes in `testing/`.
+
+## Entry points
+
+| Entry point                   | Contents                                                                                                                                              |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@ts-libs/ops/console`        | `Logger`, `createLogger`, `LogLevel`, `Clock`, `LogSink`                                                                                              |
+| `@ts-libs/ops/run-command`    | `CommandRunner`, `runCommand`, `mustRun`, `CommandError`, argv builders                                                                               |
+| `@ts-libs/ops/env`            | `EnvReader`, `createEnvReader`, `readEnvVar`, `absPath`, `substituteEnvVars`, `rewriteEnvValues`                                                      |
+| `@ts-libs/ops/fs`             | `FileSystem`, `createDenoFileSystem`, `FileStat`, `DirEntry`, `isNotFound`                                                                            |
+| `@ts-libs/ops/remote`         | `restartRemoteContainer`, `buildSshArgv`, name/path validation                                                                                        |
+| `@ts-libs/ops/deploy`         | rsync/compose argv builders, `buildDeployPlan`, `deploy`, marker script generation, `parseDeployResults`, remote checksums, service worker cache bump |
+| `@ts-libs/ops/hooks/install`  | `installHooks`, `resolveGitCommonDir`, `DEFAULT_HOOKS`                                                                                                |
+| `@ts-libs/ops/backup/types`   | `BackupConfig`, `BackupStatus`, `isMissingContainerError`                                                                                             |
+| `@ts-libs/ops/backup/compose` | `manageComposeStack` with the `up -d` fallback                                                                                                        |
+
+`testing/` (`FakeCommandRunner`, `FakeFileSystem`) is test support: not an entry
+point, not exported.
+
+## Rules this package follows
+
+- **argv, never a shell string.** The only program text that ever reaches a shell
+  is `deploy.ts`'s generated stack script, and it goes to `bash -s` on **stdin** —
+  never to `-c` — with the app directory passed as `$1` so no configuration value
+  is interpolated into executable text.
+- **Secrets never reach argv.** Env files are named by path (`--env-file`), and a
+  secret-looking key in a remote env is rejected before anything runs. argv is
+  readable by every process on the box; this is not a stylistic preference.
+- **One logging convention**: `console.ts`. `ConsoleLogger`'s trick of replacing
+  the global `console` methods to capture output is not reentrant and is not
+  ported; `Logger.records()` is how offline-backup keeps its log file.
+- **Nothing reads the environment at module scope**, so every module can be
+  imported by a test, a CLI or another library without a populated environment.
+
+## Not ported, and why
+
+- `rostok/scripts/backup/src/{operations,config,reporting}.ts` — not a framework:
+  no extension point, module-scope env reads, homelab semantics in the core
+  (a `chown` for Syncthing, `HOME=/home/$USER`, a stack name regexed out of a
+  path, restic retention 7/4/3) and 6 tests in total.
+- `scripts/encryption/*` and `cli/age.ts` — template's `infra/scripts/env/age.ts`
+  (age64, atomic writes, symlink refusal, mode bits) is stricter and is the
+  sanctioned scheme.
+- `ops/healthcheck.ts` — delivered as `server/healthcheck.ts` by #35.
+- `rostok/scripts/ansible/inventory.ts`, `rostok/scripts/ssh/+main.ts`,
+  `antonshubin.com/scripts/optimize-screenshots.ts` — CLIs and one-shot repo
+  scripts with no library surface, or with dependencies this package does not want.
+
+## Notes for a reviewer
+
+- `ops/deno.json` lists only entry points that exist; add one when you add a file.
+- `ops/notify/**` belongs to #16 (`integrations`) and is not touched here. If that
+  PR lands after this one, **merge** the `exports` maps and append its README
+  section rather than replacing either file.

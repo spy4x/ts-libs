@@ -11,6 +11,9 @@
     "./run-command": "./run-command.ts",
     "./hooks/install": "./hooks/install.ts",
     "./backup/types": "./backup/types.ts",
-    "./backup/compose": "./backup/compose.ts"
+    "./backup/compose": "./backup/compose.ts",
+    ".": "./mod.ts",
+    "./remote": "./remote.ts",
+    "./deploy": "./deploy.ts"
   }
 }
