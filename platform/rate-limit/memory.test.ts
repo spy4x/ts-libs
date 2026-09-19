@@ -180,6 +180,26 @@ describe("MemoryRateLimiter", () => {
     assertEquals(limiter.check("attacker").allowed, false)
   })
 
+  it("keeps blocking a rejected key across the idle grace, inside its window", () => {
+    const { clock, advance } = fakeClock()
+    // `idleMs` is deliberately shorter than `windowMs` so the idle grace comes due while the
+    // bucket's event is still inside its window. A grace longer than the window cannot show the
+    // bug, because the window expires first.
+    const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 1, idleMs: 100, clock })
+
+    assertEquals(limiter.check("attacker").allowed, true)
+    assertEquals(limiter.check("attacker").allowed, false)
+
+    // Past the idle grace, still inside the window, last check was a rejection. An `seenAt`-only
+    // sweep would delete the bucket here and hand the attacker a fresh window.
+    advance(700)
+    assertEquals(limiter.sweep(), 0)
+    assertEquals(limiter.check("attacker").allowed, false)
+
+    advance(1000)
+    assertEquals(limiter.check("attacker").allowed, true)
+  })
+
   it("drops only idle buckets and never a bucket inside its window", () => {
     const { clock, advance } = fakeClock()
     const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 5, idleMs: 500, clock })
