@@ -72,6 +72,42 @@ describe("buildThumbnailArgv", () => {
     expect(() => buildThumbnailArgv({ input: "/media/clip.mp4", output: "/tmp/thumb.png" }))
       .toThrow(TypeError)
   })
+
+  it("rejects an input path ffmpeg would read as one of its own options", () => {
+    // ffmpeg parses its own argument list, so argv alone is not a guard.
+    expect(() => buildThumbnailArgv({ input: "-vf", output: "/tmp/thumb.webp" }))
+      .toThrow(TypeError)
+    expect(() => buildThumbnailArgv({ input: "--help", output: "/tmp/thumb.webp" }))
+      .toThrow(TypeError)
+  })
+
+  it("rejects an output path ffmpeg would read as one of its own options", () => {
+    // Reproduced against ffmpeg 8.1.2 before the guard: this argv made ffmpeg
+    // answer `Unrecognized option 'y.webp'` and exit 8.
+    expect(() => buildThumbnailArgv({ input: "/media/clip.mp4", output: "-y.webp" }))
+      .toThrow(TypeError)
+  })
+
+  it("rejects a path containing a NUL byte", () => {
+    expect(() => buildThumbnailArgv({ input: "/media/clip.mp4", output: "/tmp/th\u0000umb.webp" }))
+      .toThrow(TypeError)
+  })
+
+  it("names which path was rejected", () => {
+    expect(() => buildThumbnailArgv({ input: "-vf", output: "/tmp/thumb.webp" }))
+      .toThrow('thumbnail input must not start with "-"')
+    expect(() => buildThumbnailArgv({ input: "/media/clip.mp4", output: "-y.webp" }))
+      .toThrow('thumbnail output must not start with "-"')
+  })
+
+  it("still accepts a dash inside a file name", () => {
+    const argv = buildThumbnailArgv({
+      input: "/media/my clip; rm -rf.mp4",
+      output: "/tmp/my-thumb-01.webp",
+    })
+    expect(argv[argv.indexOf("-i") + 1]).toBe("/media/my clip; rm -rf.mp4")
+    expect(argv[argv.length - 1]).toBe("/tmp/my-thumb-01.webp")
+  })
 })
 
 describe("makeThumbnail", () => {
