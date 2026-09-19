@@ -30,7 +30,7 @@
  */
 
 import type { SendMailOptions, SMTPTransportOptions } from "nodemailer"
-import { encodeBase64 } from "@std/encoding"
+import { decodeBase64, encodeBase64 } from "@std/encoding"
 import {
   type EmailAddress,
   parseAddress,
@@ -108,7 +108,9 @@ export interface SmtpSendInfo {
  * argument assembly is asserted on the real object that would have reached the
  * network.
  */
-export type SmtpTransportFactory = (config: SMTPTransportOptions) => SmtpTransport
+export interface SmtpTransportFactory {
+  (config: SMTPTransportOptions): SmtpTransport
+}
 
 /**
  * Create a sender for one SMTP configuration.
@@ -126,7 +128,7 @@ export function createSmtpSender(
 ): EmailSender {
   const config = transportConfig(options)
   const from = parseAddress(options.from)
-  const secrets = credentialForms(options)
+  const matcher = credentialMatcher(options)
 
   // Per-sender, not per-module: one transport belongs to this configuration and is
   // built on the first send, so constructing a sender opens nothing.
@@ -150,7 +152,7 @@ export function createSmtpSender(
         // whole message rather than quietly dropping the entry that did not parse.
         return {
           ok: false,
-          error: redact(describeError(error), secrets),
+          error: redact(describeError(error), matcher),
           accepted: [],
           rejected: [],
           duplicates: [],
@@ -177,7 +179,7 @@ export function createSmtpSender(
             error: redact(
               `SMTP send failed (${options.host}, to=${envelope.join(",")}): server rejected ` +
                 `${rejected.length} recipient(s): ${rejected.join(", ")}`,
-              secrets,
+              matcher,
             ),
           }
         }
@@ -196,7 +198,7 @@ export function createSmtpSender(
           duplicates: recipients.duplicates,
           error: redact(
             `SMTP send failed (${options.host}, to=${envelope.join(",")}): ${describeError(error)}`,
-            secrets,
+            matcher,
           ),
         }
       }
@@ -300,33 +302,181 @@ function mailbox(address: EmailAddress): string | { name: string; address: strin
 }
 
 /**
- * Every textual form of the credentials that could reach an error string.
+ * What `redact` needs to recognise a credential.
  *
- * The connection string form and the base64 forms matter as much as the password
- * itself: nodemailer echoes a `url` option back in some errors, and an AUTH-LOGIN
- * failure surfaces the base64 blob. Longest form first, so `user:pass` is replaced
- * before the bare `pass` inside it and no fragment is left behind.
- *
- * Redaction is unconditional, with no minimum length: a one-character password
- * would mangle a diagnostic, and a diagnostic is worth less than a leaked
- * credential. Sends fail closed.
+ * Three different things, because a credential reaches an error string in three
+ * shapes and they are not reducible to one another: the raw `user:pass`, a base64
+ * SASL blob, and a base64 blob whose password is not a substring of any
+ * enumerable form.
  */
-function credentialForms(options: SmtpOptions): string[] {
-  const forms = new Set<string>()
-  for (const value of [options.pass, `${options.user}:${options.pass}`]) {
-    if (value === "") continue
-    forms.add(value)
-    forms.add(encodeURIComponent(value))
-    forms.add(encodeBase64(new TextEncoder().encode(value)))
-  }
-  return [...forms].sort((a, b) => b.length - a.length)
+interface CredentialMatcher {
+  /** Exact strings to replace, longest first so `user:pass` goes before the bare `pass`. */
+  forms: string[]
+  /** AUTH PLAIN structurally: `\0user\0`, which identifies a PLAIN blob at any password length. */
+  plainSentinel: string
+  /** `user:pass`, the connection-string form, for the decoded scan. */
+  userPass: string
+  /** The raw password, for the decoded scan. */
+  pass: string
 }
 
-/** Replace every credential form in `text` with {@link REDACTED_CREDENTIAL}. */
-function redact(text: string, secrets: readonly string[]): string {
+/**
+ * The shortest credential the *decoded* scan looks for inside a base64 run.
+ *
+ * Exact forms are always matched whatever their length. The scan skips shorter
+ * values because a one-character password would otherwise match almost every
+ * decoded byte string and turn the whole diagnostic into redaction noise — and it
+ * need not: a credential that short is fully enumerable, so the exact forms
+ * already cover every blob nodemailer can emit. {@link CredentialMatcher.plainSentinel}
+ * keeps the PLAIN case covered at any password length.
+ */
+const MIN_SCANNABLE_CREDENTIAL = 4
+
+/** A run long enough to be a SASL blob: base64, base64url, padded or not. */
+const BASE64_RUN_PATTERN = /[A-Za-z0-9+/=_-]{12,}/g
+
+/**
+ * Every textual form of the credentials that could reach an error string.
+ *
+ * The blob list is the fix for the bug this shipped with. AUTH LOGIN sends
+ * `base64(pass)` on its own — `nodemailer@10.0.10 dist/esm/smtp-connection/index.js:520-530`
+ * — so covering it looked sufficient. But `:1301-1306` offers PLAIN *first*, `:422`
+ * selects `_supportedAuth[0] || 'PLAIN'`, and the PLAIN payload is
+ * `base64("\0" + user + "\0" + pass)`. Base64 groups by three bytes, so
+ * `base64(pass)` is a substring of the PLAIN blob only when `len(user) ≡ 1 (mod 3)`
+ * — for every other username length the password was recoverable from the error
+ * by decoding the blob. All three blobs are therefore enumerated, each in every
+ * mangling a logging or transport layer applies: padded, unpadded, base64url
+ * (`-_`), `+` rewritten to a space by `application/x-www-form-urlencoded`, and
+ * percent-encoded.
+ */
+function credentialMatcher(options: SmtpOptions): CredentialMatcher {
+  const forms = new Set<string>()
+
+  for (const blob of [options.pass, `${options.user}:${options.pass}`, plainPayload(options)]) {
+    if (blob === "") continue
+    forms.add(blob)
+    forms.add(encodeURIComponent(blob))
+    for (const encoded of base64Variants(blob)) forms.add(encoded)
+  }
+
+  return {
+    forms: [...forms].filter((form) => form !== "").sort((a, b) => b.length - a.length),
+    plainSentinel: options.user.length >= 2 ? `\0${options.user}\0` : "",
+    userPass: `${options.user}:${options.pass}`,
+    pass: options.pass,
+  }
+}
+
+/** The AUTH PLAIN payload nodemailer builds: `\0user\0pass`, authorization identity omitted. */
+function plainPayload(options: SmtpOptions): string {
+  return `\0${options.user}\0${options.pass}`
+}
+
+/** One credential string in every base64 mangling a downstream layer can produce. */
+function base64Variants(text: string): string[] {
+  const padded = encodeBase64(new TextEncoder().encode(text))
+  const unpadded = padded.replace(/=+$/, "")
+
+  return [
+    padded,
+    unpadded,
+    unpadded.replaceAll("+", "-").replaceAll("/", "_"),
+    padded.replaceAll("+", " "),
+    encodeURIComponent(padded),
+    encodeURIComponent(unpadded),
+  ]
+}
+
+/**
+ * Replace every credential in `text` with {@link REDACTED_CREDENTIAL}.
+ *
+ * Two layers, and the second is what makes this a closed class rather than a
+ * fixed list. The first replaces the exact forms above. The second walks every
+ * base64-ish run in what is left, decodes it — padding restored, base64url
+ * normalized, percent-encoding undone — and replaces the run when the decoded
+ * bytes obviously contain the credentials. A matcher that only knew pre-computed
+ * forms is always one encoding behind the layer that produced the string; this
+ * one decodes and looks.
+ */
+function redact(text: string, matcher: CredentialMatcher): string {
   let redacted = text
-  for (const secret of secrets) redacted = redacted.replaceAll(secret, REDACTED_CREDENTIAL)
-  return redacted
+  for (const form of matcher.forms) redacted = redacted.replaceAll(form, REDACTED_CREDENTIAL)
+  return redacted.replace(
+    BASE64_RUN_PATTERN,
+    (run) => revealsCredential(run, matcher) ? REDACTED_CREDENTIAL : run,
+  )
+}
+
+/**
+ * True when decoding `run` surfaces a credential.
+ *
+ * The `plainSentinel` test carries the PLAIN case at any password length; the
+ * `userPass` and `pass` tests catch payloads that are not one of the enumerated
+ * blobs, and are length-gated per {@link MIN_SCANNABLE_CREDENTIAL}. Over-redaction
+ * is the safe direction here: a diagnostic loses a token, the credential does not
+ * leave the process.
+ */
+function revealsCredential(run: string, matcher: CredentialMatcher): boolean {
+  for (const decoded of decodeCandidates(run)) {
+    if (matcher.plainSentinel !== "" && decoded.includes(matcher.plainSentinel)) return true
+    if (matcher.userPass.length >= MIN_SCANNABLE_CREDENTIAL) {
+      if (decoded.includes(matcher.userPass)) return true
+    }
+    if (matcher.pass.length >= MIN_SCANNABLE_CREDENTIAL && decoded.includes(matcher.pass)) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Every plausible meaning of a run of base64-ish characters.
+ *
+ * `decodeBase64` throws on anything that is not base64, so each attempt is
+ * guarded: a run that is really a message id or a hostname decodes to nothing and
+ * is left alone.
+ */
+function decodeCandidates(run: string): string[] {
+  const decoded: string[] = []
+  const utf8 = new TextDecoder()
+
+  for (const variant of [run, run.replaceAll("-", "+").replaceAll("_", "/")]) {
+    const bytes = tryDecodeBase64(variant)
+    if (bytes !== undefined) decoded.push(utf8.decode(bytes))
+  }
+
+  const percentDecoded = tryDecodePercent(run)
+  if (percentDecoded !== undefined) {
+    decoded.push(percentDecoded)
+    // The order matters downstream: a URL layer wrapping a base64 blob leaves a
+    // percent-encoded base64 string, so percent-decode then base64-decode.
+    const bytes = tryDecodeBase64(percentDecoded)
+    if (bytes !== undefined) decoded.push(utf8.decode(bytes))
+  }
+
+  return decoded
+}
+
+/** Base64-decode with the padding restored, or `undefined` when that is impossible. */
+function tryDecodeBase64(value: string): Uint8Array | undefined {
+  if (value.length % 4 === 1) return undefined
+  const padded = value + "=".repeat((4 - (value.length % 4)) % 4)
+  try {
+    return decodeBase64(padded)
+  } catch {
+    return undefined
+  }
+}
+
+/** Percent-decode, or `undefined` when the value is not percent-encoded. */
+function tryDecodePercent(value: string): string | undefined {
+  if (!value.includes("%")) return undefined
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return undefined
+  }
 }
 
 /** A message for a thrown value that may not be an `Error`. */

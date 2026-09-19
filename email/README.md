@@ -88,8 +88,35 @@ interface EmailSender {
 - **Duplicates are deduplicated** case-insensitively before sending and reported
   in `duplicates`.
 - **Credentials are redacted.** Every string that leaves through `error` has the
-  password, the `user:pass` pair, their percent-encoded forms and their base64
-  AUTH-LOGIN encodings replaced with `<REDACTED:CREDENTIAL>`.
+  password, the `user:pass` pair and every base64 SASL blob they can form replaced
+  with `<REDACTED:CREDENTIAL>`. That is not a fixed list of encodings: after the
+  exact forms are replaced, every base64-like run in the message is decoded —
+  padding restored, base64url normalized, percent-encoding undone — and replaced
+  when it obviously contains the credentials. The AUTH **PLAIN** payload is
+  `base64("\0" + user + "\0" + pass)`, which nodemailer prefers over LOGIN, and it
+  is the case a LOGIN-only form list misses: `base64(pass)` sits inside it only
+  when `len(user) ≡ 1 (mod 3)`.
+- **Attachments cannot read files or fetch URLs.** The transport is configured
+  with nodemailer's `disableFileAccess` and `disableUrlAccess`, so an attachment
+  carrying a `path` or an `href` is refused rather than read — the caller's option
+  object cannot reach either.
+
+### Addresses
+
+A mailbox is validated at the boundary, and one bad entry in a recipient list
+fails the whole message rather than dropping that entry:
+
+- An addr-spec must be a dot-atom local part at a **dotted domain**. The domain
+  rule is stricter than RFC 5322 on purpose: `user@localhost` is legal and no relay
+  outside a test container delivers it, so a bare-host address is nearly always a
+  truncated value. Reject it loudly and the truncation is visible; accept it and it
+  bounces.
+- A control character is rejected outright, anywhere in a mailbox, subject or
+  attachment filename/content type. `Name\r\nBcc: victim@example.com` is a
+  plausible-looking display name and a forged header, so it never reaches a header.
+- A display name containing a comma is accepted unquoted (`Doe, Jane <jane@example.com>`)
+  and re-emitted quoted. Non-ASCII names travel to the transport as structured
+  fields, so nodemailer encodes them per RFC 2047 instead of emitting mojibake.
 
 ## Configuration
 
@@ -117,8 +144,10 @@ relay that genuinely cannot do STARTTLS needs `requireTls: false`.
 If your process runs the default transport factory, it needs `--allow-env`:
 nodemailer's module body reads `process.env.ETHEREAL_API` while loading. This
 package imports it lazily, on the first send through the default factory, so a
-process that injects its own factory never loads nodemailer and needs no
-permission beyond the ones it already has.
+process that injects its own factory never loads nodemailer _through this package_
+and needs no permission beyond the ones it already has. (This package's own test
+suite does import nodemailer statically, to compile real MIME offline through its
+`streamTransport`; that is a test-only path.)
 
 ## Transport is injectable
 

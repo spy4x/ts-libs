@@ -76,9 +76,12 @@ export interface ConsoleSenderOptions {
  * port implementation without a mail server.
  *
  * Ported from `roley`'s dev branch (`console.log` of the send command), with the
- * part `roley` got wrong left behind: `roley` logged the *command object*, which
- * on a real transport carries the credentials. This one logs the envelope, the
- * subject and a body preview, and has no credential in scope to log.
+ * part `roley` got wrong left behind: `roley/src/lib/server/email/sendEmail.ts:23`
+ * logs the whole `SendEmailCommand` — `JSON.stringify`, inside the *production*
+ * branch too — which puts every message body and every recipient into the log,
+ * while its credentials sit in the SESv2 client config and never print. This one
+ * logs the envelope, the subject, an attachment count and a body preview, and has
+ * no credential in scope to log.
  */
 export function createConsoleSender(options: ConsoleSenderOptions = {}): EmailSender {
   const log = options.log ?? ((line: string) => console.log(line))

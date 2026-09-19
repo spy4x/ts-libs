@@ -11,7 +11,7 @@
 // `test-password-not-real`.
 
 import { assert, assertEquals, assertFalse, assertStringIncludes, assertThrows } from "@std/assert"
-import { encodeBase64 } from "@std/encoding"
+import { decodeBase64, encodeBase64 } from "@std/encoding"
 import nodemailer, { type SendMailOptions, type SMTPTransportOptions } from "nodemailer"
 import {
   createSmtpSender,
@@ -394,6 +394,119 @@ Deno.test("redacts a user:pass connection string echoed by the transport", async
   assertFalse(failed.error.includes(PASSWORD))
   assertFalse(failed.error.includes(`${USER}:${PASSWORD}`))
   assertStringIncludes(failed.error, REDACTED_CREDENTIAL)
+})
+
+/**
+ * The AUTH PLAIN payload nodemailer actually sends, which AUTH LOGIN never showed.
+ *
+ * `nodemailer@10.0.10 dist/esm/smtp-connection/index.js:1301-1306` offers PLAIN
+ * before LOGIN, `:422` selects `_supportedAuth[0] || 'PLAIN'`, and `:520-525`
+ * builds the payload as `base64("\0" + user + "\0" + pass)`. Because base64 groups
+ * by three bytes, `base64(pass)` — the only form this module originally covered —
+ * is a substring of that blob only when `len(user) ≡ 1 (mod 3)`.
+ */
+function plainBlob(user: string, pass: string): string {
+  return encodeBase64(new TextEncoder().encode(`\0${user}\0${pass}`))
+}
+
+Deno.test("redacts the AUTH PLAIN blob at every username length modulo 3", async () => {
+  // The username length decides whether the LOGIN-only coverage accidentally hid
+  // the PLAIN blob: 1, 4 and 7 (≡ 1 mod 3) hid it, 2, 3, 5, 6 and 8 exposed it.
+  // All eight are asserted, so the leak cannot hide behind the one lucky length
+  // again. The reported leak was `user: "mailer"` — length 6.
+  for (const user of ["a", "ab", "abc", "abcd", "abcde", "mailer", "mailerx", "mailers1"]) {
+    const blob = plainBlob(user, PASSWORD)
+    const { sender } = makeSender({ user }, { fail: new Error(`auth failed: ${blob}`) })
+    const failed = failure(await sender.send(MESSAGE))
+
+    assertFalse(
+      failed.error.includes(PASSWORD),
+      `password survived for username ${JSON.stringify(user)}`,
+    )
+    assertFalse(failed.error.includes(blob), `plain blob survived for username ${user}`)
+    assertStringIncludes(failed.error, REDACTED_CREDENTIAL)
+  }
+})
+
+Deno.test("the PLAIN blob is not redundant with the LOGIN blob at length 6", () => {
+  // The premise of the test above, asserted rather than assumed: for `mailer` the
+  // password's own base64 is not inside the PLAIN blob, so covering only the
+  // LOGIN form left the password recoverable from the error by decoding it. The
+  // literal is the blob the review gate recovered.
+  const loginBlob = encodeBase64(new TextEncoder().encode(PASSWORD))
+  const blob = plainBlob("mailer", PASSWORD)
+
+  assertFalse(blob.includes(loginBlob))
+  assertEquals(blob, "AG1haWxlcgB0ZXN0LXBhc3N3b3JkLW5vdC1yZWFs")
+  assertEquals(new TextDecoder().decode(decodeBase64(blob)), `\0mailer\0${PASSWORD}`)
+})
+
+Deno.test("redacts an unpadded AUTH PLAIN blob", async () => {
+  // `abcde` is length 5 ≡ 2 (mod 3), and its 29-byte payload pads to one `=`. Both
+  // properties are load-bearing: a username of length ≡ 1 (mod 3) would let the
+  // LOGIN form alone hide the leak, and a payload that is a multiple of 3 has no
+  // padding to strip.
+  const padded = plainBlob("abcde", PASSWORD)
+  const unpadded = padded.replace(/=+$/, "")
+  assert(unpadded !== padded, "fixture must have padding to strip")
+
+  const { sender } = makeSender({ user: "abcde" }, { fail: new Error(`auth ${unpadded}`) })
+  const failed = failure(await sender.send(MESSAGE))
+
+  assertFalse(failed.error.includes(padded))
+  assertFalse(failed.error.includes(unpadded))
+  assertFalse(failed.error.includes(PASSWORD))
+  assertStringIncludes(failed.error, REDACTED_CREDENTIAL)
+})
+
+Deno.test("redacts a base64url and a percent-encoded credential blob", async () => {
+  const blob = plainBlob("mailer", PASSWORD)
+  const urlSafe = blob.replaceAll("+", "-").replaceAll("/", "_")
+
+  for (const variant of [urlSafe, encodeURIComponent(blob)]) {
+    const { sender } = makeSender({ user: "mailer" }, { fail: new Error(`auth ${variant}`) })
+    const failed = failure(await sender.send(MESSAGE))
+    assertFalse(failed.error.includes(blob), `blob survived inside variant: ${variant}`)
+    assertFalse(failed.error.includes(PASSWORD), `password survived: ${variant}`)
+    assertStringIncludes(failed.error, REDACTED_CREDENTIAL)
+  }
+})
+
+Deno.test("redacts an AUTH PLAIN blob carrying an authorization identity", async () => {
+  // RFC 4616 allows `authzid \0 authcid \0 passwd`. nodemailer omits the
+  // authorization identity today, so this blob cannot be in a form list computed
+  // from the credentials — and a 14-byte authzid puts the credentials at a
+  // non-multiple-of-3 offset, so neither the enumerated PLAIN blob nor the LOGIN
+  // blob is even a substring of it. Only the decoded scan can recognise it.
+  // Asserted, not assumed, below: a 13-byte authzid would leave the LOGIN blob
+  // inside, and then this test would pass without the scan doing anything.
+  const blob = encodeBase64(
+    new TextEncoder().encode(`ab@example.com\0mailer\0${PASSWORD}`),
+  )
+
+  assertFalse(blob.includes(plainBlob("mailer", PASSWORD)), "enumerated blob must not be inside")
+  assertFalse(
+    blob.includes(encodeBase64(new TextEncoder().encode(PASSWORD))),
+    "login blob must not be inside",
+  )
+
+  const { sender } = makeSender({ user: "mailer" }, { fail: new Error(`auth ${blob}`) })
+  const failed = failure(await sender.send(MESSAGE))
+
+  assertFalse(failed.error.includes(PASSWORD))
+  assertFalse(failed.error.includes(blob))
+  assertStringIncludes(failed.error, REDACTED_CREDENTIAL)
+})
+
+Deno.test("leaves an unrelated base64 run alone", async () => {
+  // The decoded scan must not become a blanket: a long opaque token that decodes
+  // to something else stays readable, because a diagnostic is worth keeping.
+  const unrelated = encodeBase64(new TextEncoder().encode("unrelated payload bytes 1234"))
+
+  const { sender } = makeSender({}, { fail: new Error(`bounce detail: ${unrelated}`) })
+  const failed = failure(await sender.send(MESSAGE))
+
+  assertStringIncludes(failed.error, unrelated)
 })
 
 Deno.test("redacts the base64 AUTH LOGIN blob", async () => {

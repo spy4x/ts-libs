@@ -65,13 +65,14 @@ export interface IcalAttachmentOptions {
  * Validate a message before any transport sees it.
  *
  * The rejections are the ones that otherwise surface as a delivery surprise: a
- * header-injecting subject, a header-injecting attachment filename, an attachment
- * with no MIME type, and a message with no body at all. `<` and `>` are allowed
+ * header-injecting subject, a header-injecting attachment filename or content type,
+ * an attachment with no MIME type, and a message with no body at all. `<` and `>` are allowed
  * in a subject — mail clients encode it, and rejecting them would reject ordinary
  * text like `Meeting <draft>`.
  *
- * @throws {TypeError} on a control character in `subject` or a filename, on no
- * recipients, on no usable body, or on an attachment missing its type.
+ * @throws {TypeError} on a control character in `subject`, a filename or a
+ * content type, on no recipients, on no usable body, or on an attachment missing
+ * its type.
  */
 export function assertSendableMessage(message: EmailMessage): void {
   const recipients = typeof message.to === "string" ? [message.to] : message.to
@@ -86,6 +87,7 @@ export function assertSendableMessage(message: EmailMessage): void {
 
   for (const attachment of message.attachments ?? []) {
     assertNoControlCharacters(attachment.filename, "Attachment filename")
+    assertNoControlCharacters(attachment.contentType, "Attachment contentType")
     if (attachment.filename.trim() === "") {
       throw new TypeError("Attachment filename must not be empty")
     }

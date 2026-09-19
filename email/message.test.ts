@@ -156,6 +156,24 @@ Deno.test("rejects a CRLF in an attachment filename", () => {
   )
 })
 
+Deno.test("rejects a CRLF in an attachment content type", () => {
+  // The content type lands in a MIME part header. nodemailer strips the CR/LF, so
+  // nothing is injected today — this rejects it at the boundary instead of relying
+  // on a dependency's sanitising to stay put.
+  assertThrows(
+    () =>
+      assertSendableMessage(makeMessage({
+        attachments: [{
+          filename: "a.ics",
+          content: "x",
+          contentType: "text/calendar\r\nContent-Type: text/html",
+        }],
+      })),
+    TypeError,
+    "Attachment contentType contains a control character",
+  )
+})
+
 Deno.test("rejects an attachment with no content type or no filename", () => {
   assertThrows(
     () =>
