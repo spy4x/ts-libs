@@ -17,9 +17,21 @@ which is already pinned in the root import map and used only for the `hono/cors`
 | `@ts-libs/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                 |
 
 **Merge order:** the three issues that added these files (`#28`, `#30`, `#35`) were cut from one
-`main` and each carries the earlier ones, so the second and third to merge rebase with a **union** on
-`server/deno.json` exports and this README. `server/http/bounded-body.ts` is byte-identical on all
-three branches, so there is nothing to reconcile in the code itself.
+`main` and each carries the earlier ones, so whoever merges second rebases with a **union** on
+`server/deno.json` exports and this README — never by dropping another package's entries.
+`server/http/bounded-body.ts` is byte-identical on all three branches (`sha256 5fc55e75`).
+
+**Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
+at a file that does not exist, so every branch that touches `server/deno.json` must also run:
+
+```bash
+deno publish --dry-run --allow-dirty                          # exit 0
+CI=true DENO_DIR=$(mktemp -d) deno publish --dry-run --allow-dirty   # exit 0, cold
+```
+
+That is the check that catches a dangling target (`TS2307`, exit 1) — the failure mode that blocked
+the sibling `time/` package. Every entry in this package's `exports` must resolve inside _this_ tree;
+`#31` (`server/storage`) owns `./storage` and must not be pre-declared here.
 
 ## `server/http/bounded-body`
 
