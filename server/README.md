@@ -30,11 +30,14 @@ Every function takes `{ maxBytes, timeoutMs? }`. The cap is enforced on the stre
 `content-length` over the cap is rejected without reading the body, and the reader is cancelled on
 any failure — including a stalled body whose deadline passes.
 
-**Canonical home pending.** This is a temporary duplicate of `net/bounded-body.ts` (issue #1, which
-has not landed — `net/` holds only `url-shape.ts` today). When it does, this module collapses to
-`export * from "@ts-libs/net/bounded-body"` plus `parseBoundedFormData`. `PayloadTooLargeError` must
-remain a single class with a single identity, so a caller catching it from `net` catches the one
-thrown here; two same-named classes would be a real bug.
+**Canonical home pending — verified, not assumed.** `git show origin/main:net/bounded-body.ts` fails,
+so the canonical module has **not** landed (`net/` holds only `url-shape.ts`). The implementation
+therefore stays local, and the collapse is a **follow-up the coordinator must enforce** when `#1`
+lands: this module becomes `export * from "@ts-libs/net/bounded-body"` plus `parseBoundedFormData`.
+`PayloadTooLargeError` must then be the _same class object_, not a second class with the same name —
+a caller catching it from `net` has to catch the one thrown here. A test that
+`assertStrictEquals(error instanceof NetPayloadTooLargeError, true)` across the two modules is the
+only test that catches a duplicate; every other test passes either way.
 
 ## `server/http/cors`
 
