@@ -21,6 +21,7 @@ import {
   readServiceWorkerCacheVersion,
   runDeployPlan,
   runDeployScript,
+  shellQuote,
   type StackConfig,
 } from "./deploy.ts"
 
@@ -99,6 +100,7 @@ Deno.test("brings compose up over ssh without cd, bash or a shell string", () =>
   const argv = buildComposeUpArgs(TARGET)
   assertEquals(argv, [
     "ssh",
+    "--",
     "deploy@host.example",
     "docker",
     "compose",
@@ -128,8 +130,8 @@ Deno.test("names each env file relative to the remote path", () => {
 
 Deno.test("passes non-secret env entries to the remote compose command", () => {
   const argv = buildComposeUpArgs({ ...TARGET, env: { PROJECT: "site-stag" } })
-  assertEquals(argv.slice(1, 4), ["deploy@host.example", "env", "PROJECT=site-stag"])
-  assertEquals(argv[4], "docker")
+  assertEquals(argv.slice(1, 5), ["--", "deploy@host.example", "env", "PROJECT=site-stag"])
+  assertEquals(argv[5], "docker")
 })
 
 Deno.test("rejects a secret-looking env entry before it reaches the remote argv", () => {
@@ -278,23 +280,26 @@ Deno.test("leaves the service worker alone when it has no version pattern", asyn
   assertEquals(fs.writes, [])
 })
 
-Deno.test("bumps the service worker before the sync, and carries a warning when it cannot", async () => {
-  const fs = new FakeFileSystem()
-  fs.seed("/app/static/sw.js", `const CACHE = "site-v1"`)
-  const runner = createFakeRunner()
+Deno.test(
+  "bumps the service worker before the sync, and carries a warning when it cannot",
+  async () => {
+    const fs = new FakeFileSystem()
+    fs.seed("/app/static/sw.js", `const CACHE = "site-v1"`)
+    const runner = createFakeRunner()
 
-  const outcome = await deploy({
-    runner,
-    fs,
-    target: TARGET,
-    serviceWorker: { path: "/app/static/sw.js", name: "site" },
-  })
+    const outcome = await deploy({
+      runner,
+      fs,
+      target: TARGET,
+      serviceWorker: { path: "/app/static/sw.js", name: "site" },
+    })
 
-  assertEquals(outcome.success, true)
-  assertEquals(outcome.serviceWorkerVersion, { from: 1, to: 2 })
-  assertEquals(fs.text("/app/static/sw.js"), `const CACHE = "site-v2"`)
-  assertEquals(runner.calls.length, 3)
-})
+    assertEquals(outcome.success, true)
+    assertEquals(outcome.serviceWorkerVersion, { from: 1, to: 2 })
+    assertEquals(fs.text("/app/static/sw.js"), `const CACHE = "site-v2"`)
+    assertEquals(runner.calls.length, 3)
+  },
+)
 
 Deno.test("warns instead of failing when the service worker pattern is missing", async () => {
   const fs = new FakeFileSystem()
@@ -344,19 +349,22 @@ Deno.test("derives the staging env by rewriting only the named keys", async () =
   assertEquals(fs.text("/app/.env.prod").includes("DOMAIN=antonshubin.com"), true)
 })
 
-Deno.test("staging derivation does not clobber WWW_DOMAIN when only DOMAIN is rewritten", async () => {
-  const fs = new FakeFileSystem()
-  fs.seed("/app/.env.prod", "DOMAIN=antonshubin.com\nWWW_DOMAIN=www.antonshubin.com\n")
+Deno.test(
+  "staging derivation does not clobber WWW_DOMAIN when only DOMAIN is rewritten",
+  async () => {
+    const fs = new FakeFileSystem()
+    fs.seed("/app/.env.prod", "DOMAIN=antonshubin.com\nWWW_DOMAIN=www.antonshubin.com\n")
 
-  const staging = await deriveStagingEnv({
-    fs,
-    prodPath: "/app/.env.prod",
-    stagingPath: "/app/.env.staging",
-    replacements: { DOMAIN: "website-stag.antonshubin.com" },
-  })
+    const staging = await deriveStagingEnv({
+      fs,
+      prodPath: "/app/.env.prod",
+      stagingPath: "/app/.env.staging",
+      replacements: { DOMAIN: "website-stag.antonshubin.com" },
+    })
 
-  assertEquals(staging, "DOMAIN=website-stag.antonshubin.com\nWWW_DOMAIN=www.antonshubin.com\n")
-})
+    assertEquals(staging, "DOMAIN=website-stag.antonshubin.com\nWWW_DOMAIN=www.antonshubin.com\n")
+  },
+)
 
 Deno.test("staging derivation fails when the production env has no such key", async () => {
   const fs = new FakeFileSystem()
@@ -375,6 +383,193 @@ Deno.test("staging derivation fails when the production env has no such key", as
   assertEquals(fs.writes, [])
 })
 
+/** Key spellings that leaked through the first version of the guard (reviewer's matrix). */
+const LEAKY_KEYS: readonly string[] = [
+  "API-KEY",
+  "DB_PASS",
+  "KEY_PASSPHRASE",
+  "PASSCODE",
+  "MYSQL_PWD",
+  "AUTH",
+  "BEARER",
+  "JWT",
+  "SESSION_KEY",
+  "AWS_ACCESS_KEY_ID",
+  "KEY",
+]
+
+Deno.test("refuses every key spelling from the leak matrix", () => {
+  for (const key of LEAKY_KEYS) {
+    assertThrows(
+      () => assertNoSecretEnvKeys({ [key]: "x" }),
+      CommandError,
+      undefined,
+      `${key} must be refused`,
+    )
+    assertThrows(
+      () => buildComposeUpArgs({ ...TARGET, env: { [key]: "x" } }),
+      CommandError,
+      undefined,
+      `${key} must not reach the remote argv`,
+    )
+  }
+})
+
+Deno.test("refuses a credential-shaped value under an innocuous key", () => {
+  const values = [
+    "postgres://deploy:hunter2@db.example/app",
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0",
+    "AKIAIOSFODNN7EXAMPLE",
+    "a".repeat(64),
+    "QWxhZGRpbjpvcGVuIHNlc2FtZQAAYmFzZTY0",
+  ]
+  for (const value of values) {
+    assertThrows(
+      () => assertNoSecretEnvKeys({ CONFIG_VALUE: value }),
+      CommandError,
+      "credential-shaped value",
+      `value ${JSON.stringify(value)} must be refused whatever the key is called`,
+    )
+  }
+})
+
+Deno.test("allows an ordinary scalar env entry", () => {
+  assertNoSecretEnvKeys({ PROJECT: "site-stag", REPLICAS: 2, DEBUG: true })
+})
+
+Deno.test(
+  "allows a value that merely looks like a credential when the caller vouches for it",
+  () => {
+    const digest = "a".repeat(64)
+    assertNoSecretEnvKeys({ IMAGE_DIGEST: digest }, { allowKeys: ["IMAGE_DIGEST"] })
+    assertThrows(
+      () => assertNoSecretEnvKeys({ OTHER_DIGEST: digest }, { allowKeys: ["IMAGE_DIGEST"] }),
+      CommandError,
+      "credential-shaped value",
+    )
+  },
+)
+
+Deno.test("refuses a non-scalar env value instead of shipping a stringified one", () => {
+  assertThrows(
+    () => assertNoSecretEnvKeys({ LIST: ["hunter2"] }),
+    CommandError,
+    "is not a scalar",
+  )
+  assertThrows(
+    () => assertNoSecretEnvKeys({ CONFIG: { deep: { password: "hunter2" } } }),
+    CommandError,
+    "is not a scalar",
+  )
+})
+
+Deno.test("refuses a blank env value that would silently drop configuration", () => {
+  assertThrows(() => assertNoSecretEnvKeys({ PROJECT: "   " }), CommandError, "is blank")
+})
+
+Deno.test("reports a launch failure as a failed step instead of throwing", async () => {
+  const runner = createFakeRunner().rejectWith(
+    "NotFound: Failed to spawn 'rsync': entity not found",
+  )
+  const outcome = await runDeployPlan(buildDeployPlan({ target: TARGET }), { runner })
+
+  assertEquals(outcome.success, false)
+  assertEquals(outcome.steps.length, 1)
+  assertEquals(outcome.steps[0].name, "sync-source")
+  assertEquals(outcome.steps[0].success, false)
+  assertEquals(outcome.steps[0].error, "Error: NotFound: Failed to spawn 'rsync': entity not found")
+})
+
+/** The reviewer of #50's payloads, plus the shapes a shell would also act on. */
+const INJECTION_PAYLOADS: readonly string[] = [
+  "$(echo PWNED-NAME >&2)",
+  "`echo PWNED-BACKTICK`",
+  'name" && echo PWNED-QUOTE && "',
+  "name; echo PWNED-SEMI",
+  "name with a space",
+  "name >/tmp/pwned",
+  "name${IFS}x",
+]
+
+Deno.test("refuses a stack name that bash would execute", () => {
+  for (const payload of INJECTION_PAYLOADS) {
+    assertThrows(
+      () => generateDeployScript([{ name: payload }], { containerPrefix: "hl" }),
+      CommandError,
+      undefined,
+      `stack name ${JSON.stringify(payload)} must be refused, not quoted and run`,
+    )
+  }
+})
+
+Deno.test("refuses an injection payload in every value the script interpolates", () => {
+  const payload = "$(echo PWNED >&2)"
+  const stacks: readonly StackConfig[] = [{ name: "web" }]
+
+  assertThrows(
+    () => generateDeployScript(stacks, { containerPrefix: payload }),
+    CommandError,
+    undefined,
+    "containerPrefix",
+  )
+  assertThrows(
+    () => generateDeployScript([{ name: "web", deployAs: payload }], { containerPrefix: "hl" }),
+    CommandError,
+    undefined,
+    "deployAs",
+  )
+  assertThrows(
+    () => generateDeployScript(stacks, { containerPrefix: "hl", envFiles: [payload] }),
+    CommandError,
+    undefined,
+    "envFiles",
+  )
+  assertThrows(
+    () => generateDeployScript(stacks, { containerPrefix: "hl", composeFile: payload }),
+    CommandError,
+    undefined,
+    "composeFile",
+  )
+})
+
+Deno.test("refuses an env file that escapes the app directory", () => {
+  assertThrows(
+    () =>
+      generateDeployScript([{ name: "web" }], { containerPrefix: "hl", envFiles: ["../../etc/x"] }),
+    CommandError,
+    'must not contain a ".." segment',
+  )
+})
+
+Deno.test("does not generate any script text from a refused value", () => {
+  // The property the reviewer measured: with the payload in a stack name the
+  // generated script *ran* it and still reported DEPLOY_SUCCESS. Refusal happens
+  // before a single line is built, so there is nothing to run.
+  assertThrows(
+    () => generateDeployScript([{ name: "$(echo PWNED-NAME >&2)" }], { containerPrefix: "hl" }),
+    CommandError,
+  )
+})
+
+Deno.test("single-quotes a value that reaches the script, escaping an embedded quote", () => {
+  assertEquals(shellQuote("$(echo PWNED)"), "'$(echo PWNED)'")
+  assertEquals(shellQuote("it's"), "'it'\\''s'")
+  assertEquals(shellQuote("plain-path/.env"), "'plain-path/.env'")
+})
+
+Deno.test("quotes every interpolated value in a benign script", () => {
+  const script = generateDeployScript([{ name: "web", deployAs: "hl-web" }], {
+    containerPrefix: "hl",
+    envFiles: [".env.prod"],
+  })
+  assertEquals(script.includes("-p 'hl-web'"), true)
+  assertEquals(script.includes(`-f "$app"/'stacks/web/compose.yml'`), true)
+  assertEquals(script.includes(`--env-file "$app"/'.env.prod'`), true)
+  assertEquals(script.includes(`echo 'DEPLOY_START:web:hl-web'`), true)
+  assertEquals(script.includes(`--filter 'name=hl-web'`), true)
+})
+
 const STACKS: readonly StackConfig[] = [
   { name: "traefik" },
   { name: "gatus", deployAs: "hl-gatus" },
@@ -391,8 +586,8 @@ Deno.test("generates a marker-delimited script that takes the app directory as a
 
 Deno.test("cleans up a stale container left by another compose project", () => {
   const script = generateDeployScript([{ name: "traefik" }], { containerPrefix: "hl" })
-  assertEquals(script.includes(`--filter "name=hl-traefik"`), true)
-  assertEquals(script.includes(`if [ "$project" != "traefik" ]`), true)
+  assertEquals(script.includes(`--filter 'name=hl-traefik'`), true)
+  assertEquals(script.includes(`if [ "$project" != 'traefik' ]`), true)
   assertEquals(script.includes(`docker rm -f "$id"`), true)
 })
 
@@ -414,7 +609,7 @@ Deno.test("adds a restart block only for the named stacks", () => {
 Deno.test("adds the compose override only when it exists on the remote", () => {
   const script = generateDeployScript([{ name: "traefik" }], { containerPrefix: "hl" })
   assertEquals(
-    script.includes(`if [ -f "$app/compose-override/traefik.yml" ]; then`),
+    script.includes(`if [ -f "$app"/'compose-override/traefik.yml' ]; then`),
     true,
   )
 })
@@ -535,6 +730,7 @@ Deno.test("hashes only remote files that answer with a sha256 digest", async () 
   assertEquals([...checksums.entries()], [["config/gatus.yml", digest]])
   assertEquals(runner.argvOf(0), [
     "ssh",
+    "--",
     "deploy@host.example",
     "sha256sum",
     "~/cloudlab/apps/config/gatus.yml",
@@ -553,4 +749,22 @@ Deno.test("rejects a remote config path the remote shell would execute", async (
     CommandError,
     "remote shell would execute",
   )
+})
+
+Deno.test("does not trust a digest printed by a command that failed", async () => {
+  const digest = "b".repeat(64)
+  const runner = createFakeRunner(() => ({
+    success: false,
+    output: `${digest}  /opt/apps/x\n`,
+    error: "",
+  }))
+
+  const checksums = await getRemoteChecksums({
+    runner,
+    sshAddress: "deploy@host.example",
+    remotePath: "~/cloudlab/apps",
+    files: ["config/gatus.yml"],
+  })
+
+  assertEquals([...checksums.entries()], [])
 })

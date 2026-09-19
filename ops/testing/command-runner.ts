@@ -41,6 +41,7 @@ export class FakeCommandRunner implements CommandRunner {
 
   #queue: CommandResult[] = []
   #handler?: CommandHandler
+  #rejection?: Error
 
   /** Queue one result for the next invocation. */
   respond(result: Partial<CommandResult>): this {
@@ -59,6 +60,16 @@ export class FakeCommandRunner implements CommandRunner {
     return this.onRun(() => ({ success: false, output: "", error }))
   }
 
+  /**
+   * Reject every invocation, the way a real runner does when the process cannot
+   * be launched at all — a missing binary or a `cwd` that does not exist. A port
+   * cannot be trusted by the callers if a fake can only resolve.
+   */
+  rejectWith(error: Error | string): this {
+    this.#rejection = typeof error === "string" ? new Error(error) : error
+    return this
+  }
+
   /** argv of the `index`-th invocation, or `undefined` when it never happened. */
   argvOf(index: number): readonly string[] | undefined {
     return this.calls[index]?.argv
@@ -69,6 +80,7 @@ export class FakeCommandRunner implements CommandRunner {
     options: CommandOptions = {},
   ): Promise<CommandResult> {
     this.calls.push({ argv: [...argv], options })
+    if (this.#rejection !== undefined) return Promise.reject(this.#rejection)
     const queued = this.#queue.shift()
     if (queued !== undefined) return Promise.resolve(queued)
     if (this.#handler !== undefined) {

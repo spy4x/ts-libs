@@ -134,7 +134,10 @@ export interface VerifyBackupsOptions extends OfflineBackupPorts {
    * password to every child of the process for the duration.
    */
   resticPassword: string
-  /** Read every byte (`restic check --read-data`) instead of structure only. Defaults to `false`. */
+  /**
+   * Read every byte (`restic check --read-data`) instead of structure only. Defaults to
+   * `false`.
+   */
   fullVerification?: boolean
 }
 
@@ -364,7 +367,10 @@ export interface RunSmartCheckOptions extends OfflineBackupPorts {
   pollIntervalMs?: number
   /** Milliseconds after which monitoring gives up. Defaults to 1.5x the estimate. */
   maxWaitMs?: number
-  /** Maximum number of status polls. Defaults to 150 — the bound that stops a run that never finishes. */
+  /**
+   * Maximum number of status polls. Defaults to 150 — the bound that stops a run that
+   * never finishes.
+   */
   maxPolls?: number
 }
 

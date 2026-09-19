@@ -17,6 +17,7 @@ Deno.test("restarts the container with docker's own argv, not a shell string", a
 
   assertEquals(runner.argvOf(0), [
     "ssh",
+    "--",
     "deploy@cloud.example",
     "docker",
     "restart",
@@ -73,10 +74,65 @@ Deno.test("allows a tilde path because the remote shell expands it", () => {
   assertSafeRemoteArg("~/cloudlab/apps/site", "remote argument")
 })
 
+Deno.test("rejects an ssh destination that ssh would read as an option", () => {
+  const remote = ["docker", "restart", "hl-traefik"]
+  for (const address of ["-oProxyCommand=/tmp/evil.sh", "-F/tmp/evil.conf", "-"]) {
+    assertThrows(
+      () => buildSshArgv(address, remote),
+      CommandError,
+      'starts with "-"',
+    )
+  }
+})
+
+Deno.test("emits -- before the destination so nothing after it is an option", () => {
+  assertEquals(buildSshArgv("deploy@cloud.example", ["true"]), [
+    "ssh",
+    "--",
+    "deploy@cloud.example",
+    "true",
+  ])
+})
+
+Deno.test("accepts the ssh flags a caller may legitimately pass", () => {
+  assertEquals(
+    buildSshArgv("host.example", ["true"], ["-p", "2222", "-oBatchMode=yes"]),
+    ["ssh", "-p", "2222", "-oBatchMode=yes", "--", "host.example", "true"],
+  )
+  assertEquals(
+    buildSshArgv("host.example", ["true"], ["-o", "BatchMode=yes"]),
+    ["ssh", "-o", "BatchMode=yes", "--", "host.example", "true"],
+  )
+})
+
+Deno.test("rejects a bare value where an ssh flag belongs", () => {
+  assertThrows(
+    () => buildSshArgv("host.example", ["true"], ["2222"]),
+    CommandError,
+    "must start with a flag",
+  )
+})
+
+Deno.test("rejects a flag where a flag's value belongs", () => {
+  assertThrows(
+    () => buildSshArgv("host.example", ["true"], ["-p", "-oProxyCommand=/tmp/evil.sh"]),
+    CommandError,
+    "is missing its value",
+  )
+})
+
+Deno.test("rejects a trailing flag with no value", () => {
+  assertThrows(
+    () => buildSshArgv("host.example", ["true"], ["-o"]),
+    CommandError,
+    "is missing its value",
+  )
+})
+
 Deno.test("builds ssh argv with the caller's flags before the address", () => {
   assertEquals(
     buildSshArgv("deploy@cloud.example", ["docker", "restart", "hl-traefik"], ["-p", "2222"]),
-    ["ssh", "-p", "2222", "deploy@cloud.example", "docker", "restart", "hl-traefik"],
+    ["ssh", "-p", "2222", "--", "deploy@cloud.example", "docker", "restart", "hl-traefik"],
   )
 })
 

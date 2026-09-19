@@ -16,7 +16,6 @@
  */
 
 import type { Clock, Logger } from "../console.ts"
-import type { EnvReader } from "../env.ts"
 import type { FileSystem } from "../fs.ts"
 import type { CommandRunner } from "../run-command.ts"
 
@@ -107,8 +106,6 @@ export interface OfflineBackupPorts {
   fs: FileSystem
   /** The package's one logging convention. Required. */
   logger: Logger
-  /** Reads environment values. Only needed for `restoreWorkflow`, which resolves a source's home. */
-  env?: EnvReader
   /** Pause. Only `formatDrive` and `runSmartCheck` need it. */
   sleep?: SleepFn
   /** Yes/no prompt. Omitted in a non-interactive run; that is a supported state. */

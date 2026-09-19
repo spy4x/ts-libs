@@ -66,8 +66,9 @@ Deno.test("ignores a mount row with no on separator", () => {
 
 Deno.test("lists only disks, keeping spaces in the model", async () => {
   const runner = createFakeRunner().respond({
-    output:
-      "sda   931.5G  Samsung SSD 870  disk\nsda1  931.5G                  part\nsdb   1.8T    My Passport    disk\n",
+    output: "sda   931.5G  Samsung SSD 870  disk\n" +
+      "sda1  931.5G                  part\n" +
+      "sdb   1.8T    My Passport    disk\n",
   })
   const drives = await listDrives(ports(runner))
 
@@ -105,19 +106,64 @@ Deno.test("checks the block device at the path it was given", async () => {
   )
 })
 
-Deno.test("resolves a bare drive name under the injected dev directory", async () => {
+Deno.test("resolves a bare drive name under a non-default dev directory", async () => {
+  // A non-default `devDir` is the only way to prove the option is read at all:
+  // passing "/dev" asserts against the default.
   const fs = new FakeFileSystem()
   const seen: string[] = []
   fs.stat = (path) => {
     seen.push(path)
-    return Promise.reject(new Error("no such file or directory"))
+    return Promise.resolve({
+      isFile: false,
+      isDirectory: false,
+      isBlockDevice: true,
+      isSymlink: false,
+      size: 0,
+      mode: null,
+      mtime: null,
+    })
   }
 
   assertEquals(
-    await checkDriveExists({ device: "sdb1", devDir: "/dev", ...ports(createFakeRunner(), fs) }),
-    false,
+    await checkDriveExists({
+      device: "sdb1",
+      devDir: "/devices/",
+      ...ports(createFakeRunner(), fs),
+    }),
+    true,
   )
-  assertEquals(seen, ["/dev/sdb1"])
+  assertEquals(seen, ["/devices/sdb1"])
+})
+
+Deno.test("fails loudly when udev has to be waited for without a sleep port", async () => {
+  await assertRejects(
+    () =>
+      formatDrive({
+        device: "/dev/sdb",
+        label: "OfflineBackups",
+        settleMs: 2000,
+        confirm: () => true,
+        ...ports(partedsRunner()),
+      }),
+    BackupError,
+    "needs a sleep port",
+  )
+})
+
+Deno.test("refuses to remove a mount point without an explicit home", async () => {
+  const fs = new FakeFileSystem().seedDirectory("/media/tester/OfflineBackups")
+  await assertRejects(
+    () =>
+      unmountDrive({
+        device: "/dev/sdb1",
+        mountPoint: "/media/tester/OfflineBackups",
+        removeMountPoint: true,
+        ...ports(createFakeRunner(), fs),
+      }),
+    BackupError,
+    "needs an explicit home directory",
+  )
+  assertEquals(fs.has("/media/tester/OfflineBackups"), true)
 })
 
 Deno.test("reports a missing device as absent, not as an error", async () => {

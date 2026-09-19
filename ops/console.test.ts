@@ -74,3 +74,12 @@ Deno.test("rejects a minLevel that is not a LogLevel", () => {
     "minLevel must be a LogLevel",
   )
 })
+
+Deno.test("records returns a copy a caller cannot use to rewrite history", () => {
+  const logger = createLogger({ clock, out: collector() })
+  logger.info("first")
+  const records = logger.records() as string[]
+  records.push("forged")
+  records.length = 0
+  assertEquals(logger.records(), ["2026-01-02T03:04:05.678Z INFO first"])
+})

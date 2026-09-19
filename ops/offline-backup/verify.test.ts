@@ -152,25 +152,28 @@ Deno.test("counts a directory without a config file as skipped", async () => {
   })
 })
 
-Deno.test("passes the password on the child environment, never in argv or the process env", async () => {
-  const runner = createFakeRunner((argv) =>
-    argv[0] === "which"
-      ? { success: true, output: "/usr/bin/restic", error: "" }
-      : { success: true, output: "", error: "" }
-  )
+Deno.test(
+  "passes the password on the child environment, never in argv or the process env",
+  async () => {
+    const runner = createFakeRunner((argv) =>
+      argv[0] === "which"
+        ? { success: true, output: "/usr/bin/restic", error: "" }
+        : { success: true, output: "", error: "" }
+    )
 
-  await verifyBackups({
-    mountPoint: "/mnt/drive",
-    backupPaths: [{ source: "~/data", target: "data" }],
-    resticPassword: CANARY,
-    ...ports(runner, verifiedFs()),
-  })
+    await verifyBackups({
+      mountPoint: "/mnt/drive",
+      backupPaths: [{ source: "~/data", target: "data" }],
+      resticPassword: CANARY,
+      ...ports(runner, verifiedFs()),
+    })
 
-  const check = runner.calls.find((call) => call.argv[0] === "restic")
-  assertEquals(check?.options.env, { [RESTIC_PASSWORD_VAR]: CANARY })
-  assertEquals(check?.argv.includes(CANARY), false)
-  assertEquals(Deno.env.get(RESTIC_PASSWORD_VAR), undefined)
-})
+    const check = runner.calls.find((call) => call.argv[0] === "restic")
+    assertEquals(check?.options.env, { [RESTIC_PASSWORD_VAR]: CANARY })
+    assertEquals(check?.argv.includes(CANARY), false)
+    assertEquals(Deno.env.get(RESTIC_PASSWORD_VAR), undefined)
+  },
+)
 
 Deno.test("reads every byte only when full verification is requested", async () => {
   const runner = createFakeRunner((argv) =>

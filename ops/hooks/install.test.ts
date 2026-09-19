@@ -32,24 +32,35 @@ Deno.test("resolves a relative path with parent segments against the cwd", async
   assertEquals(dir, "/home/dev/app/.git")
 })
 
-Deno.test("honours GIT_DIR from the injected reader instead of the process environment", async () => {
-  const runner = commandRunnerSucceeds(".git\n")
-  const env = createEnvReader({ GIT_DIR: "/srv/mirror.git" })
-  const dir = await resolveGitCommonDir({ fs: new FakeFileSystem(), runner, env, cwd: "/home/dev" })
-  assertEquals(dir, "/srv/mirror.git")
-  assertEquals(runner.calls.length, 0)
-})
+Deno.test(
+  "honours GIT_DIR from the injected reader instead of the process environment",
+  async () => {
+    const runner = commandRunnerSucceeds(".git\n")
+    const env = createEnvReader({ GIT_DIR: "/srv/mirror.git" })
+    const dir = await resolveGitCommonDir({
+      fs: new FakeFileSystem(),
+      runner,
+      env,
+      cwd: "/home/dev",
+    })
+    assertEquals(dir, "/srv/mirror.git")
+    assertEquals(runner.calls.length, 0)
+  },
+)
 
-Deno.test("fails loudly when git rev-parse fails instead of inventing a .git directory", async () => {
-  const runner = commandRunnerFails(
-    "fatal: not a git repository (or any of the parent directories): .git\n",
-  )
-  await assertRejects(
-    () => resolveGitCommonDir({ fs: new FakeFileSystem(), runner, cwd: "/home/dev/plain" }),
-    HookInstallError,
-    "not a git repository",
-  )
-})
+Deno.test(
+  "fails loudly when git rev-parse fails instead of inventing a .git directory",
+  async () => {
+    const runner = commandRunnerFails(
+      "fatal: not a git repository (or any of the parent directories): .git\n",
+    )
+    await assertRejects(
+      () => resolveGitCommonDir({ fs: new FakeFileSystem(), runner, cwd: "/home/dev/plain" }),
+      HookInstallError,
+      "not a git repository",
+    )
+  },
+)
 
 Deno.test("falls back to the named directory when git rev-parse fails", async () => {
   const runner = commandRunnerFails("fatal: not a git repository")
@@ -244,4 +255,30 @@ Deno.test("a missing git binary is reported as an install failure", async () => 
     HookInstallError,
     "command not found: git",
   )
+})
+
+Deno.test("treats a blank GIT_DIR as unset instead of installing at /hooks", async () => {
+  const runner = commandRunnerSucceeds("/home/dev/app/.git\n")
+  const env = { get: (name: string) => (name === "GIT_DIR" ? "   " : undefined) }
+  const dir = await resolveGitCommonDir({
+    fs: new FakeFileSystem(),
+    runner,
+    env,
+    cwd: "/home/dev/app",
+  })
+  assertEquals(dir, "/home/dev/app/.git")
+  assertEquals(runner.calls.length, 1)
+})
+
+Deno.test("resolves a relative GIT_DIR against the cwd git runs in", async () => {
+  const runner = commandRunnerSucceeds(".git\n")
+  const env = createEnvReader({ GIT_DIR: ".git" })
+  const dir = await resolveGitCommonDir({
+    fs: new FakeFileSystem(),
+    runner,
+    env,
+    cwd: "/home/dev/app",
+  })
+  assertEquals(dir, "/home/dev/app/.git")
+  assertEquals(runner.calls.length, 0)
 })

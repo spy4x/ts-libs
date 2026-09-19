@@ -5,6 +5,7 @@ import {
   buildInvocation,
   CommandError,
   createDenoCommandRunner,
+  decodeChunks,
   mustRun,
   runCommand,
   stdinModeFor,
@@ -12,6 +13,64 @@ import {
 import { createFakeRunner, FakeCommandRunner } from "./testing/command-runner.ts"
 
 const CANARY = "canary-do-not-log-3f9a"
+
+Deno.test("refuses an env value that also reaches argv", async () => {
+  const runner = createFakeRunner()
+  await assertRejects(
+    () => runCommand(runner, ["env", `TOKEN=${CANARY}`, "docker"], { env: { TOKEN: CANARY } }),
+    CommandError,
+    "a secret value reached argv",
+  )
+  assertEquals(runner.calls.length, 0)
+})
+
+Deno.test("allows an env value that stays out of argv", async () => {
+  const runner = createFakeRunner()
+  const result = await runCommand(runner, ["restic", "-r", "/repo", "check"], {
+    env: { RESTIC_PASSWORD: CANARY },
+  })
+  assertEquals(result.success, true)
+  assertEquals(runner.calls.length, 1)
+})
+
+Deno.test("turns a runner rejection into a failed result", async () => {
+  const runner = createFakeRunner().rejectWith(
+    "NotFound: Failed to spawn 'rsync': entity not found",
+  )
+  const result = await runCommand(runner, ["rsync", "./", "host:~/apps/"])
+  assertEquals(result, {
+    success: false,
+    output: "",
+    error: "Error: NotFound: Failed to spawn 'rsync': entity not found",
+  })
+})
+
+Deno.test("mustRun surfaces a launch failure as a CommandError", async () => {
+  const runner = createFakeRunner().rejectWith(
+    "NotFound: Failed to spawn 'docker': entity not found",
+  )
+  await assertRejects(
+    () => mustRun(runner, ["docker", "restart", "x"], {}, "restart x"),
+    CommandError,
+    "restart x failed: Error: NotFound",
+  )
+})
+
+Deno.test("decodes a multi-byte character split across two chunks", () => {
+  const bytes = new TextEncoder().encode("✅ done")
+  // Split inside the 3-byte emoji.
+  assertEquals(decodeChunks([bytes.slice(0, 2), bytes.slice(2)]), "✅ done")
+})
+
+Deno.test("decodes byte-at-a-time chunks without corrupting multi-byte text", () => {
+  const bytes = new TextEncoder().encode("naïve — ok")
+  assertEquals(decodeChunks([...bytes].map((byte) => new Uint8Array([byte]))), "naïve — ok")
+})
+
+Deno.test("replaces a truncated trailing sequence rather than dropping the rest", () => {
+  const bytes = new TextEncoder().encode("ok ✅")
+  assertEquals(decodeChunks([bytes.slice(0, bytes.length - 1)]), "ok �")
+})
 
 Deno.test("buildInvocation keeps argv as an array of single words", () => {
   const argv = buildInvocation([
@@ -152,11 +211,16 @@ Deno.test("a non-sudo command gets a closed stdin rather than the terminal", () 
   assertEquals(stdinModeFor({}), "null")
 })
 
-Deno.test("explicit stdin text wins over sudo's inherited terminal", () => {
-  assertEquals(
-    stdinModeFor({ sudo: true, stdin: "#!/bin/sh\nset -eu\n" }),
-    "piped",
+Deno.test("refuses sudo with stdin text instead of letting sudo eat the program", () => {
+  assertThrows(
+    () => stdinModeFor({ sudo: true, stdin: "#!/bin/sh\nset -eu\n" }),
+    CommandError,
+    "sudo cannot be combined with stdin text",
   )
+})
+
+Deno.test("pipes stdin when there is no sudo to read it", () => {
+  assertEquals(stdinModeFor({ stdin: "#!/bin/sh\nset -eu\n" }), "piped")
 })
 
 Deno.test("rejects a secret in argv instead of leaking it to the process table", () => {

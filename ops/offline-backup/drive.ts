@@ -435,7 +435,8 @@ export async function createBackupStructure(
     )
     if (!chown.success) {
       throw new BackupError(
-        `could not set ownership of ${options.mountPoint} to ${options.owner}: ${chown.error.trim()}`,
+        `could not set ownership of ${options.mountPoint} to ${options.owner}: ` +
+          chown.error.trim(),
       )
     }
   }

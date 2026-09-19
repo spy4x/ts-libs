@@ -156,8 +156,15 @@ export interface InstallHooksOptions {
  * `fallbackDir` was given, or when git prints nothing.
  */
 export async function resolveGitCommonDir(options: InstallHooksOptions): Promise<string> {
-  const override = options.env?.get("GIT_DIR")
-  if (override !== undefined) return override
+  // A blank override is an *unset* override: an `EnvReader` that does not
+  // normalise `""` to `undefined` (a plain `{ get: () => "" }`, a shell that
+  // exports an empty variable) would otherwise produce "/hooks" and install the
+  // hooks at the filesystem root. A relative override is resolved against the cwd
+  // like the value git itself prints.
+  const override = options.env?.get("GIT_DIR")?.trim()
+  if (override !== undefined && override !== "") {
+    return resolveAgainstCwd(override, options.cwd)
+  }
 
   const result = await runCommand(options.runner, ["git", "rev-parse", "--git-common-dir"], {
     cwd: options.cwd,
@@ -176,10 +183,21 @@ export async function resolveGitCommonDir(options: InstallHooksOptions): Promise
   if (reported === "") {
     throw new HookInstallError("git rev-parse --git-common-dir printed nothing")
   }
-  if (reported.startsWith("/")) return resolveSegments(reported)
+  return resolveAgainstCwd(reported, options.cwd)
+}
 
-  const base = resolveSegments((options.cwd ?? ".").replace(/\/+$/, ""))
-  return resolveSegments(`${base}/${reported.replace(/^\.\//, "")}`)
+/**
+ * Join a possibly-relative directory to the cwd and resolve its segments.
+ *
+ * Both sources of the common directory use this: the value git prints, and the
+ * `GIT_DIR` override — a caller that sets `GIT_DIR=.git` means the same thing git
+ * does, and returning a bare `.git` would put the hooks in whatever directory the
+ * *process* happens to have as its cwd.
+ */
+function resolveAgainstCwd(value: string, cwd: string | undefined): string {
+  if (value.startsWith("/")) return resolveSegments(value)
+  const base = resolveSegments((cwd ?? ".").replace(/\/+$/, ""))
+  return resolveSegments(`${base === "" ? "." : base}/${value.replace(/^\.\//, "")}`)
 }
 
 const HOOK_NAME = /^[a-z][a-z0-9-]*$/

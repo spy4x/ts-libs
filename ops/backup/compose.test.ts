@@ -4,6 +4,18 @@ import { buildComposeArgs, buildComposeBase, ComposeAction, manageComposeStack }
 
 const STACK = { project: "gatus", composeFile: "/opt/apps/stacks/gatus/compose.yml" }
 
+Deno.test("reports a launch failure as data, not as a rejection", async () => {
+  const runner = createFakeRunner().rejectWith(
+    "NotFound: Failed to spawn 'docker': entity not found",
+  )
+
+  const result = await manageComposeStack({ runner, ...STACK }, ComposeAction.START)
+
+  assertEquals(result.success, false)
+  assertEquals(result.fallbackUsed, false)
+  assertEquals(result.error, "Error: NotFound: Failed to spawn 'docker': entity not found")
+})
+
 Deno.test("builds a compose start argv as an array with no shell", () => {
   const argv = buildComposeArgs(STACK, ComposeAction.START)
   assertEquals(argv, [
@@ -68,19 +80,22 @@ Deno.test("falls back to up -d when the container vanished during the backup", a
   ])
 })
 
-Deno.test("passes the caller's HOME to the up -d fallback so a bind mount cannot land in /root", async () => {
-  const runner = new FakeCommandRunner()
-  runner.respond({ success: false, error: 'service "cert-sync" has no container to start\n' })
-  runner.respond({ success: true, output: "" })
+Deno.test(
+  "passes the caller's HOME to the up -d fallback so a bind mount cannot land in /root",
+  async () => {
+    const runner = new FakeCommandRunner()
+    runner.respond({ success: false, error: 'service "cert-sync" has no container to start\n' })
+    runner.respond({ success: true, output: "" })
 
-  await manageComposeStack(
-    { runner, ...STACK, env: { HOME: "/home/anton" } },
-    ComposeAction.START,
-  )
+    await manageComposeStack(
+      { runner, ...STACK, env: { HOME: "/home/anton" } },
+      ComposeAction.START,
+    )
 
-  assertEquals(runner.calls[0].options.env, undefined)
-  assertEquals(runner.calls[1].options.env, { HOME: "/home/anton" })
-})
+    assertEquals(runner.calls[0].options.env, undefined)
+    assertEquals(runner.calls[1].options.env, { HOME: "/home/anton" })
+  },
+)
 
 Deno.test("does not fall back when start fails for another reason", async () => {
   const runner = createFakeRunner(() => ({
@@ -123,7 +138,8 @@ Deno.test("reports both failures when the up -d fallback also fails", async () =
   assertEquals(result.fallbackUsed, true)
   assertEquals(
     result.error,
-    'start failed (service "cert-sync" has no container to start); up -d also failed (no such image: hl-cert-sync:latest)',
+    'start failed (service "cert-sync" has no container to start); ' +
+      "up -d also failed (no such image: hl-cert-sync:latest)",
   )
 })
 

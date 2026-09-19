@@ -55,27 +55,124 @@ export interface DeployTarget {
    * referenced by `--env-file`.
    */
   env?: Record<string, string>
+  /**
+   * Env keys the caller vouches for, exempting them from the value-shape check
+   * in {@link assertNoSecretEnvKeys}. For a value that merely looks like a
+   * credential — a build hash, an image digest, a fingerprint.
+   */
+  allowEnvKeys?: readonly string[]
 }
 
-/** `SOURCE`, `SSH_ADDRESS`, `PATH_APPS`-style names that must not reach argv. */
-const SECRETISH_KEY = /(SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|API_?KEY)/i
+/**
+ * Key names that say "this is a credential".
+ *
+ * The first version of this guard listed `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`,
+ * `PRIVATE`, `CREDENTIAL` and `API_?KEY`, and the reviewer of #50 walked straight
+ * through it with `API-KEY` (a hyphen does not match `API_?KEY`), `DB_PASS`,
+ * `KEY_PASSPHRASE`, `PASSCODE`, `MYSQL_PWD`, `AUTH`, `BEARER`, `JWT`,
+ * `SESSION_KEY`, `AWS_ACCESS_KEY_ID` and a bare `KEY`. Name matching is a losing
+ * game — that is the whole lesson — so it is kept only as the cheap first pass
+ * and it is paired with {@link CREDENTIAL_VALUE}, which does not care what the
+ * key is called.
+ */
+export const SECRETISH_KEY = new RegExp(
+  "SECRET|TOKEN|PASSWORD|PASSWD|PASSCODE|PASSPHRASE|PASS|PWD|PRIVATE|CREDENTIAL|" +
+    "AUTH|BEARER|JWT|SESSION|ACCESS_KEY|API[-_]?KEY|KEY",
+  "i",
+)
 
 /**
- * Reject a secret-looking key from a remote argv environment.
+ * Value shapes that are credentials whoever wrote the key.
  *
- * A heuristic on purpose: a name that says "secret" and a value that travels in
- * the process table is the exact mistake
- * `financy/infra/scripts/db-backup-create.ts:104` makes (literally
- * `-e AWS_SECRET_ACCESS_KEY=…`). A false positive costs one env-file.
- *
- * @throws {CommandError} When `entries` holds a secret-looking key.
+ * Covers the leaks the reviewer demonstrated under an *innocuous* key:
+ * `DATABASE_URL=postgres://u:pw@db/x` matched none of the key names. The blob
+ * rules are deliberately blunt — a 32-character base64-or-hex-looking value in a
+ * **remote argv** is either a credential, a key id or a digest, and none of the
+ * three belongs in a process table. A caller that genuinely needs such a value
+ * passes `allowEnvKeys` and takes the decision explicitly.
  */
-export function assertNoSecretEnvKeys(entries: Record<string, string>): void {
-  for (const key of Object.keys(entries)) {
+export const CREDENTIAL_VALUE: readonly RegExp[] = [
+  /** `scheme://user:password@host` — a connection string with inline credentials. */
+  /^[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+:[^\s/@]+@/i,
+  /** A PEM block, which the whitespace rule would reject only by accident. */
+  /-----BEGIN [A-Z ]+-----/,
+  /** A JWT. */
+  /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
+  /** An AWS access key id. */
+  /^(AKIA|ASIA)[A-Z0-9]{16}$/,
+  /** A long hex blob: an API key, a token, a private digest. */
+  /^[0-9a-fA-F]{32,}$/,
+  /** A long base64-or-base64url blob. */
+  /^[A-Za-z0-9+/_=-]{32,}$/,
+]
+
+/** Options for {@link assertNoSecretEnvKeys}. */
+export interface EnvPassthroughPolicy {
+  /**
+   * Keys the caller explicitly vouches for.
+   *
+   * Both checks are skipped for a listed key, including the value-shape ones:
+   * this is the escape hatch for a value that merely looks like a credential
+   * (a build hash, an image digest, a public key fingerprint). Naming a key here
+   * is a deliberate act in the caller's own source, which is the point — the
+   * default has to be refusal, because a key-name heuristic cannot be complete.
+   */
+  allowKeys?: readonly string[]
+}
+
+/**
+ * Reject a value-bound secret on its way into a remote argv.
+ *
+ * Two independent passes, because one is not enough:
+ *
+ * 1. the **key name** matches {@link SECRETISH_KEY};
+ * 2. the **value shape** matches {@link CREDENTIAL_VALUE} — the escape the
+ *    reviewer used with an innocuous key.
+ *
+ * A non-string value is refused outright: an array reaches the remote command as
+ * `KEY=a,b` and an object as `KEY=[object Object]`, so both silently ship a
+ * *different* value than the caller configured (and the object case hides a
+ * nested `password` field). Numbers and booleans are stringified without loss and
+ * are allowed.
+ *
+ * @throws {CommandError} When a key looks like a secret, a value looks like a
+ * credential, a value is not a scalar, or a value is blank — a blank value is a
+ * deploy that silently drops configuration.
+ */
+export function assertNoSecretEnvKeys(
+  entries: Record<string, unknown>,
+  policy: EnvPassthroughPolicy = {},
+): void {
+  const allowed = new Set(policy.allowKeys ?? [])
+
+  for (const [key, value] of Object.entries(entries)) {
+    if (allowed.has(key)) continue
+
     if (SECRETISH_KEY.test(key)) {
       throw new CommandError(
         `${key} looks like a secret; pass it in a file via --env-file, not in the remote argv`,
       )
+    }
+
+    if (typeof value === "object" || typeof value === "function") {
+      throw new CommandError(
+        `${key} is not a scalar; an array or object reaches the remote command stringified ` +
+          `(and hides any nested secret). Pass it via --env-file, or list it in allowKeys`,
+      )
+    }
+
+    const text = String(value)
+    if (text.trim() === "") {
+      throw new CommandError(`${key} is blank; a blank value silently drops configuration`)
+    }
+
+    for (const shape of CREDENTIAL_VALUE) {
+      if (shape.test(text)) {
+        throw new CommandError(
+          `${key} carries a credential-shaped value; pass it in a file via --env-file, ` +
+            `not in the remote argv (add it to allowKeys if it is a digest or a fingerprint)`,
+        )
+      }
     }
   }
 }
@@ -184,7 +281,7 @@ export function buildComposeUpArgs(
   ]
 
   const env = target.env ?? {}
-  assertNoSecretEnvKeys(env)
+  assertNoSecretEnvKeys(env, { allowKeys: target.allowEnvKeys })
   const envPrefix = Object.entries(env).flatMap(([key, value]) => [`${key}=${value}`])
 
   return buildSshArgv(
@@ -419,7 +516,10 @@ export interface DeployScriptOptions {
    * their own convention; the source hardcoded its homelab prefix.
    */
   containerPrefix: string
-  /** Env files passed to compose, relative to the app directory. Defaults to `.env` plus `.env.root`. */
+  /**
+   * Env files passed to compose, relative to the app directory. Defaults to
+   * `.env.root` and `.env`.
+   */
   envFiles?: readonly string[]
   /** Compose file name inside each stack directory. Defaults to `compose.yml`. */
   composeFile?: string
@@ -429,18 +529,84 @@ export interface DeployScriptOptions {
   restartStacks?: ReadonlySet<string>
 }
 
+/** Docker's project-name charset, which a stack directory name must also satisfy. */
+const STACK_NAME = /^[a-z0-9][a-z0-9_-]*$/
+
+/** A relative path that is safe as a single shell word and inside a quoted string. */
+const RELATIVE_PATH = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/
+
+/**
+ * Single-quote a value for bash.
+ *
+ * An embedded `'` is closed, escaped and reopened (`'\''`), which is the only
+ * escape a single-quoted bash string needs. Everything else — `$`, backticks,
+ * quotes, whitespace, `;` — is inert inside single quotes.
+ *
+ * Generated **and** validated: {@link generateDeployScript} refuses a value that
+ * is not a name or a relative path *and* quotes every interpolation, so a bug in
+ * one layer cannot produce executable text on its own. The reviewer of this PR
+ * demonstrated that validation alone was absent: `$(echo PWNED-*)` in a stack
+ * name ran under real `bash`.
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+/**
+ * Reject a value that must become a shell *word* rather than syntax.
+ *
+ * @throws {CommandError} When `value` is not a docker project name.
+ */
+export function assertStackName(value: string, label: string): void {
+  if (!STACK_NAME.test(value)) {
+    throw new CommandError(
+      `${label} "${value}" is not a docker project name (lowercase letters, digits, "_" and "-")`,
+    )
+  }
+}
+
+/**
+ * Reject a path that must stay a single relative shell word.
+ *
+ * `.` and `..` segments are refused too: an env file is resolved against the app
+ * directory, and `../../..` would silently read a file the caller never named.
+ *
+ * @throws {CommandError} When `value` is absolute, escapes the app directory, or
+ * contains shell syntax.
+ */
+export function assertRelativePath(value: string, label: string): void {
+  if (!RELATIVE_PATH.test(value)) {
+    throw new CommandError(`${label} "${value}" must be a relative path without shell syntax`)
+  }
+  for (const segment of value.split("/")) {
+    if (segment === "..") {
+      throw new CommandError(`${label} "${value}" must not contain a ".." segment`)
+    }
+  }
+}
+
 /**
  * Generate the bash script that deploys every stack and prints result markers.
  *
- * The app directory arrives as `$1` — the script text contains **no** absolute
- * path, so nothing that came from configuration is interpolated into executable
- * text. Run it through {@link runDeployScript}, which pipes it to `bash -s`.
+ * The app directory arrives as `$1`, and **every** value that comes from
+ * configuration is (a) validated as a docker project name or a relative path and
+ * (b) single-quoted through {@link shellQuote} where it is interpolated. Before
+ * this, the app directory was the only thing kept out of the script text and
+ * everything else was interpolated raw, which the reviewer of #50 exploited with
+ * `$(echo PWNED-*)` in a stack name: the payload ran, and the deploy still
+ * printed `DEPLOY_SUCCESS`.
  *
+ * Run it through {@link runDeployScript}, which pipes it to `bash -s` on stdin.
  * Each stack is wrapped in `DEPLOY_START`/`DEPLOY_SUCCESS`/`DEPLOY_FAILED`
  * markers so {@link parseDeployResults} can attribute output to a stack, plus a
  * stale-container cleanup: a container created under a different compose project
  * but holding the same `container_name` makes every later `up` fail with "name
  * already in use", and its data lives in volumes, so removing it is safe.
+ *
+ * @throws {CommandError} When a stack name, `containerPrefix`, `composeFile` or
+ * env file is not a name or a relative path. Failing generation is the point: a
+ * deploy script built from a value that could not be quoted safely is a script
+ * nobody has read.
  */
 export function generateDeployScript(
   stacks: readonly StackConfig[],
@@ -448,20 +614,33 @@ export function generateDeployScript(
 ): string {
   const envFiles = options.envFiles ?? [".env.root", ".env"]
   const composeFile = options.composeFile ?? "compose.yml"
+
+  assertStackName(options.containerPrefix, "containerPrefix")
+  assertRelativePath(composeFile, "composeFile")
+  for (const file of envFiles) assertRelativePath(file, "env file")
+
   const lines: string[] = ["#!/usr/bin/env bash", "set -u", 'app="$1"', ""]
 
   for (const stack of stacks) {
     const deployAs = stack.deployAs ?? stack.name
-    const compose = `"$app/stacks/${stack.name}/${composeFile}"`
-    const envFlags = envFiles.map((file) => `--env-file "$app/${file}"`).join(" ")
-    const composeArgs = `docker compose -p ${deployAs} -f ${compose} ${envFlags}`
-    const override = `"$app/compose-override/${stack.name}.yml"`
+    assertStackName(stack.name, "stack name")
+    assertStackName(deployAs, "deployAs")
 
-    lines.push(`echo "DEPLOY_START:${stack.name}:${deployAs}"`)
-    lines.push(`docker ps -a --filter "name=${options.containerPrefix}-${stack.name}" \\`)
+    const project = shellQuote(deployAs)
+    const compose = `"$app"/${shellQuote(`stacks/${stack.name}/${composeFile}`)}`
+    const envFlags = envFiles.map((file) => `--env-file "$app"/${shellQuote(file)}`).join(" ")
+    const composeArgs = `docker compose -p ${project} -f ${compose} ${envFlags}`
+    const override = `"$app"/${shellQuote(`compose-override/${stack.name}.yml`)}`
+    const startMarker = shellQuote(`DEPLOY_START:${stack.name}:${deployAs}`)
+    const successMarker = shellQuote(`DEPLOY_SUCCESS:${stack.name}:${deployAs}`)
+    const failedMarker = shellQuote(`DEPLOY_FAILED:${stack.name}:${deployAs}`)
+    const filter = shellQuote(`name=${options.containerPrefix}-${stack.name}`)
+
+    lines.push(`echo ${startMarker}`)
+    lines.push(`docker ps -a --filter ${filter} \\`)
     lines.push(`  --format '{{.ID}} {{.Label "com.docker.compose.project"}}' 2>/dev/null | \\`)
     lines.push(`  while read -r id project; do`)
-    lines.push(`    if [ "$project" != "${deployAs}" ] && [ -n "$id" ]; then`)
+    lines.push(`    if [ "$project" != ${project} ] && [ -n "$id" ]; then`)
     lines.push(
       `      echo "  removing stale container $id (project=$project, expected=${deployAs})"`,
     )
@@ -475,15 +654,15 @@ export function generateDeployScript(
     }
 
     lines.push(`if ${composeArgs} "$@" up -d --build; then`)
-    lines.push(`  echo "DEPLOY_SUCCESS:${stack.name}:${deployAs}"`)
+    lines.push(`  echo ${successMarker}`)
     lines.push(`else`)
-    lines.push(`  echo "DEPLOY_FAILED:${stack.name}:${deployAs}"`)
+    lines.push(`  echo ${failedMarker}`)
     lines.push(`fi`)
 
     if (options.restartStacks?.has(deployAs) === true) {
-      lines.push(`echo "RESTARTING:${stack.name}:${deployAs}"`)
+      lines.push(`echo ${shellQuote(`RESTARTING:${stack.name}:${deployAs}`)}`)
       lines.push(`${composeArgs} "$@" restart`)
-      lines.push(`echo "RESTART_DONE:${stack.name}:${deployAs}"`)
+      lines.push(`echo ${shellQuote(`RESTART_DONE:${stack.name}:${deployAs}`)}`)
     }
 
     lines.push("")
@@ -738,7 +917,8 @@ export async function deploy(options: DeployOptions): Promise<DeployOutcome> {
     })
     if (serviceWorkerVersion === null) {
       warnings.push(
-        `no service worker cache version for "${options.serviceWorker.name}" in ${options.serviceWorker.path}`,
+        `no service worker cache version for "${options.serviceWorker.name}" ` +
+          `in ${options.serviceWorker.path}`,
       )
     }
   }
