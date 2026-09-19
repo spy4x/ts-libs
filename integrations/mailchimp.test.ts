@@ -15,13 +15,15 @@ const CONFIG = {
   apiKey: "test-key-not-real",
   username: "test-user-not-real",
   listId: "test-list-not-real",
-  serverPrefix: "example",
+  // A `.invalid` prefix, so no URL this suite asserts or records names a real
+  // host; the real apex lives in `mailchimp.ts`, where it is the endpoint.
+  serverPrefix: "example.invalid",
 }
-// The client builds `https://<prefix>.api.mailchimp.com/3.0`. The suite uses an
-// RFC 2606 prefix so every URL asserted or recorded here is under
-// `api.mailchimp.com`-shaped but example-owned territory, and no request is
-// ever made.
-const API_ROOT = "https://example.api.mailchimp.com/3.0"
+// The client builds `https://<prefix>.api.mailchimp.com/3.0`; the suite uses a
+// prefix under RFC 2606's `.invalid` instead, so no URL asserted or recorded
+// here names a real host — the real apex is left in `mailchimp.ts`, where it is
+// the production endpoint and not an example. No request is ever made.
+const API_ROOT = "https://example.invalid.api.mailchimp.com/3.0"
 
 interface RecordedRequest {
   url: string
@@ -168,10 +170,22 @@ describe("basicAuthHeader", () => {
     expect(basicAuthHeader("user", "key")).toBe(`Basic ${btoa("user:key")}`)
   })
 
-  it("encodes a non-ASCII username as UTF-8 instead of throwing", () => {
-    const header = basicAuthHeader("usér", "k")
-    expect(header.startsWith("Basic ")).toBe(true)
-    expect(() => atob(header.slice(6))).not.toThrow()
+  it("encodes a non-ASCII username as UTF-8, byte for byte", () => {
+    // `usér` is `75 73 C3 A9 72` (the platform's own `TextEncoder` output), so
+    // the `usér:k` header pays `75 73 C3 A9 72 3A 6B` — `dXPDqXI6aw==` in
+    // base64, behind `Basic `.
+    // Both strings were computed from the bytes, not from this implementation.
+    // The earlier version of this test asserted only `startsWith("Basic ")` and
+    // that `atob` did not throw, and both hold for a Latin-1 encoding too — the
+    // mutation `String.fromCharCode(byte & 0x7f)` in `mailchimp.ts` left the
+    // whole file green. The exact string is what pins the encoding.
+    expect(basicAuthHeader("usér", "k")).toBe("Basic dXPDqXI6aw==")
+  })
+
+  it("encodes a multi-byte code point as four UTF-8 bytes", () => {
+    // `💾` is U+1F4BE, four UTF-8 bytes: `F0 9F 92 BE`, so `💾:` is
+    // `8J+Svjo=` in base64 — again derived from the code point, not the code.
+    expect(basicAuthHeader("💾", "")).toBe("Basic 8J+Svjo=")
   })
 })
 
