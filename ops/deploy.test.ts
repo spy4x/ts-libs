@@ -383,6 +383,19 @@ Deno.test("staging derivation fails when the production env has no such key", as
   assertEquals(fs.writes, [])
 })
 
+Deno.test("refuses a hostile stack directory name even when deployAs is benign", () => {
+  // `deployAs` defaults to `name`, so a hostile name is refused by that check on
+  // its own only if this case is pinned separately.
+  assertThrows(
+    () =>
+      generateDeployScript([{ name: "$(echo PWNED-NAME >&2)", deployAs: "web" }], {
+        containerPrefix: "hl",
+      }),
+    CommandError,
+    "is not a docker project name",
+  )
+})
+
 /** Key spellings that leaked through the first version of the guard (reviewer's matrix). */
 const LEAKY_KEYS: readonly string[] = [
   "API-KEY",
