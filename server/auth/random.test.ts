@@ -166,16 +166,17 @@ Deno.test("digits are uniform over a large sample from the production CSPRNG", (
   // The structural tests above are the evidence: they drive a known byte stream
   // through the production function and check, deterministically, that every draw
   // either yields a digit or is one of the six residues rejection must discard. A
-  // `% 10` mutant fails them every time. This test samples the real CSPRNG, so it
-  // cannot make the same claim: measured over 1e6 draws, uniform digits deviate at
-  // most 0.20% (1 standard deviation is 0.095%) while `% 10`'s bias is
-  // `(1/4 - 1/5)`-weighted and measured at 2.5%. The threshold sits at 1.8%: the
-  // largest of ten digit deviations has a standard deviation of ~0.21% over 1e6
-  // draws, so 1.8% is ~8 sigma (false failure ~1e-15) while staying below the
-  // measured 2.5% floor of `% 10`, which therefore reddens here in practice.
-  // Measured on this machine, ten runs of correct output: 0.37%–0.71%; `% 10`: 2.54%.
+  // `% 10` mutant fails them every time.
+  //
+  // This test samples the real CSPRNG, so its numbers have to come from measurement
+  // rather than from a hand-derived sigma — an earlier revision got them wrong by
+  // roughly 5x. Measured over 40 runs of 1e6 draws on this machine, the largest of
+  // the ten digit deviations from 10% ran 0.259%–0.868%, mean 0.568%, sd 0.154%.
+  // `% 10`'s bias measures 2.4%–2.5%. The threshold is mean + 6 sd = 1.49%, rounded
+  // to 1.6%: comfortably above every observed correct run (~1.8 sd of headroom over
+  // the worst) and below the mutant's floor, which therefore reddens here too.
   const draws = 1_000_000
-  const threshold = 1.8 / 100
+  const threshold = 1.6 / 100
   const counts = new Array<number>(10).fill(0)
   for (let index = 0; index < draws; index++) {
     counts[Number(getRandomDigit())]++

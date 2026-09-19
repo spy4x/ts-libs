@@ -82,6 +82,16 @@ export interface OAuth2ProviderOptions extends ProviderDeps {
   authorizeUrl: string
   tokenUrl: string
   userInfoUrl: string
+  /**
+   * Query parameters for the userinfo request.
+   *
+   * Facebook's Graph API returns only `id` and `name` unless the fields are asked
+   * for explicitly (`?fields=id,name,first_name,last_name,picture,email`), so the
+   * provider that needs the rest of the profile must name them. Google's endpoint
+   * needs none. Dropping this made the Facebook configuration silently fetch a
+   * profile without an email, which turns into an account keyed on the subject id.
+   */
+  userInfoParams?: Record<string, string>
   /** Space-separated OAuth2 scope. */
   scope: string
   clientId: string
@@ -488,9 +498,13 @@ export class OAuth2Provider implements IOAuth2Provider {
     return asString(body["access_token"])
   }
 
-  /** GET the userinfo endpoint with the access token. */
+  /** GET the userinfo endpoint with the access token and any configured fields. */
   private async fetchUserInfo(accessToken: string): Promise<Record<string, unknown>> {
-    const response = await this.http(this.options.userInfoUrl, {
+    const url = new URL(this.options.userInfoUrl)
+    for (const [name, value] of Object.entries(this.options.userInfoParams ?? {})) {
+      url.searchParams.set(name, value)
+    }
+    const response = await this.http(url.toString(), {
       headers: { Authorization: `Bearer ${accessToken}` },
     })
     if (!response.ok) {

@@ -157,6 +157,14 @@ export class EmailPasswordProvider implements IEmailPasswordProvider {
    * Returns `null` when no password credential exists, so the caller cannot use
    * this endpoint to enumerate accounts any faster than the sign-in endpoint
    * already allows.
+   *
+   * A second request **replaces** the outstanding token rather than adding a
+   * second row. That is not cosmetic: `findKeyByKindAndIdentification` fetches one
+   * row, and a store that returns the *oldest* match (`ORDER BY id LIMIT 1` in the
+   * Postgres adapter) would then hand back the superseded token, so the link the
+   * user just received would fail while the previous one silently kept working.
+   * Rotating in place is also what an earlier-requested token being cancelled
+   * means to the user who asked for the second one.
    */
   async createPasswordResetToken(email: string): Promise<null | string> {
     const key = await this.deps.key.findByKindAndIdentification({
@@ -167,14 +175,27 @@ export class EmailPasswordProvider implements IEmailPasswordProvider {
       return null
     }
     const token = getRandomString(DEFAULT_SESSION_LENGTH)
+    const credential = {
+      secret: await this.crypto.hash(token),
+      expiresAt: new Date(this.now() + RESET_TTL_MS),
+      attempts: 0,
+    }
+
+    const outstanding = await this.deps.key.findByKindAndIdentification({
+      kind: KeyKind.EmailPasswordReset,
+      identification: email,
+    })
+    if (outstanding) {
+      const updated = await this.deps.key.update(outstanding.id, credential)
+      return updated ? token : null
+    }
+
     const created = await this.deps.key.create({
       userId: key.userId,
       kind: KeyKind.EmailPasswordReset,
       identification: email,
       email,
-      secret: await this.crypto.hash(token),
-      expiresAt: new Date(this.now() + RESET_TTL_MS),
-      attempts: 0,
+      ...credential,
     })
     if (!created) {
       return null
@@ -218,17 +239,16 @@ export class EmailPasswordProvider implements IEmailPasswordProvider {
     if (!passwordKey) {
       return null
     }
-    const session = await this.deps.session.create({
-      userId: passwordKey.userId,
-      keyId: passwordKey.id,
-    })
-    if (!session) {
-      return null
-    }
+    // Order matters and is asserted: revoking *after* minting would delete the
+    // session this call is about to hand back, so the caller would receive a
+    // session that no store can validate.
     await this.deps.key.update(passwordKey.id, { secret: await this.crypto.hash(newPassword) })
     await this.deps.key.deleteById(resetKey.id)
     await this.deps.session.deleteAll(passwordKey.userId)
-    return session
+    return await this.deps.session.create({
+      userId: passwordKey.userId,
+      keyId: passwordKey.id,
+    })
   }
 
   /** Change the address a password credential authenticates with. */
@@ -269,13 +289,10 @@ export class EmailPasswordProvider implements IEmailPasswordProvider {
     if (!(await this.crypto.verify(oldPassword, key.secret))) {
       return null
     }
-    const session = await this.deps.session.create({ userId, keyId: key.id })
-    if (!session) {
-      return null
-    }
     await this.deps.key.update(key.id, { secret: await this.crypto.hash(newPassword) })
+    // Revoke first, mint second — see the note in `validatePasswordResetToken`.
     await this.deps.session.deleteAll(userId)
-    return session
+    return await this.deps.session.create({ userId, keyId: key.id })
   }
 
   hashPassword(password: string): Promise<string> {

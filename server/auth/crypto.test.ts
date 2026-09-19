@@ -29,35 +29,148 @@ import {
 } from "./testing/harness.ts"
 
 /**
- * True when `body` contains a loose or strict equality operator.
+ * True when `body` contains `===`, `==`, `!==` or `!=`.
  *
- * Written by character code so the intent cannot be mistaken for the operator it
- * looks for, and so this helper is not itself a match for the assertion it serves.
+ * The operators are written as escapes so this helper is not itself a match for the
+ * assertion it serves. Everything else `=` takes part in — assignment, `=>`, `>=`,
+ * `<=` — is deliberately not a hit.
+ *
+ * This function has its own tests below. Its first version had none and was, in the
+ * reviewer's words, unreachable-true for exactly the operators it named, which made
+ * a source-level assertion look like proof when it proved nothing.
  */
 function hasEqualityOperator(body: string): boolean {
-  for (let index = 0; index < body.length; index++) {
-    if (body.charCodeAt(index) !== 61) {
-      continue
+  return ["\u003D\u003D\u003D", "\u003D\u003D", "\u0021\u003D\u003D", "\u0021\u003D"].some((
+    operator,
+  ) => body.includes(operator))
+}
+
+/**
+ * True when `body` compares two *whole* identifiers with an equality operator.
+ *
+ * The narrowest form that is still sound for this file. Both sides must be a plain
+ * identifier that is not a property access: `separator === stored.length - 1` and
+ * `expected.length !== this.keyBytes` are guards over the *shape* of a stored value
+ * and are ordinary code, so a rule that flagged them would redden on correct code.
+ * What remains is the shape a substitution takes when a comparison is lifted out of
+ * the seam and written as two named values compared directly.
+ */
+function comparesTwoBareIdentifiers(body: string): boolean {
+  const operators = ["\u003D\u003D\u003D", "\u003D\u003D", "\u0021\u003D\u003D", "\u0021\u003D"]
+  const literals = new Set(["null", "undefined", "true", "false", "NaN"])
+  const identifier = "(?:^|[^.])\\b([A-Za-z_$][\\w$]*)\\b(?!\\.)"
+  const other = "\\b([A-Za-z_$][\\w$]*)\\b(?!\\.)"
+  for (const operator of operators) {
+    const pattern = new RegExp(`${identifier}\\s*${operator}\\s*${other}`, "g")
+    for (const match of body.matchAll(pattern)) {
+      if (match[1] !== match[2] && !literals.has(match[1]) && !literals.has(match[2])) {
+        return true
+      }
     }
-    const previous = index > 0 ? body.charCodeAt(index - 1) : 0
-    const next = index + 1 < body.length ? body.charCodeAt(index + 1) : 0
-    // Skip the `==` half of `!=`, `<=`, `>=`, and skip assignment and arrow function.
-    if (previous === 61 || next === 61) {
-      continue
-    }
-    if (previous === 33 || previous === 60 || previous === 62) {
-      continue
-    }
-    if (previous === 61 || next === 61) {
-      continue
-    }
-    // A lone `=` is an assignment or a default parameter, both allowed.
-    if (next !== 61 && previous !== 61) {
-      continue
-    }
-    return true
   }
   return false
+}
+
+Deno.test("the equality scanner detects every operator it claims to", () => {
+  // The scanner's own tests, without which a broken scanner silently weakens the
+  // source-level assertion below and nothing reports it.
+  assert(hasEqualityOperator("a === b"))
+  assert(hasEqualityOperator("a == b"))
+  assert(hasEqualityOperator("a !== b"))
+  assert(hasEqualityOperator("a != b"))
+  assert(hasEqualityOperator("const ok = a === b"))
+  assertFalse(hasEqualityOperator("const x = 1"))
+  assertFalse(hasEqualityOperator("(a) => a"))
+  assertFalse(hasEqualityOperator("a >= b"))
+  assertFalse(hasEqualityOperator(""))
+  assertFalse(hasEqualityOperator("this.compare(actual, expected)"))
+
+  assert(comparesTwoBareIdentifiers("return actual === expected"))
+  assert(comparesTwoBareIdentifiers("if (expected == actual) return false"))
+  assert(comparesTwoBareIdentifiers("const same = leftDigest !== rightDigest"))
+  assertFalse(comparesTwoBareIdentifiers("if (expected === null) return false"))
+  assertFalse(comparesTwoBareIdentifiers("if (actual !== undefined) return false"))
+  assertFalse(comparesTwoBareIdentifiers("if (expected.length !== this.keyBytes) return false"))
+  assertFalse(comparesTwoBareIdentifiers("if (separator === stored.length - 1) return false"))
+  assertFalse(comparesTwoBareIdentifiers("if (salt.length === 0) return false"))
+  assertFalse(comparesTwoBareIdentifiers("return this.compare(actual, expected)"))
+  assertFalse(comparesTwoBareIdentifiers("const actual = await this.derive(value, salt)"))
+
+  // And the argument splitter, which the operand count depends on.
+  assertEquals(splitTopLevelArguments("actual, expected"), ["actual", "expected"])
+  assertEquals(
+    splitTopLevelArguments("new Uint8Array(leftDigest), new Uint8Array(rightDigest)"),
+    ["new Uint8Array(leftDigest)", "new Uint8Array(rightDigest)"],
+  )
+  assertEquals(splitTopLevelArguments("a"), ["a"])
+  assertEquals(splitTopLevelArguments(""), [])
+
+  // And the call reader, which has to see through nested calls.
+  assertEquals(compareArguments("return this.compare(actual, expected)"), ["actual", "expected"])
+  assertEquals(
+    compareArguments("return this.compare(new Uint8Array(l), new Uint8Array(r))"),
+    ["new Uint8Array(l)", "new Uint8Array(r)"],
+  )
+  assertEquals(compareArguments("if (a === b) {}"), null)
+})
+
+/**
+ * The argument list of `this.compare(...)`, with nesting respected.
+ *
+ * A regex stopped at the first `)`, so
+ * `this.compare(new Uint8Array(leftDigest), new Uint8Array(rightDigest))` yielded one
+ * argument and the assertion below failed on correct code. Scanning with a depth
+ * counter is the only reliable way to read a call whose arguments contain calls.
+ */
+function compareArguments(body: string): string[] | null {
+  const marker = "this.compare("
+  const start = body.indexOf(marker)
+  if (start < 0) {
+    return null
+  }
+  let depth = 0
+  for (let index = start + marker.length - 1; index < body.length; index++) {
+    const character = body[index]
+    if (character === "(") {
+      depth++
+    } else if (character === ")") {
+      depth--
+      if (depth === 0) {
+        return splitTopLevelArguments(body.slice(start + marker.length, index))
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Split a call's argument list on top-level commas only.
+ *
+ * `this.compare(new Uint8Array(leftDigest), new Uint8Array(rightDigest))` has two
+ * arguments, and a plain `split(",")` also splits the ones inside the wrappers — so
+ * a naive count reported one operand and the assertion below failed on correct code.
+ */
+function splitTopLevelArguments(list: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let current = ""
+  for (const character of list) {
+    if (character === "(" || character === "[" || character === "{") {
+      depth++
+    } else if (character === ")" || character === "]" || character === "}") {
+      depth--
+    }
+    if (character === "," && depth === 0) {
+      parts.push(current.trim())
+      current = ""
+      continue
+    }
+    current += character
+  }
+  if (current.trim().length > 0) {
+    parts.push(current.trim())
+  }
+  return parts
 }
 
 /** Derived-key length the tests assert on, matching `DEFAULT_HASH_KEY_BYTES`. */
@@ -257,19 +370,66 @@ Deno.test("constantTimeEquals digests both sides before it compares anything", a
   )
 })
 
-Deno.test("the peppered input is length-framed, so a suffix cannot stand in for a pepper", async () => {
-  // The source's `password + pepper` made `("xpe", "pper")` and `("x", "pepper")`
-  // collide, because the boundary between value and pepper was not recoverable.
-  // `len:value:pepper` fixes the boundary, so the same pair no longer collides.
-  const longer = new CryptoContext({ pepper: "pepper", iterations: TEST_ITERATIONS })
-  const shorter = new CryptoContext({ pepper: "pper", iterations: TEST_ITERATIONS })
-  assertFalse(
-    await longer.verify("xpe", await shorter.hash("x")),
-    "a length-framed input cannot collide across a pepper boundary",
+/**
+ * PBKDF2 over an explicit input, with the production parameters.
+ *
+ * Used to show what the *old* framing hashed, so the collision is demonstrated
+ * rather than asserted via a context pair that cannot collide either way.
+ */
+async function deriveWithSalt(value: string, salt: Uint8Array, keyBytes: number): Promise<string> {
+  const encoder = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(value),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
   )
-  // Each context still verifies its own values.
-  assert(await longer.verify("xpe", await longer.hash("xpe")))
-  assert(await shorter.verify("x", await shorter.hash("x")))
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: salt as BufferSource, iterations: TEST_ITERATIONS, hash: "SHA-256" },
+    key,
+    keyBytes * 8,
+  )
+  return Array.from(new Uint8Array(bits)).map((byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+Deno.test("pepper framing cannot be dropped without a collision", async () => {
+  // The pair that actually collides. The old input was `value + pepper`, so
+  // `("", "abc")` and `("a", "bc")` both hashed the bytes `abc` — one credential,
+  // verifiable under two different peppers. A context pair like
+  // `("xpe", "pepper")` versus `("x", "pper")` proves nothing: those two
+  // concatenations differ whether or not the framing exists, so the earlier revision
+  // of this test was vacuous.
+  const salt = new Uint8Array(16).fill(7)
+  const keyBytes = 16
+
+  assertEquals(
+    await deriveWithSalt(`${""}${"abc"}`, salt, keyBytes),
+    await deriveWithSalt(`${"a"}${"bc"}`, salt, keyBytes),
+    "the old concatenation collides on this pair",
+  )
+  assertNotEquals(
+    await deriveWithSalt(`${"".length}:${""}:${"abc"}`, salt, keyBytes),
+    await deriveWithSalt(`${"a".length}:${"a"}:${"bc"}`, salt, keyBytes),
+    "length framing separates the same two boundary cases",
+  )
+
+  // End to end: a credential hashed under one pepper does not verify under another,
+  // and each context still accepts its own.
+  const emptyValue = new CryptoContext({ pepper: "abc", iterations: TEST_ITERATIONS })
+  const shifted = new CryptoContext({ pepper: "bc", iterations: TEST_ITERATIONS })
+  assertFalse(
+    await shifted.verify("a", await emptyValue.hash("")),
+    "a hash from another pepper must not verify",
+  )
+  assert(await emptyValue.verify("", await emptyValue.hash("")))
+  assert(await shifted.verify("a", await shifted.hash("a")))
+
+  // A value whose own text contains the separator still round-trips, so the framing
+  // is unambiguous rather than merely different.
+  const crypto = new CryptoContext({ pepper: TEST_PEPPER, iterations: TEST_ITERATIONS })
+  const awkward = "8:8:test-pepper-not-real"
+  assert(await crypto.verify(awkward, await crypto.hash(awkward)))
 })
 
 Deno.test("every failure path is silent about the secret", async () => {
@@ -395,18 +555,44 @@ Deno.test("the seam cannot be satisfied by calling the comparator and ignoring i
 })
 
 Deno.test("no secret is compared outside the one comparator", async () => {
-  // Source-level assertion, and legitimately so: the property is *which operator
-  // the verify paths use*, and no runtime check can observe that an equivalent
-  // substitution happened — that was the gap a mutation on `timingSafeEqual`
-  // exposed. Both verify bodies are read from disk and asserted to end in a
-  // comparator call with no inline equality operator of their own.
+  // The property is *which comparison the verify paths use*, and no runtime check can
+  // observe that an equivalent substitution happened — that was the gap a mutation on
+  // `timingSafeEqual` exposed. Asserted from the source, read off disk:
+  //
+  //  1. the comparison goes through `this.compare(`, and its result is returned, so
+  //     a call whose answer is discarded is not mistaken for a comparison;
+  //  2. it is called with exactly two operands, neither of them `undefined`, and no
+  //     local captures the result of a `this.compare(` call for use elsewhere;
+  //  3. no two *bare* identifiers are compared with an equality operator in the body.
+  //
+  // Assertion 3 is weaker than it reads, and an earlier revision of this test
+  // overclaimed that it was "mutation-proven" for every operator shape. It cannot see
+  // a comparison reached through an attribute (`actual[0] === expected[0]`) or against
+  // a literal (`actual[0] === 0`), and it deliberately does not flag the shape guards
+  // `verify` needs (`if (separator === stored.length - 1)`), because flagging those
+  // reddens on correct code. It is not a proof that no comparison was substituted; it
+  // narrows the one-line forms. The behavioural proof is the comparator seam above.
   const source = await Deno.readTextFile(new URL("./crypto.ts", import.meta.url))
   for (const name of ["verify", "constantTimeEquals"]) {
     const body = methodBody(source, name)
-    assertFalse(hasEqualityOperator(body), `CryptoContext.${name} must not compare inline`)
+    const operands = compareArguments(body)
+    assert(operands, `CryptoContext.${name} must compare through this.compare`)
     assert(
-      body.includes("this.compare("),
-      `CryptoContext.${name} must route its comparison through this.compare`,
+      /return\s+this\.compare\(/.test(body),
+      `CryptoContext.${name} must return the comparison result, not discard it`,
+    )
+    assertEquals(operands.length, 2, `CryptoContext.${name} must compare exactly two operands`)
+    assertFalse(
+      operands.includes("undefined"),
+      `CryptoContext.${name} must not compare a computed value against undefined`,
+    )
+    assertFalse(
+      comparesTwoBareIdentifiers(body),
+      `CryptoContext.${name} must not compare two identifiers with an equality operator`,
+    )
+    assertFalse(
+      new RegExp(`const\\s+\\w+\\s*=\\s*(await\\s+)?this\\.compare\\(`).test(body),
+      `CryptoContext.${name} must not stash the comparison result in a local`,
     )
   }
 
@@ -425,10 +611,7 @@ Deno.test("no secret is compared outside the one comparator", async () => {
     1,
     "timingSafeEqual must be referenced from exactly one file, the comparator default",
   )
-  assert(
-    referencing[0].includes("timingSafeBytesComparator"),
-    "and that reference must be the exported comparator default",
-  )
+  assert(referencing[0].includes("timingSafeBytesComparator"))
 })
 
 /**

@@ -49,6 +49,7 @@ const FACEBOOK: OAuth2InstanceOptions = {
   authorizeUrl: "https://www.facebook.example.test/v16.0/dialog/oauth",
   tokenUrl: "https://graph.example.test/v16.0/oauth/access_token",
   userInfoUrl: "https://graph.example.test/me",
+  userInfoParams: { fields: "id,name,first_name,last_name,picture,email" },
   scope: "email,public_profile",
   clientId: "test-app-id-not-real",
   clientSecret: "test-app-secret-not-real",
@@ -143,14 +144,43 @@ Deno.test("drives a whole OAuth2 signup with a fake sink and a fake cookie jar",
   assertEquals(everything.key.kind, KeyKind.OAuth2)
   assertEquals(everything.key.secret, "google-subject-1")
   assertEquals(everything.session.userId, everything.user.id)
-  // The session went to the sink and nowhere else: no cookie was written by the
-  // provider, and the state cookie was cleared. Asserting the jar is empty catches
-  // the source's shape directly — `google.ts:195,226,265` called
-  // `setSession(cookies, session)`, which would leave a session cookie here.
+  // The provider handed the session back rather than writing it anywhere: no cookie
+  // was written and the sink was not called from inside the provider. Asserting the
+  // jar is empty catches the source's shape directly — `google.ts:195,226,265`
+  // called `setSession(cookies, session)`, which would leave a session cookie here.
+  //
+  // The sink being empty is the *correct* observation, not a contradiction: a
+  // provider returns `Everything` and the caller writes the cookie. That the sink
+  // works at all is asserted separately, in "a transport can write the session the
+  // provider returned".
   assertEquals(auth.sink.sessions.length, 0, "the provider must not call the sink itself")
   assertEquals(jar.all(), {}, "the provider must not write a session cookie")
   // The exact "transport in the provider" bug, asserted as an absent call path.
   assertFalse(auth.http.requests.some((request) => request.url.includes("app.example.test")))
+})
+
+Deno.test("a transport can write the session the provider returned", async () => {
+  // `SessionSink` is the interface that replaces the source's in-provider
+  // `setSession(cookies, ...)` call, and until now nothing exercised it: the test
+  // above pins it *empty*. This is what a transport does with `Everything`.
+  const auth = oauthAuth({ profile: { sub: "google-subject-sink", email: "user@example.com" } })
+  const { state, jar } = startFlow(auth)
+  const everything = await auth.auth.oauth2.google.check("auth-code", state, jar)
+
+  const idToken = auth.sink.getIdToken(everything.session)
+  auth.sink.setSession(everything.session)
+
+  assertEquals(auth.sink.sessions.length, 1)
+  assertEquals(auth.sink.sessions[0].id, everything.session.id)
+  assertEquals(idToken, `${everything.session.id}:${everything.session.token}`)
+  // The cookie value the sink produced actually validates, which is the property a
+  // cookie is for.
+  const validated = await auth.auth.session.validate(idToken)
+  assert(
+    validated,
+    "the session the provider returned must validate through the sink's cookie value",
+  )
+  assertEquals(validated.id, everything.session.id)
 })
 
 Deno.test("makes the token and userinfo requests it was configured with", async () => {
@@ -233,6 +263,34 @@ Deno.test("rejects a userinfo response with no subject", async () => {
   const auth = oauthAuth({ profile: { email: "user@example.com" } })
   const { state, jar } = startFlow(auth)
   await assertRejects(() => auth.auth.oauth2.google.check("code", state, jar), OAuth2FlowError)
+})
+
+Deno.test("the userinfo request carries the configured fields", async () => {
+  // Facebook's Graph API returns only `id` and `name` unless the fields are asked
+  // for, so this query is what makes an email address available at all. It was
+  // dropped in the first draft of this provider — and the fixture ignored queries,
+  // which is why no test noticed.
+  const http = new FakeHttp({ profile: { id: "facebook-id-fields", email: "user@example.com" } })
+  const auth = createTestAuth({ oauth2: { facebook: { ...FACEBOOK, fetch: http.fetch } } })
+  const jar = new FakeCookieJar()
+  new URL(auth.auth.oauth2.facebook.getRedirectURL(jar))
+  const state = jar.get("facebook_state") ?? ""
+  await auth.auth.oauth2.facebook.check("code", state, jar)
+
+  const userinfo = http.requests.find((request) => request.url.includes("/me"))
+  assert(userinfo, "the userinfo request must have been made")
+  const url = new URL(userinfo.url)
+  assertEquals(url.searchParams.get("fields"), "id,name,first_name,last_name,picture,email")
+  assertEquals(url.origin + url.pathname, "https://graph.example.test/me")
+})
+
+Deno.test("a provider with no configured fields sends a clean userinfo request", async () => {
+  const auth = oauthAuth({ profile: { sub: "s", email: "user@example.com" } })
+  const { state, jar } = startFlow(auth)
+  await auth.auth.oauth2.google.check("auth-code", state, jar)
+  const userinfo = auth.http.requests.find((request) => request.url.includes("userinfo"))
+  assert(userinfo)
+  assertEquals(new URL(userinfo.url).search, "", "Google's endpoint takes no query")
 })
 
 Deno.test("reads a form-encoded token response, which is what Facebook sends", async () => {

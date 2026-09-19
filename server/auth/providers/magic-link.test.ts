@@ -116,10 +116,15 @@ Deno.test("verifyToken compares digests of any length and never throws", async (
 })
 
 Deno.test("the comparator digests both sides before comparing, at any length", async () => {
-  // Structural proof on the exact function the provider calls. `constantTimeEquals`
-  // encodes both arguments inside one `Promise.all`, synchronously, before either
-  // digest is awaited: a length-dependent return could not have skipped one, and
-  // `timingSafeEqual` never sees unequal lengths (it throws on them).
+  // Structural proof on `constantTimeEquals` itself, which is **not** on the
+  // magic-link path: this provider compares through `crypto.verify` (see
+  // `verifyToken` above), and `constantTimeEquals` exists for values that are not
+  // hashed at rest — its production call site is the OAuth2 `state` cookie. Its
+  // properties still matter here because the digest step is the same mechanism that
+  // keeps a credential comparison length-independent: it encodes both arguments
+  // inside one `Promise.all`, synchronously, before either digest is awaited, so a
+  // length-dependent return could not have skipped one, and `timingSafeEqual` never
+  // sees unequal lengths (it throws on them).
   const crypto = new CryptoContext({ pepper: TEST_PEPPER, iterations: TEST_ITERATIONS })
   const encoded: string[] = []
   const spy = (value: string, label: string): string => {

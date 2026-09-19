@@ -59,6 +59,8 @@ export interface OAuth2InstanceOptions {
   authorizeUrl: string
   tokenUrl: string
   userInfoUrl: string
+  /** Query parameters the userinfo endpoint needs, e.g. Facebook's `fields`. */
+  userInfoParams?: Record<string, string>
   scope: string
   clientId: string
   clientSecret: string

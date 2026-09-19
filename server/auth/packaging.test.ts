@@ -68,7 +68,11 @@ Deno.test("the shared README has exactly one heading per section", async () => {
 
   const titles = headings.filter((heading) => heading.level === 1)
   assertEquals(titles.length, 1, "exactly one h1: the package title")
-  assert(titles[0].text.startsWith("@ts-libs/server"))
+  // `main` renders the title in code span form: `# \`@ts-libs/server\``.
+  assert(
+    titles[0].text.replaceAll("`", "").startsWith("@ts-libs/server"),
+    `the h1 must name the package, was ${titles[0].text}`,
+  )
 })
 
 Deno.test("the shared README has one table per section, with one header row each", async () => {
@@ -151,20 +155,104 @@ Deno.test("the export map still carries every non-auth entry it inherited", asyn
     "./export-client",
     "./static",
     "./healthcheck",
+    // `#31`'s package, which is why it is *inherited* rather than foreign: `main`
+    // declares it and this branch only has to avoid dropping it.
+    "./storage",
   ]
   const config = await readConfig()
   const missing = expected.filter((key) => !(key in config.exports))
-  assertEquals(missing, [], "a rebase dropped an export another package owns")
+  assertEquals(missing, [], "a rebase dropped an export this branch inherited from main")
+  assertEquals(expected.length, 9, "main declared 9 entries when this branch was cut")
 })
 
-Deno.test("no export is declared for a package this branch does not own", async () => {
-  // `./storage` belongs to `#31`; pre-declaring it here would collide with that PR's
-  // own entry and is exactly what the README's merge-order note warns against.
+Deno.test("no export is declared for a package that is not part of main", async () => {
+  // "Foreign" means a package that exists only in this branch's imagination, so
+  // declaring an export for it would be a dangling promise. `./storage` is not
+  // foreign — `main` declares it and `#31` owns its files, which is why it belongs
+  // in the inherited list above. Getting the distinction backwards reddens on the
+  // correct union resolution, which is how this test first failed.
   const config = await readConfig()
   const foreign = Object.keys(config.exports).filter((key) =>
-    key.startsWith("./storage") || key.startsWith("./kv") || key.startsWith("./db")
+    key.startsWith("./kv") || key.startsWith("./db") || key.startsWith("./platform")
   )
-  assertEquals(foreign, [], "this branch must not declare another package's exports")
+  assertEquals(
+    foreign,
+    [],
+    "this branch must not declare an export for a package that does not exist",
+  )
+})
+
+Deno.test("the package config names this package and starts at 0.1.0", async () => {
+  const config = await readConfig()
+  assertEquals(config.name, "@ts-libs/server")
+  const source = await Deno.readTextFile(CONFIG_PATH)
+  assert(source.includes('"version": "0.1.0"'), "the package version is 0.1.0 until first publish")
+  assertFalse(
+    source.includes('"lint"') || source.includes('"fmt"'),
+    "root config is the single source of truth; a package-level lint/fmt block is a fork",
+  )
+})
+
+Deno.test("every auth module is re-exported by one of the declared subpaths", async () => {
+  // The previous version of this test collected file names into a list and then
+  // asserted something unrelated about `mod.ts`, so it could not fail for the reason
+  // it named. This one checks the property: a module that no declared target
+  // re-exports is either dead or a missing export, and an unpublished module is an
+  // API a reader can see in the source but a caller cannot import.
+  const config = await readConfig()
+  const targets = Object.values(config.exports)
+    .map((target) => target.replace(/^\.\//, ""))
+    .filter((target) => target.startsWith("auth/"))
+  assert(targets.length > 0, "at least one auth subpath must be exported")
+
+  // The re-export graph, starting from the declared entry points.
+  const reachable = new Set<string>()
+  const read = async (path: string): Promise<string> => {
+    try {
+      return await Deno.readTextFile(new URL(`../${path}`, import.meta.url))
+    } catch {
+      return ""
+    }
+  }
+  const walk = async (path: string): Promise<void> => {
+    if (reachable.has(path)) {
+      return
+    }
+    reachable.add(path)
+    // A bare sibling name is relative to the auth directory, which is where every
+    // import in this package resolves; only `../x` leaves it. Recording the
+    // normalised form is what makes the orphan check below see `auth/events.ts`
+    // rather than a name that never matches.
+    const normalised = path.startsWith("auth/") ? path : `auth/${path.replace(/^\.\//, "")}`
+    const source = await read(normalised)
+    for (const match of source.matchAll(/from\s+"(\.{1,2}\/[^"]+)"/g)) {
+      const resolved = new URL(match[1], new URL(`../${normalised}`, import.meta.url))
+      const relative = resolved.pathname.split("/server/")[1]
+      if (relative) {
+        await walk(relative)
+      }
+    }
+  }
+  for (const target of targets) {
+    await walk(target)
+  }
+
+  // This package's own modules only: `server/` also holds `#9`'s and `#31`'s files,
+  // which are reached by their own exports and are not this branch's business.
+  const orphans: string[] = []
+  for await (const entry of Deno.readDir(new URL("./", import.meta.url))) {
+    if (!entry.isFile || !entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) {
+      continue
+    }
+    if (!reachable.has(`auth/${entry.name}`)) {
+      orphans.push(entry.name)
+    }
+  }
+  assertEquals(orphans, [], "these modules are in the tree but no exported subpath reaches them")
+
+  // `mod.ts` specifically: it is the barrel, so it must be the `.` target itself.
+  assert(reachable.has("auth/mod.ts"), "mod.ts must be exported as ./auth")
+  assertEquals(config.exports["./auth"], "./auth/mod.ts")
 })
 
 Deno.test("the package config names this package and starts at 0.1.0", async () => {

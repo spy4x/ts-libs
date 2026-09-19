@@ -20,7 +20,7 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@ts-libs/server/static`            | Static-file serving with a MIME table and path-traversal protection                  |
 | `@ts-libs/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
 | `@ts-libs/server/storage`           | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning |
-| `@ts-libs/server/auth`              | Multi-provider auth (`#6`): see the `server/auth` section below                     |
+| `@ts-libs/server/auth`              | Multi-provider auth (`#6`): see the `server/auth` section below                      |
 
 **Merge order:** the four issues that added files here (`#28`, `#30`, `#35`, `#6`) were cut from
 different points on `main` and each carries the earlier ones, so whoever merges later rebases with a
