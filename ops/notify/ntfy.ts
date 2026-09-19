@@ -173,6 +173,12 @@ const DEFAULT_RETRY: RetryPolicy = {
  *
  * A base URL can carry a token in its path, so the rejection names the shape
  * problem and never the value.
+ *
+ * The caller passes the value it read, **before** the trailing slash is
+ * normalised away: `"https://"` stripped to `"https:"` no longer contains `://`,
+ * so the old test on that substring called it scheme-less, which is the one
+ * thing it is not. The newline that would otherwise become a path separator is
+ * stripped for the same reason.
  */
 const describeUrlShape = (value: string): string => {
   if (value === "") {
@@ -181,7 +187,9 @@ const describeUrlShape = (value: string): string => {
   if (value.includes("://")) {
     return "it has a scheme but no host"
   }
-  return "no absolute scheme"
+  return /^[A-Za-z][A-Za-z0-9+.-]*:(\/|$)/.test(value.replace(/[\t\n\r]/g, ""))
+    ? "it has a scheme but no absolute URL"
+    : "no absolute scheme"
 }
 
 export const ntfyConfigFromEnv = (
@@ -214,7 +222,13 @@ export class NtfyClient {
   private readonly gate: NotificationSeverity
 
   constructor(config: NtfyClientConfig, options: NtfyClientOptions = {}) {
-    const baseUrl = config.baseUrl?.trim().replace(/\/+$/, "") ?? ""
+    // The trailing slash is dropped **after** the guard, not before it: the
+    // guard's rejection text describes the value the caller supplied, and
+    // stripping first turned `"https://"` into `"https:"` — a shape the message
+    // then described wrongly. Nothing about which values are refused changes,
+    // because `URL.canParse` is what refuses them.
+    const rawBaseUrl = config.baseUrl?.trim() ?? ""
+    const baseUrl = rawBaseUrl.replace(/\/+$/, "")
     const topic = config.topic?.trim() ?? ""
     if (baseUrl === "") {
       throw new Error(
@@ -232,7 +246,7 @@ export class NtfyClient {
     // misconfiguration that looked like a provider outage.
     if (!URL.canParse(baseUrl)) {
       throw new Error(
-        `NtfyClient: baseUrl is not a valid absolute URL: ${describeUrlShape(baseUrl)}`,
+        `NtfyClient: baseUrl is not a valid absolute URL: ${describeUrlShape(rawBaseUrl)}`,
       )
     }
     this.config = { ...config, baseUrl, topic }

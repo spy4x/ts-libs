@@ -142,6 +142,37 @@ describe("NtfyClient construction", () => {
     }
   })
 
+  it("describes a slash-only URL as host-less, not as scheme-less", () => {
+    // `"https://"` is one character away from `"https:"` after the trailing slash
+    // is normalised away, so the older description asked whether the normalised
+    // value contains `://`, found it does not, and called a URL with a scheme
+    // "scheme-less" — the one thing it is not. The description now reads the
+    // value the caller passed. Which values are refused is unchanged:
+    // `URL.canParse` decides that, and it rejects the stripped form too.
+    const shapeFor = (baseUrl: string): string => {
+      try {
+        new NtfyClient({ baseUrl, topic: TOPIC })
+        return "did not throw"
+      } catch (cause) {
+        return cause instanceof Error ? cause.message : String(cause)
+      }
+    }
+    for (const baseUrl of ["https://", "https:///"]) {
+      expect({ baseUrl, shape: shapeFor(baseUrl) }).toEqual({
+        baseUrl,
+        shape: expect.stringContaining("it has a scheme but no host"),
+      })
+      expect(URL.canParse(baseUrl)).toBe(false)
+    }
+    // A scheme with no `//` at all reaches the third branch, which no other
+    // input reaches — so the message that used to cover everything is still
+    // reachable and still names the shape.
+    expect(shapeFor("https:")).toContain("it has a scheme but no absolute URL")
+    // A value with no scheme at all still says so.
+    expect(shapeFor("ntfy.example.invalid")).toContain("no absolute scheme")
+    expect(shapeFor("//x")).toContain("no absolute scheme")
+  })
+
   it("still accepts a well-formed base URL, so the guard is not unconditional", () => {
     expect(() => new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC })).not.toThrow()
     expect(() => new NtfyClient({ baseUrl: `${BASE_URL}/`, topic: TOPIC })).not.toThrow()
