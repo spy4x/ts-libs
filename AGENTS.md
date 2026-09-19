@@ -22,6 +22,7 @@ exactly one top-level directory.
 | `caldav/`       | ical, xml, client, query                                                |
 | `email/`        | smtp transport, dkim-verify                                             |
 | `ops/`          | backup contract, offline-backup, deploy, age64 env, type-check          |
+| `validation/`   | arktype validate helpers, validation model                              |
 
 ## Adding a package
 
