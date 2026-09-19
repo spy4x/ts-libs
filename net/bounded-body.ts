@@ -128,7 +128,10 @@ async function* readBoundedChunks(
   /** `Promise.race` against a per-chunk timer; the timer covers one read only. */
   const readNext = (): Promise<ReadableStreamReadResult<Uint8Array>> => {
     if (timeoutMs <= 0) return reader.read()
-    let timer: number | undefined
+    // `ReturnType<typeof setTimeout>`, not `number`: the id is a `number` under
+    // Deno's typings and a `Timeout` object under Node's, and one import of a
+    // `node:` builtin is enough to pull the latter into the same compilation.
+    let timer: ReturnType<typeof setTimeout> | undefined
     return Promise.race([
       reader.read(),
       new Promise<never>((_resolve, reject) => {

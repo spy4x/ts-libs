@@ -298,4 +298,53 @@ describe("defaults", () => {
     )
     assertEquals(Date.now() - started < 5000, true)
   })
+
+  it("clears the stall timer once a read finishes", async () => {
+    // A direct assertion, not the per-test `sanitizeResources` flag the server
+    // suite relies on: that flag is a Deno-test-only guard, and it is the whole
+    // of the evidence there.
+    //
+    // The spies wrap the platform timer pair instead of comparing handles: Deno
+    // hands out a fresh `Timeout` object per `setTimeout` call, so handle
+    // equality is not a portable identity. Everything is typed off
+    // `typeof setTimeout`, which is the `node:`-safe spelling.
+    type TimerHandle = ReturnType<typeof setTimeout>
+    const realSet = setTimeout
+    const realClear = clearTimeout
+    const setDescriptor = Object.getOwnPropertyDescriptor(globalThis, "setTimeout")
+    const clearDescriptor = Object.getOwnPropertyDescriptor(globalThis, "clearTimeout")
+    const armedBySpy = new Set<TimerHandle>()
+    const clearedBySpy = new Set<TimerHandle>()
+    // Redefined rather than reassigned: assigning a global is a lint error.
+    Object.defineProperty(globalThis, "setTimeout", {
+      value: ((...args: Parameters<typeof setTimeout>) => {
+        const handle = realSet(...args)
+        armedBySpy.add(handle)
+        return handle
+      }) as typeof setTimeout,
+      configurable: true,
+    })
+    Object.defineProperty(globalThis, "clearTimeout", {
+      value: ((handle?: TimerHandle) => {
+        if (handle !== undefined) clearedBySpy.add(handle)
+        return realClear(handle)
+      }) as typeof clearTimeout,
+      configurable: true,
+    })
+    // Armed through the real pair so it is in neither set, which gives the
+    // assertion below a line the timer-leak mutation cannot touch.
+    const probe = realSet(() => {}, 30_000)
+
+    try {
+      assertEquals(await readBoundedText(response("ok"), { maxBytes: 64, timeoutMs: 30_000 }), "ok")
+      const leaked = [...armedBySpy].filter((handle) => !clearedBySpy.has(handle))
+      // Removing the `.finally(clearTimeout)` in `readNext` leaves the budget
+      // timer armed past the read, so it lands in `leaked` and this reddens.
+      assertEquals(leaked.length, 0, `${leaked.length} timer(s) outlived the read`)
+    } finally {
+      realClear(probe)
+      Object.defineProperty(globalThis, "setTimeout", setDescriptor!)
+      Object.defineProperty(globalThis, "clearTimeout", clearDescriptor!)
+    }
+  })
 })
