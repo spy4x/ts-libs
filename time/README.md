@@ -1,19 +1,43 @@
 # `@ts-libs/time`
 
-Time primitives with no application domain attached. Today that is one module:
-[`tz.ts`](./tz.ts) — IANA timezone math on `Intl`, zero runtime dependencies.
+Time and calendar primitives with no application domain attached. IANA timezone math on `Intl`,
+plus an RFC 5545 iCalendar writer. Zero runtime dependencies.
+
+| Module          | Exports                                                                 |
+| --------------- | ----------------------------------------------------------------------- |
+| `time/tz`       | IANA zone helpers: `zonedDateTime`, `formatInstantLong`, `validTimeZoneOr`, `addDays`, … |
+| `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer         |
+| `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …      |
 
 ```ts
-import { formatDateTimeLong, validTimeZoneOr, zonedDateTime } from "@ts-libs/time/tz"
+import { formatDateTimeLong, zonedDateTime } from "@ts-libs/time/tz"
 
 // A stored booking: a wall clock, the zone it was made in, the guest's zone.
 const instant = zonedDateTime("2026-08-28", "10:00", "Europe/Berlin")
 formatDateTimeLong("2026-08-28", "10:00", "Europe/Berlin") // "Friday, 28 August 2026 at 10:00"
 ```
 
+```ts
+import { generateIcs, IcsEventStatus } from "@ts-libs/time/ics"
+import { zonedDateTime } from "@ts-libs/time/tz"
+
+const start = zonedDateTime("2026-08-28", "10:00", "Europe/Berlin")
+const ics = generateIcs(
+  {
+    uid: "01HXYZBK8M@calendar.example.com",
+    start,
+    end: new Date(start.getTime() + 30 * 60_000),
+    summary: "Meeting with Jane Doe",
+    organizer: { email: "jane@example.com", name: "Jane Doe" },
+    attendees: [{ email: "client@example.com", name: "Client", rsvp: true }],
+  },
+  { prodid: "-//example.com//booking//EN", dtstamp: new Date() },
+)
+```
+
 ## Why `Intl` and not a date library
 
-Everything here is built on `Intl.DateTimeFormat`. Three consequences:
+Everything in `time/tz` is built on `Intl.DateTimeFormat`. Three consequences:
 
 - **Zero dependencies, zero bundled tzdata.** `Intl` reads the runtime's own
   tzdata, which is already installed, already patched when a government changes
@@ -103,22 +127,99 @@ at the wall clock treated as UTC — an instant one whole offset away from the
 answer — and was an hour late or early for the weeks around a transition. See
 the PR body for the file and line of each such defect.
 
+## Timezone contract
+
+`generateIcs` takes **absolute instants** (`Date`) and always writes UTC
+(`DTSTART:20260828T080000Z`), never a local wall clock and never a `TZID`. It does not import
+`time/tz.ts` and never reads the host `TZ`.
+
+Converting a wall-clock date + time + IANA zone into an instant is the caller's one line:
+`zonedDateTime("2026-08-28", "10:00", "Europe/Berlin")`. Keeping that out of the writer is what
+makes the writer dependency-free and testable — UTC output is an absolute instant, so every client
+renders it in the viewer's own zone anyway, and there is no `VTIMEZONE` component to get wrong.
+
+Because `dtstamp` is a required option rather than `new Date()` read internally, two calls with the
+same arguments produce byte-identical documents.
+
+```ts
+generateIcs(event, { prodid, dtstamp })
+```
+
+**The trap is on the caller's side, not in this API.** `start` and `end` must be `Date` objects — a
+string throws (`TypeError: event.start.getTime is not a function`), so nothing is silently converted
+for you. What _is_ silent is how you make that `Date`: `new Date("2026-08-28T10:00:00")` — no offset —
+is parsed by JavaScript as **host-local**, so the same call means different instants on a laptop and
+in CI. Always name the zone explicitly, with `zonedDateTime(date, time, zone)` from `time/tz` or a
+`Z`-suffixed ISO string:
+
+```ts
+// Wrong: host-local, differs per machine.
+generateIcs({ ...event, start: new Date("2026-08-28T10:00:00") }, options)
+// Right: the wall clock is tied to a zone, or the instant is given outright.
+generateIcs({ ...event, start: zonedDateTime("2026-08-28", "10:00", "Europe/Berlin") }, options)
+```
+
 ## Not in scope
 
-- **Parsing.** Input is `YYYY-MM-DD` and `HH:MM`, and anything else throws a
-  `RangeError`. No ISO-8601 parser, no relative-date parser, no clock library.
-- **Durations and arithmetic in the host zone.** `addDays` moves a calendar
-  date. Elapsed-time math belongs on epoch milliseconds where no zone can
-  interfere.
-- **Recurrence rules (RRULE), calendars, iCal or CalDAV.** Those are separate
-  packages; day-of-week and day-addition are the only pieces they need from here.
-- **Sub-minute offsets.** `tzOffsetMinutes` is minute resolution, so historical
-  LMT offsets (which carry seconds) are truncated. A scheduling library does not
-  need them.
-- **Validation of anything but a zone name.** `isValidTimeZone` answers whether
-  the runtime knows the zone; it does not check that a date and time exist.
-- **Localisation of the locale.** The locale tag is fixed to `"en-GB"` inside
-  each formatter. `Intl` makes changing it trivial; no API exposes it yet
-  because nothing consumes a second locale.
-- **`Date` objects as the public currency for wall clocks.** They cannot
-  represent one, which is the whole point.
+**Across the package.** Inputs are typed values, and anything outside the type throws rather than
+being coerced: `generateIcs` rejects a non-`Date` instant, a missing `uid`, a `sequence` that is not
+a non-negative integer and an empty mail address. There is no silent conversion anywhere in `time/`.
+
+**`time/ics` — calendar features.** Not implemented, and not planned here. Do not assume otherwise:
+
+- **No recurrence.** No `RRULE`, no `EXDATE`, no `RDATE`, no `RECURRENCE-ID`. One VEVENT, one
+  occurrence.
+- **No `VTIMEZONE` and no `TZID`.** All times are UTC with a `Z` suffix.
+- **No alarms and no explicit duration.** No `VALARM`, no `DURATION` (`DTEND` is always written).
+- **No other components.** No VTODO, no VJOURNAL, no VFREEBUSY, no multiple VEVENTs in one
+  VCALENDAR.
+- **No parsing of a calendar.** The writer is write-only, and no ISO-8601 or relative-date parser
+  feeds it. Reading an existing calendar is `caldav/` (#13).
+- **No CalDAV wire concerns.** `RELATED-TO`, `ETag`/`If-Match` and HTTP transport belong to `#13`.
+- **No product domain.** No bookings, hosts, guests, availability, rate limits or cancel tokens —
+  callers map their own types onto `IcsEvent`. `meetingSummary()` and the `Booking`/`Config`
+  coupling from the source are deliberately not ported; a human-readable summary of an instant is
+  `formatInstantLong(start, zone)` from `time/tz`, not a calendar concern.
+
+**`time/tz` — timezone features.**
+
+- **Durations and arithmetic in the host zone.** `addDays` moves a calendar date. Elapsed-time math
+  belongs on epoch milliseconds where no zone can interfere.
+- **Sub-minute offsets.** `tzOffsetMinutes` is minute resolution, so historical LMT offsets (which
+  carry seconds) are truncated. A scheduling library does not need them.
+- **Validation of anything but a zone name.** `isValidTimeZone` answers whether the runtime knows the
+  zone; it does not check that a date and time exist.
+- **Localisation of the locale.** The locale tag is fixed to `"en-GB"` inside each formatter. `Intl`
+  makes changing it trivial; no API exposes it yet because nothing consumes a second locale.
+- **`Date` objects as the public currency for wall clocks.** They cannot represent one, which is the
+  whole point.
+
+## Design notes
+
+### `ics-core` is shared with `#13`
+
+`time/ics-core.ts` holds the byte-level RFC 5545 primitives: 75-octet folding, unfolding, TEXT
+escaping, RFC 6868 parameter escaping, control-character stripping and the UTC DATE-TIME format.
+`time/ics.ts` builds VCALENDAR/VEVENT on top of it. The CalDAV work in `#13` imports the same
+module (`@ts-libs/time/ics-core`) instead of carrying a third copy — `caldav-mcp`'s `ical.ts`
+currently slices folded lines by character (`ical.ts:10-19`), which splits multi-byte UTF-8.
+
+### Folding
+
+`foldLine` folds at 75 **octets** *excluding* the CRLF line break, counting the one-octet
+continuation space toward the limit (so continuation lines carry at most 74 octets of content). It
+iterates by code point and measures each with `TextEncoder`, so a multi-byte sequence is never split.
+`String.prototype.length` is never consulted: 25 CJK code points are 25 characters but 75 octets.
+
+Control characters are stripped before escaping; `HTAB` is the one C0 character kept in a TEXT
+value, and a mail address is stripped harder (no C0 at all) because it sits in the property _value_
+position where no escaping helper applies.
+
+## Tests
+
+```bash
+deno test time/
+```
+
+Colocated `*.test.ts`, deterministic: explicit UTC instants, explicit `dtstamp`, explicit IANA
+zones, no reliance on the host clock or `TZ`.
