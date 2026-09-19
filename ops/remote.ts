@@ -202,7 +202,7 @@ export interface RemoteCommandOptions {
   logger?: Logger
   /**
    * Extra `ssh` flags, e.g. `["-p", "2222"]`, `["-o", "BatchMode=yes"]`. Validated
-   * by {@link assertSshOption}: these are the caller's own flags, so they are
+   * by {@link assertSshOptions}: these are the caller's own flags, so they are
    * trusted to be flags — a value that is not one is a bug in the caller, not
    * input to defend against.
    */
