@@ -37,7 +37,6 @@ Deno.test("syncs the source as argv, honouring .dockerignore from the sender", (
   assertEquals(argv, [
     "rsync",
     "-avz",
-    "--info=name1",
     "--delete",
     "--exclude",
     ".git/",

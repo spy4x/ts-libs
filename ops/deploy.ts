@@ -121,7 +121,7 @@ export function buildRsyncSourceArgs(options: RsyncSourceOptions): string[] {
   if (options.source.trim() === "") throw new CommandError("rsync source must not be blank")
   if (options.target.trim() === "") throw new CommandError("rsync target must not be blank")
 
-  const argv = ["rsync", "-avz", "--info=name1"]
+  const argv = ["rsync", "-avz"]
   if (options.delete ?? true) argv.push("--delete")
   for (const exclude of options.excludes ?? DEFAULT_SYNC_EXCLUDES) {
     argv.push("--exclude", exclude)
