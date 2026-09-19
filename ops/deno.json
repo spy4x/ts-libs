@@ -1,0 +1,9 @@
+{
+  "name": "@ts-libs/ops",
+  "version": "0.1.0",
+  "exports": {
+    "./notify": "./notify/mod.ts",
+    "./notify/healthchecks": "./notify/healthchecks.ts",
+    "./notify/ntfy": "./notify/ntfy.ts"
+  }
+}
