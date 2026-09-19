@@ -109,10 +109,12 @@ These are the load-bearing bits; each one is a test, and each was a source bug.
   an attacker still gets to answer is not a safe outcome. Three entry points, three refusals: a
   cross-origin `calendar-home-set` yields a warning and the `/username/` fallback; a cross-origin
   calendar collection in the calendars PROPFIND yields a warning and is skipped, so it never reaches
-  the `REPORT` the engine would otherwise issue; a `URL:` property inside `calendar-data` is ignored
-  and reported in `parseTodos`/`parseEvents` `issues`, so `Todo.url` and `Event.url` stay on the
-  calendar's origin. The check covers absolute URLs, protocol-relative `//host/path`, a same-host URL
-  on another port, a different scheme, and a `host@attacker` userinfo lookalike.
+  the `REPORT` the engine would otherwise issue — the warning reaches a `queryTodos`/`queryEvents`
+  caller in `output.warnings`, not only in `listCalendars()`; a `URL:` property inside `calendar-data`
+  is refused unless it can be shown to resolve onto the calendar's own origin, and is reported in
+  `parseTodos`/`parseEvents` `issues` (see the resource-URL rule below). The check covers absolute
+  URLs, protocol-relative `//host/path`, a same-host URL on another port, a different scheme, and a
+  `host@attacker` userinfo lookalike.
   A redirect from the configured origin to another one happens inside the transport, where this gate
   cannot see it: `fetch` deletes `Authorization` on a cross-origin redirect (Fetch §4.4), and a
   caller-supplied transport must do the same. This bounds what a _server_ can redirect a credential
@@ -138,13 +140,25 @@ holding no tasks all arrived as "no tasks". Here:
 
 - a calendar whose REPORT fails is listed in `output.failures` with its error, while the other
   calendars' tasks are still returned;
+- a calendar that answered **partly** — a `207` where some members carried their own failure status —
+  is also listed in `output.failures`, and `failure.resources` names the hrefs that are missing, so a
+  short list of tasks is never mistaken for a complete one;
+- a collection `CalDavClient` refused to return at all (it was named off the configured origin) has no
+  failure to report and never appears in `failures`; the reason travels in `output.warnings` on the
+  query result, which is what lets a caller tell "your only calendar was skipped" from "you have no
+  tasks" — both are otherwise `{ total: 0 }`;
 - the envelope fails only when _every_ calendar failed — and still carries the partial aggregate;
 - `getTodo`/`getEvent` return `ok(null)` for a genuine `404` and a `TRANSPORT`/`PARSE` failure for
   anything else;
 - a malformed iCalendar document returns a `PARSE` failure rather than throwing out of the parser;
 - a `DUE` that is present but unreadable is reported in `issues`, so it is not confused with a task
   that has no due date;
-- a Radicale `/username/` fallback is reported in `warnings`, with the failure that triggered it.
+- a Radicale `/username/` fallback is reported in `warnings`, with the failure that triggered it —
+  on `listCalendars()`, and on `QueryEngine.queryTodos`/`queryEvents` through `output.warnings`.
+
+`output.warnings` is deliberately on the **output**, not only on the envelope: a partial envelope
+(`{ success: false, output }`) carries no `warnings` of its own, and a skipped collection is exactly
+the case a caller must still be able to see when everything else failed.
 
 ## Injected transport and clock
 
@@ -209,10 +223,31 @@ origin, and a caller that needs two must build two clients.
   answer, which is a different contract.
 - `PRODID` defaults to `-//ts-libs//caldav//EN` and is overridable, where the source hard-coded it.
 - **DEL (`#x7F`) is dropped by `escapeXml` and substituted by `decodeXmlEntities`, though XML 1.0
-  gives it a representation** (`Char` includes `[#x20-#xD7FF]`). The pattern that treats it as illegal
-  also covers values that genuinely are, and the behaviour is pinned as it stands; the documentation
-  in `xml.ts` says so. Parked, not fixed.
-- **A `URL:` property the server named off the calendar's origin is ignored**, and the resource URL is
-  derived from the calendar instead, so `Todo.url`/`Event.url` are always on the origin of the
-  calendar they came from. `parseTodos`/`parseEvents` report the refusal in `issues`;
-  `QueryEngine` does not surface `issues`, so a caller of `queryTodos` sees only the derived URL.
+  gives it a representation** (`Char` includes `[#x20-#xD7FF]`, and `isXmlChar(0x7F)` is `true`). The
+  pattern that treats it as illegal also covers values that genuinely are. This is a **deviation, not
+  a consequence of the `Char` rule**, and it is documented as one in `xml.ts` and pinned as one in
+  `xml.test.ts` — the earlier pin listed `&#x7F;` among the `Char` violations, which was the wrong
+  premise. The behaviour is unchanged. Parked, not fixed.
+- **The two `.ics` heuristics mis-locate a resource whose path ends in `.ics/` or in a dotless
+  segment.** `query.ts` walks back one path segment when the last one ends in `.ics`, to turn a
+  resource URL into its collection URL (`collectionUrlOfResource`) and a task's `calendarName`
+  (`calendarNameFromUrl`). The walk is right for `…/tasks/a.ics`, and wrong for
+  `…/tasks/a.ics/` → `…/tasks/a.ics/t1.ics` and for `…/tasks/note` → `…/tasks/note/t1.ics`: the
+  derived resource URL addresses a collection-shaped path, not a resource. Nothing in the CalDAV
+  wire format distinguishes the two shapes without asking the server, so the heuristic stays and is
+  recorded here. Measured, not fixed; a caller whose server uses those shapes must pass explicit URLs.
+- **A response-level `200` beside a group-level `404` silently drops that member.**
+  `propstatAnswering` falls back to the whole `<response>` when no _successful_ group answers for the
+  property, and a member whose `calendar-data` group answered `404` under a response-level `200` is
+  neither read nor reported — it leaves `readReportResources` with no entry in `resources` **or**
+  `failures`. Group-level failures _are_ reported (a `207` member whose own group answers
+  `404`/`403`/`500` appears in `failures`); this is the one shape that still goes quiet, and it is
+  bounded to a member the server answered nothing usable for. Measured, not fixed.
+- **A `URL:` property the server named off the calendar's origin is refused**, and the resource URL is
+  derived from the calendar instead. The guarantee is exactly this: **every returned `Todo.url` /
+  `Event.url` is either an absolute URL on the calendar's own origin, or a rooted path that resolves
+  to it** — never a reference that resolves to another origin. `//attacker.example.net/u.ics` is a
+  network-path reference, not a rooted path, and is refused by resolving it and comparing the origin;
+  `/dav/u.ics` is kept because it resolves onto the calendar's origin. `parseTodos`/`parseEvents`
+  report every refusal in `issues`; `QueryEngine` does not surface `issues`, so a caller of
+  `queryTodos` sees only the derived URL.

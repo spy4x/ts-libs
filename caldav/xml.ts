@@ -109,11 +109,12 @@ export function isXmlChar(code: number): boolean {
  * **DEL does not belong to that set, and the pattern includes it anyway.** `#x7F`
  * is inside `Char` (`[#x20-#xD7FF]`), so XML 1.0 gives it a representation: the
  * treatment below is a deliberate deviation, not a consequence of the `Char`
- * rule. `escapeXml("a\u007Fb")` is `"ab"` and `decodeXmlEntities("&#x7F;")` is
- * `U+FFFD` — a legal character dropped or substituted with nothing in the result
- * to say so. Behaviour is pinned as it stands (see the `&#x7F;` case in
- * `xml.test.ts`, which rests on the same mistaken premise); correcting it is a
- * parked follow-up, not part of the credential work.
+ * rule. {@link isXmlChar} says so — `isXmlChar(0x7F)` is `true` — while
+ * `escapeXml("a\u007Fb")` is `"ab"` and `decodeXmlEntities("&#x7F;")` is
+ * `U+FFFD`: a legal character dropped or substituted with nothing in the result
+ * to say so. Behaviour is pinned as it stands, and `xml.test.ts` pins it as the
+ * **deviation** it is rather than as a `Char` violation; correcting the
+ * behaviour is a parked follow-up, recorded in `caldav/README.md`.
  */
 // The control-character range is the point of this pattern, as in `net/url-shape`.
 // deno-lint-ignore no-control-regex
