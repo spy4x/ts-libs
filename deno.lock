@@ -23,6 +23,7 @@
     "jsr:@std/uuid@1.1.1": "1.1.1",
     "jsr:@std/yaml@1.2.0": "1.2.0",
     "npm:arktype@2.2.3": "2.2.3",
+    "npm:nodemailer@10.0.10": "10.0.10",
     "npm:postgres@3.4.7": "3.4.7"
   },
   "jsr": {
@@ -128,6 +129,9 @@
         "arkregex"
       ]
     },
+    "nodemailer@10.0.10": {
+      "integrity": "sha512-He9XskOFms62SyAKkLu8CcGcYHAo+BSHSsORI8s4PJH8qZgZY4L4lDfvyN0twvmbpyG+eGrxpyBlskj9d9rJ8A=="
+    },
     "postgres@3.4.7": {
       "integrity": "sha512-Jtc2612XINuBjIl/QTWsV5UvE8UHuNblcO3vVADSrKsrc6RqGX6lOW1cEo3CM2v0XG4Nat8nI+YM7/f26VxXLw=="
     }
@@ -149,6 +153,13 @@
       "jsr:@std/yaml@1.2.0",
       "npm:arktype@2.2.3",
       "npm:postgres@3.4.7"
-    ]
+    ],
+    "members": {
+      "email": {
+        "dependencies": [
+          "npm:nodemailer@10.0.10"
+        ]
+      }
+    }
   }
 }
