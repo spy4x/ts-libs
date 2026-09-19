@@ -4,10 +4,18 @@ import {
   PayloadTooLargeError as NetPayloadTooLargeError,
 } from "@ts-libs/net/bounded-body"
 import {
+  // `BodySource` and `ReadBoundedBodyOptions` are imported for the compile-time
+  // pin only. A type has no runtime presence, so the `in surface` test below can
+  // never cover one — and nothing else in-repo consumes these two, so dropping
+  // either from the named re-export would leave every suite green while breaking
+  // `import type` for a downstream caller. Importing them makes `deno check` the
+  // guard: unexported, they fail here as TS2305.
+  type BodySource,
   type BoundedBodyTimeout,
   parseBoundedFormData,
   PayloadTooLargeError,
   readBoundedBody,
+  type ReadBoundedBodyOptions,
   readBoundedText,
   readContentLength,
 } from "./bounded-body.ts"
@@ -480,6 +488,17 @@ Deno.test("the entry point republishes the promised surface and nothing else", a
   ) {
     assertStrictEquals(unpromised in surface, false, `${unpromised} leaked into the surface`)
   }
+})
+
+Deno.test("the re-exported types still name the canonical shapes", () => {
+  // Assignments, not value assertions: `BodySource` and `ReadBoundedBodyOptions`
+  // are the only type-only members of the re-export surface, and the preserved
+  // `import type` above is the whole of the guard that they survive it.
+  const source: BodySource = new Request(ORIGIN)
+  const options: ReadBoundedBodyOptions = { maxBytes: 5 }
+
+  assertEquals(source.body, null)
+  assertEquals(options.maxBytes, 5)
 })
 
 Deno.test("BoundedBodyTimeout still types the stall budget", async () => {
