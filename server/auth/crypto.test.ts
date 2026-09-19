@@ -450,6 +450,16 @@ Deno.test("verify rejects a malformed key that decodes to a one-byte zero", asyn
   // `0x00`, so the stored key became a single zero byte while `expected.length`
   // stayed 1. Any credential whose one-byte PBKDF2 output is zero then verified.
   // That is an authentication bypass: roughly one credential in 256.
+  //
+  // Why the old suite missed it and why CI flaked. `verify is not fooled by a
+  // truncated stored hash` asserted the *right* answer on `${salt}:00`, a one-byte
+  // row whose hex is *valid*: its expected key decoded to exactly one zero byte.
+  // That assertion therefore held only when `crypto.hash("value")` happened to
+  // derive a first byte of `0x00`, i.e. about 1 run in 256. Measured with the
+  // pre-fix decoder over 20,000 fresh credentials: 0.385% accepted the malformed
+  // hash (theory 1/256 = 0.391%), matching the 0.27–0.475% flake observed in CI.
+  // The credential below is brute-forced offline and hardcoded, so this test
+  // fails deterministically rather than on the sampler's luck.
   const crypto = new CryptoContext({ pepper: TEST_PEPPER, iterations: TEST_ITERATIONS })
   const malformed = `${SALT_HEX}:zz`
 
