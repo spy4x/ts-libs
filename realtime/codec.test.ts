@@ -8,6 +8,8 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 
+import { type } from "arktype"
+
 import {
   createHint,
   createJsonCodec,
@@ -42,6 +44,18 @@ const PROTOTYPE_MEMBER_NAMES = [
 /** A hint frame carrying `name` as an undeclared own property, built through JSON on purpose. */
 function hintWithProperty(name: string): string {
   return `{"kind":"change.hint","groupId":"group-1","sequence":4,${JSON.stringify(name)}:1}`
+}
+
+/** Declared keys of an arktype object schema, read from its public JSON form. */
+function declaredKeysOf(schema: { json: unknown }): string[] {
+  const json = schema.json as {
+    required?: { key: string }[]
+    optional?: { key: string }[]
+  }
+  return [
+    ...(json.required ?? []).map((entry) => entry.key),
+    ...(json.optional ?? []).map((entry) => entry.key),
+  ].sort()
 }
 
 describe("createJsonCodec", () => {
@@ -244,6 +258,25 @@ describe("createJsonCodec", () => {
     // And the converse, so the predicate is not vacuously permissive.
     expect(findUndeclaredKey({ toString: 1 }, ["groupId"])).toBe("toString")
     expect(findUndeclaredKey({}, ["toString"])).toBeNull()
+  })
+
+  it("accepts a schema-declared key that also exists on Object.prototype", () => {
+    // Guards the failure mode where the declared-set check is replaced — or shadowed — by a list of
+    // banned prototype names. That shape rejects a legitimate key (`toString`) the moment a schema
+    // declares one, and it cannot be seen by the rejection test above, because every name that test
+    // uses is undeclared under both rules. Measured: adding `PROTOTYPE_NAMES.has(key)` beside the
+    // allow-list reddens this test and no other in the suite.
+    const synthetic = type({ kind: "'client.ping'", toString: "string" })
+    const declared = declaredKeysOf(synthetic)
+    expect(declared).toEqual(["kind", "toString"])
+
+    const frame = JSON.parse(`{"kind":"client.ping","toString":"declared"}`)
+    expect(synthetic(frame) instanceof type.errors).toBe(false)
+    expect(findUndeclaredKey(frame as object, declared)).toBeNull()
+
+    // The same schema, a prototype name that is *not* declared: still rejected.
+    const undeclared = JSON.parse(`{"kind":"client.ping","valueOf":"x"}`)
+    expect(findUndeclaredKey(undeclared as object, declared)).toBe("valueOf")
   })
 
   it("accepts a frame whose undeclared-looking names exist only on Object.prototype", () => {

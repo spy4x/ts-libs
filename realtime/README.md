@@ -309,8 +309,11 @@ would reject a legitimate key whose name happens to exist on `Object.prototype`,
 would accept nothing else it is supposed to: the test "accepts a declared key whose name
 also exists on `Object.prototype`" (with `toString` and `__proto__` passed as declared)
 fails against that rewrite, and no frame in this protocol declares such a key today, so
-no wire-level test could hold the property. Rewriting the predicate that way reddens five
-tests.
+no wire-level test could hold the property. Two acceptance tests pin it — one with an
+explicit declared list, one deriving the list from a synthetic arktype schema whose
+declared keys include `toString`. Measured: rewriting the predicate as a blacklist
+reddens six tests, while _adding_ a blacklist beside the allow-list reddens exactly those
+two and nothing else in the suite, which is what makes them non-redundant.
 
 ## Testing
 
