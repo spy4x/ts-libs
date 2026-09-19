@@ -1,0 +1,14 @@
+{
+  "name": "@ts-libs/email",
+  "version": "0.1.0",
+  "exports": {
+    "./address": "./address.ts",
+    "./html": "./html.ts",
+    "./message": "./message.ts",
+    "./sender": "./sender.ts",
+    "./smtp": "./smtp.ts"
+  },
+  "imports": {
+    "nodemailer": "npm:nodemailer@10.0.10"
+  }
+}
