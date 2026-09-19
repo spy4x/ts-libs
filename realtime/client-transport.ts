@@ -459,8 +459,13 @@ export class ClientTransport {
    * hints are applied in arrival order; a handshake touches no cursor, and chaining it would delay
    * every inbound hint until the server acknowledged the handshake — up to
    * `handshakeAttempts × handshakeAckTimeout`, ten seconds by default. A hint that arrives while the
-   * handshake is unanswered is decided immediately, and the handshake's cursor snapshot is simply
-   * taken later, which can only make it fresher.
+   * handshake is unanswered is decided immediately.
+   *
+   * The cursor snapshot is therefore taken at whatever moment the handshake runs, so it may be
+   * fresher or staler than the cursors were when the socket opened. A stale floor is safe: the server
+   * replays changes the client has already applied, and those land in {@link ApplyStatus.Duplicate},
+   * never in a gap. This is a resume hint, not an authorization decision — auth happens at the
+   * upgrade, and the reconnect gate runs before a socket is opened at all.
    */
   #handleOpen(socket: ManagedSocket): void {
     if (this.#socket !== socket) return
