@@ -75,7 +75,7 @@ export interface DeployTarget {
  * and it is paired with {@link CREDENTIAL_VALUE}, which does not care what the
  * key is called.
  */
-export const SECRETISH_KEY = new RegExp(
+export const SECRETISH_KEY: RegExp = new RegExp(
   "SECRET|TOKEN|PASSWORD|PASSWD|PASSCODE|PASSPHRASE|PASS|PWD|PRIVATE|CREDENTIAL|" +
     "AUTH|BEARER|JWT|SESSION|ACCESS_KEY|API[-_]?KEY|KEY",
   "i",
