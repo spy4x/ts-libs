@@ -18,14 +18,31 @@
  * The message types are declared explicitly rather than inferred, so the published protocol shape is
  * readable without arktype's type machinery.
  *
- * **Undeclared properties are rejected, not ignored.** arktype's default is `onUndeclaredKey:
- * "ignore"`, which accepts an object carrying extra properties and *preserves* them on the parsed
- * value — so `{"kind":"change.hint", …, "payload":{…}}` would decode, survive {@link
- * MessageCodec.encode}, and reach a host's `onFrame` handler. Rejecting unknown keys is what makes
- * "no mutations over the socket" a property of the protocol rather than a remark about the frame
- * kinds this file happens to declare. Every object schema below therefore sets `"+": "reject"`,
- * including the nested cursor snapshot.
+ * **Undeclared properties are rejected, not ignored — and that check is this package's, not the
+ * validator's.** {@link protocolViolation} checks each parsed frame against an explicit declared-key
+ * allow-list using *own-property* membership.
  *
+ * The validator cannot do this on its own. arktype's default is `onUndeclaredKey: "ignore"`, which
+ * accepts extra properties and *preserves* them on the parsed value, so `{"kind":"change.hint", …,
+ * "payload":{…}}` decoded, survived {@link MessageCodec.encode} and reached a host's `onFrame`. Its
+ * strict option does not close it either: `@ark/schema@0.56.2` decides declaredness with
+ * `k in this.propsByKey` (`out/structure/structure.js`), and `in` walks the prototype chain, so all
+ * twelve `Object.prototype` member names — `__proto__`, `constructor`, `toString`, `valueOf`,
+ * `hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable`, `toLocaleString`, `__defineGetter__`,
+ * `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__` — read as *declared*, while
+ * `@ark/util@0.56.2/out/flatMorph.js` starts its morph target from `{}` so they survive onto the
+ * parsed value, own and enumerable. Measured: 12 of 12 passed both `decode` and `encode` and reached
+ * `onFrame`, with or without `"+": "reject"` on the schemas.
+ *
+ * Hence one mechanism rather than two: the schemas carry no undeclared-key marker (it was tried, and
+ * with the allow-list in place removing it leaves the whole suite green, which makes it a line no
+ * test can distinguish), and every frame is checked by the allow-list instead.
+ *
+ * Own-property membership is the right test because it is the only thing that can travel: JSON
+ * serialises own enumerable properties only, and `JSON.parse` never produces an inherited one.
+ * A frame whose prototype is not `Object.prototype` is refused too, so a decoded frame can never
+ * carry data the receiver would read through the prototype chain.
+
  * `validation/` leaves strictness to the host ("Strictness (`onUndeclaredKey`) is the host
  * application's decision, not a library's side effect" — `validation/validate.ts:7-8`). A wire
  * protocol is the opposite case: the library owns the wire, an unrecognised property is a protocol
@@ -94,21 +111,18 @@ export type WireMessage = ClientMessage | ServerMessage
 const cursorSnapshotSchema = type({
   groupId: "string",
   sequence: "number",
-  "+": "reject",
 })
 
 /** Client half of the protocol. */
 export const clientMessageSchema: Type<ClientMessage> = type({
   kind: "'client.ping' | 'client.pong'",
   "id?": "string",
-  "+": "reject",
 }).or(
   type({
     kind: "'client.sync'",
     cursors: cursorSnapshotSchema.array(),
     fromStart: "boolean",
     "id?": "string",
-    "+": "reject",
   }),
 )
 
@@ -116,12 +130,10 @@ export const clientMessageSchema: Type<ClientMessage> = type({
 export const serverMessageSchema: Type<ServerMessage> = type({
   kind: "'server.ping' | 'server.pong'",
   "id?": "string",
-  "+": "reject",
 }).or(
   type({
     kind: "'server.ack'",
     ackId: "string",
-    "+": "reject",
   }),
 ).or(
   type({
@@ -129,11 +141,70 @@ export const serverMessageSchema: Type<ServerMessage> = type({
     groupId: "string",
     "aggregate?": "string",
     sequence: "number",
-    "+": "reject",
   }),
 )
 
 const wireMessageSchema = serverMessageSchema.or(clientMessageSchema)
+
+/**
+ * The keys each frame kind may carry, and nothing else.
+ *
+ * Data rather than something derived from arktype, because deriving it from the schema would inherit
+ * the very prototype-chain defect this table exists to work around.
+ */
+const DECLARED_FRAME_KEYS: Record<WireMessage["kind"], readonly string[]> = {
+  "client.ping": ["kind", "id"],
+  "client.pong": ["kind", "id"],
+  "client.sync": ["kind", "cursors", "fromStart", "id"],
+  "server.ping": ["kind", "id"],
+  "server.pong": ["kind", "id"],
+  "server.ack": ["kind", "ackId"],
+  "change.hint": ["kind", "groupId", "aggregate", "sequence"],
+}
+
+/** Keys a handshake cursor snapshot may carry. */
+const DECLARED_CURSOR_KEYS: readonly string[] = ["groupId", "sequence"]
+
+/** First own property of `value` that `declared` does not list, or `null`. */
+function findUndeclaredKey(value: object, declared: readonly string[]): string | null {
+  for (const key of Object.keys(value)) {
+    if (!declared.includes(key)) return key
+  }
+  return null
+}
+
+/** Whether a parsed node is a plain object, so nothing can be read through its prototype chain. */
+function isPlainObject(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+/**
+ * Why a frame is not protocol, or `null` when it is.
+ *
+ * Runs after the schemas have checked types, so it only has to answer one question: is every own
+ * property of this frame, and of every cursor it carries, one the protocol declares?
+ */
+function protocolViolation(message: WireMessage): string | null {
+  if (!isPlainObject(message)) return `frame of kind "${message.kind}" is not a plain object`
+
+  const undeclared = findUndeclaredKey(message, DECLARED_FRAME_KEYS[message.kind])
+  if (undeclared !== null) {
+    return `undeclared property "${undeclared}" on ${message.kind}`
+  }
+
+  if (message.kind === "client.sync") {
+    for (const cursor of message.cursors) {
+      if (!isPlainObject(cursor)) return `cursors[] of ${message.kind} is not a plain object`
+      const cursorKey = findUndeclaredKey(cursor, DECLARED_CURSOR_KEYS)
+      if (cursorKey !== null) {
+        return `undeclared property "${cursorKey}" on ${message.kind} cursors[]`
+      }
+    }
+  }
+
+  return null
+}
 
 /** Outcome of decoding one text frame. A decode never throws. */
 export type DecodeResult =
@@ -177,6 +248,10 @@ export function createJsonCodec(): MessageCodec {
       if (parsed instanceof type.errors) {
         throw new Error(`Refusing to send a frame that is not protocol: ${parsed.summary}`)
       }
+      const violation = protocolViolation(parsed)
+      if (violation !== null) {
+        throw new Error(`Refusing to send a frame that is not protocol: ${violation}`)
+      }
       return JSON.stringify(parsed)
     },
     decode(raw) {
@@ -189,6 +264,10 @@ export function createJsonCodec(): MessageCodec {
       const parsed = wireMessageSchema(json)
       if (parsed instanceof type.errors) {
         return { ok: false, reason: parsed.summary }
+      }
+      const violation = protocolViolation(parsed)
+      if (violation !== null) {
+        return { ok: false, reason: violation }
       }
       return { ok: true, message: parsed }
     },

@@ -8,9 +8,35 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 
-import { createHint, createJsonCodec, isChangeHint } from "./codec.ts"
+import { createHint, createJsonCodec, isChangeHint, type WireMessage } from "./codec.ts"
 
 const codec = createJsonCodec()
+
+/**
+ * Every member name of `Object.prototype`.
+ *
+ * arktype cannot police these: it decides declaredness with `k in propsByKey`, and `in` walks the
+ * prototype chain. They are therefore the regression set for this package's own allow-list check.
+ */
+const PROTOTYPE_MEMBER_NAMES = [
+  "__proto__",
+  "constructor",
+  "toString",
+  "valueOf",
+  "hasOwnProperty",
+  "isPrototypeOf",
+  "propertyIsEnumerable",
+  "toLocaleString",
+  "__defineGetter__",
+  "__defineSetter__",
+  "__lookupGetter__",
+  "__lookupSetter__",
+]
+
+/** A hint frame carrying `name` as an undeclared own property, built through JSON on purpose. */
+function hintWithProperty(name: string): string {
+  return `{"kind":"change.hint","groupId":"group-1","sequence":4,${JSON.stringify(name)}:1}`
+}
 
 describe("createJsonCodec", () => {
   it("round-trips a change hint with its sequence", () => {
@@ -145,6 +171,105 @@ describe("createJsonCodec", () => {
     } as unknown as Parameters<typeof codec.encode>[0]
 
     expect(() => codec.encode(withPayload)).toThrow("Refusing to send a frame that is not protocol")
+  })
+
+  it("rejects every Object.prototype member name as an undeclared property on decode", () => {
+    const accepted = PROTOTYPE_MEMBER_NAMES.filter((name) =>
+      codec.decode(hintWithProperty(name)).ok
+    )
+
+    expect(accepted).toEqual([])
+  })
+
+  it("rejects every Object.prototype member name as an undeclared property on encode", () => {
+    const accepted = PROTOTYPE_MEMBER_NAMES.filter((name) => {
+      try {
+        codec.encode(JSON.parse(hintWithProperty(name)) as WireMessage)
+        return true
+      } catch {
+        return false
+      }
+    })
+
+    expect(accepted).toEqual([])
+  })
+
+  it("rejects a prototype member name on every frame kind", () => {
+    const frames: WireMessage[] = [
+      { kind: "client.ping" },
+      { kind: "client.sync", cursors: [{ groupId: "group-1", sequence: 4 }], fromStart: false },
+      { kind: "server.ack", ackId: "frame-1" },
+      { kind: "change.hint", groupId: "group-1", sequence: 4 },
+    ]
+
+    const accepted = frames.filter((frame) => {
+      const withExtra = JSON.parse(
+        `{${
+          Object.entries(frame).map(([key, value]) =>
+            `${JSON.stringify(key)}:${JSON.stringify(value)}`
+          )
+            .join(",")
+        },"constructor":1}`,
+      )
+      return codec.decode(JSON.stringify(withExtra)).ok
+    })
+
+    expect(accepted).toEqual([])
+  })
+
+  it("rejects a prototype member name nested inside a handshake cursor", () => {
+    const accepted = PROTOTYPE_MEMBER_NAMES.filter((name) => {
+      const raw = `{"kind":"client.sync","cursors":[{"groupId":"group-1","sequence":4,` +
+        `${JSON.stringify(name)}:1}],"fromStart":false}`
+      return codec.decode(raw).ok
+    })
+
+    expect(accepted).toEqual([])
+  })
+
+  it("accepts a frame whose undeclared-looking names exist only on Object.prototype", () => {
+    const raw = `{"kind":"change.hint","groupId":"group-1","sequence":4}`
+    const parsed = JSON.parse(raw) as WireMessage
+
+    // Every one of these is reachable through `in`, and none of them is an own property: a check
+    // that used `in` (which is what the validator does) would be reading the prototype chain here.
+    expect("toString" in parsed).toBe(true)
+    expect(Object.hasOwn(parsed, "toString")).toBe(false)
+
+    expect(codec.decode(raw)).toEqual({
+      ok: true,
+      message: { kind: "change.hint", groupId: "group-1", sequence: 4 },
+    })
+    expect(JSON.parse(codec.encode(parsed))).toEqual({
+      kind: "change.hint",
+      groupId: "group-1",
+      sequence: 4,
+    })
+  })
+
+  it("refuses a frame that is not a plain object, so nothing is read through a prototype chain", () => {
+    const hostile = JSON.parse(`{"kind":"change.hint","groupId":"group-1","sequence":4}`)
+    Object.setPrototypeOf(hostile, { payload: { total: 100 } })
+
+    expect(() => codec.encode(hostile)).toThrow("is not a plain object")
+  })
+
+  it("still decodes and encodes a well-formed frame of every kind", () => {
+    const frames: WireMessage[] = [
+      { kind: "client.ping" },
+      { kind: "client.pong", id: "frame-1" },
+      { kind: "client.sync", cursors: [{ groupId: "group-1", sequence: 4 }], fromStart: false },
+      { kind: "client.sync", cursors: [], fromStart: true, id: "frame-2" },
+      { kind: "server.ping" },
+      { kind: "server.pong", id: "server-1" },
+      { kind: "server.ack", ackId: "frame-1" },
+      { kind: "change.hint", groupId: "group-1", sequence: 4 },
+      { kind: "change.hint", groupId: "group-1", aggregate: "invoice", sequence: 42 },
+    ]
+
+    for (const frame of frames) {
+      expect(codec.decode(codec.encode(frame))).toEqual({ ok: true, message: frame })
+    }
   })
 
   it("rejects a hint whose sequence is not a number", () => {
