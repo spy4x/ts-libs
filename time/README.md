@@ -3,11 +3,11 @@
 Time and calendar primitives with no application domain attached. IANA timezone math on `Intl`,
 plus an RFC 5545 iCalendar writer. Zero runtime dependencies.
 
-| Module          | Exports                                                                 |
-| --------------- | ----------------------------------------------------------------------- |
+| Module          | Exports                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------- |
 | `time/tz`       | IANA zone helpers: `zonedDateTime`, `formatInstantLong`, `validTimeZoneOr`, `addDays`, … |
-| `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer         |
-| `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …      |
+| `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                         |
+| `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                      |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@ts-libs/time/tz"
@@ -220,7 +220,7 @@ currently slices folded lines by character (`ical.ts:10-19`), which splits multi
 
 ### Folding
 
-`foldLine` folds at 75 **octets** *excluding* the CRLF line break, counting the one-octet
+`foldLine` folds at 75 **octets** _excluding_ the CRLF line break, counting the one-octet
 continuation space toward the limit (so continuation lines carry at most 74 octets of content). It
 iterates by code point and measures each with `TextEncoder`, so a multi-byte sequence is never split.
 `String.prototype.length` is never consulted: 25 CJK code points are 25 characters but 75 octets.
