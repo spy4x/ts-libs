@@ -53,10 +53,18 @@ export interface ServerAckMessage {
   ackId: string
 }
 
-/** A hint that a group moved to `sequence`. Carries no payload by design. */
+/**
+ * A hint that a group moved to `sequence`. Carries no entity payload by design — the payload is what
+ * the REST pull returns.
+ *
+ * `aggregate` is optional so the minimal frame the design doc specifies
+ * (`sync.hint { groupId, sequence }`, `docs/design/realtime-websockets.md:90`) decodes here too. It
+ * is an addition, not a requirement: a server that routes by aggregate server-side does not have to
+ * name it on the wire.
+ */
 export interface ChangeHint {
   groupId: string
-  aggregate: string
+  aggregate?: string
   /** Sequence the change was committed at; 1-based. */
   sequence: number
 }
@@ -101,7 +109,7 @@ export const serverMessageSchema: Type<ServerMessage> = type({
   type({
     kind: "'change.hint'",
     groupId: "string",
-    aggregate: "string",
+    "aggregate?": "string",
     sequence: "number",
   }),
 )
@@ -126,7 +134,7 @@ export function createHint(hint: ChangeHint): ServerMessage {
   return {
     kind: "change.hint",
     groupId: hint.groupId,
-    aggregate: hint.aggregate,
+    ...(hint.aggregate !== undefined ? { aggregate: hint.aggregate } : {}),
     sequence: hint.sequence,
   }
 }

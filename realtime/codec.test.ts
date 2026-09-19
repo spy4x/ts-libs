@@ -54,6 +54,35 @@ describe("createJsonCodec", () => {
     expect(result.ok).toBe(false)
   })
 
+  it("accepts a hint without an aggregate, the minimal shape the design doc specifies", () => {
+    const result = codec.decode(
+      JSON.stringify({ kind: "change.hint", groupId: "group-1", sequence: 4 }),
+    )
+
+    expect(result).toEqual({
+      ok: true,
+      message: { kind: "change.hint", groupId: "group-1", sequence: 4 },
+    })
+  })
+
+  it("round-trips a hint that names the aggregate", () => {
+    const hint = createHint({ groupId: "group-1", aggregate: "invoice", sequence: 4 })
+
+    expect(hint).toEqual({
+      kind: "change.hint",
+      groupId: "group-1",
+      aggregate: "invoice",
+      sequence: 4,
+    })
+  })
+
+  it("omits the aggregate key entirely when the hint does not name one", () => {
+    const hint = createHint({ groupId: "group-1", sequence: 4 })
+
+    expect(Object.keys(hint).sort()).toEqual(["groupId", "kind", "sequence"])
+    expect(codec.decode(codec.encode(hint))).toEqual({ ok: true, message: hint })
+  })
+
   it("rejects a hint whose sequence is not a number", () => {
     const result = codec.decode(
       JSON.stringify({

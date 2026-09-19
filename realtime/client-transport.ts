@@ -65,7 +65,8 @@ export enum TransportStatus {
 /** A `change.hint` that was contiguous with the cursor and therefore applied. */
 export interface AppliedHint {
   groupId: string
-  aggregate: string
+  /** Present when the server named the aggregate; the cursor rule never depends on it. */
+  aggregate?: string
   sequence: number
 }
 
@@ -509,7 +510,9 @@ export class ClientTransport {
       case "change.hint": {
         const hint: AppliedHint = {
           groupId: result.message.groupId,
-          aggregate: result.message.aggregate,
+          ...(result.message.aggregate !== undefined
+            ? { aggregate: result.message.aggregate }
+            : {}),
           sequence: result.message.sequence,
         }
         this.#emitFrame(result.message)
