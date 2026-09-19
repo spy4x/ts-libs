@@ -58,6 +58,23 @@ protocol to carry mutations means the socket becomes a second application surfac
 with its own authorization path, which is a new ADR, not a flag on this one. A
 host cannot do it by accident — `ClientMessage` has no frame kind for it.
 
+**Ruling (architecture owner, at review of this change): hint-only stands.** The
+recorded reasoning, so a later reader does not have to re-litigate it:
+
+- Issue #19 and the extraction inventory both ask for hint-only, and the
+  inventory's own target column describes it (`:52-53`).
+- Mutating over a socket that carries no sequence and has no gap detection is
+  precisely the divergence bug this package exists to eliminate — ADR 002:63-66
+  makes the cursor pull the only correctness path, and a mutation frame would
+  put a second, weaker application path beside it.
+- Widening the protocol needs an ADR amendment **plus** the auth-into-CQRS
+  handlers work ADR 002:132-134 calls "a prerequisite, not a follow-up"; both are
+  outside issue #19's scope.
+
+The divergent text is ADR 002:50, quoted above, and it is named here rather than
+quietly ignored: this package implements the sync contract the ADR fixes and
+declines the mutation transport the ADR also describes.
+
 ### What "hint-only" buys
 
 `financy`'s socket was the only mutation path, so the app did not work with the
@@ -68,36 +85,42 @@ backwards.
 
 ## Package location
 
-This is a **top-level package, `realtime/`**, not a file inside `server/`.
+This is a **top-level package, `realtime/`**, not a file inside `server/`
+(ruling recorded when the member was registered, `93708f8` / PR #38).
 
-`server/realtime.ts` would have avoided a root-config change, and it is what the
-design doc's boundary recommendation suggests — "Put the connection registry and
-the message protocol in `libs/server/realtime` and mount it from `apps/api`"
-(`docs/design/realtime-websockets.md:62-64`). In this repository that home is the
-`server/` package, which is claimed by other extraction issues (`#5 storage`,
-`#6 auth`, `#9 http`, `#15 db`), does not exist yet, and is a Wave 2/3 target
-whereas this issue is Wave 4 "scheduled alone". The repository rule is one package
-per PR with disjoint diffs, so creating a directory that three other agents will
-also write into is how a rebase turns into a merge conflict in shared files.
+`server/realtime.ts` is what the design doc's boundary recommendation suggests —
+"Put the connection registry and the message protocol in `libs/server/realtime`
+and mount it from `apps/api`" (`docs/design/realtime-websockets.md:62-64`) — but
+that is a _template_ path, not this repository's. Here the analogous home is the
+`server/` package, which is claimed by four other extraction issues (`#5
+storage`, `#6 auth`, `#9 http`, `#15 db`), is a Wave 2/3 target while this issue
+is Wave 4 "scheduled alone", and is where this package would collide: the
+repository rule is one package per PR with disjoint diffs.
 
 The name follows the same doc's naming rule — it "names the capability rather
 than the transport" (`:66-70`) — so `realtime/`, not `ws/` or `ws-api/`. The
 registry and the message protocol live together in it, as the boundary
-recommendation asks; only the directory differs. If the maintainer prefers the
-`server/` home, this package can be re-exported from `server/mod.ts` later
-without moving a line of it.
+recommendation asks; only the directory differs.
 
-One line is therefore needed in the root `deno.jsonc` `workspace` array — after
-`"./platform",`, before `"./server",`:
+**Future path if the maintainer later consolidates:** re-export this package from
+`server/` (or from a future `server/realtime/` subpath) without moving a line of
+it, since it imports nothing from this repository and its entry points are already
+declared in `realtime/deno.json`.
+
+The workspace member line landed in `deno.jsonc` (between `./platform` and
+`./server`):
 
 ```jsonc
 "./realtime",
 ```
 
-Deno already discovers and runs this package's tests without that line, and
-`infra/scripts/type-check.ts` walks the tree, so the line is what makes it a JSR
-member and lets a sibling package import `@ts-libs/realtime`, not what makes the
-checks pass.
+That registration is load-bearing for tooling, measured both ways on this
+package's 19 files: unlisted, `deno fmt --check realtime/` exits 1 on 18 of them,
+because Deno then resolves the package's own config and does not inherit the root
+`fmt` block; listed, path-scoped `deno fmt --check realtime/` and
+`deno lint realtime/` both exit 0 with the root config applied. The pathless
+`deno task check` was green either way, which is why the missing line was easy to
+miss and why it is worth this paragraph.
 
 This supersedes `apps/api/services/wsHub.ts` — the 55-line stub whose whole model
 is `Map<clientId, { userId, socket }>`, with no heartbeat, no liveness deadline,
