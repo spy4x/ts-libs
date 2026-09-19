@@ -53,7 +53,12 @@ export interface DkimSignatureHeader {
 export interface DkimPublicKey {
   /** `k=` from the record; `rsa` when the tag is absent. */
   algorithm: DkimKeyAlgorithm
-  /** The key in binary form: PKCS#1 for RSA, raw for Ed25519. */
+  /**
+   * The key exactly as `p=` carried it: a bare PKCS#1 `RSAPublicKey` or a
+   * complete SubjectPublicKeyInfo for RSA, raw for Ed25519. Not normalised —
+   * RFC 6376 §3.6.1 specifies PKCS#1 and its own example record publishes SPKI,
+   * so both shapes occur and both are left alone.
+   */
   keyBytes: Uint8Array
 }
 
@@ -420,21 +425,16 @@ function toCrlf(input: string): string {
 }
 
 /**
- * Rebuild a `DKIM-Signature` header value in canonical form with the `b=` tag
- * emptied, per RFC 6376 §3.7 step 5. The tag itself stays, the layout of the
- * header is otherwise untouched.
- *
- * The value is truncated at the recorded end of `b=`, so a folded `b=`, a
- * quoted `b=`, or an unrelated tag containing the characters `b=` all behave
- * the same; the source instead re-scanned with `\bb=` and dropped everything
- * after it. With simple canonicalization the truncation has to be byte-exact,
- * so a `b=` that is not the final tag cannot be replaced this way without
- * rebuilding the header — that is refused rather than mis-signed.
- */
-/**
  * Return the same tag-list with one tag's value deleted, keeping the tag name,
  * the `=` and the raw folding around it — exactly what RFC 6376 §3.7 step 2
  * hashes for the `b=` tag.
+ *
+ * The deletion is bounded by the parsed offsets of the value, so a folded `b=`,
+ * a quoted `b=`, or an unrelated tag carrying the characters `b=` all behave the
+ * same; an earlier revision re-scanned with `\bb=` and dropped everything after
+ * it. Nothing after the value is touched: `b=` need not be the last tag, and a
+ * tag that follows it stays inside the signed bytes, where §3.7 leaves it.
+ * `raw` is the field value, without the field name.
  */
 function deleteTagValue(raw: string, tag: string): string {
   const parsed = parseDkimSignatureHeader(raw)

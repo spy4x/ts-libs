@@ -135,6 +135,8 @@ interface SignOptions {
   names?: string[]
   /** Extra tags before b=, e.g. `l=17` or `x=1800000000`. */
   extraTags?: string
+  /** Tags placed *after* b=, which §3.7 step 2 leaves inside the signed bytes. */
+  afterB?: string
   ed25519?: boolean
   foldSignature?: boolean
 }
@@ -173,7 +175,8 @@ async function sign(
   // that followed it. Simple canonicalization keeps that byte verbatim (dkimpy:
   // `DKIM-Signature: v=1; …`), and relaxed mode strips it again, so one call
   // shape serves both modes.
-  const field = canonHeader("DKIM-Signature", ` ${stub}; b=`, mode).replace(/\r\n$/, "")
+  const tail = options.afterB ?? ""
+  const field = canonHeader("DKIM-Signature", ` ${stub}; b=${tail}`, mode).replace(/\r\n$/, "")
   const input = head.join("") + field
 
   const pair = options.ed25519 ? await ed25519() : await rsa()
@@ -190,7 +193,7 @@ async function sign(
       : await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, pair.privateKey, message),
   )
 
-  const rendered = `${stub}; b=${base64(signature)}`
+  const rendered = `${stub}; b=${base64(signature)}${tail}`
   const block = options.foldSignature ? rendered.replace(/; /g, "; \r\n\t") : rendered
   const publicKey = options.ed25519 ? await ed25519Key(await ed25519()) : await rsaKey(await rsa())
   return {
@@ -333,6 +336,20 @@ describe("differential: messages dkimpy signs and itself verifies", () => {
     // longer verifies at all.
     const { raw, record } = await fixture("dkimpy-unsigned-trailing-tag")
     const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.parsed?.expiration, 1800000000n)
+  })
+
+  it("verifies a signature whose x= tag follows b= under simple", async () => {
+    // The claim that a `b=` tag which is not final cannot be emptied byte-exactly
+    // was false in either mode: the deletion is bounded by the parsed value, so
+    // what follows `b=` stays inside the signed field and is authenticated.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
+      mode: "simple",
+      extraTags: "l=17",
+      afterB: "; x=1800000000",
+    })
+    const result = await verifyDkim(raw, publicKey, { now: 1700001000n })
     assert(result.valid, `reason=${result.reason}`)
     assertEquals(result.parsed?.expiration, 1800000000n)
   })
@@ -582,6 +599,12 @@ describe("canonicalizeHeader", () => {
       [...canonicalizeHeader("X-Cr", "a\rb", "relaxed")].map((c) => c.charCodeAt(0)),
       [120, 45, 99, 114, 58, 97, 13, 98, 13, 10],
     )
+    // At the ends of the value it is a different story: the relaxed path trims
+    // with `String.trim()`, for which CR is whitespace, so a trailing lone CR is
+    // stripped there and kept by simple.
+    assertEquals(canonicalizeHeader("X-Cr", "a\r", "simple"), "X-Cr:a\r\r\n")
+    assertEquals(canonicalizeHeader("X-Cr", "a\r", "relaxed"), "x-cr:a\r\n")
+    assertEquals(canonicalizeHeader("X-Cr", "\ra", "relaxed"), "x-cr:a\r\n")
   })
 })
 

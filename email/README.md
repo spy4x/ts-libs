@@ -245,6 +245,12 @@ question: **does this message's `DKIM-Signature` verify against this key?**
   `SHA-256` of the canonical input as RFC 8463 §3 requires.
 - `parseDkimPublicKey` from a DNS TXT record, including revoked keys (`p=`).
 - Expiry (`x=`) against an injectable clock.
+- The header/body boundary, which RFC 5322 §2.2 puts at the **first** empty line.
+  A body whose first line begins with SP or HTAB is body, not a folded header —
+  reading it as a header left those octets outside the body hash entirely.
+- The DKIM-Signature field **name the message actually spells**. §3.7 step 2
+  hashes "the DKIM-Signature header field that exists", and under `simple`
+  canonicalization the name's case is part of the signed bytes.
 
 The signature input follows §3.7 step 2 exactly: every header named in `h=`, in
 the order `h=` declares (so repeated fields are consumed from the bottom of the
@@ -255,7 +261,9 @@ no header in the message contribute nothing, as §3.5 allows.
 
 Correctness is checked against implementations other than this one: RFC 8463's
 Appendix A.3 Ed25519 example, RFC 6376's example message signed with a known key,
-and eighteen messages built with dkimpy 1.1.8's canonicalizers plus OpenSSL and
+eighteen messages built with dkimpy 1.1.8's canonicalizers plus OpenSSL, and five
+signed by an OpenSSL-only script whose canonicalizer is written from the RFC text
+(`openssl-*`: the §2.2 boundary cases and a lower-case field name). Every one is
 confirmed by `openssl dgst -sha256 -verify` against the §3.7 reconstruction. See
 `fixtures/SOURCES.md`, which also records what these vectors are _not_.
 
@@ -315,8 +323,28 @@ injected resolver escapes it.
 - **`l=` truncates the canonicalized body before hashing it.** §3.7 step 1 says
   the body is "truncated to the length specified in the l= tag", so a signature
   over 18 octets is only reproducible by hashing 18 octets. A bound _longer_ than
-  the body it accompanies is not an error: the hash is over all of it, which is
-  what a signer declaring a longer bound produced.
+  the body it accompanies is **accepted**, although §3.5 says the signer "MUST
+  NOT" use one: that MUST binds the signer, and verifier-side a bound can only
+  ever _reduce_ the octets covered, never extend them, so accepting one cannot
+  admit a message a shorter bound would have rejected (`dkimpy-l25` is `l=25`
+  over an 18-octet body, and appending a single byte to it still fails). It is
+  inside the signed field, so an attacker cannot add or enlarge it. Rejecting
+  instead would convert a harmless signer tag into a false rejection.
+- **An unsigned `From:` verifies, and that check is the caller's.** §5.4 requires
+  a _signer_ to list `From:` in `h=`, while §6.1.1 and §6.1.2 add no verifier
+  check that it did — so `verifyDkim` accepts a signature whose `h=` never names
+  `From:`, and a `From:`-less message too (malformed per RFC 5322, but malformed
+  is not unverified). Domain policy is where that belongs: read
+  `result.parsed.signedHeaders` and require `"from"` before trusting a verdict.
+- **The DKIM-Signature field name comes from the message.** §3.7 step 2 hashes
+  "the DKIM-Signature header field that exists", and `simple` preserves the
+  name's case (§3.4.1), so the name is signed bytes: renaming the field to
+  `dkim-signature:` fails a simple signature, and a signer that emitted the
+  lower-case name verifies. Hashing a literal `"DKIM-Signature"` — as an earlier
+  revision did — verified a renamed field against bytes the message no longer
+  contained and rejected the lower-case signer. `relaxed` lower-cases the name
+  (§3.4.2), so there the case carries no information and a renamed field still
+  verifies.
 - **`h=` must NOT list `dkim-signature`.** §3.5 forbids it, and §3.7 adds that
   field to the header hash as its own unconditional step. Requiring it — as an
   earlier revision of this file did — rejects every standard signer, RFC 6376's
@@ -337,19 +365,27 @@ injected resolver escapes it.
   it, so `one<CRLF><HTAB>two` canonicalizes to `one two` and `a<LF>b` to `ab`.
   A bare LF inside a value is not a line ending (RFC 5322 §2.3): `simple` keeps
   it byte for byte, `relaxed` deletes it as part of unfolding. A **non-trailing**
-  lone CR likewise survives both modes, since §3.4.2 unfolds CRLF only and
-  `String.trim()` would have swallowed it — that is why the relaxed path does its
-  own WSP trimming rather than calling `trim()`. Body handling still normalises
-  bare LF to CRLF, because mailbox storage rewrites line endings and nothing else
-  references the body's original bytes.
+  lone CR likewise survives both modes: §3.4.2 unfolds CRLF only, and the relaxed
+  path trims the ends of the value, not its interior. That trim **is**
+  `String.trim()` (`canonicalizeHeader`), so a _trailing_ lone CR is kept by
+  `simple` and stripped by `relaxed` — a leading or trailing CR is whitespace to
+  `trim()`, an interior one is not. (An earlier revision of this file claimed the
+  relaxed path avoided `trim()` to preserve a lone CR; it does not, and the tests
+  pin the interior-CR expectation rather than that rationale.) Body handling still
+  normalises bare LF to CRLF, because mailbox storage rewrites line endings and
+  nothing else references the body's original bytes.
 - **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
   `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
   example record publishes a complete SubjectPublicKeyInfo. The envelope is
   detected, not guessed. `DkimPublicKey.keyBytes` therefore holds whatever the
   record carried — SPKI bytes for an SPKI `p=` — rather than a normalised form.
-- **`b=` must be the last tag for `simple` canonicalization.** Byte-exact
-  reconstruction of an _emptied_ `b=` is impossible otherwise, and refusing is
-  safer than mis-signing.
+- **`b=` need not be the last tag, in either mode.** §3.7 step 2 deletes only the
+  _value_ of `b=`, bounded by the value's parsed offsets, so the deletion is
+  byte-exact wherever the tag sits; a field ending `…; b=SIG; x=1800000000`
+  verifies under `simple` as well as `relaxed` and its `x=` is authenticated
+  (`dkimpy-unsigned-trailing-tag`). An earlier revision refused that shape, on the
+  false premise that a non-final `b=` could not be emptied without rebuilding the
+  header.
 
 ## What the suite does not cover
 
