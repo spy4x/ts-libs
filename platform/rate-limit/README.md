@@ -85,7 +85,8 @@ cannot outrun it.
 
 **Memory envelope.** At the defaults (`windowMs` 60 s, `idleMs` 600 s) a bucket lives 660 s, so
 steady-state retention is `request_rate × 660` keys — about 660k keys at 1,000 req/s. Measured on
-this implementation: ~349 bytes per bucket, so roughly 230 MB at that rate. That is the price of the
+this implementation across 200,000 rotating buckets: **353.5 bytes per bucket**, so roughly
+**222 MiB (233 MB)** at that rate. That is the price of the
 10-minute grace, and `idleMs` is the knob: the `mig` implementation this replaces pruned at
 `request_rate × windowMs` (60 s), i.e. 11× tighter, at the cost of dropping a bucket the moment its
 window closed. Lower `idleMs` towards `windowMs` to trade memory for extra sweep churn.
@@ -97,6 +98,11 @@ Two consequences worth stating, because both are security properties:
   counter; only waiting does.
 - **A busy bucket is never swept.** `seenAt` alone would be wrong: a bucket whose most recent check
   was a _rejection_ stores no event and would look idle. Both conditions are therefore required.
+- **No wall clock, and no per-event shifting.** Every timing decision goes through the injected
+  `Clock`, including the seed for the automatic sweep, and a prune costs one binary search plus one
+  `slice` rather than a `shift()` per stale event. Both regressions are now caught: seeding
+  `lastSweepAt` from `Date.now()` fails `schedules its automatic sweep from the injected clock, never
+  the wall clock`, and restoring the loop fails the array-operation guard.
 
 Per-bucket memory is bounded by `limit` — nothing is stored for a rejected request — so a client
 hammering one key grows nothing. Across keys, the sweep is the bound. `caldav-mcp`'s map had none,
@@ -134,6 +140,18 @@ Without a `remoteAddr` accessor the resolver has no peer address at all and fall
 placeholder `clientIp` returns, `0.0.0.0` — and **every** header-less client then shares one bucket,
 so one caller exhausting it denies the rest. If you cannot obtain a peer address, treat the shared
 bucket as a backstop and front the service with a proxy.
+
+**Where the trust decision lives.** Exactly three places can consult a forwarding header, and all
+three default to not trusting one: `clientIp`'s `trustedProxy` parameter, `userThenIp`'s
+`trustedProxy` option, and the `keyResolver` you write — which sees a header only if you read one.
+There is deliberately no fourth. This package used to export a `resolveIdentityKey` helper that built
+a key from a `Request` plus a peer address passed as a plain string; its `trustedProxy` default was
+`true`, it duplicated `userThenIp`, and it made the peer-address mitigation unreachable, because a
+`Request` carries no peer address, so that option could only ever be fed by a side channel. A caller
+wiring the two obvious arguments got a limiter that 200 rotating `X-Forwarded-For` values at
+`limit: 3` walked straight through. It is removed rather than kept as a second public entry point with
+a security-relevant default; compose `clientIp` with `rateLimitKey` yourself if you need a key
+outside the middleware, stating explicitly which of the two you want.
 
 ## Headers
 
