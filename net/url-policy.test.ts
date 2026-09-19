@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert"
+import { assertEquals, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import {
   defaultResolver,
@@ -475,12 +475,52 @@ describe("validatePublicUrl", () => {
 })
 
 describe("defaultResolver", () => {
-  it("is exported and asks Deno for both A and AAAA records", () => {
+  it("is exported and callable", () => {
     assertEquals(typeof defaultResolver.resolve, "function")
-    const source = defaultResolver.resolve.toString()
-    assertStringIncludes(source, "resolveDns")
-    assertStringIncludes(source, '"A"')
-    assertStringIncludes(source, '"AAAA"')
+  })
+
+  it("queries A and AAAA and returns both families", async () => {
+    // Behavioural, and hermetic: `Deno.resolveDns` is stubbed for the duration,
+    // so this asserts what the resolver asks for without touching the network.
+    // An implementation that skipped the AAAA family would let a public-A host
+    // with a loopback AAAA through the guard.
+    const requested: string[] = []
+    const original = Deno.resolveDns
+    const records: Record<string, string[]> = {
+      "A:both.example": ["93.184.216.34"],
+      "AAAA:both.example": ["2606:4700:4700::1111"],
+      "A:only.example": ["93.184.216.34"],
+    }
+    try {
+      Object.defineProperty(Deno, "resolveDns", {
+        configurable: true,
+        writable: true,
+        value: (host: string, type: string) => {
+          requested.push(`${type}:${host}`)
+          const answer = records[`${type}:${host}`]
+          return answer ? Promise.resolve(answer) : Promise.reject(new Error("NotFound"))
+        },
+      })
+      assertEquals(
+        await defaultResolver.resolve("both.example"),
+        ["93.184.216.34", "2606:4700:4700::1111"],
+      )
+      assertEquals(requested.includes("A:both.example"), true)
+      assertEquals(requested.includes("AAAA:both.example"), true)
+      // A host with only an A record must not resolve — a missing family is a
+      // failure, not an empty set to be ignored.
+      await assertRejects(
+        () => defaultResolver.resolve("only.example"),
+        Error,
+        "NotFound",
+      )
+    } finally {
+      Object.defineProperty(Deno, "resolveDns", {
+        configurable: true,
+        writable: true,
+        value: original,
+      })
+    }
   })
 })
 
