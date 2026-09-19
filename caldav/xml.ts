@@ -116,8 +116,9 @@ export const XML_ILLEGAL_REPLACEMENT = "\uFFFD"
 /**
  * True for a high code unit: the first half of a surrogate pair.
  *
- * The bounds are written out rather than derived from an exported constant so
- * every caller's module graph pulls in nothing it does not use.
+ * `0xD800-0xDBFF` and `0xDC00-0xDFFF` are written out rather than named as
+ * exported constants, because the only thing a CalDAV body ever needs from them
+ * is the pair check below.
  */
 function isHighSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff
@@ -133,10 +134,11 @@ function isLowSurrogate(code: number): boolean {
  *
  * A JS string can hold half a surrogate pair, which is not a character at all:
  * XML 1.0 has no representation for it, and `String.prototype.replaceAll` throws
- * `RangeError` when handed one. Scanning for the pairs is the replacement for the
- * character class a regex cannot express here — `/[\uD800-\uDFFF]/gu` is only
- * legal in Unicode mode, and in that mode the class matches code *points*, so it
- * matches no surrogate and a lone one sails straight through.
+ * `RangeError` when handed one — so the repair cannot be a regex replacement
+ * either. A lone surrogate code *unit* in the input string is invisible to a
+ * Unicode-mode `/[\uD800-\uDFFF]/gu` class, because such a class matches code
+ * *points* and never a code unit that belongs to no code point. The pair check is
+ * therefore an explicit scan.
  */
 function replaceLoneSurrogates(value: string): string {
   const out: string[] = []
@@ -177,20 +179,7 @@ function stripIllegalXmlCharacters(value: string): string {
  * not what the server sent".
  */
 function replaceIllegalXmlCharacters(value: string): string {
-  let replaced = replaceLoneSurrogates(value)
-  for (let code = 0; code <= 0x1f; code++) {
-    if (code === 9 || code === 10 || code === 13) continue
-    replaced = replaceCodeUnit(replaced, code)
-  }
-  for (const code of [0x7f, 0xfffe, 0xffff]) replaced = replaceCodeUnit(replaced, code)
-  return replaced
-}
-
-/** Replace every occurrence of the code unit `code` with {@link XML_ILLEGAL_REPLACEMENT}. */
-function replaceCodeUnit(value: string, code: number): string {
-  const unit = String.fromCharCode(code)
-  if (!value.includes(unit)) return value
-  return value.split(unit).join(XML_ILLEGAL_REPLACEMENT)
+  return replaceLoneSurrogates(value.replace(ILLEGAL_CODE_UNIT, XML_ILLEGAL_REPLACEMENT))
 }
 
 /**
