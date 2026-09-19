@@ -246,12 +246,34 @@ Deno.test("readBoundedBody reports the read error even when cancel rejects", asy
   assertEquals((rejection as Error).message, "connection reset")
 })
 
-Deno.test("readBoundedBody rejects a negative cap instead of reading", async () => {
-  // The canonical reader has no `RangeError` branch: a non-positive cap simply
-  // cannot be satisfied, so the read fails closed on the same error a real
-  // over-cap body raises.
-  const request = new Request(ORIGIN, { method: "POST", body: "abc" })
-  await assertRejects(() => readBoundedBody(request, { maxBytes: -1 }), PayloadTooLargeError)
+Deno.test("readBoundedBody rejects an unusable cap instead of reading", async () => {
+  // The canonical reader has no `RangeError` branch: a cap that cannot be
+  // satisfied fails closed on the same error a real over-cap body raises. Both
+  // values below were rejected by a `RangeError` before the collapse.
+  for (const cap of [-1, 1.5]) {
+    // A fresh request per case: a body can only be read once, so reusing one
+    // would test the second read against an already-drained stream.
+    const request = new Request(ORIGIN, { method: "POST", body: "abc" })
+    await assertRejects(
+      () => readBoundedBody(request, { maxBytes: cap }),
+      PayloadTooLargeError,
+      String(cap),
+    )
+  }
+})
+
+Deno.test("readBoundedBody fails open on a non-finite cap (known gap in net/)", async () => {
+  // `NaN` and `Infinity` compare false against the running total, so the cap is
+  // silently disabled and the body is read in full — the one `maxBytes` value
+  // the pre-collapse module's `RangeError` caught and the canonical reader does
+  // not. Documented here rather than left silent: it belongs in `net/`'s
+  // validation, and this test must be inverted when that lands.
+  const request = new Request(ORIGIN, { method: "POST", body: "abcdef" })
+
+  assertEquals(
+    await readBoundedBody(request, { maxBytes: NaN }),
+    new TextEncoder().encode("abcdef"),
+  )
 })
 
 Deno.test("PayloadTooLargeError names itself and carries the cap", async () => {
