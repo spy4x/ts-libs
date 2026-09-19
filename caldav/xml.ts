@@ -5,23 +5,41 @@
  * `client.ts` (issue #13). No XML library, on either side: the builders emit
  * literal strings and the readers match elements with a namespace-prefix-
  * agnostic pattern. A server may use any prefix or none at all — Radicale writes
- * `xmlns="DAV:"` with unprefixed children, Apple's CalendarServer writes
- * `D:`/`C:`/`CS:`, SabreDAV writes lowercase — so every pattern here accepts
+ * `xmlns="DAV:"` with unprefixed children and Apple's CalendarServer writes
+ * `D:`/`C:`/`CS:` — so every pattern here accepts
  * `<response>`, `<D:response>` and `<d:response>` alike. See `caldav/README.md`
  * for the interop notes this encodes.
  *
  * Bugs fixed at extraction time (source line numbers in the PR body):
  *
  *  - the response pattern was `/<(?:D:)?response>/i`, hard-coded to the single
- *    prefix `D:`, so a SabreDAV response using `<d:response>` or a default
- *    namespace using `<response>` parsed to zero calendars. The source had a
- *    correct pattern in `query.ts` (`extractTagSimple`) and a broken one in
- *    `client.ts`; the single correct implementation is here.
+ *    prefix `D:`, so `<A:response>` parsed to zero calendars. The source had a
+ *    correct pattern in `query.ts` (`extractTagSimple`) and a narrower one in
+ *    `client.ts`; the single correct implementation is here. Measured on the
+ *    source: `<d:response>` and an unprefixed `<response>` both parsed, because
+ *    of the `i` flag and the optional group — only a non-`D` prefix broke.
  *  - `escapeXml` left an XML-invalid C0 control character in place, so a
- *    `displayName` carrying a `\u0000` produced a body no server can parse.
- *  - the resource-type test was `block.includes("<calendar")`, which matches
- *    `<calendar-color>` and therefore reports a plain collection carrying only a
- *    colour as a calendar.
+ *    `displayName` carrying a `\u0000` produced a body no server can parse. It
+ *    also let a lone surrogate through its `code >= 32` test; that is repaired
+ *    too, by the XML 1.0 `Char` rule this module now implements in one place.
+ *  - the resource-type test was `/<[^>]*\bcalendar\b[^>]*\/?>/i`, which matches
+ *    any `calendar-*` element inside a `resourcetype` — `<calendar-color>`
+ *    prefixed or unprefixed, `<calendar-description>`, `<calendar-home-set>` —
+ *    and therefore reports a plain collection as a calendar.
+ *  - the response parser read the first `<status>` **anywhere** inside a
+ *    `<response>`, including the one nested in a `<propstat>`. WebDAV groups a
+ *    response's properties by status and does not order the groups, so a server
+ *    answering `404` for an unsupported `CS:getctag` before the `200` group made
+ *    `listCalendars()` return zero calendars with no warning — a regression
+ *    against the source, whose `<status>` pattern was anchored to the response's
+ *    own element. The status now comes from the response level when present,
+ *    else from the group that carries the requested property, never from
+ *    whichever `<status>` appears first. The same reading at `extractEtags` and
+ *    `readReportResources` dropped a readable resource's `calendar-data`.
+ *  - `decodeXmlEntities` handed every numeric reference to
+ *    `String.fromCodePoint`, so `&#x110000;` inside a `calendar-data` element
+ *    threw `RangeError` out of `readReportResources`, `CalDavClient.readReport`
+ *    and `QueryEngine.queryTodos`.
  */
 
 import { toCalDavDate } from "./ical.ts"
@@ -62,15 +80,140 @@ function elementPattern(name: string, flags = "is"): RegExp {
   return new RegExp(`<${PREFIX}${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${PREFIX}${name}\\s*>`, flags)
 }
 
-/** Escape the five XML predefined entities and drop characters XML forbids. */
+/**
+ * True when `code` is an XML 1.0 **Char** (XML 1.0 §2.2).
+ *
+ * `Char ::= #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]`
+ *
+ * The excluded values are not merely "above `#x10FFFF`": they also include the
+ * surrogate range, which in a JS string is not a character at all but half of a
+ * pair, the C0 controls other than tab/CR/LF, DEL, and the two non-characters
+ * `#xFFFE`/`#xFFFF`. A code point outside this set has no representation in XML
+ * 1.0 — not even as a numeric character reference — so a body carrying one is a
+ * body no conforming parser accepts.
+ */
+export function isXmlChar(code: number): boolean {
+  if (code === 9 || code === 10 || code === 13) return true
+  if (code >= 32 && code <= 0xd7ff) return true
+  if (code >= 0xe000 && code <= 0xfffd) return true
+  return code >= 0x10000 && code <= 0x10ffff
+}
+
+/**
+ * The code units XML 1.0 cannot carry that are always illegal on their own.
+ *
+ * The two non-characters `#xFFFE`/`#xFFFF` are included for the same reason as
+ * the C0 controls: XML 1.0 §2.2 excludes them from **Char**, so a literal one is
+ * as unacceptable as a NUL. DEL is excluded by the same production.
+ */
+// The control-character range is the point of this pattern, as in `net/url-shape`.
+// deno-lint-ignore no-control-regex
+const ILLEGAL_CODE_UNIT = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ufffe\uffff]/g
+
+/** The literal XML 1.0 §2.2 has for a code point with no representation of its own. */
+export const XML_ILLEGAL_REPLACEMENT = "\uFFFD"
+
+/**
+ * True for a high code unit: the first half of a surrogate pair.
+ *
+ * The bounds are written out rather than derived from an exported constant so
+ * every caller's module graph pulls in nothing it does not use.
+ */
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff
+}
+
+/** True for a low code unit: the second half of a surrogate pair. */
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff
+}
+
+/**
+ * Replace every unpaired surrogate code unit with {@link XML_ILLEGAL_REPLACEMENT}.
+ *
+ * A JS string can hold half a surrogate pair, which is not a character at all:
+ * XML 1.0 has no representation for it, and `String.prototype.replaceAll` throws
+ * `RangeError` when handed one. Scanning for the pairs is the replacement for the
+ * character class a regex cannot express here — `/[\uD800-\uDFFF]/gu` is only
+ * legal in Unicode mode, and in that mode the class matches code *points*, so it
+ * matches no surrogate and a lone one sails straight through.
+ */
+function replaceLoneSurrogates(value: string): string {
+  const out: string[] = []
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (isHighSurrogate(code)) {
+      if (isLowSurrogate(value.charCodeAt(index + 1))) {
+        out.push(value[index]!, value[index + 1]!)
+        index++
+        continue
+      }
+      out.push(XML_ILLEGAL_REPLACEMENT)
+      continue
+    }
+    if (isLowSurrogate(code)) {
+      out.push(XML_ILLEGAL_REPLACEMENT)
+      continue
+    }
+    out.push(value[index]!)
+  }
+  return out.join("")
+}
+
+/** Drop every literal code unit XML 1.0 forbids, leaving valid pairs untouched. */
+function stripIllegalXmlCharacters(value: string): string {
+  return replaceLoneSurrogates(value.replace(ILLEGAL_CODE_UNIT, ""))
+}
+
+/**
+ * Replace every code point XML 1.0 has no representation for with `U+FFFD`.
+ *
+ * The decode-side twin of {@link stripIllegalXmlCharacters}, and the difference
+ * between the two is deliberate. `escapeXml` *emits* text and drops what it
+ * cannot write, because a request body must stay valid and there is nothing else
+ * to do with a NUL. `decodeXmlEntities` *reports* what a server sent, so dropping
+ * a byte there would turn a corrupt payload into a plausible-looking one; the
+ * `U+FFFD` is the one code point that stays legal in XML *and* says "this was
+ * not what the server sent".
+ */
+function replaceIllegalXmlCharacters(value: string): string {
+  let replaced = replaceLoneSurrogates(value)
+  for (let code = 0; code <= 0x1f; code++) {
+    if (code === 9 || code === 10 || code === 13) continue
+    replaced = replaceCodeUnit(replaced, code)
+  }
+  for (const code of [0x7f, 0xfffe, 0xffff]) replaced = replaceCodeUnit(replaced, code)
+  return replaced
+}
+
+/** Replace every occurrence of the code unit `code` with {@link XML_ILLEGAL_REPLACEMENT}. */
+function replaceCodeUnit(value: string, code: number): string {
+  const unit = String.fromCharCode(code)
+  if (!value.includes(unit)) return value
+  return value.split(unit).join(XML_ILLEGAL_REPLACEMENT)
+}
+
+/**
+ * Escape the five predefined entities and remove every character XML 1.0 forbids.
+ *
+ * Rule, in one line: the output is `value` with each character that is **not** an
+ * XML 1.0 `Char` ({@link isXmlChar}) removed, and each of `& < > " '` replaced by
+ * its predefined entity.
+ *
+ * Dropping rather than substituting is deliberate for the characters XML 1.0
+ * gives **no** representation at all — a body carrying one is a body no
+ * conforming parser accepts, so emitting nothing is the only option that produces
+ * a valid request. An unpaired surrogate is *replaced* with `U+FFFD` instead of
+ * dropped: a lone surrogate is already a value the caller could not have meant,
+ * and silently shortening the string hides more than it protects. Note the
+ * consequence for a caller: a `displayname` of `"a\u0000b"` is sent as `"ab"`,
+ * and nothing reports the loss.
+ *
+ * @param value Text to place in an XML body.
+ * @returns Markup-safe text containing no non-`Char` code point.
+ */
 export function escapeXml(value: string): string {
-  const cleaned = [...value].filter((character) => {
-    const code = character.codePointAt(0)!
-    // XML 1.0 §2.2: #x9, #xA, #xD, #x20-#xD7FF, and above. Everything else in C0
-    // (and DEL) has no representation at all, not even as a numeric entity, so a
-    // value carrying one produces a body no conforming parser accepts.
-    return code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127)
-  }).join("")
+  const cleaned = stripIllegalXmlCharacters(value)
   return cleaned
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -365,17 +508,137 @@ export function resolveUrl(href: string, baseUrl: string): string {
   }
 }
 
-/** True when a multi-status `propstat` block reports a failure for its property. */
-function isFailedPropstat(block: string): boolean {
-  const status = extractElementText(block, "status")
-  if (status === undefined) return false
+/** True when a `status` line reports anything but a 2xx. */
+function isFailureStatus(status: string): boolean {
   return !/\s2\d\d[\s.]/.test(status)
 }
 
-/** True when a `propstat` block reports `404 Not Found` for its properties. */
-function isMissingPropstat(block: string): boolean {
-  const status = extractElementText(block, "status")
-  return status !== undefined && /\s404[\s.]/.test(status)
+/**
+ * A `propstat` broken into the properties it answers for and its own status.
+ *
+ * `names` are local names with any namespace prefix stripped, because a server
+ * may write `<d:getetag>` and the caller asks for `getetag`.
+ */
+interface PropstatBlock {
+  names: Set<string>
+  status: string | undefined
+}
+
+/** Local name of an element: everything after the last `:`, when there is one. */
+function localName(name: string): string {
+  const colon = name.indexOf(":")
+  return colon === -1 ? name : name.slice(colon + 1)
+}
+
+/**
+ * The `propstat` block that answers for `name`, or `""` when none does.
+ *
+ * A group whose own status is a failure is not an answer even when the empty
+ * element is written inside it — `<D:getetag/>` under `404 Not Found` says the
+ * property is absent, not that it is present and empty. When no present group
+ * answers, the whole response block is returned so a body without any `propstat`
+ * (a flat `<response><getetag>…`) still reads.
+ */
+function propstatAnswering(response: string, name: string): string {
+  const answering = extractElementBlocks(response, "propstat").filter((propstat) => {
+    const status = ownStatuses(propstat)[0]
+    if (status !== undefined && isFailureStatus(status)) return false
+    return propertyIn(propstat, name)
+  })
+  return answering.join("") || response
+}
+
+/** The status lines belonging *directly* to a block, in document order. */
+function ownStatuses(block: string): string[] {
+  return [
+    ...block.matchAll(
+      new RegExp(`<${PREFIX}status(?:\\s[^>]*)?>([\\s\\S]*?)</${PREFIX}status\\s*>`, "gis"),
+    ),
+  ]
+    .map((match) => match[1]!.trim())
+}
+
+/**
+ * Split a `<response>` block's `propstat` children into names and status.
+ *
+ * The `propstat` split is non-greedy, and the `<status>` search inside one is
+ * restricted to the `</prop>`-to-`</propstat>` remainder: a `propstat` never
+ * nests another `propstat`, and the remainder cannot reach into a sibling.
+ */
+function propstatBlocks(response: string): PropstatBlock[] {
+  const blocks: PropstatBlock[] = []
+  for (const match of response.matchAll(elementPattern("propstat", "gi"))) {
+    const body = match[1]!
+    const propEnd = body.lastIndexOf("</prop>")
+    const propXml = propEnd === -1 ? body : body.slice(0, propEnd + "</prop>".length)
+    const afterProp = propEnd === -1 ? "" : body.slice(propEnd + "</prop>".length)
+    const names = new Set(
+      [...propXml.matchAll(new RegExp(`<${PREFIX}([A-Za-z_][\\w.-]*)(?:\\s[^>]*)?>`, "g"))]
+        .map((inner) => localName(inner[1]!)),
+    )
+    blocks.push({ names, status: ownStatuses(afterProp)[0] })
+  }
+  return blocks
+}
+
+/** The `<status>` line of a block itself: everything outside its `propstat` children. */
+function ownStatus(response: string): string | undefined {
+  let outer = ""
+  let cursor = 0
+  for (const match of response.matchAll(elementPattern("propstat", "gi"))) {
+    outer += response.slice(cursor, match.index)
+    cursor = match.index! + match[0].length
+  }
+  outer += response.slice(cursor)
+  return ownStatuses(outer)[0]
+}
+
+/**
+ * Status that governs `name` for one `<response>` block.
+ *
+ * WebDAV splits a response into one `propstat` per status group, and the groups
+ * may arrive in any order: a server that does not implement `CS:getctag` answers
+ * with a `404` `propstat` for that property and a `200` `propstat` for the rest,
+ * and nothing requires the `200` one to come first. Reading the first `<status>`
+ * anywhere in the block therefore reads a *sibling* group's status — it made
+ * `parseCalendarPropfind` drop every calendar whose `getctag` was not
+ * implemented, so `listCalendars()` returned zero calendars with no warning.
+ *
+ * Precedence, in order:
+ *
+ *  1. the `<status>` the `<response>` itself carries, which RFC 4918 §14.24
+ *     defines as the status of the request as a whole;
+ *  2. the status of the `propstat` whose `<prop>` contains `name` — the group
+ *     that actually answers for the property the caller asked about;
+ *  3. when no group mentions `name` at all, the first `propstat` status, which
+ *     is what a single-group response carries and preserves the previous reading
+ *     for that case.
+ *
+ * @returns the status line, or `undefined` when the block carries none, which
+ * RFC 4918 §14.22 makes equivalent to a success.
+ */
+function responseStatusFor(response: string, name: string): string | undefined {
+  const responseStatus = ownStatus(response)
+  if (responseStatus !== undefined) return responseStatus
+
+  const propstats = propstatBlocks(response)
+  for (const propstat of propstats) {
+    if (propstat.names.has(name) && propstat.status !== undefined) return propstat.status
+  }
+  return propstats.find((propstat) => propstat.status !== undefined)?.status
+}
+
+/**
+ * True when `block` carries an element with this local name, whatever its prefix,
+ * empty or not.
+ *
+ * A shape check only: it must be applied to the `propstat` groups whose status
+ * answered for the property, never to a whole `<response>`, or an empty element
+ * in a failed group would be read as "the property is present, read its value
+ * from the group that answers for it".
+ */
+function propertyIn(block: string, name: string): boolean {
+  return new RegExp(`<${PREFIX}${name}(?:\\s[^>]*)?/?>`, "i").test(block)
 }
 
 /**
@@ -389,7 +652,23 @@ function isMissingPropstat(block: string): boolean {
 export function hasCalendarResourceType(block: string): boolean {
   const resourcetype = extractElementText(block, "resourcetype")
   if (resourcetype === undefined) return false
-  return /<[^>]*\bcalendar\b[^>]*\/?>/i.test(resourcetype)
+  return calendarElementPattern().test(resourcetype)
+}
+
+/**
+ * Match a `calendar` element by name, never a `calendar-*` neighbour.
+ *
+ * Two boundaries, and both are load-bearing:
+ *
+ *  - the name ends at `\s`, `/>` or `>` — `` does **not** end it, because `-`
+ *    is not a word character, so `/<[^>]*\bcalendar\b[^>]*\/?>/i` matches
+ *    `<C:calendar-color>` and `<C:calendar-description>` the moment either
+ *    appears inside the `resourcetype`;
+ *  - the name starts at `<` or at a prefix's `:`. A bare `calendar` substring
+ *    also matches the tail of `supported-calendar-component-set`.
+ */
+function calendarElementPattern(): RegExp {
+  return /<(?:[^<>:\s]*:)?calendar(?=[\s/>])/i
 }
 
 /**
@@ -457,23 +736,32 @@ export function parseCalendarPropfind(
   const calendars: Calendar[] = []
   const warnings: string[] = []
   for (const block of blocks) {
-    const ownStatus = extractElementText(block, "status")
-    if (ownStatus !== undefined && !/\s2\d\d[\s.]/.test(ownStatus)) continue
+    const responseStatus = responseStatusFor(block, "displayname")
+    if (responseStatus !== undefined && isFailureStatus(responseStatus)) continue
 
     const href = extractElementText(block, "href")
     if (href === undefined || href === "") continue
 
     const propstats = extractElementBlocks(block, "propstat")
-    const usable = propstats.filter((propstat) => !isFailedPropstat(propstat))
-    const scope = usable.length > 0 ? usable.join("") : block
-    if (propstats.length > 0 && usable.length === 0) {
+    const succeeded = propstats.filter((propstat) => {
+      const status = ownStatuses(propstat)[0]
+      return status === undefined || !isFailureStatus(status)
+    })
+    if (propstats.length > 0 && succeeded.length === 0) {
       // Every property errored: a per-resource failure inside a 207. Skipping it
       // keeps a broken member from being reported as a calendar with no name.
-      const status = extractElementText(propstats[0]!, "status") ?? "unknown status"
-      if (isMissingPropstat(propstats[0]!)) continue
+      const status = ownStatuses(propstats[0]!)[0] ?? "unknown status"
+      if (/\s404[\s.]/.test(status)) continue
       warnings.push(`skipped ${href}: properties failed with ${status}`)
       continue
     }
+
+    // Properties are read from the groups that answered 2xx, and only from them:
+    // a `404 propstat` for `getctag` says nothing about the `resourcetype` that
+    // arrived in the group beside it, so it must not be handed to the readers as
+    // if it carried properties at all. A response with no `propstat` at all is
+    // read flat, which is the shape a simple server emits.
+    const scope = succeeded.length > 0 ? succeeded.join("") : block
 
     const isCalendarResource = hasCalendarResourceType(scope)
     const { components, declared } = readSupportedComponents(scope)
@@ -529,10 +817,10 @@ function lastPathSegment(href: string): string {
 export function extractEtags(xml: string): Map<string, string> {
   const etags = new Map<string, string>()
   for (const block of extractElementBlocks(xml, "response")) {
-    const ownStatus = extractElementText(block, "status")
-    if (ownStatus !== undefined && !/\s2\d\d[\s.]/.test(ownStatus)) continue
+    const blockStatus = responseStatusFor(block, "getetag")
+    if (blockStatus !== undefined && isFailureStatus(blockStatus)) continue
     const href = extractElementText(block, "href")
-    const etag = extractElementText(block, "getetag")
+    const etag = extractElementText(propstatAnswering(block, "getetag"), "getetag")
     if (href === undefined || etag === undefined || etag === "") continue
     etags.set(resourceName(href), normalizeEtag(etag))
   }
@@ -574,6 +862,16 @@ export function normalizeEtag(etag: string): string {
  * than dropped: a 207 multi-status is how a server reports "the collection was
  * queried, this member errored", and a caller that cannot see that cannot decide
  * whether the answer is trustworthy.
+ *
+ * The status used for that decision is the one governed by `calendar-data`,
+ * resolved per response by {@link responseStatusFor}. Reading the first
+ * `<status>` in the block at random read whichever `propstat` happened to come
+ * first, so a server that answered `<D:getetag/>` with `404 Not Found` before the
+ * group carrying the payload lost the whole resource — it was reported as a
+ * failure and its `calendar-data` was never read.
+ *
+ * The payload itself is read from the group that *answers* for `calendar-data`,
+ * so a present-but-empty element in a failed group cannot stand in for it.
  */
 export function readReportResources(xml: string): {
   resources: { href: string; etag: string; calendarData: string }[]
@@ -583,13 +881,14 @@ export function readReportResources(xml: string): {
   const failures: { href: string; status: string }[] = []
   for (const block of extractElementBlocks(xml, "response")) {
     const href = extractElementText(block, "href") ?? ""
-    const ownStatus = extractElementText(block, "status")
-    if (ownStatus !== undefined && !/\s2\d\d[\s.]/.test(ownStatus)) {
-      failures.push({ href, status: ownStatus })
+    const status = responseStatusFor(block, "calendar-data")
+    if (status !== undefined && isFailureStatus(status)) {
+      failures.push({ href, status })
       continue
     }
-    const etag = extractElementText(block, "getetag")
-    const calendarData = extractElementText(block, "calendar-data")
+    const scope = propstatAnswering(block, "calendar-data")
+    const etag = extractElementText(scope, "getetag")
+    const calendarData = extractElementText(scope, "calendar-data")
     if (etag === undefined && calendarData === undefined) continue
     resources.push({
       href,
@@ -607,11 +906,42 @@ export function readReportResources(xml: string): {
  * become `&` before the iCalendar parser runs — otherwise a `SUMMARY` holding a
  * comma-separated list arrives with `&amp;` in it. Numeric references are
  * decoded too, because a server may escape a character with no named entity.
+ *
+ * **The rule, and it is total: this function never throws, and its result never
+ * contains a code point that is not an XML 1.0 `Char` ({@link isXmlChar}).**
+ * Every reference whose value falls outside that set — `&#x110000;` (above
+ * `#x10FFFF`), `&#xD800;` (a surrogate), `&#xFFFF;` (a non-character), `&#x0;`,
+ * `&#x8;`, `&#x7F;` — becomes {@link XML_ILLEGAL_REPLACEMENT} (`U+FFFD`), as does
+ * an unpaired surrogate sitting in the surrounding text with no reference
+ * involved.
+ *
+ * Why total rather than guarded: the input is untrusted network bytes, and the
+ * previous implementation handed every reference to `String.fromCodePoint`, so a
+ * single `&#x110000;` inside a `calendar-data` element threw `RangeError: Invalid
+ * code point 1114112` straight out of `readReportResources`,
+ * `CalDavClient.readReport` and `QueryEngine.queryTodos`. A public API must not
+ * carry a throw on its input path that the caller cannot avoid by inspecting the
+ * input.
+ *
+ * Why substitute rather than leave the reference undecoded: a value that decodes
+ * to something with no XML representation is corrupt, and leaving the raw
+ * `&#x110000;` would push that decision onto whichever layer reads the value next
+ * — including the iCalendar parser, which would meet a literal `&` it never asked
+ * for. `U+FFFD` is the one code point that says "corrupt" in a form every
+ * downstream layer already handles. The cost is that corruption is silent: a
+ * caller that needs to know must look for `U+FFFD` in the result.
+ *
+ * Scope note: only character references are decoded. `CDATA` sections are left
+ * literal, which is why `parseCalendarPropfind` does not entity-decode property
+ * text at all.
+ *
+ * @param value XML text to decode.
+ * @returns Text carrying only legal XML 1.0 characters.
  */
 export function decodeXmlEntities(value: string): string {
-  return value.replaceAll(
+  const decoded = value.replaceAll(
     /&(?:#(\d+)|#x([0-9a-fA-F]+)|(amp|lt|gt|quot|apos));/g,
-    (whole, decimal: string | undefined, hex: string | undefined, named: string | undefined) => {
+    (_whole, decimal: string | undefined, hex: string | undefined, named: string | undefined) => {
       if (named !== undefined) {
         const entities: Record<string, string> = {
           amp: "&",
@@ -623,7 +953,13 @@ export function decodeXmlEntities(value: string): string {
         return entities[named]!
       }
       const code = decimal !== undefined ? Number.parseInt(decimal, 10) : Number.parseInt(hex!, 16)
-      return Number.isFinite(code) ? String.fromCodePoint(code) : whole
+      // `isXmlChar` rejects NaN as well: every comparison against NaN is false,
+      // so a reference that parsed to nothing takes the `U+FFFD` branch.
+      return isXmlChar(code) ? String.fromCodePoint(code) : XML_ILLEGAL_REPLACEMENT
     },
   )
+  // The text around the references is untrusted too: it can carry a bare NUL or
+  // half a surrogate pair with no reference involved. `replace`, not `strip`:
+  // see the note on `replaceIllegalXmlCharacters`.
+  return replaceIllegalXmlCharacters(decoded)
 }
