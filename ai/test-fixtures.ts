@@ -91,7 +91,16 @@ export function createFakeFetcher(replies: FakeReply[]): FakeFetcher {
       resolve()
     }
     const reply = replies[index++]
-    if (!reply) throw new Error(`fake fetcher ran out of replies after ${index - 1} call(s)`)
+    if (!reply) {
+      // Deliberately distinctive: a test that queued too few replies must fail
+      // loudly instead of asserting on this error while believing it holds a
+      // provider response.
+      const failure = new Error(
+        `FakeFetcherExhausted: no reply queued for call ${index} of ${replies.length}`,
+      )
+      failure.name = "FakeFetcherExhausted"
+      throw failure
+    }
     if ("networkError" in reply) return Promise.reject(reply.networkError)
     if ("hangs" in reply) {
       return new Promise<Response>((_resolve, reject) => {

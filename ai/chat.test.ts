@@ -31,6 +31,22 @@ import {
   surfacedStrings,
 } from "./test-fixtures.ts"
 
+/**
+ * Fail a test loudly when the fixture ran out of replies.
+ *
+ * A retryable status consumes more than one queued reply, so a test that queued
+ * one reply and asserted on the resulting error would otherwise assert on the
+ * fixture's own exhaustion error while believing it held a provider response.
+ */
+function assertNotExhausted(error: unknown): void {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+  assertEquals(
+    text.includes("FakeFetcherExhausted"),
+    false,
+    `the fixture ran out of replies; the assertion would be about the fixture: ${text}`,
+  )
+}
+
 /** Build a client over queued replies, with a fake clock and a recording logger. */
 function harness(replies: FakeReply[], config: Parameters<typeof createChatClient>[0] = {
   apiKey: FAKE_API_KEY,
@@ -555,8 +571,14 @@ describe("errors never carry a stack, a path or a credential", () => {
   const leakyKey = "sk-live-looking-key-that-must-not-travel"
 
   it("keeps frame text and paths out of everything a route would surface", async () => {
-    const { client } = harness([{ status: 500, body: { error: { message: "internal" } } }])
+    // One attempt: a 500 is retryable, and this test is about the error surface,
+    // not about the retry — so the one queued reply is the reply that surfaces.
+    const { client } = harness(
+      [{ status: 500, body: { error: { message: "internal" } } }],
+      { apiKey: FAKE_API_KEY, retry: { maxAttempts: 1 } },
+    )
     const error = await assertRejects(() => client.chatCompletion(ASK))
+    assertNotExhausted(error)
     const payload = serialized(error)
 
     // The contract: a route that puts the error on the wire — `JSON.stringify`
@@ -581,24 +603,38 @@ describe("errors never carry a stack, a path or a credential", () => {
   })
 
   it("keeps a provider message from leaking a key or a frame", async () => {
-    const { client } = harness([
-      {
-        status: 500,
-        body: {
-          error: {
-            message:
-              `internal error at handler (/srv/app/routes/api/chat.ts:41:9) using ${leakyKey}`,
+    // One attempt, so the single queued reply is what surfaces — a 500 is
+    // retryable and an exhausted fixture would otherwise be the error asserted on.
+    const { client } = harness(
+      [
+        {
+          status: 500,
+          body: {
+            error: {
+              message:
+                `internal error at handler (/srv/app/routes/api/chat.ts:41:9) using ${leakyKey}`,
+            },
           },
         },
-      },
-    ])
+      ],
+      { apiKey: FAKE_API_KEY, retry: { maxAttempts: 1 } },
+    )
     const error = await assertRejects(() => client.chatCompletion(ASK))
-    const haystack = isAiError(error) ? surfacedStrings(error).join(" ") : ""
+    assertNotExhausted(error)
 
+    const haystack = isAiError(error) ? surfacedStrings(error).join(" ") : ""
+    // The credential never travels.
     assertEquals(haystack.includes(leakyKey), false)
     assertEquals(serialized(error).includes(leakyKey), false)
-    assertEquals(/at [A-Za-z_$][\w$.]* \(/.test(haystack), false, `frame text: ${haystack}`)
-    assertEquals(haystack.includes(".ts:"), false, `file path: ${haystack}`)
+    // Neither does a path, a line number or a frame, even though the provider put
+    // all three in its own message: the frame is redacted and the description
+    // survives.
+    assertEquals(haystack.includes("/srv/"), false, haystack)
+    assertEquals(haystack.includes(".ts:"), false, haystack)
+    assertEquals(hasFrameText(haystack), false, haystack)
+    assertMatch(haystack, /internal error/)
+    assertMatch(haystack, /<stack frame redacted>/)
+    assertMatch(haystack, /<REDACTED:API_KEY>/)
   })
 
   it("redacts a key the provider echoes into its own message", async () => {
@@ -621,11 +657,12 @@ describe("errors never carry a stack, a path or a credential", () => {
   })
 
   it("never logs the key, the prompt or the completion", async () => {
-    const { client, lines } = harness([
+    const { client, lines, fake } = harness([
       { status: 503, body: { error: { message: `failed with ${leakyKey}` } } },
       { body: completionBody("a secret completion") },
     ])
     await client.chatCompletion({ messages: [{ role: "user", content: "a secret prompt" }] })
+    assertEquals(fake.calls(), 2, "the first reply was a retryable 503")
 
     assertEquals(lines.length, 1, "one retry must produce exactly one log line")
     const logged = JSON.stringify(lines)

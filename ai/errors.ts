@@ -134,13 +134,35 @@ const CONTROL_CHARACTERS = new RegExp(
  * the only function permitted to hand provider text back to a caller.
  */
 export function sanitizeProviderText(text: string): string {
-  return text
+  return stripFrameText(text)
     .replace(/sk-[A-Za-z0-9_-]{4,}/g, "<REDACTED:API_KEY>")
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer <REDACTED:API_KEY>")
     .replace(CONTROL_CHARACTERS, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, MAX_PROVIDER_TEXT)
+}
+
+/**
+ * Remove stack-frame text from provider-controlled prose.
+ *
+ * A provider error message frequently carries its own trace — `at handler
+ * (/srv/app/routes/api/chat.ts:41:9)` — and echoing a path, a module name and a
+ * line number back to a caller is exactly what this package refuses to do,
+ * whether the frame came from our code or from theirs. The descriptive part
+ * survives: `internal error at handler (/srv/...:41:9) using X` becomes
+ * `internal error <stack frame redacted> using X`, so the message still says what
+ * happened without saying where anything lives.
+ *
+ * Deliberately conservative: a path carrying a line and column, and an `at frame`
+ * sequence, are matched. A bare `FooError: too many requests` is left alone.
+ */
+export function stripFrameText(text: string): string {
+  return text
+    // `/srv/app/routes/api/chat.ts:41:9`, `worker.js:1:2`, `mod.mts:3:4`
+    .replace(/[\w./@~-]*[\w-]+\.[cm]?[jt]sx?:\d+(?::\d+)?/g, "<stack frame redacted>")
+    // `at handler (...)`, `at Object.<anonymous>`, `at async Object.chatCompletion`
+    .replace(/\bat\s+(?:async\s+)?[\w$][\w$.<>]*(?:\s*\([^)]*\))?/g, "<stack frame redacted>")
 }
 
 /** `name: message` for a caught value, sanitized. Never a stack. */
