@@ -1,0 +1,10 @@
+{
+  "name": "@ts-libs/ai",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./+main.ts",
+    "./chat": "./chat.ts",
+    "./chat-json": "./chat-json.ts",
+    "./parse-json": "./parse-json.ts"
+  }
+}
