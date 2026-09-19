@@ -1,6 +1,11 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { createLineSplitter, ProcessExecutionError, type ProcessOutput } from "./process-runner.ts"
+import {
+  assertUsablePath,
+  createLineSplitter,
+  ProcessExecutionError,
+  type ProcessOutput,
+} from "./process-runner.ts"
 
 function collector(): { lines: string[]; splitter: ReturnType<typeof createLineSplitter> } {
   const lines: string[] = []
@@ -75,5 +80,35 @@ describe("ProcessExecutionError", () => {
 
   it("is an Error so a caller can catch it as one", () => {
     expect(new ProcessExecutionError("failed", output, ["ffprobe"]) instanceof Error).toBe(true)
+  })
+})
+
+describe("assertUsablePath", () => {
+  it("accepts an ordinary path", () => {
+    expect(() => assertUsablePath("/media/clip.mp4")).not.toThrow()
+  })
+
+  it("accepts a dash inside a file name", () => {
+    expect(() => assertUsablePath("/media/my-clip-01.mp4")).not.toThrow()
+  })
+
+  it("rejects a path that starts with a dash, which a binary reads as an option", () => {
+    expect(() => assertUsablePath("-y.webp")).toThrow(TypeError)
+    expect(() => assertUsablePath("--help")).toThrow(TypeError)
+  })
+
+  it("rejects a path containing a NUL byte", () => {
+    expect(() => assertUsablePath("/tmp/th\u0000umb.webp")).toThrow(TypeError)
+  })
+
+  it("names the kind of path in the diagnostic", () => {
+    expect(() => assertUsablePath("-y.webp", "thumbnail output")).toThrow(
+      'thumbnail output must not start with "-": "-y.webp"',
+    )
+    expect(() => assertUsablePath("media path", "input")).not.toThrow()
+  })
+
+  it("quotes an unprintable path so the diagnostic cannot corrupt a log line", () => {
+    expect(() => assertUsablePath("a\u0000b")).toThrow('"a\\u0000b"')
   })
 })

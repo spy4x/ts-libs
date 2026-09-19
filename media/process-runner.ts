@@ -80,6 +80,35 @@ export class ProcessExecutionError extends Error {
   }
 }
 
+/**
+ * Rejects a filesystem path that a media binary would read as one of its own
+ * options, or that no `execve` call can carry.
+ *
+ * Passing `argv` instead of a shell string removes shell interpretation, but it
+ * does **not** remove option parsing: ffmpeg and ffprobe parse their own
+ * argument list, so a path that begins with `-` is read as a flag. Reaching them
+ * with `output: "-y.webp"` produced `Unrecognized option 'y.webp'` and exit 8 on
+ * ffmpeg 8.1.2 — a caller-supplied path became a command-line flag. A NUL byte
+ * is rejected for the same reason to keep the failure ours: `Deno.Command`
+ * otherwise throws its own `nul byte found in provided data` from deep inside
+ * the spawn, which names neither the argument nor the caller.
+ *
+ * Every wrapper in this package runs its caller-supplied paths through here
+ * before building argv.
+ *
+ * @param kind what the path is, for the diagnostic — `"media path"`,
+ * `"thumbnail output"`.
+ * @throws {TypeError} before any process is created.
+ */
+export function assertUsablePath(path: string, kind = "media path"): void {
+  if (path.startsWith("-")) {
+    throw new TypeError(`${kind} must not start with "-": ${JSON.stringify(path)}`)
+  }
+  if (path.includes("\0")) {
+    throw new TypeError(`${kind} must not contain a NUL byte: ${JSON.stringify(path)}`)
+  }
+}
+
 /** Incrementally splits a byte stream into complete lines. */
 export interface LineSplitter {
   /** Feeds one chunk; complete lines are delivered to the callback. */

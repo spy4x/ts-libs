@@ -10,6 +10,7 @@
 import { formatDurationParam } from "./duration.ts"
 import { createFfmpegProgressParser, type FfmpegProgressEvent } from "./progress-parse.ts"
 import {
+  assertUsablePath,
   FFMPEG_BINARY,
   type MediaDeps,
   ProcessExecutionError,
@@ -55,11 +56,23 @@ export const DEFAULT_THUMBNAIL_AT_MS = 1300
  *
  * `-ss` stays after `-i`, which decodes-and-discards rather than seeking
  * instantly: slower, but the source's behaviour and the accurate one.
+ *
+ * Both paths go through `assertUsablePath` before argv exists: ffmpeg parses its
+ * own option list, so a path beginning with `-` is not a filename to it.
+ * Reproduced against ffmpeg 8.1.2 before this guard existed — `output:
+ * "-y.webp"` reached argv and ffmpeg answered `Unrecognized option 'y.webp'`
+ * with exit 8, i.e. a caller-supplied path had become a command-line flag.
+ *
+ * @throws {TypeError} when either path could be read as an ffmpeg option or
+ * contains a NUL byte, or when the output is not `.webp`. Thrown before any
+ * process is created.
  */
 export function buildThumbnailArgv(
   options: ThumbnailOptions,
   ffmpegPath: string = FFMPEG_BINARY,
 ): string[] {
+  assertUsablePath(options.input, "thumbnail input")
+  assertUsablePath(options.output, "thumbnail output")
   if (!options.output.toLowerCase().endsWith(".webp")) {
     throw new TypeError(`thumbnail output must end in .webp, received ${options.output}`)
   }
@@ -83,7 +96,8 @@ export function buildThumbnailArgv(
  * Extracts one webp thumbnail.
  *
  * @returns the output path, so a caller can chain it.
- * @throws {TypeError} when the output path is not `.webp`.
+ * @throws {TypeError} when either path could be read as an ffmpeg option, or
+ * when the output path is not `.webp` — both before any process is created.
  * @throws {ProcessExecutionError} when ffmpeg exits non-zero.
  */
 export async function makeThumbnail(options: ThumbnailOptions, deps: MediaDeps): Promise<string> {

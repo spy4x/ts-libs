@@ -94,6 +94,40 @@ describe("makeThumbnail", () => {
     expect(runner.argvOf(0)?.[0]).toBe("/usr/bin/ffmpeg")
   })
 
+  it("refuses a dash-leading output before creating any process", async () => {
+    const runner = new FakeProcessRunner(() => ({}))
+    const error = await makeThumbnail(
+      { input: "/media/clip.mp4", output: "-y.webp" },
+      { runner },
+    ).catch((thrown: unknown) => thrown)
+    expect(error instanceof TypeError).toBe(true)
+    expect((error as TypeError).message).toBe(
+      'thumbnail output must not start with "-": "-y.webp"',
+    )
+    expect(runner.callCount).toBe(0)
+  })
+
+  it("refuses a dash-leading input before creating any process", async () => {
+    const runner = new FakeProcessRunner(() => ({}))
+    const error = await makeThumbnail(
+      { input: "-vf", output: "/tmp/thumb.webp" },
+      { runner },
+    ).catch((thrown: unknown) => thrown)
+    expect(error instanceof TypeError).toBe(true)
+    expect(runner.callCount).toBe(0)
+  })
+
+  it("refuses a NUL byte in the output path before creating any process", async () => {
+    const runner = new FakeProcessRunner(() => ({}))
+    const error = await makeThumbnail(
+      { input: "/media/clip.mp4", output: "/tmp/th\u0000umb.webp" },
+      { runner },
+    ).catch((thrown: unknown) => thrown)
+    expect(error instanceof TypeError).toBe(true)
+    expect((error as TypeError).message).toContain("thumbnail output must not contain a NUL byte")
+    expect(runner.callCount).toBe(0)
+  })
+
   it("throws a ProcessExecutionError carrying stderr when ffmpeg fails", async () => {
     const runner = new FakeProcessRunner(() => ({
       code: 1,
