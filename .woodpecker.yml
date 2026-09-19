@@ -1,0 +1,20 @@
+# Woodpecker CI (self-hosted, same instance as spy4x/template and spy4x/preact-components).
+#
+# The `when` guard is explicit on purpose. The sibling repo `preact-components`
+# shipped `deno task check` with no guard, so the pipeline ran on every event the
+# webhook delivered (`bad_habit`). No precedent for the fix exists in that repo's
+# git history (`git log --all | grep -i bad_habit` finds nothing, and no sibling
+# repo under ~/sync/code carries that fix), so this is the standard Woodpecker
+# shape: pushes to main, pull requests targeting main, and tag builds. PRs are
+# what the reviewer gate needs; tags are kept so #20's JSR publish can hang off
+# a tag build later without another workflow edit.
+when:
+  event: [push, pull_request, tag]
+  branch: main
+
+steps:
+  check:
+    image: denoland/deno:2.9.7
+    commands:
+      - deno --version
+      - deno task check

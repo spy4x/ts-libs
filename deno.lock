@@ -1,0 +1,154 @@
+{
+  "version": "5",
+  "specifiers": {
+    "jsr:@hono/hono@4.13.8": "4.13.8",
+    "jsr:@std/assert@1.0.19": "1.0.19",
+    "jsr:@std/assert@^1.0.19": "1.0.19",
+    "jsr:@std/async@1.5.0": "1.5.0",
+    "jsr:@std/bytes@^1.0.6": "1.0.6",
+    "jsr:@std/cli@1.0.32": "1.0.32",
+    "jsr:@std/collections@1.3.0": "1.3.0",
+    "jsr:@std/crypto@1.1.0": "1.1.0",
+    "jsr:@std/crypto@^1.1.0": "1.1.0",
+    "jsr:@std/data-structures@^1.1.1": "1.1.2",
+    "jsr:@std/encoding@1.0.11": "1.0.11",
+    "jsr:@std/expect@1.0.20": "1.0.20",
+    "jsr:@std/fs@1.0.24": "1.0.24",
+    "jsr:@std/internal@^1.0.12": "1.0.14",
+    "jsr:@std/internal@^1.0.14": "1.0.14",
+    "jsr:@std/path@1.1.6": "1.1.6",
+    "jsr:@std/path@^1.1.5": "1.1.6",
+    "jsr:@std/path@^1.1.6": "1.1.6",
+    "jsr:@std/testing@1.0.20": "1.0.20",
+    "jsr:@std/uuid@1.1.1": "1.1.1",
+    "jsr:@std/yaml@1.2.0": "1.2.0",
+    "npm:arktype@2.2.3": "2.2.3",
+    "npm:postgres@3.4.7": "3.4.7"
+  },
+  "jsr": {
+    "@hono/hono@4.13.8": {
+      "integrity": "bbb566d9ebb81e74c0d7eeff1f9221ba9f3fda6f1832e5ca66cbddcecb2f7fec"
+    },
+    "@std/assert@1.0.19": {
+      "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
+      "dependencies": [
+        "jsr:@std/internal@^1.0.12"
+      ]
+    },
+    "@std/async@1.5.0": {
+      "integrity": "4c1f22d287a17ad7d8643b1952bc5a4d21e5d8b68dc8c20d8268eecc69096e82",
+      "dependencies": [
+        "jsr:@std/data-structures"
+      ]
+    },
+    "@std/bytes@1.0.6": {
+      "integrity": "f6ac6adbd8ccd99314045f5703e23af0a68d7f7e58364b47d2c7f408aeb5820a"
+    },
+    "@std/cli@1.0.32": {
+      "integrity": "188b3a100d6202d64e3f5bd3d799c7fa4f6d77f92cc65eb7f641c1fa0aa92a66",
+      "dependencies": [
+        "jsr:@std/internal@^1.0.14"
+      ]
+    },
+    "@std/collections@1.3.0": {
+      "integrity": "eb36b43d784477ea0b476483ac034a14bdd182aff921c812ecf662a1fcef9498"
+    },
+    "@std/crypto@1.1.0": {
+      "integrity": "b8d6d0a6377a32b213af2661ed7bf1062d94feac0c57def5526a8e74a95c3ec8"
+    },
+    "@std/data-structures@1.1.2": {
+      "integrity": "2471377c9e0051f9ec34e57d0ebd0ad133a5a889677446ec6ba9938e4e102918"
+    },
+    "@std/encoding@1.0.11": {
+      "integrity": "e7cef2f0b3153bccc17431e7c864a1de03a4b6d9647389c43e08aaa775d37385"
+    },
+    "@std/expect@1.0.20": {
+      "integrity": "ffc4f3c33f732417e3e9acf3d995818c89984313c37d933b9ebbb4571d2887e9",
+      "dependencies": [
+        "jsr:@std/assert@^1.0.19",
+        "jsr:@std/internal@^1.0.14",
+        "jsr:@std/path@^1.1.6"
+      ]
+    },
+    "@std/fs@1.0.24": {
+      "integrity": "f3061b45b81673a2bece689da041df32d174be064c89eb6397fb5718d3fb7877",
+      "dependencies": [
+        "jsr:@std/internal@^1.0.14",
+        "jsr:@std/path@^1.1.5"
+      ]
+    },
+    "@std/internal@1.0.14": {
+      "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
+    },
+    "@std/path@1.1.6": {
+      "integrity": "c68485c2a4dfbb5ae3cc74fae4e8c4e5d874cf8a8ed12927917235c758b46cbe",
+      "dependencies": [
+        "jsr:@std/internal@^1.0.14"
+      ]
+    },
+    "@std/testing@1.0.20": {
+      "integrity": "21380ed438672762e4ec549cbf4fe41c5b68f5598773a30b64abe7375513e721",
+      "dependencies": [
+        "jsr:@std/assert@^1.0.19",
+        "jsr:@std/internal@^1.0.14"
+      ]
+    },
+    "@std/uuid@1.1.1": {
+      "integrity": "7b49060282d90f72fec64952f8c7a2914cbe6fdba3eca665f8cedc90830154a7",
+      "dependencies": [
+        "jsr:@std/bytes",
+        "jsr:@std/crypto@^1.1.0"
+      ]
+    },
+    "@std/yaml@1.2.0": {
+      "integrity": "20beb41e4983ba3437dbefac62b14061ab058e8a187596f19d28ff9035f6e6cf"
+    }
+  },
+  "npm": {
+    "@ark/schema@0.56.2": {
+      "integrity": "sha512-Qx4D2JFbBWpntiHZaTv7bGG4H/M2rigiknezKg/WVyDSaLdE4YCcWAOoFB7pjjDqHbbV2OqRfntm1nnXvwMexg==",
+      "dependencies": [
+        "@ark/util"
+      ]
+    },
+    "@ark/util@0.56.2": {
+      "integrity": "sha512-9kU2sUE38FZEGG7l3hamYMBieLYEJh2L1mrYD2eXpT+78EnQSV1bhjxJhnxGBMSTbtwpBSDNSK+K60WvaI/DTQ=="
+    },
+    "arkregex@0.0.8": {
+      "integrity": "sha512-PJcx6G1kQTgLKPUbeYlYecDRaKq15AMSGVajlKFYWlPeJRQL+j3dKE6tyMs40HZ99djS1l9Vhl3ezAHy9JBIqQ==",
+      "dependencies": [
+        "@ark/util"
+      ]
+    },
+    "arktype@2.2.3": {
+      "integrity": "sha512-7W+0RLTUNJiBFIIZXwOQxSR8Z273IAd6IvqBeG9+gHnQKFsIx2C0iOtGTmMrPnlX4qLXyc5+ll7A0BIj9WrbTg==",
+      "dependencies": [
+        "@ark/schema",
+        "@ark/util",
+        "arkregex"
+      ]
+    },
+    "postgres@3.4.7": {
+      "integrity": "sha512-Jtc2612XINuBjIl/QTWsV5UvE8UHuNblcO3vVADSrKsrc6RqGX6lOW1cEo3CM2v0XG4Nat8nI+YM7/f26VxXLw=="
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "jsr:@hono/hono@4.13.8",
+      "jsr:@std/assert@1.0.19",
+      "jsr:@std/async@1.5.0",
+      "jsr:@std/cli@1.0.32",
+      "jsr:@std/collections@1.3.0",
+      "jsr:@std/crypto@1.1.0",
+      "jsr:@std/encoding@1.0.11",
+      "jsr:@std/expect@1.0.20",
+      "jsr:@std/fs@1.0.24",
+      "jsr:@std/path@1.1.6",
+      "jsr:@std/testing@1.0.20",
+      "jsr:@std/uuid@1.1.1",
+      "jsr:@std/yaml@1.2.0",
+      "npm:arktype@2.2.3",
+      "npm:postgres@3.4.7"
+    ]
+  }
+}
