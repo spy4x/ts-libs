@@ -28,7 +28,6 @@ Line folding, unfolding and TEXT escaping are **not implemented here**. They liv
 
 ```ts
 import {
-  foldLine,
   formatIcsUtc,
   icsEscape,
   icsUnescape,
@@ -37,13 +36,15 @@ import {
 } from "@ts-libs/time/ics-core"
 ```
 
-Names consumed by `ical.ts`: `foldLine`, `joinContentLines`, `unfoldLines`, `icsEscape`,
-`icsUnescape`, `formatIcsUtc`, `CRLF`. Also available and _not_ used here: `icsEscapeParameter`,
-`icsUnescapeParameter` (this layer does not write caller-supplied parameter values),
-`stripControlCharacters`, `assertFoldable`, `FOLD_LIMIT`, `CONTINUATION_LIMIT`, `LF`.
+Five names, exactly as imported above: `formatIcsUtc`, `icsEscape`, `icsUnescape`,
+`joinContentLines` (which folds every line through `foldLine` internally), `unfoldLines`.
 
-The source's `foldLine` counted **characters** (`line.length`, `slice(i, i + 75)`) and its `unfold`
-was a private copy. That character count is the bug the shared core fixes: a value whose UTF-8
+Available and _not_ used here: `foldLine` (reached through `joinContentLines`),
+`icsEscapeParameter` / `icsUnescapeParameter` (this layer writes no caller-supplied parameter values),
+`stripControlCharacters`, `assertFoldable`, `CRLF`, `FOLD_LIMIT`, `CONTINUATION_LIMIT`, `LF`.
+
+The source's `foldLine` counted **characters** (`line.length <= 75`, `slice(i, i + 75)`) and its
+`unfold` was a private copy. That character count is the bug the shared core fixes: a value whose UTF-8
 encoding crosses the 75-octet boundary between two of its code points gets split mid-sequence and the
 document becomes unreadable. `ical.test.ts` pins the delegation on both sides — the writer's folded
 output must unfold back through `time/ics-core`'s `unfoldLines` to the literal value.

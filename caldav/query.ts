@@ -329,6 +329,10 @@ export class QueryEngine {
       }])
     }
     const listed = await this.client.listCalendars()
+    // `reshapeFailure` drops the listing's own partial `{calendars, warnings}`:
+    // that shape is not a `TodoQueryResult`, and forwarding it would hand a
+    // caller an object whose `todos` field does not exist. The listing's own
+    // `listCalendars()` call still returns it for a caller that wants it.
     if (!listed.success) return reshapeFailure(listed)
     return ok(listed.output.calendars.filter((calendar) => calendar.components.includes(component)))
   }
@@ -365,6 +369,10 @@ export class QueryEngine {
           }
         }
         const { resources, failures } = this.client.readReport(response.output)
+        // Every member of a 207 failed: the calendar answered, but with nothing
+        // usable, so it is reported as a failed calendar rather than as an empty
+        // one. A `207` with resources *and* failures is a partial success and is
+        // counted as one.
         if (failures.length > 0 && resources.length === 0) {
           return {
             ok: false,
@@ -416,7 +424,6 @@ export class QueryEngine {
     // and two collections may legitimately hold the same UID for different tasks.
     const etags = etagsFor(resources)
     for (const resource of resources) {
-      if (resource.calendarData.trim() === "") continue
       const parsed = parseTodos(resource.calendarData, {
         calendarName: calendar.displayName,
         calendarUrl: calendar.url,
@@ -436,7 +443,6 @@ export class QueryEngine {
     const events: Event[] = []
     const etags = etagsFor(resources)
     for (const resource of resources) {
-      if (resource.calendarData.trim() === "") continue
       const parsed = parseEvents(resource.calendarData, {
         calendarName: calendar.displayName,
         calendarUrl: calendar.url,
@@ -472,6 +478,10 @@ export class QueryEngine {
           }
         }
         const { resources, failures } = this.client.readReport(response.output)
+        // Every member of a 207 failed: the calendar answered, but with nothing
+        // usable, so it is reported as a failed calendar rather than as an empty
+        // one. A `207` with resources *and* failures is a partial success and is
+        // counted as one.
         if (failures.length > 0 && resources.length === 0) {
           return {
             ok: false,

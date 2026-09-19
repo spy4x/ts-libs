@@ -11,19 +11,19 @@
  *
  * Bugs fixed at extraction time (source line numbers in the PR body):
  *
- *  - `DTSTAMP` was `toISOString().replace(/[-:]/g, "")`, which leaves the
- *    millisecond field behind, so every generated resource carried
- *    `DTSTAMP:20260601T120000.000Z` — an invalid value.
- *  - the property separator was the *first* colon, so a value whose own colon is
- *    escaped (`URL:https\://example.com`) was split inside the value.
  *  - `CATEGORIES` splitting ignored escaping, so a category containing a comma
  *    (`a\,b`) came back as two categories.
+ *  - `escapeICal` left CR and every other C0 control character in the value, and
+ *    the component builders wrote a `UID` and a `RELATED-TO` uid through a
+ *    hand-rolled escape chain that did the same, so a value in the property
+ *    position could end its own content line.
  *  - a `STATUS` outside the RFC's four values was reported as `NEEDS-ACTION`,
  *    telling a caller an unknown-status task was open.
  *  - the fallback resource URL interpolated the `UID` unencoded and assumed a
  *    trailing slash, so a UID containing a slash or a dot changed the URL shape.
  *  - `fromICalDate("")` returned the *current* time, so a task with no `DUE`
- *    acquired one.
+ *    acquired one, and `fromICalDate("banana")` returned `"bana-na-"`: it sliced
+ *    fixed offsets and validated nothing.
  *
  * Out of scope, as in the source (documented in `caldav/README.md`):
  * RRULE/EXDATE/RECURRENCE-ID, VTIMEZONE/TZID, VALARM/DURATION, and *any* form of
@@ -32,7 +32,6 @@
  */
 
 import {
-  foldLine,
   formatIcsUtc,
   icsEscape,
   icsUnescape,
@@ -326,10 +325,16 @@ export function fromCalDavDateValue(value: string, parameter?: string): CalDavDa
 /**
  * Locate the colon separating a property's name-and-parameters from its value.
  *
- * RFC 5545 §3.1 lets a value contain a colon as long as it is escaped, so the
- * separator is the first *unescaped* colon. The source used `indexOf(":")`,
- * which truncated `URL:https\://example.com` to `https\` and left the rest of the
- * line looking like another property.
+ * RFC 5545 §3.1 lets a value contain a colon, and a colon inside a TEXT value may
+ * itself be escaped, so the separator is the first colon not preceded by an odd
+ * number of backslashes.
+ *
+ * The simpler `indexOf(":")` the source used is correct for every value a real
+ * server sends — the RFC forbids escaping a colon in a *value*, and a *name*
+ * cannot contain one — so this is a hardening choice rather than a bug fix: it
+ * costs one pass over the name-and-parameters prefix, which is short, and it
+ * removes the need to reason about whether a backslash `indexOf` did not account
+ * for was an escape.
  *
  * @returns the index, or `-1` when the line carries no separator at all and is
  * therefore not a property.
@@ -428,13 +433,26 @@ export function categoriesValue(categories: readonly string[]): string {
   return categories.map((category) => icsEscape(category)).join(",")
 }
 
-/** Render one `RELATED-TO` line from a {@link RelatedTo} edge. */
+/**
+ * Render one `RELATED-TO` line from a {@link RelatedTo} edge.
+ *
+ * The `UID` is escaped with `time/ics-core`'s `icsEscape`, exactly like every
+ * other TEXT value this module writes. A hand-rolled `\`, `;`, `,` chain is not
+ * equivalent: it leaves CR, LF and the rest of C0 in place, so a UID of
+ * `"a\r\nSUMMARY:INJECTED"` closes the `RELATED-TO` line and opens a second
+ * content line — a property the caller never asked for, written to the server by
+ * `PUT`. `icsEscape` strips those characters *and* escapes the three listed
+ * ones, and it is the same function `time/ics.ts` uses, so there is one
+ * definition rather than two.
+ *
+ * @throws {TypeError} when `reltype` is not a recognised {@link RelatedType}.
+ */
 export function relatedToLine(relation: RelatedTo): string {
   const label = RelatedTypeLabel[relation.reltype]
   if (typeof label !== "string") {
     throw new TypeError(`relatedTo.reltype is not a recognised value: ${String(relation.reltype)}`)
   }
-  const uid = relation.uid.replaceAll("\\", "\\\\").replaceAll(";", "\\;").replaceAll(",", "\\,")
+  const uid = requiredText(relation.uid, "relatedTo.uid")
   return `RELATED-TO;RELTYPE=${label}:${uid}`
 }
 
@@ -465,9 +483,8 @@ function identity(options: IcalBuildOptions): { uid: string; dtstamp: Date } {
 /**
  * Serialise a `VTODO` into a complete iCalendar document.
  *
- * The `DTSTAMP` is `formatIcsUtc`'s output, never an ISO string with its
- * punctuation stripped, so the value always ends in `Z` with no fractional
- * seconds.
+ * The `DTSTAMP` is `formatIcsUtc`'s output, so the value always ends in `Z` with
+ * no fractional seconds and never depends on the host's timezone.
  *
  * @throws {TypeError} when `summary` is empty, `priority` or `percentComplete`
  * is not a number, or `due` is not a parseable date.
@@ -540,22 +557,6 @@ export function buildEventIcal(event: EventIcalInput, options: IcalBuildOptions 
   lines.push("END:VEVENT")
 
   return wrapCalendar(lines, options.prodid ?? DEFAULT_PRODID)
-}
-
-/**
- * Fold one already-assembled content line to the RFC 5545 octet limit.
- *
- * Exported because `xml.ts` and callers writing raw lines need the same
- * definition, and because it makes the shared-core delegation greppable: this
- * module has no folding arithmetic of its own.
- */
-export function foldContentLine(line: string): string {
-  return foldLine(line)
-}
-
-/** Reverse {@link foldContentLine} for a whole document. */
-export function unfoldDocument(text: string): string {
-  return unfoldLines(text)
 }
 
 /**

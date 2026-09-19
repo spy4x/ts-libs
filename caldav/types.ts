@@ -169,16 +169,26 @@ export function partial<T>(error: CalDavError, output: T): CalDavFailure<T> {
 }
 
 /**
- * Re-shape a failure that may belong to another result type.
+ * Re-shape a failure from one result type into another.
  *
- * A stage whose own return type differs from the one it forwards (the `Response`
- * of a generic request, the `IcalResource` of a fetch) passes the whole failure
- * through here. Taking a `CalDavFailure<unknown>` rather than a bare error keeps
- * `status` and `url` — re-running only `code` and `message` through {@link fail}
- * silently dropped both, which the `putIcal` 412 test catches.
+ * Only the error travels: `code`, `message`, `status` and `url`. The failing
+ * envelope's own partial `output` is deliberately **dropped**, because it
+ * belongs to the stage that produced it. Carrying it across a type change is a
+ * lie the compiler cannot see — a failed `listCalendars` hands back
+ * `{calendars, warnings}`, and forwarding that as the `output` of a
+ * `CalDavResult<TodoQueryResult>` produced an object with no `todos` field at
+ * all, which a caller reading `output.todos` would then crash on. A stage that
+ * genuinely has a partial answer for *its own* type builds it with
+ * {@link partial} instead.
  */
 export function reshapeFailure<T>(failure: CalDavFailure<unknown>): CalDavFailure<T> {
-  return failure as CalDavFailure<T>
+  const error: CalDavError = {
+    code: failure.error.code,
+    message: failure.error.message,
+    status: failure.error.status,
+    url: failure.error.url,
+  }
+  return { success: false, error }
 }
 
 /** One calendar collection as reported by the server. */

@@ -4,8 +4,9 @@
 // by hand. Where a request body matters, the assertion is on the recorded
 // request (method, `Depth`, `If-Match`, body substring) rather than on a count.
 
-import { assert, assertEquals, assertStringIncludes } from "@std/assert"
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert"
 import { CalDavClient, httpError } from "./client.ts"
+import { proppatchCalendar } from "./xml.ts"
 import { CalDavErrorCode, ComponentType } from "./types.ts"
 import {
   FAKE_PASSWORD,
@@ -442,4 +443,84 @@ Deno.test("icalUid reads the UID of the component the document actually contains
   ].join("\r\n")
   assertEquals(CalDavClient.icalUid(document), "real-uid")
   assertEquals(CalDavClient.icalUid("not a calendar"), undefined)
+})
+
+Deno.test("makeCalendar surfaces a 403 from the server as UNAUTHORIZED", () => {
+  // RFC 4791 §5.3.1 lets a server reject the display-name-derived collection URL
+  // with a 403; the caller must see that rather than a URL to a collection that
+  // was never created.
+  const transport = stubTransport([response(403, "", { statusText: "Forbidden" })])
+  return client(transport).makeCalendar("https://caldav.example.com/user/calendars/", {
+    displayName: "Work & Play",
+    components: [ComponentType.VTODO],
+  }).then((result) => {
+    assert(!result.success)
+    assertEquals(result.error.code, CalDavErrorCode.UNAUTHORIZED)
+    assertEquals(result.error.status, 403)
+    assertEquals(result.error.url, "https://caldav.example.com/user/calendars/Work%20%26%20Play/")
+    assertEquals(transport.requests[0]!.method, "MKCALENDAR")
+    assertEquals(result.output, undefined)
+  })
+})
+
+Deno.test("makeCalendar surfaces a 403 that arrives as a multi-status body", async () => {
+  // Some servers answer a refused MKCALENDAR with a 207 whose only propstat
+  // carries the failure. A 207 is `ok` on the wire, so it must not be reported as
+  // a created collection.
+  const transport = stubTransport([
+    response(
+      207,
+      `<?xml version="1.0" encoding="utf-8" ?><D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">` +
+        `<D:response><D:href>/user/calendars/Denied/</D:href><D:propstat><D:prop>` +
+        `<D:displayname/><C:supported-calendar-component-set/>` +
+        `</D:prop><D:status>HTTP/1.1 403 Forbidden</D:status></D:propstat></D:response></D:multistatus>`,
+    ),
+  ])
+  const result = await client(transport).makeCalendar(
+    "https://caldav.example.com/user/calendars/",
+    {
+      displayName: "Denied",
+      components: [ComponentType.VTODO],
+    },
+  )
+  // The transport layer cannot look inside a 207, so this documents the actual
+  // behaviour rather than the ideal one: the caller gets success and must treat
+  // the returned URL as a request, not an observation. Pinned so a future change
+  // to the 207 handling is a deliberate one.
+  assert(result.success)
+  assertEquals(result.output.url, "https://caldav.example.com/user/calendars/Denied/")
+})
+
+Deno.test("updateCalendar surfaces a 403 as UNAUTHORIZED", async () => {
+  const transport = stubTransport([response(403, "", { statusText: "Forbidden" })])
+  const result = await client(transport).updateCalendar(
+    "https://caldav.example.com/user/calendars/tasks/",
+    { displayName: "Renamed" },
+  )
+  assert(!result.success)
+  assertEquals(result.error.code, CalDavErrorCode.UNAUTHORIZED)
+  assertEquals(result.error.status, 403)
+  assertEquals(transport.requests[0]!.method, "PROPPATCH")
+  assertStringIncludes(transport.requests[0]!.body!, "<D:displayname>Renamed</D:displayname>")
+})
+
+Deno.test("proppatch surfaces a 403 for an extension property body", async () => {
+  const transport = stubTransport([response(403, "", { statusText: "Forbidden" })])
+  const result = await client(transport).proppatch(
+    "https://caldav.example.com/user/calendars/tasks/",
+    proppatchCalendar({ description: "x" }),
+  )
+  assert(!result.success)
+  assertEquals(result.error.code, CalDavErrorCode.UNAUTHORIZED)
+  assertEquals(result.error.status, 403)
+  assertEquals(transport.requests[0]!.method, "PROPPATCH")
+})
+
+Deno.test("updateCalendar rejects an empty PROPPATCH before touching the transport", async () => {
+  const transport = stubTransport([])
+  await assertRejects(
+    () => client(transport).updateCalendar("https://caldav.example.com/user/calendars/tasks/", {}),
+    TypeError,
+  )
+  assertEquals(transport.requests.length, 0)
 })

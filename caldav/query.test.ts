@@ -312,6 +312,56 @@ Deno.test("queryTodos fails when the calendar listing itself fails", async () =>
   const result = await query.queryTodos()
   assert(!result.success)
   assertEquals(result.error.code, CalDavErrorCode.UNAUTHORIZED)
+  assertEquals(result.error.status, 401)
+  // Both requests that can fail here are retried against the `/username/`
+  // fallback, so the failure carries the URL the last attempt used.
+  assertEquals(result.error.url, `${FAKE_SERVER}/user%40example.com/`)
+  // The listing's failure carries its own partial `{calendars, warnings}`.
+  // Forwarding it as this result's `output` would hand a caller an object with no
+  // `todos` field at all, typed as if it had one, so the output must be absent.
+  assertEquals(result.output, undefined)
+})
+
+Deno.test("queryEvents fails the same way when the calendar listing fails", async () => {
+  const { engine: query } = engine([
+    response(207, homeSetBody()),
+    response(403, "", { statusText: "Forbidden" }),
+    response(403, "", { statusText: "Forbidden" }),
+  ])
+  const result = await query.queryEvents()
+  assert(!result.success)
+  assertEquals(result.error.code, CalDavErrorCode.UNAUTHORIZED)
+  assertEquals(result.output, undefined)
+})
+
+Deno.test("a whole-fan-out failure keeps a well-shaped partial aggregate", async () => {
+  // The other half of the same rule: when the *query* lost every calendar, the
+  // partial output is this stage's own and does have the declared shape, so it
+  // travels.
+  const { engine: query, transport } = engine([
+    response(207, homeSetBody()),
+    response(
+      207,
+      calendarsBody([{ href: "/user/calendars/tasks/", name: "Tasks", components: ["VTODO"] }]),
+    ),
+    response(500, "", { statusText: "Internal Server Error" }),
+  ])
+  const result = await query.queryTodos()
+  assert(!result.success)
+  assertEquals(transport.requests.length, 3)
+  assertEquals(result.output?.todos, [])
+  assertEquals(result.output?.total, 0)
+  assertEquals(result.output?.failures?.length, 1)
+  assertEquals(result.output?.byPriority, { high: 0, medium: 0, low: 0, none: 0 })
+})
+
+Deno.test("getTodo drops the fetched resource's partial body when the parse fails", async () => {
+  // `getIcalResource` hands back `{data, etag}` on failure paths it never
+  // reaches, and the engine must not forward that as a `Todo | null` output.
+  const { engine: query } = engine([response(200, "not an iCalendar document")])
+  const result = await query.getTodo(`${TASKS_URL}a.ics`)
+  assert(!result.success)
+  assertEquals(result.output, undefined)
 })
 
 Deno.test("a calendar whose every resource failed is reported as a calendar failure", async () => {

@@ -21,11 +21,11 @@ import {
   parsePropertyPrefix,
   parseTodos,
   readRelatedTo,
+  relatedToLine,
   resourceUrl,
   splitEscapedList,
   toCalDavDate,
   toCalDavDateValue,
-  unfoldDocument,
 } from "./ical.ts"
 import { ComponentType, RelatedType, TodoStatus } from "./types.ts"
 import { FIXED_NOW } from "./test-doubles.ts"
@@ -84,7 +84,7 @@ Deno.test("parseIcal reads a folded multi-byte SUMMARY the writer's folding prod
   // characters passes a naive round trip and fails this.
   const summary = `Réunion avec l'équipe — notes ✓ ${"x".repeat(120)}`
   const document = buildTodoIcal({ summary }, OPTIONS)
-  const physical = unfoldDocument(document).replaceAll("\r\n", "\n").split("\n")
+  const physical = unfoldLines(document).replaceAll("\r\n", "\n").split("\n")
   const summaryLine = physical.find((line) => line.startsWith("SUMMARY:"))!
   assertEquals(summaryLine, `SUMMARY:${summary}`)
 
@@ -194,7 +194,12 @@ Deno.test("readRelatedTo defaults a missing RELTYPE to PARENT and drops an empty
   assertEquals(relations[1], { uid: "parent-2@example.com", reltype: RelatedType.PARENT })
 })
 
-Deno.test("readRelatedTo reads edges past a repeated property the data map overwrote", () => {
+Deno.test("readRelatedTo reads both edges of two distinct RELATED-TO uids", () => {
+  // NOT a fix: the source's raw-block regex already returned both edges here, and
+  // a probe against `caldav-mcp` confirms it. Reading from `properties` instead of
+  // re-scanning the block is a shape change, not a repair — what it removes is the
+  // second definition of "how a RELATED-TO line looks". The row is withdrawn in the
+  // PR body and this test pins the behaviour both implementations share.
   const document = [
     "BEGIN:VCALENDAR",
     "BEGIN:VTODO",
@@ -210,6 +215,23 @@ Deno.test("readRelatedTo reads edges past a repeated property the data map overw
   assertEquals(readRelatedTo(parsed.output.components[0]!.properties), [
     { uid: "a", reltype: RelatedType.PARENT },
     { uid: "b", reltype: RelatedType.CHILD },
+  ])
+})
+
+Deno.test("readRelatedTo keeps the first RELTYPE for a uid repeated across lines", () => {
+  const document = [
+    "BEGIN:VCALENDAR",
+    "BEGIN:VTODO",
+    "UID:x",
+    "RELATED-TO;RELTYPE=PARENT:a",
+    "RELATED-TO;RELTYPE=CHILD:a",
+    "END:VTODO",
+    "END:VCALENDAR",
+  ].join("\r\n")
+  const parsed = parseIcal(document)
+  assert(parsed.success)
+  assertEquals(readRelatedTo(parsed.output.components[0]!.properties), [
+    { uid: "a", reltype: RelatedType.PARENT },
   ])
 })
 
@@ -336,11 +358,11 @@ Deno.test("parseIcal warns about a content line with no separator", () => {
   assertStringIncludes(parsed.output.warnings[0]!, "no property separator")
 })
 
-Deno.test("buildTodoIcal emits DTSTAMP as a valid UTC DATE-TIME", () => {
+Deno.test("buildTodoIcal emits DTSTAMP as a UTC DATE-TIME from the injected clock", () => {
+  // Not a fix: the source's two-replace chain (`[-:]` then `\.\d{3}`) already produced
+  // this exact value, so this test is a regression pin on the injected-clock
+  // contract, not evidence of a corrected bug.
   const document = buildTodoIcal({ summary: "t" }, { uid: "u", dtstamp: FIXED_NOW })
-  // The source's `toISOString().replace(/[-:]/g, "")` produced
-  // `20260701T120000.000Z`: the fractional-seconds field is not part of a
-  // DATE-TIME value, so the literal is the pin.
   assertStringIncludes(document, "DTSTAMP:20260701T120000Z")
   assertEquals(document.includes(".000"), false)
 })
@@ -444,7 +466,11 @@ Deno.test("parsePropertyPrefix keeps parameters and unquotes a quoted value", ()
   })
 })
 
-Deno.test("parseIcal reads a value whose own colon is escaped without truncating it", () => {
+Deno.test("parseIcal reads a value whose colon is backslash-escaped", () => {
+  // Hardening, not a reproduced source bug: this input is not RFC-legal (a colon
+  // in a value must not be escaped), so the source's `indexOf(":")` handled every
+  // legal document, including the `URL:` and `DTSTART:` colon. This pins the
+  // stricter reading so a future simplification back to `indexOf` is deliberate.
   const document = [
     "BEGIN:VCALENDAR",
     "BEGIN:VEVENT",
@@ -458,6 +484,7 @@ Deno.test("parseIcal reads a value whose own colon is escaped without truncating
   const parsed = parseIcal(document)
   assert(parsed.success)
   assertEquals(parsed.output.components[0]!.data["URL"], "https://example.com/a")
+  assertEquals(parsed.output.components[0]!.data["DTSTART"], "20260704T090000Z")
 })
 
 Deno.test("parseEvents reads DTSTART, DTEND and falls back to DTSTART when DTEND is absent", () => {
@@ -647,3 +674,56 @@ function unpairedSurrogates(value: string): number {
   }
   return count
 }
+
+Deno.test("a RELATED-TO uid cannot inject a second content line", () => {
+  // The hand-rolled `\` `;` `,` chain this replaced left CR, LF and the rest of
+  // C0 in the value, so a UID of "a\r\nSUMMARY:INJECTED" closed the RELATED-TO
+  // line and opened a second, caller-invisible property — written to the server
+  // by PUT. The escaping comes from `time/ics-core` now, exactly like every other
+  // TEXT value.
+  const document = buildTodoIcal({
+    summary: "child",
+    relatedTo: [
+      { uid: "a\r\nSUMMARY:INJECTED", reltype: RelatedType.PARENT },
+      { uid: "b\u0000c", reltype: RelatedType.SIBLING },
+    ],
+  }, OPTIONS)
+
+  const lines = document.split("\r\n")
+  assertEquals(lines.some((line) => line === "SUMMARY:INJECTED"), false)
+  assertEquals(document.includes("\u0000"), false)
+  assertEquals(lines.filter((line) => line.startsWith("SUMMARY:")).length, 1)
+
+  const related = lines.find((line) => line.startsWith("RELATED-TO;RELTYPE=PARENT"))!
+  // The CR/LF are *dropped* rather than escaped, because `icsEscape` strips the C0
+  // range: a value in the property position cannot be folded on its own line
+  // breaks, so nothing of value is lost and nothing can be injected.
+  assertEquals(related, "RELATED-TO;RELTYPE=PARENT:a\\nSUMMARY:INJECTED")
+
+  const parsed = parseTodos(document)
+  assert(parsed.success)
+  assertEquals(parsed.output.todos.length, 1)
+  assertEquals(parsed.output.todos[0]!.summary, "child")
+  assertEquals(parsed.output.todos[0]!.relatedTo, [
+    { uid: "a\nSUMMARY:INJECTED", reltype: RelatedType.PARENT },
+    { uid: "bc", reltype: RelatedType.SIBLING },
+  ])
+})
+
+Deno.test("relatedToLine escapes the three TEXT characters icsEscape escapes", () => {
+  assertEquals(
+    relatedToLine({ uid: "a;b,c\\d", reltype: RelatedType.CHILD }),
+    "RELATED-TO;RELTYPE=CHILD:a\\;b\\,c\\\\d",
+  )
+})
+
+Deno.test("relatedToLine rejects an empty uid", () => {
+  assertThrows(() => relatedToLine({ uid: "  ", reltype: RelatedType.PARENT }), TypeError)
+})
+
+Deno.test("relatedToLine rejects a reltype outside the enum", () => {
+  assertThrows(
+    () => relatedToLine({ uid: "a", reltype: 99 as RelatedType }),
+    TypeError,
+  )
+})
