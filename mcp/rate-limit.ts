@@ -1,27 +1,29 @@
-// ── In-memory rate limiter with eviction ──
-// Port of the caldav-mcp limiter with the unbounded-map leak fixed: a client that
-// rotates its source address used to grow the map forever. Entries now expire on a
-// TTL sweep and the map is hard-capped with LRU eviction.
+// ── In-memory rate limiter: sliding window, idle-sweep eviction ──
 //
-// The port shape (`check` / `evict` / `size`, injected clock, injected key resolver)
-// mirrors `@ts-libs/platform/rate-limit` from issue #4, which did not exist on
-// `origin/main` when this package landed. Collapse this file to that import once #4
-// merges — the HTTP transport already depends on the interface, not the class.
+// Port of the caldav-mcp limiter with two source bugs fixed: the map never evicted,
+// and (introduced by the first version of this port) eviction was by insertion order,
+// which let a key-rotating client reset another client's counter — a rate-limit bypass.
+//
+// The eviction policy here is `@ts-libs/platform/rate-limit`'s (issue #4, PR #32):
+// time-driven only, never on insertion, and never against a bucket that is still live.
 
-/** Fixed-window limits. */
+/** Limits for one key. */
 export interface RateLimitOptions {
   /** Requests allowed per window, per key. */
   limit: number
   /** Window length in milliseconds. */
   windowMs: number
-  /** Evict an entry this long after its window ended. Defaults to `windowMs`. */
-  ttlMs?: number
-  /** Hard cap on tracked keys; the least recently used entry is evicted above it. */
-  maxEntries?: number
+  /**
+   * Idle grace after a bucket stops being active before it may be swept. Defaults to
+   * {@link DEFAULT_IDLE_MS}. A larger grace means a busier map and a smoother rebuild.
+   */
+  idleMs?: number
   /** Time source. Injectable so the sweep is testable without sleeping. */
   now?: () => number
   /** Resolves a request to a rate-limit key. Defaults to {@link clientIp}. */
   keyResolver?: (request: Request) => string
+  /** Notified with the number of buckets each sweep removed. */
+  onSweep?: (removed: number) => void
 }
 
 /** Verdict for one request. */
@@ -29,109 +31,180 @@ export interface RateLimitResult {
   allowed: boolean
   /** Requests left in the current window. `0` when denied. */
   remaining: number
-  /** Milliseconds until the window resets. Sent as `Retry-After`. */
+  /** Milliseconds until the next request is allowed. Sent as `Retry-After`. */
   retryAfterMs: number
 }
 
-/** The port the HTTP transport depends on. `@ts-libs/platform/rate-limit` (#4) fits it. */
+/**
+ * The port the HTTP transport depends on — deliberately the same shape as
+ * `@ts-libs/platform/rate-limit`'s limiter so the swap is a deletion, not a rewrite.
+ */
 export interface RateLimitStore {
+  /** Record one request for `key` and return the verdict. */
   check(key: string): RateLimitResult
-  /** Drop every expired entry. Called automatically by `check`; exposed for tests. */
-  evict(): void
-  /** Number of tracked keys — the bounded-map assertion. */
+  /** Drop every bucket that is neither idle nor holding a live event. Returns the count. */
+  evict(): number
+  /** Number of tracked buckets. */
   readonly size: number
 }
 
-interface Entry {
-  count: number
-  resetAt: number
-}
-
-const DEFAULT_MAX_ENTRIES = 10_000
+/** Default idle grace: ten minutes, as `@ts-libs/platform/rate-limit` uses. */
+export const DEFAULT_IDLE_MS = 10 * 60_000
 
 /**
- * Fixed-window limiter over an in-memory map.
+ * How many checks may pass between two sweeps. A client that sends one request per key
+ * cannot outrun the sweep by volume alone.
+ */
+export const SWEEP_EVERY_CHECKS = 512
+
+/** Accepted-request timestamps for one key, oldest first. */
+interface Bucket {
+  /** Milliseconds, non-decreasing. */
+  events: number[]
+  /** Timestamp of the most recent check, whatever its outcome. */
+  seenAt: number
+}
+
+/** Index of the first event inside `(cutoff, now]` — events are sorted, so binary search. */
+function firstLiveIndex(events: number[], cutoff: number): number {
+  let low = 0
+  let high = events.length
+  while (low < high) {
+    const mid = (low + high) >> 1
+    if ((events[mid] as number) <= cutoff) low = mid + 1
+    else high = mid
+  }
+  return low
+}
+
+/**
+ * In-process sliding-window limiter.
  *
- * Boundedness comes from two independent mechanisms: every `check` first sweeps entries
- * whose window ended more than `ttlMs` ago, and before inserting a new key the map is
- * trimmed to `maxEntries` by evicting the least recently used entry.
+ * **Window semantics: sliding, not fixed.** One timestamp is stored per *accepted*
+ * request, and only timestamps newer than `now - windowMs` count. A fixed window would
+ * let a caller spend the whole budget in the last millisecond of one window and the whole
+ * budget again in the next — `2 * limit` in a hair over one window.
+ *
+ * **Eviction is time-driven only, and never targets a live bucket.** A bucket is dropped
+ * when nothing has been seen for it within `idleMs` **and** its newest recorded event is
+ * older than `windowMs + idleMs`. Two consequences, both security properties:
+ *
+ * - a request from a new key can never free space by displacing an active bucket, so
+ *   rotating keys does not reset another client's counter — this is the bypass the first
+ *   version of this port shipped;
+ * - a bucket whose most recent check was a *rejection* stores no event, so `seenAt` alone
+ *   would be wrong; that is why both conditions are required.
+ *
+ * Rejected requests are not recorded, which is what stops a blocked client from extending
+ * its own window by retrying.
  */
 export class MemoryRateLimitStore implements RateLimitStore {
-  private readonly entries = new Map<string, Entry>()
+  private readonly buckets = new Map<string, Bucket>()
   private readonly limit: number
   private readonly windowMs: number
-  private readonly ttlMs: number
-  private readonly maxEntries: number
+  private readonly idleMs: number
   private readonly now: () => number
+  private readonly onSweep: ((removed: number) => void) | undefined
+  private lastSweepAt: number
+  private checksSinceSweep = 0
 
   constructor(options: RateLimitOptions) {
-    if (options.limit <= 0) throw new Error("rate limit must be positive")
-    if (options.windowMs <= 0) throw new Error("rate limit window must be positive")
-    this.limit = options.limit
+    if (!(options.limit >= 1)) throw new Error("rate limit must be >= 1")
+    if (!(options.windowMs > 0)) throw new Error("rate limit window must be positive")
+    if (options.idleMs !== undefined && !(options.idleMs >= 0)) {
+      throw new Error("rate limit idle grace must not be negative")
+    }
+    this.limit = Math.floor(options.limit)
     this.windowMs = options.windowMs
-    this.ttlMs = options.ttlMs ?? options.windowMs
-    this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES
-    if (this.maxEntries <= 0) throw new Error("rate limit maxEntries must be positive")
+    this.idleMs = options.idleMs ?? DEFAULT_IDLE_MS
     this.now = options.now ?? Date.now
+    this.onSweep = options.onSweep
+    this.lastSweepAt = this.now()
   }
 
   get size(): number {
-    return this.entries.size
+    return this.buckets.size
   }
 
   /** Record one request for `key` and return the verdict. */
   check(key: string): RateLimitResult {
     const now = this.now()
-    this.evictAt(now)
+    this.maybeSweep(now)
 
-    const existing = this.entries.get(key)
-    if (existing && now < existing.resetAt) {
-      // Re-insert to mark the key as most recently used for the LRU cap.
-      this.entries.delete(key)
-      existing.count += 1
-      this.entries.set(key, existing)
-      return this.verdict(existing, now)
+    const cutoff = now - this.windowMs
+    const bucket = this.buckets.get(key) ?? { events: [], seenAt: now }
+    bucket.seenAt = now
+
+    const live = firstLiveIndex(bucket.events, cutoff)
+    if (live > 0) bucket.events = bucket.events.slice(live)
+
+    if (bucket.events.length >= this.limit) {
+      const oldest = bucket.events[0] as number
+      this.buckets.set(key, bucket)
+      const retryAfterMs = Math.max(0, oldest + this.windowMs - now)
+      return { allowed: false, remaining: 0, retryAfterMs }
     }
 
-    const entry: Entry = { count: 1, resetAt: now + this.windowMs }
-    this.entries.set(key, entry)
-    this.enforceCap()
-    return this.verdict(entry, now)
-  }
-
-  /** Drop every entry whose window ended more than `ttlMs` ago. */
-  evict(): void {
-    this.evictAt(this.now())
-  }
-
-  private verdict(entry: Entry, now: number): RateLimitResult {
-    const remaining = Math.max(0, this.limit - entry.count)
+    bucket.events.push(now)
+    this.buckets.set(key, bucket)
     return {
-      allowed: entry.count <= this.limit,
-      remaining,
-      retryAfterMs: remaining > 0 ? 0 : Math.max(0, entry.resetAt - now),
+      allowed: true,
+      remaining: Math.max(0, this.limit - bucket.events.length),
+      retryAfterMs: 0,
     }
   }
 
-  private evictAt(now: number): void {
-    for (const [key, entry] of this.entries) {
-      if (entry.resetAt + this.ttlMs <= now) this.entries.delete(key)
-    }
+  /** Run the idle sweep now instead of waiting for the interval. Returns buckets removed. */
+  evict(): number {
+    return this.sweep(this.now())
   }
 
-  private enforceCap(): void {
-    while (this.entries.size > this.maxEntries) {
-      const oldest = this.entries.keys().next()
-      if (oldest.done) return
-      this.entries.delete(oldest.value)
+  /**
+   * Sweep at most once per `windowMs`, and force one after {@link SWEEP_EVERY_CHECKS}
+   * checks so a fingerprinting client that sends one request per key still cannot outrun
+   * it.
+   */
+  private maybeSweep(now: number): void {
+    if (now - this.lastSweepAt < this.windowMs && this.checksSinceSweep < SWEEP_EVERY_CHECKS) {
+      this.checksSinceSweep += 1
+      return
     }
+    this.sweep(now)
+  }
+
+  private sweep(now: number): number {
+    this.lastSweepAt = now
+    this.checksSinceSweep = 0
+    let removed = 0
+
+    for (const [key, bucket] of this.buckets) {
+      const newest = bucket.events[bucket.events.length - 1]
+      // Idle on two counts: nothing seen within the grace, *and* no event still inside a
+      // window. The second test keeps a bucket alive whose last check was a rejection —
+      // it stores no event, so `seenAt` alone would let the sweep delete a bucket that is
+      // about to hand out a fresh request.
+      const idle = bucket.seenAt <= now - this.idleMs &&
+        (newest === undefined
+          // No event at all: the only activity was a rejection, which stores nothing.
+          // Keep the bucket while that rejection can still be inside its window, since
+          // one arriving after the window is open again gets a fresh budget anyway.
+          ? bucket.seenAt <= now - this.windowMs
+          : newest <= now - this.windowMs - this.idleMs)
+      if (idle) {
+        this.buckets.delete(key)
+        removed += 1
+      }
+    }
+
+    this.onSweep?.(removed)
+    return removed
   }
 }
 
 /**
- * Resolve the rate-limit key for a request. `x-forwarded-for` is only trustworthy
- * behind a proxy that overwrites it (Traefik does); the leftmost entry is the client.
- * A request with no address at all is bucketed together so it cannot bypass the limit.
+ * Resolve the rate-limit key for a request. `x-forwarded-for` is only trustworthy behind
+ * a proxy that overwrites it (Traefik does); the leftmost entry is the client. A request
+ * with no address at all is bucketed together so it cannot bypass the limit.
  */
 export function clientIp(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for")
@@ -142,10 +215,7 @@ export function clientIp(request: Request): string {
   return realIp && realIp.length > 0 ? realIp : "unknown"
 }
 
-/**
- * Build the store the HTTP transport uses. Kept as a factory so the transport can fall
- * back to it while `#4` has not landed, without the transport knowing the class.
- */
+/** Build the store the HTTP transport uses, without the transport knowing the class. */
 export function createRateLimitStore(options: RateLimitOptions): RateLimitStore {
   return new MemoryRateLimitStore(options)
 }

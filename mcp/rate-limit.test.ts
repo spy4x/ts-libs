@@ -1,10 +1,17 @@
-// Tests for the limiter. The two behaviours that matter: the window verdict is
-// correct, and the tracked-key map stays bounded when a client rotates its address.
-// The clock is injected — no test here sleeps.
+// Tests for the limiter. The behaviours that matter: the sliding window is correct, the
+// map is bounded by a time-driven sweep, and — the one that matters most — a
+// key-rotating client cannot reset another client's counter. The clock is injected; no
+// test here sleeps.
 
-import { assertEquals, assertThrows } from "@std/assert"
+import { assert, assertEquals, assertThrows } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
-import { clientIp, MemoryRateLimitStore, retryAfterSeconds } from "./rate-limit.ts"
+import {
+  clientIp,
+  createRateLimitStore,
+  MemoryRateLimitStore,
+  retryAfterSeconds,
+  SWEEP_EVERY_CHECKS,
+} from "./rate-limit.ts"
 
 /** A manual clock. Tests advance it explicitly. */
 function clock(start = 1_700_000_000_000) {
@@ -39,13 +46,42 @@ describe("MemoryRateLimitStore", () => {
     assertEquals(store.check("198.51.100.9").allowed, true)
   })
 
-  it("resets the window once it has elapsed", () => {
+  it("slides the window, so an event expires exactly windowMs after it happened", () => {
     const time = clock()
-    const store = new MemoryRateLimitStore({ limit: 1, windowMs: 60_000, now: time.now })
+    const store = new MemoryRateLimitStore({ limit: 1, windowMs: 1_000, now: time.now })
     assertEquals(store.check("203.0.113.7").allowed, true)
+
+    time.advance(999)
     assertEquals(store.check("203.0.113.7").allowed, false)
 
-    time.advance(60_000)
+    time.advance(1)
+    assertEquals(store.check("203.0.113.7").allowed, true)
+  })
+
+  it("does not allow 2 * limit across what a fixed window would call a boundary", () => {
+    const time = clock()
+    const store = new MemoryRateLimitStore({ limit: 5, windowMs: 1_000, now: time.now })
+    for (let index = 0; index < 5; index += 1) store.check("203.0.113.7")
+
+    // A fixed window would have reset at t0 + 1000 and handed out five more.
+    time.advance(990)
+    assertEquals(store.check("203.0.113.7").allowed, false)
+    time.advance(5)
+    assertEquals(store.check("203.0.113.7").allowed, false)
+    time.advance(5)
+    assertEquals(store.check("203.0.113.7").allowed, true)
+  })
+
+  it("does not extend the window when a rejected request retries", () => {
+    const time = clock()
+    const store = new MemoryRateLimitStore({ limit: 1, windowMs: 1_000, now: time.now })
+    store.check("203.0.113.7")
+
+    time.advance(500)
+    for (let index = 0; index < 10; index += 1) store.check("203.0.113.7")
+
+    // 1 000 ms after the single accepted event: allowed, because retries did not count.
+    time.advance(500)
     assertEquals(store.check("203.0.113.7").allowed, true)
   })
 
@@ -66,142 +102,312 @@ describe("MemoryRateLimitStore", () => {
     assertEquals(retryAfterSeconds(1_001), "2")
   })
 
-  it("refuses a non-positive limit or window", () => {
-    assertThrows(() => new MemoryRateLimitStore({ limit: 0, windowMs: 60_000 }), Error, "positive")
+  it("refuses a non-positive limit, window or idle grace", () => {
+    assertThrows(() => new MemoryRateLimitStore({ limit: 0, windowMs: 60_000 }), Error, ">= 1")
     assertThrows(() => new MemoryRateLimitStore({ limit: 1, windowMs: 0 }), Error, "positive")
     assertThrows(
-      () => new MemoryRateLimitStore({ limit: 1, windowMs: 60_000, maxEntries: 0 }),
+      () => new MemoryRateLimitStore({ limit: 1, windowMs: 60_000, idleMs: -1 }),
       Error,
-      "positive",
+      "negative",
     )
   })
 })
 
-describe("MemoryRateLimitStore eviction", () => {
-  it("drops an entry once its window is past the TTL", () => {
+describe("no path from key rotation to a reset counter", () => {
+  // The reviewer's exact reproduction against the previous LRU-capped eviction
+  // (limit 3, maxEntries 4): the victim spent its budget, an attacker rotated ten keys,
+  // and the victim's next check came back {"allowed":true,"remaining":2}.
+  function spendVictimBudget(store: MemoryRateLimitStore): void {
+    store.check("victim")
+    store.check("victim")
+    store.check("victim")
+  }
+
+  it("keeps the victim denied after an attacker rotates ten keys", () => {
+    const store = new MemoryRateLimitStore({ limit: 3, windowMs: 60_000, now: clock().now })
+
+    spendVictimBudget(store)
+    assertEquals(store.check("victim").allowed, false, "the victim must be denied first")
+
+    for (let index = 0; index < 10; index += 1) store.check(`attacker-${index}`)
+
+    const after = store.check("victim")
+    assertEquals(after.allowed, false)
+    assertEquals(after.remaining, 0)
+  })
+
+  it("keeps the victim denied after 5 000 rotating keys", () => {
+    const time = clock()
+    const store = new MemoryRateLimitStore({ limit: 3, windowMs: 60_000, now: time.now })
+
+    spendVictimBudget(store)
+    assertEquals(store.check("victim").allowed, false)
+
+    for (let index = 0; index < 5_000; index += 1) {
+      store.check(`attacker-${index}`)
+      time.advance(1)
+    }
+
+    const after = store.check("victim")
+    assertEquals(after.allowed, false)
+    assertEquals(after.remaining, 0)
+  })
+
+  it("tracks a bucket per live key, with no silent cap to displace one", () => {
+    // The documented memory model: buckets are bounded by activity in the window plus the
+    // idle grace, not by a cap that can free a live bucket. A cap would make this 50 into
+    // something smaller and hand one of these clients a fresh budget.
+    const store = new MemoryRateLimitStore({
+      limit: 1,
+      windowMs: 60_000,
+      idleMs: 60_000,
+      now: clock().now,
+    })
+    for (let index = 0; index < 50; index += 1) store.check(`rotating-${index}`)
+
+    assertEquals(store.size, 50)
+    for (let index = 0; index < 50; index += 1) {
+      store.check(`rotating-${index}`)
+      assertEquals(store.check(`rotating-${index}`).allowed, false)
+    }
+  })
+
+  it("does not free a live bucket for the new keys arriving behind it", () => {
+    const store = new MemoryRateLimitStore({ limit: 1, windowMs: 60_000, now: clock().now })
+    store.check("first")
+    // Under eviction-by-insertion-order "first" is dropped here. Under the idle sweep it
+    // outlives any number of unrelated keys while it is still inside its window.
+    for (let index = 0; index < 1_000; index += 1) store.check(`new-${index}`)
+
+    assertEquals(store.check("first").allowed, false)
+  })
+
+  it("runs sweeps over a map containing a live victim and never drops that victim", () => {
+    // The reviewer's reproduction, run long enough to cross the sweep's check-count
+    // threshold repeatedly: the victim's own key stays live the whole time, and the
+    // sweeps must never treat it as the disposable one.
+    const time = clock()
+    let sweeps = 0
+    let removed = 0
+    const store = new MemoryRateLimitStore({
+      limit: 1,
+      windowMs: 1_000,
+      idleMs: 10_000,
+      now: time.now,
+      onSweep: (count) => {
+        sweeps += 1
+        removed += count
+      },
+    })
+
+    // 200 rounds × 250 ms = 50 s of wall time. The victim is checked four times per
+    // 1 000 ms window, so it lands one accepted request per window and is denied on the
+    // three in between — for the whole test, deterministically. That is what makes "the
+    // victim survived" an assertion about eviction rather than about expiry. The attacker
+    // inserts a fresh key every round, so the sweeps have something real to collect and
+    // cannot pass by doing nothing.
+    for (let round = 0; round < 200; round += 1) {
+      const victim = store.check("victim")
+      assertEquals(
+        victim.allowed,
+        round % 4 === 0,
+        `victim ${victim.allowed ? "allowed" : "denied"} at round ${round}`,
+      )
+      store.check(`rotating-${round}`)
+      time.advance(250)
+      if (round % 50 === 0) store.evict()
+    }
+
+    // Proof that the sweeps ran and did collect idle rotating keys, so the survival
+    // asserted inside the loop was neither a no-op sweep nor a sweep that never fired.
+    assert(sweeps >= 2, `only ${sweeps} sweeps ran`)
+    assert(removed > 0, "the sweeps collected no idle rotating key at all")
+
+    // 200 rounds at one accepted request per four checks: the steady state the loop
+    // asserted, one budget per window and no more.
+    assertEquals(store.size > 1, true, "the rotating attacker keys must still be tracked live")
+    assertEquals(sweeps >= 4, true, `only ${sweeps} sweeps ran`)
+  })
+
+  it("never evicts on insertion, only on a sweep — and a sweep spares the victim", () => {
+    const time = clock()
+    const store = new MemoryRateLimitStore({
+      limit: 1,
+      // Long window: the sweep's time trigger cannot fire, so only the check-count
+      // trigger and the explicit call can run one.
+      windowMs: 600_000,
+      idleMs: 0,
+      now: time.now,
+    })
+    store.check("victim")
+    for (let index = 0; index < 1_000; index += 1) store.check(`rotating-${index}`)
+
+    // No time passed, so every bucket is live: nothing was evicted for anyone, and the
+    // victim is still at its limit after a sweep has run over the whole map.
+    assertEquals(store.check("victim").allowed, false)
+    store.evict()
+    assertEquals(store.size, 1_001)
+    assertEquals(store.check("victim").allowed, false)
+  })
+
+  it("forgets the counter only for a bucket that genuinely went idle past the grace", () => {
+    const time = clock()
+    const store = new MemoryRateLimitStore({
+      limit: 3,
+      windowMs: 1_000,
+      idleMs: 5_000,
+      now: time.now,
+    })
+    spendVictimBudget(store)
+    time.advance(6_100)
+    assertEquals(store.evict(), 1)
+    // This reset is the legitimate one: the victim has been idle for the whole grace and
+    // has no event left inside a window. It is not reachable by key rotation.
+    assertEquals(store.check("victim").remaining, 2)
+  })
+})
+
+describe("MemoryRateLimitStore idle sweep", () => {
+  it("drops a bucket once nothing has been seen for the idle grace", () => {
     const time = clock()
     const store = new MemoryRateLimitStore({
       limit: 5,
       windowMs: 1_000,
-      ttlMs: 5_000,
+      idleMs: 5_000,
       now: time.now,
     })
     store.check("203.0.113.7")
     assertEquals(store.size, 1)
 
-    // Inside the window and the TTL: kept.
+    // Inside the grace: kept, even though its window has expired.
     time.advance(2_000)
-    store.evict()
+    assertEquals(store.evict(), 0)
     assertEquals(store.size, 1)
 
-    // Past window end + TTL: dropped.
+    // Past window end + idle grace: dropped.
     time.advance(5_000)
-    store.evict()
+    assertEquals(store.evict(), 1)
     assertEquals(store.size, 0)
   })
 
-  it("keeps the map bounded when the client rotates its address", () => {
+  it("sweeps a bucket only once its newest event has left the window", () => {
     const time = clock()
     const store = new MemoryRateLimitStore({
-      limit: 10,
-      windowMs: 60_000,
-      ttlMs: 60_000,
-      maxEntries: 100,
+      limit: 1,
+      windowMs: 1_000,
+      idleMs: 1_000,
       now: time.now,
     })
+    store.check("203.0.113.7")
 
-    for (let index = 0; index < 2_000; index += 1) {
-      store.check(`203.0.113.${index % 254}:${index}`)
-      time.advance(10)
-    }
+    // Window has expired, grace has not: the event is still within `windowMs + idleMs`.
+    time.advance(1_500)
+    assertEquals(store.evict(), 0)
+    assertEquals(store.size, 1)
 
-    assertEquals(store.size <= 100, true, `map grew to ${store.size}`)
+    // Window and grace both expired: swept.
+    time.advance(600)
+    assertEquals(store.evict(), 1)
+    assertEquals(store.size, 0)
   })
 
-  it("keeps the map bounded by the TTL sweep alone when the cap is not reached", () => {
+  it("keeps a bucket alive whose last check was a rejection that stored no event", () => {
+    const time = clock()
+    const store = new MemoryRateLimitStore({
+      limit: 1,
+      windowMs: 2_000,
+      idleMs: 1_000,
+      now: time.now,
+    })
+    store.check("203.0.113.7")
+    time.advance(2_000)
+    // The t0 event is exactly windowMs old, so it no longer counts: this request is
+    // allowed and stores a new one.
+    assertEquals(store.check("203.0.113.7").allowed, true)
+    time.advance(100)
+    // Denied by the newer event, and a rejection stores nothing.
+    assertEquals(store.check("203.0.113.7").allowed, false)
+
+    time.advance(1_000)
+    // `seenAt` is now older than the 1 000 ms grace, so a sweep keyed on `seenAt` alone
+    // would delete this bucket and hand the client a fresh budget. The newest event is
+    // still inside the window, so the bucket is live and must survive.
+    assertEquals(store.evict(), 0)
+    assertEquals(store.size, 1)
+    assertEquals(store.check("203.0.113.7").allowed, false)
+  })
+
+  it("is bounded by the sweep when a client rotates its address slowly", () => {
     const time = clock()
     const store = new MemoryRateLimitStore({
       limit: 5,
       windowMs: 1_000,
-      ttlMs: 1_000,
-      // Far above the number of distinct keys below, so only the TTL sweep can bound
-      // the map. This is the assertion that catches a missing sweep.
-      maxEntries: 10_000,
+      idleMs: 1_000,
       now: time.now,
     })
 
     for (let round = 0; round < 20; round += 1) {
-      for (let index = 0; index < 50; index += 1) {
-        store.check(`203.0.113.7:${round}:${index}`)
-      }
-      // Every key from the previous round is now past window end + TTL.
+      for (let index = 0; index < 50; index += 1) store.check(`203.0.113.7:${round}:${index}`)
+      // Every key from the previous round is now past window end + idle grace.
       time.advance(2_000)
     }
 
     assertEquals(store.size <= 50, true, `map grew to ${store.size}`)
   })
 
-  it("evicts the least recently used key when the cap is reached", () => {
+  it("forces a sweep every SWEEP_EVERY_CHECKS checks, so volume alone cannot outrun it", () => {
     const time = clock()
+    let sweeps = 0
     const store = new MemoryRateLimitStore({
-      limit: 10,
+      limit: 1,
+      // Long window, so the sweep's time trigger cannot fire during this test: what
+      // crosses the threshold below is the check count, not elapsed time.
       windowMs: 600_000,
-      ttlMs: 600_000,
-      maxEntries: 3,
+      idleMs: 0,
       now: time.now,
+      onSweep: () => {
+        sweeps += 1
+      },
     })
 
-    store.check("oldest")
-    store.check("middle")
-    store.check("newest")
-    // Touch "oldest" so "middle" becomes the least recently used entry.
-    time.advance(1)
-    store.check("oldest")
+    for (let index = 0; index < SWEEP_EVERY_CHECKS; index += 1) store.check(`key-${index}`)
+    assertEquals(sweeps, 0)
+    assertEquals(store.size, SWEEP_EVERY_CHECKS)
 
-    time.advance(1)
-    store.check("fourth")
-
-    assertEquals(store.size, 3)
-    // A fresh counter for an evicted key starts from one, which is the observable
-    // consequence of the eviction.
-    assertEquals(store.check("middle").remaining, 9)
+    // One more check crosses the threshold.
+    store.check("key-final")
+    assertEquals(sweeps, 1)
+    // Every bucket is still inside its window at this timestamp, so the forced sweep
+    // removes none of them — it is the volume that triggers it, not the volume that
+    // decides what goes.
+    assertEquals(store.size, SWEEP_EVERY_CHECKS + 1)
   })
 
-  it("forgets an evicted key's count, so the cap cannot be used to bypass the limit", () => {
+  it("sweeps at most once per window when the time trigger fires", () => {
     const time = clock()
+    let sweeps = 0
     const store = new MemoryRateLimitStore({
-      limit: 10,
-      windowMs: 600_000,
-      ttlMs: 600_000,
-      maxEntries: 2,
+      limit: 1,
+      windowMs: 1_000,
+      idleMs: 0,
       now: time.now,
+      onSweep: () => {
+        sweeps += 1
+      },
     })
-    store.check("a")
     store.check("a")
     store.check("b")
+    assertEquals(sweeps, 0)
+
+    time.advance(1_000)
     store.check("c")
+    assertEquals(sweeps, 1)
 
-    // "a" was evicted; documenting the tradeoff rather than pretending it survives.
-    assertEquals(store.check("a").remaining, 9)
+    store.check("d")
+    assertEquals(sweeps, 1)
   })
 
-  it("sweeps expired entries during check without an explicit evict call", () => {
-    const time = clock()
-    const store = new MemoryRateLimitStore({
-      limit: 5,
-      windowMs: 1_000,
-      ttlMs: 1_000,
-      now: time.now,
-    })
-    for (let index = 0; index < 50; index += 1) store.check(`key-${index}`)
-    assertEquals(store.size, 50)
-
-    time.advance(2_000)
-    store.check("fresh")
-    assertEquals(store.size, 1)
-  })
-
-  it("treats a window that has already reset as a new window", () => {
+  it("treats an expired window as a fresh budget for the same key", () => {
     const time = clock()
     const store = new MemoryRateLimitStore({ limit: 2, windowMs: 1_000, now: time.now })
     store.check("a")
@@ -240,5 +446,16 @@ describe("clientIp", () => {
       ),
       "unknown",
     )
+  })
+})
+
+describe("createRateLimitStore", () => {
+  it("returns a store the transport can use through the port alone", () => {
+    const store = createRateLimitStore({ limit: 1, windowMs: 1_000, now: clock().now })
+    assertEquals(store.check("a").allowed, true)
+    assertEquals(store.check("a").allowed, false)
+    assertEquals(store.evict(), 0)
+    assertEquals(store.size, 1)
+    assert(typeof store.check === "function")
   })
 })

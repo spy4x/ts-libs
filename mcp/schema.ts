@@ -38,6 +38,9 @@ export interface JsonSchemaNode {
  * conversion time rather than ignored: a constraint that silently does nothing is
  * worse than a registration that fails.
  */
+/** Scalar `type`s an `enum` can meaningfully narrow. */
+const ENUM_SCALAR_TYPES = new Set(["string", "number", "integer", "boolean", "null"])
+
 const SUPPORTED_NODE_KEYS = new Set([
   "type",
   "enum",
@@ -80,6 +83,7 @@ export function schemaToArkTypeDefinition(node: JsonSchemaNode, path = "argument
           `inputSchema enum at ${path} must hold strings or numbers, got ${typeof member}`,
         )
       }
+      refuseContradictoryEnumMember(node, member, path)
       literals.push(JSON.stringify(member))
     }
     // Parenthesised: arktype resolves an unquoted word as a keyword, so a member named
@@ -102,6 +106,34 @@ export function schemaToArkTypeDefinition(node: JsonSchemaNode, path = "argument
     throw new Error(`inputSchema at ${path} combines "enum" with an object type`)
   }
   return members.length === 1 ? members[0] : `(${members.join(" | ")})`
+}
+
+/**
+ * Refuse an `enum` whose members the declared `type` can never accept.
+ *
+ * `{ type: "number", enum: ["a"] }` would otherwise be accepted as `"a"`: the enum is
+ * emitted as its own literals and the scalar `type` is dropped from the union, so the
+ * declared type silently stops applying. Validation still rejects `"a"`, which makes the
+ * failure a confusing 400 at call time instead of a registration error — for a tool
+ * author that is a footgun, not a feature.
+ */
+function refuseContradictoryEnumMember(
+  node: JsonSchemaNode,
+  member: string | number,
+  path: string,
+): void {
+  if (node.type === undefined || !ENUM_SCALAR_TYPES.has(node.type)) return
+  const accepts = node.type === "string"
+    ? typeof member === "string"
+    : node.type === "boolean"
+    ? typeof member === "boolean"
+    : typeof member === "number"
+  if (!accepts) {
+    throw new Error(
+      `inputSchema at ${path} declares type "${node.type}" but its enum holds ` +
+        `${JSON.stringify(member)} (${typeof member})`,
+    )
+  }
 }
 
 function refuseUnsupportedKeys(node: JsonSchemaNode, path: string): void {

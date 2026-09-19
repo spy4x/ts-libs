@@ -14,6 +14,30 @@ import {
 } from "./auth.ts"
 import { FAKE_TOKEN, FAKE_TOKEN_WRONG } from "./test-helpers.ts"
 
+/**
+ * Run `action` with `crypto.subtle.digest` instrumented, and report which algorithms and
+ * input lengths went through it. Restores the real implementation afterwards.
+ */
+async function recordDigests(
+  action: () => Array<Promise<unknown>>,
+): Promise<{ algorithms: string[]; inputs: number[] }> {
+  const realDigest = crypto.subtle.digest.bind(crypto.subtle)
+  const algorithms: string[] = []
+  const inputs: number[] = []
+  crypto.subtle.digest = ((algorithm: AlgorithmIdentifier, data: BufferSource) => {
+    algorithms.push(String(algorithm))
+    inputs.push(new Uint8Array(data as ArrayBuffer).byteLength)
+    return realDigest(algorithm, data)
+  }) as typeof crypto.subtle.digest
+
+  try {
+    await Promise.all(action())
+  } finally {
+    crypto.subtle.digest = realDigest as typeof crypto.subtle.digest
+  }
+  return { algorithms, inputs }
+}
+
 describe("constantTimeEquals", () => {
   it("accepts two equal tokens", async () => {
     assertEquals(await constantTimeEquals(FAKE_TOKEN, FAKE_TOKEN), true)
@@ -35,37 +59,14 @@ describe("constantTimeEquals", () => {
     }
   })
 
-  it("digests both sides with SHA-256 for every comparison, whatever the input length", async () => {
-    // Timing itself is not measurable in CI, or on a shared runner. What is verifiable
-    // is the implementation shape that makes the comparison length-independent: both
-    // sides go through SHA-256, so the compared digests are always 32 bytes. A naive
-    // `a === b` replacement fails this — it never touches `crypto.subtle`.
-    const realDigest = crypto.subtle.digest.bind(crypto.subtle)
-    const algorithms: string[] = []
-    const inputs: number[] = []
-    crypto.subtle.digest = ((algorithm: AlgorithmIdentifier, data: BufferSource) => {
-      algorithms.push(String(algorithm))
-      inputs.push(new Uint8Array(data as ArrayBuffer).byteLength)
-      return realDigest(algorithm, data)
-    }) as typeof crypto.subtle.digest
-
-    try {
-      await constantTimeEquals("short", FAKE_TOKEN)
-      await constantTimeEquals(FAKE_TOKEN, "x".repeat(200))
-      await constantTimeEquals(FAKE_TOKEN, FAKE_TOKEN)
-    } finally {
-      crypto.subtle.digest = realDigest as typeof crypto.subtle.digest
-    }
-
-    assertEquals(algorithms, Array(6).fill("SHA-256"))
-    assertEquals(inputs, [
-      5,
-      FAKE_TOKEN.length,
-      FAKE_TOKEN.length,
-      200,
-      FAKE_TOKEN.length,
-      FAKE_TOKEN.length,
+  it("digests both sides on every call, whatever the input length", async () => {
+    const { algorithms, inputs } = await recordDigests(() => [
+      constantTimeEquals("short", FAKE_TOKEN),
+      constantTimeEquals(FAKE_TOKEN, "x".repeat(200)),
     ])
+
+    assertEquals(algorithms, Array(4).fill("SHA-256"))
+    assertEquals(inputs, [5, FAKE_TOKEN.length, FAKE_TOKEN.length, 200])
   })
 
   it("rejects an empty presented token and an empty configured token", async () => {
@@ -88,6 +89,19 @@ describe("createTokenVerifier", () => {
   it("rejects the empty token", async () => {
     const verifier = createTokenVerifier(FAKE_TOKEN)
     assertEquals(await verifier.verify(""), false)
+  })
+
+  it("never compares the plaintext on the production path", async () => {
+    // The verifier used to pre-digest the configured token once and digest only the
+    // presented one, which made the number of digest calls depend on the secret rather
+    // than on the request. Both sides are now hashed per call, so this counts 2 per
+    // verification and a short presented token cannot skip the digest.
+    const { algorithms, inputs } = await recordDigests(() => [
+      createTokenVerifier(FAKE_TOKEN).verify("ab"),
+    ])
+
+    assertEquals(algorithms, ["SHA-256", "SHA-256"])
+    assertEquals(inputs, [2, FAKE_TOKEN.length])
   })
 
   it("refuses to be built from an empty secret rather than failing open", () => {
@@ -130,11 +144,12 @@ describe("bearerTokenFromHeaders", () => {
 describe("bearerTokenFromEnv", () => {
   it("takes the environment as a required argument, so no import reads it", () => {
     // The one assertion that keeps a credential read out of module scope: calling it
-    // without an environment is a type error and a runtime failure, never a silent
-    // read of the ambient process environment.
-    // deno-lint-ignore no-explicit-any
-    const call = bearerTokenFromEnv as any
-    assertThrows(() => call("MCP_BEARER_TOKEN"), TypeError)
+    // without an environment is a type error and a runtime failure, never a silent read of
+    // the ambient process environment. The single-argument call is made through a
+    // deliberately wrong, locally declared signature — no `any`, and nothing in `src`
+    // loses its types for it.
+    const wrongArity = bearerTokenFromEnv as unknown as (name: string) => string
+    assertThrows(() => wrongArity("MCP_BEARER_TOKEN"), TypeError)
   })
 
   it("reads the value of the named variable", () => {

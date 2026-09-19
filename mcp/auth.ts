@@ -59,18 +59,28 @@ export async function constantTimeEquals(presented: string, expected: string): P
  * `Deno.env` here — an entry point calls {@link bearerTokenFromEnv} at startup instead,
  * so a module import can never pick up a credential.
  */
+/**
+ * Build a verifier over one configured token. This is the path the HTTP transport
+ * authenticates through, and it is the only place a bearer token is compared, so the
+ * constant-time property has to hold here rather than in a helper nobody calls.
+ *
+ * The token is passed in, never read from `Deno.env` — an entry point calls
+ * {@link bearerTokenFromEnv} at startup instead, so a module import can never pick up a
+ * credential.
+ */
 export function createTokenVerifier(token: string): TokenVerifier {
   if (token.length === 0) {
     throw new Error("createTokenVerifier requires a non-empty token: refusing to fail open")
   }
-  // Pre-digest the configured token once. The comparison stays constant time; this
-  // only avoids hashing the same value on every request.
-  const expectedDigest = digest(token)
   return {
+    /**
+     * Both sides are SHA-256 digested on every call and compared with `timingSafeEqual`,
+     * so the comparison always runs over two 32-byte digests: neither the length of the
+     * presented token nor a shared prefix of it can be probed by timing.
+     */
     async verify(presented: string): Promise<boolean> {
       if (presented.length === 0) return false
-      const presentedDigest = await digest(presented)
-      return timingSafeEqual(presentedDigest, await expectedDigest)
+      return await constantTimeEquals(presented, token)
     },
   }
 }

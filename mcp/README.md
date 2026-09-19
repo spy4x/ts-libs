@@ -129,34 +129,74 @@ body is never logged: it is the one place a client may put a credential.
 
 ## Rate-limit contract
 
-`MemoryRateLimitStore` is a fixed-window limiter behind the `RateLimitStore` port
+`MemoryRateLimitStore` is a **sliding-window** limiter behind the `RateLimitStore` port
 (`check(key)`, `evict()`, `size`). The clock is injected — every test advances a manual
 clock, none sleeps.
 
+- One timestamp is stored per _accepted_ request; only timestamps newer than
+  `now - windowMs` count. A fixed window would let a caller spend the whole budget in the
+  last millisecond of one window and the whole budget again in the next — `2 * limit` in a
+  hair over one window.
+- Rejected requests are **not** recorded, so a blocked client cannot extend its own window
+  by retrying.
 - Over the limit: HTTP 429, `Retry-After: <seconds>` (whole seconds, never `0`), body
   `{"error":"Rate limit exceeded"}`.
 - Key resolution is `clientIp(request)`: the leftmost `x-forwarded-for` entry, then
   `x-real-ip`, then the literal `"unknown"`. Requests with no address are bucketed
   together rather than keyed per-request, so omitting the header cannot bypass the limit.
   `x-forwarded-for` is only trustworthy behind a proxy that overwrites it.
-- The map is bounded two independent ways: an entry is swept when its window ended more
-  than `ttlMs` ago (default `windowMs`), and the map is trimmed to `maxEntries` (default
-  10 000) by evicting the least recently used key. The source's map grew forever under a
-  source-rotating client.
 - Auth is checked **before** the rate limit: an unauthenticated flood cannot spend an
   authenticated client's quota.
-- Tradeoff: LRU eviction forgets an evicted key's count, so a deliberately rotating
-  client can exceed the limit by starting fresh counters. Bounded memory was the
-  requirement; per-key isolation under rotation needs a shared store.
 
-**Issue #4 coordination.** `@ts-libs/platform/rate-limit` did not exist on `origin/main`
-(`git show origin/main:platform/rate-limit/memory.ts` → `fatal: path ... does not exist`)
-when this package landed, so the limiter is ported here **behind the same port shape**
-(`check`/`evict`/`size`, injected clock, injected key resolver). Once #4 merges, delete
-`rate-limit.ts` and import `@ts-libs/platform/rate-limit`: nothing else in this package
-depends on the class, only on the `RateLimitStore` interface.
+### Eviction: idle sweep only, never on insertion
 
-## CORS
+A bucket is dropped only when **both** hold: nothing has been seen for that key within
+`idleMs` (default 10 minutes), **and** its newest recorded event is older than
+`windowMs + idleMs`. The sweep runs at most once per `windowMs`, or after
+`SWEEP_EVERY_CHECKS` (512) checks — whichever comes first — so a client sending one request
+per key cannot outrun it by volume.
+
+Two consequences, both security properties:
+
+- **No insertion-time eviction.** Eviction is time-driven, so a request from a brand-new key
+  can never free space by pushing out an active bucket. Rotating keys does not reset another
+  client's counter; only waiting does. An earlier version of this package evicted by LRU
+  insertion order and had exactly that bypass.
+- **A busy bucket is never swept.** `seenAt` alone would be wrong: a bucket whose most
+  recent check was a _rejection_ stores no event and would look idle. Both conditions are
+  therefore required.
+
+Per-bucket memory is bounded by `limit`, since nothing is stored for a rejected request.
+Across keys, the sweep is the bound: buckets exist only while a key is active or inside its
+idle grace, and after that they are gone. There is no hard entry cap by design — a cap is an
+eviction policy, and every cap that can free a live bucket is a bypass. Memory is therefore
+proportional to the number of distinct keys active within `windowMs + idleMs`, which is what
+a shared store (`#4`) exists to shrink.
+
+### Collapse to `@ts-libs/platform/rate-limit` (issue #4 / PR #32)
+
+`#4` is **open as PR #32, not merged**, and `platform/` is **not on `origin/main`**
+(`git show origin/main:platform/rate-limit/memory.ts` → `fatal: path ... does not exist`).
+The limiter is therefore ported here — with #32's eviction policy, copied deliberately.
+
+**The collapse is not a one-line import swap, and this is the honest cost.** PR #32's shape
+differs from this port in three ways:
+
+| This package                                      | `@ts-libs/platform/rate-limit` (#32)                        |
+| ------------------------------------------------- | ----------------------------------------------------------- |
+| `check(key) → {allowed, remaining, retryAfterMs}` | `RateLimitDecision` also carries `resetAfterMs` and `limit` |
+| `evict()`, `size`                                 | `sweep()`, `reset()`, `clear()`, `size`, `onSweep`          |
+| synchronous, in-process only                      | store port is **async** (`read`/`write`/`delete`)           |
+
+So the follow-up is: swap `MemoryRateLimitStore` for `createMemoryRateLimiter` /
+`createStoreLimiter` from `@ts-libs/platform/rate-limit`, move `clientIp` to
+`@ts-libs/platform/rate-limit/client-ip` (which also adds a `CF-Connecting-IP` first hop, a
+peer-address fallback and a `trustedProxy` switch this port lacks), make the transport's
+limit check `await`, and widen `RateLimitResult` to `RateLimitDecision`. The transport
+already depends on a port rather than the class, so no route logic changes. Cost it as a
+small refactor plus test updates, not a deletion.
+
+## CORS## CORS
 
 `allowedOrigins` is an exact-match allowlist, empty by default, which forbids every
 cross-origin request. There is no `"*"` mode and no code path emits
@@ -193,6 +233,14 @@ that reached it anyway.
   which is JSON Schema's default.
 - `enum` members are emitted as parenthesised literals, so a member whose name collides
   with an arktype keyword (`"string"`) is matched as a value, not as a type.
+- An `enum` that contradicts its `type` — `{ type: "number", enum: ["a"] }` — is **refused at
+  registration**. Without that check the enum becomes the whole rule and the declared `type`
+  silently stops applying, so the mistake surfaces as a confusing 400 on a call instead of
+  an error where the tool is defined.
+- **Undeclared arguments pass through to the handler** unless the schema sets
+  `additionalProperties: false`. `tools/call` does not drop them and does not reject them, so
+  a handler that reads `args` must not assume the keys it receives were declared. Set
+  `additionalProperties: false` on a tool whose arguments are a closed set.
 
 A tool author who would rather write the arktype schema directly passes
 `arkTypeValidator(type({ … }))` as the fourth argument of `invokeTool`, or wraps
@@ -224,7 +272,8 @@ when the revision moves, together with its test in `handler.test.ts`.
 
 ## Testing
 
-Colocated `*.test.ts`, 127 assertion steps. Deterministic by construction: injected clock
+Colocated `*.test.ts`: 135 `it()` cases, reported by `deno test` as 142 assertion steps
+(counting the suite members the `describe` blocks add). Deterministic by construction: injected clock
 (rate limiter), injected reader/writer (stdio), injected heartbeat producer (SSE), and
 `Request` objects constructed in-process (HTTP). No sockets, no real stdio, no `sleep`,
 no environment reads. The root test task runs with `--allow-read --allow-env` only, and

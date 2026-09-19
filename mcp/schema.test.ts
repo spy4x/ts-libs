@@ -53,6 +53,45 @@ describe("validateAgainstSchema", () => {
     assert(rejected.message.includes("NEEDS-ACTION"))
   })
 
+  it("refuses an enum and a type that contradict each other at registration", () => {
+    for (
+      const node of [
+        { type: "number", enum: ["a"] },
+        { type: "string", enum: [1] },
+        { type: "boolean", enum: ["true"] },
+        { type: "integer", enum: ["7"] },
+      ]
+    ) {
+      let thrown: unknown
+      try {
+        compileInputSchema(schema({ value: node }))
+      } catch (error) {
+        thrown = error
+      }
+      assert(
+        thrown instanceof Error,
+        `${JSON.stringify(node)} must be refused, not silently accepted`,
+      )
+      assert((thrown as Error).message.includes("enum holds"), (thrown as Error).message)
+    }
+  })
+
+  it("still accepts an enum that agrees with its type", () => {
+    assertEquals(
+      validateAgainstSchema(schema({ unit: { type: "string", enum: ["a", "b"] } }), { unit: "a" })
+        .ok,
+      true,
+    )
+    assertEquals(
+      validateAgainstSchema(schema({ n: { type: "number", enum: [1, 2] } }), { n: 2 }).ok,
+      true,
+    )
+    assertEquals(
+      validateAgainstSchema(schema({ n: { type: "integer", enum: [1, 2] } }), { n: 1.5 }).ok,
+      false,
+    )
+  })
+
   it("treats an enum member named like an arktype keyword as a literal", () => {
     const enumSchema = schema({ unit: { enum: ["string", "number"] } })
     assertEquals(validateAgainstSchema(enumSchema, { unit: "string" }).ok, true)
