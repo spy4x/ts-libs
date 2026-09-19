@@ -74,19 +74,12 @@ provider text can reach a response body.
 
 | Source                                       | Bug                                                                                                                                 | Pinned by                                                                     |
 | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `warthunder-stats/.../body.ts:49`            | `body.buffer` ignored `byteOffset`/`byteLength` (off by the view)                                                                   | `readBoundedText decodes a multi-byte body at the cap`                        |
-| `warthunder-stats/.../body.ts:53`            | a rejecting `reader.cancel()` replaced the real read error                                                                          | `readBoundedBody reports the read error even when cancel rejects`             |
-| `warthunder-stats/.../body.ts:60-66`         | an over-cap `content-length` was only checked after streaming                                                                       | `readBoundedBody rejects an oversized declared content-length before reading` |
-| `warthunder-stats/.../body.ts:68`            | the rejected body was left uncancelled                                                                                              | `readBoundedBody cancels an over-cap declared body without reading it`        |
-| `offer-lens/libs/scraper/mod.ts:184-186`     | reader never cancelled when the timeout won the `Promise.race`                                                                      | `readBoundedBody rejects a stalled body when the deadline fires`              |
-| =======                                      |                                                                                                                                     |                                                                               |
-| Source                                       | Bug                                                                                                                                 | Pinned by                                                                     |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `warthunder-stats/.../body.ts:49-51`         | `body.buffer` ignored the view's `byteOffset`/`byteLength`; the `as ArrayBuffer` cast hid it                                        | `parseBoundedFormData respects a non-zero byteOffset on the read buffer`      |
-| `warthunder-stats/.../body.ts:11-13`         | an over-cap `content-length` was rejected without cancelling the request body                                                       | `readBoundedBody cancels an over-cap declared body without reading it`        |
+| `warthunder-stats/.../body.ts:49-51`         | `body.buffer` ignored the view's `byteOffset`/`byteLength` — the `as ArrayBuffer` cast hid it                                       | `parseBoundedFormData respects a non-zero byteOffset on the read buffer`      |
+| `warthunder-stats/.../body.ts:11-13`         | an over-cap `content-length` was rejected without cancelling the request body, and the check did not pin the position of the read   | `readBoundedBody cancels an over-cap declared body without reading it`        |
+| `warthunder-stats/.../body.ts:23-24`         | the cap was enforced by a `NaN`-comparing `Number(...)` check instead of an explicit header reader                                  | `readContentLength reads an integer header and ignores junk`                  |
 | `warthunder-stats/.../body.ts:28`            | `await reader.cancel()` in the `catch` was relied on not to reject, while the sibling call was wrapped                              | `readBoundedBody reports the read error even when cancel rejects`             |
 | `offer-lens/libs/scraper/mod.ts:184-186`     | when the deadline won the `Promise.race` the reader was only cancelled "best effort", leaving a pending `read()` that never settles | `readBoundedBody rejects a stalled body when the deadline fires`              |
-| `offer-lens/libs/scraper/mod.ts:206`         | the oversized `content-length` early-out was absent, so a body that declares 4 GiB was streamed before being rejected               | `readBoundedBody rejects an oversized declared content-length before reading` |
+| `offer-lens/libs/scraper/mod.ts:206`         | the oversized `content-length` early-out was absent, so a body declaring 4 GiB was streamed before being rejected                   | `readBoundedBody rejects an oversized declared content-length before reading` |
 | `offer-lens/apps/api/services/cors.ts:53-60` | an `https://` host missing from the allowlist fell through to the dev-host check                                                    | `cors: https dev origins are refused`                                         |
 
 ## `server/export`
@@ -116,7 +109,12 @@ route paths.
 ## `server/healthcheck`
 
 `probeLoopback`, `healthcheckExitCode`, `runHealthcheck`, `resolveHealthcheckPort`, `denoConnector`,
-`DEFAULT_TIMEOUT_MS`, `DEFAULT_PORT`.
+`LOOPBACK_HOSTS`, `DEFAULT_TIMEOUT_MS`, `DEFAULT_PORT`.
+
+`hostname` must be a `LOOPBACK_HOSTS` entry, so a probe cannot be aimed at a public bind; `timeoutMs`
+must be a non-negative integer; and `HEALTHCHECK_PORT`/`PORT` must be bare decimal digits
+(`0x1f90`, `1e3`, `+8080` are refused rather than parsed), the same rule this package applies to
+`content-length`.
 
 Lives here rather than in `ops/` on purpose: `ops/` is issue #18's package and would need its own
 `deno.json`, so this avoids two writers of one config for 60 LOC. The probe is separated from the exit

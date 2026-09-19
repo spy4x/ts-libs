@@ -99,10 +99,14 @@ export async function buildExportEnvelope<TUser>(
 }
 
 /**
- * Format the calendar day of a date as `YYYY-MM-DD` in **local** time.
+ * Format the calendar day of a date as `YYYY-MM-DD` from the **local** getters.
  *
- * The local day is the one the user is living in, and it is the one a filename
- * should carry.
+ * "Local" is the *process's* timezone, not the user's: this function removes the
+ * UTC shift (see the module header), it does not discover the reader's timezone.
+ * A server on `TZ=UTC` therefore names a file for the server's day — the residual
+ * documented at the top of this module, which needs the user's zone as input to
+ * fix. What is guaranteed here is the honest half: the day is the one the date
+ * object reports locally, never `toISOString()`'s UTC day.
  */
 export function formatLocalDate(date: Date): string {
   const year = String(date.getFullYear()).padStart(4, "0")

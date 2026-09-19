@@ -137,38 +137,92 @@ Deno.test("export: a product may override the format version", async () => {
   assertEquals(envelope.version, "2.1")
 })
 
-Deno.test("export: the filename is <name>-YYYY-MM-DD.json", () => {
-  assertEquals(exportFileName("northstar", FIXED), `northstar-${localDayOf(FIXED)}.json`)
-})
-
-Deno.test("export: the filename carries the local day, not the UTC day", () => {
-  // 2026-03-09T23:30Z is the 10th at +05:00 and still the 9th at -05:00. In a
-  // negative-offset timezone that is 18:30-19:30 local, so the source's
-  // `toISOString().slice(0, 10)` would have named an evening export for tomorrow.
-  const evening = new Date("2026-03-09T23:30:00.000Z")
-  const localDay = localDayOf(evening)
-  const utcDay = evening.toISOString().slice(0, 10)
-  const filename = exportFileName("northstar", evening)
-
-  assertEquals(filename, `northstar-${localDay}.json`)
-  if (utcDay !== localDay) {
-    assertStrictEquals(
-      filename.includes(utcDay),
-      false,
-      `filename used the UTC day ${utcDay} instead of the local day ${localDay}`,
-    )
+/**
+ * Run `operation` with the process timezone forced to `tz`.
+ *
+ * `formatLocalDate` is defined by local getters, which makes it *extensionally
+ * identical* to a UTC-reader on a host running at UTC: 23:30 local is 23:30Z, and
+ * no instant can separate the two. A test that wants to tell them apart has to
+ * choose the offset, so this pins one for the duration of the assertion and
+ * restores the environment in a `finally`.
+ */
+function withTimeZone<T>(tz: string, operation: () => T): T {
+  const previous = Deno.env.get("TZ")
+  Deno.env.set("TZ", tz)
+  try {
+    return operation()
+  } finally {
+    if (previous === undefined) Deno.env.delete("TZ")
+    else Deno.env.set("TZ", previous)
   }
+}
+
+Deno.test("export: the filename is <name>-YYYY-MM-DD.json", () => {
+  // Literal, not derived: an expectation computed with the same local getters the
+  // implementation uses would agree with a broken implementation.
+  assertEquals(
+    exportFileName("northstar", new Date(2026, 2, 9, 12, 0, 0)),
+    "northstar-2026-03-09.json",
+  )
+  assertEquals(
+    exportFileName("northstar", new Date(2026, 2, 9, 23, 30, 0)),
+    "northstar-2026-03-09.json",
+  )
 })
 
-Deno.test("export: the local day is zero-padded in both month and day", () => {
-  assertEquals(formatLocalDate(new Date(2026, 0, 5, 12)), "2026-01-05")
-  assertEquals(formatLocalDate(new Date(2026, 11, 31, 12)), "2026-12-31")
+Deno.test("export: formatLocalDate reads the local calendar day, never the UTC day", () => {
+  // Unconditional, hard-coded expectations — nothing here can coincide with a
+  // broken implementation's output, so it never degrades into a no-op.
+  assertEquals(formatLocalDate(new Date(2026, 2, 9, 23, 30, 0)), "2026-03-09")
+  assertEquals(formatLocalDate(new Date(2026, 2, 9, 0, 30, 0)), "2026-03-09")
+  assertEquals(formatLocalDate(new Date(2025, 11, 31, 23, 30, 0)), "2025-12-31")
 })
 
-Deno.test("export: the local formatter agrees with local getters across a month boundary", () => {
-  const boundary = new Date(2026, 2, 10, 0, 0, 0)
-  assertEquals(formatLocalDate(boundary), "2026-03-10")
-  assertEquals(formatLocalDate(boundary), localDayOf(boundary))
+Deno.test("export: the local day differs from the UTC day west of Greenwich", () => {
+  // Forces a negative offset so the two calendars genuinely disagree: 2026-03-09
+  // 23:30 at UTC-04:00 is 2026-03-10T03:30Z. Reading `getUTC*` names the file for
+  // the 10th, so this is red for that mutation on any host, UTC included — which
+  // is the property a CI run without `TZ` needs.
+  withTimeZone("America/New_York", () => {
+    const evening = new Date(2026, 2, 9, 23, 30, 0)
+    assertStrictEquals(
+      evening.getTimezoneOffset() > 0,
+      true,
+      "the forced timezone did not take effect; refusing to report a vacuous pass",
+    )
+    assertStrictEquals(evening.getUTCDate(), 10)
+    assertEquals(formatLocalDate(evening), "2026-03-09")
+    assertEquals(exportFileName("northstar", evening), "northstar-2026-03-09.json")
+  })
+})
+
+Deno.test("export: the local day differs from the UTC day east of Greenwich", () => {
+  // The mirror case: 2026-03-09 00:30 at UTC+07:00 is 2026-03-08T17:30Z, so a
+  // UTC-reader names the file for the 8th.
+  withTimeZone("Asia/Bangkok", () => {
+    const morning = new Date(2026, 2, 9, 0, 30, 0)
+    assertStrictEquals(morning.getTimezoneOffset() < 0, true)
+    assertStrictEquals(morning.getUTCDate(), 8)
+    assertEquals(formatLocalDate(morning), "2026-03-09")
+    assertEquals(exportFileName("northstar", morning), "northstar-2026-03-09.json")
+  })
+})
+
+Deno.test("export: a fixed instant is named for its local day", () => {
+  // 2026-03-09T23:30Z is the 10th at +05:00 and still the 9th at -05:00: the
+  // instant the source's `toISOString().slice(0, 10)` named a day early. The day
+  // depends on the host timezone here, so the expectation is derived; the forced
+  // offset tests above are the ones that bite unconditionally.
+  const evening = new Date("2026-03-09T23:30:00.000Z")
+  assertEquals(
+    exportFileName("northstar", evening),
+    `northstar-${localDayOf(evening)}.json`,
+  )
+})
+
+Deno.test("export: the filename date shape is fixed", () => {
+  const filename = exportFileName("northstar", new Date(2026, 2, 9, 23, 30, 0))
+  assertStrictEquals(/^northstar-\d{4}-\d{2}-\d{2}\.json$/.test(filename), true)
 })
 
 Deno.test("export: the filename cannot inject a header or a path", () => {

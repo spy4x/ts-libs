@@ -4,6 +4,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   healthcheckExitCode,
   HealthcheckTimeoutError,
+  LOOPBACK_HOSTS,
   type ProbeConnection,
   type ProbeConnector,
   probeLoopback,
@@ -149,11 +150,15 @@ Deno.test("healthcheck: a refused connection is reported as connect_failed", asy
 
 Deno.test("healthcheck: a failure reason never carries network text", async () => {
   const connector: ProbeConnector = {
-    connect: () => Promise.reject(new Error("connect to 10.0.0.5:3000 failed: EHOSTUNREACH")),
+    connect: () => Promise.reject(new Error("connect to 198.51.100.7:3000 failed: EHOSTUNREACH")),
   }
   const result = await probeLoopback({ port: 3000, connector })
   const serialised = JSON.stringify(result)
-  assertStrictEquals(serialised.includes("10.0.0.5"), false, "reason leaked an internal address")
+  assertStrictEquals(
+    serialised.includes("198.51.100.7"),
+    false,
+    "reason leaked an internal address",
+  )
   assertStrictEquals(serialised.includes("EHOSTUNREACH"), false, "reason leaked an errno")
 })
 
@@ -270,6 +275,60 @@ Deno.test("healthcheck: a timeout propagates the operation's own rejection", asy
   const failing = withDeadline(Promise.reject(new Error("boom")), 1000, () => {}, manual.timer)
   await assertRejects(() => failing, Error, "boom")
   assertEquals(manual.cleared.length, 1)
+})
+
+Deno.test("healthcheck: a non-loopback hostname is refused, not probed", async () => {
+  // Without this, `hostname` is a free-text field that the doc comment promised
+  // was loopback-only. A probe must never leave the box.
+  for (const hostname of ["198.51.100.7", "example.com", "169.254.169.254", "", "LOCALHOST"]) {
+    await assertRejects(
+      () => probeLoopback({ port: 3000, hostname, connector: hangingConnector }),
+      RangeError,
+      "must be one of",
+    )
+  }
+})
+
+Deno.test("healthcheck: every allow-listed loopback host is accepted", async () => {
+  for (const hostname of LOOPBACK_HOSTS) {
+    const socket = echoSocket()
+    assertEquals(
+      await probeLoopback({ port: 3000, hostname, connector: staticConnector(socket.connection) }),
+      { healthy: true },
+    )
+  }
+})
+
+Deno.test("healthcheck: a negative or non-integer deadline is refused", async () => {
+  const socket = echoSocket()
+  for (const timeoutMs of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    await assertRejects(
+      () =>
+        probeLoopback({
+          port: 3000,
+          timeoutMs,
+          connector: staticConnector(socket.connection),
+        }),
+      RangeError,
+      "timeoutMs",
+    )
+  }
+})
+
+Deno.test("healthcheck: a port in a non-decimal notation is refused", () => {
+  // `Number()` accepts all of these; a decimal port string is bare digits.
+  for (const raw of ["0x1f90", "1e3", "+8080", "8080.0", " 80 80 ", "8080abc"]) {
+    assertThrows(
+      () => resolveHealthcheckPort({ get: (name) => (name === "PORT" ? raw : undefined) }),
+      RangeError,
+      "decimal integer",
+    )
+  }
+})
+
+Deno.test("healthcheck: a valid decimal port is accepted after trimming", () => {
+  assertEquals(resolveHealthcheckPort({ get: () => "8080" }), 8080)
+  assertEquals(resolveHealthcheckPort({ get: () => " 8080 " }), 8080)
 })
 
 Deno.test("healthcheck: the exit code is 0 for a healthy service", async () => {

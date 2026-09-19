@@ -54,6 +54,14 @@ export const DEFAULT_TIMEOUT_MS = 2000
 /** Default service port when neither `PORT` nor `HEALTHCHECK_PORT` is set. */
 export const DEFAULT_PORT = 3000
 
+/** The only hosts a probe may target. A healthcheck has no business leaving the box. */
+export const LOOPBACK_HOSTS: readonly string[] = [
+  "127.0.0.1",
+  "::1",
+  "localhost",
+  "0.0.0.0",
+]
+
 /** Why a probe failed. Every value is a constant; no provider or network text is carried. */
 export type ProbeFailure = "connect_failed" | "write_failed" | "no_echo" | "read_timeout"
 
@@ -69,11 +77,21 @@ export interface ProbeResult {
 export interface HealthcheckOptions {
   /** Port to probe. */
   port: number
-  /** Host to probe. Defaults to `127.0.0.1` — loopback only, never a public bind. */
+  /**
+   * Host to probe. Defaults to `127.0.0.1`. Must be a loopback address —
+   * {@link LOOPBACK_HOSTS} are the only accepted values, so a probe can never be
+   * pointed at a public bind by a typo or by a caller that forwards an env value
+   * straight through.
+   */
   hostname?: string
   /** Connector. Defaults to {@link denoConnector}. */
   connector?: ProbeConnector
-  /** Per-step deadline in milliseconds. Defaults to {@link DEFAULT_TIMEOUT_MS}. `0` disables it. */
+  /**
+   * Per-step deadline in milliseconds. Defaults to {@link DEFAULT_TIMEOUT_MS}.
+   * `0` disables it; a negative or non-finite value is rejected, because a
+   * negative deadline silently disables the probe's only bound and `NaN` would
+   * fire immediately.
+   */
   timeoutMs?: number
   /** Timer for the deadline. Defaults to the platform timers. */
   timer?: ProbeTimer
@@ -131,9 +149,10 @@ export async function withDeadline<T>(
  * @returns `{ healthy: true }`, or `{ healthy: false, reason }` with a constant
  * reason — never a message from the network stack, which could name an internal
  * address.
- * @throws {RangeError} When `port` is not an integer in 1-65535. A port that
- * cannot be listened on is a configuration error, not an unhealthy service, and
- * must not exit `1` next to a real outage.
+ * @throws {RangeError} When `port` is not an integer in 1-65535, when `hostname`
+ * is not a {@link LOOPBACK_HOSTS} entry, or when `timeoutMs` is negative or not
+ * an integer. All three are configuration errors rather than an unhealthy
+ * service, and must not exit `1` next to a real outage.
  */
 export async function probeLoopback(options: HealthcheckOptions): Promise<ProbeResult> {
   const { port, hostname = "127.0.0.1" } = options
@@ -143,6 +162,14 @@ export async function probeLoopback(options: HealthcheckOptions): Promise<ProbeR
 
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new RangeError(`healthcheck port must be 1-65535, got ${port}`)
+  }
+  if (!LOOPBACK_HOSTS.includes(hostname)) {
+    throw new RangeError(
+      `healthcheck hostname must be one of ${LOOPBACK_HOSTS.join(", ")}, got "${hostname}"`,
+    )
+  }
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 0) {
+    throw new RangeError(`healthcheck timeoutMs must be a non-negative integer, got ${timeoutMs}`)
   }
 
   let connection: ProbeConnection
@@ -231,7 +258,12 @@ export async function runHealthcheck(
  * `HEALTHCHECK_PORT` wins over `PORT`, so a container can be probed on a port the
  * app does not serve without changing the app.
  *
- * @throws {RangeError} When a set value is not an integer in 1-65535. A
+ * The value must be bare decimal digits, matching the rule this package applies
+ * to `content-length`: `Number()` alone also accepts `1e3`, `0x1f90`, `+8080`
+ * and `" 8080"`, none of which are valid decimal port strings, and a port parsed
+ * from a value like that probes something the operator never wrote down.
+ *
+ * @throws {RangeError} When a set value is not a decimal integer in 1-65535. A
  * healthcheck that silently probes the default reports a healthy service as dead,
  * which is worse than failing to start.
  */
@@ -241,8 +273,11 @@ export function resolveHealthcheckPort(
   for (const name of ["HEALTHCHECK_PORT", "PORT"]) {
     const raw = env.get(name)
     if (raw === undefined || raw.trim() === "") continue
-    const port = Number(raw)
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    if (!/^\d+$/.test(raw.trim())) {
+      throw new RangeError(`${name} must be a decimal integer in 1-65535, got "${raw}"`)
+    }
+    const port = Number(raw.trim())
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
       throw new RangeError(`${name} must be an integer in 1-65535, got "${raw}"`)
     }
     return port
