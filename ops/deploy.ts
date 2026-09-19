@@ -153,11 +153,13 @@ export interface EnvPassthroughPolicy {
   /**
    * Keys the caller explicitly vouches for.
    *
-   * Both checks are skipped for a listed key, including the value-shape ones:
-   * this is the escape hatch for a value that merely looks like a credential
-   * (a build hash, an image digest, a public key fingerprint). Naming a key here
-   * is a deliberate act in the caller's own source, which is the point — the
-   * default has to be refusal, because a key-name heuristic cannot be complete.
+   * Only the **value-shape** pass is lifted: this is the escape hatch for a value
+   * that merely looks like a credential (a build hash, an image digest, a public
+   * key fingerprint). The key-name, non-scalar and blank rules still apply, so
+   * `allowEnvKeys: ["DB_PASS"]` is refused rather than a blank cheque. Naming a
+   * key here is a deliberate act in the caller's own source, which is the point —
+   * the default has to be refusal, because a key-name heuristic cannot be
+   * complete.
    */
   allowEnvKeys?: readonly string[]
 }

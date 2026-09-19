@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects, assertThrows } from "@std/assert"
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert"
 import { createEnvReader, MissingEnvError } from "./env.ts"
 import { CommandError } from "./run-command.ts"
 import { createFakeRunner, FakeCommandRunner } from "./testing/command-runner.ts"
@@ -401,14 +401,33 @@ Deno.test("refuses a hostile stack directory name even when deployAs is benign",
  * Remove every quoted region from a shell script, leaving the **residue**: the
  * bare words a shell still parses as syntax.
  *
- * Configuration values may only ever appear inside a quoted region, so a value
- * found in the residue is executable text. The check is deliberately
- * configuration-independent — it inspects whatever `generateDeployScript`
- * produced, with no knowledge of which interpolation site put it there — so it
- * covers sites the author did not think to enumerate. The previous version of
- * this helper tracked quote state per needle instead, and was defeated by one
- * edit at a site (the `RESTARTING` marker) that its single sample configuration
- * never generated.
+ * The helper is configuration-independent — it inspects whatever
+ * `generateDeployScript` produced, with no knowledge of which interpolation site
+ * put a value there — which is what lets one assertion cover a site the author
+ * did not think to enumerate. The previous version tracked quote state per needle
+ * instead, and was defeated by one edit at a site (the `RESTARTING` marker) that
+ * its single sample configuration never generated.
+ *
+ * **What the residue checks actually establish.** The guarantee is bounded by
+ * {@link configurationNeedles}: an enumeration of the values the inventory knows
+ * this configuration contributes, plus the residue's token allowlist (see
+ * `STATIC_RESIDUE_TOKENS`), which asserts that every word in the residue is
+ * literal text of the generator. Measured on ten mutants, every detection came
+ * from the enumeration, and the allowlist is the only clause that can see a value
+ * the enumeration cannot name. `$(`/backtick/`${` and `balanced` are latitude, not
+ * the defence: on a `shellQuote`-reduced-to-identity script the residue is
+ * configuration-visible (`echo DEPLOY_START:webq1:webq1`, `-p hlq2`) while
+ * `balanced` stays true and the syntax list is empty, and a residue holding a bare
+ * `$VAR` or the legacy `$[1+1]` scores no syntax hit either. `$[1+1]` is caught by
+ * the token allowlist (the `$`); a bare `$VAR` is caught only when the word is not
+ * itself allowlisted.
+ *
+ * **Known blind spot.** A residue word that is also literal text of the generator
+ * is invisible to every clause: the app directory's `$1` and `$app`, and — before
+ * `undefined` was added to the needle list — a site whose expression yielded
+ * `undefined`. Both the enumeration and the allowlist enumerate literal text, so
+ * "a token the generator does not know it can emit" remains the limit of this
+ * check; a real deploy of a real configuration is the only check outside it.
  *
  * `balanced` is false when the script ends inside a quote, which the caller must
  * treat as a failure: an unbalanced script makes everything after the stray quote
@@ -492,6 +511,16 @@ const SCRIPT_CASES: readonly ScriptCase[] = [
  * a forgotten `shellQuote` visible: an unquoted `echo RESTARTING:a:b` leaves
  * `RESTARTING:a:b` in the residue even though `a` alone might be too short to
  * search for.
+ *
+ * This list is the load-bearing part of the residue check, so its blind spot is
+ * stated rather than implied: it can only name values this helper knows how to
+ * derive. `undefined` is here because a site whose expression yields it used to be
+ * invisible to every clause of the check, which is exactly the class a
+ * case-by-case inventory cannot cover. A value derived some other way — the app
+ * directory, a caller-supplied string spliced in elsewhere — is covered only by
+ * the residue's token allowlist and by the `$(`-style clauses. `null` is *not*
+ * added: the generator's own static text contains `/dev/null`, so a substring
+ * search for it would redden on a clean script.
  */
 function configurationNeedles(testCase: ScriptCase): string[] {
   const envFiles = testCase.options.envFiles ?? [".env.root", ".env"]
@@ -511,10 +540,83 @@ function configurationNeedles(testCase: ScriptCase): string[] {
       `RESTARTING:${stack.name}:${deployAs}`,
       `RESTART_DONE:${stack.name}:${deployAs}`,
       `name=${testCase.options.containerPrefix}-${stack.name}`,
+      // A site that emits a JavaScript non-value is not "a configuration value",
+      // and the enumeration above could never name it.
+      "undefined",
     )
   }
 
   return needles
+}
+
+/**
+ * Words and flags the residue carries when every interpolation is quoted.
+ *
+ * The list is not a guess about what bash accepts: it is exactly the token set
+ * the four {@link SCRIPT_CASES} residues contain at this commit, curated once by
+ * reading each token back against the generator's own text. Because a quoted
+ * value collapses to the single space its opening quote wrote, *any* token in the
+ * residue that varies with the configuration is unquoted text — so an exact
+ * allowlist is also the invariant "no configuration value reaches the residue",
+ * stated without naming a value.
+ *
+ * Adding a token is the deliberate act that keeps the check honest: a token that
+ * comes from a configuration value is a leak, not a new entry here.
+ */
+const STATIC_RESIDUE_TOKENS: readonly string[] = [
+  "--",
+  "--build",
+  "--env-file",
+  "--filter",
+  "--format",
+  "-a",
+  "-d",
+  "-f",
+  "-n",
+  "-p",
+  "-r",
+  "-u",
+  "/dev/null",
+  "/usr/bin/env",
+  "1",
+  "2",
+  "app",
+  "bash",
+  "compose",
+  "do",
+  "docker",
+  "done",
+  "echo",
+  "else",
+  "fi",
+  "id",
+  "if",
+  "project",
+  "ps",
+  "read",
+  "restart",
+  "rm",
+  "set",
+  "then",
+  "true",
+  "up",
+  "while",
+]
+
+/** A syntactically meaningful word in a residue: identifiers, flags, paths. */
+const RESIDUE_TOKEN = /[A-Za-z0-9_./{}$-]+/g
+
+/**
+ * The residue's tokens, minus the punctuators that are single characters on their
+ * own (`/`, `-`), which the generator emits as static text and which no value
+ * produces in isolation.
+ */
+function residueTokens(script: string): Set<string> {
+  const { residue } = stripQuotedRegions(script)
+  const tokens = (residue.match(RESIDUE_TOKEN) ?? []).filter((token) =>
+    token !== "" && token !== "/" && token !== "-"
+  )
+  return new Set(tokens)
 }
 
 Deno.test("no configuration value survives in a script's unquoted residue", () => {
@@ -537,6 +639,27 @@ Deno.test("no configuration value survives in a script's unquoted residue", () =
         `${testCase.label}: ${needle} is unquoted, so a shell would parse it`,
       )
     }
+  }
+})
+
+Deno.test("leaves no residue token the generator's static text cannot account for", () => {
+  // The enumeration above can only name what it knows how to derive. This asserts
+  // the same property without naming a value: every word in the residue is literal
+  // text of the generator, so a site that leaks *anything* — including a value the
+  // inventory has never heard of — adds a token and reddens here.
+  for (const testCase of SCRIPT_CASES) {
+    const script = generateDeployScript(testCase.stacks, testCase.options)
+    const extra = [...residueTokens(script)].filter((token) =>
+      !STATIC_RESIDUE_TOKENS.includes(token)
+    ).sort()
+
+    assert(
+      extra.length === 0,
+      `${testCase.label}: residue tokens outside the static allowlist: ${JSON.stringify(extra)}. ` +
+        `A token that comes from a configuration value is an unquoted interpolation, not a new ` +
+        `allowlist entry — check the site in generateDeployScript before touching ` +
+        `STATIC_RESIDUE_TOKENS.`,
+    )
   }
 })
 
