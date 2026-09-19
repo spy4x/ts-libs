@@ -4,6 +4,13 @@
   "exports": {
     "./notify": "./notify/mod.ts",
     "./notify/healthchecks": "./notify/healthchecks.ts",
-    "./notify/ntfy": "./notify/ntfy.ts"
+    "./notify/ntfy": "./notify/ntfy.ts",
+    "./console": "./console.ts",
+    "./env": "./env.ts",
+    "./fs": "./fs.ts",
+    "./run-command": "./run-command.ts",
+    "./hooks/install": "./hooks/install.ts",
+    "./backup/types": "./backup/types.ts",
+    "./backup/compose": "./backup/compose.ts"
   }
 }
