@@ -1,0 +1,7 @@
+{
+  "name": "@ts-libs/time",
+  "version": "0.1.0",
+  "exports": {
+    "./tz": "./tz.ts"
+  }
+}
