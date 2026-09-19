@@ -5,7 +5,7 @@
 // request (method, `Depth`, `If-Match`, body substring) rather than on a count.
 
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert"
-import { CalDavClient, httpError } from "./client.ts"
+import { CalDavClient, crossOriginHomeSetWarning, httpError } from "./client.ts"
 import { proppatchCalendar } from "./xml.ts"
 import { CalDavErrorCode, ComponentType } from "./types.ts"
 import {
@@ -118,6 +118,134 @@ Deno.test("listCalendars falls back to /{username}/ when no home-set element is 
   assertEquals(transport.requests[1]!.url, "https://caldav.example.com/user%40example.com/")
   assertEquals(result.output.warnings.length, 1)
   assertStringIncludes(result.output.warnings[0]!, "no calendar-home-set")
+})
+
+/** A multi-status body announcing `homeSet` as the `calendar-home-set`. */
+function homeSetBody(homeSet: string): string {
+  return `<?xml version="1.0" encoding="utf-8" ?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:response>
+    <D:href>/user/</D:href>
+    <D:propstat>
+      <D:prop>
+        <C:calendar-home-set><D:href>${homeSet}</D:href></C:calendar-home-set>
+      </D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>`
+}
+
+/**
+ * Every credential-bearing request this transport saw, as `method origin`.
+ *
+ * The assertion every credential test below rests on: not "the client did the
+ * right thing with the header", but "the request to that origin never happened".
+ */
+function authenticatedOrigins(transport: StubTransport): string[] {
+  return transport.requests
+    .filter((request) => request.headers["authorization"] !== undefined)
+    .map((request) => `${request.method} ${new URL(request.url).origin}`)
+}
+
+Deno.test("listCalendars refuses a cross-origin calendar-home-set and keeps the credential home", async () => {
+  // BLOCKER 3. A server-named `calendar-home-set` is a server-supplied absolute
+  // URL; following it sent `Authorization: Basic <user's real credential>` to
+  // whatever origin the response named. Here: the attacker's calendar list is
+  // never requested at all, and the discovery answer is not used.
+  const transport = stubTransport([
+    response(207, homeSetBody("https://attacker.example.net/homes/")),
+    response(207, CALENDARS_BODY),
+  ])
+  const result = await client(transport).listCalendars()
+
+  assertEquals(
+    authenticatedOrigins(transport),
+    ["PROPFIND https://caldav.example.com", "PROPFIND https://caldav.example.com"],
+  )
+  for (const request of transport.requests) {
+    assertEquals(new URL(request.url).origin, FAKE_SERVER)
+  }
+  assertEquals(transport.requests.some((request) => request.url.includes("attacker")), false)
+  assert(result.success)
+  // The list comes from the `/username/` fallback on the configured origin, not
+  // from the origin the response named: one calendar, discovered at the
+  // fallback URL, which is the only place the second request went.
+  assertEquals(result.output.calendars.length, 1)
+  assertEquals(result.output.calendars[0]!.url, "https://caldav.example.com/user/calendars/tasks/")
+  assertEquals(transport.requests[1]!.url, "https://caldav.example.com/user%40example.com/")
+  assertEquals(result.output.warnings.length, 1)
+  assertStringIncludes(result.output.warnings[0]!, "is not on the configured origin")
+  assertStringIncludes(result.output.warnings[0]!, "https://attacker.example.net/homes/")
+})
+
+Deno.test("listCalendars refuses a protocol-relative cross-origin home set", async () => {
+  // `//host/path` is the cheap way to write an absolute URL, and resolving it
+  // against the base turns it into a real cross-origin URL, so the origin check
+  // has to run on the *resolved* value, not on the href text.
+  const transport = stubTransport([
+    response(207, homeSetBody("//attacker.example.net/homes/")),
+    response(207, CALENDARS_BODY),
+  ])
+  const result = await client(transport).listCalendars()
+  assertEquals(authenticatedOrigins(transport), [
+    "PROPFIND https://caldav.example.com",
+    "PROPFIND https://caldav.example.com",
+  ])
+  assert(result.success)
+  assertStringIncludes(result.output.warnings[0]!, "https://attacker.example.net/homes/")
+})
+
+Deno.test("listCalendars refuses a same-host home set on another port", async () => {
+  // The origin is scheme + host + port. A same-host URL on a different port is a
+  // different origin and a different credential recipient.
+  const transport = stubTransport([
+    response(207, homeSetBody("https://caldav.example.com:8443/homes/")),
+    response(207, CALENDARS_BODY),
+  ])
+  const result = await client(transport).listCalendars()
+  assertEquals(transport.requests.some((request) => request.url.includes("8443")), false)
+  assert(result.success)
+  assertStringIncludes(result.output.warnings[0]!, "is not on the configured origin")
+})
+
+Deno.test("listCalendars follows a same-origin home set that only differs in path", async () => {
+  // The rule must not break the normal shape: a deeper path on the configured
+  // origin is followed, with the credential, and no warning is recorded.
+  const transport = stubTransport([
+    response(207, homeSetBody("/user/calendars/")),
+    response(207, CALENDARS_BODY),
+  ])
+  const result = await client(transport).listCalendars()
+  assert(result.success)
+  assertEquals(transport.requests[1]!.url, "https://caldav.example.com/user/calendars/")
+  assertEquals(result.output.warnings, [])
+  assertEquals(
+    authenticatedOrigins(transport),
+    ["PROPFIND https://caldav.example.com", "PROPFIND https://caldav.example.com"],
+  )
+})
+
+Deno.test("listCalendars follows an absolute home set on the configured origin", async () => {
+  const transport = stubTransport([
+    response(207, homeSetBody("https://caldav.example.com/user/calendars/")),
+    response(207, CALENDARS_BODY),
+  ])
+  const result = await client(transport).listCalendars()
+  assert(result.success)
+  assertEquals(transport.requests[1]!.url, "https://caldav.example.com/user/calendars/")
+  assertEquals(result.output.warnings, [])
+})
+
+Deno.test("crossOriginHomeSetWarning states the rule and stays silent on a match", () => {
+  assertEquals(crossOriginHomeSetWarning("https://a.example/", "https://a.example/"), undefined)
+  assertEquals(
+    crossOriginHomeSetWarning("https://a.example:8443/", "https://a.example/"),
+    "calendar-home-set https://a.example:8443/ is not on the configured origin https://a.example; using the /username/ convention instead, because credentials are sent only to the origin the caller configured",
+  )
+  // Case, default port and IDN are all folded by `URL` before the comparison.
+  assertEquals(crossOriginHomeSetWarning("https://A.EXAMPLE/", "https://a.example/"), undefined)
+  assertEquals(crossOriginHomeSetWarning("https://a.example:443/", "https://a.example/"), undefined)
 })
 
 Deno.test("listCalendars falls back to /{username}/ when discovery is refused", async () => {

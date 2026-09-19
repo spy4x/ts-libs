@@ -19,6 +19,28 @@
  *  - the Radicale fallback is reported: it is a warning on a success, or the
  *    underlying failure inside the error, never a silent substitution.
  *
+ * **Credential rule.** Credentials are sent only to the origin the caller
+ * configured in `baseUrl`, never to an origin a *server* named. A
+ * `calendar-home-set` is a server-supplied `href`, and a request built from it
+ * carries `Authorization`: resolving one to a foreign origin and following it
+ * hands a Basic credential to whoever can influence the discovery response. Such
+ * a home set is therefore refused with a warning and the `/username/` convention
+ * is used instead — the same fallback a missing or unreadable home set gets, so
+ * nothing new has to be handled by a caller. A cross-origin home set is *not*
+ * followed with the header stripped: the client has no reason to talk to that
+ * origin at all, and a de-authenticated request an attacker still answers is not
+ * a safe outcome. The origin compared here is `scheme://host:port`, so a home set
+ * deeper on the configured origin is accepted and a same-host different-port URL
+ * is not.
+ *
+ * That rule bounds which *server-named* URL the client will use. It is not the
+ * SSRF guard: it does not vet the `baseUrl` the caller chose, nor the resource
+ * URLs a caller passes to `putIcal`, `getIcalResource` or `queryTodos`, because
+ * those are the caller's own input and the caller owns their trust. A consumer
+ * that accepts a server URL from an untrusted user should vet it with
+ * `validatePublicUrl` from `@ts-libs/net/url-policy` (or drive the whole client
+ * through `safeFetch`) before construction.
+ *
  * The `{username}/` fallback exists because a CalDAV server may not advertise
  * `calendar-home-set` on its root at all — Radicale answers the PROPFIND with
  * the property's *absence* (a `404` `propstat`, still an HTTP 207), so the
@@ -290,7 +312,12 @@ export class CalDavClient {
       const href = extractNestedHref(attempt.output)
       if (href !== undefined && href !== "") {
         try {
-          return ok({ url: resolveUrl(href, root), warnings })
+          const resolved = resolveUrl(href, root)
+          const originWarning = crossOriginHomeSetWarning(resolved, root)
+          if (originWarning === undefined) {
+            return ok({ url: resolved, warnings })
+          }
+          warnings.push(originWarning)
         } catch (cause) {
           warnings.push(`${String(cause)}; using the /username/ convention instead`)
         }
@@ -535,4 +562,57 @@ export function extractNestedHref(xml: string): string | undefined {
       .exec(xml)
   if (!block) return undefined
   return extractElementText(block[1]!, "href")
+}
+
+/**
+ * Origin of a URL: scheme, host and port, or `undefined` when it is not absolute.
+ *
+ * A `URL`'s `origin` is the string `"null"` for a non-`http(s)` scheme, which
+ * would make two exotic URLs compare equal. A CalDAV server root is always
+ * `http(s)`, and the constructor already refuses anything `new URL` rejects, so
+ * the value is composed from the parts instead of read from `origin`.
+ */
+function originOf(url: string): string | undefined {
+  try {
+    const parsed = new URL(url)
+    return `${parsed.protocol}//${parsed.host}`
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The credential rule, in one function: a URL a **server** named is only used
+ * when it stays on the origin the **caller** configured.
+ *
+ * A `calendar-home-set` is a server-supplied `href`, and a client that follows it
+ * to another origin sends its `Authorization` header there — handing a Basic
+ * credential to whoever can influence one byte of a discovery response. The rule
+ * therefore cannot be "follow it and drop the header": the client has no reason
+ * to talk to that origin at all, and a silently de-authenticated request against
+ * an attacker host is still a request an attacker controls the answer to.
+ *
+ * The origin includes the port, so `https://host:8443/` and `https://host/` do
+ * not match, and it excludes any path, so a home set on the same origin but a
+ * different path is accepted, which is the normal shape.
+ *
+ * `scheme://host:port` cannot be faked with a lookalike the `URL` parser folds
+ * differently: `new URL` lowercases the host, punycodes an IDN, resolves `..`
+ * and drops a default port before this comparison ever runs.
+ *
+ * @param namedUrl The resolved URL the server named.
+ * @param configuredUrl The URL the caller configured the client with.
+ * @returns the warning to record before falling back, or `undefined` when the
+ * origins match and the URL is safe to use.
+ */
+export function crossOriginHomeSetWarning(
+  namedUrl: string,
+  configuredUrl: string,
+): string | undefined {
+  const named = originOf(namedUrl)
+  const configured = originOf(configuredUrl)
+  if (named !== undefined && named === configured) return undefined
+  return `calendar-home-set ${namedUrl} is not on the configured origin ${
+    configured ?? configuredUrl
+  }; using the /username/ convention instead, because credentials are sent only to the origin the caller configured`
 }
