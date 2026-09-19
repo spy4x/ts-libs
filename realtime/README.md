@@ -301,7 +301,7 @@ Own-property membership is the right test because it is the only thing that can 
 JSON serialises own enumerable properties only, and `JSON.parse` never produces an
 inherited one. The dependency's behaviour is documented rather than patched — this
 package does not fork arktype; the guard is a handful of lines next to the schemas it
-protects, and mutating it reddens five tests.
+protects, and mutating it reddens nine tests.
 
 ## Testing
 
