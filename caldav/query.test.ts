@@ -670,6 +670,43 @@ Deno.test("calendarNameFromUrl reads the last path segment", () => {
   assertEquals(calendarNameFromUrl("https://caldav.example.com/"), "caldav.example.com")
 })
 
+Deno.test("queryTodos does not throw on an out-of-range character reference", async () => {
+  // BLOCKER 2 at the public API the throw escaped: `QueryEngine.queryTodos` on a
+  // payload carrying `&#x110000;` used to reject with
+  // `RangeError: Invalid code point 1114112`, from inside `readReportResources`.
+  // The reference is written literally into the raw body because `escapeForXml`
+  // would escape the ampersand and the server would then be sending text.
+  const hostile =
+    `<?xml version="1.0" encoding="utf-8" ?><D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">` +
+    `<D:response><D:href>/c/a.ics</D:href><D:propstat><D:prop>` +
+    `<D:getetag>"e1"</D:getetag>` +
+    `<C:calendar-data>BEGIN:VCALENDAR&#13;&#10;BEGIN:VTODO&#13;&#10;UID:a&#13;&#10;SUMMARY:x&#x110000;y&#13;&#10;END:VTODO&#13;&#10;END:VCALENDAR&#13;&#10;</C:calendar-data>` +
+    `</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>`
+  const { engine: query } = engine([response(207, hostile)])
+  const result = await query.queryTodos({ calendarUrl: TASKS_URL })
+  assert(result.success, `queryTodos failed: ${JSON.stringify(result)}`)
+  assertEquals(result.output.todos.length, 1)
+  // The corrupt code point is substituted, not dropped and not thrown over.
+  assertEquals(result.output.todos[0]!.summary, "x\uFFFDy")
+})
+
+Deno.test("readReport does not throw on an out-of-range character reference", () => {
+  // The same input through `CalDavClient.readReport`, the synchronous entry point
+  // a caller reaches without a socket.
+  const hostile =
+    `<?xml version="1.0" encoding="utf-8" ?><D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">` +
+    `<D:response><D:href>/c/a.ics</D:href><D:propstat><D:prop>` +
+    `<C:calendar-data>SUMMARY:x&#x110000;y</C:calendar-data>` +
+    `</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>`
+  const read = new CalDavClient({
+    baseUrl: FAKE_SERVER,
+    username: FAKE_USERNAME,
+    password: FAKE_PASSWORD,
+    fetch: stubTransport([]).fetch,
+  }).readReport(hostile)
+  assertEquals(read.resources[0]!.calendarData, "SUMMARY:x\uFFFDy")
+})
+
 Deno.test("summarized todos carry the status label, the ETag and the related edges", async () => {
   const { engine: query } = engine([
     response(

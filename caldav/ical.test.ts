@@ -452,10 +452,35 @@ Deno.test("splitEscapedList splits on unescaped commas only", () => {
   assertEquals(splitEscapedList(""), [])
 })
 
-Deno.test("findPropertySeparator skips an escaped colon inside the value", () => {
+Deno.test("findPropertySeparator skips an escaped colon and takes an odd-backslash one", () => {
+  // Row 5's pin. `parseIcal` cannot be the pin: `icsUnescape` maps `\:` to `:`,
+  // so a value whose colon is escaped comes out identical whichever separator the
+  // scanner chose, and a scanner reverted to `indexOf(":")` would still pass every
+  // parse-level assertion. The rule has to be pinned where it is observable, on
+  // the function that carries it — which is exported for exactly that reason.
   assertEquals(findPropertySeparator("URL:https\\://example.com/a"), 3)
+  // The escaped colon at index 9 is skipped; the colon at index 7 is the separator.
   assertEquals(findPropertySeparator("SUMMARY:a\\:b:c"), 7)
   assertEquals(findPropertySeparator("no-separator-here"), -1)
+  // The rule is an *odd* number of preceding backslashes, so a colon is the
+  // separator exactly when its backslashes pair off. Precedence is document
+  // order, so in the next three cases the scan meets an escaped colon first: a
+  // scanner that stopped at the first colon it found would return that index.
+  const escapedThenReal = "a\\:b\\:c:d"
+  assertEquals(escapedThenReal.indexOf(":d"), 7)
+  assertEquals(findPropertySeparator(escapedThenReal), 7)
+  const backslashThenReal = "a\\\\:bc:d"
+  assertEquals(backslashThenReal.indexOf(":bc"), 3)
+  assertEquals(findPropertySeparator(backslashThenReal), 3)
+  const oddThenReal = "a\\\\\\:bc:d"
+  assertEquals(oddThenReal.indexOf(":d"), 7)
+  assertEquals(findPropertySeparator(oddThenReal), 7)
+  // Every colon escaped: there is no separator, and `-1` is what stops a caller
+  // from slicing a line that has none.
+  assertEquals(findPropertySeparator("a\\:b\\:c"), -1)
+  assertEquals(findPropertySeparator("a\\:b"), -1)
+  assertEquals(findPropertySeparator(":leading"), 0)
+  assertEquals(findPropertySeparator(""), -1)
 })
 
 Deno.test("parsePropertyPrefix keeps parameters and unquotes a quoted value", () => {
@@ -469,8 +494,10 @@ Deno.test("parsePropertyPrefix keeps parameters and unquotes a quoted value", ()
 Deno.test("parseIcal reads a value whose colon is backslash-escaped", () => {
   // Hardening, not a reproduced source bug: this input is not RFC-legal (a colon
   // in a value must not be escaped), so the source's `indexOf(":")` handled every
-  // legal document, including the `URL:` and `DTSTART:` colon. This pins the
-  // stricter reading so a future simplification back to `indexOf` is deliberate.
+  // legal document, including the `URL:` and `DTSTART:` colon. This test only
+  // records that such a line still parses — it does NOT pin the scan, because
+  // `icsUnescape` strips the escape either way. The scan itself is pinned by
+  // `findPropertySeparator skips an escaped colon and takes an odd-backslash one`.
   const document = [
     "BEGIN:VCALENDAR",
     "BEGIN:VEVENT",
