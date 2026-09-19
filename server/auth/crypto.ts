@@ -10,8 +10,13 @@
  *     in `helpers.ts:7` and a `'custom-auth'` literal default in
  *     `misc/constants.ts:4`. A missing pepper now throws at construction instead
  *     of silently hashing with a string an attacker has read in this file.
- *  2. `constantTimeEquals` compares a SHA-256 digest of each side, so neither the
- *     content nor the length of a secret is observable from timing.
+ *  2. Both verify paths compare through one seam, `CryptoContext.compare`
+ *     (default `timingSafeEqual`), so a substitute comparison cannot be inserted
+ *     without a test noticing. `verify` compares two derived keys;
+ *     `constantTimeEquals` first digests each side to a fixed 32 bytes, so neither
+ *     the content nor the length of a value that is *not* hashed at rest is
+ *     observable from timing. Its production call site is the OAuth2 `state`
+ *     check, not the magic-link token.
  *  3. Nothing is logged. No path here can put a password, an OTP, a magic-link
  *     token, a session token or the pepper into a message.
  *
@@ -50,9 +55,36 @@ function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
-function fromHex(hex: string): Uint8Array {
-  const pairs = hex.match(/../g) ?? []
-  return new Uint8Array(pairs.map((pair) => Number.parseInt(pair, 16)))
+/** Hex digits only, and an even number of them. */
+const HEX_PATTERN = /^(?:[0-9a-f]{2})+$/i
+
+/**
+ * Decode a hex string to bytes, or `null` if it is not valid hex.
+ *
+ * The previous form was `new Uint8Array(hex.match(/../g)!.map((pair) =>
+ * Number.parseInt(pair, 16)))`, which had two acceptance defects:
+ *
+ *  - `Number.parseInt("zz", 16)` is `NaN`, and `Uint8Array` **coerces `NaN` to
+ *    `0x00`**. A stored hash of `<salt>:zz` therefore decoded to a one-byte zero key,
+ *    and `verify` accepted any credential whose one-byte PBKDF2 output was `0x00` —
+ *    roughly one credential in 256. That is an authentication bypass reachable from a
+ *    single corrupt or adversarially inserted row, since `postgres-adapter.ts` maps
+ *    `secret` through `toNullableString` with no format check.
+ *  - `hex.match(/../g)` silently truncates an odd-length string (`"abc"` → `"AB"`),
+ *    so a truncated or malformed digest could still compare equal.
+ *
+ * Returning `null` rather than throwing keeps the caller's contract: a corrupt row
+ * fails the login, it does not 500 the endpoint.
+ */
+function fromHex(hex: string): Uint8Array | null {
+  if (!HEX_PATTERN.test(hex)) {
+    return null
+  }
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let index = 0; index < bytes.length; index++) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16)
+  }
+  return bytes
 }
 
 /**
@@ -111,28 +143,38 @@ export class CryptoContext {
   /**
    * Verify `value` against a stored `hexSalt:hexKey`.
    *
-   * A malformed stored hash returns `false` rather than throwing: a corrupted
-   * row must fail the login, not 500 the endpoint. The comparison is the last
-   * statement and runs on the raw derived bytes — never on the hex strings, which
-   * would compare byte by byte and exit at the first difference.
+   * Every malformed input returns `false` rather than throwing or reaching the
+   * comparison: a corrupt row must fail the login, not 500 the endpoint and not
+   * authenticate. The format is enforced before decoding — a non-hex or
+   * odd-length salt or key is rejected outright, because a decoder that coerces
+   * its input is an acceptance path (see `fromHex`).
+   *
+   * The comparison is the last statement and runs on the raw derived bytes —
+   * never on the hex strings, which would compare byte by byte and exit at the
+   * first difference.
    */
   async verify(value: string, stored: string | null | undefined): Promise<boolean> {
     if (!stored) {
       return false
     }
     const separator = stored.indexOf(":")
-    if (separator <= 0) {
+    if (separator <= 0 || separator === stored.length - 1) {
       return false
     }
     const salt = fromHex(stored.slice(0, separator))
     const expected = fromHex(stored.slice(separator + 1))
-    if (salt.length === 0 || expected.length === 0) {
+    if (salt === null || expected === null) {
+      return false
+    }
+    // The stored key must be exactly the length this context derives. Both sites
+    // that write a hash use `keyBytes` or the stored length, so anything else is a
+    // corrupt or forged row. Accepting a short one costs security: a one-byte key
+    // has a 1-in-256 chance of matching *any* credential, so a truncated row is a
+    // bypass with better odds than guessing.
+    if (expected.length !== this.keyBytes) {
       return false
     }
     const actual = await this.derive(value, salt, expected.length)
-    if (actual.length !== expected.length) {
-      return false
-    }
     return this.compare(actual, expected)
   }
 

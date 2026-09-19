@@ -133,6 +133,30 @@ Deno.test("the comparator digests both sides before comparing, at any length", a
   assertFalse(await crypto.constantTimeEquals("a".repeat(64), "b"))
 })
 
+Deno.test("the magic-link token path does not use constantTimeEquals", () => {
+  // The comments in `magic-link.ts` and `crypto.ts` attribute the protection to
+  // `crypto.verify` (which compares two derived keys) and reserve
+  // `constantTimeEquals` for values that are not hashed at rest — the OAuth2 state
+  // cookie. A comment can drift; this reads the code.
+  //
+  // Asserted on the strip-comments form, so the prose *naming* the other function
+  // is not mistaken for a call to it.
+  return Deno.readTextFile(new URL("./magic-link.ts", import.meta.url)).then((source) => {
+    const code = source
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("*") && !line.trimStart().startsWith("//"))
+      .join("\n")
+    assertFalse(
+      code.includes("constantTimeEquals"),
+      "the magic-link path compares through crypto.verify, not constantTimeEquals",
+    )
+    assert(
+      code.includes("verifyToken") && code.includes("crypto.verify"),
+      "the token must be checked through crypto.verify",
+    )
+  })
+})
+
 Deno.test("rejects a replayed magic-link token", async () => {
   const { auth, adapter } = linkAuth()
   const token = await auth.magicLink.signUp("user@example.com")

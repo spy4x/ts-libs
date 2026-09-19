@@ -431,6 +431,131 @@ Deno.test("no secret is compared outside the one comparator", async () => {
   )
 })
 
+/**
+ * The credential whose **one-byte** PBKDF2 output is `0x00` under the salt below.
+ *
+ * Brute-forced once, offline, and hardcoded: `probe-4` is the 5th candidate. The
+ * test is therefore deterministic — it does not depend on the sampler finding a
+ * credential, which is how this defect hid behind a 0.39% chance for two review
+ * rounds.
+ */
+const ONE_BYTE_ZERO_CREDENTIAL = "probe-4"
+
+/** Sixteen bytes of salt, as the stored format hex-encodes them. */
+const SALT_HEX = "802f0e69dbede4c961f06e7abef3395b"
+
+Deno.test("verify rejects a malformed key that decodes to a one-byte zero", async () => {
+  // `802f…:zz` — the salt is valid hex, the key is not. The pre-fix decoder ran
+  // `Number.parseInt("zz", 16)`, which is `NaN`, and `Uint8Array` coerced that to
+  // `0x00`, so the stored key became a single zero byte while `expected.length`
+  // stayed 1. Any credential whose one-byte PBKDF2 output is zero then verified.
+  // That is an authentication bypass: roughly one credential in 256.
+  const crypto = new CryptoContext({ pepper: TEST_PEPPER, iterations: TEST_ITERATIONS })
+  const malformed = `${SALT_HEX}:zz`
+
+  assertFalse(
+    await crypto.verify(ONE_BYTE_ZERO_CREDENTIAL, malformed),
+    "a malformed stored key must never verify",
+  )
+  // The whole shape, not one lucky credential: no value may verify against it.
+  for (const credential of ["probe-4", "probe-79", "", "password", "a".repeat(64)]) {
+    assertFalse(
+      await crypto.verify(credential, malformed),
+      `credential of length ${credential.length} must not verify against a malformed hash`,
+    )
+  }
+  // And the same row with *valid* hex is refused too: a one-byte stored key is
+  // refused by length, because a one-byte key matches any credential with 1-in-256
+  // probability. Without this check the malformed decoder above is fixed but the
+  // short-key bypass survives.
+  assertFalse(
+    await crypto.verify(ONE_BYTE_ZERO_CREDENTIAL, `${SALT_HEX}:00`),
+    "a one-byte stored key must be refused even when its hex is valid",
+  )
+})
+
+Deno.test("verify refuses a stored key that is not the derived length", async () => {
+  const crypto = new CryptoContext({ pepper: TEST_PEPPER, iterations: TEST_ITERATIONS })
+  const valid = await crypto.hash("value")
+  const [saltHex, keyHex] = valid.split(":")
+
+  // Every truncation and every extension of a real key, all valid hex.
+  for (let byteCount = 1; byteCount <= keyHex.length / 2; byteCount++) {
+    const shorter = keyHex.slice(0, byteCount * 2)
+    if (shorter === keyHex) {
+      continue
+    }
+    assertFalse(
+      await crypto.verify("value", `${saltHex}:${shorter}`),
+      `a ${byteCount}-byte stored key must be refused`,
+    )
+  }
+  assertFalse(await crypto.verify("value", `${saltHex}:${keyHex}00`))
+  assert(await crypto.verify("value", valid), "the untruncated hash must still verify")
+})
+
+Deno.test("verify rejects every malformed stored hash without comparing", async () => {
+  const comparator = new RecordingComparator()
+  const crypto = new CryptoContext({
+    pepper: TEST_PEPPER,
+    iterations: TEST_ITERATIONS,
+    comparator: comparator.compare,
+  })
+  const valid = await crypto.hash("value")
+  const [saltHex, keyHex] = valid.split(":")
+
+  const malformed = [
+    "",
+    "no-separator",
+    ":only-key",
+    `${saltHex}:`,
+    "zz:deadbeef",
+    `${saltHex}:zz`,
+    `${saltHex}:zzzz`,
+    `${saltHex}z:deadbeef`,
+    "abc:deadbeef",
+    `${saltHex}:abc`,
+    `${saltHex}: deadbeef`,
+    `${saltHex}:DEADBEEF-EXTRA`,
+    `${saltHex}:0xdeadbeef`,
+  ]
+  for (const stored of malformed) {
+    comparator.reset()
+    assertFalse(
+      await crypto.verify("value", stored),
+      `stored ${JSON.stringify(stored)} must be refused`,
+    )
+    assertEquals(
+      comparator.calls.length,
+      0,
+      `stored ${JSON.stringify(stored)} must be refused before any comparison`,
+    )
+  }
+
+  // And the comparator is reached again for a well-formed hash, so the refusals
+  // above are rejections rather than a broken seam.
+  comparator.reset()
+  assert(await crypto.verify("value", valid))
+  assertEquals(comparator.calls.length, 1)
+  assert(keyHex.length > 0)
+})
+
+Deno.test("a valid hash never decodes through a coercing decoder", async () => {
+  // The complement: an odd-length or non-hex digest is refused outright rather
+  // than silently truncated. `/../g` turned `"abc"` into `"AB"`, so a truncated
+  // stored key could still have compared equal.
+  const crypto = new CryptoContext({ pepper: TEST_PEPPER, iterations: TEST_ITERATIONS })
+  const valid = await crypto.hash("value")
+  const [saltHex, keyHex] = valid.split(":")
+  assertEquals(saltHex.length % 2, 0)
+  assertEquals(keyHex.length % 2, 0)
+
+  for (const stored of [`${saltHex}:${keyHex.slice(0, -1)}`, `${saltHex.slice(0, -1)}:${keyHex}`]) {
+    assertFalse(await crypto.verify("value", stored), "an odd-length half must be refused")
+  }
+  assert(await crypto.verify("value", valid))
+})
+
 Deno.test("verify rejects a malformed stored hash and keeps verifying afterwards", async () => {
   const crypto = new CryptoContext({ pepper: TEST_PEPPER, iterations: TEST_ITERATIONS })
   const hash = await crypto.hash("value")

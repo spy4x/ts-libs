@@ -171,6 +171,29 @@ Deno.test("makes the token and userinfo requests it was configured with", async 
   assertEquals(userinfo.method, "GET")
 })
 
+Deno.test("the OAuth2 state check is the production site of constantTimeEquals", () => {
+  // The counterpart of the magic-link assertion. `crypto.test.ts` proves the
+  // *behaviour* of `constantTimeEquals` with an injected comparator; what this pins
+  // is that the state cookie is where it is called — a value that is not hashed at
+  // rest, unlike a credential, which goes through `verify` instead. Read from the
+  // code rather than taken from a comment, so the two attribution comments in
+  // `magic-link.ts` and `oauth2.ts` cannot drift apart again.
+  return Deno.readTextFile(new URL("./oauth2.ts", import.meta.url)).then((source) => {
+    const code = source
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("*") && !line.trimStart().startsWith("//"))
+      .join("\n")
+    assert(
+      code.includes("constantTimeEquals(state, storedState)"),
+      "the state check must compare through constantTimeEquals",
+    )
+    assertFalse(
+      code.includes("state === storedState") || code.includes("state == storedState"),
+      "the state must not be compared with an equality operator",
+    )
+  })
+})
+
 Deno.test("rejects a callback whose state does not match the cookie", async () => {
   const auth = oauthAuth({ profile: { sub: "s", email: "user@example.com" } })
   const { state, jar } = startFlow(auth)

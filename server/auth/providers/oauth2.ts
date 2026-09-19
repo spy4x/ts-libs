@@ -416,10 +416,13 @@ export class OAuth2Provider implements IOAuth2Provider {
    * Exchange the code and read the profile, in one place so `check` and `connect`
    * cannot drift apart.
    *
-   * The `state` is compared through `CryptoContext.constantTimeEquals`, so a
-   * guessed state cannot be narrowed down by response time, and the state cookie
-   * is cleared on every exit — success or failure — so a stale state cannot be
-   * replayed against a second callback.
+   * The `state` is compared through `CryptoContext.constantTimeEquals` — this is
+   * that function's production call site, since a state value is not hashed at
+   * rest the way a credential is. Both sides are digested to a fixed 32 bytes
+   * before the comparison, so neither the value nor the length of a guessed state
+   * is observable in the response time. The state cookie is cleared on every exit
+   * — success or failure — so a stale state cannot be replayed against a second
+   * callback.
    */
   private async authorize(
     code: string,

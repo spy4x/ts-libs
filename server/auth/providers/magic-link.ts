@@ -10,11 +10,18 @@
  * PBKDF2 digest is stored — the same mechanism passwords use, so there is one
  * hashing path in the package, not two.
  *
- * **Constant-time comparison.** `CryptoContext.constantTimeEquals` digests both
- * sides to a fixed 32 bytes before comparing, so neither the content nor the
- * length of a guessed token is observable in the response time. A plain `===`
- * exits at the first differing byte, and an early return on a length mismatch
- * leaks the length.
+ * **Constant-time comparison.** The presented token is checked by
+ * `CryptoContext.verify` (`crypto.ts`), which derives it with the stored salt and
+ * compares the two derived keys through `CryptoContext.compare`, defaulted to
+ * `timingSafeEqual`. Both operands are therefore the same fixed width, so neither
+ * the content nor the length of a guess is observable in the response time: a
+ * plain `===` exits at the first differing byte, and an explicit length check
+ * would leak the length. The stored value is a digest, so there is no raw token to
+ * compare against in the first place.
+ *
+ * `CryptoContext.constantTimeEquals` is a *different* function and is not on this
+ * path — it exists for values that are not already hashed at rest; the OAuth2
+ * `state` cookie is the site that uses it.
  *
  * **Single use, with a deadline and a lockout.** The source left the token valid
  * until the next one was requested, with no expiry and no attempt counter, so a
