@@ -313,10 +313,12 @@ export function hasFrameText(value: string): boolean {
 /**
  * Everything a route could put on the wire for an error, as one string.
  *
- * `Object.getOwnPropertyNames` alone is not enough: `message` on an `Error` is
- * not enumerable, so a mutation that appends a stack to the message would slip
- * past a payload built from enumerable keys only. `stack` is still excluded —
- * it is the runtime's own addition and this package never copies it — so the
+ * `Object.getOwnPropertyNames`, not `Object.keys`: `message` on an `Error` is an
+ * own property but not an enumerable one, so a payload built from enumerable
+ * keys only would miss a frame appended to the message. The same call already
+ * carries `name`, which `AiRequestError` sets in its constructor, and
+ * `cause`/`kind`/`code`, which are plain own properties. `stack` is skipped — it
+ * is the runtime's own addition and this package never copies it — so the
  * assertion stays about what the library surfaces.
  */
 export function serialized(error: unknown): string {
@@ -324,10 +326,6 @@ export function serialized(error: unknown): string {
   for (const entry of Object.getOwnPropertyNames(error)) {
     if (entry === "stack") continue
     record[entry] = (error as Record<string, unknown>)[entry]
-  }
-  if (error instanceof Error) {
-    record.name = error.name
-    record.message = error.message
   }
   return JSON.stringify(record)
 }
