@@ -30,6 +30,7 @@ export {
   createHint,
   createJsonCodec,
   type DecodeResult,
+  findUndeclaredKey,
   isChangeHint,
   type MessageCodec,
   type ServerMessage,

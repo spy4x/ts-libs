@@ -303,6 +303,15 @@ inherited one. The dependency's behaviour is documented rather than patched — 
 package does not fork arktype; the guard is a handful of lines next to the schemas it
 protects, and mutating it reddens nine tests.
 
+The rule is exported as `findUndeclaredKey` so it can be pinned on its own, because it
+must stay a _declared-set_ check rather than a prototype-name blacklist. A blacklist
+would reject a legitimate key whose name happens to exist on `Object.prototype`, and
+would accept nothing else it is supposed to: the test "accepts a declared key whose name
+also exists on `Object.prototype`" (with `toString` and `__proto__` passed as declared)
+fails against that rewrite, and no frame in this protocol declares such a key today, so
+no wire-level test could hold the property. Rewriting the predicate that way reddens five
+tests.
+
 ## Testing
 
 ```bash

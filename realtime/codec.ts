@@ -165,8 +165,18 @@ const DECLARED_FRAME_KEYS: Record<WireMessage["kind"], readonly string[]> = {
 /** Keys a handshake cursor snapshot may carry. */
 const DECLARED_CURSOR_KEYS: readonly string[] = ["groupId", "sequence"]
 
-/** First own property of `value` that `declared` does not list, or `null`. */
-function findUndeclaredKey(value: object, declared: readonly string[]): string | null {
+/**
+ * First own property of `value` that `declared` does not list, or `null`.
+ *
+ * This is the protocol rule itself, exported so it can be pinned on its own: membership is decided by
+ * the *own* keys of the value against an explicit list. It must never be rewritten as a
+ * prototype-name blacklist — that shape would accept every future declared key whose name happens to
+ * exist on `Object.prototype`, and would reject a declared one. The test
+ * "accepts a declared key whose name also exists on Object.prototype" fails against a blacklist, and
+ * replaces nothing: no frame in this protocol declares such a key today, so only a predicate-level
+ * assertion can hold the property.
+ */
+export function findUndeclaredKey(value: object, declared: readonly string[]): string | null {
   for (const key of Object.keys(value)) {
     if (!declared.includes(key)) return key
   }

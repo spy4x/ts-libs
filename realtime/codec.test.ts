@@ -8,7 +8,13 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 
-import { createHint, createJsonCodec, isChangeHint, type WireMessage } from "./codec.ts"
+import {
+  createHint,
+  createJsonCodec,
+  findUndeclaredKey,
+  isChangeHint,
+  type WireMessage,
+} from "./codec.ts"
 
 const codec = createJsonCodec()
 
@@ -225,6 +231,19 @@ describe("createJsonCodec", () => {
     })
 
     expect(accepted).toEqual([])
+  })
+
+  it("accepts a declared key whose name also exists on Object.prototype", () => {
+    // The declared set is what decides, not the name: `toString` and `__proto__` are both members of
+    // Object.prototype and both accepted here precisely because they are declared. A guard rewritten
+    // as a prototype-name blacklist returns a non-null key for these and this test goes red, which is
+    // the failure mode that would reopen the hole in a different shape.
+    expect(findUndeclaredKey({ toString: 1 }, ["toString"])).toBeNull()
+    expect(findUndeclaredKey(JSON.parse(`{"__proto__":1}`), ["__proto__"])).toBeNull()
+
+    // And the converse, so the predicate is not vacuously permissive.
+    expect(findUndeclaredKey({ toString: 1 }, ["groupId"])).toBe("toString")
+    expect(findUndeclaredKey({}, ["toString"])).toBeNull()
   })
 
   it("accepts a frame whose undeclared-looking names exist only on Object.prototype", () => {
