@@ -110,9 +110,14 @@ export function icsUnescape(value: string): string {
 }
 
 /**
- * Reverse {@link icsEscapeParameter} per RFC 6868. `^n` becomes a newline,
- * `^'` a double quote, `^^` a caret; anything else after a caret is left as
- * written, matching the RFC's requirement that unknown escapes pass through.
+ * Reverse {@link icsEscapeParameter} per RFC 6868 §3.1: `^n` becomes a newline,
+ * `^'` a double quote, `^^` a single caret.
+ *
+ * The `^^` case must emit one caret and then keep scanning, *not* one caret and
+ * skip the next character — `^^n` is an encoded literal caret followed by `n`,
+ * so decoding it to a newline would break the round trip for any value holding
+ * the two characters `^n`. A caret followed by anything else is left as written,
+ * per the RFC's requirement that unknown escapes pass through unchanged.
  */
 export function icsUnescapeParameter(value: string): string {
   let out = ""
@@ -124,6 +129,8 @@ export function icsUnescapeParameter(value: string): string {
     }
     const next = value[index + 1]
     if (next === "^") {
+      // One caret, then continue scanning: "^^n" is an encoded caret followed
+      // by a literal "n", not an encoded newline.
       out += "^"
       index++
     } else if (next === "'") {

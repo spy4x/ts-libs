@@ -252,8 +252,23 @@ Deno.test("icsUnescapeParameter decodes ^^, ^' and ^n and passes unknown escapes
   assertEquals(icsUnescapeParameter("trailing^"), "trailing^")
 })
 
-Deno.test("icsUnescapeParameter is the inverse of icsEscapeParameter for caret-free input", () => {
-  const samples = [`Lastname, Firstname; PhD`, `Visitor";ROLE=CHAIR${LF}Injected`, "plain", ""]
+Deno.test("icsUnescapeParameter is the inverse of icsEscapeParameter", () => {
+  // Caret-bearing samples included deliberately: "^^n" must decode to a literal
+  // caret followed by "n", not to a newline, or a value holding "^n" cannot
+  // round-trip. See icsUnescapeParameter's JSDoc.
+  const samples = [
+    `Lastname, Firstname; PhD`,
+    `Visitor";ROLE=CHAIR${LF}Injected`,
+    "^n",
+    "^^",
+    "a^nb",
+    "a^b",
+    "^",
+    "trailing^",
+    `${LF}`,
+    "plain",
+    "",
+  ]
 
   for (const sample of samples) {
     assertEquals(
