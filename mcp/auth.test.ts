@@ -96,12 +96,51 @@ describe("createTokenVerifier", () => {
     // presented one, which made the number of digest calls depend on the secret rather
     // than on the request. Both sides are now hashed per call, so this counts 2 per
     // verification and a short presented token cannot skip the digest.
+    //
+    // What this establishes, exactly: **which** values reach `crypto.subtle.digest` and how
+    // many times — the presented value and the configured token, always both, whatever the
+    // presented length. It does **not** establish comparison safety. A comparison of the
+    // two digests that is behaviourally equivalent on a digested 32-byte input passes it,
+    // and one such comparison is not constant time:
+    //
+    //   const [p, e] = [await digest(presented), await digest(expected)]
+    //   return new TextDecoder().decode(p) === new TextDecoder().decode(e)   // green here
+    //
+    // Measured: that mutant leaves this file green, 6 passed (26 steps) / 0 failed. Equal
+    // bytes decode to equal strings, so no input can separate it from a byte-wise
+    // comparison — the two are observationally identical from outside
+    // `constantTimeEquals`, and timing is not measurable on a shared runner. So the
+    // constant-time property rests on `@std/crypto`'s `timingSafeEqual`, named in
+    // `mcp/auth.ts:54`, and two things carry the safety this test cannot: that call, and
+    // digesting both sides first — a leak from a non-constant-time comparison is then a
+    // leak of SHA-256 output, not of token bytes. The counting assertions below pin the
+    // second half of that; nothing in this suite pins the first.
     const { algorithms, inputs } = await recordDigests(() => [
       createTokenVerifier(FAKE_TOKEN).verify("ab"),
     ])
 
     assertEquals(algorithms, ["SHA-256", "SHA-256"])
     assertEquals(inputs, [2, FAKE_TOKEN.length])
+  })
+
+  it("digests the configured token per call rather than once at construction", async () => {
+    // The same production-path property on the axis that a pre-digested secret would show
+    // up on: three verifications must be three digest pairs, in order, not one pair and
+    // then presented-only digests.
+    const { inputs } = await recordDigests(() => [
+      createTokenVerifier(FAKE_TOKEN).verify("ab"),
+      createTokenVerifier(FAKE_TOKEN).verify("abc"),
+      createTokenVerifier(FAKE_TOKEN).verify(FAKE_TOKEN_WRONG),
+    ])
+
+    assertEquals(inputs, [
+      2,
+      FAKE_TOKEN.length,
+      3,
+      FAKE_TOKEN.length,
+      FAKE_TOKEN_WRONG.length,
+      FAKE_TOKEN.length,
+    ])
   })
 
   it("refuses to be built from an empty secret rather than failing open", () => {
