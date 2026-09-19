@@ -152,19 +152,43 @@ Deploy, git-hook and backup tooling as a **library with ports**, extracted from
 | `@ts-libs/ops/hooks/install`  | `installHooks`, `resolveGitCommonDir`, `DEFAULT_HOOKS`                                                                                                |
 | `@ts-libs/ops/backup/types`   | `BackupConfig`, `BackupStatus`, `isMissingContainerError`                                                                                             |
 | `@ts-libs/ops/backup/compose` | `manageComposeStack` with the `up -d` fallback                                                                                                        |
+| `@ts-libs/ops/offline-backup` | the external-drive cold-backup mechanics — see `ops/offline-backup/README.md`                                                                         |
+| `@ts-libs/ops` (`.`)          | `mod.ts`: a barrel re-exporting the entries above except `offline-backup`                                                                             |
 
-`testing/` (`FakeCommandRunner`, `FakeFileSystem`) is test support: not an entry
-point, not exported.
+Those eleven entries are exactly what `ops/deno.json` exports; the five
+`offline-backup` modules are reachable through the one `./offline-backup` barrel
+and **not** as individual subpaths. `testing/` (`FakeCommandRunner`,
+`FakeFileSystem`) is test support: not an entry point, and not exported.
 
 ## Rules this package follows
 
-- **argv, never a shell string.** The only program text that ever reaches a shell
-  is `deploy.ts`'s generated stack script, and it goes to `bash -s` on **stdin** —
-  never to `-c` — with the app directory passed as `$1` so no configuration value
-  is interpolated into executable text.
-- **Secrets never reach argv.** Env files are named by path (`--env-file`), and a
-  secret-looking key in a remote env is rejected before anything runs. argv is
-  readable by every process on the box; this is not a stylistic preference.
+- **argv, never a shell string.** Commands are arrays: `ssh`/`rsync`/`docker`
+  arguments are never joined into a string, and there is no `bash -c` in the
+  package outside two doc comments.
+- **The one piece of real shell text is generated, validated and quoted.**
+  `deploy.ts`'s stack script is the exception, and it is treated as text, not as
+  argv: it goes to `bash -s` on **stdin** (never `-c`), the app directory arrives
+  as `$1`, and every value that comes from configuration is (a) refused unless it
+  is a docker project name or a relative path and (b) single-quoted through
+  `shellQuote` where it is interpolated. Both layers exist because the first
+  version of this file asserted the property while only the app directory was
+  actually kept out of the script: the reviewer of #50 ran `$(echo PWNED-*)` from
+  a stack name, and the deploy reported `DEPLOY_SUCCESS` anyway.
+- **Secrets never reach argv.** Env files are named by path (`--env-file`); a
+  secret-shaped key **or value** in a remote env is refused before anything runs
+  (`assertNoSecretEnvKeys`, value-shape rules included, with `allowEnvKeys` as the
+  explicit escape hatch); and `runCommand` refuses any argv that contains a value
+  the caller also passed in the child's environment. argv is readable by every
+  process on the box; this is not a stylistic preference.
+- **The command port is total.** `runCommand` converts a runner rejection — a
+  missing binary, a `cwd` that does not exist — into `{ success: false, error }`,
+  so a caller branching on `success` cannot be surprised by a launch failure. See
+  "The adapter boundary" below for what that leaves untested.
+- **The remote side is shell input, and is treated as such.** ssh joins its
+  command arguments and hands the result to the remote login shell, so every
+  remote argument is validated, the destination is validated _and_ preceded by
+  `--` (a `SSH_ADDRESS` of `-oProxyCommand=…` would otherwise be local code
+  execution), and container names must match docker's charset.
 - **One logging convention**: `console.ts`. `ConsoleLogger`'s trick of replacing
   the global `console` methods to capture output is not reentrant and is not
   ported; `Logger.records()` is how offline-backup keeps its log file.
@@ -191,3 +215,34 @@ point, not exported.
 - `ops/notify/**` belongs to #16 (`integrations`) and is not touched here. If that
   PR lands after this one, **merge** the `exports` maps and append its README
   section rather than replacing either file.
+
+## The adapter boundary
+
+Two adapters touch the platform, and both are deliberately thin:
+`createDenoCommandRunner` (`run-command.ts`) and `createDenoFileSystem` (`fs.ts`).
+
+**Behind the port and tested**: argv assembly (`buildInvocation`, including the
+`sudo` prefix), the stdin policy (`stdinModeFor`, including the refusal of
+`sudo` + `stdin` text), multi-byte stream decoding (`decodeChunks`), the launch
+failure → `{success: false}` conversion (`runCommand`, driven from a fake that
+rejects), and the secret-in-argv rule.
+
+**Inside the adapter, not tested here**: that `Deno.Command` actually spawns,
+that `clearEnv` clears and `env` merges the inherited environment, `cwd`
+handling, live `onOutput` chunking, `status.success` mapping, stdin piping into a
+real child, and the `FileInfo` → `FileStat` mapping (`denoStat`, including
+`lstat` not following a symlink and the `mode` bits). The workspace test task is
+`deno test --no-prompt --allow-read --allow-env`, so reaching them needs
+`--allow-run` and `--allow-write`, a root-config change this package does not own.
+
+To exercise them without changing CI:
+
+```bash
+deno test --allow-run --allow-read --allow-env ops/run-command.integration.test.ts
+deno test --allow-write --allow-read --allow-env ops/fs.integration.test.ts
+```
+
+Those two files are not in this PR: adding them means either granting the flags in
+CI or shipping tests that CI cannot run, and neither is a decision a package PR
+should take on its own. Until then the mapping above is the honest statement of
+what is verified and what is assumed.
