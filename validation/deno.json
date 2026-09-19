@@ -1,0 +1,9 @@
+{
+  "name": "@ts-libs/validation",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./mod.ts",
+    "./validate": "./validate.ts",
+    "./model": "./model.ts"
+  }
+}
