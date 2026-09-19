@@ -12,6 +12,7 @@ import {
   bumpServiceWorkerBeforeDeploy,
   bumpServiceWorkerCacheVersion,
   deploy,
+  type DeployScriptOptions,
   type DeployTarget,
   deriveStagingEnv,
   extractVolumePaths,
@@ -215,25 +216,25 @@ Deno.test("stops at the first failed step and reports the stderr", async () => {
 })
 
 Deno.test("bumps the service worker cache version by one", () => {
-  const source = `const CACHE = "antonshubin-v7"\n`
-  const bumped = bumpServiceWorkerCacheVersion(source, "antonshubin")
-  assertEquals(bumped, { content: `const CACHE = "antonshubin-v8"\n`, from: 7, to: 8 })
+  const source = `const CACHE = "example-v7"\n`
+  const bumped = bumpServiceWorkerCacheVersion(source, "example")
+  assertEquals(bumped, { content: `const CACHE = "example-v8"\n`, from: 7, to: 8 })
 })
 
 Deno.test("does not bump a version outside the anchored assignment", () => {
   const source = [
-    `// antonshubin-v7 shipped on 2026-01-01`,
-    `const OTHER = "antonshubin-v7"`,
-    `const CACHE = "antonshubin-v7"`,
+    `// example-v7 shipped on 2026-01-01`,
+    `const OTHER = "example-v7"`,
+    `const CACHE = "example-v7"`,
     "",
   ].join("\n")
-  const bumped = bumpServiceWorkerCacheVersion(source, "antonshubin")
+  const bumped = bumpServiceWorkerCacheVersion(source, "example")
   assertEquals(
     bumped?.content,
     [
-      `// antonshubin-v7 shipped on 2026-01-01`,
-      `const OTHER = "antonshubin-v7"`,
-      `const CACHE = "antonshubin-v8"`,
+      `// example-v7 shipped on 2026-01-01`,
+      `const OTHER = "example-v7"`,
+      `const CACHE = "example-v8"`,
       "",
     ].join("\n"),
   )
@@ -321,7 +322,7 @@ Deno.test("derives the staging env by rewriting only the named keys", async () =
   const fs = new FakeFileSystem()
   fs.seed(
     "/app/.env.prod",
-    ["DOMAIN=antonshubin.com", "WWW_DOMAIN=www.antonshubin.com", "TZ=Asia/Singapore", ""].join(
+    ["DOMAIN=example.com", "WWW_DOMAIN=www.example.com", "TZ=Asia/Singapore", ""].join(
       "\n",
     ),
   )
@@ -331,44 +332,44 @@ Deno.test("derives the staging env by rewriting only the named keys", async () =
     prodPath: "/app/.env.prod",
     stagingPath: "/app/.env.staging",
     replacements: {
-      DOMAIN: "website-stag.antonshubin.com",
-      WWW_DOMAIN: "website-stag.antonshubin.com",
+      DOMAIN: "website-stag.example.com",
+      WWW_DOMAIN: "website-stag.example.com",
     },
   })
 
   assertEquals(
     staging,
     [
-      "DOMAIN=website-stag.antonshubin.com",
-      "WWW_DOMAIN=website-stag.antonshubin.com",
+      "DOMAIN=website-stag.example.com",
+      "WWW_DOMAIN=website-stag.example.com",
       "TZ=Asia/Singapore",
       "",
     ].join("\n"),
   )
   assertEquals(fs.text("/app/.env.staging"), staging)
-  assertEquals(fs.text("/app/.env.prod").includes("DOMAIN=antonshubin.com"), true)
+  assertEquals(fs.text("/app/.env.prod").includes("DOMAIN=example.com"), true)
 })
 
 Deno.test(
   "staging derivation does not clobber WWW_DOMAIN when only DOMAIN is rewritten",
   async () => {
     const fs = new FakeFileSystem()
-    fs.seed("/app/.env.prod", "DOMAIN=antonshubin.com\nWWW_DOMAIN=www.antonshubin.com\n")
+    fs.seed("/app/.env.prod", "DOMAIN=example.com\nWWW_DOMAIN=www.example.com\n")
 
     const staging = await deriveStagingEnv({
       fs,
       prodPath: "/app/.env.prod",
       stagingPath: "/app/.env.staging",
-      replacements: { DOMAIN: "website-stag.antonshubin.com" },
+      replacements: { DOMAIN: "website-stag.example.com" },
     })
 
-    assertEquals(staging, "DOMAIN=website-stag.antonshubin.com\nWWW_DOMAIN=www.antonshubin.com\n")
+    assertEquals(staging, "DOMAIN=website-stag.example.com\nWWW_DOMAIN=www.example.com\n")
   },
 )
 
 Deno.test("staging derivation fails when the production env has no such key", async () => {
   const fs = new FakeFileSystem()
-  fs.seed("/app/.env.prod", "DOMAIN=antonshubin.com\n")
+  fs.seed("/app/.env.prod", "DOMAIN=example.com\n")
   await assertRejects(
     () =>
       deriveStagingEnv({
@@ -397,46 +398,160 @@ Deno.test("refuses a hostile stack directory name even when deployAs is benign",
 })
 
 /**
- * Offsets where `needle` occurs outside a single-quoted region.
+ * Remove every quoted region from a shell script, leaving the **residue**: the
+ * bare words a shell still parses as syntax.
  *
- * Only a single-quoted string is inert in bash: double quotes still expand `$`,
- * backticks and `\`, so a configuration value inside them is *not* neutralised.
- * This is the executable form of the site-by-site inventory — a grep for
- * `shellQuote` would miss a site that simply forgot to call it, which is exactly
- * what the reviewer found at the stale-container message.
+ * Configuration values may only ever appear inside a quoted region, so a value
+ * found in the residue is executable text. The check is deliberately
+ * configuration-independent — it inspects whatever `generateDeployScript`
+ * produced, with no knowledge of which interpolation site put it there — so it
+ * covers sites the author did not think to enumerate. The previous version of
+ * this helper tracked quote state per needle instead, and was defeated by one
+ * edit at a site (the `RESTARTING` marker) that its single sample configuration
+ * never generated.
+ *
+ * `balanced` is false when the script ends inside a quote, which the caller must
+ * treat as a failure: an unbalanced script makes everything after the stray quote
+ * look "quoted" and would hide a leak. The previous version also skipped `\`-escaped
+ * characters *outside* a quote, which is not a bash rule and desynchronised it.
  */
-function unquotedOccurrences(script: string, needle: string): number[] {
-  const found: number[] = []
-  let inSingleQuotes = false
+function stripQuotedRegions(script: string): { residue: string; balanced: boolean } {
+  let residue = ""
+  let quote: '"' | "'" | null = null
   for (let i = 0; i < script.length; i++) {
     const char = script[i]
-    if (char === "'") {
-      inSingleQuotes = !inSingleQuotes
+    if (quote === null) {
+      if (char === "'" || char === '"') {
+        quote = char
+        residue += " "
+        continue
+      }
+      residue += char
       continue
     }
-    if (!inSingleQuotes && char === "\\") {
-      i++
+    if (char === quote) {
+      quote = null
       continue
     }
-    if (!inSingleQuotes && script.startsWith(needle, i)) found.push(i)
+    if (quote === '"' && char === "\\") i++
+    // inside a quoted region: dropped, replaced by the separator written on open
   }
-  return found
+  return { residue, balanced: quote === null }
 }
 
-Deno.test("no configuration value appears outside a single-quoted region", () => {
-  const script = generateDeployScript([{ name: "web", deployAs: "hl-web" }], {
-    containerPrefix: "hl-acme",
-    envFiles: [".env.prod"],
-    composeFile: "compose.prod.yml",
-  })
+/** One configuration that reaches a branch of {@link generateDeployScript}. */
+interface ScriptCase {
+  /** Failure message label. */
+  label: string
+  /** Stacks to deploy. */
+  stacks: readonly StackConfig[]
+  /** Options for the generator. */
+  options: DeployScriptOptions
+}
 
-  for (const value of ["web", "hl-web", "hl-acme", ".env.prod", "compose.prod.yml"]) {
-    assertEquals(
-      unquotedOccurrences(script, value),
-      [],
-      `${value} must only ever appear inside a single-quoted literal`,
+/**
+ * Every branch of the generator: the restart markers exist only when a stack
+ * restarts, and the override block only when it is not disabled — so a single
+ * sample configuration cannot be the whole inventory.
+ */
+const SCRIPT_CASES: readonly ScriptCase[] = [
+  {
+    label: "one stack, defaults",
+    stacks: [{ name: "webq1" }],
+    options: { containerPrefix: "hlq3" },
+  },
+  {
+    label: "one stack, custom deployAs, compose file and env file",
+    stacks: [{ name: "webq1", deployAs: "hlq2" }],
+    options: { containerPrefix: "hlq3", envFiles: [".envq4"], composeFile: "composeq5.yml" },
+  },
+  {
+    label: "two stacks, one restarting, no override",
+    stacks: [{ name: "webq1", deployAs: "hlq2" }, { name: "apizq6" }],
+    options: {
+      containerPrefix: "hlq3",
+      useOverride: false,
+      restartStacks: new Set(["hlq2"]),
+    },
+  },
+  {
+    label: "both stacks restarting, override enabled",
+    stacks: [{ name: "webq1", deployAs: "hlq2" }, { name: "apizq6" }],
+    options: {
+      containerPrefix: "hlq3",
+      envFiles: [".envq4", ".env.root"],
+      restartStacks: new Set(["hlq2", "apizq6"]),
+    },
+  },
+]
+
+/**
+ * Every string the generator derives from a configuration.
+ *
+ * Asserting on the derived composites, not only on the raw values, is what makes
+ * a forgotten `shellQuote` visible: an unquoted `echo RESTARTING:a:b` leaves
+ * `RESTARTING:a:b` in the residue even though `a` alone might be too short to
+ * search for.
+ */
+function configurationNeedles(testCase: ScriptCase): string[] {
+  const envFiles = testCase.options.envFiles ?? [".env.root", ".env"]
+  const composeFile = testCase.options.composeFile ?? "compose.yml"
+  const needles: string[] = [testCase.options.containerPrefix, ...envFiles]
+
+  for (const stack of testCase.stacks) {
+    const deployAs = stack.deployAs ?? stack.name
+    needles.push(
+      stack.name,
+      deployAs,
+      `stacks/${stack.name}/${composeFile}`,
+      `compose-override/${stack.name}.yml`,
+      `DEPLOY_START:${stack.name}:${deployAs}`,
+      `DEPLOY_SUCCESS:${stack.name}:${deployAs}`,
+      `DEPLOY_FAILED:${stack.name}:${deployAs}`,
+      `RESTARTING:${stack.name}:${deployAs}`,
+      `RESTART_DONE:${stack.name}:${deployAs}`,
+      `name=${testCase.options.containerPrefix}-${stack.name}`,
     )
   }
+
+  return needles
+}
+
+Deno.test("no configuration value survives in a script's unquoted residue", () => {
+  for (const testCase of SCRIPT_CASES) {
+    const script = generateDeployScript(testCase.stacks, testCase.options)
+    const { residue, balanced } = stripQuotedRegions(script)
+
+    assertEquals(balanced, true, `${testCase.label}: the script must quote end to end`)
+    for (const syntax of ["$(", "`", "${"]) {
+      assertEquals(
+        residue.includes(syntax),
+        false,
+        `${testCase.label}: ${syntax} survived outside a quoted region`,
+      )
+    }
+    for (const needle of configurationNeedles(testCase)) {
+      assertEquals(
+        residue.includes(needle),
+        false,
+        `${testCase.label}: ${needle} is unquoted, so a shell would parse it`,
+      )
+    }
+  }
+})
+
+Deno.test("quotes the restart markers, which only exist when a stack restarts", () => {
+  // The site that defeated the previous helper: absent from a configuration with
+  // no `restartStacks`, so its sample never inspected it.
+  const script = generateDeployScript([{ name: "gatus", deployAs: "hl-gatus" }], {
+    containerPrefix: "hl",
+    restartStacks: new Set(["hl-gatus"]),
+  })
+
+  assertEquals(script.includes("echo 'RESTARTING:gatus:hl-gatus'"), true)
+  assertEquals(script.includes("echo 'RESTART_DONE:gatus:hl-gatus'"), true)
+  assertEquals(script.includes("echo RESTARTING:"), false)
+  assertEquals(script.includes("echo RESTART_DONE:"), false)
 })
 
 Deno.test("quotes the expected project name into the stale-container message", () => {
@@ -470,7 +585,85 @@ Deno.test("refuses a build id that looks like a credential unless the caller vou
     CommandError,
     "credential-shaped value",
   )
-  assertNoSecretEnvKeys({ GIT_SHA: sha }, { allowKeys: ["GIT_SHA"] })
+  assertNoSecretEnvKeys({ GIT_SHA: sha }, { allowEnvKeys: ["GIT_SHA"] })
+})
+
+/**
+ * The token list, both directions.
+ *
+ * Both directions live in one test on purpose: tightening for a false positive
+ * (adding a word boundary) is what opened the inflection hole that let
+ * `GH_TOKENS` and `MY_SECRETS` reach the remote argv, so a test that only pins
+ * the refusals would call that a pass.
+ */
+Deno.test("refuses credential-spellings including their inflections", () => {
+  const refused = [
+    // round-1 matrix
+    "AWS_SECRET_ACCESS_KEY",
+    "aws_secret_access_key",
+    "GH_TOKEN",
+    "APIKEY",
+    "API_KEY",
+    "API-KEY",
+    "CREDENTIAL",
+    "PRIVATE_KEY",
+    "DB_PASS",
+    "KEY_PASSPHRASE",
+    "PASSCODE",
+    "MYSQL_PWD",
+    "AUTH",
+    "BEARER",
+    "JWT",
+    "SESSION_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "KEY",
+    // inflections the boundary tightening broke
+    "GH_TOKENS",
+    "MY_SECRETS",
+    "SECRETS",
+    "AUTHORIZATION",
+    "API_KEYS",
+    "SESSIONS",
+    "PASSES",
+    "PWD",
+  ]
+
+  for (const key of refused) {
+    assertThrows(
+      () => assertNoSecretEnvKeys({ [key]: "short" }),
+      CommandError,
+      undefined,
+      `${key} must be refused`,
+    )
+  }
+})
+
+Deno.test("allows names that merely contain a credential word inside another", () => {
+  const allowed = [
+    "MONKEY",
+    "AUTHOR",
+    "AUTHORED_BY",
+    "PUBKEY",
+    "BYPASS_PROXY",
+    "COMPASS",
+    "TOKENIZER",
+    "KEYSTONE",
+    "SESSIONLESS",
+  ]
+
+  for (const key of allowed) {
+    assertNoSecretEnvKeys({ [key]: "value" })
+  }
+})
+
+Deno.test("cannot vouch for a key that names itself a credential", () => {
+  // `allowEnvKeys` lifts the value-shape rule, not the key-shape rule, so it
+  // cannot be turned into a blank cheque for `DB_PASS`.
+  assertThrows(
+    () => assertNoSecretEnvKeys({ DB_PASS: "short" }, { allowEnvKeys: ["DB_PASS"] }),
+    CommandError,
+    "looks like a secret",
+  )
 })
 
 /** Key spellings that leaked through the first version of the guard (reviewer's matrix). */
@@ -532,9 +725,9 @@ Deno.test(
   "allows a value that merely looks like a credential when the caller vouches for it",
   () => {
     const digest = "a".repeat(64)
-    assertNoSecretEnvKeys({ IMAGE_DIGEST: digest }, { allowKeys: ["IMAGE_DIGEST"] })
+    assertNoSecretEnvKeys({ IMAGE_DIGEST: digest }, { allowEnvKeys: ["IMAGE_DIGEST"] })
     assertThrows(
-      () => assertNoSecretEnvKeys({ OTHER_DIGEST: digest }, { allowKeys: ["IMAGE_DIGEST"] }),
+      () => assertNoSecretEnvKeys({ OTHER_DIGEST: digest }, { allowEnvKeys: ["IMAGE_DIGEST"] }),
       CommandError,
       "credential-shaped value",
     )
@@ -692,7 +885,7 @@ Deno.test("adds a restart block only for the named stacks", () => {
     containerPrefix: "hl",
     restartStacks: new Set(["hl-gatus"]),
   })
-  assertEquals(script.includes("RESTARTING:gatus:hl-gatus"), true)
+  assertEquals(script.includes("echo 'RESTARTING:gatus:hl-gatus'"), true)
   assertEquals(script.includes("RESTARTING:traefik:traefik"), false)
 })
 

@@ -56,9 +56,14 @@ export interface DeployTarget {
    */
   env?: Record<string, string>
   /**
-   * Env keys the caller vouches for, exempting them from the value-shape check
-   * in {@link assertNoSecretEnvKeys}. For a value that merely looks like a
-   * credential — a build hash, an image digest, a fingerprint.
+   * Env keys the caller vouches for. Each listed key skips the **value-shape**
+   * pass in {@link assertNoSecretEnvKeys} — the one that refuses anything looking
+   * like a credential — and nothing else: a key whose *name* says credential, a
+   * non-scalar value and a blank value are still refused.
+   *
+   * For a value that merely looks like a credential: a build hash, an image
+   * digest, a public-key fingerprint. Note that a public key *itself* is such a
+   * value, which is what this escape hatch is for.
    */
   allowEnvKeys?: readonly string[]
 }
@@ -77,28 +82,38 @@ export interface DeployTarget {
  */
 export const SECRETISH_KEY: RegExp = new RegExp(
   [
-    // Generic words are matched with word boundaries. Without them the first
-    // version refused `MONKEY`, `AUTHOR`, `PUBKEY` and `BYPASS_PROXY` — real
-    // configuration that has nothing to do with a credential — while the whole
-    // point of this pass is to catch *spellings of credentials*, and the
-    // value-shape pass below catches credentials whoever named them.
-    bounded("SECRET"),
-    bounded("TOKEN"),
+    // Generic words match as whole words *and* through their plural/adjectival
+    // inflection. Both halves of that sentence are load-bearing:
+    //
+    // - Without the boundary the first version refused `MONKEY`, `AUTHOR`,
+    //   `PUBKEY` and `BYPASS_PROXY` — real configuration with nothing to do with
+    //   a credential.
+    // - With the boundary but without the inflection, tightening for that first
+    //   case *opened* a hole in the second: `bounded("TOKEN")` stopped matching
+    //   `GH_TOKENS`, and `bounded("SECRET")` stopped matching `MY_SECRETS`, which
+    //   the reviewer measured reaching the remote argv. `AUTHORIZATION` is not an
+    //   acceptable false positive, so `AUTH` carries its long form.
+    //
+    // A name that inflects some other way (`CREDENTIALS` is covered by the
+    // unbounded stem, `BEARER` has no useful plural) is still caught by
+    // {@link CREDENTIAL_VALUE}, which does not look at the key at all.
+    bounded("SECRETS?"),
+    bounded("TOKENS?"),
     "PASSWORD",
     "PASSWD",
     "PASSCODE",
     "PASSPHRASE",
-    bounded("PASS"),
-    bounded("PWD"),
+    bounded("PASS(?:ES)?"),
+    bounded("PWDS?"),
     "PRIVATE",
     "CREDENTIAL",
-    bounded("AUTH"),
+    bounded("AUTH(?:ORIZATION)?"),
     "BEARER",
     "JWT",
-    bounded("SESSION"),
+    bounded("SESSIONS?"),
     "ACCESS_KEY",
-    "API[-_]?KEY",
-    bounded("KEY"),
+    "API[-_]?KEYS?",
+    bounded("KEYS?"),
   ].join("|"),
   "i",
 )
@@ -144,7 +159,7 @@ export interface EnvPassthroughPolicy {
    * is a deliberate act in the caller's own source, which is the point — the
    * default has to be refusal, because a key-name heuristic cannot be complete.
    */
-  allowKeys?: readonly string[]
+  allowEnvKeys?: readonly string[]
 }
 
 /**
@@ -164,17 +179,22 @@ export interface EnvPassthroughPolicy {
  *
  * @throws {CommandError} When a key looks like a secret, a value looks like a
  * credential, a value is not a scalar, or a value is blank — a blank value is a
- * deploy that silently drops configuration.
+ * deploy that silently drops configuration. `policy.allowEnvKeys` lifts the
+ * credential-shaped-value rule for the keys it names, and only that rule.
  */
 export function assertNoSecretEnvKeys(
   entries: Record<string, unknown>,
   policy: EnvPassthroughPolicy = {},
 ): void {
-  const allowed = new Set(policy.allowKeys ?? [])
+  const vouched = new Set(policy.allowEnvKeys ?? [])
 
   for (const [key, value] of Object.entries(entries)) {
-    if (allowed.has(key)) continue
-
+    // The key-shape, scalar and blank rules apply to everyone. `allowEnvKeys`
+    // exempts a key from the **value-shape** pass and nothing else: the caller is
+    // vouching for a *value* that merely looks like a credential (a build hash, an
+    // image digest, a fingerprint), not for a key that names itself a credential.
+    // A blanket exemption would have made `allowEnvKeys: ["DB_PASS"]` a blank
+    // cheque, which is the reading this docstring used to invite.
     if (SECRETISH_KEY.test(key)) {
       throw new CommandError(
         `${key} looks like a secret; pass it in a file via --env-file, not in the remote argv`,
@@ -184,7 +204,7 @@ export function assertNoSecretEnvKeys(
     if (typeof value === "object" || typeof value === "function") {
       throw new CommandError(
         `${key} is not a scalar; an array or object reaches the remote command stringified ` +
-          `(and hides any nested secret). Pass it via --env-file, or list it in allowKeys`,
+          `(and hides any nested secret). Pass it via --env-file`,
       )
     }
 
@@ -193,11 +213,13 @@ export function assertNoSecretEnvKeys(
       throw new CommandError(`${key} is blank; a blank value silently drops configuration`)
     }
 
+    if (vouched.has(key)) continue
+
     for (const shape of CREDENTIAL_VALUE) {
       if (shape.test(text)) {
         throw new CommandError(
           `${key} carries a credential-shaped value; pass it in a file via --env-file, ` +
-            `not in the remote argv (add it to allowKeys if it is a digest or a fingerprint)`,
+            `not in the remote argv (add it to allowEnvKeys if it is a digest or a fingerprint)`,
         )
       }
     }
@@ -208,7 +230,7 @@ export function assertNoSecretEnvKeys(
 export interface RsyncSourceOptions {
   /** Local source, e.g. `./`. */
   source: string
-  /** Remote destination, e.g. `cloudlab:~/cloudlab/apps/antonshubin.com/`. */
+  /** Remote destination, e.g. `deploy@host.example:~/apps/site/`. */
   target: string
   /** `--delete` on the remote side. Defaults to `true`. */
   delete?: boolean
@@ -308,7 +330,7 @@ export function buildComposeUpArgs(
   ]
 
   const env = target.env ?? {}
-  assertNoSecretEnvKeys(env, { allowKeys: target.allowEnvKeys })
+  assertNoSecretEnvKeys(env, { allowEnvKeys: target.allowEnvKeys })
   const envPrefix = Object.entries(env).flatMap(([key, value]) => [`${key}=${value}`])
 
   return buildSshArgv(
@@ -492,7 +514,7 @@ export interface ServiceWorkerBumpOptions {
   fs: FileSystem
   /** Path of the local service worker file. */
   path: string
-  /** Cache name prefix, e.g. `antonshubin`. */
+  /** Cache name prefix, e.g. `example`. */
   name: string
   /** Constant holding the version. Defaults to `CACHE`. */
   variable?: string

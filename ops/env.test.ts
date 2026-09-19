@@ -74,33 +74,33 @@ Deno.test("substituteEnvVars throws rather than substituting an empty string", (
 
 Deno.test("rewriteEnvValues does not touch a key that merely ends with the rewritten key", () => {
   const prod = [
-    "DOMAIN=antonshubin.com",
-    "WWW_DOMAIN=www.antonshubin.com",
+    "DOMAIN=example.com",
+    "WWW_DOMAIN=www.example.com",
     "TZ=Asia/Singapore",
   ].join("\n")
   const staging = rewriteEnvValues(prod, {
-    DOMAIN: "website-stag.antonshubin.com",
-    WWW_DOMAIN: "website-stag.antonshubin.com",
+    DOMAIN: "website-stag.example.com",
+    WWW_DOMAIN: "website-stag.example.com",
   })
   assertEquals(
     staging,
     [
-      "DOMAIN=website-stag.antonshubin.com",
-      "WWW_DOMAIN=website-stag.antonshubin.com",
+      "DOMAIN=website-stag.example.com",
+      "WWW_DOMAIN=website-stag.example.com",
       "TZ=Asia/Singapore",
     ].join("\n"),
   )
 })
 
 Deno.test("rewriteEnvValues changes only the named key", () => {
-  const prod = ["DOMAIN=antonshubin.com", "WWW_DOMAIN=www.antonshubin.com"]
+  const prod = ["DOMAIN=example.com", "WWW_DOMAIN=www.example.com"]
     .join("\n")
   const staging = rewriteEnvValues(prod, {
-    DOMAIN: "website-stag.antonshubin.com",
+    DOMAIN: "website-stag.example.com",
   })
   assertEquals(
     staging,
-    ["DOMAIN=website-stag.antonshubin.com", "WWW_DOMAIN=www.antonshubin.com"]
+    ["DOMAIN=website-stag.example.com", "WWW_DOMAIN=www.example.com"]
       .join("\n"),
   )
 })
@@ -109,18 +109,18 @@ Deno.test("rewriteEnvValues preserves comments, blank lines and order", () => {
   const prod = [
     "# domain config",
     "",
-    "DOMAIN=antonshubin.com",
+    "DOMAIN=example.com",
     "TZ=Asia/Singapore",
   ].join("\n")
   const staging = rewriteEnvValues(prod, {
-    DOMAIN: "website-stag.antonshubin.com",
+    DOMAIN: "website-stag.example.com",
   })
   assertEquals(
     staging,
     [
       "# domain config",
       "",
-      "DOMAIN=website-stag.antonshubin.com",
+      "DOMAIN=website-stag.example.com",
       "TZ=Asia/Singapore",
     ].join("\n"),
   )
@@ -136,7 +136,7 @@ Deno.test("rewriteEnvValues writes a dollar sign in a value literally", () => {
 
 Deno.test("rewriteEnvValues fails loudly when the env file has no such key", () => {
   assertThrows(
-    () => rewriteEnvValues("DOMAIN=antonshubin.com\n", { PROTOCOL: "https" }),
+    () => rewriteEnvValues("DOMAIN=example.com\n", { PROTOCOL: "https" }),
     MissingEnvError,
     "no line for PROTOCOL",
   )
