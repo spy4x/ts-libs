@@ -136,7 +136,9 @@ export type RemoteAddrResolver<E extends Env = Record<string, never>> = (
 
 /**
  * Key the current request. Receives the request and, since that carries no peer address, the
- * framework context as a second parameter.
+ * framework context as a second parameter — `context.remoteAddr` holds whatever
+ * {@link RateLimitMiddlewareOptions.remoteAddr} resolved, which is how a deployment with no
+ * header-rewriting proxy keys on the connection instead of on a forgeable header.
  */
 export type KeyResolver<E extends Env = Record<string, never>> = (
   req: Request,
