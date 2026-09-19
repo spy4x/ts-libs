@@ -1,0 +1,8 @@
+{
+  "name": "@ts-libs/platform",
+  "version": "0.1.0",
+  "exports": {
+    "./tokens": "./tokens.ts",
+    "./validation/predicates": "./validation/predicates.ts"
+  }
+}
