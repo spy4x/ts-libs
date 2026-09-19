@@ -135,9 +135,13 @@ export interface TodoAggregate extends TodoQueryResult {
  *
  * The source modelled this as `{ xml: string, calendar }` with `''` for failure;
  * this type makes the two cases impossible to confuse.
+ *
+ * A successful contribution may still carry a `failure`: a `207` where some
+ * members failed and others answered is a partial success, and the missing
+ * members are reported rather than counted as an empty collection.
  */
 type CalendarOutcome<T> =
-  | { ok: true; calendar: Calendar; items: T[] }
+  | { ok: true; calendar: Calendar; items: T[]; failure?: CalendarFailure }
   | { ok: false; calendar: Calendar; failure: CalendarFailure }
 
 /**
@@ -182,21 +186,107 @@ function collectionUrlOfResource(url: string): string {
 }
 
 /**
+ * Build the failure a `207` reports when only **some** of its members failed.
+ *
+ * A partial answer used to be silent: `readReportResources` named the failed
+ * members, `QueryEngine` dropped them the moment one other member parsed, and a
+ * caller holding a short list of tasks had nothing to tell it the list was
+ * short. The failed hrefs travel in `resources`, so the caller can see *which*
+ * member is missing rather than only how many.
+ *
+ * The message names at most three of them: a `207` may report thousands, and the
+ * hrefs are all present in `resources` for a caller that needs every one.
+ */
+function partialReportFailure(
+  calendar: Calendar,
+  resources: readonly { href: string }[],
+  failures: readonly { href: string; status: string }[],
+): CalendarFailure {
+  const shown = failures.slice(0, 3).map((failure) => `${failure.href} ${failure.status}`)
+  const rest = failures.length - shown.length
+  return {
+    calendarName: calendar.displayName,
+    url: calendar.url,
+    error: {
+      code: CalDavErrorCode.HTTP_STATUS,
+      message: `${failures.length} of ${resources.length + failures.length} resources failed: ${
+        shown.join(", ")
+      }${rest > 0 ? `, +${rest} more` : ""}`,
+      url: calendar.url,
+    },
+    resources: failures.map((failure) => failure.href),
+  }
+}
+
+/** The optional notices a fan-out result carries; both are omitted when empty. */
+interface FanOutNotices {
+  failures?: CalendarFailure[]
+  warnings?: string[]
+}
+
+/**
  * Attach a fan-out's failures and warnings to its aggregate.
  *
  * Omitted rather than empty, so `output.failures !== undefined` is the test for
  * "something went missing" and an aggregate with nothing to report is exactly
  * what the aggregator returned.
  */
-function withNotices<T extends { failures?: CalendarFailure[]; warnings?: string[] }>(
+function withNotices<T extends FanOutNotices>(
   aggregate: T,
   failures: readonly CalendarFailure[],
   warnings: readonly string[],
 ): T {
-  const notices: { failures?: CalendarFailure[]; warnings?: string[] } = {}
+  const notices: FanOutNotices = {}
   if (failures.length > 0) notices.failures = [...failures]
   if (warnings.length > 0) notices.warnings = [...warnings]
   return { ...aggregate, ...notices }
+}
+
+/**
+ * Turn a fan-out's per-calendar outcomes into the house envelope.
+ *
+ * Two different questions, deliberately answered separately: `failures` counts
+ * everything that went missing (including the members of a partially read
+ * collection), while the envelope fails only when **no** calendar produced an
+ * answer at all. Counting a partial collection among the failures must not make
+ * the envelope look like a total loss, which is why the two counters are
+ * separate.
+ *
+ * @param outcomes One entry per target calendar, in the order it was queried.
+ * @param calendarCount How many calendars were targeted.
+ * @param aggregate Builds the result from everything that was readable.
+ * @param warnings Notices from the listing, e.g. a collection that was refused.
+ */
+function fanOutResult<T, A extends FanOutNotices>(
+  outcomes: readonly CalendarOutcome<T>[],
+  calendarCount: number,
+  aggregate: (items: T[]) => A,
+  warnings: readonly string[],
+): CalDavResult<A> {
+  const items: T[] = []
+  const failures: CalendarFailure[] = []
+  const lost: CalendarFailure[] = []
+  for (const outcome of outcomes) {
+    if (outcome.ok) {
+      items.push(...outcome.items)
+      if (outcome.failure !== undefined) failures.push(outcome.failure)
+      continue
+    }
+    failures.push(outcome.failure)
+    lost.push(outcome.failure)
+  }
+
+  const output = withNotices(aggregate(items), failures, warnings)
+  if (lost.length === calendarCount && calendarCount > 0) {
+    return partial(
+      {
+        code: CalDavErrorCode.TRANSPORT,
+        message: `all ${lost.length} calendar(s) failed: ${lost[0]!.error.message}`,
+      },
+      output,
+    )
+  }
+  return ok(output)
 }
 
 /**
@@ -399,13 +489,20 @@ export class QueryEngine {
    * envelope is a failure only when *no* calendar answered — a caller that
    * ignores `success` still gets a usable aggregate, which is what makes
    * partial degradation possible without hiding the failure.
+   *
+   * Every way a task can go missing is reported in the output itself:
+   * a collection whose query failed, a collection the client refused to return
+   * at all (`output.warnings`), and a member of a `207` the server answered with
+   * a status of its own (an entry in `output.failures` carrying the member's
+   * href, beside the tasks that were readable).
    */
   async queryTodos(options: TodoQueryOptions = {}): Promise<CalDavResult<TodoQueryResult>> {
     const calendars = await this.targetCalendars(ComponentType.VTODO, options.calendarUrl)
     if (!calendars.success) return reshapeFailure(calendars)
+    const targets = calendars.output.calendars
 
     const outcomes = await Promise.all(
-      calendars.output.calendars.map(async (calendar): Promise<CalendarOutcome<Todo>> => {
+      targets.map(async (calendar): Promise<CalendarOutcome<Todo>> => {
         const response = await this.client.queryTodos(calendar.url, {
           status: options.status,
           text: options.text,
@@ -426,7 +523,9 @@ export class QueryEngine {
         // Every member of a 207 failed: the calendar answered, but with nothing
         // usable, so it is reported as a failed calendar rather than as an empty
         // one. A `207` with resources *and* failures is a partial success and is
-        // counted as one.
+        // counted as one — but the failed members are still named, because a
+        // short list of tasks with nothing beside it is the silent data loss
+        // this fan-out exists to prevent.
         if (failures.length > 0 && resources.length === 0) {
           return {
             ok: false,
@@ -442,32 +541,27 @@ export class QueryEngine {
             },
           }
         }
-        return { ok: true, calendar, items: this.todosFromResources(calendar, resources) }
+        const items = this.todosFromResources(calendar, resources)
+        return failures.length === 0 ? { ok: true, calendar, items } : {
+          ok: true,
+          calendar,
+          items,
+          failure: partialReportFailure(calendar, resources, failures),
+        }
       }),
     )
 
-    const tasks: Todo[] = []
-    const failures: CalendarFailure[] = []
-    for (const outcome of outcomes) {
-      if (outcome.ok) tasks.push(...outcome.items)
-      else failures.push(outcome.failure)
-    }
-
-    const filtered = options.priority ? filterByPriority(tasks, options.priority) : tasks
-    const aggregate = aggregateTodos(filtered, this.clock(), options.limit)
-    const output = withNotices(aggregate, failures, calendars.output.warnings)
-    if (
-      failures.length === calendars.output.calendars.length && calendars.output.calendars.length > 0
-    ) {
-      return partial(
-        {
-          code: CalDavErrorCode.TRANSPORT,
-          message: `all ${failures.length} calendar(s) failed: ${failures[0]!.error.message}`,
-        },
-        output,
-      )
-    }
-    return ok(output)
+    return fanOutResult(
+      outcomes,
+      targets.length,
+      (tasks) =>
+        aggregateTodos(
+          options.priority ? filterByPriority(tasks, options.priority) : tasks,
+          this.clock(),
+          options.limit,
+        ),
+      calendars.output.warnings,
+    )
   }
 
   /** Parse the tasks out of a `calendar-query` response's resources. */
@@ -514,9 +608,10 @@ export class QueryEngine {
   async queryEvents(options: EventQueryOptions = {}): Promise<CalDavResult<EventQueryResult>> {
     const calendars = await this.targetCalendars(ComponentType.VEVENT, options.calendarUrl)
     if (!calendars.success) return reshapeFailure(calendars)
+    const targets = calendars.output.calendars
 
     const outcomes = await Promise.all(
-      calendars.output.calendars.map(async (calendar): Promise<CalendarOutcome<Event>> => {
+      targets.map(async (calendar): Promise<CalendarOutcome<Event>> => {
         const response = await this.client.queryEvents(calendar.url, {
           dateFrom: options.dateFrom,
           dateTo: options.dateTo,
@@ -536,8 +631,8 @@ export class QueryEngine {
         const { resources, failures } = this.client.readReport(response.output)
         // Every member of a 207 failed: the calendar answered, but with nothing
         // usable, so it is reported as a failed calendar rather than as an empty
-        // one. A `207` with resources *and* failures is a partial success and is
-        // counted as one.
+        // one; a `207` with resources *and* failures reports the failed members
+        // beside the readable ones. See {@link QueryEngine.queryTodos}.
         if (failures.length > 0 && resources.length === 0) {
           return {
             ok: false,
@@ -553,31 +648,22 @@ export class QueryEngine {
             },
           }
         }
-        return { ok: true, calendar, items: this.eventsFromResources(calendar, resources) }
+        const items = this.eventsFromResources(calendar, resources)
+        return failures.length === 0 ? { ok: true, calendar, items } : {
+          ok: true,
+          calendar,
+          items,
+          failure: partialReportFailure(calendar, resources, failures),
+        }
       }),
     )
 
-    const events: Event[] = []
-    const failures: CalendarFailure[] = []
-    for (const outcome of outcomes) {
-      if (outcome.ok) events.push(...outcome.items)
-      else failures.push(outcome.failure)
-    }
-
-    const aggregate = aggregateEvents(events, this.clock(), options.limit)
-    const output = withNotices(aggregate, failures, calendars.output.warnings)
-    if (
-      failures.length === calendars.output.calendars.length && calendars.output.calendars.length > 0
-    ) {
-      return partial(
-        {
-          code: CalDavErrorCode.TRANSPORT,
-          message: `all ${failures.length} calendar(s) failed: ${failures[0]!.error.message}`,
-        },
-        output,
-      )
-    }
-    return ok(output)
+    return fanOutResult(
+      outcomes,
+      targets.length,
+      (events) => aggregateEvents(events, this.clock(), options.limit),
+      calendars.output.warnings,
+    )
   }
 
   /**

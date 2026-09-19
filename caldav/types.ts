@@ -295,6 +295,15 @@ export interface CalendarFailure {
   url: string
   /** The underlying failure, already stripped of credentials. */
   error: CalDavError
+  /**
+   * Hrefs of the members of this collection that failed, when the collection
+   * answered for some of them and not others. Absent when the collection itself
+   * failed, which is what {@link url} already names.
+   *
+   * A partial `207` is a failure *and* a success at once, and this is what tells
+   * them apart: the entries here are the tasks missing from `todos`/`events`.
+   */
+  resources?: string[]
 }
 
 /** Aggregated `VTODO` query result. */
@@ -314,6 +323,11 @@ export interface TodoQueryResult {
   /**
    * Calendars whose query failed. Present and non-empty only when the fan-out
    * lost part of the answer — the other calendars' tasks are still in `todos`.
+   *
+   * An entry also appears for a calendar that answered **partly**: its
+   * `resources` names the members that failed, so a caller can tell a short list
+   * from a complete one. Use {@link CalendarFailure.resources} to distinguish
+   * the two cases.
    */
   failures?: CalendarFailure[]
   /**

@@ -226,9 +226,38 @@ Deno.test("queryTodos distinguishes an empty calendar from a failed one", async 
 })
 
 // ---------------------------------------------------------------------------
-// BLOCKER E2 — a collection the client skipped as off-origin is visible through
-// the primary API, not only in the listing it was dropped from.
+// BLOCKER E1 — a member a 207 answered with a failure of its own is named in
+// `failures` rather than dropped; BLOCKER E2 — a collection the client skipped
+// as off-origin is visible through the primary API, not only in the listing.
 // ---------------------------------------------------------------------------
+
+/** A `207` body whose second member answers `calendar-data` with its own failure. */
+function reportWithFailedMember(): string {
+  return `<?xml version="1.0" encoding="utf-8" ?><D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">` +
+    `<D:response><D:href>/user/calendars/tasks/a.ics</D:href><D:propstat><D:prop>` +
+    `<D:getetag>"e-a"</D:getetag><C:calendar-data>${
+      escapeForXml(todoIcal("a"))
+    }</C:calendar-data>` +
+    `</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
+    `<D:response><D:href>/user/calendars/tasks/gone.ics</D:href><D:propstat><D:prop>` +
+    `<C:calendar-data/></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat></D:response>` +
+    `</D:multistatus>`
+}
+
+Deno.test("queryTodos names the member a 207 answered with a failure of its own", async () => {
+  // BLOCKER E1, end to end. The member's own group answered `calendar-data` with
+  // `404`; the reader dropped it from `resources` and `failures` alike, so this
+  // returned `todos: 1, failures: []` and the missing task was unreportable.
+  const { engine: query } = engine([response(207, reportWithFailedMember())])
+  const result = await query.queryTodos({ calendarUrl: TASKS_URL })
+  assert(result.success)
+  assertEquals(result.output.total, 1)
+  assertEquals(result.output.todos.map((todo) => todo.summary), ["Task a"])
+  assertEquals(result.output.failures?.length, 1)
+  assertEquals(result.output.failures?.[0]?.resources, ["/user/calendars/tasks/gone.ics"])
+  assertStringIncludes(result.output.failures![0]!.error.message, "1 of 2 resources failed")
+  assertStringIncludes(result.output.failures![0]!.error.message, "/user/calendars/tasks/gone.ics")
+})
 
 Deno.test("queryTodos reports a collection the client skipped as off-origin", async () => {
   // BLOCKER E2. The warning existed, but only in `listCalendars()` — which
