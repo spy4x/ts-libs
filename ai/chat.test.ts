@@ -584,10 +584,16 @@ describe("errors never carry a stack, a path or a credential", () => {
     // The contract: a route that puts the error on the wire — `JSON.stringify`
     // of the error, or of a hand-picked `{ error, detail }` — cannot carry a
     // stack frame, a source path or a credential. `serialized` is the enumerable
-    // surface plus `name` and `message`; `stack` is the runtime's own
-    // non-enumerable addition and is never copied into any of those fields.
-    assertEquals(payload.includes("stack"), false, payload)
+    // own-property surface, `name` and `message` included; `stack` is the
+    // runtime's own non-enumerable addition and is never copied into any field.
+    //
+    // A substring probe for the word `stack` is the wrong shape of check: the
+    // scrubber's own marker is `<stack frame redacted>`, so the probe reddens on
+    // correctly scrubbed input, while real frame text never carries the word.
+    // `hasFrameText` is the sound check — frame *shape*, not the word — and the
+    // marker's absence pins the other direction: the scrubber never fired here.
     assertEquals(hasFrameText(payload), false, payload)
+    assertEquals(payload.includes("<stack frame redacted>"), false, payload)
     assertEquals(payload.includes(".ts:"), false, payload)
     assertEquals(payload.includes("/srv/"), false, payload)
   })
@@ -597,8 +603,8 @@ describe("errors never carry a stack, a path or a credential", () => {
     const error = await assertRejects(() => client.chatCompletion(ASK))
     const payload = serialized(error)
 
-    assertEquals(payload.includes("stack"), false, payload)
     assertEquals(hasFrameText(payload), false, payload)
+    assertEquals(payload.includes("<stack frame redacted>"), false, payload)
     assertEquals(payload.includes("chat.test.ts"), false, payload)
   })
 
