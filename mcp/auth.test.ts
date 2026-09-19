@@ -35,6 +35,39 @@ describe("constantTimeEquals", () => {
     }
   })
 
+  it("digests both sides with SHA-256 for every comparison, whatever the input length", async () => {
+    // Timing itself is not measurable in CI, or on a shared runner. What is verifiable
+    // is the implementation shape that makes the comparison length-independent: both
+    // sides go through SHA-256, so the compared digests are always 32 bytes. A naive
+    // `a === b` replacement fails this — it never touches `crypto.subtle`.
+    const realDigest = crypto.subtle.digest.bind(crypto.subtle)
+    const algorithms: string[] = []
+    const inputs: number[] = []
+    crypto.subtle.digest = ((algorithm: AlgorithmIdentifier, data: BufferSource) => {
+      algorithms.push(String(algorithm))
+      inputs.push(new Uint8Array(data as ArrayBuffer).byteLength)
+      return realDigest(algorithm, data)
+    }) as typeof crypto.subtle.digest
+
+    try {
+      await constantTimeEquals("short", FAKE_TOKEN)
+      await constantTimeEquals(FAKE_TOKEN, "x".repeat(200))
+      await constantTimeEquals(FAKE_TOKEN, FAKE_TOKEN)
+    } finally {
+      crypto.subtle.digest = realDigest as typeof crypto.subtle.digest
+    }
+
+    assertEquals(algorithms, Array(6).fill("SHA-256"))
+    assertEquals(inputs, [
+      5,
+      FAKE_TOKEN.length,
+      FAKE_TOKEN.length,
+      200,
+      FAKE_TOKEN.length,
+      FAKE_TOKEN.length,
+    ])
+  })
+
   it("rejects an empty presented token and an empty configured token", async () => {
     assertEquals(await constantTimeEquals("", FAKE_TOKEN), false)
     assertEquals(await constantTimeEquals(FAKE_TOKEN, ""), false)

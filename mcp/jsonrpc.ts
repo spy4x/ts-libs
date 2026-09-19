@@ -1,6 +1,6 @@
 // ── JSON-RPC 2.0 wire types and error codes ──
 
-import type { JsonRpcError, JsonRpcId, ToolResult } from "./types.ts"
+import type { JsonRpcError, JsonRpcId } from "./types.ts"
 
 /** JSON-RPC 2.0 error codes used by the MCP core. */
 export enum JsonRpcErrorCode {
@@ -35,11 +35,15 @@ export interface JsonRpcRequest {
   id?: JsonRpcId
 }
 
-/** A JSON-RPC 2.0 response. Exactly one of `result` / `error` is present. */
+/**
+ * A JSON-RPC 2.0 response. Exactly one of `result` / `error` is present. `result` is
+ * `unknown` because its shape depends on the method — the handler is the only place
+ * that knows it, and the transports pass it through untyped.
+ */
 export interface JsonRpcResponse {
   jsonrpc: "2.0"
   id: JsonRpcId
-  result?: ToolResult | Record<string, unknown> | null
+  result?: unknown
   error?: JsonRpcError
 }
 
@@ -59,6 +63,6 @@ export function jsonRpcError(
 }
 
 /** Build a success response. */
-export function jsonRpcResult(id: JsonRpcId, result: JsonRpcResponse["result"]): JsonRpcResponse {
+export function jsonRpcResult(id: JsonRpcId, result: unknown): JsonRpcResponse {
   return { jsonrpc: "2.0", id, result }
 }

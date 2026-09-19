@@ -164,8 +164,10 @@ export function compileInputSchema(schema: JsonSchemaObject): CompiledValidator 
 
   const definition = objectDefinition(schema as JsonSchemaNode, "arguments")
   // arktype throws on a definition it cannot parse — that is the registration-time
-  // loud failure, so no extra guard is needed here.
-  const validator = type(definition as Record<string, unknown>) as unknown as CompiledValidator
+  // loud failure, so no extra guard is needed here. The cast is the one place this
+  // package crosses into a third-party library's types: `Type` is not callable in a
+  // type position, so the narrow `CompiledValidator` shape is used instead.
+  const validator = type(definition) as unknown as CompiledValidator
   compiled.set(schema, validator)
   return validator
 }

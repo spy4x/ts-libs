@@ -159,7 +159,7 @@ async function postResponse(
     body = await request.text()
   } catch {
     return jsonResponse(
-      jsonRpcError(null, JsonRpcErrorCode.ParseError) as unknown as Record<string, unknown>,
+      jsonRpcError(null, JsonRpcErrorCode.ParseError),
       400,
       origin,
       allowedOrigins,
@@ -173,7 +173,7 @@ async function postResponse(
   // A JSON-RPC error is a protocol-level result, so the HTTP status stays 200; only a
   // body that could not be read at all is a 4xx.
   const response = await handler.handleMessage(body)
-  return jsonResponse(response as unknown as Record<string, unknown>, 200, origin, allowedOrigins)
+  return jsonResponse(response, 200, origin, allowedOrigins)
 }
 
 /**

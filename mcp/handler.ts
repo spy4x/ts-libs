@@ -133,13 +133,13 @@ export class McpHandler {
       capabilities: { tools: {} },
       serverInfo: this.serverInfo,
     }
-    return jsonRpcResult(id, result as unknown as Record<string, unknown>)
+    return jsonRpcResult(id, result)
   }
 
   private handleToolsList(id: JsonRpcId): JsonRpcResponse {
     const denial = this.initializationGuard(id)
     if (denial) return denial
-    return jsonRpcResult(id, { tools: this.registry.list() } as unknown as Record<string, unknown>)
+    return jsonRpcResult(id, { tools: this.registry.list() })
   }
 
   private async handleToolsCall(
@@ -158,14 +158,15 @@ export class McpHandler {
     }
 
     const rawArgs = params.arguments
-    if (rawArgs !== undefined && (typeof rawArgs !== "object" || rawArgs === null)) {
+    if (rawArgs !== undefined && !isRecord(rawArgs)) {
       return jsonRpcError(
         id,
         JsonRpcErrorCode.InvalidParams,
         '"params.arguments" must be an object',
       )
     }
-    const args = (rawArgs ?? {}) as Record<string, unknown>
+    // A copy, so a validator that deletes or reorders keys cannot mutate the parsed frame.
+    const args: Record<string, unknown> = rawArgs === undefined ? {} : { ...rawArgs }
 
     try {
       const invoked = await invokeTool(this.registry, name, args)
@@ -177,21 +178,15 @@ export class McpHandler {
       if (invoked.kind === "failed") {
         // The tool exists and its arguments were valid, so the failure belongs to the
         // tool. Reported as a tool error result, never as a JSON-RPC error.
-        return jsonRpcResult(
-          id,
-          toolFailureResult(invoked.message) as unknown as Record<
-            string,
-            unknown
-          >,
-        )
+        return jsonRpcResult(id, toolFailureResult(invoked.message))
       }
 
       const result: ToolResult = {
         content: [{ type: "text", text: JSON.stringify(invoked.outcome) }],
-        structuredContent: { envelope: invoked.outcome } as Record<string, unknown>,
+        structuredContent: { envelope: invoked.outcome },
         ...(invoked.outcome.success ? {} : { isError: true }),
       }
-      return jsonRpcResult(id, result as unknown as Record<string, unknown>)
+      return jsonRpcResult(id, result)
     } catch (error) {
       // Only reachable if a future change makes invokeTool throw. Reported as a
       // JSON-RPC error rather than an unhandled rejection.
@@ -216,6 +211,11 @@ export class McpHandler {
 /** Convenience factory matching the source's `new McpHandler({ name, version })` call. */
 export function createMcpHandler(serverInfo: McpServerInfo): McpHandler {
   return new McpHandler({ serverInfo })
+}
+
+/** True for a non-null, non-array object — the only shape `arguments` may take. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 /**
