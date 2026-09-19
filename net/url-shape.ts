@@ -38,7 +38,7 @@ export function isUrlShapeOk(result: NormalizeUrlShapeResult): result is UrlShap
   return result.ok
 }
 
-export const ALLOWED_PROTOCOLS = new Set(["http:", "https:"])
+export const ALLOWED_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"])
 
 /**
  * Any `scheme:` prefix, with or without `//`, so `javascript:` is caught too.
@@ -47,19 +47,19 @@ export const ALLOWED_PROTOCOLS = new Set(["http:", "https:"])
  * explicit scheme — a scheme-less `example.com:8443` must not be read as one.
  * The pattern carries no `/g` flag, so `.exec()` holds no `lastIndex` state.
  */
-export const EXPLICIT_SCHEME = /^([a-z][a-z0-9+.-]*):/i
+export const EXPLICIT_SCHEME: RegExp = /^([a-z][a-z0-9+.-]*):/i
 
 /** A hostname that is a plain DNS label run: no `:`, no brackets, no dots. */
-export const PLAIN_HOSTNAME = /^[a-z0-9_-]+$/i
+export const PLAIN_HOSTNAME: RegExp = /^[a-z0-9_-]+$/i
 
 // The control-character range is the point of this pattern.
 // deno-lint-ignore no-control-regex
-export const INVALID_CHARACTERS = /[\s\u0000-\u001f\u007f]/
+export const INVALID_CHARACTERS: RegExp = /[\s\u0000-\u001f\u007f]/
 
-export const EMPTY_MESSAGE = "Enter a URL"
-export const UNSUPPORTED_PROTOCOL_MESSAGE = "URL must start with http:// or https://"
-export const INVALID_FORMAT_MESSAGE = "Invalid URL format"
-export const INVALID_CHARACTERS_MESSAGE = "URL contains invalid characters"
+export const EMPTY_MESSAGE: string = "Enter a URL"
+export const UNSUPPORTED_PROTOCOL_MESSAGE: string = "URL must start with http:// or https://"
+export const INVALID_FORMAT_MESSAGE: string = "Invalid URL format"
+export const INVALID_CHARACTERS_MESSAGE: string = "URL contains invalid characters"
 
 /**
  * Split an explicit `scheme:` prefix off the raw input.

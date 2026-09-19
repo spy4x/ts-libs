@@ -479,41 +479,25 @@ describe("defaultResolver", () => {
     assertEquals(typeof defaultResolver.resolve, "function")
   })
 
-  it("queries A and AAAA and returns both families", async () => {
-    // Behavioural, and hermetic: `Deno.resolveDns` is stubbed for the duration,
-    // so this asserts what the resolver asks for without touching the network.
-    // An implementation that skipped the AAAA family would let a public-A host
-    // with a loopback AAAA through the guard.
-    const requested: string[] = []
+  /**
+   * Run `body` with `Deno.resolveDns` replaced, then restore it.
+   *
+   * The stub is how this suite stays hermetic while still exercising the real
+   * `defaultResolver`: it reproduces the two behaviours of the platform API
+   * that matter here — an answer, and `Deno.errors.NotFound` on NODATA.
+   */
+  async function withStubbedDns(
+    resolver: (host: string, type: string) => Promise<string[]>,
+    body: () => Promise<void>,
+  ): Promise<void> {
     const original = Deno.resolveDns
-    const records: Record<string, string[]> = {
-      "A:both.example": ["93.184.216.34"],
-      "AAAA:both.example": ["2606:4700:4700::1111"],
-      "A:only.example": ["93.184.216.34"],
-    }
+    Object.defineProperty(Deno, "resolveDns", {
+      configurable: true,
+      writable: true,
+      value: resolver,
+    })
     try {
-      Object.defineProperty(Deno, "resolveDns", {
-        configurable: true,
-        writable: true,
-        value: (host: string, type: string) => {
-          requested.push(`${type}:${host}`)
-          const answer = records[`${type}:${host}`]
-          return answer ? Promise.resolve(answer) : Promise.reject(new Error("NotFound"))
-        },
-      })
-      assertEquals(
-        await defaultResolver.resolve("both.example"),
-        ["93.184.216.34", "2606:4700:4700::1111"],
-      )
-      assertEquals(requested.includes("A:both.example"), true)
-      assertEquals(requested.includes("AAAA:both.example"), true)
-      // A host with only an A record must not resolve — a missing family is a
-      // failure, not an empty set to be ignored.
-      await assertRejects(
-        () => defaultResolver.resolve("only.example"),
-        Error,
-        "NotFound",
-      )
+      await body()
     } finally {
       Object.defineProperty(Deno, "resolveDns", {
         configurable: true,
@@ -521,6 +505,116 @@ describe("defaultResolver", () => {
         value: original,
       })
     }
+  }
+
+  it("queries A and AAAA and returns both families", async () => {
+    // An implementation that skipped the AAAA family would let a public-A host
+    // with a loopback AAAA through the guard.
+    const requested: string[] = []
+    await withStubbedDns((host, type) => {
+      requested.push(`${type}:${host}`)
+      const records: Record<string, string[]> = {
+        "A:both.example": ["93.184.216.34"],
+        "AAAA:both.example": ["2606:4700:4700::1111"],
+      }
+      const answer = records[`${type}:${host}`]
+      return answer ? Promise.resolve(answer) : Promise.reject(new Deno.errors.NotFound("NODATA"))
+    }, async () => {
+      assertEquals(
+        await defaultResolver.resolve("both.example"),
+        ["93.184.216.34", "2606:4700:4700::1111"],
+      )
+      assertEquals(requested.includes("A:both.example"), true)
+      assertEquals(requested.includes("AAAA:both.example"), true)
+    })
+  })
+
+  it("treats NODATA in one family as an empty answer, not a failure", async () => {
+    // `Deno.resolveDns` throws `Deno.errors.NotFound` for a family the name has
+    // no records for. Most of the public web is A-only, so propagating that
+    // would refuse `github.com`. NODATA is a legitimate empty family.
+    await withStubbedDns((_host, type) => {
+      if (type === "AAAA") return Promise.reject(new Deno.errors.NotFound("NODATA"))
+      return Promise.resolve(["93.184.216.34"])
+    }, async () => {
+      assertEquals(await defaultResolver.resolve("a-only.example"), ["93.184.216.34"])
+    })
+  })
+
+  it("treats NODATA as empty in the other direction too", async () => {
+    await withStubbedDns((_host, type) => {
+      if (type === "A") return Promise.reject(new Deno.errors.NotFound("NODATA"))
+      return Promise.resolve(["2606:4700:4700::1111"])
+    }, async () => {
+      assertEquals(await defaultResolver.resolve("aaaa-only.example"), ["2606:4700:4700::1111"])
+    })
+  })
+
+  it("still fails closed on a real lookup error", async () => {
+    // NODATA is the only error that means "empty". A SERVFAIL, a timeout or a
+    // malformed reply must propagate, or an unanswerable family would be read
+    // as safe — the exact bypass this guard exists to stop.
+    for (
+      const error of [
+        new Deno.errors.InvalidData("malformed reply"),
+        new Deno.errors.TimedOut("query timed out"),
+        new Error("SERVFAIL"),
+        new TypeError("network unreachable"),
+      ]
+    ) {
+      await withStubbedDns(() => Promise.reject(error), async () => {
+        await assertRejects(
+          () => defaultResolver.resolve("broken.example"),
+          Error,
+          error.message,
+        )
+      })
+    }
+  })
+
+  it("returns an empty set when neither family answers, and the guard refuses it", async () => {
+    // NODATA on both families means the name has no records at all. The
+    // resolver reports that as an empty answer rather than an error — NODATA is
+    // not a lookup failure — so refusing it is the *policy's* job, and it does:
+    // "no records" is not a routable destination.
+    await withStubbedDns(
+      () => Promise.reject(new Deno.errors.NotFound("NODATA")),
+      async () => {
+        assertEquals(await defaultResolver.resolve("gone.example"), [])
+        try {
+          await validatePublicUrl("https://gone.example/", { resolver: defaultResolver })
+          throw new Error("expected throw")
+        } catch (err) {
+          assertEquals(err instanceof DnsResolutionError, true)
+          if (err instanceof DnsResolutionError) assertEquals(err.code, "dns_failure")
+        }
+      },
+    )
+  })
+
+  it("accepts an A-only host end to end through the stubbed platform API", async () => {
+    // The regression this pins: rejecting NODATA refused every A-only host, so
+    // `validatePublicUrl("https://github.com/")` raised `dns_failure`. This
+    // drives the *real* `defaultResolver` under the policy, with only the
+    // platform DNS call stubbed to behave like an A-only host.
+    await withStubbedDns((_host, type) => {
+      if (type === "AAAA") return Promise.reject(new Deno.errors.NotFound("NODATA"))
+      return Promise.resolve(["20.205.243.166"])
+    }, async () => {
+      assertEquals(await validatePublicUrl("https://a-only.example/"), "https://a-only.example/")
+      // An empty family is not a bypass: the family that does answer is still
+      // checked for routability.
+      await withStubbedDns((_host, type) => {
+        if (type === "AAAA") return Promise.reject(new Deno.errors.NotFound("NODATA"))
+        return Promise.resolve(["10.0.0.1"])
+      }, async () => {
+        await assertRejects(
+          () => validatePublicUrl("https://private-a-only.example/"),
+          UrlValidationError,
+          "non-public",
+        )
+      })
+    })
   })
 })
 
@@ -707,7 +801,7 @@ describe("isLocalHostname", () => {
   })
 
   it("leaves ordinary public hostnames alone", () => {
-    for (const host of ["example.com", "localhost.com", "mylocalhost", "notlocal.invalid.com"]) {
+    for (const host of ["example.com", "mylocalhost", "notlocal.example", "notlocalhost.example"]) {
       assertEquals(isLocalHostname(host), false, host)
     }
   })

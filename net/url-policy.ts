@@ -104,21 +104,38 @@ export interface DnsResolver {
   resolve(hostname: string): Promise<string[]>
 }
 
+/** Address families the policy verifies. Every family listed is required. */
+type AddressFamily = "A" | "AAAA"
+
 /**
  * The production resolver: system A **and** AAAA lookups, both required.
  *
- * An empty answer from either family is indistinguishable from "no such host"
- * here, so a partial resolution degrades to `dns_failure` rather than being
- * silently accepted. A host whose AAAA lookup fails therefore still fails the
- * policy — a resolved-but-unverifiable family is exactly the bypass this guard
- * exists to stop.
+ * NODATA and lookup failure are different things and must be treated
+ * differently:
+ *
+ *  - **NODATA** — the name exists but has no record of that type.
+ *    `Deno.resolveDns` throws `Deno.errors.NotFound` for it. That is a
+ *    legitimate empty answer: most of the public web is A-only, so treating it
+ *    as a failure would refuse `github.com`. It resolves to an empty family.
+ *  - **Every other error** — SERVFAIL, timeout, refused, malformed reply — is a
+ *    real failure and propagates, so the guard reports `dns_failure` and fails
+ *    closed. An unanswerable family is unverifiable, and unverifiable must never
+ *    be read as safe.
+ *
+ * A host that answers neither family propagates as NODATA and fails the
+ * policy — "no records at all" is not a routable destination.
  */
 export const defaultResolver: DnsResolver = {
   async resolve(hostname: string): Promise<string[]> {
-    const [a, aaaa] = await Promise.all([
-      Deno.resolveDns(hostname, "A"),
-      Deno.resolveDns(hostname, "AAAA"),
-    ])
+    const lookup = async (type: AddressFamily): Promise<string[]> => {
+      try {
+        return await Deno.resolveDns(hostname, type)
+      } catch (err) {
+        if (err instanceof Deno.errors.NotFound) return []
+        throw err
+      }
+    }
+    const [a, aaaa] = await Promise.all([lookup("A"), lookup("AAAA")])
     return [...a, ...aaaa]
   },
 }
@@ -131,7 +148,7 @@ export interface ValidatePublicUrlOptions {
 }
 
 /** Message used when `allowHttp: false` rejects an `http:` URL. */
-export const HTTP_OPTION_MESSAGE = "HTTPS required"
+export const HTTP_OPTION_MESSAGE: string = "HTTPS required"
 
 const CANONICAL_DOTTED_IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
 

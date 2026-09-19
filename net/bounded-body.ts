@@ -45,10 +45,10 @@ export class BodyReadTimeoutError extends Error {
 }
 
 /** Default ceiling for a body read: 5 MiB. */
-export const DEFAULT_MAX_BYTES = 5 * 1024 * 1024
+export const DEFAULT_MAX_BYTES: number = 5 * 1024 * 1024
 
 /** Default stall budget: 10s without a chunk. */
-export const DEFAULT_BODY_TIMEOUT_MS = 10_000
+export const DEFAULT_BODY_TIMEOUT_MS: number = 10_000
 
 /**
  * The read surface shared by `Request` and `Response`.

@@ -73,11 +73,21 @@ seam for anything the system resolver cannot express:
 - a latency bound (`Promise.race` the lookup against your own timeout);
 - DNS-over-HTTPS, a cache, or a fixture in a request-handling test.
 
-`defaultResolver` is the production implementation: it asks
-`Deno.resolveDns` for A and AAAA in parallel and returns both sets. If **either
-family fails to resolve**, the result is empty and the guard raises
-`dns_failure` — a partially resolved host is never treated as safe, because an
-unverifiable family is exactly the gap an SSRF guard must not leave open.
+`defaultResolver` is the production implementation: it asks `Deno.resolveDns`
+for A and AAAA in parallel and returns both sets, so **every family that answers
+is checked**. It distinguishes the two ways a lookup can come back empty:
+
+- **NODATA** (`Deno.resolveDns` throws `Deno.errors.NotFound`) means the name
+  exists but has no record of that type. That is a legitimate empty family and
+  it is tolerated — most of the public web is A-only, and refusing those hosts
+  would make the guard useless as a default.
+- **Any other error** (SERVFAIL, timeout, refused, malformed reply) propagates
+  and the guard raises `dns_failure`. An _unanswerable_ family is unverifiable,
+  and unverifiable must never be read as safe.
+
+A host that answers neither family propagates as NODATA and is refused: "no
+records at all" is not a routable destination. An empty family is not a bypass —
+the family that does answer is still checked for routability.
 
 ## Permissions
 
@@ -103,7 +113,8 @@ to `http://169.254.169.254/` and the runtime will happily fetch it.
 and protocol-relative locations are resolved against the current URL first, so a
 `Location: /admin` cannot smuggle you elsewhere. One `AbortController` and one
 timer cover the whole chain, the redirect count is capped
-(`DEFAULT_MAX_REDIRECTS = 3`), each redirect body is cancelled before the next
+(`DEFAULT_MAX_REDIRECTS = 3` hops, i.e. **up to 4 requests** — the original plus
+one per followed `Location`), each redirect body is cancelled before the next
 hop, and a 301/302/303 downgrades a non-`GET` request to `GET` per RFC 9110.
 
 `Fetcher` is the injection seam for the transport; `url` in the result is

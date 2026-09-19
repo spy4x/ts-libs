@@ -34,10 +34,10 @@ import {
 } from "./url-policy.ts"
 
 /** Redirects followed before the chain is refused. */
-export const DEFAULT_MAX_REDIRECTS = 3
+export const DEFAULT_MAX_REDIRECTS: number = 3
 
 /** Total budget for the whole redirect chain. */
-export const DEFAULT_TIMEOUT_MS = 10_000
+export const DEFAULT_TIMEOUT_MS: number = 10_000
 
 /** Request methods a redirect is allowed to carry unchanged. */
 export enum SafeFetchMethod {
@@ -80,8 +80,15 @@ export const defaultFetcher: Fetcher = {
 export interface SafeFetchOptions {
   /** Resolver for DNS lookups; defaults to `defaultResolver`. */
   resolver?: DnsResolver
-  /** Maximum number of redirects to follow. Defaults to 3. */
+  /**
+   * Maximum number of redirects to follow before the chain is refused.
+   * Defaults to `DEFAULT_MAX_REDIRECTS` (3).
+   *
+   * Counts hops, not requests: `maxRedirects: 3` issues up to **4** requests —
+   * the original plus one per followed `Location`.
+   */
   maxRedirects?: number
+
   /**
    * Total timeout covering the in-flight fetcher, shared by every hop.
    * Defaults to 10s. Must be a positive number of milliseconds.
