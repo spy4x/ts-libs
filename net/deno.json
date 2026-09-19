@@ -2,6 +2,10 @@
   "name": "@ts-libs/net",
   "version": "0.1.0",
   "exports": {
-    ".": "./url-shape.ts"
+    ".": "./+main.ts",
+    "./url-shape": "./url-shape.ts",
+    "./url-policy": "./url-policy.ts",
+    "./safe-fetch": "./safe-fetch.ts",
+    "./bounded-body": "./bounded-body.ts"
   }
 }
