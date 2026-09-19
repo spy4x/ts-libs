@@ -79,11 +79,15 @@ export type { BodySource } from "@ts-libs/net/bounded-body"
  * The bytes go to `Response` as a view, never as `body.buffer`: `Response` reads
  * `byteOffset..byteLength` of what it is handed, so the whole backing buffer
  * would have appended unrelated bytes had the reader ever returned a window onto
- * a larger allocation. `slice()` is what narrows the canonical reader's
- * `Uint8Array<ArrayBufferLike>` to the `Uint8Array<ArrayBuffer>` that `BodyInit`
- * demands — one copy, bounded by `maxBytes`, preferred over a cast that would
- * re-open the whole-buffer hazard. Annotating the canonical readers' return type
- * as `Uint8Array<ArrayBuffer>` removes the copy, but that is a change to `net/`.
+ * a larger allocation.
+ *
+ * One narrow cast is required, and only on the view: the canonical reader
+ * declares `Uint8Array<ArrayBufferLike>` while `BodyInit` demands
+ * `Uint8Array<ArrayBuffer>`. Casting `body.buffer` instead would be smaller and
+ * wrong for the reason above, and `slice()` would drop the cast at the cost of a
+ * copy bounded by `maxBytes`. Annotating the canonical readers' return type as
+ * `Uint8Array<ArrayBuffer>` removes the cast entirely, but that is a change to
+ * `net/`.
  *
  * @throws `PayloadTooLargeError` Under the same conditions as `readBoundedBody`.
  * @throws `TypeError` When the request carries no `content-type`; without it the
@@ -99,5 +103,7 @@ export async function parseBoundedFormData(
   }
   const body = await readBoundedBody(request, options)
 
-  return await new Response(body.slice(), { headers: { "content-type": contentType } }).formData()
+  return await new Response(body as Uint8Array<ArrayBuffer>, {
+    headers: { "content-type": contentType },
+  }).formData()
 }
