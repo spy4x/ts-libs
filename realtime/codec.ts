@@ -39,9 +39,12 @@
  * test can distinguish), and every frame is checked by the allow-list instead.
  *
  * Own-property membership is the right test because it is the only thing that can travel: JSON
- * serialises own enumerable properties only, and `JSON.parse` never produces an inherited one.
- * A frame whose prototype is not `Object.prototype` is refused too, so a decoded frame can never
- * carry data the receiver would read through the prototype chain.
+ * serialises own enumerable properties only, and `JSON.parse` never produces an inherited one. That
+ * test is `Object.keys`, so it covers every own *string* key and does not examine an own *symbol* key:
+ * a symbol is dropped by `JSON.stringify` and so never reaches the wire, but the guard does not claim
+ * to close that gap. A frame whose prototype is neither `Object.prototype` nor `null` is refused too —
+ * a class instance, or `Object.create({ evil: 1 })` — so a decoded frame can never carry data the
+ * receiver would read through the prototype chain.
 
  * `validation/` leaves strictness to the host ("Strictness (`onUndeclaredKey`) is the host
  * application's decision, not a library's side effect" — `validation/validate.ts:7-8`). A wire
@@ -166,14 +169,18 @@ const DECLARED_FRAME_KEYS: Record<WireMessage["kind"], readonly string[]> = {
 const DECLARED_CURSOR_KEYS: readonly string[] = ["groupId", "sequence"]
 
 /**
- * First own property of `value` that `declared` does not list, or `null`.
+ * First own string key of `value` that `declared` does not list, or `null`.
  *
  * This is the protocol rule itself, exported so it can be pinned on its own: membership is decided by
- * the *own* keys of the value against an explicit list. It must never be rewritten as a
- * prototype-name blacklist — that shape would accept every future declared key whose name happens to
- * exist on `Object.prototype`, and would reject a declared one. The test
- * "accepts a declared key whose name also exists on Object.prototype" fails against a blacklist, and
- * replaces nothing: no frame in this protocol declares such a key today, so only a predicate-level
+ * the *own* keys of the value against an explicit list. `Object.keys` walks the own string keys, so an
+ * own *symbol* key is not examined here — `JSON.stringify` drops symbol-keyed properties, so no frame
+ * carrying one reaches the wire, and the guard is described as covering string keys rather than
+ * claimed to cover every own property.
+ *
+ * It must never be rewritten as a prototype-name blacklist — that shape would accept every future
+ * declared key whose name happens to exist on `Object.prototype`, and would reject a declared one. The
+ * test "accepts a declared key whose name also exists on Object.prototype" fails against a blacklist,
+ * and replaces nothing: no frame in this protocol declares such a key today, so only a predicate-level
  * assertion can hold the property.
  */
 export function findUndeclaredKey(value: object, declared: readonly string[]): string | null {
@@ -183,7 +190,14 @@ export function findUndeclaredKey(value: object, declared: readonly string[]): s
   return null
 }
 
-/** Whether a parsed node is a plain object, so nothing can be read through its prototype chain. */
+/**
+ * Whether a parsed node is a plain object, so nothing can be read through its prototype chain.
+ *
+ * `Object.prototype` and `null` are both accepted: a null-prototype object built by
+ * `Object.create(null)` has no chain to read through, so it is a plain object here. A class instance,
+ * an array, and `Object.create({ evil: 1 })` are refused, because each carries a prototype a receiver
+ * could read data through.
+ */
 function isPlainObject(value: object): boolean {
   const prototype = Object.getPrototypeOf(value)
   return prototype === Object.prototype || prototype === null
@@ -193,7 +207,8 @@ function isPlainObject(value: object): boolean {
  * Why a frame is not protocol, or `null` when it is.
  *
  * Runs after the schemas have checked types, so it only has to answer one question: is every own
- * property of this frame, and of every cursor it carries, one the protocol declares?
+ * *string* key of this frame, and of every cursor it carries, one the protocol declares? An own
+ * *symbol* key is not examined (`Object.keys`), and cannot travel: `JSON.stringify` drops it.
  */
 function protocolViolation(message: WireMessage): string | null {
   if (!isPlainObject(message)) return `frame of kind "${message.kind}" is not a plain object`
