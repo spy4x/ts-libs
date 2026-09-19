@@ -384,7 +384,23 @@ export class CalDavClient {
         { url: root },
       )
     }
-    return ok({ url: this.resolve(`${encodeURIComponent(this.username)}/`), warnings })
+    // Inside the guard: `resolve` rejects a `baseUrl` a relative path cannot be
+    // resolved against — `mailto:user@example.com` is a valid absolute URL and an
+    // unusable CalDAV root — and that must arrive as this method's declared
+    // envelope, not as a `TypeError` thrown out of an API that returns results.
+    let fallback: string
+    try {
+      fallback = this.resolve(`${encodeURIComponent(this.username)}/`)
+    } catch (cause) {
+      return fail(
+        CalDavErrorCode.INVALID_ARGUMENT,
+        `/username/ fallback is not resolvable against ${this.baseUrl} (${
+          cause instanceof Error ? cause.message : String(cause)
+        })`,
+        { url: root },
+      )
+    }
+    return ok({ url: fallback, warnings })
   }
 
   /**

@@ -841,3 +841,22 @@ Deno.test("discoverCalendarHomeSet refuses a server-named file URL and sends no 
   )
 })
 
+Deno.test("discoverCalendarHomeSet returns a typed failure when baseUrl cannot resolve the fallback", async () => {
+  // BLOCKER D2.2. `mailto:` passes `new URL`, so the constructor accepts it; the
+  // `/username/` fallback then cannot resolve against it. That used to throw a
+  // `TypeError` out of an API whose every other path returns an envelope.
+  const transport = stubTransport([response(404, "", { statusText: "Not Found" })])
+  const result = await clientAt("mailto:user@example.com", transport)
+    .discoverCalendarHomeSet()
+  assert(!result.success)
+  assertEquals(result.error.code, CalDavErrorCode.INVALID_ARGUMENT)
+  assertStringIncludes(result.error.message, "/username/ fallback is not resolvable against")
+  assertEquals(credentialTrace(transport), ["PROPFIND mailto:// auth=absent"])
+})
+
+Deno.test("listCalendars reports the unresolvable base URL as a failure, not a throw", async () => {
+  const transport = stubTransport([response(404, "", { statusText: "Not Found" })])
+  const result = await clientAt("mailto:user@example.com", transport).listCalendars()
+  assert(!result.success)
+  assertEquals(result.error.code, CalDavErrorCode.INVALID_ARGUMENT)
+})
