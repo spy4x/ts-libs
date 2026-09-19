@@ -12,25 +12,51 @@ a redesign rather than a port.
 ## The contract
 
 The governing record is ADR 002 in `spy4x/template`
-(`docs/decisions/002-realtime-transport-and-sync.md`), and this package
-implements the transport half of it. Three rules, and everything below follows
-from them:
+(`docs/decisions/002-realtime-transport-and-sync.md`). Three rules, and
+everything below follows from them. Where the ADR's wording is quoted, the file
+and line are given, so a reader can check the citation rather than the summary.
 
-1. **No mutations over the socket.** REST is the external application protocol.
-   The socket carries liveness, a sync handshake and change hints.
+1. **No mutations over the socket.** REST is the external application protocol;
+   the socket carries liveness, a sync handshake and change hints.
    `ClientMessage` has no mutation frame and `ServerMessage` has none either —
-   there is nothing to dispatch.
-2. **A push carries a sequence.** A hint names a group, an aggregate and the
-   `next_change_sequence` the change was committed at. It carries no entity
+   there is nothing here to validate, authorize or dispatch. (See _Divergence_
+   below: this is ADR 001's rule, which ADR 002 supersedes for `apps/spa`. It is
+   what issue #19 requires and what the extraction inventory targets.)
+2. **A push carries a sequence.** ADR 002:60-61 — "Servers push committed
+   changes over the socket, stamped with the per-group `next_change_sequence`
+   they were committed at." A hint names a group and that sequence, and no entity
    payload.
-3. **A gap triggers a pull.** A hint is applied only when its sequence is
-   contiguous with the cursor the client already holds. Anything else — a
-   dropped frame, a duplicate, a reorder — is discarded and the cursor is pulled
-   over REST. Correctness lives in exactly one path, the cursor pull, which is
-   the path that also runs when the socket is absent.
+3. **A gap triggers a pull.** ADR 002:63-66 — "A client applies a pushed change
+   only when its sequence is contiguous with the cursor the client already holds.
+   On any gap it discards the payload and pulls from its cursor over REST.
+   Correctness therefore lives in exactly one path - the cursor pull - which is
+   also the path that runs when the socket is absent." Dropped frame, reconnect
+   gap, reorder, duplicate delivery: each degrades to a redundant pull, never to
+   divergent state.
 
-The test of any future change is ADR 002's own: _delete every line of WebSocket
+The test of any future change is ADR 002:72-74: _delete every line of WebSocket
 code and the application must still converge to correct state._
+
+### Where this package diverges from ADR 002, and why
+
+ADR 002:50 says "`apps/spa` speaks WebSocket for all mutations, queries and
+realtime updates", and ADR 002:132-134 makes moving authorization into the CQRS
+handlers a prerequisite for that. ADR 002:63-65 also implies a push _carries_ a
+payload, since a gap means discarding "the payload".
+
+This package does neither: there is no mutation frame, and a hint carries no
+data. It is the stricter position — ADR 001:64 ("REST is external application
+protocol"), the extraction inventory's target ("Target is a few hundred lines of
+hint-only transport", `docs/financy-extraction-inventory.md:52`) and the design
+doc's steady state (`sync.hint { groupId, sequence }` … "The hint carries no
+payload", `docs/design/realtime-websockets.md:90-91`) — chosen because issue #19
+schedules it that way and because it is the shape that satisfies ADR 002's own
+governing test trivially.
+
+The divergence is deliberate and load-bearing, not an oversight: widening this
+protocol to carry mutations means the socket becomes a second application surface
+with its own authorization path, which is a new ADR, not a flag on this one. A
+host cannot do it by accident — `ClientMessage` has no frame kind for it.
 
 ### What "hint-only" buys
 
@@ -44,12 +70,22 @@ backwards.
 
 This is a **top-level package, `realtime/`**, not a file inside `server/`.
 
-`server/realtime.ts` would have avoided a root-config change, but `server/` is
-claimed by other extraction issues (`#5 storage`, `#6 auth`, `#9 http`,
-`#15 db`) and the repository rule is one package per PR with disjoint diffs;
-three agents writing into one directory is how a rebase turns into a merge
-conflict in shared files. The directory also does not exist yet, so this package
-cannot reuse it without inventing it for someone else.
+`server/realtime.ts` would have avoided a root-config change, and it is what the
+design doc's boundary recommendation suggests — "Put the connection registry and
+the message protocol in `libs/server/realtime` and mount it from `apps/api`"
+(`docs/design/realtime-websockets.md:62-64`). In this repository that home is the
+`server/` package, which is claimed by other extraction issues (`#5 storage`,
+`#6 auth`, `#9 http`, `#15 db`), does not exist yet, and is a Wave 2/3 target
+whereas this issue is Wave 4 "scheduled alone". The repository rule is one package
+per PR with disjoint diffs, so creating a directory that three other agents will
+also write into is how a rebase turns into a merge conflict in shared files.
+
+The name follows the same doc's naming rule — it "names the capability rather
+than the transport" (`:66-70`) — so `realtime/`, not `ws/` or `ws-api/`. The
+registry and the message protocol live together in it, as the boundary
+recommendation asks; only the directory differs. If the maintainer prefers the
+`server/` home, this package can be re-exported from `server/mod.ts` later
+without moving a line of it.
 
 One line is therefore needed in the root `deno.jsonc` `workspace` array — after
 `"./platform",`, before `"./server",`:
@@ -62,6 +98,11 @@ Deno already discovers and runs this package's tests without that line, and
 `infra/scripts/type-check.ts` walks the tree, so the line is what makes it a JSR
 member and lets a sibling package import `@ts-libs/realtime`, not what makes the
 checks pass.
+
+This supersedes `apps/api/services/wsHub.ts` — the 55-line stub whose whole model
+is `Map<clientId, { userId, socket }>`, with no heartbeat, no liveness deadline,
+no acks and one `broadcastToUser` — and the 87-line SPA client that ships with it
+"with no acks, no heartbeat and no sync handshake" (issue #19).
 
 ## Ports
 
@@ -181,6 +222,12 @@ the broadcast — here a throwing socket is reaped and the loop continues.
   exactly what ADR 002 rules out.
 - **A host socket adapter.** `apps/api` and `apps/spa` own those, because only
   they know their upgrade path and their cookie handling.
+- **Hint coalescing.** The design doc leaves it open whether a group under rapid
+  writes should emit at most one hint per client per interval
+  (`docs/design/realtime-websockets.md:131-133`). `AggregateNotifier` sends one
+  hint per committed change; a host that wants coalescing can batch before
+  calling it, and the client is unaffected because it pulls the latest state
+  either way. Deliberately not built on speculation.
 
 ## Testing
 
