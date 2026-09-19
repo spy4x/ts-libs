@@ -18,7 +18,7 @@
 
 import { assert, assertEquals, assertFalse, assertNotEquals, assertThrows } from "@std/assert"
 import { timingSafeEqual } from "@std/crypto/timing-safe-equal"
-import { assertPepper, CryptoContext, MissingPepperError } from "./crypto.ts"
+import { assertPepper, CryptoContext, decodeHex, MissingPepperError } from "./crypto.ts"
 import { createAuth } from "./lib.ts"
 import { MemoryAdapter } from "./testing/memory-adapter.ts"
 import {
@@ -627,6 +627,47 @@ const ONE_BYTE_ZERO_CREDENTIAL = "probe-4"
 /** Sixteen bytes of salt, as the stored format hex-encodes them. */
 const SALT_HEX = "802f0e69dbede4c961f06e7abef3395b"
 
+Deno.test("the decoder rejects malformed hex instead of coercing it", () => {
+  // Asserted on `decodeHex`, not through `verify`, and that is a deliberate choice:
+  // through `verify` the guarantee is not decidable. The length gate refuses a short
+  // key first, and reaching the coercion with a *full-length* all-zero key would need
+  // a 2^-256 search for a credential. The guarantee is "a malformed string decodes to
+  // `null`, never to bytes", and it is asserted where it can be decided.
+  //
+  // This is the defect that mattered: `Number.parseInt("zz", 16)` is `NaN`, and a
+  // `Uint8Array` element coerces that to `0x00`, so `"zz"` decoded to a zero byte
+  // instead of being refused.
+  assertEquals(decodeHex("00"), new Uint8Array([0]))
+  assertEquals(decodeHex("ff"), new Uint8Array([255]))
+  assertEquals(decodeHex("0a0b0c"), new Uint8Array([10, 11, 12]))
+  assertEquals(decodeHex("DEADBEEF"), new Uint8Array([0xde, 0xad, 0xbe, 0xef]))
+
+  const malformed = [
+    "",
+    "z",
+    "zz",
+    "0x",
+    "0x00",
+    "zz".repeat(16),
+    "abc",
+    "0a0",
+    " 0a",
+    "0a ",
+    "0a-b",
+    "g0",
+    "-1",
+    "+1",
+    "0a\n",
+  ]
+  for (const candidate of malformed) {
+    assertEquals(
+      decodeHex(candidate),
+      null,
+      `${JSON.stringify(candidate)} must decode to null, not to bytes`,
+    )
+  }
+})
+
 Deno.test("verify rejects a malformed key that decodes to a one-byte zero", async () => {
   // `802f…:zz` — the salt is valid hex, the key is not. The pre-fix decoder ran
   // `Number.parseInt("zz", 16)`, which is `NaN`, and `Uint8Array` coerced that to
@@ -733,17 +774,31 @@ Deno.test("verify rejects every malformed stored hash without comparing", async 
   assert(keyHex.length > 0)
 })
 
-Deno.test("a valid hash never decodes through a coercing decoder", async () => {
-  // The complement: an odd-length or non-hex digest is refused outright rather
-  // than silently truncated. `/../g` turned `"abc"` into `"AB"`, so a truncated
-  // stored key could still have compared equal.
+Deno.test("a malformed salt never accepts, and odd-length halves are refused", async () => {
+  // Through `verify` a malformed salt is indistinguishable from a wrong one by
+  // result — both are a mismatch — so what is asserted is the security property: it
+  // never *accepts*. The malformed-vs-refused distinction is covered by the decoder
+  // test above, where it is decidable.
   const crypto = new CryptoContext({ pepper: TEST_PEPPER, iterations: TEST_ITERATIONS })
   const valid = await crypto.hash("value")
   const [saltHex, keyHex] = valid.split(":")
+
+  for (const salt of ["", "z", "zz", "not-a-salt", "0x00", "-1", "abc"]) {
+    assertFalse(
+      await crypto.verify("value", `${salt}:${keyHex}`),
+      `salt ${JSON.stringify(salt)} must not accept`,
+    )
+  }
+  // Odd-length halves are refused rather than silently truncated: `/../g` turned
+  // `"abc"` into `"AB"`, so a truncated digest could have compared equal.
   assertEquals(saltHex.length % 2, 0)
   assertEquals(keyHex.length % 2, 0)
-
-  for (const stored of [`${saltHex}:${keyHex.slice(0, -1)}`, `${saltHex.slice(0, -1)}:${keyHex}`]) {
+  for (
+    const stored of [
+      `${saltHex}:${keyHex.slice(0, -1)}`,
+      `${saltHex.slice(0, -1)}:${keyHex}`,
+    ]
+  ) {
     assertFalse(await crypto.verify("value", stored), "an odd-length half must be refused")
   }
   assert(await crypto.verify("value", valid))

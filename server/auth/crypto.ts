@@ -75,8 +75,13 @@ const HEX_PATTERN = /^(?:[0-9a-f]{2})+$/i
  *
  * Returning `null` rather than throwing keeps the caller's contract: a corrupt row
  * fails the login, it does not 500 the endpoint.
+ *
+ * Exported so the rejection itself is testable. Through `verify` it is not: the
+ * length gate rejects a short key first, and exercising the coercion would need a
+ * credential whose whole 32-byte key is zero — a 2^-256 search. The guarantee is
+ * therefore asserted on the decoder, where it is decidable.
  */
-function fromHex(hex: string): Uint8Array | null {
+export function decodeHex(hex: string): Uint8Array | null {
   if (!HEX_PATTERN.test(hex)) {
     return null
   }
@@ -161,8 +166,8 @@ export class CryptoContext {
     if (separator <= 0 || separator === stored.length - 1) {
       return false
     }
-    const salt = fromHex(stored.slice(0, separator))
-    const expected = fromHex(stored.slice(separator + 1))
+    const salt = decodeHex(stored.slice(0, separator))
+    const expected = decodeHex(stored.slice(separator + 1))
     if (salt === null || expected === null) {
       return false
     }
