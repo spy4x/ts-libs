@@ -1,10 +1,9 @@
 # @ts-libs/email
 
-Email primitives. Today: an SMTP transport behind a small `EmailSender` port.
-
-> The RFC 6376 DKIM verifier (`#8`) is a sibling PR that adds `./dkim-verify` and
-> its own section here. This file is written to be **extended, not replaced** when
-> it lands: the intro and the per-feature sections are independent.
+Email primitives: an SMTP transport behind a small `EmailSender` port, and a pure
+RFC 6376 DKIM verifier. The root entry point `"."` re-exports both halves
+(`mod.ts`); the subpaths are `./address`, `./html`, `./message`, `./sender`,
+`./smtp` and `./dkim-verify`.
 
 ```ts
 import { createSmtpSender } from "@ts-libs/email/smtp"
@@ -215,5 +214,157 @@ by the transport.
 - **Binary attachments.** `EmailAttachment.content` is UTF-8 text, which is what
   an ICS file and a rendered HTML part need. A `Uint8Array` variant is the change
   to make when a caller needs one.
-- **Inbound mail.** Parsing, DKIM verification (`#8`) is separate, SMTP receipt is
-  not planned.
+- **Inbound mail.** Receiving mail is not planned; DKIM verification lives in the
+  `./dkim-verify` subpath of this package, not here.
+
+## DKIM verification
+
+```ts
+import { fetchDkimPublicKey, verifyDkim } from "@ts-libs/email"
+
+// Key supplied by the caller — no permissions needed.
+const key = await fetchDkimPublicKey("example.com", "sel", { resolver })
+const offline = await verifyDkim(rawMessage, key ?? undefined)
+
+// Key fetched from DNS by the default resolver — needs --allow-net.
+const live = await verifyDkim(rawMessage)
+if (!live.valid) console.warn(live.reason)
+```
+
+## What this verifies
+
+Given a raw RFC 5322 message and a DKIM public key, `verifyDkim` answers one
+question: **does this message's `DKIM-Signature` verify against this key?**
+
+- Signature-header parsing (`parseDkimSignature`), including folded values.
+- `simple` and `relaxed` canonicalization, for headers and for bodies
+  (`canonicalizeHeader`, `canonicalizeBody`).
+- The body hash (`bh=`), computed over the canonicalized body truncated to the
+  `l=` bound when one is present, as RFC 6376 §3.7 step 1 requires.
+- `rsa-sha256` (RSASSA-PKCS1-v1_5) and `ed25519-sha256`, the latter signing
+  `SHA-256` of the canonical input as RFC 8463 §3 requires.
+- `parseDkimPublicKey` from a DNS TXT record, including revoked keys (`p=`).
+- Expiry (`x=`) against an injectable clock.
+
+The signature input follows §3.7 step 2 exactly: every header named in `h=`, in
+the order `h=` declares (so repeated fields are consumed from the bottom of the
+header block upwards, §5.4.2), then the `DKIM-Signature` field with its `b=`
+value deleted and **without a trailing CRLF**. Nothing follows that field — the
+body hash the signer covered is the `bh=` tag inside it. Names in `h=` that match
+no header in the message contribute nothing, as §3.5 allows.
+
+Correctness is checked against implementations other than this one: RFC 8463's
+Appendix A.3 Ed25519 example, RFC 6376's example message signed with a known key,
+and eighteen messages built with dkimpy 1.1.8's canonicalizers plus OpenSSL and
+confirmed by `openssl dgst -sha256 -verify` against the §3.7 reconstruction. See
+`fixtures/SOURCES.md`, which also records what these vectors are _not_.
+
+## What this does not do
+
+- **It does not fetch the key for you** unless you inject a resolver or accept
+  the default one. The default is `Deno.resolveDns(name, "TXT")`, which needs
+  `--allow-net`. Everything in this package's own test suite runs through an
+  injected resolver and therefore needs no permissions.
+- **No DMARC, SPF, ARC or DKIM alignment.** A verified signature is not an
+  authorized sender. DMARC needs `d=`/`i=` alignment against the visible `From:`
+  field, which is a policy decision rather than a cryptographic one, and this
+  package never inspects `From:` for that purpose.
+- **No deliverability policy.** It does not decide what to do with a message
+  that fails: no quarantine, no scoring, no reporting. That belongs in the
+  caller.
+- **No replay, freshness or `Received`-chain protection.** A valid signature
+  stays valid unless `x=` says otherwise. `t=` is parsed but not enforced beyond
+  what the signature already binds.
+- **No signature generation.** Verification only; there is no signer here.
+
+## Injected resolver contract
+
+```ts
+interface DnsTxtResolver {
+  resolveTxt: (name: string) => Promise<string[][]>
+}
+
+interface DkimVerifyOptions {
+  now?: bigint
+  resolver?: DnsTxtResolver
+}
+```
+
+- The queried name is `` `${selector}._domainkey.${domain}` ``.
+- The shape is one array of strings per TXT record. RFC 6376 §3.6.2.2 requires a
+  record's strings to be concatenated with no separator, and
+  `fetchDkimPublicKey` does that before parsing.
+- An empty answer throws `DkimParseError` rather than reporting a revoked key,
+  so a broken resolver cannot be mistaken for a revoked key. A resolver
+  rejection propagates out of `fetchDkimPublicKey` and becomes
+  `result.reason` in `verifyDkim`.
+- `p=` present but empty is a revoked key: `fetchDkimPublicKey` returns `null`
+  and `verifyDkim` reports `"DKIM key revoked (p= is empty)"`.
+- `publicKey` wins over `resolver` in `verifyDkim`: pass a key and no lookup
+  happens at all.
+
+`verifyDkim` returns a result for every message-shaped failure — missing header,
+bad grammar, expiry, body mismatch, unverifiable signature. Only a throwing
+injected resolver escapes it.
+
+## Decisions a reviewer should weigh
+
+- **Errors are results, not exceptions.** A malformed message does not throw, so
+  a caller cannot lose a diagnosis to a `catch`. `reason` distinguishes the
+  cases and `parsed` is populated whenever the header parsed at all.
+- **`l=` truncates the canonicalized body before hashing it.** §3.7 step 1 says
+  the body is "truncated to the length specified in the l= tag", so a signature
+  over 18 octets is only reproducible by hashing 18 octets. A bound _longer_ than
+  the body it accompanies is not an error: the hash is over all of it, which is
+  what a signer declaring a longer bound produced.
+- **`h=` must NOT list `dkim-signature`.** §3.5 forbids it, and §3.7 adds that
+  field to the header hash as its own unconditional step. Requiring it — as an
+  earlier revision of this file did — rejects every standard signer, RFC 6376's
+  own examples included.
+- **Tags after `b=` are verified, not refused.** §3.7 deletes only the _value_ of
+  `b=`, so everything after it stays inside the signed bytes. A signature ending
+  `…; b=SIG; x=1800000000` is valid and its `x=` is authenticated, and appending
+  `; x=9999999999` or `; i=@attacker.invalid` to a genuine message changes the
+  hashed field and fails. An earlier revision truncated the field at `b=` and
+  claimed the tag was unprotected; that reasoning was wrong in both directions,
+  and it rejected conformant mail.
+- **A repeated tag is rejected.** §3.2 forbids duplicates. Silently keeping the
+  last one let an attacker append `; b=<their own signature>` and win.
+- **An unknown tag is ignored.** §3.5 allows extensions; real signatures carry
+  them (`r=`, `dt=`).
+- **Unfolding deletes the line ending, it does not turn it into a space.**
+  §3.4.2 unfolds by removing the CRLF and then compressing the WSP that followed
+  it, so `one<CRLF><HTAB>two` canonicalizes to `one two` and `a<LF>b` to `ab`.
+  A bare LF inside a value is not a line ending (RFC 5322 §2.3): `simple` keeps
+  it byte for byte, `relaxed` deletes it as part of unfolding. A **non-trailing**
+  lone CR likewise survives both modes, since §3.4.2 unfolds CRLF only and
+  `String.trim()` would have swallowed it — that is why the relaxed path does its
+  own WSP trimming rather than calling `trim()`. Body handling still normalises
+  bare LF to CRLF, because mailbox storage rewrites line endings and nothing else
+  references the body's original bytes.
+- **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
+  `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
+  example record publishes a complete SubjectPublicKeyInfo. The envelope is
+  detected, not guessed. `DkimPublicKey.keyBytes` therefore holds whatever the
+  record carried — SPKI bytes for an SPKI `p=` — rather than a normalised form.
+- **`b=` must be the last tag for `simple` canonicalization.** Byte-exact
+  reconstruction of an _emptied_ `b=` is impossible otherwise, and refusing is
+  safer than mis-signing.
+
+## What the suite does not cover
+
+- **No real mail.** Every fixture is synthetic. A message from a production
+  signer would test more, and none is available offline.
+- **The printed §3.5 signature is not reproduced.** Its private key is
+  unpublished, so the RFC's actual signature cannot be verified by anyone; what
+  is tested is the RFC's example message signed with a known key.
+- **Negative coverage is a matrix, not a proof.** Tampering is tested across both
+  modes and both algorithms (body, signed header, signature byte, removed header,
+  wrong key), which is stronger than one case per path but still finite.
+
+## Zero dependencies
+
+This package imports nothing. Web Crypto and platform primitives only, on
+purpose: the verifier cannot drift out of step with a crypto dependency, and it
+needs no supply-chain review. If a change here looks like it needs `@std/*` or
+npm, that is a design question, not an import to add.
