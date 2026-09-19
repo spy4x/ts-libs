@@ -173,6 +173,34 @@ eviction policy, and every cap that can free a live bucket is a bypass. Memory i
 proportional to the number of distinct keys active within `windowMs + idleMs`, which is what
 a shared store (`#4`) exists to shrink.
 
+### Time is taken monotonically
+
+`now()` defaults to `Date.now`, which follows the wall clock and is **not** monotonic: an NTP
+correction or an operator setting the clock back moves it backwards. The store never uses a
+raw `now()` reading — it keeps `lastNow = max(lastNow, now())` and judges every request
+against that sequence (see `mcp/rate-limit.ts`, `observe`).
+
+A backwards reading is treated as **the previous timestamp**, never as a window reset or a
+rewound counter:
+
+- a request arriving while the clock is behind is judged against the newest timestamp the
+  store has already seen, so moving the clock cannot extend or escape a window. Its cost is a
+  slightly later budget than the wall clock alone would grant, for as long as the discrepancy
+  lasts — the fail-closed direction;
+- a **forward** step is not clamped: the larger observation wins, every event in a bucket
+  falls out of the window at once and the bucket gets a fresh budget immediately, which is
+  the same answer `Date.now` alone would give;
+- since `events` only ever receives timestamps from a non-decreasing sequence, a backwards
+  step followed by a forwards recovery cannot resurrect an expired event. Before this rule,
+  a backwards step left `events` unsorted, the binary search over it mislocated the live
+  prefix, and a client that stepped the clock back was handed a fresh budget on top of one it
+  had spent — 4 requests accepted inside a single 1 000 ms window at `limit: 2`.
+
+The rule is pinned by `rate-limit.test.ts` "does not hand out a fresh budget when the wall
+clock steps backwards", "cannot resurrect an expired event after a backwards step and a
+forwards recovery" and "does not grant a fresh budget when the clock recovers to a pre-jump
+value"; reverting the clamp reddens the first two.
+
 ### Collapse to `@ts-libs/platform/rate-limit` (issue #4 / PR #32)
 
 `#4` is **open as PR #32, not merged**, and `platform/` is **not on `origin/main`**
@@ -196,7 +224,7 @@ limit check `await`, and widen `RateLimitResult` to `RateLimitDecision`. The tra
 already depends on a port rather than the class, so no route logic changes. Cost it as a
 small refactor plus test updates, not a deletion.
 
-## CORS## CORS
+## CORS
 
 `allowedOrigins` is an exact-match allowlist, empty by default, which forbids every
 cross-origin request. There is no `"*"` mode and no code path emits

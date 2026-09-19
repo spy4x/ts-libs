@@ -59,9 +59,14 @@ export const SWEEP_EVERY_CHECKS = 512
 
 /** Accepted-request timestamps for one key, oldest first. */
 interface Bucket {
-  /** Milliseconds, non-decreasing. */
+  /**
+   * Milliseconds, strictly non-decreasing. Every value here is a timestamp this store
+   * already clamped against its own monotonically non-decreasing observation sequence
+   * (see {@link MemoryRateLimitStore.check}), so the array stays sorted even when the
+   * injected clock steps backwards.
+   */
   events: number[]
-  /** Timestamp of the most recent check, whatever its outcome. */
+  /** Timestamp of the most recent check, whatever its outcome and after clamping. */
   seenAt: number
 }
 
@@ -97,6 +102,30 @@ function firstLiveIndex(events: number[], cutoff: number): number {
  *
  * Rejected requests are not recorded, which is what stops a blocked client from extending
  * its own window by retrying.
+ *
+ * **Time is taken monotonically, clamped per store.** Every timestamp in this class comes
+ * from `lastNow = max(lastNow, now())`, not from `now()` directly. `Date.now` follows the
+ * wall clock, which is not monotonic: an NTP correction or an operator setting the clock
+ * back can move it backwards. An observation sequence that goes backwards is what broke
+ * the sortedness of `events`, and with it the binary search in {@link firstLiveIndex}: the
+ * search then mislocated the live prefix, `slice(live)` dropped events that were still
+ * inside the window, and a client that stepped the clock back got a fresh budget on top of
+ * one it had already spent. Clamping is what makes `events` non-decreasing by construction.
+ *
+ * A backwards observation is **read as the previous timestamp**, never as a window reset or
+ * as a rewound counter. Two consequences: a request that arrives while the clock is behind
+ * is judged against the newest timestamp the store has already seen, so it cannot extend or
+ * escape its window by moving the clock; and after the clock recovers, the store's own
+ * sequence is at or ahead of the wall clock again, so no event is held live longer than
+ * `windowMs` of real time. The cost is a slightly later budget than the wall clock alone
+ * would grant, for the duration of the discrepancy — the fail-closed direction.
+ *
+ * A **forward** step is not clamped: the larger observation wins, every event in a bucket
+ * falls out of the window at once, and the bucket gets a fresh budget immediately, which is
+ * the same answer `Date.now` alone would have given. A backwards step followed by a forwards
+ * recovery therefore cannot resurrect an event that already expired — `events` only ever
+ * receives timestamps from a non-decreasing sequence, so nothing is ever re-inserted behind
+ * the live prefix.
  */
 export class MemoryRateLimitStore implements RateLimitStore {
   private readonly buckets = new Map<string, Bucket>()
@@ -105,6 +134,12 @@ export class MemoryRateLimitStore implements RateLimitStore {
   private readonly idleMs: number
   private readonly now: () => number
   private readonly onSweep: ((removed: number) => void) | undefined
+  /**
+   * The newest timestamp this store has observed (`max` of every `now()` it has seen).
+   * Monotonically non-decreasing for the lifetime of the store, whatever the injected
+   * clock does, which is what keeps every bucket's `events` sorted.
+   */
+  private lastNow: number = Number.NEGATIVE_INFINITY
   private lastSweepAt: number
   private checksSinceSweep = 0
 
@@ -119,16 +154,30 @@ export class MemoryRateLimitStore implements RateLimitStore {
     this.idleMs = options.idleMs ?? DEFAULT_IDLE_MS
     this.now = options.now ?? Date.now
     this.onSweep = options.onSweep
-    this.lastSweepAt = this.now()
+    this.lastNow = this.observe()
+    this.lastSweepAt = this.lastNow
   }
 
   get size(): number {
     return this.buckets.size
   }
 
-  /** Record one request for `key` and return the verdict. */
+  /**
+   * One monotonically non-decreasing observation of the injected clock. Never returns less
+   * than the previous call, so a backwards step in the wall clock cannot unsort a bucket.
+   */
+  private observe(): number {
+    this.lastNow = Math.max(this.lastNow, this.now())
+    return this.lastNow
+  }
+
+  /**
+   * Record one request for `key` and return the verdict. Time comes from
+   * {@link observe}, so the verdict is a function of a non-decreasing sequence even when
+   * the injected clock steps backwards.
+   */
   check(key: string): RateLimitResult {
-    const now = this.now()
+    const now = this.observe()
     this.maybeSweep(now)
 
     const cutoff = now - this.windowMs
@@ -156,7 +205,7 @@ export class MemoryRateLimitStore implements RateLimitStore {
 
   /** Run the idle sweep now instead of waiting for the interval. Returns buckets removed. */
   evict(): number {
-    return this.sweep(this.now())
+    return this.sweep(this.observe())
   }
 
   /**

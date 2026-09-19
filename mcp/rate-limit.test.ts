@@ -85,6 +85,93 @@ describe("MemoryRateLimitStore", () => {
     assertEquals(store.check("203.0.113.7").allowed, true)
   })
 
+  it("does not hand out a fresh budget when the wall clock steps backwards", () => {
+    // A backwards observation used to unsort the bucket: `events` was no longer
+    // non-decreasing, so the binary search in `firstLiveIndex` mislocated the live prefix
+    // and `slice(live)` discarded events still inside the window. This is the reviewer's
+    // reproduction against the pre-fix store: at head it accepted 4 requests inside one
+    // 1 000 ms window instead of 2. Every verdict below except the count is the same
+    // before and after the fix — the count is the defect.
+    const wall = { t: 0 }
+    const store = new MemoryRateLimitStore({ limit: 2, windowMs: 1_000, now: () => wall.t })
+    let accepted = 0
+    const check = (): boolean => {
+      const result = store.check("203.0.113.7")
+      if (result.allowed) accepted += 1
+      return result.allowed
+    }
+
+    assertEquals(check(), true)
+    wall.t -= 500
+    assertEquals(check(), true)
+    wall.t += 1_000
+    assertEquals(check(), false)
+    assertEquals(check(), false)
+
+    // The defect's signature: three or more accepted inside one window.
+    assertEquals(accepted, 2, `${accepted} requests accepted for a limit of 2`)
+    // Denied, not reset: the store is still honouring the window it opened.
+    const denied = store.check("203.0.113.7")
+    assertEquals(denied.allowed, false)
+    assertEquals(denied.retryAfterMs, 500)
+  })
+
+  it("cannot resurrect an expired event after a backwards step and a forwards recovery", () => {
+    // The same defect one step later: with the bucket unsorted, the sliding prefix is
+    // located wrongly after the clock recovers, so an event that had already expired is
+    // counted again. This is the reviewer's reproduction without the clamping and with a
+    // third request after the recovery — 3 accepted inside one 1 000 ms window, and the
+    // final assertion reads 3. The three denied requests are denied with and without the
+    // fix; the acceptance count is what the defect moves.
+    const wall = { t: 0 }
+    const store = new MemoryRateLimitStore({ limit: 2, windowMs: 1_000, now: () => wall.t })
+    let accepted = 0
+    const check = (): boolean => {
+      const result = store.check("203.0.113.7")
+      if (result.allowed) accepted += 1
+      return result.allowed
+    }
+
+    assertEquals(check(), true)
+    wall.t -= 1
+    assertEquals(check(), true)
+    // 999 ms forward, which puts the wall clock back where the second event was taken.
+    wall.t += 999
+    assertEquals(check(), false)
+    // One millisecond later the first event is exactly 1 000 ms old and gone; with the
+    // bucket sorted only the other event is still live, so this is the second denial. With
+    // the bucket unsorted the recovery drops the wrong prefix and this is accepted.
+    wall.t += 1
+    assertEquals(check(), false)
+
+    assertEquals(accepted, 2, `${accepted} requests accepted for a limit of 2`)
+  })
+
+  it("does not grant a fresh budget when the clock recovers to a pre-jump value", () => {
+    const wall = { t: 0 }
+    const store = new MemoryRateLimitStore({ limit: 2, windowMs: 1_000, now: () => wall.t })
+    assertEquals(store.check("203.0.113.7").allowed, true)
+    assertEquals(store.check("203.0.113.7").allowed, true)
+    assertEquals(store.check("203.0.113.7").allowed, false)
+
+    // An hour forward: both events are far outside the window, so this is a fresh window.
+    wall.t += 3_600_000
+    assertEquals(store.check("203.0.113.7").allowed, true)
+    assertEquals(store.check("203.0.113.7").allowed, true)
+    assertEquals(store.check("203.0.113.7").allowed, false)
+
+    // A forward step is not clamped and not rewound, so the sequence keeps its progress.
+    wall.t += 1_000
+    assertEquals(store.check("203.0.113.7").allowed, true)
+    assertEquals(store.check("203.0.113.7").allowed, true)
+    assertEquals(store.check("203.0.113.7").allowed, false)
+
+    // The clock snapping back to before the jump must not reopen the window that the two
+    // events above just spent: the clamped observation stays where those events put it.
+    wall.t -= 3_600_000
+    assertEquals(store.check("203.0.113.7").allowed, false)
+  })
+
   it("reports the remaining time of the window in Retry-After", () => {
     const time = clock()
     const store = new MemoryRateLimitStore({ limit: 1, windowMs: 60_000, now: time.now })
@@ -114,9 +201,12 @@ describe("MemoryRateLimitStore", () => {
 })
 
 describe("no path from key rotation to a reset counter", () => {
-  // The reviewer's exact reproduction against the previous LRU-capped eviction
-  // (limit 3, maxEntries 4): the victim spent its budget, an attacker rotated ten keys,
-  // and the victim's next check came back {"allowed":true,"remaining":2}.
+  // The reviewer's exact reproduction against the superseded eviction policy, which capped
+  // the map by least-recently-inserted order (a cap of 4 buckets at limit 3): the victim
+  // spent its budget, an attacker rotated ten keys, the cap displaced the victim's bucket,
+  // and the victim's next check came back {"allowed":true,"remaining":2}. That policy and
+  // its `maxEntries` option are gone; eviction is idle-time-driven only, and the rows below
+  // are what replaced the reproduction of the bypass.
   function spendVictimBudget(store: MemoryRateLimitStore): void {
     store.check("victim")
     store.check("victim")
