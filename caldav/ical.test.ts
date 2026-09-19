@@ -585,15 +585,86 @@ Deno.test("resourceUrl percent-encodes the UID and normalises the base URL", () 
   )
 })
 
-Deno.test("resourceUrl prefers an absolute URL the component declares", () => {
+Deno.test("resourceUrl honours a declared URL only on the calendar's origin", () => {
+  // BLOCKER D1, third path. `URL` is a server-named value, and the extraction
+  // used to prefer it unconditionally: a `VTODO` carrying
+  // `URL:https://attacker.example.net/evil/t.ics` produced a `Todo.url` the
+  // documented `updateTodo(todo.url, ...)` then GET and PUT to, with the Basic
+  // credential on both. It is now honoured only where its origin can be shown to
+  // be the calendar's own — the derived URL is used otherwise.
   assertEquals(
-    resourceUrl(CALENDAR_URL, "u1", "https://elsewhere.example.com/u1.ics"),
-    "https://elsewhere.example.com/u1.ics",
+    resourceUrl(CALENDAR_URL, "u1", "https://caldav.example.com/other/u1.ics"),
+    "https://caldav.example.com/other/u1.ics",
   )
   assertEquals(
     resourceUrl(CALENDAR_URL, "u1", "/dav/u1.ics"),
     "/dav/u1.ics",
   )
+  assertEquals(
+    resourceUrl(CALENDAR_URL, "u1", "https://elsewhere.example.com/u1.ics"),
+    "https://caldav.example.com/user/calendars/tasks/u1.ics",
+  )
+  // A lookalike the parser folds differently is still another origin.
+  assertEquals(
+    resourceUrl(CALENDAR_URL, "u1", "https://caldav.example.com:8443/u1.ics"),
+    "https://caldav.example.com/user/calendars/tasks/u1.ics",
+  )
+  assertEquals(
+    resourceUrl(CALENDAR_URL, "u1", "https://caldav.example.com@attacker.example.net/u1.ics"),
+    "https://caldav.example.com/user/calendars/tasks/u1.ics",
+  )
+  // No calendar URL means no origin can be proven: fail closed, derive.
+  assertEquals(
+    resourceUrl("", "u1", "https://caldav.example.com/u1.ics"),
+    "/u1.ics",
+  )
+})
+
+Deno.test("parseTodos reports a declared URL off the calendar's origin and uses the derived one", () => {
+  const document = [
+    "BEGIN:VCALENDAR",
+    "BEGIN:VTODO",
+    "UID:u1",
+    "SUMMARY:s",
+    "URL:https://attacker.example.net/evil/u1.ics",
+    "END:VTODO",
+    "END:VCALENDAR",
+  ].join("\r\n")
+  const parsed = parseTodos(document, { calendarUrl: CALENDAR_URL })
+  assert(parsed.success)
+  assertEquals(
+    parsed.output.todos[0]!.url,
+    "https://caldav.example.com/user/calendars/tasks/u1.ics",
+  )
+  // Not silent: the refusal is reported where every other present-but-unusable
+  // property is reported, so a caller can tell "the server named another origin"
+  // from "the server named nothing".
+  assertEquals(parsed.output.issues.length, 1)
+  assertEquals(parsed.output.issues[0]!.property, "URL")
+  assertEquals(parsed.output.issues[0]!.value, "https://attacker.example.net/evil/u1.ics")
+  assertStringIncludes(parsed.output.issues[0]!.message, "not on the origin")
+})
+
+Deno.test("parseEvents reports a declared URL off the calendar's origin too", () => {
+  const document = [
+    "BEGIN:VCALENDAR",
+    "BEGIN:VEVENT",
+    "UID:e1",
+    "SUMMARY:s",
+    "DTSTART:20260704T090000Z",
+    "DTEND:20260704T100000Z",
+    "URL:https://attacker.example.net/evil/e1.ics",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n")
+  const parsed = parseEvents(document, { calendarUrl: CALENDAR_URL })
+  assert(parsed.success)
+  assertEquals(
+    parsed.output.events[0]!.url,
+    "https://caldav.example.com/user/calendars/tasks/e1.ics",
+  )
+  assertEquals(parsed.output.issues.length, 1)
+  assertEquals(parsed.output.issues[0]!.property, "URL")
 })
 
 Deno.test("parseTodos reads a resource URL the component declares", () => {

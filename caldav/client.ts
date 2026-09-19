@@ -20,26 +20,49 @@
  *    underlying failure inside the error, never a silent substitution.
  *
  * **Credential rule.** Credentials are sent only to the origin the caller
- * configured in `baseUrl`, never to an origin a *server* named. A
- * `calendar-home-set` is a server-supplied `href`, and a request built from it
- * carries `Authorization`: resolving one to a foreign origin and following it
- * hands a Basic credential to whoever can influence the discovery response. Such
- * a home set is therefore refused with a warning and the `/username/` convention
- * is used instead — the same fallback a missing or unreadable home set gets, so
- * nothing new has to be handled by a caller. A cross-origin home set is *not*
- * followed with the header stripped: the client has no reason to talk to that
- * origin at all, and a de-authenticated request an attacker still answers is not
- * a safe outcome. The origin compared here is `scheme://host:port`, so a home set
- * deeper on the configured origin is accepted and a same-host different-port URL
- * is not.
+ * configured in `baseUrl`, never to an origin a *server* named — enforced in
+ * exactly one place, {@link CalDavClient.requestHeaders}, which every request
+ * goes through and which is handed the **destination URL** as an argument. The
+ * rule cannot be enforced at a call site, and this round proved it twice: a guard
+ * on the one call that built a URL out of a `calendar-home-set` does not see a URL
+ * a *different* response named — a `<D:href>` in the calendars PROPFIND, a `URL:`
+ * property inside `calendar-data`, a `REPORT` target — because those URLs are
+ * chosen later, by a layer that only asks for "the headers for an XML request".
+ * The header builder therefore takes the URL now, compares `scheme://host:port`
+ * with `baseUrl`'s ({@link sameOrigin}, which fails closed), and **omits**
+ * `Authorization` when they differ. A request to another origin is still made
+ * when the *caller* asked for it (their URL, their trust), but never with the
+ * credential.
+ *
+ * On top of the gate, a URL the *server* named is refused outright rather than
+ * followed unauthenticated — the client has no reason to talk to that origin at
+ * all, and a de-authenticated request an attacker still answers is not a safe
+ * outcome. Each place a server-named URL can enter a value refuses it there:
+ *
+ *  - `calendar-home-set` → a warning, and the `/username/` convention is used
+ *    instead; the same fallback a missing or unreadable home set gets, so nothing
+ *    new has to be handled by a caller;
+ *  - a calendar collection `<D:href>` in the calendars PROPFIND → a warning, and
+ *    the collection is skipped, so it never reaches a `REPORT` and never appears
+ *    in `CalendarListing.calendars`;
+ *  - a `URL:` property inside `calendar-data` → ignored in `ical.ts`'s
+ *    `resourceUrl`, which keeps the derived URL, so `Todo.url` and `Event.url` are
+ *    always on the configured origin and a caller may rely on that.
+ *
+ * A redirect is the one hop this gate cannot see, because it happens inside the
+ * transport; `fetch` deletes `Authorization` from a request it redirects to
+ * another origin (Fetch §4.4, "HTTP-redirect fetch"), which is the behaviour the
+ * default transport relies on. A caller-supplied transport that follows redirects
+ * itself must do the same.
  *
  * That rule bounds which *server-named* URL the client will use. It is not the
  * SSRF guard: it does not vet the `baseUrl` the caller chose, nor the resource
  * URLs a caller passes to `putIcal`, `getIcalResource` or `queryTodos`, because
- * those are the caller's own input and the caller owns their trust. A consumer
- * that accepts a server URL from an untrusted user should vet it with
- * `validatePublicUrl` from `@ts-libs/net/url-policy` (or drive the whole client
- * through `safeFetch`) before construction.
+ * those are the caller's own input and the caller owns their trust — a foreign
+ * one now travels *without* the credential. A consumer that accepts a server URL
+ * from an untrusted user should vet it with `validatePublicUrl` from
+ * `@ts-libs/net/url-policy` (or drive the whole client through `safeFetch`)
+ * before construction.
  *
  * The `{username}/` fallback exists because a CalDAV server may not advertise
  * `calendar-home-set` on its root at all — Radicale answers the PROPFIND with
@@ -51,6 +74,7 @@
  */
 
 import { parseIcal } from "./ical.ts"
+import { originOf, sameOrigin } from "./origin.ts"
 import {
   CalDavErrorCode,
   type CalDavFailure,
@@ -215,19 +239,43 @@ export class CalDavClient {
    * The source's `QueryEngine` read `this.client["username"]` and
    * `this.client["password"]` through bracket syntax, which is exactly the
    * encapsulation hole this replaces.
+   *
+   * It carries no destination, so it cannot enforce the origin rule — a caller
+   * that uses it is responsible for the URL it sends it to. The client's own
+   * requests never call it directly: they go through {@link requestHeaders}.
    */
   authorizationHeader(): string | undefined {
     if (this.username === "") return undefined
     return `Basic ${btoa(`${this.username}:${this.password}`)}`
   }
 
-  /** Auth plus the XML content type, as a fresh object per call. */
-  private xmlHeaders(depth?: string): Record<string, string> {
-    const headers: Record<string, string> = { "Content-Type": "application/xml; charset=utf-8" }
+  /**
+   * Headers for one request: `extra`, plus the credential when — and only when —
+   * `url` is on the origin the caller configured.
+   *
+   * **The single point at which a credential is attached to a request.** Every
+   * credentialed request in this package goes through here, and the destination is
+   * an argument rather than something a call site already knows, which is what
+   * makes the rule hold for URLs that no call site chose: a `<D:href>` from a
+   * response body, a `REPORT` target, a `URL:` property inside `calendar-data`, a
+   * resource URL a caller passes to `putIcal`/`getIcalResource`/`deleteResource`.
+   * A call-site check cannot see those, because at the call site the URL is
+   * whatever the layer below decided.
+   *
+   * Fails closed in both directions: {@link sameOrigin} is false when either side
+   * is not an `http(s)` URL, so a client whose `baseUrl` has no comparable origin
+   * attaches no credential to anything, and neither does one whose destination is
+   * unparseable.
+   *
+   * @param url Absolute request URL.
+   * @param extra Headers this request needs regardless of origin.
+   * @returns A fresh header object; no credential when the origins differ.
+   */
+  private requestHeaders(url: string, extra: Record<string, string> = {}): Record<string, string> {
+    if (!sameOrigin(url, this.baseUrl)) return { ...extra }
     const authorization = this.authorizationHeader()
-    if (authorization !== undefined) headers["Authorization"] = authorization
-    if (depth !== undefined) headers["Depth"] = depth
-    return headers
+    if (authorization === undefined) return { ...extra }
+    return { Authorization: authorization, ...extra }
   }
 
   /** Absolute URL for a server-relative path, resolved against the root. */
@@ -244,7 +292,7 @@ export class CalDavClient {
     try {
       response = await this.transport(options.url, {
         method: options.method,
-        headers: this.xmlHeaders(options.depth),
+        headers: this.requestHeaders(options.url, xmlHeaders(options.depth)),
         body: options.body,
       })
     } catch (cause) {
@@ -273,15 +321,16 @@ export class CalDavClient {
     }
   }
 
-  /** Headers for an iCalendar request, including `If-Match` when an ETag is known. */
-  private icalHeaders(etag?: string): Record<string, string> {
-    const headers: Record<string, string> = {
-      "Content-Type": "text/calendar; charset=utf-8",
-    }
-    const authorization = this.authorizationHeader()
-    if (authorization !== undefined) headers["Authorization"] = authorization
-    if (etag !== undefined && etag !== "") headers["If-Match"] = etag
-    return headers
+  /**
+   * Headers for an iCalendar request, including `If-Match` when an ETag is known.
+   *
+   * Takes the destination because the credential must be gated on it; see
+   * {@link requestHeaders}.
+   */
+  private icalHeaders(url: string, etag?: string): Record<string, string> {
+    const extra: Record<string, string> = { "Content-Type": "text/calendar; charset=utf-8" }
+    if (etag !== undefined && etag !== "") extra["If-Match"] = etag
+    return this.requestHeaders(url, extra)
   }
 
   /**
@@ -345,6 +394,14 @@ export class CalDavClient {
    * against `/{username}/`, which is the shape a server that answered the
    * home-set PROPFIND from a proxy or a rewritten path needs.
    *
+   * A collection the response names on another origin is **skipped with a
+   * warning**, never returned: it is a server-named URL, so the client has no
+   * reason to talk to that origin, and returning it would hand a caller a
+   * `Calendar.url` whose `REPORT` — the very next request `QueryEngine` makes —
+   * would otherwise have carried the credential. Skipping here is what keeps the
+   * guarantee in the module doc: nothing this package returns points off the
+   * configured origin.
+   *
    * @returns a failure when the home set cannot be discovered or both attempts
    * fail; a success with an empty list when the server legitimately holds no
    * calendars.
@@ -364,8 +421,13 @@ export class CalDavClient {
 
     let payload: CalDavResult<string> = first
     if (!first.success) {
-      const fallbackUrl = this.resolve(`${encodeURIComponent(this.username)}/`)
-      if (fallbackUrl !== discovery.output.url) {
+      let fallbackUrl: string | undefined
+      try {
+        fallbackUrl = this.resolve(`${encodeURIComponent(this.username)}/`)
+      } catch (cause) {
+        warnings.push(`${String(cause)}; not retrying the calendar listing`)
+      }
+      if (fallbackUrl !== undefined && fallbackUrl !== discovery.output.url) {
         warnings.push(`${first.error.message}; retrying against ${fallbackUrl}`)
         payload = await this.xmlRequest("PROPFIND calendars", {
           method: "PROPFIND",
@@ -383,8 +445,14 @@ export class CalDavClient {
     if (!parsed.success) {
       return partial(parsed.error, { calendars: [], warnings })
     }
+    const calendars: Calendar[] = []
+    for (const calendar of parsed.output.calendars) {
+      const originWarning = crossOriginCalendarWarning(calendar.url, this.baseUrl)
+      if (originWarning === undefined) calendars.push(calendar)
+      else warnings.push(originWarning)
+    }
     return ok(
-      { calendars: parsed.output.calendars, warnings: [...warnings, ...parsed.output.warnings] },
+      { calendars, warnings: [...warnings, ...parsed.output.warnings] },
       warnings,
     )
   }
@@ -428,10 +496,9 @@ export class CalDavClient {
    * known — which is the case for a `get_todo` by URL.
    */
   async getIcalResource(url: string): Promise<CalDavResult<IcalResource>> {
-    const headers: Record<string, string> = {}
-    const authorization = this.authorizationHeader()
-    if (authorization !== undefined) headers["Authorization"] = authorization
-    const response = await this.simpleRequest("GET", url, { headers })
+    const response = await this.simpleRequest("GET", url, {
+      headers: this.requestHeaders(url),
+    })
     if (!response.success) return reshapeFailure(response)
     try {
       return ok({
@@ -460,7 +527,7 @@ export class CalDavClient {
   ): Promise<CalDavResult<PutResult>> {
     const response = await this.simpleRequest("PUT", url, {
       method: "PUT",
-      headers: this.icalHeaders(etag),
+      headers: this.icalHeaders(url, etag),
       body: icalBody,
     })
     if (!response.success) return reshapeFailure(response)
@@ -469,11 +536,12 @@ export class CalDavClient {
 
   /** `DELETE` a resource, conditionally when an ETag is known. */
   async deleteResource(url: string, etag?: string): Promise<CalDavResult<null>> {
-    const headers: Record<string, string> = {}
-    const authorization = this.authorizationHeader()
-    if (authorization !== undefined) headers["Authorization"] = authorization
-    if (etag !== undefined && etag !== "") headers["If-Match"] = etag
-    const response = await this.simpleRequest("DELETE", url, { method: "DELETE", headers })
+    const extra: Record<string, string> = {}
+    if (etag !== undefined && etag !== "") extra["If-Match"] = etag
+    const response = await this.simpleRequest("DELETE", url, {
+      method: "DELETE",
+      headers: this.requestHeaders(url, extra),
+    })
     if (!response.success) return reshapeFailure(response)
     return ok(null)
   }
@@ -547,6 +615,13 @@ export class CalDavClient {
   }
 }
 
+/** Request headers for a CalDAV XML call: content type, plus `Depth` when given. */
+function xmlHeaders(depth?: string): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/xml; charset=utf-8" }
+  if (depth !== undefined) headers["Depth"] = depth
+  return headers
+}
+
 /**
  * Read the `href` nested inside a `calendar-home-set` element.
  *
@@ -565,25 +640,8 @@ export function extractNestedHref(xml: string): string | undefined {
 }
 
 /**
- * Origin of a URL: scheme, host and port, or `undefined` when it is not absolute.
- *
- * A `URL`'s `origin` is the string `"null"` for a non-`http(s)` scheme, which
- * would make two exotic URLs compare equal. A CalDAV server root is always
- * `http(s)`, and the constructor already refuses anything `new URL` rejects, so
- * the value is composed from the parts instead of read from `origin`.
- */
-function originOf(url: string): string | undefined {
-  try {
-    const parsed = new URL(url)
-    return `${parsed.protocol}//${parsed.host}`
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * The credential rule, in one function: a URL a **server** named is only used
- * when it stays on the origin the **caller** configured.
+ * The credential rule for a URL a **server** named: it is used only on the origin
+ * the **caller** configured.
  *
  * A `calendar-home-set` is a server-supplied `href`, and a client that follows it
  * to another origin sends its `Authorization` header there — handing a Basic
@@ -598,12 +656,17 @@ function originOf(url: string): string | undefined {
  *
  * `scheme://host:port` cannot be faked with a lookalike the `URL` parser folds
  * differently: `new URL` lowercases the host, punycodes an IDN, resolves `..`
- * and drops a default port before this comparison ever runs.
+ * and drops a default port before this comparison ever runs. It does not fold a
+ * trailing-dot host: `https://caldav.example.com./` is refused, which is the safe
+ * direction.
  *
  * Fails closed. When either URL has no origin to compare — the constructor
  * accepts any absolute URL, so a non-`http(s)` `baseUrl` is possible — the
  * server-named URL is refused rather than used, because "cannot tell" must never
- * read as "same origin".
+ * read as "same origin". That is also the reason this is not a call-site check
+ * in `discoverCalendarHomeSet`: the credential itself is gated on the request URL
+ * in {@link CalDavClient.requestHeaders}, and this function is the *policy* on
+ * top of it.
  *
  * @param namedUrl The resolved URL the server named.
  * @param configuredUrl The URL the caller configured the client with.
@@ -614,15 +677,34 @@ export function crossOriginHomeSetWarning(
   namedUrl: string,
   configuredUrl: string,
 ): string | undefined {
-  const named = originOf(namedUrl)
-  const configured = originOf(configuredUrl)
-  // Both sides must produce an origin for a match. `originOf` returns
-  // `undefined` for a non-`http(s)` URL, so a client configured with an exotic
-  // scheme refuses every server-named URL rather than skipping the check.
-  if (named !== undefined && configured !== undefined && named === configured) {
-    return undefined
-  }
+  if (sameOrigin(namedUrl, configuredUrl)) return undefined
   return `calendar-home-set ${namedUrl} is not on the configured origin ${
-    configured ?? configuredUrl
+    originOf(configuredUrl) ?? configuredUrl
   }; using the /username/ convention instead, because credentials are sent only to the origin the caller configured`
+}
+
+/**
+ * The same rule for a calendar collection a PROPFIND response named.
+ *
+ * Separate from {@link crossOriginHomeSetWarning} only because the consequence
+ * differs: a cross-origin home set falls back to `/username/`, while a
+ * cross-origin *collection* has no fallback — it is skipped, and the caller sees
+ * the warning. Two things are bought by skipping rather than following without
+ * credentials: the collection never reaches the `REPORT` that `QueryEngine` would
+ * otherwise issue against it, and `CalendarListing.calendars` never carries a URL
+ * off the configured origin for a caller to act on.
+ *
+ * @param url The resolved collection URL the server named.
+ * @param configuredUrl The URL the caller configured the client with.
+ * @returns the warning to record before skipping, or `undefined` when the origins
+ * match and the collection is safe to use.
+ */
+export function crossOriginCalendarWarning(
+  url: string,
+  configuredUrl: string,
+): string | undefined {
+  if (sameOrigin(url, configuredUrl)) return undefined
+  return `calendar ${url} is not on the configured origin ${
+    originOf(configuredUrl) ?? configuredUrl
+  }; skipping it, because credentials are sent only to the origin the caller configured`
 }

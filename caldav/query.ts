@@ -162,6 +162,26 @@ export function calendarNameFromUrl(url: string): string {
 }
 
 /**
+ * The collection URL of a resource URL: everything up to the resource's own name.
+ *
+ * `getTodo`/`getEvent` fetch **one resource**, and the parse options' `calendarUrl`
+ * is documented as the URL of the *collection* the document came from. Passing the
+ * resource URL there made the derived URL `${resource}.ics/${uid}.ics` — a path
+ * that exists nowhere. It went unnoticed while a document's own `URL` property was
+ * preferred unconditionally, and it surfaced the moment an off-origin `URL` began
+ * to be refused (see `resourceUrl` in `ical.ts`), because the derived value is then
+ * the one a caller gets and feeds back into `updateTodo`.
+ *
+ * The last path segment is dropped only when it looks like a resource, which is the
+ * same rule `calendarNameFromUrl` uses to walk back to the collection name.
+ */
+function collectionUrlOfResource(url: string): string {
+  if (!/\.ics$/i.test(url.split("?")[0]!)) return url
+  const cut = url.lastIndexOf("/")
+  return cut === -1 ? url : url.slice(0, cut + 1)
+}
+
+/**
  * Count tasks by status, priority band and overdue state, then cap the list.
  *
  * `byStatus` is keyed by the label the server reported, so an unknown `STATUS`
@@ -541,7 +561,7 @@ export class QueryEngine {
     if (uid !== undefined) etags.set(uid, resource.output.etag)
     const parsed = parseTodos(resource.output.data, {
       calendarName: this.nameOf(url),
-      calendarUrl: url,
+      calendarUrl: collectionUrlOfResource(url),
       etags,
     })
     if (!parsed.success) return reshapeFailure(parsed)
@@ -560,7 +580,7 @@ export class QueryEngine {
     if (uid !== undefined) etags.set(uid, resource.output.etag)
     const parsed = parseEvents(resource.output.data, {
       calendarName: this.nameOf(url),
-      calendarUrl: url,
+      calendarUrl: collectionUrlOfResource(url),
       etags,
     })
     if (!parsed.success) return reshapeFailure(parsed)

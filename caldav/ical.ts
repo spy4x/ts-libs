@@ -38,6 +38,7 @@ import {
   joinContentLines,
   unfoldLines,
 } from "@ts-libs/time/ics-core"
+import { sameOrigin } from "./origin.ts"
 import {
   CalDavErrorCode,
   type CalDavResult,
@@ -192,7 +193,14 @@ export interface EventIcalInput {
 export interface ParseOptions {
   /** `displayName` of the collection the text came from. */
   calendarName?: string
-  /** Absolute URL of the collection, used to derive a resource URL. */
+  /**
+   * Absolute URL of the collection, used to derive a resource URL.
+   *
+   * Also the only origin a component's `URL` property may point at: a declared
+   * URL on another origin is ignored and reported in `issues` (see
+   * {@link resourceUrl}). Omitting it means no origin can be proven, so a
+   * declared absolute `URL` is ignored for every component.
+   */
   calendarUrl?: string
   /** `UID` → `getetag` map, as extracted from the REPORT response. */
   etags?: ReadonlyMap<string, string>
@@ -750,16 +758,43 @@ function withTrailingSlash(url: string): string {
  * slash or a `?` rewrote the path or started a query. Here the UID is
  * percent-encoded and the base is normalised, so the URL's shape depends only on
  * the base's path.
+ *
+ * **A declared `URL` is a server-named URL, so it is honoured only where its
+ * origin can be shown to be the calendar's own.** A rooted path (`/dav/u.ics`) is
+ * on that origin by construction and is kept; an absolute URL is kept only when
+ * it shares an `http(s)` origin with `calendarUrl` ({@link sameOrigin}, which
+ * fails closed). Anything else — another origin, or an origin that cannot be
+ * compared because `calendarUrl` is empty or not `http(s)` — is ignored and the
+ * URL is derived from `calendarUrl` exactly as for a component with no `URL` at
+ * all. A caller may therefore rely on `Todo.url` and `Event.url` staying on the
+ * origin of the calendar they came from, whatever the server wrote; the cost is
+ * that a task whose `URL` really did point at another origin loses that URL —
+ * silently in this function, reported through `parseTodos`/`parseEvents`
+ * `issues`.
+ *
+ * @param calendarUrl Absolute URL of the collection the component came from.
+ * @param uid `UID` of the component, percent-encoded into the resource name.
+ * @param declaredUrl The component's `URL` property, when it has one.
+ * @returns The resource URL to use for a GET/PUT/DELETE.
  */
 export function resourceUrl(calendarUrl: string, uid: string, declaredUrl?: string): string {
-  if (declaredUrl !== undefined && declaredUrl.trim() !== "") {
-    const candidate = declaredUrl.trim()
-    if (/^[a-z][a-z0-9+.-]*:/i.test(candidate) || candidate.startsWith("/")) {
-      return candidate
-    }
-  }
+  const candidate = declaredUrl?.trim() ?? ""
+  if (candidate !== "" && isUsableDeclaredUrl(candidate, calendarUrl)) return candidate
   const name = uid.trim() === "" ? "untitled" : uid.trim()
   return `${withTrailingSlash(calendarUrl)}${encodeURIComponent(name)}.ics`
+}
+
+/**
+ * True when a server-declared `URL` may stand in for the resource location.
+ *
+ * Rooted paths inherit the calendar's origin; absolute URLs must prove it. An
+ * `http(s)`-vs-`ftp` mismatch, a relative URL that is not rooted, and the empty
+ * `calendarUrl` a caller gets when it parses a document with no options all
+ * return `false`, because none of them can be *shown* to be same-origin.
+ */
+function isUsableDeclaredUrl(declaredUrl: string, calendarUrl: string): boolean {
+  if (declaredUrl.startsWith("/")) return true
+  return /^[a-z][a-z0-9+.-]*:/i.test(declaredUrl) && sameOrigin(declaredUrl, calendarUrl)
 }
 
 /**
@@ -831,12 +866,37 @@ function readDate(value: string | undefined, parameter?: string): string | undef
 }
 
 /**
+ * The `issues` entry for a server-declared `URL` that {@link resourceUrl} refused.
+ *
+ * `undefined` when there is nothing to report: no `URL`, or one the resource URL
+ * may legitimately be derived from (rooted, or absolute on the calendar's
+ * origin). The caller gets it in `issues`, the place every other present-but-
+ * unusable property is reported.
+ */
+function declaredUrlIssue(
+  declaredUrl: string | undefined,
+  calendarUrl: string | undefined,
+): IcalIssue | undefined {
+  const candidate = declaredUrl?.trim() ?? ""
+  if (candidate === "" || isUsableDeclaredUrl(candidate, calendarUrl ?? "")) return undefined
+  return {
+    property: "URL",
+    value: candidate,
+    message: `is not on the origin of ${
+      calendarUrl ?? "the calendar"
+    }; the resource URL is derived from the calendar instead`,
+  }
+}
+
+/**
  * Convert parsed iCalendar text into {@link Todo} values.
  *
  * @returns a failure when the document itself is unusable, otherwise a success
  * whose `issues` carry any property that was present but unreadable — a task
  * with `DUE:garbage` is neither silently dropped nor reported as one with no due
- * date. Blocks of the wrong component kind are skipped, not treated as faults.
+ * date, and a `URL` the server named off the calendar's origin is reported there
+ * too while the derived URL is used instead ({@link resourceUrl}). Blocks of the
+ * wrong component kind are skipped, not treated as faults.
  */
 export function parseTodos(
   text: string,
@@ -851,6 +911,11 @@ export function parseTodos(
     if (block.component !== ComponentType.VTODO) continue
     const uid = block.data["UID"] ?? ""
     const statusLabel = block.data["STATUS"] ?? TodoStatusLabel[1]
+    // `URL` is a server-named URL: `resourceUrl` ignores one that is not on the
+    // calendar's origin, and the caller is told here rather than left to notice
+    // that the URL it got back is not the one the document carried.
+    const declaredIssue = declaredUrlIssue(block.data["URL"], options.calendarUrl)
+    if (declaredIssue !== undefined) issues.push(declaredIssue)
     todos.push({
       summary: block.data["SUMMARY"] ?? "Untitled",
       description: block.data["DESCRIPTION"],
@@ -899,6 +964,10 @@ export function parseEvents(
     const endProperty = block.properties.find((entry) => entry.name === "DTEND")
     const start = readDate(block.data["DTSTART"], startProperty?.params["VALUE"]) ?? ""
     const end = readDate(block.data["DTEND"], endProperty?.params["VALUE"]) || start
+    // See `parseTodos`: a `URL` off the calendar's origin is ignored by
+    // `resourceUrl` and reported as an issue instead of silently swapped.
+    const declaredIssue = declaredUrlIssue(block.data["URL"], options.calendarUrl)
+    if (declaredIssue !== undefined) issues.push(declaredIssue)
     events.push({
       summary: block.data["SUMMARY"] ?? "Untitled",
       description: block.data["DESCRIPTION"],

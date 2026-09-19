@@ -729,3 +729,80 @@ Deno.test("summarized todos carry the status label, the ETag and the related edg
   assertEquals(result.output.todos[0]!.relatedTo, [{ uid: "p1", reltype: RelatedType.PARENT }])
   assertEquals(result.output.byStatus, { "IN-PROCESS": 1 })
 })
+
+/*
+ * ---------------------------------------------------------------------------
+ * Round-3 credential tests (BLOCKER D1).
+ *
+ * The defect was structural: the credential was attached by the layer that built
+ * the headers, which never saw the destination, so a URL chosen by a *response*
+ * body reached the wire authenticated. These two tests are the reviewer's
+ * reproduction, at the level of the engine a caller actually uses.
+ * ---------------------------------------------------------------------------
+ */
+
+/** Every request the transport saw, as `METHOD origin auth=PRESENT|absent`. */
+function credentialTrace(transport: StubTransport): string[] {
+  return transport.requests.map((request) =>
+    `${request.method} ${new URL(request.url).origin} auth=${
+      request.headers["authorization"] === undefined ? "absent" : "PRESENT"
+    }`
+  )
+}
+
+Deno.test("queryTodos never REPORTs to a collection the server named on another origin", async () => {
+  // The calendars PROPFIND names a collection on `attacker.example.net`; the
+  // discovery answer is the only URL involved and no caller input mentions it.
+  // Before the fix the trace's third line was
+  // `REPORT https://attacker.example.net auth=PRESENT` — the Basic credential,
+  // from the library's own discovery output.
+  const { engine: query, transport } = engine([
+    response(207, homeSetBody()),
+    response(
+      207,
+      calendarsBody([
+        { href: "https://attacker.example.net/evil/", name: "Evil", components: ["VTODO"] },
+        { href: "/user/calendars/tasks/", name: "Tasks", components: ["VTODO"] },
+      ]),
+    ),
+    response(
+      207,
+      reportBody([{ href: "/user/calendars/tasks/a.ics", etag: '"e1"', ical: todoIcal("a") }]),
+    ),
+  ])
+  const result = await query.queryTodos()
+  assert(result.success)
+  assertEquals(result.output.todos.length, 1)
+  assertEquals(transport.requests.some((request) => request.url.includes("attacker")), false)
+  assertEquals(credentialTrace(transport), [
+    "PROPFIND https://caldav.example.com auth=PRESENT",
+    "PROPFIND https://caldav.example.com auth=PRESENT",
+    "REPORT https://caldav.example.com auth=PRESENT",
+  ])
+})
+
+Deno.test("updateTodo stays on the configured origin when the document declares another one", async () => {
+  // BLOCKER D1, third path. `URL:` inside `calendar-data` is server-named, and it
+  // used to become `Todo.url` — which the documented `updateTodo(todo.url, ...)`
+  // flow then GETs and PUTs to, with the credential attached to both.
+  const declared = todoIcal("a", ["URL:https://attacker.example.net/evil/a.ics"])
+  // Two GETs: the explicit one, then the one `updateTodo` makes for itself.
+  const { engine: query, transport } = engine([
+    response(200, declared, { headers: { ETag: '"e1"' } }),
+    response(200, declared, { headers: { ETag: '"e1"' } }),
+    response(204, "", { headers: { ETag: '"e2"' } }),
+  ])
+  const fetched = await query.getTodo(`${TASKS_URL}a.ics`)
+  assert(fetched.success)
+  assertEquals(fetched.output!.url, `${TASKS_URL}a.ics`)
+
+  const updated = await query.updateTodo(fetched.output!.url, '"e1"', { summary: "Renamed" })
+  assert(updated.success)
+  assertEquals(updated.output.url, `${TASKS_URL}a.ics`)
+  assertEquals(transport.requests.some((request) => request.url.includes("attacker")), false)
+  assertEquals(credentialTrace(transport), [
+    "GET https://caldav.example.com auth=PRESENT",
+    "GET https://caldav.example.com auth=PRESENT",
+    "PUT https://caldav.example.com auth=PRESENT",
+  ])
+})

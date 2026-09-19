@@ -5,7 +5,12 @@
 // request (method, `Depth`, `If-Match`, body substring) rather than on a count.
 
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert"
-import { CalDavClient, crossOriginHomeSetWarning, httpError } from "./client.ts"
+import {
+  CalDavClient,
+  crossOriginCalendarWarning,
+  crossOriginHomeSetWarning,
+  httpError,
+} from "./client.ts"
 import { proppatchCalendar } from "./xml.ts"
 import { CalDavErrorCode, ComponentType } from "./types.ts"
 import {
@@ -655,3 +660,184 @@ Deno.test("updateCalendar rejects an empty PROPPATCH before touching the transpo
   )
   assertEquals(transport.requests.length, 0)
 })
+
+/*
+ * ---------------------------------------------------------------------------
+ * Round-3 credential tests (BLOCKERS D1 and D2).
+ *
+ * The unit of evidence here is the request the transport actually saw, with the
+ * destination origin and whether `Authorization` was on it: the defect was never
+ * "the client decided wrong", it was "the header went to another origin", so the
+ * assertion is on the trace, not on the client's intent.
+ * ---------------------------------------------------------------------------
+ */
+
+/**
+ * Every request the transport saw, as `METHOD origin auth=PRESENT|absent`.
+ *
+ * The origin is composed as `scheme//host` rather than read from `URL.origin`,
+ * which is the string `"null"` for a non-`http(s)` URL — a trace that says
+ * `null` for both sides of a `file://` comparison is exactly the ambiguity this
+ * round is about.
+ */
+function credentialTrace(transport: StubTransport): string[] {
+  return transport.requests.map((request) => {
+    const url = new URL(request.url)
+    return `${request.method} ${url.protocol}//${url.host} auth=${
+      request.headers["authorization"] === undefined ? "absent" : "PRESENT"
+    }`
+  })
+}
+
+/** A client over a scripted transport, with a base URL the caller chose. */
+function clientAt(baseUrl: string, transport: StubTransport): CalDavClient {
+  return new CalDavClient({
+    baseUrl,
+    username: FAKE_USERNAME,
+    password: FAKE_PASSWORD,
+    fetch: transport.fetch,
+  })
+}
+
+Deno.test("every credentialed request is gated on the destination origin", async () => {
+  // BLOCKER D1. This is the gate itself, exercised on all five methods that can
+  // carry a credential, against a URL the caller passed. The gate is what the
+  // fix is: without it each of these lines reads `auth=PRESENT` and the Basic
+  // credential is handed to `attacker.example.net`.
+  const foreign = "https://attacker.example.net/evil/"
+  const transport = stubTransport([
+    response(207, EMPTY_MULTISTATUS),
+    response(207, EMPTY_MULTISTATUS),
+    response(200, "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"),
+    response(204, ""),
+    response(204, ""),
+  ])
+  const subject = clientAt(`${FAKE_SERVER}/`, transport)
+  await subject.queryTodos(foreign)
+  await subject.queryEvents(foreign)
+  await subject.getIcalResource(`${foreign}a.ics`)
+  await subject.putIcal(`${foreign}a.ics`, "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n")
+  await subject.deleteResource(`${foreign}a.ics`)
+
+  assertEquals(credentialTrace(transport), [
+    "REPORT https://attacker.example.net auth=absent",
+    "REPORT https://attacker.example.net auth=absent",
+    "GET https://attacker.example.net auth=absent",
+    "PUT https://attacker.example.net auth=absent",
+    "DELETE https://attacker.example.net auth=absent",
+  ])
+  // and the request still went out: a caller-supplied URL is the caller's own
+  // input, so it is not refused — it is simply not given a credential.
+  assertEquals(transport.requests.length, 5)
+})
+
+Deno.test("a same-origin REPORT still carries the credential", async () => {
+  // The positive control for the gate: same origin, same header as before.
+  const transport = stubTransport([response(207, EMPTY_MULTISTATUS)])
+  const subject = clientAt(`${FAKE_SERVER}/`, transport)
+  await subject.queryTodos("https://caldav.example.com/user/calendars/tasks/")
+  assertEquals(credentialTrace(transport), ["REPORT https://caldav.example.com auth=PRESENT"])
+  assertEquals(
+    transport.requests[0]!.headers["authorization"],
+    `Basic ${btoa(`${FAKE_USERNAME}:${FAKE_PASSWORD}`)}`,
+  )
+})
+
+Deno.test("listCalendars skips a collection the response names on another origin", async () => {
+  // BLOCKER D1, the path the call-site check could not see: the href is chosen by
+  // the calendars PROPFIND *response*, and `QueryEngine` REPORTs to whatever
+  // `calendars` carries. The collection is skipped with a warning, so no REPORT
+  // is ever built for it.
+  const transport = stubTransport([
+    response(207, HOME_SET_BODY),
+    response(
+      207,
+      `<?xml version="1.0" encoding="utf-8" ?><D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">` +
+        `<D:response><D:href>https://attacker.example.net/evil/</D:href><D:propstat><D:prop>` +
+        `<D:displayname>Evil</D:displayname>` +
+        `<D:resourcetype><D:collection/><C:calendar/></D:resourcetype>` +
+        `<C:supported-calendar-component-set><C:comp name="VTODO"/></C:supported-calendar-component-set>` +
+        `</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
+        `<D:response><D:href>/user/calendars/tasks/</D:href><D:propstat><D:prop>` +
+        `<D:displayname>Tasks</D:displayname>` +
+        `<D:resourcetype><D:collection/><C:calendar/></D:resourcetype>` +
+        `<C:supported-calendar-component-set><C:comp name="VTODO"/></C:supported-calendar-component-set>` +
+        `</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>`,
+    ),
+  ])
+  const result = await client(transport).listCalendars()
+  assert(result.success)
+  // The same-origin collection in the same body is still listed: the rule drops
+  // one entry, not the answer.
+  assertEquals(result.output.calendars.map((calendar) => calendar.url), [
+    "https://caldav.example.com/user/calendars/tasks/",
+  ])
+  assertEquals(result.output.warnings.length, 1)
+  assertStringIncludes(result.output.warnings[0]!, "is not on the configured origin")
+  assertStringIncludes(result.output.warnings[0]!, "https://attacker.example.net/evil/")
+  assertEquals(transport.requests.some((request) => request.url.includes("attacker")), false)
+})
+
+Deno.test("crossOriginCalendarWarning states the rule and stays silent on a match", () => {
+  assertEquals(
+    crossOriginCalendarWarning("https://a.example/cal/", "https://a.example/"),
+    undefined,
+  )
+  assertEquals(
+    crossOriginCalendarWarning("https://a.example:8443/cal/", "https://a.example"),
+    "calendar https://a.example:8443/cal/ is not on the configured origin https://a.example; skipping it, because credentials are sent only to the origin the caller configured",
+  )
+  // Fail-closed pairs: nothing here has an `http(s)` origin to compare.
+  assertEquals(
+    typeof crossOriginCalendarWarning("file:///etc/passwd", "file:///tmp/x/"),
+    "string",
+  )
+  assertEquals(
+    typeof crossOriginCalendarWarning("https://a.example/cal/", "mailto:user@example.com"),
+    "string",
+  )
+})
+
+Deno.test("crossOriginHomeSetWarning refuses a pair with no comparable origin", () => {
+  // BLOCKER D2.1. `originOf` used to compose `scheme://host` for *any* parseable
+  // URL, so `file:///etc/passwd` and `file:///tmp/x/` compared equal and the
+  // server-named URL was accepted with the credential attached.
+  assertStringIncludes(
+    crossOriginHomeSetWarning("file:///etc/passwd", "file:///tmp/x/")!,
+    "is not on the configured origin",
+  )
+  assertStringIncludes(
+    crossOriginHomeSetWarning("https://a.example/", "mailto:user@example.com")!,
+    "is not on the configured origin",
+  )
+  assertStringIncludes(
+    crossOriginHomeSetWarning("ftp://a.example/", "ftp://a.example/")!,
+    "is not on the configured origin",
+  )
+  // A trailing-dot host is a different string from its dotted-twin, and the safe
+  // direction is to refuse rather than to fold.
+  assertStringIncludes(
+    crossOriginHomeSetWarning("https://caldav.example.com./", "https://caldav.example.com")!,
+    "is not on the configured origin",
+  )
+})
+
+Deno.test("discoverCalendarHomeSet refuses a server-named file URL and sends no credential", async () => {
+  // BLOCKER D2.1, end to end: a `file://` base URL has no comparable origin, so
+  // (a) no request may carry the credential, and (b) the server-named path may
+  // not become the discovery result.
+  const transport = stubTransport([
+    response(207, homeSetBody("file:///etc/passwd")),
+    response(207, CALENDARS_BODY),
+  ])
+  const result = await clientAt("file:///tmp/x/", transport).discoverCalendarHomeSet()
+  assert(result.success)
+  assertEquals(result.output.url, "file:///tmp/x/user%40example.com/")
+  assertEquals(result.output.warnings.length, 1)
+  assertStringIncludes(result.output.warnings[0]!, "file:///etc/passwd")
+  assertEquals(
+    credentialTrace(transport),
+    ["PROPFIND file:// auth=absent"],
+  )
+})
+
