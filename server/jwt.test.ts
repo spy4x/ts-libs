@@ -148,6 +148,82 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
 }
 
+// ---------------------------------------------------------------------------------------------
+// Predicates behind the source-reading tests.
+//
+// Each one is a named function over an arbitrary string rather than an inline literal, for one
+// reason: an inline regex or `includes` cannot be probed. A scanner that is unreachable-true —
+// a regex that can never match, or a constant that is never the flagged value — leaves its test
+// green whatever production does, and reads as coverage. Every predicate below is therefore fed,
+// in `describe("scanner self-test")`, both the exact input it claims to detect and an input it must
+// not flag, so a scanner that stops discriminating fails its own self-test.
+// ---------------------------------------------------------------------------------------------
+
+/** The accessor names that must never appear in this module's executable source. */
+const ENV_ACCESSORS: readonly string[] = ["Deno.env", "Deno.env.get"]
+
+/** True when `code` reads the environment, i.e. could take a signing secret from it. */
+function readsEnvironment(code: string): boolean {
+  return ENV_ACCESSORS.some((accessor) => code.includes(accessor))
+}
+
+/** The `verify` call on the primitive, arguments pinned: a bare `constantTimeEquals(` is not enough. */
+const CALL_SITE_PATTERN = /!await constantTimeEquals\(\s*receivedSignature\s*,\s*expectedTag\s*\)/
+
+/** The digests being compared with `===`/`!==`, i.e. by value instead of by the primitive. */
+const COMPARE_BY_VALUE_PATTERN = /(receivedSignature|expectedTag)[^\n]*(===|!==)/
+
+/** True when the body calls the primitive on the received signature and the recomputed tag. */
+function callsPrimitiveOnTag(code: string): boolean {
+  return CALL_SITE_PATTERN.test(code)
+}
+
+/** True when the body compares the tag by value with `===`/`!==`. */
+function comparesByValue(code: string): boolean {
+  return COMPARE_BY_VALUE_PATTERN.test(code)
+}
+
+/** The module import must bind the bare name `timingSafeEqual`, so the call below cannot be an alias. */
+const PRIMITIVE_IMPORT_PATTERN =
+  /import \{[^}]*\btimingSafeEqual\b[^}]*\} from "@std\/crypto\/timing-safe-equal"/
+
+/**
+ * The call inside the primitive, bound to the imported name.
+ *
+ * `\btimingSafeEqual\(` matches a bare identifier followed by `(`, so an aliased call (`tse(...)`) is
+ * not a match — the import assertion alone would accept an alias, and with it a different function.
+ */
+const PRIMITIVE_CALL_PATTERN = /return \btimingSafeEqual\(/
+
+/** Manual per-byte work: reading bytes by hand, or accumulating a difference with XOR/OR. */
+const MANUAL_BYTE_MARKERS: readonly string[] = ["charCodeAt", "^=", "|="]
+/** True when the primitive reads or folds bytes itself instead of delegating the compare. */
+function hasManualByteLoop(code: string): boolean {
+  return MANUAL_BYTE_MARKERS.some((marker) => code.includes(marker))
+}
+
+/**
+ * The strict comparisons in a body, counting only operators *outside* string literals.
+ *
+ * String literals are excluded so a message such as `` `expected ${code} === ${actual}` `` is not
+ * mistaken for a comparison. `(?<![=!])`/`(?!=)` keep `===`/`!==` whole, so neither is counted twice.
+ */
+function strictComparisons(code: string): number {
+  const withoutStrings = code.replace(
+    /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g,
+    "``",
+  )
+  return withoutStrings.match(/(?<![=!])(?:===|!==)(?!=)/g)?.length ?? 0
+}
+
+/** The one strict comparison this primitive is allowed: the early return on unequal length. */
+const LENGTH_GUARD_PATTERN = /if \(a\.length !== b\.length\) return false/
+
+/** True when the body performs exactly the one strict comparison this primitive is allowed. */
+function hasOnlyTheLengthGuard(code: string): boolean {
+  return strictComparisons(code) === 1 && LENGTH_GUARD_PATTERN.test(code)
+}
+
 describe("assertJwtSecret", () => {
   it("rejects a non-string or blank secret as missing", () => {
     for (const candidate of [undefined, null, "", "   ", "\t\n", 42, {}]) {
@@ -246,14 +322,10 @@ describe("JwtSigner construction", () => {
     // Only executable source is inspected: the JSDoc *tells a caller* to pass an env value in, which
     // is the point of the fix, and a comment cannot read anything.
     const code = stripComments(source)
-    // Split so this assertion does not match its own literal.
-    const globalObject = "Deno"
-    for (const member of [".env", "env.get"]) {
-      assertFalse(
-        code.includes(`${globalObject}${member}`),
-        `jwt.ts reads ${globalObject}${member}`,
-      )
-    }
+    assertFalse(
+      readsEnvironment(code),
+      "jwt.ts reads Deno.env and could take a signing secret from it",
+    )
   })
 })
 
@@ -714,26 +786,25 @@ describe("constantTimeEquals", () => {
     // looping over the bytes does not satisfy it either.
     const body = stripComments(await sliceBody("export async function constantTimeEquals("))
 
-    assertMatch(body, /return timingSafeEqual\(/)
+    assertMatch(body, PRIMITIVE_CALL_PATTERN)
 
-    // The primitive must be the imported one, not something shadowed locally.
-    const module = await Deno.readTextFile(new URL("./jwt.ts", import.meta.url))
-    assertMatch(
-      stripComments(module),
-      /import \{[^}]*\btimingSafeEqual\b[^}]*\} from "@std\/crypto\/timing-safe-equal"/,
+    // The primitive must be the imported one, bound to the bare name: `import { timingSafeEqual as
+    // tse }` plus `tse(...)` would satisfy the import assertion alone while calling something else
+    // (see "the primitive is called by its imported name" in the scanner self-test).
+    const module = stripComments(await Deno.readTextFile(new URL("./jwt.ts", import.meta.url)))
+    assertMatch(module, PRIMITIVE_IMPORT_PATTERN)
+
+    assertFalse(hasManualByteLoop(body), `the primitive does byte work itself: ${body}`)
+
+    // Exactly one strict comparison is expected — the length guard — so anything beyond it is a
+    // second, hand-rolled comparison of the digest bytes. Asserted as a count rather than a blanket
+    // ban, because the early return on unequal length is allowed and required.
+    assert(
+      hasOnlyTheLengthGuard(body),
+      `expected the length guard to be the only strict comparison, found ${
+        strictComparisons(body)
+      }`,
     )
-
-    // No manual byte work: no per-byte read, no accumulation with XOR/OR.
-    assertFalse(body.includes("charCodeAt"), "the primitive reads bytes by hand")
-    assertFalse(body.includes("^="), "the primitive accumulates differences with ^=")
-    assertFalse(body.includes("|="), "the primitive accumulates differences with |=")
-
-    // Exactly one comparison operator per line is expected — the length guard — so anything beyond
-    // it is a second, hand-rolled comparison of the digest bytes. Asserted precisely rather than as
-    // a blanket ban, because the early return on unequal length is allowed and required.
-    const comparisons = body.match(/(?<![=!])(?:===|!==)(?!=)/g) ?? []
-    assertEquals(comparisons.length, 1, `unexpected comparison operators: ${comparisons.join(" ")}`)
-    assertMatch(body, /if \(a\.length !== b\.length\) return false/)
   })
 })
 
@@ -743,16 +814,131 @@ describe("verify call site", () => {
     // equality *and adds a comment mentioning* `constantTimeEquals(` satisfied the previous version
     // of this test (11/11 green with production no longer using the primitive).
     const body = stripComments(await sliceBody("async verify("))
-    assertMatch(
-      body,
-      /!await constantTimeEquals\(\s*receivedSignature\s*,\s*expectedTag\s*\)/,
+    assert(
+      callsPrimitiveOnTag(body),
+      "verify does not call constantTimeEquals on the tag arguments",
     )
     // Belt and braces: the tag must not be compared by value with either operator.
-    for (const operator of ["===", "!=="]) {
-      assertFalse(
-        new RegExp(`(receivedSignature|expectedTag)[^\\n]*${operator}`).test(body),
-        `verify compares the tag with ${operator}`,
-      )
+    assertFalse(
+      comparesByValue(body),
+      "verify compares the tag by value instead of by the primitive",
+    )
+  })
+})
+
+describe("scanner self-test", () => {
+  it("flags a source that reads the environment, and not one that only names it", () => {
+    // Synthetic, and built by concatenation so this block contains no literal accessor of its own.
+    const reads = "const secret = " + "Deno" + ".env" + '.get("JWT_SECRET") ?? ""'
+    const inert = "const secret = " + "Deno" + "_" + ".env" + '.get("JWT_SECRET") ?? ""'
+    assertEquals(readsEnvironment(reads), true)
+    assertEquals(readsEnvironment(inert), false)
+    // The production source must be the `false` case.
+    assertEquals(readsEnvironment('const secret = "test-secret-not-real-0123456789abcdef"'), false)
+  })
+
+  it("matches the production call site, and not a string comparison wearing a comment", () => {
+    const production = "if (!await constantTimeEquals(receivedSignature, expectedTag)) {"
+    assertEquals(callsPrimitiveOnTag(production), true)
+    assertEquals(comparesByValue(production), false)
+
+    const byValue = "if (encodeBase64Url(receivedSignature) !== encodeBase64Url(expectedTag)) {"
+    assertEquals(callsPrimitiveOnTag(byValue), false)
+    assertEquals(comparesByValue(byValue), true)
+
+    // The decoy that defeated the earlier revision: the string comparison, plus a comment quoting
+    // the call. Comment stripping happens before this predicate, so the quote cannot rescue it.
+    const decoy = stripComments(
+      [
+        "// still goes through !await constantTimeEquals(receivedSignature, expectedTag) — honest",
+        byValue,
+      ].join("\n"),
+    )
+    assertEquals(callsPrimitiveOnTag(decoy), false)
+    assertEquals(comparesByValue(decoy), true)
+  })
+
+  it("recognises the primitive, its import, a manual byte loop and the comparison count", () => {
+    const delegated = [
+      "return timingSafeEqual(new Uint8Array(digestA), new Uint8Array(digestB))",
+    ].join("\n")
+    const aliased = "return tse(new Uint8Array(digestA), new Uint8Array(digestB))"
+    const manual = [
+      "let diff = 0",
+      "for (let i = 0; i < left.length; i++) diff |= left[i] ^ right[i]",
+      "return diff === 0",
+    ].join("\n")
+
+    // The call, and the import that binds the bare name it must be called by.
+    assertEquals(PRIMITIVE_CALL_PATTERN.test(delegated), true)
+    assertEquals(PRIMITIVE_CALL_PATTERN.test(aliased), false)
+    assertEquals(hasManualByteLoop(delegated), false)
+    assertEquals(hasManualByteLoop(aliased), false)
+    assertEquals(
+      PRIMITIVE_IMPORT_PATTERN.test(
+        'import { timingSafeEqual } from "@std/crypto/timing-safe-equal"',
+      ),
+      true,
+    )
+    // An aliased import still binds the module, so the import pattern alone is not the guard; the
+    // call pattern above is what rejects `tse(...)`.
+    assertEquals(
+      PRIMITIVE_IMPORT_PATTERN.test(
+        'import { timingSafeEqual as tse } from "@std/crypto/timing-safe-equal"',
+      ),
+      true,
+    )
+
+    // A hand-rolled loop, flagged by each marker it can plausibly use.
+    assertEquals(hasManualByteLoop(manual), true)
+    for (const body of markerVariants()) {
+      assertEquals(hasManualByteLoop(body), true, body)
+    }
+
+    // The count, in both directions: exactly the length guard is 1, one extra `===` is 2, and a
+    // `===` inside a *string literal* is not a comparison at all.
+    const guardOnly = "if (a.length !== b.length) return false"
+    assertEquals(strictComparisons(guardOnly), 1)
+    assertEquals(hasOnlyTheLengthGuard(guardOnly), true)
+    const withExtra = [guardOnly, "if (a.length === 0) return false"].join("\n")
+    assertEquals(strictComparisons(withExtra), 2)
+    assertEquals(hasOnlyTheLengthGuard(withExtra), false)
+    // The count alone is not the guard: a body whose single strict comparison is not the length
+    // check at all must still fail, otherwise the predicate would only be counting operators.
+    assertEquals(strictComparisons("if (a.length === 0) return false"), 1)
+    assertEquals(hasOnlyTheLengthGuard("if (a.length === 0) return false"), false)
+    assertEquals(hasOnlyTheLengthGuard(`${guardOnly}\nreturn timingSafeEqual(left, right)`), true)
+    assertEquals(strictComparisons("throw new Error(`expected ${a} !== ${b}`)"), 0)
+
+    // Hand-rolled comparisons the marker list does not spell. Both are flagged only by the count,
+    // which is exactly why the production test asserts the count and not only the markers — stated
+    // here as `false` for the marker predicate so the coverage is not implied to be blanket.
+    for (const body of countVariants()) {
+      assertEquals(hasManualByteLoop(body), false, body)
+      assertEquals(hasOnlyTheLengthGuard(body), false, body)
     }
   })
 })
+
+/** Bodies carrying a manual byte compare spelled with one of `MANUAL_BYTE_MARKERS`. */
+function markerVariants(): string[] {
+  return [
+    "for (const [i, byte] of left.entries()) diff |= byte ^ right[i]",
+    "if (left.charCodeAt(0) !== right.charCodeAt(0)) return false",
+  ]
+}
+
+/**
+ * Hand-rolled comparisons that spell no marker, so only the strict-comparison count flags them.
+ *
+ * Kept separate from {@link markerVariants} so the self-test states precisely which predicate
+ * catches which body instead of implying the marker list covers every hand-rolled compare.
+ */
+function countVariants(): string[] {
+  return [
+    "const a0 = left[0]; const b0 = right[0]; return a0 === b0",
+    "return left.every((byte, i) => byte === right[i])",
+    "return String.fromCharCode(left[0]) === String.fromCharCode(right[0])",
+    "return left.join() === right.join()",
+  ]
+}

@@ -169,6 +169,71 @@ function strictComparisons(code: string): string[] {
     .filter((line) => line.includes("===") || line.includes("!=="))
 }
 
+/**
+ * The strict comparisons `constantTimeEquals` is allowed to contain: input type
+ * checks, input emptiness checks, the decoded-digest length check, and the `null`
+ * results of the hex decode. Everything else decides on digest content and is a
+ * leak.
+ */
+const ALLOWED_STRICT_COMPARISON_COUNT = 4
+
+/** Every strict comparison a compliant body may contain. */
+const ALLOWED_STRICT_COMPARISONS = [
+  'typeof a !== "string"',
+  'typeof b !== "string"',
+  'a === ""',
+  'b === ""',
+  "left === null",
+  "right === null",
+  "left.length !== right.length",
+]
+
+/**
+ * Checks a `constantTimeEquals` body against the delegating-comparator contract.
+ *
+ * Extracted from the source-reading test so the matcher itself is testable: a
+ * matcher that cannot be shown to return `false` for a bad body is worse than no
+ * matcher, because it reads as coverage.
+ *
+ * Known blind spot, deliberately not claimed as coverage: this is a text matcher,
+ * so a hand-rolled comparison that uses neither `===` nor a manual byte loop —
+ * `Object.is(leftDigest[i], rightDigest[i])` in an early-return loop, which was
+ * reproduced at 1 iteration on a mismatch vs 32 on a match — passes it. Only the
+ * import plus a green constant-time test on the primitive's output closes that;
+ * the text assertion is a shape check, not a proof of constant time.
+ *
+ * @param body The function body text, comment-free.
+ * @returns Every failure found, empty when the body satisfies the contract.
+ */
+function findDelegationViolations(body: string): string[] {
+  const violations: string[] = []
+  if (!body.includes("timingSafeEqual(")) {
+    violations.push("does not call timingSafeEqual")
+  }
+  for (const forbidden of ["charCodeAt", "codePointAt", "^=", "|="]) {
+    if (body.includes(forbidden)) violations.push(`hand-rolled comparison: ${forbidden}`)
+  }
+  const comparisons = strictComparisons(body)
+  if (comparisons.length !== ALLOWED_STRICT_COMPARISON_COUNT) {
+    violations.push(
+      `strict comparison count ${comparisons.length} is not ${ALLOWED_STRICT_COMPARISON_COUNT}`,
+    )
+  }
+  for (const comparison of comparisons) {
+    if (!ALLOWED_STRICT_COMPARISONS.some((permitted) => comparison.includes(permitted))) {
+      violations.push(`unallowed strict comparison: ${comparison}`)
+    }
+  }
+  for (const digest of ["leftDigest", "rightDigest"]) {
+    for (const operator of ["===", "!==", "==", "!="]) {
+      if (body.includes(`${digest} ${operator}`) || body.includes(`${operator} ${digest}`)) {
+        violations.push(`compares ${digest} with ${operator}`)
+      }
+    }
+  }
+  return violations
+}
+
 Deno.test("monotonicUlid — id is 26 Crockford base32 characters", () => {
   const id = fixedFactory().monotonicUlid()
   assertEquals(id.length, ULID_LENGTH)
@@ -463,44 +528,35 @@ Deno.test("constantTimeEquals — delegates the comparison to timingSafeEqual an
   const module = await readModuleSourceWithoutComments()
   const body = sliceFunctionBody(module, "export async function constantTimeEquals(")
 
-  // The one and only comparison primitive.
-  assert(
-    body.includes("timingSafeEqual("),
-    "constantTimeEquals must call timingSafeEqual",
+  // The one and only comparison primitive. The matcher's own true/false behaviour
+  // is pinned by "scanner self-test — the delegation matcher" below, so a matcher
+  // that could never fail cannot pass silently.
+  assertEquals(
+    findDelegationViolations(body),
+    [],
+    `constantTimeEquals violates the delegation contract: ${
+      findDelegationViolations(body).join("; ")
+    }`,
   )
   assert(
     module.includes('import { timingSafeEqual } from "@std/crypto/timing-safe-equal"'),
     "timingSafeEqual must be imported from @std/crypto/timing-safe-equal",
   )
 
-  // No manual comparison anywhere in the primitive. `===`/`!==` are covered by
-  // the allowance list below instead, because four of them are legitimate.
-  for (const forbidden of ["charCodeAt", "codePointAt", "^=", "|="]) {
-    assertFalse(
-      body.includes(forbidden),
-      `constantTimeEquals must not compare bytes by hand: found ${forbidden}`,
-    )
-  }
-
   // `===` and `!==` are allowed only where the decision cannot depend on digest
   // content: the input type checks, the input emptiness checks, the decoded-digest
   // length check, and the `null` results of the hex decode. Every other strict
   // comparison — in particular any comparison of `leftDigest`/`rightDigest`, the
   // values the constant-time call is supposed to own — is a leak.
-  const allowed = [
-    'typeof a !== "string"',
-    'typeof b !== "string"',
-    'a === ""',
-    'b === ""',
-    "left === null",
-    "right === null",
-    "left.length !== right.length",
-  ]
   const comparisons = strictComparisons(body)
-  assertEquals(comparisons.length, 4, `unexpected strict comparisons: ${comparisons.join(" | ")}`)
+  assertEquals(
+    comparisons.length,
+    ALLOWED_STRICT_COMPARISON_COUNT,
+    `unexpected strict comparisons: ${comparisons.join(" | ")}`,
+  )
   for (const comparison of comparisons) {
     assert(
-      allowed.some((permitted) => comparison.includes(permitted)),
+      ALLOWED_STRICT_COMPARISONS.some((permitted) => comparison.includes(permitted)),
       `constantTimeEquals has a strict comparison that is not a type, emptiness, length or decode check: ${comparison}`,
     )
   }
@@ -512,6 +568,306 @@ Deno.test("constantTimeEquals — delegates the comparison to timingSafeEqual an
       )
     }
   }
+})
+
+/** A synthetic body that satisfies the delegation contract, for the matcher self-test. */
+function compliantConstantTimeBody(): string {
+  return [
+    "{",
+    '  if (typeof a !== "string" || typeof b !== "string") return false',
+    '  if (a === "" || b === "") return false',
+    "  const left = decodeDigestHex(a)",
+    "  const right = decodeDigestHex(b)",
+    "  if (left === null || right === null) return false",
+    "  if (left.length !== right.length) return false",
+    "  return timingSafeEqual(leftDigest, rightDigest)",
+    "}",
+  ].join("\n")
+}
+
+// ---------------------------------------------------------------------------
+// Scanner self-tests.
+//
+// Every source-reading assertion in this file is only as good as its scanner, and
+// a scanner that is unreachable-true (or unreachable-false) reads as coverage while
+// providing none — a sibling guard shipped a probe that answered `false` for `===`,
+// `==`, `!==` and `<=`. Each helper below is fed the exact input it claims to
+// detect, plus a negative control, and the observed result is asserted. If one of
+// these goes red, the source-reading assertions above it are not evidence.
+// ---------------------------------------------------------------------------
+
+Deno.test("scanner self-test — stripComments drops comments carrying the primitive and preserves literals", () => {
+  // A block comment or line comment mentioning the call must not keep a
+  // `timingSafeEqual(` assertion green.
+  const block = stripComments("/* call timingSafeEqual(x, y) here */\nreturn other(z)")
+  assertFalse(block.includes("timingSafeEqual("), `block comment survived: ${block}`)
+  assertEquals(block.trim(), "return other(z)")
+
+  const line = stripComments("return other(z) // timingSafeEqual(x, y)")
+  assertFalse(line.includes("timingSafeEqual("), `line comment survived: ${line}`)
+  assertEquals(line.trim(), "return other(z)")
+
+  // Literals are preserved verbatim, which the docblock claims and every
+  // downstream assertion depends on.
+  for (const literal of ['"timingSafeEqual("', "'timingSafeEqual('", "`timingSafeEqual(`"]) {
+    const preserved = stripComments(`return ${literal}`)
+    assert(preserved.includes("timingSafeEqual("), `literal was stripped: ${preserved}`)
+    assertEquals(preserved.trim(), `return ${literal}`)
+  }
+
+  // Documented corner of "literals are preserved": because a literal body is copied
+  // verbatim, `//` inside it is NOT a comment start, so `"a//timingSafeEqual("`
+  // survives intact. Observed, not assumed — the first version of this assertion
+  // guessed the opposite and was wrong.
+  const withSlashes = stripComments('const marker = "a//timingSafeEqual(" + rest')
+  assert(
+    withSlashes.includes('"a//timingSafeEqual("'),
+    `paired quotes should keep the literal intact: ${withSlashes}`,
+  )
+  assertEquals(withSlashes.trim(), 'const marker = "a//timingSafeEqual(" + rest')
+  assertEquals(
+    stripComments('const marker = "// still a literal"'),
+    'const marker = "// still a literal"',
+  )
+
+  // Negative control: clean input round-trips and keeps the call.
+  const clean = "const value = timingSafeEqual(left, right)"
+  assertEquals(stripComments(clean), clean)
+  assert(stripComments(clean).includes("timingSafeEqual("))
+})
+
+Deno.test("scanner self-test — strictComparisons counts real === and !== lines and ignores comments", () => {
+  // Positive controls: the operators it exists to catch.
+  assertEquals(strictComparisons("if (a === b) return true").length, 1)
+  assertEquals(strictComparisons("if (a !== b) return true").length, 1)
+  assertEquals(strictComparisons("if (a === b) return true\nif (c !== d) return true").length, 2)
+
+  // Documented exclusion: loose `==`/`!=` are not `===`/`!==` hits. They are still
+  // faults in a digest compare; catching them is the matcher's digest-operand check.
+  assertEquals(strictComparisons("if (a == b) return true").length, 0)
+  assertEquals(strictComparisons("if (a != b) return true").length, 0)
+
+  // A comparison inside a comment must not count once comments are stripped.
+  const line = stripComments("// if (a === b) return true\nreturn a === b")
+  assertEquals(strictComparisons(line).length, 1)
+  assertEquals(strictComparisons(line)[0], "return a === b")
+  assertEquals(strictComparisons(stripComments("/* if (a === b) return true */")).length, 0)
+
+  // Inside a string literal this scanner reports a hit, because it has no literal
+  // context. Stated explicitly and deliberately: it errs toward flagging, so it can
+  // never be the thing that lets a real comparison through.
+  const inLiteral = stripComments('const marker = "a !== b"')
+  assertEquals(strictComparisons(inLiteral).length, 1)
+  assertEquals(strictComparisons(inLiteral)[0], 'const marker = "a !== b"')
+
+  // Negative control.
+  assertEquals(strictComparisons("const value = timingSafeEqual(left, right)").length, 0)
+})
+
+Deno.test("scanner self-test — sliceFunctionBody picks the asked-for function and reports a missing one", () => {
+  const source = [
+    "export function constantTimeEqualsHelper() {",
+    '  return "helper body"',
+    "}",
+    "",
+    "export function constantTimeEquals(a: string, b: string): boolean {",
+    "  return timingSafeEqual(a, b)",
+    "}",
+  ].join("\n")
+
+  // Two similarly named functions, the helper first and a prefix of the real name:
+  // a first-match scanner returns the wrong body.
+  const wanted = sliceFunctionBody(source, "export function constantTimeEquals(")
+  assert(wanted.includes("timingSafeEqual(a, b)"), `wrong body sliced: ${wanted}`)
+  assertFalse(wanted.includes("helper body"), `sliced the prefix-matching helper: ${wanted}`)
+
+  const helper = sliceFunctionBody(source, "export function constantTimeEqualsHelper(")
+  assert(helper.includes("helper body"), `wrong body sliced: ${helper}`)
+  assertFalse(helper.includes("timingSafeEqual("), `helper slice leaked its neighbour: ${helper}`)
+
+  // Nested braces stay inside the slice.
+  const nested = sliceFunctionBody(
+    "export function outer() {\n  if (x) { return { a: 1 } }\n  return y\n}\nconst after = 1",
+    "export function outer(",
+  )
+  assert(nested.includes("return y"), `nested slice truncated: ${nested}`)
+  assertFalse(nested.includes("const after"), `nested slice overshot: ${nested}`)
+
+  // A missing declaration, a declaration with no body, and unbalanced braces are
+  // each reported with a message, never a silent empty string.
+  assertThrows(
+    () => sliceFunctionBody(source, "export function absent("),
+    Error,
+    "export function absent( is no longer declared",
+  )
+  assertThrows(
+    () => sliceFunctionBody("declare function f(x: string): void", "declare function f("),
+    Error,
+    "declare function f( has no body",
+  )
+  assertThrows(
+    () => sliceFunctionBody("function f() {", "function f("),
+    Error,
+    "unbalanced braces in function f(",
+  )
+})
+
+Deno.test("scanner self-test — the delegation matcher is true for a compliant body and false for each fault", () => {
+  const compliant = compliantConstantTimeBody()
+  assertEquals(strictComparisons(compliant).length, ALLOWED_STRICT_COMPARISON_COUNT)
+  assertEquals(findDelegationViolations(compliant), [])
+
+  // Not unreachable-true: every fault shape it claims to detect is shown detected.
+  const call = "  return timingSafeEqual(leftDigest, rightDigest)"
+  const faults: Array<[string, string, string]> = [
+    ["no primitive call", "  return true", "does not call timingSafeEqual"],
+    [
+      "charCodeAt loop",
+      "  if (leftDigest.charCodeAt(0) !== rightDigest.charCodeAt(0)) return false\n  return true",
+      "hand-rolled comparison: charCodeAt",
+    ],
+    [
+      "xor accumulator",
+      "  let diff = 0\n  diff ^= leftDigest[0] ^ rightDigest[0]\n  return diff === 0",
+      "hand-rolled comparison: ^=",
+    ],
+    [
+      "or accumulator",
+      "  let diff = 0\n  diff |= leftDigest[0] ^ rightDigest[0]\n  return diff === 0",
+      "hand-rolled comparison: |=",
+    ],
+    [
+      "extra strict comparison",
+      "  if (leftDigest.length === 0) return false\n  return timingSafeEqual(leftDigest, rightDigest)",
+      `strict comparison count ${
+        ALLOWED_STRICT_COMPARISON_COUNT + 1
+      } is not ${ALLOWED_STRICT_COMPARISON_COUNT}`,
+    ],
+    [
+      "digest compared with ===",
+      "  return leftDigest === rightDigest",
+      "compares leftDigest with ===",
+    ],
+    [
+      "digest compared with loose ==",
+      "  return leftDigest == rightDigest",
+      "compares leftDigest with ==",
+    ],
+  ]
+  for (const [label, replacement, expected] of faults) {
+    const body = compliant.replace(call, replacement)
+    assert(body !== compliant, `fixture for ${label} did not replace the call`)
+    const violations = findDelegationViolations(body)
+    assert(violations.length > 0, `matcher stayed true for ${label}`)
+    assert(
+      violations.some((violation) => violation.includes(expected)),
+      `matcher missed ${label}; reported ${violations.join(" | ")}`,
+    )
+  }
+
+  // A comment cannot carry compliance, because the body is stripped first.
+  const commentOnly = stripComments(
+    compliant.replace(call, "  // return timingSafeEqual(leftDigest, rightDigest)\n  return true"),
+  )
+  assert(
+    findDelegationViolations(commentOnly).includes("does not call timingSafeEqual"),
+    `a comment satisfied the matcher: ${findDelegationViolations(commentOnly).join(" | ")}`,
+  )
+})
+
+Deno.test("scanner self-test — the import assertion is exact text, so an aliased import is not coverage", () => {
+  // The real module's import, which the source-reading test matches literally.
+  const exact = 'import { timingSafeEqual } from "@std/crypto/timing-safe-equal"'
+  assert(exact.includes('import { timingSafeEqual } from "@std/crypto/timing-safe-equal"'))
+
+  // An aliased import binds the same primitive but does NOT satisfy the exact-text
+  // assertion. Measured by probe: with `import { timingSafeEqual as tse }` plus a
+  // `tse(...)` call in tokens.ts, the source-reading test goes red on the import
+  // assertion, so the alias cannot hide behind it.
+  const aliased = 'import { timingSafeEqual as compareBytes } from "@std/crypto/timing-safe-equal"'
+  assertFalse(
+    aliased.includes('import { timingSafeEqual } from "@std/crypto/timing-safe-equal"'),
+    "an aliased import still matched the exact-text assertion",
+  )
+
+  // A disguised sink — a local variable named `timingSafeEqual` fed by a hand-rolled
+  // loop — is reported, but by the allowance and count checks, NOT by the name check:
+  // the observed violations are asserted exactly, because claiming the name check
+  // caught it would overstate the matcher.
+  const compliant = compliantConstantTimeBody()
+  assertEquals(findDelegationViolations(compliant), [], "positive control regressed")
+  const loopWithSinkName = compliant.replace(
+    "  return timingSafeEqual(leftDigest, rightDigest)",
+    "  let timingSafeEqual = true\n  for (const byte of leftDigest) if (byte !== 0) timingSafeEqual = false\n  return timingSafeEqual",
+  )
+  const violations = findDelegationViolations(loopWithSinkName)
+  assertEquals(violations.length, 3, `unexpected violations: ${violations.join(" | ")}`)
+  assert(
+    violations.includes("does not call timingSafeEqual"),
+    `expected the (false-positive) name check to fire: ${violations.join(" | ")}`,
+  )
+  assert(
+    violations.includes(
+      `strict comparison count ${
+        ALLOWED_STRICT_COMPARISON_COUNT + 1
+      } is not ${ALLOWED_STRICT_COMPARISON_COUNT}`,
+    ),
+    `expected the count check to fire: ${violations.join(" | ")}`,
+  )
+  assert(
+    violations.some((violation) =>
+      violation.startsWith("unallowed strict comparison:") && violation.includes("leftDigest")
+    ),
+    `expected the allowance check to fire: ${violations.join(" | ")}`,
+  )
+})
+
+Deno.test("scanner self-test — the matcher's Object.is blind spot is measured, not claimed as closed", () => {
+  // Reproduced here so the limitation cannot silently drift into a false claim of
+  // coverage: an early-return loop using `Object.is` has no `===`, no `!==`, no
+  // `charCodeAt` and no accumulator, so the text matcher reports no violations at
+  // all — while the function is measurably not constant-time (1 iteration on an
+  // early mismatch vs 32 on an identical pair, measured below).
+  const body = [
+    "{",
+    '  if (typeof a !== "string" || typeof b !== "string") return false',
+    '  if (a === "" || b === "") return false',
+    "  const left = decodeDigestHex(a)",
+    "  const right = decodeDigestHex(b)",
+    "  if (left === null || right === null) return false",
+    "  if (left.length !== right.length) return false",
+    "  for (let i = 0; i < leftDigest.length; i++) {",
+    "    if (!Object.is(leftDigest[i], rightDigest[i])) return false",
+    "  }",
+    "  return timingSafeEqual(leftDigest, rightDigest)",
+    "}",
+  ].join("\n")
+
+  // Negative-control-shaped result: the matcher is BLIND here, asserted explicitly.
+  assertEquals(
+    findDelegationViolations(body),
+    [],
+    "the Object.is loop became detectable — update the documented limitation",
+  )
+  assertEquals(strictComparisons(body).length, ALLOWED_STRICT_COMPARISON_COUNT)
+
+  // The leak, measured on the same loop shape: an early mismatch costs one
+  // iteration, an identical pair costs all 32. `Object.is` is not `!==`, so no
+  // text rule in this file can see it; only a real timing test or a byte-count
+  // measurement on the primitive can.
+  const countIterations = (x: Uint8Array, y: Uint8Array): number => {
+    let iterations = 0
+    for (let i = 0; i < x.length; i++) {
+      iterations += 1
+      if (!Object.is(x[i], y[i])) return iterations
+    }
+    return iterations
+  }
+  const digest = new Uint8Array(32).fill(7)
+  const mismatched = new Uint8Array(32).fill(7)
+  mismatched[0] = 9
+  assertEquals(countIterations(digest, mismatched), 1)
+  assertEquals(countIterations(digest, digest), 32)
 })
 
 Deno.test("verifyCancelToken — the production call site goes through the constant-time primitive", async () => {
