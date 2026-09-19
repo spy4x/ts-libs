@@ -212,18 +212,32 @@ safe to apply. Everything else already went to `pull`, which is the
 authoritative path and also the one a host keeps running on an interval when
 `onSyncDegraded` fires.
 
+Three properties a caller should know, each pinned by a test:
+
+- **A hint is decided as soon as it arrives, even while the handshake is
+  unacknowledged.** The handshake is not serialised behind the cursor chain, so a
+  hint is not held for up to `handshakeAttempts × handshakeAckTimeout`. Its cursor
+  snapshot is simply taken later, which can only make it fresher.
+- **`clear()` and `keys()` read durable state first.** A fresh instance that calls
+  `clear()` before anything else still removes the stored cursors and the sync
+  time, leaving no orphan keys behind.
+- **`advanceTo(groupId, 0)` records a cursor of `0` for a group the client has not
+  seen**, so a pull that reports an empty group stays distinguishable from a cold
+  start. For a group that already has a cursor, `advanceTo` is monotonic and a
+  lower — or negative — value is refused.
+
 ## Fixed at port time
 
 Each row is a bug in the source this package redesigns, with the test that now
 pins the behaviour.
 
-| Bug                                                                                                                                                                                                                                                                     | Source                                                                          | Fix here                                                                                                                                                                                                    |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| An unknown model broadcast to **every connected user** (`default:` → `Array.from(userBySocket.values())`, and `case tag:` doing the same)                                                                                                                               | `financy/apps/api/services/websockets.ts:1187-1198`                             | Unknown aggregate → zero recipients, `NotifyStatus.UnknownAggregate`, never a fan-out call (`notify.ts`)                                                                                                    |
-| A throwing recipient lookup fell back to `sendToAll`                                                                                                                                                                                                                    | `financy/apps/api/services/websockets.ts:1147-1151`                             | Resolver failure → `NotifyStatus.Failed`, zero recipients, `onError` (`notify.ts`)                                                                                                                          |
-| `SYNC_START` sent a hardcoded `0` (`p: [0]`, with a TODO to persist the checkpoint), so every connect re-downloaded everything                                                                                                                                          | `financy/apps/web/src/state/ws.ts:276-286`                                      | The handshake sends the persisted cursors, or an explicit `fromStart: true` for a genuinely cold client (`client-transport.ts`)                                                                             |
-| Guards written as `return` inside a per-model `if` chain: inconsistent (an unknown op is rejected for `transaction` at `:347-358` and `userSettings` at `:1047-1058`, silently ignored for `user` at `:962-1002`) and scoped to the whole handler rather than the block | `financy/apps/api/services/websockets.ts:179-1059`                              | One exhaustive dispatcher: a frame that does not decode, or arrives in the wrong direction, is reported as malformed and never dispatched (`registry.ts`); hints go through one keyed adapter (`notify.ts`) |
-| `syncedAt` in an in-memory signal, so it died with the tab                                                                                                                                                                                                              | `financy/apps/web/src/state/ws.ts:43,196`; `gb/apps/web/state/ws.ts:65,256-258` | Cursors and the sync time are persisted through an injected `KeyValueStore`; a pull that succeeds calls `markSynced()` (`cursor.ts`)                                                                        |
+| Bug                                                                                                                                                                                                                                                                     | Source                                                                                                                                                       | Fix here                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| An unknown model broadcast to **every connected user** (`default:` → `Array.from(userBySocket.values())`, and `case tag:` doing the same)                                                                                                                               | `financy/apps/api/services/websockets.ts:1187-1198`                                                                                                          | Unknown aggregate → zero recipients, `NotifyStatus.UnknownAggregate`, never a fan-out call (`notify.ts`)                                                                                                    |
+| A throwing recipient lookup fell back to `sendToAll`                                                                                                                                                                                                                    | `financy/apps/api/services/websockets.ts:1147-1151`                                                                                                          | Resolver failure → `NotifyStatus.Failed`, zero recipients, `onError` (`notify.ts`)                                                                                                                          |
+| `SYNC_START` sent a hardcoded `0` (`p: [0]`, with a TODO to persist the checkpoint), so every connect re-downloaded everything                                                                                                                                          | `financy/apps/web/src/state/ws.ts:276-286`                                                                                                                   | The handshake sends the persisted cursors, or an explicit `fromStart: true` for a genuinely cold client (`client-transport.ts`)                                                                             |
+| Guards written as `return` inside a per-model `if` chain: inconsistent (an unknown op is rejected for `transaction` at `:347-358` and `userSettings` at `:1047-1058`, silently ignored for `user` at `:962-1002`) and scoped to the whole handler rather than the block | `financy/apps/api/services/websockets.ts:179-1059`                                                                                                           | One exhaustive dispatcher: a frame that does not decode, or arrives in the wrong direction, is reported as malformed and never dispatched (`registry.ts`); hints go through one keyed adapter (`notify.ts`) |
+| `syncedAt` in an in-memory signal, so it died with the tab                                                                                                                                                                                                              | `financy/apps/web/src/state/ws.ts:43,196`; `gb/apps/web/state/ws.ts:65,79,256-258` — `:65` declares the field, `:79` initialises it, `:256-258` overwrite it | Cursors and the sync time are persisted through an injected `KeyValueStore`; a pull that succeeds calls `markSynced()` (`cursor.ts`)                                                                        |
 
 Two more differences worth naming, both in the registry: `gb` pinged every
 socket and never looked for a pong, so a half-open socket stayed in the fan-out
@@ -240,9 +254,12 @@ the broadcast — here a throwing socket is reaped and the loop continues.
 - **A signals binding.** The client transport is deliberately signal-free, so it
   is testable without Preact. A binding over `onStatus`/`onChange` belongs in
   `preact-components`.
-- **An SSE or long-poll transport.** The ports would accept one; building a
-  second mechanism before there is a stream-shaped feed that justifies it is
-  exactly what ADR 002 rules out.
+- **An SSE or long-poll transport.** The name is the design doc's, chosen so
+  "adding SSE or long-polling later does not make the name a lie"
+  (`docs/design/realtime-websockets.md:68`); the reason it is not built is ADR
+  002:76-82 ("One mechanism") — no second, lower-guarantee lane before a
+  stream-shaped feed justifies one. The ports would accept such a transport; this
+  package does not ship one.
 - **A host socket adapter.** `apps/api` and `apps/spa` own those, because only
   they know their upgrade path and their cookie handling.
 - **Hint coalescing.** The design doc leaves it open whether a group under rapid
