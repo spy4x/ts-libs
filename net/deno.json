@@ -1,0 +1,7 @@
+{
+  "name": "@ts-libs/net",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./url-shape.ts"
+  }
+}
