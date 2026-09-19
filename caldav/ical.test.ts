@@ -593,3 +593,57 @@ Deno.test("buildTodoIcal writes RELATED-TO edges the parser reads back as edges"
     { uid: "sibling@example.com", reltype: RelatedType.SIBLING },
   ])
 })
+
+Deno.test("the writer's folding keeps a multi-byte value inside the octet limit", () => {
+  // The source folded with `line.length` and `slice(i, i + 75)`, both of which
+  // count UTF-16 code units. The 75-octet rule is about *octets*, so this is the
+  // assertion that distinguishes the two: with emoji in the value every physical
+  // line the naive fold produces is well over 75 octets.
+  const value = "🚀".repeat(24) + "x".repeat(24)
+  const document = buildTodoIcal({ summary: value }, OPTIONS)
+  const longest = document.split("\r\n").reduce((max, line) => Math.max(max, octets(line)), 0)
+  assertEquals(longest <= FOLD_LIMIT, true, `longest physical line is ${longest} octets`)
+})
+
+Deno.test("a byte-sliced fold of a multi-byte value is no longer valid UTF-8", () => {
+  // Demonstrates the corruption the octet-counting fold avoids: slicing the
+  // encoded bytes at 75 splits the run of `é` mid-sequence, so the decoded half
+  // is the replacement character and the line no longer holds the value.
+  const value = "é".repeat(50)
+  const encoded = new TextEncoder().encode(value)
+  const naiveFold = new TextDecoder().decode(encoded.slice(0, 75))
+  assertEquals(naiveFold.includes("\uFFFD"), true)
+  assertEquals(naiveFold === value.slice(0, 75), false)
+
+  const document = buildTodoIcal({ summary: value }, OPTIONS)
+  assertStringIncludes(unfoldLines(document), `SUMMARY:${value}`)
+})
+
+Deno.test("a character-counted fold can split a surrogate pair across two lines", () => {
+  // The second face of the same bug: `slice` at an odd offset cuts the surrogate
+  // pair, so each physical line carries an unpaired surrogate that a UTF-8
+  // encoder replaces with U+FFFD — the value is destroyed on the way out.
+  const value = "a".repeat(74) + "🚀" + "b".repeat(10)
+  const naiveFold = value.slice(0, 75)
+  assertEquals(unpairedSurrogates(naiveFold), 1)
+
+  const document = buildTodoIcal({ summary: value }, OPTIONS)
+  assertEquals(unpairedSurrogates(document), 0)
+  assertStringIncludes(unfoldLines(document), `SUMMARY:${value}`)
+})
+
+/** Count UTF-16 code units that are unpaired surrogates. */
+function unpairedSurrogates(value: string): number {
+  let count = 0
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (!(next >= 0xdc00 && next <= 0xdfff)) count++
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      const previous = value.charCodeAt(index - 1)
+      if (!(previous >= 0xd800 && previous <= 0xdbff)) count++
+    }
+  }
+  return count
+}
