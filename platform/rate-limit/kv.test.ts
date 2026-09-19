@@ -179,26 +179,17 @@ describe("createKvStore", () => {
 
 describe("StoreRateLimiter parity with MemoryRateLimiter", () => {
   /**
-   * KV fake that honours the TTL it is handed, the way a real backend does.
+   * KV fake with no expiry notion of its own.
    *
-   * `expiresAt` is expressed on the same virtual timeline the limiter uses, so the entry's absolute
-   * lifetime is offset into wall time before the backend stores it; that way the backend's own
-   * `Date.now()` comparison agrees with the injected clock without the test reading real time.
+   * A real backend would also drop an entry after `expireIn`, which would mask a wrong `expiresAt`;
+   * dropping that behaviour keeps this test measuring the package's own lifetime arithmetic.
    */
-  function ttlAwareKv(): RateLimitKv {
-    const skew = Date.now() - T0
-    const entries = new Map<string, { expiresAt: number; events: number[] }>()
+  function createIgnoringKv(): RateLimitKv {
+    const entries = new Map<string, unknown>()
     return {
       get: (key: string) => Promise.resolve(entries.get(key)),
-      set: (key: string, value: unknown, options?: { expireIn?: number }) => {
-        const entry = value as { events: number[]; expiresAt: number }
-        const ttlDeadline = options?.expireIn === undefined
-          ? Infinity
-          : Date.now() + options.expireIn
-        entries.set(key, {
-          expiresAt: Math.min(entry.expiresAt + skew, ttlDeadline),
-          events: entry.events,
-        })
+      set: (key: string, value: unknown) => {
+        entries.set(key, value)
         return Promise.resolve()
       },
       delete: (key: string) => {
@@ -216,10 +207,10 @@ describe("StoreRateLimiter parity with MemoryRateLimiter", () => {
     // extra requests. Measured before the fix at limit 3 / windowMs 1000: memory 3 in the window,
     // store 5.
     //
-    // Deterministic: one injected clock drives both limiters, and the backend converts the entry's
-    // lifetime into wall time only so its own `Date.now()` comparison agrees with the injected one.
-    // No sleeping, no timing assertion — the advance is arithmetic.
-    const kv = ttlAwareKv()
+    // Deterministic: one injected clock drives both limiters, and the backend deliberately has no
+    // expiry notion of its own, so the only lifetime in play is the package's own `expiresAt` and
+    // this measures exactly that. No sleeping, no timing assertion — the advance is arithmetic.
+    const kv = createIgnoringKv()
     const { clock, advanceTo } = fakeClock()
     const memory = createMemoryRateLimiter({ windowMs: 1000, limit: 3, clock })
     const store = createStoreLimiter(createKvStore({ backend: kv, clock }), {
