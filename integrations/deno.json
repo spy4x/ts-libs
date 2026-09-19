@@ -1,0 +1,10 @@
+{
+  "name": "@ts-libs/integrations",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./integrations/mod.ts",
+    "./slack": "./integrations/slack.ts",
+    "./mailchimp": "./integrations/mailchimp.ts",
+    "./webhooks": "./integrations/webhooks.ts"
+  }
+}
