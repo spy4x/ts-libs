@@ -2,6 +2,8 @@
   "name": "@ts-libs/time",
   "version": "0.1.0",
   "exports": {
-    "./tz": "./tz.ts"
+    "./tz": "./tz.ts",
+    "./ics": "./ics.ts",
+    "./ics-core": "./ics-core.ts"
   }
 }
