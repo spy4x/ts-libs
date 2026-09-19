@@ -19,6 +19,7 @@ mcp/          jsonrpc core, stdio + http transports, tool registry
 caldav/       ical, xml, client, query
 email/        smtp transport, dkim-verify
 ops/          backup contract, offline-backup, deploy, age64 env, type-check
+realtime/     hint-only websocket transport, registry, heartbeat, cursor sync
 validation/   arktype validate helpers, validation model
 ```
 
