@@ -125,10 +125,12 @@ export interface DenoKvLike {
  * Deno KV adapter.
  *
  * ~15 lines by construction: `get` returns `{ value }`, `set` takes `expireIn` in milliseconds, and
- * `delete` matches the port. Keeping it this thin is what lets the limiter be covered end-to-end
- * against an in-memory fake, because the repo's `deno test` grants only `--allow-read --allow-env`
- * — no `--unstable-kv`, no `--allow-write` — so `Deno.openKv()` cannot be called from a test. This
- * adapter is therefore the one path in the package that no test reaches.
+ * `delete` matches the port. Because it consumes that port rather than the `Deno` global, it is
+ * covered against a fake handle under the repo's exact test grants, which are
+ * `--no-prompt --allow-read --allow-env` — see `denoKvBackend`'s cases in `kv.test.ts`.
+ *
+ * `Deno.openKv()` itself is the one call in this package with no test: it needs `--unstable-kv`
+ * plus a writable path, neither of which the root `test` task grants.
  *
  * @param kv Open handle. The caller owns its lifetime and must `close()` it.
  * @param namespace First key segment, so two apps can share one KV database.

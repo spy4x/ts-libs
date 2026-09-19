@@ -57,11 +57,12 @@ export interface RateLimitDecision {
    */
   retryAfterMs: number
   /**
-   * Milliseconds until this key's counter is fully empty.
+   * Milliseconds until this key's counter drops below `limit`: until the **first** recorded event
+   * leaves the window and one slot opens.
    *
-   * For a sliding window that is never *earlier* than the next slot: a bucket holding ten events
-   * spread over the window regains room long before it is empty. Sent as `RateLimit-Reset` on an
-   * allowed response and as `Retry-After` on a rejection.
+   * Not "until the bucket is empty" — a bucket holding ten events spread across the window regains
+   * room long before the last of them expires. Sent as `RateLimit-Reset` on an allowed response;
+   * a rejection uses `retryAfterMs`, which is derived from the same oldest event.
    */
   resetAfterMs: number
   /** Requests allowed per window, so the middleware can report the configured limit. */
@@ -107,6 +108,21 @@ function firstLiveIndex(events: number[], cutoff: number): number {
 }
 
 /**
+ * How long a shared-store entry must survive so no live event is forgotten.
+ *
+ * Derived from the **newest** recorded event, never the oldest. A TTL from the oldest would drop the
+ * entry while newer events are still inside the window; the next request would then read an absent
+ * key and the window would restart early, allowing up to `limit` extra requests — a bypass, not a
+ * rounding error. Derived from the newest event the entry outlives the last event's window, so a
+ * TTL eviction can only happen once the bucket is genuinely empty. Floored at 1 ms so a backend is
+ * never asked to store something it would expire immediately.
+ */
+function storeTtlMs(events: number[], windowMs: number, now: number): number {
+  const newest = events.length === 0 ? now : (events[events.length - 1] as number)
+  return Math.max(1, newest + windowMs - now)
+}
+
+/**
  * In-process sliding-window limiter.
  *
  * Synchronous by design: a single isolate can serve a decision without awaiting storage, which is
@@ -132,10 +148,17 @@ export class MemoryRateLimiter {
   constructor(options: MemoryRateLimiterOptions) {
     if (!(options.windowMs > 0)) throw new Error("windowMs must be > 0")
     if (!(options.limit >= 1)) throw new Error("limit must be >= 1")
+    const idleMs = options.idleMs ?? DEFAULT_IDLE_MS
+    // `idleMs` is the precondition of the sweep's live-event guarantee: a negative grace would let
+    // a bucket holding a live event be dropped, and `NaN` makes every comparison false, so the
+    // sweep would never run and the map would grow without bound.
+    if (!Number.isFinite(idleMs) || idleMs < 0) {
+      throw new Error("idleMs must be a finite number >= 0")
+    }
     this.windowMs = options.windowMs
     this.limit = Math.floor(options.limit)
     this.clock = options.clock ?? systemClock
-    this.idleMs = options.idleMs ?? DEFAULT_IDLE_MS
+    this.idleMs = idleMs
     this.onSweep = options.onSweep
     this.lastSweepAt = this.clock()
   }
@@ -283,8 +306,9 @@ export class StoreRateLimiter {
     if (events.length >= this.limit) {
       const oldest = events[0] as number
       const retryAfterMs = Math.max(0, oldest + this.windowMs - now)
-      // Re-write so the backend TTL keeps covering the live events.
-      await this.store.write(key, events, now, retryAfterMs)
+      // Keep the entry alive for every live event, newest included — a TTL taken from `oldest`
+      // would let the bucket lapse while newer events were still in the window.
+      await this.store.write(key, events, now, storeTtlMs(events, this.windowMs, now))
       return {
         allowed: false,
         remaining: 0,
@@ -297,7 +321,7 @@ export class StoreRateLimiter {
     events.push(now)
     const oldest = events[0] as number
     const resetAfterMs = Math.max(0, oldest + this.windowMs - now)
-    await this.store.write(key, events, now, resetAfterMs)
+    await this.store.write(key, events, now, storeTtlMs(events, this.windowMs, now))
     return {
       allowed: true,
       remaining: Math.max(0, this.limit - events.length),

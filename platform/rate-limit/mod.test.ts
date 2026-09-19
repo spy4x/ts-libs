@@ -33,6 +33,11 @@ describe("public surface", () => {
     for (const name of expected) {
       assertEquals(name in barrel, true, `${name} is not exported from mod.ts`)
     }
+    // Presence alone is not a contract: an extra export would slip through the loop above. The
+    // public surface is exactly this list, so compare it as a set — which is what makes adding a
+    // name back to `mod.ts` (as `resolveIdentityKey` was, and would be) a failing test rather than
+    // a silent widening of the API.
+    assertEquals(Object.keys(barrel).sort(), [...expected].sort())
   })
 
   it("limits through the barrel", () => {

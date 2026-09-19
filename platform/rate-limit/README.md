@@ -53,6 +53,15 @@ const limiter = createStoreLimiter(store, { windowMs: 60_000, limit: 10 })
 Redis or Postgres reach the same limiter by implementing `RateLimitStore` (`read`, `write`,
 `delete`) — `createStoreLimiter` is the only thing the core needs.
 
+**Same semantics as the in-process limiter**, asserted by a parity test that drives both with one
+multi-event sequence and compares `allowed` and `remaining` decision for decision. An earlier revision
+did **not** hold that invariant: the entry's TTL was derived from the bucket's _oldest_ event, so a
+bucket holding several events expired as soon as the first left the window, the next request read an
+absent key, and the window restarted early. Measured at `limit: 3` / `windowMs: 1000` the store path
+accepted **5** requests inside one window where the memory path accepted 3. The TTL now comes from the
+**newest** event (`newest + windowMs − now`) on both branches of `StoreRateLimiter`, so early expiry
+cannot happen.
+
 **Read-modify-write is not atomic across instances.** Two isolates can read the same value and both
 accept, so the effective limit under concurrency is `limit + (concurrent isolates - 1)`. The
 3-method port is what forecloses a Deno KV `atomic().check()` compare-and-swap: that is a deliberate
@@ -84,12 +93,26 @@ window). The sweep runs when `windowMs` has elapsed since the last one, or every
 cannot outrun it.
 
 **Memory envelope.** At the defaults (`windowMs` 60 s, `idleMs` 600 s) a bucket lives 660 s, so
-steady-state retention is `request_rate × 660` keys — about 660k keys at 1,000 req/s. Measured on
-this implementation across 200,000 rotating buckets: **353.5 bytes per bucket**, so roughly
-**222 MiB (233 MB)** at that rate. That is the price of the
-10-minute grace, and `idleMs` is the knob: the `mig` implementation this replaces pruned at
-`request_rate × windowMs` (60 s), i.e. 11× tighter, at the cost of dropping a bucket the moment its
-window closed. Lower `idleMs` towards `windowMs` to trade memory for extra sweep churn.
+steady-state retention is `request_rate × (windowMs + idleMs)` keys — about 660k keys at 1,000 req/s.
+**Measurement**: `MemoryRateLimiter`, one accepted event per rotated key, fixed injected clock, GC
+forced then `Deno.memoryUsage().heapUsed` read against an empty-limiter baseline, two runs.
+
+| keys    | heap delta | per bucket |
+| ------- | ---------- | ---------- |
+| 200,000 | 59.86 MB   | 299.3 B    |
+| 660,000 | 143.2 MB   | 217.0 B    |
+
+So budget **roughly 140 MiB (147 MB) at 1,000 req/s**; per-bucket cost falls as the map grows (299 B
+at 200k keys, 217 B at 660k) because the `Map`'s own overhead is amortised. One caveat the bound does
+not capture: the key is caller-supplied and unbounded, so a resolver returning a long header-derived
+string retains it for 660 s per distinct value.
+
+**Compared with `mig`,** which this replaces: `mig` prunes every `pruneIntervalMs` (600 s, its line 29)
+and deletes only buckets left _empty_ at that prune, so its bound is `request_rate × (windowMs +
+pruneInterval)` — the same 660 s shape as here, not `request_rate × windowMs`. Measured at 1,000 req/s
+that is 1.24M buckets there against 601k here: **≈1.3× overall**, not the 11× an earlier revision of
+this README claimed (that figure divided 660 s by 60 s and ignored `pruneIntervalMs`). `idleMs` is the
+knob either way: lowering it towards `windowMs` trades memory for extra sweep churn.
 
 Two consequences worth stating, because both are security properties:
 
@@ -182,5 +205,6 @@ combined `RateLimit` field is not emitted.
 - `Deno.openKv()` is the one call with no test: it needs `--unstable-kv` (plus a writable path), and
   the repo's `deno test` grants only `--allow-read --allow-env`. Everything around it is covered —
   `denoKvBackend` consumes a `DenoKvLike` port, so it is tested against a fake handle (namespace key
-  shape, `{ value: null }` treated as absent, `expireIn` pass-through, delete, and a limiter driven
-  end to end through it), and so is the store logic on top.
+  shape, `{ value }` unwrapping, `{ value: null }` treated as absent, `expireIn` pass-through
+  including no-TTL ≠ TTL 0, `delete`, and a limiter driven end to end through it), and the store
+  logic on top is covered too, including cross-store parity.

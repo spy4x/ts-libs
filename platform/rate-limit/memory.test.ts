@@ -266,8 +266,12 @@ describe("MemoryRateLimiter", () => {
   it("schedules its automatic sweep from the injected clock, never the wall clock", () => {
     // Guards the `mig:28` bug this port fixes. `lastSweepAt` is seeded in the constructor: if that
     // seed were `Date.now()` instead of `clock()`, the limiter would run on two clocks at once and
-    // `now - lastSweepAt` could go negative, so no automatic sweep would ever fire. The injected
-    // clock here sits far from the wall clock, which is what makes the difference observable.
+    // `now - lastSweepAt` could go negative, so no automatic sweep would ever fire.
+    //
+    // Fixture-dependent on purpose: the mechanism is the negative difference, so this only reddens
+    // while the fixture clock sits *behind* the wall clock — it does, and it stays there because it
+    // is a literal far in the past. A future fixture dated ahead of now would silently stop
+    // detecting the mutation, so keep any replacement clock behind `Date.now()`.
     const { clock, advance } = fakeClock(1_000_000_000_000)
     const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 1, idleMs: 0, clock })
 
@@ -281,10 +285,13 @@ describe("MemoryRateLimiter", () => {
   })
 
   it("everts in one slice per prune instead of shifting events out one at a time", () => {
-    // Guards the `mig:47-49` fix, which is behaviour-preserving and so invisible to every other
-    // assertion — reverting it to the `while (…) events.shift()` loop leaves the rest of the suite
-    // green. Counting array operations rather than timing them keeps this deterministic: the
-    // measured gap is 7.58 us/check against 0.36, and a wall-clock assertion would flake under load.
+    // A regression tripwire, not a complexity bound. It exists because reverting the `mig:47-49`
+    // fix to the `while (…) events.shift()` loop is behaviour-preserving and so invisible to every
+    // other assertion. Counting array operations rather than timing them keeps it deterministic —
+    // the measured gap is 7.58 us/check against 0.36 — but it does assert *implementation shape*:
+    // an equivalent single-call `events.splice(0, live)` refactor (also O(n), same semantics) will
+    // FAIL this test. If you are here because it went red after an optimization, check the
+    // semantics before assuming a regression; a genuine improvement may need this test rewritten.
     const { clock, advance } = fakeClock()
     const limiter = new MemoryRateLimiter({ windowMs: 100, limit: 4, idleMs: 10_000, clock })
     for (let i = 0; i < 4; i++) {
@@ -348,6 +355,26 @@ describe("MemoryRateLimiter", () => {
       message = (error as Error).message
     }
     assertEquals(message, "windowMs must be > 0")
+  })
+
+  it("refuses an idle grace that would void the live-event guarantee", () => {
+    // `idleMs` is the precondition of the sweep's guarantee: negative lets a bucket holding a live
+    // event be dropped, and `NaN` makes every comparison false so the sweep never runs at all.
+    for (const idleMs of [-1, -(Number.MAX_SAFE_INTEGER), Number.NaN, Number.POSITIVE_INFINITY]) {
+      let message = ""
+      try {
+        new MemoryRateLimiter({ windowMs: 1000, limit: 1, idleMs })
+      } catch (error) {
+        message = (error as Error).message
+      }
+      assertEquals(message, "idleMs must be a finite number >= 0", `idleMs=${idleMs}`)
+    }
+  })
+
+  it("accepts an idle grace of zero and a fractional one", () => {
+    const { clock } = fakeClock()
+    assertEquals(new MemoryRateLimiter({ windowMs: 1000, limit: 1, idleMs: 0, clock }).size, 0)
+    assertEquals(new MemoryRateLimiter({ windowMs: 1000, limit: 1, idleMs: 0.5, clock }).size, 0)
   })
 
   it("refuses a limit that would allow everything", () => {
