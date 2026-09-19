@@ -57,15 +57,26 @@ export const DEFAULT_THUMBNAIL_AT_MS = 1300
  * `-ss` stays after `-i`, which decodes-and-discards rather than seeking
  * instantly: slower, but the source's behaviour and the accurate one.
  *
- * Both paths go through `assertUsablePath` before argv exists: ffmpeg parses its
- * own option list, so a path beginning with `-` is not a filename to it.
- * Reproduced against ffmpeg 8.1.2 before this guard existed — `output:
- * "-y.webp"` reached argv and ffmpeg answered `Unrecognized option 'y.webp'`
- * with exit 8, i.e. a caller-supplied path had become a command-line flag.
+ * Both paths go through `assertUsablePath` before argv exists. Which of the two
+ * guards is load-bearing was measured on ffmpeg 8.1.2, and they differ:
  *
- * @throws {TypeError} when either path could be read as an ffmpeg option or
- * contains a NUL byte, or when the output is not `.webp`. Thrown before any
- * process is created.
+ * - **Output — genuinely injectable.** `-y.webp` reached argv and ffmpeg
+ *   answered `Unrecognized option 'y.webp'` with exit 8: a caller-supplied path
+ *   had become a command-line flag.
+ * - **Input — defence in depth, not the live vector.** ffmpeg consumes the token
+ *   after `-i` as a filename whatever it starts with: `-i -y.webp` exits 254,
+ *   `Error opening input file -y.webp`. The guard is kept anyway — the slot is
+ *   one option-reordering away from being an option list, and a filename ffmpeg
+ *   will never open deserves the caller's own diagnostic. The same distinction
+ *   holds in `ffprobe.ts:374` (`getAudioDuration`), where the path lands in a
+ *   trailing option slot and `-read_intervals` does reach ffprobe as an option —
+ *   exit 1, `Missing argument for option 'read_intervals'`.
+ * - **NUL byte — neither, and not ffmpeg's business.** `Deno.Command` throws its
+ *   own `nul byte found in provided data` from inside the spawn, naming neither
+ *   the argument nor the caller, so the check keeps that failure ours.
+ *
+ * @throws {TypeError} when either path begins with `-` or contains a NUL byte,
+ * or when the output is not `.webp`. Thrown before any process is created.
  */
 export function buildThumbnailArgv(
   options: ThumbnailOptions,

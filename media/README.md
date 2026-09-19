@@ -57,12 +57,28 @@ never a shell string — and `denoCommandRunner` spawns with `stdin: "null"` so 
 block on a prompt.
 
 argv removes shell interpretation but **not option parsing**: ffmpeg and ffprobe parse their own
-argument list, so a path beginning with `-` would reach them as a flag. Every caller-supplied path
+argument list, so a path beginning with `-` can reach them as a flag. Every caller-supplied path
 (`getMeta`, `getDuration`, `getAudioDuration`, `getImageDimensions`, `makeThumbnail`'s input and
 output) is therefore checked by `assertUsablePath` before argv is built, and a dash-leading or
-NUL-bearing path throws a `TypeError` naming the path — before any process is created. Without that
-guard, `makeThumbnail` with `output: "-y.webp"` made ffmpeg answer `Unrecognized option 'y.webp'`
-with exit 8 instead of writing a file.
+NUL-bearing path throws a `TypeError` naming the path — before any process is created.
+
+The slots are not equally exposed, measured on ffmpeg/ffprobe 8.1.2:
+
+- **Load-bearing:** the thumbnail **output**, and `getAudioDuration`'s trailing slot. `output:
+  "-y.webp"` made ffmpeg answer `Unrecognized option 'y.webp'` with exit 8 instead of writing a file,
+  and `getAudioDuration("-read_intervals")` made ffprobe answer exit 1, `Missing argument for option
+  'read_intervals'`. A caller-supplied path was a command-line flag in both.
+- **Defence in depth:** the thumbnail **input**. ffmpeg consumes the token after `-i` as a filename
+  whatever it starts with — `-i -y.webp` exits 254, `Error opening input file -y.webp` — so that
+  guard is not the live injection vector. It stays, because a filename ffmpeg will never open deserves
+  the caller's own diagnostic rather than an exit code.
+- **Neither, and not the binary's business:** a NUL byte. `Deno.Command` throws its own
+  `nul byte found in provided data` from inside the spawn, naming neither the argument nor the caller,
+  so the check keeps the failure in this package.
+
+The guard is an **option-injection** check only. It is not path confinement: an absolute path, a
+symlink out of the working directory or `/etc/passwd` all pass, and is meant to — this is a library,
+the caller owns its own confinement, and `argv` is never a shell string.
 
 ```ts
 import { denoCommandRunner, findFfmpeg, getMeta } from "@ts-libs/media"

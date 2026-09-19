@@ -73,8 +73,11 @@ describe("buildThumbnailArgv", () => {
       .toThrow(TypeError)
   })
 
-  it("rejects an input path ffmpeg would read as one of its own options", () => {
-    // ffmpeg parses its own argument list, so argv alone is not a guard.
+  it("rejects a dash-leading input path before argv is built", () => {
+    // Defence in depth: ffmpeg consumes the token after `-i` as a filename
+    // whatever it starts with, so this guard is not the live injection vector —
+    // the output guard below is. It is kept because a filename ffmpeg will never
+    // open deserves the caller's own diagnostic.
     expect(() => buildThumbnailArgv({ input: "-vf", output: "/tmp/thumb.webp" }))
       .toThrow(TypeError)
     expect(() => buildThumbnailArgv({ input: "--help", output: "/tmp/thumb.webp" }))
