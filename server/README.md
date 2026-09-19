@@ -8,7 +8,7 @@ which is already pinned in the root import map and used only for the `hono/cors`
 
 | Export                              | What it is                                                                          |
 | ----------------------------------- | ----------------------------------------------------------------------------------- |
-| `@ts-libs/server/http/bounded-body` | Byte-capped, timeout-bounded request body reading; `PayloadTooLargeError`           |
+| `@ts-libs/server/http/bounded-body` | Byte-capped, stall-budgeted request body reading; canonical `PayloadTooLargeError`  |
 | `@ts-libs/server/http/cors`         | Exact-match origin allowlist and the `hono/cors` origin resolver                    |
 | `@ts-libs/server/http/redact`       | Provider-error redaction: class name and scope to the log, a constant to the client |
 | `@ts-libs/server/export`            | Versioned export envelope and `Content-Disposition` download response               |
@@ -19,7 +19,9 @@ which is already pinned in the root import map and used only for the `hono/cors`
 **Merge order:** the three issues that added these files (`#28`, `#30`, `#35`) were cut from one
 `main` and each carries the earlier ones, so whoever merges second rebases with a **union** on
 `server/deno.json` exports and this README — never by dropping another package's entries.
-`server/http/bounded-body.ts` is byte-identical on all three branches (`sha256 5fc55e75`).
+`server/http/bounded-body.ts` is the exception: `#28`/`#30` carried a byte-identical copy of
+`net/bounded-body.ts` (`sha256 5fc55e75`) and that copy has since collapsed into the canonical
+module, so this file no longer matches the pre-collapse branches by design.
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -36,20 +38,21 @@ the sibling `time/` package. Every entry in this package's `exports` must resolv
 ## `server/http/bounded-body`
 
 `readBoundedBody`, `readBoundedText`, `parseBoundedFormData`, `readContentLength`,
-`PayloadTooLargeError`.
+`PayloadTooLargeError`, and the types `ReadBoundedBodyOptions` and `BodySource`.
 
-Every function takes `{ maxBytes, timeoutMs? }`. The cap is enforced on the stream, a declared
-`content-length` over the cap is rejected without reading the body, and the reader is cancelled on
-any failure — including a stalled body whose deadline passes.
-
-**Canonical home pending — verified, not assumed.** `git show origin/main:net/bounded-body.ts` fails,
-so the canonical module has **not** landed (`net/` holds only `url-shape.ts`). The implementation
-therefore stays local, and the collapse is a **follow-up the coordinator must enforce** when `#1`
-lands: this module becomes `export * from "@ts-libs/net/bounded-body"` plus `parseBoundedFormData`.
-`PayloadTooLargeError` must then be the _same class object_, not a second class with the same name —
-a caller catching it from `net` has to catch the one thrown here. A test that
-`assertStrictEquals(error instanceof NetPayloadTooLargeError, true)` across the two modules is the
-only test that catches a duplicate; every other test passes either way.
+**Canonical home: `net/bounded-body.ts`** (`@ts-libs/net/bounded-body`). This module is a named
+re-export of it: `PayloadTooLargeError`, `readBoundedBody`, `readBoundedText` and
+`readContentLength` are the canonical symbols, so `PayloadTooLargeError` is one class object behind
+both specifiers and a single `catch` covers either import. The re-export is named rather than
+`export *`, so `BodyReadErrorCode`, `BodyReadTimeoutError`, `readBoundedJson` and the default
+constants are not republished as if this package had promised them. `parseBoundedFormData` stays
+here — it is the only server-specific entry point, and it is built on the canonical reader. The
+cap is enforced on the stream, a declared `content-length` over the cap is rejected without
+reading the body, and the reader is cancelled on any failure. `maxBytes` is optional and defaults
+to 5 MiB; `timeoutMs` is a **per-chunk stall budget, not a single overall deadline** — a
+slow-but-live upload is never cut off by its own total duration, only by a gap between chunks. A
+stall rejects with the canonical `BodyReadTimeoutError`, importable from
+`@ts-libs/net/bounded-body`, rather than the bare `Error` this module threw before the collapse.
 
 ## `server/http/cors`
 
@@ -75,10 +78,10 @@ provider text can reach a response body.
 | Source                                       | Bug                                                                                                                                 | Pinned by                                                                     |
 | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `warthunder-stats/.../body.ts:49-51`         | `body.buffer` ignored the view's `byteOffset`/`byteLength` — the `as ArrayBuffer` cast hid it                                       | `parseBoundedFormData respects a non-zero byteOffset on the read buffer`      |
-| `warthunder-stats/.../body.ts:11-13`         | an over-cap `content-length` was rejected without cancelling the request body, and the check did not pin the position of the read   | `readBoundedBody cancels an over-cap declared body without reading it`        |
-| `warthunder-stats/.../body.ts:23-24`         | the cap was enforced by a `NaN`-comparing `Number(...)` check instead of an explicit header reader                                  | `readContentLength reads an integer header and ignores junk`                  |
+| `warthunder-stats/.../body.ts:11-13`         | an over-cap `content-length` was rejected without cancelling the request body, and the check did not pin the position of the read   | `readBoundedBody leaves an unread rejected body to the server to drain`       |
+| `warthunder-stats/.../body.ts:23-24`         | the cap was enforced by a `NaN`-comparing `Number(...)` check instead of an explicit header reader                                  | `readContentLength reads a bare decimal length and ignores anything else`     |
 | `warthunder-stats/.../body.ts:28`            | `await reader.cancel()` in the `catch` was relied on not to reject, while the sibling call was wrapped                              | `readBoundedBody reports the read error even when cancel rejects`             |
-| `offer-lens/libs/scraper/mod.ts:184-186`     | when the deadline won the `Promise.race` the reader was only cancelled "best effort", leaving a pending `read()` that never settles | `readBoundedBody rejects a stalled body when the deadline fires`              |
+| `offer-lens/libs/scraper/mod.ts:184-186`     | when the deadline won the `Promise.race` the reader was only cancelled "best effort", leaving a pending `read()` that never settles | `readBoundedBody rejects a stalled body once the stall budget expires`        |
 | `offer-lens/libs/scraper/mod.ts:206`         | the oversized `content-length` early-out was absent, so a body declaring 4 GiB was streamed before being rejected                   | `readBoundedBody rejects an oversized declared content-length before reading` |
 | `offer-lens/apps/api/services/cors.ts:53-60` | an `https://` host missing from the allowlist fell through to the dev-host check                                                    | `cors: https dev origins are refused`                                         |
 
@@ -119,3 +122,8 @@ must be a non-negative integer; and `HEALTHCHECK_PORT`/`PORT` must be bare decim
 Lives here rather than in `ops/` on purpose: `ops/` is issue #18's package and would need its own
 `deno.json`, so this avoids two writers of one config for 60 LOC. The probe is separated from the exit
 so the decision is a return value a test can assert with `--allow-read --allow-env` and no socket.
+
+Two rows changed meaning when this module collapsed into the canonical reader: the canonical one
+rejects an over-cap `content-length` before taking a reader, so there is no reader to cancel and an
+unread request body is left to the server to drain, and a stall now surfaces as
+`BodyReadTimeoutError` rather than a bare `Error`.

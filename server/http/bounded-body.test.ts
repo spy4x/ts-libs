@@ -1,5 +1,9 @@
 import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert"
 import {
+  BodyReadTimeoutError as NetBodyReadTimeoutError,
+  PayloadTooLargeError as NetPayloadTooLargeError,
+} from "@ts-libs/net/bounded-body"
+import {
   type BoundedBodyTimeout,
   parseBoundedFormData,
   PayloadTooLargeError,
@@ -18,9 +22,10 @@ function streamInit(body: ReadableStream<Uint8Array>, headers?: HeadersInit): Re
 /**
  * A body whose bytes are a `Uint8Array` view at a non-zero `byteOffset`.
  *
- * `readBoundedBody` returns offset-0 views today, but the form-data path must
- * not depend on that: the source handed `body.buffer` to `Response`, which is
- * the whole backing buffer, not the view.
+ * A contract guard rather than a discriminator: both the pre-collapse reader and
+ * the canonical one return an exactly-sized offset-0 array, so it passes either
+ * way. It fails the day a reader hands `Response` a window onto a larger buffer,
+ * which is the `body.buffer` hazard this path documents.
  */
 function offsetViewInit(bytes: Uint8Array, contentType: string): RequestInit {
   const buffer = new ArrayBuffer(bytes.byteLength + 4)
@@ -35,26 +40,32 @@ function offsetViewInit(bytes: Uint8Array, contentType: string): RequestInit {
   return streamInit(stream, { "content-type": contentType })
 }
 
-/** A timer the test fires by hand, so no test waits on the wall clock. */
-function manualTimer() {
-  const handlers: Array<() => void> = []
-  const cleared: number[] = []
-  const timeoutOptions: BoundedBodyTimeout = {
-    setTimer: (handler) => {
-      handlers.push(handler)
-      return handlers.length - 1
+/** A body that never produces a chunk, so only the stall budget can settle it. */
+function stalledStream(onCancel?: () => void): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    pull() {
+      return new Promise<void>(() => {})
     },
-    clearTimer: (handle) => {
-      cleared.push(handle)
+    cancel() {
+      onCancel?.()
     },
-  }
-  return {
-    timeoutOptions,
-    cleared,
-    fire: () => {
-      for (const handler of handlers) handler()
+  })
+}
+
+/** A live body that emits one chunk per `gapMs`, so the wall clock is the test's. */
+function dripStream(chunk: Uint8Array, count: number, gapMs: number): ReadableStream<Uint8Array> {
+  let emitted = 0
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (emitted >= count) {
+        controller.close()
+        return
+      }
+      emitted++
+      await new Promise((resolve) => setTimeout(resolve, gapMs))
+      controller.enqueue(chunk)
     },
-  }
+  })
 }
 
 Deno.test("readBoundedBody returns a body one byte under the cap", async () => {
@@ -67,6 +78,13 @@ Deno.test("readBoundedBody accepts a body exactly at the cap", async () => {
   const body = await readBoundedBody(request, { maxBytes: 5 })
   assertEquals(body.byteLength, 5)
   assertEquals(new TextDecoder().decode(body), "abcde")
+})
+
+Deno.test("readBoundedBody falls back to the default cap when none is given", async () => {
+  // `maxBytes` is optional in the canonical module (5 MiB), and the server
+  // surface is the canonical one — the old copy required it.
+  const request = new Request(ORIGIN, { method: "POST", body: "abc" })
+  assertEquals(await readBoundedBody(request), new TextEncoder().encode("abc"))
 })
 
 Deno.test("readBoundedBody returns an empty array for a bodyless request", async () => {
@@ -92,12 +110,13 @@ Deno.test("readBoundedBody aborts a multi-chunk stream when the cap is crossed",
 })
 
 Deno.test("readBoundedBody rejects an oversized declared content-length before reading", async () => {
-  let settled = false
+  // The streamed body is itself inside the cap, so only the declared-length
+  // pre-check can produce this throw: a read-first implementation answers with
+  // the bytes instead. The lock assertion catches one that takes a reader before
+  // consulting the header.
   const body = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      // Whatever reaches the reader is irrelevant: the rejection has to happen
-      // before the first chunk, so closing here keeps the test from hanging.
-      settled = true
+    start(controller) {
+      controller.enqueue(new Uint8Array([1]))
       controller.close()
     },
   })
@@ -107,32 +126,18 @@ Deno.test("readBoundedBody rejects an oversized declared content-length before r
   )
 
   await assertRejects(() => readBoundedBody(request, { maxBytes: 5 }), PayloadTooLargeError)
-  assertEquals(settled, false, "the body was read despite an over-cap content-length")
-})
-
-Deno.test("readBoundedBody cancels an over-cap declared body without reading it", async () => {
-  let cancelReason: unknown
-  let cancelled = false
-  const body = new ReadableStream<Uint8Array>({
-    pull() {
-      return new Promise<void>(() => {})
-    },
-    cancel(reason) {
-      cancelled = true
-      cancelReason = reason
-    },
-  })
-  const request = new Request(
-    ORIGIN,
-    streamInit(body, { "content-length": "999999" }),
+  assertStrictEquals(
+    request.body?.locked,
+    false,
+    "a reader was taken on a body that was never read",
   )
-
-  await assertRejects(() => readBoundedBody(request, { maxBytes: 5 }), PayloadTooLargeError)
-  assertEquals(cancelled, true, "rejected request body was left un-cancelled")
-  assertEquals(cancelReason, undefined)
 })
 
-Deno.test("readBoundedBody rejects a stalled body when the deadline fires", async () => {
+Deno.test("readBoundedBody leaves an unread rejected body to the server to drain", async () => {
+  // The canonical reader rejects the declared length before taking a reader, so
+  // there is no lock to release and nothing here to cancel: an unread request
+  // body belongs to the server, which drains or cancels it once the handler has
+  // answered. The pre-collapse copy cancelled it at this point instead.
   let cancelled = false
   const body = new ReadableStream<Uint8Array>({
     pull() {
@@ -142,19 +147,55 @@ Deno.test("readBoundedBody rejects a stalled body when the deadline fires", asyn
       cancelled = true
     },
   })
-  const request = new Request(ORIGIN, streamInit(body))
-  const timer = manualTimer()
-
-  const pending = assertRejects(
-    () => readBoundedBody(request, { maxBytes: 64, timeoutMs: 1000, ...timer.timeoutOptions }),
-    Error,
-    "Body read timed out after 1000ms",
+  const request = new Request(
+    ORIGIN,
+    streamInit(body, { "content-length": "999999" }),
   )
 
-  timer.fire()
-  await pending
-  assertEquals(timer.cleared.length, 1, "timeout timer was not cleared")
-  assertEquals(cancelled, true, "the stalled reader was left open after the timeout")
+  await assertRejects(() => readBoundedBody(request, { maxBytes: 5 }), PayloadTooLargeError)
+  assertStrictEquals(cancelled, false, "the rejected body was cancelled despite never being read")
+})
+
+Deno.test("readBoundedBody rejects a stalled body once the stall budget expires", async () => {
+  let cancelled = false
+  const request = new Request(
+    ORIGIN,
+    streamInit(stalledStream(() => {
+      cancelled = true
+    })),
+  )
+
+  const rejection = await assertRejects(
+    () => readBoundedBody(request, { maxBytes: 64, timeoutMs: 25 }),
+    NetBodyReadTimeoutError,
+    "Body read stalled for 25ms",
+  )
+  assertStrictEquals(rejection instanceof NetBodyReadTimeoutError, true)
+  assertEquals(cancelled, true, "the stalled reader was left open after the stall budget expired")
+})
+
+Deno.test("readBoundedBody keeps a slow-but-live read alive past the budget", async () => {
+  // 8 chunks x 15ms is ~120ms of wall clock against a 60ms budget: a single
+  // overall deadline would abort at 60ms, so this pins the per-chunk stall
+  // budget the canonical module documents and this package inherits.
+  const request = new Request(ORIGIN, streamInit(dripStream(new Uint8Array([7]), 8, 15)))
+
+  const body = await readBoundedBody(request, { maxBytes: 64, timeoutMs: 60 })
+  assertEquals(body.byteLength, 8)
+})
+
+Deno.test({
+  name: "readBoundedBody clears its stall timer when a live read finishes",
+  // The assertion is the resources sanitizer: a timer armed for the stall budget
+  // and never cleared is reported as a leaked timer. The pre-collapse copy armed
+  // four and cleared one.
+  sanitizeResources: true,
+  fn: async () => {
+    const request = new Request(ORIGIN, streamInit(dripStream(new Uint8Array([1]), 3, 1)))
+
+    const body = await readBoundedBody(request, { maxBytes: 64, timeoutMs: 5000 })
+    assertEquals([...body], [1, 1, 1])
+  },
 })
 
 Deno.test("readBoundedBody cancels the reader when the cap is crossed mid-stream", async () => {
@@ -206,8 +247,11 @@ Deno.test("readBoundedBody reports the read error even when cancel rejects", asy
 })
 
 Deno.test("readBoundedBody rejects a negative cap instead of reading", async () => {
+  // The canonical reader has no `RangeError` branch: a non-positive cap simply
+  // cannot be satisfied, so the read fails closed on the same error a real
+  // over-cap body raises.
   const request = new Request(ORIGIN, { method: "POST", body: "abc" })
-  await assertRejects(() => readBoundedBody(request, { maxBytes: -1 }), RangeError)
+  await assertRejects(() => readBoundedBody(request, { maxBytes: -1 }), PayloadTooLargeError)
 })
 
 Deno.test("PayloadTooLargeError names itself and carries the cap", async () => {
@@ -238,13 +282,16 @@ Deno.test("readBoundedText decodes a multi-byte body at the cap", async () => {
   assertEquals(await readBoundedText(request, { maxBytes: 3 }), "aé")
 })
 
-Deno.test("readContentLength reads an integer header and ignores junk", () => {
+Deno.test("readContentLength reads a bare decimal length and ignores anything else", () => {
   assertEquals(readContentLength(new Headers({ "content-length": "42" })), 42)
   assertEquals(readContentLength(new Headers({ "content-length": "0" })), 0)
   assertEquals(readContentLength(new Headers()), null)
-  assertEquals(readContentLength(new Headers({ "content-length": "12.5" })), null)
-  assertEquals(readContentLength(new Headers({ "content-length": "-1" })), null)
-  assertEquals(readContentLength(new Headers({ "content-length": "12abc" })), null)
+  // RFC 9110 §8.6 makes the field 1*DIGIT. `Number()` alone also accepts every
+  // value below, which is the leniency the pre-collapse copy shipped: a cap
+  // pre-check that reads `1e3` as 1000 can be argued out of rejecting a body.
+  for (const value of ["1e3", "0x10", "+5", "12.5", "-1", "12abc"]) {
+    assertEquals(readContentLength(new Headers({ "content-length": value })), null, value)
+  }
 })
 
 Deno.test("parseBoundedFormData reads a url-encoded body within the cap", async () => {
@@ -311,4 +358,113 @@ Deno.test("parseBoundedFormData rejects a multipart body over the cap", async ()
 Deno.test("parseBoundedFormData refuses a request without a content-type", async () => {
   const request = new Request(ORIGIN, { method: "POST", body: "email=user%40example.com" })
   await assertRejects(() => parseBoundedFormData(request, { maxBytes: 1024 }), TypeError)
+})
+
+// The tests below pin class identity and the public surface after the collapse
+// into `net/bounded-body.ts`. They are not the only tests a local
+// `class PayloadTooLargeError` breaks: it also reddens the seven
+// `assertRejects(..., PayloadTooLargeError)` call sites above, which report the
+// bug as "Expected error to be instance of X, but was X" — ten failures in all.
+
+Deno.test("PayloadTooLargeError is the same class object as the canonical one", () => {
+  assertStrictEquals(PayloadTooLargeError, NetPayloadTooLargeError)
+})
+
+Deno.test("a streamed over-cap body throws the canonical class through the entry point", async () => {
+  // The declared-length path is not exercised here: a stream body carries no
+  // `content-length`, so only the running total can reject it.
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(8))
+    },
+  })
+  const request = new Request(ORIGIN, streamInit(body))
+  assertStrictEquals(request.headers.get("content-length"), null)
+
+  const thrown = await assertRejects(() => readBoundedBody(request, { maxBytes: 4 }))
+  assertStrictEquals(thrown instanceof NetPayloadTooLargeError, true)
+  assertStrictEquals(thrown instanceof PayloadTooLargeError, true)
+})
+
+Deno.test("a declared over-cap length throws the canonical class through the entry point", async () => {
+  // The streamed bytes are inside the cap, so only the declared-length pre-check
+  // can reject this request.
+  const request = new Request(
+    ORIGIN,
+    streamInit(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(1))
+          controller.close()
+        },
+      }),
+      { "content-length": "999999" },
+    ),
+  )
+
+  const thrown = await assertRejects(() => readBoundedBody(request, { maxBytes: 4 }))
+  assertStrictEquals(thrown instanceof NetPayloadTooLargeError, true)
+  assertStrictEquals(thrown instanceof PayloadTooLargeError, true)
+})
+
+Deno.test("a form-data cap rejection is catchable as the canonical error", async () => {
+  const boundary = "----tslibsboundary"
+  const payload = [
+    `--${boundary}`,
+    `Content-Disposition: form-data; name="file"; filename="big.txt"`,
+    "Content-Type: text/plain",
+    "",
+    "x".repeat(64),
+    `--${boundary}--`,
+    "",
+  ].join("\r\n")
+  const request = new Request(ORIGIN, {
+    method: "POST",
+    headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+    body: payload,
+  })
+
+  const thrown = await assertRejects(
+    () => parseBoundedFormData(request, { maxBytes: 32 }),
+    NetPayloadTooLargeError,
+  )
+  assertStrictEquals(thrown instanceof NetPayloadTooLargeError, true)
+})
+
+Deno.test("the entry point republishes the promised surface and nothing else", async () => {
+  const surface: Record<string, unknown> = await import("./bounded-body.ts")
+
+  for (
+    const name of [
+      "PayloadTooLargeError",
+      "readBoundedBody",
+      "readBoundedText",
+      "readContentLength",
+      "parseBoundedFormData",
+    ]
+  ) {
+    assertStrictEquals(name in surface, true, `${name} disappeared from the surface`)
+  }
+  // A narrow re-export is the point of the collapse: widening it to `export *`
+  // would publish canonical symbols this package never promised.
+  for (
+    const unpromised of [
+      "BodyReadErrorCode",
+      "BodyReadTimeoutError",
+      "readBoundedJson",
+      "DEFAULT_MAX_BYTES",
+      "DEFAULT_BODY_TIMEOUT_MS",
+    ]
+  ) {
+    assertStrictEquals(unpromised in surface, false, `${unpromised} leaked into the surface`)
+  }
+})
+
+Deno.test("BoundedBodyTimeout still types the stall budget", async () => {
+  // A compile-time pin as much as a runtime one: the name survives the collapse,
+  // so `import type { BoundedBodyTimeout }` keeps working for existing callers.
+  const timeout: BoundedBodyTimeout = { timeoutMs: 50 }
+  const request = new Request(ORIGIN, { method: "POST", body: "abc" })
+
+  assertEquals((await readBoundedBody(request, { ...timeout, maxBytes: 5 })).byteLength, 3)
 })
