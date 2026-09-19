@@ -2,8 +2,8 @@
   "name": "@ts-libs/ops",
   "version": "0.1.0",
   "exports": {
-    "./notify": "./ops/notify/mod.ts",
-    "./notify/healthchecks": "./ops/notify/healthchecks.ts",
-    "./notify/ntfy": "./ops/notify/ntfy.ts"
+    "./notify": "./notify/mod.ts",
+    "./notify/healthchecks": "./notify/healthchecks.ts",
+    "./notify/ntfy": "./notify/ntfy.ts"
   }
 }

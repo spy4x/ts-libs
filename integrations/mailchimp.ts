@@ -29,6 +29,7 @@ import {
   type BackoffFn,
   type Clock,
   createExponentialBackoff,
+  describeTransportError,
   isTransientStatus,
   parseRetryAfterMs,
   type RetryPolicy,
@@ -323,7 +324,7 @@ export const mailchimpConfigFromEnv = (
  * to record that outcome as a result a caller must handle.
  */
 export class MailchimpClient {
-  /** API root, e.g. `https://us21.api.mailchimp.com/3.0`. */
+  /** API root: `https://<serverPrefix>.api.mailchimp.com/3.0`. */
   readonly apiUrl: string
   private readonly config: MailchimpClientConfig
   private readonly fetcher: typeof fetch
@@ -555,7 +556,7 @@ export class MailchimpClient {
       return {
         ok: false,
         code: "network_error",
-        message: cause instanceof Error ? cause.message : String(cause),
+        message: describeTransportError(cause),
         attempts: attempt,
         retryable: true,
       }

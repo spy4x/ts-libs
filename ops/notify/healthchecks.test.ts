@@ -132,6 +132,11 @@ describe("HealthchecksClient.ping", () => {
     expect(result.ok === false && result.message).toBe("500")
     expect(result.ok === false && result.attempts).toBe(10)
     expect(transport.requests.length).toBe(10)
+    // The prose in ops/README.md quotes a total. Assert it from the schedule
+    // itself so the two cannot drift apart again.
+    const waitedMs = result.ok === false ? result.waitedMs : 0
+    expect(waitedMs).toBe(2_220_000)
+    expect(waitedMs / 60_000).toBe(37)
     expect(timer.delays).toEqual([
       60_000,
       120_000,
@@ -192,7 +197,9 @@ describe("HealthchecksClient.ping", () => {
     const client = new HealthchecksClient({ pingUrl: PING_URL }, {
       fetcher: () => {
         calls++
-        return Promise.reject(new Error("tls handshake failed"))
+        // What a real transport failure looks like: the URL carries the check's
+        // capability key in its path.
+        return Promise.reject(new Error(`Invalid URL: '${PING_URL}/fail'`))
       },
       sleep: timer.sleep,
       clock: timer.clock,
@@ -203,7 +210,7 @@ describe("HealthchecksClient.ping", () => {
     expect(result).toEqual({
       ok: false,
       code: "network_error",
-      message: "tls handshake failed",
+      message: "transport failure (url withheld)",
       attempts: 2,
       waitedMs: 10,
     })

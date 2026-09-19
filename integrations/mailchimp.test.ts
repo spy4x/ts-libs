@@ -15,9 +15,13 @@ const CONFIG = {
   apiKey: "test-key-not-real",
   username: "test-user-not-real",
   listId: "test-list-not-real",
-  serverPrefix: "us99",
+  serverPrefix: "example",
 }
-const API_ROOT = "https://us99.api.mailchimp.com/3.0"
+// The client builds `https://<prefix>.api.mailchimp.com/3.0`. The suite uses an
+// RFC 2606 prefix so every URL asserted or recorded here is under
+// `api.mailchimp.com`-shaped but example-owned territory, and no request is
+// ever made.
+const API_ROOT = "https://example.api.mailchimp.com/3.0"
 
 interface RecordedRequest {
   url: string
@@ -441,10 +445,13 @@ describe("MailchimpClient.searchContact", () => {
     })
   })
 
-  it("returns a typed network_error when the transport throws", async () => {
+  it("returns a typed network_error without echoing the request URL", async () => {
     const timer = recordingTimer()
     const client = new MailchimpClient(CONFIG, {
-      fetcher: () => Promise.reject(new Error("dns failure")),
+      // What `fetch` actually throws: the URL, which for this client carries no
+      // credential, but the same code path serves a caller-supplied host.
+      fetcher: () =>
+        Promise.reject(new TypeError(`Invalid URL: '${API_ROOT}/lists/l/members/abc'`)),
       sleep: timer.sleep,
       clock: timer.clock,
       retry: { maxAttempts: 2, baseDelayMs: 10, maxDelayMs: 10, jitterRatio: 0 },
@@ -452,7 +459,10 @@ describe("MailchimpClient.searchContact", () => {
     const result = await client.searchContact("member@example.invalid")
     expect(result.ok).toBe(false)
     expect(result.ok === false && result.code).toBe("network_error")
-    expect(result.ok === false && result.message).toBe("dns failure")
+    expect(result.ok === false && result.message).toBe(
+      "TypeError: transport failure (url withheld)",
+    )
+    expect(JSON.stringify(result)).not.toContain("api.example.com")
   })
 
   it("refuses an empty address without calling the network", async () => {

@@ -33,8 +33,15 @@ const result = await slack.send({ blocks: [...] })
   in a branch.
 
 `responseBody` carries Slack's own reason (`invalid_payload`, `no_service`) truncated to 500
-characters. The webhook URL is never logged and never appears in a result, so the token in it cannot
-leak through an error path.
+characters.
+
+**The webhook URL never appears in a result.** Its last path segment _is_ the credential, and
+`fetch` puts the whole URL in its error text (`Invalid URL: 'https://…/services/T/B/token'`). Every
+transport failure is therefore reported through `describeTransportError`, which returns the error's
+class name and `transport failure (url withheld)` — never the URL. The same helper covers
+`MailchimpClient` (a caller-supplied API host) and `ops/notify/healthchecks` (the ping URL carries the
+check's capability key). Pinned by
+`SlackClient.send ... never returns the webhook URL, so the token in it cannot leak`.
 
 **Config.** `SLACK_WEBHOOK_URL`. Read through `slackConfigFromEnv(read?)`, which returns `null` when
 unset — the caller decides whether that is fatal. Nothing reads `$env` at module scope and the
@@ -92,8 +99,12 @@ const payload = JSON.parse(new TextDecoder().decode(result.body))
 - A timestamp participates in the signature and is checked against an injected clock, so a captured
   delivery cannot be replayed after the window. A missing or unparseable timestamp is a rejection,
   not "no replay protection needed".
-- Fail-closed. Every rejection returns a `reason` and none of them accept; an empty secret refuses
-  everything rather than signing with nothing.
+- Fail-closed on **every** unusable secret, not just the empty string. `""`, `" "`, `null`,
+  `undefined`, a number and a missing config object all return the typed
+  `{ ok: false, reason: "invalid_secret" }`. Nothing throws: a zero-length HMAC key raises
+  `DataError: Key length is zero`, which is a crash on an untrusted request rather than a 401, and
+  the values that did _not_ throw produced a usable key, so a body signed with the same falsy value
+  verified. Pinned by `rejects a forgery signed with the HMAC key \`null\``and`does not throw \`DataError: Key length is zero\` for an empty or absent secret`.
 - The body must be the raw bytes off the wire. Parsing and re-serialising JSON changes the hash.
 
 Headers default to `X-Signature-256` and `X-Signature-Timestamp`, both overridable, so a
@@ -110,10 +121,20 @@ Read the three sections below before writing a test that touches the network. It
   timer plus a manual clock, so nothing sleeps and nothing asserts on wall-clock time.
 - **`backoff?: BackoffFn`** — the delay computation. `onDelay` observes every requested delay, which
   is how a test asserts _"asked for exactly 2 seconds"_ without waiting for them.
+- **Console silence is asserted, not assumed.** `integrations/console.test.ts` installs a
+  process-wide capture _before_ importing the modules and drives every path of both clients —
+  upsert, API rejection, disabled skip, empty address, lookup hit, 404 miss, 5xx, transport throw,
+  invalid payload — asserting nothing is logged. A per-suite capture only covers that suite's
+  branches, which is how a restored 4xx `console.error` survived a green run.
 - **Secrets are constructor parameters.** No module reads `$env` at import time and no secret is
   logged. The `*ConfigFromEnv(read?)` helpers take a reader, so a test injects a fake environment.
 
 ## Retry policy
+
+The retry mechanism is `retry.ts`, **copied byte-for-byte** into `ops/notify/retry.ts` because the
+two packages are owned by different issues and must stay file-disjoint.
+`ops/notify/retry-drift.test.ts` reads both files and fails if the bytes differ, so the duplication
+cannot silently diverge.
 
 Transient statuses are `429` and `5xx`; every other `4xx` is permanent. `Retry-After` in the
 delay-seconds form wins over the computed backoff, then the same per-wait ceiling applies, so a

@@ -25,10 +25,10 @@
  *    read at module scope and never logged.
  */
 
+import { createAsciiHeaders } from "./header-safety.ts"
 import {
   type BackoffFn,
   type Clock,
-  createAsciiHeaders,
   createExponentialBackoff,
   isTransientStatus,
   parseRetryAfterMs,
@@ -89,8 +89,17 @@ export interface NtfyPushed {
   status: "pushed"
   httpStatus: number
   attempts: number
-  /** Headers as sent, so a caller can assert the ASCII transliteration. */
-  headers: Record<string, string>
+  /**
+   * The header values a caller may need, already transliterated to ASCII.
+   *
+   * Deliberately *not* the whole header map. Returning it verbatim also
+   * returned `authorization: "Bearer <token>"`, so any caller that logged a
+   * result — the obvious thing to do with one — logged the credential. These
+   * are the only two fields a caller has a reason to read; the token is never
+   * part of a result.
+   */
+  title: string
+  tags: string | null
 }
 
 export interface NtfySkipped {
@@ -254,7 +263,8 @@ export class NtfyClient {
         status: "pushed",
         httpStatus: settled.httpStatus,
         attempts: run.attempts,
-        headers: Object.fromEntries(headers.entries()),
+        title: headers.get("Title") ?? "",
+        tags: headers.get("Tags"),
       }
     }
     return {

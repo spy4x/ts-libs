@@ -17,6 +17,7 @@ import {
   type BackoffFn,
   type Clock,
   createExponentialBackoff,
+  describeTransportError,
   isTransientStatus,
   parseRetryAfterMs,
   type RetryPolicy,
@@ -25,7 +26,7 @@ import {
 } from "./retry.ts"
 
 export interface SlackClientConfig {
-  /** Slack incoming-webhook URL, e.g. `https://hooks.slack.com/services/T/B/X`. */
+  /** Slack incoming-webhook URL, e.g. `https://hooks.slack.example.com/services/T/B/X`. */
   webhookUrl: string
 }
 
@@ -234,7 +235,7 @@ export class SlackClient {
       return {
         ok: false,
         code: "network_error",
-        message: cause instanceof Error ? cause.message : String(cause),
+        message: describeTransportError(cause),
         attempts: attempt,
         retryable: true,
       }

@@ -9,11 +9,20 @@ and age64 env.
 
 ## Entry points
 
-| Export                  | What it is                                                   |
-| ----------------------- | ------------------------------------------------------------ |
-| `./notify`              | Barrel for everything below.                                 |
-| `./notify/healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, outcomes  |
-| `./notify/ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, … |
+| Export                  | What it is                                                  |
+| ----------------------- | ----------------------------------------------------------- |
+| `./notify`              | Barrel for everything below.                                |
+| `./notify/healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, outcomes |
+| `./notify/ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`   |
+
+Export targets are **package-relative** (`"./notify": "./notify/mod.ts"`), resolved against this
+package directory. A repo-root-relative target (`"./ops/notify/mod.ts"`) resolves to
+`ops/ops/notify/mod.ts` and makes every notifier unimportable by name — `deno publish --dry-run`
+exits 1 with `TS2307`.
+
+`#18` lists `./console`, `./env`, `./fs`, `./run-command`, `./hooks/install`, `./backup/types` and
+`./backup/compose`. Those sets are disjoint, so whichever lands second must **union** the exports
+rather than overwrite this file.
 
 ## `HealthchecksClient` — dead-man's switch
 
@@ -32,9 +41,11 @@ The constructor throws on an empty URL. Nothing is read at module scope.
 `{ ok: false, code, message, status?, attempts, waitedMs }`. The upstream resolved `void` and logged
 its failures, so a caller could not tell a delivered ping from a dead endpoint.
 
-**Retry policy.** 10 attempts, 60s doubling, capped at 5 minutes per wait — the schedule totals 38
-minutes, which fits inside healthchecks.io's 1-hour grace window. A 10-minute per-wait cap would need
-46 minutes and overrun the very window the cap exists to respect. `Retry-After` is honoured: the
+**Retry policy.** 10 attempts, 60s doubling, capped at 5 minutes per wait. Measured schedule, not
+estimated: waits run `1 + 2 + 4 + 5 + 5 + 5 + 5 + 5 + 5 = 37.0 minutes` (2,220,000 ms across 9
+retries), which fits inside healthchecks.io's 1-hour grace window. A 10-minute per-wait cap gives
+`1 + 2 + 4 + 8 + 10 + 10 + 10 + 10 + 10 = 65.0 minutes` and overruns the very window the cap exists
+to respect. Both figures are asserted by the suite. `Retry-After` is honoured: the
 provider rate-limits with `429` and the upstream ignored the header, hammering the endpoint on the
 failures it was retrying. A total budget bounds the whole operation; it is set above the sum of the
 waits, because a budget of exactly 10 minutes aborted after the 4th attempt and silently delivered 4

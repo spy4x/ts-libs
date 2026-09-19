@@ -1,7 +1,21 @@
 /**
- * Transport retry policy shared by the `integrations/` clients.
+ * Transport retry policy. **Canonical copy — do not edit one copy alone.**
  *
- * Every knob a test needs is injectable: the delay function (`backoff`), the
+ * This file is byte-identical in two places:
+ *
+ * - `integrations/retry.ts`
+ * - `ops/notify/retry.ts`
+ *
+ * The two packages are owned by different issues (#16 and #18) and deliberately
+ * do not import from a packages directory neither owns, so the module is
+ * copied rather than shared. `integrations/retry-drift.test.ts` and
+ * `ops/notify/retry-drift.test.ts` read both files and fail if the bytes differ,
+ * so the duplication cannot silently diverge: the four ways it had already
+ * diverged (jitter honoured in one copy and ignored in the other,
+ * `isPermanentStatus` present in one only, a different backoff signature, and a
+ * disagreeing `maxAttempts: 0` guard) are all covered by that one assertion.
+ *
+ * Everything a test needs is injectable: the delay function (`backoff`), the
  * waiter (`sleep`) and the elapsed-time source (`clock`). Production defaults
  * are real; a test supplies a recording timer and a manual clock, so no test
  * ever sleeps and no test asserts against wall-clock time.
@@ -14,7 +28,7 @@
 export type BackoffFn = (attempt: number, retryAfterMs?: number) => number
 
 export interface RetryPolicy {
-  /** Total attempts, including the first. 1 disables retrying. */
+  /** Total attempts, including the first. 1 or fewer disables retrying. */
   maxAttempts: number
   /** Delay before the second attempt. */
   baseDelayMs: number
@@ -28,10 +42,10 @@ export interface RetryPolicy {
   onDelay?: (delayMs: number, attempt: number) => void
 }
 
-/** Real-time scale, in front of a `Clock`. */
+/** Waits a duration. Injected so a test can record instead of sleeping. */
 export type Sleeper = (ms: number) => Promise<void>
 
-/** Monotonic-enough millisecond source. */
+/** Millisecond time source. */
 export type Clock = () => number
 
 /**
@@ -49,14 +63,22 @@ export const settle = async (result: void | Promise<void>): Promise<void> => {
  *
  * Only the delay-seconds form is honoured; the HTTP-date form is ignored
  * because it needs a wall clock, and a skewed client clock would turn a
- * provider hint into a multi-hour stall. A negative or non-numeric value is
- * ignored rather than treated as zero.
+ * provider hint into a multi-hour stall.
+ *
+ * A missing header, a blank header (`""`, `" "`) and a negative or non-numeric
+ * value all return `undefined`, meaning "no hint" — the caller's backoff
+ * applies. Returning `0` for a blank header would delete all backoff, because
+ * `0` is a valid delay; the trim is what separates "absent" from "zero".
  */
 export const parseRetryAfterMs = (value: string | null): number | undefined => {
   if (value === null) {
     return undefined
   }
-  const seconds = Number(value.trim())
+  const trimmed = value.trim()
+  if (trimmed === "") {
+    return undefined
+  }
+  const seconds = Number(trimmed)
   if (!Number.isFinite(seconds) || seconds < 0) {
     return undefined
   }
@@ -67,9 +89,14 @@ export const parseRetryAfterMs = (value: string | null): number | undefined => {
  * Exponential backoff, clamped and optionally jittered.
  *
  * `Retry-After` short-circuits the computation, then the same clamps apply so a
- * hostile or buggy provider cannot pin a process for a week. Jitter is
- * deterministic per `(attempt, retryAfterMs)` so the function stays pure and a
- * test can assert its exact output.
+ * hostile or buggy provider cannot pin a process for a week.
+ *
+ * Jitter is **deterministic**, derived from `(attempt, retryAfterMs)` rather
+ * than from a random source: the function stays pure, a test can assert its
+ * exact output, and a retry test does not become a flake. That is a deliberate
+ * departure from the usual randomised jitter — the goal here is only to
+ * de-synchronise callers that start together, and a per-attempt constant
+ * achieves that.
  */
 export const createExponentialBackoff =
   (policy: Pick<RetryPolicy, "baseDelayMs" | "maxDelayMs" | "jitterRatio">): BackoffFn =>
@@ -82,9 +109,8 @@ export const createExponentialBackoff =
     const span = clamped * policy.jitterRatio
     const seed = (attempt * 2654435761 + (retryAfterMs ?? 0)) % 1000
     const jitter = (seed / 1000) * 2 * span - span
-    return Math.round(
-      Math.min(Math.max(clamped + jitter, policy.baseDelayMs > 0 ? 1 : 0), policy.maxDelayMs),
-    )
+    const floor = policy.baseDelayMs > 0 ? 1 : 0
+    return Math.round(Math.min(Math.max(clamped + jitter, floor), policy.maxDelayMs))
   }
 
 /** Statuses worth another attempt: rate limiting and upstream faults. */
@@ -92,6 +118,24 @@ export const isTransientStatus = (status: number): boolean => status === 429 || 
 
 /** Statuses that will never succeed on a retry: the request itself is wrong. */
 export const isPermanentStatus = (status: number): boolean => status >= 400 && status < 500
+
+/**
+ * Describes a transport failure **without** the request URL.
+ *
+ * A webhook URL and a healthchecks ping URL both carry their credential in the
+ * path, and `fetch` puts the whole thing in its error text
+ * (`Invalid URL: 'https://hooks.slack.example.invalid/services/T/B/token'`).
+ * Returning `cause.message` therefore returned the secret. The error's own
+ * `name` and a fixed description are enough to diagnose a transport failure;
+ * the URL belongs in the caller's debugger, not in a value that gets logged,
+ * rendered into a UI or pasted into an issue.
+ */
+export const describeTransportError = (cause: unknown): string => {
+  if (cause instanceof Error && cause.name !== "Error") {
+    return `${cause.name}: transport failure (url withheld)`
+  }
+  return "transport failure (url withheld)"
+}
 
 export interface RetryRunResult<R> {
   /** Attempts performed, including the first. */
@@ -118,22 +162,24 @@ export interface RetryRunOptions<R> {
  * the next delay cannot fit in `totalBudgetMs` measured from the injected
  * clock. `onDelay` sees every requested delay, which is how the retry tests
  * assert "asked for exactly 2 seconds" without waiting.
+ *
+ * `maxAttempts <= 0` is treated as **one** attempt, not zero: a policy that
+ * performs no attempt at all would have no result to report, and the two
+ * copies of this module previously disagreed about that.
  */
 export const runWithRetry = async <R>(options: RetryRunOptions<R>): Promise<RetryRunResult<R>> => {
   const { policy, attempt, sleep, clock, backoff } = options
+  const totalAttempts = Math.max(policy.maxAttempts, 1)
   const startedAt = clock()
   let attempts = 0
   let waitedMs = 0
   let lastValue: R | undefined
 
-  for (let index = 1; index <= Math.max(policy.maxAttempts, 1); index++) {
+  for (let index = 1; index <= totalAttempts; index++) {
     attempts = index
     const outcome = await attempt(index)
     lastValue = outcome.value
-    if (!outcome.failed) {
-      break
-    }
-    if (index === policy.maxAttempts) {
+    if (!outcome.failed || index === totalAttempts) {
       break
     }
     const delayMs = backoff(index, outcome.retryAfterMs)

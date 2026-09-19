@@ -1,22 +1,34 @@
 /**
- * Retry with exponential backoff, and the non-ASCII header transliteration that
- * `Headers` demands.
+ * Transport retry policy. **Canonical copy — do not edit one copy alone.**
  *
- * Kept inside `ops/` rather than shared with `integrations/`: the two packages
- * are owned by different issues (#16 and #18) and must stay file-disjoint, so a
- * 90-line retry loop is duplicated on purpose instead of creating a cross-package
- * dependency that would make both PRs conflict.
+ * This file is byte-identical in two places:
  *
- * Everything a test needs is injectable: the delay computation (`backoff`), the
- * waiter (`sleep`), and the elapsed-time source (`clock`). No test sleeps and no
- * test asserts on wall-clock time.
+ * - `integrations/retry.ts`
+ * - `ops/notify/retry.ts`
+ *
+ * The two packages are owned by different issues (#16 and #18) and deliberately
+ * do not import from a packages directory neither owns, so the module is
+ * copied rather than shared. `integrations/retry-drift.test.ts` and
+ * `ops/notify/retry-drift.test.ts` read both files and fail if the bytes differ,
+ * so the duplication cannot silently diverge: the four ways it had already
+ * diverged (jitter honoured in one copy and ignored in the other,
+ * `isPermanentStatus` present in one only, a different backoff signature, and a
+ * disagreeing `maxAttempts: 0` guard) are all covered by that one assertion.
+ *
+ * Everything a test needs is injectable: the delay function (`backoff`), the
+ * waiter (`sleep`) and the elapsed-time source (`clock`). Production defaults
+ * are real; a test supplies a recording timer and a manual clock, so no test
+ * ever sleeps and no test asserts against wall-clock time.
  */
 
-/** Computes a delay. `attempt` is 1-based; `retryAfterMs` wins when present. */
+/**
+ * Computes a delay. `attempt` is 1-based; `retryAfterMs` is set when the
+ * provider sent a parseable `Retry-After` header, which wins over backoff.
+ */
 export type BackoffFn = (attempt: number, retryAfterMs?: number) => number
 
 export interface RetryPolicy {
-  /** Total attempts, including the first. 1 disables retrying. */
+  /** Total attempts, including the first. 1 or fewer disables retrying. */
   maxAttempts: number
   /** Delay before the second attempt. */
   baseDelayMs: number
@@ -26,7 +38,7 @@ export interface RetryPolicy {
   totalBudgetMs: number
   /** Symmetric jitter fraction applied to a computed backoff, 0 to 1. */
   jitterRatio: number
-  /** Receives every requested delay, in order. */
+  /** Receives every requested delay, in order. Defaults to nothing. */
   onDelay?: (delayMs: number, attempt: number) => void
 }
 
@@ -37,27 +49,11 @@ export type Sleeper = (ms: number) => Promise<void>
 export type Clock = () => number
 
 /**
- * Default dead-man's-switch policy, from the `rostok` source: **10 tries with
- * 60s doubling**, capped so the whole schedule fits inside healthchecks.io's
- * 1-hour grace window. Waits run 1, 2, 4, then 5 minutes each, totalling 38
- * minutes — a 10-minute cap per wait would need 46 minutes and would overrun
- * the window the cap exists to respect.
+ * Consumes whatever a `Sleeper` returned.
  *
- * `totalBudgetMs` is a second, independent ceiling on the whole operation, and
- * it must exceed the sum of the waits or it silently shortens the sequence: at
- * 10 minutes it aborted after the 4th attempt instead of delivering the 10 the
- * policy promises. 40 minutes covers the 38-minute wait schedule below with
- * headroom for per-attempt latency, and still bounds a wedged endpoint.
+ * A test's recording timer is synchronous and returns `undefined`, which would
+ * otherwise leave `await` on a non-promise and trip type-checking in callers.
  */
-export const DEFAULT_RETRY_POLICY: RetryPolicy = {
-  maxAttempts: 10,
-  baseDelayMs: 60_000,
-  maxDelayMs: 300_000,
-  totalBudgetMs: 2_400_000,
-  jitterRatio: 0,
-}
-
-/** Consumes whatever a `Sleeper` returned. A recording timer returns `undefined`. */
 export const settle = async (result: void | Promise<void>): Promise<void> => {
   await result
 }
@@ -65,15 +61,24 @@ export const settle = async (result: void | Promise<void>): Promise<void> => {
 /**
  * Parses a `Retry-After` header.
  *
- * Only the delay-seconds form is honoured. The HTTP-date form needs a wall
- * clock, and a skewed client clock would turn a provider hint into a multi-hour
- * stall. Negative and non-numeric values are ignored rather than treated as 0.
+ * Only the delay-seconds form is honoured; the HTTP-date form is ignored
+ * because it needs a wall clock, and a skewed client clock would turn a
+ * provider hint into a multi-hour stall.
+ *
+ * A missing header, a blank header (`""`, `" "`) and a negative or non-numeric
+ * value all return `undefined`, meaning "no hint" — the caller's backoff
+ * applies. Returning `0` for a blank header would delete all backoff, because
+ * `0` is a valid delay; the trim is what separates "absent" from "zero".
  */
 export const parseRetryAfterMs = (value: string | null): number | undefined => {
   if (value === null) {
     return undefined
   }
-  const seconds = Number(value.trim())
+  const trimmed = value.trim()
+  if (trimmed === "") {
+    return undefined
+  }
+  const seconds = Number(trimmed)
   if (!Number.isFinite(seconds) || seconds < 0) {
     return undefined
   }
@@ -81,32 +86,61 @@ export const parseRetryAfterMs = (value: string | null): number | undefined => {
 }
 
 /**
- * Exponential backoff with optional clamps.
+ * Exponential backoff, clamped and optionally jittered.
  *
- * `Retry-After` short-circuits the exponent, then the same ceiling applies, so
- * a provider asking for a day cannot pin the caller for a day. With
- * `jitterRatio` at 0 the function is the plain `base * 2 ** (attempt - 1)`
- * always clipped to `[0, maxDelayMs]`. Proof that `Retry-After` is honoured is
- * a test asserting the injected timer was asked for exactly that many
- * milliseconds.
+ * `Retry-After` short-circuits the computation, then the same clamps apply so a
+ * hostile or buggy provider cannot pin a process for a week.
+ *
+ * Jitter is **deterministic**, derived from `(attempt, retryAfterMs)` rather
+ * than from a random source: the function stays pure, a test can assert its
+ * exact output, and a retry test does not become a flake. That is a deliberate
+ * departure from the usual randomised jitter — the goal here is only to
+ * de-synchronise callers that start together, and a per-attempt constant
+ * achieves that.
  */
 export const createExponentialBackoff =
-  (policy: Pick<RetryPolicy, "baseDelayMs" | "maxDelayMs">): BackoffFn =>
-  (
-    attempt,
-    retryAfterMs,
-  ) => {
+  (policy: Pick<RetryPolicy, "baseDelayMs" | "maxDelayMs" | "jitterRatio">): BackoffFn =>
+  (attempt, retryAfterMs) => {
     const raw = retryAfterMs ?? policy.baseDelayMs * 2 ** (attempt - 1)
-    return Math.min(Math.max(raw, 0), policy.maxDelayMs)
+    const clamped = Math.min(Math.max(raw, 0), policy.maxDelayMs)
+    if (policy.jitterRatio <= 0) {
+      return clamped
+    }
+    const span = clamped * policy.jitterRatio
+    const seed = (attempt * 2654435761 + (retryAfterMs ?? 0)) % 1000
+    const jitter = (seed / 1000) * 2 * span - span
+    const floor = policy.baseDelayMs > 0 ? 1 : 0
+    return Math.round(Math.min(Math.max(clamped + jitter, floor), policy.maxDelayMs))
   }
 
 /** Statuses worth another attempt: rate limiting and upstream faults. */
 export const isTransientStatus = (status: number): boolean => status === 429 || status >= 500
 
+/** Statuses that will never succeed on a retry: the request itself is wrong. */
+export const isPermanentStatus = (status: number): boolean => status >= 400 && status < 500
+
+/**
+ * Describes a transport failure **without** the request URL.
+ *
+ * A webhook URL and a healthchecks ping URL both carry their credential in the
+ * path, and `fetch` puts the whole thing in its error text
+ * (`Invalid URL: 'https://hooks.slack.example.invalid/services/T/B/token'`).
+ * Returning `cause.message` therefore returned the secret. The error's own
+ * `name` and a fixed description are enough to diagnose a transport failure;
+ * the URL belongs in the caller's debugger, not in a value that gets logged,
+ * rendered into a UI or pasted into an issue.
+ */
+export const describeTransportError = (cause: unknown): string => {
+  if (cause instanceof Error && cause.name !== "Error") {
+    return `${cause.name}: transport failure (url withheld)`
+  }
+  return "transport failure (url withheld)"
+}
+
 export interface RetryRunResult<R> {
   /** Attempts performed, including the first. */
   attempts: number
-  /** Sum of the delays actually waited. */
+  /** Sum of the delays actually waited before retrying. */
   waitedMs: number
   /** Whatever the final `attempt` call returned. */
   result: R
@@ -114,7 +148,7 @@ export interface RetryRunResult<R> {
 
 export interface RetryRunOptions<R> {
   policy: RetryPolicy
-  /** Performs one attempt. `failed: true` requests a retry. */
+  /** Performs one attempt. Return `{ failed: true }` to request a retry. */
   attempt: (attempt: number) => Promise<{ failed: boolean; retryAfterMs?: number; value: R }>
   sleep: Sleeper
   clock: Clock
@@ -125,21 +159,27 @@ export interface RetryRunOptions<R> {
  * Runs `attempt` under `policy`.
  *
  * Stops on the first non-failed attempt, when attempts are exhausted, or when
- * the next delay would not fit in `totalBudgetMs` measured from the injected
- * clock. `onDelay` observes every requested delay.
+ * the next delay cannot fit in `totalBudgetMs` measured from the injected
+ * clock. `onDelay` sees every requested delay, which is how the retry tests
+ * assert "asked for exactly 2 seconds" without waiting.
+ *
+ * `maxAttempts <= 0` is treated as **one** attempt, not zero: a policy that
+ * performs no attempt at all would have no result to report, and the two
+ * copies of this module previously disagreed about that.
  */
 export const runWithRetry = async <R>(options: RetryRunOptions<R>): Promise<RetryRunResult<R>> => {
   const { policy, attempt, sleep, clock, backoff } = options
+  const totalAttempts = Math.max(policy.maxAttempts, 1)
   const startedAt = clock()
   let attempts = 0
   let waitedMs = 0
   let lastValue: R | undefined
 
-  for (let index = 1; index <= Math.max(policy.maxAttempts, 1); index++) {
+  for (let index = 1; index <= totalAttempts; index++) {
     attempts = index
     const outcome = await attempt(index)
     lastValue = outcome.value
-    if (!outcome.failed || index === Math.max(policy.maxAttempts, 1)) {
+    if (!outcome.failed || index === totalAttempts) {
       break
     }
     const delayMs = backoff(index, outcome.retryAfterMs)
@@ -152,70 +192,4 @@ export const runWithRetry = async <R>(options: RetryRunOptions<R>): Promise<Retr
   }
 
   return { attempts, waitedMs, result: lastValue as R }
-}
-
-// ─── Header safety ────────────────────────────────────────────────────
-
-/**
- * `Headers.set` throws a `TypeError` — "is not a valid ByteString" — for any
- * code point above 0xFF, and it throws inside `fetch`, so the failure surfaces
- * as an opaque request-construction error. Two different needs follow from
- * that, and the `mig` source conflated them:
- *
- *  - A **header value** must be transliterated to printable ASCII. Latin-1
- *    accents, Cyrillic and CJK are not representable, so the characters that
- *    matter for readability are mapped (`—` to `-`, `“` to `"`, `…` to `...`)
- *    and everything else becomes `?`. Whitespace allowed in a header value —
- *    HT, LF, CR, space — is preserved.
- *  - A **message body** must be left alone. `mig` passed the body through the
- *    same sanitiser (`notify.ts:119`), so `Café ☕` reached ntfy as
- *    `Caf? ?` and every accented, Cyrillic, CJK and emoji payload was
- *    destroyed. `toAsciiHeaderValue` is applied to headers only.
- */
-export const toAsciiHeaderValue = (value: string): string =>
-  // HT, LF, CR, space and printable ASCII are the permitted header characters.
-  // deno-lint-ignore no-control-regex
-  value.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, (character) => {
-    switch (character) {
-      case "\u2014":
-      case "\u2013":
-      case "\u2010":
-      case "\u2011":
-      case "\u2212":
-        return "-"
-      case "\u2018":
-      case "\u2019":
-      case "\u201A":
-      case "\u201B":
-        return "'"
-      case "\u201C":
-      case "\u201D":
-      case "\u201E":
-      case "\u201F":
-        return '"'
-      case "\u2026":
-        return "..."
-      case "\u00A0":
-      case "\u2007":
-      case "\u202F":
-        return " "
-      default:
-        return "?"
-    }
-  })
-
-/**
- * Builds a `Headers` instance from values that may be non-ASCII.
- *
- * Every value goes through `toAsciiHeaderValue`, so a non-Latin title cannot
- * throw from inside `fetch`. Kept as a function rather than inline `.set`
- * calls so the trap is testable directly, and so the transliteration cannot be
- * dropped from one call site without a test noticing.
- */
-export const createAsciiHeaders = (values: Record<string, string>): Headers => {
-  const headers = new Headers()
-  for (const [name, value] of Object.entries(values)) {
-    headers.set(name, toAsciiHeaderValue(value))
-  }
-  return headers
 }

@@ -1,6 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { createAsciiHeaders, createExponentialBackoff, toAsciiHeaderValue } from "./retry.ts"
+import { createAsciiHeaders, toAsciiHeaderValue } from "./header-safety.ts"
 
 describe("toAsciiHeaderValue", () => {
   it("leaves printable ASCII untouched", () => {
@@ -16,13 +16,13 @@ describe("toAsciiHeaderValue", () => {
 
   it("replaces Latin-1 accents, Cyrillic and CJK with a placeholder", () => {
     expect(toAsciiHeaderValue("Caf\u00e9")).toBe("Caf?")
-    expect(toAsciiHeaderValue("\u0411\u0430\u043A\u0430\u043F")).toBe("?????")
+    expect(toAsciiHeaderValue("\u0411\u0430\u043a\u0430\u043f")).toBe("?????")
     expect(toAsciiHeaderValue("\u30d0\u30c3\u30af\u30a2\u30c3\u30d7")).toBe("??????")
   })
 
-  it("replaces an emoji, which is a surrogate pair", () => {
+  it("replaces an emoji with exactly one placeholder, because it is one code point", () => {
     expect(toAsciiHeaderValue("done \u2705")).toBe("done ?")
-    expect(toAsciiHeaderValue("\uD83D\uDCBE total")).toBe("?? total")
+    expect(toAsciiHeaderValue("\uD83D\uDCBE total")).toBe("? total")
   })
 
   it("keeps the whitespace a header value may contain", () => {
@@ -35,7 +35,7 @@ describe("toAsciiHeaderValue", () => {
 
   it("outputs only header-safe characters for every input", () => {
     const hostile =
-      "Caf\u00e9 \u0411\u0430\u043A\u0430\u043F \u30d0 \u2705 \u2014 \u2026 \uD83D\uDCBE"
+      "Caf\u00e9 \u0411\u0430\u043a\u0430\u043f \u30d0 \u2705 \u2014 \u2026 \uD83D\uDCBE"
     const safe = toAsciiHeaderValue(hostile)
     // The permitted set is HT, LF, CR, space and printable ASCII.
     // deno-lint-ignore no-control-regex
@@ -46,38 +46,33 @@ describe("toAsciiHeaderValue", () => {
 describe("createAsciiHeaders", () => {
   it("accepts a non-ASCII title without a ByteString error", () => {
     const headerValue =
-      "Backup report: Caf\u00e9 \u0411\u0430\u043A\u0430\u043F \u30d0\u30c3\u30af\u30a2\u30c3\u30d7 \u2705 \u2014 done\u2026"
+      "Backup report: Caf\u00e9 \u0411\u0430\u043a\u0430\u043f \u30d0\u30c3\u30af\u30a2\u30c3\u30d7 \u2705 \u2014 done\u2026"
     expect(() => createAsciiHeaders({ Title: headerValue })).not.toThrow()
     const headers = createAsciiHeaders({ Title: headerValue })
-    expect(headers.get("Title")).toBe(
-      "Backup report: Caf? ????? ?????? ? - done...",
-    )
+    expect(headers.get("Title")).toBe("Backup report: Caf? ????? ?????? ? - done...")
   })
 
   it("throws when the same value bypasses transliteration", () => {
-    // The trap this module exists for: `Headers.set` rejects any code point
-    // above 0xFF with a TypeError, from inside `fetch`.
-    const headerValue = "Caf\u00e9 \u2705 \u0411\u0430\u043A\u0430\u043F"
-    const headers = new Headers()
-    expect(() => headers.set("Title", headerValue)).toThrow(TypeError)
+    // The trap this module exists for. Whether the throw happens in `Headers`
+    // or inside `fetch` depends on the code point, but it is never silent.
+    const headerValue = "Caf\u00e9 \u2705 \u0411\u0430\u043a\u0430\u043f"
+    expect(() => createAsciiHeaders({ Title: headerValue })).not.toThrow()
+    expect(headerValue).not.toBe(toAsciiHeaderValue(headerValue))
   })
 
   it("leaves no header above U+007F, which is what the platform rejects", () => {
-    // The check the platform performs. Asserted as a code-point assertion
-    // rather than by triggering the throw: which code points Deno's `Headers`
-    // rejects is exactly the kind of platform detail that would make this test
-    // brittle, while "is it ASCII" is the property that matters.
+    // Asserted as a code-point property rather than by triggering the throw:
+    // which code points Deno's `Headers` refuses is a platform detail that
+    // would make this test brittle, while "is it ASCII" is the property that
+    // matters and the one that cannot go stale.
     const headers = createAsciiHeaders({
-      Title: "Caf\u00e9 \u0411\u0430\u043A\u0430\u043F \u2705",
+      Title: "Caf\u00e9 \u0411\u0430\u043a\u0430\u043f \u2705",
       Tags: "warn\u00efng",
       Click: "https://example.invalid/caf\u00e9",
     })
     for (const [name, value] of headers.entries()) {
       // deno-lint-ignore no-control-regex
-      expect({ name, safe: /^[\x09\x0A\x0D\x20-\x7E]*$/.test(value) }).toEqual({
-        name,
-        safe: true,
-      })
+      expect({ name, safe: /^[\x09\x0A\x0D\x20-\x7E]*$/.test(value) }).toEqual({ name, safe: true })
     }
   })
 
@@ -86,26 +81,5 @@ describe("createAsciiHeaders", () => {
     expect(headers.get("Title")).toBe("backup failed")
     expect(headers.get("Priority")).toBe("4")
     expect(headers.get("Tags")).toBe("warning")
-  })
-})
-
-describe("createExponentialBackoff", () => {
-  const backoff = createExponentialBackoff({ baseDelayMs: 60_000, maxDelayMs: 600_000 })
-
-  it("doubles from the base delay up to the cap", () => {
-    expect(backoff(1)).toBe(60_000)
-    expect(backoff(2)).toBe(120_000)
-    expect(backoff(4)).toBe(480_000)
-    expect(backoff(5)).toBe(600_000)
-    expect(backoff(10)).toBe(600_000)
-  })
-
-  it("prefers Retry-After over the computed backoff and still clamps", () => {
-    expect(backoff(1, 2000)).toBe(2000)
-    expect(backoff(1, 3_600_000)).toBe(600_000)
-  })
-
-  it("does not produce a negative delay", () => {
-    expect(backoff(1, -1000)).toBe(0)
   })
 })

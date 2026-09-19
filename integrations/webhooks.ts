@@ -24,6 +24,7 @@
 
 /** Why a delivery was rejected. Every value is a rejection. */
 export type WebhookRejectReason =
+  | "invalid_secret"
   | "missing_signature"
   | "malformed_signature"
   | "missing_timestamp"
@@ -41,6 +42,10 @@ export interface WebhookVerifierConfig {
   /**
    * Shared secret. Caller-supplied, never read from the environment here, and
    * never logged or echoed into a result.
+   *
+   * Typed `string`, and re-checked at runtime: a caller can still pass `null`
+   * or `undefined` through a cast or an untyped boundary, and an unusable
+   * secret must refuse every delivery rather than sign with the falsy value.
    */
   secret: string
   /** Accepted age and future skew of a signature, in seconds. Default 300. */
@@ -117,9 +122,27 @@ export const verifyWebhookRequest = async (
   headers: Headers | Record<string, string>,
   config: WebhookVerifierConfig,
 ): Promise<WebhookVerifyResult> => {
-  if (config.secret === "") {
-    return { ok: false, reason: "missing_signature", message: "verifier has no secret configured" }
+  // Fail closed on *every* unusable secret, not just the empty string. A blank
+  // or non-string secret previously fell through to `crypto.subtle.importKey`
+  // with a key built from the falsy value: a zero-length key throws
+  // `DataError: Key length is zero`, while `null`, `undefined`, a number or
+  // whitespace produced a *usable* key, so a forged body signed with the same
+  // falsy value was accepted. Both behaviours are wrong; neither may accept.
+  if (config === null || config === undefined || typeof config.secret !== "string") {
+    return {
+      ok: false,
+      reason: "invalid_secret",
+      message: "verifier has no usable secret configured",
+    }
   }
+  if (config.secret.trim() === "") {
+    return {
+      ok: false,
+      reason: "invalid_secret",
+      message: "verifier has no usable secret configured",
+    }
+  }
+
   if (!(rawBody instanceof Uint8Array) && !(rawBody instanceof ArrayBuffer)) {
     return { ok: false, reason: "malformed_body", message: "raw body must be bytes" }
   }

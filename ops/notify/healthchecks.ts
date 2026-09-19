@@ -23,11 +23,12 @@
  *    including a padded table. That stays in `#18 ops/`, which owns backup.
  */
 
+import { DEFAULT_RETRY_POLICY } from "./policy.ts"
 import {
   type BackoffFn,
   type Clock,
   createExponentialBackoff,
-  DEFAULT_RETRY_POLICY,
+  describeTransportError,
   isTransientStatus,
   parseRetryAfterMs,
   type RetryPolicy,
@@ -46,7 +47,7 @@ export enum HealthchecksOutcome {
 }
 
 export interface HealthchecksClientConfig {
-  /** Check ping URL, e.g. `https://hc-ping.com/<uuid>`. */
+  /** Check ping URL, e.g. `https://hc-ping.example.com/<uuid>`. */
   pingUrl: string
 }
 
@@ -139,6 +140,14 @@ export class HealthchecksClient {
           "an unconfigured switch as an explicit caller decision",
       )
     }
+    // A URL the platform cannot parse can never be pinged, and the failure it
+    // used to produce was `{ ok: true, httpStatus: 200 }` from a stubbed
+    // transport. Refused at construction so a typo cannot look like a healthy
+    // dead-man's switch. `invalid_ping_url` stays an error code because a
+    // caller-supplied URL is the only thing that reaches this point.
+    if (!URL.canParse(pingUrl)) {
+      throw new Error("HealthchecksClient: pingUrl is not a valid absolute URL")
+    }
     this.pingUrl = pingUrl.replace(/\/+$/, "")
     this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init))
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
@@ -225,7 +234,7 @@ export class HealthchecksClient {
       return {
         ok: false,
         code: "network_error",
-        message: cause instanceof Error ? cause.message : String(cause),
+        message: describeTransportError(cause),
         attempts: attempt,
         retryable: true,
       }

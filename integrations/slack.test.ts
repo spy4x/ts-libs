@@ -185,6 +185,38 @@ describe("SlackClient.send", () => {
     expect(result.ok === false && result.status).toBeUndefined()
   })
 
+  it("never returns the webhook URL, so the token in it cannot leak", async () => {
+    // What the platform actually throws for a malformed webhook: the whole URL,
+    // whose path segment IS the credential. Returning `cause.message` returned
+    // it, and the obvious things a caller does with a failure result — log it,
+    // render it, paste it into an issue — then published the token.
+    const tokenish = "REALTOKENISH"
+    const timer = recordingTimer()
+    const client = new SlackClient({
+      webhookUrl: `https://hooks.slack.example.invalid/services/T000/B000/${tokenish}`,
+    }, {
+      fetcher: () =>
+        Promise.reject(
+          new TypeError(
+            `Invalid URL: 'https://hooks.slack.example.invalid/services/T000/B000/${tokenish}'`,
+          ),
+        ),
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1 },
+    })
+    const result = await client.send({ text: "hello" })
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.code).toBe("network_error")
+    const serialised = JSON.stringify(result)
+    expect(serialised).not.toContain(tokenish)
+    expect(serialised).not.toContain("hooks.slack.example.invalid")
+    // ...and the failure is still diagnosable.
+    expect(result.ok === false && result.message).toBe(
+      "TypeError: transport failure (url withheld)",
+    )
+  })
+
   it("rejects an undefined payload without calling the network", async () => {
     const { client, transport } = clientFor([{ status: 200 }])
     const result = await client.send(undefined)

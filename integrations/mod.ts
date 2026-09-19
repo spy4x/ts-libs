@@ -21,6 +21,7 @@ export {
   MailchimpClient,
   mailchimpConfigFromEnv,
   MailchimpStatus,
+  md5Hex,
   normalizeEmail,
 } from "./mailchimp.ts"
 export type {
@@ -45,10 +46,12 @@ export type { WebhookRejectReason, WebhookVerifierConfig, WebhookVerifyResult } 
 
 export {
   createExponentialBackoff,
+  describeTransportError,
   isPermanentStatus,
   isTransientStatus,
   parseRetryAfterMs,
   runWithRetry,
+  settle,
 } from "./retry.ts"
 export type {
   BackoffFn,

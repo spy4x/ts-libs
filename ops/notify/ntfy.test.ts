@@ -1,7 +1,7 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { NotificationSeverity, NtfyClient, ntfyConfigFromEnv, NtfyPriority } from "./ntfy.ts"
-import { createAsciiHeaders } from "./retry.ts"
+import { createAsciiHeaders } from "./header-safety.ts"
 import type { Clock, Sleeper } from "./retry.ts"
 
 const BASE_URL = "https://ntfy.example.invalid"
@@ -123,15 +123,30 @@ describe("NtfyClient.push", () => {
     expect(result.ok).toBe(true)
     expect(result.status).toBe("pushed")
     expect(result.ok && result.status === "pushed" && result.httpStatus).toBe(200)
-    expect(result.ok && result.status === "pushed" && result.headers).toEqual({
-      "authorization": `Bearer ${TOKEN}`,
-      "title": "backup failed",
-      "priority": "4",
-      "tags": "warning,backup",
-    })
+    // The result carries the two fields a caller may need, not the whole header
+    // map. Returning the map also returned `authorization: "Bearer <token>"`,
+    // which put the credential into any log line that printed a result.
+    expect(result.ok && result.status === "pushed" && result.title).toBe("backup failed")
+    expect(result.ok && result.status === "pushed" && result.tags).toBe("warning,backup")
     expect(transport.requests[0].url).toBe(ENDPOINT)
     expect(transport.requests[0].method).toBe("POST")
     expect(transport.requests[0].body).toBe("3 of 5 repositories failed")
+  })
+
+  it("never puts the bearer token in a result, while still sending it", async () => {
+    const { client, transport } = clientFor([{ status: 200 }])
+    const result = await client.push({
+      title: "backup failed",
+      message: "detail",
+      severity: NotificationSeverity.Failure,
+    })
+    const serialised = JSON.stringify(result)
+    expect(serialised).not.toContain(TOKEN)
+    expect(serialised).not.toContain("Bearer")
+    expect(serialised.toLowerCase()).not.toContain("authorization")
+    // ...and the credential still reaches the wire, so this is not a test that
+    // passes by the auth header never being set.
+    expect(transport.requests[0].headers.get("Authorization")).toBe(`Bearer ${TOKEN}`)
   })
 
   it("omits the Authorization header when no token is configured", async () => {

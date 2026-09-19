@@ -178,8 +178,8 @@ describe("verifyWebhookRequest", () => {
       clock: clockAt(AT_SECONDS * 1000),
     })
     expect(unconfigured.ok).toBe(false)
-    expect(unconfigured.ok === false && unconfigured.reason).toBe("missing_signature")
-    expect(unconfigured.ok === false && unconfigured.message).toContain("no secret configured")
+    expect(unconfigured.ok === false && unconfigured.reason).toBe("invalid_secret")
+    expect(unconfigured.ok === false && unconfigured.message).toContain("no usable secret")
   })
 
   it("leaks neither the secret nor the body in a rejection message", async () => {
@@ -195,5 +195,91 @@ describe("verifyWebhookRequest", () => {
     // Same body, signature minted for a different second: the timestamp is
     // inside the signed string and inside the replay check.
     expect(await rejection(BODY, headersFor(signature, AT_SECONDS + 1))).toBe("signature_mismatch")
+  })
+})
+
+describe("verifyWebhookRequest secret handling", () => {
+  const FORGERY = new TextEncoder().encode('{"event":"admin_granted"}')
+  const clock = clockAt(AT_SECONDS * 1000)
+
+  /** Signs with an arbitrary value, the way a forger who knows the weakness would. */
+  const signWith = async (secret: unknown, body: Uint8Array) => {
+    // The HMAC key the old code built for a falsy secret was `String(falsy)`,
+    // so `null` signed as the literal text "null" and `" "` as a space.
+    const asString = typeof secret === "string" ? secret : String(secret)
+    return await sign(asString === "null" ? "null" : asString, AT_SECONDS, body)
+  }
+
+  const rejects = async (secret: unknown): Promise<WebhookRejectReason> => {
+    const signature = await signWith(secret, FORGERY)
+    const result = await verifyWebhookRequest(FORGERY, headersFor(signature, AT_SECONDS), {
+      secret: secret as string,
+      clock,
+    })
+    expect({ secret: String(secret), ok: result.ok }).toEqual({ secret: String(secret), ok: false })
+    return result.ok === false ? result.reason : "signature_mismatch"
+  }
+
+  it("rejects a forgery signed with the HMAC key `null`", async () => {
+    // The live forgery path: `crypto.subtle.importKey` accepted the key built
+    // from `null`, so a body signed with the same `null` verified.
+    expect(await rejects(null)).toBe("invalid_secret")
+  })
+
+  it("rejects a forgery signed with a whitespace-only secret", async () => {
+    expect(await rejects(" ")).toBe("invalid_secret")
+    expect(await rejects("\t \n")).toBe("invalid_secret")
+  })
+
+  it("rejects every unusable secret with the same typed reason, never a throw", async () => {
+    for (const secret of ["", "   ", null, undefined, 42, {}, [], true]) {
+      const signature = await sign(SECRET, AT_SECONDS, FORGERY)
+      const result = await verifyWebhookRequest(FORGERY, headersFor(signature, AT_SECONDS), {
+        secret: secret as string,
+        clock,
+      })
+      expect({
+        secret: String(secret),
+        ok: result.ok,
+        reason: result.ok === false && result.reason,
+      })
+        .toEqual({ secret: String(secret), ok: false, reason: "invalid_secret" })
+    }
+  })
+
+  it("rejects a missing config object rather than throwing", async () => {
+    const signature = await sign(SECRET, AT_SECONDS, FORGERY)
+    const result = await verifyWebhookRequest(
+      FORGERY,
+      headersFor(signature, AT_SECONDS),
+      null as unknown as { secret: string },
+    )
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.reason).toBe("invalid_secret")
+  })
+
+  it("does not throw `DataError: Key length is zero` for an empty or absent secret", async () => {
+    for (const secret of ["", null, undefined]) {
+      const signature = await sign(SECRET, AT_SECONDS, FORGERY)
+      await expect(
+        verifyWebhookRequest(FORGERY, headersFor(signature, AT_SECONDS), {
+          secret: secret as string,
+          clock,
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: "invalid_secret",
+        message: "verifier has no usable secret configured",
+      })
+    }
+  })
+
+  it("still accepts a real secret, so the fail-closed check is not unconditional", async () => {
+    const signature = await sign(SECRET, AT_SECONDS, FORGERY)
+    const result = await verifyWebhookRequest(FORGERY, headersFor(signature, AT_SECONDS), {
+      secret: SECRET,
+      clock,
+    })
+    expect(result.ok).toBe(true)
   })
 })

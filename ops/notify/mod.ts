@@ -36,13 +36,22 @@ export type {
   NtfySkipped,
 } from "./ntfy.ts"
 
+export { createAsciiHeaders, toAsciiHeaderValue } from "./header-safety.ts"
+export { DEFAULT_RETRY_POLICY } from "./policy.ts"
 export {
-  createAsciiHeaders,
   createExponentialBackoff,
-  DEFAULT_RETRY_POLICY,
+  describeTransportError,
+  isPermanentStatus,
   isTransientStatus,
   parseRetryAfterMs,
   runWithRetry,
-  toAsciiHeaderValue,
+  settle,
 } from "./retry.ts"
-export type { BackoffFn, Clock, RetryPolicy, RetryRunResult, Sleeper } from "./retry.ts"
+export type {
+  BackoffFn,
+  Clock,
+  RetryPolicy,
+  RetryRunOptions,
+  RetryRunResult,
+  Sleeper,
+} from "./retry.ts"

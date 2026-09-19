@@ -55,6 +55,40 @@ describe("parseRetryAfterMs", () => {
     expect(parseRetryAfterMs("soon")).toBeUndefined()
     expect(parseRetryAfterMs(null)).toBeUndefined()
   })
+
+  it("treats a blank header as absent, not as zero", () => {
+    // `0` is a valid delay, so returning it for an empty header would delete all
+    // backoff: the caller would retry immediately and hammer the endpoint it is
+    // backing off from. Measured live before the fix: a bare `Retry-After:`
+    // produced delays [1, 1] where `null` produced [552, 1009].
+    expect(parseRetryAfterMs("")).toBeUndefined()
+    expect(parseRetryAfterMs("   ")).toBeUndefined()
+    expect(parseRetryAfterMs("\t\n")).toBeUndefined()
+    // An explicit zero is still a zero.
+    expect(parseRetryAfterMs("0")).toBe(0)
+  })
+
+  it("does not let a blank Retry-After collapse the backoff schedule", async () => {
+    const policy = {
+      maxAttempts: 3,
+      baseDelayMs: 1000,
+      maxDelayMs: 10_000,
+      totalBudgetMs: 60_000,
+      jitterRatio: 0,
+    }
+    const backoff = createExponentialBackoff(policy)
+    const blank = parseRetryAfterMs("")
+    const timer = recordingTimer()
+    await runWithRetry<number>({
+      policy,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      backoff: (attempt) => backoff(attempt, blank),
+      attempt: (attempt) => Promise.resolve({ failed: true, value: attempt }),
+    })
+    expect(blank).toBeUndefined()
+    expect(timer.delays).toEqual([1000, 2000])
+  })
 })
 
 describe("createExponentialBackoff", () => {
