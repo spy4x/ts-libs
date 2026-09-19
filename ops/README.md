@@ -1,28 +1,108 @@
 # @ts-libs/ops
 
-Operational clients: standalone outbound notifiers. Zero dependencies.
+Operational tooling as a **library with ports**: the backup contract, offline-backup, deploy
+helpers, the git-hook installer and the console/env/fs/command ports — plus standalone outbound
+notifiers. Zero runtime dependencies. The `ops/` half is extracted from `rostok` and
+`antonshubin.com` (issue #18).
 
-This package is owned by two issues. **`#16` created it and lists only the `notify/` entry points
-below. `#18 ops/` must merge its own exports into `exports` in `ops/deno.json` and its own section
-into this file — it must not replace either.** `#18` owns the backup contract, offline-backup, deploy
-and age64 env.
+This package is owned by two issues. `#16` created it and listed only the `notify/` entry points;
+`#18 ops/` added the deploy, hook, backup and age64 env entries. The two export sets are disjoint, so
+`ops/deno.json` and this file carry the **union** of both — neither set replaces the other. The union
+landed in #50, which rebased onto `61fcad3` (#39) once that PR had merged.
 
 ## Entry points
 
-| Export                  | What it is                                                  |
-| ----------------------- | ----------------------------------------------------------- |
-| `./notify`              | Barrel for everything below.                                |
-| `./notify/healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, outcomes |
-| `./notify/ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`   |
+| Entry point                        | Contents                                                                                                                                              |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@ts-libs/ops` (`.`)               | `mod.ts`: a barrel re-exporting the entries below except `offline-backup`                                                                             |
+| `@ts-libs/ops/notify`              | Barrel for the notifiers below.                                                                                                                       |
+| `@ts-libs/ops/notify/healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, outcomes                                                                                           |
+| `@ts-libs/ops/notify/ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`                                                                                             |
+| `@ts-libs/ops/console`             | `Logger`, `createLogger`, `LogLevel`, `Clock`, `LogSink`                                                                                              |
+| `@ts-libs/ops/run-command`         | `CommandRunner`, `runCommand`, `mustRun`, `CommandError`, argv builders                                                                               |
+| `@ts-libs/ops/env`                 | `EnvReader`, `createEnvReader`, `readEnvVar`, `absPath`, `substituteEnvVars`, `rewriteEnvValues`                                                      |
+| `@ts-libs/ops/fs`                  | `FileSystem`, `createDenoFileSystem`, `FileStat`, `DirEntry`, `isNotFound`                                                                            |
+| `@ts-libs/ops/remote`              | `restartRemoteContainer`, `buildSshArgv`, name/path validation                                                                                        |
+| `@ts-libs/ops/deploy`              | rsync/compose argv builders, `buildDeployPlan`, `deploy`, marker script generation, `parseDeployResults`, remote checksums, service worker cache bump |
+| `@ts-libs/ops/hooks/install`       | `installHooks`, `resolveGitCommonDir`, `DEFAULT_HOOKS`                                                                                                |
+| `@ts-libs/ops/backup/types`        | `BackupConfig`, `BackupStatus`, `isMissingContainerError`                                                                                             |
+| `@ts-libs/ops/backup/compose`      | `manageComposeStack` with the `up -d` fallback                                                                                                        |
+| `@ts-libs/ops/offline-backup`      | the external-drive cold-backup mechanics — see `ops/offline-backup/README.md`                                                                         |
 
 Export targets are **package-relative** (`"./notify": "./notify/mod.ts"`), resolved against this
 package directory. A repo-root-relative target (`"./ops/notify/mod.ts"`) resolves to
 `ops/ops/notify/mod.ts` and makes every notifier unimportable by name — `deno publish --dry-run`
 exits 1 with `TS2307`.
 
-`#18` lists `./console`, `./env`, `./fs`, `./run-command`, `./hooks/install`, `./backup/types` and
-`./backup/compose`. Those sets are disjoint, so whichever lands second must **union** the exports
-rather than overwrite this file.
+Those fourteen entries are exactly what `ops/deno.json` exports; the five `offline-backup` modules
+are reachable through the one `./offline-backup` barrel and **not** as individual subpaths.
+`testing/` (`FakeCommandRunner`, `FakeFileSystem`) is test support: not an entry point, and not
+exported.
+
+## Why it lives here
+
+`ops/` lives in this repository, with three constraints:
+
+1. `@rostok/cli` keeps its **CLI** — an argument parser and command wiring are not
+   library concerns. `jsr:@rostok/cli@1.0.3` is the published CLI; nothing
+   CLI-only is duplicated here.
+2. This package takes the **shared contract and the clients** — the
+   `BackupConfig` contract, the hook installer, the deploy helpers — as a library
+   with **ports**. No `Deno.args`, no `Deno.exit`, no `prompt()`, no TTY handling.
+3. Every external process, filesystem write and network call goes through an
+   injected port, because the workspace test task grants only `--allow-read` and
+   `--allow-env`. The real adapters (`createDenoCommandRunner`,
+   `createDenoFileSystem`, `systemEnv`) are thin and untested by design; the
+   decision logic is tested against the fakes in `testing/`.
+
+## Rules this package follows
+
+- **argv, never a shell string.** Commands are arrays: `ssh`/`rsync`/`docker`
+  arguments are never joined into a string, and there is no `bash -c` in the
+  package outside two doc comments.
+- **The one piece of real shell text is generated, validated and quoted.**
+  `deploy.ts`'s stack script is the exception, and it is treated as text, not as
+  argv: it goes to `bash -s` on **stdin** (never `-c`), the app directory arrives
+  as `$1`, and every value that comes from configuration is (a) refused unless it
+  is a docker project name or a relative path and (b) single-quoted through
+  `shellQuote` where it is interpolated. Both layers exist because the first
+  version of this file asserted the property while only the app directory was
+  actually kept out of the script: the reviewer of #50 ran `$(echo PWNED-*)` from
+  a stack name, and the deploy reported `DEPLOY_SUCCESS` anyway.
+- **Secrets never reach argv.** Env files are named by path (`--env-file`); a
+  secret-shaped key **or value** in a remote env is refused before anything runs
+  (`assertNoSecretEnvKeys`, value-shape rules included, with `allowEnvKeys` as the
+  explicit escape hatch); and `runCommand` refuses any argv that contains a value
+  the caller also passed in the child's environment. argv is readable by every
+  process on the box; this is not a stylistic preference.
+- **The command port is total.** `runCommand` converts a runner rejection — a
+  missing binary, a `cwd` that does not exist — into `{ success: false, error }`,
+  so a caller branching on `success` cannot be surprised by a launch failure. See
+  "The adapter boundary" below for what that leaves untested.
+- **The remote side is shell input, and is treated as such.** ssh joins its
+  command arguments and hands the result to the remote login shell, so every
+  remote argument is validated, the destination is validated _and_ preceded by
+  `--` (a `SSH_ADDRESS` of `-oProxyCommand=…` would otherwise be local code
+  execution), and container names must match docker's charset.
+- **One logging convention**: `console.ts`. `ConsoleLogger`'s trick of replacing
+  the global `console` methods to capture output is not reentrant and is not
+  ported; `Logger.records()` is how offline-backup keeps its log file.
+- **Nothing reads the environment at module scope**, so every module can be
+  imported by a test, a CLI or another library without a populated environment.
+
+## Not ported, and why
+
+- `rostok/scripts/backup/src/{operations,config,reporting}.ts` — not a framework:
+  no extension point, module-scope env reads, homelab semantics in the core
+  (a `chown` for Syncthing, `HOME=/home/$USER`, a stack name regexed out of a
+  path, restic retention 7/4/3) and 6 tests in total.
+- `scripts/encryption/*` and `cli/age.ts` — template's `infra/scripts/env/age.ts`
+  (age64, atomic writes, symlink refusal, mode bits) is stricter and is the
+  sanctioned scheme.
+- `ops/healthcheck.ts` — delivered as `server/healthcheck.ts` by #35.
+- `rostok/scripts/ansible/inventory.ts`, `rostok/scripts/ssh/+main.ts`,
+  `antonshubin.com/scripts/optimize-screenshots.ts` — CLIs and one-shot repo
+  scripts with no library surface, or with dependencies this package does not want.
 
 ## `HealthchecksClient` — dead-man's switch
 
@@ -110,10 +190,48 @@ through a new call site. Both halves are pinned by tests, including the body rou
   time are injectable, so no test sleeps and none asserts on wall-clock time.
 - **Secrets are constructor parameters**, never read from `$env` at module scope and never logged.
 
+## The adapter boundary
+
+Two adapters touch the platform, and both are deliberately thin:
+`createDenoCommandRunner` (`run-command.ts`) and `createDenoFileSystem` (`fs.ts`).
+
+**Behind the port and tested**: argv assembly (`buildInvocation`, including the
+`sudo` prefix), the stdin policy (`stdinModeFor`, including the refusal of
+`sudo` + `stdin` text), multi-byte stream decoding (`decodeChunks`), the launch
+failure → `{success: false}` conversion (`runCommand`, driven from a fake that
+rejects), and the secret-in-argv rule.
+
+**Inside the adapter, not tested here**: that `Deno.Command` actually spawns,
+that `clearEnv` clears and `env` merges the inherited environment, `cwd`
+handling, live `onOutput` chunking, `status.success` mapping, stdin piping into a
+real child, and the `FileInfo` → `FileStat` mapping (`denoStat`, including
+`lstat` not following a symlink and the `mode` bits). The workspace test task is
+`deno test --no-prompt --allow-read --allow-env`, so reaching them needs
+`--allow-run` and `--allow-write`, a root-config change this package does not own.
+
+To exercise them without changing CI:
+
+```bash
+deno test --allow-run --allow-read --allow-env ops/run-command.integration.test.ts
+deno test --allow-write --allow-read --allow-env ops/fs.integration.test.ts
+```
+
+Those two files are not in this PR: adding them means either granting the flags in
+CI or shipping tests that CI cannot run, and neither is a decision a package PR
+should take on its own. Until then the mapping above is the honest statement of
+what is verified and what is assumed.
+
+## Notes for a reviewer
+
+- `ops/deno.json` lists only entry points that exist; add one when you add a file.
+- The export map is the **union** of `#16` (`./notify`, `./notify/healthchecks`, `./notify/ntfy`) and
+  `#18` (the eleven `ops/` entry points). Keep it that way: add a key, never replace the map — and
+  keep `ops/notify/**` byte-identical to `main`, which `ops/notify/retry-drift.test.ts` guards.
+
 ## Out of scope
 
-- **Backup contract, offline-backup, deploy, age64 env, type-check** — `#18 ops/`, which extends this
-  package's `exports` rather than replacing them.
+- **Backup contract, offline-backup, deploy, age64 env, type-check** — `#18 ops/`. Its exports were
+  unioned into this package's map rather than substituted for `#16`'s.
 - **Email, SMTP, webhooks, Slack, Mailchimp** — `@ts-libs/integrations`.
 - **Gatus, VictoriaMetrics and the rest of the shared platform.** These clients talk to a provider;
   they do not run one.
