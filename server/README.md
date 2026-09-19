@@ -21,10 +21,12 @@ Every function takes `{ maxBytes, timeoutMs? }`. The cap is enforced on the stre
 `content-length` over the cap is rejected without reading the body, and the reader is cancelled on
 any failure — including a stalled body whose deadline passes.
 
-**Canonical home pending.** This is a temporary duplicate of `net/bounded-body.ts` (issue #1). When
-that lands, this module collapses to `export * from "@ts-libs/net/bounded-body"` plus
-`parseBoundedFormData`. `PayloadTooLargeError` must remain a single class, so callers keep catching
-the same identity.
+**Canonical home pending.** This is a temporary duplicate of `net/bounded-body.ts` (issue #1, which
+has not landed — checked with `git show origin/main:net/bounded-body.ts`, absent). When it does, this
+module collapses to `export * from "@ts-libs/net/bounded-body"` plus `parseBoundedFormData`, and
+`PayloadTooLargeError` must stay a single class with a single identity: a caller catching it from
+`net` has to catch the one thrown here, and two same-named classes would be a real bug that every
+other test passes.
 
 ## `server/http/cors`
 
