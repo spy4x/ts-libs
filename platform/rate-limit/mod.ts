@@ -22,7 +22,6 @@ export {
   RateLimitKind,
   type RateLimitOptions,
   type RateLimitStore,
-  resolveIdentityKey,
   StoreRateLimiter,
   SWEEP_EVERY_CHECKS,
   systemClock,

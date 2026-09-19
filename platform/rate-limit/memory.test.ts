@@ -8,7 +8,6 @@ import {
   rateLimitKey,
   RateLimitKind,
   type RateLimitStore,
-  resolveIdentityKey,
 } from "./memory.ts"
 
 /** Fixed start instant. Every test advances this manually; none reads `Date.now()`. */
@@ -264,6 +263,63 @@ describe("MemoryRateLimiter", () => {
     assertEquals(removed, 1)
   })
 
+  it("schedules its automatic sweep from the injected clock, never the wall clock", () => {
+    // Guards the `mig:28` bug this port fixes. `lastSweepAt` is seeded in the constructor: if that
+    // seed were `Date.now()` instead of `clock()`, the limiter would run on two clocks at once and
+    // `now - lastSweepAt` could go negative, so no automatic sweep would ever fire. The injected
+    // clock here sits far from the wall clock, which is what makes the difference observable.
+    const { clock, advance } = fakeClock(1_000_000_000_000)
+    const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 1, idleMs: 0, clock })
+
+    limiter.check("a")
+    assertEquals(limiter.size, 1)
+
+    advance(1000)
+    limiter.check("b") // window elapsed on the injected clock: the sweep must run first
+    assertEquals(limiter.size, 1)
+    assertEquals(limiter.check("a").allowed, true)
+  })
+
+  it("everts in one slice per prune instead of shifting events out one at a time", () => {
+    // Guards the `mig:47-49` fix, which is behaviour-preserving and so invisible to every other
+    // assertion — reverting it to the `while (…) events.shift()` loop leaves the rest of the suite
+    // green. Counting array operations rather than timing them keeps this deterministic: the
+    // measured gap is 7.58 us/check against 0.36, and a wall-clock assertion would flake under load.
+    const { clock, advance } = fakeClock()
+    const limiter = new MemoryRateLimiter({ windowMs: 100, limit: 4, idleMs: 10_000, clock })
+    for (let i = 0; i < 4; i++) {
+      advance(10)
+      limiter.check("a")
+    }
+
+    const originalShift = Array.prototype.shift
+    const originalSlice = Array.prototype.slice
+    let shifts = 0
+    let slices = 0
+    Array.prototype.shift = function (this: unknown[]) {
+      shifts += 1
+      return Reflect.apply(originalShift, this, [])
+    }
+    Array.prototype.slice = function (this: unknown[], start?: number, end?: number) {
+      slices += 1
+      return Reflect.apply(originalSlice, this, [start, end])
+    }
+    try {
+      // Past the window, so the four recorded events are stale. The first check triggers the
+      // automatic sweep and survives it (long idle grace); the second finds them still in the
+      // bucket and prunes them, which is the code path under test.
+      advance(80)
+      limiter.check("a")
+      limiter.check("a")
+    } finally {
+      Array.prototype.shift = originalShift
+      Array.prototype.slice = originalSlice
+    }
+
+    assertEquals(slices >= 1, true)
+    assertEquals(shifts, 0)
+  })
+
   it("resets one key without touching another", () => {
     const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 1, clock: () => T0 })
 
@@ -369,41 +425,5 @@ describe("rateLimitKey", () => {
 
   it("scopes keys so two limiters sharing a backend do not collide", () => {
     assertEquals(rateLimitKey(RateLimitKind.User, "42", "chart:"), "chart:user:42")
-  })
-})
-
-describe("resolveIdentityKey", () => {
-  const request = (headers: Record<string, string> = {}) =>
-    new Request("http://localhost/auth/sign-in", { headers })
-
-  it("prefers the authenticated user", async () => {
-    const key = await resolveIdentityKey(request({ "cf-connecting-ip": "203.0.113.9" }), () => "42")
-    assertEquals(key, "user:42")
-  })
-
-  it("falls back to the client IP", async () => {
-    const key = await resolveIdentityKey(
-      request({ "cf-connecting-ip": "203.0.113.9" }),
-      () => undefined,
-    )
-    assertEquals(key, "ip:203.0.113.9")
-  })
-
-  it("ignores an empty user id", async () => {
-    const key = await resolveIdentityKey(request({ "x-real-ip": "198.51.100.7" }), () => "")
-    assertEquals(key, "ip:198.51.100.7")
-  })
-
-  it("carries a prefix through to both branches", async () => {
-    assertEquals(
-      await resolveIdentityKey(request(), () => "42", { prefix: "auth:" }),
-      "auth:user:42",
-    )
-    assertEquals(
-      await resolveIdentityKey(request({ "x-real-ip": "198.51.100.7" }), () => undefined, {
-        prefix: "auth:",
-      }),
-      "auth:ip:198.51.100.7",
-    )
   })
 })

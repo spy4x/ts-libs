@@ -24,7 +24,6 @@ describe("public surface", () => {
       "rateLimitKey",
       "RateLimitStoreOverKv",
       "REJECTION_STATUSES",
-      "resolveIdentityKey",
       "StoreRateLimiter",
       "SWEEP_EVERY_CHECKS",
       "systemClock",

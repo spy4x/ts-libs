@@ -25,8 +25,6 @@
  * keys; the counter only decays by waiting.
  */
 
-import { clientIp } from "./client-ip.ts"
-
 /** Monotonic millisecond clock. Inject a fake in tests; never read `Date.now()` behind one. */
 export type Clock = () => number
 
@@ -345,24 +343,4 @@ export function createStoreLimiter(
 export function rateLimitKey(kind: RateLimitKind, id: string, prefix = ""): string {
   const scope = kind === RateLimitKind.User ? "user" : "ip"
   return `${prefix}${scope}:${id}`
-}
-
-/**
- * Key a request on the authenticated user when there is one, else on the client IP.
- *
- * The user id comes from a caller-supplied lookup, not from Hono context: `gb`'s
- * `c.get?.("auth")` was the only app-coupled line in the source, and optional-chaining the context
- * silently degraded to IP keying when the auth middleware had not run.
- */
-export async function resolveIdentityKey(
-  req: Request,
-  userId: (req: Request) => string | undefined | Promise<string | undefined>,
-  options: { remoteAddr?: string; trustedProxy?: boolean; prefix?: string } = {},
-): Promise<string> {
-  const id = await userId(req)
-  if (id !== undefined && id !== "") {
-    return rateLimitKey(RateLimitKind.User, id, options.prefix ?? "")
-  }
-  const ip = clientIp(req, options.remoteAddr, options.trustedProxy ?? true)
-  return rateLimitKey(RateLimitKind.Ip, ip, options.prefix ?? "")
 }
