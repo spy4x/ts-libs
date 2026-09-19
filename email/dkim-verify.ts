@@ -671,7 +671,14 @@ export async function verifyDkim(
   if (dkimHeaderLine === undefined) {
     return { valid: false, reason: "no DKIM-Signature header found" }
   }
-  const dkimRaw = dkimHeaderLine.slice("dkim-signature:".length)
+  // §3.7 step 2 hashes "the DKIM-Signature header field that exists" in the
+  // message, so the field name is taken from the message rather than assumed.
+  // Under `simple` canonicalization the name's case is part of the hashed
+  // bytes: hashing a literal "DKIM-Signature" verified a field renamed to
+  // `dkim-signature:`, i.e. bytes the message no longer contained, and rejected
+  // a signer that emitted the lower-case name.
+  const dkimFieldName = dkimHeaderLine.slice(0, dkimHeaderLine.indexOf(":"))
+  const dkimRaw = dkimHeaderLine.slice(dkimFieldName.length + 1)
   if (dkimRaw.trim() === "") {
     return { valid: false, reason: "DKIM-Signature header is empty" }
   }
@@ -752,7 +759,7 @@ export async function verifyDkim(
       canonicalizeHeader(name, value, parsed.canonicalization.header)
     )
     const signatureField = canonicalizeHeader(
-      "DKIM-Signature",
+      dkimFieldName,
       deleteTagValue(dkimRaw, "b"),
       parsed.canonicalization.header,
     ).replace(/\r\n$/, "")

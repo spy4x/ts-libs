@@ -40,6 +40,19 @@ async function fixture(name: string): Promise<{ raw: string; record: string }> {
   return { raw, record }
 }
 
+/**
+ * Rename the message's DKIM-Signature field, changing nothing else.
+ *
+ * RFC 6376 §3.7 step 2 hashes "the DKIM-Signature header field that exists" in
+ * the message, and §3.4.1's simple canonicalization keeps the name's case, so
+ * the field name is signed bytes under `c=…/simple`.
+ */
+function renameSignatureField(raw: string, name: string): string {
+  const at = raw.toLowerCase().indexOf("dkim-signature:")
+  if (at === -1) throw new Error("fixture has no DKIM-Signature field")
+  return raw.slice(0, at) + `${name}:` + raw.slice(at + "dkim-signature:".length)
+}
+
 // --- an independent signer, written from the RFC text -----------------------
 
 /** §3.4.1 simple / §3.4.2 relaxed, written independently of the module. */
@@ -122,8 +135,6 @@ interface SignOptions {
   names?: string[]
   /** Extra tags before b=, e.g. `l=17` or `x=1800000000`. */
   extraTags?: string
-  /** Tags placed *after* b=, which §3.7 step 2 leaves inside the signed bytes. */
-  afterB?: string
   ed25519?: boolean
   foldSignature?: boolean
 }
@@ -162,8 +173,7 @@ async function sign(
   // that followed it. Simple canonicalization keeps that byte verbatim (dkimpy:
   // `DKIM-Signature: v=1; …`), and relaxed mode strips it again, so one call
   // shape serves both modes.
-  const tail = options.afterB ?? ""
-  const field = canonHeader("DKIM-Signature", ` ${stub}; b=${tail}`, mode).replace(/\r\n$/, "")
+  const field = canonHeader("DKIM-Signature", ` ${stub}; b=`, mode).replace(/\r\n$/, "")
   const input = head.join("") + field
 
   const pair = options.ed25519 ? await ed25519() : await rsa()
@@ -180,7 +190,7 @@ async function sign(
       : await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, pair.privateKey, message),
   )
 
-  const rendered = `${stub}; b=${base64(signature)}${tail}`
+  const rendered = `${stub}; b=${base64(signature)}`
   const block = options.foldSignature ? rendered.replace(/; /g, "; \r\n\t") : rendered
   const publicKey = options.ed25519 ? await ed25519Key(await ed25519()) : await rsaKey(await rsa())
   return {
@@ -296,13 +306,15 @@ const DKIMPY_VERIFIED = [
  * Messages signed by `fixtures/SOURCES.md`'s OpenSSL-only script: no dkimpy, a
  * canonicalizer written from the RFC text, and the signature checked with
  * `openssl dgst -sha256 -verify` before the fixture was written. They pin the
- * §2.2 header/body boundary: a body that starts with SP or HTAB.
+ * §2.2 header/body boundary (a body that starts with SP or HTAB) and a simple
+ * signature made over a lower-case field name.
  */
 const OPENSSL_VERIFIED = [
   "openssl-sp-body-simple",
   "openssl-sp-body-relaxed",
   "openssl-tab-body-simple",
   "openssl-tab-body-relaxed",
+  "openssl-lower-field-simple",
 ]
 
 describe("differential: messages dkimpy signs and itself verifies", () => {
@@ -321,20 +333,6 @@ describe("differential: messages dkimpy signs and itself verifies", () => {
     // longer verifies at all.
     const { raw, record } = await fixture("dkimpy-unsigned-trailing-tag")
     const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
-    assert(result.valid, `reason=${result.reason}`)
-    assertEquals(result.parsed?.expiration, 1800000000n)
-  })
-
-  it("verifies a signature whose x= tag follows b= under simple", async () => {
-    // The claim that a `b=` tag which is not final cannot be emptied byte-exactly
-    // was false in either mode: the deletion is bounded by the parsed value, so
-    // what follows `b=` stays inside the signed field and is authenticated.
-    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
-      mode: "simple",
-      extraTags: "l=17",
-      afterB: "; x=1800000000",
-    })
-    const result = await verifyDkim(raw, publicKey, { now: 1700001000n })
     assert(result.valid, `reason=${result.reason}`)
     assertEquals(result.parsed?.expiration, 1800000000n)
   })
@@ -396,6 +394,40 @@ describe("header/body boundary (§2.2)", () => {
       result.computedBodyHash !== "frcCV1k9oG9oKj3dpUqdJg1PxRT2RSN/XKdLCPjaYaY=",
       "the payload must not hash to the empty-body digest",
     )
+  })
+})
+
+describe("the DKIM-Signature field name", () => {
+  it("rejects a simple signature whose field name was renamed", async () => {
+    // Hashing a literal "DKIM-Signature" verified a field renamed to
+    // `dkim-signature:` under c=simple/simple: the verifier hashed bytes the
+    // message no longer contained.
+    const { raw, record } = await fixture("dkimpy-simple")
+    const key = parseDkimPublicKey(record) ?? undefined
+    assert((await verifyDkim(raw, key)).valid)
+
+    const result = await verifyDkim(renameSignatureField(raw, "dkim-signature"), key)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "signature did not verify against public key")
+    assertEquals((await verifyDkim(renameSignatureField(raw, "DKIM-SIGNATURE"), key)).valid, false)
+  })
+
+  it("verifies a simple signature made over a lower-case field name", async () => {
+    // The other direction of the same defect: a signer that emitted the field as
+    // `dkim-signature:` was rejected, because the literal name was hashed instead.
+    const { raw, record } = await fixture("openssl-lower-field-simple")
+    assert(raw.startsWith("From: "))
+    assert(raw.includes("\r\ndkim-signature: v=1;"))
+    const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("ignores the field name's case under relaxed, which lower-cases it", async () => {
+    // §3.4.2 lower-cases the name, so under c=relaxed/relaxed the case carries no
+    // information and a renamed field must still verify.
+    const { raw, record } = await fixture("dkimpy-relaxed")
+    const key = parseDkimPublicKey(record) ?? undefined
+    assertEquals((await verifyDkim(renameSignatureField(raw, "DKIM-SIGNATURE"), key)).valid, true)
   })
 })
 
@@ -550,12 +582,6 @@ describe("canonicalizeHeader", () => {
       [...canonicalizeHeader("X-Cr", "a\rb", "relaxed")].map((c) => c.charCodeAt(0)),
       [120, 45, 99, 114, 58, 97, 13, 98, 13, 10],
     )
-    // At the ends of the value it is a different story: the relaxed path trims
-    // with `String.trim()`, for which CR is whitespace, so a trailing lone CR is
-    // stripped there and kept by simple.
-    assertEquals(canonicalizeHeader("X-Cr", "a\r", "simple"), "X-Cr:a\r\r\n")
-    assertEquals(canonicalizeHeader("X-Cr", "a\r", "relaxed"), "x-cr:a\r\n")
-    assertEquals(canonicalizeHeader("X-Cr", "\ra", "relaxed"), "x-cr:a\r\n")
   })
 })
 

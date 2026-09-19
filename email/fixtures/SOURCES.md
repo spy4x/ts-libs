@@ -94,10 +94,11 @@ What each fixture pins:
 | `dkimpy-l0`, `dkimpy-l8`, `dkimpy-l18`, `dkimpy-l25`        | `l=` truncation of the canonical body, including a bound longer than the body |
 | `dkimpy-unsigned-trailing-tag`                              | **valid**: its `x=` tag after `b=` is inside the signed bytes                 |
 
-Plus the four `openssl-*` vectors described below, which the dkimpy set does not
-reach: bodies beginning with SP or HTAB. Twenty-five `*.msg` in total, every one
-expected valid: eighteen built with dkimpy 1.1.8's canonicalizers plus OpenSSL,
-four from the OpenSSL-only script below, and three with a standards-document provenance (RFC
+Plus the five `openssl-*` vectors described below, which the dkimpy set does not
+reach: bodies beginning with SP or HTAB, and a `simple` signature made over a
+lower-case field name. Twenty-six `*.msg` in total, every one expected valid:
+eighteen built with dkimpy 1.1.8's canonicalizers plus OpenSSL, five from the
+OpenSSL-only script below, and three with a standards-document provenance (RFC
 6376's example message in LF and CRLF form, RFC 8463 Appendix A.3).
 
 ## Why `dkimpy-unsigned-trailing-tag` is valid
@@ -114,16 +115,19 @@ The same property protects the other direction: appending `; x=9999999999` or
 
 ## `openssl-*.msg` — the RFC 5322 §2.2 boundary and the field name
 
-Four vectors built by an **OpenSSL-only** script: no dkimpy, a canonicalizer
+Five vectors built by an **OpenSSL-only** script: no dkimpy, a canonicalizer
 written from the RFC 6376 text, and every signature checked with
 `openssl dgst -sha256 -verify` before the fixture was written. They cover cases the
 dkimpy set cannot: RFC 5322 §2.2 ends the header section at the first empty line
-whatever follows it, so a body beginning with SP or HTAB is body.
+whatever follows it, so a body beginning with SP or HTAB is body — and §3.7 step 2
+hashes "the DKIM-Signature header field that exists", so under `simple` the field
+name's case is signed bytes.
 
-| Fixture                                               | What it pins                                                        |
-| ----------------------------------------------------- | ------------------------------------------------------------------- |
-| `openssl-sp-body-simple`, `openssl-tab-body-simple`   | `c=simple/simple`, body whose first line starts with SP / with HTAB |
-| `openssl-sp-body-relaxed`, `openssl-tab-body-relaxed` | the same bodies under `c=relaxed/relaxed`                           |
+| Fixture                                               | What it pins                                                              |
+| ----------------------------------------------------- | ------------------------------------------------------------------------- |
+| `openssl-sp-body-simple`, `openssl-tab-body-simple`   | `c=simple/simple`, body whose first line starts with SP / with HTAB       |
+| `openssl-sp-body-relaxed`, `openssl-tab-body-relaxed` | the same bodies under `c=relaxed/relaxed`                                 |
+| `openssl-lower-field-simple`                          | `c=simple/simple`, field emitted as `dkim-signature:` and signed that way |
 
 The forgery these pin is a mutation, not a fixture: injecting `" \r\n<payload>"`
 behind the first empty line of `dkimpy-empty-body-simple` used to verify, because
