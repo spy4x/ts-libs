@@ -161,7 +161,7 @@ export interface IcsOptions {
   /**
    * Emitted as `METHOD`; defaults to `REQUEST` for a `CONFIRMED` or `TENTATIVE`
    * event and `CANCEL` for a `CANCELLED` one. An explicit value that contradicts
-   * `event.status` throws rather than emitting a document clients ignore.
+   * `event.status` throws rather than emitting a contradictory document.
    *
    * Consequence worth knowing: only those two pairings are reachable, so
    * `IcsMethod.PUBLISH` and `IcsMethod.REPLY` cannot be combined with a VEVENT

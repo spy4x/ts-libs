@@ -337,15 +337,16 @@ Deno.test("generateIcs honours an explicitly tentative status", () => {
   assertEquals(flat.includes(`METHOD:REQUEST${CRLF}`), true)
 })
 
-Deno.test("generateIcs sends a cancellation as METHOD:CANCEL with STATUS:CANCELLED", () => {
+Deno.test("generateIcs derives METHOD:CANCEL for a cancelled event, never METHOD:REQUEST", () => {
   const flat = unfoldLines(
     generateIcs(makeEvent({ status: IcsEventStatus.CANCELLED }), makeOptions()),
   )
 
   assertEquals(flat.includes(`STATUS:CANCELLED${CRLF}`), true)
   // RFC 5545 §3.4: a cancellation is METHOD:CANCEL. The source hardcoded
-  // METHOD:REQUEST (mig/lib/ics.ts:136) for every status, so clients treated
-  // the cancellation as an update request and kept the event.
+  // METHOD:REQUEST (mig/lib/ics.ts:136) for every status while also writing
+  // STATUS:CANCELLED (mig/lib/ics.ts:151) — a contradictory pair, which is a
+  // spec violation on its own, whatever any client did with it.
   assertEquals(flat.includes(`METHOD:CANCEL${CRLF}`), true)
   assertEquals(flat.includes("METHOD:REQUEST"), false)
 })
