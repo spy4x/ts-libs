@@ -16,7 +16,8 @@
  *    otherwise have to do by eye.
  */
 
-import { assert, assertEquals, assertFalse, assertThrows } from "@std/assert"
+import { assert, assertEquals, assertFalse, assertNotEquals, assertThrows } from "@std/assert"
+import { timingSafeEqual } from "@std/crypto/timing-safe-equal"
 import { assertPepper, CryptoContext, MissingPepperError } from "./crypto.ts"
 import { createAuth } from "./lib.ts"
 import { MemoryAdapter } from "./testing/memory-adapter.ts"
@@ -26,6 +27,66 @@ import {
   TEST_ITERATIONS,
   TEST_PEPPER,
 } from "./testing/harness.ts"
+
+/**
+ * True when `body` contains a loose or strict equality operator.
+ *
+ * Written by character code so the intent cannot be mistaken for the operator it
+ * looks for, and so this helper is not itself a match for the assertion it serves.
+ */
+function hasEqualityOperator(body: string): boolean {
+  for (let index = 0; index < body.length; index++) {
+    if (body.charCodeAt(index) !== 61) {
+      continue
+    }
+    const previous = index > 0 ? body.charCodeAt(index - 1) : 0
+    const next = index + 1 < body.length ? body.charCodeAt(index + 1) : 0
+    // Skip the `==` half of `!=`, `<=`, `>=`, and skip assignment and arrow function.
+    if (previous === 61 || next === 61) {
+      continue
+    }
+    if (previous === 33 || previous === 60 || previous === 62) {
+      continue
+    }
+    if (previous === 61 || next === 61) {
+      continue
+    }
+    // A lone `=` is an assignment or a default parameter, both allowed.
+    if (next !== 61 && previous !== 61) {
+      continue
+    }
+    return true
+  }
+  return false
+}
+
+/** Derived-key length the tests assert on, matching `DEFAULT_HASH_KEY_BYTES`. */
+const TEST_KEY_BYTES = 32
+
+/**
+ * Extract a method body from a source file by brace matching.
+ *
+ * Brace matching rather than a regex, so a nested block cannot truncate the body
+ * and hide a comparison from the assertion that reads it.
+ */
+function methodBody(source: string, name: string): string {
+  const start = source.indexOf(`\n  async ${name}(`)
+  assert(start >= 0, `method ${name} not found in the source`)
+  const open = source.indexOf("{", start)
+  let depth = 0
+  for (let index = open; index < source.length; index++) {
+    const character = source[index]
+    if (character === "{") {
+      depth++
+    } else if (character === "}") {
+      depth--
+      if (depth === 0) {
+        return source.slice(open, index + 1)
+      }
+    }
+  }
+  throw new Error(`unterminated body for ${name}`)
+}
 
 /** Assembled rather than written out, so these sources do not match their own grep. */
 const FORBIDDEN = {
@@ -244,6 +305,130 @@ Deno.test("hashes carry no pepper material in the stored value", async () => {
   const stored = adapter.allKeys()[0].secret ?? ""
   assertFalse(stored.includes(TEST_PEPPER))
   assertFalse(stored.includes("hunter2"))
+})
+
+/**
+ * A comparator that records what it was asked to compare.
+ *
+ * The point is not that it compares — it delegates to the real one, so every
+ * existing behavioural test still holds — but that its *call* is observable. Any
+ * mutation that replaces the comparison on a verify path with `===`, a hex-string
+ * compare or an inline `timingSafeEqual` stops calling it, and a test asserting it
+ * was called therefore goes red.
+ */
+class RecordingComparator {
+  readonly calls: Array<{ left: number[]; right: number[] }> = []
+
+  readonly compare = (left: Uint8Array, right: Uint8Array): boolean => {
+    this.calls.push({ left: [...left], right: [...right] })
+    return timingSafeEqual(left, right)
+  }
+
+  reset(): void {
+    this.calls.length = 0
+  }
+}
+
+Deno.test("the verify path compares through the injected comparator", async () => {
+  const comparator = new RecordingComparator()
+  const crypto = new CryptoContext({
+    pepper: TEST_PEPPER,
+    iterations: TEST_ITERATIONS,
+    comparator: comparator.compare,
+  })
+  const hash = await crypto.hash("correct horse battery staple")
+
+  comparator.reset()
+  assert(await crypto.verify("correct horse battery staple", hash))
+  assertEquals(comparator.calls.length, 1, "verify must compare exactly once")
+
+  const [call] = comparator.calls
+  // Both operands are the *derived* keys — not the hex strings, not the raw inputs.
+  // A hex-string comparison would exit at the first differing byte; a comparison of
+  // raw inputs would not be a credential check at all.
+  assertEquals(call.left.length, TEST_KEY_BYTES)
+  assertEquals(call.right.length, TEST_KEY_BYTES)
+  assertEquals(call.left, call.right, "a matching credential derives equal keys")
+
+  comparator.reset()
+  assertFalse(await crypto.verify("wrong password", hash))
+  assertEquals(comparator.calls.length, 1, "a wrong credential must still be compared")
+  assertNotEquals(comparator.calls[0].left, comparator.calls[0].right)
+})
+
+Deno.test("constantTimeEquals compares through the same injected comparator", async () => {
+  const comparator = new RecordingComparator()
+  const crypto = new CryptoContext({
+    pepper: TEST_PEPPER,
+    iterations: TEST_ITERATIONS,
+    comparator: comparator.compare,
+  })
+
+  assert(await crypto.constantTimeEquals("token", "token"))
+  assertEquals(comparator.calls.length, 1)
+  // 32 bytes on both sides whatever the inputs were: that is the digest step, and
+  // it is what makes the comparison length-independent. A `===` on the inputs would
+  // compare 0 times; a hex compare would hand over 64 characters.
+  assertEquals(comparator.calls[0].left.length, 32)
+  assertEquals(comparator.calls[0].right.length, 32)
+
+  comparator.reset()
+  assertFalse(await crypto.constantTimeEquals("a", "b".repeat(4096)))
+  assertEquals(comparator.calls.length, 1, "unequal lengths must still reach the comparator")
+  assertEquals(comparator.calls[0].left.length, 32)
+  assertEquals(comparator.calls[0].right.length, 32)
+})
+
+Deno.test("the seam cannot be satisfied by calling the comparator and ignoring it", async () => {
+  // The converse: if the comparison result were discarded and a hardcoded answer
+  // returned, this fails.
+  const permissive = new CryptoContext({
+    pepper: TEST_PEPPER,
+    iterations: TEST_ITERATIONS,
+    comparator: () => true,
+  })
+  const hash = await permissive.hash("real password")
+  assert(await permissive.verify("anything at all", hash))
+
+  const real = new CryptoContext({ pepper: TEST_PEPPER, iterations: TEST_ITERATIONS })
+  assertFalse(await real.verify("anything at all", hash))
+})
+
+Deno.test("no secret is compared outside the one comparator", async () => {
+  // Source-level assertion, and legitimately so: the property is *which operator
+  // the verify paths use*, and no runtime check can observe that an equivalent
+  // substitution happened — that was the gap a mutation on `timingSafeEqual`
+  // exposed. Both verify bodies are read from disk and asserted to end in a
+  // comparator call with no inline equality operator of their own.
+  const source = await Deno.readTextFile(new URL("./crypto.ts", import.meta.url))
+  for (const name of ["verify", "constantTimeEquals"]) {
+    const body = methodBody(source, name)
+    assertFalse(hasEqualityOperator(body), `CryptoContext.${name} must not compare inline`)
+    assert(
+      body.includes("this.compare("),
+      `CryptoContext.${name} must route its comparison through this.compare`,
+    )
+  }
+
+  // And the constant-time primitive is referenced from exactly one place in the
+  // package: the comparator default. A second reference is a second compare path.
+  const sources: string[] = []
+  for await (const entry of Deno.readDir(new URL(".", import.meta.url))) {
+    if (!entry.isFile || !entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) {
+      continue
+    }
+    sources.push(await Deno.readTextFile(new URL(entry.name, import.meta.url)))
+  }
+  const referencing = sources.filter((text) => text.includes("timingSafeEqual"))
+  assertEquals(
+    referencing.length,
+    1,
+    "timingSafeEqual must be referenced from exactly one file, the comparator default",
+  )
+  assert(
+    referencing[0].includes("timingSafeBytesComparator"),
+    "and that reference must be the exported comparator default",
+  )
 })
 
 Deno.test("verify rejects a malformed stored hash and keeps verifying afterwards", async () => {

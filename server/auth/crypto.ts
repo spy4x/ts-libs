@@ -56,19 +56,49 @@ function fromHex(hex: string): Uint8Array {
 }
 
 /**
+ * Compares two byte arrays of equal length and returns whether they match.
+ *
+ * The default is `timingSafeEqual` from `@std/crypto`. The seam exists so the
+ * comparison on the verify path is *observable by a test*: a test injects a
+ * recording comparator and thereby proves that the production path routed through
+ * this one function with fixed-width digests, which is the property that a
+ * constant-time comparison actually rests on. Measuring wall-clock latency would
+ * be flaky on shared CI, so the property is proven structurally instead — see
+ * `crypto.test.ts`, "the verify path compares through the injected comparator".
+ */
+export type BytesComparator = (left: Uint8Array, right: Uint8Array) => boolean
+
+/** Every digest and every derived key in this package is compared through this. */
+export const timingSafeBytesComparator: BytesComparator = timingSafeEqual
+
+/**
  * Pepper-bound key derivation. Every caller that stores a secret at rest —
  * passwords, OTPs and magic-link tokens alike — goes through this one class, so
  * a change of algorithm is a change of one file.
+ *
+ * Both comparison sites call `this.compare` and nothing else. There is exactly
+ * one `timingSafeEqual` reference in the package (the default above) and no direct
+ * byte or string comparison of a secret anywhere on a verify path; a mutation that
+ * substitutes one is caught behaviourally, because the injected comparator stops
+ * being called.
  */
 export class CryptoContext {
   readonly pepper: string
   readonly iterations: number
   readonly keyBytes: number
+  private readonly compare: BytesComparator
 
-  constructor(options: { pepper: string; iterations?: number; keyBytes?: number }) {
+  constructor(options: {
+    pepper: string
+    iterations?: number
+    keyBytes?: number
+    /** Comparison implementation. Injected by tests; production uses `timingSafeEqual`. */
+    comparator?: BytesComparator
+  }) {
     this.pepper = assertPepper(options.pepper)
     this.iterations = options.iterations ?? DEFAULT_HASH_ITERATIONS
     this.keyBytes = options.keyBytes ?? DEFAULT_HASH_KEY_BYTES
+    this.compare = options.comparator ?? timingSafeBytesComparator
   }
 
   /** Derive `hexSalt:hexKey` for `value`. A fresh salt per call, never reused. */
@@ -82,8 +112,9 @@ export class CryptoContext {
    * Verify `value` against a stored `hexSalt:hexKey`.
    *
    * A malformed stored hash returns `false` rather than throwing: a corrupted
-   * row must fail the login, not 500 the endpoint. The comparison runs on the
-   * raw derived bytes, so there is no hex-encoded early exit.
+   * row must fail the login, not 500 the endpoint. The comparison is the last
+   * statement and runs on the raw derived bytes — never on the hex strings, which
+   * would compare byte by byte and exit at the first difference.
    */
   async verify(value: string, stored: string | null | undefined): Promise<boolean> {
     if (!stored) {
@@ -102,7 +133,7 @@ export class CryptoContext {
     if (actual.length !== expected.length) {
       return false
     }
-    return timingSafeEqual(actual, expected)
+    return this.compare(actual, expected)
   }
 
   /**
@@ -110,7 +141,7 @@ export class CryptoContext {
    *
    * Both sides are digested to a fixed 32 bytes under one `Promise.all`, before
    * any comparison and before any branch that observes the inputs, and only then
-   * compared with `timingSafeEqual`. A length-dependent early return is therefore
+   * handed to `this.compare`. A length-dependent early return is therefore
    * impossible: the function has no branch over the inputs at all, only over
    * their fixed-width digests. The digest step is not decoration — without it
    * `timingSafeEqual` throws on unequal lengths, and a thrown-and-caught
@@ -122,7 +153,7 @@ export class CryptoContext {
       crypto.subtle.digest("SHA-256", encoder.encode(left)),
       crypto.subtle.digest("SHA-256", encoder.encode(right)),
     ])
-    return timingSafeEqual(new Uint8Array(leftDigest), new Uint8Array(rightDigest))
+    return this.compare(new Uint8Array(leftDigest), new Uint8Array(rightDigest))
   }
 
   private async derive(
