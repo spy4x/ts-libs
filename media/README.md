@@ -9,20 +9,20 @@ why the suite runs under `deno test --allow-read --allow-env` with no `--allow-r
 
 ## Module map
 
-| Entry point         | Exports                                                                                                                                                                     |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@ts-libs/media`    | barrel — everything below                                                                                                                                                   |
-| `./process-runner`  | `ProcessRunner`, `ProcessOutput`, `ProcessLineHandlers`, `MediaDeps`, `ProcessExecutionError`, `createLineSplitter`, `denoCommandRunner`, `FFMPEG_BINARY`, `FFPROBE_BINARY` |
-| `./ffprobe`         | `getMeta`, `getDuration`, `getAudioDuration`, `getImageDimensions`, `asMp4Path`, `isMp4Path`, `isMp4Format`, `Mp4Path`, ffprobe JSON types                                  |
-| `./ffmpeg`          | `makeThumbnail`, `buildThumbnailArgv`, `runWithProgress`, `DEFAULT_THUMBNAIL_AT_MS`                                                                                         |
-| `./progress-parse`  | `createFfmpegProgressParser`, `FfmpegProgressKind`, `clampPercent`, `parseOutTime`                                                                                          |
-| `./progress-broker` | `SseProgressBroker`, `ProgressJobId`, subscription and publish option types                                                                                                 |
-| `./sse-frame`       | `formatSseFrame`, `SseFrame`                                                                                                                                                |
-| `./timers`          | `Timers`, `systemTimers`                                                                                                                                                    |
-| `./duration`        | `parseDurationMs`, `formatDurationParam`, `getTrueResolution`                                                                                                               |
-| `./lrc-sylt`        | `parseLrcToSylt`, `SyltTimestampFormat`, `SyltTag`, `SyltEntry`                                                                                                             |
-| `./atomic-rewrite`  | `withAtomicRewrite`, `tempSiblingPath`, `sizeDeltaBounds`, `verdictSizeDelta`, `RewriteFileSystem`, `denoFileSystem`                                                        |
-| `./binary-lookup`   | `createBinaryFinder`, `findFfmpeg`, `BinaryFinderDeps`, `EnvironmentReader`                                                                                                 |
+| Entry point         | Exports                                                                                                                                                                                         |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@ts-libs/media`    | barrel — everything below                                                                                                                                                                       |
+| `./process-runner`  | `ProcessRunner`, `ProcessOutput`, `ProcessLineHandlers`, `MediaDeps`, `ProcessExecutionError`, `assertUsablePath`, `createLineSplitter`, `denoCommandRunner`, `FFMPEG_BINARY`, `FFPROBE_BINARY` |
+| `./ffprobe`         | `getMeta`, `getDuration`, `getAudioDuration`, `getImageDimensions`, `asMp4Path`, `isMp4Path`, `isMp4Format`, `Mp4Path`, ffprobe JSON types                                                      |
+| `./ffmpeg`          | `makeThumbnail`, `buildThumbnailArgv`, `runWithProgress`, `DEFAULT_THUMBNAIL_AT_MS`                                                                                                             |
+| `./progress-parse`  | `createFfmpegProgressParser`, `FfmpegProgressKind`, `clampPercent`, `parseOutTime`                                                                                                              |
+| `./progress-broker` | `SseProgressBroker`, `ProgressJobId`, subscription and publish option types                                                                                                                     |
+| `./sse-frame`       | `formatSseFrame`, `SseFrame`                                                                                                                                                                    |
+| `./timers`          | `Timers`, `systemTimers`                                                                                                                                                                        |
+| `./duration`        | `parseDurationMs`, `formatDurationParam`, `getTrueResolution`                                                                                                                                   |
+| `./lrc-sylt`        | `parseLrcToSylt`, `SyltTimestampFormat`, `SyltTag`, `SyltEntry`                                                                                                                                 |
+| `./atomic-rewrite`  | `withAtomicRewrite`, `tempSiblingPath`, `sizeDeltaBounds`, `verdictSizeDelta`, `RewriteFileSystem`, `denoFileSystem`                                                                            |
+| `./binary-lookup`   | `createBinaryFinder`, `findFfmpeg`, `BinaryFinderDeps`, `EnvironmentReader`                                                                                                                     |
 
 `test-doubles.ts` holds the fakes and is deliberately **not** an export: a JSR publish ships the
 graph reachable from `exports`, so the fakes stay out of the published package.
@@ -52,6 +52,14 @@ is storage-coupled and was not ported; thumbnails use ffmpeg's webp encoder inst
 `ProcessRunner` is the only way this package touches a process. `argv` is always a string array —
 never a shell string — and `denoCommandRunner` spawns with `stdin: "null"` so a child can never
 block on a prompt.
+
+argv removes shell interpretation but **not option parsing**: ffmpeg and ffprobe parse their own
+argument list, so a path beginning with `-` would reach them as a flag. Every caller-supplied path
+(`getMeta`, `getDuration`, `getAudioDuration`, `getImageDimensions`, `makeThumbnail`'s input and
+output) is therefore checked by `assertUsablePath` before argv is built, and a dash-leading or
+NUL-bearing path throws a `TypeError` naming the path — before any process is created. Without that
+guard, `makeThumbnail` with `output: "-y.webp"` made ffmpeg answer `Unrecognized option 'y.webp'`
+with exit 8 instead of writing a file.
 
 ```ts
 import { denoCommandRunner, findFfmpeg, getMeta } from "@ts-libs/media"
@@ -84,6 +92,10 @@ binary being installed:
 PATH=/nonexistent deno task test   # exit 0
 ```
 
+Spawn-freeness is asserted, not assumed: the path-guard tests require
+`runner.callCount === 0`, so `assertUsablePath` is proven to reject before a process exists rather
+than being caught afterwards by ffmpeg's own exit code.
+
 ## `getDuration` is mp4-only, and the type system says so
 
 `getDuration` needs `Mp4Path`, a branded string that only `asMp4Path` produces. `asMp4Path` rejects
@@ -99,9 +111,23 @@ await getDuration("/tmp/clip.webm", deps)
 `getMeta` reports the container it found; `isMp4Format(meta.format)` is the bridge from that answer
 to a brandable path.
 
-`getMeta` returns `durationMs: 0` for containers whose duration ffprobe does not report usefully —
-`webm`, and the still-image demuxers (`image2`, `png_pipe`, `webp_pipe`, `jpg_pipe`). Convert to mp4
-first and use `getDuration`.
+`getMeta` returns `durationMs: 0` in two different situations, and neither means "ffprobe had
+nothing to say":
+
+- **Still images** (`image2`, `png_pipe`, `jpg_pipe`, `webp_pipe`) have no duration to report, so `0`
+  means "not applicable". The source only skipped `png_pipe` and `jpg_pipe`, but a real `.jpg` file
+  is probed as `image2` and a real `.webp` as `webp_pipe`, so those files used to throw
+  `"duration could not be detected"` instead.
+- **`webm`** does have a duration, and `0` is policy rather than a limitation. ffprobe reports it
+  correctly for a finished webm (measured: `format.duration = 3.008000` on ffmpeg 8.1.2), but a webm
+  written by a live muxer — MediaRecorder, a streaming encoder — has no `Duration` element in its
+  Segment Info, and the value ffprobe then derives from the last cluster can be badly off. The
+  source's contract, kept here, is to convert to mp4 and measure with `getDuration`, so `0` never
+  means "a duration that may be wrong". The cost is a mandatory conversion even when the reported
+  duration was fine — call `getDuration(asMp4Path(pathAfterConversion), deps)` at that point.
+
+`getDuration` itself is unaffected: it reads `format.duration` for an mp4 through the same
+`parseDurationMs`, so a six-digit, three-digit or absent fraction all land in whole milliseconds.
 
 ## Progress: parse, then report
 

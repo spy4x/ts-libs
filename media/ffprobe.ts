@@ -8,13 +8,20 @@
  * Two changes shape this module:
  *
  * 1. The source passed a shell string with the media path interpolated into it
- *    (`helpers.ts:37,96,123`). Every call here is an argv array.
+ *    (`helpers.ts:37,96,123`). Every call here is an argv array, and every
+ *    caller-supplied path is checked against option injection by the shared
+ *    `assertUsablePath` before argv is built.
  * 2. `getDuration` is mp4-only by contract, and the source's own comment said a
  *    caller could reach it with a webm path. The contract is now a branded
  *    parameter type plus a container check against ffprobe's own answer.
  */
 
-import { FFPROBE_BINARY, type MediaDeps, ProcessExecutionError } from "./process-runner.ts"
+import {
+  assertUsablePath,
+  FFPROBE_BINARY,
+  type MediaDeps,
+  ProcessExecutionError,
+} from "./process-runner.ts"
 import { parseDurationMs, type Resolution } from "./duration.ts"
 
 /** One entry of ffprobe's `side_data_list`. */
@@ -60,12 +67,22 @@ export interface FFProbeOutput {
 /** Video metadata for one file. */
 export interface MediaMeta {
   /**
-   * Duration in milliseconds, or `0` for a container that does not carry one.
+   * Duration in milliseconds, or `0` when this wrapper refuses to report one.
    *
-   * ffprobe reports no usable duration for the `webm`, `png_pipe` and
-   * `jpg_pipe` formats here — the source's own note said so
-   * (`helpers.ts:33-35`) and kept the zero. A webm must be converted first and
-   * measured with `asMp4Path` + `getDuration`.
+   * `0` has two meanings, both deliberate, and neither is "ffprobe had nothing
+   * to say":
+   *
+   * - **Still images** (`image2`, `png_pipe`, `jpg_pipe`, `webp_pipe`): ffprobe
+   *   reports no duration at all, so `0` means "not applicable".
+   * - **webm**: ffprobe *does* report `format.duration` for a completed webm —
+   *   measured on ffmpeg 8.1.2, 3.008 s for a 3 s clip — but a webm from a live
+   *   muxer (MediaRecorder, a streaming encoder) has no `Duration` element in
+   *   its Segment Info, and the number ffprobe then prints is derived from the
+   *   last cluster rather than from a header. The source's contract, kept here,
+   *   is to convert to mp4 and measure with `getDuration` rather than return a
+   *   duration that is sometimes wrong. The cost is a mandatory conversion even
+   *   when the reported duration was fine; the benefit is that `0` never means
+   *   "a duration that may be badly off".
    */
   durationMs: number
   /** ffprobe's `format_name`, e.g. `"mov,mp4,m4a,3gp,3g2,mj2"`. */
@@ -154,22 +171,6 @@ export function isMp4Format(format: string | null | undefined): boolean {
   return typeof format === "string" && format.includes("mp4")
 }
 
-/**
- * Rejects a media path ffprobe would read as an option.
- *
- * argv already removes shell interpretation, but ffprobe parses its own option
- * list, so a path beginning with `-` is still an injection into the command
- * line. A NUL byte cannot be passed to `execve` either.
- */
-function assertUsablePath(path: string): void {
-  if (path.startsWith("-")) {
-    throw new TypeError(`media path must not start with "-": ${JSON.stringify(path)}`)
-  }
-  if (path.includes("\0")) {
-    throw new TypeError("media path must not contain a NUL byte")
-  }
-}
-
 async function runProbe(
   path: string,
   deps: MediaDeps,
@@ -243,17 +244,28 @@ function readRotation(probe: FFProbeOutput, stream: FFProbeStream): number {
 }
 
 /**
- * Containers whose ffprobe `format.duration` is unusable.
+ * Containers whose ffprobe `format.duration` this wrapper refuses to report.
  *
- * The source skipped `webm`, `png_pipe` and `jpg_pipe` (`helpers.ts:70-72`) and
- * threw `"duration could not be detected"` for everything else. Two of those
- * three names do not describe the files a caller actually passes: ffprobe
- * 8.1.2 reports `image2` for a `.jpg` file and `webp_pipe` for a `.webp`, so a
- * still image reached the throwing branch. `_pipe` names appear only for piped
- * input, which is why the source's checks missed real files. The still-image
- * demuxers are listed explicitly instead of by suffix.
+ * Two categories with different reasons — see `MediaMeta.durationMs`:
+ *
+ * - **Still images** genuinely have no duration to read.
+ * - **`webm`** does have one, and this entry is a deliberate policy, not an
+ *   ffprobe limitation: a completed webm reports its duration correctly
+ *   (measured: 3.008 s for a 3 s clip on ffmpeg 8.1.2), but a webm written by a
+ *   live muxer has no `Duration` element, so the value cannot be trusted on
+ *   sight. The source had the same policy (`helpers.ts:70-72`, with its note at
+ *   `helpers.ts:33-35`); it stays here, and the price is that a caller converts
+ *   to mp4 and uses `getDuration` even when the duration was available.
+ *
+ * The source listed `webm`, `png_pipe` and `jpg_pipe`, and threw
+ * `"duration could not be detected"` for everything else. Two of those three
+ * names do not describe the files a caller actually passes: ffprobe 8.1.2
+ * reports `image2` for a `.jpg` file and `webp_pipe` for a `.webp`, so a still
+ * image reached the throwing branch. `_pipe` names appear only for piped input,
+ * which is why the source's checks missed real files. The still-image demuxers
+ * are listed explicitly instead of by suffix.
  */
-const DURATIONLESS_FORMATS = [
+const UNTRUSTED_DURATION_FORMATS = [
   "webm",
   "png_pipe",
   "jpg_pipe",
@@ -265,7 +277,7 @@ const DURATIONLESS_FORMATS = [
 
 function lacksDuration(format: string | null): boolean {
   return format === null ||
-    DURATIONLESS_FORMATS.some((durationless) => format.includes(durationless))
+    UNTRUSTED_DURATION_FORMATS.some((untrusted) => format.includes(untrusted))
 }
 
 /**
