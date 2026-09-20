@@ -116,26 +116,112 @@ gh pr create --fill --base main
 
 ```bash
 deno task check
-CI=true DENO_DIR=$(mktemp -d) deno task check   # CI emulation — the only real evidence
+# CI emulation — the only real evidence. The cache directory is created and removed
+# here on purpose: `DENO_DIR=$(mktemp -d)` leaves ~2 000 files under /tmp per run,
+# and a wave of parallel agents filled the machine's /tmp doing exactly that.
+D=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" denodir.XXXXXX)
+CI=true DENO_DIR=$D deno task check; echo "exit=$?"
+rm -rf -- "$D"
 ```
 
 A warm local run is not evidence: it hides `$HOME`, `DENO_DIR` and cache assumptions. Never assert a
 path under `$HOME` in a test — resolve it through `import.meta.resolve` or an injected config. A test
 that can silently skip when its dependency is missing must fail loudly instead.
 
-| Task                 | Does                                             |
-| -------------------- | ------------------------------------------------ |
-| `deno task check`    | all checks; the only command CI runs             |
-| `deno task fmt`      | format (`fmt:check` in CI)                       |
-| `deno task lint`     | lint (`lint:fix` to apply suggestions)           |
-| `deno task ts:check` | `deno check` over every `.ts`/`.tsx` in the tree |
-| `deno task test`     | run all tests                                    |
-| `deno task fix`      | `lint --fix` then format                         |
+| Task                         | Does                                                       |
+| ---------------------------- | ---------------------------------------------------------- |
+| `deno task check`            | format, lint, types and the unit tier; needs no containers |
+| `deno task check:all`        | `check`, then the integration tier                         |
+| `deno task fmt`              | format (`fmt:check` in CI)                                 |
+| `deno task lint`             | lint (`lint:fix` to apply suggestions)                     |
+| `deno task ts:check`         | `deno check` over every `.ts`/`.tsx` in the tree           |
+| `deno task test`             | the unit tier — every test except `*.integration.test.ts`  |
+| `deno task test:integration` | the integration tier — only `*.integration.test.ts`        |
+| `deno task services:up`      | start Postgres, MinIO and Mailpit, wait until healthy      |
+| `deno task services:down`    | stop them and drop their volumes                           |
+| `deno task services:logs`    | logs of the three containers                               |
+| `deno task fix`              | `lint --fix` then format                                   |
 
 If `deno task check` fails because the lockfile is stale, run the task that needs the new dependency
 once with network access and commit the updated `deno.lock`. Never delete or hand-edit the lockfile.
 `CI=true` makes Deno treat the lockfile as frozen — a cold run that wants to rewrite it is a failure,
 not a warning to ignore.
+
+## Test tiers
+
+Two tiers, agreed in issue #74. They differ in what they are allowed to touch, not in how carefully
+they are written.
+
+|              | Unit tier                  | Integration tier                 |
+| ------------ | -------------------------- | -------------------------------- |
+| File name    | `*.test.ts`                | `*.integration.test.ts`          |
+| Task         | `deno task test`           | `deno task test:integration`     |
+| Talks to     | fakes only                 | real Postgres, MinIO and Mailpit |
+| Permissions  | `--allow-read --allow-env` | the above plus `--allow-net`     |
+| Needs Docker | no                         | yes                              |
+
+The suffix is the only thing that puts a file in a tier: `deno task test` ignores `**/*.integration.test.ts`
+and `deno task test:integration` runs nothing else. Both tiers are formatted, linted and type-checked
+by `deno task check` — only the _running_ is split.
+
+`deno task check` stays free of containers so a package PR can be verified anywhere.
+`deno task check:all` runs both tiers in order, unit first.
+
+### Running the integration tier
+
+```bash
+deno task services:up          # Postgres, MinIO and Mailpit; returns when all three are healthy
+deno task test:integration
+deno task services:down        # when you are done with them for the day
+```
+
+The containers are defined in `infra/compose.integration.yml` under the fixed compose project name
+`ts-libs-it`. Every published port is bound to `127.0.0.1` and sits in the 5xxxx range so it cannot
+collide with anything already running. Images are pinned to an exact tag, like every other
+dependency.
+
+### Writing one
+
+Import the harness from `@integration-testing` (it lives in `infra/testing/`, which is not a
+workspace member, so nothing test-only can ever be published):
+
+```ts
+import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
+
+const settings = postgresSettings()
+await requireReachable(settings.address) // fails loudly when the container is not there
+const schema = uniqueIdentifier("it_db") // unique per run
+```
+
+Three rules, and a test that breaks one breaks somebody else's run:
+
+- **Fail loudly, never skip.** Call `requireReachable` before touching a service. There is no
+  `ignore`, no early `return` and no `try`/`catch` that turns a missing container into a pass.
+- **Isolate every global name.** Several worktrees run this tier against the same containers at the
+  same time. Take a fresh suffix — `uniqueIdentifier`, `uniqueKeyPrefix`, `uniqueRecipient` — for
+  every schema, object key and mail recipient, and never truncate a shared table or delete every
+  message in the mailbox.
+- **Clean up in a `finally`.** Drop the schema, delete the object, delete the mail. A test that
+  failed still cleans up.
+
+Addresses come from one environment variable each, defaulting to the compose file. CI sets them to
+the Woodpecker service host names.
+
+```
+TS_LIBS_IT_POSTGRES_URL          postgres://…@127.0.0.1:55432/…
+TS_LIBS_IT_S3_ENDPOINT           http://127.0.0.1:59000
+TS_LIBS_IT_S3_ACCESS_KEY_ID      integration-test-only
+TS_LIBS_IT_S3_SECRET_ACCESS_KEY  integration-test-only
+TS_LIBS_IT_S3_BUCKET             ts-libs-integration
+TS_LIBS_IT_S3_REGION             us-east-1
+TS_LIBS_IT_SMTP_HOST             127.0.0.1
+TS_LIBS_IT_SMTP_PORT             51025
+TS_LIBS_IT_MAILPIT_URL           http://127.0.0.1:58025
+```
+
+The containers' user, password and database name are all `integration-test-only`. They hold
+throw-away data and listen on loopback only; the literal is meant to be unmistakable if it ever
+turns up in a log. It is the one credential-shaped string this repository commits.
 
 ## Code style
 

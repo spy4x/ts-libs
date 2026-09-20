@@ -31,6 +31,14 @@ validation/   arktype validate helpers, validation model
   at extraction time. No module is published while it still carries a known bug.
 - **MIT.**
 
+## Tests
+
+Two tiers. `deno task test` is the unit tier: fakes only, no network, no Docker, and it is part of
+`deno task check`. `deno task test:integration` is the integration tier: files named
+`*.integration.test.ts`, run against a real Postgres, a real S3-compatible store and a real mail
+server started by `deno task services:up`. An integration test whose service is missing fails with
+the address and the command that starts it — it never skips. `AGENTS.md` has the details.
+
 ## Relationship to other repos
 
 - `spy4x/preact-components` — Preact + Tailwind layer. Independent package; no workspace coupling.
