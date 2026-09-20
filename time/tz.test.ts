@@ -245,6 +245,57 @@ describe("zonedDateTime", () => {
       "2026-01-15T12:00:00.000Z",
     )
   })
+
+  it("resolves candidates correctly even if a display-locale parameter reached isoDateInTz/hhmmInTz", () => {
+    // zonedDateTime screens candidates with its own formatter, one call that
+    // reads year through minute together (six fields, including hourCycle).
+    // isoDateInTz and hhmmInTz — built on zonedFormatter, the code path the
+    // display formatters use — each read a narrower slice (three fields: date
+    // only, or time only). That shape difference is what this intercepts:
+    // it forces "ar-EG" onto any three-field call, simulating a locale
+    // parameter added to the display side, and leaves the six-field call
+    // zonedDateTime actually depends on untouched. Reverting zonedDateTime to
+    // read its wall clock through isoDateInTz/hhmmInTz (as it once did) makes
+    // this go red, because ar-EG renders Arabic-indic digits that can never
+    // equal the plain-ASCII `requested` string.
+    //
+    // Europe/Madrid and Pacific/Auckland — never passed to isoDateInTz or
+    // hhmmInTz anywhere else in this file — so zonedFormatter's per-zone
+    // cache is empty for them here and the interception below cannot be
+    // bypassed by a formatter an earlier test already built.
+    const RealDateTimeFormat = Intl.DateTimeFormat
+
+    function isThreeFieldDateOrTimeShape(options: Intl.DateTimeFormatOptions | undefined) {
+      if (!options) return false
+      const hasDate = "year" in options && "month" in options && "day" in options
+      const hasTime = "hour" in options && "minute" in options
+      return (hasDate && !hasTime) || (hasTime && !hasDate)
+    }
+
+    function FakeDateTimeFormat(
+      locale?: string | string[],
+      options?: Intl.DateTimeFormatOptions,
+    ) {
+      return new RealDateTimeFormat(
+        isThreeFieldDateOrTimeShape(options) ? "ar-EG" : locale,
+        options,
+      )
+    }
+
+    Intl.DateTimeFormat = FakeDateTimeFormat as unknown as typeof Intl.DateTimeFormat
+    try {
+      // Europe/Madrid's spring-forward gap — same rule and instant as Berlin's.
+      expect(zonedDateTime("2026-03-29", "02:30", "Europe/Madrid").toISOString()).toBe(
+        "2026-03-29T01:30:00.000Z",
+      )
+      // New Zealand's own spring-forward gap — an unrelated hemisphere and rule.
+      expect(zonedDateTime("2026-09-27", "02:30", "Pacific/Auckland").toISOString()).toBe(
+        "2026-09-26T14:30:00.000Z",
+      )
+    } finally {
+      Intl.DateTimeFormat = RealDateTimeFormat
+    }
+  })
 })
 
 describe("tzOffsetMinutes", () => {

@@ -53,20 +53,29 @@ Three more consequences of the `Intl` choice:
   `date-fns-tz`, Luxon — each carry a copy of the tz database and a release
   cadence to match. This module retires that dependency class rather than
   adding to it.
-- **Display locale comes for free, offset locale never varies.** The display
-  formatters (`formatDateTimeLong` and friends) are built on locale data, not
-  string assembly, so the same code could produce
+- **A display-locale parameter is genuinely safe to add, because two other
+  formatters can never see it.** The display formatters (`formatDateTimeLong`
+  and friends, including `isoDateInTz`/`hhmmInTz`) are built on locale data,
+  not string assembly, so the same code could produce
   `"Friday, 28 August 2026 at 10:00"` in `en-GB` and
   `"Freitag, 28. August 2026 um 10:00"` in `de-DE` if a locale parameter were
   added — the locale tag is fixed inside each formatter today because nothing
-  yet consumes a second one, not because it would be hard to add. The UTC
-  offset that `zonedDateTime` computes from is a different story: it is read by
-  parsing ICU's `"GMT±H:MM"` text, and that text is `en-GB`'s own rendering —
-  `fr-FR` renders the same offset as `"UTC+5:30"`, `ar-EG` with Arabic-indic
-  digits, and an unread offset silently becomes zero. A locale parameter must
-  never reach that one formatter, so it is kept structurally separate from the
-  display formatters (`time/tz.ts`'s `offsetFormatter`, pinned to `en-GB`) —
-  not a "trivial to add" afterthought.
+  yet consumes a second one, not because it would be hard to add. Two
+  computations must never see that parameter, because they turn `Intl`'s
+  output back into data instead of displaying it, and `Intl` renders both
+  differently per locale: the UTC offset `zonedDateTime` derives its instant
+  from (`en-GB` renders `Asia/Kolkata`'s offset as `"GMT+5:30"`, `fr-FR` as
+  `"UTC+5:30"`, `ar-EG` with Arabic-indic digits — an unread offset silently
+  becomes zero), and the wall clock `zonedDateTime` screens its candidates
+  against (the same digit substitution would apply to a year, month, day,
+  hour and minute compared as ASCII text). Both live in their own formatters
+  — `time/tz.ts`'s `offsetFormatter` and `canonicalWallClockFormatter`, both
+  pinned to `en-GB` — outside the option-set table `formatDateTimeLong` and
+  `isoDateInTz`/`hhmmInTz` share, so a locale parameter added to that table
+  cannot reach either one. Verified by forcing `zonedFormatter`'s own locale
+  to `ar-EG`: `zonedDateTime` keeps resolving every case in its test suite
+  correctly, because it depends on neither `zonedFormatter` nor the display
+  functions built on it.
 - **Determinism is the caller's job, and here it is enforced.** The runtime's
   tzdata is the ICU build, not the host. Every function takes an explicit IANA
   zone and none of them read the host `TZ` or the host clock, so the suite
@@ -231,11 +240,12 @@ a non-negative integer and an empty mail address. There is no silent conversion 
   one rather than answering up to a minute wrong. A scheduling library does not need them.
 - **Validation of anything but a zone name.** `isValidTimeZone` answers whether the runtime knows the
   zone; it does not check that a date and time exist — that is `zonedDateTime`'s own, separate check.
-- **Localisation of the display locale, never the offset locale.** The display formatters'
-  locale tag is fixed to `"en-GB"` today; `Intl` would make adding a parameter straightforward,
-  because nothing consumes a second one yet. The offset-reading formatter `zonedDateTime` depends on
-  is different: it is pinned to `en-GB` permanently, on purpose, because parsing ICU's offset text
-  only works for the locale that renders it as `"GMT±H:MM"` — see
+- **Localisation of the display locale, never the two formatters `zonedDateTime` reads back as
+  data.** The display formatters' locale tag — including `isoDateInTz`'s and `hhmmInTz`'s — is
+  fixed to `"en-GB"` today, and adding a parameter is genuinely straightforward: `zonedDateTime`
+  does not call either of them. It reads its own offset formatter and its own wall-clock
+  formatter, both pinned to `en-GB` permanently and on purpose, because parsing `Intl`'s output
+  back into data only works for the one locale the parser was written against — see
   [Why `Intl` and not a date library](#why-intl-and-not-a-date-library).
 - **`Date` objects as the public currency for wall clocks.** They cannot represent one, which is the
   whole point.
