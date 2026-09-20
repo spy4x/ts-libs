@@ -240,17 +240,28 @@ Properties a caller should know, each pinned by a test:
 - **A reconnect always pulls every group the client already holds a cursor
   for**, once, unconditionally — not only when a later hint happens to reveal
   a gap, which in a quiet group might never happen.
-- **The reconnect backoff resets only once a message has actually arrived**,
-  not merely because the socket opened. A server that accepts a connection and
-  drops it immediately, every time, produces a growing delay between attempts
-  instead of a reconnect every few hundred milliseconds forever.
+- **The reconnect backoff resets only once the connection has proven itself —
+  a message _and_ a minimum amount of time open, not either alone.** A single
+  inbound frame is not proof of health: a server that sends one byte and drops
+  satisfies "a message arrived" for free, on every attempt, which is exactly
+  what let a reconnect storm through until issue #65's follow-up review caught
+  it. The counter resets only once a message has arrived _and_ the socket has
+  stayed open for at least `minHealthyMs` (default: `backoff.baseMs`) — a
+  server that accepts a connection and drops it, with or without sending
+  anything first, produces a growing delay between attempts instead of a
+  reconnect every few hundred milliseconds forever.
 - **A hint is decided as soon as it arrives, even while the handshake is
   unacknowledged.** The handshake is not serialised behind the cursor chain, so a
   hint is not held for up to `handshakeAttempts × handshakeAckTimeout`. Its cursor
   snapshot is simply taken later, which can only make it fresher.
 - **`clear()` and `keys()` read durable state first.** A fresh instance that calls
-  `clear()` before anything else still removes the stored cursors and the sync
-  time, leaving no orphan keys behind.
+  `clear()` before anything else still removes every cursor and the sync time
+  that the stored group index lists. It does not scan for a cursor key that
+  predates or bypasses that index — `KeyValueStore` has no way to enumerate its
+  own keys — so a genuinely orphaned `realtime:cursor:*` entry can survive
+  `clear()`. This is a real, pre-existing limitation, not a hypothetical one:
+  reproduced by seeding `realtime:cursor:g2` without listing `g2` in
+  `realtime:groups`.
 - **`advanceTo(groupId, 0)` records a cursor of `0` for a group the client has not
   seen**, so a pull that reports an empty group stays distinguishable from a cold
   start. For a group that already has a cursor, `advanceTo` is monotonic and a
@@ -281,13 +292,16 @@ An audit of this package (issue #65) found five problems the tests above did
 not catch, because no real `WebSocket` had ever been used against it. Each is
 now fixed, with a colocated test that fails if the fix is reverted, and an
 integration test (`web-socket-adapter.integration.test.ts`) that runs the real
-adapter against a real local server.
+adapter against a real local server. The backoff fix below went through two
+rounds: the first shipped version reset the counter on any inbound message,
+which a review caught still storming against a peer that sends one frame and
+drops — the row describes the fix that shipped, not the first attempt.
 
 | Bug                                                                                                                                                                                                                                                                               | Fix                                                                                                                                                                                                                            |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | A hint carries no payload, so its arrival alone was never proof the client held the data — the cursor advanced (and persisted) on arrival regardless                                                                                                                              | Every non-duplicate hint is pulled before anything moves; `cursors.apply` — the one thing that persists — runs only once that pull has succeeded (`client-transport.ts`, `#applyHint`)                                         |
 | A gap opened while reconnecting surfaced only if a later hint happened to reveal it, which in a quiet group could be never                                                                                                                                                        | A reconnect (not the first connect) pulls every group the client already holds a cursor for, once, unconditionally (`#pullAfterReconnect`)                                                                                     |
-| The reconnect backoff reset the moment a socket opened, so a server that accepted and immediately dropped every attempt produced a reconnect roughly every base-delay interval forever                                                                                            | The counter resets only once the first inbound message actually arrives (`#connectionProven`, checked in `#handleMessage`)                                                                                                     |
+| The reconnect backoff reset the moment a socket opened — or, after the first fix, the moment any single message arrived, which a peer that sends one byte and drops satisfies for free — so a bad peer caused a reconnect every few hundred milliseconds forever                  | The counter resets only once a message has arrived _and_ the socket has stayed open for at least `minHealthyMs` (`#tryResetBackoff`, checked from both `#handleMessage` and a timer armed in `#handleOpen`)                    |
 | No adapter shipped for a real `WebSocket`; the obvious one-liner (`return ws.readyState`) reads the platform's 0-3 `readyState` against this package's 1-4 `SocketState` and gets every state wrong, so an open socket reads as `Connecting` and every `send` is silently refused | `web-socket-adapter.ts` ships `adaptWebSocket` / `createWebSocketFactory` with an explicit translation table, and `send` throws on a state it actually checked rather than trusting the native socket's inconsistent behaviour |
 | The registry enforced no limits: one user id was measured holding 50 000 sockets, a single 6.9 MB frame was decoded and validated before anything measured it, and nothing slowed delivery to a socket whose peer had stopped reading                                             | `ConnectionRegistry` gained `maxConnectionsPerUser`, `maxMessageBytes` (measured before decoding) and `maxBufferedBytes` (a send is skipped, not queued, past it)                                                              |
 
@@ -374,14 +388,20 @@ two and nothing else in the suite, which is what makes them non-redundant.
 ## Testing
 
 ```bash
-deno task test               # unit tier: this package's *.test.ts
-deno task test:integration   # integration tier: *.integration.test.ts
+deno task test               # unit tier, the whole workspace (root task; see repo AGENTS.md)
+deno task test:integration   # integration tier, the whole workspace
+```
+
+Scoped to just this package:
+
+```bash
+deno test --no-prompt --allow-read --allow-env --ignore='**/*.integration.test.ts' realtime/
+deno test --no-prompt --allow-read --allow-env --allow-net realtime/*.integration.test.ts
 ```
 
 The unit tier has no sleeps, no network, no extra permissions: `FakeClock`
 fires timers only when a test advances it, `FakeSocket` is driven by the test
-as the peer, and `MemoryKeyValueStore` stands in for storage. It runs under
-the repository's `deno test --no-prompt --allow-read --allow-env`.
+as the peer, and `MemoryKeyValueStore` stands in for storage.
 
 The integration tier (`web-socket-adapter.integration.test.ts`) runs the real
 adapter against a real WebSocket server the test itself starts on `127.0.0.1`
