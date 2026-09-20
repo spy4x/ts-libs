@@ -64,16 +64,20 @@ export function niceStep(span: number, target = 5): number {
 /**
  * Tick values covering `[min, max]`, expanded outward to the next nice step.
  *
- * When `min === max` a single-element array is returned, so a caller can render a degenerate
- * axis without dividing by zero.
+ * Reversed bounds are swapped rather than rejected — `ticks(10, 0)` equals `ticks(0, 10)` — so a
+ * caller does not have to sort its own domain first; ported from
+ * `preact-components/charts/scales.ts`, whose JSDoc calls the swap out as deliberate. When
+ * `min === max` a single-element array is returned, so a caller can render a degenerate axis
+ * without dividing by zero.
  */
 export function ticks(min: number, max: number, maxTicks = 5): number[] {
   if (!Number.isFinite(min) || !Number.isFinite(max)) {
     throw new Error("ticks: min and max must be finite")
   }
-  if (max === min) return [min]
-  const step = niceStep(max - min, maxTicks)
-  return ticksForStep(min, max, step)
+  const [low, high] = min <= max ? [min, max] : [max, min]
+  if (low === high) return [low]
+  const step = niceStep(high - low, maxTicks)
+  return ticksForStep(low, high, step)
 }
 
 /**

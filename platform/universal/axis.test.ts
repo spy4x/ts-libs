@@ -107,6 +107,15 @@ describe("ticks", () => {
     expect(() => ticks(Number.POSITIVE_INFINITY, 1)).toThrow("must be finite")
   })
 
+  it("swaps reversed bounds instead of returning them as given", () => {
+    // Before this fix `ticks(10, 0)` returned `[10, 0]` (a two-element descending pair that reads
+    // as a valid axis) and, on origin/main before this PR, `[]`. The reference swaps unconditionally
+    // and documents it as deliberate; expected values taken from running it.
+    expect(ticks(10, 0)).toEqual(ticks(0, 10))
+    expect(ticks(10, 0)).toEqual([0, 2, 4, 6, 8, 10])
+    expect(ticks(1, -1)).toEqual([-1.2, -0.8, -0.4, 0, 0.4, 0.8, 1.2])
+  })
+
   it("terminates on a span narrower than the float precision of its bounds, instead of looping forever", () => {
     // Before the fix, a cursor advanced by `value += step` never moved once the step (20) was
     // finer than one ulp at 1e18 (128), so the loop that read `value <= end + step / 2` never
