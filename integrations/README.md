@@ -43,7 +43,9 @@ schedule, not estimated: without jitter the waits run
 `1 + 2 + 4 + 5 + 5 + 5 + 5 + 5 + 5 = 37.0 minutes` (2,220,000 ms across 9 retries), which fits
 inside healthchecks.io's 1-hour grace window; with +/-20% jitter the same 9 waits range
 `29.6-38.4 minutes` (1,776,000-2,304,000 ms), still comfortably inside the window and the 40-minute
-total budget. The un-jittered figure is asserted by the suite. A 10-minute per-wait cap gives
+total budget. Both the un-jittered figure and the jittered range are asserted by the suite,
+including a test that constructs the client with no options at all — the settings that ship — and
+confirms two instances get different delays. A 10-minute per-wait cap gives
 `1 + 2 + 4 + 8 + 10 + 10 + 10 + 10 + 10 = 65.0 minutes` and overruns the very window the cap exists
 to respect. `Retry-After` is honoured: the provider rate-limits with `429` and the source ignored
 the header, hammering the endpoint on the failures it was retrying. A total budget bounds the whole
@@ -74,7 +76,8 @@ which returns `null` when incomplete.
 
 **Retry policy.** 5 attempts, 3s doubling plus +/-20% jitter (2.4-3.6s, 4.8-7.2s, 9.6-14.4s,
 12-15s), honouring `Retry-After`, bounded by attempts and total elapsed time. The jitter exists so
-many callers hitting the same endpoint at once do not retry at the same instant.
+many callers hitting the same endpoint at once do not retry at the same instant; a test constructs
+the client with no options at all and confirms two instances get different delays.
 
 **The base URL never appears in a result.** It can carry a token in its path, and `fetch` puts the
 whole URL in its error text. Every transport failure is reported through `describeTransportError`,
@@ -197,7 +200,8 @@ budget bounds the whole operation, not just the gaps between attempts. `NtfyClie
 `HealthchecksClient`'s shipped policies both use `jitterRatio: 0.2`, and jitter draws from a real
 random source (`Math.random` by default) instead of a formula of `attempt` and `retryAfterMs`: two
 processes retrying the same call, with no options overridden, no longer compute the identical
-delay.
+delay — the "settings that ship" tests in `ntfy.test.ts` and `healthchecks.test.ts` construct a
+client with no `retry` or `random` override at all and assert exactly that.
 
 ## Out of scope
 

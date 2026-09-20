@@ -401,6 +401,54 @@ describe("HealthchecksClient.ping", () => {
     expect(await delayFor(() => 0.1)).not.toBe(await delayFor(() => 0.9))
   })
 
+  it("gives two default-configured clients different delays under the settings that ship", async () => {
+    // No `retry` override and no injected `random`: exactly what a caller who
+    // configures nothing gets. This is the test #68 asks for — "at least one
+    // retry test runs with the shipped delay settings, and two processes do
+    // not get identical delays" — and it is what makes DEFAULT_RETRY_POLICY's
+    // jitterRatio: 0.2 matter, rather than only the mechanism being capable of
+    // randomness. `sleep`/`clock` are still injected so the test never waits
+    // on wall-clock time; only the randomness is real.
+    const delaysFor = async (): Promise<number[]> => {
+      const timer = recordingTimer()
+      const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+        fetcher: fakeTransport([{ status: 500 }]).fetcher,
+        sleep: timer.sleep,
+        clock: timer.clock,
+      })
+      await client.ping({ outcome: HealthchecksOutcome.Success })
+      return timer.delays
+    }
+    const [processA, processB] = await Promise.all([delaysFor(), delaysFor()])
+    // A byte-identical draw across two independent Math.random() sequences is
+    // astronomically unlikely, not impossible — the same tolerance any test
+    // of real randomness has to accept.
+    expect(processA).not.toEqual(processB)
+    // Documented bounds (see DEFAULT_RETRY_POLICY's JSDoc in policy.ts): the
+    // first 3 delays stay inside their own clamped value +/-20%; the last 6
+    // already clamp to maxDelayMs before jitter, so jitter can only pull them
+    // down from it, never past it.
+    const bounds: Array<[number, number]> = [
+      [48_000, 72_000],
+      [96_000, 144_000],
+      [192_000, 288_000],
+      [240_000, 300_000],
+      [240_000, 300_000],
+      [240_000, 300_000],
+      [240_000, 300_000],
+      [240_000, 300_000],
+      [240_000, 300_000],
+    ]
+    for (const delays of [processA, processB]) {
+      expect(delays.length).toBe(9)
+      delays.forEach((delay, index) => {
+        const [min, max] = bounds[index]
+        expect(delay).toBeGreaterThanOrEqual(min)
+        expect(delay).toBeLessThanOrEqual(max)
+      })
+    }
+  })
+
   it("does not reject when a transport error's name is a Symbol", async () => {
     // The value was unvalidated even after the read was guarded: `${name}` on a
     // Symbol throws `TypeError: Cannot convert a Symbol value to a string`, so

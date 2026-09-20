@@ -426,6 +426,48 @@ describe("NtfyClient.push", () => {
     expect(await delayFor(() => 0.1)).not.toBe(await delayFor(() => 0.9))
   })
 
+  it("gives two default-configured clients different delays under the settings that ship", async () => {
+    // No `retry` override and no injected `random`: exactly what a caller who
+    // configures nothing gets. This is the test #68 asks for — "at least one
+    // retry test runs with the shipped delay settings, and two processes do
+    // not get identical delays" — and it is what makes DEFAULT_RETRY's
+    // jitterRatio: 0.2 matter, rather than only the mechanism being capable of
+    // randomness. `sleep`/`clock` are still injected so the test never waits
+    // on wall-clock time; only the randomness is real.
+    const delaysFor = async (): Promise<number[]> => {
+      const timer = recordingTimer()
+      const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+        fetcher: fakeTransport([{ status: 500 }]).fetcher,
+        sleep: timer.sleep,
+        clock: timer.clock,
+      })
+      await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
+      return timer.delays
+    }
+    const [processA, processB] = await Promise.all([delaysFor(), delaysFor()])
+    // A byte-identical draw across two independent Math.random() sequences is
+    // astronomically unlikely, not impossible — the same tolerance any test
+    // of real randomness has to accept.
+    expect(processA).not.toEqual(processB)
+    // Documented bounds (see DEFAULT_RETRY's JSDoc in ntfy.ts): each of the 4
+    // delays before attempts 2-5 stays inside its clamped value +/-20%, with
+    // the fourth's span clipped by maxDelayMs before jitter can widen it.
+    const bounds: Array<[number, number]> = [
+      [2400, 3600],
+      [4800, 7200],
+      [9600, 14400],
+      [12_000, 15_000],
+    ]
+    for (const delays of [processA, processB]) {
+      expect(delays.length).toBe(4)
+      delays.forEach((delay, index) => {
+        const [min, max] = bounds[index]
+        expect(delay).toBeGreaterThanOrEqual(min)
+        expect(delay).toBeLessThanOrEqual(max)
+      })
+    }
+  })
+
   it("writes nothing to the console on success, skip or failure", async () => {
     const messages: unknown[] = []
     const originalError = console.error
