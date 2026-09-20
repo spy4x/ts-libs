@@ -79,6 +79,25 @@ export interface DkimPublicKey {
   flags?: string[]
 }
 
+/**
+ * How much of the canonicalized body a signature's `bh=` tag actually covers.
+ *
+ * RFC 6376 §3.5's `l=` tag lets a signer sign a prefix of the body and leave the
+ * rest unsigned; with `l=0` the signature covers no body at all, and any text may
+ * be appended to the message without breaking it. That is legal, so it does not
+ * make the signature invalid — but a caller who reads "valid" as "the whole
+ * message is authentic" is wrong whenever {@link DkimBodyCoverage.complete} is
+ * false, which is why every result that hashed a body carries this.
+ */
+export interface DkimBodyCoverage {
+  /** Canonical body octets the body hash covers. */
+  signedOctets: number
+  /** Canonical body octets the message has. */
+  totalOctets: number
+  /** True when the signature covers the whole canonical body. */
+  complete: boolean
+}
+
 /** Outcome of {@link verifyDkim}. A malformed message returns, it does not throw. */
 export interface DkimVerificationResult {
   valid: boolean
@@ -90,6 +109,8 @@ export interface DkimVerificationResult {
   computedBodyHash?: string
   /** First 240 characters of the recomputed signature input, for diagnostics. */
   computedInputPreview?: string
+  /** How much of the body the signature covers; present once the body was hashed. */
+  bodyCoverage?: DkimBodyCoverage
 }
 
 /**
@@ -985,27 +1006,35 @@ async function verifyOneSignature(
 
   let signedHeaders: { name: string; value: string }[]
   let computedBodyHash: string
+  let bodyCoverage: DkimBodyCoverage
   try {
     signedHeaders = selectSignedHeaders(headers, parsed.signedHeaders)
-    const canonicalBody = canonicalizeBody(body, parsed.canonicalization.body)
-    if (parsed.bodyLength === undefined) {
-      computedBodyHash = await sha256Base64(canonicalBody)
-    } else {
-      // §3.7 step 1: the body is hashed "canonicalized using the body
-      // canonicalization algorithm specified in the c= tag and then truncated to
-      // the length specified in the l= tag". The bound counts canonical *octets*,
-      // so the truncation happens on the UTF-8 bytes: `String.prototype.slice`
-      // counts UTF-16 code units, which diverge from octets at the first
-      // non-ASCII character, and the verifier hashed a different byte range than
-      // the signer did — falsely rejecting valid non-ASCII mail. The bound may
-      // also land inside a multi-octet character, which is what rules out
-      // decoding the sliced bytes back to a string: U+FFFD would be hashed in
-      // place of the declared octets. A bound longer than the body it accompanies
-      // is not an error: the slice then covers all of it, which is what a signer
-      // that declared a longer bound produced.
-      const bounded = new TextEncoder().encode(canonicalBody).slice(0, parsed.bodyLength)
-      computedBodyHash = await sha256Base64(bounded)
+    // §3.7 step 1: the body is hashed "canonicalized using the body
+    // canonicalization algorithm specified in the c= tag and then truncated to
+    // the length specified in the l= tag". The bound counts canonical *octets*,
+    // so the truncation happens on the UTF-8 bytes: `String.prototype.slice`
+    // counts UTF-16 code units, which diverge from octets at the first non-ASCII
+    // character, and the verifier hashed a different byte range than the signer
+    // did — falsely rejecting valid non-ASCII mail. The bound may also land
+    // inside a multi-octet character, which is what rules out decoding the sliced
+    // bytes back to a string: U+FFFD would be hashed in place of the declared
+    // octets. A bound longer than the body it accompanies is not an error: the
+    // slice then covers all of it, which is what a signer that declared a longer
+    // bound produced.
+    const canonicalBody = new TextEncoder().encode(
+      canonicalizeBody(body, parsed.canonicalization.body),
+    )
+    const signedOctets = parsed.bodyLength === undefined
+      ? canonicalBody.length
+      : Math.min(parsed.bodyLength, canonicalBody.length)
+    bodyCoverage = {
+      signedOctets,
+      totalOctets: canonicalBody.length,
+      complete: signedOctets === canonicalBody.length,
     }
+    computedBodyHash = await sha256Base64(
+      signedOctets === canonicalBody.length ? canonicalBody : canonicalBody.slice(0, signedOctets),
+    )
   } catch (err) {
     return { valid: false, parsed, reason: errorMessage(err) }
   }
@@ -1016,6 +1045,7 @@ async function verifyOneSignature(
       parsed,
       reason: "body hash mismatch (body modified after signing)",
       computedBodyHash,
+      bodyCoverage,
     }
   }
 
@@ -1040,7 +1070,7 @@ async function verifyOneSignature(
     // every externally produced signature failed.
     canonicalInput = signedParts.join("") + signatureField
   } catch (err) {
-    return { valid: false, parsed, reason: errorMessage(err), computedBodyHash }
+    return { valid: false, parsed, reason: errorMessage(err), computedBodyHash, bodyCoverage }
   }
 
   let verified: boolean
@@ -1052,6 +1082,7 @@ async function verifyOneSignature(
       parsed,
       reason: errorMessage(err),
       computedBodyHash,
+      bodyCoverage,
     }
   }
 
@@ -1060,6 +1091,7 @@ async function verifyOneSignature(
     parsed,
     computedBodyHash,
     computedInputPreview: canonicalInput.slice(0, 240),
+    bodyCoverage,
     reason: verified ? undefined : "signature did not verify against public key",
   }
 }

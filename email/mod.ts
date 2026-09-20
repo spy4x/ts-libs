@@ -60,6 +60,7 @@ export {
   DEFAULT_MAX_MESSAGE_LENGTH,
   DEFAULT_MAX_SIGNATURES,
   type DkimAlgorithm,
+  type DkimBodyCoverage,
   type DkimKeyAlgorithm,
   DkimParseError,
   type DkimPublicKey,

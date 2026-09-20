@@ -218,6 +218,12 @@ interface SignOptions {
   names?: string[]
   /** Extra tags before b=, e.g. `l=17` or `x=1800000000`. */
   extraTags?: string
+  /**
+   * Sign under an `l=` bound: `bh=` then covers that many canonical octets and
+   * the tag is written into the field, which is what a signer that truncates
+   * does. Without it the body hash covers the whole canonical body.
+   */
+  bodyLength?: number
   /** Tags placed *after* b=, which §3.7 step 2 leaves inside the signed bytes. */
   afterB?: string
   /**
@@ -249,10 +255,16 @@ async function sign(
   // §3.4 gives c= a header half and a body half, and they need not match.
   const bodyMode = options.bodyMode ?? mode
   const names = options.names ?? ["from", "to", "subject"]
-  const bodyHash = await sha256Base64(canonBody(body, bodyMode))
+  const canonicalBody = canonBody(body, bodyMode)
+  const bodyHash = await sha256Base64(
+    options.bodyLength === undefined
+      ? canonicalBody
+      : new TextEncoder().encode(canonicalBody).slice(0, options.bodyLength),
+  )
   const signedBodyHash = options.bodyHashWsp ? spliceWsp(bodyHash, options.bodyHashWsp) : bodyHash
   const stub = `v=1; a=${options.ed25519 ? "ed25519-sha256" : "rsa-sha256"}; ` +
     `c=${mode}/${bodyMode}; d=example.com; s=sel; h=${names.join(":")}; bh=${signedBodyHash}` +
+    (options.bodyLength === undefined ? "" : `; l=${options.bodyLength}`) +
     (options.extraTags ? `; ${options.extraTags}` : "")
 
   const used = new Map<string, number>()
@@ -736,6 +748,63 @@ describe("policy RFC 6376 leaves to the caller", () => {
     const tampered = await verifyDkim(grown, key)
     assertEquals(tampered.valid, false)
     assertEquals(tampered.reason, "body hash mismatch (body modified after signing)")
+  })
+})
+
+// --- how much of the body a signature covers --------------------------------
+
+/**
+ * The fifth finding of issue #62: with `l=0` a signature covers no body at all,
+ * so any text can be appended to the message and the signature still verifies.
+ * RFC 6376 §3.5 allows that, so the verdict stays "valid" — but the result said
+ * nothing about it, and a caller reading `valid` had no way to learn that the
+ * body it was about to show a person was never signed.
+ */
+describe("the body coverage a result reports", () => {
+  it("reports the whole body as covered when there is no l= bound", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.bodyCoverage, { signedOctets: 17, totalOctets: 17, complete: true })
+  })
+
+  it("reports that an l=0 signature covers none of the body", async () => {
+    // The attack the report exists for: the signature is genuine, the body is
+    // whatever the attacker likes, and only `complete: false` says so.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "", { bodyLength: 0 })
+    const appended = `${raw}Please wire the payment to attacker.example\r\n`
+    const result = await verifyDkim(appended, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.bodyCoverage?.signedOctets, 0)
+    assertEquals(result.bodyCoverage?.complete, false)
+    assert(
+      (result.bodyCoverage?.totalOctets ?? 0) > 40,
+      `the appended body must be counted: ${result.bodyCoverage?.totalOctets}`,
+    )
+  })
+
+  it("reports the octets an l= bound covers and the ones it leaves out", async () => {
+    // `dkimpy-l8` signs the first 8 octets of an 18-octet canonical body.
+    const { raw, record } = await fixture("dkimpy-l8")
+    const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.bodyCoverage, { signedOctets: 8, totalOctets: 18, complete: false })
+  })
+
+  it("reports a bound longer than the body as complete coverage", async () => {
+    // `dkimpy-l25` declares 25 octets over an 18-octet body: the truncation
+    // covers all of it, so nothing is left unsigned.
+    const { raw, record } = await fixture("dkimpy-l25")
+    const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.bodyCoverage, { signedOctets: 18, totalOctets: 18, complete: true })
+  })
+
+  it("reports coverage on a rejected message too", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const result = await verifyDkim(raw.replace("a test", "a tesz"), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.bodyCoverage?.complete, true)
   })
 })
 
