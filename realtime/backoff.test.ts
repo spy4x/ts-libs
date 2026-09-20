@@ -116,4 +116,16 @@ describe("nextBackoffDelay", () => {
     expect(DEFAULT_BACKOFF.factor).toBe(2)
     expect(DEFAULT_BACKOFF.maxMs).toBe(30_000)
   })
+
+  it("still clamps to the cap when a misbehaving random source returns 1 or more", () => {
+    // #74: with a well-behaved `random` in [0, 1), the inner clamp on `capped` already keeps every
+    // value at or under `maxMs`, which makes the final `Math.min(maxMs, …)` in the implementation
+    // look redundant — it survived a mutation because nothing exercised the one case it actually
+    // guards: a caller whose `random` breaks the documented `[0, 1)` contract. Attempt 5 with
+    // `baseMs: 100, maxMs: 400` uncapped-doubles to 3200, so `capped` is 400 and `floor` is 200;
+    // `random() => 1.5` would compute 200 + 1.5 * 200 = 500 without the outer clamp.
+    expect(
+      nextBackoffDelay({ attempt: 5, random: () => 1.5, baseMs: 100, maxMs: 400 }),
+    ).toBe(400)
+  })
 })
