@@ -152,13 +152,13 @@ not a warning to ignore.
 Two tiers, agreed in issue #74. They differ in what they are allowed to touch, not in how carefully
 they are written.
 
-|              | Unit tier                  | Integration tier                                                     |
-| ------------ | -------------------------- | -------------------------------------------------------------------- |
-| File name    | `*.test.ts`                | `*.integration.test.ts`                                              |
-| Task         | `deno task test`           | `deno task test:integration`                                         |
-| Talks to     | fakes only                 | real Postgres, MinIO and Mailpit                                     |
-| Permissions  | `--allow-read --allow-env` | the above plus `--allow-sys` and `--allow-net` to the three services |
-| Needs Docker | no                         | yes                                                                  |
+|              | Unit tier                  | Integration tier                 |
+| ------------ | -------------------------- | -------------------------------- |
+| File name    | `*.test.ts`                | `*.integration.test.ts`          |
+| Task         | `deno task test`           | `deno task test:integration`     |
+| Talks to     | fakes only                 | real Postgres, MinIO and Mailpit |
+| Permissions  | `--allow-read --allow-env` | the above plus `--allow-net`     |
+| Needs Docker | no                         | yes                              |
 
 The suffix is the only thing that puts a file in a tier: `deno task test` ignores `**/*.integration.test.ts`
 and `deno task test:integration` runs nothing else. Both tiers are formatted, linted and type-checked
@@ -205,9 +205,7 @@ Three rules, and a test that breaks one breaks somebody else's run:
   failed still cleans up.
 
 Addresses come from one environment variable each, defaulting to the compose file. CI sets them to
-the Woodpecker service host names. Keep a local address as `127.0.0.1`: the integration task grants
-network access to that address and that port only, and the `localhost` spelling needs a name lookup
-the grant does not cover.
+the Woodpecker service host names.
 
 ```
 TS_LIBS_IT_POSTGRES_URL          postgres://…@127.0.0.1:55432/…

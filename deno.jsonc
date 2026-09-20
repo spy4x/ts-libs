@@ -48,18 +48,15 @@
     // The integration tier. The glob is the only thing that selects it, so a file
     // joins the tier by its name alone.
     //
-    // `--allow-net` is enumerated rather than blanket: the four local addresses
-    // from `infra/compose.integration.yml` and the three Woodpecker service host
-    // names from `.woodpecker.yml`. Moving a service to another address means
-    // editing this list too — which is the point, an integration test must not be
-    // able to reach anything else.
-    //
-    // Loopback is pinned to a port because a developer's machine runs other things
-    // on it, and `127.0.0.1` rather than `localhost` because an IP literal needs no
-    // name lookup. The three CI host names carry no port: they each resolve to one
-    // dedicated container, and Deno checks a name lookup against the bare host, so
-    // `mailpit:1025` alone fails nodemailer's `dns.lookup` with `getaddrinfo EPERM`.
-    "test:integration": "deno test --no-prompt --allow-read --allow-env --allow-sys --allow-net=127.0.0.1:55432,127.0.0.1:59000,127.0.0.1:51025,127.0.0.1:58025,postgres,minio,mailpit **/*.integration.test.ts",
+    // `--allow-net` carries no address list, and that is a concession rather than a
+    // preference. Two CI runs proved an enumerated list cannot work: nodemailer
+    // resolves the relay name itself and then dials the address it got back, so
+    // `mailpit:1025` fails the name lookup (`getaddrinfo EPERM`) and adding the bare
+    // name only moves the failure to the resolved address (`Requires net access to
+    // "10.200.2.4:1025"`), which Woodpecker assigns per run and no list can predict.
+    // `--allow-read` and `--allow-env` stay as narrow as the unit tier's, and no
+    // integration test may reach anything but the three services regardless.
+    "test:integration": "deno test --no-prompt --allow-read --allow-env --allow-net **/*.integration.test.ts",
     "services:up": "docker compose -f infra/compose.integration.yml up -d --wait",
     "services:down": "docker compose -f infra/compose.integration.yml down -v",
     "services:logs": "docker compose -f infra/compose.integration.yml logs",
