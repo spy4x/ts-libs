@@ -37,13 +37,17 @@ The constructor throws on an empty URL. Nothing is read at module scope.
 `"network_error"` or `"timeout"`. The source resolved `void` and logged its failures, so a caller
 could not tell a delivered ping from a dead endpoint.
 
-**Retry policy.** 10 attempts, 60s doubling, capped at 5 minutes per wait. Measured schedule, not
-estimated: waits run `1 + 2 + 4 + 5 + 5 + 5 + 5 + 5 + 5 = 37.0 minutes` (2,220,000 ms across 9
-retries), which fits inside healthchecks.io's 1-hour grace window. A 10-minute per-wait cap gives
+**Retry policy.** 10 attempts, 60s doubling, capped at 5 minutes per wait, plus +/-20% jitter so
+that many hosts pinging the same check after a shared outage do not retry in lockstep. Measured
+schedule, not estimated: without jitter the waits run
+`1 + 2 + 4 + 5 + 5 + 5 + 5 + 5 + 5 = 37.0 minutes` (2,220,000 ms across 9 retries), which fits
+inside healthchecks.io's 1-hour grace window; with +/-20% jitter the same 9 waits range
+`29.6-38.4 minutes` (1,776,000-2,304,000 ms), still comfortably inside the window and the 40-minute
+total budget. The un-jittered figure is asserted by the suite. A 10-minute per-wait cap gives
 `1 + 2 + 4 + 8 + 10 + 10 + 10 + 10 + 10 = 65.0 minutes` and overruns the very window the cap exists
-to respect. Both figures are asserted by the suite. `Retry-After` is honoured: the provider
-rate-limits with `429` and the source ignored the header, hammering the endpoint on the failures it
-was retrying. A total budget bounds the whole operation, set above the sum of the waits.
+to respect. `Retry-After` is honoured: the provider rate-limits with `429` and the source ignored
+the header, hammering the endpoint on the failures it was retrying. A total budget bounds the whole
+operation, set above the sum of the waits.
 
 **No backup coupling.** Nothing here imports or references `BackupResult` or any backup type. A
 notifier that only works while a backup runs is a notifier nobody can reuse.
@@ -68,8 +72,9 @@ failures, so a dropped push looked like a delivered one.
 self-hosted ntfy on a private network may not use auth. Read through `ntfyConfigFromEnv(read?)`,
 which returns `null` when incomplete.
 
-**Retry policy.** 5 attempts, 3s apart, honouring `Retry-After`, bounded by attempts and total
-elapsed time.
+**Retry policy.** 5 attempts, 3s doubling plus +/-20% jitter (2.4-3.6s, 4.8-7.2s, 9.6-14.4s,
+12-15s), honouring `Retry-After`, bounded by attempts and total elapsed time. The jitter exists so
+many callers hitting the same endpoint at once do not retry at the same instant.
 
 **The base URL never appears in a result.** It can carry a token in its path, and `fetch` puts the
 whole URL in its error text. Every transport failure is reported through `describeTransportError`,
@@ -189,10 +194,10 @@ elapsed time are both capped.
 _next retry_ could be scheduled; a request itself had no timeout and could hang forever. Every
 attempt now runs under `AbortSignal.timeout()`, clamped to whatever `totalBudgetMs` has left, so the
 budget bounds the whole operation, not just the gaps between attempts. `NtfyClient`'s and
-`HealthchecksClient`'s shipped policies both use `jitterRatio: 0` — their ported sources never used
-jitter — but jitter itself, wherever a caller enables it, now draws from a real random source
-(`Math.random` by default) instead of a formula of `attempt` and `retryAfterMs`: two processes retrying
-the same call no longer compute the identical "random" delay.
+`HealthchecksClient`'s shipped policies both use `jitterRatio: 0.2`, and jitter draws from a real
+random source (`Math.random` by default) instead of a formula of `attempt` and `retryAfterMs`: two
+processes retrying the same call, with no options overridden, no longer compute the identical
+delay.
 
 ## Out of scope
 

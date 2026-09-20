@@ -162,13 +162,21 @@ export interface NtfyClientOptions {
   random?: RandomSource
 }
 
-/** 5 attempts, 3s between them, mirroring `rostok`'s ntfy loop. */
+/**
+ * 5 attempts, 3s doubling, mirroring `rostok`'s ntfy loop, plus +/-20% jitter so
+ * many callers hitting the same endpoint at once do not retry in lockstep.
+ *
+ * Delay ranges with jitter applied: 2.4-3.6s, 4.8-7.2s, 9.6-14.4s, 12-15s (the
+ * fourth clamps to `maxDelayMs` before jitter can push it past it). Worst case,
+ * every draw lands at its span's top: 3.6 + 7.2 + 14.4 + 15 = 40.2s, still well
+ * inside the 60s budget, so all 5 attempts always complete.
+ */
 const DEFAULT_RETRY: RetryPolicy = {
   maxAttempts: 5,
   baseDelayMs: 3000,
   maxDelayMs: 15_000,
   totalBudgetMs: 60_000,
-  jitterRatio: 0,
+  jitterRatio: 0.2,
 }
 
 /**

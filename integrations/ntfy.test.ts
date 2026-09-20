@@ -69,6 +69,11 @@ const clientFor = (
       sleep: timer.sleep,
       clock: timer.clock,
       gate: overrides.gate,
+      // The shipped default now jitters (`jitterRatio: 0.2`). A midpoint draw
+      // makes `(random() * 2 - 1) * span` exactly 0, so every exact-delay
+      // assertion in this file keeps testing what it always tested; the
+      // dedicated jitter tests below inject their own `random` instead.
+      random: () => 0.5,
     },
   )
   return { client, transport, timer }

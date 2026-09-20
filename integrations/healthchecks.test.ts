@@ -66,6 +66,11 @@ const clientFor = (responses: FakeResponse[], overrides: { pingUrl?: string } = 
     fetcher: transport.fetcher,
     sleep: timer.sleep,
     clock: timer.clock,
+    // The shipped default now jitters (`jitterRatio: 0.2`). A midpoint draw
+    // makes `(random() * 2 - 1) * span` exactly 0, so every exact-delay
+    // assertion in this file keeps testing what it always tested; the
+    // dedicated jitter tests below inject their own `random` instead.
+    random: () => 0.5,
   })
   return { client, transport, timer }
 }
@@ -216,6 +221,9 @@ describe("HealthchecksClient.ping", () => {
         maxDelayMs: 600_000,
         totalBudgetMs: 4_500_000,
       },
+      // This test is about the 10-minute-cap comparison figure, not jitter; a
+      // midpoint draw keeps the delays exact (see `clientFor`'s comment above).
+      random: () => 0.5,
     })
     const result = await client.ping({ outcome: HealthchecksOutcome.Success })
     const waitedMs = result.ok === false ? result.waitedMs : 0
@@ -261,6 +269,9 @@ describe("HealthchecksClient.ping", () => {
       sleep: timer.sleep,
       clock: timer.clock,
       retry: { maxAttempts: 10, baseDelayMs: 60_000, maxDelayMs: 600_000, totalBudgetMs: 100_000 },
+      // This test is about the budget cutoff, not jitter; a midpoint draw
+      // keeps the delay exact (see `clientFor`'s comment above).
+      random: () => 0.5,
     })
     const result = await client.ping({ outcome: HealthchecksOutcome.Success })
     expect(result.ok).toBe(false)
@@ -289,6 +300,11 @@ describe("HealthchecksClient.ping", () => {
       sleep: timer.sleep,
       clock: timer.clock,
       retry: { maxAttempts: 2, baseDelayMs: 10, maxDelayMs: 10, totalBudgetMs: 1000 },
+      // This test is about the network_error path, not jitter; a midpoint draw
+      // keeps `waitedMs` exact (see `clientFor`'s comment above). Without this,
+      // the assertion below is flaky: half the possible jittered draws for
+      // baseDelayMs === maxDelayMs clamp to exactly 10 and half do not.
+      random: () => 0.5,
     })
     const result = await client.ping({ outcome: HealthchecksOutcome.Fail })
     expect(calls).toBe(2)
