@@ -244,7 +244,11 @@ export function hhmmInTz(instant: Date, tz: string): string {
  * order identically to the values they denote precisely because the format is
  * fixed-width and zero-padded — so `time` is padded before use.
  *
- * `date` and `time` must name a wall clock that actually occurs on the
+ * `date` must be exactly `"YYYY-MM-DD"` and `time` exactly `"HH:MM"` —
+ * zero-padded, no seconds, no surrounding whitespace — or the call throws
+ * naming the format, not the zone: a shape mistake and an impossible date
+ * fail for different reasons and the message says which one happened.
+ * `date` and `time` must also name a wall clock that actually occurs on the
  * Gregorian calendar: `"2026-02-30"`, `"2026-13-01"` and `"25:00"` all throw,
  * as does a year outside 100–9999 (`Date.UTC` folds a two-digit year like
  * `99` into 1999 rather than rejecting it). A zone whose historical offset is
@@ -254,14 +258,28 @@ export function hhmmInTz(instant: Date, tz: string): string {
  * at all rather than up to a minute wrong.
  */
 export function zonedDateTime(date: string, time: string, tz: string): Date {
+  // Checked before any parsing so a shape mistake is never mistaken for one
+  // of the other two failure modes below: `"2026-6-15"` (not zero-padded),
+  // `"12:00:30"` (seconds) and `"12:00 "` (trailing space) all reach
+  // `Date.UTC` fine and denote a real calendar date, so neither the
+  // impossible-date check nor the minute-resolution check would catch them —
+  // they would instead fail the wall-clock string comparison later and blame
+  // the zone's historical offset for what is actually a format problem.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
+    throw new RangeError(
+      `Expected date as "YYYY-MM-DD" and time as "HH:MM", got ${JSON.stringify({ date, time })}`,
+    )
+  }
+
   const [year, month, day] = date.split("-").map(Number)
   const [hour, minute] = time.split(":").map(Number)
   const naiveUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0)
 
-  // `Date.UTC` is permissive — `"2026-13-45"` rolls over into 2027 — so a
-  // non-finite result is the only signal that the input was not a date and time
-  // at all. Rejecting it here is what keeps `Infinity` from escaping as a
-  // `Date` and the comparison below from being made against garbage.
+  // `Date.UTC` is permissive — `"9999-99-99"` rolls over — so a non-finite
+  // result is the only remaining signal that the numbers themselves are out
+  // of any representable range. Rejecting it here is what keeps `Infinity`
+  // from escaping as a `Date` and the comparison below from being made
+  // against garbage.
   if (!Number.isFinite(naiveUtc)) {
     throw new RangeError(`Not a date and time: ${JSON.stringify({ date, time, tz })}`)
   }

@@ -190,6 +190,23 @@ describe("zonedDateTime", () => {
     )
   })
 
+  it("rejects a non-zero-padded date with a format message, not a zone one", () => {
+    // "2026-6-15" denotes a real, ordinary date — the offset math never runs,
+    // because the shape check rejects it first.
+    expect(() => zonedDateTime("2026-6-15", "12:00", BERLIN)).toThrow(/YYYY-MM-DD/)
+    expect(() => zonedDateTime("2026-6-15", "12:00", BERLIN)).not.toThrow(/minute resolution/)
+  })
+
+  it("rejects a time with seconds with a format message, not a zone one", () => {
+    expect(() => zonedDateTime("2026-06-15", "12:00:30", BERLIN)).toThrow(/HH:MM/)
+    expect(() => zonedDateTime("2026-06-15", "12:00:30", BERLIN)).not.toThrow(/minute resolution/)
+  })
+
+  it("rejects a time with surrounding whitespace with a format message, not a zone one", () => {
+    expect(() => zonedDateTime("2026-06-15", "12:00 ", BERLIN)).toThrow(/HH:MM/)
+    expect(() => zonedDateTime(" 2026-06-15", "12:00", BERLIN)).toThrow(/YYYY-MM-DD/)
+  })
+
   it("shifts a gap that falls at midnight into the same day", () => {
     // America/Santiago springs forward at 2026-09-06 00:00 local, so midnight
     // itself does not exist and the conversion shifts to 01:00 — still the day
