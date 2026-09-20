@@ -49,11 +49,17 @@
     // joins the tier by its name alone.
     //
     // `--allow-net` is enumerated rather than blanket: the four local addresses
-    // from `infra/compose.integration.yml` (under both spellings of loopback) and
-    // the three Woodpecker service host names from `.woodpecker.yml`. Moving a
-    // service to another address means editing this list too — which is the point,
-    // an integration test must not be able to reach anything else.
-    "test:integration": "deno test --no-prompt --allow-read --allow-env --allow-sys --allow-net=127.0.0.1:55432,127.0.0.1:59000,127.0.0.1:51025,127.0.0.1:58025,localhost:55432,localhost:59000,localhost:51025,localhost:58025,postgres:5432,minio:9000,mailpit:1025,mailpit:8025 **/*.integration.test.ts",
+    // from `infra/compose.integration.yml` and the three Woodpecker service host
+    // names from `.woodpecker.yml`. Moving a service to another address means
+    // editing this list too — which is the point, an integration test must not be
+    // able to reach anything else.
+    //
+    // Loopback is pinned to a port because a developer's machine runs other things
+    // on it, and `127.0.0.1` rather than `localhost` because an IP literal needs no
+    // name lookup. The three CI host names carry no port: they each resolve to one
+    // dedicated container, and Deno checks a name lookup against the bare host, so
+    // `mailpit:1025` alone fails nodemailer's `dns.lookup` with `getaddrinfo EPERM`.
+    "test:integration": "deno test --no-prompt --allow-read --allow-env --allow-sys --allow-net=127.0.0.1:55432,127.0.0.1:59000,127.0.0.1:51025,127.0.0.1:58025,postgres,minio,mailpit **/*.integration.test.ts",
     "services:up": "docker compose -f infra/compose.integration.yml up -d --wait",
     "services:down": "docker compose -f infra/compose.integration.yml down -v",
     "services:logs": "docker compose -f infra/compose.integration.yml logs",

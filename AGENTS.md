@@ -205,7 +205,9 @@ Three rules, and a test that breaks one breaks somebody else's run:
   failed still cleans up.
 
 Addresses come from one environment variable each, defaulting to the compose file. CI sets them to
-the Woodpecker service host names:
+the Woodpecker service host names. Keep a local address as `127.0.0.1`: the integration task grants
+network access to that address and that port only, and the `localhost` spelling needs a name lookup
+the grant does not cover.
 
 ```
 TS_LIBS_IT_POSTGRES_URL          postgres://…@127.0.0.1:55432/…
