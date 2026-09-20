@@ -268,6 +268,66 @@ export async function validatePublicUrl(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// The second layer: address ranges the runtime should refuse to dial
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Addresses to refuse at connection time, in the spelling `--deny-net` takes.
+ *
+ * This guard resolves a hostname and then hands the *name* to `fetch`, which
+ * resolves it a second time. A DNS server under someone else's control can
+ * answer with a public address for the first lookup and an internal one for the
+ * second, and the request then goes where the guard never looked. Nothing this
+ * module can do closes that gap: the platform `fetch` takes no resolved address.
+ *
+ * `--deny-net` does close it, because Deno applies it at connect time, against
+ * the address the connection is actually going to. Start the process with these
+ * denied and a rebind lands on a refused connection instead of on the internal
+ * service — see `denyNetFlag()` and the README.
+ *
+ * **What this layer cannot cover.** Deno 2.9.7 takes a CIDR range for IPv4 but
+ * not for IPv6: `--deny-net=fc00::/7` stops the process from starting at all
+ * ("ipv6 addresses must be enclosed in square brackets") and `[fc00::]/7` is
+ * rejected as a host, so an IPv6 range cannot be written down. Only single
+ * bracketed addresses can, and `[::1]` is the one worth naming. Unique-local
+ * and link-local IPv6 therefore have the classifier above as their only layer.
+ *
+ * `0.0.0.0/8` is left out for a different reason: a denied range cannot be
+ * listened on either, and `Deno.serve` binds the wildcard address by default, so
+ * including it stops the application from starting its own server. Every address
+ * here is one `isPublicAddress` also refuses, which `url-policy.test.ts` checks;
+ * the other direction does not hold, and this list is the shorter of the two.
+ */
+export const DENY_NET_ADDRESSES: readonly string[] = [
+  "10.0.0.0/8", // private (RFC 1918)
+  "100.64.0.0/10", // carrier-grade NAT (RFC 6598)
+  "127.0.0.0/8", // loopback
+  "169.254.0.0/16", // link-local, including the cloud metadata address
+  "172.16.0.0/12", // private (RFC 1918)
+  "192.0.0.0/24", // IETF protocol assignments
+  "192.0.2.0/24", // documentation (TEST-NET-1)
+  "192.88.99.0/24", // 6to4 relay anycast, decommissioned
+  "192.168.0.0/16", // private (RFC 1918)
+  "198.18.0.0/15", // benchmarking (RFC 2544)
+  "198.51.100.0/24", // documentation (TEST-NET-2)
+  "203.0.113.0/24", // documentation (TEST-NET-3)
+  "224.0.0.0/4", // multicast
+  "240.0.0.0/4", // reserved, including the broadcast address
+  "[::1]", // IPv6 loopback — the one IPv6 address the flag can express
+]
+
+/**
+ * `DENY_NET_ADDRESSES` as the command-line flag that applies them.
+ *
+ * Meant for whatever writes the command: a task definition, a Dockerfile, a
+ * deploy script. It cannot restrict the process it is called from — permissions
+ * are fixed when that process starts.
+ */
+export function denyNetFlag(): string {
+  return `--deny-net=${DENY_NET_ADDRESSES.join(",")}`
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Hostname + IP classifiers
 // ────────────────────────────────────────────────────────────────────────────
 

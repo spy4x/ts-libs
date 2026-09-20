@@ -37,6 +37,8 @@ export type {
 
 export {
   defaultResolver,
+  DENY_NET_ADDRESSES,
+  denyNetFlag,
   DnsResolutionError,
   isLocalHostname,
   isPublicAddress,
@@ -49,6 +51,7 @@ export {
 export type { DnsResolver, UrlPolicyErrorCode, ValidatePublicUrlOptions } from "./url-policy.ts"
 
 export {
+  CREDENTIAL_HEADERS,
   DEFAULT_MAX_REDIRECTS,
   DEFAULT_TIMEOUT_MS,
   defaultFetcher,

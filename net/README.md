@@ -102,6 +102,57 @@ deno test --no-prompt --allow-read --allow-env       # this package's tests: her
 
 `normalizeUrlShape()` and `bounded-body.ts` need no permissions at all.
 
+## The second lookup, and how to close it
+
+The guard resolves the hostname, decides the address is public, and then hands
+the **name** to `fetch` — which resolves it again. Whoever runs the DNS server
+for that name chooses both answers. Answer with a public address the first time
+and `127.0.0.1` the second, and the request goes somewhere the guard never
+looked. This is DNS rebinding, it is a standard attack rather than a theoretical
+one, and no amount of care inside this module closes it: the platform `fetch`
+accepts a name, not the address that was checked.
+
+What does close it is the runtime. Deno applies `--deny-net` at connection time,
+against the address the connection is actually going to, so a second answer
+pointing inside the network is refused by the process rather than by the guard.
+The list is exported so it does not have to be retyped:
+
+```ts
+import { DENY_NET_ADDRESSES, denyNetFlag } from "@ts-libs/net/url-policy"
+
+console.log(denyNetFlag())
+// --deny-net=10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,…,[::1]
+```
+
+Print it once and paste the result into the task, the Dockerfile or the unit
+file that starts the process — permissions are fixed when a process starts, so
+nothing the process itself calls can apply them:
+
+```bash
+deno run --allow-net --deny-net=10.0.0.0/8,127.0.0.0/8,169.254.0.0/16,… server.ts
+```
+
+Verified on Deno 2.9.7, with a server listening on `127.0.0.1` in another
+process: without the flag the fetch returns the internal service's body, with it
+the fetch fails with `Requires net access to "127.0.0.1:<port>"`.
+
+Three things about this layer are worth knowing before you rely on it:
+
+- **It covers IPv4 ranges and one IPv6 address.** `--deny-net` takes a CIDR range
+  for IPv4, but not for IPv6: `--deny-net=fc00::/7` stops the process from
+  starting (`ipv6 addresses must be enclosed in square brackets`), and
+  `[fc00::]/7` is not a host it accepts either. Only single addresses such as
+  `[::1]` can be written, so unique-local and link-local IPv6 have the guard
+  itself as their only layer.
+- **A denied range cannot be listened on either.** `0.0.0.0/8` is therefore not
+  in the list — denying it stops `Deno.serve` binding its default wildcard
+  address, and an application that cannot start tends to lose the whole flag. An
+  application that listens on `127.0.0.1` behind a proxy has to drop
+  `127.0.0.0/8` as well, and gives up loopback cover in exchange.
+- **It is a second layer, not the first.** `validatePublicUrl` still has to run:
+  the deny list says nothing about `javascript:` locations, credentials in a URL,
+  or a name that resolves internally on the first lookup.
+
 ## `safeFetch` — the redirect problem
 
 The platform default follows redirects _inside_ `fetch`, where a guard cannot
@@ -114,8 +165,18 @@ and protocol-relative locations are resolved against the current URL first, so a
 `Location: /admin` cannot smuggle you elsewhere. One `AbortController` and one
 timer cover the whole chain, the redirect count is capped
 (`DEFAULT_MAX_REDIRECTS = 3` hops, i.e. **up to 4 requests** — the original plus
-one per followed `Location`), each redirect body is cancelled before the next
-hop, and a 301/302/303 downgrades a non-`GET` request to `GET` per RFC 9110.
+one per followed `Location`), each redirect body is cancelled before anything
+that can throw, and a 301/302/303 downgrades a non-`GET`/`HEAD` request to `GET`
+per RFC 9110.
+
+Taking redirects away from the platform `fetch` also takes away its header
+rules, so they are applied here: `Authorization`, `Cookie` and
+`Proxy-Authorization` (`CREDENTIAL_HEADERS`) are dropped as soon as a hop lands
+on a different origin, and stay dropped for the rest of the chain. Scheme, host
+and port all count as a change of origin. A redirect refused by the policy, and
+a `Location` the URL parser cannot read, both raise `UrlValidationError` with
+code `invalid_redirect` or `non_public_ip` — never a bare `TypeError` — after
+the redirect body has been cancelled.
 
 `Fetcher` is the injection seam for the transport; `url` in the result is
 always the canonical URL that actually answered.
@@ -128,9 +189,10 @@ always the canonical URL that actually answered.
 - **a hard byte cap** (`maxBytes`, default 5 MiB), checked against both the
   declared `Content-Length` and the running total, so a missing or lying header
   cannot get past it;
-- **a stall budget** (`timeoutMs`, default 0 = off), the maximum wait for the
-  _next_ chunk — so a slow-but-live transfer is allowed to finish while a hung
-  one fails fast with `BodyReadTimeoutError`.
+- **a stall budget** (`timeoutMs`, default 10s), the maximum wait for the _next_
+  chunk — so a slow-but-live transfer is allowed to finish while a hung one
+  fails fast with `BodyReadTimeoutError`. `timeoutMs: 0` turns it off, which is
+  a thing to ask for deliberately rather than by saying nothing.
 
 Failures are typed: `PayloadTooLargeError`, `BodyReadTimeoutError`, and the
 platform `SyntaxError` for malformed JSON. The reader is cancelled and unlocked
@@ -143,9 +205,10 @@ on every exit path.
 - **No response-body policy.** Size and time only; content type, charset and
   malware scanning belong to the caller.
 - **No DNS pinning.** The guard resolves a host and then `fetch` resolves it
-  again, so a TOCTOU rebind between the two is theoretically possible. Closing
-  that needs a custom dispatcher pinned to a resolved IP, which is not something
-  the platform `fetch` exposes today. Documented rather than pretended.
+  again. Pinning the connection to the address that was checked needs a custom
+  dispatcher, which the platform `fetch` does not expose. The gap is real and it
+  is closed from outside the module — see "The second lookup, and how to close
+  it" above.
 - **No allow-list or deny-list of hosts.** The policy is "publicly routable",
   not "these domains". A caller with a stricter rule injects a resolver.
 - **No HTML parsing, scraping or content extraction.**

@@ -2,6 +2,8 @@ import { assertEquals, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import {
   defaultResolver,
+  DENY_NET_ADDRESSES,
+  denyNetFlag,
   DnsResolutionError,
   isLocalHostname,
   isPublicAddress,
@@ -815,6 +817,50 @@ describe("isPublicIpv6", () => {
     assertEquals(isPublicIpv6("not::an::addr"), false)
     assertEquals(isPublicIpv6(":::"), false)
     assertEquals(isPublicIpv6(""), false)
+  })
+})
+
+describe("DENY_NET_ADDRESSES", () => {
+  it("names only addresses this policy also refuses", () => {
+    // The two layers have to agree about what is internal, or the flag becomes
+    // a second, quieter policy that nobody reads.
+    for (const entry of DENY_NET_ADDRESSES) {
+      assertEquals(isPublicAddress(entry.split("/")[0]), false, entry)
+    }
+  })
+
+  it("covers the ranges a rebind would aim at", () => {
+    for (
+      const range of [
+        "127.0.0.0/8", // loopback
+        "169.254.0.0/16", // cloud metadata
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "[::1]",
+      ]
+    ) {
+      assertEquals(DENY_NET_ADDRESSES.includes(range), true, range)
+    }
+  })
+
+  it("leaves out what the runtime will not start with", () => {
+    // Both verified against Deno 2.9.7 by running a process with the flag:
+    // an IPv6 range is rejected as a host ("ipv6 addresses must be enclosed in
+    // square brackets"), and a denied 0.0.0.0/8 also stops `Deno.serve` from
+    // binding its default wildcard address, which stops the application dead.
+    assertEquals(DENY_NET_ADDRESSES.filter((e) => e.includes(":") && e.includes("/")), [])
+    assertEquals(DENY_NET_ADDRESSES.includes("0.0.0.0/8"), false)
+  })
+
+  it("builds one flag with one entry per address", () => {
+    const flag = denyNetFlag()
+    assertEquals(flag.startsWith("--deny-net="), true)
+    const listed = flag.slice("--deny-net=".length).split(",")
+    assertEquals(listed.length, DENY_NET_ADDRESSES.length)
+    assertEquals(listed.includes("127.0.0.0/8"), true)
+    // An entry carrying a comma would silently become two entries here.
+    assertEquals(DENY_NET_ADDRESSES.some((entry) => entry.includes(",")), false)
   })
 })
 
