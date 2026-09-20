@@ -444,7 +444,10 @@ which propagates the resolver's rejection instead of reporting it.
   but "valid" still only says _that domain signed it_, so a caller that cares
   whether the signer has anything to do with the `From:` address must compare
   `result.parsed.domain` itself. That comparison is DMARC alignment, which is out
-  of scope here.
+  of scope here. `verifyDkim` reports the **first valid** signature, which on a
+  mailing-list message is the list's rather than the author's, so a caller making
+  that comparison should read every result from `verifyDkimSignatures` and look
+  for the one whose domain lines up.
 - **`b=` need not be the last tag, in either mode.** §3.7 step 2 deletes only the
   _value_ of `b=`, bounded by the value's parsed offsets, so the deletion is
   byte-exact wherever the tag sits; a field ending `…; b=SIG; x=1800000000`

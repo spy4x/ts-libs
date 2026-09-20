@@ -7,10 +7,10 @@ provenance.
 
 ## Copied from dkimpy
 
-| File                                      | Origin in dkimpy                                                            |
-| ----------------------------------------- | --------------------------------------------------------------------------- |
-| `rfc6376-rsa.msg`, `rfc6376-rsa-crlf.msg` | `data/rfc6376.signed.rsa.msg`, the second with LF endings rewritten to CRLF |
-| `rfc6376-rsa.key`, `rfc6376-rsa-crlf.key` | `data/test.txt`, the published key record for that message                  |
+| File                                      | Origin in dkimpy                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------------------- |
+| `rfc6376-rsa.msg`, `rfc6376-rsa-crlf.msg` | `dkim/tests/data/rfc6376.signed.rsa.msg`, the second with LF endings rewritten to CRLF |
+| `rfc6376-rsa.key`, `rfc6376-rsa-crlf.key` | `dkim/tests/data/test.txt`, the published key record for that message                  |
 
 dkimpy is the Python DKIM implementation at <https://launchpad.net/dkimpy>, maintained by Scott
 Kitterman. Its `LICENSE` file, reproduced in full below as its third restriction requires, is the
