@@ -1,4 +1,4 @@
-// Token primitives: monotonic ULIDs, opaque cancel tokens, constant-time compare.
+// Token primitives: monotonic ULIDs, opaque tokens, constant-time compare.
 //
 // Ported from `mig/lib/tokens.ts` (62 LOC). Three changes at extraction time:
 //
@@ -7,11 +7,11 @@
 //    house rule is "own the small, keep the huge". No new dependency.
 // 2. The secret is validated. The source hashed `raw + secret` with no check
 //    (`tokens.ts:42`), so a missing secret silently hashed against the string
-//    `"undefined"` — a fail-open. See `newCancelToken`.
+//    `"undefined"` — a fail-open. See `newOpaqueToken`.
 // 3. Callers must never compare signatures with `!==`. The source's compare was
 //    constant-time already (`tokens.ts:55-62`), but the equivalent in
 //    `offer-lens/libs/auth/mod.ts:115` is a plain `sigB64 !== expectedSig`.
-//    `verifyCancelToken` therefore routes through `constantTimeEquals`, and
+//    `verifyOpaqueToken` therefore routes through `constantTimeEquals`, and
 //    `tokens.test.ts` asserts that call site so the mistake cannot come back.
 
 import { encodeBase64Url } from "@std/encoding/base64url"
@@ -29,7 +29,7 @@ export const DEFAULT_TOKEN_BYTES = 16
 /**
  * Smallest accepted secret length, in characters, measured on the trimmed value.
  *
- * A cancel-token hash is a plain `sha256Hex(raw + secret)` and the digest is
+ * An opaque-token hash is a plain `sha256Hex(raw + secret)` and the digest is
  * stored, so the secret is not protected by any rate limit: an attacker holding a
  * stored digest can search the whole keyspace offline. 32 characters removes a
  * dictionary-sized search; it does not replace real entropy, which the caller
@@ -296,7 +296,7 @@ export function randomBase64Url(bytes: number = DEFAULT_TOKEN_BYTES): string {
 /**
  * Rejects any secret that would make the digest meaningless or brute-forceable.
  *
- * The source did not check at all (`tokens.ts:38-44`), so `newCancelToken()` with
+ * The source did not check at all (`tokens.ts:38-44`), so `newOpaqueToken()` with
  * no argument hashed against the literal `"undefined"` and produced a token any
  * caller could forge. Fail closed instead: an unusable secret is a programming
  * error, not a warning.
@@ -335,14 +335,14 @@ function isPrintable(value: string): boolean {
 }
 
 /**
- * Mints an opaque cancel token: `raw` goes to the caller, `hash` is what the
+ * Mints an opaque token: `raw` goes to the caller, `hash` is what the
  * server stores.
  *
  * The construction is the source's, unchanged: `hash = sha256Hex(raw + secret)`
  * (`tokens.ts:38-44`). Tradeoff, recorded deliberately: HMAC-SHA-256 with the
  * secret as key is the stronger construction, but the stored value carries no
  * algorithm or version marker, so switching it would silently invalidate every
- * hash already in the database — all cancel links would stop working with no
+ * hash already in the database — every issued token would stop verifying with no
  * diagnostic. Keeping the concatenated digest is safe *here* because the raw
  * token is 128 random bits and verification compares the full 64-character
  * digest, so the length-extension property a concatenated digest exposes cannot
@@ -353,7 +353,7 @@ function isPrintable(value: string): boolean {
  *     never stored in the result.
  * @throws {TokenError} `InvalidSecret` when the secret is blank or too short.
  */
-export async function newCancelToken(secret: string): Promise<{ raw: string; hash: string }> {
+export async function newOpaqueToken(secret: string): Promise<{ raw: string; hash: string }> {
   assertUsableSecret(secret)
   const raw = randomBase64Url(DEFAULT_TOKEN_BYTES)
   const hash = await sha256Hex(raw + secret)
@@ -375,7 +375,7 @@ export async function newCancelToken(secret: string): Promise<{ raw: string; has
  * @param secret Server-side secret of at least {@link MIN_SECRET_LENGTH} characters.
  * @throws {TokenError} `InvalidSecret` when the secret is blank or too short.
  */
-export async function verifyCancelToken(
+export async function verifyOpaqueToken(
   raw: string,
   hash: string,
   secret: string,

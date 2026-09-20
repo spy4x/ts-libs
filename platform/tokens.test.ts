@@ -19,7 +19,7 @@ import {
   DEFAULT_TOKEN_BYTES,
   MIN_SECRET_LENGTH,
   monotonicUlid,
-  newCancelToken,
+  newOpaqueToken,
   randomBase64Url,
   sha256Hex,
   type TokenError,
@@ -27,7 +27,7 @@ import {
   ULID_ALPHABET,
   ULID_LENGTH,
   ULID_RANDOM_CHARS,
-  verifyCancelToken,
+  verifyOpaqueToken,
 } from "./tokens.ts"
 
 /** Frozen clock used by every ULID test: 2023-11-14T22:13:20.000Z. */
@@ -390,108 +390,108 @@ Deno.test("sha256Hex — matches the published digest of a known ASCII input", a
   assertEquals((await sha256Hex("abc")).length, 64)
 })
 
-Deno.test("newCancelToken — raw is base64url and hash is 64 lower-case hex characters", async () => {
-  const { raw, hash } = await newCancelToken(SECRET)
+Deno.test("newOpaqueToken — raw is base64url and hash is 64 lower-case hex characters", async () => {
+  const { raw, hash } = await newOpaqueToken(SECRET)
   assert(/^[A-Za-z0-9_-]+$/.test(raw))
   assertEquals(raw.length, 22)
   assertFalse(raw.includes("="))
   assert(/^[0-9a-f]{64}$/.test(hash))
 })
 
-Deno.test("newCancelToken — two calls differ and the hash is sha256Hex(raw + secret)", async () => {
-  const first = await newCancelToken(SECRET)
-  const second = await newCancelToken(SECRET)
+Deno.test("newOpaqueToken — two calls differ and the hash is sha256Hex(raw + secret)", async () => {
+  const first = await newOpaqueToken(SECRET)
+  const second = await newOpaqueToken(SECRET)
   assert(first.raw !== second.raw)
   assert(first.hash !== second.hash)
   assertEquals(first.hash, await sha256Hex(first.raw + SECRET))
   assertEquals(second.hash, await sha256Hex(second.raw + SECRET))
 })
 
-Deno.test("newCancelToken — a blank secret fails closed", async () => {
+Deno.test("newOpaqueToken — a blank secret fails closed", async () => {
   for (const blank of ["", "   ", "\t\n"]) {
-    const error = await assertRejects(() => newCancelToken(blank), Error)
+    const error = await assertRejects(() => newOpaqueToken(blank), Error)
     assertEquals((error as TokenError).code, TokenErrorCode.InvalidSecret)
     assertEquals(error.message, "secret must be a non-empty string")
   }
 })
 
-Deno.test("newCancelToken — a secret below the 32-character floor fails closed", async () => {
+Deno.test("newOpaqueToken — a secret below the 32-character floor fails closed", async () => {
   assertEquals(MIN_SECRET_LENGTH, 32)
   const tooShort = ["a", "a".repeat(MIN_SECRET_LENGTH - 1)]
   for (const secret of tooShort) {
-    const error = await assertRejects(() => newCancelToken(secret), Error)
+    const error = await assertRejects(() => newOpaqueToken(secret), Error)
     assertEquals((error as TokenError).code, TokenErrorCode.InvalidSecret)
     assertEquals(error.message, "secret must be at least 32 characters")
   }
   // Length is measured on the trimmed value, so padding cannot smuggle a short
   // secret past the floor.
   const padded = " ".repeat(40) + "a".repeat(MIN_SECRET_LENGTH - 1)
-  const paddedError = await assertRejects(() => newCancelToken(padded), Error)
+  const paddedError = await assertRejects(() => newOpaqueToken(padded), Error)
   assertEquals((paddedError as TokenError).code, TokenErrorCode.InvalidSecret)
 
-  const accepted = await newCancelToken("a".repeat(MIN_SECRET_LENGTH))
+  const accepted = await newOpaqueToken("a".repeat(MIN_SECRET_LENGTH))
   assert(/^[0-9a-f]{64}$/.test(accepted.hash))
 })
 
-Deno.test("newCancelToken — a NUL or control-character secret fails closed whatever its length", async () => {
+Deno.test("newOpaqueToken — a NUL or control-character secret fails closed whatever its length", async () => {
   for (
     const secret of ["\u0000", "\u0000".repeat(64), `test-secret-not-real${"\u0007"}0123456789`]
   ) {
-    const error = await assertRejects(() => newCancelToken(secret), Error)
+    const error = await assertRejects(() => newOpaqueToken(secret), Error)
     assertEquals((error as TokenError).code, TokenErrorCode.InvalidSecret)
     assertEquals(error.message, "secret must be a non-empty string")
   }
 })
 
-Deno.test("verifyCancelToken — accepts a round-tripped token", async () => {
-  const { raw, hash } = await newCancelToken(SECRET)
-  assertEquals(await verifyCancelToken(raw, hash, SECRET), true)
+Deno.test("verifyOpaqueToken — accepts a round-tripped token", async () => {
+  const { raw, hash } = await newOpaqueToken(SECRET)
+  assertEquals(await verifyOpaqueToken(raw, hash, SECRET), true)
 })
 
-Deno.test("verifyCancelToken — rejects a wrong secret, a wrong raw token and a tampered hash", async () => {
-  const { raw, hash } = await newCancelToken(SECRET)
-  assertEquals(await verifyCancelToken(raw, hash, OTHER_SECRET), false)
-  assertEquals(await verifyCancelToken("test-secret-not-real-raw-0123456789", hash, SECRET), false)
+Deno.test("verifyOpaqueToken — rejects a wrong secret, a wrong raw token and a tampered hash", async () => {
+  const { raw, hash } = await newOpaqueToken(SECRET)
+  assertEquals(await verifyOpaqueToken(raw, hash, OTHER_SECRET), false)
+  assertEquals(await verifyOpaqueToken("test-secret-not-real-raw-0123456789", hash, SECRET), false)
   const tampered = flipHex(hash)
-  assertEquals(await verifyCancelToken(raw, tampered, SECRET), false)
-  assertEquals(await verifyCancelToken(raw, hash.toUpperCase(), SECRET), false)
+  assertEquals(await verifyOpaqueToken(raw, tampered, SECRET), false)
+  assertEquals(await verifyOpaqueToken(raw, hash.toUpperCase(), SECRET), false)
 })
 
-Deno.test("verifyCancelToken — rejects a truncated, prefixed, empty or non-hex hash without throwing", async () => {
-  const { raw, hash } = await newCancelToken(SECRET)
+Deno.test("verifyOpaqueToken — rejects a truncated, prefixed, empty or non-hex hash without throwing", async () => {
+  const { raw, hash } = await newOpaqueToken(SECRET)
   assertEquals(hash.length, 64)
   for (const malformed of [hash.slice(0, 32), hash.slice(0, 63), "", "0", "abc", "zz".repeat(32)]) {
-    assertEquals(await verifyCancelToken(raw, malformed, SECRET), false)
+    assertEquals(await verifyOpaqueToken(raw, malformed, SECRET), false)
   }
 })
 
-Deno.test("verifyCancelToken — a blank secret fails closed", async () => {
+Deno.test("verifyOpaqueToken — a blank secret fails closed", async () => {
   for (const blank of ["", "  ", "\n"]) {
     const error = await assertRejects(
-      () => verifyCancelToken("any-raw", "a".repeat(64), blank),
+      () => verifyOpaqueToken("any-raw", "a".repeat(64), blank),
       Error,
     )
     assertEquals((error as TokenError).code, TokenErrorCode.InvalidSecret)
   }
 })
 
-Deno.test("verifyCancelToken — a secret below the 32-character floor fails closed", async () => {
+Deno.test("verifyOpaqueToken — a secret below the 32-character floor fails closed", async () => {
   for (const secret of ["a", "a".repeat(MIN_SECRET_LENGTH - 1)]) {
     const error = await assertRejects(
-      () => verifyCancelToken("any-raw", "a".repeat(64), secret),
+      () => verifyOpaqueToken("any-raw", "a".repeat(64), secret),
       Error,
     )
     assertEquals((error as TokenError).code, TokenErrorCode.InvalidSecret)
     assertEquals(error.message, "secret must be at least 32 characters")
   }
   const nulError = await assertRejects(
-    () => verifyCancelToken("any-raw", "a".repeat(64), "\u0000"),
+    () => verifyOpaqueToken("any-raw", "a".repeat(64), "\u0000"),
     Error,
   )
   assertEquals((nulError as TokenError).code, TokenErrorCode.InvalidSecret)
   // Exactly the floor is accepted, so the rule is a floor and not an off-by-one.
   assertEquals(
-    await verifyCancelToken("any-raw", "a".repeat(64), "a".repeat(MIN_SECRET_LENGTH)),
+    await verifyOpaqueToken("any-raw", "a".repeat(64), "a".repeat(MIN_SECRET_LENGTH)),
     false,
   )
 })
@@ -870,13 +870,13 @@ Deno.test("scanner self-test — the matcher's Object.is blind spot is measured,
   assertEquals(countIterations(digest, digest), 32)
 })
 
-Deno.test("verifyCancelToken — the production call site goes through the constant-time primitive", async () => {
+Deno.test("verifyOpaqueToken — the production call site goes through the constant-time primitive", async () => {
   const module = await readModuleSourceWithoutComments()
-  const body = sliceFunctionBody(module, "export async function verifyCancelToken(")
+  const body = sliceFunctionBody(module, "export async function verifyOpaqueToken(")
   assert(
     body.includes("constantTimeEquals("),
-    "verifyCancelToken must compare through constantTimeEquals",
+    "verifyOpaqueToken must compare through constantTimeEquals",
   )
-  assertFalse(body.includes("computed === hash"), "verifyCancelToken must not compare with ===")
-  assertFalse(body.includes("computed !== hash"), "verifyCancelToken must not compare with !==")
+  assertFalse(body.includes("computed === hash"), "verifyOpaqueToken must not compare with ===")
+  assertFalse(body.includes("computed !== hash"), "verifyOpaqueToken must not compare with !==")
 })
