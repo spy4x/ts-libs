@@ -33,8 +33,9 @@ exposes the mapping.
 The constructor throws on an empty URL. Nothing is read at module scope.
 
 **Result.** `{ ok: true, httpStatus, attempts, body, waitedMs }` or
-`{ ok: false, code, message, status?, attempts, waitedMs }`. The source resolved `void` and logged
-its failures, so a caller could not tell a delivered ping from a dead endpoint.
+`{ ok: false, code, message, status?, attempts, waitedMs }`, `code` being `"http_error"`,
+`"network_error"` or `"timeout"`. The source resolved `void` and logged its failures, so a caller
+could not tell a delivered ping from a dead endpoint.
 
 **Retry policy.** 10 attempts, 60s doubling, capped at 5 minutes per wait. Measured schedule, not
 estimated: waits run `1 + 2 + 4 + 5 + 5 + 5 + 5 + 5 + 5 = 37.0 minutes` (2,220,000 ms across 9
@@ -59,8 +60,9 @@ that still returns `{ ok: true, status: "skipped", reason: "below-gate", attempt
 is assertable. Callers that genuinely want success pushes pass `severity: Info`.
 
 **Result.** `{ ok: true, status: "pushed", httpStatus, attempts, title, tags }`,
-`{ ok: true, status: "skipped", … }`, or `{ ok: false, code, message, status?, attempts }`. The
-source returned `void` and logged failures, so a dropped push looked like a delivered one.
+`{ ok: true, status: "skipped", … }`, or `{ ok: false, code, message, status?, attempts }`, `code`
+being `"http_error"`, `"network_error"` or `"timeout"`. The source returned `void` and logged
+failures, so a dropped push looked like a delivered one.
 
 **Config.** `NTFY_URL` and `NTFY_TOPIC` are required; `NTFY_TOKEN` is optional because a
 self-hosted ntfy on a private network may not use auth. Read through `ntfyConfigFromEnv(read?)`,
@@ -133,15 +135,24 @@ adapter that builds that string; the verification here is the reusable half.
 
 ## Injectable transport
 
-Read the three sections below before writing a test that touches the network. It cannot.
+Read the sections below before writing a _unit_ test that touches the network. It cannot: the unit
+suite runs under `--allow-read --allow-env` with no `--allow-net`. The integration tier is the one
+exception — see below.
 
-- **`fetcher?: typeof fetch`** — defaults to `globalThis.fetch`. No test in this package performs a
-  real request, and the suite runs under `--allow-read --allow-env` with no `--allow-net`.
+- **`fetcher?: typeof fetch`** — defaults to `globalThis.fetch`. No unit test in this package performs
+  a real request.
 - **`sleep?: (ms: number) => Promise<void>` and `clock?: () => number`** — the retry loop measures its
-  budget through the injected clock and waits through the injected sleeper. Tests supply a recording
-  timer plus a manual clock, so nothing sleeps and nothing asserts on wall-clock time.
-- **`backoff?: BackoffFn`** — the delay computation. `onDelay` observes every requested delay, which
-  is how a test asserts _"asked for exactly 2 seconds"_ without waiting for them.
+  budget through the injected clock and waits through the injected sleeper. Unit tests supply a
+  recording timer plus a manual clock, so nothing sleeps and nothing asserts on wall-clock time.
+- **`backoff?: BackoffFn` and `random?: RandomSource`** — the delay computation, and the source its
+  jitter draws from (`Math.random` unless a caller injects another, so two processes with jitter
+  enabled do not compute the same "random" delay). `onDelay` observes every requested delay, which is
+  how a test asserts _"asked for exactly 2 seconds"_ without waiting for them.
+- **`requestTimeoutMs?: number`** — bounds one request via `AbortSignal.timeout()`. Defaults to
+  `DEFAULT_REQUEST_TIMEOUT_MS` (10s, `retry.ts`) and is clamped to whatever `totalBudgetMs` has left
+  for the attempt about to run, so a generous per-request timeout can never itself outrun the budget
+  it is nested inside. A timed-out request reports `code: "timeout"`, distinct from the generic
+  `"network_error"` a transport throw gets.
 - **Console silence is asserted, not assumed.** `integrations/console.test.ts` installs a
   process-wide capture _before_ importing the modules and drives every path of both clients —
   delivered, below-gate skip, 4xx, 5xx retried to success, transport throw — asserting nothing is
@@ -149,6 +160,16 @@ Read the three sections below before writing a test that touches the network. It
   `console.error` survived a green run in the clients this replaced.
 - **Secrets are constructor parameters.** No module reads `$env` at import time and no secret is
   logged. The `*ConfigFromEnv(read?)` helpers take a reader, so a test injects a fake environment.
+
+### Integration tier
+
+`ntfy.integration.test.ts` and `healthchecks.integration.test.ts` (`deno task test:integration`) run
+the real client against a real HTTP server the test itself starts on `127.0.0.1` with
+`Deno.serve({ port: 0 })` — no container, nothing reachable outside loopback. They exist because a
+fake `fetch` that always resolves synchronously cannot prove a timeout actually bounds a hanging
+request: these tests start a server that never answers and assert the call still returns, with
+`code: "timeout"`, inside the configured budget, and a server that fails twice before succeeding to
+prove a retry actually recovers over a real socket.
 
 ## Retry policy
 
@@ -163,6 +184,15 @@ delay-seconds form wins over the computed backoff, then the same per-wait ceilin
 provider asking for a day cannot pin a process for a day. The HTTP-date form is ignored: it needs a
 wall clock, and a skewed client clock would turn a hint into a multi-hour stall. Attempts and total
 elapsed time are both capped.
+
+**Every request is bounded, and the budget is real.** `totalBudgetMs` used to bound only when the
+_next retry_ could be scheduled; a request itself had no timeout and could hang forever. Every
+attempt now runs under `AbortSignal.timeout()`, clamped to whatever `totalBudgetMs` has left, so the
+budget bounds the whole operation, not just the gaps between attempts. `NtfyClient`'s and
+`HealthchecksClient`'s shipped policies both use `jitterRatio: 0` — their ported sources never used
+jitter — but jitter itself, wherever a caller enables it, now draws from a real random source
+(`Math.random` by default) instead of a formula of `attempt` and `retryAfterMs`: two processes retrying
+the same call no longer compute the identical "random" delay.
 
 ## Out of scope
 
