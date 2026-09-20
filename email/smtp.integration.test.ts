@@ -38,6 +38,17 @@ import { createSmtpSender } from "./smtp.ts"
 /** The password the adapter is configured with; no error may ever carry it. */
 const SENDER_PASSWORD = "integration-test-only"
 
+/** Greeting timeout handed to the transport by the silent-server test. */
+const GREETING_TIMEOUT_MS = 500
+
+/**
+ * How long that send may take. Twenty times the injected timeout leaves room for
+ * a loaded machine, and it is far below nodemailer's own 30-second default — which
+ * is what the bound is really testing, since the option not reaching the transport
+ * is the failure this test exists to catch.
+ */
+const GREETING_BOUND_MS = 10_000
+
 describe("smtp transport against a real mail server", () => {
   it("delivers a message the server hands back with the same subject and body", async () => {
     const smtp = smtpSettings()
@@ -155,32 +166,69 @@ describe("smtp transport against a real mail server", () => {
     )
   })
 
-  it("gives up on a server that never answers instead of hanging", async () => {
-    // 192.0.2.1 is RFC 5737 documentation space: nothing routes there, so the
-    // connection either is refused by the local stack or never completes.
-    // `connectionTimeoutMs` is what turns the second case into a result, and this
-    // is the only test that runs it against a real socket.
+  it("gives up on a server that accepts the connection and never greets", async () => {
+    // A server that completes the TCP handshake and then says nothing is the case
+    // the timeout options exist for, and the only way to produce it reliably is to
+    // be that server. This listener accepts on loopback and never writes the 220
+    // greeting, so the send can only end through the greeting timeout.
+    //
+    // The previous version of this test dialled 192.0.2.1, which left loopback and
+    // depended on the routing of whatever machine ran it. It also passed with the
+    // timeouts unwired, because nodemailer's own 30-second default produced the
+    // same failure two minutes later. The bound below is 10 seconds against an
+    // injected 500 ms: generous for a loaded machine, and well under that default.
+    const silent = Deno.listen({ hostname: "127.0.0.1", port: 0 })
+    const address = silent.addr as Deno.NetAddr
+    const accepted: Deno.Conn[] = []
+    const accepting = (async () => {
+      for await (const connection of silent) accepted.push(connection)
+    })().catch(() => {})
+
     const sender = createSmtpSender({
-      host: "192.0.2.1",
-      port: 25,
+      host: address.hostname,
+      port: address.port,
       user: "integration-test-only",
       pass: SENDER_PASSWORD,
       from: `ts-libs <no-reply@${RESERVED_EMAIL_DOMAIN}>`,
       requireTls: false,
-      connectionTimeoutMs: 1_500,
-      greetingTimeoutMs: 1_500,
+      connectionTimeoutMs: GREETING_TIMEOUT_MS,
+      greetingTimeoutMs: GREETING_TIMEOUT_MS,
     })
 
-    const result = await sender.send({
-      to: uniqueRecipient("smtp-blackhole"),
-      subject: "never delivered",
-      text: "never delivered",
-    })
+    try {
+      const started = performance.now()
+      const result = await sender.send({
+        to: uniqueRecipient("smtp-silent"),
+        subject: "never delivered",
+        text: "never delivered",
+      })
+      const elapsed = performance.now() - started
 
-    assertFalse(result.ok, "an unreachable host must not report a successful send")
-    if (result.ok) return
-    assertStringIncludes(result.error, "192.0.2.1")
-    assert(result.error.length > 0, "the failure must say something")
-    assertFalse(result.error.includes(SENDER_PASSWORD))
+      assertFalse(result.ok, "a server that never greets must not report a successful send")
+      if (result.ok) return
+      assertStringIncludes(result.error, "SMTP send failed")
+      assertStringIncludes(result.error, address.hostname)
+      assertEquals(result.accepted, [])
+      assertFalse(
+        result.error.includes(SENDER_PASSWORD),
+        `the password must not reach the error: ${result.error}`,
+      )
+      assertEquals(accepted.length, 1, "the transport must have reached the listener")
+      assert(
+        elapsed < GREETING_BOUND_MS,
+        `the send took ${Math.round(elapsed)}ms with a ${GREETING_TIMEOUT_MS}ms greeting ` +
+          `timeout, so the timeout did not reach the transport`,
+      )
+    } finally {
+      silent.close()
+      await accepting
+      for (const connection of accepted) {
+        try {
+          connection.close()
+        } catch {
+          // The transport may have closed its end first; nothing left to do.
+        }
+      }
+    }
   })
 })
