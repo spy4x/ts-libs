@@ -1,7 +1,7 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { SseProgressBroker } from "./progress-broker.ts"
-import { FakeTimers } from "./test-doubles.ts"
+import { countedAbortSignal, FakeTimers } from "./test-doubles.ts"
 
 interface Payload {
   percent: number
@@ -140,6 +140,60 @@ describe("SseProgressBroker", () => {
     controller.abort()
 
     expect(timers.pending).toBe(0)
+  })
+
+  it("detaches the abort listener when the job completes", () => {
+    const broker = new SseProgressBroker<Payload>()
+    const controller = new AbortController()
+    const counted = countedAbortSignal(controller.signal)
+    open(broker, 7, { signal: counted.signal })
+    expect(counted.listenerCount()).toBe(1)
+
+    broker.complete(7)
+
+    expect(broker.subscriberCount(7)).toBe(0)
+    expect(counted.listenerCount()).toBe(0)
+  })
+
+  it("detaches the abort listener when the stream is cancelled", async () => {
+    const broker = new SseProgressBroker<Payload>()
+    const controller = new AbortController()
+    const counted = countedAbortSignal(controller.signal)
+    const reader = open(broker, 7, { signal: counted.signal })
+    expect(counted.listenerCount()).toBe(1)
+
+    await reader.cancel()
+
+    expect(broker.subscriberCount(7)).toBe(0)
+    expect(counted.listenerCount()).toBe(0)
+  })
+
+  it("detaches the abort listener when the deadline fires", () => {
+    const timers = new FakeTimers()
+    const broker = new SseProgressBroker<Payload>({ timers })
+    const controller = new AbortController()
+    const counted = countedAbortSignal(controller.signal)
+    open(broker, 7, { signal: counted.signal, timeoutMs: 60_000 })
+    expect(counted.listenerCount()).toBe(1)
+
+    timers.runAll()
+
+    expect(timers.pending).toBe(0)
+    expect(counted.listenerCount()).toBe(0)
+  })
+
+  it("removes the subscriber when the counted signal aborts", async () => {
+    const broker = new SseProgressBroker<Payload>()
+    const controller = new AbortController()
+    const counted = countedAbortSignal(controller.signal)
+    const reader = open(broker, 7, { signal: counted.signal })
+    expect(counted.listenerCount()).toBe(1)
+
+    controller.abort()
+
+    expect(broker.subscriberCount(7)).toBe(0)
+    const { done } = await reader.read()
+    expect(done).toBe(true)
   })
 
   it("closes a subscription that never completes instead of hanging", async () => {
