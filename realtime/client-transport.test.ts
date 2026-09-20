@@ -673,6 +673,29 @@ describe("ClientTransport heartbeat", () => {
 
     expect(harness.errors.at(-1)).toBeInstanceOf(PongTimeoutError)
   })
+
+  it("does not let an orphaned pong timer close a later, unrelated reconnection", async () => {
+    // If `#ping` re-armed the timer on every call without clearing the previous one, the second and
+    // third unanswered pings (at t=200 and t=300) would each leave their own timer running, due at
+    // 450 and 550 — after the connection has already failed once and reconnected (the default
+    // backoff's base delay puts the reconnect at 350 + 100 = 450). `#handlePongTimeout` reads
+    // whatever socket is current, not the one that was open when the timer was armed, so a survivor
+    // would spuriously close the reconnected socket too. This test proves none survives: it reaches
+    // past both deadlines without answering anything on the reconnected socket, and before that
+    // socket's own first heartbeat could legitimately time out on its own (its first ping is not due
+    // until t=550, its own deadline not until t=800).
+    const harness = createHarness({ heartbeatIntervalMs: 100, pongTimeoutMs: 250 })
+    await harness.open()
+
+    await harness.clock.advance(350) // three unanswered pings, then the one real timeout
+    expect(harness.errors.length).toBe(1)
+    expect(harness.errors[0]).toBeInstanceOf(PongTimeoutError)
+
+    await harness.clock.advance(250) // t=600: past the reconnect and both would-be orphaned deadlines
+
+    expect(harness.errors.length).toBe(1)
+    expect(harness.factory.sockets.length).toBe(2) // the original socket, plus its one legitimate reconnect
+  })
 })
 
 describe("ClientTransport reconnect", () => {
@@ -832,7 +855,10 @@ describe("ClientTransport reconnect", () => {
     expect(harness.factory.sockets.length).toBe(3)
   })
 
-  it("resets the backoff once a message actually arrives, not merely when the socket opens", async () => {
+  it("resets the backoff once a message has arrived and the socket stayed open long enough", async () => {
+    // "Proven" needs both conditions, not just a message (the reviewer's finding on the previous
+    // head of this branch: a peer that sends one frame and drops still reset the counter for free).
+    // `minHealthyMs` defaults to `backoff.baseMs`, so 100ms here.
     const harness = createHarness({
       backoff: { baseMs: 100, factor: 2, maxMs: 10_000, jitterRatio: 0 },
       random: sequenceRandom([0]),
@@ -843,10 +869,42 @@ describe("ClientTransport reconnect", () => {
 
     expect(harness.factory.sockets.length).toBe(2)
 
-    harness.factory.latest.receive(JSON.stringify({ kind: "server.ping" })) // proves the connection
+    harness.factory.latest.receive(JSON.stringify({ kind: "server.ping" })) // one condition met
+    await harness.clock.advance(100) // the other condition — minHealthyMs open — is now met too
+
     harness.factory.latest.dropFromPeer()
     await harness.clock.advance(100) // back at the base delay, not the doubled one
 
+    expect(harness.factory.sockets.length).toBe(3)
+  })
+
+  it("keeps the backoff climbing when the peer sends one frame and drops every attempt", async () => {
+    // Issue #65, finding 3, the residual the reviewer found: resetting on the message alone let a
+    // peer that sends a single byte before dropping reset the counter for free, every time, so the
+    // delay never grew past the base value. Requiring the socket to also have stayed open for
+    // `minHealthyMs` defeats it, because the drop always arrives before that deadline.
+    const harness = createHarness({
+      backoff: { baseMs: 100, factor: 2, maxMs: 10_000, jitterRatio: 0 },
+      random: sequenceRandom([0]),
+    })
+    const dropWithOneFrame = () => {
+      harness.factory.latest.receive(JSON.stringify({ kind: "server.ping" }))
+      harness.factory.latest.dropFromPeer()
+    }
+
+    harness.transport.connect()
+    dropWithOneFrame() // the first connection: one frame, then dropped, with no time elapsed
+    await harness.clock.advance(100) // attempt 0's delay
+    expect(harness.factory.sockets.length).toBe(2)
+
+    dropWithOneFrame()
+    await harness.clock.advance(100)
+    // Resetting on the message alone would have put attempt back at 0 here, so 100ms would be
+    // enough again and a third socket would already exist. Requiring minHealthyMs too keeps attempt
+    // at 1, so the delay has doubled to 200ms and nothing has happened yet.
+    expect(harness.factory.sockets.length).toBe(2)
+
+    await harness.clock.advance(100) // 200ms total since the second drop: now it is due
     expect(harness.factory.sockets.length).toBe(3)
   })
 })
