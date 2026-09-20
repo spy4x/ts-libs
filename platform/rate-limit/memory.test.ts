@@ -25,12 +25,14 @@ function fakeClock(start = T0): { clock: () => number; advance: (ms: number) => 
 }
 
 /** In-memory store, so the store-backed limiter is covered without a backend. */
-function fakeStore(): RateLimitStore & { entries: Map<string, number[]> } {
+function fakeStore(): RateLimitStore & { entries: Map<string, number[]>; writes: number } {
   const entries = new Map<string, number[]>()
-  return {
+  const store = {
     entries,
+    writes: 0,
     read: (key: string) => Promise.resolve(entries.get(key)),
     write: (key: string, events: number[]) => {
+      store.writes += 1
       entries.set(key, [...events])
       return Promise.resolve()
     },
@@ -39,6 +41,7 @@ function fakeStore(): RateLimitStore & { entries: Map<string, number[]> } {
       return Promise.resolve()
     },
   }
+  return store
 }
 
 describe("MemoryRateLimiter", () => {
@@ -441,6 +444,18 @@ describe("StoreRateLimiter", () => {
     await limiter.check("a")
     await limiter.reset("a")
     assertEquals((await limiter.check("a")).allowed, true)
+  })
+
+  it("writes to the store only on an accepted request, never on a rejection", async () => {
+    // Reproduces the audit's measurement: 100 requests at `limit: 2` counted 100 writes, one per
+    // rejected request, because the reject branch re-wrote the same unchanged events. A rejected
+    // request adds no event, so nothing about the stored entry needs to change.
+    const store = fakeStore()
+    const limiter = createStoreLimiter(store, { windowMs: 60_000, limit: 2, clock: () => T0 })
+
+    for (let i = 0; i < 100; i++) await limiter.check("attacker")
+
+    assertEquals(store.writes, 2)
   })
 })
 
