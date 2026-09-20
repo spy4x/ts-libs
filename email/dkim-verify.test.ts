@@ -192,6 +192,12 @@ async function ed25519Key(pair: CryptoKeyPair): Promise<DkimPublicKey> {
   return parseDkimPublicKey(`v=DKIM1; k=ed25519; p=${base64(raw)}`)!
 }
 
+/** Insert WSP into a base64 value at `at`, standing in for a signer's folding. */
+function spliceWsp(value: string, wsp: { at: number; kind: "fold" | "space" }): string {
+  const inserted = wsp.kind === "fold" ? "\r\n\t" : " "
+  return value.slice(0, wsp.at) + inserted + value.slice(wsp.at)
+}
+
 interface SignOptions {
   mode?: "simple" | "relaxed"
   /** The body half of `c=` when it differs from `mode`: a mixed `c=` value. */
@@ -202,6 +208,14 @@ interface SignOptions {
   extraTags?: string
   /** Tags placed *after* b=, which §3.7 step 2 leaves inside the signed bytes. */
   afterB?: string
+  /**
+   * Put WSP inside the `bh=` value at `at`, as §3.5 invites a signer to do when
+   * the value reaches the folding column: `"fold"` inserts CRLF + HTAB, `"space"`
+   * a single SP. The message is signed *after* the insertion, so the WSP is part
+   * of the bytes the signature covers — a vector a real signer emits, rather than
+   * an already-signed message edited afterwards.
+   */
+  bodyHashWsp?: { at: number; kind: "fold" | "space" }
   ed25519?: boolean
   foldSignature?: boolean
 }
@@ -222,8 +236,9 @@ async function sign(
   const bodyMode = options.bodyMode ?? mode
   const names = options.names ?? ["from", "to", "subject"]
   const bodyHash = await sha256Base64(canonBody(body, bodyMode))
+  const signedBodyHash = options.bodyHashWsp ? spliceWsp(bodyHash, options.bodyHashWsp) : bodyHash
   const stub = `v=1; a=${options.ed25519 ? "ed25519-sha256" : "rsa-sha256"}; ` +
-    `c=${mode}/${bodyMode}; d=example.com; s=sel; h=${names.join(":")}; bh=${bodyHash}` +
+    `c=${mode}/${bodyMode}; d=example.com; s=sel; h=${names.join(":")}; bh=${signedBodyHash}` +
     (options.extraTags ? `; ${options.extraTags}` : "")
 
   const used = new Map<string, number>()
@@ -1486,4 +1501,90 @@ describe("an appended instance of a header the signature covers (§5.4.2)", () =
       })
     }
   }
+})
+
+// --- §3.5: whitespace inside the bh= tag ------------------------------------
+
+/**
+ * RFC 6376 §3.5, on bh=: "Whitespace is ignored in this value and MUST be ignored
+ * when reassembling the original signature. In particular, the signing process
+ * can safely insert FWS in this value in arbitrary places to conform to
+ * line-length limits." §3.2 states the rule the exception sits in: whitespace
+ * inside a value "MUST be retained unless explicitly excluded by the specific tag
+ * description", and bh= is one of the tags that excludes it.
+ *
+ * Every vector here is signed *with* the whitespace in place, so the whitespace
+ * is inside the bytes the signature covers and the message is one a conformant
+ * signer can emit. That distinction matters: whitespace inserted into a message
+ * after signing changes the canonical field, and rejecting such a message is
+ * correct — see "still rejects whitespace added to a signed signature field"
+ * below, which pins exactly that.
+ */
+describe("whitespace inside the bh= tag (§3.5)", () => {
+  const BODY = "This is a test.\r\n"
+
+  // A bare SP or HTAB inside a single-line bh= value. The verifier compared the
+  // tag's text against a digest that never contains WSP, so one space made the
+  // two unequal by length alone and the message came back "body modified after
+  // signing" — rejecting mail that was signed exactly as it arrived.
+  for (const mode of ["relaxed", "simple"] as const) {
+    it(`verifies a message whose bh= carries a literal SP (${mode})`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+        mode,
+        bodyHashWsp: { at: 20, kind: "space" },
+      })
+      const expected = await sha256Base64(canonBody(BODY, mode))
+      assert(
+        raw.includes(`bh=${expected.slice(0, 20)} ${expected.slice(20)}`),
+        "the message must carry the SP inside its bh= value",
+      )
+
+      const result = await verifyDkim(raw, publicKey)
+      assert(result.valid, `reason=${result.reason}`)
+      assertEquals(result.computedBodyHash, expected)
+      assertEquals(result.parsed?.bodyHash, expected)
+      assert(
+        !/\s/.test(result.parsed!.bodyHash),
+        "the parsed bh= value must carry no WSP",
+      )
+    })
+  }
+
+  // A fold inside bh=, which §3.5 names explicitly as safe for a signer. These
+  // already verified — `unfold` drops a fold entirely, so the parsed value was
+  // clean — and they are here so that a future change to how the value is
+  // normalised cannot quietly take the fold path with it.
+  for (const mode of ["relaxed", "simple"] as const) {
+    it(`verifies a message whose bh= is folded mid-value (${mode})`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+        mode,
+        bodyHashWsp: { at: 20, kind: "fold" },
+      })
+      assert(raw.includes("bh="), "the fixture must carry a folded bh= value")
+      assert(
+        raw.includes(`bh=${(await sha256Base64(canonBody(BODY, mode))).slice(0, 20)}\r\n\t`),
+        "the fold must land inside the bh= value",
+      )
+
+      const result = await verifyDkim(raw, publicKey)
+      assert(result.valid, `reason=${result.reason}`)
+      assertEquals(result.parsed?.bodyHash, await sha256Base64(canonBody(BODY, mode)))
+    })
+  }
+
+  it("still rejects whitespace added to a signed signature field", async () => {
+    // The other direction, and the reason the fix is not simply "strip WSP
+    // wherever it appears in the field": §3.7 step 2 hashes the field as the
+    // message carries it, so whitespace that was not there when the signer signed
+    // changes the signed bytes. Under relaxed canonicalization a fold becomes one
+    // SP, which is enough to break the signature.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, { mode: "relaxed" })
+    assert((await verifyDkim(raw, publicKey)).valid)
+
+    const value = /bh=([A-Za-z0-9+/=]+)/.exec(raw)![1]
+    const folded = raw.replace(`bh=${value}`, `bh=${value.slice(0, 20)}\r\n\t${value.slice(20)}`)
+    const result = await verifyDkim(folded, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "signature did not verify against public key")
+  })
 })

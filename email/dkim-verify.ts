@@ -29,7 +29,7 @@ export interface DkimSignatureHeader {
   selector: string
   /** `h=` — signed header field names, lowercased, in signed order. */
   signedHeaders: string[]
-  /** `bh=` — base64 body hash, as it appeared in the header. */
+  /** `bh=` — base64 body hash, with folding and WSP removed (RFC 6376 §3.5). */
   bodyHash: string
   /** `b=` — base64 signature, as it appeared in the header. */
   signature: string
@@ -295,7 +295,20 @@ function parseDkimSignatureHeader(raw: string, requireB = true): ParsedDkimSigna
     domain,
     selector,
     signedHeaders,
-    bodyHash: tags.get("bh")!.value,
+    // §3.5 on bh=: "Whitespace is ignored in this value and MUST be ignored when
+    // reassembling the original signature. In particular, the signing process can
+    // safely insert FWS in this value in arbitrary places to conform to
+    // line-length limits." §3.2 retains whitespace inside a value only when the
+    // tag's own description does not exclude it, and bh='s does. `unfold` leaves
+    // one SP where a WSP run stood, and the digest this is compared against never
+    // contains WSP, so one leftover space failed the comparison by length alone —
+    // a correctly signed message reported as "body modified after signing".
+    //
+    // Stripped here, in the value the comparison and the caller see, and *not* in
+    // the field §3.7 step 2 hashes: there it is part of the signed bytes exactly
+    // as the signer wrote them — a signer that folded bh= signed the fold's SP —
+    // so removing it there would hash bytes no signer signed.
+    bodyHash: tags.get("bh")!.value.replace(/\s+/g, ""),
     signature: tags.get("b")!.value,
     canonicalization,
     timestamp: tags.has("t") ? parseEpoch(tags.get("t")!.value, "t") : undefined,
