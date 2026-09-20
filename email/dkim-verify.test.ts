@@ -4,9 +4,10 @@
 //
 //  1. `fixtures/` — messages signed with dkimpy 1.1.8's canonicalizers plus
 //     `openssl dgst -sha256 -sign`, every one asserted valid by dkimpy itself.
-//     RFC 6376's own signed example is among them. These catch a verifier that
-//     agrees only with itself, which is exactly how the first port of this file
-//     shipped a canonicalization bug behind a green suite.
+//     The RFC 6376 example *message*, re-signed in 2018 with a published key, is
+//     among them. These catch a verifier that agrees only with itself, which is
+//     exactly how the first port of this file shipped a canonicalization bug
+//     behind a green suite.
 //  2. `sign()` below — a deliberately hand-written second implementation of
 //     §3.4 canonicalization and §3.7 hash steps, used for the tamper cases. It
 //     shares no code with `dkim-verify.ts`: importing the module's own
@@ -53,6 +54,54 @@ function renameSignatureField(raw: string, name: string): string {
   return raw.slice(0, at) + `${name}:` + raw.slice(at + "dkim-signature:".length)
 }
 
+/** Offset at which the signature field starts, found by name, never by index. */
+function signatureFieldStart(raw: string): number {
+  const at = raw.toLowerCase().indexOf("dkim-signature:")
+  if (at === -1) throw new Error("message has no DKIM-Signature field")
+  return at
+}
+
+/** Offset just past the header field beginning at `at`, folded lines included. */
+function endOfField(raw: string, at: number): number {
+  let pos = at
+  for (;;) {
+    const eol = raw.indexOf("\r\n", pos)
+    if (eol === -1) return raw.length
+    pos = eol + 2
+    if (raw[pos] !== " " && raw[pos] !== "\t") return pos
+  }
+}
+
+/**
+ * Append `payload` to the message's DKIM-Signature field itself, so the payload
+ * lands inside the bytes §3.7 step 2 hashes.
+ *
+ * The field is located by name: the whole point of these attacks is *which*
+ * field they extend, and a line index silently follows a fixture that inserted
+ * a field above it — which is how these cases were passing against `From:`.
+ */
+function appendToSignatureField(raw: string, payload: string): string {
+  const end = endOfField(raw, signatureFieldStart(raw))
+  // `end` sits just past the field's closing CRLF — for the signature field, which
+  // is the last field of these messages, that is the CRLF before the empty line.
+  // The payload belongs inside the field, so it goes before it; inserting at
+  // `end` would open the body with it instead.
+  const contentEnd = raw.slice(end - 2, end) === "\r\n" ? end - 2 : end
+  return raw.slice(0, contentEnd) + payload + raw.slice(contentEnd)
+}
+
+/**
+ * Add a second instance of `field` to a message that was already signed. Both
+ * positions are outside the bytes the signature covers; only §5.4.2's "the
+ * message grew a field of a name h= consumed" check can see them.
+ */
+function injectHeader(raw: string, field: string, where: "top" | "below-signature"): string {
+  const injected = `${field}: injected\r\n`
+  if (where === "top") return injected + raw
+  const end = endOfField(raw, signatureFieldStart(raw))
+  return raw.slice(0, end) + injected + raw.slice(end)
+}
+
 // --- an independent signer, written from the RFC text -----------------------
 
 /** §3.4.1 simple / §3.4.2 relaxed, written independently of the module. */
@@ -91,31 +140,45 @@ function base64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-let rsaPair: Promise<CryptoKeyPair> | undefined
-let ed25519Pair: Promise<CryptoKeyPair> | undefined
+const rsaPairs = new Map<string, Promise<CryptoKeyPair>>()
+const ed25519Pairs = new Map<string, Promise<CryptoKeyPair>>()
 
-/** Memoised 2048-bit RSA pair, generated in-process. */
-function rsa(): Promise<CryptoKeyPair> {
-  rsaPair ??= crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["sign", "verify"],
-  ) as Promise<CryptoKeyPair>
-  return rsaPair
+/**
+ * Memoised 2048-bit RSA pair, generated in-process.
+ *
+ * `slot` selects the pair: "primary" is the one messages are signed with, any
+ * other slot is a second key of the same shape — which is what a wrong-key test
+ * needs, since a key of the *other* algorithm never reaches the crypto.
+ */
+function rsa(slot = "primary"): Promise<CryptoKeyPair> {
+  let pair = rsaPairs.get(slot)
+  if (!pair) {
+    pair = crypto.subtle.generateKey(
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["sign", "verify"],
+    ) as Promise<CryptoKeyPair>
+    rsaPairs.set(slot, pair)
+  }
+  return pair
 }
 
-/** Memoised Ed25519 pair, generated in-process. */
-function ed25519(): Promise<CryptoKeyPair> {
-  ed25519Pair ??= crypto.subtle.generateKey({ name: "Ed25519" }, true, [
-    "sign",
-    "verify",
-  ]) as Promise<CryptoKeyPair>
-  return ed25519Pair
+/** Memoised Ed25519 pair, generated in-process; `slot` as in {@link rsa}. */
+function ed25519(slot = "primary"): Promise<CryptoKeyPair> {
+  let pair = ed25519Pairs.get(slot)
+  if (!pair) {
+    pair = crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+      "sign",
+      "verify",
+    ]) as Promise<CryptoKeyPair>
+    ed25519Pairs.set(slot, pair)
+  }
+  return pair
 }
 
 async function rsaKey(pair: CryptoKeyPair): Promise<DkimPublicKey> {
@@ -131,6 +194,8 @@ async function ed25519Key(pair: CryptoKeyPair): Promise<DkimPublicKey> {
 
 interface SignOptions {
   mode?: "simple" | "relaxed"
+  /** The body half of `c=` when it differs from `mode`: a mixed `c=` value. */
+  bodyMode?: "simple" | "relaxed"
   /** Header names to sign, in h= order. */
   names?: string[]
   /** Extra tags before b=, e.g. `l=17` or `x=1800000000`. */
@@ -153,10 +218,12 @@ async function sign(
   options: SignOptions = {},
 ): Promise<{ raw: string; publicKey: DkimPublicKey; publicKeyRecord: string; input: string }> {
   const mode = options.mode ?? "relaxed"
+  // §3.4 gives c= a header half and a body half, and they need not match.
+  const bodyMode = options.bodyMode ?? mode
   const names = options.names ?? ["from", "to", "subject"]
-  const bodyHash = await sha256Base64(canonBody(body, mode))
+  const bodyHash = await sha256Base64(canonBody(body, bodyMode))
   const stub = `v=1; a=${options.ed25519 ? "ed25519-sha256" : "rsa-sha256"}; ` +
-    `c=${mode}/${mode}; d=example.com; s=sel; h=${names.join(":")}; bh=${bodyHash}` +
+    `c=${mode}/${bodyMode}; d=example.com; s=sel; h=${names.join(":")}; bh=${bodyHash}` +
     (options.extraTags ? `; ${options.extraTags}` : "")
 
   const used = new Map<string, number>()
@@ -213,12 +280,20 @@ const TEST_HEADERS = [
 // --- RFC 6376's own examples -----------------------------------------------
 
 describe("RFC 6376 examples", () => {
-  it("verifies the RSA-signed example from §3.5", async () => {
+  it("verifies the RFC 6376 §3.5 example message re-signed by dkimpy in 2018", async () => {
+    // The title states the provenance because the old one ("the RSA-signed
+    // example from §3.5") claimed the RFC's *printed* signature, which cannot be
+    // verified at all — its private key is unpublished, as `fixtures/SOURCES.md`
+    // records. The vector is dkimpy's 2018 re-signature of the RFC's example
+    // message, and `t=` is what distinguishes the two, so it is pinned here
+    // rather than left to a comment: a fixture swapped for any other RSA-signed
+    // message would otherwise keep the test name honest but the claim false.
     const { raw, record } = await fixture("rfc6376-rsa")
     const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
     assert(result.valid, `reason=${result.reason}`)
     assertEquals(result.parsed?.domain, "football.example.com")
     assertEquals(result.parsed?.selector, "test")
+    assertEquals(result.parsed?.timestamp, 1527915362n)
     assertEquals(result.parsed?.canonicalization, { header: "simple", body: "simple" })
   })
 
@@ -354,19 +429,36 @@ describe("differential: messages dkimpy signs and itself verifies", () => {
     assertEquals(result.parsed?.expiration, 1800000000n)
   })
 
-  for (const attack of ["; x=9999999999", "; i=@attacker.invalid", "; l=1"]) {
-    it(`rejects ${attack} appended to a genuine signature`, async () => {
-      // The payload lands inside the hashed field, so it changes the signed
-      // bytes: an attacker cannot move the expiry or the identity this way.
+  // Every payload is appended to the DKIM-Signature field itself. That is the
+  // only position that tests anything: the field's own bytes are part of the
+  // signed input (§3.7 step 2), so a tag added to it changes what the signature
+  // covers. An earlier revision appended to `lines[0]`, which is the `From:`
+  // field of this fixture — so the tests never touched the signature at all and
+  // passed because `From:` is signed bytes for a different reason.
+  const SIGNATURE_ATTACKS = [
+    { payload: "; x=9999999999", reason: "signature did not verify against public key" },
+    { payload: "; i=@attacker.invalid", reason: "signature did not verify against public key" },
+    // The injected `l=` is caught one step earlier, by the body hash: the bound
+    // re-truncates the canonical body, so `bh=` stops matching before the
+    // signature is ever checked. The tag still took effect — on `From:` it had
+    // none, and the reason was the signature mismatch above.
+    { payload: "; l=1", reason: "body hash mismatch (body modified after signing)" },
+  ] as const
+
+  for (const attack of SIGNATURE_ATTACKS) {
+    it(`rejects ${attack.payload} appended to a genuine signature`, async () => {
       const { raw, record } = await fixture("dkimpy-relaxed")
-      const lines = raw.split("\r\n")
-      lines[0] = `${lines[0]}${attack}`
-      const result = await verifyDkim(
-        lines.join("\r\n"),
-        parseDkimPublicKey(record) ?? undefined,
+      const attacked = appendToSignatureField(raw, attack.payload)
+      const field = splitMessage(attacked).headers.find((line) =>
+        line.toLowerCase().startsWith("dkim-signature:")
       )
+      assert(
+        field !== undefined && field.includes(attack.payload),
+        "the payload must land inside the DKIM-Signature field, not on another field",
+      )
+      const result = await verifyDkim(attacked, parseDkimPublicKey(record) ?? undefined)
       assertEquals(result.valid, false)
-      assertEquals(result.reason, "signature did not verify against public key")
+      assertEquals(result.reason, attack.reason)
     })
   }
 })
@@ -1091,6 +1183,36 @@ describe("verifyDkim", () => {
     assert(result.valid, `reason=${result.reason}`)
   })
 
+  // §3.4 lets the header and body halves of c= differ, and nothing else in this
+  // file pairs them: every fixture and every other sign() call uses one mode for
+  // both halves, so a verifier that read one half twice — or applied the header
+  // mode to the body — passed the entire suite. The body carries WSP that the two
+  // algorithms canonicalize differently, so their digests are distinct and a
+  // swapped half cannot hide behind a coincidentally equal hash.
+  for (const [header, body] of [["relaxed", "simple"], ["simple", "relaxed"]] as const) {
+    it(`verifies a mixed c=${header}/${body} message end to end`, async () => {
+      const bodyText = "This is  a test. \r\n"
+      const { raw, publicKey } = await sign(TEST_HEADERS, bodyText, {
+        mode: header,
+        bodyMode: body,
+      })
+      const result = await verifyDkim(raw, publicKey)
+      assert(result.valid, `reason=${result.reason}`)
+      assertEquals(result.parsed?.canonicalization, { header, body })
+      assert(
+        await sha256Base64(canonBody(bodyText, header)) !==
+          await sha256Base64(canonBody(bodyText, body)),
+        "the two body canonicalizations must differ, or the body half is untested",
+      )
+      assertEquals(result.computedBodyHash, await sha256Base64(canonBody(bodyText, body)))
+      assertEquals(
+        result.computedBodyHash,
+        result.parsed?.bodyHash,
+        "the body half of c= is the one that hashes the body",
+      )
+    })
+  }
+
   it("verifies a message whose DKIM-Signature is folded over three lines", async () => {
     const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
       foldSignature: true,
@@ -1167,6 +1289,11 @@ describe("verifyDkim", () => {
     )
     const result = await verifyDkim(withExtra, publicKey)
     assertEquals(result.valid, false)
+    // The exact reason is the assertion: `valid === false` on its own is also what
+    // a body hash mismatch and a signature mismatch return, which is how this test
+    // stayed green with the §5.4.2 guard deleted. See the appended-instance suite
+    // at the end of this file for the position where that acceptance is reachable.
+    assertEquals(result.reason, "unsigned additional instances of a signed header: subject")
   })
 
   it("reports an expired signature", async () => {
@@ -1240,18 +1367,43 @@ describe("verifyDkim", () => {
         assertEquals(result.valid, false)
       })
 
-      it(`rejects a signature checked against the wrong key (${label})`, async () => {
+      it(`rejects a signature checked against a different key of the same algorithm (${label})`, async () => {
         const { raw } = await sign(TEST_HEADERS, "This is a test.\r\n", {
           mode,
           ed25519: useEd25519,
         })
-        // The other algorithm's key material: same curve/format, different key.
+        // A second key of the same algorithm, so the crypto actually runs. The
+        // cross-algorithm key below is rejected by the algorithm guard before any
+        // verification, which is why it cannot stand in for this case: it left
+        // `signature did not verify against public key` — the reason a forged
+        // message really produces — untested for both algorithms.
+        const other = useEd25519
+          ? await ed25519Key(await ed25519("other"))
+          : await rsaKey(await rsa("other"))
+        const result = await verifyDkim(raw, other)
+        assertEquals(result.valid, false)
+        assertEquals(result.reason, "signature did not verify against public key")
+        assert(
+          result.computedBodyHash === result.parsed?.bodyHash,
+          "the body is untouched, so the rejection must come from the signature",
+        )
+      })
+
+      it(`rejects a signature checked against the other algorithm's key (${label})`, async () => {
+        const { raw } = await sign(TEST_HEADERS, "This is a test.\r\n", {
+          mode,
+          ed25519: useEd25519,
+        })
+        // The other algorithm's key material: a distinct check from the one above,
+        // and the one that names the algorithm mismatch in the reason.
         const other = useEd25519 ? await rsaKey(await rsa()) : await ed25519Key(await ed25519())
         const result = await verifyDkim(raw, other)
         assertEquals(result.valid, false)
-        assert(
-          result.reason !== undefined,
-          "a wrong key must produce a reason",
+        assertEquals(
+          result.reason,
+          useEd25519
+            ? "algorithm/key mismatch (signature ed25519-sha256 vs key rsa)"
+            : "algorithm/key mismatch (signature rsa-sha256 vs key ed25519)",
         )
       })
     }
@@ -1269,4 +1421,69 @@ describe("verifyDkim", () => {
     assertEquals(result.valid, false)
     assertEquals(result.reason, "DKIM-Signature missing required tag: s")
   })
+})
+
+// --- an appended instance of a header the signature already covers ----------
+
+/**
+ * RFC 6376 §5.4.2: listing a name in `h=` as many times as the message held
+ * instances of it is how a signer notices that the message grew another one.
+ * `selectSignedHeaders` pairs the list with the message bottom-up and then
+ * refuses a message that still holds an instance of a name it was asked for.
+ *
+ * That guard is load-bearing and was invisible to this suite: with the throw
+ * replaced by nothing at all, every other test here still passed, while an
+ * appended header was accepted outright (`valid: true`) in the "top" position
+ * below — the location where header selection happens to consume the *original*
+ * instance and leaves the attacker's copy outside the hash. The reason string is
+ * what makes these tests discriminating: `valid === false` is also returned by a
+ * body hash mismatch and by a signature mismatch, so it cannot tell the guard
+ * from a rejection by accident.
+ */
+describe("an appended instance of a header the signature covers (§5.4.2)", () => {
+  const GUARD_REASON = "unsigned additional instances of a signed header: subject"
+
+  for (const mode of ["relaxed", "simple"] as const) {
+    for (const useEd25519 of [false, true]) {
+      const label = `${mode}/${useEd25519 ? "ed25519" : "rsa"}`
+
+      it(`rejects a Subject: prepended above the block (${label})`, async () => {
+        const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
+          mode,
+          ed25519: useEd25519,
+        })
+        assert((await verifyDkim(raw, publicKey)).valid)
+
+        // The acceptance case. Bottom-up selection reaches the signed instance
+        // first when the injected copy sits at the top of the block, so every
+        // other check agrees with the attacker: the header hash is unchanged and
+        // the message verifies with a Subject: the signer never saw.
+        const attacked = injectHeader(raw, "Subject", "top")
+        assert(
+          !raw.startsWith("Subject:") && attacked.startsWith("Subject: injected"),
+          "the injected field must be new to the message",
+        )
+        const result = await verifyDkim(attacked, publicKey)
+        assertEquals(result.valid, false)
+        assertEquals(result.reason, GUARD_REASON)
+      })
+
+      it(`rejects a Subject: appended below the signature (${label})`, async () => {
+        const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
+          mode,
+          ed25519: useEd25519,
+        })
+        assert((await verifyDkim(raw, publicKey)).valid)
+
+        // The other position, where an unguarded verifier would select the
+        // injected instance and then fail the signature check — a rejection for a
+        // reason that has nothing to do with §5.4.2. Asserting the guard's own
+        // reason is what separates "refused by rule" from "failed by accident".
+        const attacked = injectHeader(raw, "Subject", "below-signature")
+        const result = await verifyDkim(attacked, publicKey)
+        assertEquals(result.valid, false)
+        assertEquals(result.reason, GUARD_REASON)
+      })
+    }
+  }
 })
