@@ -3,87 +3,93 @@
 Outbound integration clients and inbound webhook verification. Zero dependencies, no SDKs — every
 client is a thin `fetch` wrapper with an injectable transport.
 
-Ported from `roley` (`slack.service.ts`, `mailchimp.service.ts`) and extended at extraction time.
-The webhook verifier is new: nothing in the extraction sweep had one.
+`webhooks.ts` is new: nothing in the extraction sweep had a webhook verifier. `ntfy.ts` and
+`healthchecks.ts` moved in from `ops/notify/` when `ops/` was removed (`#67`); they were ported from
+`rostok/scripts/backup/src/reporting.ts` and `mig/lib/notify.ts`. Slack and Mailchimp clients were
+removed (`#68`): neither service is used, and the preference is open-source, self-hosted services.
 
 ## Entry points
 
-| Export         | What it is                                                  |
-| -------------- | ----------------------------------------------------------- |
-| `.` (`mod.ts`) | Barrel.                                                     |
-| `./slack`      | `SlackClient`, `slackConfigFromEnv`                         |
-| `./mailchimp`  | `MailchimpClient`, `emailHash`, `md5Hex`, `basicAuthHeader` |
-| `./webhooks`   | `verifyWebhookRequest` — inbound HMAC-SHA256 verification   |
+| Export           | What it is                                                                |
+| ---------------- | ------------------------------------------------------------------------- |
+| `.` (`mod.ts`)   | Barrel.                                                                   |
+| `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority` |
+| `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`  |
+| `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification                 |
 
 ## Contracts
 
-### `SlackClient`
+### `HealthchecksClient` — dead-man's switch
 
 ```ts
-const slack = new SlackClient({ webhookUrl })
-const result = await slack.send({ blocks: [...] })
+const client = new HealthchecksClient({ pingUrl })
+const result = await client.ping({ outcome: HealthchecksOutcome.Fail, body: "3 of 5 failed" })
 ```
 
-`send` returns a discriminated result, never a bare boolean:
+`Success` pings the base URL, `Fail` pings `<url>/fail`, `Start` pings `<url>/start`. `urlFor`
+exposes the mapping.
 
-- `{ ok: true, httpStatus, attempts }` — Slack answered `2xx`.
-- `{ ok: false, code, message, status?, responseBody?, attempts }` — `code` is one of
-  `invalid_payload`, `http_error`, `network_error`. There is no `not_configured` code: an
-  unconfigured client is rejected at construction, so the "not configured" case cannot be forgotten
-  in a branch.
+**Config.** `HEALTHCHECKS_PING_URL` through `healthchecksConfigFromEnv(read?)`; `null` when unset.
+The constructor throws on an empty URL. Nothing is read at module scope.
 
-`responseBody` carries Slack's own reason (`invalid_payload`, `no_service`) truncated to 500
-characters.
+**Result.** `{ ok: true, httpStatus, attempts, body, waitedMs }` or
+`{ ok: false, code, message, status?, attempts, waitedMs }`. The source resolved `void` and logged
+its failures, so a caller could not tell a delivered ping from a dead endpoint.
 
-**The webhook URL never appears in a result.** Its last path segment _is_ the credential, and
-`fetch` puts the whole URL in its error text (`Invalid URL: 'https://…/services/T/B/token'`). Every
-transport failure is therefore reported through `describeTransportError`, which returns the error's
-class name and `transport failure (url withheld)` — never the URL. The same helper covers
-`MailchimpClient` (a caller-supplied API host) and `ops/notify/healthchecks` (the ping URL carries the
-check's capability key). Pinned by
-`SlackClient.send ... never returns the webhook URL, so the token in it cannot leak`.
+**Retry policy.** 10 attempts, 60s doubling, capped at 5 minutes per wait. Measured schedule, not
+estimated: waits run `1 + 2 + 4 + 5 + 5 + 5 + 5 + 5 + 5 = 37.0 minutes` (2,220,000 ms across 9
+retries), which fits inside healthchecks.io's 1-hour grace window. A 10-minute per-wait cap gives
+`1 + 2 + 4 + 8 + 10 + 10 + 10 + 10 + 10 = 65.0 minutes` and overruns the very window the cap exists
+to respect. Both figures are asserted by the suite. `Retry-After` is honoured: the provider
+rate-limits with `429` and the source ignored the header, hammering the endpoint on the failures it
+was retrying. A total budget bounds the whole operation, set above the sum of the waits.
 
-**Config.** `SLACK_WEBHOOK_URL`. Read through `slackConfigFromEnv(read?)`, which returns `null` when
-unset — the caller decides whether that is fatal. Nothing reads `$env` at module scope and the
-constructor throws on an empty URL, because a client that fails silently at first send is how a
-revoked webhook goes unnoticed for a week.
+**No backup coupling.** Nothing here imports or references `BackupResult` or any backup type. A
+notifier that only works while a backup runs is a notifier nobody can reuse.
 
-**Failure semantics.** 429 and 5xx retry, honouring `Retry-After`. Every other non-2xx fails
-immediately: a malformed Block Kit payload cannot become valid by being sent again. Transport throws
-retry. `send` never throws and never writes to the console.
-
-### `MailchimpClient`
+### `NtfyClient` — failure-only push
 
 ```ts
-const client = new MailchimpClient({ apiKey, username, listId, serverPrefix })
-const result = await client.putContact({ email, emailBefore, firstName, lastName })
+const client = new NtfyClient({ baseUrl, topic, token })
+const result = await client.notifyFailure("backup failed", "3 of 5 repositories failed")
 ```
 
-`putContact` resolves membership first (`GET /lists/{list}/members/{hash}`, checking `emailBefore`
-when given) and then `PATCH`es an existing member or `POST`s a new one. A `Member Exists` 400 on that
-`POST` — two concurrent signups for one address — is reconciled with a single `PATCH`, so neither
-caller fails.
+**Failure-only by default.** `NotificationSeverity.Failure` is the gate; an `Info` push is a no-op
+that still returns `{ ok: true, status: "skipped", reason: "below-gate", attempts: 0 }`, so the gate
+is assertable. Callers that genuinely want success pushes pass `severity: Info`.
 
-Result variants:
+**Result.** `{ ok: true, status: "pushed", httpStatus, attempts, title, tags }`,
+`{ ok: true, status: "skipped", … }`, or `{ ok: false, code, message, status?, attempts }`. The
+source returned `void` and logged failures, so a dropped push looked like a delivered one.
 
-- `{ ok: true, status: "upserted", method, httpStatus, change, attempts }`
-- `{ ok: true, status: "skipped-disabled", reason, attempts: 0 }`
-- `{ ok: false, code, message, status?, attempts }`
+**Config.** `NTFY_URL` and `NTFY_TOPIC` are required; `NTFY_TOKEN` is optional because a
+self-hosted ntfy on a private network may not use auth. Read through `ntfyConfigFromEnv(read?)`,
+which returns `null` when incomplete.
 
-`searchContact` returns `{ ok: true, exists: true, status }`, `{ ok: true, exists: false }` for the
-documented 404, or a typed failure. A 404 is a miss, not an error.
+**Retry policy.** 5 attempts, 3s apart, honouring `Retry-After`, bounded by attempts and total
+elapsed time.
 
-**Config.** `MAILCHIMP_API_KEY`, `MAILCHIMP_API_USERNAME`, `MAILCHIMP_LIST_ID`,
-`MAILCHIMP_SERVER_PREFIX` through `mailchimpConfigFromEnv(read?)`, which returns `null` when any is
-missing. The constructor throws on blank credentials rather than degrading to a disabled no-op.
+**The base URL never appears in a result.** It can carry a token in its path, and `fetch` puts the
+whole URL in its error text. Every transport failure is reported through `describeTransportError`,
+which returns the error's class name and `transport failure (url withheld)` — never the URL. The
+same helper covers `HealthchecksClient` (the ping URL carries the check's capability key).
 
-**Failure semantics.** 429 and 5xx retry with `Retry-After` support; other 4xx fail immediately.
-Nothing is written to the console on success or failure — the upstream logged `console.error` on the
-success path, which made a working deployment indistinguishable from a broken one.
+### Header safety — the trap `ntfy.ts` carries a fix for
 
-**Environment contract.** `MAILCHIMP_API_USERNAME` is the account name Mailchimp pairs with the key.
-The API ignores it, so any non-empty string works (`"anystring"` is the convention); the upstream
-called it `MAILCHIMP_API_SALT`, which suggested a secret it never was.
+`Headers.set` rejects code points the platform will not accept in a header value, and the rejection
+surfaces from inside `fetch` as an opaque `TypeError: Value is not a valid ByteString`. Two
+different needs follow, and `mig`'s source conflated them:
+
+- A **header value** must be transliterated to printable ASCII. `toAsciiHeaderValue` maps the
+  characters that matter for readability (`—` → `-`, `"` → `"`, `…` → `...`, non-breaking space →
+  space) and replaces everything else — Latin-1 accents, Cyrillic, CJK, emoji — with `?`. Allowed
+  header whitespace (HT, LF, CR, space) is preserved.
+- A **message body** must be left alone. `mig` passed the body through the same sanitiser, so
+  `Café ☕` reached ntfy as `Caf? ?` and every accented, Cyrillic, CJK and emoji payload was
+  destroyed. Only headers are transliterated here.
+
+`createAsciiHeaders` applies the transliteration to every value, so the failure cannot come back
+through a new call site. Both halves are pinned by tests, including the body round-trip.
 
 ### `verifyWebhookRequest`
 
@@ -138,18 +144,19 @@ Read the three sections below before writing a test that touches the network. It
   is how a test asserts _"asked for exactly 2 seconds"_ without waiting for them.
 - **Console silence is asserted, not assumed.** `integrations/console.test.ts` installs a
   process-wide capture _before_ importing the modules and drives every path of both clients —
-  upsert, API rejection, disabled skip, empty address, lookup hit, 404 miss, 5xx, transport throw,
-  invalid payload — asserting nothing is logged. A per-suite capture only covers that suite's
-  branches, which is how a restored 4xx `console.error` survived a green run.
+  delivered, below-gate skip, 4xx, 5xx retried to success, transport throw — asserting nothing is
+  logged. A per-suite capture only covers that suite's branches, which is how a restored 4xx
+  `console.error` survived a green run in the clients this replaced.
 - **Secrets are constructor parameters.** No module reads `$env` at import time and no secret is
   logged. The `*ConfigFromEnv(read?)` helpers take a reader, so a test injects a fake environment.
 
 ## Retry policy
 
-The retry mechanism is `retry.ts`, **copied byte-for-byte** into `ops/notify/retry.ts` because the
-two packages are owned by different issues and must stay file-disjoint.
-`ops/notify/retry-drift.test.ts` reads both files and fails if the bytes differ, so the duplication
-cannot silently diverge.
+The retry mechanism is `retry.ts`, shared by `ntfy.ts`, `healthchecks.ts` and `webhooks.ts`'s
+callers. It used to exist twice — a byte-identical copy lived in `ops/notify/retry.ts`, guarded by
+a test that compared the two files — because the two packages were owned by different issues and
+had to stay file-disjoint. That constraint went away with `ops/` (`#67`): the ops copy and its drift
+test are deleted, and this is now the only copy in the repo.
 
 Transient statuses are `429` and `5xx`; every other `4xx` is permanent. `Retry-After` in the
 delay-seconds form wins over the computed backoff, then the same per-wait ceiling applies, so a
@@ -159,10 +166,10 @@ elapsed time are both capped.
 
 ## Out of scope
 
-- **Block Kit payloads and handler registration.** The payloads are domain-bound. So is
-  `initX()` → `eventBus.register(DomainEvent, Handler)`; that is 1:1 with the application's CQRS
-  event handlers and stays in the application. This package ships the client, not the wiring.
+- **Block Kit payloads, event-bus wiring and any other domain-bound glue.** This package ships
+  clients, not the wiring around them.
 - **A webhook router.** `verifyWebhookRequest` verifies. Routing, idempotency and retry queues are
   the caller's job.
-- **Backup, deploy and any `ops/` concern.** Those live in `@ts-libs/ops`.
+- **Backup, deploy, env tooling.** `ops/` was removed from ts-libs (`#67`); a project built from the
+  template gets the equivalent scripts from its own `infra/scripts/`.
 - **Email and SMTP**, `server/email`.

@@ -1,21 +1,12 @@
 /**
- * Transport retry policy. **Canonical copy — do not edit one copy alone.**
+ * Transport retry policy, shared by every client in this package.
  *
- * This file is byte-identical in two places:
- *
- * - `integrations/retry.ts`
- * - `ops/notify/retry.ts`
- *
- * The two packages are owned by different issues (#16 and #18) and deliberately
- * do not import from a packages directory neither owns, so the module is
- * copied rather than shared. `ops/notify/retry-drift.test.ts` is the only reader
- * that reads *both* copies — `integrations/retry.test.ts` reads the
- * `integrations/` copy and nothing else. The drift test compares the bytes of
- * every copy it finds and fails if any two differ, so the duplication cannot
- * silently diverge: the four ways it had already diverged (jitter honoured in
- * one copy and ignored in the other, `isPermanentStatus` present in one only, a
- * different backoff signature, and a disagreeing `maxAttempts: 0` guard) are all
- * covered by that one assertion.
+ * Until `#67`, this file was byte-identical to `ops/notify/retry.ts`: the two
+ * packages were owned by different issues (#16 and #18) and deliberately did
+ * not import from a packages directory neither owned, so the module was
+ * copied rather than shared, guarded by a test that compared the two files'
+ * bytes. `ops/` was removed and its copy of `ntfy.ts`/`healthchecks.ts` moved
+ * here, so this is now the only copy, and the drift test is gone with it.
  *
  * Everything a test needs is injectable: the delay function (`backoff`), the
  * waiter (`sleep`) and the elapsed-time source (`clock`). Production defaults

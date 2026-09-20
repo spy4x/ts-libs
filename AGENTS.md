@@ -9,21 +9,17 @@ exactly one top-level directory.
 
 ## Package layout
 
-| Directory       | Contents                                                                |
-| --------------- | ----------------------------------------------------------------------- |
-| `platform/`     | cqrs, types (arktype), cache, helpers, config, uuid, rate-limit, fs     |
-| `server/`       | auth, storage, email, exec, kv, crypto, outbox, db, http, quota, export |
-| `net/`          | url-shape, url-policy (SSRF guard), safe-fetch, bounded-body            |
-| `integrations/` | slack, mailchimp, healthchecks, ntfy, webhooks                          |
-| `media/`        | ffmpeg/ffprobe wrappers, sse broker, lrc-sylt                           |
-| `time/`         | tz, ics, duration, formatting                                           |
-| `ai/`           | chatCompletion, chatJson, JSON-from-fence recovery                      |
-| `mcp/`          | jsonrpc core, stdio + http transports, tool registry                    |
-| `caldav/`       | ical, xml, client, query                                                |
-| `email/`        | smtp transport, dkim-verify                                             |
-| `ops/`          | backup contract, offline-backup, deploy, age64 env, type-check          |
-| `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync         |
-| `validation/`   | arktype validate helpers, validation model                              |
+| Directory       | Contents                                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `platform/`     | types (arktype), helpers, rate-limit, fs                                                                            |
+| `server/`       | auth, storage, crypto, db, http (bounded-body, cors, bearer-auth), static, healthcheck, user-secrets, quota, export |
+| `net/`          | url-shape, url-policy (SSRF guard), safe-fetch, bounded-body                                                        |
+| `integrations/` | healthchecks, ntfy, webhooks                                                                                        |
+| `time/`         | tz, ics                                                                                                             |
+| `ai/`           | chatCompletion, chatJson, JSON-from-fence recovery                                                                  |
+| `email/`        | smtp transport, dkim-verify                                                                                         |
+| `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync                                                     |
+| `validation/`   | arktype validate helpers, validation model                                                                          |
 
 ## Adding a package
 
@@ -177,16 +173,10 @@ Current pins (root `deno.jsonc`, the single source of truth):
 arktype                          2.2.3
 @std/assert                     1.0.19
 @std/expect                     1.0.20
-@std/testing                    1.0.20
+@std/testing/bdd                1.0.20
 @std/path                        1.1.6
 @std/encoding                   1.0.11
-@std/cli                        1.0.32
 @std/crypto                      1.1.0
-@std/uuid                        1.1.1
-@std/async                       1.5.0
-@std/fs                         1.0.24
-@std/collections                 1.3.0
-@std/yaml                        1.2.0
 hono                            4.13.8
 postgres                         3.4.7
 ```

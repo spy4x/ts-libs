@@ -8,17 +8,14 @@ that is useful to more than one product.
 ## Scope
 
 ```
-platform/     cqrs, types (arktype), cache, helpers, config, uuid, rate-limit, fs
-server/       auth, storage, email, exec, kv, crypto, outbox, db, http, quota, export
+platform/     types (arktype), helpers, rate-limit, fs
+server/       auth, storage, crypto, db, http (bounded-body, cors, bearer-auth), static,
+              healthcheck, user-secrets, quota, export
 net/          url-policy (SSRF guard), safe-fetch, bounded-body
-integrations/ slack, mailchimp, healthchecks, ntfy, webhooks
-media/        ffmpeg/ffprobe wrappers, sse broker, lrc-sylt
-time/         tz, ics, duration, formatting
+integrations/ healthchecks, ntfy, webhooks
+time/         tz, ics
 ai/           chatCompletion, chatJson, JSON-from-fence recovery
-mcp/          jsonrpc core, stdio + http transports, tool registry
-caldav/       ical, xml, client, query
 email/        smtp transport, dkim-verify
-ops/          backup contract, offline-backup, deploy, age64 env, type-check
 realtime/     hint-only websocket transport, registry, heartbeat, cursor sync
 validation/   arktype validate helpers, validation model
 ```
