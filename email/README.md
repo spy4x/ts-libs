@@ -179,6 +179,12 @@ htmlWrap({ body: `<p>${escapeHtml(name)}</p>` }) // correct
 htmlWrap({ body: escapeHtml(`<p>${name}</p>`) }) // escapes the markup too
 ```
 
+`brandUrl` must be an absolute `http:`, `https:` or `mailto:` URL and throws a
+`TypeError` otherwise. Escaping leaves `javascript:alert(1)` a well-formed link —
+the characters that need escaping are not the ones that make a scheme dangerous —
+and the value comes from a caller's configuration rather than from a recipient, so
+a wrong one is a bug to surface rather than input to sanitise.
+
 ## Per-recipient timezone framing
 
 `frameWallClockLong(date, time, sourceTz, recipientTz?)` turns a wall clock

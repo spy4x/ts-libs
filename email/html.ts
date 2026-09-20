@@ -45,7 +45,11 @@ export interface HtmlShellOptions {
   body: string
   /** Brand label in the header and the footer signature, escaped by the shell. */
   brand?: string
-  /** Link target for the header brand label, escaped by the shell. Plain text when absent. */
+  /**
+   * Link target for the header brand label, escaped by the shell. Plain text when
+   * absent. It must be an absolute `http:`, `https:` or `mailto:` URL — see
+   * {@link htmlWrap} on why anything else throws.
+   */
   brandUrl?: string
   /**
    * Extra HTML appended after the body, before the footer signature. Not escaped;
@@ -67,6 +71,12 @@ export interface HtmlShellOptions {
  * stretching across a desktop pane; the background still reaches the viewport
  * edges. No inline `<style>` block: Gmail strips `<head>` styles, so every rule
  * that matters is an attribute.
+ *
+ * @throws {TypeError} when `brandUrl` is not an absolute `http:`, `https:` or
+ * `mailto:` URL. Escaping made `javascript:alert(1)` a perfectly well-formed
+ * link, and a shell that quietly dropped it instead would hide the same mistake.
+ * The value comes from a caller's configuration rather than from a recipient, so
+ * a wrong one is a bug to surface, not input to sanitise.
  */
 export function htmlWrap(options: HtmlShellOptions): string {
   const brand = options.brand === undefined ? "" : escapeHtml(options.brand)
@@ -102,7 +112,36 @@ ${signature}
  */
 function brandAnchor(options: HtmlShellOptions, escapedBrand: string): string {
   if (options.brandUrl === undefined) return escapedBrand
+  assertLinkableUrl(options.brandUrl)
   return `<a href="${
     escapeHtml(options.brandUrl)
   }" style="color:#f97316;font-weight:600;text-decoration:none">${escapedBrand}</a>`
+}
+
+/** Schemes a mail client may follow from a link in a message. */
+const LINKABLE_SCHEMES = ["http:", "https:", "mailto:"]
+
+/**
+ * Reject a URL whose scheme does not belong in a mail link.
+ *
+ * The scheme is read with `URL`, not with a prefix test: `\njavascript:alert(1)`,
+ * `JaVaScript:alert(1)` and `java\0script:alert(1)` all parse to the same scheme
+ * that a string comparison would miss. A relative URL has no meaning in a message
+ * that is read outside any page, so it is rejected with everything else.
+ */
+function assertLinkableUrl(value: string): void {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new TypeError(
+      `HtmlShellOptions.brandUrl must be an absolute URL, got ${JSON.stringify(value)}`,
+    )
+  }
+  if (!LINKABLE_SCHEMES.includes(parsed.protocol)) {
+    throw new TypeError(
+      `HtmlShellOptions.brandUrl must use ${LINKABLE_SCHEMES.join(", ")}, got ` +
+        JSON.stringify(parsed.protocol),
+    )
+  }
 }
