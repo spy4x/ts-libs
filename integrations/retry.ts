@@ -9,9 +9,11 @@
  * here, so this is now the only copy, and the drift test is gone with it.
  *
  * Everything a test needs is injectable: the delay function (`backoff`), the
- * waiter (`sleep`) and the elapsed-time source (`clock`). Production defaults
- * are real; a test supplies a recording timer and a manual clock, so no test
- * ever sleeps and no test asserts against wall-clock time.
+ * waiter (`sleep`), the elapsed-time source (`clock`) and, inside `backoff`'s
+ * jitter, the random source. Production defaults are real; a test supplies a
+ * recording timer, a manual clock and a fixed random sequence, so no test ever
+ * sleeps, asserts against wall-clock time, or has to tolerate a flake from real
+ * randomness.
  */
 
 /**
@@ -19,6 +21,15 @@
  * provider sent a parseable `Retry-After` header, which wins over backoff.
  */
 export type BackoffFn = (attempt: number, retryAfterMs?: number) => number
+
+/**
+ * A source of numbers in `[0, 1)`, the shape `Math.random` has.
+ *
+ * Injectable so a test can supply a fixed sequence instead of the platform's
+ * real generator: the jitter computation stays testable without becoming
+ * predictable in production.
+ */
+export type RandomSource = () => number
 
 export interface RetryPolicy {
   /** Total attempts, including the first. 1 or fewer disables retrying. */
@@ -49,6 +60,46 @@ export type Clock = () => number
  */
 export const settle = async (result: void | Promise<void>): Promise<void> => {
   await result
+}
+
+/**
+ * Bounds a single outgoing request, used by every client in this package
+ * unless a caller overrides it.
+ *
+ * Before this constant existed, no client attached a timeout to `fetch` at
+ * all: `totalBudgetMs` only stopped new *retries* from being scheduled, so a
+ * server that accepted a connection and never answered blocked the caller
+ * forever. 10s comfortably covers a slow but healthy endpoint without leaving
+ * a caller blocked for anywhere near as long as a typical `totalBudgetMs`.
+ */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
+
+/**
+ * True when `cause` is the `TimeoutError` an `AbortSignal.timeout()` firing
+ * produces.
+ *
+ * Safe to use as "this attempt timed out": no client in this package accepts
+ * a caller-supplied `AbortSignal`, so the only abort a client's own `fetch`
+ * can ever reject with is its own timeout firing, never an unrelated
+ * cancellation.
+ */
+export const isRequestTimeout = (cause: unknown): boolean =>
+  cause instanceof Error && cause.name === "TimeoutError"
+
+/**
+ * Releases a response's body without reading it.
+ *
+ * Every client here reports only the status line — `httpStatus`,
+ * `statusText` — and never the body, so nothing ever calls `.text()` or
+ * `.json()` on a response. Left alone, an unconsumed body keeps its
+ * connection open until the runtime's garbage collector gets around to it,
+ * which a loop that can make ten attempts should not depend on. `cancel()`
+ * releases it immediately; a `null` body (already empty) needs nothing.
+ */
+export const releaseResponseBody = async (response: Response): Promise<void> => {
+  if (response.body !== null) {
+    await response.body.cancel()
+  }
 }
 
 /**
@@ -84,27 +135,30 @@ export const parseRetryAfterMs = (value: string | null): number | undefined => {
  * `Retry-After` short-circuits the computation, then the same clamps apply so a
  * hostile or buggy provider cannot pin a process for a week.
  *
- * Jitter is **deterministic**, derived from `(attempt, retryAfterMs)` rather
- * than from a random source: the function stays pure, a test can assert its
- * exact output, and a retry test does not become a flake. That is a deliberate
- * departure from the usual randomised jitter — the goal here is only to
- * de-synchronise callers that start together, and a per-attempt constant
- * achieves that.
+ * Jitter is **real randomness**, drawn from `random` (`Math.random` unless a
+ * caller injects another source), not a value derived from `attempt` and
+ * `retryAfterMs`. A per-attempt formula is a deterministic function of inputs
+ * every process shares, so every process computed the exact same "jittered"
+ * delay — the opposite of what jitter exists for, which is to de-synchronise
+ * callers that started together. `random` follows `Math.random`'s contract
+ * (`[0, 1)`), so a test can inject a fixed sequence and still exercise this
+ * exact code path deterministically.
  */
-export const createExponentialBackoff =
-  (policy: Pick<RetryPolicy, "baseDelayMs" | "maxDelayMs" | "jitterRatio">): BackoffFn =>
-  (attempt, retryAfterMs) => {
-    const raw = retryAfterMs ?? policy.baseDelayMs * 2 ** (attempt - 1)
-    const clamped = Math.min(Math.max(raw, 0), policy.maxDelayMs)
-    if (policy.jitterRatio <= 0) {
-      return clamped
-    }
-    const span = clamped * policy.jitterRatio
-    const seed = (attempt * 2654435761 + (retryAfterMs ?? 0)) % 1000
-    const jitter = (seed / 1000) * 2 * span - span
-    const floor = policy.baseDelayMs > 0 ? 1 : 0
-    return Math.round(Math.min(Math.max(clamped + jitter, floor), policy.maxDelayMs))
+export const createExponentialBackoff = (
+  policy: Pick<RetryPolicy, "baseDelayMs" | "maxDelayMs" | "jitterRatio">,
+  random: RandomSource = Math.random,
+): BackoffFn =>
+(attempt, retryAfterMs) => {
+  const raw = retryAfterMs ?? policy.baseDelayMs * 2 ** (attempt - 1)
+  const clamped = Math.min(Math.max(raw, 0), policy.maxDelayMs)
+  if (policy.jitterRatio <= 0) {
+    return clamped
   }
+  const span = clamped * policy.jitterRatio
+  const jitter = (random() * 2 - 1) * span
+  const floor = policy.baseDelayMs > 0 ? 1 : 0
+  return Math.round(Math.min(Math.max(clamped + jitter, floor), policy.maxDelayMs))
+}
 
 /** Statuses worth another attempt: rate limiting and upstream faults. */
 export const isTransientStatus = (status: number): boolean => status === 429 || status >= 500
@@ -222,8 +276,20 @@ export interface RetryRunResult<R> {
 
 export interface RetryRunOptions<R> {
   policy: RetryPolicy
-  /** Performs one attempt. Return `{ failed: true }` to request a retry. */
-  attempt: (attempt: number) => Promise<{ failed: boolean; retryAfterMs?: number; value: R }>
+  /**
+   * Performs one attempt. Return `{ failed: true }` to request a retry.
+   *
+   * `remainingBudgetMs` is `totalBudgetMs` minus the elapsed time so far,
+   * floored at 0. A caller that issues a real request should bound it with
+   * `Math.min(itsOwnTimeout, remainingBudgetMs)`: without that, `totalBudgetMs`
+   * only ever stopped a *future* retry from being scheduled, so a single
+   * attempt with its own generous timeout could still run well past the
+   * budget it was supposed to respect.
+   */
+  attempt: (
+    attempt: number,
+    remainingBudgetMs: number,
+  ) => Promise<{ failed: boolean; retryAfterMs?: number; value: R }>
   sleep: Sleeper
   clock: Clock
   backoff: BackoffFn
@@ -251,7 +317,8 @@ export const runWithRetry = async <R>(options: RetryRunOptions<R>): Promise<Retr
 
   for (let index = 1; index <= totalAttempts; index++) {
     attempts = index
-    const outcome = await attempt(index)
+    const remainingBudgetMs = Math.max(policy.totalBudgetMs - (clock() - startedAt), 0)
+    const outcome = await attempt(index, remainingBudgetMs)
     lastValue = outcome.value
     if (!outcome.failed || index === totalAttempts) {
       break

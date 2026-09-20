@@ -1,5 +1,13 @@
 /**
- * Inbound webhook verification (Slack / GitHub / Stripe / generic HMAC-SHA256).
+ * Inbound webhook verification: HMAC-SHA256 over a timestamp and the raw
+ * request body, signed with a shared secret.
+ *
+ * This is **not** a drop-in verifier for GitHub, Slack or Stripe — none of
+ * them signs `<timestamp>.<raw body>` with the timestamp in a header the way
+ * this module expects. GitHub in particular sends no timestamp header at
+ * all, so every real GitHub delivery is rejected as `missing_timestamp`; see
+ * the package README for the full comparison and what a per-provider adapter
+ * would need to do differently.
  *
  * Nothing in the extraction sweep had a receiver, so this is written fresh
  * rather than ported. It is deliberately the smallest correct thing:
@@ -51,8 +59,11 @@ export interface WebhookVerifierConfig {
   /** Accepted age and future skew of a signature, in seconds. Default 300. */
   toleranceSeconds?: number
   /**
-   * Signature header name. GitHub sends `X-Hub-Signature-256`; a generic
-   * sender uses `X-Signature-256`.
+   * Signature header name. Configurable because senders disagree on it —
+   * GitHub's is `X-Hub-Signature-256`, a generic sender's is
+   * `X-Signature-256` — not because naming the header makes this module able
+   * to verify that sender's full scheme: GitHub, for one, sends no timestamp,
+   * which this module always requires.
    */
   signatureHeader?: string
   /** Timestamp header name. */
@@ -219,6 +230,16 @@ export const verifyWebhookRequest = async (
   )
   // `verify` is constant-time in the platform's HMAC. No string or byte-level
   // `===` touches the digest, which would leak position-by-position progress.
+  //
+  // This line must keep using `crypto.subtle.verify` and never a hand-rolled
+  // comparison (`===`, `Buffer.compare`, a byte-by-byte loop that returns
+  // early): none of those run in constant time, and every one of them would
+  // let a network attacker recover a valid signature one byte at a time by
+  // timing rejections. No test in this suite can catch that regression —
+  // constant-time-ness is a property of how long the comparison takes, not of
+  // what it returns, and asserting on timing here would be exactly the kind
+  // of wall-clock-based unit test this repo's house rules rule out. Treat
+  // this comment as the guard a test cannot be.
   const valid = await crypto.subtle.verify(
     "HMAC",
     key,

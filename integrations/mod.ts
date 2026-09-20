@@ -38,16 +38,20 @@ export type {
 
 export {
   createExponentialBackoff,
+  DEFAULT_REQUEST_TIMEOUT_MS,
   describeTransportError,
   isPermanentStatus,
+  isRequestTimeout,
   isTransientStatus,
   parseRetryAfterMs,
+  releaseResponseBody,
   runWithRetry,
   settle,
 } from "./retry.ts"
 export type {
   BackoffFn,
   Clock,
+  RandomSource,
   RetryPolicy,
   RetryRunOptions,
   RetryRunResult,

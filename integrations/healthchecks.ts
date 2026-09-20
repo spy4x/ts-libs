@@ -29,9 +29,13 @@ import {
   type BackoffFn,
   type Clock,
   createExponentialBackoff,
+  DEFAULT_REQUEST_TIMEOUT_MS,
   describeTransportError,
+  isRequestTimeout,
   isTransientStatus,
   parseRetryAfterMs,
+  type RandomSource,
+  releaseResponseBody,
   type RetryPolicy,
   runWithRetry,
   type Sleeper,
@@ -61,7 +65,7 @@ export interface HealthchecksClientConfig {
  * configured" reaches the caller, as an explicit decision. A member that no
  * code path produces is a member a caller will branch on forever and never see.
  */
-export type HealthchecksErrorCode = "http_error" | "network_error"
+export type HealthchecksErrorCode = "http_error" | "network_error" | "timeout"
 
 export interface HealthchecksSuccess {
   ok: true
@@ -106,6 +110,14 @@ export interface HealthchecksClientOptions {
   retry?: HealthchecksRetryOptions
   /** Receives every requested delay, in order. */
   onDelay?: (delayMs: number, attempt: number) => void
+  /**
+   * Timeout for a single request, via `AbortSignal.timeout()`. Defaults to
+   * `DEFAULT_REQUEST_TIMEOUT_MS`. Never larger than the budget an attempt has
+   * left under `totalBudgetMs` — see `post`.
+   */
+  requestTimeoutMs?: number
+  /** Random source for `backoff`'s jitter. Defaults to `Math.random`. */
+  random?: RandomSource
 }
 
 /**
@@ -137,6 +149,7 @@ export class HealthchecksClient {
   private readonly clock: Clock
   private readonly policy: RetryPolicy
   private readonly backoff: BackoffFn
+  private readonly requestTimeoutMs: number
 
   constructor(config: HealthchecksClientConfig, options: HealthchecksClientOptions = {}) {
     const pingUrl = config.pingUrl?.trim() ?? ""
@@ -164,7 +177,8 @@ export class HealthchecksClient {
       ...options.retry,
       onDelay: options.onDelay,
     }
-    this.backoff = options.backoff ?? createExponentialBackoff(this.policy)
+    this.backoff = options.backoff ?? createExponentialBackoff(this.policy, options.random)
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
   }
 
   /**
@@ -184,8 +198,8 @@ export class HealthchecksClient {
       sleep: this.sleep,
       clock: this.clock,
       backoff: this.backoff,
-      attempt: async (attempt) => {
-        const attemptOutcome = await this.post(url, body, attempt)
+      attempt: async (attempt, remainingBudgetMs) => {
+        const attemptOutcome = await this.post(url, body, attempt, remainingBudgetMs)
         last = attemptOutcome
         return {
           failed: !attemptOutcome.ok && attemptOutcome.retryable,
@@ -222,13 +236,26 @@ export class HealthchecksClient {
     return `${this.pingUrl}/${outcome === HealthchecksOutcome.Fail ? "fail" : "start"}`
   }
 
-  private async post(url: string, body: string, attempt: number): Promise<PostOutcome> {
+  private async post(
+    url: string,
+    body: string,
+    attempt: number,
+    remainingBudgetMs: number,
+  ): Promise<PostOutcome> {
+    // Never longer than what `totalBudgetMs` has left: a per-request timeout
+    // alone bounds one request, but not the operation `ping` promises to bound.
+    const timeoutMs = Math.max(Math.min(this.requestTimeoutMs, remainingBudgetMs), 0)
     try {
-      const response = await this.fetcher(url, { method: "POST", body })
+      const response = await this.fetcher(url, {
+        method: "POST",
+        body,
+        signal: AbortSignal.timeout(timeoutMs),
+      })
       if (response.ok) {
+        await releaseResponseBody(response)
         return { ok: true, httpStatus: response.status, attempts: attempt }
       }
-      return {
+      const outcome: PostFailure = {
         ok: false,
         code: "http_error",
         message: `${response.status} ${response.statusText}`.trim(),
@@ -237,7 +264,18 @@ export class HealthchecksClient {
         retryable: isTransientStatus(response.status),
         retryAfterMs: parseRetryAfterMs(response.headers.get("Retry-After")),
       }
+      await releaseResponseBody(response)
+      return outcome
     } catch (cause) {
+      if (isRequestTimeout(cause)) {
+        return {
+          ok: false,
+          code: "timeout",
+          message: `healthchecks request timed out after ${timeoutMs}ms`,
+          attempts: attempt,
+          retryable: true,
+        }
+      }
       return {
         ok: false,
         code: "network_error",
@@ -259,7 +297,7 @@ interface PostSuccess {
 
 interface PostFailure {
   ok: false
-  code: "http_error" | "network_error"
+  code: "http_error" | "network_error" | "timeout"
   message: string
   attempts: number
   retryable: boolean

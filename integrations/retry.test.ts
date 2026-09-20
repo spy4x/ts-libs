@@ -1,13 +1,16 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import type { Clock, Sleeper } from "./retry.ts"
+import type { Clock, RandomSource, Sleeper } from "./retry.ts"
 import {
   createExponentialBackoff,
+  DEFAULT_REQUEST_TIMEOUT_MS,
   describeErrorKind,
   describeTransportError,
   isPermanentStatus,
+  isRequestTimeout,
   isTransientStatus,
   parseRetryAfterMs,
+  releaseResponseBody,
   runWithRetry,
 } from "./retry.ts"
 
@@ -113,6 +116,66 @@ describe("createExponentialBackoff", () => {
   })
 })
 
+describe("createExponentialBackoff jitter", () => {
+  // `jitterRatio: 0.2` is the value the issue names as "the shipped default" —
+  // ntfy's and healthchecks' actual shipped policies both use `jitterRatio: 0`
+  // (their ported sources never used jitter, see the last test below), so a
+  // nonzero ratio is what it takes to exercise this code path at all.
+  const jitteredPolicy = { ...policy, jitterRatio: 0.2 }
+
+  it("draws the jitter from the injected random source, not from the attempt number", () => {
+    // Before the fix, jitter was `(attempt * 2654435761 + retryAfterMs) % 1000`:
+    // a pure function of its inputs, so every process asking for the same
+    // attempt computed the exact same "jittered" delay — the opposite of what
+    // jitter exists for.
+    const low = createExponentialBackoff(jitteredPolicy, () => 0)
+    const high = createExponentialBackoff(jitteredPolicy, () => 1)
+    expect(low(1)).not.toBe(high(1))
+    expect(low(1)).toBe(800)
+    expect(high(1)).toBe(1200)
+  })
+
+  it("gives two independent random sources different delays for the same attempt", () => {
+    // The issue's own acceptance criterion: "two processes do not get identical
+    // delays." Two fixed-but-different sources stand in for two processes.
+    const processA = createExponentialBackoff(jitteredPolicy, () => 0.1)
+    const processB = createExponentialBackoff(jitteredPolicy, () => 0.9)
+    expect(processA(2)).not.toBe(processB(2))
+  })
+
+  it("keeps every draw inside the documented +/-jitterRatio span", () => {
+    const clamped = 1000 // backoff(1) with no jitter applied
+    const span = clamped * jitteredPolicy.jitterRatio
+    for (const random of [0, 0.25, 0.5, 0.75, 1]) {
+      const delay = createExponentialBackoff(jitteredPolicy, () => random)(1)
+      expect(delay).toBeGreaterThanOrEqual(clamped - span)
+      expect(delay).toBeLessThanOrEqual(clamped + span)
+    }
+  })
+
+  it("still clamps a jittered delay to maxDelayMs", () => {
+    const nearCeiling = { ...jitteredPolicy, baseDelayMs: 9500, maxDelayMs: 10_000 }
+    expect(createExponentialBackoff(nearCeiling, () => 1)(1)).toBe(10_000)
+  })
+
+  it("is wired to Math.random by default, not to another deterministic stand-in", () => {
+    const original = Math.random
+    try {
+      Math.random = () => 0.9
+      expect(createExponentialBackoff(jitteredPolicy)(1)).toBe(1160)
+    } finally {
+      Math.random = original
+    }
+  })
+
+  it("returns the unjittered delay when jitterRatio is 0, regardless of the random source", () => {
+    // ntfy's and healthchecks' shipped policies both use `jitterRatio: 0`, the
+    // early-return path here — their ported sources never used jitter.
+    const random: RandomSource = () => 1
+    expect(createExponentialBackoff({ ...policy, jitterRatio: 0 }, random)(1)).toBe(1000)
+  })
+})
+
 describe("status classification", () => {
   it("treats 429 and 5xx as transient", () => {
     expect(isTransientStatus(429)).toBe(true)
@@ -125,6 +188,47 @@ describe("status classification", () => {
     expect(isPermanentStatus(404)).toBe(true)
     expect(isTransientStatus(400)).toBe(false)
     expect(isTransientStatus(404)).toBe(false)
+  })
+})
+
+describe("isRequestTimeout", () => {
+  it("recognises the TimeoutError AbortSignal.timeout() produces", () => {
+    expect(isRequestTimeout(new DOMException("The signal timed out", "TimeoutError"))).toBe(true)
+  })
+
+  it("does not mistake an ordinary transport failure for a timeout", () => {
+    expect(isRequestTimeout(new TypeError("Invalid URL: 'https://x.invalid/'"))).toBe(false)
+    expect(isRequestTimeout(new DOMException("aborted", "AbortError"))).toBe(false)
+  })
+
+  it("does not throw on a non-Error value", () => {
+    expect(isRequestTimeout("TimeoutError")).toBe(false)
+    expect(isRequestTimeout(undefined)).toBe(false)
+  })
+})
+
+describe("DEFAULT_REQUEST_TIMEOUT_MS", () => {
+  it("is a positive, finite bound", () => {
+    // The bound this whole fix exists to add: before it, no client attached any
+    // timeout to a request, so a server that accepted a connection and never
+    // answered blocked the caller forever.
+    expect(DEFAULT_REQUEST_TIMEOUT_MS).toBeGreaterThan(0)
+    expect(Number.isFinite(DEFAULT_REQUEST_TIMEOUT_MS)).toBe(true)
+  })
+})
+
+describe("releaseResponseBody", () => {
+  it("cancels a response's body without reading it", async () => {
+    const response = new Response("unread payload")
+    expect(response.bodyUsed).toBe(false)
+    await releaseResponseBody(response)
+    expect(response.bodyUsed).toBe(true)
+  })
+
+  it("does nothing for a response with no body", async () => {
+    const response = new Response(null, { status: 204 })
+    expect(response.body).toBeNull()
+    await expect(releaseResponseBody(response)).resolves.toBeUndefined()
   })
 })
 
@@ -212,6 +316,51 @@ describe("runWithRetry", () => {
     expect(calls).toBe(1)
     expect(run.attempts).toBe(1)
     expect(timer.delays).toEqual([])
+  })
+
+  it("passes the shrinking remaining budget to each attempt", async () => {
+    // Before this, `attempt` only ever saw its own index: `totalBudgetMs` bounded
+    // when the *next retry* could be scheduled, never what a single attempt's
+    // own request was allowed to take — which is how a request with a generous
+    // timeout of its own could run well past the budget it was meant to respect.
+    const timer = recordingTimer()
+    const seen: number[] = []
+    await runWithRetry<number>({
+      policy,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      backoff: createExponentialBackoff(policy),
+      attempt: (attempt, remainingBudgetMs) => {
+        seen.push(remainingBudgetMs)
+        return Promise.resolve({ failed: true, value: attempt })
+      },
+    })
+    // startedAt is 0; 1000ms and 2000ms of recorded sleep are subtracted from
+    // the 60,000ms budget before attempts 2 and 3 see what is left of it.
+    expect(seen).toEqual([60_000, 59_000, 57_000])
+  })
+
+  it("floors the remaining budget at zero when a sleep runs slightly long", async () => {
+    // A real `setTimeout` can fire a little late under load, so the actual
+    // elapsed time after a sleep can exceed what the pre-sleep fit check
+    // estimated. `remainingBudgetMs` must never go negative when that happens.
+    let now = 0
+    const tight = { ...policy, maxAttempts: 2, totalBudgetMs: 1000 }
+    const seen: number[] = []
+    await runWithRetry<number>({
+      policy: tight,
+      sleep: (ms) => {
+        now += ms + 50 // 50ms later than requested
+        return Promise.resolve()
+      },
+      clock: () => now,
+      backoff: () => 1000, // exactly the budget, so the pre-sleep fit check still allows it
+      attempt: (attempt, remainingBudgetMs) => {
+        seen.push(remainingBudgetMs)
+        return Promise.resolve({ failed: true, value: attempt })
+      },
+    })
+    expect(seen).toEqual([1000, 0])
   })
 })
 

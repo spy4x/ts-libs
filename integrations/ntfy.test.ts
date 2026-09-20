@@ -69,6 +69,11 @@ const clientFor = (
       sleep: timer.sleep,
       clock: timer.clock,
       gate: overrides.gate,
+      // The shipped default now jitters (`jitterRatio: 0.2`). A midpoint draw
+      // makes `(random() * 2 - 1) * span` exactly 0, so every exact-delay
+      // assertion in this file keeps testing what it always tested; the
+      // dedicated jitter tests below inject their own `random` instead.
+      random: () => 0.5,
     },
   )
   return { client, transport, timer }
@@ -330,6 +335,137 @@ describe("NtfyClient.push", () => {
       message: "TypeError: transport failure (url withheld)",
       attempts: 2,
     })
+  })
+
+  /** What `fetch` rejects with when its `AbortSignal.timeout()` signal fires. */
+  const timeoutFailure = (): Promise<Response> =>
+    Promise.reject(new DOMException("The signal timed out", "TimeoutError"))
+
+  it("reports a timed-out request with its own error code, not a generic network_error", async () => {
+    const timer = recordingTimer()
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: timeoutFailure,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1, totalBudgetMs: 5000 },
+      requestTimeoutMs: 2000,
+    })
+    const result = await client.push({
+      title: "backup failed",
+      message: "detail",
+      severity: NotificationSeverity.Failure,
+    })
+    expect(result).toEqual({
+      ok: false,
+      code: "timeout",
+      message: "ntfy request timed out after 2000ms",
+      attempts: 1,
+    })
+  })
+
+  it("clamps the per-request timeout to what remains of the total budget", async () => {
+    // The budget, not the per-request default, is what must really bound the
+    // operation: a generous per-request timeout cannot outrun a tight budget.
+    const timer = recordingTimer()
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: timeoutFailure,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1, totalBudgetMs: 800 },
+      requestTimeoutMs: 5000,
+    })
+    const result = await client.push({
+      title: "backup failed",
+      message: "detail",
+      severity: NotificationSeverity.Failure,
+    })
+    expect(result.ok === false && result.message).toBe("ntfy request timed out after 800ms")
+  })
+
+  it("releases the response body on a delivered push instead of leaving it unconsumed", async () => {
+    let captured: Response | undefined
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: () => {
+        captured = new Response("ignored", { status: 200 })
+        return Promise.resolve(captured)
+      },
+    })
+    await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
+    expect(captured?.bodyUsed).toBe(true)
+  })
+
+  it("releases the response body on an HTTP error too", async () => {
+    let captured: Response | undefined
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: () => {
+        captured = new Response("nope", { status: 400 })
+        return Promise.resolve(captured)
+      },
+      retry: { maxAttempts: 1 },
+    })
+    await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
+    expect(captured?.bodyUsed).toBe(true)
+  })
+
+  it("gives two client instances different retry delays when jitter is enabled", async () => {
+    // Proves the client actually threads its `random` option down to the
+    // shared backoff, rather than only `createExponentialBackoff` itself
+    // being capable of real randomness.
+    const delayFor = async (random: () => number): Promise<number> => {
+      const timer = recordingTimer()
+      const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+        fetcher: fakeTransport([{ status: 500 }, { status: 200 }]).fetcher,
+        sleep: timer.sleep,
+        clock: timer.clock,
+        retry: { maxAttempts: 2, baseDelayMs: 1000, jitterRatio: 0.2 },
+        random,
+      })
+      await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
+      return timer.delays[0]
+    }
+    expect(await delayFor(() => 0.1)).not.toBe(await delayFor(() => 0.9))
+  })
+
+  it("gives two default-configured clients different delays under the settings that ship", async () => {
+    // No `retry` override and no injected `random`: exactly what a caller who
+    // configures nothing gets. This is the test #68 asks for — "at least one
+    // retry test runs with the shipped delay settings, and two processes do
+    // not get identical delays" — and it is what makes DEFAULT_RETRY's
+    // jitterRatio: 0.2 matter, rather than only the mechanism being capable of
+    // randomness. `sleep`/`clock` are still injected so the test never waits
+    // on wall-clock time; only the randomness is real.
+    const delaysFor = async (): Promise<number[]> => {
+      const timer = recordingTimer()
+      const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+        fetcher: fakeTransport([{ status: 500 }]).fetcher,
+        sleep: timer.sleep,
+        clock: timer.clock,
+      })
+      await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
+      return timer.delays
+    }
+    const [processA, processB] = await Promise.all([delaysFor(), delaysFor()])
+    // A byte-identical draw across two independent Math.random() sequences is
+    // astronomically unlikely, not impossible — the same tolerance any test
+    // of real randomness has to accept.
+    expect(processA).not.toEqual(processB)
+    // Documented bounds (see DEFAULT_RETRY's JSDoc in ntfy.ts): each of the 4
+    // delays before attempts 2-5 stays inside its clamped value +/-20%, with
+    // the fourth's span clipped by maxDelayMs before jitter can widen it.
+    const bounds: Array<[number, number]> = [
+      [2400, 3600],
+      [4800, 7200],
+      [9600, 14400],
+      [12_000, 15_000],
+    ]
+    for (const delays of [processA, processB]) {
+      expect(delays.length).toBe(4)
+      delays.forEach((delay, index) => {
+        const [min, max] = bounds[index]
+        expect(delay).toBeGreaterThanOrEqual(min)
+        expect(delay).toBeLessThanOrEqual(max)
+      })
+    }
   })
 
   it("writes nothing to the console on success, skip or failure", async () => {

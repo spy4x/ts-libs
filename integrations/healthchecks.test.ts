@@ -66,6 +66,11 @@ const clientFor = (responses: FakeResponse[], overrides: { pingUrl?: string } = 
     fetcher: transport.fetcher,
     sleep: timer.sleep,
     clock: timer.clock,
+    // The shipped default now jitters (`jitterRatio: 0.2`). A midpoint draw
+    // makes `(random() * 2 - 1) * span` exactly 0, so every exact-delay
+    // assertion in this file keeps testing what it always tested; the
+    // dedicated jitter tests below inject their own `random` instead.
+    random: () => 0.5,
   })
   return { client, transport, timer }
 }
@@ -216,6 +221,9 @@ describe("HealthchecksClient.ping", () => {
         maxDelayMs: 600_000,
         totalBudgetMs: 4_500_000,
       },
+      // This test is about the 10-minute-cap comparison figure, not jitter; a
+      // midpoint draw keeps the delays exact (see `clientFor`'s comment above).
+      random: () => 0.5,
     })
     const result = await client.ping({ outcome: HealthchecksOutcome.Success })
     const waitedMs = result.ok === false ? result.waitedMs : 0
@@ -261,6 +269,9 @@ describe("HealthchecksClient.ping", () => {
       sleep: timer.sleep,
       clock: timer.clock,
       retry: { maxAttempts: 10, baseDelayMs: 60_000, maxDelayMs: 600_000, totalBudgetMs: 100_000 },
+      // This test is about the budget cutoff, not jitter; a midpoint draw
+      // keeps the delay exact (see `clientFor`'s comment above).
+      random: () => 0.5,
     })
     const result = await client.ping({ outcome: HealthchecksOutcome.Success })
     expect(result.ok).toBe(false)
@@ -289,6 +300,11 @@ describe("HealthchecksClient.ping", () => {
       sleep: timer.sleep,
       clock: timer.clock,
       retry: { maxAttempts: 2, baseDelayMs: 10, maxDelayMs: 10, totalBudgetMs: 1000 },
+      // This test is about the network_error path, not jitter; a midpoint draw
+      // keeps `waitedMs` exact (see `clientFor`'s comment above). Without this,
+      // the assertion below is flaky: half the possible jittered draws for
+      // baseDelayMs === maxDelayMs clamp to exactly 10 and half do not.
+      random: () => 0.5,
     })
     const result = await client.ping({ outcome: HealthchecksOutcome.Fail })
     expect(calls).toBe(2)
@@ -299,6 +315,138 @@ describe("HealthchecksClient.ping", () => {
       attempts: 2,
       waitedMs: 10,
     })
+  })
+
+  /** What `fetch` rejects with when its `AbortSignal.timeout()` signal fires. */
+  const timeoutFailure = (): Promise<Response> =>
+    Promise.reject(new DOMException("The signal timed out", "TimeoutError"))
+
+  it("reports a timed-out request with its own error code, not a generic network_error", async () => {
+    const timer = recordingTimer()
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: timeoutFailure,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1, totalBudgetMs: 5000 },
+      requestTimeoutMs: 2000,
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result).toEqual({
+      ok: false,
+      code: "timeout",
+      message: "healthchecks request timed out after 2000ms",
+      attempts: 1,
+      waitedMs: 0,
+    })
+  })
+
+  it("clamps the per-request timeout to what remains of the total budget", async () => {
+    // The budget, not the per-request default, is what must really bound the
+    // operation: a generous per-request timeout cannot outrun a tight budget.
+    const timer = recordingTimer()
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: timeoutFailure,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1, totalBudgetMs: 800 },
+      requestTimeoutMs: 5000,
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result.ok === false && result.message).toBe(
+      "healthchecks request timed out after 800ms",
+    )
+  })
+
+  it("releases the response body on a delivered ping instead of leaving it unconsumed", async () => {
+    let captured: Response | undefined
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: () => {
+        captured = new Response("ignored", { status: 200 })
+        return Promise.resolve(captured)
+      },
+    })
+    await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(captured?.bodyUsed).toBe(true)
+  })
+
+  it("releases the response body on an HTTP error too", async () => {
+    let captured: Response | undefined
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: () => {
+        captured = new Response("nope", { status: 400 })
+        return Promise.resolve(captured)
+      },
+      retry: { maxAttempts: 1 },
+    })
+    await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(captured?.bodyUsed).toBe(true)
+  })
+
+  it("gives two client instances different retry delays when jitter is enabled", async () => {
+    // Proves the client actually threads its `random` option down to the
+    // shared backoff, rather than only `createExponentialBackoff` itself
+    // being capable of real randomness.
+    const delayFor = async (random: () => number): Promise<number> => {
+      const timer = recordingTimer()
+      const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+        fetcher: fakeTransport([{ status: 500 }, { status: 200 }]).fetcher,
+        sleep: timer.sleep,
+        clock: timer.clock,
+        retry: { maxAttempts: 2, baseDelayMs: 60_000, jitterRatio: 0.2 },
+        random,
+      })
+      await client.ping({ outcome: HealthchecksOutcome.Success })
+      return timer.delays[0]
+    }
+    expect(await delayFor(() => 0.1)).not.toBe(await delayFor(() => 0.9))
+  })
+
+  it("gives two default-configured clients different delays under the settings that ship", async () => {
+    // No `retry` override and no injected `random`: exactly what a caller who
+    // configures nothing gets. This is the test #68 asks for — "at least one
+    // retry test runs with the shipped delay settings, and two processes do
+    // not get identical delays" — and it is what makes DEFAULT_RETRY_POLICY's
+    // jitterRatio: 0.2 matter, rather than only the mechanism being capable of
+    // randomness. `sleep`/`clock` are still injected so the test never waits
+    // on wall-clock time; only the randomness is real.
+    const delaysFor = async (): Promise<number[]> => {
+      const timer = recordingTimer()
+      const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+        fetcher: fakeTransport([{ status: 500 }]).fetcher,
+        sleep: timer.sleep,
+        clock: timer.clock,
+      })
+      await client.ping({ outcome: HealthchecksOutcome.Success })
+      return timer.delays
+    }
+    const [processA, processB] = await Promise.all([delaysFor(), delaysFor()])
+    // A byte-identical draw across two independent Math.random() sequences is
+    // astronomically unlikely, not impossible — the same tolerance any test
+    // of real randomness has to accept.
+    expect(processA).not.toEqual(processB)
+    // Documented bounds (see DEFAULT_RETRY_POLICY's JSDoc in policy.ts): the
+    // first 3 delays stay inside their own clamped value +/-20%; the last 6
+    // already clamp to maxDelayMs before jitter, so jitter can only pull them
+    // down from it, never past it.
+    const bounds: Array<[number, number]> = [
+      [48_000, 72_000],
+      [96_000, 144_000],
+      [192_000, 288_000],
+      [240_000, 300_000],
+      [240_000, 300_000],
+      [240_000, 300_000],
+      [240_000, 300_000],
+      [240_000, 300_000],
+      [240_000, 300_000],
+    ]
+    for (const delays of [processA, processB]) {
+      expect(delays.length).toBe(9)
+      delays.forEach((delay, index) => {
+        const [min, max] = bounds[index]
+        expect(delay).toBeGreaterThanOrEqual(min)
+        expect(delay).toBeLessThanOrEqual(max)
+      })
+    }
   })
 
   it("does not reject when a transport error's name is a Symbol", async () => {
