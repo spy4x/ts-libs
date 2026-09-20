@@ -146,6 +146,19 @@ export interface DkimVerifyOptions {
    * operation each.
    */
   maxSignatures?: number
+  /**
+   * How many header fields a message may carry. Defaults to
+   * {@link DEFAULT_MAX_HEADER_FIELDS}. Neither RFC 5322 nor RFC 6376 sets a
+   * limit, and ordinary mail is two orders of magnitude below this one; a message
+   * that is only header fields is not mail.
+   */
+  maxHeaderFields?: number
+  /**
+   * How many names a signature's `h=` tag may list. Defaults to
+   * {@link DEFAULT_MAX_SIGNED_HEADER_NAMES}. A signer that oversigns lists every
+   * field twice, so real values are tens, not hundreds.
+   */
+  maxSignedHeaderNames?: number
 }
 
 /**
@@ -160,6 +173,19 @@ export const DEFAULT_MAX_SIGNATURES = 10
  * that takes a noticeable time to canonicalize.
  */
 export const DEFAULT_MAX_MESSAGE_LENGTH = 10 * 1024 * 1024
+
+/**
+ * Default {@link DkimVerifyOptions.maxHeaderFields}. Mail carries tens of header
+ * fields; a long mailing-list chain with a `Received` line per hop carries
+ * hundreds at the very worst.
+ */
+export const DEFAULT_MAX_HEADER_FIELDS = 1000
+
+/**
+ * Default {@link DkimVerifyOptions.maxSignedHeaderNames}. Signers list ten to
+ * twenty names, or twice that when they oversign.
+ */
+export const DEFAULT_MAX_SIGNED_HEADER_NAMES = 200
 
 /**
  * RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less
@@ -822,6 +848,14 @@ function selectSignedHeaders(
   const remaining = new Map<string, number[]>()
   for (const [name, list] of occurrences) remaining.set(name, [...list])
 
+  // How often the h= list asks for each name, counted once. Asking the list per
+  // distinct header name instead — `names.filter(…)` inside the loop below — cost
+  // one pass over h= for every name in the message, so a message made of headers
+  // that h= all names took time proportional to the square of its size: 3 MB of
+  // them froze the process for 63 seconds, with no valid signature needed.
+  const asked = new Map<string, number>()
+  for (const name of names) asked.set(name, (asked.get(name) ?? 0) + 1)
+
   const selected: { name: string; value: string }[] = []
   for (const name of names) {
     const list = remaining.get(name)
@@ -840,10 +874,10 @@ function selectSignedHeaders(
   // signing, which is exactly the addition §5.4.2 lets a signer detect by
   // listing a name more times than the field occurs.
   for (const [name, list] of occurrences) {
-    const asked = names.filter((n) => n === name).length
     // Names the h= list never asks for are outside this signature entirely; only
     // a name it does ask for has a defined number of expected instances.
-    if (asked === 0 || asked >= list.length) continue
+    const count = asked.get(name) ?? 0
+    if (count === 0 || count >= list.length) continue
     throw new DkimParseError(`unsigned additional instances of a signed header: ${name}`)
   }
   return selected
@@ -926,6 +960,14 @@ export async function verifyDkimSignatures(
   }
 
   const { headers, body } = splitMessage(rawMessage)
+  const maxHeaderFields = options.maxHeaderFields ?? DEFAULT_MAX_HEADER_FIELDS
+  if (headers.length > maxHeaderFields) {
+    return [{
+      valid: false,
+      reason: `message has ${headers.length} header fields, over the ` +
+        `${maxHeaderFields}-field limit`,
+    }]
+  }
   // Every signature is verified, not just the first: a broken one above a good
   // one used to condemn the whole message, and a valid one an attacker put on top
   // used to decide it. Each field's value keeps its exact bytes, so the canonical
@@ -1114,6 +1156,14 @@ function refuseSignatureHeader(
   headers: string[],
   options: DkimVerifyOptions,
 ): string | undefined {
+  // The work a signature can ask for is bounded before any of it is done: the
+  // selection below walks h= once per name, and h= comes from the sender.
+  const maxSignedHeaderNames = options.maxSignedHeaderNames ?? DEFAULT_MAX_SIGNED_HEADER_NAMES
+  if (parsed.signedHeaders.length > maxSignedHeaderNames) {
+    return `h= names ${parsed.signedHeaders.length} headers, over the ` +
+      `${maxSignedHeaderNames}-name limit`
+  }
+
   // §6.1.1: "If the 'h=' tag does not include the From header field, the Verifier
   // MUST ignore the DKIM-Signature header field and return PERMFAIL (From field
   // not signed)."

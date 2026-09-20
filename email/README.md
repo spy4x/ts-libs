@@ -424,12 +424,18 @@ which propagates the resolver's rejection instead of reporting it.
   example record publishes a complete SubjectPublicKeyInfo. The envelope is
   detected, not guessed. `DkimPublicKey.keyBytes` therefore holds whatever the
   record carried — SPKI bytes for an SPKI `p=` — rather than a normalised form.
-- **The work is bounded, because the sender is not trusted.** A message longer
-  than `maxMessageLength` (10 MiB) is refused before it is canonicalized, and at
-  most `maxSignatures` (10) `DKIM-Signature` fields are verified — §6.1 allows the
-  limit, and each extra field otherwise buys a key lookup and a public-key
-  operation. Every pass over the body is linear; two backtracking regular
-  expressions used to make it quadratic, and 80 KB of spaces took four seconds.
+- **The work is bounded, because the sender is not trusted.** Four limits, each
+  with a `reason` that names it: a message longer than `maxMessageLength` (10 MiB)
+  is refused before it is canonicalized, a message with more than
+  `maxHeaderFields` (1 000) fields is refused before any signature is looked at,
+  `maxSignedHeaderNames` (200) bounds the names one `h=` may list, and at most
+  `maxSignatures` (10) `DKIM-Signature` fields are verified — §6.1 allows that
+  one, and each extra field otherwise buys a key lookup and a public-key
+  operation. Inside those limits every pass over the message is linear. Two
+  backtracking regular expressions used to make the body quadratic (80 KB of
+  spaces took four seconds), and the selection of signed headers walked the whole
+  `h=` list once per distinct header name, which cost 46 seconds for 1.8 MB of
+  headers that `h=` all named.
 - **Several signatures are all verified, and the first valid one is the verdict.**
   §6.1 treats each field independently. A broken signature above a good one no
   longer condemns the message, and one an attacker prepends no longer decides it —

@@ -28,8 +28,10 @@ import { describe, it } from "@std/testing/bdd"
 import {
   canonicalizeBody,
   canonicalizeHeader,
+  DEFAULT_MAX_HEADER_FIELDS,
   DEFAULT_MAX_MESSAGE_LENGTH,
   DEFAULT_MAX_SIGNATURES,
+  DEFAULT_MAX_SIGNED_HEADER_NAMES,
   DkimParseError,
   type DkimPublicKey,
   type DnsTxtResolver,
@@ -748,6 +750,127 @@ describe("policy RFC 6376 leaves to the caller", () => {
     const tampered = await verifyDkim(grown, key)
     assertEquals(tampered.valid, false)
     assertEquals(tampered.reason, "body hash mismatch (body modified after signing)")
+  })
+})
+
+// --- the cost of selecting the headers a signature names --------------------
+
+/**
+ * The same harm as the body freeze, reached through the header block instead.
+ *
+ * `selectSignedHeaders` used to count, for every distinct header name in the
+ * message, how often `h=` names it — by walking the whole `h=` list again each
+ * time. A message whose headers are all named in `h=` therefore cost time
+ * proportional to the square of its size, and no valid signature was needed to
+ * spend it: measured on the code before this change, 0.21 MB of such headers took
+ * 344 ms, 0.89 MB took 4.2 s and 1.81 MB took 46 s.
+ *
+ * The budget below is a multiple of one linear scan of the same message, timed on
+ * the machine running the test, rather than a number of milliseconds. The
+ * quadratic version comes in at roughly 350 times that scan and the linear one at
+ * about 4, so a factor of 50 tells them apart with room on both sides.
+ */
+describe("the cost of selecting the headers a signature names", () => {
+  const REFERENCE_PASSES = 3
+  const LINEAR_BUDGET_FACTOR = 50
+  const HEADER_COUNT = 40_000
+
+  /** A message of `count` distinct headers, every one of them named in `h=`. */
+  function messageNamingEveryHeader(count: number): string {
+    const names = ["from", "to", "subject"]
+    const lines = ["From: a@example.com", "To: b@example.com", "Subject: s"]
+    for (let index = 0; index < count; index++) {
+      names.push(`x-h-${index}`)
+      lines.push(`X-H-${index}: v`)
+    }
+    lines.push(
+      `DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=sel; ` +
+        `h=${names.join(":")}; bh=AAAA; b=AAAA`,
+    )
+    return `${lines.join("\r\n")}\r\n\r\nbody\r\n`
+  }
+
+  /** One linear pass over the message, doing the kind of work the verifier does. */
+  function scanHeaders(raw: string): number {
+    let work = 0
+    for (const line of raw.split("\r\n")) {
+      const colon = line.indexOf(":")
+      if (colon === -1) continue
+      work += line.slice(0, colon).trim().toLowerCase().length
+    }
+    return work
+  }
+
+  it("selects from a message of 40 000 signed headers within a linear budget", async () => {
+    const raw = messageNamingEveryHeader(HEADER_COUNT)
+    // A key that cannot be imported: the selection runs before the body hash is
+    // compared, so this measures header work and no cryptography.
+    const key: DkimPublicKey = { algorithm: "rsa", keyBytes: new Uint8Array([0x30, 0x02, 0x00]) }
+    // The caps that would refuse a message of this shape outright are raised on
+    // purpose: what is under test is the selection loop, and the caps have their
+    // own tests below.
+    const limits = { maxHeaderFields: HEADER_COUNT * 2, maxSignedHeaderNames: HEADER_COUNT * 2 }
+
+    let referenceWork = 0
+    const referenceStart = performance.now()
+    for (let pass = 0; pass < REFERENCE_PASSES; pass++) referenceWork += scanHeaders(raw)
+    const reference = (performance.now() - referenceStart) / REFERENCE_PASSES
+    assert(referenceWork > 0, "the reference pass must not be optimised away")
+    assert(reference > 0, `the reference pass was too fast to time: ${reference}ms`)
+
+    const start = performance.now()
+    const result = await verifyDkim(raw, key, limits)
+    const elapsed = performance.now() - start
+
+    // The message really was processed: it reached the body hash, which is the
+    // step after the selection.
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "body hash mismatch (body modified after signing)")
+    assert(
+      elapsed < reference * LINEAR_BUDGET_FACTOR,
+      `selecting ${HEADER_COUNT} headers took ${elapsed.toFixed(0)}ms, over ` +
+        `${LINEAR_BUDGET_FACTOR}x the ${reference.toFixed(1)}ms linear reference`,
+    )
+  })
+
+  it("refuses a message with more header fields than the cap allows", async () => {
+    const lines = ["From: a@example.com", "To: b@example.com", "Subject: s"]
+    for (let index = 0; index < DEFAULT_MAX_HEADER_FIELDS; index++) {
+      lines.push(`X-H-${index}: v`)
+    }
+    const raw = `${lines.join("\r\n")}\r\n\r\nbody\r\n`
+    const result = await verifyDkim(raw)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      `message has ${lines.length} header fields, over the ` +
+        `${DEFAULT_MAX_HEADER_FIELDS}-field limit`,
+    )
+    assertEquals(DEFAULT_MAX_HEADER_FIELDS, 1000)
+
+    // One field fewer passes the cap and fails for the ordinary reason instead.
+    const allowed = `${lines.slice(0, DEFAULT_MAX_HEADER_FIELDS).join("\r\n")}\r\n\r\nbody\r\n`
+    assertEquals((await verifyDkim(allowed)).reason, "no DKIM-Signature header found")
+  })
+
+  it("refuses a signature whose h= names more headers than the cap allows", async () => {
+    const names = ["from", "to", "subject"]
+    while (names.length <= DEFAULT_MAX_SIGNED_HEADER_NAMES) names.push(`x-h-${names.length}`)
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", { names })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      `h= names ${names.length} headers, over the ${DEFAULT_MAX_SIGNED_HEADER_NAMES}-name limit`,
+    )
+    assertEquals(DEFAULT_MAX_SIGNED_HEADER_NAMES, 200)
+
+    // The same message verifies when the cap is raised to fit it, so the refusal
+    // is the cap and not the message.
+    assert(
+      (await verifyDkim(raw, publicKey, { maxSignedHeaderNames: names.length })).valid,
+      "a signature at the limit must still verify",
+    )
   })
 })
 
