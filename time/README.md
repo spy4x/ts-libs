@@ -37,19 +37,36 @@ const ics = generateIcs(
 
 ## Why `Intl` and not a date library
 
-Everything in `time/tz` is built on `Intl.DateTimeFormat`. Three consequences:
+Everything in `time/tz` is built on `Intl.DateTimeFormat`, not `Temporal`.
+`Temporal` is newer, has a cleaner API, and is already built into Deno (2.9.7
+needs no flag) — but this module is meant to run in browsers too, and browser
+support for `Temporal` is not yet reliable enough to depend on. `Intl` is what
+every target runtime already has. Revisit this once `Temporal` is broadly
+available in browsers; until then, `Intl` stays.
+
+Three more consequences of the `Intl` choice:
 
 - **Zero dependencies, zero bundled tzdata.** `Intl` reads the runtime's own
   tzdata, which is already installed, already patched when a government changes
-  its rules, and already correct for historical dates. The alternatives —
-  `date-fns-tz`, Luxon, a Temporal polyfill — each carry a copy of the tz
-  database and a release cadence to match. This module retires that dependency
-  class rather than adding to it.
-- **Locale comes for free.** The formatters are locale data, not string
-  assembly, so the same code produces `"Friday, 28 August 2026 at 10:00"` in
-  `en-GB` and `"Freitag, 28. August 2026 um 10:00"` in `de-DE`. One locale tag
-  is fixed inside each formatter today; making it a parameter is the whole
-  change needed for localisation, and it needs no new dependency.
+  its rules, and already correct for historical dates outside the fractional-
+  minute LMT era (see [Not in scope](#not-in-scope)). The alternatives —
+  `date-fns-tz`, Luxon — each carry a copy of the tz database and a release
+  cadence to match. This module retires that dependency class rather than
+  adding to it.
+- **Display locale comes for free, offset locale never varies.** The display
+  formatters (`formatDateTimeLong` and friends) are built on locale data, not
+  string assembly, so the same code could produce
+  `"Friday, 28 August 2026 at 10:00"` in `en-GB` and
+  `"Freitag, 28. August 2026 um 10:00"` in `de-DE` if a locale parameter were
+  added — the locale tag is fixed inside each formatter today because nothing
+  yet consumes a second one, not because it would be hard to add. The UTC
+  offset that `zonedDateTime` computes from is a different story: it is read by
+  parsing ICU's `"GMT±H:MM"` text, and that text is `en-GB`'s own rendering —
+  `fr-FR` renders the same offset as `"UTC+5:30"`, `ar-EG` with Arabic-indic
+  digits, and an unread offset silently becomes zero. A locale parameter must
+  never reach that one formatter, so it is kept structurally separate from the
+  display formatters (`time/tz.ts`'s `offsetFormatter`, pinned to `en-GB`) —
+  not a "trivial to add" afterthought.
 - **Determinism is the caller's job, and here it is enforced.** The runtime's
   tzdata is the ICU build, not the host. Every function takes an explicit IANA
   zone and none of them read the host `TZ` or the host clock, so the suite
@@ -127,6 +144,15 @@ at the wall clock treated as UTC — an instant one whole offset away from the
 answer — and was an hour late or early for the weeks around a transition. See
 the PR body for the file and line of each such defect.
 
+`zonedDateTime` also rejects a `date` + `time` that does not exist on the
+Gregorian calendar — `"2026-02-30"`, `"2026-13-01"`, `"25:00"`, and a year
+`Date.UTC` would fold into 19xx (`"0099"` becomes 1999) all throw a
+`RangeError` rather than silently landing on the nearest date `Date.UTC`
+happens to roll over into. It separately rejects a historical wall clock whose
+zone offset is not aligned to a whole minute (`Africa/Monrovia` before 1972,
+for example): this module is minute resolution only, so such a request is
+refused rather than answered up to a minute wrong.
+
 ## Timezone contract
 
 `generateIcs` takes **absolute instants** (`Date`) and always writes UTC
@@ -201,11 +227,16 @@ a non-negative integer and an empty mail address. There is no silent conversion 
 - **Durations and arithmetic in the host zone.** `addDays` moves a calendar date. Elapsed-time math
   belongs on epoch milliseconds where no zone can interfere.
 - **Sub-minute offsets.** `tzOffsetMinutes` is minute resolution, so historical LMT offsets (which
-  carry seconds) are truncated. A scheduling library does not need them.
+  carry seconds) are not resolved to the minute; `zonedDateTime` rejects a wall clock that would need
+  one rather than answering up to a minute wrong. A scheduling library does not need them.
 - **Validation of anything but a zone name.** `isValidTimeZone` answers whether the runtime knows the
-  zone; it does not check that a date and time exist.
-- **Localisation of the locale.** The locale tag is fixed to `"en-GB"` inside each formatter. `Intl`
-  makes changing it trivial; no API exposes it yet because nothing consumes a second locale.
+  zone; it does not check that a date and time exist — that is `zonedDateTime`'s own, separate check.
+- **Localisation of the display locale, never the offset locale.** The display formatters'
+  locale tag is fixed to `"en-GB"` today; `Intl` would make adding a parameter straightforward,
+  because nothing consumes a second one yet. The offset-reading formatter `zonedDateTime` depends on
+  is different: it is pinned to `en-GB` permanently, on purpose, because parsing ICU's offset text
+  only works for the locale that renders it as `"GMT±H:MM"` — see
+  [Why `Intl` and not a date library](#why-intl-and-not-a-date-library).
 - **`Date` objects as the public currency for wall clocks.** They cannot represent one, which is the
   whole point.
 
