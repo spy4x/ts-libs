@@ -171,9 +171,13 @@ Deno.test("no export is declared for a package that is not part of main", async 
   // foreign — `main` declares it and `#31` owns its files, which is why it belongs
   // in the inherited list above. Getting the distinction backwards reddens on the
   // correct union resolution, which is how this test first failed.
+  //
+  // `./db` was in this list until #15 landed: that PR creates `server/db/` and declares
+  // its four exports, so the prefix stops being evidence of a dangling promise. The two
+  // prefixes left are the ones no branch has implemented.
   const config = await readConfig()
   const foreign = Object.keys(config.exports).filter((key) =>
-    key.startsWith("./kv") || key.startsWith("./db") || key.startsWith("./platform")
+    key.startsWith("./kv") || key.startsWith("./platform")
   )
   assertEquals(
     foreign,
