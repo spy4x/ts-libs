@@ -40,9 +40,8 @@ export const DEFAULT_TOKEN_BYTES = 16
  * An opaque-token hash is a plain `sha256Hex(raw + secret)` and the digest is stored, so the
  * secret is not protected by any rate limit: an attacker holding a stored digest can search the
  * whole keyspace offline. 32 characters removes a dictionary-sized search; it does not replace
- * real entropy, which the caller must inject. Same rule, same number, same reasoning as
- * `server/jwt.ts`'s own `MIN_SECRET_LENGTH` — a short secret is brute-forceable offline in both
- * modules, so both fail closed at the same floor rather than one of them silently accepting `"a"`.
+ * real entropy, which the caller must inject. A short secret is brute-forceable offline, so this
+ * fails closed at that floor rather than silently accepting `"a"`.
  */
 export const MIN_SECRET_LENGTH = 32
 
