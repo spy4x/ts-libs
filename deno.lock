@@ -12,6 +12,7 @@
     "jsr:@std/path@1.1.6": "1.1.6",
     "jsr:@std/path@^1.1.6": "1.1.6",
     "jsr:@std/testing@1.0.20": "1.0.20",
+    "jsr:@std/ulid@1.0.0": "1.0.0",
     "npm:arktype@2.2.3": "2.2.3",
     "npm:nodemailer@10.0.10": "10.0.10",
     "npm:postgres@3.4.7": "3.4.7"
@@ -55,6 +56,9 @@
         "jsr:@std/assert@^1.0.19",
         "jsr:@std/internal@^1.0.14"
       ]
+    },
+    "@std/ulid@1.0.0": {
+      "integrity": "d41c3d27a907714413649fee864b7cde8d42ee68437d22b79d5de4f81d808780"
     }
   },
   "npm": {
@@ -97,6 +101,7 @@
       "jsr:@std/expect@1.0.20",
       "jsr:@std/path@1.1.6",
       "jsr:@std/testing@1.0.20",
+      "jsr:@std/ulid@1.0.0",
       "npm:arktype@2.2.3",
       "npm:postgres@3.4.7"
     ],
