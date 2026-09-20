@@ -42,6 +42,10 @@ Deno.test("buildPostgresOptions fills every pool option from the defaults", () =
   assertEquals(options.idle_timeout, 30)
   assertEquals(options.max_lifetime, 1800)
   assertEquals(options.max, 15)
+  assertEquals(DEFAULT_POOL_OPTIONS.connectTimeout, 10)
+  assertEquals(DEFAULT_POOL_OPTIONS.idleTimeout, 30)
+  assertEquals(DEFAULT_POOL_OPTIONS.maxLifetimeSeconds, 1800)
+  assertEquals(DEFAULT_POOL_OPTIONS.max, 15)
   assertEquals(options.host, "db.internal")
   assertEquals(options.pass, "secret")
   // No `transform` and no `connection` key unless the caller asked for them: a default
