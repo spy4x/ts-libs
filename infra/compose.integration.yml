@@ -1,0 +1,88 @@
+# Dependencies of the integration test tier (issue #74), for local runs.
+#
+# Start them with `deno task services:up` and stop them with `deno task services:down`.
+# CI does not use this file: Woodpecker starts the same three images through the
+# `services:` block of `.woodpecker.yml`, and the tests find them through the same
+# environment variables.
+#
+# Three rules this file exists to hold:
+#
+# 1. **A fixed project name.** `name:` below pins it, so these containers can never
+#    be confused with — or removed together with — anything else on the machine.
+#    Every compose command must carry `-f infra/compose.integration.yml`, which the
+#    `services:*` tasks do.
+# 2. **Loopback only.** Every published port is bound to `127.0.0.1`, and the host
+#    ports are deliberately unusual (the 5xxxx range) so they cannot collide with a
+#    Postgres, MinIO or mail server already running on the developer's machine.
+# 3. **Obviously fake credentials.** `integration-test-only` is the user, the
+#    password and the database name everywhere. These containers hold throw-away
+#    data, are reachable from the loopback interface only, and the string is meant
+#    to be unmistakable if it ever shows up in a log or a bug report.
+#
+# Images are pinned to an exact version tag, never `latest`, for the same reason the
+# import map pins every dependency: a silent upgrade turns a green suite red with no
+# commit to blame.
+
+name: ts-libs-it
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_USER: integration-test-only
+      POSTGRES_PASSWORD: integration-test-only
+      POSTGRES_DB: integration-test-only
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U integration-test-only -d integration-test-only"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+  # The community image lives on quay.io: `minio/minio` on Docker Hub refuses
+  # anonymous pulls ("pull access denied … repository does not exist").
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --address :9000 --console-address :9001
+    environment:
+      MINIO_ROOT_USER: integration-test-only
+      MINIO_ROOT_PASSWORD: integration-test-only
+    ports:
+      - "127.0.0.1:59000:9000"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+  # `MP_SMTP_AUTH_ACCEPT_ANY` plus `MP_SMTP_AUTH_ALLOW_INSECURE` make Mailpit
+  # advertise AUTH on a plaintext port and accept any credentials, so the adapter's
+  # real AUTH exchange runs. Mailpit serves no STARTTLS without a certificate, so an
+  # integration test against it must pass `requireTls: false` explicitly.
+  # Messages are kept in memory: no volume, nothing survives a restart.
+  mailpit:
+    image: axllent/mailpit:v1.31.2
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+      MP_DISABLE_VERSION_CHECK: "true"
+    ports:
+      - "127.0.0.1:51025:1025"
+      - "127.0.0.1:58025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+volumes:
+  postgres-data:
+  minio-data:
