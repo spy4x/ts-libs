@@ -48,6 +48,10 @@ export const denoFileSystem: FileSystemPort = {
     return Deno.writeTextFile(path, content)
   },
 
+  appendText(path, content) {
+    return Deno.writeTextFile(path, content, { append: true, create: true })
+  },
+
   rename(from, to) {
     return Deno.rename(from, to)
   },
