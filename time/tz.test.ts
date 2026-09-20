@@ -180,6 +180,29 @@ describe("zonedDateTime", () => {
     const instant = zonedDateTime("2026-03-29", "12:00", "Pacific/Chatham")
     expect(instant.toISOString()).toBe("2026-03-28T22:15:00.000Z")
   })
+
+  it("gives the same moment for a half-hour zone regardless of locale", () => {
+    // ICU's offset text for Asia/Kolkata depends on locale: "en-GB" renders
+    // "GMT+5:30", "fr-FR" renders "UTC+5:30", "ar-EG" renders Arabic-indic
+    // digits — neither of the latter two matches tzOffsetMinutes' "GMT±H:MM"
+    // pattern. Confirmed against the real formatters, not assumed.
+    const instant = utc("2026-01-15T12:00:00Z")
+    const offsetText = (locale: string) =>
+      new Intl.DateTimeFormat(locale, { timeZone: "Asia/Kolkata", timeZoneName: "shortOffset" })
+        .formatToParts(instant)
+        .find((part) => part.type === "timeZoneName")!.value
+
+    expect(offsetText("en-GB")).toBe("GMT+5:30")
+    expect(offsetText("fr-FR")).not.toBe(offsetText("en-GB"))
+    expect(offsetText("ar-EG")).not.toBe(offsetText("en-GB"))
+
+    // tzOffsetMinutes and zonedDateTime never read a caller-supplied locale,
+    // so the hazard above cannot reach them: the offset is correct regardless.
+    expect(tzOffsetMinutes(instant, "Asia/Kolkata")).toBe(330)
+    expect(zonedDateTime("2026-01-15", "17:30", "Asia/Kolkata").toISOString()).toBe(
+      "2026-01-15T12:00:00.000Z",
+    )
+  })
 })
 
 describe("tzOffsetMinutes", () => {

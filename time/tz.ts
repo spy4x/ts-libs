@@ -54,7 +54,6 @@ const optionSets = {
   },
   isoDate: { year: "numeric", month: "2-digit", day: "2-digit" },
   shortWeekday: { weekday: "short" },
-  offset: { timeZoneName: "shortOffset" },
 } as const satisfies Record<string, Intl.DateTimeFormatOptions>
 
 type OptionSetName = keyof typeof optionSets
@@ -294,6 +293,37 @@ export function zonedDateTime(date: string, time: string, tz: string): Date {
 }
 
 /**
+ * Locale used only to read the numeric UTC offset out of ICU — never the
+ * locale of any other formatter in this module.
+ *
+ * `tzOffsetMinutes` parses ICU's offset text with a `"GMT±H:MM"` pattern, and
+ * that pattern is `en-GB`'s own rendering, not a locale-neutral one: `fr-FR`
+ * renders the same offset as `"UTC+5:30"` and `ar-EG` with Arabic-indic
+ * digits (`"غرينتش+٥:٣٠"`), neither of which the pattern reads, and an
+ * unread offset silently becomes 0 (see below) — five and a half hours wrong
+ * for `Asia/Kolkata`. `zonedDateTime` depends on this being correct, so this
+ * formatter is deliberately kept outside {@link optionSets} and
+ * {@link zonedFormatter}: a locale parameter added to the display formatters
+ * later cannot reach this one by sharing its code path.
+ */
+const OFFSET_LOCALE = "en-GB"
+
+const offsetFormatterCache = new Map<string, Intl.DateTimeFormat>()
+
+/** A formatter that reads `tz`'s UTC offset text, always in {@link OFFSET_LOCALE}. */
+function offsetFormatter(tz: string): Intl.DateTimeFormat {
+  const cached = offsetFormatterCache.get(tz)
+  if (cached) return cached
+
+  const formatter = new Intl.DateTimeFormat(OFFSET_LOCALE, {
+    timeZone: tz,
+    timeZoneName: "shortOffset",
+  })
+  offsetFormatterCache.set(tz, formatter)
+  return formatter
+}
+
+/**
  * Minutes east of UTC for `tz` at the instant `instant`. Positive east.
  *
  * ICU reports the offset as `"GMT+1"`, `"GMT-5"`, `"GMT+5:30"`, `"GMT+10:30"`
@@ -301,12 +331,14 @@ export function zonedDateTime(date: string, time: string, tz: string): Date {
  * UTC, `Atlantic/Reykjavik` and every `GMT+x` zone's own baseline use. An
  * unmatched name is treated as 0 rather than throwing: the name is ICU's, so a
  * future rename should degrade to "no offset" instead of breaking every caller.
+ * This reads {@link offsetFormatter}, pinned to {@link OFFSET_LOCALE}, and
+ * nothing else — see that formatter's doc for why.
  *
  * Minute resolution only — historical LMT offsets carry seconds, which no
  * scheduling use case here needs.
  */
 export function tzOffsetMinutes(instant: Date, tz: string): number {
-  const parts = zonedFormatter("offset", tz).formatToParts(instant)
+  const parts = offsetFormatter(tz).formatToParts(instant)
 
   const name = parts.find((part) => part.type === "timeZoneName")?.value ?? "GMT"
   const match = name.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/)
