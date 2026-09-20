@@ -1,37 +1,4 @@
-/** Bounded-concurrency helpers: a parallel map and a fair async mutex. */
-
-/**
- * Map `items` through `fn` with at most `limit` calls in flight.
- *
- * Completion order is irrelevant: the result array matches the input order. The first rejection
- * wins — the returned promise rejects as soon as any worker fails, and the remaining workers
- * finish in the background rather than being cancelled (there is no cancellation primitive in
- * `Promise`). `limit` is clamped to at least 1, and a `limit` greater than the item count simply
- * means "all at once".
- *
- * This is the *bounded fan-out* variant: one worker per item, capped at `limit` in flight.
- */
-export async function mapConcurrent<Item, Out>(
-  items: readonly Item[],
-  limit: number,
-  fn: (item: Item, index: number) => Promise<Out>,
-): Promise<Out[]> {
-  if (!Number.isFinite(limit)) throw new Error("mapConcurrent: limit must be finite")
-  const workers = Math.max(1, Math.min(Math.trunc(limit), items.length))
-  const results = new Array<Out>(items.length)
-  let next = 0
-
-  const run = async (): Promise<void> => {
-    for (;;) {
-      const index = next++
-      if (index >= items.length) return
-      results[index] = await fn(items[index], index)
-    }
-  }
-
-  await Promise.all(Array.from({ length: workers }, run))
-  return results
-}
+/** A fair async mutex. */
 
 interface Waiter {
   resolve: (release: () => void) => void

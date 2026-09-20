@@ -8,7 +8,7 @@ deno add jsr:@ts-libs/platform
 ```
 
 ```ts
-import { formatDecimal, mapConcurrent, ok } from "@ts-libs/platform"
+import { formatDecimal, ok } from "@ts-libs/platform"
 import { makeStorage } from "@ts-libs/platform/browser"
 import { atomicWriteJson, denoFileSystem } from "@ts-libs/platform/server"
 ```
@@ -19,7 +19,7 @@ Three subpaths, split by _where the code can run_ — the split the source repo 
 762-LOC `helpers.ts` mixed `globalThis.atob`, `self.location` and PBKDF2 and was imported by both
 the browser and the API.
 
-### `.` → `universal.ts` (12 modules, 912 LOC)
+### `.` → `universal.ts` (11 modules, 863 LOC)
 
 Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched are `Date`, `Intl`,
 `Math`, `TextEncoder`, and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
@@ -29,56 +29,63 @@ browser- and server-only halves are the other two subpaths.
 | Module                     | Contents                                                                                                   |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `universal/async`          | `sleep`, `debounce` (cancelable, unref'd)                                                                  |
-| `universal/concurrency`    | `mapConcurrent`, `AsyncMutex` (fair FIFO)                                                                  |
-| `universal/axis`           | `niceStep`, `ticks`                                                                                        |
-| `universal/constants`      | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_CONCURRENCY`, `DEFAULT_FLUSH_INTERVAL_MS`                               |
-| `universal/csv`            | `splitCsvLine` (RFC-4180-ish, optional `keepQuotes`)                                                       |
+| `universal/concurrency`    | `AsyncMutex` (fair FIFO)                                                                                   |
+| `universal/axis`           | `niceStep`, `ticks` — the one home for chart tick maths; `preact-components` imports this                  |
+| `universal/constants`      | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                               |
 | `universal/errors`         | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `OperationState`, `OperationResult` |
 | `universal/format-number`  | `round`, `formatDecimal`, `formatPct`                                                                      |
 | `universal/result`         | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                             |
 | `universal/schema`         | `InferSchema` — the only arktype type helper this package needs                                            |
 | `universal/text`           | `search`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                 |
 | `universal/time`           | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`          |
-| `universal/time-constants` | `ONE_MONTH_IN_MILLISECONDS` and friends, `MIN_PASSWORD_LENGTH`                                             |
+| `universal/time-constants` | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                    |
 
-### `./browser` → `browser.ts` (3 modules, 175 LOC)
+`universal/csv` and `mapConcurrent` (formerly in `universal/concurrency`) were removed: `@std/csv`
+and `@std/async`'s `pooledMap` already cover them, and no app in this workspace imported either.
 
-Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `urlBase64ToUint8Array`
-calls `atob` when invoked, and `makeStorage` takes its `Storage`-shaped object as a parameter.
+### `./browser` → `browser.ts` (1 module, 151 LOC)
 
-| Module             | Contents                                                      |
-| ------------------ | ------------------------------------------------------------- |
-| `browser/base64`   | `urlBase64ToUint8Array`                                       |
-| `browser/dropdown` | `shouldDropdownOpenUp`                                        |
-| `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike`, `TypedStorage` |
+Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `makeStorage` takes its
+`Storage`-shaped object as a parameter.
 
-### `./server` → `server.ts` (8 modules, 897 LOC)
+| Module            | Contents                                                      |
+| ----------------- | ------------------------------------------------------------- |
+| `browser/storage` | `makeStorage`, `memoryStorage`, `StorageLike`, `TypedStorage` |
 
-Needs a filesystem. Every module takes a port (`FileSystemPort`, `ClockPort`, `TimerPort`,
-`ByteReader`) instead of calling `Deno.*` directly, because the root `test` task grants
-`--allow-read --allow-env` and **no `--allow-write`**. The decision logic — what to write, when to
-flush, which entry to skip — is tested against an in-memory fake.
+`browser/base64` (`@std/encoding`'s `decodeBase64Url` covers it, and already used by
+`platform/tokens.ts`) and `browser/dropdown` (an 11-line rule that is the dropdown component's own
+business, in `preact-components`) were removed.
+
+### `./server` → `server.ts` (6 modules, 723 LOC)
+
+Needs a filesystem. Every module takes a port (`FileSystemPort`, `ClockPort`, `TimerPort`) instead
+of calling `Deno.*` directly, because the root `test` task grants `--allow-read --allow-env` and
+**no `--allow-write`**. The decision logic — what to write, when to flush, which entry to skip — is
+tested against an in-memory fake.
 
 Only two objects in this subpath touch `Deno` anyway: `denoFileSystem`, `denoByteReader`
 (`server/deno-fs.ts`), and `Deno.pid` as the temp-file uniquifier default in
-`server/throttled-saver.ts`. Of `denoFileSystem`'s **8 methods**, four are covered by
+`server/throttled-saver.ts`. Of `denoFileSystem`'s **9 methods**, three are covered by
 `server/deno-fs.test.ts` under the read-only grant — `exists`, `readText`, `readDir` (including its
-`isNotFound` mapping and the `NotADirectory` rethrow), `denoByteReader` (chunk-size-independent
-digest) — and the `exists`/`readText`/`readDir` rethrow branches are reached via `ENOTDIR`. **Not
-covered, and not coverable under this grant:** `writeText`, `rename`, `mkdirp`, `lock` (which opens
-`create: true, write: true`), and the successful branch of `remove` — the four calls that actually
-need `--allow-write`.
+`isNotFound` mapping and the `NotADirectory` rethrow) — and the `exists`/`readText`/`readDir`
+rethrow branches are reached via `ENOTDIR`. `denoByteReader` is covered separately (chunk-size
+independence and a missing-file rethrow). **Not covered, and not coverable under this grant:**
+`writeText`, `appendText`, `rename`, `mkdirp`, `lock` (which opens `create: true, write: true`), and
+the successful branch of `remove` — the calls that actually need `--allow-write`.
 
-| Module                   | Contents                                                                     |
-| ------------------------ | ---------------------------------------------------------------------------- |
-| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                             |
-| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                       |
-| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`                              |
-| `server/hash-file`       | `sha256OfBytes`, `sha256OfText`, `sha256OfStream` (buffered — see its JSDoc) |
-| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                              |
-| `server/ports`           | the port interfaces, `systemClockPort`                                       |
-| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                         |
-| `server/walk`            | `walkFiles` (iterative), `extensionOf`, `isInside`, `DEFAULT_SKIP_DIRS`      |
+| Module                   | Contents                                               |
+| ------------------------ | ------------------------------------------------------ |
+| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`       |
+| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters) |
+| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`        |
+| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`        |
+| `server/ports`           | the port interfaces, `systemClockPort`                 |
+| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`   |
+
+`server/walk` (`@std/fs`'s `walk` covers it) and `server/hash-file` (`@std/crypto` already hashes a
+stream, and nothing in this workspace called `sha256OfStream`) were removed, along with the
+`platform/scripts/memory-probe.ts` script that measured `hash-file`'s buffering — a script is not a
+module and would have shipped with the package.
 
 Not in this package, deliberately: `cqrs`, `types`, `cache`, `config`, `uuid`, `rate-limit` (owned
 by `@ts-libs/*` template modules or issue #4), money/currency helpers (their own issue), and
@@ -101,7 +108,7 @@ source of "why is this error a string" regret.
 | `CommandEnvelope<T>`          | a CLI command or job crossing a process boundary             | `string`                  |
 
 ```ts
-const parsed = splitCsvLine(line) // throws: malformed input is a programming error
+const parsed = JSON.parse(raw) // throws: malformed input is a programming error
 const result: Result<number> = tryParse(text) // returns: malformed input is expected
 ```
 
@@ -146,16 +153,6 @@ what makes it runnable under the root test task's permission grant. Two conseque
   the same fields.
 - `ThrottledJsonSaver.flush()` is the deterministic exit point. `markDirty()` may start a detached
   write, and `flush()` waits for it before deciding whether another write is needed.
-
-## Known gap: `sha256OfStream` is buffered
-
-The digest reads the whole source into memory before hashing, so peak memory grows with the input.
-That is not a claim about a ratio — one could not be measured reliably (`Deno.memoryUsage().external`
-does not track these allocations synchronously; see `platform/scripts/memory-probe.ts`) — it is what
-`collectBytes` does. An incremental digest needs either a one-line `ReturnType<typeof setTimeout>` fix
-in `server/http/bounded-body.ts:60` (which unblocks `node:crypto`'s `createHash`) or a streaming hash
-provider. The suite cannot distinguish the two implementations, and says so rather than pretending
-otherwise.
 
 ## Out of scope
 

@@ -2,8 +2,9 @@
  * Tests for the read-only half of {@link denoFileSystem} and for {@link denoByteReader}.
  *
  * Everything here runs under the root task's `--allow-read --allow-env` grant — no writes. The
- * methods that open for write (`writeText`, `rename`, `mkdirp`, `lock`) and the successful branch of
- * `remove` are the ones that genuinely cannot be covered here; they are named in the package README.
+ * methods that open for write (`writeText`, `appendText`, `rename`, `mkdirp`, `lock`) and the
+ * successful branch of `remove` are the ones that genuinely cannot be covered here; they are named
+ * in the package README.
  *
  * Fixtures are resolved through the URL of this file, never through `$HOME` or a hardcoded checkout
  * path, so the suite is location-independent.
@@ -13,7 +14,6 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
 import { denoByteReader, denoFileSystem } from "./deno-fs.ts"
-import { sha256OfStream } from "./hash-file.ts"
 
 /** This file's own directory: an existing directory with at least this file in it. */
 const SERVER_DIR = new URL("./", import.meta.url)
@@ -109,16 +109,19 @@ describe("denoByteReader", () => {
     }
   })
 
-  const digestIsChunkIndependent = "produces a chunk-boundary-independent digest of the file"
-  it(digestIsChunkIndependent, async () => {
+  const bytesAreChunkIndependent = "reassembles the same bytes regardless of chunk size"
+  it(bytesAreChunkIndependent, async () => {
     const whole = await Deno.readFile(THIS_FILE)
-    const oneShot = await sha256OfStream({
-      async *chunks() {
-        yield whole
-      },
-    })
     for (const chunkSize of [1, 7, 64, 4096]) {
-      expect(await sha256OfStream(denoByteReader(THIS_FILE, chunkSize))).toBe(oneShot)
+      const parts: Uint8Array[] = []
+      for await (const chunk of denoByteReader(THIS_FILE, chunkSize).chunks()) parts.push(chunk)
+      const reassembled = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
+      let offset = 0
+      for (const part of parts) {
+        reassembled.set(part, offset)
+        offset += part.length
+      }
+      expect(reassembled).toEqual(whole)
     }
   })
 
