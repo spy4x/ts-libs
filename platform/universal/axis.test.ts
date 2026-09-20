@@ -106,4 +106,19 @@ describe("ticks", () => {
     expect(() => ticks(0, Number.NaN)).toThrow("must be finite")
     expect(() => ticks(Number.POSITIVE_INFINITY, 1)).toThrow("must be finite")
   })
+
+  it("terminates on a span narrower than the float precision of its bounds, instead of looping forever", () => {
+    // Before the fix, a cursor advanced by `value += step` never moved once the step (20) was
+    // finer than one ulp at 1e18 (128), so the loop that read `value <= end + step / 2` never
+    // returned. Expected values taken from `preact-components/charts/scales.ts`, the reference
+    // this package is now the single home for (see `platform/universal/axis.ts`'s JSDoc).
+    expect(ticks(1e18, 1e18 + 100)).toEqual([1e18, 1e18 + 100])
+  })
+
+  it("keeps six distinct ticks for a span far below one unit, instead of collapsing to a single 0", () => {
+    // Before the fix, `niceStep` floored its result at 1e-9 — coarser than the whole 1e-12 span —
+    // so every tick but the first rounded away and `ticks(0, 1e-12)` returned `[0]`. Expected
+    // values taken from `preact-components/charts/scales.ts`.
+    expect(ticks(0, 1e-12)).toEqual([0, 2e-13, 4e-13, 6e-13, 8e-13, 1e-12])
+  })
 })
