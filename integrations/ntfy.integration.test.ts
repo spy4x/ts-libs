@@ -32,28 +32,69 @@ const startServer = (
   }
 }
 
+/** How long the "never answers" test waits before failing on its own. */
+const GUARD_BOUND_MS = 5000
+
+/**
+ * Rejects with a clear message if `promise` has not settled within `boundMs`.
+ *
+ * Without this, a regression that drops the client's own timeout turns this
+ * test into a hang: nothing here ever times the client call out, so the test
+ * would block the whole integration run until an outer process killed it,
+ * printing no useful failure. `Promise.race` does not cancel the loser, so
+ * the caller must still let it settle — see the `finally` block below.
+ */
+const withGuard = async <T>(promise: Promise<T>, boundMs: number): Promise<T> => {
+  let timer: number | undefined
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`the client did not give up within ${boundMs}ms`)),
+      boundMs,
+    )
+  })
+  try {
+    return await Promise.race([promise, guard])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 describe("NtfyClient against a real server", () => {
   it("fails with a timeout error inside the budget when the server never answers", async () => {
-    const { baseUrl, stop } = startServer(() => new Promise<Response>(() => {}))
-    try {
-      const client = new NtfyClient(
-        { baseUrl, topic: "it-never-answers" },
-        { requestTimeoutMs: 300, retry: { maxAttempts: 1, totalBudgetMs: 2000 } },
-      )
-      const startedAt = performance.now()
-      const result = await client.push({
-        title: "integration",
-        message: "never answers",
-        severity: NotificationSeverity.Failure,
+    // The handler never resolves on its own; the test releases it explicitly
+    // in `finally`, so cleanup never depends on the client having given up —
+    // a client that regressed and never times out must not be able to hang
+    // `stop()` too.
+    let releasePendingRequest: (() => void) | undefined
+    const { baseUrl, stop } = startServer(() =>
+      new Promise<Response>((resolve) => {
+        releasePendingRequest = () => resolve(new Response(null, { status: 599 }))
       })
+    )
+    const client = new NtfyClient(
+      { baseUrl, topic: "it-never-answers" },
+      { requestTimeoutMs: 300, retry: { maxAttempts: 1, totalBudgetMs: 2000 } },
+    )
+    const startedAt = performance.now()
+    const pushed = client.push({
+      title: "integration",
+      message: "never answers",
+      severity: NotificationSeverity.Failure,
+    })
+    try {
+      const result = await withGuard(pushed, GUARD_BOUND_MS)
       const elapsedMs = performance.now() - startedAt
       expect(result.ok).toBe(false)
       expect(result.ok === false && result.code).toBe("timeout")
       // A generous upper bound, not a tight wall-clock assertion: the point is
       // that the call returned at all instead of hanging forever.
-      expect(elapsedMs).toBeLessThan(5000)
+      expect(elapsedMs).toBeLessThan(GUARD_BOUND_MS)
     } finally {
+      releasePendingRequest?.()
       await stop()
+      // Let the race's loser settle before this test function returns, so a
+      // guard-triggered failure never leaves a dangling op for the sanitizers.
+      await pushed.catch(() => {})
     }
   })
 
