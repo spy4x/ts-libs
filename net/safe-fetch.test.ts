@@ -13,6 +13,9 @@ import { type DnsResolver, UrlValidationError, validatePublicUrl } from "./url-p
 const FAKE_AUTHORIZATION = "Bearer not-a-real-token"
 const FAKE_COOKIE = "session=not-a-real-session"
 
+/** The part of both fake credentials that must never reach the second site. */
+const SECRET_FRAGMENT = "not-a-real"
+
 /** Deterministic resolver: one host answers private, everything else public. */
 const ALWAYS_PUBLIC: DnsResolver = {
   resolve: (host: string) => {
@@ -473,9 +476,11 @@ describe("safeFetch", () => {
       resolver: ALWAYS_PUBLIC,
       headers: { "User-Agent": "ts-libs-test", Authorization: FAKE_AUTHORIZATION },
     })
+    // Lower-cased: the caller's headers go through the platform `Headers`, which
+    // is where the names this module compares against come from.
     assertEquals(sentHeaders, [{
-      "User-Agent": "ts-libs-test",
-      Authorization: FAKE_AUTHORIZATION,
+      "user-agent": "ts-libs-test",
+      authorization: FAKE_AUTHORIZATION,
     }])
   })
 
@@ -489,7 +494,7 @@ describe("safeFetch", () => {
       resolver: ALWAYS_PUBLIC,
       headers: { Authorization: FAKE_AUTHORIZATION, Cookie: FAKE_COOKIE },
     })
-    assertEquals(sentHeaders[1], { Authorization: FAKE_AUTHORIZATION, Cookie: FAKE_COOKIE })
+    assertEquals(sentHeaders[1], { authorization: FAKE_AUTHORIZATION, cookie: FAKE_COOKIE })
   })
 
   it("drops the authorization header when a redirect changes site", async () => {
@@ -502,7 +507,7 @@ describe("safeFetch", () => {
       resolver: ALWAYS_PUBLIC,
       headers: { Authorization: FAKE_AUTHORIZATION },
     })
-    assertEquals(sentHeaders[0], { Authorization: FAKE_AUTHORIZATION })
+    assertEquals(sentHeaders[0], { authorization: FAKE_AUTHORIZATION })
     assertEquals(sentHeaders[1], {})
   })
 
@@ -542,7 +547,7 @@ describe("safeFetch", () => {
       resolver: ALWAYS_PUBLIC,
       headers: { "User-Agent": "ts-libs-test", Authorization: FAKE_AUTHORIZATION },
     })
-    assertEquals(sentHeaders[1], { "User-Agent": "ts-libs-test" })
+    assertEquals(sentHeaders[1], { "user-agent": "ts-libs-test" })
   })
 
   it("drops the credential headers when only the port changes", async () => {
@@ -609,6 +614,78 @@ describe("safeFetch", () => {
       headers: { Authorization: FAKE_AUTHORIZATION },
     })
     assertEquals(sentHeaders[2], {})
+  })
+
+  // ── Whatever shape the caller's headers arrive in ────────────────────────
+
+  it("sends and drops the same headers whichever shape they arrive in", async () => {
+    // A `Headers`, an array of pairs and a plain object are all shapes the
+    // platform `fetch` takes, and a caller with a cast — or no types at all —
+    // passes any of them. All three have to reach the first site and none of
+    // them may reach the second.
+    const shapes: [string, HeadersInit][] = [
+      ["Headers", new Headers({ Authorization: FAKE_AUTHORIZATION, "User-Agent": "ts-libs-test" })],
+      ["array of pairs", [["Authorization", FAKE_AUTHORIZATION], ["User-Agent", "ts-libs-test"]]],
+      ["plain object", { Authorization: FAKE_AUTHORIZATION, "User-Agent": "ts-libs-test" }],
+    ]
+    for (const [shape, headers] of shapes) {
+      const { fetcher, sentHeaders } = fakeFetcher([
+        { url: "https://example.com/old", status: 302, location: "https://other.example/landing" },
+        { url: "https://other.example/landing", status: 200, body: "ok" },
+      ])
+      await safeFetch("https://example.com/old", { fetcher, resolver: ALWAYS_PUBLIC, headers })
+      assertEquals(sentHeaders[0], {
+        authorization: FAKE_AUTHORIZATION,
+        "user-agent": "ts-libs-test",
+      }, shape)
+      assertEquals(sentHeaders[1], { "user-agent": "ts-libs-test" }, shape)
+    }
+  })
+
+  it("never lets a credential value cross a site under another name", async () => {
+    // Read as a plain record, an array of pairs yields the indices as names —
+    // `0`, `1` — with the whole pair as the value, so the secret crossed the
+    // origin under a name no list of credential headers can match. The
+    // assertion is on the values for that reason: a name nobody expected is
+    // exactly the case it has to catch.
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/old", status: 302, location: "https://other.example/landing" },
+      { url: "https://other.example/landing", status: 200, body: "ok" },
+    ])
+    const pairs: [string, string][] = [
+      ["Authorization", FAKE_AUTHORIZATION],
+      ["Cookie", FAKE_COOKIE],
+    ]
+    await safeFetch("https://example.com/old", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: pairs,
+    })
+    const crossed = Object.values(sentHeaders[1] ?? {}).join(" ")
+    assertEquals(crossed.includes(SECRET_FRAGMENT), false, crossed)
+  })
+
+  it("refuses headers the platform will not parse", async () => {
+    const { fetcher, getCalls } = fakeFetcher([
+      { url: "https://example.com/page", status: 200, body: "ok" },
+    ])
+    const refused: HeadersInit[] = [
+      // A pair that is not a pair, an invalid header name, and a value with a
+      // newline in it — the last one being how a header injection is written.
+      [["Authorization"]] as unknown as HeadersInit,
+      { "User Agent": "ts-libs-test" },
+      { Authorization: "Bearer x\r\nX-Injected: y" },
+      42 as unknown as HeadersInit,
+    ]
+    for (const headers of refused) {
+      const error = await assertRejects(
+        () => safeFetch("https://example.com/page", { fetcher, resolver: ALWAYS_PUBLIC, headers }),
+        UrlValidationError,
+        "headers",
+      )
+      assertEquals(error.code, "invalid_format")
+    }
+    assertEquals(getCalls(), 0)
   })
 
   // ── Timeout, cancellation and the timer lifecycle ────────────────────────

@@ -172,11 +172,28 @@ per RFC 9110.
 Taking redirects away from the platform `fetch` also takes away its header
 rules, so they are applied here: `Authorization`, `Cookie` and
 `Proxy-Authorization` (`CREDENTIAL_HEADERS`) are dropped as soon as a hop lands
-on a different origin, and stay dropped for the rest of the chain. Scheme, host
-and port all count as a change of origin. A redirect refused by the policy, and
-a `Location` the URL parser cannot read, both raise `UrlValidationError` with
-code `invalid_redirect` or `non_public_ip` — never a bare `TypeError` — after
-the redirect body has been cancelled.
+on a different origin, and stay dropped for the rest of the chain — a bounce
+back to the first site does not get them back, and neither does a further hop
+inside the second one. Scheme, host and port all count as a change of origin. A
+redirect refused by the policy, and a `Location` the URL parser cannot read,
+both raise `UrlValidationError` with code `invalid_redirect` or `non_public_ip`
+— never a bare `TypeError` — after the redirect body has been cancelled.
+
+Two things about that rule are worth knowing before you rely on it:
+
+- **`headers` is parsed by the platform `Headers` before anything reads it**, so
+  a `Headers`, an array of name/value pairs and a plain object all behave the
+  same way. That is a security decision rather than a convenience: an array of
+  pairs read as a plain record gives back the _indices_ as header names, so a
+  credential crossed to the other origin under the name `0` with the secret
+  still in the value, and a `Headers` object read the same way lost every header
+  instead. Anything the platform refuses — a malformed pair, an invalid name, a
+  value with a newline in it — is refused here as `UrlValidationError` with code
+  `invalid_format`, before any request is made.
+- **Only the three standard names are dropped**, exactly as the platform does
+  it. A house header that carries a secret — `X-Api-Key`, `X-Auth-Token` — does
+  follow a redirect to another origin. Add it to the request only where it is
+  needed, or do not send it through `safeFetch`.
 
 `Fetcher` is the injection seam for the transport; `url` in the result is
 always the canonical URL that actually answered.

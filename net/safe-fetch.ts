@@ -51,6 +51,11 @@ export const DEFAULT_TIMEOUT_MS: number = 10_000
  * and HTTP field names are case-insensitive. The list is the one the platform
  * `fetch` strips on a cross-origin redirect: everything that authenticates the
  * caller to the origin it was addressed to and to nobody else.
+ *
+ * It is the standard names only, exactly like the platform. A house header that
+ * carries a secret — `X-Api-Key`, `X-Auth-Token` — is not on it and does follow
+ * a redirect to another origin. A caller who sends one either adds it to the
+ * request only when it is needed, or does not use `safeFetch` for that request.
  */
 export const CREDENTIAL_HEADERS: readonly string[] = [
   "authorization",
@@ -115,8 +120,18 @@ export interface SafeFetchOptions {
   timeoutMs?: number
   /** Fetcher implementation; defaults to the global `fetch`. */
   fetcher?: Fetcher
-  /** Request headers (e.g. User-Agent). */
-  headers?: Record<string, string>
+  /**
+   * Request headers, in any shape the platform `fetch` accepts: a `Headers`, an
+   * array of name/value pairs, or a plain object.
+   *
+   * Whatever arrives is normalised through the platform `Headers` before
+   * anything in this module reads it, so the names compared against
+   * `CREDENTIAL_HEADERS` are real header names rather than whatever keys the
+   * value happened to have. Anything the platform refuses — a malformed pair, an
+   * invalid name, a value with a newline in it — is refused here too, with
+   * `UrlValidationError` and code `invalid_format`.
+   */
+  headers?: HeadersInit
   /** Request method. Defaults to `GET`. */
   method?: SafeFetchMethod | string
 }
@@ -138,14 +153,16 @@ export interface SafeFetchResult {
  * Method handling follows RFC 9110: a 301/302/303 downgrades any non-`GET`/`HEAD`
  * request to `GET`; a 307/308 preserves the method.
  *
- * `options.headers` are sent on the first request and carried along the chain,
- * except that the headers in `CREDENTIAL_HEADERS` are dropped as soon as a hop
- * lands on a different origin — and stay dropped for the rest of the chain, so
- * a bounce back to the first origin does not hand them over after all.
+ * `options.headers` are normalised through the platform `Headers`, sent on the
+ * first request and carried along the chain, except that the headers in
+ * `CREDENTIAL_HEADERS` are dropped as soon as a hop lands on a different origin
+ * — and stay dropped for the rest of the chain, so neither a bounce back to the
+ * first origin nor a further hop inside the second one gets them back.
  *
  * @throws `UrlValidationError` when the initial URL or any redirect target
- * fails the policy, when a redirect carries no `Location`, or when the chain
- * exceeds `maxRedirects`.
+ * fails the policy, when a redirect carries no `Location`, when the chain
+ * exceeds `maxRedirects`, or when an option — `timeoutMs`, `maxRedirects`,
+ * `headers` — is not something this module can use.
  */
 export async function safeFetch(
   startUrl: string,
@@ -172,7 +189,7 @@ export async function safeFetch(
   }
   const resolver = options.resolver ?? defaultResolver
   let method = options.method ?? SafeFetchMethod.Get
-  let headers = options.headers
+  let headers = normalizeHeaders(options.headers)
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -267,6 +284,38 @@ function methodAfterRedirect(status: number, method: string): string {
     return upper === SafeFetchMethod.Get ? method : SafeFetchMethod.Get
   }
   return method
+}
+
+/**
+ * Turn whatever the caller passed into a record of real header names.
+ *
+ * The platform `Headers` is the parser for every shape `fetch` takes, so it is
+ * the parser here: a `Headers`, an array of pairs and a plain object all come
+ * out as lower-cased names with their values, and nothing else gets past.
+ *
+ * This is a security boundary, not a convenience. Reading an array of pairs
+ * with `Object.entries` gives the *indices* as names — `0`, `1` — and the pair
+ * as the value, so a credential crosses an origin under a name no list of
+ * credential headers will ever match, with the secret still in the value. A
+ * `Headers` object read the same way gives nothing at all, and the caller's
+ * headers silently vanish. One parser removes both.
+ *
+ * @throws `UrlValidationError` with code `invalid_format` for anything the
+ * platform refuses, which includes an invalid header name and a value carrying
+ * a newline.
+ */
+function normalizeHeaders(init: HeadersInit | undefined): Record<string, string> | undefined {
+  if (init === undefined) return undefined
+  let parsed: Headers
+  try {
+    parsed = new Headers(init)
+  } catch {
+    throw new UrlValidationError(
+      "invalid_format",
+      "headers must be a Headers, an array of name/value pairs, or a plain object",
+    )
+  }
+  return Object.fromEntries(parsed)
 }
 
 /**

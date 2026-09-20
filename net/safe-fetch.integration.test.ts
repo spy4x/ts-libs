@@ -247,6 +247,44 @@ describe("safeFetch over real sockets", () => {
     }
   })
 
+  it("sends no credential to another site whatever shape the headers arrive in", async () => {
+    // Over a real connection the header record becomes real header lines, so a
+    // credential that crossed under the name `0` would arrive as
+    // `0: Authorization,Bearer …`. Each shape is checked on the wire.
+    const shapes: [string, HeadersInit][] = [
+      ["Headers", new Headers({ Authorization: FAKE_AUTHORIZATION, Cookie: FAKE_COOKIE })],
+      ["array of pairs", [["Authorization", FAKE_AUTHORIZATION], ["Cookie", FAKE_COOKIE]]],
+      ["plain object", { Authorization: FAKE_AUTHORIZATION, Cookie: FAKE_COOKIE }],
+    ]
+    for (const [shape, headers] of shapes) {
+      const landing = startSite("site-b.test", () => new Response("landed", { status: 200 }))
+      const start = startSite(
+        "site-a.test",
+        () =>
+          new Response("moved", {
+            status: 302,
+            headers: { location: `${landing.origin}/landing` },
+          }),
+      )
+      try {
+        const result = await safeFetch(`${start.origin}/start`, {
+          fetcher: loopbackFetcher([start, landing]),
+          resolver: PUBLIC_RESOLVER,
+          headers,
+        })
+        assertEquals(await readBoundedText(result.response), "landed")
+        // The first site is addressed by the caller, so it gets the credential
+        // under its proper name — that is what makes the second assertion mean
+        // something.
+        assertEquals(start.received[0].get("authorization"), FAKE_AUTHORIZATION, shape)
+        assertEquals(carriesSecret(landing.received[0]), false, `${shape}: leaked`)
+      } finally {
+        await start.shutdown()
+        await landing.shutdown()
+      }
+    }
+  })
+
   it("gives up on a body that stops arriving, and lets the server know", async () => {
     const body = stalledBody()
     const site = startSite("site-a.test", () => new Response(body.stream, { status: 200 }))
