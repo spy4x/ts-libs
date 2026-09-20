@@ -17,14 +17,22 @@
  * exercise. Every assertion here is unconditional — nothing skips.
  */
 
-import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert"
+import {
+  assertEquals,
+  assertMatch,
+  assertRejects,
+  assertStrictEquals,
+  assertThrows,
+} from "@std/assert"
 import type { SqliteDriver, SqliteStatement } from "./sqlite.ts"
 import {
   applySqliteSchema,
+  DEFAULT_MIGRATIONS_TABLE,
   openSqliteDb,
   resolveSqlitePath,
   SqliteDb,
   SqliteEnvName,
+  SqliteMigrationDriver,
 } from "./sqlite.ts"
 import { createNodeSqliteDriver } from "./testing/node-sqlite-driver.ts"
 
@@ -429,5 +437,184 @@ Deno.test("queryOne returns undefined where queryAll returns no rows", async () 
   await db.exec("CREATE TABLE empty (id INTEGER PRIMARY KEY)")
   assertEquals(await db.queryOne("SELECT id FROM empty"), undefined)
   assertEquals(await db.queryAll("SELECT id FROM empty"), [])
+  await db.close()
+})
+
+/**
+ * Opens an in-memory database whose driver records every statement it receives.
+ *
+ * `exec` reaches the real engine, so a multi-statement payload is genuinely executed:
+ * that is the behaviour the injection tests below assert is unreachable, and it is
+ * worth recording rather than assuming. `issued` and `prepared` are separate because
+ * they are separate paths — `exec` runs text, `prepare` compiles a single statement —
+ * and a driver double that merged them could not tell a spliced identifier from a
+ * bound one. A `:memory:` database cannot verify "the `DROP` did not run" by looking
+ * for a dropped table unless the table was planted on the same handle, which is what
+ * the injection test does.
+ */
+async function recordingMemory(): Promise<{
+  db: SqliteDb
+  issued: string[]
+  prepared: string[]
+}> {
+  const real = await createNodeSqliteDriver({ path: ":memory:" })
+  const issued: string[] = []
+  const prepared: string[] = []
+  return {
+    issued,
+    prepared,
+    db: new SqliteDb(
+      {
+        exec: (sql: string) => {
+          issued.push(sql)
+          return real.exec(sql)
+        },
+        prepare: (sql: string) => {
+          prepared.push(sql)
+          return real.prepare(sql)
+        },
+        close: () => real.close(),
+      },
+      ":memory:",
+    ),
+  }
+}
+
+/**
+ * The payloads a caller must not be able to get through `table`.
+ *
+ * The first two are the ones the PR #56 review probed; both are malformed enough that
+ * SQLite rejects the *first* statement, which is why they appeared safe. The third is
+ * the well-formed one the coordinator measured data loss with: SQLite admits
+ * `CREATE TABLE IF NOT EXISTS migrations (name TEXT)`, the `;` then separates a real
+ * `DROP TABLE victims`, and the trailing `--` comments the rest of the template out.
+ */
+const REJECTED_TABLE_NAMES = [
+  `t"; DROP TABLE victims; --`,
+  "t; DROP TABLE victims",
+  "migrations (name TEXT); DROP TABLE victims; --",
+  "",
+  `t"x`,
+  "t\0x",
+  "my-migrations",
+  "my migrations",
+  "migrations\uFF1B",
+]
+
+Deno.test("every malformed history table name is rejected at construction", async () => {
+  const { db } = await recordingMemory()
+  for (const table of REJECTED_TABLE_NAMES) {
+    const error = assertThrows(
+      () => new SqliteMigrationDriver({ db, table }),
+      RangeError,
+      "table name must be a bare identifier, got ",
+    )
+    assertEquals(error.message.includes(JSON.stringify(table)), true)
+  }
+  await db.close()
+})
+
+Deno.test("a rejected history table name never reaches the driver", async () => {
+  const { db, issued } = await recordingMemory()
+  await db.exec("CREATE TABLE victims (id INTEGER)")
+
+  for (const table of REJECTED_TABLE_NAMES) {
+    assertThrows(() => new SqliteMigrationDriver({ db, table }), RangeError)
+  }
+
+  assertEquals(issued, ["CREATE TABLE victims (id INTEGER)"])
+  await db.close()
+})
+
+Deno.test("an injected history table name cannot drop a table", async () => {
+  const { db, issued } = await recordingMemory()
+  // Planted on the same handle the driver would run through, which is the arrangement
+  // the coordinator's probe measured the loss in.
+  await db.exec("CREATE TABLE victims (id INTEGER)")
+  await db.execute("INSERT INTO victims (id) VALUES (?)", 1)
+  const injected = "migrations (name TEXT); DROP TABLE victims; --"
+
+  assertThrows(() => new SqliteMigrationDriver({ db, table: injected }), RangeError)
+
+  // One statement was issued in this test's whole lifetime: the plant. The injected
+  // text appears nowhere in it.
+  assertEquals(issued.length, 1)
+  assertEquals(issued[0].includes("DROP TABLE victims"), false)
+  assertEquals(await db.queryOne<{ id: number }>("SELECT id FROM victims"), { id: 1 })
+  await db.close()
+})
+
+Deno.test("a legitimate history table name is quoted in every statement", async () => {
+  const { db, issued, prepared } = await recordingMemory()
+  const driver = new SqliteMigrationDriver({ db, table: "migrations_v2" })
+
+  await driver.createHistoryTable()
+  await driver.applyInTransaction({
+    fileName: "0001_one.sql",
+    name: "0001_one",
+    sqlText: "CREATE TABLE one (id INTEGER)",
+    withoutTransaction: false,
+  })
+  assertEquals(await driver.appliedNames(), ["0001_one"])
+  await driver.applyWithoutTransaction({
+    fileName: "0002_two.no_transaction.sql",
+    name: "0002_two",
+    sqlText: "SELECT 1",
+    withoutTransaction: true,
+  })
+  assertEquals(await driver.appliedNames(), ["0001_one", "0002_two"])
+
+  // The `exec` path: the history table, then the `BEGIN`/`COMMIT` around the first
+  // migration. The second migration runs bare, which is the `.no_transaction` contract.
+  assertMatch(issued[0], /^\s*CREATE TABLE IF NOT EXISTS "migrations_v2"/)
+  assertEquals(issued.slice(1), [
+    "BEGIN",
+    "CREATE TABLE one (id INTEGER)",
+    "COMMIT",
+    "SELECT 1",
+  ])
+  // The `prepare` path: the two history inserts and the two history reads, every one of
+  // them spelling the identifier in its quoted form.
+  const inserts = prepared.filter((sql) => sql.startsWith("INSERT INTO"))
+  assertEquals(inserts, [
+    'INSERT INTO "migrations_v2" (name) VALUES (?)',
+    'INSERT INTO "migrations_v2" (name) VALUES (?)',
+  ])
+  const reads = prepared.filter((sql) => sql.startsWith("SELECT name FROM"))
+  assertEquals(reads, [
+    'SELECT name FROM "migrations_v2" ORDER BY id',
+    'SELECT name FROM "migrations_v2" ORDER BY id',
+  ])
+  await db.close()
+})
+
+Deno.test("the default history table name is accepted and quoted", async () => {
+  const { db, issued, prepared } = await recordingMemory()
+  await new SqliteMigrationDriver({ db }).createHistoryTable()
+  assertMatch(issued[0], new RegExp(`CREATE TABLE IF NOT EXISTS "${DEFAULT_MIGRATIONS_TABLE}"`))
+  assertEquals(prepared, [])
+  await db.close()
+})
+
+Deno.test("a history table name is rejected before the database is asked anything", async () => {
+  const { db, issued } = await recordingMemory()
+  const before = issued.length
+  assertThrows(
+    () => new SqliteMigrationDriver({ db, table: "migrations\uFF1B" }),
+    RangeError,
+    "table name must be a bare identifier",
+  )
+  assertEquals(issued.slice(before), [])
+  await db.close()
+})
+
+Deno.test("a schema table that is not a bare identifier is rejected", async () => {
+  const { db, issued } = await recordingMemory()
+  await assertRejects(
+    () => applySqliteSchema(db, { table: "entries; DROP TABLE victims", sql: SCHEMA }),
+    RangeError,
+    "schema table must be a bare identifier",
+  )
+  assertEquals(issued, [])
   await db.close()
 })

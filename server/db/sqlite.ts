@@ -98,6 +98,46 @@ export const DEFAULT_SQLITE_FILE = "db.sqlite"
 /** Default history table name, matching the Postgres adapter's. */
 export const DEFAULT_MIGRATIONS_TABLE = "migrations"
 
+/**
+ * The identifiers this module admits, as one shape.
+ *
+ * A leading letter or underscore, then letters, digits or underscores. Dashes and
+ * spaces are excluded deliberately, so `my-migrations` and `my migrations` fail where
+ * the caller wrote them instead of at the first statement that mentions them. Digits
+ * are admitted because the migration table is parameterised precisely so a consumer
+ * can use `migrations_v2`.
+ */
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * Reject a caller-supplied identifier before it is interpolated into SQL text.
+ *
+ * Every identifier this module splices — a migration table, a schema's table — and a
+ * pragma name go through this one function, so the allowlist is one shape rather than
+ * one per call site. It is not the whole barrier: {@link quoteIdentifier} runs after
+ * it. It is however the barrier that runs at construction, so an unquotable value
+ * fails where it is passed rather than at whatever statement first uses it.
+ */
+function assertIdentifier(name: string, option: string): string {
+  if (!IDENTIFIER.test(name)) {
+    throw new RangeError(`${option} must be a bare identifier, got ${JSON.stringify(name)}`)
+  }
+  return name
+}
+
+/**
+ * Render an identifier as a quoted SQL identifier, internal `"` doubled.
+ *
+ * The SQLite counterpart of what `postgres-migrate.ts` gets from `sql(this.table)`
+ * (`:72,84,92,98`) — postgres.js's own `escapeIdentifier` is
+ * `'"' + str.replace(/"/g, '""') + '"'`. No escape survives {@link assertIdentifier},
+ * so the doubling is unreachable through this module; it is here so that the quoting
+ * is correct on its own terms rather than only because validation ran first.
+ */
+function quoteIdentifier(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`
+}
+
 /** How a transaction is opened and closed, per driver dialect. */
 export interface TransactionStatements {
   begin: string
@@ -187,7 +227,7 @@ export class SqliteDb {
    * reason.
    */
   async pragma(name: string): Promise<unknown> {
-    const row = await this.queryOne<unknown>(`PRAGMA ${assertPragmaName(name)}`)
+    const row = await this.queryOne<unknown>(`PRAGMA ${assertIdentifier(name, "pragma name")}`)
     // Both drivers answer a pragma with a one-column row (`{ journal_mode: "wal" }`), and a
     // double may answer with the bare value. `Object.values` of a number is `[]`, so the
     // scalar case is kept as it is rather than read as "no result".
@@ -307,17 +347,29 @@ export async function openSqliteDb(options: OpenSqliteDbOptions): Promise<Sqlite
 
 /** One schema, applied either once or through a caller-supplied upgrade. */
 export interface SqliteSchema {
-  /** Table the schema owns. Used to detect a legacy table and to name it in errors. */
+  /**
+   * Table the schema owns. Used to detect a legacy table and to name it in errors.
+   *
+   * A bare identifier, validated when the schema is applied — the same shape
+   * {@link SqliteMigrationDriver}'s `table` takes. The schema's own SQL is not this:
+   * `sql` and `upgrade` are caller-supplied SQL *text* by design, and neither is
+   * escaped or inspected.
+   */
   table: string
   /**
    * Schema SQL. Must be idempotent on its own terms — `CREATE TABLE IF NOT EXISTS`
    * and the like.
+   *
+   * Raw SQL text, run as written: this is the option's whole contract. Nothing here
+   * validates or quotes it, so the caller owns every identifier inside it.
    */
   sql: string
   /**
    * Upgrade a table that exists but is not the one {@link sql} declares. The
    * source's `stats_entries` STRICT migration (`:74-93`) is the shape. Omitted, the
    * schema SQL runs and any incompatibility is the engine's error.
+   *
+   * Raw SQL text like {@link sql}, and for the same reason.
    */
   upgrade?: (db: SqliteDb) => Promise<void>
 }
@@ -335,6 +387,11 @@ export interface SqliteSchema {
  * whose name is absent runs the schema SQL directly.
  */
 export async function applySqliteSchema(db: SqliteDb, schema: SqliteSchema): Promise<void> {
+  // The schema's table is interpolated nowhere here — the existence check is a bound
+  // parameter and `sqlite_master` is a fixed name — but it is validated because
+  // `SqliteSchema.table` is a caller-supplied identifier and this module admits one
+  // shape of those, not two.
+  assertIdentifier(schema.table, "schema table")
   const existing = await db.queryOne<{ strict: number }>(
     "SELECT strict FROM pragma_table_list WHERE name = ?",
     schema.table,
@@ -385,14 +442,33 @@ export async function removeSqliteFiles(
  * its history insert: SQLite has no `CREATE INDEX CONCURRENTLY`, and the suffix
  * exists so a caller with a statement that refuses a transaction — an `ATTACH`, a
  * `VACUUM` — has a way to say so.
+ *
+ * `table` is a caller-supplied identifier and is the one value here that is spliced
+ * into SQL text rather than bound as a parameter. It is validated against an
+ * identifier allowlist **and** quoted; see {@link assertIdentifier}. Migration names
+ * are bound, and the schema's `sql`/`upgrade` are the caller's own SQL text.
  */
 export class SqliteMigrationDriver implements MigrationDriver {
   private readonly db: SqliteDb
   private readonly table: string
 
+  /**
+   * @throws {RangeError} when `table` is not a bare identifier. Validated here, in
+   * the constructor, and not at first use: `options.table` reaches `exec`, whose
+   * multi-statement behaviour turns a table name into arbitrary SQL, so a bad value
+   * must fail while the caller still has the call on the stack. Measured on
+   * `83f3be3`, `table: "migrations (name TEXT); DROP TABLE victims; --"` executed the
+   * `DROP` *and* then threw, leaving the caller an exception and no signal that
+   * tables had been dropped.
+   */
   constructor(options: { db: SqliteDb; table?: string }) {
     this.db = options.db
-    this.table = options.table ?? DEFAULT_MIGRATIONS_TABLE
+    // Validated and then quoted. Validation is the barrier that runs before any SQL
+    // exists; quoting is what makes the splice safe on its own terms, the way
+    // `postgres-migrate.ts` gets it from `sql(this.table)`.
+    this.table = quoteIdentifier(
+      assertIdentifier(options.table ?? DEFAULT_MIGRATIONS_TABLE, "table name"),
+    )
   }
 
   /** Idempotent: a second call leaves the table and its rows untouched. */
@@ -426,14 +502,6 @@ export class SqliteMigrationDriver implements MigrationDriver {
     await this.db.exec(migration.sqlText)
     await this.db.execute(`INSERT INTO ${this.table} (name) VALUES (?)`, migration.name)
   }
-}
-
-/** Reject a pragma name that is not a bare identifier before it is interpolated. */
-function assertPragmaName(name: string): string {
-  if (!/^[a-z_]+$/i.test(name)) {
-    throw new RangeError(`pragma name must be a bare identifier, got ${JSON.stringify(name)}`)
-  }
-  return name
 }
 
 /** Assert a table by name exists, so an upgrade step that dropped it fails loudly. */
