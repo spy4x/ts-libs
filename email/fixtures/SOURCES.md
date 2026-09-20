@@ -4,6 +4,9 @@ Every `*.msg` here is an externally produced DKIM signature. The `*.key` beside 
 is the `v=DKIM1; …` TXT record the verifier should use. Expected verdicts are in
 the tables below; all are **valid**.
 
+Where these files come from and under whose licence is in `NOTICE.md`. Two of them
+were copied from dkimpy, whose licence requires that its notice travel with them.
+
 ## Provenance of `rfc6376-rsa*.msg` — read this before citing §3.5
 
 These are dkimpy's `data/rfc6376.signed.rsa.msg` (md5
