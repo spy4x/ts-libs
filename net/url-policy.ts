@@ -363,6 +363,12 @@ export function isPublicIpv6(addr: string): boolean {
     return isPublicIpv4(ipv4)
   }
 
+  // ::ffff:0:0:0/96 — IPv4-translated (RFC 2765 §2.1, dropped by RFC 6145). It
+  // wraps an IPv4 address one group further along than the mapped form above,
+  // so `::ffff:0:7f00:1` is loopback written in a way the mapped check does not
+  // see. The whole prefix goes: it is obsolete, so no destination needs it.
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0xffff && f === 0) return false
+
   // ::/128 unspecified
   if (groups.every((x) => x === 0)) return false
   // ::1/128 loopback — must precede the IPv4-compatible check below so a
@@ -383,16 +389,30 @@ export function isPublicIpv6(addr: string): boolean {
     const ipv4 = `${(g >> 8) & 0xff}.${g & 0xff}.${(h >> 8) & 0xff}.${h & 0xff}`
     return isPublicIpv4(ipv4)
   }
+  // 64:ff9b:1::/48 — local-use NAT64 (RFC 8215). Unlike the well-known prefix
+  // above it is chosen by whoever runs the network, and what it translates to is
+  // their business, so the address says nothing about where the packet lands.
+  if (a === 0x0064 && b === 0xff9b && c === 0x0001) return false
+  // 2002::/16 — 6to4 (RFC 3056), deprecated by RFC 7526. The second and third
+  // groups are an IPv4 address, so `2002:7f00:1::` is 127.0.0.1 in costume.
+  if (a === 0x2002) return false
   // 100::/64 discard prefix — block the whole prefix, not just the all-zero
   // address (RFC 6666). Any address whose first 64 bits are 0x0100:: is
   // reserved for discard.
   if (a === 0x0100 && b === 0 && c === 0 && d === 0) return false
   // 2001:db8::/32 documentation
   if (a === 0x2001 && b === 0x0db8) return false
-  // 2001::/32 Teredo (RFC 4380) — tunneling, not a real destination
-  if (a === 0x2001 && b === 0) return false
-  // 2001:2::/48 benchmarking (RFC 5180)
-  if (a === 0x2001 && b === 0x0002) return false
+  // 2001::/23 — the IETF protocol assignments block (RFC 2928). Teredo
+  // (2001::/32), benchmarking (2001:2::/48) and ORCHID (2001:10::/28 and
+  // 2001:20::/28) all sit inside it, and so does whatever is assigned there
+  // next. The neighbouring 2001:200::/23 and up are ordinary allocations and
+  // stay public — only the first 512 blocks are reserved.
+  if (a === 0x2001 && (b & 0xfe00) === 0) return false
+  // 3fff::/20 — documentation (RFC 9637)
+  if (a === 0x3fff && (b & 0xf000) === 0) return false
+  // 5f00::/16 — segment routing identifiers (RFC 9602): inside one operator's
+  // network by construction.
+  if (a === 0x5f00) return false
   // fec0::/10 deprecated site-local (RFC 3879)
   if ((a & 0xffc0) === 0xfec0) return false
   // fc00::/7 unique local addresses (ULA)
