@@ -11,9 +11,10 @@
  * - The transport sends no application mutation. Its outbound vocabulary is liveness and a sync
  *   handshake; {@link ClientTransport.send} is typed to {@link ClientMessage}, which has no
  *   mutation frame.
- * - A pushed hint is applied only when its sequence is contiguous with the stored cursor. On a gap
- *   the hint is discarded and `pull` is called with the cursor the client actually holds, so a
- *   missed frame costs one redundant REST pull instead of silently divergent local state.
+ * - A hint carries no payload — only a sequence — so arrival alone can never mean the client has
+ *   the data. Every hint that is not a duplicate, contiguous or not, is pulled from the cursor the
+ *   client already holds before anything moves; a gap and a merely-contiguous hint cost exactly
+ *   the same one REST pull, and the durable cursor advances only once that pull has succeeded.
  * - A failed handshake is reported as degraded, not fatal: the socket is an optimisation and the
  *   REST pull path stays correct without it.
  *
@@ -27,6 +28,14 @@
  * - Every timer is injected, so nothing here sleeps and every deadline below is asserted.
  * - A failed reconnect gate stops the loop instead of being ignored; a gate that throws is retried
  *   on the next backoff step rather than treated as consent.
+ * - A hint's sequence is no longer trusted as "received" on arrival (issue #65, finding 1): the
+ *   position now moves forward only once the pull it triggers has actually succeeded.
+ * - A reconnect always pulls every group the client holds a cursor for (issue #65, finding 2): a
+ *   quiet group's gap used to surface only when a later hint happened to reveal it, which in a
+ *   quiet group could be never.
+ * - The reconnect backoff counter resets only once the connection has proven itself — its first
+ *   inbound message — rather than at the moment the socket merely opens (issue #65, finding 3): a
+ *   server that accepts and immediately drops every attempt no longer causes a reconnect storm.
  */
 
 import { type BackoffConfig, DEFAULT_BACKOFF, nextBackoffDelay } from "./backoff.ts"
@@ -73,7 +82,11 @@ export interface AppliedHint {
 /** Snapshot of transport state, delivered to `onStatus` listeners. */
 export interface TransportStatusSnapshot {
   status: TransportStatus
-  /** Reconnect attempts since the last successful open. */
+  /**
+   * Reconnect attempts since the connection last proved itself healthy — its first inbound
+   * message, not merely the socket opening. A peer that accepts and immediately drops every
+   * attempt keeps this climbing instead of resetting to zero on each open.
+   */
   attempt: number
   /** Ack-tracked requests still waiting for a response. */
   pendingRequests: number
@@ -99,6 +112,13 @@ export interface GateResult {
 export interface CursorPort {
   /** The handshake payload: the real cursors, or an explicit cold start. */
   syncRequest(): SyncRequest | Promise<SyncRequest>
+  /**
+   * Current cursor for one group, read-only. Used to decide whether a hint is new — and, if so,
+   * what range to fetch — before anything is persisted. `PersistentCursorStore.cursorFor` and
+   * `CursorTracker.cursorFor` already satisfy this; it is a read the transport did not previously
+   * have a way to ask for without also committing.
+   */
+  cursorFor(groupId: string): number | Promise<number>
   /** Apply a pushed sequence. `PersistentCursorStore` satisfies this port. */
   apply(change: SequenceChange): ApplyOutcome | Promise<ApplyOutcome>
   /**
@@ -117,7 +137,14 @@ export interface ClientTransportOptions {
   socketFactory: SocketFactory
   clock: Clock
   cursors: CursorPort
-  /** The REST pull a gap falls back to. Hints are an optimisation; this is the authority. */
+  /**
+   * The REST pull that confirms a change and is the only thing that may move the cursor.
+   *
+   * Called for every hint that is not a duplicate — a genuine gap and a merely-contiguous hint
+   * both go through it, with the range the client still needs — and once after every reconnect,
+   * for each group the client already holds a cursor for. Hints tell the transport *when* to
+   * pull; this is what confirms the client actually has the data.
+   */
   pull: (gap: GapReport) => void | Promise<void>
   /** Checked before every reconnect attempt. A refusal stops reconnecting. */
   gate?: () => GateResult | Promise<GateResult>
@@ -251,6 +278,8 @@ export class ClientTransport {
   #attempt = 0
   #stopped = false
   #frameCounter = 0
+  /** Whether the current socket has produced any inbound message yet; gates the backoff reset. */
+  #connectionProven = false
   #heartbeatTimer: TimerHandle | null = null
   #pongTimer: TimerHandle | null = null
   #connectTimer: TimerHandle | null = null
@@ -438,6 +467,7 @@ export class ClientTransport {
   #attachSocket(socket: ManagedSocket): void {
     this.#forgetSocket()
     this.#socket = socket
+    this.#connectionProven = false
     this.#unsubscribes = [
       socket.onOpen(() => this.#handleOpen(socket)),
       socket.onMessage((data) => this.#handleMessage(socket, data)),
@@ -453,7 +483,19 @@ export class ClientTransport {
   }
 
   /**
-   * The socket opened: reset the attempt counter, start the heartbeat, handshake.
+   * The socket opened: start the heartbeat, handshake, and — on a reconnect — pull every group the
+   * client already holds a cursor for.
+   *
+   * The attempt counter is deliberately *not* reset here (issue #65, finding 3): a socket that
+   * merely opened has not been proven healthy yet, only {@link #handleMessage}'s first inbound
+   * frame does that. Resetting on open is what let a server that accepts and immediately drops
+   * every attempt keep every reconnect delay at the base value forever.
+   *
+   * A reconnect — as opposed to the transport's first ever connect — also pulls every group the
+   * client holds a cursor for (issue #65, finding 2): a gap opened while the socket was down would
+   * otherwise surface only if a later hint happened to reveal it, which in a quiet group may never
+   * happen. `attempt > 0` at this point is exactly "a reconnect": `connect()` starts it at zero and
+   * only `#scheduleReconnect` ever increments it, always before the attempt that follows.
    *
    * The handshake is *not* put on {@link #enqueue}'s chain. That chain serialises cursor decisions so
    * hints are applied in arrival order; a handshake touches no cursor, and chaining it would delay
@@ -470,10 +512,11 @@ export class ClientTransport {
   #handleOpen(socket: ManagedSocket): void {
     if (this.#socket !== socket) return
     this.#clearConnectTimer()
-    this.#attempt = 0
+    const isReconnect = this.#attempt > 0
     this.#setStatus(TransportStatus.Open)
     this.#startHeartbeat()
     void this.#handshake().catch((error: unknown) => this.#report(toError(error)))
+    if (isReconnect) this.#enqueue(() => this.#pullAfterReconnect())
   }
 
   /** The socket never opened in time. Abandon the attempt and let the close path reconnect. */
@@ -498,9 +541,17 @@ export class ClientTransport {
    * Everything decoded here is one of: liveness, an acknowledgement, or a change hint. The first
    * two are handled locally; a hint goes through the cursor and the serialised apply chain, so
    * hints are decided in arrival order even when the cursor store is asynchronous.
+   *
+   * The first frame on a socket is also what proves the connection healthy and resets the backoff
+   * counter (issue #65, finding 3). Any frame counts, decodable or not: bytes arriving at all is
+   * what a socket that opened and was immediately dropped never produces.
    */
   #handleMessage(socket: ManagedSocket, data: string): void {
     if (this.#socket !== socket) return
+    if (!this.#connectionProven) {
+      this.#connectionProven = true
+      this.#attempt = 0
+    }
     const result = this.#codec.decode(data)
     if (!result.ok) {
       this.#report(new Error(`dropped a malformed frame: ${result.reason}`))
@@ -543,37 +594,64 @@ export class ClientTransport {
   }
 
   /**
-   * Decide one hint against the durable cursor.
+   * Decide one hint against the durable cursor, then fetch before the position moves.
    *
-   * Applied → fan out to `onChange`. Duplicate or old → ignored without touching the cursor. Gap →
-   * discarded, and the pull is called with the cursor the client holds, which is what makes a
-   * missed frame cost one redundant pull instead of divergent state.
+   * A hint carries no payload — only a sequence — so its arrival is never proof the client holds
+   * the data (issue #65, finding 1). Duplicate or older than the cursor → nothing new arrived,
+   * ignored, no pull. Anything else — a genuine gap or a hint that is merely the next sequence — is
+   * pulled first, with the range the client still needs; only once that pull has actually succeeded
+   * is `cursors.apply` called, which is the one place the durable position moves. A failed pull
+   * leaves the cursor exactly where it was, and a hint that turns out to still be a gap after the
+   * pull (the app's own pull handler did not catch it up) is left for the next one, exactly as
+   * before.
    */
   async #applyHint(hint: AppliedHint): Promise<void> {
+    const cursor = await this.#options.cursors.cursorFor(hint.groupId)
+    if (hint.sequence <= cursor) return
+
+    const ok = await this.#runPull({
+      groupId: hint.groupId,
+      since: cursor,
+      received: hint.sequence,
+    })
+    if (!ok) return
+
     const outcome = await this.#options.cursors.apply(hint)
-    if (outcome.status === ApplyStatus.Gap) {
-      await this.#pull(outcome.gap)
-      return
-    }
+    this.#options.cursors.markSynced?.()
     if (outcome.status === ApplyStatus.Applied) {
       for (const handler of this.#changeHandlers) handler(hint, outcome)
     }
   }
 
   /**
-   * Run the authoritative REST pull, surfacing a failure instead of swallowing it.
-   *
-   * A pull that succeeds is also the moment the client is genuinely in sync, so the time is
-   * recorded through the cursor port — durably, which is what the source's in-memory signal was not.
+   * After a reconnect, pull every group the client already holds a cursor for (issue #65, finding
+   * 2). A cold client — no cursors yet — has nothing to pull; its first fetch is the app's own
+   * bootstrap, which this package does not own (see README, "Explicitly not implemented").
    */
-  async #pull(gap: GapReport): Promise<void> {
+  async #pullAfterReconnect(): Promise<void> {
+    const request = await this.#options.cursors.syncRequest()
+    for (const cursor of request.cursors) {
+      const ok = await this.#runPull({
+        groupId: cursor.groupId,
+        since: cursor.sequence,
+        received: cursor.sequence,
+      })
+      if (ok) this.#options.cursors.markSynced?.()
+    }
+  }
+
+  /**
+   * Run the app's REST pull, surfacing a failure instead of swallowing it. Returns whether it
+   * succeeded; the caller decides what — if anything — may be persisted as a result.
+   */
+  async #runPull(gap: GapReport): Promise<boolean> {
     try {
       await this.#options.pull(gap)
+      return true
     } catch (error) {
       this.#report(toError(error))
-      return
+      return false
     }
-    this.#options.cursors.markSynced?.()
   }
 
   /**
