@@ -225,6 +225,67 @@ export class FakeFileSystem implements RewriteFileSystem {
   }
 }
 
+/**
+ * A real `AbortSignal` behind a proxy that reports how many `abort` listeners
+ * are attached to it.
+ *
+ * Nothing in the platform answers "is this target still listening": `Deno.inspect`
+ * on a signal prints only `aborted`/`reason`/`onabort`, there is no
+ * `listenerCount` method, and `node:events`' `getEventListeners` does read the
+ * registry but importing any `node:` builtin drags Node's `setTimeout` typings
+ * into the repo-wide compilation, which fails `deno task ts:check` in
+ * `mcp/http.ts`, `media/timers.ts` and `server/healthcheck.ts`.
+ *
+ * The proxy registers the caller's own listener — identity and `{ once: true }`
+ * included — on the real signal through `AbortSignal.prototype`, so aborts arrive
+ * on the platform's dispatch path and `aborted`/`reason` stay the platform's
+ * values. Only the attachment bookkeeping is local, and that is what makes an
+ * otherwise invisible detach observable.
+ *
+ * The count tracks listeners added and explicitly removed through the returned
+ * signal; an automatic `{ once: true }` removal after a fired abort is the
+ * platform's business and is not reflected here.
+ */
+export function countedAbortSignal(signal: AbortSignal): {
+  /** Drop-in replacement for `signal`; pass this one to the code under test. */
+  signal: AbortSignal
+  /** `abort` listeners attached through the proxy and not yet detached. */
+  listenerCount(): number
+} {
+  const attached = new Set<EventListenerOrEventListenerObject>()
+  const add = AbortSignal.prototype.addEventListener
+  const remove = AbortSignal.prototype.removeEventListener
+
+  const proxied = new Proxy(signal, {
+    get(target, property) {
+      if (property === "addEventListener") {
+        return (
+          type: string,
+          listener: EventListenerOrEventListenerObject,
+          options?: boolean | AddEventListenerOptions,
+        ): void => {
+          attached.add(listener)
+          add.call(target, type, listener, options)
+        }
+      }
+      if (property === "removeEventListener") {
+        return (
+          type: string,
+          listener: EventListenerOrEventListenerObject,
+          options?: boolean | EventListenerOptions,
+        ): void => {
+          attached.delete(listener)
+          remove.call(target, type, listener, options)
+        }
+      }
+      const value: unknown = Reflect.get(target, property, target)
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
+
+  return { signal: proxied, listenerCount: () => attached.size }
+}
+
 /** An environment reader backed by a plain record. */
 export function fakeEnvironment(values: Record<string, string>): {
   get(name: string): string | undefined
