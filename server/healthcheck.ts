@@ -7,11 +7,11 @@
  * loopback port it is listening on, write one byte, read one byte back, and exit
  * `0` when the echo arrives and `1` otherwise.
  *
- * Where it lives: **`server/healthcheck.ts`, not `ops/`.** `ops/` is owned by
- * issue #18 and will carry its own package config; putting this file there would
- * create two writers of `ops/deno.json` for 60 LOC. A loopback probe of an HTTP
- * server is a server concern, and this module needs no package of its own — it is
- * a `server/` subpath.
+ * Where it lives: **`server/healthcheck.ts`, not a separate deploy-tooling package.**
+ * `ops/` used to be that package (issue #18) and would have needed its own config for
+ * 60 LOC; `ops/` was later removed from ts-libs entirely (#67). A loopback probe of an
+ * HTTP server is a server concern, and this module needs no package of its own — it
+ * is a `server/` subpath.
  *
  * The probe is separate from the process wrapper ({@link runHealthcheck}) so the
  * decision logic is unit-testable without a socket: `deno test` runs with
@@ -19,8 +19,8 @@
  * and neither `Deno.connect` nor a real deadline is exercised by a test.
  *
  * Not ported: the `caldav-mcp` two-stage Dockerfile (`denoland/deno:alpine` →
- * `gcr.io/distroless/cc-debian12` + `deno compile`). That is `ops/` and belongs
- * with #18.
+ * `gcr.io/distroless/cc-debian12` + `deno compile`). Deploy tooling is not part of
+ * ts-libs; a project built from the template has its own `infra/scripts/`.
  */
 
 /** The byte written to the socket. NUL is not valid HTTP, so it cannot be read as a request. */

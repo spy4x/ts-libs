@@ -182,8 +182,8 @@ describe("HealthchecksClient.ping", () => {
     expect(result.ok === false && result.message).toBe("500")
     expect(result.ok === false && result.attempts).toBe(10)
     expect(transport.requests.length).toBe(10)
-    // The prose in ops/README.md quotes a total. Assert it from the schedule
-    // itself so the two cannot drift apart again.
+    // The prose in integrations/README.md quotes a total. Assert it from the
+    // schedule itself so the two cannot drift apart again.
     const waitedMs = result.ok === false ? result.waitedMs : 0
     expect(waitedMs).toBe(2_220_000)
     expect(waitedMs / 60_000).toBe(37)
@@ -201,9 +201,9 @@ describe("HealthchecksClient.ping", () => {
   })
 
   it("needs 65 minutes across 9 retries if the per-wait cap were 10 minutes", async () => {
-    // The comparison figure quoted in `ops/README.md` and `policy.ts`. It was
-    // prose only; asserting it is what makes "both figures are asserted" true
-    // rather than an overclaim about this suite's own coverage.
+    // The comparison figure quoted in `integrations/README.md` and `policy.ts`.
+    // It was prose only; asserting it is what makes "both figures are asserted"
+    // true rather than an overclaim about this suite's own coverage.
     const transport = fakeTransport([{ status: 500 }])
     const timer = recordingTimer()
     const client = new HealthchecksClient({ pingUrl: PING_URL }, {

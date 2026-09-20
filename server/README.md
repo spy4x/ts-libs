@@ -136,9 +136,10 @@ must be a non-negative integer; and `HEALTHCHECK_PORT`/`PORT` must be bare decim
 (`0x1f90`, `1e3`, `+8080` are refused rather than parsed), the same rule this package applies to
 `content-length`.
 
-Lives here rather than in `ops/` on purpose: `ops/` is issue #18's package and would need its own
-`deno.json`, so this avoids two writers of one config for 60 LOC. The probe is separated from the exit
-so the decision is a return value a test can assert with `--allow-read --allow-env` and no socket.
+Lives here rather than in a deploy-tooling package: `ops/` used to be that package and would have
+needed its own `deno.json` for 60 LOC, and `ops/` was later removed from ts-libs entirely (#67). The
+probe is separated from the exit so the decision is a return value a test can assert with
+`--allow-read --allow-env` and no socket.
 
 Two rows changed meaning when this module collapsed into the canonical reader: the canonical one
 rejects an over-cap `content-length` before taking a reader, so there is no reader to cancel and an

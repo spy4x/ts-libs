@@ -188,8 +188,9 @@ a non-negative integer and an empty mail address. There is no silent conversion 
 - **No other components.** No VTODO, no VJOURNAL, no VFREEBUSY, no multiple VEVENTs in one
   VCALENDAR.
 - **No parsing of a calendar.** The writer is write-only, and no ISO-8601 or relative-date parser
-  feeds it. Reading an existing calendar is `caldav/` (#13).
-- **No CalDAV wire concerns.** `RELATED-TO`, `ETag`/`If-Match` and HTTP transport belong to `#13`.
+  feeds it. A calendar client (`caldav/`) used to read one; it was removed from ts-libs (#63).
+- **No CalDAV wire concerns.** `RELATED-TO`, `ETag`/`If-Match` and HTTP transport are not this
+  package's job.
 - **No product domain.** No bookings, hosts, guests, availability, rate limits or cancel tokens —
   callers map their own types onto `IcsEvent`. `meetingSummary()` and the `Booking`/`Config`
   coupling from the source are deliberately not ported; a human-readable summary of an instant is
@@ -210,13 +211,15 @@ a non-negative integer and an empty mail address. There is no silent conversion 
 
 ## Design notes
 
-### `ics-core` is shared with `#13`
+### `ics-core` is its own module
 
 `time/ics-core.ts` holds the byte-level RFC 5545 primitives: 75-octet folding, unfolding, TEXT
 escaping, RFC 6868 parameter escaping, control-character stripping and the UTC DATE-TIME format.
-`time/ics.ts` builds VCALENDAR/VEVENT on top of it. The CalDAV work in `#13` imports the same
-module (`@ts-libs/time/ics-core`) instead of carrying a third copy — `caldav-mcp`'s `ical.ts`
-currently slices folded lines by character (`ical.ts:10-19`), which splits multi-byte UTF-8.
+`time/ics.ts` builds VCALENDAR/VEVENT on top of it. The split originally let the removed `caldav/`
+package (#13) import the same module instead of carrying a third copy; `caldav/` is gone (#63), but
+`time/ics.ts` still needs the split, so `ics-core.ts` stays. `caldav-mcp`'s `ical.ts` — a separate
+repo, not part of this library — slices folded lines by character (`ical.ts:10-19`), which splits
+multi-byte UTF-8; `ics-core.ts` does not.
 
 ### Folding
 

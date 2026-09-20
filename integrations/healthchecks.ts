@@ -20,7 +20,8 @@
  *    `successCount === totalCount` (`reporting.ts:84`), which is a backup
  *    concept. `outcome` is now the caller's explicit `"success" | "fail"`.
  *  - The source built its message from backup rows (`buildHealthchecksMessage`),
- *    including a padded table. That stays in `#18 ops/`, which owns backup.
+ *    including a padded table. That was backup-specific and was never ported
+ *    here; it lived in `ops/`'s backup module, which is not part of ts-libs (#67).
  */
 
 import { DEFAULT_RETRY_POLICY } from "./policy.ts"
