@@ -130,22 +130,27 @@ no acks and one `broadcastToUser` — and the 87-line SPA client that ships with
 ## Ports
 
 Nothing here imports a WebSocket library, a framework or Preact. A host adapts
-its own objects once.
+its own objects once — except the browser `WebSocket` itself, which this
+package now adapts (see below).
 
-| Port                | Shape                                                                   | File                  |
-| ------------------- | ----------------------------------------------------------------------- | --------------------- |
-| `ManagedSocket`     | `state`, `send`, `close`, `onOpen`, `onMessage`, `onClose`              | `socket-port.ts`      |
-| `SocketFactory`     | `(url) => ManagedSocket`                                                | `socket-port.ts`      |
-| `Clock`             | `now`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`       | `clock.ts`            |
-| `KeyValueStore`     | `getItem`, `setItem`, `removeItem` — satisfied by Web Storage `Storage` | `storage.ts`          |
-| `MessageCodec`      | `encode`, `decode`                                                      | `codec.ts`            |
-| `CursorPort`        | `syncRequest`, `apply`, optional `markSynced`                           | `client-transport.ts` |
-| `UserFanout`        | `sendToUsers(userIds, message)`                                         | `notify.ts`           |
-| `RecipientResolver` | `(change) => userIds`                                                   | `notify.ts`           |
+| Port                | Shape                                                                                 | File                  |
+| ------------------- | ------------------------------------------------------------------------------------- | --------------------- |
+| `ManagedSocket`     | `state`, `send`, `close`, `onOpen`, `onMessage`, `onClose`, optional `bufferedAmount` | `socket-port.ts`      |
+| `SocketFactory`     | `(url) => ManagedSocket`                                                              | `socket-port.ts`      |
+| `Clock`             | `now`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`                     | `clock.ts`            |
+| `KeyValueStore`     | `getItem`, `setItem`, `removeItem` — satisfied by Web Storage `Storage`               | `storage.ts`          |
+| `MessageCodec`      | `encode`, `decode`                                                                    | `codec.ts`            |
+| `CursorPort`        | `syncRequest`, `cursorFor`, `apply`, optional `markSynced`                            | `client-transport.ts` |
+| `UserFanout`        | `sendToUsers(userIds, message)`                                                       | `notify.ts`           |
+| `RecipientResolver` | `(change) => userIds`                                                                 | `notify.ts`           |
 
-Adapters a host writes — a browser `WebSocket` to `ManagedSocket`,
-`localStorage` to `KeyValueStore`, `fetch` to the two sync calls — are each a
-handful of lines and are the only place a platform primitive is named.
+Adapters a host writes — `localStorage` to `KeyValueStore`, `fetch` to the two
+sync calls — are each a handful of lines and are the only place a platform
+primitive is named. The one exception is `ManagedSocket` over a browser
+`WebSocket`: this package ships `adaptWebSocket` and `createWebSocketFactory`
+(`web-socket-adapter.ts`), because the mapping from the platform's `readyState`
+(0-3) to this package's `SocketState` (1-4) is exactly the kind of bug a host
+would silently reproduce — see "Fixed after ship" below.
 
 `UserFanout` deliberately exposes no broadcast. The registry has `sendToAll` for
 a server-wide notice, but the notify path is only ever given `sendToUsers`, and
@@ -158,7 +163,13 @@ recipients.
 import { AggregateNotifier, ConnectionRegistry, createSystemClock } from "@ts-libs/realtime"
 
 const clock = createSystemClock()
-const registry = new ConnectionRegistry({ clock })
+const registry = new ConnectionRegistry({
+  clock,
+  // Defaults shown; override per deployment. See "Fixed after ship" below (issue #65, finding 5).
+  maxConnectionsPerUser: 20,
+  maxMessageBytes: 64 * 1024,
+  maxBufferedBytes: 1_000_000,
+})
 const notifier = new AggregateNotifier({
   fanout: registry,
   resolvers: new Map([
@@ -168,8 +179,10 @@ const notifier = new AggregateNotifier({
   onUnknownAggregate: (change) => logger.warn("unhandled aggregate", change),
 })
 
-// From the upgrade handler: authenticate once at the upgrade, then attach.
-registry.attach(userId, adaptSocket(await upgrade(request)))
+// From the upgrade handler: authenticate once at the upgrade, then attach. `attach` returns `null`
+// — and has already closed the socket — once the user is at `maxConnectionsPerUser`.
+const handle = registry.attach(userId, adaptSocket(await upgrade(request)))
+if (!handle) logger.warn("refused a socket: user already at the connection cap", { userId })
 
 // From the worker that drains outbox_events, after the commit that stamped the sequence.
 await notifier.notify({
@@ -187,7 +200,12 @@ package, see below).
 ## Client wiring
 
 ```ts
-import { ClientTransport, PersistentCursorStore, TransportStatus } from "@ts-libs/realtime"
+import {
+  ClientTransport,
+  createWebSocketFactory,
+  PersistentCursorStore,
+  TransportStatus,
+} from "@ts-libs/realtime"
 
 const cursors = new PersistentCursorStore({
   storage: localStorage,
@@ -195,7 +213,7 @@ const cursors = new PersistentCursorStore({
 })
 const transport = new ClientTransport({
   url: `wss://${location.host}/api/ws`,
-  socketFactory: (url) => adaptSocket(new WebSocket(url)),
+  socketFactory: createWebSocketFactory(),
   clock: createSystemClock(),
   cursors,
   pull: (gap) => api.get(`/api/groups/${gap.groupId}/changes?since=${gap.since}`),
@@ -207,13 +225,25 @@ transport.onError((error) => logger.warn(error))
 transport.connect()
 ```
 
-`onChange` fires only for hints contiguous with the stored cursor — those are
-safe to apply. Everything else already went to `pull`, which is the
-authoritative path and also the one a host keeps running on an interval when
-`onSyncDegraded` fires.
+Every hint that is not a duplicate — a genuine gap and a merely-contiguous one
+alike — is pulled before anything moves, and `onChange` fires only once that
+pull has actually succeeded (issue #65, finding 1: a hint carries no payload,
+so its arrival alone was never proof the client held the data). `pull` is
+therefore the one path a failure can be seen on, and it is also the one a host
+keeps running on an interval when `onSyncDegraded` fires.
 
-Three properties a caller should know, each pinned by a test:
+Properties a caller should know, each pinned by a test:
 
+- **The durable position moves only once a fetch has succeeded.** A hint that
+  triggers a failing `pull` leaves the stored cursor untouched, so the next
+  delivery of the same hint (or the next reconnect) tries again.
+- **A reconnect always pulls every group the client already holds a cursor
+  for**, once, unconditionally — not only when a later hint happens to reveal
+  a gap, which in a quiet group might never happen.
+- **The reconnect backoff resets only once a message has actually arrived**,
+  not merely because the socket opened. A server that accepts a connection and
+  drops it immediately, every time, produces a growing delay between attempts
+  instead of a reconnect every few hundred milliseconds forever.
 - **A hint is decided as soon as it arrives, even while the handshake is
   unacknowledged.** The handshake is not serialised behind the cursor chain, so a
   hint is not held for up to `handshakeAttempts × handshakeAckTimeout`. Its cursor
@@ -245,6 +275,28 @@ forever — here a socket silent past `livenessTimeoutMs` is closed and reaped;
 and `gb`'s `sendToAll` threw out of its loop on the first bad socket, truncating
 the broadcast — here a throwing socket is reaped and the loop continues.
 
+## Fixed after ship
+
+An audit of this package (issue #65) found five problems the tests above did
+not catch, because no real `WebSocket` had ever been used against it. Each is
+now fixed, with a colocated test that fails if the fix is reverted, and an
+integration test (`web-socket-adapter.integration.test.ts`) that runs the real
+adapter against a real local server.
+
+| Bug                                                                                                                                                                                                                                                                               | Fix                                                                                                                                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A hint carries no payload, so its arrival alone was never proof the client held the data — the cursor advanced (and persisted) on arrival regardless                                                                                                                              | Every non-duplicate hint is pulled before anything moves; `cursors.apply` — the one thing that persists — runs only once that pull has succeeded (`client-transport.ts`, `#applyHint`)                                         |
+| A gap opened while reconnecting surfaced only if a later hint happened to reveal it, which in a quiet group could be never                                                                                                                                                        | A reconnect (not the first connect) pulls every group the client already holds a cursor for, once, unconditionally (`#pullAfterReconnect`)                                                                                     |
+| The reconnect backoff reset the moment a socket opened, so a server that accepted and immediately dropped every attempt produced a reconnect roughly every base-delay interval forever                                                                                            | The counter resets only once the first inbound message actually arrives (`#connectionProven`, checked in `#handleMessage`)                                                                                                     |
+| No adapter shipped for a real `WebSocket`; the obvious one-liner (`return ws.readyState`) reads the platform's 0-3 `readyState` against this package's 1-4 `SocketState` and gets every state wrong, so an open socket reads as `Connecting` and every `send` is silently refused | `web-socket-adapter.ts` ships `adaptWebSocket` / `createWebSocketFactory` with an explicit translation table, and `send` throws on a state it actually checked rather than trusting the native socket's inconsistent behaviour |
+| The registry enforced no limits: one user id was measured holding 50 000 sockets, a single 6.9 MB frame was decoded and validated before anything measured it, and nothing slowed delivery to a socket whose peer had stopped reading                                             | `ConnectionRegistry` gained `maxConnectionsPerUser`, `maxMessageBytes` (measured before decoding) and `maxBufferedBytes` (a send is skipped, not queued, past it)                                                              |
+
+`testing.ts`'s `FakeSocket` also changed: `close()` now moves to `Closing`
+immediately and only reaches `Closed` — firing the close handlers — on a later
+microtask, the way a real `WebSocket` does. It used to close synchronously,
+which every other suite in this package (and a host testing its own wiring)
+inherited without knowing it.
+
 ## Explicitly not implemented
 
 - **The sync protocol.** Bootstrap, the pull endpoint, `authorization_revision`,
@@ -260,8 +312,12 @@ the broadcast — here a throwing socket is reaped and the loop continues.
   002:76-82 ("One mechanism") — no second, lower-guarantee lane before a
   stream-shaped feed justifies one. The ports would accept such a transport; this
   package does not ship one.
-- **A host socket adapter.** `apps/api` and `apps/spa` own those, because only
-  they know their upgrade path and their cookie handling.
+- **A server upgrade adapter.** `apps/api` owns wrapping its own framework's
+  upgraded socket (Hono's, `Deno.upgradeWebSocket`'s, or another's) into
+  `ManagedSocket` for `registry.attach`, because only the host knows its
+  upgrade path and its cookie handling. The _client_ side is different: a
+  browser `WebSocket` has exactly one shape, so this package now ships that
+  adapter itself (`web-socket-adapter.ts`; see "Fixed after ship" below).
 - **Hint coalescing.** The design doc leaves it open whether a group under rapid
   writes should emit at most one hint per client per interval
   (`docs/design/realtime-websockets.md:131-132`). `AggregateNotifier` sends one
@@ -318,17 +374,28 @@ two and nothing else in the suite, which is what makes them non-redundant.
 ## Testing
 
 ```bash
-deno test realtime/
+deno task test               # unit tier: this package's *.test.ts
+deno task test:integration   # integration tier: *.integration.test.ts
 ```
 
-No sleeps, no network, no extra permissions: `FakeClock` fires timers only when
-a test advances it, `FakeSocket` is driven by the test as the peer, and
-`MemoryKeyValueStore` stands in for storage. The suite runs under the
-repository's `deno test --no-prompt --allow-read --allow-env`.
+The unit tier has no sleeps, no network, no extra permissions: `FakeClock`
+fires timers only when a test advances it, `FakeSocket` is driven by the test
+as the peer, and `MemoryKeyValueStore` stands in for storage. It runs under
+the repository's `deno test --no-prompt --allow-read --allow-env`.
+
+The integration tier (`web-socket-adapter.integration.test.ts`) runs the real
+adapter against a real WebSocket server the test itself starts on `127.0.0.1`
+with an ephemeral port (`Deno.serve({ port: 0 })`, `Deno.upgradeWebSocket`). It
+needs `--allow-net` and no container — nothing it does reaches past loopback —
+and every server and socket it opens is closed before the test ends, so
+Deno's resource and op sanitizers stay on.
 
 The doubles are exported from `@ts-libs/realtime/testing` so a host can test its
 own wiring without inventing a second set.
 
 Dependencies: arktype (the repository's only validator) for the wire schemas,
 and `@std/*` in tests. No WebSocket library, no framework, no Preact, no
-signals.
+signals. `web-socket-adapter.ts` is the one file that names the platform
+`WebSocket` type, and only as a type — it constructs one only in
+`createWebSocketFactory`, which a browser client calls, and in the
+integration test, which is Deno-only.
