@@ -285,6 +285,21 @@ describe("PersistentCursorStore", () => {
     expect(store.syncRequest()).toEqual({ cursors: [], fromStart: true })
   })
 
+  it("treats a negative stored cursor as absent instead of restoring it", () => {
+    // #74: the load path (`#ensureLoaded`) already guards `sequence < SEQUENCE_START`, but nothing
+    // pinned it — only the non-numeric case above was covered, and a negative number passes
+    // `Number.isFinite` on its own. A stored `-1` reaching `CursorTracker.restore` unrejected would
+    // resume gap detection from a cursor no real sequence can ever be contiguous with.
+    const storage = new MemoryKeyValueStore()
+    storage.setItem("realtime:groups", JSON.stringify(["group-1"]))
+    storage.setItem("realtime:cursor:group-1", "-1")
+
+    const store = new PersistentCursorStore({ storage })
+
+    expect(store.cursors()).toEqual([])
+    expect(store.syncRequest()).toEqual({ cursors: [], fromStart: true })
+  })
+
   it("treats an unreadable group index as a cold start", () => {
     const storage = new MemoryKeyValueStore()
     storage.setItem("realtime:groups", "{not json")

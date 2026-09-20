@@ -111,9 +111,15 @@ export type ServerMessage = ServerLivenessMessage | ServerAckMessage | ServerHin
 /** Any frame in either direction. */
 export type WireMessage = ClientMessage | ServerMessage
 
+// `SEQUENCE_START` (cursor.ts) is 0 and sequences only ever increase from there, so a negative or
+// fractional sequence is never legitimate wire data — it is refused here, at the boundary, rather
+// than relied on to fall out safely from the cursor arithmetic downstream (#74: a negative sequence
+// reaching `CursorTracker` unrejected was a break the existing suite did not catch).
+const sequenceSchema = "number.integer >= 0"
+
 const cursorSnapshotSchema = type({
   groupId: "string",
-  sequence: "number",
+  sequence: sequenceSchema,
 })
 
 /** Client half of the protocol. */
@@ -143,7 +149,7 @@ export const serverMessageSchema: Type<ServerMessage> = type({
     kind: "'change.hint'",
     groupId: "string",
     "aggregate?": "string",
-    sequence: "number",
+    sequence: sequenceSchema,
   }),
 )
 
