@@ -886,7 +886,11 @@ function base64Encode(bytes: Uint8Array): string {
  *
  * Message-shaped failures — missing header, bad grammar, expired signature,
  * unsigned `From`, body mismatch, unverifiable signature — all come back as a
- * {@link DkimVerificationResult}. Only a throwing injected resolver escapes.
+ * {@link DkimVerificationResult}, and so does a resolver that throws: its message
+ * becomes the reason. Nothing escapes, which means a DNS failure and a wrong
+ * signature look alike here; a caller that needs RFC 6376 §6.1.2's TEMPFAIL and
+ * PERMFAIL apart should fetch the key with {@link fetchDkimPublicKey}, which
+ * propagates the resolver's rejection.
  */
 export async function verifyDkim(
   rawMessage: string,
