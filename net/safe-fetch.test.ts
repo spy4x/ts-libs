@@ -9,6 +9,10 @@ import {
 } from "./safe-fetch.ts"
 import { type DnsResolver, UrlValidationError, validatePublicUrl } from "./url-policy.ts"
 
+/** Obviously fake credentials: what a caller's headers would carry in production. */
+const FAKE_AUTHORIZATION = "Bearer not-a-real-token"
+const FAKE_COOKIE = "session=not-a-real-session"
+
 /** Deterministic resolver: one host answers private, everything else public. */
 const ALWAYS_PUBLIC: DnsResolver = {
   resolve: (host: string) => {
@@ -35,14 +39,21 @@ interface Step {
  */
 function fakeFetcher(
   steps: Step[],
-): { fetcher: Fetcher; getCalls: () => number; methods: string[] } {
+): {
+  fetcher: Fetcher
+  getCalls: () => number
+  methods: string[]
+  sentHeaders: (Record<string, string> | undefined)[]
+} {
   let calls = 0
   const methods: string[] = []
+  const sentHeaders: (Record<string, string> | undefined)[] = []
   const fetcher: Fetcher = {
     fetch(input, init) {
       const step = steps[calls]
       calls++
       methods.push(init.method ?? "")
+      sentHeaders.push(init.headers)
       // Confirm the URL the caller is asking for matches the planned step.
       if (!step || step.url !== input) {
         return Promise.resolve(
@@ -58,7 +69,7 @@ function fakeFetcher(
       return Promise.resolve(new Response(body, { status, headers }))
     },
   }
-  return { fetcher, getCalls: () => calls, methods }
+  return { fetcher, getCalls: () => calls, methods, sentHeaders }
 }
 
 /** A fetcher that records the URLs it was asked for, always answering 200. */
@@ -340,6 +351,132 @@ describe("safeFetch", () => {
     ])
     await safeFetch("https://example.com/page", { fetcher, resolver: ALWAYS_PUBLIC })
     assertEquals(methods, ["GET"])
+  })
+
+  // ── Caller headers across a redirect ─────────────────────────────────────
+
+  it("sends the caller's headers with the request", async () => {
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/page", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/page", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: { "User-Agent": "ts-libs-test", Authorization: FAKE_AUTHORIZATION },
+    })
+    assertEquals(sentHeaders, [{
+      "User-Agent": "ts-libs-test",
+      Authorization: FAKE_AUTHORIZATION,
+    }])
+  })
+
+  it("keeps the credential headers on a same-origin redirect", async () => {
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/old", status: 302, location: "/new" },
+      { url: "https://example.com/new", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/old", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: { Authorization: FAKE_AUTHORIZATION, Cookie: FAKE_COOKIE },
+    })
+    assertEquals(sentHeaders[1], { Authorization: FAKE_AUTHORIZATION, Cookie: FAKE_COOKIE })
+  })
+
+  it("drops the authorization header when a redirect changes site", async () => {
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/old", status: 302, location: "https://other.example/landing" },
+      { url: "https://other.example/landing", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/old", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: { Authorization: FAKE_AUTHORIZATION },
+    })
+    assertEquals(sentHeaders[0], { Authorization: FAKE_AUTHORIZATION })
+    assertEquals(sentHeaders[1], {})
+  })
+
+  it("drops the cookie and proxy-authorization headers when a redirect changes site", async () => {
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/old", status: 302, location: "https://other.example/landing" },
+      { url: "https://other.example/landing", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/old", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: { Cookie: FAKE_COOKIE, "Proxy-Authorization": FAKE_AUTHORIZATION },
+    })
+    assertEquals(sentHeaders[1], {})
+  })
+
+  it("drops a credential header however the caller spelled it", async () => {
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/old", status: 302, location: "https://other.example/landing" },
+      { url: "https://other.example/landing", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/old", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: { AUTHORIZATION: FAKE_AUTHORIZATION, cookie: FAKE_COOKIE },
+    })
+    assertEquals(sentHeaders[1], {})
+  })
+
+  it("keeps a non-credential header when a redirect changes site", async () => {
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/old", status: 302, location: "https://other.example/landing" },
+      { url: "https://other.example/landing", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/old", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: { "User-Agent": "ts-libs-test", Authorization: FAKE_AUTHORIZATION },
+    })
+    assertEquals(sentHeaders[1], { "User-Agent": "ts-libs-test" })
+  })
+
+  it("drops the credential headers when only the port changes", async () => {
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/old", status: 302, location: "https://example.com:8443/landing" },
+      { url: "https://example.com:8443/landing", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/old", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: { Authorization: FAKE_AUTHORIZATION },
+    })
+    assertEquals(sentHeaders[1], {})
+  })
+
+  it("drops the credential headers when a redirect downgrades the scheme", async () => {
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/old", status: 302, location: "http://example.com/landing" },
+      { url: "http://example.com/landing", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/old", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: { Authorization: FAKE_AUTHORIZATION },
+    })
+    assertEquals(sentHeaders[1], {})
+  })
+
+  it("does not hand the credentials back when the chain returns to the first site", async () => {
+    // Dropping them for one hop is not enough: a chain that bounces through a
+    // third party and back must arrive without them, or the detour is a way of
+    // asking the third party which credentials to replay.
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/old", status: 302, location: "https://other.example/bounce" },
+      { url: "https://other.example/bounce", status: 302, location: "https://example.com/back" },
+      { url: "https://example.com/back", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/old", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: { Authorization: FAKE_AUTHORIZATION },
+    })
+    assertEquals(sentHeaders[2], {})
   })
 
   // ── Timeout, cancellation and the timer lifecycle ────────────────────────

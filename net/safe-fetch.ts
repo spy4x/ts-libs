@@ -24,6 +24,11 @@
  * against the current URL (`new URL(location, currentUrl)`), which is what
  * RFC 9110 requires. A `Location` that parses to a non-http(s) scheme — a
  * crafted `javascript:` header, say — is rejected by the policy, never fetched.
+ *
+ * CREDENTIALS DO NOT CROSS AN ORIGIN: taking redirect handling away from the
+ * platform `fetch` also took away its header rules, so the caller's
+ * `Authorization`, `Cookie` and `Proxy-Authorization` are dropped here the
+ * moment a hop changes origin — see `CREDENTIAL_HEADERS`.
  */
 
 import {
@@ -38,6 +43,20 @@ export const DEFAULT_MAX_REDIRECTS: number = 3
 
 /** Total budget for the whole redirect chain. */
 export const DEFAULT_TIMEOUT_MS: number = 10_000
+
+/**
+ * Request headers that must not follow a redirect to another origin.
+ *
+ * Lower-case, because a caller's header record is keyed however they spelled it
+ * and HTTP field names are case-insensitive. The list is the one the platform
+ * `fetch` strips on a cross-origin redirect: everything that authenticates the
+ * caller to the origin it was addressed to and to nobody else.
+ */
+export const CREDENTIAL_HEADERS: readonly string[] = [
+  "authorization",
+  "cookie",
+  "proxy-authorization",
+]
 
 /** Request methods a redirect is allowed to carry unchanged. */
 export enum SafeFetchMethod {
@@ -119,6 +138,11 @@ export interface SafeFetchResult {
  * Method handling follows RFC 9110: a 301/302/303 downgrades any non-`GET`/`HEAD`
  * request to `GET`; a 307/308 preserves the method.
  *
+ * `options.headers` are sent on the first request and carried along the chain,
+ * except that the headers in `CREDENTIAL_HEADERS` are dropped as soon as a hop
+ * lands on a different origin — and stay dropped for the rest of the chain, so
+ * a bounce back to the first origin does not hand them over after all.
+ *
  * @throws `UrlValidationError` when the initial URL or any redirect target
  * fails the policy, when a redirect carries no `Location`, or when the chain
  * exceeds `maxRedirects`.
@@ -138,6 +162,7 @@ export async function safeFetch(
   }
   const resolver = options.resolver ?? defaultResolver
   let method = options.method ?? SafeFetchMethod.Get
+  let headers = options.headers
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -150,7 +175,7 @@ export async function safeFetch(
         signal: controller.signal,
         redirect: "manual",
         method,
-        headers: options.headers,
+        headers,
       })
 
       if (!isRedirectStatus(response.status)) {
@@ -180,7 +205,9 @@ export async function safeFetch(
       // IP family, DNS). This is the only place a redirect target is allowed to
       // become a request target.
       const next = new URL(location, currentUrl)
-      currentUrl = await validatePublicUrl(next.href, { resolver })
+      const target = await validatePublicUrl(next.href, { resolver })
+      headers = headersForHop(headers, currentUrl, target)
+      currentUrl = target
 
       if (response.status === 301 || response.status === 302 || response.status === 303) {
         method = SafeFetchMethod.Get
@@ -196,6 +223,33 @@ export async function safeFetch(
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * The headers the next hop may carry.
+ *
+ * Same origin — same scheme, host and port — keeps the record untouched. Any
+ * other target gets a copy without the `CREDENTIAL_HEADERS`, matched
+ * case-insensitively because a caller's record is keyed however they spelled it.
+ *
+ * Origin, not registrable domain: `https://pay.example.com` and
+ * `https://blog.example.com` are one site and two origins, and a guard whose
+ * whole job is to distrust the destination has no reason to hand a token to the
+ * second because the first asked it to.
+ */
+function headersForHop(
+  headers: Record<string, string> | undefined,
+  fromUrl: string,
+  toUrl: string,
+): Record<string, string> | undefined {
+  if (!headers) return headers
+  if (new URL(fromUrl).origin === new URL(toUrl).origin) return headers
+  const kept: Record<string, string> = {}
+  for (const [name, value] of Object.entries(headers)) {
+    if (CREDENTIAL_HEADERS.includes(name.toLowerCase())) continue
+    kept[name] = value
+  }
+  return kept
 }
 
 async function tryCancel(response: Response): Promise<void> {
