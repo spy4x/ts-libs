@@ -45,7 +45,9 @@ with no renderer in it, which is why it lives here rather than in a component li
 An arktype issue that does not belong to a single field — a rule spanning two fields, or the value
 not being an object at all — is filed under `FORM_FIELD` rather than dropped, so it still makes
 `isValid` return `false`. A caller that renders per-field errors should also render `vl[FORM_FIELD]`
-somewhere the whole form can show it.
+somewhere the whole form can show it. `FORM_FIELD` is the string `"_form"`: a model with a real field
+literally named `_form` would have that field's own issues and the cross-field ones overwrite each
+other, so avoid that field name.
 
 ## Recognising an arktype rejection
 
