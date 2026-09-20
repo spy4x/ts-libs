@@ -19,6 +19,14 @@
  * - **One interval, not one per socket**, so the timer count does not grow with connections.
  * - **Direction is enforced.** A client frame that decodes as a server frame is dropped as malformed
  *   instead of being dispatched.
+ * - **Three limits neither source enforced (issue #65, finding 5).** A user id could open an
+ *   unbounded number of sockets; an oversized text frame was handed straight to the codec and the
+ *   validator before anything measured it; and nothing slowed delivery to a socket whose peer had
+ *   stopped reading. `attach` now refuses past `maxConnectionsPerUser`, `#receive` measures a frame
+ *   before decoding it and reaps the connection past `maxMessageBytes`, and `#deliver` skips a send
+ *   past `maxBufferedBytes` instead of queueing without bound. All three limits are this package's
+ *   own — the upgrade handler, rate limiting per IP and anything else the surrounding server does is
+ *   outside it, same as the rest of the sync protocol (see README, "Explicitly not implemented").
  */
 
 import {
@@ -40,6 +48,8 @@ export enum CloseReason {
   SendFailed = 3,
   /** {@link ConnectionRegistry.shutdown} closed it. */
   Shutdown = 4,
+  /** An inbound frame exceeded `maxMessageBytes`. */
+  MessageTooLarge = 5,
 }
 
 /** Identifies one socket of one user. */
@@ -88,6 +98,12 @@ export interface ConnectionRegistryOptions {
   livenessTimeoutMs?: number
   /** Wire codec. Defaults to the JSON codec. */
   codec?: MessageCodec
+  /** Live sockets one user id may hold at once. `attach` refuses past this. */
+  maxConnectionsPerUser?: number
+  /** UTF-8 bytes one inbound frame may carry before it is refused unread. */
+  maxMessageBytes?: number
+  /** Bytes queued on a socket, past which a send to it is skipped instead of queued further. */
+  maxBufferedBytes?: number
 }
 
 interface Connection {
@@ -101,6 +117,12 @@ interface Connection {
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000
 const DEFAULT_LIVENESS_TIMEOUT_MS = 90_000
+/** Generous for a user with several tabs and devices; nowhere near the 50 000 the audit found open. */
+const DEFAULT_MAX_CONNECTIONS_PER_USER = 20
+/** Protocol frames are a handful of fields; 64 KiB comfortably fits a `client.sync` with many cursors. */
+const DEFAULT_MAX_MESSAGE_BYTES = 64 * 1024
+/** Past this, a socket is presumed to have a peer that stopped reading; sends to it are skipped. */
+const DEFAULT_MAX_BUFFERED_BYTES = 1_000_000
 
 /**
  * Every live socket, indexed by user and by socket id.
@@ -115,6 +137,9 @@ export class ConnectionRegistry {
   readonly #codec: MessageCodec
   readonly #heartbeatIntervalMs: number
   readonly #livenessTimeoutMs: number
+  readonly #maxConnectionsPerUser: number
+  readonly #maxMessageBytes: number
+  readonly #maxBufferedBytes: number
   readonly #connections = new Map<string, Connection>()
   readonly #byUser = new Map<string, Set<string>>()
   readonly #openHandlers = new Set<OpenHandler>()
@@ -131,6 +156,10 @@ export class ConnectionRegistry {
       DEFAULT_HEARTBEAT_INTERVAL_MS
     this.#livenessTimeoutMs = options.livenessTimeoutMs ??
       DEFAULT_LIVENESS_TIMEOUT_MS
+    this.#maxConnectionsPerUser = options.maxConnectionsPerUser ??
+      DEFAULT_MAX_CONNECTIONS_PER_USER
+    this.#maxMessageBytes = options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES
+    this.#maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES
   }
 
   /**
@@ -139,8 +168,25 @@ export class ConnectionRegistry {
    * The user map is many-to-one by design: a user with a tab and a phone has two sockets and one
    * user id, and both must receive a hint. Returns a {@link ConnectionHandle} the caller keeps for
    * `send`, and registers the socket's own handlers so cleanup cannot be forgotten by the host.
+   *
+   * Refuses past `maxConnectionsPerUser` (issue #65, finding 5: one user id was measured holding
+   * 50 000 sockets) — the socket is closed with `1013` ("try again later") and `null` is returned
+   * instead of a handle, before anything is added to either index.
    */
-  attach(userId: string, socket: ManagedSocket): ConnectionHandle {
+  attach(userId: string, socket: ManagedSocket): ConnectionHandle | null {
+    const current = this.#byUser.get(userId)?.size ?? 0
+    if (current >= this.#maxConnectionsPerUser) {
+      try {
+        socket.close(
+          1013,
+          `too many connections for this user (max ${this.#maxConnectionsPerUser})`,
+        )
+      } catch {
+        // A socket that refuses to close is already gone as far as the registry is concerned.
+      }
+      return null
+    }
+
     const connection: Connection = {
       id: `socket-${this.#nextSocketId++}`,
       userId,
@@ -287,11 +333,23 @@ export class ConnectionRegistry {
    * Handle one inbound text frame.
    *
    * Any frame counts as liveness evidence, because a peer that is talking is a peer that is alive.
-   * Ping is answered here; everything else either goes to the frame handlers or is dropped with a
-   * reason. Nothing is dispatched that the registry could not decode.
+   * Size is measured before anything else — a frame past `maxMessageBytes` is refused and the
+   * connection reaped without ever reaching the codec or the validator (issue #65, finding 5: a
+   * single 6.9 MB message was decoded and validated, costing 81 ms of CPU it should never have
+   * spent). Ping is answered here; everything else either goes to the frame handlers or is dropped
+   * with a reason. Nothing is dispatched that the registry could not decode.
    */
   #receive(connection: Connection, data: string): void {
     connection.lastSeenAt = this.#clock.now()
+
+    const bytes = new TextEncoder().encode(data).byteLength
+    if (bytes > this.#maxMessageBytes) {
+      const reason = `message of ${bytes} bytes exceeds the ${this.#maxMessageBytes} byte limit`
+      this.#reportMalformed(connection, reason)
+      this.#reap(connection, CloseReason.MessageTooLarge, reason)
+      return
+    }
+
     const result = this.#codec.decode(data)
     if (!result.ok) {
       this.#reportMalformed(connection, result.reason)
@@ -322,9 +380,20 @@ export class ConnectionRegistry {
     )
   }
 
-  /** Encode and send, reaping the socket when the send throws. */
+  /**
+   * Encode and send, reaping the socket when the send throws.
+   *
+   * A send is skipped — not queued — once `bufferedAmount` reports more than `maxBufferedBytes`
+   * still waiting to leave the socket (issue #65, finding 5: nothing previously slowed delivery to
+   * a client that had stopped reading). This is safe for a hint the same way a dropped frame always
+   * is: the client notices the gap itself and pulls, so skipping one delivery costs a redundant
+   * pull, never divergence. `bufferedAmount` is optional on the port, so an adapter that cannot
+   * report it — `FakeSocket` unless a test calls `setBufferedAmount` — is never throttled here.
+   */
   #deliver(connection: Connection, message: ServerMessage): boolean {
     if (connection.socket.state !== SocketState.Open) return false
+    const buffered = connection.socket.bufferedAmount
+    if (buffered !== undefined && buffered > this.#maxBufferedBytes) return false
     let frame: string
     try {
       frame = this.#codec.encode(message)
@@ -434,7 +503,9 @@ export class ConnectionRegistry {
 
 /** Close code sent when the registry reaps a socket. */
 function closeCodeFor(reason: CloseReason): number {
-  return reason === CloseReason.Remote ? 1000 : 1001
+  if (reason === CloseReason.Remote) return 1000
+  if (reason === CloseReason.MessageTooLarge) return 1009 // RFC 6455 "Message Too Big"
+  return 1001
 }
 
 /** Human-readable close reason, small enough to fit in a close frame. */
@@ -444,6 +515,7 @@ function reasonText(reason: CloseReason): string {
     [CloseReason.LivenessTimeout]: "liveness timeout",
     [CloseReason.SendFailed]: "send failed",
     [CloseReason.Shutdown]: "server shutdown",
+    [CloseReason.MessageTooLarge]: "message too large",
   }
   return names[reason] ?? "closed"
 }

@@ -136,6 +136,7 @@ export class FakeSocket implements ManagedSocket {
   readonly #closeHandlers = new Set<(info: SocketCloseInfo) => void>()
   #state: SocketState = SocketState.Connecting
   #sendError: Error | null = null
+  #bufferedAmount = 0
 
   constructor(url: string) {
     this.url = url
@@ -143,6 +144,16 @@ export class FakeSocket implements ManagedSocket {
 
   get state(): SocketState {
     return this.#state
+  }
+
+  /** Bytes a test has told this socket to report as queued. Zero unless `setBufferedAmount` was called. */
+  get bufferedAmount(): number {
+    return this.#bufferedAmount
+  }
+
+  /** Simulate a peer that is not draining: a registry checking `bufferedAmount` should back off sending. */
+  setBufferedAmount(bytes: number): void {
+    this.#bufferedAmount = bytes
   }
 
   /** Frames received, parsed. Throws on a frame that is not JSON, which is itself a test failure. */
@@ -162,9 +173,20 @@ export class FakeSocket implements ManagedSocket {
     this.sent.push(data)
   }
 
+  /**
+   * Close the socket, the way a real one does: `state` moves to `Closing` immediately and the
+   * `close` event — and the move to `Closed` — happens on a later microtask.
+   *
+   * A real `WebSocket.close()` does not close synchronously; a caller that reads `state` right
+   * after calling it sees `Closing`, and code that assumed otherwise (a fixed bug in this package,
+   * issue #74) has to be wrong in a way a test can catch. `closeCalls` still records the call
+   * immediately, so a test asserting *that* a close was requested does not need to await anything.
+   */
   close(code = 1000, reason = ""): void {
     this.closeCalls.push({ code, reason })
-    this.#shutdown({ code, reason, abnormal: code !== 1000 })
+    if (this.#state === SocketState.Closing || this.#state === SocketState.Closed) return
+    this.#state = SocketState.Closing
+    queueMicrotask(() => this.#shutdown({ code, reason, abnormal: code !== 1000 }))
   }
 
   onOpen(handler: () => void): Unsubscribe {
@@ -185,7 +207,8 @@ export class FakeSocket implements ManagedSocket {
   /** The peer accepted the connection. Fires the open handlers. */
   openFromPeer(): void {
     if (
-      this.#state === SocketState.Open || this.#state === SocketState.Closed
+      this.#state === SocketState.Open || this.#state === SocketState.Closing ||
+      this.#state === SocketState.Closed
     ) return
     this.#state = SocketState.Open
     for (const handler of [...this.#openHandlers]) handler()

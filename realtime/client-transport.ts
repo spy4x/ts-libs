@@ -11,9 +11,10 @@
  * - The transport sends no application mutation. Its outbound vocabulary is liveness and a sync
  *   handshake; {@link ClientTransport.send} is typed to {@link ClientMessage}, which has no
  *   mutation frame.
- * - A pushed hint is applied only when its sequence is contiguous with the stored cursor. On a gap
- *   the hint is discarded and `pull` is called with the cursor the client actually holds, so a
- *   missed frame costs one redundant REST pull instead of silently divergent local state.
+ * - A hint carries no payload — only a sequence — so arrival alone can never mean the client has
+ *   the data. Every hint that is not a duplicate, contiguous or not, is pulled from the cursor the
+ *   client already holds before anything moves; a gap and a merely-contiguous hint cost exactly
+ *   the same one REST pull, and the durable cursor advances only once that pull has succeeded.
  * - A failed handshake is reported as degraded, not fatal: the socket is an optimisation and the
  *   REST pull path stays correct without it.
  *
@@ -27,6 +28,17 @@
  * - Every timer is injected, so nothing here sleeps and every deadline below is asserted.
  * - A failed reconnect gate stops the loop instead of being ignored; a gate that throws is retried
  *   on the next backoff step rather than treated as consent.
+ * - A hint's sequence is no longer trusted as "received" on arrival (issue #65, finding 1): the
+ *   position now moves forward only once the pull it triggers has actually succeeded.
+ * - A reconnect always pulls every group the client holds a cursor for (issue #65, finding 2): a
+ *   quiet group's gap used to surface only when a later hint happened to reveal it, which in a
+ *   quiet group could be never.
+ * - The reconnect backoff counter resets only once the connection has proven itself, rather than at
+ *   the moment the socket merely opens (issue #65, finding 3): a server that accepts and immediately
+ *   drops every attempt no longer causes a reconnect storm. "Proven" needs two things, not one — a
+ *   message must have arrived, *and* the socket must have stayed open for at least `minHealthyMs`
+ *   (default: the base backoff delay) — because a single inbound frame is not proof by itself: a
+ *   peer that sends one byte and drops satisfies "a message arrived" for free, on every attempt.
  */
 
 import { type BackoffConfig, DEFAULT_BACKOFF, nextBackoffDelay } from "./backoff.ts"
@@ -73,7 +85,12 @@ export interface AppliedHint {
 /** Snapshot of transport state, delivered to `onStatus` listeners. */
 export interface TransportStatusSnapshot {
   status: TransportStatus
-  /** Reconnect attempts since the last successful open. */
+  /**
+   * Reconnect attempts since the connection last proved itself healthy: a message has arrived *and*
+   * the socket has stayed open for at least `minHealthyMs`, not merely opened or received one frame.
+   * A peer that accepts and drops every attempt — with or without sending anything first — keeps
+   * this climbing instead of resetting to zero.
+   */
   attempt: number
   /** Ack-tracked requests still waiting for a response. */
   pendingRequests: number
@@ -99,6 +116,13 @@ export interface GateResult {
 export interface CursorPort {
   /** The handshake payload: the real cursors, or an explicit cold start. */
   syncRequest(): SyncRequest | Promise<SyncRequest>
+  /**
+   * Current cursor for one group, read-only. Used to decide whether a hint is new — and, if so,
+   * what range to fetch — before anything is persisted. `PersistentCursorStore.cursorFor` and
+   * `CursorTracker.cursorFor` already satisfy this; it is a read the transport did not previously
+   * have a way to ask for without also committing.
+   */
+  cursorFor(groupId: string): number | Promise<number>
   /** Apply a pushed sequence. `PersistentCursorStore` satisfies this port. */
   apply(change: SequenceChange): ApplyOutcome | Promise<ApplyOutcome>
   /**
@@ -117,7 +141,14 @@ export interface ClientTransportOptions {
   socketFactory: SocketFactory
   clock: Clock
   cursors: CursorPort
-  /** The REST pull a gap falls back to. Hints are an optimisation; this is the authority. */
+  /**
+   * The REST pull that confirms a change and is the only thing that may move the cursor.
+   *
+   * Called for every hint that is not a duplicate — a genuine gap and a merely-contiguous hint
+   * both go through it, with the range the client still needs — and once after every reconnect,
+   * for each group the client already holds a cursor for. Hints tell the transport *when* to
+   * pull; this is what confirms the client actually has the data.
+   */
   pull: (gap: GapReport) => void | Promise<void>
   /** Checked before every reconnect attempt. A refusal stops reconnecting. */
   gate?: () => GateResult | Promise<GateResult>
@@ -136,6 +167,19 @@ export interface ClientTransportOptions {
   handshakeAttempts?: number
   /** Backoff schedule for reconnects. */
   backoff?: Partial<BackoffConfig>
+  /**
+   * Minimum time a socket must stay open before an inbound message is allowed to reset the
+   * reconnect backoff to zero. Defaults to `backoff.baseMs`.
+   *
+   * A single inbound frame is not proof of health by itself: a server that sends one byte — an
+   * error frame, a stale ack, a ping squeezed out before the host reaps the socket — and then
+   * drops satisfies "a message arrived" for free, every attempt, which is exactly what issue #65's
+   * finding 3 turned out to still allow. Requiring the connection to also have stayed open for a
+   * minimum duration defeats that without any new protocol dependency: an attacker or a broken peer
+   * would have to keep the socket open for `minHealthyMs` to get anything out of it, at which point
+   * the reconnect rate this produces is bounded by that duration, not a storm.
+   */
+  minHealthyMs?: number
   /** Uniform source in `[0, 1)` for jitter. Injected so tests are deterministic. */
   random?: () => number
   /** Called for every error the transport surfaces. Errors are never swallowed. */
@@ -232,6 +276,7 @@ export class ClientTransport {
   readonly #handshakeAckTimeoutMs: number
   readonly #handshakeAttempts: number
   readonly #backoff: BackoffConfig
+  readonly #minHealthyMs: number
   readonly #random: () => number
   readonly #pending = new Map<string, PendingRequest>()
   readonly #frameHandlers = new Set<(message: ServerMessage) => void>()
@@ -251,10 +296,16 @@ export class ClientTransport {
   #attempt = 0
   #stopped = false
   #frameCounter = 0
+  /** Whether the current socket has produced any inbound message yet. */
+  #messageReceived = false
+  /** When the current socket opened, by the injected clock. */
+  #openedAt: number | null = null
   #heartbeatTimer: TimerHandle | null = null
   #pongTimer: TimerHandle | null = null
   #connectTimer: TimerHandle | null = null
   #reconnectTimer: TimerHandle | null = null
+  /** Fires once `minHealthyMs` after open, to catch a message that arrived before that deadline. */
+  #healthyTimer: TimerHandle | null = null
   #hintChain: Promise<void> = Promise.resolve()
 
   constructor(options: ClientTransportOptions) {
@@ -274,6 +325,7 @@ export class ClientTransport {
       options.handshakeAttempts ?? DEFAULT_HANDSHAKE_ATTEMPTS,
     )
     this.#backoff = { ...DEFAULT_BACKOFF, ...options.backoff }
+    this.#minHealthyMs = options.minHealthyMs ?? this.#backoff.baseMs
     this.#random = options.random ?? Math.random
   }
 
@@ -438,6 +490,8 @@ export class ClientTransport {
   #attachSocket(socket: ManagedSocket): void {
     this.#forgetSocket()
     this.#socket = socket
+    this.#messageReceived = false
+    this.#openedAt = null
     this.#unsubscribes = [
       socket.onOpen(() => this.#handleOpen(socket)),
       socket.onMessage((data) => this.#handleMessage(socket, data)),
@@ -453,7 +507,20 @@ export class ClientTransport {
   }
 
   /**
-   * The socket opened: reset the attempt counter, start the heartbeat, handshake.
+   * The socket opened: start the heartbeat, handshake, arm the health deadline, and — on a
+   * reconnect — pull every group the client already holds a cursor for.
+   *
+   * The attempt counter is deliberately *not* reset here (issue #65, finding 3): a socket that
+   * merely opened has not been proven healthy yet. Resetting on open is what let a server that
+   * accepts and immediately drops every attempt keep every reconnect delay at the base value
+   * forever. `#openedAt` and `#healthyTimer` are what {@link #tryResetBackoff} checks against —
+   * see that method for why one inbound message is not enough either.
+   *
+   * A reconnect — as opposed to the transport's first ever connect — also pulls every group the
+   * client holds a cursor for (issue #65, finding 2): a gap opened while the socket was down would
+   * otherwise surface only if a later hint happened to reveal it, which in a quiet group may never
+   * happen. `attempt > 0` at this point is exactly "a reconnect": `connect()` starts it at zero and
+   * only `#scheduleReconnect` ever increments it, always before the attempt that follows.
    *
    * The handshake is *not* put on {@link #enqueue}'s chain. That chain serialises cursor decisions so
    * hints are applied in arrival order; a handshake touches no cursor, and chaining it would delay
@@ -470,10 +537,16 @@ export class ClientTransport {
   #handleOpen(socket: ManagedSocket): void {
     if (this.#socket !== socket) return
     this.#clearConnectTimer()
-    this.#attempt = 0
+    const isReconnect = this.#attempt > 0
+    this.#openedAt = this.#clock.now()
+    this.#healthyTimer = this.#clock.setTimeout(
+      () => this.#tryResetBackoff(),
+      this.#minHealthyMs,
+    )
     this.#setStatus(TransportStatus.Open)
     this.#startHeartbeat()
     void this.#handshake().catch((error: unknown) => this.#report(toError(error)))
+    if (isReconnect) this.#enqueue(() => this.#pullAfterReconnect())
   }
 
   /** The socket never opened in time. Abandon the attempt and let the close path reconnect. */
@@ -498,9 +571,16 @@ export class ClientTransport {
    * Everything decoded here is one of: liveness, an acknowledgement, or a change hint. The first
    * two are handled locally; a hint goes through the cursor and the serialised apply chain, so
    * hints are decided in arrival order even when the cursor store is asynchronous.
+   *
+   * A frame arriving is one half of what proves the connection healthy and resets the backoff
+   * counter (issue #65, finding 3); {@link #tryResetBackoff} is the other half. Any frame counts
+   * toward this, decodable or not: bytes arriving at all is one signal of health, though on its own
+   * — see that method — it is not enough.
    */
   #handleMessage(socket: ManagedSocket, data: string): void {
     if (this.#socket !== socket) return
+    this.#messageReceived = true
+    this.#tryResetBackoff()
     const result = this.#codec.decode(data)
     if (!result.ok) {
       this.#report(new Error(`dropped a malformed frame: ${result.reason}`))
@@ -543,37 +623,64 @@ export class ClientTransport {
   }
 
   /**
-   * Decide one hint against the durable cursor.
+   * Decide one hint against the durable cursor, then fetch before the position moves.
    *
-   * Applied → fan out to `onChange`. Duplicate or old → ignored without touching the cursor. Gap →
-   * discarded, and the pull is called with the cursor the client holds, which is what makes a
-   * missed frame cost one redundant pull instead of divergent state.
+   * A hint carries no payload — only a sequence — so its arrival is never proof the client holds
+   * the data (issue #65, finding 1). Duplicate or older than the cursor → nothing new arrived,
+   * ignored, no pull. Anything else — a genuine gap or a hint that is merely the next sequence — is
+   * pulled first, with the range the client still needs; only once that pull has actually succeeded
+   * is `cursors.apply` called, which is the one place the durable position moves. A failed pull
+   * leaves the cursor exactly where it was, and a hint that turns out to still be a gap after the
+   * pull (the app's own pull handler did not catch it up) is left for the next one, exactly as
+   * before.
    */
   async #applyHint(hint: AppliedHint): Promise<void> {
+    const cursor = await this.#options.cursors.cursorFor(hint.groupId)
+    if (hint.sequence <= cursor) return
+
+    const ok = await this.#runPull({
+      groupId: hint.groupId,
+      since: cursor,
+      received: hint.sequence,
+    })
+    if (!ok) return
+
     const outcome = await this.#options.cursors.apply(hint)
-    if (outcome.status === ApplyStatus.Gap) {
-      await this.#pull(outcome.gap)
-      return
-    }
+    this.#options.cursors.markSynced?.()
     if (outcome.status === ApplyStatus.Applied) {
       for (const handler of this.#changeHandlers) handler(hint, outcome)
     }
   }
 
   /**
-   * Run the authoritative REST pull, surfacing a failure instead of swallowing it.
-   *
-   * A pull that succeeds is also the moment the client is genuinely in sync, so the time is
-   * recorded through the cursor port — durably, which is what the source's in-memory signal was not.
+   * After a reconnect, pull every group the client already holds a cursor for (issue #65, finding
+   * 2). A cold client — no cursors yet — has nothing to pull; its first fetch is the app's own
+   * bootstrap, which this package does not own (see README, "Explicitly not implemented").
    */
-  async #pull(gap: GapReport): Promise<void> {
+  async #pullAfterReconnect(): Promise<void> {
+    const request = await this.#options.cursors.syncRequest()
+    for (const cursor of request.cursors) {
+      const ok = await this.#runPull({
+        groupId: cursor.groupId,
+        since: cursor.sequence,
+        received: cursor.sequence,
+      })
+      if (ok) this.#options.cursors.markSynced?.()
+    }
+  }
+
+  /**
+   * Run the app's REST pull, surfacing a failure instead of swallowing it. Returns whether it
+   * succeeded; the caller decides what — if anything — may be persisted as a result.
+   */
+  async #runPull(gap: GapReport): Promise<boolean> {
     try {
       await this.#options.pull(gap)
+      return true
     } catch (error) {
       this.#report(toError(error))
-      return
+      return false
     }
-    this.#options.cursors.markSynced?.()
   }
 
   /**
@@ -600,6 +707,26 @@ export class ClientTransport {
       this.#report(failure)
       for (const handler of this.#degradedHandlers) handler(failure)
     }
+  }
+
+  /**
+   * Reset the reconnect backoff to zero, but only once both are true: at least one message has
+   * arrived, and the socket has been open for at least `minHealthyMs` (issue #65, finding 3).
+   *
+   * Called from two places, because either condition can be satisfied first: {@link #handleMessage}
+   * calls it on every inbound frame, for the case where the socket has already been open long
+   * enough by the time a message shows up; {@link #handleOpen} arms `#healthyTimer` to call it once
+   * more at the `minHealthyMs` deadline, for the case where a message already arrived earlier than
+   * that. Either caller is a no-op until both conditions hold, which is what stops a peer that sends
+   * one frame and drops immediately from resetting the counter on every attempt — the earlier bug
+   * this method replaces reset on the message alone, so that peer reset it for free, every time.
+   */
+  #tryResetBackoff(): void {
+    if (this.#attempt === 0) return
+    if (!this.#messageReceived) return
+    if (this.#openedAt === null) return
+    if (this.#clock.now() - this.#openedAt < this.#minHealthyMs) return
+    this.#attempt = 0
   }
 
   /** The socket closed. Reconnect unless the transport was stopped or a gate refused. */
@@ -674,7 +801,19 @@ export class ClientTransport {
     )
   }
 
-  /** Ping the peer, and arm a deadline for the pong. */
+  /**
+   * Ping the peer, and arm a deadline for the pong.
+   *
+   * The guard matters beyond the deadline it is named for. Without it, every unanswered ping would
+   * overwrite `#pongTimer` with a new handle and leave the previous one running, uncleared, in the
+   * clock: `#clearPongTimer` only ever clears whichever handle the field currently holds, so every
+   * earlier timer becomes unreachable and un-cancellable. Each one still fires at its own original
+   * deadline — `#handlePongTimeout` reads `this.#socket` fresh, not a closure over the socket that
+   * was open when it was armed — so a stale timer from a connection that already failed and
+   * reconnected can fire later and close whatever socket happens to be current then, healthy or not.
+   * Reverting this guard is behaviourally invisible in a short test (the first, earliest timer always
+   * still fires on time), which is why it needs this comment rather than only a test.
+   */
   #ping(): void {
     if (this.#status !== TransportStatus.Open) return
     this.#send({ kind: "client.ping" })
@@ -827,11 +966,18 @@ export class ClientTransport {
     this.#reconnectTimer = null
   }
 
+  #clearHealthyTimer(): void {
+    if (!this.#healthyTimer) return
+    this.#clock.clearTimeout(this.#healthyTimer)
+    this.#healthyTimer = null
+  }
+
   #clearTimers(): void {
     this.#clearHeartbeatTimer()
     this.#clearPongTimer()
     this.#clearConnectTimer()
     this.#clearReconnectTimer()
+    this.#clearHealthyTimer()
   }
 }
 

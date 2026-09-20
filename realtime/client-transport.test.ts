@@ -1,10 +1,12 @@
 /**
- * Client transport: handshake cursors, gap fallback, acks, heartbeat, backoff, gate.
+ * Client transport: handshake cursors, fetch-before-apply, acks, heartbeat, backoff, gate.
  *
  * Every case is driven by `FakeClock` and `FakeSocket` — no sleep, no network, no `--allow-net`.
- * The two cases that matter most are the ones ADR 002 is built on: the handshake advertises the
- * cursor the client actually holds (not a hardcoded `0`), and a hint that is not contiguous with
- * that cursor produces a REST pull instead of being applied.
+ * The cases that matter most are the ones ADR 002 and issue #65 are built on: the handshake
+ * advertises the cursor the client actually holds (not a hardcoded `0`); a hint — contiguous or
+ * not — triggers a pull and the cursor moves only once that pull succeeds; a reconnect pulls every
+ * held cursor once, unprompted; and the reconnect backoff resets only once a message has actually
+ * arrived, not merely because a socket opened.
  */
 
 import { expect } from "@std/expect"
@@ -333,7 +335,7 @@ describe("ClientTransport sync handshake", () => {
 })
 
 describe("ClientTransport gap handling", () => {
-  it("applies a hint contiguous with the cursor and fans it out", async () => {
+  it("pulls a contiguous hint before applying it, and applies it once the pull succeeds", async () => {
     const harness = createHarness({ cursors: { "group-1": 4 } })
     const applied: { sequence: number; cursor: number }[] = []
     harness.transport.onChange((hint, outcome) => {
@@ -344,8 +346,52 @@ describe("ClientTransport gap handling", () => {
     harness.factory.latest.receive(hintFrame("group-1", 5))
     await drainMicrotasks()
 
+    // A contiguous hint carries no payload either, so it costs the same one pull a gap would.
+    expect(harness.gaps).toEqual([{ groupId: "group-1", since: 4, received: 5 }])
     expect(applied).toEqual([{ sequence: 5, cursor: 5 }])
-    expect(harness.gaps).toEqual([])
+    expect(harness.store.cursorFor("group-1")).toBe(5)
+  })
+
+  it("does not move the position when the fetch a contiguous hint triggers fails", async () => {
+    // Issue #65, finding 1, and #74's done-when: the position must not move when the app's own
+    // fetch fails. Before the fix, `cursors.apply` ran on hint arrival, so the cursor moved
+    // regardless of whether anything was ever fetched.
+    const harness = createHarness({
+      cursors: { "group-1": 4 },
+      pull: () => {
+        throw new Error("fetch failed")
+      },
+    })
+    const applied: unknown[] = []
+    harness.transport.onChange((hint, outcome) => applied.push({ hint, outcome }))
+    await harness.open()
+
+    harness.factory.latest.receive(hintFrame("group-1", 5))
+    await drainMicrotasks()
+
+    expect(harness.store.cursorFor("group-1")).toBe(4)
+    expect(applied).toEqual([])
+    expect(harness.errors.at(-1)?.message).toBe("fetch failed")
+  })
+
+  it("applies a hint on a later delivery once its fetch succeeds, after an earlier failure", async () => {
+    let fail = true
+    const harness = createHarness({
+      cursors: { "group-1": 4 },
+      pull: () => {
+        if (fail) throw new Error("fetch failed")
+      },
+    })
+    await harness.open()
+
+    harness.factory.latest.receive(hintFrame("group-1", 5))
+    await drainMicrotasks()
+    expect(harness.store.cursorFor("group-1")).toBe(4)
+
+    fail = false
+    harness.factory.latest.receive(hintFrame("group-1", 5))
+    await drainMicrotasks()
+
     expect(harness.store.cursorFor("group-1")).toBe(5)
   })
 
@@ -367,7 +413,7 @@ describe("ClientTransport gap handling", () => {
     expect(harness.store.cursorFor("group-1")).toBe(4)
   })
 
-  it("requests a pull from the cursor after a contiguous run, not from the start", async () => {
+  it("requests the eventual gap's pull from the caught-up cursor, not from the start", async () => {
     const harness = createHarness({ cursors: { "group-1": 1 } })
     await harness.open()
 
@@ -378,11 +424,14 @@ describe("ClientTransport gap handling", () => {
     harness.factory.latest.receive(hintFrame("group-1", 8))
     await drainMicrotasks()
 
-    expect(harness.gaps).toEqual([{
-      groupId: "group-1",
-      since: 3,
-      received: 8,
-    }])
+    // Each contiguous hint pulled its own single-sequence range and advanced the cursor before the
+    // gap arrived, so the gap resumes from 3 — the cursor the client had caught up to — not from 1.
+    expect(harness.gaps).toEqual([
+      { groupId: "group-1", since: 1, received: 2 },
+      { groupId: "group-1", since: 2, received: 3 },
+      { groupId: "group-1", since: 3, received: 8 },
+    ])
+    expect(harness.store.cursorFor("group-1")).toBe(3)
   })
 
   it("ignores a duplicate hint without pulling", async () => {
@@ -409,13 +458,16 @@ describe("ClientTransport gap handling", () => {
     await drainMicrotasks()
 
     expect(harness.store.cursorFor("group-1")).toBe(3)
-    expect(harness.gaps).toEqual([])
+    // The first hint (contiguous) pulled once; the second, now stale against cursor 3, pulled
+    // nothing.
+    expect(harness.gaps).toEqual([{ groupId: "group-1", since: 2, received: 3 }])
   })
 
   it("decides hinted changes in arrival order when the cursor store is asynchronous", async () => {
     const harness = createHarness({
       cursorsPort: (store) => ({
         syncRequest: () => store.syncRequest(),
+        cursorFor: (groupId) => store.cursorFor(groupId),
         apply: async (change) => {
           await Promise.resolve()
           return store.apply(change)
@@ -430,10 +482,16 @@ describe("ClientTransport gap handling", () => {
     socket.receive(hintFrame("group-1", 1))
     socket.receive(hintFrame("group-1", 2))
     socket.receive(hintFrame("group-1", 3))
-    await drainMicrotasks()
+    // Each hint now also awaits a cursor peek and a pull before applying, on top of the store's own
+    // delay, so three serialised hints need more microtask turns than the default drains.
+    await drainMicrotasks(64)
 
     expect(cursors).toEqual([1, 2, 3])
-    expect(harness.gaps).toEqual([])
+    expect(harness.gaps).toEqual([
+      { groupId: "group-1", since: 0, received: 1 },
+      { groupId: "group-1", since: 1, received: 2 },
+      { groupId: "group-1", since: 2, received: 3 },
+    ])
   })
 
   it("reports a failed pull instead of retrying the hint", async () => {
@@ -596,6 +654,48 @@ describe("ClientTransport heartbeat", () => {
     expect(harness.factory.sockets.length).toBe(2)
     expect(harness.transport.status).toBe(TransportStatus.Open)
   })
+
+  it("keeps the original pong deadline instead of re-arming it on every unanswered ping", async () => {
+    // #74: this needs a heartbeat interval shorter than the pong timeout, so more than one ping is
+    // sent before the deadline — the existing "closes the socket…" test above has the interval
+    // longer than the timeout, so only one ping is ever sent and the re-arm guard is never
+    // exercised. If `#ping` re-armed the timer on every call instead of only the first, a peer that
+    // never answers would never be detected: the deadline would keep sliding forward forever.
+    const harness = createHarness({ heartbeatIntervalMs: 100, pongTimeoutMs: 250 })
+    await harness.open()
+
+    await harness.clock.advance(300) // pings at t=100, 200 and 300; none answered
+    const pings = kinds(harness.factory.latest).filter((kind) => kind === "client.ping").length
+    expect(pings).toBeGreaterThanOrEqual(3)
+    expect(harness.errors).toEqual([]) // the first ping's deadline (100 + 250 = 350) is not yet due
+
+    await harness.clock.advance(50) // t=350: exactly the first ping's deadline, not the third's
+
+    expect(harness.errors.at(-1)).toBeInstanceOf(PongTimeoutError)
+  })
+
+  it("does not let an orphaned pong timer close a later, unrelated reconnection", async () => {
+    // If `#ping` re-armed the timer on every call without clearing the previous one, the second and
+    // third unanswered pings (at t=200 and t=300) would each leave their own timer running, due at
+    // 450 and 550 — after the connection has already failed once and reconnected (the default
+    // backoff's base delay puts the reconnect at 350 + 100 = 450). `#handlePongTimeout` reads
+    // whatever socket is current, not the one that was open when the timer was armed, so a survivor
+    // would spuriously close the reconnected socket too. This test proves none survives: it reaches
+    // past both deadlines without answering anything on the reconnected socket, and before that
+    // socket's own first heartbeat could legitimately time out on its own (its first ping is not due
+    // until t=550, its own deadline not until t=800).
+    const harness = createHarness({ heartbeatIntervalMs: 100, pongTimeoutMs: 250 })
+    await harness.open()
+
+    await harness.clock.advance(350) // three unanswered pings, then the one real timeout
+    expect(harness.errors.length).toBe(1)
+    expect(harness.errors[0]).toBeInstanceOf(PongTimeoutError)
+
+    await harness.clock.advance(250) // t=600: past the reconnect and both would-be orphaned deadlines
+
+    expect(harness.errors.length).toBe(1)
+    expect(harness.factory.sockets.length).toBe(2) // the original socket, plus its one legitimate reconnect
+  })
 })
 
 describe("ClientTransport reconnect", () => {
@@ -725,6 +825,129 @@ describe("ClientTransport reconnect", () => {
     await harness.clock.advance(10 + 200)
 
     expect(calls).toBe(2)
+  })
+
+  it("keeps the backoff climbing when the peer accepts and drops before any message arrives", async () => {
+    // Issue #65, finding 3: a server that accepts a connection and closes it immediately used to
+    // reset the attempt counter the moment the socket opened, so every reconnect delay stayed at
+    // the base value — a storm of attempts roughly twice a second forever. No jitter here so every
+    // delay is the exact, deterministic `baseMs * factor ** attempt`.
+    const harness = createHarness({
+      backoff: { baseMs: 100, factor: 2, maxMs: 10_000, jitterRatio: 0 },
+      random: sequenceRandom([0]),
+    })
+    harness.transport.connect()
+    await drainMicrotasks()
+    expect(harness.factory.sockets.length).toBe(1)
+
+    harness.factory.latest.dropFromPeer() // accepted, then dropped: no message ever arrived
+    await harness.clock.advance(100) // attempt 0's delay
+    expect(harness.factory.sockets.length).toBe(2)
+
+    harness.factory.latest.dropFromPeer() // dropped again, still with no message
+    await harness.clock.advance(100)
+    // The buggy behaviour would have reset the attempt to 0 on the open above, so 100ms would be
+    // enough again here and a third socket would already exist. The fix keeps attempt at 1, so the
+    // delay is 200ms and nothing has happened yet.
+    expect(harness.factory.sockets.length).toBe(2)
+
+    await harness.clock.advance(100) // 200ms total since the second drop: now it is due
+    expect(harness.factory.sockets.length).toBe(3)
+  })
+
+  it("resets the backoff once a message has arrived and the socket stayed open long enough", async () => {
+    // "Proven" needs both conditions, not just a message (the reviewer's finding on the previous
+    // head of this branch: a peer that sends one frame and drops still reset the counter for free).
+    // `minHealthyMs` defaults to `backoff.baseMs`, so 100ms here.
+    const harness = createHarness({
+      backoff: { baseMs: 100, factor: 2, maxMs: 10_000, jitterRatio: 0 },
+      random: sequenceRandom([0]),
+    })
+    harness.transport.connect()
+    harness.factory.latest.dropFromPeer()
+    await harness.clock.advance(100) // second socket opens; still no message, so attempt stays at 1
+
+    expect(harness.factory.sockets.length).toBe(2)
+
+    harness.factory.latest.receive(JSON.stringify({ kind: "server.ping" })) // one condition met
+    await harness.clock.advance(100) // the other condition — minHealthyMs open — is now met too
+
+    harness.factory.latest.dropFromPeer()
+    await harness.clock.advance(100) // back at the base delay, not the doubled one
+
+    expect(harness.factory.sockets.length).toBe(3)
+  })
+
+  it("keeps the backoff climbing when the peer sends one frame and drops every attempt", async () => {
+    // Issue #65, finding 3, the residual the reviewer found: resetting on the message alone let a
+    // peer that sends a single byte before dropping reset the counter for free, every time, so the
+    // delay never grew past the base value. Requiring the socket to also have stayed open for
+    // `minHealthyMs` defeats it, because the drop always arrives before that deadline.
+    const harness = createHarness({
+      backoff: { baseMs: 100, factor: 2, maxMs: 10_000, jitterRatio: 0 },
+      random: sequenceRandom([0]),
+    })
+    const dropWithOneFrame = () => {
+      harness.factory.latest.receive(JSON.stringify({ kind: "server.ping" }))
+      harness.factory.latest.dropFromPeer()
+    }
+
+    harness.transport.connect()
+    dropWithOneFrame() // the first connection: one frame, then dropped, with no time elapsed
+    await harness.clock.advance(100) // attempt 0's delay
+    expect(harness.factory.sockets.length).toBe(2)
+
+    dropWithOneFrame()
+    await harness.clock.advance(100)
+    // Resetting on the message alone would have put attempt back at 0 here, so 100ms would be
+    // enough again and a third socket would already exist. Requiring minHealthyMs too keeps attempt
+    // at 1, so the delay has doubled to 200ms and nothing has happened yet.
+    expect(harness.factory.sockets.length).toBe(2)
+
+    await harness.clock.advance(100) // 200ms total since the second drop: now it is due
+    expect(harness.factory.sockets.length).toBe(3)
+  })
+})
+
+describe("ClientTransport reconnect fetches what was missed", () => {
+  it("pulls every held cursor once after a reconnect, not on the first connect", async () => {
+    // Issue #65, finding 2: a quiet group's gap used to surface only when a later hint happened to
+    // reveal it, which in a quiet group might be never. A reconnect now pulls unconditionally.
+    const harness = createHarness({ cursors: { "group-1": 4, "group-2": 7 } })
+    await harness.open()
+    expect(harness.gaps).toEqual([]) // the first connect pulls nothing on its own
+
+    harness.factory.latest.dropFromPeer()
+    await harness.clock.advance(100)
+    await drainMicrotasks()
+
+    expect(harness.gaps).toEqual([
+      { groupId: "group-1", since: 4, received: 4 },
+      { groupId: "group-2", since: 7, received: 7 },
+    ])
+  })
+
+  it("triggers exactly one fetch when a single-group client reconnects once", async () => {
+    const harness = createHarness({ cursors: { "group-1": 4 } })
+    await harness.open()
+
+    harness.factory.latest.dropFromPeer()
+    await harness.clock.advance(100)
+    await drainMicrotasks()
+
+    expect(harness.factory.sockets.length).toBe(2) // exactly one reconnect
+    expect(harness.gaps.length).toBe(1) // exactly one fetch
+  })
+
+  it("pulls nothing after a reconnect for a cold client that holds no cursor yet", async () => {
+    const harness = createHarness()
+    await harness.open()
+
+    harness.factory.latest.dropFromPeer()
+    await harness.clock.advance(100)
+    await drainMicrotasks()
+
+    expect(harness.gaps).toEqual([])
   })
 })
 

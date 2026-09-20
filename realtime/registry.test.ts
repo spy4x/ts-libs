@@ -9,9 +9,14 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 
 import type { ServerMessage } from "./codec.ts"
-import { CloseReason, ConnectionRegistry, type RegistryCloseInfo } from "./registry.ts"
+import {
+  CloseReason,
+  ConnectionRegistry,
+  type ConnectionRegistryOptions,
+  type RegistryCloseInfo,
+} from "./registry.ts"
 import { SocketState } from "./socket-port.ts"
-import { FakeClock, FakeSocketFactory } from "./testing.ts"
+import { drainMicrotasks, FakeClock, FakeSocketFactory } from "./testing.ts"
 
 const HEARTBEAT_INTERVAL_MS = 1_000
 const LIVENESS_TIMEOUT_MS = 3_000
@@ -22,13 +27,17 @@ interface Harness {
   registry: ConnectionRegistry
 }
 
-function createHarness(autoOpen = true): Harness {
+function createHarness(
+  autoOpen = true,
+  registryOptions: Partial<ConnectionRegistryOptions> = {},
+): Harness {
   const clock = new FakeClock()
   const factory = new FakeSocketFactory({ autoOpen })
   const registry = new ConnectionRegistry({
     clock,
     heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
     livenessTimeoutMs: LIVENESS_TIMEOUT_MS,
+    ...registryOptions,
   })
   return { clock, factory, registry }
 }
@@ -301,7 +310,7 @@ describe("ConnectionRegistry", () => {
     expect(clock.pendingTimers).toBe(0)
   })
 
-  it("closes every socket and leaves no timer on shutdown", () => {
+  it("closes every socket and leaves no timer on shutdown", async () => {
     const { clock, factory, registry } = createHarness()
     const closed: RegistryCloseInfo[] = []
     registry.onClose((_handle, info) => closed.push(info))
@@ -316,6 +325,10 @@ describe("ConnectionRegistry", () => {
       CloseReason.Shutdown,
       CloseReason.Shutdown,
     ])
+    // A real socket's close is asynchronous — `state` is `Closing` right after `close()` is called,
+    // and only reaches `Closed` once the closing handshake finishes (#74; `FakeSocket` used to close
+    // synchronously, which this suite never had a reason to catch).
+    await drainMicrotasks()
     expect(
       factory.sockets.every((socket) => socket.state === SocketState.Closed),
     ).toBe(true)
@@ -351,6 +364,106 @@ describe("ConnectionRegistry", () => {
 
     expect(malformed).toEqual([])
     expect(socket.sent).toEqual([])
+  })
+})
+
+describe("ConnectionRegistry limits", () => {
+  it("refuses a socket once a user is at the connection cap", () => {
+    // Issue #65, finding 5: one user id was measured holding 50 000 sockets.
+    const { registry, factory } = createHarness(true, { maxConnectionsPerUser: 2 })
+
+    const first = registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+    const second = registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+    const third = registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    expect(first).not.toBeNull()
+    expect(second).not.toBeNull()
+    expect(third).toBeNull()
+    expect(registry.connectionsFor("user-1")).toBe(2)
+    expect(factory.sockets[2]?.closeCalls).toEqual([{
+      code: 1013,
+      reason: "too many connections for this user (max 2)",
+    }])
+  })
+
+  it("does not count a refused socket against another user's cap", () => {
+    const { registry, factory } = createHarness(true, { maxConnectionsPerUser: 1 })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    const forOther = registry.attach("user-2", factory.open("wss://api.example.test/ws"))
+
+    expect(forOther).not.toBeNull()
+    expect(registry.connectionsFor("user-2")).toBe(1)
+  })
+
+  it("frees a slot once a capped user's socket disconnects", () => {
+    const { registry, factory } = createHarness(true, { maxConnectionsPerUser: 1 })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+    expect(registry.attach("user-1", factory.open("wss://api.example.test/ws"))).toBeNull()
+
+    factory.sockets[0].dropFromPeer()
+
+    expect(registry.attach("user-1", factory.open("wss://api.example.test/ws"))).not.toBeNull()
+  })
+
+  it("reaps a connection whose frame exceeds the message size limit, without decoding it", () => {
+    // Issue #65, finding 5: a single 6.9 MB message was decoded and validated, costing 81 ms of CPU
+    // it should never have spent. `maxMessageBytes` measures the frame before the codec ever runs.
+    const { registry, factory } = createHarness(true, { maxMessageBytes: 16 })
+    const malformed: string[] = []
+    const closed: RegistryCloseInfo[] = []
+    registry.onMalformedFrame((frame) => malformed.push(frame.reason))
+    registry.onClose((_handle, info) => closed.push(info))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    // Well-formed JSON, but longer than the 16 byte limit configured above.
+    factory.latest.receive(pingFrame("a-very-long-frame-id"))
+
+    expect(registry.count()).toBe(0)
+    expect(malformed.length).toBe(1)
+    expect(malformed[0]).toContain("exceeds the 16 byte limit")
+    expect(closed.length).toBe(1)
+    expect(closed[0]?.reason).toBe(CloseReason.MessageTooLarge)
+    expect(closed[0]?.code).toBe(1009)
+    expect(closed[0]?.detail).toContain("exceeds the 16 byte limit")
+  })
+
+  it("still accepts a frame at or under the message size limit", () => {
+    const { registry, factory } = createHarness(true, { maxMessageBytes: 1_024 })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(pingFrame("frame-1"))
+
+    expect(registry.count()).toBe(1)
+    expect(factory.latest.frames()).toEqual([{ kind: "server.pong", id: "frame-1" }])
+  })
+
+  it("skips delivery to a socket whose peer has stopped draining it, without reaping it", () => {
+    // Issue #65, finding 5: nothing previously slowed delivery to a client that was not reading.
+    // Skipping a hint is safe the same way a dropped one always is — the client notices the gap
+    // itself and pulls — so this must not tear the connection down.
+    const { registry, factory } = createHarness(true, { maxBufferedBytes: 1_000 })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+    factory.latest.setBufferedAmount(2_000)
+
+    const delivered = registry.sendToUser("user-1", { kind: "server.ping" })
+
+    expect(delivered).toBe(0)
+    expect(factory.latest.sent).toEqual([])
+    expect(registry.count()).toBe(1)
+  })
+
+  it("delivers again once a backed-up socket's buffer drains below the limit", () => {
+    const { registry, factory } = createHarness(true, { maxBufferedBytes: 1_000 })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+    factory.latest.setBufferedAmount(2_000)
+    registry.sendToUser("user-1", { kind: "server.ping" })
+
+    factory.latest.setBufferedAmount(0)
+    const delivered = registry.sendToUser("user-1", { kind: "server.ping" })
+
+    expect(delivered).toBe(1)
+    expect(factory.latest.frames()).toEqual([{ kind: "server.ping" }])
   })
 })
 

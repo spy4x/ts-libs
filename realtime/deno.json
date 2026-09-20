@@ -8,6 +8,7 @@
     "./notify": "./notify.ts",
     "./cursor": "./cursor.ts",
     "./protocol": "./codec.ts",
+    "./web-socket": "./web-socket-adapter.ts",
     "./testing": "./testing.ts"
   }
 }

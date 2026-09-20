@@ -32,6 +32,12 @@ export interface SocketPort {
   /** Send one text frame. Implementations throw when the socket is not open. */
   send(data: string): void
   close(code?: number, reason?: string): void
+  /**
+   * Bytes queued locally, not yet flushed to the peer. `undefined` when an implementation cannot
+   * report it. A platform `WebSocket` exposes this natively; a registry uses it to stop writing to
+   * a client that has stopped draining instead of queueing without bound.
+   */
+  readonly bufferedAmount?: number
 }
 
 /** The inbound half of a socket, as a subscription API rather than `on*` properties. */

@@ -337,6 +337,47 @@ describe("createJsonCodec", () => {
     expect(result.ok).toBe(false)
   })
 
+  it("rejects a hint carrying a negative sequence", () => {
+    // #74: a negative sequence reaching CursorTracker unrejected was a break the suite missed;
+    // rejecting it here, at the wire boundary, means the cursor arithmetic never has to see one.
+    const result = codec.decode(
+      JSON.stringify({ kind: "change.hint", groupId: "group-1", sequence: -1 }),
+    )
+
+    expect(result.ok).toBe(false)
+  })
+
+  it("rejects a hint carrying a fractional sequence", () => {
+    const result = codec.decode(
+      JSON.stringify({ kind: "change.hint", groupId: "group-1", sequence: 1.5 }),
+    )
+
+    expect(result.ok).toBe(false)
+  })
+
+  it("rejects a negative sequence inside a handshake cursor", () => {
+    const result = codec.decode(
+      JSON.stringify({
+        kind: "client.sync",
+        cursors: [{ groupId: "group-1", sequence: -1 }],
+        fromStart: false,
+      }),
+    )
+
+    expect(result.ok).toBe(false)
+  })
+
+  it("still accepts the sentinel sequence of zero", () => {
+    // SEQUENCE_START (cursor.ts) is 0 and is a real, meaningful value — a stored cursor of zero is
+    // how "this group is at zero" stays distinguishable from "never seen this group" — so the
+    // non-negative check must not reject it.
+    const result = codec.decode(
+      JSON.stringify({ kind: "change.hint", groupId: "group-1", sequence: 0 }),
+    )
+
+    expect(result.ok).toBe(true)
+  })
+
   it("rejects a handshake with no cursor list", () => {
     const result = codec.decode(
       JSON.stringify({ kind: "client.sync", fromStart: true }),

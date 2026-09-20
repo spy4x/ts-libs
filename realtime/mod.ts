@@ -102,3 +102,10 @@ export {
   SocketState,
   type Unsubscribe,
 } from "./socket-port.ts"
+
+export {
+  adaptWebSocket,
+  createWebSocketFactory,
+  mapReadyState,
+  type NativeSocketLike,
+} from "./web-socket-adapter.ts"
