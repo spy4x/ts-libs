@@ -160,6 +160,16 @@ export async function safeFetch(
       "timeoutMs must be a positive number of milliseconds",
     )
   }
+  // `NaN` is what `Number(process.env.MAX_REDIRECTS)` gives for a typo, and it
+  // compares false against everything: the loop would end on its first turn and
+  // report "too many redirects" for a chain of none. `Infinity` would let the
+  // chain run until the timeout instead of until the cap.
+  if (!Number.isInteger(maxRedirects) || maxRedirects < 0) {
+    throw new UrlValidationError(
+      "invalid_format",
+      "maxRedirects must be a non-negative whole number",
+    )
+  }
   const resolver = options.resolver ?? defaultResolver
   let method = options.method ?? SafeFetchMethod.Get
   let headers = options.headers

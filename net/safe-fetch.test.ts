@@ -809,6 +809,42 @@ describe("safeFetch", () => {
     }
     assertEquals(getCalls(), 0)
   })
+
+  it("rejects a redirect cap that is not a whole number of hops", async () => {
+    const { fetcher, getCalls } = fakeFetcher([
+      { url: "https://example.com/page", status: 200, body: "ok" },
+    ])
+    for (const maxRedirects of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+      await assertRejects(
+        () =>
+          safeFetch("https://example.com/page", {
+            fetcher,
+            resolver: ALWAYS_PUBLIC,
+            maxRedirects,
+          }),
+        UrlValidationError,
+        "maxRedirects",
+      )
+    }
+    assertEquals(getCalls(), 0)
+  })
+
+  it("accepts a cap of zero and follows nothing", async () => {
+    const { fetcher, getCalls } = fakeFetcher([
+      { url: "https://example.com/old", status: 302, location: "/new" },
+    ])
+    await assertRejects(
+      () =>
+        safeFetch("https://example.com/old", {
+          fetcher,
+          resolver: ALWAYS_PUBLIC,
+          maxRedirects: 0,
+        }),
+      UrlValidationError,
+      "redirects",
+    )
+    assertEquals(getCalls(), 1)
+  })
 })
 
 describe("defaultFetcher", () => {
