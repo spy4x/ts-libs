@@ -161,8 +161,11 @@ choice:
 
 Without a `remoteAddr` accessor the resolver has no peer address at all and falls back to the
 placeholder `clientIp` returns, `0.0.0.0` — and **every** header-less client then shares one bucket,
-so one caller exhausting it denies the rest. If you cannot obtain a peer address, treat the shared
-bucket as a backstop and front the service with a proxy.
+so one caller exhausting it denies the rest. This used to happen silently; `createRateLimitMiddleware`
+now **requires** a `remoteAddr` resolver and throws at construction time without one, so the shared
+bucket can only happen because a caller wrote `remoteAddr: () => undefined` and meant it, not because
+the option was left out. If you cannot obtain a peer address, pass that no-op explicitly, treat the
+shared bucket as a backstop, and front the service with a proxy.
 
 **Where the trust decision lives.** Exactly three places can consult a forwarding header, and all
 three default to not trusting one: `clientIp`'s `trustedProxy` parameter, `userThenIp`'s

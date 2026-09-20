@@ -13,7 +13,10 @@
  *
  * Configuration is validated with arktype at factory time: a limiter built with `limit: 0` or a
  * negative window would silently deny or allow everything, and that failure belongs at startup, not
- * in production traffic.
+ * in production traffic. `remoteAddr` is checked the same way and for the same reason: with no
+ * accessor wired and no trusted proxy header, every anonymous request buckets on the same
+ * placeholder address, and a config that can do that silently is exactly the kind this factory
+ * refuses to build. See {@link RateLimitMiddlewareOptions.remoteAddr}.
  */
 
 import { type as arkType } from "arktype"
@@ -156,6 +159,12 @@ export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never
    * Where to read the connection's peer address, for resolvers that want it. Returned value is
    * exposed to `keyResolver` as `context.remoteAddr`.
    *
+   * **Required**, even for a `keyResolver` that never reads `context.remoteAddr`: with no accessor
+   * wired and forwarding headers left untrusted (the default), every anonymous request falls back
+   * to `clientIp`'s placeholder address, so every client shares one bucket and one caller can lock
+   * everyone else out — and nothing said so until it happened in production. Pass `() => undefined`
+   * to record, explicitly, that this deployment has no peer address available.
+   *
    * ```ts
    * app.use(createRateLimitMiddleware(limiter, {
    *   remoteAddr: ({ env }) => env?.remoteAddr,
@@ -163,7 +172,7 @@ export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never
    * }))
    * ```
    */
-  remoteAddr?: RemoteAddrResolver<E>
+  remoteAddr: RemoteAddrResolver<E>
   /** Rejection body. Defaults to `"Too many requests, please try again later."` */
   errorMessage?: string
   /** Status for a rejection. Defaults to 429. */
@@ -208,6 +217,12 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
   if (typeof parsed.keyResolver !== "function") {
     throw new Error("invalid rate limit middleware options: keyResolver is required")
   }
+  if (typeof parsed.remoteAddr !== "function") {
+    throw new Error(
+      "invalid rate limit middleware options: remoteAddr is required — pass a resolver, or " +
+        "() => undefined to record that no peer address is available in this deployment",
+    )
+  }
   if (parsed.status !== undefined && !REJECTION_STATUSES.has(parsed.status)) {
     throw new Error(
       `invalid rate limit middleware options: status ${parsed.status} is not sendable`,
@@ -215,7 +230,7 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
   }
 
   const keyResolver = parsed.keyResolver as KeyResolver<E>
-  const remoteAddrResolver = parsed.remoteAddr as RemoteAddrResolver<E> | undefined
+  const remoteAddrResolver = parsed.remoteAddr as RemoteAddrResolver<E>
   const message = parsed.errorMessage ??
     "Too many requests, please try again later."
   // The schema has already bounded this to an integer in 400..599; the cast only names it.
@@ -233,7 +248,7 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
     }
     // Resolved before the key, so `keyResolver` can bucket on the connection's own address rather
     // than on a header the client set.
-    context.remoteAddr = remoteAddrResolver?.(context)
+    context.remoteAddr = remoteAddrResolver(context)
 
     const key = `${prefix}${await keyResolver(request, context)}`
     const decision = await rateLimiter.check(key)
