@@ -11,8 +11,13 @@ import {
   formatLogLine,
   REDACTED_TOKEN,
   redactor,
-} from "./auth.ts"
-import { FAKE_TOKEN, FAKE_TOKEN_WRONG } from "./test-helpers.ts"
+} from "./bearer-auth.ts"
+
+/** An obviously-fake bearer token used across this suite. */
+const FAKE_TOKEN = "not-a-real-token"
+
+/** A different token of the same length as {@link FAKE_TOKEN}, for the auth tests. */
+const FAKE_TOKEN_WRONG = "not-a-fake-token"
 
 /**
  * Run `action` with `crypto.subtle.digest` instrumented, and report which algorithms and
@@ -111,7 +116,7 @@ describe("createTokenVerifier", () => {
     // comparison — the two are observationally identical from outside
     // `constantTimeEquals`, and timing is not measurable on a shared runner. So the
     // constant-time property rests on `@std/crypto`'s `timingSafeEqual`, named in
-    // `mcp/auth.ts:54`, and two things carry the safety this test cannot: that call, and
+    // `bearer-auth.ts:54`, and two things carry the safety this test cannot: that call, and
     // digesting both sides first — a leak from a non-constant-time comparison is then a
     // leak of SHA-256 output, not of token bytes. The counting assertions below pin the
     // second half of that; nothing in this suite pins the first.

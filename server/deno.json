@@ -6,6 +6,7 @@
     "./http/bounded-body": "./http/bounded-body.ts",
     "./http/cors": "./http/cors.ts",
     "./http/redact": "./http/redact.ts",
+    "./http/bearer-auth": "./http/bearer-auth.ts",
     "./export": "./export.ts",
     "./export-client": "./export-client.ts",
     "./static": "./static.ts",
