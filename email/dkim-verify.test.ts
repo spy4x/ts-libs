@@ -1079,6 +1079,55 @@ describe("the identity and key-record checks (§6.1.1, §3.6.1)", () => {
     assertEquals(result.parsed?.identity, "agent@mail.example.com")
   })
 
+  it("accepts an i= whose domain is exactly d=", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, { extraTags: "i=ceo@example.com" })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("compares the i= domain with d= case-insensitively", async () => {
+    // §3.5 leaves the case of a domain to the sender; `d=` is lowercased when it
+    // is parsed, so `i=` has to be too or a capital letter alone would refuse a
+    // signature the signer meant.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "i=ceo@Mail.EXAMPLE.com",
+    })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("rejects an i= in a domain that merely ends with d=", async () => {
+    // The dot is the whole check. `notexample.com` ends with `example.com` and is
+    // a different domain that anyone can register, so a suffix comparison without
+    // the separator hands every signature from `d=example.com` to whoever owns
+    // it. Nothing in the suite noticed when the dot was removed, which is why
+    // this test and the one below exist.
+    for (const identity of ["ceo@notexample.com", "ceo@xexample.com"]) {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY, { extraTags: `i=${identity}` })
+      const result = await verifyDkim(raw, publicKey)
+      const domain = identity.slice(identity.indexOf("@") + 1)
+      assertEquals(result.valid, false, `${identity} must be refused`)
+      assertEquals(
+        result.reason,
+        `i= domain ${domain} is not d= (example.com) or a subdomain of it`,
+      )
+    }
+  })
+
+  it("rejects an i= whose domain has d= as a prefix, not a parent", async () => {
+    // The other direction of the same mistake: `example.com.evil.example` is a
+    // domain `evil.example` controls, and it contains `example.com` at the front.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "i=ceo@example.com.evil.example",
+    })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      "i= domain example.com.evil.example is not d= (example.com) or a subdomain of it",
+    )
+  })
+
   it("rejects a subdomain i= when the key record sets t=s", async () => {
     // §3.6.1 on the `s` flag: the domain part of `i=` "MUST be the same as the
     // value of the d= tag", so the parent-domain allowance is withdrawn.
