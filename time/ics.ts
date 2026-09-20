@@ -340,7 +340,16 @@ export function buildVEventLines(event: IcsEvent, dtstamp: Date, method: IcsMeth
 
   if (event.description) lines.push(`DESCRIPTION:${icsEscape(event.description)}`)
   if (event.location) lines.push(`LOCATION:${icsEscape(event.location)}`)
-  if (event.url) lines.push(`URL:${icsEscape(event.url)}`)
+  if (event.url) {
+    // RFC 5545 §3.8.4.6 types `URL` as a URI (§3.3.13), which has no escaping
+    // of its own — a `,` or `;` in a query string is not special here, unlike
+    // in a TEXT value. `icsEscape` would corrupt the link by adding backslashes
+    // the client is not expecting. Only control characters need stripping: the
+    // value position is never folded on its own line breaks (see
+    // {@link sanitizeValue}), so a surviving CR or LF would end the line early.
+    const url = sanitizeValue(event.url)
+    if (url !== undefined) lines.push(`URL:${url}`)
+  }
   if (event.organizer) lines.push(organizerLine(event.organizer))
   for (const attendee of event.attendees ?? []) lines.push(attendeeLine(attendee))
   lines.push(
