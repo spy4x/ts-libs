@@ -5,6 +5,8 @@
     ".": "./mod.ts",
     "./slack": "./slack.ts",
     "./mailchimp": "./mailchimp.ts",
-    "./webhooks": "./webhooks.ts"
+    "./webhooks": "./webhooks.ts",
+    "./ntfy": "./ntfy.ts",
+    "./healthchecks": "./healthchecks.ts"
   }
 }
