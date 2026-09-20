@@ -122,7 +122,7 @@ exported so it does not have to be retyped:
 import { DENY_NET_ADDRESSES, denyNetFlag } from "@ts-libs/net/url-policy"
 
 console.log(denyNetFlag())
-// --deny-net=10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,…,[::1]
+// --deny-net=10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,…,[::1],[::]
 ```
 
 Print it once and paste the result into the task, the Dockerfile or the unit
@@ -155,11 +155,14 @@ Four things about this layer are worth knowing before you rely on it:
   `[fc00::]/7` is not a host it accepts either. Only single addresses can be
   written, which is why the list carries `[::1]` and `[::]` and nothing else in
   that family — unique-local and link-local IPv6 have the guard itself as their
-  only layer. `[::]` is safe to deny: unlike `0.0.0.0`, it does not stop the
-  default bind.
-- **A denied range cannot be listened on either.** An application that listens
-  on `127.0.0.1` behind a proxy on the same host has to drop `127.0.0.0/8` from
-  the list, and gives up loopback cover in exchange.
+  only layer. `[::]` can be denied where `0.0.0.0` cannot, because it does not
+  stop the **default** bind.
+- **A denied address cannot be listened on either.** Under the flag as shipped,
+  `Deno.serve` binds its default address and nothing else: both
+  `Deno.serve({ hostname: "127.0.0.1" })` and `Deno.serve({ hostname: "::" })`
+  fail with `NotCapable`. An application that listens on loopback behind a proxy
+  on the same host, or on `::` for dual stack, has to drop `127.0.0.0/8` or
+  `[::]` from the list and gives up that much cover in exchange.
 - **It is a second layer, not the first.** `validatePublicUrl` still has to run:
   the deny list says nothing about `javascript:` locations, credentials in a URL,
   or a name that resolves internally on the first lookup.
@@ -234,9 +237,12 @@ on every exit path.
   malware scanning belong to the caller.
 - **No DNS pinning.** The guard resolves a host and then `fetch` resolves it
   again. Pinning the connection to the address that was checked needs a custom
-  dispatcher, which the platform `fetch` does not expose. The gap is real and it
-  is closed from outside the module — see "The second lookup, and how to close
-  it" above.
+  dispatcher, which the platform `fetch` does not expose. The gap is real, and
+  from outside the module it is narrowed rather than closed: with the
+  `--deny-net` list a second answer of `127.0.0.1`, `[::1]` or `[::]` is refused
+  at connect time, and a second answer of `0.0.0.0` still reaches services on
+  the machine. See "The second lookup, and how to close it" above for what the
+  list covers, what it costs and what is left.
 - **No allow-list or deny-list of hosts.** The policy is "publicly routable",
   not "these domains". A caller with a stricter rule injects a resolver.
 - **No HTML parsing, scraping or content extraction.**
