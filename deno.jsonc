@@ -24,6 +24,13 @@
       "description": "Run all checks",
       "dependencies": ["fmt:check", "lint", "ts:check", "test"]
     },
+    // Both tiers, unit first — the order issue #74 asks for. `check` itself stays
+    // free of Docker so a package PR can be verified on a machine with no
+    // containers; this is the task that adds the integration tier on top.
+    "check:all": {
+      "command": "deno task check && deno task test:integration",
+      "description": "Run all checks, then the integration tier"
+    },
     "fmt": "deno fmt",
     "fmt:check": "deno fmt --check",
     "lint": "deno lint",
@@ -33,7 +40,23 @@
     // vars. Both grants are as narrow as the tests allow; they are repo-wide
     // only because `deno test` discovers every member's suite in one process.
     // Nothing here needs `net`, `run` or `write`.
-    "test": "deno test --no-prompt --allow-read --allow-env",
+    //
+    // `--ignore` is what keeps the two tiers apart: Deno's discovery matches
+    // `*.test.ts`, and `x.integration.test.ts` ends in `.test.ts`, so without it
+    // the unit run would pick up the integration suite and fail with no container.
+    "test": "deno test --no-prompt --allow-read --allow-env --ignore=**/*.integration.test.ts",
+    // The integration tier. The glob is the only thing that selects it, so a file
+    // joins the tier by its name alone.
+    //
+    // `--allow-net` is enumerated rather than blanket: the four local addresses
+    // from `infra/compose.integration.yml` (under both spellings of loopback) and
+    // the three Woodpecker service host names from `.woodpecker.yml`. Moving a
+    // service to another address means editing this list too — which is the point,
+    // an integration test must not be able to reach anything else.
+    "test:integration": "deno test --no-prompt --allow-read --allow-env --allow-sys --allow-net=127.0.0.1:55432,127.0.0.1:59000,127.0.0.1:51025,127.0.0.1:58025,localhost:55432,localhost:59000,localhost:51025,localhost:58025,postgres:5432,minio:9000,mailpit:1025,mailpit:8025 **/*.integration.test.ts",
+    "services:up": "docker compose -f infra/compose.integration.yml up -d --wait",
+    "services:down": "docker compose -f infra/compose.integration.yml down -v",
+    "services:logs": "docker compose -f infra/compose.integration.yml logs",
     "fix": {
       "command": "echo 'Fixes applied!'",
       "description": "Run all fixes",
@@ -41,6 +64,12 @@
     }
   },
   "imports": {
+    // The integration tier's shared harness (#74): service addresses, the
+    // fail-loudly reachability check and the unique-name helpers. A local path,
+    // not a dependency. It sits in `infra/` — which is not a workspace member —
+    // so a test-only helper can never be published as part of a package.
+    "@integration-testing": "./infra/testing/+lib.ts",
+
     // Validation — arktype only, never zod. `platform/` types (#10, #23),
     // `ai/chatJson` schemas (#11), `server/auth` bodies (#6).
     "arktype": "npm:arktype@2.2.3",
