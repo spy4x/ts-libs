@@ -244,14 +244,18 @@ function sanitizeValue(value: string): string | undefined {
  * helper covers: a CR or LF that survives ends the content line and lets the
  * rest of the address become a property of its own
  * (`jane\r\nX-INJECTED:1@example.com` yields a real `X-INJECTED` property), and
- * a comma would turn one ATTENDEE into two addresses.
+ * a comma would turn one ATTENDEE into two addresses — rejected outright,
+ * since there is no escaping that could keep it as one.
  *
- * @throws {TypeError} when nothing usable survives.
+ * @throws {TypeError} when nothing usable survives, or the address contains a comma.
  */
 function addressValue(address: IcsAddress, property: string): string {
   const value = sanitizeValue(address.email)
   if (value === undefined) {
     throw new TypeError(`${property} requires a non-empty email address`)
+  }
+  if (value.includes(",")) {
+    throw new TypeError(`${property} email address must not contain a comma: ${value}`)
   }
   return value
 }

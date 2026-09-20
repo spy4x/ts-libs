@@ -597,6 +597,30 @@ Deno.test("generateIcs rejects missing required values", () => {
   )
 })
 
+Deno.test("generateIcs rejects a comma in an attendee or organizer email address", () => {
+  // A raw comma in the mailto: value position would turn one ATTENDEE into
+  // two addresses for a lenient parser; there is no escaping that keeps it as
+  // one, so it is rejected rather than emitted as-is.
+  assertThrows(
+    () =>
+      generateIcs(
+        makeEvent({ attendees: [{ email: "a@example.com,b@example.com" }] }),
+        makeOptions(),
+      ),
+    TypeError,
+    "comma",
+  )
+  assertThrows(
+    () =>
+      generateIcs(
+        makeEvent({ organizer: { email: "a@example.com,b@example.com" } }),
+        makeOptions(),
+      ),
+    TypeError,
+    "comma",
+  )
+})
+
 Deno.test("generateIcs ignores surrounding whitespace in an email address", () => {
   const flat = unfoldLines(
     generateIcs(makeEvent({ organizer: { email: "  jane@example.com  " } }), makeOptions()),
