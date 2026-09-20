@@ -96,6 +96,12 @@ export interface DkimVerifyOptions {
   resolver?: DnsTxtResolver
 }
 
+/**
+ * RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less
+ * than 1024 bits as valid."
+ */
+export const MIN_RSA_KEY_BITS = 1024
+
 /** Thrown for a malformed DKIM-Signature header or DNS key record. */
 export class DkimParseError extends Error {
   override name = "DkimParseError"
@@ -878,6 +884,17 @@ async function verifySignature(
       false,
       ["verify"],
     )
+    // RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of
+    // less than 1024 bits as valid." The modulus length comes from the imported
+    // key rather than from counting DER bytes, so it is the length the crypto
+    // implementation will actually use. A 512-bit key is breakable by anyone who
+    // wants to forge mail from the domain that published it.
+    const modulusLength = (cryptoKey.algorithm as RsaHashedKeyAlgorithm).modulusLength
+    if (modulusLength < MIN_RSA_KEY_BITS) {
+      throw new DkimParseError(
+        `RSA key is ${modulusLength} bits; RFC 8301 requires at least ${MIN_RSA_KEY_BITS}`,
+      )
+    }
     return await crypto.subtle.verify(
       { name: "RSASSA-PKCS1-v1_5" },
       cryptoKey,

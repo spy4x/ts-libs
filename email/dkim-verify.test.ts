@@ -144,26 +144,29 @@ const rsaPairs = new Map<string, Promise<CryptoKeyPair>>()
 const ed25519Pairs = new Map<string, Promise<CryptoKeyPair>>()
 
 /**
- * Memoised 2048-bit RSA pair, generated in-process.
+ * Memoised RSA pair, generated in-process; 2048 bits unless asked otherwise.
  *
  * `slot` selects the pair: "primary" is the one messages are signed with, any
  * other slot is a second key of the same shape — which is what a wrong-key test
  * needs, since a key of the *other* algorithm never reaches the crypto.
+ * `modulusLength` is what the RFC 8301 floor is tested with, and it is part of
+ * the memo key, so a short key can never stand in for the ordinary one.
  */
-function rsa(slot = "primary"): Promise<CryptoKeyPair> {
-  let pair = rsaPairs.get(slot)
+function rsa(slot = "primary", modulusLength = 2048): Promise<CryptoKeyPair> {
+  const memo = `${slot}:${modulusLength}`
+  let pair = rsaPairs.get(memo)
   if (!pair) {
     pair = crypto.subtle.generateKey(
       {
         name: "RSASSA-PKCS1-v1_5",
-        modulusLength: 2048,
+        modulusLength,
         publicExponent: new Uint8Array([1, 0, 1]),
         hash: "SHA-256",
       },
       true,
       ["sign", "verify"],
     ) as Promise<CryptoKeyPair>
-    rsaPairs.set(slot, pair)
+    rsaPairs.set(memo, pair)
   }
   return pair
 }
@@ -218,6 +221,8 @@ interface SignOptions {
   bodyHashWsp?: { at: number; kind: "fold" | "space" }
   ed25519?: boolean
   foldSignature?: boolean
+  /** Modulus length of the RSA pair to sign with. Defaults to 2048. */
+  rsaBits?: number
 }
 
 /**
@@ -261,7 +266,7 @@ async function sign(
   const field = canonHeader("DKIM-Signature", ` ${stub}; b=${tail}`, mode).replace(/\r\n$/, "")
   const input = head.join("") + field
 
-  const pair = options.ed25519 ? await ed25519() : await rsa()
+  const pair = options.ed25519 ? await ed25519() : await rsa("primary", options.rsaBits)
   let message = ascii(input)
   if (options.ed25519) {
     // RFC 8463 §3: Ed25519 DKIM signs SHA-256 of the canonicalized input, not
@@ -277,7 +282,9 @@ async function sign(
 
   const rendered = `${stub}; b=${base64(signature)}${tail}`
   const block = options.foldSignature ? rendered.replace(/; /g, "; \r\n\t") : rendered
-  const publicKey = options.ed25519 ? await ed25519Key(await ed25519()) : await rsaKey(await rsa())
+  const publicKey = options.ed25519
+    ? await ed25519Key(await ed25519())
+    : await rsaKey(await rsa("primary", options.rsaBits))
   return {
     raw: `${[...headers, `DKIM-Signature: ${block}`].join("\r\n")}\r\n\r\n${body}`,
     publicKey,
@@ -709,6 +716,36 @@ describe("policy RFC 6376 leaves to the caller", () => {
     const tampered = await verifyDkim(grown, key)
     assertEquals(tampered.valid, false)
     assertEquals(tampered.reason, "body hash mismatch (body modified after signing)")
+  })
+})
+
+// --- RFC 8301: the RSA key size floor ---------------------------------------
+
+/**
+ * RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less
+ * than 1024 bits as valid."
+ *
+ * The keys here are generated in-process and the message is signed with them, so
+ * the signature is cryptographically perfect and only the key's size separates
+ * the two cases. A 512-bit modulus is factorable on one machine in hours, which
+ * is what makes "valid" the wrong answer for it.
+ */
+describe("the RSA key size floor (RFC 8301)", () => {
+  it("rejects a signature made with a 512-bit RSA key", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", { rsaBits: 512 })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "RSA key is 512 bits; RFC 8301 requires at least 1024")
+    // The body was never in question: the rejection is the key, not the message.
+    assertEquals(result.computedBodyHash, result.parsed?.bodyHash)
+  })
+
+  it("verifies the same message signed with a 1024-bit key", async () => {
+    // The floor itself, so "rejects a short key" cannot be satisfied by rejecting
+    // every key that is not the suite's usual 2048-bit one.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", { rsaBits: 1024 })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
   })
 })
 
