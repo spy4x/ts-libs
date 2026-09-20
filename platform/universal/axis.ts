@@ -6,10 +6,11 @@
  */
 
 /**
- * Hard ceiling on generated ticks. A safety net rather than a tested path: the index-driven loop
- * terminates on its own for every input the tests exercise.
+ * Hard ceiling on generated ticks, and on the iterations {@link ticksForStep}'s loop may spend
+ * producing them — see that function's doc for why the loop needs its own bound, not just the
+ * output's. Exported so `axis.test.ts` can assert against it instead of a repeated literal.
  */
-const MAX_TICKS = 1_000
+export const MAX_TICKS = 1_000
 
 /**
  * Coerce a tick target to a usable step count.
@@ -112,6 +113,21 @@ export function ticks(min: number, max: number, maxTicks = 5): number[] {
  * Values are rounded relative to the step rather than to a fixed number of decimals: rounding to a
  * fixed 8 decimals collapsed every tick of a sub-nanosecond span to `0` (`ticks(0, 1e-12)` returned a
  * single `[0]`), and a fixed-decimal form cannot represent a step like `2e-13` at all.
+ *
+ * **Bounded by `MAX_TICKS`, not just its output.** `steps` is `(end - start) / step`, and an absurd
+ * tick target (`ticks(1_000_000, 2_000_000, 1e25)`, say) makes `step` many orders of magnitude
+ * smaller than the float precision at `low`/`high`'s magnitude. Every `roundToStep` result then
+ * collapses onto the same handful of doubles, so `out.length` almost stops growing while `index`
+ * keeps climbing toward a `steps` that can itself be `1e25` — relying on `out.length < MAX_TICKS`
+ * alone never terminates. Capping the loop itself at `Math.min(steps + 1, MAX_TICKS)` is the fix:
+ * the reference this module is ported from has the exact same defect (it does not return either;
+ * `origin/main` before this module threw after ~12s on the same call instead of hanging), so there
+ * is no reference behaviour to copy here. The choice is a chart's: return whichever ticks
+ * distinguish themselves within `MAX_TICKS` iterations — as few as one, if the target is absurd
+ * enough that nothing else is representable — rather than freeze the page. The `index > MAX_TICKS`
+ * check below is a regression tripwire, not the fix itself: the ceiling already makes it
+ * unreachable, so it exists purely so that weakening the ceiling back to plain `steps + 1` fails
+ * `axis.test.ts` with a fast thrown error instead of hanging the whole suite.
  */
 function ticksForStep(low: number, high: number, step: number): number[] {
   const start = Math.floor(low / step) * step
@@ -120,7 +136,11 @@ function ticksForStep(low: number, high: number, step: number): number[] {
   if (!Number.isFinite(steps) || steps < 0) return [low, high]
 
   const out: number[] = []
-  for (let index = 0; index <= steps + 1 && out.length < MAX_TICKS; index++) {
+  const iterationCeiling = Math.min(steps + 1, MAX_TICKS)
+  for (let index = 0; index <= iterationCeiling && out.length < MAX_TICKS; index++) {
+    if (index > MAX_TICKS) {
+      throw new RangeError(`ticksForStep: exceeded MAX_TICKS (${MAX_TICKS}) iterations`)
+    }
     const value = roundToStep(start + index * step, step)
     if (value < low - step / 2 || value > high + step / 2) continue
     if (out.length > 0 && out[out.length - 1] === value) continue

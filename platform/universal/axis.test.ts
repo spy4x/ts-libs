@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { niceStep, ticks } from "./axis.ts"
+import { MAX_TICKS, niceStep, ticks } from "./axis.ts"
 
 describe("niceStep", () => {
   it("snaps the significand to 1, 2 or 5 times a power of ten", () => {
@@ -149,5 +149,52 @@ describe("ticks", () => {
     // so every tick but the first rounded away and `ticks(0, 1e-12)` returned `[0]`. Expected
     // values taken from `preact-components/charts/scales.ts`.
     expect(ticks(0, 1e-12)).toEqual([0, 2e-13, 4e-13, 6e-13, 8e-13, 1e-12])
+  })
+
+  it("returns at once for an absurd tick target instead of looping without bound", () => {
+    // Before the fix, `ticksForStep`'s loop ran `steps + 1` times (here `steps` is `1e25`) and
+    // relied on `out.length < MAX_TICKS` alone to stop it; a step this many orders of magnitude
+    // below the float precision at this range's magnitude makes every rounded value collapse onto
+    // the same handful of doubles, so `out.length` never reaches MAX_TICKS and the loop never
+    // reached `steps + 1` either — it did not return within a 25-second wait. No wall clock is
+    // asserted here: `ticksForStep`'s own `index > MAX_TICKS` tripwire makes a regression throw
+    // within a few thousand iterations instead of hanging this test run.
+    const values = ticks(1_000_000, 2_000_000, 1e25)
+    expect(values.length).toBeGreaterThan(0)
+    expect(values.length).toBeLessThanOrEqual(MAX_TICKS)
+    for (const value of values) {
+      expect(Number.isFinite(value)).toBe(true)
+    }
+    for (let i = 1; i < values.length; i++) {
+      expect(values[i]).toBeGreaterThan(values[i - 1])
+    }
+    // The collapse leaves every surviving tick within a hair of `low`; a generous margin avoids
+    // pinning the exact rounding artefact while still catching a wildly out-of-range result.
+    for (const value of values) {
+      expect(value).toBeGreaterThanOrEqual(1_000_000 - 1)
+      expect(value).toBeLessThanOrEqual(2_000_000 + 1)
+    }
+  })
+
+  it("stays bounded for other absurd targets and spans, not just the one reported case", () => {
+    // Same class of bug, different corners of it: an absurd target with an ordinary span, an
+    // ordinary target with an absurd span (both directions), and Infinity as the target (which
+    // normaliseTarget should catch before it ever reaches the loop).
+    const cases: [number, number, number][] = [
+      [0, 1, 1e300],
+      [0, 1, Number.MAX_VALUE],
+      [0, 1, Number.POSITIVE_INFINITY],
+      [0, 1e300, 5],
+      [0, 1e-300, 1e25],
+      [-1e300, 1, 1e20],
+    ]
+    for (const [min, max, target] of cases) {
+      const values = ticks(min, max, target)
+      expect(values.length).toBeLessThanOrEqual(MAX_TICKS)
+      expect(values.every(Number.isFinite)).toBe(true)
+      for (let i = 1; i < values.length; i++) {
+        expect(values[i]).toBeGreaterThan(values[i - 1])
+      }
+    }
   })
 })
