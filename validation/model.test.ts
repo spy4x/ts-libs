@@ -1,6 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { type } from "arktype"
+import { Type, type } from "arktype"
 import {
   FORM_FIELD,
   isValid,
@@ -29,6 +29,25 @@ const clean = (): ValidationModel<Person> => ({})
  * whole reason it exists is to fold data that is still wrong into the model.
  */
 const wrong = (model: Record<string, unknown>): Person => model as unknown as Person
+
+/**
+ * An object with arktype's public rejection shape — an array of issues with a `summary` string,
+ * a `throw` method, and the `issues` array {@link schemaIssues} iterates — but no `ArkErrors` in
+ * its prototype chain.
+ *
+ * Stands in for a rejection built by a second, differently-loaded copy of arktype: same shape,
+ * different class identity, so `instanceof` against this module's `type.errors` fails on it even
+ * though `schemaIssues` should still read it as a rejection.
+ */
+function foreignRejection(issues: Array<{ path: PropertyKey[]; message: string }>) {
+  return Object.assign([...issues], {
+    summary: issues.map((issue) => issue.message).join("\n"),
+    throw: () => {
+      throw new Error("ArkErrors.throw")
+    },
+    issues,
+  })
+}
 
 describe("isValid", () => {
   it("accepts a model with no issues", () => {
@@ -202,6 +221,19 @@ describe("validateSchema", () => {
 
     expect(isValid(invalid)).toBe(false)
     expect(invalid[FORM_FIELD]?.[ValidationType.SCHEMA]?.message).toContain("start before end")
+  })
+
+  it("still reports issues when the schema rejects with a shape that fails instanceof", () => {
+    // A rejection built by a differently-loaded copy of arktype is not `instanceof` this module's
+    // `type.errors`, so this drives the same `schemaIssues` call `validateSchema` makes with a
+    // stand-in for that case — see `foreignRejection` above.
+    const foreign = foreignRejection([{ path: ["age"], message: "age must be a number" }])
+    const fakeSchema = ((_value: unknown) => foreign) as unknown as Type
+
+    const invalid = validateSchema(fakeSchema, { name: "Ada", age: "old" }, {})
+
+    expect(isValid(invalid)).toBe(false)
+    expect(invalid.age?.[ValidationType.SCHEMA]?.message).toContain("age must be a number")
   })
 })
 
