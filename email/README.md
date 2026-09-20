@@ -325,6 +325,8 @@ interface DkimVerifyOptions {
   resolver?: DnsTxtResolver
   maxMessageLength?: number // default DEFAULT_MAX_MESSAGE_LENGTH, 10 MiB
   maxSignatures?: number // default DEFAULT_MAX_SIGNATURES, 10
+  maxHeaderFields?: number // default DEFAULT_MAX_HEADER_FIELDS, 1000
+  maxSignedHeaderNames?: number // default DEFAULT_MAX_SIGNED_HEADER_NAMES, 200
 }
 ```
 
@@ -345,7 +347,14 @@ interface DkimVerifyOptions {
   When none parses, the first record's own error is what the caller sees.
 - `d=` and `s=` are checked against §3.1's grammar before the name is built, so a
   resolver that puts the name into a URL or a command line cannot be handed
-  anything but letters, digits, hyphens and dots.
+  anything but letters, digits, hyphens and dots. Three spellings a verifier
+  without that check would have looked up are refused with
+  `"DKIM d= tag is not a domain name"` (or `s=`): an **underscore**
+  (`s=sel_1`), a **trailing dot** (`d=example.com.`), and **non-ASCII letters**
+  (`d=münchen.example`, which RFC 8616 permits — publish the A-label
+  `xn--mnchen-3ya.example` instead). The check reads `d=` and `s=` separately, so
+  the `_domainkey` label the lookup itself adds is unaffected, and ordinary
+  selectors (`selector1`, `hs1-12345`, `2026`) are unaffected too.
 
 `verifyDkim` returns a result for every message-shaped failure — missing header,
 bad grammar, expiry, unsigned `From`, body mismatch, unverifiable signature — and
@@ -433,11 +442,12 @@ which propagates the resolver's rejection instead of reporting it.
   `maxSignedHeaderNames` (200) bounds the names one `h=` may list, and at most
   `maxSignatures` (10) `DKIM-Signature` fields are verified — §6.1 allows that
   one, and each extra field otherwise buys a key lookup and a public-key
-  operation. Inside those limits every pass over the message is linear. Two
-  backtracking regular expressions used to make the body quadratic (80 KB of
-  spaces took four seconds), and the selection of signed headers walked the whole
-  `h=` list once per distinct header name, which cost 46 seconds for 1.8 MB of
-  headers that `h=` all named.
+  operation. Inside those limits every pass over the message is linear: twice the
+  message costs about twice the time. Two things used to make it quadratic — four
+  times the time for twice the input, so a message an attacker sizes freezes the
+  process — and both are gone. Two backtracking regular expressions did it to the
+  body, and the selection of signed headers did it to the header block, by walking
+  the whole `h=` list again for every distinct header name in the message.
 - **Several signatures are all verified, and the first valid one is the verdict.**
   §6.1 treats each field independently. A broken signature above a good one no
   longer condemns the message, and one an attacker prepends no longer decides it —
