@@ -94,7 +94,21 @@ export interface DkimVerifyOptions {
   now?: bigint
   /** DNS TXT resolver used to fetch the public key when none is supplied. */
   resolver?: DnsTxtResolver
+  /**
+   * Longest message this verifier will look at, in characters. Defaults to
+   * {@link DEFAULT_MAX_MESSAGE_LENGTH}. A longer message is refused before it is
+   * canonicalized: every pass here is linear, and the cap is what bounds the work
+   * an unauthenticated sender can ask for.
+   */
+  maxMessageLength?: number
 }
+
+/**
+ * Default {@link DkimVerifyOptions.maxMessageLength}: 10 MiB of characters, which
+ * is above the message size limit relays usually impose and far below anything
+ * that takes a noticeable time to canonicalize.
+ */
+export const DEFAULT_MAX_MESSAGE_LENGTH = 10 * 1024 * 1024
 
 /**
  * RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less
@@ -420,27 +434,78 @@ export function canonicalizeHeader(
  * {@link verifyDkim} — the bound is counted in octets, not in characters.
  */
 export function canonicalizeBody(body: string, algorithm: Canonicalization): string {
-  const crlf = toCrlf(body)
-  if (algorithm === "relaxed") {
-    // §3.4.4 order: strip trailing WSP from every line, compress the remaining
-    // WSP runs to one SP, then ignore trailing empty lines. A body that reduces
-    // to nothing is the empty string, not a lone CRLF.
-    const prepared = crlf
-      .replace(/[ \t]+\r\n/g, "\r\n")
-      .replace(/[ \t]+/g, " ")
-    const stripped = prepared.replace(/(?:\r\n)+$/, "")
-    if (stripped === "") return ""
-    return stripped + "\r\n"
-  }
-  // Simple (§3.4.3): only the trailing empty lines go. Body bytes are otherwise
-  // untouched. An empty body still ends with the CRLF the algorithm appends.
-  const stripped = crlf.replace(/(?:\r\n)+$/, "")
-  return stripped === "" && crlf === "" ? "\r\n" : stripped + "\r\n"
+  // One pass to split, one pass per line, one join: the cost grows with the body,
+  // not with its square. The regular expressions this replaced backtracked —
+  // `/[ \t]+\r\n/g` retried a whole run of spaces at every offset inside it and
+  // `/(?:\r\n)+$/` retried every run of line endings — so 80 KB of either took
+  // about four seconds, and each doubling of the body cost four times as much.
+  // The body arrives from an unauthenticated sender, so that was a freeze
+  // anybody could trigger by sending one large message.
+  const lines = splitBodyLines(body)
+  // §3.4.4 order: strip trailing WSP from every line and compress the remaining
+  // WSP runs to one SP, *then* ignore trailing empty lines — a line of nothing
+  // but WSP is empty by the time the last step looks at it.
+  const canonical = algorithm === "relaxed" ? lines.map(relaxBodyLine) : lines
+
+  let end = canonical.length
+  while (end > 0 && canonical[end - 1] === "") end--
+  // §3.4.5 pins the two empty cases apart: simple hashes the CRLF the algorithm
+  // appends (`frcCV1k9…`), relaxed hashes nothing at all (`47DEQpj8…`).
+  if (end === 0) return algorithm === "relaxed" ? "" : "\r\n"
+  return `${canonical.slice(0, end).join("\r\n")}\r\n`
 }
 
-/** Normalise bare LF and lone CR to CRLF. */
-function toCrlf(input: string): string {
-  return input.replace(/\r\n|\r|\n/g, "\r\n")
+/**
+ * Split a body into lines, dropping the line endings.
+ *
+ * CRLF, a bare LF and a lone CR each end a line, which is how the canonical body
+ * comes out CRLF-terminated whatever the message's storage did to it. The last
+ * element is what followed the final line ending — the empty string when the body
+ * ends with one.
+ */
+function splitBodyLines(body: string): string[] {
+  const lines: string[] = []
+  let start = 0
+  for (let i = 0; i < body.length; i++) {
+    const code = body.charCodeAt(i)
+    if (code !== 0x0d && code !== 0x0a) continue
+    lines.push(body.slice(start, i))
+    if (code === 0x0d && body.charCodeAt(i + 1) === 0x0a) i++
+    start = i + 1
+  }
+  lines.push(body.slice(start))
+  return lines
+}
+
+/**
+ * §3.4.4 for one line: every WSP run becomes one SP, and the run at the end of
+ * the line disappears.
+ *
+ * A leading run becomes one SP rather than nothing — §3.4.5's own Example 3
+ * canonicalizes `" C "` to `" C"`, space included — so the leading SP is emitted
+ * with the first word rather than trimmed away.
+ */
+function relaxBodyLine(line: string): string {
+  let out = ""
+  let at = 0
+  let pendingSpace = false
+  while (at < line.length) {
+    if (isWsp(line.charCodeAt(at))) {
+      pendingSpace = true
+      at++
+      continue
+    }
+    const start = at
+    while (at < line.length && !isWsp(line.charCodeAt(at))) at++
+    if (pendingSpace) out += " "
+    pendingSpace = false
+    out += line.slice(start, at)
+  }
+  return out
+}
+
+function isWsp(code: number): boolean {
+  return code === 0x20 || code === 0x09
 }
 
 /**
@@ -689,6 +754,15 @@ export async function verifyDkim(
   publicKey?: DkimPublicKey,
   options: DkimVerifyOptions = {},
 ): Promise<DkimVerificationResult> {
+  const maxMessageLength = options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH
+  if (rawMessage.length > maxMessageLength) {
+    return {
+      valid: false,
+      reason: `message is ${rawMessage.length} characters, over the ` +
+        `${maxMessageLength}-character limit`,
+    }
+  }
+
   const { headers, body } = splitMessage(rawMessage)
 
   // A message may carry several signatures; the first one is verified. The

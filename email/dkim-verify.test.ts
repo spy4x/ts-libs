@@ -17,11 +17,18 @@
 // Nothing here touches the network. Keys are fixture records or generated
 // in-process by Web Crypto; no private key is committed.
 
-import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert"
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import {
   canonicalizeBody,
   canonicalizeHeader,
+  DEFAULT_MAX_MESSAGE_LENGTH,
   DkimParseError,
   type DkimPublicKey,
   type DnsTxtResolver,
@@ -962,6 +969,81 @@ describe("canonicalizeBody", () => {
     assertEquals(canonicalizeBody("Hello world.\n", "simple"), "Hello world.\r\n")
     assertEquals(canonicalizeBody("a\n\n\n", "relaxed"), "a\r\n")
   })
+
+  it("treats a lone CR in a body as a line ending", () => {
+    // Mailbox storage rewrites line endings and nothing else references the
+    // body's original bytes, so every ending — CRLF, bare LF, lone CR — becomes
+    // one canonical CRLF. Deleting this rewrite left the suite green before
+    // (#74), because every other body test uses CRLF or LF.
+    assertEquals(canonicalizeBody("line one\rline two\r\n", "simple"), "line one\r\nline two\r\n")
+    assertEquals(canonicalizeBody("a\rb", "relaxed"), "a\r\nb\r\n")
+    assertEquals(canonicalizeBody("a\r\r\r", "simple"), "a\r\n")
+    // A CR that ends the body is a line ending too, so the trailing empty line
+    // it opens is dropped rather than kept as content.
+    assertEquals(canonicalizeBody("a\r", "relaxed"), "a\r\n")
+  })
+
+  it("keeps the internal empty lines and drops only the trailing ones", () => {
+    assertEquals(canonicalizeBody("a\r\n\r\n\r\nb\r\n\r\n\r\n", "simple"), "a\r\n\r\n\r\nb\r\n")
+    assertEquals(canonicalizeBody("a\r\n \r\n \r\nb\r\n \r\n", "relaxed"), "a\r\n\r\n\r\nb\r\n")
+  })
+})
+
+// --- the cost of canonicalizing a body --------------------------------------
+
+/**
+ * The third finding of issue #62: `canonicalizeBody` used two regular
+ * expressions that backtrack — `/[ \t]+\r\n/g` retried a whole run of spaces at
+ * every offset inside it, and `/(?:\r\n)+$/` did the same for a run of line
+ * endings — so the work grew with the square of the body. Measured on the code
+ * before this change: 20 000 characters took 257 ms, 40 000 took 1 015 ms and
+ * 80 000 took 4 291 ms. The body comes from whoever sent the message, the work
+ * is synchronous, and one large message froze the process.
+ *
+ * The budget below is a multiple of a linear pass over the same strings, timed on
+ * the machine running the test, rather than a number of milliseconds: a slow or
+ * loaded machine moves both sides of the comparison together. The factor is
+ * enormous on purpose. A linear implementation comes in at well under 10x the
+ * reference and the quadratic one at several thousand times it, so anything in
+ * between is still a clear failure.
+ */
+describe("the cost of canonicalizing a large body", () => {
+  const REFERENCE_PASSES = 5
+  const LINEAR_BUDGET_FACTOR = 200
+
+  it("canonicalizes 128 KiB of the pathological shapes within a linear budget", () => {
+    const size = 128 * 1024
+    const spaces = `${" ".repeat(size)}x\r\n`
+    const endings = `x${"\r\n".repeat(size / 2)}`
+
+    // The reference: split and re-join the same strings, which is the same order
+    // of work the canonicalizer does and is unambiguously linear. The length is
+    // accumulated so the optimiser cannot drop the loop.
+    let referenceChars = 0
+    const referenceStart = performance.now()
+    for (let pass = 0; pass < REFERENCE_PASSES; pass++) {
+      referenceChars += spaces.split("\r\n").join("\r\n").length
+      referenceChars += endings.split("\r\n").join("\r\n").length
+    }
+    const reference = (performance.now() - referenceStart) / REFERENCE_PASSES
+    assert(referenceChars > 0, "the reference pass must not be optimised away")
+    assert(reference > 0, `the reference pass was too fast to time: ${reference}ms`)
+
+    const start = performance.now()
+    const relaxed = canonicalizeBody(spaces, "relaxed")
+    const simple = canonicalizeBody(endings, "simple")
+    const elapsed = performance.now() - start
+
+    // The results are asserted too: a canonicalizer that returned early would be
+    // fast and wrong.
+    assertEquals(relaxed, " x\r\n")
+    assertEquals(simple, "x\r\n")
+    assert(
+      elapsed < reference * LINEAR_BUDGET_FACTOR,
+      `canonicalizing ${size} characters took ${elapsed.toFixed(1)}ms, over ` +
+        `${LINEAR_BUDGET_FACTOR}x the ${reference.toFixed(1)}ms linear reference`,
+    )
+  })
 })
 
 // --- parseDkimSignature ----------------------------------------------------
@@ -1513,6 +1595,36 @@ describe("verifyDkim", () => {
     const result = await verifyDkim(raw, await rsaKey(await rsa()))
     assertEquals(result.valid, false)
     assertEquals(result.reason, "DKIM-Signature missing required tag: s")
+  })
+
+  it("refuses a message larger than the cap it was given", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const result = await verifyDkim(raw, publicKey, { maxMessageLength: raw.length - 1 })
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      `message is ${raw.length} characters, over the ${raw.length - 1}-character limit`,
+    )
+    // Nothing was parsed or hashed: the message never reached the verifier.
+    assertEquals(result.parsed, undefined)
+    assertEquals(result.computedBodyHash, undefined)
+  })
+
+  it("verifies a message that is exactly the size of the cap", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const result = await verifyDkim(raw, publicKey, { maxMessageLength: raw.length })
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("refuses a message over the default cap", async () => {
+    // The default has to be enforced, not merely available: a caller that passes
+    // no options is the one this protects.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const oversized = raw + " ".repeat(DEFAULT_MAX_MESSAGE_LENGTH)
+    const result = await verifyDkim(oversized, publicKey)
+    assertEquals(result.valid, false)
+    assertStringIncludes(result.reason ?? "", `over the ${DEFAULT_MAX_MESSAGE_LENGTH}-character`)
+    assertEquals(DEFAULT_MAX_MESSAGE_LENGTH, 10 * 1024 * 1024)
   })
 })
 
