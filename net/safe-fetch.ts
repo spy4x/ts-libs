@@ -192,8 +192,14 @@ export async function safeFetch(
       }
 
       const location = response.headers.get("location")
+
+      // Nothing below reads the redirect body, and everything below can throw.
+      // Cancelling here — before the header is even looked at — is what makes
+      // "a refused chain does not leak a socket" true on every path out of this
+      // loop, rather than on the two that were remembered.
+      await tryCancel(response)
+
       if (!location) {
-        await tryCancel(response)
         throw new UrlValidationError(
           "invalid_redirect",
           "Redirect response missing Location header",
@@ -204,7 +210,21 @@ export async function safeFetch(
       // result through the full public-URL policy (scheme, host, credentials,
       // IP family, DNS). This is the only place a redirect target is allowed to
       // become a request target.
-      const next = new URL(location, currentUrl)
+      //
+      // The `Location` is upstream's text, so a value the URL parser refuses is
+      // a bad redirect, not a bug here: it leaves as this module's own error
+      // with a code a caller can branch on, never as a raw `TypeError`. The
+      // value itself is left out of the message — it is attacker-chosen text and
+      // this message reaches logs.
+      let next: URL
+      try {
+        next = new URL(location, currentUrl)
+      } catch {
+        throw new UrlValidationError(
+          "invalid_redirect",
+          "Redirect Location is not a valid URL",
+        )
+      }
       const target = await validatePublicUrl(next.href, { resolver })
       headers = headersForHop(headers, currentUrl, target)
       currentUrl = target
@@ -212,10 +232,6 @@ export async function safeFetch(
       if (response.status === 301 || response.status === 302 || response.status === 303) {
         method = SafeFetchMethod.Get
       }
-
-      // Drop the redirect response so the next iteration can issue a fresh
-      // fetch against the new URL.
-      await tryCancel(response)
     }
 
     // Unreachable: the loop returns or throws.

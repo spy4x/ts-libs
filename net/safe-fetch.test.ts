@@ -72,6 +72,47 @@ function fakeFetcher(
   return { fetcher, getCalls: () => calls, methods, sentHeaders }
 }
 
+/**
+ * A `Location` the URL parser refuses outright.
+ *
+ * `http://[` opens an IPv6 literal and never closes it, which is the shape a
+ * hostile upstream would use to make the client throw from inside its own
+ * parser rather than from its policy.
+ */
+const UNPARSEABLE_LOCATION = "http://["
+
+/**
+ * One redirect whose body is an open stream that counts its cancellations.
+ *
+ * The stream is never closed on purpose: an unread, unclosed body is exactly
+ * the socket a refused chain is not allowed to leave behind, so `cancelled()`
+ * is the only thing that can end it.
+ */
+function redirectWithCountedBody(
+  location: string | undefined,
+): { fetcher: Fetcher; cancelled: () => number } {
+  let cancelled = 0
+  const fetcher: Fetcher = {
+    fetch() {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]))
+        },
+        cancel() {
+          cancelled++
+        },
+      })
+      return Promise.resolve(
+        new Response(stream, {
+          status: 302,
+          headers: location === undefined ? undefined : { location },
+        }),
+      )
+    },
+  }
+  return { fetcher, cancelled: () => cancelled }
+}
+
 /** A fetcher that records the URLs it was asked for, always answering 200. */
 function recordingFetcher(): { fetcher: Fetcher; urls: string[] } {
   const urls: string[] = []
@@ -642,6 +683,48 @@ describe("safeFetch", () => {
       "Location",
     )
     assertEquals(cancelledCount >= 1, true)
+  })
+
+  it("cancels the redirect body when the target fails the policy", async () => {
+    const { fetcher, cancelled } = redirectWithCountedBody("http://169.254.169.254/latest")
+    await assertRejects(
+      () => safeFetch("https://example.com/old", { fetcher, resolver: ALWAYS_PUBLIC }),
+      UrlValidationError,
+      "non-public",
+    )
+    assertEquals(cancelled(), 1)
+  })
+
+  it("cancels the redirect body when the Location does not parse", async () => {
+    const { fetcher, cancelled } = redirectWithCountedBody(UNPARSEABLE_LOCATION)
+    await assertRejects(
+      () => safeFetch("https://example.com/old", { fetcher, resolver: ALWAYS_PUBLIC }),
+      UrlValidationError,
+    )
+    assertEquals(cancelled(), 1)
+  })
+
+  it("reports a Location that does not parse as its own error, not a TypeError", async () => {
+    const { fetcher } = redirectWithCountedBody(UNPARSEABLE_LOCATION)
+    const error = await assertRejects(
+      () => safeFetch("https://example.com/old", { fetcher, resolver: ALWAYS_PUBLIC }),
+      UrlValidationError,
+      "Location",
+    )
+    assertEquals(error.code, "invalid_redirect")
+    // The header is upstream's text and this message is logged: it must not
+    // carry the value back out.
+    assertEquals(error.message.includes(UNPARSEABLE_LOCATION), false)
+  })
+
+  it("cancels the redirect body when the target resolves to a private address", async () => {
+    const { fetcher, cancelled } = redirectWithCountedBody("https://internal.evil.test/x")
+    await assertRejects(
+      () => safeFetch("https://example.com/old", { fetcher, resolver: ALWAYS_PUBLIC }),
+      UrlValidationError,
+      "non-public",
+    )
+    assertEquals(cancelled(), 1)
   })
 
   it("rejects a non-positive timeout instead of aborting silently", async () => {
