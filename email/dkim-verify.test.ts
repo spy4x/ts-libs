@@ -450,6 +450,140 @@ describe("the DKIM-Signature field name", () => {
 
 // --- verifier policy RFC 6376 leaves to the caller -------------------------
 
+describe("the l= body bound is counted in octets", () => {
+  // RFC 6376 §3.5 / §3.7 count canonical **octets**. `String.prototype.slice`
+  // counts UTF-16 code units, so a verifier that bounds the canonical body string
+  // hashes a different byte range than the signer did as soon as a non-ASCII
+  // character sits before the bound — and rejects valid mail. Each fixture here
+  // was signed by the OpenSSL-only script in `fixtures/SOURCES.md` and asserted
+  // with `openssl dgst -sha256 -verify` before it was written.
+  const vectors = [
+    {
+      name: "openssl-utf8-l4",
+      body: "héllo",
+      bodyLength: 4,
+      bodyHash: "nCjUmslET0eKzs9FV7zzkWhR/r2ik2CJIgWSlEPYf6A=",
+    },
+    {
+      name: "openssl-utf8-l6",
+      body: "heloéé",
+      bodyLength: 6,
+      bodyHash: "sZ0NsYvV5Rbv3pELbhdaYgWpIl+a0NmYlxJvzRwfLhc=",
+    },
+    {
+      // Two octets, and the second is the first byte of the three-octet euro sign:
+      // the bound lands inside a character, so decoding the slice back to a string
+      // yields U+FFFD (0xEF 0xBF 0xBD) — three octets no signer signed.
+      name: "openssl-utf8-split-l2",
+      body: "h\u20acllo",
+      bodyLength: 2,
+      bodyHash: "BnwhlmstcOW74w+XBvVGZvPGRVnBN23k4FCq43WUwBw=",
+    },
+  ]
+
+  for (const vector of vectors) {
+    it(`verifies ${vector.name}`, async () => {
+      const { raw, record } = await fixture(vector.name)
+      const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
+      assert(result.valid, `reason=${result.reason}`)
+      assertEquals(result.parsed?.bodyLength, vector.bodyLength)
+      assertEquals(result.computedBodyHash, vector.bodyHash)
+
+      // The two counts the fixture separates: the bound is the octet count, so a
+      // canonical body read as UTF-16 code units is longer than it is in octets,
+      // and the code-unit slice covers more characters than the signer signed.
+      const canonical = `${vector.body}\r\n`
+      const bytes = new TextEncoder().encode(canonical)
+      assert(
+        vector.body.length < new TextEncoder().encode(vector.body).length,
+        "the body must contain a multi-octet character",
+      )
+      const bounded = bytes.slice(0, vector.bodyLength)
+      assertEquals(bounded.length, vector.bodyLength)
+      assert(
+        canonical.slice(0, vector.bodyLength) !== new TextDecoder().decode(bounded),
+        "the code-unit slice and the octet slice must differ",
+      )
+    })
+  }
+
+  it("hashes the octets the l= bound names, not the UTF-16 code units", async () => {
+    // The one line the whole file is about: `computedBodyHash` must be the digest
+    // of the first `l=` canonical octets. `String.prototype.slice` produces the
+    // fourth of these values, and it is exactly what a signer that declared the
+    // bound did not hash.
+    const { raw, record } = await fixture("openssl-utf8-l4")
+    const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
+    assert(result.valid, `reason=${result.reason}`)
+
+    const canonical = canonicalizeBody(splitMessage(raw).body, "relaxed")
+    const covered = "h\u00e9l"
+    assertEquals(canonical, `${covered}lo\r\n`)
+    assertEquals(new TextEncoder().encode(covered).length, 4)
+    assertEquals(covered.length, 3, "four octets are three UTF-16 code units")
+
+    assertEquals(result.computedBodyHash, await sha256Base64(covered))
+    assertEquals(
+      await sha256Base64(covered),
+      "nCjUmslET0eKzs9FV7zzkWhR/r2ik2CJIgWSlEPYf6A=",
+    )
+    assertEquals(result.computedBodyHash, result.parsed?.bodyHash)
+
+    // The pre-fix behaviour, recorded as an inequality rather than prose: a
+    // code-unit slice hashes "héll" (5 octets) and must not be what this
+    // verifier computes.
+    assertEquals(canonical.slice(0, 4), "h\u00e9ll")
+    assertEquals(
+      await sha256Base64(canonical.slice(0, 4)),
+      "V/OrDY5eigJU1Zmgo+zLEbepPnNVUwupIRgyjsfEE4g=",
+    )
+    assert(result.computedBodyHash !== await sha256Base64(canonical.slice(0, 4)))
+  })
+
+  it("hashes a slice that ends inside a character", async () => {
+    // Decoding the byte slice back to a string cannot work: the slice stops
+    // mid-character, so the two octets come back as U+FFFD (0xEF 0xBF 0xBD) and a
+    // decode-then-hash verifier would hash three octets where the signer signed
+    // two.
+    const { raw, record } = await fixture("openssl-utf8-split-l2")
+    const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
+    assert(result.valid, `reason=${result.reason}`)
+
+    const bounded = new TextEncoder().encode("h\u20acllo").slice(0, 2)
+    assertEquals([...bounded], [0x68, 0xe2])
+    assertEquals(result.computedBodyHash, await sha256Base64(bounded))
+    assertEquals(result.computedBodyHash, result.parsed?.bodyHash)
+
+    // The round-trip the issue warns about, recorded with its digest.
+    const decoded = new TextDecoder().decode(bounded)
+    assertEquals(decoded, "h" + String.fromCodePoint(0xfffd))
+    assertEquals([...new TextEncoder().encode(decoded)], [0x68, 0xef, 0xbf, 0xbd])
+    assertEquals(
+      await sha256Base64(decoded),
+      "4b5JJzu7A+6PSXw3/SguYfWFYGMPbuteZ+mHdZDLaxM=",
+    )
+    assert(
+      result.computedBodyHash !== await sha256Base64(decoded),
+      "the decoded form must not match",
+    )
+  })
+
+  it("rejects an edit inside the bits the l= bound covers", async () => {
+    // Tightening the bound is not a free pass: truncation to l= is what makes the
+    // hash reproducible, and every octet it names is still authenticated. The
+    // byte before the bound is a continuation octet, so the tamper is inside it.
+    const { raw, record } = await fixture("openssl-utf8-l4")
+    const key = parseDkimPublicKey(record) ?? undefined
+    assert((await verifyDkim(raw, key)).valid)
+
+    const tampered = raw.replace("h\u00e9llo", "h\u00e8llo")
+    assert(tampered !== raw, "the body must have changed")
+    const result = await verifyDkim(tampered, key)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "body hash mismatch (body modified after signing)")
+  })
+})
+
 describe("policy RFC 6376 leaves to the caller", () => {
   it("accepts an l= bound longer than the body without enlarging what it covers", async () => {
     // §3.5: "the signer MUST NOT use a value in the l= tag that is greater than

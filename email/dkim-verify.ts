@@ -398,7 +398,7 @@ export function canonicalizeHeader(
  * Returning the empty string in both cases made `simple` hash zero bytes.
  *
  * An `l=` bound is applied afterwards, to these canonical octets, by
- * {@link verifyDkim}.
+ * {@link verifyDkim} — the bound is counted in octets, not in characters.
  */
 export function canonicalizeBody(body: string, algorithm: Canonicalization): string {
   const crlf = toCrlf(body)
@@ -635,9 +635,17 @@ function selectSignedHeaders(
   return selected
 }
 
-/** Compute the base64 SHA-256 digest of a string. */
-export async function sha256Base64(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input)
+/**
+ * Compute the base64 SHA-256 digest of a string or of raw octets.
+ *
+ * A string is encoded as UTF-8 first, which is what RFC 6376 hashes: the
+ * canonical form of a message body is a sequence of octets, not of characters.
+ * Passing `Uint8Array` is what lets a caller bound *octets* — an `l=` bound can
+ * land inside a multi-octet character, and decoding the sliced bytes back to a
+ * string would hash the replacement character instead of the declared bytes.
+ */
+export async function sha256Base64(input: string | Uint8Array): Promise<string> {
+  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input
   const digest = await crypto.subtle.digest("SHA-256", asBytes(bytes))
   return base64Encode(new Uint8Array(digest))
 }
@@ -723,18 +731,25 @@ export async function verifyDkim(
   let computedBodyHash: string
   try {
     signedHeaders = selectSignedHeaders(headers, parsed.signedHeaders)
-    let canonicalBody = canonicalizeBody(body, parsed.canonicalization.body)
-    if (parsed.bodyLength !== undefined) {
+    const canonicalBody = canonicalizeBody(body, parsed.canonicalization.body)
+    if (parsed.bodyLength === undefined) {
+      computedBodyHash = await sha256Base64(canonicalBody)
+    } else {
       // §3.7 step 1: the body is hashed "canonicalized using the body
       // canonicalization algorithm specified in the c= tag and then truncated to
-      // the length specified in the l= tag". The bound is a count of canonical
-      // octets, so truncation is what makes bh= reproducible — hashing the whole
-      // body failed every message signed with a length. A bound longer than the
-      // body it accompanies is not an error: the hash is simply over all of it,
-      // which is what a signer that declared a longer bound produced.
-      canonicalBody = canonicalBody.slice(0, parsed.bodyLength)
+      // the length specified in the l= tag". The bound counts canonical *octets*,
+      // so the truncation happens on the UTF-8 bytes: `String.prototype.slice`
+      // counts UTF-16 code units, which diverge from octets at the first
+      // non-ASCII character, and the verifier hashed a different byte range than
+      // the signer did — falsely rejecting valid non-ASCII mail. The bound may
+      // also land inside a multi-octet character, which is what rules out
+      // decoding the sliced bytes back to a string: U+FFFD would be hashed in
+      // place of the declared octets. A bound longer than the body it accompanies
+      // is not an error: the slice then covers all of it, which is what a signer
+      // that declared a longer bound produced.
+      const bounded = new TextEncoder().encode(canonicalBody).slice(0, parsed.bodyLength)
+      computedBodyHash = await sha256Base64(bounded)
     }
-    computedBodyHash = await sha256Base64(canonicalBody)
   } catch (err) {
     return { valid: false, parsed, reason: errorMessage(err) }
   }
