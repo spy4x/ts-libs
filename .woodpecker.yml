@@ -12,9 +12,51 @@ when:
   event: [push, pull_request, tag]
   branch: main
 
+# The integration tier's dependencies (#74). Same three images as
+# `infra/compose.integration.yml`, same exact version pins; only the addresses
+# differ, because Woodpecker publishes a service under its own name as hostname on
+# the container's own port. The credentials are the same obviously fake literal, and
+# these containers live for one pipeline run.
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_USER: integration-test-only
+      POSTGRES_PASSWORD: integration-test-only
+      POSTGRES_DB: integration-test-only
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    environment:
+      MINIO_ROOT_USER: integration-test-only
+      MINIO_ROOT_PASSWORD: integration-test-only
+    commands:
+      - minio server /data --address :9000 --console-address :9001
+
+  mailpit:
+    image: axllent/mailpit:v1.31.2
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+      MP_DISABLE_VERSION_CHECK: "true"
+
+# Steps run in declaration order. Unit first, integration second, which is the order
+# issue #74 asks for: format, lint, types and the unit suite fail in seconds, the
+# integration tier takes a container start-up to fail.
 steps:
   check:
     image: denoland/deno:2.9.7
     commands:
       - deno --version
       - deno task check
+
+  integration:
+    image: denoland/deno:2.9.7
+    environment:
+      TS_LIBS_IT_POSTGRES_URL: postgres://integration-test-only:integration-test-only@postgres:5432/integration-test-only
+      TS_LIBS_IT_S3_ENDPOINT: http://minio:9000
+      TS_LIBS_IT_SMTP_HOST: mailpit
+      TS_LIBS_IT_SMTP_PORT: "1025"
+      TS_LIBS_IT_MAILPIT_URL: http://mailpit:8025
+    commands:
+      - deno task test:integration
