@@ -248,6 +248,45 @@ Deno.test("applying a schema creates a STRICT table the pragma reports as strict
   await db.close()
 })
 
+Deno.test("a second apply does not run the upgrade again", async () => {
+  const db = await openMemory()
+  await db.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+  await db.execute("INSERT INTO entries (id, label) VALUES (?, ?)", 7, "legacy")
+  let upgrades = 0
+  const schema = {
+    table: "entries",
+    sql: SCHEMA,
+    upgrade: async (transaction: SqliteDb) => {
+      upgrades += 1
+      // A one-shot rename: this throws if it runs a second time, which is what the strict
+      // check in `applySqliteSchema` exists to prevent. The source's own upgrade moved data
+      // between a legacy and a current table the same way.
+      await transaction.exec("ALTER TABLE entries RENAME TO entries_old")
+      await transaction.exec(
+        "CREATE TABLE entries (id INTEGER PRIMARY KEY, label TEXT NOT NULL) STRICT",
+      )
+      await transaction.exec("INSERT INTO entries (id, label) SELECT id, label FROM entries_old")
+      await transaction.exec("DROP TABLE entries_old")
+    },
+  }
+
+  await applySqliteSchema(db, schema)
+  await applySqliteSchema(db, schema)
+
+  assertEquals(upgrades, 1)
+  assertEquals(await db.queryAll<{ id: number; label: string }>("SELECT id, label FROM entries"), [
+    { id: 7, label: "legacy" },
+  ])
+  assertEquals(
+    await db.queryOne<{ strict: number }>(
+      "SELECT strict FROM pragma_table_list WHERE name = ?",
+      "entries",
+    ),
+    { strict: 1 },
+  )
+  await db.close()
+})
+
 Deno.test("applying a schema to a legacy table runs the upgrade inside a transaction", async () => {
   const db = await openMemory()
   await db.exec(
