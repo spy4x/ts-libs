@@ -42,6 +42,11 @@ below.
 `sameValidation`. It is a plain state shape — `{ [field]: { [errorType]: { message, payload } } }` —
 with no renderer in it, which is why it lives here rather than in a component library.
 
+An arktype issue that does not belong to a single field — a rule spanning two fields, or the value
+not being an object at all — is filed under `FORM_FIELD` rather than dropped, so it still makes
+`isValid` return `false`. A caller that renders per-field errors should also render `vl[FORM_FIELD]`
+somewhere the whole form can show it.
+
 ## Recognising an arktype rejection
 
 `validate` and `schemaIssues` tell a rejection from a parsed value with `isArkErrors`, a shape check

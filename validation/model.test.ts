@@ -2,6 +2,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { type } from "arktype"
 import {
+  FORM_FIELD,
   isValid,
   sameValidation,
   schemaIssues,
@@ -119,6 +120,22 @@ describe("schemaIssues", () => {
 
     expect(Object.keys(issues).sort()).toEqual(["age", "name"])
   })
+
+  it("keeps a cross-field rule under FORM_FIELD instead of dropping it", () => {
+    const pairSchema = type({ start: "string", end: "string" }).narrow(
+      (v, ctx) => v.start < v.end || ctx.mustBe("start before end"),
+    )
+    const issues = schemaIssues(pairSchema, { start: "2024-02-01", end: "2024-01-01" })
+
+    expect(issues[FORM_FIELD]?.[ValidationType.SCHEMA]?.message).toContain("start before end")
+  })
+
+  it("keeps a non-object value under FORM_FIELD instead of dropping it", () => {
+    const issues = schemaIssues(personSchema, "oops")
+
+    expect(issues[FORM_FIELD]?.[ValidationType.SCHEMA]?.message).toBeTruthy()
+    expect(isValid(issues as ValidationModel<Person>)).toBe(false)
+  })
 })
 
 describe("validateSchema", () => {
@@ -171,6 +188,20 @@ describe("validateSchema", () => {
     expect(partial.name?.[ValidationType.SCHEMA]).toBeUndefined()
     expect(partial.age?.[ValidationType.SCHEMA]?.message).toContain("age must be a number")
     expect(isValid(partial)).toBe(false)
+  })
+
+  it("makes the model invalid when a cross-field rule fails", () => {
+    const pairSchema = type({ start: "string", end: "string" }).narrow(
+      (v, ctx) => v.start < v.end || ctx.mustBe("start before end"),
+    )
+    const invalid = validateSchema(
+      pairSchema,
+      { start: "2024-02-01", end: "2024-01-01" },
+      {},
+    )
+
+    expect(isValid(invalid)).toBe(false)
+    expect(invalid[FORM_FIELD]?.[ValidationType.SCHEMA]?.message).toContain("start before end")
   })
 })
 

@@ -25,6 +25,15 @@ export enum ValidationType {
   SCHEMA = "SCHEMA",
 }
 
+/**
+ * Key an issue with no single field is reported under.
+ *
+ * A cross-field rule ("end date must be after start date") or a value that is not even an object
+ * fails without a field path arktype can point at. Filing that under `FORM_FIELD` instead of
+ * dropping it is what makes {@link isValid} treat it as an error a caller can render and act on.
+ */
+export const FORM_FIELD = "_form"
+
 /** One issue on one field. */
 export interface FieldIssue {
   /** Text shown next to the field. */
@@ -84,7 +93,10 @@ export function setFieldIssue<M extends object>(
  * The issues arktype reported for a value, keyed by the model field they belong to.
  *
  * A nested failure (`address.city`) is reported against its top-level field (`address`), because
- * that is the one a field row can render. Several issues on one field are joined into one message.
+ * that is the one a field row can render. An issue with no field at all — a cross-field rule, or
+ * the value not being an object in the first place — is filed under {@link FORM_FIELD} instead of
+ * being dropped, so it still makes the model invalid. Several issues on one field (or on
+ * `FORM_FIELD`) are joined into one message.
  */
 export function schemaIssues<S extends Type>(
   schema: S,
@@ -95,9 +107,8 @@ export function schemaIssues<S extends Type>(
 
   const issues: Record<string, FieldValidation> = {}
   for (const issue of outcome.issues) {
-    const field = issue.path.length > 0 ? String(issue.path[0]) : ""
-    if (field === "") continue
-    const previous = issues[field]?.SCHEMA?.message
+    const field = issue.path.length > 0 ? String(issue.path[0]) : FORM_FIELD
+    const previous = issues[field]?.[ValidationType.SCHEMA]?.message
     issues[field] = {
       [ValidationType.SCHEMA]: {
         message: previous === undefined ? issue.message : `${previous} ${issue.message}`,
