@@ -45,6 +45,35 @@ export { verifyWebhookRequest } from "./webhooks.ts"
 export type { WebhookRejectReason, WebhookVerifierConfig, WebhookVerifyResult } from "./webhooks.ts"
 
 export {
+  HealthchecksClient,
+  healthchecksConfigFromEnv,
+  HealthchecksOutcome,
+} from "./healthchecks.ts"
+export type {
+  HealthchecksClientConfig,
+  HealthchecksClientOptions,
+  HealthchecksErrorCode,
+  HealthchecksFailure,
+  HealthchecksPing,
+  HealthchecksResult,
+  HealthchecksRetryOptions,
+  HealthchecksSuccess,
+} from "./healthchecks.ts"
+
+export { NotificationSeverity, NtfyClient, ntfyConfigFromEnv, NtfyPriority } from "./ntfy.ts"
+export type {
+  NtfyClientConfig,
+  NtfyClientOptions,
+  NtfyErrorCode,
+  NtfyFailure,
+  NtfyPush,
+  NtfyPushed,
+  NtfyResult,
+  NtfyRetryOptions,
+  NtfySkipped,
+} from "./ntfy.ts"
+
+export {
   createExponentialBackoff,
   describeTransportError,
   isPermanentStatus,

@@ -314,6 +314,10 @@ describe("describeErrorKind", () => {
   it("names a real platform class, so the allowlist is not empty", () => {
     expect(describeErrorKind(new TypeError("boom"))).toBe("TypeError")
     expect(describeErrorKind(new RangeError("boom"))).toBe("RangeError")
+    // Folded in from the deleted ops/notify/retry-guards.test.ts (#67): the ops
+    // copy's example was SyntaxError, which this file's allowlist case had not
+    // exercised.
+    expect(describeErrorKind(new SyntaxError("boom"))).toBe("SyntaxError")
   })
 
   it("reports Error for a caller-set name", () => {

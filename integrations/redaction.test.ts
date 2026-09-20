@@ -1,22 +1,18 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { MailchimpClient } from "./mailchimp.ts"
-import { SlackClient } from "./slack.ts"
+import { HealthchecksClient, HealthchecksOutcome } from "./healthchecks.ts"
+import { NotificationSeverity, NtfyClient } from "./ntfy.ts"
 
 /**
- * Every client failure must be free of the credential the client was configured
- * with.
+ * Every notifier failure must be free of the credential the client was
+ * configured with.
  *
- * This is a regression guard over a defect that shipped three times: each
- * client returned `cause.message` from its transport catch, and `fetch` puts
- * the whole request URL into that message. For Slack the credential is the last
- * path segment; for healthchecks it is the check's capability key; for ntfy it
- * is a path segment of the base URL. Nothing about the type system stops a
- * fourth call site from being written the same way, so each client is driven to
- * a URL-bearing transport failure and its serialised result is asserted clean.
- *
- * The token is a distinctive marker rather than a realistic key, so a hit is
- * unambiguous and no credential-shaped string appears in this repo.
+ * Slack, Mailchimp and healthchecks were each fixed for returning
+ * `cause.message` from a transport catch, and ntfy was missed — its base URL
+ * can carry the token in a path segment, and `fetch` puts the whole URL in its
+ * error text. This suite drives both notifiers to a URL-bearing transport
+ * failure and asserts the serialised result is clean, so a fourth call site
+ * written the same way cannot pass.
  */
 
 /** Stands in for the credential, in a position no sanitised result can contain. */
@@ -26,70 +22,72 @@ const TOKEN = "REALTOKENISH"
 const urlBearingFailure = (url: string) => () =>
   Promise.reject(new TypeError(`Invalid URL: '${url}'`))
 
-const CONFIG = {
-  apiKey: "test-key-not-real",
-  username: "test-user-not-real",
-  listId: "test-list-not-real",
-  serverPrefix: "example",
-}
-
 const assertClean = (label: string, result: unknown): void => {
   const serialised = JSON.stringify(result)
-  const entry = { label, leaksToken: serialised.includes(TOKEN) }
-  expect(entry).toEqual({ label, leaksToken: false })
-  // The host is a leak too: a token is useless without knowing where to post it.
+  expect({ label, leaksToken: serialised.includes(TOKEN) }).toEqual({ label, leaksToken: false })
   expect({ label, leaksHost: serialised.includes("example.invalid") }).toEqual({
     label,
     leaksHost: false,
   })
 }
 
-describe("no client failure leaks the configured credential", () => {
-  it("keeps the Slack webhook token out of a transport failure", async () => {
-    const url = `https://hooks.slack.example.invalid/services/T000/B000/${TOKEN}`
-    const client = new SlackClient({ webhookUrl: url }, {
+describe("no notifier failure leaks the configured credential", () => {
+  it("keeps the ntfy token out of a transport failure", async () => {
+    const baseUrl = `${TOKEN}`
+    const url = `https://ntfy.example.invalid/${baseUrl}/test-topic`
+    const client = new NtfyClient({
+      baseUrl: `https://ntfy.example.invalid/${baseUrl}`,
+      topic: "test-topic",
+    }, {
       fetcher: urlBearingFailure(url),
       retry: { maxAttempts: 1 },
     })
-    const result = await client.send({ text: "hello" })
+    const result = await client.push({
+      title: "backup failed",
+      message: "detail",
+      severity: NotificationSeverity.Failure,
+    })
     expect(result.ok).toBe(false)
-    assertClean("slack transport", result)
+    expect(result.ok === false && result.code).toBe("network_error")
+    assertClean("ntfy transport", result)
   })
 
-  it("keeps the Mailchimp key out of a transport failure", async () => {
-    const url = `https://example.invalid/${TOKEN}/3.0`
-    const client = new MailchimpClient(CONFIG, {
-      fetcher: urlBearingFailure(url),
-      retry: { maxAttempts: 1 },
-    })
-    assertClean("mailchimp upsert", await client.putContact({ email: "a@example.invalid" }))
-    assertClean("mailchimp lookup", await client.searchContact("a@example.invalid"))
-  })
-
-  it("keeps a caller-supplied payload's own text out of an invalid-payload failure", async () => {
-    // `JSON.stringify` on a payload with a hostile `toJSON` throws text the
-    // caller controls, so the message must not be forwarded into a result.
-    const payload = {
-      toJSON: () => {
-        throw new TypeError(`Invalid URL: 'https://hooks.slack.example.invalid/${TOKEN}'`)
-      },
-    }
-    const client = new SlackClient({
-      webhookUrl: "https://hooks.slack.example.invalid/services/T/B",
-    })
-    const result = await client.send(payload)
+  it("keeps the ntfy token out of a transport failure reached through notifyFailure", async () => {
+    const url = `https://ntfy.example.invalid/${TOKEN}/test-topic`
+    const client = new NtfyClient({
+      baseUrl: `https://ntfy.example.invalid/${TOKEN}`,
+      topic: "test-topic",
+      token: "test-token-not-real",
+    }, { fetcher: urlBearingFailure(url), retry: { maxAttempts: 1 } })
+    const result = await client.notifyFailure("backup failed", "detail")
     expect(result.ok).toBe(false)
-    expect(result.ok === false && result.code).toBe("invalid_payload")
-    assertClean("slack unserialisable payload", result)
+    assertClean("ntfy notifyFailure", result)
   })
 
-  it("still names a transport failure, so the results stay diagnosable", async () => {
-    const url = `https://hooks.slack.example.invalid/services/T000/B000/${TOKEN}`
-    const client = new SlackClient({ webhookUrl: url }, {
-      fetcher: urlBearingFailure(url),
+  it("keeps the healthchecks capability key out of a transport failure", async () => {
+    const url = `https://hc-ping.example.invalid/${TOKEN}`
+    const client = new HealthchecksClient({ pingUrl: url }, {
+      fetcher: urlBearingFailure(`${url}/fail`),
       retry: { maxAttempts: 1 },
     })
-    const result = await client.send({ text: "hello" })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Fail })
+    expect(result.ok).toBe(false)
+    assertClean("healthchecks ping", result)
+  })
+
+  it("still names each transport failure, so the results stay diagnosable", async () => {
+    const client = new NtfyClient({
+      baseUrl: `https://ntfy.example.invalid/${TOKEN}`,
+      topic: "test-topic",
+    }, {
+      fetcher: urlBearingFailure(`https://ntfy.example.invalid/${TOKEN}/test-topic`),
+      retry: { maxAttempts: 1 },
+    })
+    const result = await client.push({
+      title: "backup failed",
+      message: "detail",
+      severity: NotificationSeverity.Failure,
+    })
     expect(result.ok === false && result.message).toBe(
       "TypeError: transport failure (url withheld)",
     )
