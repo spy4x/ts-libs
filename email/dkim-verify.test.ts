@@ -1018,7 +1018,7 @@ describe("the identity and key-record checks (§6.1.1, §3.6.1)", () => {
     assertEquals(result.reason, "unsupported DKIM key record version: DKIM2")
   })
 
-  it("rejects a key record whose v= is not the first tag", async () => {
+  it("rejects a key record whose v= is not the first tag", () => {
     // §3.6.1: "v= ... MUST be the first tag in the record."
     assertThrows(
       () => parseDkimPublicKey("k=rsa; v=DKIM1; p=AAECAw=="),
@@ -1027,7 +1027,7 @@ describe("the identity and key-record checks (§6.1.1, §3.6.1)", () => {
     )
   })
 
-  it("rejects a key record whose s= or h= list is empty", async () => {
+  it("rejects a key record whose s= or h= list is empty", () => {
     // Present and empty is a typo, not "no restriction": reading it as "any
     // service" would widen the key's permission rather than narrow it.
     for (const tag of ["s", "h"]) {
@@ -1039,7 +1039,7 @@ describe("the identity and key-record checks (§6.1.1, §3.6.1)", () => {
     }
   })
 
-  it("reads the restriction tags onto the parsed key", async () => {
+  it("reads the restriction tags onto the parsed key", () => {
     const key = parseDkimPublicKey("v=DKIM1; h=sha256; s=email:*; t=y:s; p=AAECAw==")!
     assertEquals(key.version, "DKIM1")
     assertEquals(key.hashAlgorithms, ["sha256"])
@@ -1085,7 +1085,7 @@ describe("the identity and key-record checks (§6.1.1, §3.6.1)", () => {
     assert(result.valid, `reason=${result.reason}`)
   })
 
-  it("rejects an i= tag that carries no domain", async () => {
+  it("rejects an i= tag that carries no domain", () => {
     assertThrows(
       () =>
         parseDkimSignature(
