@@ -253,4 +253,46 @@ describe("the real WebSocket adapter against a real local server", () => {
       await server.close()
     }
   })
+
+  it("does not storm-reconnect when the server sends one frame and drops every attempt", async () => {
+    // The residual the reviewer found on the previous head: resetting the backoff on the first
+    // inbound message let a server that sends a single byte before dropping reset the counter for
+    // free every time, so the delay stayed at the base value instead of growing. This is that exact
+    // shape, over a real socket: one frame, then a drop, on every single attempt.
+    const server = startServer((socket) => {
+      socket.addEventListener("open", () => {
+        socket.send(JSON.stringify({ kind: "server.ping" }))
+        socket.close(1001, "dropped after one frame")
+      })
+    })
+
+    const clock = createSystemClock()
+    const store = new PersistentCursorStore({ storage: new MemoryKeyValueStore(), clock })
+
+    const transport = new ClientTransport({
+      url: server.url,
+      socketFactory: createWebSocketFactory(),
+      clock,
+      cursors: store,
+      pull: () => {},
+      backoff: { baseMs: 30, factor: 2, maxMs: 300, jitterRatio: 0.3 },
+      heartbeatIntervalMs: 60_000,
+      pongTimeoutMs: 60_000,
+      handshakeAckTimeoutMs: 60_000,
+    })
+
+    try {
+      transport.connect()
+      await new Promise((resolve) => setTimeout(resolve, 800))
+
+      // Same bound as the silent-drop case above, and for the same reason: this is not a timing
+      // assertion, it is a check that the count stays in the same order of magnitude rather than
+      // storming. Without the `minHealthyMs` gate this reliably exceeds 30 in the same window.
+      expect(server.sockets.length).toBeGreaterThanOrEqual(2)
+      expect(server.sockets.length).toBeLessThan(15)
+    } finally {
+      transport.stop()
+      await server.close()
+    }
+  })
 })
