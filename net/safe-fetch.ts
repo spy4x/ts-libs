@@ -229,9 +229,7 @@ export async function safeFetch(
       headers = headersForHop(headers, currentUrl, target)
       currentUrl = target
 
-      if (response.status === 301 || response.status === 302 || response.status === 303) {
-        method = SafeFetchMethod.Get
-      }
+      method = methodAfterRedirect(response.status, method)
     }
 
     // Unreachable: the loop returns or throws.
@@ -239,6 +237,26 @@ export async function safeFetch(
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * The method the next hop is issued with, per RFC 9110 §15.4.
+ *
+ * A 303 rewrites everything to `GET`, a 301 or 302 rewrites everything that is
+ * not already `GET`, and 307/308 exist precisely so nothing is rewritten.
+ * `HEAD` is never rewritten by any of them: turning it into a `GET` downloads a
+ * body the caller asked not to receive, which is the opposite of what a caller
+ * who wrote `HEAD` wanted. The comparison is case-insensitive because `method`
+ * is a free string as well as a `SafeFetchMethod`.
+ */
+function methodAfterRedirect(status: number, method: string): string {
+  const upper = method.toUpperCase()
+  if (upper === SafeFetchMethod.Head) return method
+  if (status === 303) return SafeFetchMethod.Get
+  if (status === 301 || status === 302) {
+    return upper === SafeFetchMethod.Get ? method : SafeFetchMethod.Get
+  }
+  return method
 }
 
 /**

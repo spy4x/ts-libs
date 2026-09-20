@@ -373,6 +373,74 @@ describe("safeFetch", () => {
     assertEquals(methods, ["POST", "GET"])
   })
 
+  it("downgrades a POST to GET on a 301", async () => {
+    const { fetcher, methods } = fakeFetcher([
+      { url: "https://example.com/submit", status: 301, location: "/done" },
+      { url: "https://example.com/done", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/submit", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      method: SafeFetchMethod.Post,
+    })
+    assertEquals(methods, ["POST", "GET"])
+  })
+
+  it("downgrades a PUT to GET on a 302", async () => {
+    const { fetcher, methods } = fakeFetcher([
+      { url: "https://example.com/submit", status: 302, location: "/done" },
+      { url: "https://example.com/done", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/submit", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      method: SafeFetchMethod.Put,
+    })
+    assertEquals(methods, ["PUT", "GET"])
+  })
+
+  it("keeps a HEAD request a HEAD across a 301", async () => {
+    // RFC 9110 §15.4 rewrites the method of a 301/302/303 to GET only when it is
+    // not already GET or HEAD. Rewriting HEAD downloads the body the caller
+    // explicitly asked not to be sent.
+    const { fetcher, methods } = fakeFetcher([
+      { url: "https://example.com/probe", status: 301, location: "/moved" },
+      { url: "https://example.com/moved", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/probe", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      method: SafeFetchMethod.Head,
+    })
+    assertEquals(methods, ["HEAD", "HEAD"])
+  })
+
+  it("keeps a HEAD request a HEAD across a 303", async () => {
+    const { fetcher, methods } = fakeFetcher([
+      { url: "https://example.com/probe", status: 303, location: "/moved" },
+      { url: "https://example.com/moved", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/probe", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      method: SafeFetchMethod.Head,
+    })
+    assertEquals(methods, ["HEAD", "HEAD"])
+  })
+
+  it("preserves the method on a 308", async () => {
+    const { fetcher, methods } = fakeFetcher([
+      { url: "https://example.com/submit", status: 308, location: "/done" },
+      { url: "https://example.com/done", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/submit", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      method: SafeFetchMethod.Post,
+    })
+    assertEquals(methods, ["POST", "POST"])
+  })
+
   it("preserves the method on a 307", async () => {
     const { fetcher, methods } = fakeFetcher([
       { url: "https://example.com/submit", status: 307, location: "/done" },
