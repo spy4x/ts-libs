@@ -8,7 +8,7 @@
  * Strictness (`onUndeclaredKey`) is the host application's decision, not a library's side effect.
  */
 
-import { type ArkErrors, Type, type } from "arktype"
+import { type ArkErrors, Type } from "arktype"
 
 /** Value a schema produces after parsing, morphs applied. */
 export type SchemaOutput<T extends Type> = T["infer"]
@@ -50,10 +50,28 @@ export type ValidationResult<T extends Type> =
  */
 export function validate<T extends Type>(schema: T, value: unknown): ValidationResult<T> {
   const result = schema(value)
-  if (result instanceof type.errors) {
+  if (isArkErrors(result)) {
     return { error: toValidationError(result), data: null }
   }
   return { error: null, data: result as SchemaOutput<T> }
+}
+
+/**
+ * Whether a value is an arktype rejection, without relying on `instanceof`.
+ *
+ * `instanceof ArkErrors` only matches an instance built by the exact same loaded copy of arktype.
+ * If the host application and this package resolve two different copies — a version mismatch
+ * across packages is enough — an error built by one copy fails `instanceof` against the other's
+ * class, and gets read as a successful value instead of a rejection. This checks the same public
+ * shape every arktype build exposes on a rejection instead: an array of issues with a `summary`
+ * string and a `throw` method.
+ */
+export function isArkErrors(value: unknown): value is ArkErrors {
+  return (
+    Array.isArray(value) &&
+    typeof (value as { summary?: unknown }).summary === "string" &&
+    typeof (value as { throw?: unknown }).throw === "function"
+  )
 }
 
 /**
