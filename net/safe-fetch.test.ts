@@ -571,6 +571,29 @@ describe("safeFetch", () => {
     assertEquals(sentHeaders[1], {})
   })
 
+  it("keeps the credentials dropped on a later same-site hop", async () => {
+    // Once dropped, gone for the rest of the chain. The third request here is
+    // same-origin with the second, so a drop worked out afresh on each hop from
+    // what the caller passed — instead of carried along — finds nothing to drop
+    // and hands the token to the site that asked for the detour.
+    const { fetcher, sentHeaders } = fakeFetcher([
+      { url: "https://example.com/start", status: 302, location: "https://other.example/a" },
+      { url: "https://other.example/a", status: 302, location: "/b" },
+      { url: "https://other.example/b", status: 200, body: "ok" },
+    ])
+    await safeFetch("https://example.com/start", {
+      fetcher,
+      resolver: ALWAYS_PUBLIC,
+      headers: {
+        Authorization: FAKE_AUTHORIZATION,
+        Cookie: FAKE_COOKIE,
+        "Proxy-Authorization": FAKE_AUTHORIZATION,
+      },
+    })
+    assertEquals(sentHeaders[1], {})
+    assertEquals(sentHeaders[2], {})
+  })
+
   it("does not hand the credentials back when the chain returns to the first site", async () => {
     // Dropping them for one hop is not enough: a chain that bounces through a
     // third party and back must arrive without them, or the detour is a way of

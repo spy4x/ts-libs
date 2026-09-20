@@ -42,6 +42,20 @@ const LOOPBACK = "127.0.0.1"
 const FAKE_AUTHORIZATION = "Bearer not-a-real-token"
 const FAKE_COOKIE = "session=not-a-real-session"
 
+/** The part of both fake credentials that must never reach the second site. */
+const SECRET_FRAGMENT = "not-a-real"
+
+/**
+ * True if any header value carries the secret, under any name.
+ *
+ * Checking the value and not the name is the point: a credential can cross an
+ * origin under a name nobody thought to look at, which is exactly what a header
+ * record built from an array of pairs used to do.
+ */
+function carriesSecret(received: Headers): boolean {
+  return [...received].some(([, value]) => value.includes(SECRET_FRAGMENT))
+}
+
 /**
  * Every name resolves to the address `example.com` used to answer on.
  *
@@ -186,6 +200,47 @@ describe("safeFetch over real sockets", () => {
       assertEquals(landing.received[0].get("cookie"), null)
       assertEquals(landing.received[0].get("proxy-authorization"), null)
       assertEquals(landing.received[0].get("user-agent"), "ts-libs-integration")
+    } finally {
+      await start.shutdown()
+      await landing.shutdown()
+    }
+  })
+
+  it("keeps the credentials dropped on a later same-site hop", async () => {
+    // The second site sends the caller on to one of its own paths. That hop
+    // does not change origin, so a drop recomputed from what the caller passed
+    // would find nothing to drop and deliver the token on the third request.
+    const landing = startSite("site-b.test", (request) => {
+      if (new URL(request.url).pathname === "/a") {
+        return new Response("moved again", { status: 302, headers: { location: "/b" } })
+      }
+      return new Response("landed", { status: 200 })
+    })
+    const start = startSite(
+      "site-a.test",
+      () =>
+        new Response("moved", {
+          status: 302,
+          headers: { location: `${landing.origin}/a` },
+        }),
+    )
+    try {
+      const result = await safeFetch(`${start.origin}/start`, {
+        fetcher: loopbackFetcher([start, landing]),
+        resolver: PUBLIC_RESOLVER,
+        headers: {
+          Authorization: FAKE_AUTHORIZATION,
+          Cookie: FAKE_COOKIE,
+          "Proxy-Authorization": FAKE_AUTHORIZATION,
+        },
+      })
+      assertEquals(await readBoundedText(result.response), "landed")
+      assertEquals(result.url, `${landing.origin}/b`)
+
+      assertEquals(landing.received.length, 2)
+      for (const received of landing.received) {
+        assertEquals(carriesSecret(received), false, [...received.keys()].join(", "))
+      }
     } finally {
       await start.shutdown()
       await landing.shutdown()
