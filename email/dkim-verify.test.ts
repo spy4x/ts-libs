@@ -710,27 +710,68 @@ describe("policy RFC 6376 leaves to the caller", () => {
     assertEquals(tampered.valid, false)
     assertEquals(tampered.reason, "body hash mismatch (body modified after signing)")
   })
+})
 
-  it("verifies an unsigned From: — §5.4 binds the signer, not the verifier", async () => {
-    // §5.4 requires a signer to include From in h=; §6.1.1 and §6.1.2 add no
-    // verifier check that it did. Requiring it here would reject conformant
-    // verification results, so it is caller policy: read `h=` yourself.
+// --- §6.1.1: the From field must be signed ----------------------------------
+
+/**
+ * RFC 6376 §6.1.1: "If the 'h=' tag does not include the From header field, the
+ * Verifier MUST ignore the DKIM-Signature header field and return PERMFAIL (From
+ * field not signed)."
+ *
+ * Two tests used to pin the opposite, on the reading that §5.4 binds only the
+ * signer. The consequence is the first finding of issue #62: a message signed
+ * with `h=to:subject` keeps a valid signature while its From line is rewritten to
+ * anybody's address, so "valid" said nothing about who sent the mail.
+ */
+describe("the From field must be signed (§6.1.1)", () => {
+  it("rejects a mail whose From is not named in h=", async () => {
     const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
       names: ["to", "subject"],
     })
     const result = await verifyDkim(raw, publicKey)
-    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "From field not signed (h= does not name from)")
     assertEquals(result.parsed?.signedHeaders.includes("from"), false)
   })
 
-  it("verifies a message that has no From: at all", async () => {
-    // RFC 5322 requires From:, but DKIM verification is not where it is enforced:
-    // a From-less message is malformed mail, not an invalid signature.
-    const headers = ["To: recipient@example.org", "Subject: DKIM port smoke test"]
-    const { raw, publicKey } = await sign(headers, "This is a test.\r\n", {
+  it("rejects a forged sender the signature never covered", async () => {
+    // The attack itself: the signature is genuine and the body is untouched, so
+    // every other check in this file agrees with the attacker. Only the From
+    // check sees that the address a person reads was never signed.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
       names: ["to", "subject"],
     })
+    const forged = raw.replace(
+      "From: Sender <sender@example.com>",
+      "From: Your Bank <security@bank.example>",
+    )
+    assert(forged.includes("security@bank.example"), "the forged sender must be in the message")
+    const result = await verifyDkim(forged, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "From field not signed (h= does not name from)")
+  })
+
+  it("rejects a message that has no From at all", async () => {
+    // `h=from` over a message with no From field hashes nothing for it (§3.5's
+    // "null input"), so the signature says nothing about the author. RFC 5322
+    // requires the field; a message without one is not authenticated here.
+    const headers = ["To: recipient@example.org", "Subject: DKIM port smoke test"]
+    const { raw, publicKey } = await sign(headers, "This is a test.\r\n", {
+      names: ["from", "to", "subject"],
+    })
     assert(!raw.includes("From:"))
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "From field not signed (the message has no From field)")
+  })
+
+  it("verifies the same message once From is signed", async () => {
+    // The control: nothing else about the message changed, so the rejections
+    // above are the From check and not a broken signer helper.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
+      names: ["from", "to", "subject"],
+    })
     const result = await verifyDkim(raw, publicKey)
     assert(result.valid, `reason=${result.reason}`)
   })

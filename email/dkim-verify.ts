@@ -712,6 +712,21 @@ export async function verifyDkim(
     return { valid: false, reason: errorMessage(err) }
   }
 
+  // §6.1.1: "If the 'h=' tag does not include the From header field, the Verifier
+  // MUST ignore the DKIM-Signature header field and return PERMFAIL (From field
+  // not signed)." Without this check a signature over `h=to:subject` stayed valid
+  // while the From line was rewritten to anybody's address, so a verdict of
+  // "valid" said nothing about who sent the mail.
+  if (!parsed.signedHeaders.includes("from")) {
+    return { valid: false, parsed, reason: "From field not signed (h= does not name from)" }
+  }
+  // §5.4 requires the From field to be signed, which a message that has no From
+  // field cannot satisfy: `h=from` over a message with no From hashes nothing for
+  // it (§3.5's "null input"), so the signature says nothing about the author.
+  if (!headers.some((line) => line.slice(0, line.indexOf(":")).trim().toLowerCase() === "from")) {
+    return { valid: false, parsed, reason: "From field not signed (the message has no From field)" }
+  }
+
   if (parsed.expiration !== undefined) {
     const now = options.now ?? BigInt(Math.floor(Date.now() / 1000))
     if (parsed.expiration < now) {
