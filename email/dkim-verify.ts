@@ -60,6 +60,23 @@ export interface DkimPublicKey {
    * so both shapes occur and both are left alone.
    */
   keyBytes: Uint8Array
+  /** `v=` when the record carries one. §3.6.1 defines exactly one value: `DKIM1`. */
+  version?: string
+  /**
+   * `h=` — the hash algorithms the key may be used with, lowercased. Absent when
+   * the record names none, which §3.6.1 reads as "all algorithms are allowed".
+   */
+  hashAlgorithms?: string[]
+  /**
+   * `s=` — the service types the key applies to, lowercased. Absent when the
+   * record names none, which §3.6.1 reads as `*`.
+   */
+  serviceTypes?: string[]
+  /**
+   * `t=` — the record's flags, lowercased. §3.6.1 defines `y` (the domain is
+   * testing DKIM) and `s` (`i=` must carry exactly `d=`, not a subdomain).
+   */
+  flags?: string[]
 }
 
 /** Outcome of {@link verifyDkim}. A malformed message returns, it does not throw. */
@@ -304,9 +321,14 @@ function parseDkimSignatureHeader(raw: string, requireB = true): ParsedDkimSigna
     throw new DkimParseError("DKIM-Signature s= tag is empty")
   }
 
-  const dt = tags.get("dt")?.value
-  if (dt !== undefined && dt !== "1") {
-    throw new DkimParseError(`unsupported DKIM dtag: ${dt}`)
+  // §3.5 gives i= the grammar `[ Local-part ] "@" domain-name`, so a value with
+  // no "@" carries no domain for §6.1.1 to compare against d= and is malformed.
+  // (An earlier revision rejected a `dt=` tag here instead, which no RFC defines:
+  // §3.2 says an unrecognised tag MUST be ignored, and the README documented the
+  // opposite of what the code did.)
+  const identity = tags.get("i")?.value
+  if (identity !== undefined && !identity.includes("@")) {
+    throw new DkimParseError(`DKIM-Signature i= tag has no domain: ${identity}`)
   }
 
   const header: DkimSignatureHeader = {
@@ -335,7 +357,7 @@ function parseDkimSignatureHeader(raw: string, requireB = true): ParsedDkimSigna
     expiration: tags.has("x") ? parseEpoch(tags.get("x")!.value, "x") : undefined,
     bodyLength: tags.has("l") ? parseBodyLength(tags.get("l")!.value) : undefined,
     queryMethod: tags.get("q")?.value,
-    identity: tags.get("i")?.value,
+    identity,
     raw,
   }
   const b = tags.get("b")
@@ -533,11 +555,28 @@ function deleteTagValue(raw: string, tag: string): string {
  * already be concatenated and dequoted per RFC 6376 §3.6.2.2.
  *
  * Returns `null` when the key is revoked — `p=` present but empty. Throws
- * {@link DkimParseError} on a missing `p=`, an unknown `k=`, a repeated tag,
- * or a `p=` whose base64 does not decode.
+ * {@link DkimParseError} on a missing `p=`, an unknown `k=`, an unknown `v=`, a
+ * `v=` that is not the first tag, an empty `h=` or `s=` list, a repeated tag, or
+ * a `p=` whose base64 does not decode.
+ *
+ * The restriction tags — `h=`, `s=`, `t=` — are read here and applied by
+ * {@link verifyDkim}, which is the only place that knows which hash the
+ * signature used and that the service is email.
  */
 export function parseDkimPublicKey(txtRecord: string): DkimPublicKey | null {
   const tags = scanTagList(txtRecord)
+  // §3.6.1: "v= ... MUST be the first tag in the record", and the only value it
+  // defines is DKIM1. A record from a future version is not one this verifier
+  // may guess at, so it is a syntax error rather than an ignored tag.
+  const version = tags.get("v")?.value
+  if (version !== undefined) {
+    if (version !== "DKIM1") {
+      throw new DkimParseError(`unsupported DKIM key record version: ${version}`)
+    }
+    if ([...tags.keys()][0] !== "v") {
+      throw new DkimParseError("DKIM TXT record v= tag must come first")
+    }
+  }
   if (!tags.has("p")) {
     throw new DkimParseError("DKIM TXT record has no p= tag")
   }
@@ -549,7 +588,32 @@ export function parseDkimPublicKey(txtRecord: string): DkimPublicKey | null {
   if (algorithm !== "rsa" && algorithm !== "ed25519") {
     throw new DkimParseError(`unsupported DKIM key algorithm: ${algorithm}`)
   }
-  return { algorithm, keyBytes: base64Decode(p) }
+  return {
+    algorithm,
+    keyBytes: base64Decode(p),
+    version,
+    hashAlgorithms: parseRecordList(tags.get("h")?.value, "h"),
+    serviceTypes: parseRecordList(tags.get("s")?.value, "s"),
+    flags: parseRecordList(tags.get("t")?.value, "t"),
+  }
+}
+
+/**
+ * Split a colon-separated key-record list (`h=`, `s=`, `t=`) into lowercase
+ * entries, or `undefined` when the tag is absent.
+ *
+ * A tag that is present but lists nothing is a syntax error rather than "no
+ * restriction": `s=` names the service types the key may be used for, and reading
+ * an empty list as "any" would turn a typo into a wider permission.
+ */
+function parseRecordList(value: string | undefined, tag: string): string[] | undefined {
+  if (value === undefined) return undefined
+  const entries = value.toLowerCase().split(":").map((entry) => entry.replace(/[ \t]+/g, ""))
+    .filter(Boolean)
+  if (entries.length === 0) {
+    throw new DkimParseError(`DKIM TXT record ${tag}= tag is empty`)
+  }
+  return entries
 }
 
 /**
@@ -566,13 +630,45 @@ export async function fetchDkimPublicKey(
   selector: string,
   options: DkimVerifyOptions = {},
 ): Promise<DkimPublicKey | null> {
+  assertDnsLabels(domain, "d=")
+  assertDnsLabels(selector, "s=")
   const name = `${selector}._domainkey.${domain}`
   const { resolveTxt = defaultResolveTxt } = options.resolver ?? {}
   const records = await resolveTxt(name)
-  // §3.6.2.2: concatenate the strings of the first record, no separator. A
-  // record may legitimately arrive empty, which parses to a revoked key.
-  const record = records[0]?.join("") ?? ""
-  return parseDkimPublicKey(record)
+  // §3.6.2.2: concatenate the strings of *one* record, with no separator — a long
+  // key is published as several strings of one record and joining them with
+  // anything at all corrupts it. §3.6.2.2 also leaves the order of several
+  // records unspecified, so an unrelated TXT record at the front is not an
+  // answer: each record is tried and the first one that parses is the key. When
+  // none parses, the first record's own error is what the caller sees.
+  if (records.length === 0) return parseDkimPublicKey("")
+  let firstError: unknown
+  for (const record of records) {
+    try {
+      return parseDkimPublicKey(record.join(""))
+    } catch (err) {
+      firstError ??= err
+    }
+  }
+  throw firstError
+}
+
+/**
+ * Reject a domain or selector that is not a dot-separated run of RFC 5321
+ * `sub-domain` labels, before it is interpolated into a query name.
+ *
+ * `d=` and `s=` come from the message, and an injected resolver may put the name
+ * into a URL (DNS over HTTPS) or a command line. Letters, digits and interior
+ * hyphens are all RFC 6376 §3.1's grammar allows, so anything else is a
+ * malformed signature rather than a name to look up.
+ */
+function assertDnsLabels(value: string, tag: string): void {
+  const labels = value.split(".")
+  const valid = labels.length > 0 &&
+    labels.every((label) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(label))
+  if (!valid) {
+    throw new DkimParseError(`DKIM ${tag} tag is not a domain name: ${JSON.stringify(value)}`)
+  }
 }
 
 async function defaultResolveTxt(name: string): Promise<string[][]> {
@@ -792,27 +888,8 @@ export async function verifyDkim(
     return { valid: false, reason: errorMessage(err) }
   }
 
-  // §6.1.1: "If the 'h=' tag does not include the From header field, the Verifier
-  // MUST ignore the DKIM-Signature header field and return PERMFAIL (From field
-  // not signed)." Without this check a signature over `h=to:subject` stayed valid
-  // while the From line was rewritten to anybody's address, so a verdict of
-  // "valid" said nothing about who sent the mail.
-  if (!parsed.signedHeaders.includes("from")) {
-    return { valid: false, parsed, reason: "From field not signed (h= does not name from)" }
-  }
-  // §5.4 requires the From field to be signed, which a message that has no From
-  // field cannot satisfy: `h=from` over a message with no From hashes nothing for
-  // it (§3.5's "null input"), so the signature says nothing about the author.
-  if (!headers.some((line) => line.slice(0, line.indexOf(":")).trim().toLowerCase() === "from")) {
-    return { valid: false, parsed, reason: "From field not signed (the message has no From field)" }
-  }
-
-  if (parsed.expiration !== undefined) {
-    const now = options.now ?? BigInt(Math.floor(Date.now() / 1000))
-    if (parsed.expiration < now) {
-      return { valid: false, parsed, reason: "signature expired" }
-    }
-  }
+  const refusal = refuseSignatureHeader(parsed, headers, options)
+  if (refusal !== undefined) return { valid: false, parsed, reason: refusal }
 
   let key = publicKey
   if (!key) {
@@ -834,6 +911,9 @@ export async function verifyDkim(
       return { valid: false, parsed, reason: errorMessage(err) }
     }
   }
+
+  const keyRefusal = refuseKeyRecord(key, parsed)
+  if (keyRefusal !== undefined) return { valid: false, parsed, reason: keyRefusal }
 
   let signedHeaders: { name: string; value: string }[]
   let computedBodyHash: string
@@ -914,6 +994,129 @@ export async function verifyDkim(
     computedInputPreview: canonicalInput.slice(0, 240),
     reason: verified ? undefined : "signature did not verify against public key",
   }
+}
+
+/**
+ * The checks RFC 6376 §6.1.1 puts on the signature header itself, before a key
+ * is fetched. Returns the reason to refuse, or `undefined` to carry on.
+ *
+ * Every one of these is a MUST in the standard, and the first is the one this
+ * verifier shipped without: a signature whose `h=` never names `From` binds
+ * nothing to the address a person reads, so rewriting `From` left the signature
+ * valid and the mail was accepted as coming from whoever the attacker liked.
+ */
+function refuseSignatureHeader(
+  parsed: DkimSignatureHeader,
+  headers: string[],
+  options: DkimVerifyOptions,
+): string | undefined {
+  // §6.1.1: "If the 'h=' tag does not include the From header field, the Verifier
+  // MUST ignore the DKIM-Signature header field and return PERMFAIL (From field
+  // not signed)."
+  if (!parsed.signedHeaders.includes("from")) {
+    return "From field not signed (h= does not name from)"
+  }
+  // §5.4 requires the From field to be signed, which a message that has no From
+  // field cannot satisfy: `h=from` over a message with no From hashes nothing for
+  // it, so the signature would say nothing about the author either.
+  if (!headers.some((line) => line.slice(0, line.indexOf(":")).trim().toLowerCase() === "from")) {
+    return "From field not signed (the message has no From field)"
+  }
+
+  // §6.1.1: "Verifiers MUST confirm that the domain specified in the 'd=' tag is
+  // the same as or a parent domain of the domain part of the 'i=' tag."
+  const identityDomain = signerIdentityDomain(parsed)
+  if (identityDomain !== undefined && !isSameOrParentDomain(parsed.domain, identityDomain)) {
+    return `i= domain ${identityDomain} is not d= (${parsed.domain}) or a subdomain of it`
+  }
+
+  // §3.5 on x=: "The value of the 'x=' tag MUST be greater than the value of the
+  // 't=' tag if both are present." A signature that expires before it was made
+  // covers no window at all.
+  if (
+    parsed.expiration !== undefined && parsed.timestamp !== undefined &&
+    parsed.expiration <= parsed.timestamp
+  ) {
+    return `x= (${parsed.expiration}) is not later than t= (${parsed.timestamp})`
+  }
+
+  if (parsed.expiration !== undefined) {
+    const now = options.now ?? BigInt(Math.floor(Date.now() / 1000))
+    if (parsed.expiration < now) return "signature expired"
+  }
+
+  // §3.5 on q=: the only method this verifier implements is `dns/txt`, which is
+  // also the default when the tag is absent. A signer that asks for a method
+  // nobody here speaks has not published a key this code can find.
+  if (parsed.queryMethod !== undefined) {
+    const methods = parsed.queryMethod.toLowerCase().split(":").map((method) =>
+      method.replace(/[ \t]+/g, "")
+    )
+    if (!methods.some((method) => method === "dns/txt" || method === "dns")) {
+      return `unsupported q= query method: ${parsed.queryMethod}`
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * The checks RFC 6376 §3.6.1 puts on the key record, once it is in hand. Returns
+ * the reason to refuse, or `undefined` to carry on.
+ */
+function refuseKeyRecord(
+  key: DkimPublicKey,
+  parsed: DkimSignatureHeader,
+): string | undefined {
+  // §3.6.1 on t=y: "This domain is testing DKIM. Verifiers MUST NOT treat
+  // messages from signers in testing mode differently from unsigned email."
+  // A verdict of "valid" is exactly the different treatment that forbids, so a
+  // testing key produces a reason rather than an authentication.
+  if (key.flags?.includes("y")) {
+    return "key record is in testing mode (t=y), so the signature authenticates nothing"
+  }
+  // §3.6.1 on t=s: "Any DKIM-Signature header fields using the 'i=' tag MUST have
+  // the same domain value on the right-hand side of the '@' in the 'i=' tag and
+  // the value of the 'd=' tag." The parent-domain allowance above is withdrawn.
+  const identityDomain = signerIdentityDomain(parsed)
+  if (
+    key.flags?.includes("s") && identityDomain !== undefined && identityDomain !== parsed.domain
+  ) {
+    return `i= domain ${identityDomain} is not exactly d= (${parsed.domain}), which t=s requires`
+  }
+  // §3.6.1 on h=: "A colon-separated list of hash algorithms that might be used.
+  // Signers and Verifiers MUST support the 'sha256' hash algorithm." Both
+  // algorithms this verifier implements hash with SHA-256, so a record that does
+  // not list it does not allow this signature.
+  if (key.hashAlgorithms !== undefined && !key.hashAlgorithms.includes("sha256")) {
+    return `key record does not allow sha256 (h=${key.hashAlgorithms.join(":")})`
+  }
+  // §3.6.1 on s=: a key that does not name the `email` service type, or `*`, is
+  // not published for signing mail.
+  if (
+    key.serviceTypes !== undefined && !key.serviceTypes.includes("*") &&
+    !key.serviceTypes.includes("email")
+  ) {
+    return `key record is not published for email (s=${key.serviceTypes.join(":")})`
+  }
+  return undefined
+}
+
+/**
+ * The domain half of the signature's `i=` tag, lowercased, or `undefined` when
+ * the tag is absent.
+ *
+ * §3.5 gives `i=` the grammar `[ Local-part ] "@" domain-name`, and a quoted
+ * local part may itself contain an `@`, so the domain starts after the last one.
+ */
+function signerIdentityDomain(parsed: DkimSignatureHeader): string | undefined {
+  if (parsed.identity === undefined) return undefined
+  return parsed.identity.slice(parsed.identity.lastIndexOf("@") + 1).toLowerCase()
+}
+
+/** True when `candidate` is `domain` itself or a subdomain of it. */
+function isSameOrParentDomain(domain: string, candidate: string): boolean {
+  return candidate === domain || candidate.endsWith(`.${domain}`)
 }
 
 function errorMessage(err: unknown): string {

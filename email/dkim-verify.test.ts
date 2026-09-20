@@ -466,7 +466,18 @@ describe("differential: messages dkimpy signs and itself verifies", () => {
   // passed because `From:` is signed bytes for a different reason.
   const SIGNATURE_ATTACKS = [
     { payload: "; x=9999999999", reason: "signature did not verify against public key" },
-    { payload: "; i=@attacker.invalid", reason: "signature did not verify against public key" },
+    // An `i=` in a foreign domain never reaches the signature check: §6.1.1 makes
+    // the d=/i= relation a check of its own and it runs first. The subdomain
+    // payload below is the same attack with an `i=` that satisfies §6.1.1, so the
+    // signature mismatch stays pinned too.
+    {
+      payload: "; i=@attacker.invalid",
+      reason: "i= domain attacker.invalid is not d= (example.com) or a subdomain of it",
+    },
+    {
+      payload: "; i=@mail.example.com",
+      reason: "signature did not verify against public key",
+    },
     // The injected `l=` is caught one step earlier, by the body hash: the bound
     // re-truncates the canonical body, so `bh=` stops matching before the
     // signature is ever checked. The tag still took effect — on `From:` it had
@@ -723,6 +734,200 @@ describe("policy RFC 6376 leaves to the caller", () => {
     const tampered = await verifyDkim(grown, key)
     assertEquals(tampered.valid, false)
     assertEquals(tampered.reason, "body hash mismatch (body modified after signing)")
+  })
+})
+
+// --- §6.1.1 and §3.6.1: the checks a verifier owes the standard -------------
+
+/**
+ * The fourth finding of issue #62: the signer's identity was parsed and never
+ * compared with the signing domain, and nothing in the published key record was
+ * read beyond `k=` and `p=`. A key published for another service, restricted to
+ * another hash, or marked as testing was accepted as if it said nothing.
+ *
+ * Each test signs a message in-process and verifies it through an injected
+ * resolver, so the only thing that varies is the tag under test.
+ */
+describe("the identity and key-record checks (§6.1.1, §3.6.1)", () => {
+  const BODY = "This is a test.\r\n"
+
+  /** A resolver that answers every query with one record. */
+  function resolverFor(record: string): DnsTxtResolver {
+    return { resolveTxt: () => Promise.resolve([[record]]) }
+  }
+
+  /** The signed message plus a key record carrying `tags` before `p=`. */
+  async function signedWithRecord(
+    tags: string,
+    options: SignOptions = {},
+  ): Promise<{ raw: string; record: string }> {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, options)
+    const p = base64(publicKey.keyBytes)
+    return { raw, record: `v=DKIM1; k=${publicKey.algorithm};${tags} p=${p}` }
+  }
+
+  it("rejects an i= whose domain is not d= or below it", async () => {
+    // §6.1.1: "Verifiers MUST confirm that the domain specified in the 'd=' tag
+    // is the same as or a parent domain of the domain part of the 'i=' tag."
+    // The signature itself is genuine: only the identity it claims is foreign.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "i=ceo@bank.example",
+    })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      "i= domain bank.example is not d= (example.com) or a subdomain of it",
+    )
+  })
+
+  it("accepts an i= in a subdomain of d=", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "i=agent@mail.example.com",
+    })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.parsed?.identity, "agent@mail.example.com")
+  })
+
+  it("rejects a subdomain i= when the key record sets t=s", async () => {
+    // §3.6.1 on the `s` flag: the domain part of `i=` "MUST be the same as the
+    // value of the d= tag", so the parent-domain allowance is withdrawn.
+    const { raw, record } = await signedWithRecord(" t=s;", {
+      extraTags: "i=agent@mail.example.com",
+    })
+    const result = await verifyDkim(raw, undefined, { resolver: resolverFor(record) })
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      "i= domain mail.example.com is not exactly d= (example.com), which t=s requires",
+    )
+
+    // The same record without the flag accepts the same message.
+    const relaxedRecord = record.replace(" t=s;", "")
+    assert((await verifyDkim(raw, undefined, { resolver: resolverFor(relaxedRecord) })).valid)
+  })
+
+  it("rejects a key record marked as testing (t=y)", async () => {
+    // §3.6.1: "Verifiers MUST NOT treat messages from signers in testing mode
+    // differently from unsigned email", and "valid" is exactly that different
+    // treatment.
+    const { raw, record } = await signedWithRecord(" t=y;")
+    const result = await verifyDkim(raw, undefined, { resolver: resolverFor(record) })
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      "key record is in testing mode (t=y), so the signature authenticates nothing",
+    )
+  })
+
+  it("rejects a key record that does not allow sha256", async () => {
+    const { raw, record } = await signedWithRecord(" h=sha1;")
+    const result = await verifyDkim(raw, undefined, { resolver: resolverFor(record) })
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "key record does not allow sha256 (h=sha1)")
+
+    const both = record.replace(" h=sha1;", " h=sha1:sha256;")
+    assert((await verifyDkim(raw, undefined, { resolver: resolverFor(both) })).valid)
+  })
+
+  it("rejects a key record published for another service", async () => {
+    const { raw, record } = await signedWithRecord(" s=calendar;")
+    const result = await verifyDkim(raw, undefined, { resolver: resolverFor(record) })
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "key record is not published for email (s=calendar)")
+
+    for (const service of [" s=email;", " s=*;", " s=calendar:email;"]) {
+      const allowed = record.replace(" s=calendar;", service)
+      const verified = await verifyDkim(raw, undefined, { resolver: resolverFor(allowed) })
+      assert(verified.valid, `s=${service}: ${verified.reason}`)
+    }
+  })
+
+  it("rejects a key record from another version of the standard", async () => {
+    const { raw, record } = await signedWithRecord("")
+    const future = record.replace("v=DKIM1", "v=DKIM2")
+    const result = await verifyDkim(raw, undefined, { resolver: resolverFor(future) })
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsupported DKIM key record version: DKIM2")
+  })
+
+  it("rejects a key record whose v= is not the first tag", async () => {
+    // §3.6.1: "v= ... MUST be the first tag in the record."
+    assertThrows(
+      () => parseDkimPublicKey("k=rsa; v=DKIM1; p=AAECAw=="),
+      DkimParseError,
+      "v= tag must come first",
+    )
+  })
+
+  it("rejects a key record whose s= or h= list is empty", async () => {
+    // Present and empty is a typo, not "no restriction": reading it as "any
+    // service" would widen the key's permission rather than narrow it.
+    for (const tag of ["s", "h"]) {
+      assertThrows(
+        () => parseDkimPublicKey(`v=DKIM1; ${tag}=; p=AAECAw==`),
+        DkimParseError,
+        `${tag}= tag is empty`,
+      )
+    }
+  })
+
+  it("reads the restriction tags onto the parsed key", async () => {
+    const key = parseDkimPublicKey("v=DKIM1; h=sha256; s=email:*; t=y:s; p=AAECAw==")!
+    assertEquals(key.version, "DKIM1")
+    assertEquals(key.hashAlgorithms, ["sha256"])
+    assertEquals(key.serviceTypes, ["email", "*"])
+    assertEquals(key.flags, ["y", "s"])
+  })
+
+  it("rejects a q= that names no query method this verifier speaks", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, { extraTags: "q=http/ldap" })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsupported q= query method: http/ldap")
+
+    // The default and the one every signer publishes.
+    const { raw: viaDns, publicKey: dnsKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "q=dns/txt",
+    })
+    assert((await verifyDkim(viaDns, dnsKey)).valid)
+  })
+
+  it("rejects a signature that expires no later than it was made", async () => {
+    // §3.5: "The value of the 'x=' tag MUST be greater than the value of the 't='
+    // tag if both are present."
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "t=1700000000; x=1700000000",
+    })
+    const result = await verifyDkim(raw, publicKey, { now: 1600000000n })
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "x= (1700000000) is not later than t= (1700000000)")
+  })
+
+  it("ignores a signature tag no RFC defines, whatever its value", async () => {
+    // §3.2: "Unrecognized tags MUST be ignored." An earlier revision rejected a
+    // `dt=` tag with any value but `1` — an invented rule, unreachable in
+    // practice, that the README described as an ignored tag (#74).
+    const parsed = parseDkimSignature(
+      "v=1; a=rsa-sha256; d=example.com; s=sel; h=from; bh=abc; b=xxx; dt=2; r=y",
+    )
+    assertEquals(parsed.domain, "example.com")
+
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, { extraTags: "dt=2" })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("rejects an i= tag that carries no domain", async () => {
+    assertThrows(
+      () =>
+        parseDkimSignature(
+          "v=1; a=rsa-sha256; d=example.com; s=sel; h=from; bh=abc; b=x; i=nobody",
+        ),
+      DkimParseError,
+      "i= tag has no domain",
+    )
   })
 })
 
@@ -1252,11 +1457,71 @@ describe("fetchDkimPublicKey", () => {
   })
 
   it("concatenates the strings of one TXT record without a separator", async () => {
+    // §3.6.2.2: the strings of one record are joined with nothing at all. This
+    // split lands inside `k=rsa`, so a separator does not merely pad the record,
+    // it changes a tag's value and the record stops naming an algorithm. The old
+    // vector split between tags, where a stray space is swallowed again by the
+    // tag scanner and by the base64 decoder — which is how joining the parts with
+    // a space stayed invisible to this suite (#74).
     const resolver: DnsTxtResolver = {
-      resolveTxt: () => Promise.resolve([["v=DKIM1; k=rsa; ", "p=AAEC", "Aw=="]]),
+      resolveTxt: () => Promise.resolve([["v=DKIM1; k=r", "sa; p=AAEC", "Aw=="]]),
+    }
+    const key = await fetchDkimPublicKey("example.com", "sel", { resolver })
+    assertEquals(key!.algorithm, "rsa")
+    assertEquals(Array.from(key!.keyBytes), [0, 1, 2, 3])
+  })
+
+  it("passes over a TXT record that is not a DKIM key", async () => {
+    // §3.6.2.2 leaves the order of several records unspecified, and a domain may
+    // publish anything beside its key. Reading the first record only threw the
+    // whole lookup away when an unrelated record came back first.
+    const resolver: DnsTxtResolver = {
+      resolveTxt: () =>
+        Promise.resolve([
+          ["v=spf1 include:_spf.example.com ~all"],
+          ["v=DKIM1; k=rsa; p=AAECAw=="],
+        ]),
     }
     const key = await fetchDkimPublicKey("example.com", "sel", { resolver })
     assertEquals(Array.from(key!.keyBytes), [0, 1, 2, 3])
+  })
+
+  it("reports the first record's error when no record holds a key", async () => {
+    const resolver: DnsTxtResolver = {
+      resolveTxt: () => Promise.resolve([["v=spf1 ~all"], ["also not a key"]]),
+    }
+    // The first record's own diagnosis, not a generic one: an SPF record read as
+    // a DKIM one fails on its version tag, and saying so is what tells a caller
+    // which record the resolver actually returned.
+    await assertRejects(
+      () => fetchDkimPublicKey("example.com", "sel", { resolver }),
+      DkimParseError,
+      "unsupported DKIM key record version: spf1",
+    )
+  })
+
+  it("refuses to look up a domain or selector that is not a domain name", async () => {
+    // The name is interpolated into whatever an injected resolver does with it —
+    // a URL, for a DNS-over-HTTPS resolver — and `d=`/`s=` come from the message.
+    // §3.1 allows letters, digits and interior hyphens only.
+    let asked = 0
+    const resolver: DnsTxtResolver = {
+      resolveTxt: () => {
+        asked += 1
+        return Promise.resolve([["v=DKIM1; k=rsa; p=AAECAw=="]])
+      },
+    }
+    await assertRejects(
+      () => fetchDkimPublicKey("x.example/../?q=1&type=a #", "sel", { resolver }),
+      DkimParseError,
+      "d= tag is not a domain name",
+    )
+    await assertRejects(
+      () => fetchDkimPublicKey("example.com", "sel/../evil", { resolver }),
+      DkimParseError,
+      "s= tag is not a domain name",
+    )
+    assertEquals(asked, 0, "a name that fails the check must never be looked up")
   })
 
   it("returns null when the answer holds a revoked key", async () => {
