@@ -9,8 +9,8 @@ were copied from dkimpy, whose licence requires that its notice travel with them
 
 ## Provenance of `rfc6376-rsa*.msg` — read this before citing §3.5
 
-These are dkimpy's `data/rfc6376.signed.rsa.msg` (md5
-`5deeccd15678e5bd33a7d6fda8e58209`) together with its `data/test.txt` as the key.
+These are dkimpy's `dkim/tests/data/rfc6376.signed.rsa.msg` (md5
+`5deeccd15678e5bd33a7d6fda8e58209`) together with its `dkim/tests/data/test.txt` as the key.
 That is a **2018 re-signature of the RFC 6376 example _message_** (`t=1527915362`,
 `s=test`), not the signature printed in the RFC.
 
