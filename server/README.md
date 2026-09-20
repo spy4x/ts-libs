@@ -2,7 +2,7 @@
 
 Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 
-- **HTTP** — bounded request bodies, CORS origin allow-listing, provider-error redaction, export
+- **HTTP** — bounded request bodies, CORS origin allow-listing, bearer-token verification, export
   envelopes, static-file serving and a distroless healthcheck. Zero dependencies except `hono`,
   which is already pinned in the root import map and used only for the `hono/cors` resolver type.
 - **Storage** — the `FileStorage` port with a local-filesystem provider, an S3-compatible provider
@@ -14,14 +14,13 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | ----------------------------------- | ------------------------------------------------------------------------------------ |
 | `@ts-libs/server/http/bounded-body` | Byte-capped, stall-budgeted request body reading; canonical `PayloadTooLargeError`   |
 | `@ts-libs/server/http/cors`         | Exact-match origin allowlist and the `hono/cors` origin resolver                     |
-| `@ts-libs/server/http/redact`       | Provider-error redaction: class name and scope to the log, a constant to the client  |
+| `@ts-libs/server/http/bearer-auth`  | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)    |
 | `@ts-libs/server/export`            | Versioned export envelope and `Content-Disposition` download response                |
 | `@ts-libs/server/export-client`     | Browser-only: save a response body as a file (DOM, so never imported server-side)    |
 | `@ts-libs/server/static`            | Static-file serving with a MIME table and path-traversal protection                  |
 | `@ts-libs/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
 | `@ts-libs/server/storage`           | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning |
 | `@ts-libs/server/auth`              | Multi-provider auth (`#6`): see the `server/auth` section below                      |
-| `@ts-libs/server/jwt`               | Zero-dependency HS256 JWT: `sign`, `verify`, typed claims, fail-closed secret        |
 | `@ts-libs/server/crypto`            | AES-256-GCM at-rest cipher, hex-key constructor, `maskKey` display hint              |
 | `@ts-libs/server/user-secrets`      | BYOK store pattern over an injected port: validate, encrypt, mask, upsert, delete    |
 | `@ts-libs/server/quota`             | Usage metering with 429/503 semantics — not a rate limiter                           |
@@ -32,13 +31,10 @@ different points on `main` and each carries the earlier ones, so whoever merges 
 `server/http/bounded-body.ts` is the exception: `#28`/`#30` carried a byte-identical copy of
 `net/bounded-body.ts` (`sha256 5fc55e75`) and that copy has since collapsed into the canonical module
 (`#43`), so this file no longer matches the pre-collapse branches by design. `#6` added `./auth*`
-and the `server/auth` section; `#17` adds `./jwt`, `./crypto`, `./user-secrets` and `./quota` plus the
-four sections below. Resolving the conflict by keeping one side would silently drop the
-`export`/`static`/`healthcheck` entries, the `auth` ones, or these four.
+and the `server/auth` section; `#17` adds `./crypto`, `./user-secrets` and `./quota` plus their
+sections below. Resolving the conflict by keeping one side would silently drop the
+`export`/`static`/`healthcheck` entries, the `auth` ones, or these three.
 
-The union is asserted rather than trusted: `server/auth/packaging.test.ts` fails on a conflict marker
-anywhere in this file, on a duplicated heading, on a table with two header rows, on an export target
-that does not resolve, and on any `main` entry missing from `server/deno.json`.
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
 
@@ -81,13 +77,18 @@ product. Matching is exact on the serialised origin, and the value must round-tr
 check. `createCorsOriginResolver` throws on an empty allowlist rather than returning a resolver that
 accepts everything.
 
-## `server/http/redact`
+## `server/http/bearer-auth`
 
-`ProviderScope`, `genericProviderMessage`, `logProviderError`.
+`bearerTokenFromHeaders`, `bearerTokenFromEnv`, `constantTimeEquals`, `createTokenVerifier`,
+`redactor`, `formatLogLine`, `AUTHORIZATION_HEADER`, `REDACTED_TOKEN`, and the `TokenVerifier`
+interface.
 
-`logProviderError` writes one fixed-shape line — `${scope}_provider_error ${errorName}` — and never
-the message, stack, cause or request id. The client-facing message is a constant per scope, so no
-provider text can reach a response body.
+Moved here from `mcp/auth.ts` when `mcp/` was removed (`#64`): a generic "extract and verify a
+bearer token, never in the environment at module scope, never compared with `===`" helper, with
+nothing MCP-specific about it. Both sides of the comparison are SHA-256 digested before
+`timingSafeEqual`, so neither the presented token's length nor a shared prefix is observable by
+timing. `redactor`/`formatLogLine` strip every configured secret from a log line, so a raw
+`Authorization` header cannot reach a log by accident.
 
 ### Fixes applied at extraction time
 
@@ -430,34 +431,6 @@ instead of bcrypt on every validation. `index.ts` (SvelteKit cookie glue) is not
 transport supplies a `SessionSink` instead. `KeyKind.OAuth2` replaces the separate `GOOGLE` and
 `FACEBOOK` kinds, so the two OAuth2 providers keep provider-scoped identifications.
 
-## `server/jwt`
-
-`JwtSigner`, `assertJwtSecret`, `constantTimeEquals`, `JwtError`, `JwtErrorCode`, `JWT_ALGORITHM`,
-`JWT_TYPE`, `MIN_SECRET_LENGTH`, `DEFAULT_TTL_SECONDS`, `PLACEHOLDER_SECRETS`,
-`PLACEHOLDER_SECRET_MARKERS`.
-
-HS256 only, over Web Crypto, with no dependency and **no environment read**: the secret is a
-constructor option, validated once at construction. `sign(claims, { expiresInSeconds })` stamps
-`iat`/`exp` from the injected clock, so a caller cannot backdate a token or extend its life;
-`verify(token)` validates the header _by value_ first (`alg` exactly `HS256`, `typ` exactly `JWT`),
-then the HMAC tag in constant time, then the claim shapes through arktype, then `exp`/`nbf` and the
-optional `iss`/`aud`. Failures are typed `JwtError`s carrying a `JwtErrorCode` — branch on the code,
-never on the message, because no message in the module interpolates the token, the secret, the header
-or the payload. `assertJwtSecret` fails closed on the three unusable kinds of secret: absent, shorter
-than 32 characters, or recognisable as a placeholder (exact-match set plus marker substrings, which is
-what catches the source's own 39-character default).
-
-**On the constant-time guarantee — do not infer timing safety from a green suite.** `constantTimeEquals`
-here (and its twin in `platform/tokens.ts`, whose package README arrives with the sibling `platform/`
-PRs) digests both sides to a fixed 32 bytes and then compares with `timingSafeEqual` from `@std/crypto`.
-Two tests pin that: the compare is reached on the verify path, and the primitive delegates instead of
-hand-rolling. They are **shape tripwires, not timing proofs**. A hand-rolled comparison that avoids the
-marker shapes they look for, or a helper defined outside the primitive, still passes them — an
-`Object.is` early-return loop is measured at 1 iteration on a mismatch against 32 on a match, and
-`platform/tokens.test.ts` asserts that this variant is _still undetected_, so the limitation cannot
-silently become a claim of coverage. The guards detect the mutation classes they name; they do not
-establish that no run time depends on the compared values.
-
 ## `server/crypto`
 
 `CryptoService`, `CryptoError`, `CryptoErrorCode`, `SecretCipher`, `maskKey`, `isHexKey`,
@@ -506,13 +479,10 @@ counts requests per second, keyed by whatever is cheap and not attacker-controll
 middleware before routing. `429` here means "this principal has spent their budget", never "you are
 going too fast". Request smoothing is `platform/rate-limit` (issue #4), which does not live here.
 
-### Fixes applied at extraction time (`server/jwt`, `server/crypto`, `server/user-secrets`, `server/quota`)
+### Fixes applied at extraction time (`server/crypto`, `server/user-secrets`, `server/quota`)
 
 | Source                                         | Bug                                                                                 | Pinned by                                                                           |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `offer-lens/libs/auth/mod.ts:10-14`            | `getJwtSecret()` fell back to `DEMO_OPENAI_API_KEY`, then a public dev string       | `rejects the source's hardcoded default even though it is 39 characters`            |
-| `offer-lens/libs/auth/mod.ts:115`              | `sigB64 !== expectedSig` — a non-constant-time signature compare                    | `goes through the constant-time comparison`                                         |
-| `offer-lens/libs/auth/mod.ts:109-116`          | the header was never decoded, so `alg`/`typ` were unvalidated                       | `refuses an alg none forgery on the algorithm, with or without a signature segment` |
 | `offer-lens/libs/encrypt/mod.ts:13-18`         | a 16-byte AES-128 key was accepted next to AES-256                                  | `fromHexKey rejects a 32-hex-character AES-128 key`                                 |
 | `offer-lens/libs/scraper/mod.ts:132`           | failures classified with `msg.includes("abort")`                                    | `reports DecryptionFailed for any cipher rejection, classified by type not message` |
 | `offer-lens/apps/api/routes/keys.ts:93,133`    | the provider name and a raw `err.message` were echoed into a response               | `never echoes the apiKey in a validation message`                                   |
