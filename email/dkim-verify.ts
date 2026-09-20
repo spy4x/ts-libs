@@ -118,7 +118,20 @@ export interface DkimVerifyOptions {
    * an unauthenticated sender can ask for.
    */
   maxMessageLength?: number
+  /**
+   * How many `DKIM-Signature` fields to verify. Defaults to
+   * {@link DEFAULT_MAX_SIGNATURES}. RFC 6376 §6.1 allows the limit; without one,
+   * a message full of signature fields buys one key lookup and one public-key
+   * operation each.
+   */
+  maxSignatures?: number
 }
+
+/**
+ * Default {@link DkimVerifyOptions.maxSignatures}. Real mail carries one to three
+ * signatures, and a mailing list that re-signs adds one more.
+ */
+export const DEFAULT_MAX_SIGNATURES = 10
 
 /**
  * Default {@link DkimVerifyOptions.maxMessageLength}: 10 MiB of characters, which
@@ -837,12 +850,21 @@ function base64Encode(bytes: Uint8Array): string {
 }
 
 /**
- * Verify a DKIM signature against the supplied public key. When `publicKey` is
- * omitted the key is fetched from `options.resolver`, defaulting to
- * `Deno.resolveDns` and therefore to needing `--allow-net`.
+ * Verify a message's DKIM signatures and report one verdict.
+ *
+ * A message may carry several `DKIM-Signature` fields, and RFC 6376 §6.1 treats
+ * them independently: the message is signed by any one of them that verifies.
+ * This returns the first valid result, and the first signature's diagnosis when
+ * none is valid — so a broken signature above a good one no longer condemns the
+ * message, and a signature an attacker prepends no longer decides it either.
+ * {@link verifyDkimSignatures} returns all of them when a caller needs to know
+ * which domains signed.
+ *
+ * When `publicKey` is omitted the key is fetched from `options.resolver`,
+ * defaulting to `Deno.resolveDns` and therefore to needing `--allow-net`.
  *
  * Message-shaped failures — missing header, bad grammar, expired signature,
- * body mismatch, unverifiable signature — all come back as a
+ * unsigned `From`, body mismatch, unverifiable signature — all come back as a
  * {@link DkimVerificationResult}. Only a throwing injected resolver escapes.
  */
 export async function verifyDkim(
@@ -850,24 +872,70 @@ export async function verifyDkim(
   publicKey?: DkimPublicKey,
   options: DkimVerifyOptions = {},
 ): Promise<DkimVerificationResult> {
+  const results = await verifyDkimSignatures(rawMessage, publicKey, options)
+  return results.find((result) => result.valid) ?? results[0]
+}
+
+/**
+ * Verify every `DKIM-Signature` field in the message and return one result each,
+ * in the order the fields appear.
+ *
+ * The list is never empty: a message with no signature at all produces the single
+ * "no DKIM-Signature header found" result, and so does a message longer than
+ * {@link DkimVerifyOptions.maxMessageLength}. Fields past
+ * {@link DkimVerifyOptions.maxSignatures} get a result saying they were not
+ * checked, rather than disappearing.
+ */
+export async function verifyDkimSignatures(
+  rawMessage: string,
+  publicKey?: DkimPublicKey,
+  options: DkimVerifyOptions = {},
+): Promise<DkimVerificationResult[]> {
   const maxMessageLength = options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH
   if (rawMessage.length > maxMessageLength) {
-    return {
+    return [{
       valid: false,
       reason: `message is ${rawMessage.length} characters, over the ` +
         `${maxMessageLength}-character limit`,
-    }
+    }]
   }
 
   const { headers, body } = splitMessage(rawMessage)
-
-  // A message may carry several signatures; the first one is verified. The
-  // header value keeps its exact bytes, so the canonical form reconstructed
-  // for hashing matches what the signer saw.
-  const dkimHeaderLine = headers.find((line) => line.toLowerCase().startsWith("dkim-signature:"))
-  if (dkimHeaderLine === undefined) {
-    return { valid: false, reason: "no DKIM-Signature header found" }
+  // Every signature is verified, not just the first: a broken one above a good
+  // one used to condemn the whole message, and a valid one an attacker put on top
+  // used to decide it. Each field's value keeps its exact bytes, so the canonical
+  // form reconstructed for hashing matches what that signer saw.
+  const fields = headers.filter((line) => line.toLowerCase().startsWith("dkim-signature:"))
+  if (fields.length === 0) {
+    return [{ valid: false, reason: "no DKIM-Signature header found" }]
   }
+
+  const maxSignatures = options.maxSignatures ?? DEFAULT_MAX_SIGNATURES
+  const results: DkimVerificationResult[] = []
+  for (const [index, field] of fields.entries()) {
+    // §6.1: a verifier may limit how many signatures it tries. Without a limit,
+    // every extra field buys an attacker one key lookup and one public-key
+    // operation.
+    if (index >= maxSignatures) {
+      results.push({
+        valid: false,
+        reason: `not verified: only the first ${maxSignatures} DKIM-Signature ` +
+          `fields of a message are checked`,
+      })
+      continue
+    }
+    results.push(await verifyOneSignature(field, headers, body, publicKey, options))
+  }
+  return results
+}
+
+async function verifyOneSignature(
+  dkimHeaderLine: string,
+  headers: string[],
+  body: string,
+  publicKey: DkimPublicKey | undefined,
+  options: DkimVerifyOptions,
+): Promise<DkimVerificationResult> {
   // §3.7 step 2 hashes "the DKIM-Signature header field that exists" in the
   // message, so the field name is taken from the message rather than assumed.
   // Under `simple` canonicalization the name's case is part of the hashed

@@ -29,6 +29,7 @@ import {
   canonicalizeBody,
   canonicalizeHeader,
   DEFAULT_MAX_MESSAGE_LENGTH,
+  DEFAULT_MAX_SIGNATURES,
   DkimParseError,
   type DkimPublicKey,
   type DnsTxtResolver,
@@ -38,6 +39,7 @@ import {
   sha256Base64,
   splitMessage,
   verifyDkim,
+  verifyDkimSignatures,
 } from "./dkim-verify.ts"
 
 const FIXTURE_DIR = new URL("./fixtures/", import.meta.url)
@@ -734,6 +736,101 @@ describe("policy RFC 6376 leaves to the caller", () => {
     const tampered = await verifyDkim(grown, key)
     assertEquals(tampered.valid, false)
     assertEquals(tampered.reason, "body hash mismatch (body modified after signing)")
+  })
+})
+
+// --- several signatures on one message (§6.1) -------------------------------
+
+/**
+ * RFC 6376 §6.1 treats each `DKIM-Signature` field independently: a message is
+ * signed by any one of them that verifies. This verifier looked at the first
+ * field only, so a mailing list that re-signed above a broken signature was
+ * rejected, and a signature an attacker prepended was the only one examined.
+ */
+describe("a message carrying several signatures (§6.1)", () => {
+  const BODY = "This is a test.\r\n"
+
+  /** The message's DKIM-Signature field, as one line. */
+  function signatureField(raw: string): string {
+    const line = splitMessage(raw).headers.find((header) =>
+      header.toLowerCase().startsWith("dkim-signature:")
+    )
+    if (line === undefined) throw new Error("message has no DKIM-Signature field")
+    return line
+  }
+
+  /** The same field with one base64 character of `b=` flipped. */
+  function breakSignature(field: string): string {
+    const signature = /; b=([A-Za-z0-9+/=]+)/.exec(field)![1]
+    const flipped = signature.slice(0, 5) +
+      (signature[5] === "A" ? "B" : "A") + signature.slice(6)
+    return field.replace(`; b=${signature}`, `; b=${flipped}`)
+  }
+
+  /** The message with `fields` inserted above every header it already has. */
+  function prependFields(raw: string, fields: string[]): string {
+    return `${fields.map((field) => `${field}\r\n`).join("")}${raw}`
+  }
+
+  it("verifies a mail whose first signature is broken and second is good", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = prependFields(raw, [breakSignature(signatureField(raw))])
+    assertEquals(
+      splitMessage(attacked).headers.filter((header) =>
+        header.toLowerCase().startsWith("dkim-signature:")
+      ).length,
+      2,
+    )
+
+    const result = await verifyDkim(attacked, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("returns one result per signature, in the order they appear", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = prependFields(raw, [breakSignature(signatureField(raw))])
+
+    const results = await verifyDkimSignatures(attacked, publicKey)
+    assertEquals(results.length, 2)
+    assertEquals(results[0].valid, false)
+    assertEquals(results[0].reason, "signature did not verify against public key")
+    assertEquals(results[1].valid, true)
+    // Each result names the domain that signed, which is what lets a caller
+    // decide whether the signer has anything to do with the From address.
+    assertEquals(results[0].parsed?.domain, "example.com")
+    assertEquals(results[1].parsed?.domain, "example.com")
+  })
+
+  it("checks no more signatures than the cap allows", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const broken = breakSignature(signatureField(raw))
+    const attacked = prependFields(raw, [broken, broken])
+
+    const capped = await verifyDkimSignatures(attacked, publicKey, { maxSignatures: 2 })
+    assertEquals(capped.length, 3)
+    assertEquals(capped[2].valid, false)
+    assertEquals(
+      capped[2].reason,
+      "not verified: only the first 2 DKIM-Signature fields of a message are checked",
+    )
+    assertEquals(capped[2].parsed, undefined)
+    assertEquals((await verifyDkim(attacked, publicKey, { maxSignatures: 2 })).valid, false)
+
+    // One more slot and the genuine signature is reached.
+    assert((await verifyDkim(attacked, publicKey, { maxSignatures: 3 })).valid)
+    assertEquals(DEFAULT_MAX_SIGNATURES, 10)
+  })
+
+  it("reports the first signature's diagnosis when none verifies", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const broken = breakSignature(signatureField(raw))
+    const allBroken = prependFields(
+      raw.replace(signatureField(raw), broken),
+      [broken],
+    )
+    const result = await verifyDkim(allBroken, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "signature did not verify against public key")
   })
 })
 

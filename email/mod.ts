@@ -58,6 +58,7 @@ export {
   canonicalizeBody,
   canonicalizeHeader,
   DEFAULT_MAX_MESSAGE_LENGTH,
+  DEFAULT_MAX_SIGNATURES,
   type DkimAlgorithm,
   type DkimKeyAlgorithm,
   DkimParseError,
@@ -73,4 +74,5 @@ export {
   sha256Base64,
   splitMessage,
   verifyDkim,
+  verifyDkimSignatures,
 } from "./dkim-verify.ts"
