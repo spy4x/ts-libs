@@ -1,7 +1,30 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { type } from "arktype"
-import { firstIssueMessage, toValidationError, validate, type ValidationError } from "./validate.ts"
+import { Type, type } from "arktype"
+import {
+  firstIssueMessage,
+  isArkErrors,
+  toValidationError,
+  validate,
+  type ValidationError,
+} from "./validate.ts"
+
+/**
+ * An object with arktype's public rejection shape — an array of issues with a `summary` string
+ * and a `throw` method — built without arktype's own `ArkErrors` class.
+ *
+ * Stands in for a rejection built by a second, differently-loaded copy of arktype: same shape,
+ * different class identity, so `instanceof` against this module's `type.errors` fails on it even
+ * though it is exactly what a real rejection looks like.
+ */
+function foreignArkErrors(message: string) {
+  return Object.assign([{ path: [], message }], {
+    summary: message,
+    throw: () => {
+      throw new Error(message)
+    },
+  })
+}
 
 const dateSchema = type("Date | string.date.iso.parse")
 const userSchema = type({
@@ -101,6 +124,40 @@ describe("validate", () => {
     expect(data).toBeNull()
     expect(error).not.toBeNull()
     expect(calls).toBe(1)
+  })
+})
+
+describe("isArkErrors", () => {
+  it("recognizes a real rejection", () => {
+    const result = userSchema({ name: "", joinedAt: "nope", address: {} })
+    expect(isArkErrors(result)).toBe(true)
+  })
+
+  it("does not mistake a successful parse for a rejection", () => {
+    const result = userSchema({ name: "Ada", joinedAt: new Date(), address: { city: "Berlin" } })
+    expect(isArkErrors(result)).toBe(false)
+  })
+
+  it("does not mistake a plain array for a rejection", () => {
+    expect(isArkErrors(["a", "b"])).toBe(false)
+  })
+
+  it("recognizes an errors-shaped value that fails instanceof", () => {
+    const foreign = foreignArkErrors("start before end")
+    expect(foreign instanceof type.errors).toBe(false)
+    expect(isArkErrors(foreign)).toBe(true)
+  })
+})
+
+describe("validate — a rejection from a differently-loaded arktype copy", () => {
+  it("still reports an error instead of reading the rejection as the parsed value", () => {
+    const foreign = foreignArkErrors("must be a equal to b")
+    const fakeSchema = ((_value: unknown) => foreign) as unknown as Type
+
+    const { error, data } = validate(fakeSchema, { a: "x", b: "y" })
+
+    expect(data).toBeNull()
+    expect(error?.description).toBe("must be a equal to b")
   })
 })
 

@@ -11,7 +11,8 @@
  * the other.
  */
 
-import { Type, type as arkType } from "arktype"
+import { Type } from "arktype"
+import { isArkErrors } from "./validate.ts"
 
 /**
  * Issue kinds the schema itself reports.
@@ -90,7 +91,7 @@ export function schemaIssues<S extends Type>(
   value: unknown,
 ): Record<string, FieldValidation> {
   const outcome = schema(value)
-  if (!(outcome instanceof arkType.errors)) return {}
+  if (!isArkErrors(outcome)) return {}
 
   const issues: Record<string, FieldValidation> = {}
   for (const issue of outcome.issues) {

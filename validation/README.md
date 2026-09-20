@@ -42,6 +42,15 @@ below.
 `sameValidation`. It is a plain state shape — `{ [field]: { [errorType]: { message, payload } } }` —
 with no renderer in it, which is why it lives here rather than in a component library.
 
+## Recognising an arktype rejection
+
+`validate` and `schemaIssues` tell a rejection from a parsed value with `isArkErrors`, a shape check
+(an array with a `summary` string and a `throw` method), not `instanceof ArkErrors`. Two different
+copies of arktype in the dependency tree have two different `ArkErrors` classes, so `instanceof`
+across them fails and a rejection built by one copy would be read as a successful value by the
+other. Pin arktype to one exact version everywhere it is used to avoid the mismatch in the first
+place; `isArkErrors` is the fallback for when that slips.
+
 ## No global arktype config
 
 `configure({ onUndeclaredKey: "reject", onDeepUndeclaredKey: "reject" })` is deliberately **not**
