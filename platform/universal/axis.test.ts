@@ -62,9 +62,18 @@ describe("niceStep", () => {
     expect(niceStep(1e-12, 5)).toBeGreaterThan(0)
   })
 
-  it("rejects a non-positive target rather than dividing by zero", () => {
-    expect(() => niceStep(10, 0)).toThrow("target must be positive")
-    expect(() => niceStep(10, -1)).toThrow("target must be positive")
+  it("falls back to the default target of 5 for a non-positive, non-finite or missing target", () => {
+    // Matches the reference's normaliseTarget: a chart's tick target usually comes from its own
+    // layout math (available width / label width), and a transient bad value there should degrade
+    // to the default rather than take the whole render down.
+    expect(niceStep(10, 0)).toBe(niceStep(10, 5))
+    expect(niceStep(10, -1)).toBe(niceStep(10, 5))
+    expect(niceStep(10, Number.NaN)).toBe(niceStep(10, 5))
+    expect(niceStep(10)).toBe(niceStep(10, 5))
+  })
+
+  it("floors a fractional target instead of producing a fractional step count", () => {
+    expect(niceStep(10, 4.9)).toBe(niceStep(10, 4))
   })
 })
 
@@ -102,9 +111,13 @@ describe("ticks", () => {
     expect(values[values.length - 1]).toBeGreaterThanOrEqual(50)
   })
 
-  it("rejects a non-finite bound rather than emitting NaN ticks", () => {
-    expect(() => ticks(0, Number.NaN)).toThrow("must be finite")
-    expect(() => ticks(Number.POSITIVE_INFINITY, 1)).toThrow("must be finite")
+  it("returns an empty axis for a non-finite bound instead of throwing", () => {
+    // Matches the reference: a chart fed a bad domain (an empty series' Infinity/-Infinity extent,
+    // for instance) gets an axis with no ticks, not an exception that takes the render down too.
+    // Expected values taken from `preact-components/charts/scales.ts`.
+    expect(ticks(0, Number.NaN)).toEqual([])
+    expect(ticks(Number.POSITIVE_INFINITY, 1)).toEqual([])
+    expect(ticks(Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY)).toEqual([])
   })
 
   it("swaps reversed bounds instead of returning them as given", () => {
@@ -114,6 +127,13 @@ describe("ticks", () => {
     expect(ticks(10, 0)).toEqual(ticks(0, 10))
     expect(ticks(10, 0)).toEqual([0, 2, 4, 6, 8, 10])
     expect(ticks(1, -1)).toEqual([-1.2, -0.8, -0.4, 0, 0.4, 0.8, 1.2])
+  })
+
+  it("falls back to the default tick target instead of throwing on a bad one", () => {
+    // Expected values taken from the reference: a bad `maxTicks` behaves as if it were omitted.
+    expect(ticks(0, 100, 0)).toEqual(ticks(0, 100))
+    expect(ticks(0, 100, -3)).toEqual(ticks(0, 100))
+    expect(ticks(0, 100, Number.NaN)).toEqual(ticks(0, 100))
   })
 
   it("terminates on a span narrower than the float precision of its bounds, instead of looping forever", () => {

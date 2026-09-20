@@ -30,7 +30,7 @@ browser- and server-only halves are the other two subpaths.
 | -------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `universal/async`          | `sleep`, `debounce` (cancelable, unref'd)                                                                  |
 | `universal/concurrency`    | `AsyncMutex` (fair FIFO)                                                                                   |
-| `universal/axis`           | `niceStep`, `ticks` — the one home for chart tick maths; `preact-components` imports this                  |
+| `universal/axis`           | `niceStep`, `ticks` — the one home for chart tick maths                                                    |
 | `universal/constants`      | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                               |
 | `universal/errors`         | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `OperationState`, `OperationResult` |
 | `universal/format-number`  | `round`, `formatDecimal`, `formatPct`                                                                      |
@@ -42,6 +42,19 @@ browser- and server-only halves are the other two subpaths.
 
 `universal/csv` and `mapConcurrent` (formerly in `universal/concurrency`) were removed: `@std/csv`
 and `@std/async`'s `pooledMap` already cover them, and no app in this workspace imported either.
+
+**`universal/axis` is the single home for the chart tick maths**, ported from and matched against
+`preact-components/charts/scales.ts`. `preact-components` does not import it yet — that is a
+pending PR in that repository, `spy4x/preact-components#123` — so today the two copies still exist
+side by side; this module is written so that import can be a straight substitution once it lands.
+`niceStep`/`ticks` deliberately match the reference on every case tested against it, including three
+that used to differ from it here: reversed bounds are swapped rather than returned as given
+(`ticks(10, 0)` equals `ticks(0, 10)`), a non-finite bound returns an empty axis instead of
+throwing, and a tick target that is `0`, negative or `NaN` falls back to the default of `5` instead
+of throwing. All three are deliberate: a chart's tick target and domain both come from data or
+layout math that can transiently be bad, and a chart needs an empty or default-shaped axis to keep
+rendering, not an exception that takes the rest of the component down. `niceStep`/`ticks` in
+`axis.test.ts` pin all three against values taken from running the reference.
 
 ### `./browser` → `browser.ts` (1 module, 151 LOC)
 

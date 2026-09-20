@@ -12,6 +12,22 @@
 const MAX_TICKS = 1_000
 
 /**
+ * Coerce a tick target to a usable step count.
+ *
+ * Ported from `preact-components/charts/scales.ts`'s `normaliseTarget`, which this module lacked:
+ * a target of `0`, a negative number, `NaN` or `undefined` used to throw here. A chart passes its
+ * tick target from layout code (available width divided by a label's pixel width, say), and a
+ * transient bad value there is exactly the kind of input a chart must render *something* for
+ * rather than crash the whole component on. Falling back to the default of `5` matches what
+ * happens when the caller supplies no target at all — a bad target is treated as no target — and a
+ * caller that fixes its own layout math sees no difference, since the fallback and the default are
+ * the same number.
+ */
+function normaliseTarget(target: number | undefined): number {
+  return target !== undefined && Number.isFinite(target) && target >= 1 ? Math.floor(target) : 5
+}
+
+/**
  * Round a span up to a sensible tick step at roughly `target` ticks.
  *
  * **The exact contract, measured.** The snapped quantity is the *span's* significand, placed on the
@@ -34,7 +50,8 @@ const MAX_TICKS = 1_000
  * to review, not a change to make while porting.
  *
  * A non-positive or non-finite span returns `1` so a degenerate axis still has a step, and the result
- * is never `0` or negative.
+ * is never `0` or negative. A `target` that is not a finite number `>= 1` falls back to `5`, through
+ * {@link normaliseTarget}, rather than throwing — see its own doc for why.
  *
  * **No hard floor on the result.** An earlier revision clamped with `Math.max(1e-9, raw)`, which made
  * every span narrower than about `2e-9` round up to a step 1e-9 — coarser than the whole span, so
@@ -45,7 +62,7 @@ const MAX_TICKS = 1_000
  */
 export function niceStep(span: number, target = 5): number {
   if (!Number.isFinite(span) || span <= 0) return 1
-  if (!Number.isFinite(target) || target <= 0) throw new Error("niceStep: target must be positive")
+  const wanted = normaliseTarget(target)
   const exponent = Math.floor(Math.log10(span))
   const fraction = span / 10 ** exponent
   let niceFraction: number
@@ -53,11 +70,11 @@ export function niceStep(span: number, target = 5): number {
   else if (fraction < 3) niceFraction = 2
   else if (fraction < 7) niceFraction = 5
   else niceFraction = 10
-  const step = (niceFraction * 10 ** exponent) / target
+  const step = (niceFraction * 10 ** exponent) / wanted
   if (Number.isFinite(step) && step > 0) return step
   // Subnormal spans underflow here (`10 ** exponent` itself rounds to 0); keep the smallest positive
   // step rather than returning 0, which would make tick generation divide by zero.
-  const fallback = span / target
+  const fallback = span / wanted
   return Number.isFinite(fallback) && fallback > 0 ? fallback : Number.MIN_VALUE
 }
 
@@ -68,15 +85,17 @@ export function niceStep(span: number, target = 5): number {
  * caller does not have to sort its own domain first; ported from
  * `preact-components/charts/scales.ts`, whose JSDoc calls the swap out as deliberate. When
  * `min === max` a single-element array is returned, so a caller can render a degenerate axis
- * without dividing by zero.
+ * without dividing by zero. Non-finite bounds return an empty axis rather than throwing — the same
+ * "render something, not nothing" reasoning as {@link normaliseTarget}: a chart fed a bad domain
+ * (an empty data set's `Infinity`/`-Infinity` extent, say) gets an axis with no ticks instead of an
+ * exception that takes the rest of the render down with it.
  */
 export function ticks(min: number, max: number, maxTicks = 5): number[] {
-  if (!Number.isFinite(min) || !Number.isFinite(max)) {
-    throw new Error("ticks: min and max must be finite")
-  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return []
   const [low, high] = min <= max ? [min, max] : [max, min]
   if (low === high) return [low]
   const step = niceStep(high - low, maxTicks)
+  if (!Number.isFinite(step) || step <= 0) return [low, high]
   return ticksForStep(low, high, step)
 }
 
