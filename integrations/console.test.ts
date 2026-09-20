@@ -5,19 +5,20 @@
  * leaves a blind spot: a `console.error` restored in a branch that test does
  * not drive stays green. That is exactly how a restored 4xx `console.error` in
  * `mailchimp.ts` survived a green suite — no test exercised that branch while
- * capturing the console.
+ * capturing the console. (Mailchimp and Slack are gone, #68; this file now
+ * drives the two clients that took their place.)
  *
  * This file drives every path of both clients under one capture:
- * `putContact` (upsert, API rejection, disabled skip, empty address),
- * `searchContact` (hit, 404 miss, unexpected 5xx, transport throw) and
- * `SlackClient.send` (2xx, 4xx, 5xx, transport throw, invalid payload).
+ * `NtfyClient.push` (delivered, below-gate skip, 4xx, 5xx-then-retry, transport
+ * throw) and `HealthchecksClient.ping` (delivered, 4xx, 5xx-then-retry,
+ * transport throw).
  *
  * The retry core is covered by `retry.test.ts`, which is pure and logs nothing
  * by construction.
  */
 
-import type { MailchimpClient as MailchimpClientType } from "./mailchimp.ts"
-import type { SlackClient as SlackClientType } from "./slack.ts"
+import type { HealthchecksClient as HealthchecksClientType } from "./healthchecks.ts"
+import type { NtfyClient as NtfyClientType } from "./ntfy.ts"
 
 /**
  * Installed before the modules are imported.
@@ -44,22 +45,20 @@ const SENTINEL = "console.test.ts liveness sentinel"
 console.error(SENTINEL)
 const hookWasLive = captured.includes(`error: ${SENTINEL}`)
 
-const { SlackClient: SlackClientValue } = await import("./slack.ts")
-const { MailchimpClient: MailchimpClientValue } = await import("./mailchimp.ts")
+const { NtfyClient: NtfyClientValue, NotificationSeverity } = await import("./ntfy.ts")
+const { HealthchecksClient: HealthchecksClientValue, HealthchecksOutcome } = await import(
+  "./healthchecks.ts"
+)
 
-const SlackClient = SlackClientValue as typeof SlackClientType
-const MailchimpClient = MailchimpClientValue as typeof MailchimpClientType
+const NtfyClient = NtfyClientValue as typeof NtfyClientType
+const HealthchecksClient = HealthchecksClientValue as typeof HealthchecksClientType
 
 const { describe, it } = await import("@std/testing/bdd")
 const { expect } = await import("@std/expect")
 
-const WEBHOOK = "https://hooks.slack.invalid/services/T000/B000/test-token-not-real"
-const CONFIG = {
-  apiKey: "test-key-not-real",
-  username: "test-user-not-real",
-  listId: "test-list-not-real",
-  serverPrefix: "example",
-}
+const NTFY_BASE_URL = "https://ntfy.invalid"
+const NTFY_TOPIC = "test-topic-not-real"
+const HEALTHCHECKS_PING_URL = "https://hc-ping.invalid/test-check-not-real"
 
 /** A fetch that replays a queue and repeats the last entry. */
 const replay = (queue: Array<[number, string]>) => {
@@ -85,102 +84,110 @@ describe("console silence on every client path", () => {
     expect(hookWasLive).toBe(true)
   })
 
-  it("logs nothing for a Mailchimp upsert, a rejection, a skip and an empty address", async () => {
+  it("logs nothing for an ntfy push: delivered, below-gate, 4xx and a transport throw", async () => {
     const messages = await logged(async () => {
-      const created = new MailchimpClient(CONFIG, {
-        fetcher: replay([[404, '{"title":"Resource Not Found"}'], [200, '{"status":"pending"}']]),
+      const delivered = new NtfyClient(
+        { baseUrl: NTFY_BASE_URL, topic: NTFY_TOPIC, token: "test-token-not-real" },
+        { fetcher: replay([[200, ""]]) },
+      )
+      await delivered.push({
+        title: "backup failed",
+        message: "detail",
+        severity: NotificationSeverity.Failure,
       })
-      await created.putContact({ email: "member@example.invalid", firstName: "A" })
 
-      const updated = new MailchimpClient(CONFIG, {
-        fetcher: replay([[200, '{"status":"subscribed"}'], [200, '{"status":"subscribed"}']]),
+      const belowGate = new NtfyClient(
+        { baseUrl: NTFY_BASE_URL, topic: NTFY_TOPIC },
+        { fetcher: replay([[200, ""]]) },
+      )
+      await belowGate.push({
+        title: "backup finished",
+        message: "detail",
+        severity: NotificationSeverity.Info,
       })
-      await updated.putContact({ email: "member@example.invalid" })
 
-      // The branch that hid a restored console.error: a 4xx from the API.
-      const rejected = new MailchimpClient(CONFIG, {
-        fetcher: replay([[400, '{"title":"Invalid Resource"}']]),
-        retry: { maxAttempts: 1 },
+      // The branch that hid a restored console.error in the removed clients: a
+      // permanent 4xx from the provider.
+      const rejected = new NtfyClient(
+        { baseUrl: NTFY_BASE_URL, topic: NTFY_TOPIC },
+        { fetcher: replay([[400, ""]]), retry: { maxAttempts: 1 } },
+      )
+      await rejected.push({
+        title: "backup failed",
+        message: "detail",
+        severity: NotificationSeverity.Failure,
       })
-      await rejected.putContact({ email: "member@example.invalid" })
 
-      const racy = new MailchimpClient(CONFIG, {
-        fetcher: replay([
-          [404, '{"title":"Resource Not Found"}'],
-          [400, '{"title":"Member Exists"}'],
-          [200, '{"status":"subscribed"}'],
-        ]),
-      })
-      await racy.putContact({ email: "member@example.invalid" })
-
-      const disabled = new MailchimpClient(CONFIG, { fetcher: replay([[200, "{}"]]) })
-      disabled.skipDisabled("missing_credentials")
-
-      await disabled.putContact({ email: "   " })
+      const thrown = new NtfyClient(
+        { baseUrl: NTFY_BASE_URL, topic: NTFY_TOPIC },
+        {
+          fetcher: (() =>
+            Promise.reject(new TypeError("Invalid URL: 'https://x/'"))) as typeof fetch,
+          retry: { maxAttempts: 1 },
+        },
+      )
+      await thrown.notifyFailure("backup failed", "detail")
     })
     expect(messages).toEqual([])
   })
 
-  it("logs nothing for a Mailchimp lookup hit, miss, 5xx and transport throw", async () => {
+  it("logs nothing for an ntfy push retried past a transient 5xx", async () => {
     const messages = await logged(async () => {
-      const hit = new MailchimpClient(CONFIG, {
-        fetcher: replay([[200, '{"status":"subscribed"}']]),
+      const retried = new NtfyClient(
+        { baseUrl: NTFY_BASE_URL, topic: NTFY_TOPIC },
+        {
+          fetcher: replay([[503, ""], [200, ""]]),
+          retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 },
+          sleep: () => Promise.resolve(),
+        },
+      )
+      await retried.push({
+        title: "backup failed",
+        message: "detail",
+        severity: NotificationSeverity.Failure,
       })
-      await hit.searchContact("member@example.invalid")
-
-      const miss = new MailchimpClient(CONFIG, {
-        fetcher: replay([[404, '{"title":"Resource Not Found"}']]),
-      })
-      await miss.searchContact("member@example.invalid")
-
-      const serverError = new MailchimpClient(CONFIG, {
-        fetcher: replay([[500, '{"title":"Internal Server Error"}']]),
-        retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 },
-        sleep: () => Promise.resolve(),
-      })
-      await serverError.searchContact("member@example.invalid")
-
-      const thrown = new MailchimpClient(CONFIG, {
-        fetcher: (() => Promise.reject(new TypeError("Invalid URL: 'https://x/'"))) as typeof fetch,
-        retry: { maxAttempts: 1 },
-      })
-      await thrown.searchContact("member@example.invalid")
-
-      const readOnly = new MailchimpClient(CONFIG, {
-        fetcher: replay([[200, "{}"]]),
-        readOnly: true,
-      })
-      await readOnly.putContact({ email: "member@example.invalid" })
     })
     expect(messages).toEqual([])
   })
 
-  it("logs nothing for a Slack 2xx, 4xx, 5xx, transport throw or invalid payload", async () => {
+  it("logs nothing for a healthchecks ping: delivered, 4xx and a transport throw", async () => {
     const messages = await logged(async () => {
-      const accepted = new SlackClient({ webhookUrl: WEBHOOK }, {
-        fetcher: replay([[200, "ok"]]),
-      })
-      await accepted.send({ text: "hello" })
+      const delivered = new HealthchecksClient(
+        { pingUrl: HEALTHCHECKS_PING_URL },
+        { fetcher: replay([[200, ""]]) },
+      )
+      await delivered.ping({ outcome: HealthchecksOutcome.Success })
 
-      const rejected = new SlackClient({ webhookUrl: WEBHOOK }, {
-        fetcher: replay([[404, "invalid_token"]]),
-      })
-      await rejected.send({ text: "hello" })
+      const rejected = new HealthchecksClient(
+        { pingUrl: HEALTHCHECKS_PING_URL },
+        { fetcher: replay([[400, ""]]), retry: { maxAttempts: 1 } },
+      )
+      await rejected.ping({ outcome: HealthchecksOutcome.Fail })
 
-      const serverError = new SlackClient({ webhookUrl: WEBHOOK }, {
-        fetcher: replay([[500, "server error"]]),
-        sleep: () => Promise.resolve(),
-        retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 },
-      })
-      await serverError.send({ text: "hello" })
+      const thrown = new HealthchecksClient(
+        { pingUrl: HEALTHCHECKS_PING_URL },
+        {
+          fetcher: (() =>
+            Promise.reject(new TypeError("Invalid URL: 'https://x/'"))) as typeof fetch,
+          retry: { maxAttempts: 1 },
+        },
+      )
+      await thrown.ping({ outcome: HealthchecksOutcome.Start })
+    })
+    expect(messages).toEqual([])
+  })
 
-      const thrown = new SlackClient({ webhookUrl: WEBHOOK }, {
-        fetcher: (() => Promise.reject(new TypeError("Invalid URL: 'https://x/'"))) as typeof fetch,
-        retry: { maxAttempts: 1 },
-      })
-      await thrown.send({ text: "hello" })
-
-      await accepted.send(undefined)
+  it("logs nothing for a healthchecks ping retried past a transient 5xx", async () => {
+    const messages = await logged(async () => {
+      const retried = new HealthchecksClient(
+        { pingUrl: HEALTHCHECKS_PING_URL },
+        {
+          fetcher: replay([[500, ""], [200, ""]]),
+          retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 },
+          sleep: () => Promise.resolve(),
+        },
+      )
+      await retried.ping({ outcome: HealthchecksOutcome.Success })
     })
     expect(messages).toEqual([])
   })
