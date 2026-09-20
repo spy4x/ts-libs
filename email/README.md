@@ -260,7 +260,9 @@ question: **does this message's `DKIM-Signature` verify against this key?**
   `h=` must allow `sha256`, `s=` must name `email` or `*`, and `t=y` — the domain
   is only testing DKIM — never produces a valid verdict.
 - **RSA keys of at least 1 024 bits** (RFC 8301 §3.2). A 512-bit key is refused
-  however well its signature verifies.
+  however well its signature verifies. The bits are counted from the modulus
+  itself: `CryptoKey.algorithm.modulusLength` reports an imported key's modulus
+  rounded up to a whole byte, so a 1 023-bit key claims 1 024 there.
 - **Every `DKIM-Signature` field**, not just the first (§6.1). `verifyDkim`
   reports the first valid one; `verifyDkimSignatures` returns one result per
   field, so a caller can see which domains signed.

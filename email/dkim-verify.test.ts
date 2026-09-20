@@ -1297,6 +1297,40 @@ describe("the RSA key size floor (RFC 8301)", () => {
     const result = await verifyDkim(raw, publicKey)
     assert(result.valid, `reason=${result.reason}`)
   })
+
+  it("rejects a key one bit below the floor", async () => {
+    // 1023 bits is the case the floor used to miss. `CryptoKey.algorithm
+    // .modulusLength` reports an imported key's modulus rounded up to a whole
+    // byte, so this key claims 1024 there while its modulus is one bit shorter —
+    // and the mail it signs verified. The key is generated here like every other
+    // key in this file, so nothing private is committed and the signature is real.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", { rsaBits: 1023 })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "RSA key is 1023 bits; RFC 8301 requires at least 1024")
+
+    // What the platform says about the same key once it is imported, which is the
+    // number the floor used to read.
+    // `rsaKey` publishes the platform's own SPKI export, so the record's bytes
+    // import directly here.
+    const imported = await crypto.subtle.importKey(
+      "spki",
+      new Uint8Array(publicKey.keyBytes),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      true,
+      ["verify"],
+    )
+    assertEquals((imported.algorithm as RsaHashedKeyAlgorithm).modulusLength, 1024)
+  })
+
+  it("rejects keys between 1017 and 1023 bits, which all report 1024", async () => {
+    for (const bits of [1017, 1020, 1023]) {
+      const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", { rsaBits: bits })
+      const result = await verifyDkim(raw, publicKey)
+      assertEquals(result.valid, false, `${bits} bits must be refused`)
+      assertEquals(result.reason, `RSA key is ${bits} bits; RFC 8301 requires at least 1024`)
+    }
+  })
 })
 
 // --- §6.1.1: the From field must be signed ----------------------------------

@@ -1312,18 +1312,23 @@ async function verifySignature(
       "spki",
       asBytes(spkiForRsaPublicKey(publicKey.keyBytes)),
       { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-      false,
+      // Extractable so the modulus can be measured below. It is a public key:
+      // exporting it gives away nothing that the DNS record did not publish.
+      true,
       ["verify"],
     )
     // RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of
-    // less than 1024 bits as valid." The modulus length comes from the imported
-    // key rather than from counting DER bytes, so it is the length the crypto
-    // implementation will actually use. A 512-bit key is breakable by anyone who
+    // less than 1024 bits as valid." A 512-bit key is breakable by anyone who
     // wants to forge mail from the domain that published it.
-    const modulusLength = (cryptoKey.algorithm as RsaHashedKeyAlgorithm).modulusLength
-    if (modulusLength < MIN_RSA_KEY_BITS) {
+    //
+    // The bits are counted from the modulus itself rather than read from
+    // `algorithm.modulusLength`, which for an imported key is the modulus rounded
+    // up to a whole byte: a 1023-bit key reports 1024 there and passed the floor
+    // it fails.
+    const modulusBits = await rsaModulusBits(cryptoKey)
+    if (modulusBits < MIN_RSA_KEY_BITS) {
       throw new DkimParseError(
-        `RSA key is ${modulusLength} bits; RFC 8301 requires at least ${MIN_RSA_KEY_BITS}`,
+        `RSA key is ${modulusBits} bits; RFC 8301 requires at least ${MIN_RSA_KEY_BITS}`,
       )
     }
     return await crypto.subtle.verify(
@@ -1357,6 +1362,37 @@ async function verifySignature(
   }
 
   throw new DkimParseError(`unsupported algorithm: ${parsed.algorithm}`)
+}
+
+/**
+ * The true bit length of an RSA key's modulus.
+ *
+ * `CryptoKey.algorithm.modulusLength` is not it: for a key that was imported
+ * rather than generated, the platform reports the modulus rounded up to a whole
+ * byte, so keys of 1017 to 1023 bits all say 1024 and slip past RFC 8301's floor.
+ * The JWK export carries the modulus itself (`n`, base64url, big-endian), and its
+ * leading zero bits are not part of the number.
+ */
+async function rsaModulusBits(key: CryptoKey): Promise<number> {
+  const jwk = await crypto.subtle.exportKey("jwk", key)
+  if (jwk.n === undefined) throw new DkimParseError("RSA key has no modulus")
+  return bitLength(base64UrlDecode(jwk.n))
+}
+
+/** Bits in a big-endian unsigned integer, leading zeros not counted. */
+function bitLength(bytes: Uint8Array): number {
+  let at = 0
+  while (at < bytes.length && bytes[at] === 0) at++
+  if (at === bytes.length) return 0
+  let bits = (bytes.length - at - 1) * 8
+  for (let byte = bytes[at]; byte > 0; byte >>= 1) bits++
+  return bits
+}
+
+/** Decode base64url, which is what JWK uses: `-_` for `+/`, and no padding. */
+function base64UrlDecode(value: string): Uint8Array {
+  const standard = value.replaceAll("-", "+").replaceAll("_", "/")
+  return base64Decode(standard + "=".repeat((4 - (standard.length % 4)) % 4))
 }
 
 /**
