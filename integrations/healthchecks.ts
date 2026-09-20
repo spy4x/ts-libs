@@ -34,6 +34,7 @@ import {
   isRequestTimeout,
   isTransientStatus,
   parseRetryAfterMs,
+  type RandomSource,
   releaseResponseBody,
   type RetryPolicy,
   runWithRetry,
@@ -115,6 +116,8 @@ export interface HealthchecksClientOptions {
    * left under `totalBudgetMs` — see `post`.
    */
   requestTimeoutMs?: number
+  /** Random source for `backoff`'s jitter. Defaults to `Math.random`. */
+  random?: RandomSource
 }
 
 /**
@@ -174,7 +177,7 @@ export class HealthchecksClient {
       ...options.retry,
       onDelay: options.onDelay,
     }
-    this.backoff = options.backoff ?? createExponentialBackoff(this.policy)
+    this.backoff = options.backoff ?? createExponentialBackoff(this.policy, options.random)
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
   }
 

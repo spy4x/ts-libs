@@ -366,6 +366,25 @@ describe("HealthchecksClient.ping", () => {
     expect(captured?.bodyUsed).toBe(true)
   })
 
+  it("gives two client instances different retry delays when jitter is enabled", async () => {
+    // Proves the client actually threads its `random` option down to the
+    // shared backoff, rather than only `createExponentialBackoff` itself
+    // being capable of real randomness.
+    const delayFor = async (random: () => number): Promise<number> => {
+      const timer = recordingTimer()
+      const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+        fetcher: fakeTransport([{ status: 500 }, { status: 200 }]).fetcher,
+        sleep: timer.sleep,
+        clock: timer.clock,
+        retry: { maxAttempts: 2, baseDelayMs: 60_000, jitterRatio: 0.2 },
+        random,
+      })
+      await client.ping({ outcome: HealthchecksOutcome.Success })
+      return timer.delays[0]
+    }
+    expect(await delayFor(() => 0.1)).not.toBe(await delayFor(() => 0.9))
+  })
+
   it("does not reject when a transport error's name is a Symbol", async () => {
     // The value was unvalidated even after the read was guarded: `${name}` on a
     // Symbol throws `TypeError: Cannot convert a Symbol value to a string`, so

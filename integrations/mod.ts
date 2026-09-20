@@ -51,6 +51,7 @@ export {
 export type {
   BackoffFn,
   Clock,
+  RandomSource,
   RetryPolicy,
   RetryRunOptions,
   RetryRunResult,

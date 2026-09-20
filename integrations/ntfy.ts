@@ -35,6 +35,7 @@ import {
   isRequestTimeout,
   isTransientStatus,
   parseRetryAfterMs,
+  type RandomSource,
   releaseResponseBody,
   type RetryPolicy,
   runWithRetry,
@@ -157,6 +158,8 @@ export interface NtfyClientOptions {
    * left under `totalBudgetMs` — see `post`.
    */
   requestTimeoutMs?: number
+  /** Random source for `backoff`'s jitter. Defaults to `Math.random`. */
+  random?: RandomSource
 }
 
 /** 5 attempts, 3s between them, mirroring `rostok`'s ntfy loop. */
@@ -265,7 +268,7 @@ export class NtfyClient {
     this.clock = options.clock ?? (() => Date.now())
     this.gate = options.gate ?? NotificationSeverity.Failure
     this.policy = { ...DEFAULT_RETRY, ...options.retry, onDelay: options.onDelay }
-    this.backoff = options.backoff ?? createExponentialBackoff(this.policy)
+    this.backoff = options.backoff ?? createExponentialBackoff(this.policy, options.random)
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
   }
 

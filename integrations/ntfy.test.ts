@@ -402,6 +402,25 @@ describe("NtfyClient.push", () => {
     expect(captured?.bodyUsed).toBe(true)
   })
 
+  it("gives two client instances different retry delays when jitter is enabled", async () => {
+    // Proves the client actually threads its `random` option down to the
+    // shared backoff, rather than only `createExponentialBackoff` itself
+    // being capable of real randomness.
+    const delayFor = async (random: () => number): Promise<number> => {
+      const timer = recordingTimer()
+      const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+        fetcher: fakeTransport([{ status: 500 }, { status: 200 }]).fetcher,
+        sleep: timer.sleep,
+        clock: timer.clock,
+        retry: { maxAttempts: 2, baseDelayMs: 1000, jitterRatio: 0.2 },
+        random,
+      })
+      await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
+      return timer.delays[0]
+    }
+    expect(await delayFor(() => 0.1)).not.toBe(await delayFor(() => 0.9))
+  })
+
   it("writes nothing to the console on success, skip or failure", async () => {
     const messages: unknown[] = []
     const originalError = console.error

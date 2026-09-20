@@ -9,9 +9,11 @@
  * here, so this is now the only copy, and the drift test is gone with it.
  *
  * Everything a test needs is injectable: the delay function (`backoff`), the
- * waiter (`sleep`) and the elapsed-time source (`clock`). Production defaults
- * are real; a test supplies a recording timer and a manual clock, so no test
- * ever sleeps and no test asserts against wall-clock time.
+ * waiter (`sleep`), the elapsed-time source (`clock`) and, inside `backoff`'s
+ * jitter, the random source. Production defaults are real; a test supplies a
+ * recording timer, a manual clock and a fixed random sequence, so no test ever
+ * sleeps, asserts against wall-clock time, or has to tolerate a flake from real
+ * randomness.
  */
 
 /**
@@ -19,6 +21,15 @@
  * provider sent a parseable `Retry-After` header, which wins over backoff.
  */
 export type BackoffFn = (attempt: number, retryAfterMs?: number) => number
+
+/**
+ * A source of numbers in `[0, 1)`, the shape `Math.random` has.
+ *
+ * Injectable so a test can supply a fixed sequence instead of the platform's
+ * real generator: the jitter computation stays testable without becoming
+ * predictable in production.
+ */
+export type RandomSource = () => number
 
 export interface RetryPolicy {
   /** Total attempts, including the first. 1 or fewer disables retrying. */
@@ -124,27 +135,30 @@ export const parseRetryAfterMs = (value: string | null): number | undefined => {
  * `Retry-After` short-circuits the computation, then the same clamps apply so a
  * hostile or buggy provider cannot pin a process for a week.
  *
- * Jitter is **deterministic**, derived from `(attempt, retryAfterMs)` rather
- * than from a random source: the function stays pure, a test can assert its
- * exact output, and a retry test does not become a flake. That is a deliberate
- * departure from the usual randomised jitter — the goal here is only to
- * de-synchronise callers that start together, and a per-attempt constant
- * achieves that.
+ * Jitter is **real randomness**, drawn from `random` (`Math.random` unless a
+ * caller injects another source), not a value derived from `attempt` and
+ * `retryAfterMs`. A per-attempt formula is a deterministic function of inputs
+ * every process shares, so every process computed the exact same "jittered"
+ * delay — the opposite of what jitter exists for, which is to de-synchronise
+ * callers that started together. `random` follows `Math.random`'s contract
+ * (`[0, 1)`), so a test can inject a fixed sequence and still exercise this
+ * exact code path deterministically.
  */
-export const createExponentialBackoff =
-  (policy: Pick<RetryPolicy, "baseDelayMs" | "maxDelayMs" | "jitterRatio">): BackoffFn =>
-  (attempt, retryAfterMs) => {
-    const raw = retryAfterMs ?? policy.baseDelayMs * 2 ** (attempt - 1)
-    const clamped = Math.min(Math.max(raw, 0), policy.maxDelayMs)
-    if (policy.jitterRatio <= 0) {
-      return clamped
-    }
-    const span = clamped * policy.jitterRatio
-    const seed = (attempt * 2654435761 + (retryAfterMs ?? 0)) % 1000
-    const jitter = (seed / 1000) * 2 * span - span
-    const floor = policy.baseDelayMs > 0 ? 1 : 0
-    return Math.round(Math.min(Math.max(clamped + jitter, floor), policy.maxDelayMs))
+export const createExponentialBackoff = (
+  policy: Pick<RetryPolicy, "baseDelayMs" | "maxDelayMs" | "jitterRatio">,
+  random: RandomSource = Math.random,
+): BackoffFn =>
+(attempt, retryAfterMs) => {
+  const raw = retryAfterMs ?? policy.baseDelayMs * 2 ** (attempt - 1)
+  const clamped = Math.min(Math.max(raw, 0), policy.maxDelayMs)
+  if (policy.jitterRatio <= 0) {
+    return clamped
   }
+  const span = clamped * policy.jitterRatio
+  const jitter = (random() * 2 - 1) * span
+  const floor = policy.baseDelayMs > 0 ? 1 : 0
+  return Math.round(Math.min(Math.max(clamped + jitter, floor), policy.maxDelayMs))
+}
 
 /** Statuses worth another attempt: rate limiting and upstream faults. */
 export const isTransientStatus = (status: number): boolean => status === 429 || status >= 500
