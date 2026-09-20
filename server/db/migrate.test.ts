@@ -346,10 +346,11 @@ Deno.test("the SQLite migrator is idempotent across two runs", async () => {
 
   assertEquals(second, { applied: [], skipped: ["0001_one"] })
   // `createHistoryTable` runs every time and is idempotent by `IF NOT EXISTS`; the
-  // migration itself and its `BEGIN`/`COMMIT` are what must not run again.
+  // migration itself and its `BEGIN`/`COMMIT` are what must not run again. The table
+  // name is quoted, which is what the statement's own text shows.
   assertEquals(statements.slice(before), [
     "\n" +
-    "      CREATE TABLE IF NOT EXISTS migrations\n" +
+    '      CREATE TABLE IF NOT EXISTS "migrations"\n' +
     "      (\n" +
     "        id         INTEGER PRIMARY KEY AUTOINCREMENT,\n" +
     "        name       TEXT NOT NULL UNIQUE,\n" +
