@@ -244,14 +244,18 @@ function sanitizeValue(value: string): string | undefined {
  * helper covers: a CR or LF that survives ends the content line and lets the
  * rest of the address become a property of its own
  * (`jane\r\nX-INJECTED:1@example.com` yields a real `X-INJECTED` property), and
- * a comma would turn one ATTENDEE into two addresses.
+ * a comma would turn one ATTENDEE into two addresses — rejected outright,
+ * since there is no escaping that could keep it as one.
  *
- * @throws {TypeError} when nothing usable survives.
+ * @throws {TypeError} when nothing usable survives, or the address contains a comma.
  */
 function addressValue(address: IcsAddress, property: string): string {
   const value = sanitizeValue(address.email)
   if (value === undefined) {
     throw new TypeError(`${property} requires a non-empty email address`)
+  }
+  if (value.includes(",")) {
+    throw new TypeError(`${property} email address must not contain a comma: ${value}`)
   }
   return value
 }
@@ -340,7 +344,16 @@ export function buildVEventLines(event: IcsEvent, dtstamp: Date, method: IcsMeth
 
   if (event.description) lines.push(`DESCRIPTION:${icsEscape(event.description)}`)
   if (event.location) lines.push(`LOCATION:${icsEscape(event.location)}`)
-  if (event.url) lines.push(`URL:${icsEscape(event.url)}`)
+  if (event.url) {
+    // RFC 5545 §3.8.4.6 types `URL` as a URI (§3.3.13), which has no escaping
+    // of its own — a `,` or `;` in a query string is not special here, unlike
+    // in a TEXT value. `icsEscape` would corrupt the link by adding backslashes
+    // the client is not expecting. Only control characters need stripping: the
+    // value position is never folded on its own line breaks (see
+    // {@link sanitizeValue}), so a surviving CR or LF would end the line early.
+    const url = sanitizeValue(event.url)
+    if (url !== undefined) lines.push(`URL:${url}`)
+  }
   if (event.organizer) lines.push(organizerLine(event.organizer))
   for (const attendee of event.attendees ?? []) lines.push(attendeeLine(attendee))
   lines.push(

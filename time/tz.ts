@@ -14,8 +14,14 @@
  * Every function takes an explicit IANA zone. Nothing here reads the host `TZ`,
  * so results are identical on every machine and in every CI container.
  *
- * Locale comes for free: the formatters are `Intl`-based, so the only thing
- * that pins a language is the hard-coded `"en-GB"` tag below.
+ * Locale comes for free for display text: the formatters are `Intl`-based, so
+ * the only thing that pins a language today is the hard-coded `"en-GB"` tag
+ * on {@link zonedFormatter}. Two other formatters carry their own, separate
+ * `"en-GB"` — {@link offsetFormatter} and {@link canonicalWallClockFormatter}
+ * — and theirs must never change to whatever `zonedFormatter`'s becomes:
+ * `zonedDateTime`'s correctness depends on reading `Intl`'s output back as
+ * data, not on displaying it, and only a formatter no caller can reach stays
+ * safe to parse. See {@link CANONICAL_LOCALE}.
  *
  * Out of scope: date parsing, durations, recurring rules, `Date` arithmetic in
  * the host zone, and anything that needs sub-minute offset precision.
@@ -54,7 +60,6 @@ const optionSets = {
   },
   isoDate: { year: "numeric", month: "2-digit", day: "2-digit" },
   shortWeekday: { weekday: "short" },
-  offset: { timeZoneName: "shortOffset" },
 } as const satisfies Record<string, Intl.DateTimeFormatOptions>
 
 type OptionSetName = keyof typeof optionSets
@@ -244,18 +249,62 @@ export function hhmmInTz(instant: Date, tz: string): string {
  * Both rules compare local date-times as `YYYY-MM-DD` + `HH:MM` strings, which
  * order identically to the values they denote precisely because the format is
  * fixed-width and zero-padded — so `time` is padded before use.
+ *
+ * `date` must be exactly `"YYYY-MM-DD"` and `time` exactly `"HH:MM"` —
+ * zero-padded, no seconds, no surrounding whitespace — or the call throws
+ * naming the format, not the zone: a shape mistake and an impossible date
+ * fail for different reasons and the message says which one happened.
+ * `date` and `time` must also name a wall clock that actually occurs on the
+ * Gregorian calendar: `"2026-02-30"`, `"2026-13-01"` and `"25:00"` all throw,
+ * as does a year outside 100–9999 (`Date.UTC` folds a two-digit year like
+ * `99` into 1999 rather than rejecting it). A zone whose historical offset is
+ * not aligned to a whole minute — `Africa/Monrovia` before 1972, for
+ * example — also throws: no candidate below rounds back to the exact
+ * requested wall clock, and this module answers at minute resolution or not
+ * at all rather than up to a minute wrong.
  */
 export function zonedDateTime(date: string, time: string, tz: string): Date {
+  // Checked before any parsing so a shape mistake is never mistaken for one
+  // of the other two failure modes below: `"2026-6-15"` (not zero-padded),
+  // `"12:00:30"` (seconds) and `"12:00 "` (trailing space) all reach
+  // `Date.UTC` fine and denote a real calendar date, so neither the
+  // impossible-date check nor the minute-resolution check would catch them —
+  // they would instead fail the wall-clock string comparison later and blame
+  // the zone's historical offset for what is actually a format problem.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
+    throw new RangeError(
+      `Expected date as "YYYY-MM-DD" and time as "HH:MM", got ${JSON.stringify({ date, time })}`,
+    )
+  }
+
   const [year, month, day] = date.split("-").map(Number)
   const [hour, minute] = time.split(":").map(Number)
   const naiveUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0)
 
-  // `Date.UTC` is permissive — `"2026-13-45"` rolls over into 2027 — so a
-  // non-finite result is the only signal that the input was not a date and time
-  // at all. Rejecting it here is what keeps `Infinity` from escaping as a
-  // `Date` and the comparison below from being made against garbage.
+  // `Date.UTC` is permissive — `"9999-99-99"` rolls over — so a non-finite
+  // result is the only remaining signal that the numbers themselves are out
+  // of any representable range. Rejecting it here is what keeps `Infinity`
+  // from escaping as a `Date` and the comparison below from being made
+  // against garbage.
   if (!Number.isFinite(naiveUtc)) {
     throw new RangeError(`Not a date and time: ${JSON.stringify({ date, time, tz })}`)
+  }
+
+  // `Date.UTC` is also permissive about a real-looking but impossible date: it
+  // rolls "2026-02-30" into 2 March and "25:00" into 01:00 the next day rather
+  // than rejecting either, and folds a two-digit year like `99` into 1999.
+  // Reading the parts back off the UTC instant it produced and comparing them
+  // against what was asked for is what turns that silent rollover into a
+  // rejection.
+  const probe = new Date(naiveUtc)
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() !== month - 1 ||
+    probe.getUTCDate() !== day ||
+    probe.getUTCHours() !== hour ||
+    probe.getUTCMinutes() !== minute
+  ) {
+    throw new RangeError(`Not a real date and time: ${JSON.stringify({ date, time })}`)
   }
 
   // `naive - offset` for every offset the zone uses near `naive`, deduplicated:
@@ -272,8 +321,11 @@ export function zonedDateTime(date: string, time: string, tz: string): Date {
     candidates.push(new Date(naiveUtc - offsetMs))
   }
 
-  const wallClock = (instant: Date): string =>
-    `${isoDateInTz(instant, tz)} ${hhmmInTz(instant, tz)}`
+  // Not `isoDateInTz` + `hhmmInTz`: those are built on `zonedFormatter`, the
+  // code path the display formatters use, and a locale parameter added there
+  // later must not change which instant a booking resolves to. See
+  // {@link CANONICAL_LOCALE}.
+  const wallClock = (instant: Date): string => canonicalWallClock(instant, tz)
 
   const requested = `${date} ${time.padStart(5, "0")}`
 
@@ -285,12 +337,53 @@ export function zonedDateTime(date: string, time: string, tz: string): Date {
     .reduce((earliest, candidate) => Math.min(earliest, candidate.getTime()), Infinity)
 
   if (earliestMs === Infinity) {
-    // Unreachable for a valid zone: some candidate always lands at or after the
-    // requested wall clock. Kept as a hard failure rather than an invalid date.
-    throw new RangeError(`No instant reads as ${requested} in ${tz}`)
+    // Reachable, not a bug on its own: a handful of zones carry a historical
+    // offset with a fractional minute (Africa/Monrovia's LMT was -00:44:30),
+    // and this module is minute resolution only (see the README). No
+    // candidate then rounds back to exactly the requested wall clock, so the
+    // request is rejected rather than answered up to a minute wrong.
+    throw new RangeError(
+      `No instant reads as ${requested} in ${tz} at minute resolution ` +
+        `(the zone's historical offset here may not be minute-aligned)`,
+    )
   }
 
   return new Date(earliestMs)
+}
+
+/**
+ * Locale this module uses for computation that must never see a caller's or
+ * a future display parameter's locale: reading the numeric UTC offset, and
+ * reading the wall clock `zonedDateTime` compares candidates against. Both
+ * jobs read `Intl`-formatted text and turn it back into data — an offset
+ * matched from `"GMT±H:MM"`, a wall clock compared as ASCII digits — and
+ * `Intl` renders both differently per locale: `fr-FR` renders the
+ * `Asia/Kolkata` offset as `"UTC+5:30"` and `ar-EG` with Arabic-indic digits
+ * (`"غرينتش+٥:٣٠"`) instead of `"GMT+5:30"`, and the same digit substitution
+ * would apply to a wall clock's year, month, day, hour and minute. An
+ * unparsed offset silently becomes 0 (see below); an unparsed wall clock
+ * fails every comparison and either raises the wrong error or, worse,
+ * resolves to the wrong instant without one. Both formatters below are kept
+ * outside {@link optionSets} and {@link zonedFormatter} — the code path the
+ * display formatters (`formatDateTimeLong` and friends) use — so a locale
+ * parameter added there later cannot reach either one by sharing a code
+ * path; changing this constant is the only way to change what they read.
+ */
+const CANONICAL_LOCALE = "en-GB"
+
+const offsetFormatterCache = new Map<string, Intl.DateTimeFormat>()
+
+/** A formatter that reads `tz`'s UTC offset text, always in {@link CANONICAL_LOCALE}. */
+function offsetFormatter(tz: string): Intl.DateTimeFormat {
+  const cached = offsetFormatterCache.get(tz)
+  if (cached) return cached
+
+  const formatter = new Intl.DateTimeFormat(CANONICAL_LOCALE, {
+    timeZone: tz,
+    timeZoneName: "shortOffset",
+  })
+  offsetFormatterCache.set(tz, formatter)
+  return formatter
 }
 
 /**
@@ -301,12 +394,14 @@ export function zonedDateTime(date: string, time: string, tz: string): Date {
  * UTC, `Atlantic/Reykjavik` and every `GMT+x` zone's own baseline use. An
  * unmatched name is treated as 0 rather than throwing: the name is ICU's, so a
  * future rename should degrade to "no offset" instead of breaking every caller.
+ * This reads {@link offsetFormatter}, pinned to {@link CANONICAL_LOCALE}, and
+ * nothing else — see that formatter's doc for why.
  *
  * Minute resolution only — historical LMT offsets carry seconds, which no
  * scheduling use case here needs.
  */
 export function tzOffsetMinutes(instant: Date, tz: string): number {
-  const parts = zonedFormatter("offset", tz).formatToParts(instant)
+  const parts = offsetFormatter(tz).formatToParts(instant)
 
   const name = parts.find((part) => part.type === "timeZoneName")?.value ?? "GMT"
   const match = name.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/)
@@ -316,6 +411,53 @@ export function tzOffsetMinutes(instant: Date, tz: string): number {
   const hours = parseInt(match[2], 10)
   const minutes = parseInt(match[3] ?? "0", 10)
   return sign * (hours * 60 + minutes)
+}
+
+const canonicalWallClockFormatterCache = new Map<string, Intl.DateTimeFormat>()
+
+/**
+ * A formatter that reads `tz`'s wall clock — year through minute — always in
+ * {@link CANONICAL_LOCALE}. Separate from {@link zonedFormatter}'s `isoDate`
+ * and `timeOfDay` option sets, which back the public `isoDateInTz` and
+ * `hhmmInTz`: those exist to be displayed and may one day take a caller's
+ * locale, and `zonedDateTime`'s own candidate screening must not share that
+ * fate. One formatter call gets every field `canonicalWallClock` needs,
+ * rather than the two `isoDateInTz` + `hhmmInTz` would cost.
+ */
+function canonicalWallClockFormatter(tz: string): Intl.DateTimeFormat {
+  const cached = canonicalWallClockFormatterCache.get(tz)
+  if (cached) return cached
+
+  const formatter = new Intl.DateTimeFormat(CANONICAL_LOCALE, {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  })
+  canonicalWallClockFormatterCache.set(tz, formatter)
+  return formatter
+}
+
+/**
+ * `tz`'s wall clock at `instant`, as `"YYYY-MM-DD HH:MM"` — the form
+ * `zonedDateTime` compares its candidates against. Reads
+ * {@link canonicalWallClockFormatter} and nothing else: not `isoDateInTz`,
+ * not `hhmmInTz`, not `zonedFormatter`, so nothing about how this module
+ * might one day format a wall clock for display can change what a candidate
+ * is screened against.
+ */
+function canonicalWallClock(instant: Date, tz: string): string {
+  const parts = canonicalWallClockFormatter(tz).formatToParts(instant)
+
+  const year = requiredPart(parts, "year")
+  const month = requiredPart(parts, "month")
+  const day = requiredPart(parts, "day")
+  const hour = requiredPart(parts, "hour")
+  const minute = requiredPart(parts, "minute")
+  return `${year}-${month}-${day} ${hour}:${minute}`
 }
 
 /** Abbreviated weekday name in `tz`, uppercased: `"FRI"`. Noon anchor, see {@link addDays}. */

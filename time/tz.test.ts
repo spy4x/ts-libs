@@ -165,6 +165,48 @@ describe("zonedDateTime", () => {
     expect(() => zonedDateTime("", "", BERLIN)).toThrow(RangeError)
   })
 
+  it("rejects 30 February instead of rolling it into 2 March", () => {
+    expect(() => zonedDateTime("2026-02-30", "12:00", BERLIN)).toThrow(RangeError)
+  })
+
+  it("rejects month 13 instead of rolling it into next January", () => {
+    expect(() => zonedDateTime("2026-13-01", "12:00", BERLIN)).toThrow(RangeError)
+  })
+
+  it("rejects hour 25 instead of rolling it into the next day", () => {
+    expect(() => zonedDateTime("2026-06-15", "25:00", BERLIN)).toThrow(RangeError)
+  })
+
+  it("rejects a two-digit year instead of folding it into 19xx", () => {
+    // `Date.UTC(99, ...)` silently means 1999, not year 99.
+    expect(() => zonedDateTime("0099-06-15", "12:00", BERLIN)).toThrow(RangeError)
+  })
+
+  it("rejects a historical wall clock whose offset is not minute-aligned", () => {
+    // Africa/Monrovia's LMT offset was -00:44:30 until 1972: no minute-aligned
+    // candidate reads back as the requested wall clock.
+    expect(() => zonedDateTime("1971-06-15", "12:00", "Africa/Monrovia")).toThrow(
+      /minute resolution/,
+    )
+  })
+
+  it("rejects a non-zero-padded date with a format message, not a zone one", () => {
+    // "2026-6-15" denotes a real, ordinary date — the offset math never runs,
+    // because the shape check rejects it first.
+    expect(() => zonedDateTime("2026-6-15", "12:00", BERLIN)).toThrow(/YYYY-MM-DD/)
+    expect(() => zonedDateTime("2026-6-15", "12:00", BERLIN)).not.toThrow(/minute resolution/)
+  })
+
+  it("rejects a time with seconds with a format message, not a zone one", () => {
+    expect(() => zonedDateTime("2026-06-15", "12:00:30", BERLIN)).toThrow(/HH:MM/)
+    expect(() => zonedDateTime("2026-06-15", "12:00:30", BERLIN)).not.toThrow(/minute resolution/)
+  })
+
+  it("rejects a time with surrounding whitespace with a format message, not a zone one", () => {
+    expect(() => zonedDateTime("2026-06-15", "12:00 ", BERLIN)).toThrow(/HH:MM/)
+    expect(() => zonedDateTime(" 2026-06-15", "12:00", BERLIN)).toThrow(/YYYY-MM-DD/)
+  })
+
   it("shifts a gap that falls at midnight into the same day", () => {
     // America/Santiago springs forward at 2026-09-06 00:00 local, so midnight
     // itself does not exist and the conversion shifts to 01:00 — still the day
@@ -179,6 +221,80 @@ describe("zonedDateTime", () => {
     // Identical assertion under any TZ: the zone is always explicit.
     const instant = zonedDateTime("2026-03-29", "12:00", "Pacific/Chatham")
     expect(instant.toISOString()).toBe("2026-03-28T22:15:00.000Z")
+  })
+
+  it("gives the same moment for a half-hour zone regardless of locale", () => {
+    // ICU's offset text for Asia/Kolkata depends on locale: "en-GB" renders
+    // "GMT+5:30", "fr-FR" renders "UTC+5:30", "ar-EG" renders Arabic-indic
+    // digits — neither of the latter two matches tzOffsetMinutes' "GMT±H:MM"
+    // pattern. Confirmed against the real formatters, not assumed.
+    const instant = utc("2026-01-15T12:00:00Z")
+    const offsetText = (locale: string) =>
+      new Intl.DateTimeFormat(locale, { timeZone: "Asia/Kolkata", timeZoneName: "shortOffset" })
+        .formatToParts(instant)
+        .find((part) => part.type === "timeZoneName")!.value
+
+    expect(offsetText("en-GB")).toBe("GMT+5:30")
+    expect(offsetText("fr-FR")).not.toBe(offsetText("en-GB"))
+    expect(offsetText("ar-EG")).not.toBe(offsetText("en-GB"))
+
+    // tzOffsetMinutes and zonedDateTime never read a caller-supplied locale,
+    // so the hazard above cannot reach them: the offset is correct regardless.
+    expect(tzOffsetMinutes(instant, "Asia/Kolkata")).toBe(330)
+    expect(zonedDateTime("2026-01-15", "17:30", "Asia/Kolkata").toISOString()).toBe(
+      "2026-01-15T12:00:00.000Z",
+    )
+  })
+
+  it("resolves candidates correctly even if a display-locale parameter reached isoDateInTz/hhmmInTz", () => {
+    // zonedDateTime screens candidates with its own formatter, one call that
+    // reads year through minute together (six fields, including hourCycle).
+    // isoDateInTz and hhmmInTz — built on zonedFormatter, the code path the
+    // display formatters use — each read a narrower slice (three fields: date
+    // only, or time only). That shape difference is what this intercepts:
+    // it forces "ar-EG" onto any three-field call, simulating a locale
+    // parameter added to the display side, and leaves the six-field call
+    // zonedDateTime actually depends on untouched. Reverting zonedDateTime to
+    // read its wall clock through isoDateInTz/hhmmInTz (as it once did) makes
+    // this go red, because ar-EG renders Arabic-indic digits that can never
+    // equal the plain-ASCII `requested` string.
+    //
+    // Europe/Madrid and Pacific/Auckland — never passed to isoDateInTz or
+    // hhmmInTz anywhere else in this file — so zonedFormatter's per-zone
+    // cache is empty for them here and the interception below cannot be
+    // bypassed by a formatter an earlier test already built.
+    const RealDateTimeFormat = Intl.DateTimeFormat
+
+    function isThreeFieldDateOrTimeShape(options: Intl.DateTimeFormatOptions | undefined) {
+      if (!options) return false
+      const hasDate = "year" in options && "month" in options && "day" in options
+      const hasTime = "hour" in options && "minute" in options
+      return (hasDate && !hasTime) || (hasTime && !hasDate)
+    }
+
+    function FakeDateTimeFormat(
+      locale?: string | string[],
+      options?: Intl.DateTimeFormatOptions,
+    ) {
+      return new RealDateTimeFormat(
+        isThreeFieldDateOrTimeShape(options) ? "ar-EG" : locale,
+        options,
+      )
+    }
+
+    Intl.DateTimeFormat = FakeDateTimeFormat as unknown as typeof Intl.DateTimeFormat
+    try {
+      // Europe/Madrid's spring-forward gap — same rule and instant as Berlin's.
+      expect(zonedDateTime("2026-03-29", "02:30", "Europe/Madrid").toISOString()).toBe(
+        "2026-03-29T01:30:00.000Z",
+      )
+      // New Zealand's own spring-forward gap — an unrelated hemisphere and rule.
+      expect(zonedDateTime("2026-09-27", "02:30", "Pacific/Auckland").toISOString()).toBe(
+        "2026-09-26T14:30:00.000Z",
+      )
+    } finally {
+      Intl.DateTimeFormat = RealDateTimeFormat
+    }
   })
 })
 

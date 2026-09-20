@@ -275,14 +275,37 @@ Deno.test("generateIcs escapes TEXT properties and folds nothing into a new prop
     summary: "Standup; ops, weekly",
     description: `Agenda${CRLF}Line two; with, punctuation`,
     location: "Room 1, Floor 2; north wing",
-    url: "https://meet.example.com/room/1",
   })
   const flat = unfoldLines(generateIcs(event, makeOptions()))
 
   assertEquals(flat.includes(`SUMMARY:Standup\\; ops\\, weekly${CRLF}`), true)
   assertEquals(flat.includes(`DESCRIPTION:Agenda\\nLine two\\; with\\, punctuation${CRLF}`), true)
   assertEquals(flat.includes(`LOCATION:Room 1\\, Floor 2\\; north wing${CRLF}`), true)
-  assertEquals(flat.includes(`URL:https://meet.example.com/room/1${CRLF}`), true)
+})
+
+Deno.test("generateIcs writes URL as a URI, unescaped, unlike the TEXT properties", () => {
+  // RFC 5545 §3.8.4.6 types URL as a URI (§3.3.13), which has no escaping of
+  // its own: a "," or ";" here is ordinary URI syntax, not a delimiter to
+  // guard, so backslash-escaping it (as icsEscape does for TEXT) would
+  // corrupt the link.
+  const flat = unfoldLines(
+    generateIcs(makeEvent({ url: "https://example.com/a?x=1,2;3&b=c" }), makeOptions()),
+  )
+  assertEquals(flat.includes(`URL:https://example.com/a?x=1,2;3&b=c${CRLF}`), true)
+  assertEquals(flat.includes("\\,"), false)
+  assertEquals(flat.includes("\\;"), false)
+})
+
+Deno.test("generateIcs strips a control character from the URL, not just escapes it", () => {
+  const document = generateIcs(
+    makeEvent({ url: "https://example.com/a\r\nX-INJECTED:1" }),
+    makeOptions(),
+  )
+  assertEquals(document.includes("\rX-INJECTED"), false)
+  assertEquals(document.includes("\nX-INJECTED"), false)
+  for (const line of physicalLines(document)) {
+    assertEquals(line.startsWith("X-INJECTED"), false, "injected an X-INJECTED property")
+  }
 })
 
 Deno.test("generateIcs omits optional TEXT properties that were not supplied", () => {
@@ -571,6 +594,30 @@ Deno.test("generateIcs rejects missing required values", () => {
     () => generateIcs(makeEvent({ attendees: [{ email: "" }] }), makeOptions()),
     TypeError,
     "ATTENDEE",
+  )
+})
+
+Deno.test("generateIcs rejects a comma in an attendee or organizer email address", () => {
+  // A raw comma in the mailto: value position would turn one ATTENDEE into
+  // two addresses for a lenient parser; there is no escaping that keeps it as
+  // one, so it is rejected rather than emitted as-is.
+  assertThrows(
+    () =>
+      generateIcs(
+        makeEvent({ attendees: [{ email: "a@example.com,b@example.com" }] }),
+        makeOptions(),
+      ),
+    TypeError,
+    "comma",
+  )
+  assertThrows(
+    () =>
+      generateIcs(
+        makeEvent({ organizer: { email: "a@example.com,b@example.com" } }),
+        makeOptions(),
+      ),
+    TypeError,
+    "comma",
   )
 })
 
