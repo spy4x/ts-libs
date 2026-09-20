@@ -19,7 +19,7 @@ Three subpaths, split by _where the code can run_ — the split the source repo 
 762-LOC `helpers.ts` mixed `globalThis.atob`, `self.location` and PBKDF2 and was imported by both
 the browser and the API.
 
-### `.` → `universal.ts` (11 modules, 863 LOC)
+### `.` → `universal.ts` (11 modules, 906 LOC)
 
 Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched are `Date`, `Intl`,
 `Math`, `TextEncoder`, and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
@@ -55,6 +55,19 @@ of throwing. All three are deliberate: a chart's tick target and domain both com
 layout math that can transiently be bad, and a chart needs an empty or default-shaped axis to keep
 rendering, not an exception that takes the rest of the component down. `niceStep`/`ticks` in
 `axis.test.ts` pin all three against values taken from running the reference.
+
+One case has no reference to copy: `ticksForStep`'s loop used to run `steps + 1` times while
+`MAX_TICKS` capped only the output array, so `ticks(1_000_000, 2_000_000, 1e25)` never returned — an
+absurd tick target makes the step many orders of magnitude smaller than the float precision at that
+range's magnitude, so the output stops growing almost immediately while the loop still has `1e25`
+iterations ahead of it. `preact-components/charts/scales.ts` has the exact same defect and does not
+return either, so this is not a case of matching the reference. The fix bounds the loop itself at
+`Math.min(steps + 1, MAX_TICKS)`, not just the output, and the decision for what an absurd target
+should produce is a chart's, not the reference's: return whichever ticks distinguish themselves
+within `MAX_TICKS` iterations — as few as one — rather than freeze the page. `MAX_TICKS` is exported
+so `axis.test.ts` can assert against it, and a regression tripwire inside the loop throws fast if the
+bound is ever weakened back to plain `steps + 1`, so a future revert of the fix fails a test instead
+of hanging the suite.
 
 ### `./browser` → `browser.ts` (1 module, 151 LOC)
 
