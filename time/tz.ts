@@ -247,7 +247,11 @@ export function hhmmInTz(instant: Date, tz: string): string {
  * `date` and `time` must name a wall clock that actually occurs on the
  * Gregorian calendar: `"2026-02-30"`, `"2026-13-01"` and `"25:00"` all throw,
  * as does a year outside 100–9999 (`Date.UTC` folds a two-digit year like
- * `99` into 1999 rather than rejecting it).
+ * `99` into 1999 rather than rejecting it). A zone whose historical offset is
+ * not aligned to a whole minute — `Africa/Monrovia` before 1972, for
+ * example — also throws: no candidate below rounds back to the exact
+ * requested wall clock, and this module answers at minute resolution or not
+ * at all rather than up to a minute wrong.
  */
 export function zonedDateTime(date: string, time: string, tz: string): Date {
   const [year, month, day] = date.split("-").map(Number)
@@ -306,9 +310,15 @@ export function zonedDateTime(date: string, time: string, tz: string): Date {
     .reduce((earliest, candidate) => Math.min(earliest, candidate.getTime()), Infinity)
 
   if (earliestMs === Infinity) {
-    // Unreachable for a valid zone: some candidate always lands at or after the
-    // requested wall clock. Kept as a hard failure rather than an invalid date.
-    throw new RangeError(`No instant reads as ${requested} in ${tz}`)
+    // Reachable, not a bug on its own: a handful of zones carry a historical
+    // offset with a fractional minute (Africa/Monrovia's LMT was -00:44:30),
+    // and this module is minute resolution only (see the README). No
+    // candidate then rounds back to exactly the requested wall clock, so the
+    // request is rejected rather than answered up to a minute wrong.
+    throw new RangeError(
+      `No instant reads as ${requested} in ${tz} at minute resolution ` +
+        `(the zone's historical offset here may not be minute-aligned)`,
+    )
   }
 
   return new Date(earliestMs)

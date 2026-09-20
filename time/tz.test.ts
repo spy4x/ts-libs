@@ -182,6 +182,14 @@ describe("zonedDateTime", () => {
     expect(() => zonedDateTime("0099-06-15", "12:00", BERLIN)).toThrow(RangeError)
   })
 
+  it("rejects a historical wall clock whose offset is not minute-aligned", () => {
+    // Africa/Monrovia's LMT offset was -00:44:30 until 1972: no minute-aligned
+    // candidate reads back as the requested wall clock.
+    expect(() => zonedDateTime("1971-06-15", "12:00", "Africa/Monrovia")).toThrow(
+      /minute resolution/,
+    )
+  })
+
   it("shifts a gap that falls at midnight into the same day", () => {
     // America/Santiago springs forward at 2026-09-06 00:00 local, so midnight
     // itself does not exist and the conversion shifts to 01:00 — still the day
