@@ -95,11 +95,13 @@ What each fixture pins:
 | `dkimpy-unsigned-trailing-tag`                              | **valid**: its `x=` tag after `b=` is inside the signed bytes                 |
 
 Plus the five `openssl-*` vectors described below, which the dkimpy set does not
-reach: bodies beginning with SP or HTAB, and a `simple` signature made over a
-lower-case field name. Twenty-six `*.msg` in total, every one expected valid:
-eighteen built with dkimpy 1.1.8's canonicalizers plus OpenSSL, five from the
-OpenSSL-only script below, and three with a standards-document provenance (RFC
-6376's example message in LF and CRLF form, RFC 8463 Appendix A.3).
+reach (bodies beginning with SP or HTAB, and a `simple` signature made over a
+lower-case field name) and the three `openssl-utf8-*` vectors, which are the only
+ones combining a non-ASCII body with an `l=` bound. Twenty-nine `*.msg` in total,
+every one expected valid: eighteen built with dkimpy 1.1.8's canonicalizers plus
+OpenSSL, eight from the OpenSSL-only scripts below, and three with a
+standards-document provenance (RFC 6376's example message in LF and CRLF form,
+RFC 8463 Appendix A.3).
 
 ## Why `dkimpy-unsigned-trailing-tag` is valid
 
@@ -182,3 +184,49 @@ openssl dgst -sha256 -verify pub.pem -signature sig.bin input.bin
 The `*.key` beside each is `v=DKIM1; k=rsa; p=` plus the base64 of
 `openssl rsa -in key.pem -RSAPublicKey_out -outform DER` — the bare PKCS#1 shape
 §3.6.1 specifies.
+
+## `openssl-utf8-*.msg` — `l=` counted in octets over a non-ASCII body
+
+Three vectors signed by the same **OpenSSL-only** approach, differing in one
+respect: the body carries a multi-octet character before the `l=` bound, so the
+bound falls at a different place in octets than in UTF-16 code units. They exist
+because a verifier that applies `l=` with `String.prototype.slice` — code units —
+hashes a byte range the signer never signed, and rejects valid mail.
+
+| Fixture                 | `l=` | Canonical body | Octets hashed (the signer's range) | Digest of that range                           |
+| ----------------------- | ---- | -------------- | ---------------------------------- | ---------------------------------------------- |
+| `openssl-utf8-l4`       | 4    | `héllo\r\n`    | `h\xc3\xa9l` (3 code units)        | `nCjUmslET0eKzs9FV7zzkWhR/r2ik2CJIgWSlEPYf6A=` |
+| `openssl-utf8-l6`       | 6    | `heloéé\r\n`   | `helo\xc3\xa9`                     | `sZ0NsYvV5Rbv3pELbhdaYgWpIl+a0NmYlxJvzRwfLhc=` |
+| `openssl-utf8-split-l2` | 2    | `h€llo\r\n`    | `h\xe2`                            | `BnwhlmstcOW74w+XBvVGZvPGRVnBN23k4FCq43WUwBw=` |
+
+The same bounds read as UTF-16 code units give different ranges — that is the
+defect these pin, and the difference is always in the direction of _more_ octets
+hashed, never fewer, so it is a false rejection rather than an acceptance gap:
+
+| Fixture           | Code-unit slice | Octets it hashes | Digest it produces                             |
+| ----------------- | --------------- | ---------------- | ---------------------------------------------- |
+| `openssl-utf8-l4` | `héll`          | 5                | `V/OrDY5eigJU1Zmgo+zLEbepPnNVUwupIRgyjsfEE4g=` |
+| `openssl-utf8-l6` | `heloéé`        | 8                | `yBKAQFKuFs2/qleNmNMoYTEymlYIAmjf7a4iVC7HQPE=` |
+
+`openssl-utf8-split-l2` is the decisive one for the _other_ hazard: the bound stops
+inside the three-octet euro sign, so a verifier that decodes the sliced bytes back
+to a string hashes `h\xef\xbf\xbd` (U+FFFD, `4b5JJzu7A+6PSXw3/SguYfWFYGMPbuteZ+mHdZDLaxM=`)
+rather than the two octets the signer declared. Both alternatives are recorded as
+inequalities in the tests.
+
+The recipe is the `openssl-*.msg` script above with no change other than the body,
+the `l=` tag and the truncation:
+
+```python
+body = "héllo\r\n".encode()          # or "heloéé\r\n", or "h€llo\r\n"
+l = 4                                # or 6, or 2
+canonical = canon_body(body, mode)
+bh = base64.b64encode(hashlib.sha256(canonical[:l]).digest()).decode()
+stub = (f"v=1; a=rsa-sha256; c={mode}/{mode}; d=example.com; s=sel; t=1700000000; "
+        f"h=from:to:subject; bh={bh}; l={l}; b=").encode()
+```
+
+`canonical[:l]` is a byte slice, which is the point: the signer hashes octets, and
+`openssl dgst -sha256 -verify` was run over the reconstructed input before each
+fixture was written. All three were produced with the same `key.pem`, so their
+`*.key` records are byte-identical.
