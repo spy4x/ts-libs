@@ -289,14 +289,19 @@ export async function validatePublicUrl(
  * not for IPv6: `--deny-net=fc00::/7` stops the process from starting at all
  * ("ipv6 addresses must be enclosed in square brackets") and `[fc00::]/7` is
  * rejected as a host, so an IPv6 range cannot be written down. Only single
- * bracketed addresses can, and `[::1]` is the one worth naming. Unique-local
- * and link-local IPv6 therefore have the classifier above as their only layer.
+ * bracketed addresses can — `[::1]` and `[::]` are the two worth naming — so
+ * unique-local and link-local IPv6 have the classifier above as their only layer.
  *
- * `0.0.0.0/8` is left out for a different reason: a denied range cannot be
- * listened on either, and `Deno.serve` binds the wildcard address by default, so
- * including it stops the application from starting its own server. Every address
- * here is one `isPublicAddress` also refuses, which `url-policy.test.ts` checks;
- * the other direction does not hold, and this list is the shorter of the two.
+ * **The gap it leaves.** `0.0.0.0` still reaches a service on the same machine,
+ * and it cannot be denied from here: a denied address cannot be listened on
+ * either, and `Deno.serve` binds the wildcard address by default, so
+ * `0.0.0.0/8` or `0.0.0.0/32` in this list stops the application from starting
+ * its own server. A process that never listens can add `0.0.0.0/32` to the flag
+ * itself and close it; one that serves cannot, and the README says so plainly.
+ *
+ * Every address here is one `isPublicAddress` also refuses, which
+ * `url-policy.test.ts` checks; the other direction does not hold, and this list
+ * is the shorter of the two.
  */
 export const DENY_NET_ADDRESSES: readonly string[] = [
   "10.0.0.0/8", // private (RFC 1918)
@@ -313,7 +318,11 @@ export const DENY_NET_ADDRESSES: readonly string[] = [
   "203.0.113.0/24", // documentation (TEST-NET-3)
   "224.0.0.0/4", // multicast
   "240.0.0.0/4", // reserved, including the broadcast address
-  "[::1]", // IPv6 loopback — the one IPv6 address the flag can express
+  // The two IPv6 addresses the flag can express. `[::]` is the IPv6 spelling of
+  // "this machine" and is safe to deny: unlike `0.0.0.0`, denying it does not
+  // stop `Deno.serve` binding its default address.
+  "[::1]", // IPv6 loopback
+  "[::]", // IPv6 unspecified — reaches local services when dialled
 ]
 
 /**

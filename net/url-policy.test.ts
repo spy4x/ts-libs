@@ -838,6 +838,7 @@ describe("DENY_NET_ADDRESSES", () => {
         "172.16.0.0/12",
         "192.168.0.0/16",
         "[::1]",
+        "[::]", // the IPv6 spelling of "this machine"
       ]
     ) {
       assertEquals(DENY_NET_ADDRESSES.includes(range), true, range)
@@ -845,12 +846,14 @@ describe("DENY_NET_ADDRESSES", () => {
   })
 
   it("leaves out what the runtime will not start with", () => {
-    // Both verified against Deno 2.9.7 by running a process with the flag:
-    // an IPv6 range is rejected as a host ("ipv6 addresses must be enclosed in
-    // square brackets"), and a denied 0.0.0.0/8 also stops `Deno.serve` from
-    // binding its default wildcard address, which stops the application dead.
+    // Both verified against Deno 2.9.7 by starting a process with the flag: an
+    // IPv6 range is rejected as a host ("ipv6 addresses must be enclosed in
+    // square brackets"), and denying 0.0.0.0 in any form also stops
+    // `Deno.serve` binding its default wildcard address, which stops the
+    // application dead. That is why `0.0.0.0` is the gap the README names and
+    // `[::]` is not: denying `[::]` leaves the default bind working.
     assertEquals(DENY_NET_ADDRESSES.filter((e) => e.includes(":") && e.includes("/")), [])
-    assertEquals(DENY_NET_ADDRESSES.includes("0.0.0.0/8"), false)
+    assertEquals(DENY_NET_ADDRESSES.filter((e) => e.startsWith("0.0.0.0")), [])
   })
 
   it("builds one flag with one entry per address", () => {

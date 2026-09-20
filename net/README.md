@@ -112,10 +112,11 @@ looked. This is DNS rebinding, it is a standard attack rather than a theoretical
 one, and no amount of care inside this module closes it: the platform `fetch`
 accepts a name, not the address that was checked.
 
-What does close it is the runtime. Deno applies `--deny-net` at connection time,
+The runtime closes most of it. Deno applies `--deny-net` at connection time,
 against the address the connection is actually going to, so a second answer
 pointing inside the network is refused by the process rather than by the guard.
-The list is exported so it does not have to be retyped:
+One spelling of "this machine" is left over, and it is named below. The list is
+exported so it does not have to be retyped:
 
 ```ts
 import { DENY_NET_ADDRESSES, denyNetFlag } from "@ts-libs/net/url-policy"
@@ -136,19 +137,29 @@ Verified on Deno 2.9.7, with a server listening on `127.0.0.1` in another
 process: without the flag the fetch returns the internal service's body, with it
 the fetch fails with `Requires net access to "127.0.0.1:<port>"`.
 
-Three things about this layer are worth knowing before you rely on it:
+Four things about this layer are worth knowing before you rely on it:
 
-- **It covers IPv4 ranges and one IPv6 address.** `--deny-net` takes a CIDR range
-  for IPv4, but not for IPv6: `--deny-net=fc00::/7` stops the process from
+- **`0.0.0.0` still reaches services on this machine.** With exactly the flag
+  above, `fetch("http://0.0.0.0:<port>/")` returns the body of a server
+  listening locally, so a name that re-resolves to `0.0.0.0` is not covered.
+  `0.0.0.0` cannot go in the list, because a denied address cannot be listened
+  on either and `Deno.serve` binds the wildcard address by default: adding
+  `0.0.0.0/32` makes the application fail to start with `NotCapable`. A process
+  that never listens — a worker, a CLI, a job — can append `0.0.0.0/32` to the
+  flag and close this too. One that serves has to live with it, or serve from a
+  different process than the one that fetches. Both halves measured on
+  Deno 2.9.7.
+- **It covers IPv4 ranges and two IPv6 addresses.** `--deny-net` takes a CIDR
+  range for IPv4, but not for IPv6: `--deny-net=fc00::/7` stops the process from
   starting (`ipv6 addresses must be enclosed in square brackets`), and
-  `[fc00::]/7` is not a host it accepts either. Only single addresses such as
-  `[::1]` can be written, so unique-local and link-local IPv6 have the guard
-  itself as their only layer.
-- **A denied range cannot be listened on either.** `0.0.0.0/8` is therefore not
-  in the list — denying it stops `Deno.serve` binding its default wildcard
-  address, and an application that cannot start tends to lose the whole flag. An
-  application that listens on `127.0.0.1` behind a proxy has to drop
-  `127.0.0.0/8` as well, and gives up loopback cover in exchange.
+  `[fc00::]/7` is not a host it accepts either. Only single addresses can be
+  written, which is why the list carries `[::1]` and `[::]` and nothing else in
+  that family — unique-local and link-local IPv6 have the guard itself as their
+  only layer. `[::]` is safe to deny: unlike `0.0.0.0`, it does not stop the
+  default bind.
+- **A denied range cannot be listened on either.** An application that listens
+  on `127.0.0.1` behind a proxy on the same host has to drop `127.0.0.0/8` from
+  the list, and gives up loopback cover in exchange.
 - **It is a second layer, not the first.** `validatePublicUrl` still has to run:
   the deny list says nothing about `javascript:` locations, credentials in a URL,
   or a name that resolves internally on the first lookup.
