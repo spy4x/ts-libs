@@ -51,6 +51,3 @@ export const ONE_WEEK_IN_MILLISECONDS = ONE_WEEK_IN_SECONDS * MILLISECONDS_IN_SE
 export const ONE_MONTH_IN_MILLISECONDS = ONE_MONTH_IN_SECONDS * MILLISECONDS_IN_SECOND
 /** One year (12 nominal months), in milliseconds. */
 export const ONE_YEAR_IN_MILLISECONDS = ONE_YEAR_IN_SECONDS * MILLISECONDS_IN_SECOND
-
-/** Minimum accepted password length. */
-export const MIN_PASSWORD_LENGTH = 12

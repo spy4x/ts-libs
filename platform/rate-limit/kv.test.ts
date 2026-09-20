@@ -241,9 +241,12 @@ describe("StoreRateLimiter parity with MemoryRateLimiter", () => {
   })
 
   it("hands the backend a TTL covering the newest event, not the oldest", async () => {
-    // Pins the derivation directly, through both branches: three accepted requests 150 ms apart
-    // inside a 1000 ms window, then rejections. An oldest-derived TTL writes 700 or 500 on the last
-    // two writes instead of 800, so the entry lapses while its newest event is still live.
+    // Three accepted requests 150 ms apart inside a 1000 ms window. Every write follows a push, so
+    // the pushed event is always the newest one in the bucket — an oldest-derived TTL would instead
+    // shrink as the bucket fills: 1000, 850, 700 on the three writes below. (A rejection would also
+    // exercise this arithmetic with `now` past the last push, but `StoreRateLimiter` no longer
+    // writes on rejection at all — see the write-count test in `memory.test.ts` — so only the
+    // accept path remains to pin the formula.)
     const writes: { events: number[]; ttlMs: number }[] = []
     let state: number[] = []
     const store: RateLimitStore = {
@@ -260,15 +263,14 @@ describe("StoreRateLimiter parity with MemoryRateLimiter", () => {
     }
     const limiter = createStoreLimiter(store, { windowMs: 1000, limit: 3, clock: () => T0 })
 
-    for (const at of [T0, T0 + 150, T0 + 300, T0 + 450, T0 + 500]) {
+    for (const at of [T0, T0 + 150, T0 + 300]) {
       await limiter.check("a", at)
     }
 
-    assertEquals(writes.length, 5)
+    assertEquals(writes.length, 3)
     assertEquals(writes[2]?.events, [T0, T0 + 150, T0 + 300])
+    // newest event is T0 + 300, checked at T0 + 300 → 1000. Oldest (T0) would give 700.
     assertEquals(writes[2]?.ttlMs, 1000)
-    // newest event is T0 + 300, checked at T0 + 500 → 800. Oldest (T0) would give 500.
-    assertEquals(writes.at(-1)?.ttlMs, 800)
   })
 
   it("keeps a stored entry past the oldest event's expiry while a newer one is live", async () => {

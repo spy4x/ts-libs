@@ -177,6 +177,7 @@ arktype                          2.2.3
 @std/path                        1.1.6
 @std/encoding                   1.0.11
 @std/crypto                      1.1.0
+@std/ulid                        1.0.0
 hono                            4.13.8
 postgres                         3.4.7
 ```

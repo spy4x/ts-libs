@@ -64,6 +64,22 @@ describe("makeStorage with a schema", () => {
     expect(storage.getItem("theme")).toBeNull()
   })
 
+  it("keeps the stored value when a later write is invalid, instead of erasing it", () => {
+    // A half-filled form submitting an invalid value must not cost the user their last-saved
+    // theme. Before the fix, `set`'s failure path deleted the key through the same `reject` a
+    // failed `get` uses — correct for a read, where the stored value itself is bad, but wrong for
+    // a write, where the value that failed was never persisted and the old one is still good.
+    const storage = memoryStorage()
+    const store = makeStorage(storage, "theme", { schema: themeSchema })
+    expect(store.set("dark")).toEqual({ status: "ok", value: "dark" })
+
+    const result = store.set("blue" as unknown as "light")
+
+    expect(result.status).toBe("invalid")
+    expect(store.get()).toEqual({ status: "ok", value: "dark" })
+    expect(storage.getItem("theme")).toBe(`"dark"`)
+  })
+
   it("describes the write failure through the validation envelope, not a bespoke map", () => {
     // `@ts-libs/validation` builds `description` from arktype's own issues.
     const store = makeStorage(memoryStorage(), "profile", { schema: profileSchema })

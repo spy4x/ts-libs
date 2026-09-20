@@ -306,9 +306,11 @@ export class StoreRateLimiter {
     if (events.length >= this.limit) {
       const oldest = events[0] as number
       const retryAfterMs = Math.max(0, oldest + this.windowMs - now)
-      // Keep the entry alive for every live event, newest included — a TTL taken from `oldest`
-      // would let the bucket lapse while newer events were still in the window.
-      await this.store.write(key, events, now, storeTtlMs(events, this.windowMs, now))
+      // No write here: a rejected request adds no event, so the entry the last accepted request
+      // wrote is already correct, and re-writing it would cost the shared store one round trip per
+      // rejected request — 100 requests at `limit: 2` measured 100 writes before this fix. The
+      // in-process `MemoryRateLimiter` above stores nothing for a rejected request either; this
+      // keeps the two limiters' write behaviour the same, not just their decisions.
       return {
         allowed: false,
         remaining: 0,

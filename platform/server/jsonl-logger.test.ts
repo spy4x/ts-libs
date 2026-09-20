@@ -80,6 +80,19 @@ describe("JsonlLogger", () => {
     ])
   })
 
+  it("appends through the filesystem port instead of reading the whole file back first", async () => {
+    // Before the fix, `append` read the existing file and wrote it back with one more line, so the
+    // cost of each append grew with the size of the log and a crash mid-write could lose every
+    // earlier line. A true append never reads the file at all.
+    const fs = fakeFs({ "/job.jsonl": `{"ts":"old","event":"previous"}\n` })
+    const logger = new JsonlLogger(fs, "/job.jsonl", fakeClock(TS))
+    await logger.append({ event: "next" })
+
+    expect(fs.calls.some((call) => call.op === "readText")).toBe(false)
+    expect(fs.calls.filter((call) => call.op === "appendText").length).toBe(1)
+    expect(fs.calls.some((call) => call.op === "writeText")).toBe(false)
+  })
+
   it("creates the log directory before the first write", async () => {
     const fs = fakeFs()
     await new JsonlLogger(fs, "/dir/sub/job.jsonl", fakeClock(TS)).append({ event: "x" })

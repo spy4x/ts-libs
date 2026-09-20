@@ -54,6 +54,9 @@
     "@std/path": "jsr:@std/path@1.1.6",
     "@std/encoding": "jsr:@std/encoding@1.0.11",
     "@std/crypto": "jsr:@std/crypto@1.1.0",
+    // `platform/tokens.ts`'s ULID generator (#70): replaces a hand-written encoder that existed
+    // only because this pin was missing.
+    "@std/ulid": "jsr:@std/ulid@1.0.0",
 
     // HTTP framework. `server/http` (#9) and `platform/rate-limit` (#4)
     // middleware.

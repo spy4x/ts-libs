@@ -41,7 +41,10 @@ describe("rate limiting (ported from gb, skip removed)", () => {
     const { clock, advance } = fakeClock()
     const limiter = createMemoryRateLimiter({ windowMs, limit, clock })
     const app = new Hono().basePath("/api")
-    app.use(createRateLimitMiddleware(limiter, { keyResolver: userThenIp(() => undefined) }))
+    app.use(createRateLimitMiddleware(limiter, {
+      remoteAddr: () => "203.0.113.9",
+      keyResolver: userThenIp(() => undefined),
+    }))
     app.get("/test", (c) => c.text("Allowed"))
     return { app, advance }
   }
@@ -94,7 +97,7 @@ describe("createRateLimitMiddleware", () => {
     const clock = () => T0
     const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 2, clock })
     const app = new Hono()
-    app.use(createRateLimitMiddleware(limiter, { keyResolver }))
+    app.use(createRateLimitMiddleware(limiter, { remoteAddr: () => undefined, keyResolver }))
     app.get("/auth/sign-in", (c) => c.json({ success: true }))
     return app
   }
@@ -139,7 +142,9 @@ describe("createRateLimitMiddleware", () => {
     const clock = () => T0 + 1
     const limiter = createMemoryRateLimiter({ windowMs: 1500, limit: 1, clock })
     const app = new Hono()
-    app.use(createRateLimitMiddleware(limiter, { keyResolver: () => "k" }))
+    app.use(
+      createRateLimitMiddleware(limiter, { remoteAddr: () => undefined, keyResolver: () => "k" }),
+    )
     app.get("/", (c) => c.text("ok"))
 
     await app.request(new Request("http://localhost/"))
@@ -238,6 +243,7 @@ describe("createRateLimitMiddleware", () => {
     const app = new Hono()
     app.use(
       createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
         keyResolver: userThenIp(() => undefined, { trustedProxy: true }),
       }),
     )
@@ -256,6 +262,7 @@ describe("createRateLimitMiddleware", () => {
     const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 1, clock: () => T0 })
     app.use(
       createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
         keyResolver: (req) => {
           const key = `auth:${req.headers.get("x-real-ip")}`
           seen.push(key)
@@ -283,7 +290,7 @@ describe("createRateLimitMiddleware", () => {
           },
           reset: (key: string) => store.reset(key),
         },
-        { keyResolver: () => "ip:203.0.113.9", keyPrefix: "chart:" },
+        { remoteAddr: () => undefined, keyResolver: () => "ip:203.0.113.9", keyPrefix: "chart:" },
       ),
     )
     app.get("/", (c) => c.text("ok"))
@@ -297,6 +304,7 @@ describe("createRateLimitMiddleware", () => {
     const app = new Hono()
     app.use(
       createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
         keyResolver: () => "k",
         status: 503,
         errorMessage: "slow down",
@@ -315,6 +323,7 @@ describe("createRateLimitMiddleware", () => {
     const app = new Hono()
     app.use(
       createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
         keyResolver: () => "k",
         headers: { limit: "X-RateLimit-Limit" },
       }),
@@ -334,6 +343,7 @@ describe("createRateLimitMiddleware", () => {
       // A JavaScript caller, or one reading a config file, can reach past the types: a 200 here
       // would deny with a success status, which is no limiter at all.
       createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
         keyResolver: () => "k",
         status: 200 as unknown as RejectionStatus,
       })
@@ -352,6 +362,42 @@ describe("createRateLimitMiddleware", () => {
       message = (error as Error).message
     }
     assertEquals(message.includes("keyResolver"), true, message)
+  })
+
+  it("refuses a missing remoteAddr resolver, so a caller must decide how the client IP is read", () => {
+    // Before this check, `userThenIp` with no `remoteAddr` wired and no trusted proxy header
+    // silently bucketed every anonymous request on the same placeholder address — the audit's own
+    // repro: `userThenIp` defaulted to `ip:0.0.0.0` for every client. Now the factory refuses to
+    // build at all until the caller states, even as `() => undefined`, what it read.
+    const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 1, clock: () => T0 })
+    let message = ""
+    try {
+      createRateLimitMiddleware(limiter, { keyResolver: () => "k" } as never)
+    } catch (error) {
+      message = (error as Error).message
+    }
+    assertEquals(message.includes("remoteAddr"), true, message)
+  })
+
+  it("still collides two clients on the placeholder when remoteAddr explicitly answers undefined", async () => {
+    // `() => undefined` builds successfully — this is the documented, deliberate way to state "no
+    // peer address is available here" — and every anonymous client still shares one bucket, because
+    // that is what "no peer address" means. The fix requires the decision to be written down; it
+    // does not change what a caller who writes exactly this down gets.
+    const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 1, clock: () => T0 })
+    const app = new Hono()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
+        keyResolver: userThenIp(() => undefined),
+      }),
+    )
+    app.get("/", (c) => c.text("ok"))
+
+    const from = (ip: string) =>
+      app.request(new Request("http://localhost/", { headers: { "x-forwarded-for": ip } }))
+    assertEquals((await from("203.0.113.9")).status, 200)
+    assertEquals((await from("198.51.100.7")).status, 429)
   })
 })
 

@@ -78,11 +78,22 @@ export function makeStorage<T>(
 ): TypedStorage<T> {
   const onReject = options.onReject ?? (() => {})
 
-  const reject = (reason: string): StorageRead<T> => {
+  /** A value already in storage failed to parse or validate: evict it, so a read never re-rejects. */
+  const rejectRead = (reason: string): StorageRead<T> => {
     onReject(key, reason)
-    // A value that cannot satisfy its own schema is never readable again; keeping it would
+    // A stored value that cannot satisfy its own schema is never readable again; keeping it would
     // silently re-reject on every read.
     storage.removeItem(key)
+    return { status: "invalid", reason }
+  }
+
+  /**
+   * A caller's new value failed validation: report it, without touching whatever is already
+   * stored. The value being written was never persisted, so there is nothing stale to evict — the
+   * key still holds the last value that *did* pass, and a bad write must not erase it.
+   */
+  const rejectWrite = (reason: string): StorageRead<T> => {
+    onReject(key, reason)
     return { status: "invalid", reason }
   }
 
@@ -97,13 +108,13 @@ export function makeStorage<T>(
       try {
         parsed = JSON.parse(raw)
       } catch (error) {
-        return reject(error instanceof Error ? error.message : "unparseable JSON")
+        return rejectRead(error instanceof Error ? error.message : "unparseable JSON")
       }
 
       if (!options.schema) return { status: "ok", value: parsed as T }
 
       const result = validate(options.schema, parsed)
-      if (result.error) return reject(result.error.description)
+      if (result.error) return rejectRead(result.error.description)
       return { status: "ok", value: result.data as unknown as T }
     },
 
@@ -113,7 +124,7 @@ export function makeStorage<T>(
         return { status: "ok", value }
       }
       const result = validate(options.schema, value)
-      if (result.error) return reject(result.error.description)
+      if (result.error) return rejectWrite(result.error.description)
       storage.setItem(key, JSON.stringify(result.data))
       return { status: "ok", value: result.data as unknown as T }
     },

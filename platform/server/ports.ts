@@ -38,6 +38,12 @@ export interface FileSystemPort {
   readText(path: string): Promise<string | null>
   /** Write text, replacing any existing content. */
   writeText(path: string, content: string): Promise<void>
+  /**
+   * Append text to the end of the file, creating it first if it does not exist. One call is one
+   * write at the filesystem level — never a read-modify-write of the whole file — so a caller
+   * appending one line at a time never re-touches an earlier line.
+   */
+  appendText(path: string, content: string): Promise<void>
   /** Rename over an existing path. Atomic on the same filesystem. */
   rename(from: string, to: string): Promise<void>
   /** Remove a file; a missing file is not an error. */

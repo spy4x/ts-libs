@@ -62,6 +62,13 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       return Promise.resolve()
     },
 
+    appendText(path, content) {
+      calls.push({ op: "appendText", path, extra: content })
+      if (fake.failWrites.has(path)) return Promise.reject(new Error(`write refused: ${path}`))
+      files.set(path, (files.get(path) ?? "") + content)
+      return Promise.resolve()
+    },
+
     rename(from, to) {
       calls.push({ op: "rename", path: from, extra: to })
       if (fake.failRenames.has(from)) return Promise.reject(new Error(`rename refused: ${from}`))

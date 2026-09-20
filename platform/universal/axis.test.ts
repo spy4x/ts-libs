@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { niceStep, ticks } from "./axis.ts"
+import { MAX_TICKS, niceStep, ticks } from "./axis.ts"
 
 describe("niceStep", () => {
   it("snaps the significand to 1, 2 or 5 times a power of ten", () => {
@@ -62,9 +62,18 @@ describe("niceStep", () => {
     expect(niceStep(1e-12, 5)).toBeGreaterThan(0)
   })
 
-  it("rejects a non-positive target rather than dividing by zero", () => {
-    expect(() => niceStep(10, 0)).toThrow("target must be positive")
-    expect(() => niceStep(10, -1)).toThrow("target must be positive")
+  it("falls back to the default target of 5 for a non-positive, non-finite or missing target", () => {
+    // Matches the reference's normaliseTarget: a chart's tick target usually comes from its own
+    // layout math (available width / label width), and a transient bad value there should degrade
+    // to the default rather than take the whole render down.
+    expect(niceStep(10, 0)).toBe(niceStep(10, 5))
+    expect(niceStep(10, -1)).toBe(niceStep(10, 5))
+    expect(niceStep(10, Number.NaN)).toBe(niceStep(10, 5))
+    expect(niceStep(10)).toBe(niceStep(10, 5))
+  })
+
+  it("floors a fractional target instead of producing a fractional step count", () => {
+    expect(niceStep(10, 4.9)).toBe(niceStep(10, 4))
   })
 })
 
@@ -102,8 +111,90 @@ describe("ticks", () => {
     expect(values[values.length - 1]).toBeGreaterThanOrEqual(50)
   })
 
-  it("rejects a non-finite bound rather than emitting NaN ticks", () => {
-    expect(() => ticks(0, Number.NaN)).toThrow("must be finite")
-    expect(() => ticks(Number.POSITIVE_INFINITY, 1)).toThrow("must be finite")
+  it("returns an empty axis for a non-finite bound instead of throwing", () => {
+    // Matches the reference: a chart fed a bad domain (an empty series' Infinity/-Infinity extent,
+    // for instance) gets an axis with no ticks, not an exception that takes the render down too.
+    // Expected values taken from `preact-components/charts/scales.ts`.
+    expect(ticks(0, Number.NaN)).toEqual([])
+    expect(ticks(Number.POSITIVE_INFINITY, 1)).toEqual([])
+    expect(ticks(Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY)).toEqual([])
+  })
+
+  it("swaps reversed bounds instead of returning them as given", () => {
+    // Before this fix `ticks(10, 0)` returned `[10, 0]` (a two-element descending pair that reads
+    // as a valid axis) and, on origin/main before this PR, `[]`. The reference swaps unconditionally
+    // and documents it as deliberate; expected values taken from running it.
+    expect(ticks(10, 0)).toEqual(ticks(0, 10))
+    expect(ticks(10, 0)).toEqual([0, 2, 4, 6, 8, 10])
+    expect(ticks(1, -1)).toEqual([-1.2, -0.8, -0.4, 0, 0.4, 0.8, 1.2])
+  })
+
+  it("falls back to the default tick target instead of throwing on a bad one", () => {
+    // Expected values taken from the reference: a bad `maxTicks` behaves as if it were omitted.
+    expect(ticks(0, 100, 0)).toEqual(ticks(0, 100))
+    expect(ticks(0, 100, -3)).toEqual(ticks(0, 100))
+    expect(ticks(0, 100, Number.NaN)).toEqual(ticks(0, 100))
+  })
+
+  it("terminates on a span narrower than the float precision of its bounds, instead of looping forever", () => {
+    // Before the fix, a cursor advanced by `value += step` never moved once the step (20) was
+    // finer than one ulp at 1e18 (128), so the loop that read `value <= end + step / 2` never
+    // returned. Expected values taken from `preact-components/charts/scales.ts`, the reference
+    // this package is now the single home for (see `platform/universal/axis.ts`'s JSDoc).
+    expect(ticks(1e18, 1e18 + 100)).toEqual([1e18, 1e18 + 100])
+  })
+
+  it("keeps six distinct ticks for a span far below one unit, instead of collapsing to a single 0", () => {
+    // Before the fix, `niceStep` floored its result at 1e-9 — coarser than the whole 1e-12 span —
+    // so every tick but the first rounded away and `ticks(0, 1e-12)` returned `[0]`. Expected
+    // values taken from `preact-components/charts/scales.ts`.
+    expect(ticks(0, 1e-12)).toEqual([0, 2e-13, 4e-13, 6e-13, 8e-13, 1e-12])
+  })
+
+  it("returns at once for an absurd tick target instead of looping without bound", () => {
+    // Before the fix, `ticksForStep`'s loop ran `steps + 1` times (here `steps` is `1e25`) and
+    // relied on `out.length < MAX_TICKS` alone to stop it; a step this many orders of magnitude
+    // below the float precision at this range's magnitude makes every rounded value collapse onto
+    // the same handful of doubles, so `out.length` never reaches MAX_TICKS and the loop never
+    // reached `steps + 1` either — it did not return within a 25-second wait. No wall clock is
+    // asserted here: `ticksForStep`'s own `index > MAX_TICKS` tripwire makes a regression throw
+    // within a few thousand iterations instead of hanging this test run.
+    const values = ticks(1_000_000, 2_000_000, 1e25)
+    expect(values.length).toBeGreaterThan(0)
+    expect(values.length).toBeLessThanOrEqual(MAX_TICKS)
+    for (const value of values) {
+      expect(Number.isFinite(value)).toBe(true)
+    }
+    for (let i = 1; i < values.length; i++) {
+      expect(values[i]).toBeGreaterThan(values[i - 1])
+    }
+    // The collapse leaves every surviving tick within a hair of `low`; a generous margin avoids
+    // pinning the exact rounding artefact while still catching a wildly out-of-range result.
+    for (const value of values) {
+      expect(value).toBeGreaterThanOrEqual(1_000_000 - 1)
+      expect(value).toBeLessThanOrEqual(2_000_000 + 1)
+    }
+  })
+
+  it("stays bounded for other absurd targets and spans, not just the one reported case", () => {
+    // Same class of bug, different corners of it: an absurd target with an ordinary span, an
+    // ordinary target with an absurd span (both directions), and Infinity as the target (which
+    // normaliseTarget should catch before it ever reaches the loop).
+    const cases: [number, number, number][] = [
+      [0, 1, 1e300],
+      [0, 1, Number.MAX_VALUE],
+      [0, 1, Number.POSITIVE_INFINITY],
+      [0, 1e300, 5],
+      [0, 1e-300, 1e25],
+      [-1e300, 1, 1e20],
+    ]
+    for (const [min, max, target] of cases) {
+      const values = ticks(min, max, target)
+      expect(values.length).toBeLessThanOrEqual(MAX_TICKS)
+      expect(values.every(Number.isFinite)).toBe(true)
+      for (let i = 1; i < values.length; i++) {
+        expect(values[i]).toBeGreaterThan(values[i - 1])
+      }
+    }
   })
 })

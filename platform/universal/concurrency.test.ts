@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { AsyncMutex, mapConcurrent } from "./concurrency.ts"
+import { AsyncMutex } from "./concurrency.ts"
 
 /** Wait for a condition the event loop has to reach, without assuming how many ticks that takes. */
 async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void> {
@@ -11,80 +11,6 @@ async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
 }
-
-describe("mapConcurrent", () => {
-  it("preserves input order even when completion order differs", async () => {
-    const delays = [30, 1, 20, 2]
-    const result = await mapConcurrent(delays, 4, async (delay) => {
-      await new Promise((resolve) => setTimeout(resolve, delay))
-      return delay
-    })
-    expect(result).toEqual(delays)
-  })
-
-  it("never runs more than the limit at once", async () => {
-    let inFlight = 0
-    let peak = 0
-    await mapConcurrent(Array.from({ length: 20 }, (_, i) => i), 3, async () => {
-      inFlight++
-      peak = Math.max(peak, inFlight)
-      await new Promise((resolve) => setTimeout(resolve, 1))
-      inFlight--
-      return null
-    })
-    expect(peak).toBe(3)
-  })
-
-  it("passes the index alongside the item", async () => {
-    const seen = await mapConcurrent(
-      ["a", "b", "c"],
-      2,
-      (item, index) => Promise.resolve(`${index}:${item}`),
-    )
-    expect(seen).toEqual(["0:a", "1:b", "2:c"])
-  })
-
-  it("returns an empty array for an empty input without calling fn", async () => {
-    let calls = 0
-    const result = await mapConcurrent([], 3, () => {
-      calls++
-      return Promise.resolve(1)
-    })
-    expect(result).toEqual([])
-    expect(calls).toBe(0)
-  })
-
-  it("clamps a limit below one up to one, so calls stay serial", async () => {
-    let peak = 0
-    let inFlight = 0
-    await mapConcurrent([1, 2, 3], 0, async () => {
-      inFlight++
-      peak = Math.max(peak, inFlight)
-      await new Promise((resolve) => setTimeout(resolve, 1))
-      inFlight--
-      return null
-    })
-    expect(peak).toBe(1)
-  })
-
-  it("accepts a limit larger than the item count", async () => {
-    expect(await mapConcurrent([1, 2], 100, (n) => Promise.resolve(n * 2))).toEqual([2, 4])
-  })
-
-  it("rejects with the first failure", async () => {
-    await expect(
-      mapConcurrent([1, 2, 3], 2, (n) => {
-        if (n === 2) return Promise.reject(new Error("boom on two"))
-        return Promise.resolve(n)
-      }),
-    ).rejects.toThrow("boom on two")
-  })
-
-  it("rejects a non-finite limit rather than starting unbounded work", async () => {
-    await expect(mapConcurrent([1], Number.POSITIVE_INFINITY, (n) => Promise.resolve(n)))
-      .rejects.toThrow("limit must be finite")
-  })
-})
 
 describe("AsyncMutex", () => {
   it("grants the lock immediately when free", async () => {

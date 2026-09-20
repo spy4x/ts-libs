@@ -5,9 +5,11 @@
  * crashed writer corrupts at most the final line, and every earlier line still parses — so a
  * reader must tolerate a trailing partial line rather than discarding the file.
  *
- * The port exposes no append primitive: appending is read-modify-write of the whole file, which
- * for a log is the honest trade at test scale. A production writer that needs true append should
- * supply a port backed by an `O_APPEND` descriptor.
+ * Appending goes through {@link FileSystemPort}'s `appendText`, one filesystem-level write per
+ * event. Earlier lines are never read back and never rewritten, so the promise this module's own
+ * name makes — a crash corrupts at most the final line — actually holds: the previous revision
+ * read the whole file and wrote it back with one more line, so a crash mid-write could lose the
+ * entire log, and the cost of each append grew with the size of the log already on disk.
  */
 
 import { dirname } from "@std/path"
@@ -90,8 +92,7 @@ export class JsonlLogger {
     const line = formatLogLine(event, this.#clock.now())
     const attempt = this.#tail.then(async () => {
       await this.#fs.mkdirp(dirname(this.#path))
-      const existing = await this.#fs.readText(this.#path) ?? ""
-      await this.#fs.writeText(this.#path, existing + line)
+      await this.#fs.appendText(this.#path, line)
     })
     // Attach the chain to a handler that swallows the rejection, while `attempt` still rejects for
     // this caller. A bare `this.#tail = attempt` is what makes one failure permanent.
