@@ -52,6 +52,46 @@ export const settle = async (result: void | Promise<void>): Promise<void> => {
 }
 
 /**
+ * Bounds a single outgoing request, used by every client in this package
+ * unless a caller overrides it.
+ *
+ * Before this constant existed, no client attached a timeout to `fetch` at
+ * all: `totalBudgetMs` only stopped new *retries* from being scheduled, so a
+ * server that accepted a connection and never answered blocked the caller
+ * forever. 10s comfortably covers a slow but healthy endpoint without leaving
+ * a caller blocked for anywhere near as long as a typical `totalBudgetMs`.
+ */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
+
+/**
+ * True when `cause` is the `TimeoutError` an `AbortSignal.timeout()` firing
+ * produces.
+ *
+ * Safe to use as "this attempt timed out": no client in this package accepts
+ * a caller-supplied `AbortSignal`, so the only abort a client's own `fetch`
+ * can ever reject with is its own timeout firing, never an unrelated
+ * cancellation.
+ */
+export const isRequestTimeout = (cause: unknown): boolean =>
+  cause instanceof Error && cause.name === "TimeoutError"
+
+/**
+ * Releases a response's body without reading it.
+ *
+ * Every client here reports only the status line — `httpStatus`,
+ * `statusText` — and never the body, so nothing ever calls `.text()` or
+ * `.json()` on a response. Left alone, an unconsumed body keeps its
+ * connection open until the runtime's garbage collector gets around to it,
+ * which a loop that can make ten attempts should not depend on. `cancel()`
+ * releases it immediately; a `null` body (already empty) needs nothing.
+ */
+export const releaseResponseBody = async (response: Response): Promise<void> => {
+  if (response.body !== null) {
+    await response.body.cancel()
+  }
+}
+
+/**
  * Parses a `Retry-After` header.
  *
  * Only the delay-seconds form is honoured; the HTTP-date form is ignored
@@ -222,8 +262,20 @@ export interface RetryRunResult<R> {
 
 export interface RetryRunOptions<R> {
   policy: RetryPolicy
-  /** Performs one attempt. Return `{ failed: true }` to request a retry. */
-  attempt: (attempt: number) => Promise<{ failed: boolean; retryAfterMs?: number; value: R }>
+  /**
+   * Performs one attempt. Return `{ failed: true }` to request a retry.
+   *
+   * `remainingBudgetMs` is `totalBudgetMs` minus the elapsed time so far,
+   * floored at 0. A caller that issues a real request should bound it with
+   * `Math.min(itsOwnTimeout, remainingBudgetMs)`: without that, `totalBudgetMs`
+   * only ever stopped a *future* retry from being scheduled, so a single
+   * attempt with its own generous timeout could still run well past the
+   * budget it was supposed to respect.
+   */
+  attempt: (
+    attempt: number,
+    remainingBudgetMs: number,
+  ) => Promise<{ failed: boolean; retryAfterMs?: number; value: R }>
   sleep: Sleeper
   clock: Clock
   backoff: BackoffFn
@@ -251,7 +303,8 @@ export const runWithRetry = async <R>(options: RetryRunOptions<R>): Promise<Retr
 
   for (let index = 1; index <= totalAttempts; index++) {
     attempts = index
-    const outcome = await attempt(index)
+    const remainingBudgetMs = Math.max(policy.totalBudgetMs - (clock() - startedAt), 0)
+    const outcome = await attempt(index, remainingBudgetMs)
     lastValue = outcome.value
     if (!outcome.failed || index === totalAttempts) {
       break

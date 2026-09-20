@@ -30,9 +30,12 @@ import {
   type BackoffFn,
   type Clock,
   createExponentialBackoff,
+  DEFAULT_REQUEST_TIMEOUT_MS,
   describeTransportError,
+  isRequestTimeout,
   isTransientStatus,
   parseRetryAfterMs,
+  releaseResponseBody,
   type RetryPolicy,
   runWithRetry,
   type Sleeper,
@@ -93,7 +96,7 @@ export interface NtfyPush {
  * is one a caller branches on forever and never sees — the same defect as an
  * unreachable validator.
  */
-export type NtfyErrorCode = "http_error" | "network_error"
+export type NtfyErrorCode = "http_error" | "network_error" | "timeout"
 
 export interface NtfyPushed {
   ok: true
@@ -148,6 +151,12 @@ export interface NtfyClientOptions {
   gate?: NotificationSeverity
   /** Receives every requested delay, in order. */
   onDelay?: (delayMs: number, attempt: number) => void
+  /**
+   * Timeout for a single request, via `AbortSignal.timeout()`. Defaults to
+   * `DEFAULT_REQUEST_TIMEOUT_MS`. Never larger than the budget an attempt has
+   * left under `totalBudgetMs` — see `post`.
+   */
+  requestTimeoutMs?: number
 }
 
 /** 5 attempts, 3s between them, mirroring `rostok`'s ntfy loop. */
@@ -220,6 +229,7 @@ export class NtfyClient {
   private readonly policy: RetryPolicy
   private readonly backoff: BackoffFn
   private readonly gate: NotificationSeverity
+  private readonly requestTimeoutMs: number
 
   constructor(config: NtfyClientConfig, options: NtfyClientOptions = {}) {
     // The trailing slash is dropped **after** the guard, not before it: the
@@ -256,6 +266,7 @@ export class NtfyClient {
     this.gate = options.gate ?? NotificationSeverity.Failure
     this.policy = { ...DEFAULT_RETRY, ...options.retry, onDelay: options.onDelay }
     this.backoff = options.backoff ?? createExponentialBackoff(this.policy)
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
   }
 
   /** The topic endpoint, without the token. */
@@ -297,8 +308,8 @@ export class NtfyClient {
       sleep: this.sleep,
       clock: this.clock,
       backoff: this.backoff,
-      attempt: async (attempt) => {
-        const outcome = await this.post(headers, push.message, attempt)
+      attempt: async (attempt, remainingBudgetMs) => {
+        const outcome = await this.post(headers, push.message, attempt, remainingBudgetMs)
         last = outcome
         return {
           failed: !outcome.ok && outcome.retryable,
@@ -347,15 +358,29 @@ export class NtfyClient {
     })
   }
 
-  private async post(headers: Headers, body: string, attempt: number): Promise<PostOutcome> {
+  private async post(
+    headers: Headers,
+    body: string,
+    attempt: number,
+    remainingBudgetMs: number,
+  ): Promise<PostOutcome> {
+    // Never longer than what `totalBudgetMs` has left: a per-request timeout
+    // alone bounds one request, but not the operation `push` promises to bound.
+    const timeoutMs = Math.max(Math.min(this.requestTimeoutMs, remainingBudgetMs), 0)
     try {
       // The body is re-encoded from the string by the platform, so UTF-8
       // survives; only the header values were transliterated above.
-      const response = await this.fetcher(this.endpoint, { method: "POST", headers, body })
+      const response = await this.fetcher(this.endpoint, {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.timeout(timeoutMs),
+      })
       if (response.ok) {
+        await releaseResponseBody(response)
         return { ok: true, httpStatus: response.status, attempts: attempt }
       }
-      return {
+      const outcome: PostFailure = {
         ok: false,
         code: "http_error",
         message: `${response.status} ${response.statusText}`.trim(),
@@ -364,7 +389,18 @@ export class NtfyClient {
         retryable: isTransientStatus(response.status),
         retryAfterMs: parseRetryAfterMs(response.headers.get("Retry-After")),
       }
+      await releaseResponseBody(response)
+      return outcome
     } catch (cause) {
+      if (isRequestTimeout(cause)) {
+        return {
+          ok: false,
+          code: "timeout",
+          message: `ntfy request timed out after ${timeoutMs}ms`,
+          attempts: attempt,
+          retryable: true,
+        }
+      }
       return {
         ok: false,
         code: "network_error",
@@ -389,7 +425,7 @@ interface PostSuccess {
 
 interface PostFailure {
   ok: false
-  code: "http_error" | "network_error"
+  code: "http_error" | "network_error" | "timeout"
   message: string
   attempts: number
   retryable: boolean

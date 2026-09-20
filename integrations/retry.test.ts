@@ -3,11 +3,14 @@ import { describe, it } from "@std/testing/bdd"
 import type { Clock, Sleeper } from "./retry.ts"
 import {
   createExponentialBackoff,
+  DEFAULT_REQUEST_TIMEOUT_MS,
   describeErrorKind,
   describeTransportError,
   isPermanentStatus,
+  isRequestTimeout,
   isTransientStatus,
   parseRetryAfterMs,
+  releaseResponseBody,
   runWithRetry,
 } from "./retry.ts"
 
@@ -128,6 +131,47 @@ describe("status classification", () => {
   })
 })
 
+describe("isRequestTimeout", () => {
+  it("recognises the TimeoutError AbortSignal.timeout() produces", () => {
+    expect(isRequestTimeout(new DOMException("The signal timed out", "TimeoutError"))).toBe(true)
+  })
+
+  it("does not mistake an ordinary transport failure for a timeout", () => {
+    expect(isRequestTimeout(new TypeError("Invalid URL: 'https://x.invalid/'"))).toBe(false)
+    expect(isRequestTimeout(new DOMException("aborted", "AbortError"))).toBe(false)
+  })
+
+  it("does not throw on a non-Error value", () => {
+    expect(isRequestTimeout("TimeoutError")).toBe(false)
+    expect(isRequestTimeout(undefined)).toBe(false)
+  })
+})
+
+describe("DEFAULT_REQUEST_TIMEOUT_MS", () => {
+  it("is a positive, finite bound", () => {
+    // The bound this whole fix exists to add: before it, no client attached any
+    // timeout to a request, so a server that accepted a connection and never
+    // answered blocked the caller forever.
+    expect(DEFAULT_REQUEST_TIMEOUT_MS).toBeGreaterThan(0)
+    expect(Number.isFinite(DEFAULT_REQUEST_TIMEOUT_MS)).toBe(true)
+  })
+})
+
+describe("releaseResponseBody", () => {
+  it("cancels a response's body without reading it", async () => {
+    const response = new Response("unread payload")
+    expect(response.bodyUsed).toBe(false)
+    await releaseResponseBody(response)
+    expect(response.bodyUsed).toBe(true)
+  })
+
+  it("does nothing for a response with no body", async () => {
+    const response = new Response(null, { status: 204 })
+    expect(response.body).toBeNull()
+    await expect(releaseResponseBody(response)).resolves.toBeUndefined()
+  })
+})
+
 describe("runWithRetry", () => {
   it("returns after the first non-failing attempt", async () => {
     const timer = recordingTimer()
@@ -212,6 +256,51 @@ describe("runWithRetry", () => {
     expect(calls).toBe(1)
     expect(run.attempts).toBe(1)
     expect(timer.delays).toEqual([])
+  })
+
+  it("passes the shrinking remaining budget to each attempt", async () => {
+    // Before this, `attempt` only ever saw its own index: `totalBudgetMs` bounded
+    // when the *next retry* could be scheduled, never what a single attempt's
+    // own request was allowed to take — which is how a request with a generous
+    // timeout of its own could run well past the budget it was meant to respect.
+    const timer = recordingTimer()
+    const seen: number[] = []
+    await runWithRetry<number>({
+      policy,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      backoff: createExponentialBackoff(policy),
+      attempt: (attempt, remainingBudgetMs) => {
+        seen.push(remainingBudgetMs)
+        return Promise.resolve({ failed: true, value: attempt })
+      },
+    })
+    // startedAt is 0; 1000ms and 2000ms of recorded sleep are subtracted from
+    // the 60,000ms budget before attempts 2 and 3 see what is left of it.
+    expect(seen).toEqual([60_000, 59_000, 57_000])
+  })
+
+  it("floors the remaining budget at zero when a sleep runs slightly long", async () => {
+    // A real `setTimeout` can fire a little late under load, so the actual
+    // elapsed time after a sleep can exceed what the pre-sleep fit check
+    // estimated. `remainingBudgetMs` must never go negative when that happens.
+    let now = 0
+    const tight = { ...policy, maxAttempts: 2, totalBudgetMs: 1000 }
+    const seen: number[] = []
+    await runWithRetry<number>({
+      policy: tight,
+      sleep: (ms) => {
+        now += ms + 50 // 50ms later than requested
+        return Promise.resolve()
+      },
+      clock: () => now,
+      backoff: () => 1000, // exactly the budget, so the pre-sleep fit check still allows it
+      attempt: (attempt, remainingBudgetMs) => {
+        seen.push(remainingBudgetMs)
+        return Promise.resolve({ failed: true, value: attempt })
+      },
+    })
+    expect(seen).toEqual([1000, 0])
   })
 })
 

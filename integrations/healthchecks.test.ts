@@ -301,6 +301,71 @@ describe("HealthchecksClient.ping", () => {
     })
   })
 
+  /** What `fetch` rejects with when its `AbortSignal.timeout()` signal fires. */
+  const timeoutFailure = (): Promise<Response> =>
+    Promise.reject(new DOMException("The signal timed out", "TimeoutError"))
+
+  it("reports a timed-out request with its own error code, not a generic network_error", async () => {
+    const timer = recordingTimer()
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: timeoutFailure,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1, totalBudgetMs: 5000 },
+      requestTimeoutMs: 2000,
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result).toEqual({
+      ok: false,
+      code: "timeout",
+      message: "healthchecks request timed out after 2000ms",
+      attempts: 1,
+      waitedMs: 0,
+    })
+  })
+
+  it("clamps the per-request timeout to what remains of the total budget", async () => {
+    // The budget, not the per-request default, is what must really bound the
+    // operation: a generous per-request timeout cannot outrun a tight budget.
+    const timer = recordingTimer()
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: timeoutFailure,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1, totalBudgetMs: 800 },
+      requestTimeoutMs: 5000,
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result.ok === false && result.message).toBe(
+      "healthchecks request timed out after 800ms",
+    )
+  })
+
+  it("releases the response body on a delivered ping instead of leaving it unconsumed", async () => {
+    let captured: Response | undefined
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: () => {
+        captured = new Response("ignored", { status: 200 })
+        return Promise.resolve(captured)
+      },
+    })
+    await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(captured?.bodyUsed).toBe(true)
+  })
+
+  it("releases the response body on an HTTP error too", async () => {
+    let captured: Response | undefined
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: () => {
+        captured = new Response("nope", { status: 400 })
+        return Promise.resolve(captured)
+      },
+      retry: { maxAttempts: 1 },
+    })
+    await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(captured?.bodyUsed).toBe(true)
+  })
+
   it("does not reject when a transport error's name is a Symbol", async () => {
     // The value was unvalidated even after the read was guarded: `${name}` on a
     // Symbol throws `TypeError: Cannot convert a Symbol value to a string`, so

@@ -332,6 +332,76 @@ describe("NtfyClient.push", () => {
     })
   })
 
+  /** What `fetch` rejects with when its `AbortSignal.timeout()` signal fires. */
+  const timeoutFailure = (): Promise<Response> =>
+    Promise.reject(new DOMException("The signal timed out", "TimeoutError"))
+
+  it("reports a timed-out request with its own error code, not a generic network_error", async () => {
+    const timer = recordingTimer()
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: timeoutFailure,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1, totalBudgetMs: 5000 },
+      requestTimeoutMs: 2000,
+    })
+    const result = await client.push({
+      title: "backup failed",
+      message: "detail",
+      severity: NotificationSeverity.Failure,
+    })
+    expect(result).toEqual({
+      ok: false,
+      code: "timeout",
+      message: "ntfy request timed out after 2000ms",
+      attempts: 1,
+    })
+  })
+
+  it("clamps the per-request timeout to what remains of the total budget", async () => {
+    // The budget, not the per-request default, is what must really bound the
+    // operation: a generous per-request timeout cannot outrun a tight budget.
+    const timer = recordingTimer()
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: timeoutFailure,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 1, totalBudgetMs: 800 },
+      requestTimeoutMs: 5000,
+    })
+    const result = await client.push({
+      title: "backup failed",
+      message: "detail",
+      severity: NotificationSeverity.Failure,
+    })
+    expect(result.ok === false && result.message).toBe("ntfy request timed out after 800ms")
+  })
+
+  it("releases the response body on a delivered push instead of leaving it unconsumed", async () => {
+    let captured: Response | undefined
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: () => {
+        captured = new Response("ignored", { status: 200 })
+        return Promise.resolve(captured)
+      },
+    })
+    await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
+    expect(captured?.bodyUsed).toBe(true)
+  })
+
+  it("releases the response body on an HTTP error too", async () => {
+    let captured: Response | undefined
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: () => {
+        captured = new Response("nope", { status: 400 })
+        return Promise.resolve(captured)
+      },
+      retry: { maxAttempts: 1 },
+    })
+    await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
+    expect(captured?.bodyUsed).toBe(true)
+  })
+
   it("writes nothing to the console on success, skip or failure", async () => {
     const messages: unknown[] = []
     const originalError = console.error
