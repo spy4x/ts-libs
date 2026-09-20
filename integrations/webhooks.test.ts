@@ -79,7 +79,12 @@ describe("verifyWebhookRequest", () => {
     expect(result.ok === true && [...result.body]).toEqual([...BODY])
   })
 
-  it("accepts the prefixed scheme a GitHub-style sender writes", async () => {
+  it("accepts a differently-named header using the sha256=<hex> prefix some senders write", async () => {
+    // Not a claim that this verifies a GitHub delivery: GitHub's header name
+    // and its `sha256=` prefix are reused here only as a realistic example of
+    // a configurable header name plus a prefixed scheme. A caller still has to
+    // supply a timestamp header for this module to check, and a real GitHub
+    // request carries no such header at all — see the test below.
     const signature = await sign(SECRET, AT_SECONDS, BODY)
     const headers = new Headers({
       "X-Hub-Signature-256": `sha256=${signature}`,
@@ -92,6 +97,23 @@ describe("verifyWebhookRequest", () => {
       clock: clockAt(AT_SECONDS * 1000),
     })
     expect(result.ok).toBe(true)
+  })
+
+  it("rejects a real GitHub delivery, which carries no timestamp header at all", async () => {
+    // GitHub signs the body alone (`X-Hub-Signature-256: sha256=<hmac-of-body>`)
+    // and sends nothing this module could read as a timestamp. Verifying that
+    // header name is not the same as verifying a GitHub webhook: this module
+    // always requires a timestamp, so a real GitHub request is rejected, never
+    // silently accepted with no replay protection.
+    const signature = await sign(SECRET, AT_SECONDS, BODY)
+    const headers = new Headers({ "X-Hub-Signature-256": `sha256=${signature}` })
+    const result = await verifyWebhookRequest(BODY, headers, {
+      secret: SECRET,
+      signatureHeader: "X-Hub-Signature-256",
+      clock: clockAt(AT_SECONDS * 1000),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.reason).toBe("missing_timestamp")
   })
 
   it("reads headers from a plain record case-insensitively", async () => {
@@ -175,6 +197,23 @@ describe("verifyWebhookRequest", () => {
   it("rejects a timestamp too far in the future", async () => {
     const signature = await sign(SECRET, AT_SECONDS + 400, BODY)
     expect(await rejection(BODY, headersFor(signature, AT_SECONDS + 400))).toBe("future_timestamp")
+  })
+
+  it("accepts a timestamp exactly at the future tolerance boundary", async () => {
+    const signature = await sign(SECRET, AT_SECONDS + 300, BODY)
+    const result = await verifyWebhookRequest(BODY, headersFor(signature, AT_SECONDS + 300), {
+      secret: SECRET,
+      clock: clockAt(AT_SECONDS * 1000),
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it("rejects a timestamp one second past the future tolerance boundary", async () => {
+    // A tight boundary, not the 400s-vs-300s margin above: a break that widens
+    // the future allowance by, say, 50 seconds still rejects a timestamp 400s
+    // out (the test above) but would wrongly accept this one.
+    const signature = await sign(SECRET, AT_SECONDS + 301, BODY)
+    expect(await rejection(BODY, headersFor(signature, AT_SECONDS + 301))).toBe("future_timestamp")
   })
 
   it("honours a caller-supplied narrower tolerance", async () => {

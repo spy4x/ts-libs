@@ -1,5 +1,13 @@
 /**
- * Inbound webhook verification (Slack / GitHub / Stripe / generic HMAC-SHA256).
+ * Inbound webhook verification: HMAC-SHA256 over a timestamp and the raw
+ * request body, signed with a shared secret.
+ *
+ * This is **not** a drop-in verifier for GitHub, Slack or Stripe — none of
+ * them signs `<timestamp>.<raw body>` with the timestamp in a header the way
+ * this module expects. GitHub in particular sends no timestamp header at
+ * all, so every real GitHub delivery is rejected as `missing_timestamp`; see
+ * the package README for the full comparison and what a per-provider adapter
+ * would need to do differently.
  *
  * Nothing in the extraction sweep had a receiver, so this is written fresh
  * rather than ported. It is deliberately the smallest correct thing:
@@ -51,8 +59,11 @@ export interface WebhookVerifierConfig {
   /** Accepted age and future skew of a signature, in seconds. Default 300. */
   toleranceSeconds?: number
   /**
-   * Signature header name. GitHub sends `X-Hub-Signature-256`; a generic
-   * sender uses `X-Signature-256`.
+   * Signature header name. Configurable because senders disagree on it —
+   * GitHub's is `X-Hub-Signature-256`, a generic sender's is
+   * `X-Signature-256` — not because naming the header makes this module able
+   * to verify that sender's full scheme: GitHub, for one, sends no timestamp,
+   * which this module always requires.
    */
   signatureHeader?: string
   /** Timestamp header name. */
