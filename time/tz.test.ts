@@ -165,6 +165,23 @@ describe("zonedDateTime", () => {
     expect(() => zonedDateTime("", "", BERLIN)).toThrow(RangeError)
   })
 
+  it("rejects 30 February instead of rolling it into 2 March", () => {
+    expect(() => zonedDateTime("2026-02-30", "12:00", BERLIN)).toThrow(RangeError)
+  })
+
+  it("rejects month 13 instead of rolling it into next January", () => {
+    expect(() => zonedDateTime("2026-13-01", "12:00", BERLIN)).toThrow(RangeError)
+  })
+
+  it("rejects hour 25 instead of rolling it into the next day", () => {
+    expect(() => zonedDateTime("2026-06-15", "25:00", BERLIN)).toThrow(RangeError)
+  })
+
+  it("rejects a two-digit year instead of folding it into 19xx", () => {
+    // `Date.UTC(99, ...)` silently means 1999, not year 99.
+    expect(() => zonedDateTime("0099-06-15", "12:00", BERLIN)).toThrow(RangeError)
+  })
+
   it("shifts a gap that falls at midnight into the same day", () => {
     // America/Santiago springs forward at 2026-09-06 00:00 local, so midnight
     // itself does not exist and the conversion shifts to 01:00 — still the day

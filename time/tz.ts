@@ -243,6 +243,11 @@ export function hhmmInTz(instant: Date, tz: string): string {
  * Both rules compare local date-times as `YYYY-MM-DD` + `HH:MM` strings, which
  * order identically to the values they denote precisely because the format is
  * fixed-width and zero-padded — so `time` is padded before use.
+ *
+ * `date` and `time` must name a wall clock that actually occurs on the
+ * Gregorian calendar: `"2026-02-30"`, `"2026-13-01"` and `"25:00"` all throw,
+ * as does a year outside 100–9999 (`Date.UTC` folds a two-digit year like
+ * `99` into 1999 rather than rejecting it).
  */
 export function zonedDateTime(date: string, time: string, tz: string): Date {
   const [year, month, day] = date.split("-").map(Number)
@@ -255,6 +260,23 @@ export function zonedDateTime(date: string, time: string, tz: string): Date {
   // `Date` and the comparison below from being made against garbage.
   if (!Number.isFinite(naiveUtc)) {
     throw new RangeError(`Not a date and time: ${JSON.stringify({ date, time, tz })}`)
+  }
+
+  // `Date.UTC` is also permissive about a real-looking but impossible date: it
+  // rolls "2026-02-30" into 2 March and "25:00" into 01:00 the next day rather
+  // than rejecting either, and folds a two-digit year like `99` into 1999.
+  // Reading the parts back off the UTC instant it produced and comparing them
+  // against what was asked for is what turns that silent rollover into a
+  // rejection.
+  const probe = new Date(naiveUtc)
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() !== month - 1 ||
+    probe.getUTCDate() !== day ||
+    probe.getUTCHours() !== hour ||
+    probe.getUTCMinutes() !== minute
+  ) {
+    throw new RangeError(`Not a real date and time: ${JSON.stringify({ date, time })}`)
   }
 
   // `naive - offset` for every offset the zone uses near `naive`, deduplicated:
