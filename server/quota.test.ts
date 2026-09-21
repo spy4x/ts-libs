@@ -12,19 +12,29 @@ import {
   QuotaDecision,
   QuotaError,
   QuotaErrorCode,
-  quotaHttpStatus,
   type QuotaKey,
   quotaKey,
   type QuotaMeter,
   type QuotaPolicy,
   QuotaPrincipalKind,
+  quotaStatusCode,
   type QuotaStore,
   resolveQuotaPrincipal,
+  SESSION_POOL_PRINCIPAL,
+  sessionPoolKey,
 } from "./quota.ts"
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
-/** A `Map`-backed quota store — the smallest correct one-increment store. */
+/**
+ * A `Map`-backed quota store — the smallest correct one-operation store.
+ *
+ * Every method decides and writes without awaiting anything in between, which
+ * is what makes it atomic here and what a SQL store buys with a single
+ * conditional statement (see the `QuotaStore` JSDoc). A store that awaited
+ * between the read and the write would lose increments, exactly like the
+ * check-then-record pattern this module replaced.
+ */
 function inMemoryStore(): QuotaStore {
   const counters = new Map<string, number>()
   const id = (key: QuotaKey): string => `${key.principal}|${key.window}`
@@ -32,6 +42,17 @@ function inMemoryStore(): QuotaStore {
     read: (key) => Promise.resolve(counters.get(id(key)) ?? 0),
     increment: (key, count) => {
       const next = (counters.get(id(key)) ?? 0) + count
+      counters.set(id(key), next)
+      return Promise.resolve(next)
+    },
+    reserve: (key, count, limit) => {
+      const used = counters.get(id(key)) ?? 0
+      if (used + count > limit) return Promise.resolve({ granted: false, used })
+      counters.set(id(key), used + count)
+      return Promise.resolve({ granted: true, used: used + count })
+    },
+    release: (key, count) => {
+      const next = Math.max(0, (counters.get(id(key)) ?? 0) - count)
       counters.set(id(key), next)
       return Promise.resolve(next)
     },
@@ -46,9 +67,9 @@ function inMemoryStore(): QuotaStore {
  */
 function spyStore(store: QuotaStore): {
   store: QuotaStore
-  calls: { read: number; increment: number }
+  calls: { read: number; increment: number; reserve: number; release: number }
 } {
-  const calls = { read: 0, increment: 0 }
+  const calls = { read: 0, increment: 0, reserve: 0, release: 0 }
   return {
     calls,
     store: {
@@ -60,6 +81,14 @@ function spyStore(store: QuotaStore): {
         calls.increment += 1
         return store.increment(key, count)
       },
+      reserve: (key, count, limit) => {
+        calls.reserve += 1
+        return store.reserve(key, count, limit)
+      },
+      release: (key, count) => {
+        calls.release += 1
+        return store.release(key, count)
+      },
     },
   }
 }
@@ -68,13 +97,18 @@ const USER = { kind: QuotaPrincipalKind.User, id: "user-1" }
 
 /** A meter with a frozen clock: `windowSeconds` omitted, so one lifetime window. */
 function makeMeter(
-  overrides: Partial<{ policy: QuotaPolicy; store: QuotaStore; meteredKeyAvailable: boolean }> = {},
-): { meter: QuotaMeter; calls: { read: number; increment: number } } {
+  overrides: Partial<
+    { policy: QuotaPolicy; store: QuotaStore; meteredResourceAvailable: boolean }
+  > = {},
+): {
+  meter: QuotaMeter
+  calls: { read: number; increment: number; reserve: number; release: number }
+} {
   const spy = spyStore(overrides.store ?? inMemoryStore())
   const created = createQuotaMeter({
     policy: overrides.policy ?? { limit: 3 },
     store: spy.store,
-    meteredKeyAvailable: overrides.meteredKeyAvailable ?? true,
+    meteredResourceAvailable: overrides.meteredResourceAvailable ?? true,
     now: () => 0,
   })
   return { meter: created, calls: spy.calls }
@@ -267,7 +301,7 @@ Deno.test("check: bypassWithOwnKey false keeps a BYOK request metered", async ()
 // ── metered key unavailable ────────────────────────────────────────────────
 
 Deno.test("check: an unconfigured metered key is Unavailable, not Exhausted", async () => {
-  const { meter, calls } = makeMeter({ meteredKeyAvailable: false })
+  const { meter, calls } = makeMeter({ meteredResourceAvailable: false })
   const state = await meter.check(USER)
   assertEquals(state.decision, QuotaDecision.Unavailable)
   assertEquals(state.used, 0)
@@ -284,7 +318,7 @@ Deno.test("record: an unconfigured metered key is Unavailable and spends no budg
   const created = createQuotaMeter({
     policy: { limit: 3 },
     store: spy.store,
-    meteredKeyAvailable: false,
+    meteredResourceAvailable: false,
     now: () => 0,
   })
   const state = await created.record(USER, 2)
@@ -296,22 +330,22 @@ Deno.test("record: an unconfigured metered key is Unavailable and spends no budg
 })
 
 Deno.test("get: an unconfigured metered key is Unavailable without reading the store", async () => {
-  const { meter, calls } = makeMeter({ meteredKeyAvailable: false })
+  const { meter, calls } = makeMeter({ meteredResourceAvailable: false })
   const state = await meter.get(USER)
   assertEquals(state.decision, QuotaDecision.Unavailable)
   assertEquals(calls.read, 0)
-  assertEquals(quotaHttpStatus(state.decision), 503)
+  assertEquals(quotaStatusCode(state.decision), 503)
 })
 
 // ── HTTP contract ──────────────────────────────────────────────────────────
 
-Deno.test("quotaHttpStatus: pins 200, 429 and 503 to the three decisions", () => {
-  assertEquals(quotaHttpStatus(QuotaDecision.Allowed), 200)
-  assertEquals(quotaHttpStatus(QuotaDecision.Exhausted), 429)
-  assertEquals(quotaHttpStatus(QuotaDecision.Unavailable), 503)
+Deno.test("quotaStatusCode: pins 200, 429 and 503 to the three decisions", () => {
+  assertEquals(quotaStatusCode(QuotaDecision.Allowed), 200)
+  assertEquals(quotaStatusCode(QuotaDecision.Exhausted), 429)
+  assertEquals(quotaStatusCode(QuotaDecision.Unavailable), 503)
 })
 
-Deno.test("quotaHttpStatus: a disabled budget is 429, distinct from the 503 service case", async () => {
+Deno.test("quotaStatusCode: a disabled budget is 429, distinct from the 503 service case", async () => {
   // The source could not tell these apart: it used `usage.limit === 0` as the
   // "no demo key" sentinel (`apps/api/routes/analyze.ts:115`,
   // `apps/api/routes/batch.ts:113`), which is also a legitimate disabled budget.
@@ -321,12 +355,12 @@ Deno.test("quotaHttpStatus: a disabled budget is 429, distinct from the 503 serv
   const spent = await disabled.meter.check(USER)
   assertEquals(spent.decision, QuotaDecision.Exhausted)
   assertEquals(spent.limit, 0)
-  assertEquals(quotaHttpStatus(spent.decision), 429)
+  assertEquals(quotaStatusCode(spent.decision), 429)
 
-  const unconfigured = makeMeter({ meteredKeyAvailable: false })
+  const unconfigured = makeMeter({ meteredResourceAvailable: false })
   const unavailable = await unconfigured.meter.check(USER)
   assertEquals(unavailable.decision, QuotaDecision.Unavailable)
-  assertEquals(quotaHttpStatus(unavailable.decision), 503)
+  assertEquals(quotaStatusCode(unavailable.decision), 503)
 })
 
 Deno.test("state to HTTP status: a table over the three reachable states", async () => {
@@ -334,7 +368,7 @@ Deno.test("state to HTTP status: a table over the three reachable states", async
   const exhausted = makeMeter({ policy: { limit: 1 } })
   await exhausted.meter.record(USER, 1)
   const exhaustedState = await exhausted.meter.check(USER)
-  const unavailable = await makeMeter({ meteredKeyAvailable: false }).meter.check(USER)
+  const unavailable = await makeMeter({ meteredResourceAvailable: false }).meter.check(USER)
 
   const table: Array<[typeof allowed, number]> = [
     [allowed, 200],
@@ -342,7 +376,7 @@ Deno.test("state to HTTP status: a table over the three reachable states", async
     [unavailable, 503],
   ]
   for (const [state, status] of table) {
-    assertEquals(quotaHttpStatus(state.decision), status)
+    assertEquals(quotaStatusCode(state.decision), status)
   }
   assertEquals(allowed.decision, QuotaDecision.Allowed)
   assertEquals(exhaustedState.decision, QuotaDecision.Exhausted)
@@ -357,7 +391,7 @@ Deno.test("fixed window: usage at t=0 does not count at t=60_000, and does at t=
   const at0 = createQuotaMeter({
     policy,
     store: spy.store,
-    meteredKeyAvailable: true,
+    meteredResourceAvailable: true,
     now: () => 0,
   })
   await at0.record(USER, 1)
@@ -365,7 +399,7 @@ Deno.test("fixed window: usage at t=0 does not count at t=60_000, and does at t=
   const at59999 = createQuotaMeter({
     policy,
     store: spy.store,
-    meteredKeyAvailable: true,
+    meteredResourceAvailable: true,
     now: () => 59_999,
   })
   assertEquals((await at59999.check(USER)).decision, QuotaDecision.Exhausted)
@@ -373,7 +407,7 @@ Deno.test("fixed window: usage at t=0 does not count at t=60_000, and does at t=
   const at60000 = createQuotaMeter({
     policy,
     store: spy.store,
-    meteredKeyAvailable: true,
+    meteredResourceAvailable: true,
     now: () => 60_000,
   })
   const rolled = await at60000.check(USER)
@@ -401,7 +435,7 @@ Deno.test("fixed window: a recorded overshoot does not leak into the next window
   const first = createQuotaMeter({
     policy,
     store: spy.store,
-    meteredKeyAvailable: true,
+    meteredResourceAvailable: true,
     now: () => 0,
   })
   const overshoot = await first.record(USER, 5)
@@ -410,7 +444,7 @@ Deno.test("fixed window: a recorded overshoot does not leak into the next window
   const second = createQuotaMeter({
     policy,
     store: spy.store,
-    meteredKeyAvailable: true,
+    meteredResourceAvailable: true,
     now: () => 3_600_000,
   })
   const state = await second.get(USER)
@@ -437,7 +471,7 @@ Deno.test("counters: two principals do not share one", async () => {
 })
 
 Deno.test("counters: a user and a session with the same id string do not share one", async () => {
-  const { meter } = makeMeter({ policy: { limit: 5 } })
+  const { meter } = makeMeter({ policy: { limit: 5, sessions: { poolLimit: 100 } } })
   const shared = "principal-collision"
   await meter.record({ kind: QuotaPrincipalKind.User, id: shared }, 4)
   const session = await meter.check({ kind: QuotaPrincipalKind.Session, id: shared })
@@ -450,14 +484,14 @@ Deno.test("counters: a lifetime policy never resets", async () => {
   const meter = createQuotaMeter({
     policy: { limit: 2 },
     store: spy.store,
-    meteredKeyAvailable: true,
+    meteredResourceAvailable: true,
     now: () => 0,
   })
   await meter.record(USER, 2)
   const later = createQuotaMeter({
     policy: { limit: 2 },
     store: spy.store,
-    meteredKeyAvailable: true,
+    meteredResourceAvailable: true,
     now: () => 1_700_000_000_000,
   })
   const state = await later.check(USER)
@@ -567,7 +601,7 @@ Deno.test("createQuotaMeter: rejects a limit that is not a non-negative safe int
   for (const limit of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
     assertEquals(
       await caughtCode(() =>
-        createQuotaMeter({ policy: { limit }, store, meteredKeyAvailable: true })
+        createQuotaMeter({ policy: { limit }, store, meteredResourceAvailable: true })
       ),
       QuotaErrorCode.InvalidPolicyLimit,
     )
@@ -578,7 +612,11 @@ Deno.test("createQuotaMeter: rejects windowSeconds 0 once it is set", async () =
   const store = inMemoryStore()
   assertEquals(
     await caughtCode(() =>
-      createQuotaMeter({ policy: { limit: 1, windowSeconds: 0 }, store, meteredKeyAvailable: true })
+      createQuotaMeter({
+        policy: { limit: 1, windowSeconds: 0 },
+        store,
+        meteredResourceAvailable: true,
+      })
     ),
     QuotaErrorCode.InvalidPolicyLimit,
   )
@@ -587,7 +625,7 @@ Deno.test("createQuotaMeter: rejects windowSeconds 0 once it is set", async () =
       createQuotaMeter({
         policy: { limit: 1, windowSeconds: -60 },
         store,
-        meteredKeyAvailable: true,
+        meteredResourceAvailable: true,
       })
     ),
     QuotaErrorCode.InvalidPolicyLimit,
@@ -602,11 +640,24 @@ Deno.test("createQuotaMeter: rejects a missing or half-wired store port", async 
     {},
     { read: () => Promise.resolve(0) },
     { increment: () => Promise.resolve(0) },
+    // The two gates are as required as the two counters: a store that cannot
+    // reserve cannot bound concurrent work, and one that cannot release turns
+    // every failed call into spent budget.
+    {
+      read: () => Promise.resolve(0),
+      increment: () => Promise.resolve(0),
+      release: () => Promise.resolve(0),
+    },
+    {
+      read: () => Promise.resolve(0),
+      increment: () => Promise.resolve(0),
+      reserve: () => Promise.resolve({ granted: true, used: 1 }),
+    },
   ]
   for (const store of cases) {
     assertEquals(
       await caughtCode(() =>
-        createQuotaMeter({ policy, store: store as QuotaStore, meteredKeyAvailable: true })
+        createQuotaMeter({ policy, store: store as QuotaStore, meteredResourceAvailable: true })
       ),
       QuotaErrorCode.InvalidPolicyLimit,
     )
@@ -619,7 +670,7 @@ Deno.test("QuotaError: carries a typed code and a constant message", async () =>
       createQuotaMeter({
         policy: { limit: -1 },
         store: inMemoryStore(),
-        meteredKeyAvailable: true,
+        meteredResourceAvailable: true,
       }),
     QuotaError,
   )
@@ -652,7 +703,7 @@ Deno.test("QuotaError: an arktype-shaped policy failure never echoes the value",
   ]
   for (const [policy, message] of cases) {
     const thrown = assertThrows(
-      () => createQuotaMeter({ policy, store, meteredKeyAvailable: true }),
+      () => createQuotaMeter({ policy, store, meteredResourceAvailable: true }),
       QuotaError,
     )
     assertInstanceOf(thrown, QuotaError)
@@ -676,7 +727,7 @@ Deno.test("get: never mutates usage, and reports the metered budget", async () =
   const meter = createQuotaMeter({
     policy: { limit: 4 },
     store: spy.store,
-    meteredKeyAvailable: true,
+    meteredResourceAvailable: true,
     now: () => 0,
   })
   await meter.record(USER, 2)
@@ -695,7 +746,313 @@ Deno.test("get: never mutates usage, and reports the metered budget", async () =
 })
 
 Deno.test("get: does not read the store when no metered key is configured", async () => {
-  const { meter, calls } = makeMeter({ meteredKeyAvailable: false })
+  const { meter, calls } = makeMeter({ meteredResourceAvailable: false })
   await meter.get(USER)
   assertEquals(calls.read, 0)
+})
+
+// ── reserve: the gate ──────────────────────────────────────────────────────
+
+/** A session principal; only meterable under a policy that allows sessions. */
+const SESSION = { kind: QuotaPrincipalKind.Session, id: "session-1" }
+
+/** Resolves on a later macrotask, standing in for the paid work of a request. */
+function paidWork(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 5))
+}
+
+Deno.test("reserve: ten parallel callers of a budget of three run the work three times", async () => {
+  // The race only shows when something is awaited between the decision and the
+  // work — which is every real request. With `check` in place of `reserve` all
+  // ten callers read "allowed" before any of them spent anything.
+  const store = inMemoryStore()
+  const meter = createQuotaMeter({
+    policy: { limit: 3 },
+    store,
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+
+  let workRan = 0
+  let refused = 0
+  await Promise.all(Array.from({ length: 10 }, async () => {
+    const state = await meter.reserve(USER)
+    if (state.decision !== QuotaDecision.Allowed) {
+      refused += 1
+      return
+    }
+    await paidWork()
+    workRan += 1
+  }))
+
+  assertEquals(workRan, 3)
+  assertEquals(refused, 7)
+  assertEquals(await store.read(quotaKey(USER, { limit: 3 }, 0)), 3)
+})
+
+Deno.test("reserve: a refused call charges nothing and reports Exhausted", async () => {
+  const store = inMemoryStore()
+  const meter = createQuotaMeter({
+    policy: { limit: 2 },
+    store,
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+  const key = quotaKey(USER, { limit: 2 }, 0)
+
+  assertEquals((await meter.reserve(USER, 2)).decision, QuotaDecision.Allowed)
+  const refused = await meter.reserve(USER)
+  assertEquals(refused.decision, QuotaDecision.Exhausted)
+  assertEquals(refused.used, 2)
+  assertEquals(refused.remaining, 0)
+  assertEquals(await store.read(key), 2)
+
+  // A count that does not fit is refused whole: no partial spend.
+  const store2 = inMemoryStore()
+  const meter2 = createQuotaMeter({
+    policy: { limit: 5 },
+    store: store2,
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+  assertEquals((await meter2.reserve(USER, 6)).decision, QuotaDecision.Exhausted)
+  assertEquals(await store2.read(quotaKey(USER, { limit: 5 }, 0)), 0)
+})
+
+Deno.test("reserve: exactly the limit is Allowed, one more is not", async () => {
+  const { meter } = makeMeter({ policy: { limit: 3 } })
+  const filled = await meter.reserve(USER, 3)
+  assertEquals(filled.decision, QuotaDecision.Allowed)
+  assertEquals(filled.used, 3)
+  assertEquals(filled.remaining, 0)
+  assertEquals((await meter.reserve(USER)).decision, QuotaDecision.Exhausted)
+})
+
+Deno.test("reserve: a BYOK request is Allowed, unmetered, and never touches the store", async () => {
+  const { meter, calls } = makeMeter({ policy: { limit: 1 } })
+  const state = await meter.reserve(USER, 1, { hasOwnKey: true })
+  assertEquals(state.decision, QuotaDecision.Allowed)
+  assertFalse(state.metered)
+  assertEquals(calls.reserve, 0)
+  assertEquals(calls.read, 0)
+})
+
+Deno.test("reserve: an unconfigured metered resource is Unavailable and spends nothing", async () => {
+  const { meter, calls } = makeMeter({ meteredResourceAvailable: false })
+  const state = await meter.reserve(USER)
+  assertEquals(state.decision, QuotaDecision.Unavailable)
+  assertEquals(quotaStatusCode(state.decision), 503)
+  assertEquals(calls.reserve, 0)
+})
+
+Deno.test("reserve: a count of 0, -1, 1.5 or NaN throws InvalidCount before the store", async () => {
+  const { meter, calls } = makeMeter()
+  for (const count of [0, -1, 1.5, Number.NaN]) {
+    assertEquals(await caughtCode(() => meter.reserve(USER, count)), QuotaErrorCode.InvalidCount)
+  }
+  assertEquals(calls.reserve, 0)
+})
+
+// ── release: the refund ────────────────────────────────────────────────────
+
+Deno.test("release: work that failed gives its units back", async () => {
+  const store = inMemoryStore()
+  const meter = createQuotaMeter({
+    policy: { limit: 2 },
+    store,
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+
+  await meter.reserve(USER, 2)
+  assertEquals((await meter.reserve(USER)).decision, QuotaDecision.Exhausted)
+
+  const refunded = await meter.release(USER)
+  assertEquals(refunded.used, 1)
+  assertEquals(refunded.remaining, 1)
+  assertEquals(refunded.decision, QuotaDecision.Allowed)
+  // The freed unit is spendable again.
+  assertEquals((await meter.reserve(USER)).decision, QuotaDecision.Allowed)
+  assertEquals(await store.read(quotaKey(USER, { limit: 2 }, 0)), 2)
+})
+
+Deno.test("release: a refund never drives a counter below zero", async () => {
+  const store = inMemoryStore()
+  const meter = createQuotaMeter({
+    policy: { limit: 2 },
+    store,
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+  await meter.reserve(USER)
+  await meter.release(USER)
+  const state = await meter.release(USER)
+  assertEquals(state.used, 0)
+  assertEquals(state.remaining, 2)
+  assertEquals(await store.read(quotaKey(USER, { limit: 2 }, 0)), 0)
+})
+
+// ── the shared session pool ────────────────────────────────────────────────
+
+Deno.test("sessions: a rotating session id stops at the shared pool limit", async () => {
+  // A session id is whatever the caller sends. Twenty different ids, each with
+  // its own untouched per-session counter, still spend one pool.
+  const store = inMemoryStore()
+  const meter = createQuotaMeter({
+    policy: { limit: 5, sessions: { poolLimit: 3 } },
+    store,
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+
+  let allowed = 0
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const state = await meter.reserve({
+      kind: QuotaPrincipalKind.Session,
+      id: `rotated-session-${attempt}`,
+    })
+    if (state.decision === QuotaDecision.Allowed) allowed += 1
+  }
+
+  assertEquals(allowed, 3)
+  assertEquals(await store.read(sessionPoolKey({ limit: 5 }, 0)), 3)
+})
+
+Deno.test("sessions: a user principal never spends the session pool", async () => {
+  const store = inMemoryStore()
+  const meter = createQuotaMeter({
+    policy: { limit: 5, sessions: { poolLimit: 1 } },
+    store,
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+  await meter.reserve(USER, 5)
+  assertEquals(await store.read(sessionPoolKey({ limit: 5 }, 0)), 0)
+  // The pool is untouched, so an anonymous caller still gets its one unit.
+  assertEquals((await meter.reserve(SESSION)).decision, QuotaDecision.Allowed)
+})
+
+Deno.test("sessions: a session refused by its own counter gives the pool unit back", async () => {
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 1, sessions: { poolLimit: 10 } }
+  const meter = createQuotaMeter({ policy, store, meteredResourceAvailable: true, now: () => 0 })
+
+  assertEquals((await meter.reserve(SESSION)).decision, QuotaDecision.Allowed)
+  // This one passes the pool and is then refused by the session's own limit of
+  // 1; the pool must not keep the unit it briefly held.
+  assertEquals((await meter.reserve(SESSION)).decision, QuotaDecision.Exhausted)
+  assertEquals(await store.read(sessionPoolKey(policy, 0)), 1)
+})
+
+Deno.test("sessions: a spent pool makes check and get report Exhausted", async () => {
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 50, sessions: { poolLimit: 1 } }
+  const meter = createQuotaMeter({ policy, store, meteredResourceAvailable: true, now: () => 0 })
+
+  const fresh = { kind: QuotaPrincipalKind.Session, id: "unused-session" }
+  assertEquals((await meter.check(fresh)).decision, QuotaDecision.Allowed)
+
+  await meter.reserve(SESSION)
+  // A different session, with an empty counter of its own, is still refused.
+  assertEquals((await meter.check(fresh)).decision, QuotaDecision.Exhausted)
+  assertEquals((await meter.get(fresh)).decision, QuotaDecision.Exhausted)
+  assertEquals((await meter.get(fresh)).used, 0)
+})
+
+Deno.test("sessions: releasing a session gives back both the pool and its own unit", async () => {
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 2, sessions: { poolLimit: 1 } }
+  const meter = createQuotaMeter({ policy, store, meteredResourceAvailable: true, now: () => 0 })
+
+  await meter.reserve(SESSION)
+  await meter.release(SESSION)
+  assertEquals(await store.read(sessionPoolKey(policy, 0)), 0)
+  assertEquals(await store.read(quotaKey(SESSION, policy, 0)), 0)
+  assertEquals((await meter.reserve(SESSION)).decision, QuotaDecision.Allowed)
+})
+
+Deno.test("sessions: record spends the pool too, so late accounting cannot dodge it", async () => {
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, sessions: { poolLimit: 2 } }
+  const meter = createQuotaMeter({ policy, store, meteredResourceAvailable: true, now: () => 0 })
+
+  await meter.record(SESSION, 2)
+  assertEquals(await store.read(sessionPoolKey(policy, 0)), 2)
+  assertEquals(
+    (await meter.reserve({ kind: QuotaPrincipalKind.Session, id: "other" })).decision,
+    QuotaDecision.Exhausted,
+  )
+})
+
+Deno.test("sessions: the pool key cannot collide with a principal's own counter", () => {
+  const policy: QuotaPolicy = { limit: 1, sessions: { poolLimit: 1 } }
+  assertEquals(sessionPoolKey(policy, 0), { principal: SESSION_POOL_PRINCIPAL, window: "all" })
+  assertFalse(SESSION_POOL_PRINCIPAL.includes(":"))
+  // Every principal key carries `<kind>:<id>`, which the pool principal cannot be.
+  for (const principal of [USER, SESSION, { kind: QuotaPrincipalKind.Session, id: "" }]) {
+    assertFalse(quotaKey(principal, policy, 0).principal === SESSION_POOL_PRINCIPAL)
+  }
+})
+
+Deno.test("sessions: the pool follows the same window as the counters it bounds", () => {
+  const windowed: QuotaPolicy = { limit: 1, windowSeconds: 60, sessions: { poolLimit: 1 } }
+  assertEquals(sessionPoolKey(windowed, 0).window, quotaKey(SESSION, windowed, 0).window)
+  assertEquals(sessionPoolKey(windowed, 59_999).window, "w0")
+  assertEquals(sessionPoolKey(windowed, 60_000).window, "w1")
+})
+
+Deno.test("sessions: a policy with no sessions block refuses every session principal", async () => {
+  const { meter, calls } = makeMeter({ policy: { limit: 5 } })
+  const code = QuotaErrorCode.SessionPrincipalNotAllowed
+
+  assertEquals(await caughtCode(() => meter.check(SESSION)), code)
+  assertEquals(await caughtCode(() => meter.get(SESSION)), code)
+  assertEquals(await caughtCode(() => meter.reserve(SESSION)), code)
+  assertEquals(await caughtCode(() => meter.release(SESSION)), code)
+  assertEquals(await caughtCode(() => meter.record(SESSION)), code)
+  // Refused before anything is read, written or even validated as a count.
+  assertEquals(calls.read + calls.increment + calls.reserve + calls.release, 0)
+  assertEquals(await caughtCode(() => meter.reserve(SESSION, -1)), code)
+  // The same meter still meters an authenticated user.
+  assertEquals((await meter.check(USER)).decision, QuotaDecision.Allowed)
+})
+
+Deno.test("sessions: an undefined sessions block cannot pass for an allowed one", async () => {
+  // A wiring mistake that reads a missing config value must not flip the
+  // default: `{ sessions: undefined }` is "not allowed", like an absent key.
+  const { meter } = makeMeter({ policy: { limit: 5, sessions: undefined } })
+  assertEquals(
+    await caughtCode(() => meter.reserve(SESSION)),
+    QuotaErrorCode.SessionPrincipalNotAllowed,
+  )
+})
+
+Deno.test("sessions: a poolLimit of 0 allows sessions and gives them nothing", async () => {
+  const { meter } = makeMeter({ policy: { limit: 5, sessions: { poolLimit: 0 } } })
+  const state = await meter.reserve(SESSION)
+  assertEquals(state.decision, QuotaDecision.Exhausted)
+  assertEquals(state.used, 0)
+})
+
+Deno.test("createQuotaMeter: rejects a sessions block whose poolLimit is not a counter", () => {
+  const store = inMemoryStore()
+  for (const poolLimit of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const thrown = assertThrows(
+      () =>
+        createQuotaMeter({
+          policy: { limit: 5, sessions: { poolLimit } },
+          store,
+          meteredResourceAvailable: true,
+        }),
+      QuotaError,
+    )
+    assertInstanceOf(thrown, QuotaError)
+    assertEquals(thrown.code, QuotaErrorCode.InvalidPolicyLimit)
+    assertEquals(
+      thrown.message,
+      "QuotaPolicy.sessions.poolLimit must be a non-negative safe integer",
+    )
+    assertFalse(thrown.message.includes("was "))
+    assertFalse(thrown.message.includes("1.5"))
+  }
 })
