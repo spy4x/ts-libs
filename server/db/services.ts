@@ -58,9 +58,16 @@ import type { RowCache, Sql, Transaction } from "./ports.ts"
  *
  * **It is thrown, not rejected.** The check sits on the executor itself, which the
  * driver also uses synchronously (`sql(table)` renders an identifier and returns it), so
- * one rule covers every call form. A method declared `async`, or one that awaits its
- * query, turns the throw into the rejection its caller expects; a method that returns
- * the tagged template unawaited sees it one tick earlier, as a throw.
+ * one rule covers every call *made through the clone*. A method declared `async`, or one
+ * that awaits its query, turns the throw into the rejection its caller expects; a method
+ * that returns the tagged template unawaited sees it one tick earlier, as a throw.
+ *
+ * **Two routes are still open, and they are open on the version before this check too.**
+ * A query *built* inside the callback and awaited afterwards runs when it is awaited,
+ * and the call that built it happened while the clone was live, so nothing here sees it.
+ * The same goes for a raw handle taken straight from `this.sql.savepoint(...)`, which is
+ * the driver's own object rather than the clone's. Both still write into a later
+ * transaction and lose the row. They are tracked in #108.
  */
 export class PostgresScopeEndedError extends Error {
   constructor() {
@@ -85,33 +92,59 @@ interface ScopedExecutor {
  * Wrap a transaction handle so it stops working when its transaction ends.
  *
  * A `Proxy` rather than a hand-written stand-in, because the driver's handle is a tag
- * function carrying a dozen properties — `savepoint`, `unsafe`, `json`, the type
+ * function carrying a dozen properties — `savepoint`, `unsafe`, `json`, `file`, the type
  * helpers — and a stand-in would have to list them, so a property nobody thought of
  * would quietly go around the check. The two traps cover the only two ways the handle is
  * reached: calling it (`` sql`…` `` and `sql(identifier)`) and calling something on it
- * (`sql.savepoint(…)`).
+ * (`sql.savepoint(…)`, `sql.unsafe(…)`).
  *
- * Methods are applied to the real handle, not to the proxy, so `this` inside the driver
- * is what it would have been without the wrapper.
+ * **A function reached through the handle is wrapped, not replaced.** An earlier version
+ * of this returned a plain arrow function for every function-valued property, and that
+ * threw away the properties the function carried: the driver hangs a caller's custom type
+ * helpers on `sql.types` and `sql.typed`, which are themselves functions, so
+ * `sql.types.myType(value)` became a `TypeError` inside a transaction. Each function is
+ * now wrapped in a `Proxy` of its own, recursively, so its properties survive and every
+ * call through any of them is still refused once the scope has ended.
+ *
+ * Wrappers are remembered per value, so reading the same property twice gives the same
+ * function and an identity comparison still holds.
+ *
+ * `this` is passed on unchanged everywhere, so a driver method sees the receiver the call
+ * actually named rather than one this wrapper picked.
  */
 function scopeExecutor(executor: Transaction): ScopedExecutor {
   let ended = false
   const assertUsable = (): void => {
     if (ended) throw new PostgresScopeEndedError()
   }
+  const wrappers = new WeakMap<object, unknown>()
+
+  /** Guard a value reached through the handle: functions are wrapped, anything else is not. */
+  const guard = (value: unknown): unknown => {
+    if (typeof value !== "function") return value
+    const cached = wrappers.get(value as object)
+    if (cached !== undefined) return cached
+    const wrapper = new Proxy(value as (...parameters: unknown[]) => unknown, {
+      apply(inner, thisArg, parameters: unknown[]) {
+        assertUsable()
+        return Reflect.apply(inner, thisArg, parameters)
+      },
+      get(inner, property) {
+        return guard(Reflect.get(inner, property))
+      },
+    })
+    wrappers.set(value as object, wrapper)
+    return wrapper
+  }
+
   const target = executor as unknown as (...parameters: unknown[]) => unknown
   const proxy = new Proxy(target, {
-    apply(inner, _thisArg, parameters: unknown[]) {
+    apply(inner, thisArg, parameters: unknown[]) {
       assertUsable()
-      return Reflect.apply(inner, executor, parameters)
+      return Reflect.apply(inner, thisArg, parameters)
     },
     get(inner, property) {
-      const value = Reflect.get(inner, property)
-      if (typeof value !== "function") return value
-      return (...parameters: unknown[]) => {
-        assertUsable()
-        return Reflect.apply(value as (...args: unknown[]) => unknown, inner, parameters)
-      }
+      return guard(Reflect.get(inner, property))
     },
   })
   return {

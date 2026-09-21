@@ -138,6 +138,17 @@ function createFakeSql(options: FakeSqlOptions = {}) {
   ) => Promise<unknown>
 
   /**
+   * `sql.types` / `sql.typed`, as `postgres` builds them.
+   *
+   * A function that also carries one named helper per custom type the caller registered
+   * (`postgres@3.4.7/src/index.js:86-102`). `shout` stands in for such a helper.
+   */
+  const customTypes = Object.assign(
+    (value: unknown): unknown => ({ __typed: value }),
+    { shout: (value: string): unknown => ({ __shout: value.toUpperCase() }) },
+  )
+
+  /**
    * The transaction handle, with the two nesting calls `postgres` puts on it.
    *
    * `savepoint` is the real one and is recorded in `inner`, because a savepoint is a
@@ -163,6 +174,25 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     },
     begin: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> =>
       client.begin(callback),
+    // The rest of the driver's surface, as far as a caller can reach it. They are here so
+    // that the `Proxy` in `services.ts` can be walked: the reason it is a `Proxy` rather
+    // than a hand-written stand-in is that a property nobody listed must not become a way
+    // around the check, and a fake that offered only `savepoint` could not show that.
+    unsafe: (text: string): Promise<unknown> =>
+      execute(text, (it) => (inTransaction ? inner : topLevel).push(it)),
+    file: (path: string): Promise<unknown> =>
+      execute(`file(${path})`, (it) => (inTransaction ? inner : topLevel).push(it)),
+    reserve: (): Promise<unknown> => {
+      topLevel.push("reserve()")
+      return Promise.resolve(client)
+    },
+    json: (value: unknown): unknown => ({ __json: value }),
+    // `types` and `typed` are the driver's own shape: a *function* carrying one helper per
+    // custom type the caller registered. A wrapper that replaced functions with plain
+    // arrows lost `shout` here, and `sql.types.shout(...)` became a TypeError inside a
+    // transaction.
+    types: customTypes,
+    typed: customTypes,
   })
 
   const client = Object.assign(asTag, {
@@ -218,6 +248,47 @@ class TestService extends DbServiceBase {
   select(value: number): Promise<unknown> {
     return this.sql`SELECT ${value}`
   }
+
+  /** The executor this instance writes through — the clone's wrapper, on a clone. */
+  executor(): FakeExecutor {
+    return this.sql as unknown as FakeExecutor
+  }
+}
+
+/** The driver surface {@link createFakeSql} offers, as the scope tests reach for it. */
+interface FakeExecutor {
+  (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown>
+  (identifier: string): unknown
+  unsafe(text: string): Promise<unknown>
+  file(path: string): Promise<unknown>
+  reserve(): Promise<unknown>
+  json(value: unknown): unknown
+  begin<T>(callback: (transaction: Transaction) => Promise<T>): Promise<T>
+  savepoint<T>(callback: (transaction: Transaction) => Promise<T>): Promise<T>
+  types: { (value: unknown): unknown; shout(value: string): unknown }
+  typed: { (value: unknown): unknown; shout(value: string): unknown }
+}
+
+/**
+ * Every way a caller can reach the driver through the clone's executor.
+ *
+ * Table-driven on purpose. The `Proxy` exists so that a property nobody listed cannot
+ * become a way around the check, and a test that named only `savepoint` could not show
+ * that: letting `unsafe` through the `get` trap unchecked left both tiers green.
+ */
+function callForms(sql: FakeExecutor): Array<[string, () => unknown]> {
+  return [
+    ["tagged template", () => sql`SELECT ${1}`],
+    ["identifier helper", () => sql("users")],
+    ["unsafe", () => sql.unsafe("SELECT 1")],
+    ["file", () => sql.file("/migrations/0001.sql")],
+    ["reserve", () => sql.reserve()],
+    ["json", () => sql.json({ a: 1 })],
+    ["begin", () => sql.begin(() => Promise.resolve(undefined))],
+    ["savepoint", () => sql.savepoint(() => Promise.resolve(undefined))],
+    ["a custom type helper", () => sql.types.shout("hello")],
+    ["the typed alias of the same helper", () => sql.typed.shout("hello")],
+  ]
 }
 
 /** A `RowCache` that records its calls. */
@@ -472,6 +543,50 @@ Deno.test("a clone kept past begin refuses every later statement", async () => {
   await assertRejects(() => kept!.begin(() => Promise.resolve(undefined)), PostgresScopeEndedError)
   assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
   assertEquals(fake.inner, ["SELECT $1"])
+})
+
+Deno.test("every call form through a kept clone is refused, not only the ones we thought of", async () => {
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await service.begin((tx) => {
+    kept = tx
+    return Promise.resolve()
+  })
+  assertExists(kept)
+  const sql = kept.executor()
+
+  for (const [name, call] of callForms(sql)) {
+    assertThrows(call, PostgresScopeEndedError, undefined, `${name} was not refused`)
+  }
+  // Nothing reached the driver: neither the transaction that ended nor the client.
+  assertEquals(fake.inner, [])
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
+})
+
+Deno.test("every call form works while the clone is still live", async () => {
+  // The other half of the table. A wrapper that refused everything would pass the test
+  // above and be useless, and the custom type helper is the one that was actually lost:
+  // replacing each function with a plain arrow threw away the properties it carried, so
+  // `sql.types.shout` did not exist inside a transaction although it does outside one.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  await service.begin(async (tx) => {
+    const sql = tx.executor()
+    assertEquals(sql.types.shout("hello"), { __shout: "HELLO" })
+    assertEquals(sql.typed.shout("hello"), { __shout: "HELLO" })
+    assertEquals(sql.json({ a: 1 }), { __json: { a: 1 } })
+    assertEquals(sql("users"), { __identifier: "users" })
+    // Reading the same helper twice gives the same function, so an identity comparison
+    // still holds through the wrapper.
+    assertStrictEquals(sql.types.shout, sql.types.shout)
+    await sql.unsafe("SELECT 1")
+    await sql`SELECT ${2}`
+  })
+
+  assertEquals(fake.inner, ["SELECT 1", "SELECT $1"])
 })
 
 Deno.test("a clone kept past a begin that rolled back refuses too", async () => {

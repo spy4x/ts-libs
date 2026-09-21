@@ -35,6 +35,7 @@ import {
   assertThrows,
 } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
+import postgres from "postgres"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import type { RowCache, Sql } from "./ports.ts"
 import { createSql } from "./postgres.ts"
@@ -72,6 +73,21 @@ class NoteService extends DbServiceBase {
     const rows = await this
       .sql<{ id: number }[]>`SELECT id FROM ${this.sql(schema)}.note ORDER BY id`
     return rows.map((row) => row.id)
+  }
+}
+
+/**
+ * A service that reaches for a custom type helper the caller registered on the client.
+ *
+ * `sql.types` is a function carrying one helper per registered type, so reading it
+ * through the clone's wrapper is the case that broke: a wrapper that returns a plain
+ * arrow function for it loses `shout`.
+ */
+class TypedService extends DbServiceBase {
+  shout(value: string): Promise<Array<{ v: string }>> {
+    const helpers = this.sql as unknown as { types: { shout: (value: string) => unknown } }
+    return this.sql<{ v: string }[]>`SELECT ${helpers.types.shout(value)}::text AS v`
+      .then((rows) => rows.map((row) => ({ v: row.v })))
   }
 }
 
@@ -227,6 +243,48 @@ describe("DbServiceBase against a real server", () => {
 
       assertEquals(await service.ids(schema), [1, 3])
     })
+  })
+
+  it("keeps a caller's custom type helpers reachable inside a transaction", async () => {
+    // The clone's executor is a wrapper, and a wrapper that replaced each function with a
+    // plain arrow threw away the properties that function carried. `postgres` hangs one
+    // helper per registered custom type on `sql.types` and `sql.typed`, which are
+    // themselves functions, so `sql.types.shout(...)` became a `TypeError` inside a
+    // transaction although it worked outside one.
+    //
+    // The client is built with the driver directly rather than through `createSql`,
+    // because custom types are deliberately not part of `CreateSqlOptions`; this test is
+    // about what a caller who registers one sees through the clone.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+    const name = uniqueIdentifier("it_types")
+    const sql = postgres({
+      host: settings.connection.host,
+      port: settings.connection.port,
+      user: settings.connection.user,
+      pass: settings.connection.password,
+      db: settings.connection.database,
+      connection: { application_name: name },
+      max: 1,
+      types: {
+        shout: {
+          to: 25,
+          from: [25],
+          serialize: (value: string) => value.toUpperCase(),
+          parse: (value: string) => value,
+        },
+      },
+    }) as unknown as Sql
+
+    try {
+      const service = new TypedService({ sql })
+      await service.begin(async (tx) => {
+        const rows = await tx.shout("hello")
+        assertEquals(rows, [{ v: "HELLO" }])
+      })
+    } finally {
+      await sql.end()
+    }
   })
 
   it("updates only the timestamp when the data object is empty", async () => {
