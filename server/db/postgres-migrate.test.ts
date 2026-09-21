@@ -218,7 +218,23 @@ Deno.test("purgeDatabase refuses every environment it does not recognise", async
   // The guard used to compare against the single literal "prod", so each of these
   // dropped the database: the ones that spell production differently, and the deployment
   // that sets no ENV at all.
-  const unsafe = ["prod", "production", "PROD", "Prod", "prod ", "staging", "preview", ""]
+  // The last four are the ones a substring comparison would let through: each contains
+  // a safe name inside a name that is not safe. `production-test` is the shape that
+  // matters — a production environment whose name happens to end in `test`.
+  const unsafe = [
+    "prod",
+    "production",
+    "PROD",
+    "Prod",
+    "prod ",
+    "staging",
+    "preview",
+    "",
+    "testing",
+    "production-test",
+    "dev-prod",
+    "prod-ci",
+  ]
   for (const value of unsafe) {
     const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
     const result = await purgeDatabase({ sql: fake.sql, environment: { [ENV_NAME]: value } })
@@ -248,6 +264,23 @@ Deno.test("purgeDatabase runs for each safe environment, spelled loosely", async
     const result = await purgeDatabase({ sql: fake.sql, environment: { [ENV_NAME]: value } })
 
     assertEquals(result, { dropped: ["users"], refused: false })
+  }
+})
+
+Deno.test("purgeDatabase is not armed by an argument that is not the flag", async () => {
+  // The override is one exact argument. A command line that carries anything at all —
+  // a `--dry-run`, a file path, the script's own name — must not count as asking for a
+  // production purge.
+  for (const args of [["--dry-run"], ["--PROD"], ["--prod=yes"], [" --prod"], ["purge.ts"]]) {
+    const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+    const result = await purgeDatabase({
+      sql: fake.sql,
+      environment: { [ENV_NAME]: "production" },
+      args,
+    })
+
+    assertEquals(result, { dropped: [], refused: true })
+    assertEquals(fake.topLevel, [])
   }
 })
 
