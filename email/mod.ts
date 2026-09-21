@@ -74,6 +74,7 @@ export {
   MIN_RSA_KEY_BITS,
   parseDkimPublicKey,
   parseDkimSignature,
+  refuseHeaderLineEndings,
   sha256Base64,
   splitMessage,
   verifyDkim,

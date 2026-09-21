@@ -38,6 +38,7 @@ import {
   fetchDkimPublicKey,
   parseDkimPublicKey,
   parseDkimSignature,
+  refuseHeaderLineEndings,
   sha256Base64,
   splitMessage,
   verifyDkim,
@@ -2413,5 +2414,117 @@ describe("whitespace inside the bh= tag (§3.5)", () => {
     const result = await verifyDkim(folded, publicKey)
     assertEquals(result.valid, false)
     assertEquals(result.reason, "signature did not verify against public key")
+  })
+})
+
+// --- a header block whose line endings are not uniform ----------------------
+
+/**
+ * A lone CR in the header block is how a `From:` field is hidden. Readers do not
+ * agree on whether a bare CR ends a line: this verifier keeps it inside the value
+ * it sits in, so it sees one `From:` and the signature covers the genuine one,
+ * while a client that breaks the line sees two and displays the forged one. The
+ * message came back valid and the sender shown was not the sender signed for.
+ *
+ * Each case below asserts both halves: the forged field is in the message, and
+ * the verifier's own `splitMessage` cannot see it. `valid === false` alone would
+ * not be evidence — a signature mismatch returns that too — so the reason string
+ * is the assertion.
+ */
+describe("a header block whose line endings are not uniform", () => {
+  const BODY = "This is a test.\r\n"
+  const FORGED = "From: ceo@bank.example"
+  const CR_REASON = "header block carries a carriage return that no line feed follows, " +
+    "so where its header fields end is ambiguous"
+  const MIXED_REASON = "header block mixes CRLF and bare LF line endings, " +
+    "so where its header fields end is ambiguous"
+
+  /** The `From:` fields `splitMessage` sees, which are the ones DKIM can protect. */
+  function visibleFromFields(raw: string): string[] {
+    return splitMessage(raw).headers.filter((line) => line.toLowerCase().startsWith("from:"))
+  }
+
+  it("rejects a From: hidden behind a lone carriage return above the block", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+
+    const attacked = `X-Note: a\r${FORGED}\r\n${raw}`
+    assert(attacked.includes(FORGED), "the forged From: must be in the message")
+    assertEquals(
+      visibleFromFields(attacked).length,
+      1,
+      "the point of the attack: the verifier sees only the signed From:",
+    )
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, CR_REASON)
+  })
+
+  it("rejects a From: hidden behind a lone carriage return below the signature", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const blankLine = raw.indexOf("\r\n\r\n")
+    const attacked = `${raw.slice(0, blankLine)}\r\nX-Note: a\r${FORGED}${raw.slice(blankLine)}`
+    assert(attacked.includes(FORGED), "the forged From: must be in the message")
+    assertEquals(visibleFromFields(attacked).length, 1)
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, CR_REASON)
+  })
+
+  it("rejects a From: hidden behind a lone carriage return inside a fold", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    // The CR sits in the continuation line of an unsigned field, so the header
+    // hash is untouched and nothing but the line-ending rule can refuse it.
+    const attacked = `X-Note: a\r\n\tb\r${FORGED}\r\n${raw}`
+    assert(attacked.includes(FORGED), "the forged From: must be in the message")
+    assertEquals(visibleFromFields(attacked).length, 1)
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, CR_REASON)
+  })
+
+  it("rejects a header block that ends some lines with CRLF and others with LF", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const mixed = raw.replace("To: recipient@example.org\r\n", "To: recipient@example.org\n")
+    assert(mixed !== raw, "one line ending must have changed")
+
+    const result = await verifyDkim(mixed, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, MIXED_REASON)
+  })
+
+  it("verifies a message whose header block ends every line with a bare LF", async () => {
+    // Mailbox storage rewrites CRLF to LF, and RFC 6376's own example message is
+    // stored that way. Refusing a bare LF as such would reject ordinary mail —
+    // what is refused is a block that is not consistent with itself.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const lfOnly = raw.replace(/\r\n/g, "\n")
+    assert(!lfOnly.includes("\r"), "the message must carry no CR at all")
+
+    const result = await verifyDkim(lfOnly, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("verifies a message whose body carries a lone carriage return", async () => {
+    // The rule is about the header block only. A CR in the body cannot hide a
+    // header field, and both signer and verifier hash the same body octets.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "before\rafter\r\n")
+    assert(raw.includes("before\rafter"), "the body must carry the lone CR")
+
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("reports no fault for a header block that is uniformly CRLF or LF", () => {
+    assertEquals(refuseHeaderLineEndings("From: a@example.com\r\n\r\nbody\r\n"), undefined)
+    assertEquals(refuseHeaderLineEndings("From: a@example.com\n\nbody\n"), undefined)
+    assertEquals(refuseHeaderLineEndings("From: a@example.com\r"), CR_REASON)
+    assertEquals(
+      refuseHeaderLineEndings("From: a@example.com\r\nTo: b@example.org\n\n"),
+      MIXED_REASON,
+    )
   })
 })
