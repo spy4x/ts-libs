@@ -1149,7 +1149,12 @@ function headerNameMatches(rawName: string, target: string): boolean {
  * looseHeaderNameMatch}, issue #113): such a line is never selected by the
  * bottom-up pairing above — it sits in its own bucket, under its own literal
  * name — so it is always an instance beyond what the signer signed, for
- * every name it disguises as that `h=` actually lists.
+ * every name it disguises as that `h=` actually lists. Unlike the leftover
+ * check above, this one has no {@link TRANSIT_ADDED_HEADER_NAMES} exemption:
+ * a disguised line was never written by a relay and can never be reached by
+ * the oversigning remedy either, since it is never selected or hashed, so
+ * exempting it would hand a forged trace field exactly the bypass this scan
+ * exists to close.
  */
 function selectSignedHeaders(
   headers: string[],
@@ -1214,6 +1219,18 @@ function selectSignedHeaders(
   // whichever asked-for name it disguises as, for the same reason a real
   // extra instance is: the signer never had the chance to sign it under that
   // name.
+  //
+  // No {@link TRANSIT_ADDED_HEADER_NAMES} exemption here, unlike the pairing
+  // loop above: that exemption exists because a relay prepends a real,
+  // correctly named trace field, and the remedy for a signer who wants one
+  // protected — oversigning it — reaches that field, since it has an exact
+  // name and is paired and hashed like any other. Neither holds for a name
+  // that only reads as `resent-from` or `received-spf` once a padding byte is
+  // dropped or a name is cut short: no relay wrote it that way, and
+  // oversigning cannot reach it, because a disguised line is never selected
+  // or hashed by the pairing loop at all — it sits in its own bucket. Exempting
+  // it here would hand a forged `Resent-From` the exact bypass this scan
+  // exists to close.
   const askedNames = new Set(asked.keys())
   const maxAskedNameLength = names.reduce((max, name) => Math.max(max, name.length), 0)
   for (const header of headers) {
@@ -1225,7 +1242,6 @@ function selectSignedHeaders(
     if (asked.has(exact)) continue // already accounted for above
     const loose = looseHeaderNameMatch(trimmedName, askedNames, maxAskedNameLength)
     if (loose === undefined) continue
-    if (isTransitAddedHeaderName(loose)) continue
     throw new DkimParseError(`unsigned additional instances of a signed header: ${loose}`)
   }
 
