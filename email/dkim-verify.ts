@@ -60,6 +60,42 @@ export interface DkimPublicKey {
    * so both shapes occur and both are left alone.
    */
   keyBytes: Uint8Array
+  /** `v=` when the record carries one. §3.6.1 defines exactly one value: `DKIM1`. */
+  version?: string
+  /**
+   * `h=` — the hash algorithms the key may be used with, lowercased. Absent when
+   * the record names none, which §3.6.1 reads as "all algorithms are allowed".
+   */
+  hashAlgorithms?: string[]
+  /**
+   * `s=` — the service types the key applies to, lowercased. Absent when the
+   * record names none, which §3.6.1 reads as `*`.
+   */
+  serviceTypes?: string[]
+  /**
+   * `t=` — the record's flags, lowercased. §3.6.1 defines `y` (the domain is
+   * testing DKIM) and `s` (`i=` must carry exactly `d=`, not a subdomain).
+   */
+  flags?: string[]
+}
+
+/**
+ * How much of the canonicalized body a signature's `bh=` tag actually covers.
+ *
+ * RFC 6376 §3.5's `l=` tag lets a signer sign a prefix of the body and leave the
+ * rest unsigned; with `l=0` the signature covers no body at all, and any text may
+ * be appended to the message without breaking it. That is legal, so it does not
+ * make the signature invalid — but a caller who reads "valid" as "the whole
+ * message is authentic" is wrong whenever {@link DkimBodyCoverage.complete} is
+ * false, which is why every result that hashed a body carries this.
+ */
+export interface DkimBodyCoverage {
+  /** Canonical body octets the body hash covers. */
+  signedOctets: number
+  /** Canonical body octets the message has. */
+  totalOctets: number
+  /** True when the signature covers the whole canonical body. */
+  complete: boolean
 }
 
 /** Outcome of {@link verifyDkim}. A malformed message returns, it does not throw. */
@@ -73,6 +109,8 @@ export interface DkimVerificationResult {
   computedBodyHash?: string
   /** First 240 characters of the recomputed signature input, for diagnostics. */
   computedInputPreview?: string
+  /** How much of the body the signature covers; present once the body was hashed. */
+  bodyCoverage?: DkimBodyCoverage
 }
 
 /**
@@ -94,7 +132,66 @@ export interface DkimVerifyOptions {
   now?: bigint
   /** DNS TXT resolver used to fetch the public key when none is supplied. */
   resolver?: DnsTxtResolver
+  /**
+   * Longest message this verifier will look at, in characters. Defaults to
+   * {@link DEFAULT_MAX_MESSAGE_LENGTH}. A longer message is refused before it is
+   * canonicalized: every pass here is linear, and the cap is what bounds the work
+   * an unauthenticated sender can ask for.
+   */
+  maxMessageLength?: number
+  /**
+   * How many `DKIM-Signature` fields to verify. Defaults to
+   * {@link DEFAULT_MAX_SIGNATURES}. RFC 6376 §6.1 allows the limit; without one,
+   * a message full of signature fields buys one key lookup and one public-key
+   * operation each.
+   */
+  maxSignatures?: number
+  /**
+   * How many header fields a message may carry. Defaults to
+   * {@link DEFAULT_MAX_HEADER_FIELDS}. Neither RFC 5322 nor RFC 6376 sets a
+   * limit, and ordinary mail is two orders of magnitude below this one; a message
+   * that is only header fields is not mail.
+   */
+  maxHeaderFields?: number
+  /**
+   * How many names a signature's `h=` tag may list. Defaults to
+   * {@link DEFAULT_MAX_SIGNED_HEADER_NAMES}. A signer that oversigns lists every
+   * field twice, so real values are tens, not hundreds.
+   */
+  maxSignedHeaderNames?: number
 }
+
+/**
+ * Default {@link DkimVerifyOptions.maxSignatures}. Real mail carries one to three
+ * signatures, and a mailing list that re-signs adds one more.
+ */
+export const DEFAULT_MAX_SIGNATURES = 10
+
+/**
+ * Default {@link DkimVerifyOptions.maxMessageLength}: 10 MiB of characters, which
+ * is above the message size limit relays usually impose and far below anything
+ * that takes a noticeable time to canonicalize.
+ */
+export const DEFAULT_MAX_MESSAGE_LENGTH = 10 * 1024 * 1024
+
+/**
+ * Default {@link DkimVerifyOptions.maxHeaderFields}. Mail carries tens of header
+ * fields; a long mailing-list chain with a `Received` line per hop carries
+ * hundreds at the very worst.
+ */
+export const DEFAULT_MAX_HEADER_FIELDS = 1000
+
+/**
+ * Default {@link DkimVerifyOptions.maxSignedHeaderNames}. Signers list ten to
+ * twenty names, or twice that when they oversign.
+ */
+export const DEFAULT_MAX_SIGNED_HEADER_NAMES = 200
+
+/**
+ * RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less
+ * than 1024 bits as valid."
+ */
+export const MIN_RSA_KEY_BITS = 1024
 
 /** Thrown for a malformed DKIM-Signature header or DNS key record. */
 export class DkimParseError extends Error {
@@ -284,9 +381,14 @@ function parseDkimSignatureHeader(raw: string, requireB = true): ParsedDkimSigna
     throw new DkimParseError("DKIM-Signature s= tag is empty")
   }
 
-  const dt = tags.get("dt")?.value
-  if (dt !== undefined && dt !== "1") {
-    throw new DkimParseError(`unsupported DKIM dtag: ${dt}`)
+  // §3.5 gives i= the grammar `[ Local-part ] "@" domain-name`, so a value with
+  // no "@" carries no domain for §6.1.1 to compare against d= and is malformed.
+  // (An earlier revision rejected a `dt=` tag here instead, which no RFC defines:
+  // §3.2 says an unrecognised tag MUST be ignored, and the README documented the
+  // opposite of what the code did.)
+  const identity = tags.get("i")?.value
+  if (identity !== undefined && !identity.includes("@")) {
+    throw new DkimParseError(`DKIM-Signature i= tag has no domain: ${identity}`)
   }
 
   const header: DkimSignatureHeader = {
@@ -315,7 +417,7 @@ function parseDkimSignatureHeader(raw: string, requireB = true): ParsedDkimSigna
     expiration: tags.has("x") ? parseEpoch(tags.get("x")!.value, "x") : undefined,
     bodyLength: tags.has("l") ? parseBodyLength(tags.get("l")!.value) : undefined,
     queryMethod: tags.get("q")?.value,
-    identity: tags.get("i")?.value,
+    identity,
     raw,
   }
   const b = tags.get("b")
@@ -414,27 +516,78 @@ export function canonicalizeHeader(
  * {@link verifyDkim} — the bound is counted in octets, not in characters.
  */
 export function canonicalizeBody(body: string, algorithm: Canonicalization): string {
-  const crlf = toCrlf(body)
-  if (algorithm === "relaxed") {
-    // §3.4.4 order: strip trailing WSP from every line, compress the remaining
-    // WSP runs to one SP, then ignore trailing empty lines. A body that reduces
-    // to nothing is the empty string, not a lone CRLF.
-    const prepared = crlf
-      .replace(/[ \t]+\r\n/g, "\r\n")
-      .replace(/[ \t]+/g, " ")
-    const stripped = prepared.replace(/(?:\r\n)+$/, "")
-    if (stripped === "") return ""
-    return stripped + "\r\n"
-  }
-  // Simple (§3.4.3): only the trailing empty lines go. Body bytes are otherwise
-  // untouched. An empty body still ends with the CRLF the algorithm appends.
-  const stripped = crlf.replace(/(?:\r\n)+$/, "")
-  return stripped === "" && crlf === "" ? "\r\n" : stripped + "\r\n"
+  // One pass to split, one pass per line, one join: the cost grows with the body,
+  // not with its square. The regular expressions this replaced backtracked —
+  // `/[ \t]+\r\n/g` retried a whole run of spaces at every offset inside it and
+  // `/(?:\r\n)+$/` retried every run of line endings — so 80 KB of either took
+  // about four seconds, and each doubling of the body cost four times as much.
+  // The body arrives from an unauthenticated sender, so that was a freeze
+  // anybody could trigger by sending one large message.
+  const lines = splitBodyLines(body)
+  // §3.4.4 order: strip trailing WSP from every line and compress the remaining
+  // WSP runs to one SP, *then* ignore trailing empty lines — a line of nothing
+  // but WSP is empty by the time the last step looks at it.
+  const canonical = algorithm === "relaxed" ? lines.map(relaxBodyLine) : lines
+
+  let end = canonical.length
+  while (end > 0 && canonical[end - 1] === "") end--
+  // §3.4.5 pins the two empty cases apart: simple hashes the CRLF the algorithm
+  // appends (`frcCV1k9…`), relaxed hashes nothing at all (`47DEQpj8…`).
+  if (end === 0) return algorithm === "relaxed" ? "" : "\r\n"
+  return `${canonical.slice(0, end).join("\r\n")}\r\n`
 }
 
-/** Normalise bare LF and lone CR to CRLF. */
-function toCrlf(input: string): string {
-  return input.replace(/\r\n|\r|\n/g, "\r\n")
+/**
+ * Split a body into lines, dropping the line endings.
+ *
+ * CRLF, a bare LF and a lone CR each end a line, which is how the canonical body
+ * comes out CRLF-terminated whatever the message's storage did to it. The last
+ * element is what followed the final line ending — the empty string when the body
+ * ends with one.
+ */
+function splitBodyLines(body: string): string[] {
+  const lines: string[] = []
+  let start = 0
+  for (let i = 0; i < body.length; i++) {
+    const code = body.charCodeAt(i)
+    if (code !== 0x0d && code !== 0x0a) continue
+    lines.push(body.slice(start, i))
+    if (code === 0x0d && body.charCodeAt(i + 1) === 0x0a) i++
+    start = i + 1
+  }
+  lines.push(body.slice(start))
+  return lines
+}
+
+/**
+ * §3.4.4 for one line: every WSP run becomes one SP, and the run at the end of
+ * the line disappears.
+ *
+ * A leading run becomes one SP rather than nothing — §3.4.5's own Example 3
+ * canonicalizes `" C "` to `" C"`, space included — so the leading SP is emitted
+ * with the first word rather than trimmed away.
+ */
+function relaxBodyLine(line: string): string {
+  let out = ""
+  let at = 0
+  let pendingSpace = false
+  while (at < line.length) {
+    if (isWsp(line.charCodeAt(at))) {
+      pendingSpace = true
+      at++
+      continue
+    }
+    const start = at
+    while (at < line.length && !isWsp(line.charCodeAt(at))) at++
+    if (pendingSpace) out += " "
+    pendingSpace = false
+    out += line.slice(start, at)
+  }
+  return out
+}
+
+function isWsp(code: number): boolean {
+  return code === 0x20 || code === 0x09
 }
 
 /**
@@ -462,11 +615,28 @@ function deleteTagValue(raw: string, tag: string): string {
  * already be concatenated and dequoted per RFC 6376 §3.6.2.2.
  *
  * Returns `null` when the key is revoked — `p=` present but empty. Throws
- * {@link DkimParseError} on a missing `p=`, an unknown `k=`, a repeated tag,
- * or a `p=` whose base64 does not decode.
+ * {@link DkimParseError} on a missing `p=`, an unknown `k=`, an unknown `v=`, a
+ * `v=` that is not the first tag, an empty `h=` or `s=` list, a repeated tag, or
+ * a `p=` whose base64 does not decode.
+ *
+ * The restriction tags — `h=`, `s=`, `t=` — are read here and applied by
+ * {@link verifyDkim}, which is the only place that knows which hash the
+ * signature used and that the service is email.
  */
 export function parseDkimPublicKey(txtRecord: string): DkimPublicKey | null {
   const tags = scanTagList(txtRecord)
+  // §3.6.1: "v= ... MUST be the first tag in the record", and the only value it
+  // defines is DKIM1. A record from a future version is not one this verifier
+  // may guess at, so it is a syntax error rather than an ignored tag.
+  const version = tags.get("v")?.value
+  if (version !== undefined) {
+    if (version !== "DKIM1") {
+      throw new DkimParseError(`unsupported DKIM key record version: ${version}`)
+    }
+    if ([...tags.keys()][0] !== "v") {
+      throw new DkimParseError("DKIM TXT record v= tag must come first")
+    }
+  }
   if (!tags.has("p")) {
     throw new DkimParseError("DKIM TXT record has no p= tag")
   }
@@ -478,7 +648,32 @@ export function parseDkimPublicKey(txtRecord: string): DkimPublicKey | null {
   if (algorithm !== "rsa" && algorithm !== "ed25519") {
     throw new DkimParseError(`unsupported DKIM key algorithm: ${algorithm}`)
   }
-  return { algorithm, keyBytes: base64Decode(p) }
+  return {
+    algorithm,
+    keyBytes: base64Decode(p),
+    version,
+    hashAlgorithms: parseRecordList(tags.get("h")?.value, "h"),
+    serviceTypes: parseRecordList(tags.get("s")?.value, "s"),
+    flags: parseRecordList(tags.get("t")?.value, "t"),
+  }
+}
+
+/**
+ * Split a colon-separated key-record list (`h=`, `s=`, `t=`) into lowercase
+ * entries, or `undefined` when the tag is absent.
+ *
+ * A tag that is present but lists nothing is a syntax error rather than "no
+ * restriction": `s=` names the service types the key may be used for, and reading
+ * an empty list as "any" would turn a typo into a wider permission.
+ */
+function parseRecordList(value: string | undefined, tag: string): string[] | undefined {
+  if (value === undefined) return undefined
+  const entries = value.toLowerCase().split(":").map((entry) => entry.replace(/[ \t]+/g, ""))
+    .filter(Boolean)
+  if (entries.length === 0) {
+    throw new DkimParseError(`DKIM TXT record ${tag}= tag is empty`)
+  }
+  return entries
 }
 
 /**
@@ -495,13 +690,45 @@ export async function fetchDkimPublicKey(
   selector: string,
   options: DkimVerifyOptions = {},
 ): Promise<DkimPublicKey | null> {
+  assertDnsLabels(domain, "d=")
+  assertDnsLabels(selector, "s=")
   const name = `${selector}._domainkey.${domain}`
   const { resolveTxt = defaultResolveTxt } = options.resolver ?? {}
   const records = await resolveTxt(name)
-  // §3.6.2.2: concatenate the strings of the first record, no separator. A
-  // record may legitimately arrive empty, which parses to a revoked key.
-  const record = records[0]?.join("") ?? ""
-  return parseDkimPublicKey(record)
+  // §3.6.2.2: concatenate the strings of *one* record, with no separator — a long
+  // key is published as several strings of one record and joining them with
+  // anything at all corrupts it. §3.6.2.2 also leaves the order of several
+  // records unspecified, so an unrelated TXT record at the front is not an
+  // answer: each record is tried and the first one that parses is the key. When
+  // none parses, the first record's own error is what the caller sees.
+  if (records.length === 0) return parseDkimPublicKey("")
+  let firstError: unknown
+  for (const record of records) {
+    try {
+      return parseDkimPublicKey(record.join(""))
+    } catch (err) {
+      firstError ??= err
+    }
+  }
+  throw firstError
+}
+
+/**
+ * Reject a domain or selector that is not a dot-separated run of RFC 5321
+ * `sub-domain` labels, before it is interpolated into a query name.
+ *
+ * `d=` and `s=` come from the message, and an injected resolver may put the name
+ * into a URL (DNS over HTTPS) or a command line. Letters, digits and interior
+ * hyphens are all RFC 6376 §3.1's grammar allows, so anything else is a
+ * malformed signature rather than a name to look up.
+ */
+function assertDnsLabels(value: string, tag: string): void {
+  const labels = value.split(".")
+  const valid = labels.length > 0 &&
+    labels.every((label) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(label))
+  if (!valid) {
+    throw new DkimParseError(`DKIM ${tag} tag is not a domain name: ${JSON.stringify(value)}`)
+  }
 }
 
 async function defaultResolveTxt(name: string): Promise<string[][]> {
@@ -621,6 +848,14 @@ function selectSignedHeaders(
   const remaining = new Map<string, number[]>()
   for (const [name, list] of occurrences) remaining.set(name, [...list])
 
+  // How often the h= list asks for each name, counted once. Asking the list per
+  // distinct header name instead — `names.filter(…)` inside the loop below — cost
+  // one pass over h= for every name in the message, so a message made of headers
+  // that h= all names took time proportional to the square of its size: 3 MB of
+  // them froze the process for 63 seconds, with no valid signature needed.
+  const asked = new Map<string, number>()
+  for (const name of names) asked.set(name, (asked.get(name) ?? 0) + 1)
+
   const selected: { name: string; value: string }[] = []
   for (const name of names) {
     const list = remaining.get(name)
@@ -639,10 +874,10 @@ function selectSignedHeaders(
   // signing, which is exactly the addition §5.4.2 lets a signer detect by
   // listing a name more times than the field occurs.
   for (const [name, list] of occurrences) {
-    const asked = names.filter((n) => n === name).length
     // Names the h= list never asks for are outside this signature entirely; only
     // a name it does ask for has a defined number of expected instances.
-    if (asked === 0 || asked >= list.length) continue
+    const count = asked.get(name) ?? 0
+    if (count === 0 || count >= list.length) continue
     throw new DkimParseError(`unsigned additional instances of a signed header: ${name}`)
   }
   return selected
@@ -670,28 +905,104 @@ function base64Encode(bytes: Uint8Array): string {
 }
 
 /**
- * Verify a DKIM signature against the supplied public key. When `publicKey` is
- * omitted the key is fetched from `options.resolver`, defaulting to
- * `Deno.resolveDns` and therefore to needing `--allow-net`.
+ * Verify a message's DKIM signatures and report one verdict.
+ *
+ * A message may carry several `DKIM-Signature` fields, and RFC 6376 §6.1 treats
+ * them independently: the message is signed by any one of them that verifies.
+ * This returns the first valid result, and the first signature's diagnosis when
+ * none is valid — so a broken signature above a good one no longer condemns the
+ * message, and a signature an attacker prepends no longer decides it either.
+ * {@link verifyDkimSignatures} returns all of them when a caller needs to know
+ * which domains signed.
+ *
+ * When `publicKey` is omitted the key is fetched from `options.resolver`,
+ * defaulting to `Deno.resolveDns` and therefore to needing `--allow-net`.
  *
  * Message-shaped failures — missing header, bad grammar, expired signature,
- * body mismatch, unverifiable signature — all come back as a
- * {@link DkimVerificationResult}. Only a throwing injected resolver escapes.
+ * unsigned `From`, body mismatch, unverifiable signature — all come back as a
+ * {@link DkimVerificationResult}, and so does a resolver that throws: its message
+ * becomes the reason. Nothing escapes, which means a DNS failure and a wrong
+ * signature look alike here; a caller that needs RFC 6376 §6.1.2's TEMPFAIL and
+ * PERMFAIL apart should fetch the key with {@link fetchDkimPublicKey}, which
+ * propagates the resolver's rejection.
  */
 export async function verifyDkim(
   rawMessage: string,
   publicKey?: DkimPublicKey,
   options: DkimVerifyOptions = {},
 ): Promise<DkimVerificationResult> {
-  const { headers, body } = splitMessage(rawMessage)
+  const results = await verifyDkimSignatures(rawMessage, publicKey, options)
+  return results.find((result) => result.valid) ?? results[0]
+}
 
-  // A message may carry several signatures; the first one is verified. The
-  // header value keeps its exact bytes, so the canonical form reconstructed
-  // for hashing matches what the signer saw.
-  const dkimHeaderLine = headers.find((line) => line.toLowerCase().startsWith("dkim-signature:"))
-  if (dkimHeaderLine === undefined) {
-    return { valid: false, reason: "no DKIM-Signature header found" }
+/**
+ * Verify every `DKIM-Signature` field in the message and return one result each,
+ * in the order the fields appear.
+ *
+ * The list is never empty: a message with no signature at all produces the single
+ * "no DKIM-Signature header found" result, and so does a message longer than
+ * {@link DkimVerifyOptions.maxMessageLength}. Fields past
+ * {@link DkimVerifyOptions.maxSignatures} get a result saying they were not
+ * checked, rather than disappearing.
+ */
+export async function verifyDkimSignatures(
+  rawMessage: string,
+  publicKey?: DkimPublicKey,
+  options: DkimVerifyOptions = {},
+): Promise<DkimVerificationResult[]> {
+  const maxMessageLength = options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH
+  if (rawMessage.length > maxMessageLength) {
+    return [{
+      valid: false,
+      reason: `message is ${rawMessage.length} characters, over the ` +
+        `${maxMessageLength}-character limit`,
+    }]
   }
+
+  const { headers, body } = splitMessage(rawMessage)
+  const maxHeaderFields = options.maxHeaderFields ?? DEFAULT_MAX_HEADER_FIELDS
+  if (headers.length > maxHeaderFields) {
+    return [{
+      valid: false,
+      reason: `message has ${headers.length} header fields, over the ` +
+        `${maxHeaderFields}-field limit`,
+    }]
+  }
+  // Every signature is verified, not just the first: a broken one above a good
+  // one used to condemn the whole message, and a valid one an attacker put on top
+  // used to decide it. Each field's value keeps its exact bytes, so the canonical
+  // form reconstructed for hashing matches what that signer saw.
+  const fields = headers.filter((line) => line.toLowerCase().startsWith("dkim-signature:"))
+  if (fields.length === 0) {
+    return [{ valid: false, reason: "no DKIM-Signature header found" }]
+  }
+
+  const maxSignatures = options.maxSignatures ?? DEFAULT_MAX_SIGNATURES
+  const results: DkimVerificationResult[] = []
+  for (const [index, field] of fields.entries()) {
+    // §6.1: a verifier may limit how many signatures it tries. Without a limit,
+    // every extra field buys an attacker one key lookup and one public-key
+    // operation.
+    if (index >= maxSignatures) {
+      results.push({
+        valid: false,
+        reason: `not verified: only the first ${maxSignatures} DKIM-Signature ` +
+          `fields of a message are checked`,
+      })
+      continue
+    }
+    results.push(await verifyOneSignature(field, headers, body, publicKey, options))
+  }
+  return results
+}
+
+async function verifyOneSignature(
+  dkimHeaderLine: string,
+  headers: string[],
+  body: string,
+  publicKey: DkimPublicKey | undefined,
+  options: DkimVerifyOptions,
+): Promise<DkimVerificationResult> {
   // §3.7 step 2 hashes "the DKIM-Signature header field that exists" in the
   // message, so the field name is taken from the message rather than assumed.
   // Under `simple` canonicalization the name's case is part of the hashed
@@ -712,12 +1023,8 @@ export async function verifyDkim(
     return { valid: false, reason: errorMessage(err) }
   }
 
-  if (parsed.expiration !== undefined) {
-    const now = options.now ?? BigInt(Math.floor(Date.now() / 1000))
-    if (parsed.expiration < now) {
-      return { valid: false, parsed, reason: "signature expired" }
-    }
-  }
+  const refusal = refuseSignatureHeader(parsed, headers, options)
+  if (refusal !== undefined) return { valid: false, parsed, reason: refusal }
 
   let key = publicKey
   if (!key) {
@@ -740,29 +1047,40 @@ export async function verifyDkim(
     }
   }
 
+  const keyRefusal = refuseKeyRecord(key, parsed)
+  if (keyRefusal !== undefined) return { valid: false, parsed, reason: keyRefusal }
+
   let signedHeaders: { name: string; value: string }[]
   let computedBodyHash: string
+  let bodyCoverage: DkimBodyCoverage
   try {
     signedHeaders = selectSignedHeaders(headers, parsed.signedHeaders)
-    const canonicalBody = canonicalizeBody(body, parsed.canonicalization.body)
-    if (parsed.bodyLength === undefined) {
-      computedBodyHash = await sha256Base64(canonicalBody)
-    } else {
-      // §3.7 step 1: the body is hashed "canonicalized using the body
-      // canonicalization algorithm specified in the c= tag and then truncated to
-      // the length specified in the l= tag". The bound counts canonical *octets*,
-      // so the truncation happens on the UTF-8 bytes: `String.prototype.slice`
-      // counts UTF-16 code units, which diverge from octets at the first
-      // non-ASCII character, and the verifier hashed a different byte range than
-      // the signer did — falsely rejecting valid non-ASCII mail. The bound may
-      // also land inside a multi-octet character, which is what rules out
-      // decoding the sliced bytes back to a string: U+FFFD would be hashed in
-      // place of the declared octets. A bound longer than the body it accompanies
-      // is not an error: the slice then covers all of it, which is what a signer
-      // that declared a longer bound produced.
-      const bounded = new TextEncoder().encode(canonicalBody).slice(0, parsed.bodyLength)
-      computedBodyHash = await sha256Base64(bounded)
+    // §3.7 step 1: the body is hashed "canonicalized using the body
+    // canonicalization algorithm specified in the c= tag and then truncated to
+    // the length specified in the l= tag". The bound counts canonical *octets*,
+    // so the truncation happens on the UTF-8 bytes: `String.prototype.slice`
+    // counts UTF-16 code units, which diverge from octets at the first non-ASCII
+    // character, and the verifier hashed a different byte range than the signer
+    // did — falsely rejecting valid non-ASCII mail. The bound may also land
+    // inside a multi-octet character, which is what rules out decoding the sliced
+    // bytes back to a string: U+FFFD would be hashed in place of the declared
+    // octets. A bound longer than the body it accompanies is not an error: the
+    // slice then covers all of it, which is what a signer that declared a longer
+    // bound produced.
+    const canonicalBody = new TextEncoder().encode(
+      canonicalizeBody(body, parsed.canonicalization.body),
+    )
+    const signedOctets = parsed.bodyLength === undefined
+      ? canonicalBody.length
+      : Math.min(parsed.bodyLength, canonicalBody.length)
+    bodyCoverage = {
+      signedOctets,
+      totalOctets: canonicalBody.length,
+      complete: signedOctets === canonicalBody.length,
     }
+    computedBodyHash = await sha256Base64(
+      signedOctets === canonicalBody.length ? canonicalBody : canonicalBody.slice(0, signedOctets),
+    )
   } catch (err) {
     return { valid: false, parsed, reason: errorMessage(err) }
   }
@@ -773,6 +1091,7 @@ export async function verifyDkim(
       parsed,
       reason: "body hash mismatch (body modified after signing)",
       computedBodyHash,
+      bodyCoverage,
     }
   }
 
@@ -797,7 +1116,7 @@ export async function verifyDkim(
     // every externally produced signature failed.
     canonicalInput = signedParts.join("") + signatureField
   } catch (err) {
-    return { valid: false, parsed, reason: errorMessage(err), computedBodyHash }
+    return { valid: false, parsed, reason: errorMessage(err), computedBodyHash, bodyCoverage }
   }
 
   let verified: boolean
@@ -809,6 +1128,7 @@ export async function verifyDkim(
       parsed,
       reason: errorMessage(err),
       computedBodyHash,
+      bodyCoverage,
     }
   }
 
@@ -817,8 +1137,140 @@ export async function verifyDkim(
     parsed,
     computedBodyHash,
     computedInputPreview: canonicalInput.slice(0, 240),
+    bodyCoverage,
     reason: verified ? undefined : "signature did not verify against public key",
   }
+}
+
+/**
+ * The checks RFC 6376 §6.1.1 puts on the signature header itself, before a key
+ * is fetched. Returns the reason to refuse, or `undefined` to carry on.
+ *
+ * Every one of these is a MUST in the standard, and the first is the one this
+ * verifier shipped without: a signature whose `h=` never names `From` binds
+ * nothing to the address a person reads, so rewriting `From` left the signature
+ * valid and the mail was accepted as coming from whoever the attacker liked.
+ */
+function refuseSignatureHeader(
+  parsed: DkimSignatureHeader,
+  headers: string[],
+  options: DkimVerifyOptions,
+): string | undefined {
+  // The work a signature can ask for is bounded before any of it is done: the
+  // selection below walks h= once per name, and h= comes from the sender.
+  const maxSignedHeaderNames = options.maxSignedHeaderNames ?? DEFAULT_MAX_SIGNED_HEADER_NAMES
+  if (parsed.signedHeaders.length > maxSignedHeaderNames) {
+    return `h= names ${parsed.signedHeaders.length} headers, over the ` +
+      `${maxSignedHeaderNames}-name limit`
+  }
+
+  // §6.1.1: "If the 'h=' tag does not include the From header field, the Verifier
+  // MUST ignore the DKIM-Signature header field and return PERMFAIL (From field
+  // not signed)."
+  if (!parsed.signedHeaders.includes("from")) {
+    return "From field not signed (h= does not name from)"
+  }
+  // §5.4 requires the From field to be signed, which a message that has no From
+  // field cannot satisfy: `h=from` over a message with no From hashes nothing for
+  // it, so the signature would say nothing about the author either.
+  if (!headers.some((line) => line.slice(0, line.indexOf(":")).trim().toLowerCase() === "from")) {
+    return "From field not signed (the message has no From field)"
+  }
+
+  // §6.1.1: "Verifiers MUST confirm that the domain specified in the 'd=' tag is
+  // the same as or a parent domain of the domain part of the 'i=' tag."
+  const identityDomain = signerIdentityDomain(parsed)
+  if (identityDomain !== undefined && !isSameOrParentDomain(parsed.domain, identityDomain)) {
+    return `i= domain ${identityDomain} is not d= (${parsed.domain}) or a subdomain of it`
+  }
+
+  // §3.5 on x=: "The value of the 'x=' tag MUST be greater than the value of the
+  // 't=' tag if both are present." A signature that expires before it was made
+  // covers no window at all.
+  if (
+    parsed.expiration !== undefined && parsed.timestamp !== undefined &&
+    parsed.expiration <= parsed.timestamp
+  ) {
+    return `x= (${parsed.expiration}) is not later than t= (${parsed.timestamp})`
+  }
+
+  if (parsed.expiration !== undefined) {
+    const now = options.now ?? BigInt(Math.floor(Date.now() / 1000))
+    if (parsed.expiration < now) return "signature expired"
+  }
+
+  // §3.5 on q=: the only method this verifier implements is `dns/txt`, which is
+  // also the default when the tag is absent. A signer that asks for a method
+  // nobody here speaks has not published a key this code can find.
+  if (parsed.queryMethod !== undefined) {
+    const methods = parsed.queryMethod.toLowerCase().split(":").map((method) =>
+      method.replace(/[ \t]+/g, "")
+    )
+    if (!methods.some((method) => method === "dns/txt" || method === "dns")) {
+      return `unsupported q= query method: ${parsed.queryMethod}`
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * The checks RFC 6376 §3.6.1 puts on the key record, once it is in hand. Returns
+ * the reason to refuse, or `undefined` to carry on.
+ */
+function refuseKeyRecord(
+  key: DkimPublicKey,
+  parsed: DkimSignatureHeader,
+): string | undefined {
+  // §3.6.1 on t=y: "This domain is testing DKIM. Verifiers MUST NOT treat
+  // messages from signers in testing mode differently from unsigned email."
+  // A verdict of "valid" is exactly the different treatment that forbids, so a
+  // testing key produces a reason rather than an authentication.
+  if (key.flags?.includes("y")) {
+    return "key record is in testing mode (t=y), so the signature authenticates nothing"
+  }
+  // §3.6.1 on t=s: "Any DKIM-Signature header fields using the 'i=' tag MUST have
+  // the same domain value on the right-hand side of the '@' in the 'i=' tag and
+  // the value of the 'd=' tag." The parent-domain allowance above is withdrawn.
+  const identityDomain = signerIdentityDomain(parsed)
+  if (
+    key.flags?.includes("s") && identityDomain !== undefined && identityDomain !== parsed.domain
+  ) {
+    return `i= domain ${identityDomain} is not exactly d= (${parsed.domain}), which t=s requires`
+  }
+  // §3.6.1 on h=: "A colon-separated list of hash algorithms that might be used.
+  // Signers and Verifiers MUST support the 'sha256' hash algorithm." Both
+  // algorithms this verifier implements hash with SHA-256, so a record that does
+  // not list it does not allow this signature.
+  if (key.hashAlgorithms !== undefined && !key.hashAlgorithms.includes("sha256")) {
+    return `key record does not allow sha256 (h=${key.hashAlgorithms.join(":")})`
+  }
+  // §3.6.1 on s=: a key that does not name the `email` service type, or `*`, is
+  // not published for signing mail.
+  if (
+    key.serviceTypes !== undefined && !key.serviceTypes.includes("*") &&
+    !key.serviceTypes.includes("email")
+  ) {
+    return `key record is not published for email (s=${key.serviceTypes.join(":")})`
+  }
+  return undefined
+}
+
+/**
+ * The domain half of the signature's `i=` tag, lowercased, or `undefined` when
+ * the tag is absent.
+ *
+ * §3.5 gives `i=` the grammar `[ Local-part ] "@" domain-name`, and a quoted
+ * local part may itself contain an `@`, so the domain starts after the last one.
+ */
+function signerIdentityDomain(parsed: DkimSignatureHeader): string | undefined {
+  if (parsed.identity === undefined) return undefined
+  return parsed.identity.slice(parsed.identity.lastIndexOf("@") + 1).toLowerCase()
+}
+
+/** True when `candidate` is `domain` itself or a subdomain of it. */
+function isSameOrParentDomain(domain: string, candidate: string): boolean {
+  return candidate === domain || candidate.endsWith(`.${domain}`)
 }
 
 function errorMessage(err: unknown): string {
@@ -860,9 +1312,25 @@ async function verifySignature(
       "spki",
       asBytes(spkiForRsaPublicKey(publicKey.keyBytes)),
       { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-      false,
+      // Extractable so the modulus can be measured below. It is a public key:
+      // exporting it gives away nothing that the DNS record did not publish.
+      true,
       ["verify"],
     )
+    // RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of
+    // less than 1024 bits as valid." A 512-bit key is breakable by anyone who
+    // wants to forge mail from the domain that published it.
+    //
+    // The bits are counted from the modulus itself rather than read from
+    // `algorithm.modulusLength`, which for an imported key is the modulus rounded
+    // up to a whole byte: a 1023-bit key reports 1024 there and passed the floor
+    // it fails.
+    const modulusBits = await rsaModulusBits(cryptoKey)
+    if (modulusBits < MIN_RSA_KEY_BITS) {
+      throw new DkimParseError(
+        `RSA key is ${modulusBits} bits; RFC 8301 requires at least ${MIN_RSA_KEY_BITS}`,
+      )
+    }
     return await crypto.subtle.verify(
       { name: "RSASSA-PKCS1-v1_5" },
       cryptoKey,
@@ -894,6 +1362,37 @@ async function verifySignature(
   }
 
   throw new DkimParseError(`unsupported algorithm: ${parsed.algorithm}`)
+}
+
+/**
+ * The true bit length of an RSA key's modulus.
+ *
+ * `CryptoKey.algorithm.modulusLength` is not it: for a key that was imported
+ * rather than generated, the platform reports the modulus rounded up to a whole
+ * byte, so keys of 1017 to 1023 bits all say 1024 and slip past RFC 8301's floor.
+ * The JWK export carries the modulus itself (`n`, base64url, big-endian), and its
+ * leading zero bits are not part of the number.
+ */
+async function rsaModulusBits(key: CryptoKey): Promise<number> {
+  const jwk = await crypto.subtle.exportKey("jwk", key)
+  if (jwk.n === undefined) throw new DkimParseError("RSA key has no modulus")
+  return bitLength(base64UrlDecode(jwk.n))
+}
+
+/** Bits in a big-endian unsigned integer, leading zeros not counted. */
+function bitLength(bytes: Uint8Array): number {
+  let at = 0
+  while (at < bytes.length && bytes[at] === 0) at++
+  if (at === bytes.length) return 0
+  let bits = (bytes.length - at - 1) * 8
+  for (let byte = bytes[at]; byte > 0; byte >>= 1) bits++
+  return bits
+}
+
+/** Decode base64url, which is what JWK uses: `-_` for `+/`, and no padding. */
+function base64UrlDecode(value: string): Uint8Array {
+  const standard = value.replaceAll("-", "+").replaceAll("_", "/")
+  return base64Decode(standard + "=".repeat((4 - (standard.length % 4)) % 4))
 }
 
 /**

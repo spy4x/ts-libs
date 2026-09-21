@@ -536,6 +536,24 @@ Deno.test("reports a thrown non-Error without leaking the credentials", async ()
   assertStringIncludes(failed.error, "string failure")
 })
 
+/**
+ * The error raised *before* anything is sent goes through the same scrubber.
+ *
+ * That path had no test, so deleting its `redact` call left the suite green
+ * (#74). It is reachable with the arguments in the wrong order — `send({ to:
+ * password })` is a one-character slip — and the address parser quotes the value
+ * it could not parse into the message, so the credential lands in whatever logs
+ * the returned error.
+ */
+Deno.test("redacts a credential that a bad recipient carried into the error", async () => {
+  const { sender } = makeSender()
+  const failed = failure(await sender.send({ ...MESSAGE, to: `<${PASSWORD}` }))
+
+  assertFalse(failed.error.includes(PASSWORD), "the password must not survive a parse failure")
+  assertStringIncludes(failed.error, REDACTED_CREDENTIAL)
+  assertEquals(failed.accepted, [])
+})
+
 Deno.test("keeps the diagnostic usable when nothing needs redacting", async () => {
   const { sender } = makeSender({}, { fail: new Error("550 mailbox unavailable") })
   const failed = failure(await sender.send(MESSAGE))

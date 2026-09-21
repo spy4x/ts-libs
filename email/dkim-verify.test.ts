@@ -17,11 +17,21 @@
 // Nothing here touches the network. Keys are fixture records or generated
 // in-process by Web Crypto; no private key is committed.
 
-import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert"
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import {
   canonicalizeBody,
   canonicalizeHeader,
+  DEFAULT_MAX_HEADER_FIELDS,
+  DEFAULT_MAX_MESSAGE_LENGTH,
+  DEFAULT_MAX_SIGNATURES,
+  DEFAULT_MAX_SIGNED_HEADER_NAMES,
   DkimParseError,
   type DkimPublicKey,
   type DnsTxtResolver,
@@ -31,6 +41,7 @@ import {
   sha256Base64,
   splitMessage,
   verifyDkim,
+  verifyDkimSignatures,
 } from "./dkim-verify.ts"
 
 const FIXTURE_DIR = new URL("./fixtures/", import.meta.url)
@@ -144,26 +155,29 @@ const rsaPairs = new Map<string, Promise<CryptoKeyPair>>()
 const ed25519Pairs = new Map<string, Promise<CryptoKeyPair>>()
 
 /**
- * Memoised 2048-bit RSA pair, generated in-process.
+ * Memoised RSA pair, generated in-process; 2048 bits unless asked otherwise.
  *
  * `slot` selects the pair: "primary" is the one messages are signed with, any
  * other slot is a second key of the same shape — which is what a wrong-key test
  * needs, since a key of the *other* algorithm never reaches the crypto.
+ * `modulusLength` is what the RFC 8301 floor is tested with, and it is part of
+ * the memo key, so a short key can never stand in for the ordinary one.
  */
-function rsa(slot = "primary"): Promise<CryptoKeyPair> {
-  let pair = rsaPairs.get(slot)
+function rsa(slot = "primary", modulusLength = 2048): Promise<CryptoKeyPair> {
+  const memo = `${slot}:${modulusLength}`
+  let pair = rsaPairs.get(memo)
   if (!pair) {
     pair = crypto.subtle.generateKey(
       {
         name: "RSASSA-PKCS1-v1_5",
-        modulusLength: 2048,
+        modulusLength,
         publicExponent: new Uint8Array([1, 0, 1]),
         hash: "SHA-256",
       },
       true,
       ["sign", "verify"],
     ) as Promise<CryptoKeyPair>
-    rsaPairs.set(slot, pair)
+    rsaPairs.set(memo, pair)
   }
   return pair
 }
@@ -206,6 +220,12 @@ interface SignOptions {
   names?: string[]
   /** Extra tags before b=, e.g. `l=17` or `x=1800000000`. */
   extraTags?: string
+  /**
+   * Sign under an `l=` bound: `bh=` then covers that many canonical octets and
+   * the tag is written into the field, which is what a signer that truncates
+   * does. Without it the body hash covers the whole canonical body.
+   */
+  bodyLength?: number
   /** Tags placed *after* b=, which §3.7 step 2 leaves inside the signed bytes. */
   afterB?: string
   /**
@@ -218,6 +238,8 @@ interface SignOptions {
   bodyHashWsp?: { at: number; kind: "fold" | "space" }
   ed25519?: boolean
   foldSignature?: boolean
+  /** Modulus length of the RSA pair to sign with. Defaults to 2048. */
+  rsaBits?: number
 }
 
 /**
@@ -235,10 +257,16 @@ async function sign(
   // §3.4 gives c= a header half and a body half, and they need not match.
   const bodyMode = options.bodyMode ?? mode
   const names = options.names ?? ["from", "to", "subject"]
-  const bodyHash = await sha256Base64(canonBody(body, bodyMode))
+  const canonicalBody = canonBody(body, bodyMode)
+  const bodyHash = await sha256Base64(
+    options.bodyLength === undefined
+      ? canonicalBody
+      : new TextEncoder().encode(canonicalBody).slice(0, options.bodyLength),
+  )
   const signedBodyHash = options.bodyHashWsp ? spliceWsp(bodyHash, options.bodyHashWsp) : bodyHash
   const stub = `v=1; a=${options.ed25519 ? "ed25519-sha256" : "rsa-sha256"}; ` +
     `c=${mode}/${bodyMode}; d=example.com; s=sel; h=${names.join(":")}; bh=${signedBodyHash}` +
+    (options.bodyLength === undefined ? "" : `; l=${options.bodyLength}`) +
     (options.extraTags ? `; ${options.extraTags}` : "")
 
   const used = new Map<string, number>()
@@ -261,7 +289,7 @@ async function sign(
   const field = canonHeader("DKIM-Signature", ` ${stub}; b=${tail}`, mode).replace(/\r\n$/, "")
   const input = head.join("") + field
 
-  const pair = options.ed25519 ? await ed25519() : await rsa()
+  const pair = options.ed25519 ? await ed25519() : await rsa("primary", options.rsaBits)
   let message = ascii(input)
   if (options.ed25519) {
     // RFC 8463 §3: Ed25519 DKIM signs SHA-256 of the canonicalized input, not
@@ -277,7 +305,9 @@ async function sign(
 
   const rendered = `${stub}; b=${base64(signature)}${tail}`
   const block = options.foldSignature ? rendered.replace(/; /g, "; \r\n\t") : rendered
-  const publicKey = options.ed25519 ? await ed25519Key(await ed25519()) : await rsaKey(await rsa())
+  const publicKey = options.ed25519
+    ? await ed25519Key(await ed25519())
+    : await rsaKey(await rsa("primary", options.rsaBits))
   return {
     raw: `${[...headers, `DKIM-Signature: ${block}`].join("\r\n")}\r\n\r\n${body}`,
     publicKey,
@@ -452,7 +482,18 @@ describe("differential: messages dkimpy signs and itself verifies", () => {
   // passed because `From:` is signed bytes for a different reason.
   const SIGNATURE_ATTACKS = [
     { payload: "; x=9999999999", reason: "signature did not verify against public key" },
-    { payload: "; i=@attacker.invalid", reason: "signature did not verify against public key" },
+    // An `i=` in a foreign domain never reaches the signature check: §6.1.1 makes
+    // the d=/i= relation a check of its own and it runs first. The subdomain
+    // payload below is the same attack with an `i=` that satisfies §6.1.1, so the
+    // signature mismatch stays pinned too.
+    {
+      payload: "; i=@attacker.invalid",
+      reason: "i= domain attacker.invalid is not d= (example.com) or a subdomain of it",
+    },
+    {
+      payload: "; i=@mail.example.com",
+      reason: "signature did not verify against public key",
+    },
     // The injected `l=` is caught one step earlier, by the body hash: the bound
     // re-truncates the canonical body, so `bh=` stops matching before the
     // signature is ever checked. The tag still took effect — on `From:` it had
@@ -710,27 +751,648 @@ describe("policy RFC 6376 leaves to the caller", () => {
     assertEquals(tampered.valid, false)
     assertEquals(tampered.reason, "body hash mismatch (body modified after signing)")
   })
+})
 
-  it("verifies an unsigned From: — §5.4 binds the signer, not the verifier", async () => {
-    // §5.4 requires a signer to include From in h=; §6.1.1 and §6.1.2 add no
-    // verifier check that it did. Requiring it here would reject conformant
-    // verification results, so it is caller policy: read `h=` yourself.
+// --- the cost of selecting the headers a signature names --------------------
+
+/**
+ * The same harm as the body freeze, reached through the header block instead.
+ *
+ * `selectSignedHeaders` used to count, for every distinct header name in the
+ * message, how often `h=` names it — by walking the whole `h=` list again each
+ * time. A message whose headers are all named in `h=` therefore cost time
+ * proportional to the square of its size, and no valid signature was needed to
+ * spend it: measured on the code before this change, 0.21 MB of such headers took
+ * 344 ms, 0.89 MB took 4.2 s and 1.81 MB took 46 s.
+ *
+ * The budget below is a multiple of one linear scan of the same message, timed on
+ * the machine running the test, rather than a number of milliseconds. The
+ * quadratic version comes in at roughly 350 times that scan and the linear one at
+ * about 4, so a factor of 50 tells them apart with room on both sides.
+ */
+describe("the cost of selecting the headers a signature names", () => {
+  const REFERENCE_PASSES = 3
+  const LINEAR_BUDGET_FACTOR = 50
+  const HEADER_COUNT = 40_000
+
+  /** A message of `count` distinct headers, every one of them named in `h=`. */
+  function messageNamingEveryHeader(count: number): string {
+    const names = ["from", "to", "subject"]
+    const lines = ["From: a@example.com", "To: b@example.com", "Subject: s"]
+    for (let index = 0; index < count; index++) {
+      names.push(`x-h-${index}`)
+      lines.push(`X-H-${index}: v`)
+    }
+    lines.push(
+      `DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=sel; ` +
+        `h=${names.join(":")}; bh=AAAA; b=AAAA`,
+    )
+    return `${lines.join("\r\n")}\r\n\r\nbody\r\n`
+  }
+
+  /** One linear pass over the message, doing the kind of work the verifier does. */
+  function scanHeaders(raw: string): number {
+    let work = 0
+    for (const line of raw.split("\r\n")) {
+      const colon = line.indexOf(":")
+      if (colon === -1) continue
+      work += line.slice(0, colon).trim().toLowerCase().length
+    }
+    return work
+  }
+
+  it("selects from a message of 40 000 signed headers within a linear budget", async () => {
+    const raw = messageNamingEveryHeader(HEADER_COUNT)
+    // A key that cannot be imported: the selection runs before the body hash is
+    // compared, so this measures header work and no cryptography.
+    const key: DkimPublicKey = { algorithm: "rsa", keyBytes: new Uint8Array([0x30, 0x02, 0x00]) }
+    // The caps that would refuse a message of this shape outright are raised on
+    // purpose: what is under test is the selection loop, and the caps have their
+    // own tests below.
+    const limits = { maxHeaderFields: HEADER_COUNT * 2, maxSignedHeaderNames: HEADER_COUNT * 2 }
+
+    let referenceWork = 0
+    const referenceStart = performance.now()
+    for (let pass = 0; pass < REFERENCE_PASSES; pass++) referenceWork += scanHeaders(raw)
+    const reference = (performance.now() - referenceStart) / REFERENCE_PASSES
+    assert(referenceWork > 0, "the reference pass must not be optimised away")
+    assert(reference > 0, `the reference pass was too fast to time: ${reference}ms`)
+
+    const start = performance.now()
+    const result = await verifyDkim(raw, key, limits)
+    const elapsed = performance.now() - start
+
+    // The message really was processed: it reached the body hash, which is the
+    // step after the selection.
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "body hash mismatch (body modified after signing)")
+    assert(
+      elapsed < reference * LINEAR_BUDGET_FACTOR,
+      `selecting ${HEADER_COUNT} headers took ${elapsed.toFixed(0)}ms, over ` +
+        `${LINEAR_BUDGET_FACTOR}x the ${reference.toFixed(1)}ms linear reference`,
+    )
+  })
+
+  it("refuses a message with more header fields than the cap allows", async () => {
+    const lines = ["From: a@example.com", "To: b@example.com", "Subject: s"]
+    for (let index = 0; index < DEFAULT_MAX_HEADER_FIELDS; index++) {
+      lines.push(`X-H-${index}: v`)
+    }
+    const raw = `${lines.join("\r\n")}\r\n\r\nbody\r\n`
+    const result = await verifyDkim(raw)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      `message has ${lines.length} header fields, over the ` +
+        `${DEFAULT_MAX_HEADER_FIELDS}-field limit`,
+    )
+    assertEquals(DEFAULT_MAX_HEADER_FIELDS, 1000)
+
+    // One field fewer passes the cap and fails for the ordinary reason instead.
+    const allowed = `${lines.slice(0, DEFAULT_MAX_HEADER_FIELDS).join("\r\n")}\r\n\r\nbody\r\n`
+    assertEquals((await verifyDkim(allowed)).reason, "no DKIM-Signature header found")
+  })
+
+  it("refuses a signature whose h= names more headers than the cap allows", async () => {
+    const names = ["from", "to", "subject"]
+    while (names.length <= DEFAULT_MAX_SIGNED_HEADER_NAMES) names.push(`x-h-${names.length}`)
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", { names })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      `h= names ${names.length} headers, over the ${DEFAULT_MAX_SIGNED_HEADER_NAMES}-name limit`,
+    )
+    assertEquals(DEFAULT_MAX_SIGNED_HEADER_NAMES, 200)
+
+    // The same message verifies when the cap is raised to fit it, so the refusal
+    // is the cap and not the message.
+    assert(
+      (await verifyDkim(raw, publicKey, { maxSignedHeaderNames: names.length })).valid,
+      "a signature at the limit must still verify",
+    )
+  })
+})
+
+// --- how much of the body a signature covers --------------------------------
+
+/**
+ * The fifth finding of issue #62: with `l=0` a signature covers no body at all,
+ * so any text can be appended to the message and the signature still verifies.
+ * RFC 6376 §3.5 allows that, so the verdict stays "valid" — but the result said
+ * nothing about it, and a caller reading `valid` had no way to learn that the
+ * body it was about to show a person was never signed.
+ */
+describe("the body coverage a result reports", () => {
+  it("reports the whole body as covered when there is no l= bound", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.bodyCoverage, { signedOctets: 17, totalOctets: 17, complete: true })
+  })
+
+  it("reports that an l=0 signature covers none of the body", async () => {
+    // The attack the report exists for: the signature is genuine, the body is
+    // whatever the attacker likes, and only `complete: false` says so.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "", { bodyLength: 0 })
+    const appended = `${raw}Please wire the payment to attacker.example\r\n`
+    const result = await verifyDkim(appended, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.bodyCoverage?.signedOctets, 0)
+    assertEquals(result.bodyCoverage?.complete, false)
+    assert(
+      (result.bodyCoverage?.totalOctets ?? 0) > 40,
+      `the appended body must be counted: ${result.bodyCoverage?.totalOctets}`,
+    )
+  })
+
+  it("reports the octets an l= bound covers and the ones it leaves out", async () => {
+    // `dkimpy-l8` signs the first 8 octets of an 18-octet canonical body.
+    const { raw, record } = await fixture("dkimpy-l8")
+    const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.bodyCoverage, { signedOctets: 8, totalOctets: 18, complete: false })
+  })
+
+  it("reports a bound longer than the body as complete coverage", async () => {
+    // `dkimpy-l25` declares 25 octets over an 18-octet body: the truncation
+    // covers all of it, so nothing is left unsigned.
+    const { raw, record } = await fixture("dkimpy-l25")
+    const result = await verifyDkim(raw, parseDkimPublicKey(record) ?? undefined)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.bodyCoverage, { signedOctets: 18, totalOctets: 18, complete: true })
+  })
+
+  it("reports coverage on a rejected message too", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const result = await verifyDkim(raw.replace("a test", "a tesz"), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.bodyCoverage?.complete, true)
+  })
+})
+
+// --- several signatures on one message (§6.1) -------------------------------
+
+/**
+ * RFC 6376 §6.1 treats each `DKIM-Signature` field independently: a message is
+ * signed by any one of them that verifies. This verifier looked at the first
+ * field only, so a mailing list that re-signed above a broken signature was
+ * rejected, and a signature an attacker prepended was the only one examined.
+ */
+describe("a message carrying several signatures (§6.1)", () => {
+  const BODY = "This is a test.\r\n"
+
+  /** The message's DKIM-Signature field, as one line. */
+  function signatureField(raw: string): string {
+    const line = splitMessage(raw).headers.find((header) =>
+      header.toLowerCase().startsWith("dkim-signature:")
+    )
+    if (line === undefined) throw new Error("message has no DKIM-Signature field")
+    return line
+  }
+
+  /** The same field with one base64 character of `b=` flipped. */
+  function breakSignature(field: string): string {
+    const signature = /; b=([A-Za-z0-9+/=]+)/.exec(field)![1]
+    const flipped = signature.slice(0, 5) +
+      (signature[5] === "A" ? "B" : "A") + signature.slice(6)
+    return field.replace(`; b=${signature}`, `; b=${flipped}`)
+  }
+
+  /** The message with `fields` inserted above every header it already has. */
+  function prependFields(raw: string, fields: string[]): string {
+    return `${fields.map((field) => `${field}\r\n`).join("")}${raw}`
+  }
+
+  it("verifies a mail whose first signature is broken and second is good", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = prependFields(raw, [breakSignature(signatureField(raw))])
+    assertEquals(
+      splitMessage(attacked).headers.filter((header) =>
+        header.toLowerCase().startsWith("dkim-signature:")
+      ).length,
+      2,
+    )
+
+    const result = await verifyDkim(attacked, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("returns one result per signature, in the order they appear", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = prependFields(raw, [breakSignature(signatureField(raw))])
+
+    const results = await verifyDkimSignatures(attacked, publicKey)
+    assertEquals(results.length, 2)
+    assertEquals(results[0].valid, false)
+    assertEquals(results[0].reason, "signature did not verify against public key")
+    assertEquals(results[1].valid, true)
+    // Each result names the domain that signed, which is what lets a caller
+    // decide whether the signer has anything to do with the From address.
+    assertEquals(results[0].parsed?.domain, "example.com")
+    assertEquals(results[1].parsed?.domain, "example.com")
+  })
+
+  it("checks no more signatures than the cap allows", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const broken = breakSignature(signatureField(raw))
+    const attacked = prependFields(raw, [broken, broken])
+
+    const capped = await verifyDkimSignatures(attacked, publicKey, { maxSignatures: 2 })
+    assertEquals(capped.length, 3)
+    assertEquals(capped[2].valid, false)
+    assertEquals(
+      capped[2].reason,
+      "not verified: only the first 2 DKIM-Signature fields of a message are checked",
+    )
+    assertEquals(capped[2].parsed, undefined)
+    assertEquals((await verifyDkim(attacked, publicKey, { maxSignatures: 2 })).valid, false)
+
+    // One more slot and the genuine signature is reached.
+    assert((await verifyDkim(attacked, publicKey, { maxSignatures: 3 })).valid)
+    assertEquals(DEFAULT_MAX_SIGNATURES, 10)
+  })
+
+  it("reports the first signature's diagnosis when none verifies", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const broken = breakSignature(signatureField(raw))
+    const allBroken = prependFields(
+      raw.replace(signatureField(raw), broken),
+      [broken],
+    )
+    const result = await verifyDkim(allBroken, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "signature did not verify against public key")
+  })
+})
+
+// --- §6.1.1 and §3.6.1: the checks a verifier owes the standard -------------
+
+/**
+ * The fourth finding of issue #62: the signer's identity was parsed and never
+ * compared with the signing domain, and nothing in the published key record was
+ * read beyond `k=` and `p=`. A key published for another service, restricted to
+ * another hash, or marked as testing was accepted as if it said nothing.
+ *
+ * Each test signs a message in-process and verifies it through an injected
+ * resolver, so the only thing that varies is the tag under test.
+ */
+describe("the identity and key-record checks (§6.1.1, §3.6.1)", () => {
+  const BODY = "This is a test.\r\n"
+
+  /** A resolver that answers every query with one record. */
+  function resolverFor(record: string): DnsTxtResolver {
+    return { resolveTxt: () => Promise.resolve([[record]]) }
+  }
+
+  /** The signed message plus a key record carrying `tags` before `p=`. */
+  async function signedWithRecord(
+    tags: string,
+    options: SignOptions = {},
+  ): Promise<{ raw: string; record: string }> {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, options)
+    const p = base64(publicKey.keyBytes)
+    return { raw, record: `v=DKIM1; k=${publicKey.algorithm};${tags} p=${p}` }
+  }
+
+  it("rejects an i= whose domain is not d= or below it", async () => {
+    // §6.1.1: "Verifiers MUST confirm that the domain specified in the 'd=' tag
+    // is the same as or a parent domain of the domain part of the 'i=' tag."
+    // The signature itself is genuine: only the identity it claims is foreign.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "i=ceo@bank.example",
+    })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      "i= domain bank.example is not d= (example.com) or a subdomain of it",
+    )
+  })
+
+  it("accepts an i= in a subdomain of d=", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "i=agent@mail.example.com",
+    })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.parsed?.identity, "agent@mail.example.com")
+  })
+
+  it("accepts an i= whose domain is exactly d=", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, { extraTags: "i=ceo@example.com" })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("compares the i= domain with d= case-insensitively", async () => {
+    // §3.5 leaves the case of a domain to the sender; `d=` is lowercased when it
+    // is parsed, so `i=` has to be too or a capital letter alone would refuse a
+    // signature the signer meant.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "i=ceo@Mail.EXAMPLE.com",
+    })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("rejects an i= in a domain that merely ends with d=", async () => {
+    // The dot is the whole check. `notexample.com` ends with `example.com` and is
+    // a different domain that anyone can register, so a suffix comparison without
+    // the separator hands every signature from `d=example.com` to whoever owns
+    // it. Nothing in the suite noticed when the dot was removed, which is why
+    // this test and the one below exist.
+    for (const identity of ["ceo@notexample.com", "ceo@xexample.com"]) {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY, { extraTags: `i=${identity}` })
+      const result = await verifyDkim(raw, publicKey)
+      const domain = identity.slice(identity.indexOf("@") + 1)
+      assertEquals(result.valid, false, `${identity} must be refused`)
+      assertEquals(
+        result.reason,
+        `i= domain ${domain} is not d= (example.com) or a subdomain of it`,
+      )
+    }
+  })
+
+  it("rejects an i= whose domain has d= as a prefix, not a parent", async () => {
+    // The other direction of the same mistake: `example.com.evil.example` is a
+    // domain `evil.example` controls, and it contains `example.com` at the front.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "i=ceo@example.com.evil.example",
+    })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      "i= domain example.com.evil.example is not d= (example.com) or a subdomain of it",
+    )
+  })
+
+  it("rejects a subdomain i= when the key record sets t=s", async () => {
+    // §3.6.1 on the `s` flag: the domain part of `i=` "MUST be the same as the
+    // value of the d= tag", so the parent-domain allowance is withdrawn.
+    const { raw, record } = await signedWithRecord(" t=s;", {
+      extraTags: "i=agent@mail.example.com",
+    })
+    const result = await verifyDkim(raw, undefined, { resolver: resolverFor(record) })
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      "i= domain mail.example.com is not exactly d= (example.com), which t=s requires",
+    )
+
+    // The same record without the flag accepts the same message.
+    const relaxedRecord = record.replace(" t=s;", "")
+    assert((await verifyDkim(raw, undefined, { resolver: resolverFor(relaxedRecord) })).valid)
+  })
+
+  it("rejects a key record marked as testing (t=y)", async () => {
+    // §3.6.1: "Verifiers MUST NOT treat messages from signers in testing mode
+    // differently from unsigned email", and "valid" is exactly that different
+    // treatment.
+    const { raw, record } = await signedWithRecord(" t=y;")
+    const result = await verifyDkim(raw, undefined, { resolver: resolverFor(record) })
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      "key record is in testing mode (t=y), so the signature authenticates nothing",
+    )
+  })
+
+  it("rejects a key record that does not allow sha256", async () => {
+    const { raw, record } = await signedWithRecord(" h=sha1;")
+    const result = await verifyDkim(raw, undefined, { resolver: resolverFor(record) })
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "key record does not allow sha256 (h=sha1)")
+
+    const both = record.replace(" h=sha1;", " h=sha1:sha256;")
+    assert((await verifyDkim(raw, undefined, { resolver: resolverFor(both) })).valid)
+  })
+
+  it("rejects a key record published for another service", async () => {
+    const { raw, record } = await signedWithRecord(" s=calendar;")
+    const result = await verifyDkim(raw, undefined, { resolver: resolverFor(record) })
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "key record is not published for email (s=calendar)")
+
+    for (const service of [" s=email;", " s=*;", " s=calendar:email;"]) {
+      const allowed = record.replace(" s=calendar;", service)
+      const verified = await verifyDkim(raw, undefined, { resolver: resolverFor(allowed) })
+      assert(verified.valid, `s=${service}: ${verified.reason}`)
+    }
+  })
+
+  it("rejects a key record from another version of the standard", async () => {
+    const { raw, record } = await signedWithRecord("")
+    const future = record.replace("v=DKIM1", "v=DKIM2")
+    const result = await verifyDkim(raw, undefined, { resolver: resolverFor(future) })
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsupported DKIM key record version: DKIM2")
+  })
+
+  it("rejects a key record whose v= is not the first tag", () => {
+    // §3.6.1: "v= ... MUST be the first tag in the record."
+    assertThrows(
+      () => parseDkimPublicKey("k=rsa; v=DKIM1; p=AAECAw=="),
+      DkimParseError,
+      "v= tag must come first",
+    )
+  })
+
+  it("rejects a key record whose s= or h= list is empty", () => {
+    // Present and empty is a typo, not "no restriction": reading it as "any
+    // service" would widen the key's permission rather than narrow it.
+    for (const tag of ["s", "h"]) {
+      assertThrows(
+        () => parseDkimPublicKey(`v=DKIM1; ${tag}=; p=AAECAw==`),
+        DkimParseError,
+        `${tag}= tag is empty`,
+      )
+    }
+  })
+
+  it("reads the restriction tags onto the parsed key", () => {
+    const key = parseDkimPublicKey("v=DKIM1; h=sha256; s=email:*; t=y:s; p=AAECAw==")!
+    assertEquals(key.version, "DKIM1")
+    assertEquals(key.hashAlgorithms, ["sha256"])
+    assertEquals(key.serviceTypes, ["email", "*"])
+    assertEquals(key.flags, ["y", "s"])
+  })
+
+  it("rejects a q= that names no query method this verifier speaks", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, { extraTags: "q=http/ldap" })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsupported q= query method: http/ldap")
+
+    // The default and the one every signer publishes.
+    const { raw: viaDns, publicKey: dnsKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "q=dns/txt",
+    })
+    assert((await verifyDkim(viaDns, dnsKey)).valid)
+  })
+
+  it("rejects a signature that expires no later than it was made", async () => {
+    // §3.5: "The value of the 'x=' tag MUST be greater than the value of the 't='
+    // tag if both are present."
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      extraTags: "t=1700000000; x=1700000000",
+    })
+    const result = await verifyDkim(raw, publicKey, { now: 1600000000n })
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "x= (1700000000) is not later than t= (1700000000)")
+  })
+
+  it("ignores a signature tag no RFC defines, whatever its value", async () => {
+    // §3.2: "Unrecognized tags MUST be ignored." An earlier revision rejected a
+    // `dt=` tag with any value but `1` — an invented rule, unreachable in
+    // practice, that the README described as an ignored tag (#74).
+    const parsed = parseDkimSignature(
+      "v=1; a=rsa-sha256; d=example.com; s=sel; h=from; bh=abc; b=xxx; dt=2; r=y",
+    )
+    assertEquals(parsed.domain, "example.com")
+
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, { extraTags: "dt=2" })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("rejects an i= tag that carries no domain", () => {
+    assertThrows(
+      () =>
+        parseDkimSignature(
+          "v=1; a=rsa-sha256; d=example.com; s=sel; h=from; bh=abc; b=x; i=nobody",
+        ),
+      DkimParseError,
+      "i= tag has no domain",
+    )
+  })
+})
+
+// --- RFC 8301: the RSA key size floor ---------------------------------------
+
+/**
+ * RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less
+ * than 1024 bits as valid."
+ *
+ * The keys here are generated in-process and the message is signed with them, so
+ * the signature is cryptographically perfect and only the key's size separates
+ * the two cases. A 512-bit modulus is factorable on one machine in hours, which
+ * is what makes "valid" the wrong answer for it.
+ */
+describe("the RSA key size floor (RFC 8301)", () => {
+  it("rejects a signature made with a 512-bit RSA key", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", { rsaBits: 512 })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "RSA key is 512 bits; RFC 8301 requires at least 1024")
+    // The body was never in question: the rejection is the key, not the message.
+    assertEquals(result.computedBodyHash, result.parsed?.bodyHash)
+  })
+
+  it("verifies the same message signed with a 1024-bit key", async () => {
+    // The floor itself, so "rejects a short key" cannot be satisfied by rejecting
+    // every key that is not the suite's usual 2048-bit one.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", { rsaBits: 1024 })
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("rejects a key one bit below the floor", async () => {
+    // 1023 bits is the case the floor used to miss. `CryptoKey.algorithm
+    // .modulusLength` reports an imported key's modulus rounded up to a whole
+    // byte, so this key claims 1024 there while its modulus is one bit shorter —
+    // and the mail it signs verified. The key is generated here like every other
+    // key in this file, so nothing private is committed and the signature is real.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", { rsaBits: 1023 })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "RSA key is 1023 bits; RFC 8301 requires at least 1024")
+
+    // What the platform says about the same key once it is imported, which is the
+    // number the floor used to read.
+    // `rsaKey` publishes the platform's own SPKI export, so the record's bytes
+    // import directly here.
+    const imported = await crypto.subtle.importKey(
+      "spki",
+      new Uint8Array(publicKey.keyBytes),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      true,
+      ["verify"],
+    )
+    assertEquals((imported.algorithm as RsaHashedKeyAlgorithm).modulusLength, 1024)
+  })
+
+  it("rejects keys between 1017 and 1023 bits, which all report 1024", async () => {
+    for (const bits of [1017, 1020, 1023]) {
+      const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", { rsaBits: bits })
+      const result = await verifyDkim(raw, publicKey)
+      assertEquals(result.valid, false, `${bits} bits must be refused`)
+      assertEquals(result.reason, `RSA key is ${bits} bits; RFC 8301 requires at least 1024`)
+    }
+  })
+})
+
+// --- §6.1.1: the From field must be signed ----------------------------------
+
+/**
+ * RFC 6376 §6.1.1: "If the 'h=' tag does not include the From header field, the
+ * Verifier MUST ignore the DKIM-Signature header field and return PERMFAIL (From
+ * field not signed)."
+ *
+ * Two tests used to pin the opposite, on the reading that §5.4 binds only the
+ * signer. The consequence is the first finding of issue #62: a message signed
+ * with `h=to:subject` keeps a valid signature while its From line is rewritten to
+ * anybody's address, so "valid" said nothing about who sent the mail.
+ */
+describe("the From field must be signed (§6.1.1)", () => {
+  it("rejects a mail whose From is not named in h=", async () => {
     const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
       names: ["to", "subject"],
     })
     const result = await verifyDkim(raw, publicKey)
-    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "From field not signed (h= does not name from)")
     assertEquals(result.parsed?.signedHeaders.includes("from"), false)
   })
 
-  it("verifies a message that has no From: at all", async () => {
-    // RFC 5322 requires From:, but DKIM verification is not where it is enforced:
-    // a From-less message is malformed mail, not an invalid signature.
-    const headers = ["To: recipient@example.org", "Subject: DKIM port smoke test"]
-    const { raw, publicKey } = await sign(headers, "This is a test.\r\n", {
+  it("rejects a forged sender the signature never covered", async () => {
+    // The attack itself: the signature is genuine and the body is untouched, so
+    // every other check in this file agrees with the attacker. Only the From
+    // check sees that the address a person reads was never signed.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
       names: ["to", "subject"],
     })
+    const forged = raw.replace(
+      "From: Sender <sender@example.com>",
+      "From: Your Bank <security@bank.example>",
+    )
+    assert(forged.includes("security@bank.example"), "the forged sender must be in the message")
+    const result = await verifyDkim(forged, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "From field not signed (h= does not name from)")
+  })
+
+  it("rejects a message that has no From at all", async () => {
+    // `h=from` over a message with no From field hashes nothing for it (§3.5's
+    // "null input"), so the signature says nothing about the author. RFC 5322
+    // requires the field; a message without one is not authenticated here.
+    const headers = ["To: recipient@example.org", "Subject: DKIM port smoke test"]
+    const { raw, publicKey } = await sign(headers, "This is a test.\r\n", {
+      names: ["from", "to", "subject"],
+    })
     assert(!raw.includes("From:"))
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "From field not signed (the message has no From field)")
+  })
+
+  it("verifies the same message once From is signed", async () => {
+    // The control: nothing else about the message changed, so the rejections
+    // above are the From check and not a broken signer helper.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n", {
+      names: ["from", "to", "subject"],
+    })
     const result = await verifyDkim(raw, publicKey)
     assert(result.valid, `reason=${result.reason}`)
   })
@@ -883,6 +1545,81 @@ describe("canonicalizeBody", () => {
   it("normalises LF-only input to the canonical CRLF body", () => {
     assertEquals(canonicalizeBody("Hello world.\n", "simple"), "Hello world.\r\n")
     assertEquals(canonicalizeBody("a\n\n\n", "relaxed"), "a\r\n")
+  })
+
+  it("treats a lone CR in a body as a line ending", () => {
+    // Mailbox storage rewrites line endings and nothing else references the
+    // body's original bytes, so every ending — CRLF, bare LF, lone CR — becomes
+    // one canonical CRLF. Deleting this rewrite left the suite green before
+    // (#74), because every other body test uses CRLF or LF.
+    assertEquals(canonicalizeBody("line one\rline two\r\n", "simple"), "line one\r\nline two\r\n")
+    assertEquals(canonicalizeBody("a\rb", "relaxed"), "a\r\nb\r\n")
+    assertEquals(canonicalizeBody("a\r\r\r", "simple"), "a\r\n")
+    // A CR that ends the body is a line ending too, so the trailing empty line
+    // it opens is dropped rather than kept as content.
+    assertEquals(canonicalizeBody("a\r", "relaxed"), "a\r\n")
+  })
+
+  it("keeps the internal empty lines and drops only the trailing ones", () => {
+    assertEquals(canonicalizeBody("a\r\n\r\n\r\nb\r\n\r\n\r\n", "simple"), "a\r\n\r\n\r\nb\r\n")
+    assertEquals(canonicalizeBody("a\r\n \r\n \r\nb\r\n \r\n", "relaxed"), "a\r\n\r\n\r\nb\r\n")
+  })
+})
+
+// --- the cost of canonicalizing a body --------------------------------------
+
+/**
+ * The third finding of issue #62: `canonicalizeBody` used two regular
+ * expressions that backtrack — `/[ \t]+\r\n/g` retried a whole run of spaces at
+ * every offset inside it, and `/(?:\r\n)+$/` did the same for a run of line
+ * endings — so the work grew with the square of the body. Measured on the code
+ * before this change: 20 000 characters took 257 ms, 40 000 took 1 015 ms and
+ * 80 000 took 4 291 ms. The body comes from whoever sent the message, the work
+ * is synchronous, and one large message froze the process.
+ *
+ * The budget below is a multiple of a linear pass over the same strings, timed on
+ * the machine running the test, rather than a number of milliseconds: a slow or
+ * loaded machine moves both sides of the comparison together. The factor is
+ * enormous on purpose. A linear implementation comes in at well under 10x the
+ * reference and the quadratic one at several thousand times it, so anything in
+ * between is still a clear failure.
+ */
+describe("the cost of canonicalizing a large body", () => {
+  const REFERENCE_PASSES = 5
+  const LINEAR_BUDGET_FACTOR = 200
+
+  it("canonicalizes 128 KiB of the pathological shapes within a linear budget", () => {
+    const size = 128 * 1024
+    const spaces = `${" ".repeat(size)}x\r\n`
+    const endings = `x${"\r\n".repeat(size / 2)}`
+
+    // The reference: split and re-join the same strings, which is the same order
+    // of work the canonicalizer does and is unambiguously linear. The length is
+    // accumulated so the optimiser cannot drop the loop.
+    let referenceChars = 0
+    const referenceStart = performance.now()
+    for (let pass = 0; pass < REFERENCE_PASSES; pass++) {
+      referenceChars += spaces.split("\r\n").join("\r\n").length
+      referenceChars += endings.split("\r\n").join("\r\n").length
+    }
+    const reference = (performance.now() - referenceStart) / REFERENCE_PASSES
+    assert(referenceChars > 0, "the reference pass must not be optimised away")
+    assert(reference > 0, `the reference pass was too fast to time: ${reference}ms`)
+
+    const start = performance.now()
+    const relaxed = canonicalizeBody(spaces, "relaxed")
+    const simple = canonicalizeBody(endings, "simple")
+    const elapsed = performance.now() - start
+
+    // The results are asserted too: a canonicalizer that returned early would be
+    // fast and wrong.
+    assertEquals(relaxed, " x\r\n")
+    assertEquals(simple, "x\r\n")
+    assert(
+      elapsed < reference * LINEAR_BUDGET_FACTOR,
+      `canonicalizing ${size} characters took ${elapsed.toFixed(1)}ms, over ` +
+        `${LINEAR_BUDGET_FACTOR}x the ${reference.toFixed(1)}ms linear reference`,
+    )
   })
 })
 
@@ -1092,11 +1829,71 @@ describe("fetchDkimPublicKey", () => {
   })
 
   it("concatenates the strings of one TXT record without a separator", async () => {
+    // §3.6.2.2: the strings of one record are joined with nothing at all. This
+    // split lands inside `k=rsa`, so a separator does not merely pad the record,
+    // it changes a tag's value and the record stops naming an algorithm. The old
+    // vector split between tags, where a stray space is swallowed again by the
+    // tag scanner and by the base64 decoder — which is how joining the parts with
+    // a space stayed invisible to this suite (#74).
     const resolver: DnsTxtResolver = {
-      resolveTxt: () => Promise.resolve([["v=DKIM1; k=rsa; ", "p=AAEC", "Aw=="]]),
+      resolveTxt: () => Promise.resolve([["v=DKIM1; k=r", "sa; p=AAEC", "Aw=="]]),
+    }
+    const key = await fetchDkimPublicKey("example.com", "sel", { resolver })
+    assertEquals(key!.algorithm, "rsa")
+    assertEquals(Array.from(key!.keyBytes), [0, 1, 2, 3])
+  })
+
+  it("passes over a TXT record that is not a DKIM key", async () => {
+    // §3.6.2.2 leaves the order of several records unspecified, and a domain may
+    // publish anything beside its key. Reading the first record only threw the
+    // whole lookup away when an unrelated record came back first.
+    const resolver: DnsTxtResolver = {
+      resolveTxt: () =>
+        Promise.resolve([
+          ["v=spf1 include:_spf.example.com ~all"],
+          ["v=DKIM1; k=rsa; p=AAECAw=="],
+        ]),
     }
     const key = await fetchDkimPublicKey("example.com", "sel", { resolver })
     assertEquals(Array.from(key!.keyBytes), [0, 1, 2, 3])
+  })
+
+  it("reports the first record's error when no record holds a key", async () => {
+    const resolver: DnsTxtResolver = {
+      resolveTxt: () => Promise.resolve([["v=spf1 ~all"], ["also not a key"]]),
+    }
+    // The first record's own diagnosis, not a generic one: an SPF record read as
+    // a DKIM one fails on its version tag, and saying so is what tells a caller
+    // which record the resolver actually returned.
+    await assertRejects(
+      () => fetchDkimPublicKey("example.com", "sel", { resolver }),
+      DkimParseError,
+      "unsupported DKIM key record version: spf1",
+    )
+  })
+
+  it("refuses to look up a domain or selector that is not a domain name", async () => {
+    // The name is interpolated into whatever an injected resolver does with it —
+    // a URL, for a DNS-over-HTTPS resolver — and `d=`/`s=` come from the message.
+    // §3.1 allows letters, digits and interior hyphens only.
+    let asked = 0
+    const resolver: DnsTxtResolver = {
+      resolveTxt: () => {
+        asked += 1
+        return Promise.resolve([["v=DKIM1; k=rsa; p=AAECAw=="]])
+      },
+    }
+    await assertRejects(
+      () => fetchDkimPublicKey("x.example/../?q=1&type=a #", "sel", { resolver }),
+      DkimParseError,
+      "d= tag is not a domain name",
+    )
+    await assertRejects(
+      () => fetchDkimPublicKey("example.com", "sel/../evil", { resolver }),
+      DkimParseError,
+      "s= tag is not a domain name",
+    )
+    assertEquals(asked, 0, "a name that fails the check must never be looked up")
   })
 
   it("returns null when the answer holds a revoked key", async () => {
@@ -1435,6 +2232,36 @@ describe("verifyDkim", () => {
     const result = await verifyDkim(raw, await rsaKey(await rsa()))
     assertEquals(result.valid, false)
     assertEquals(result.reason, "DKIM-Signature missing required tag: s")
+  })
+
+  it("refuses a message larger than the cap it was given", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const result = await verifyDkim(raw, publicKey, { maxMessageLength: raw.length - 1 })
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      `message is ${raw.length} characters, over the ${raw.length - 1}-character limit`,
+    )
+    // Nothing was parsed or hashed: the message never reached the verifier.
+    assertEquals(result.parsed, undefined)
+    assertEquals(result.computedBodyHash, undefined)
+  })
+
+  it("verifies a message that is exactly the size of the cap", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const result = await verifyDkim(raw, publicKey, { maxMessageLength: raw.length })
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("refuses a message over the default cap", async () => {
+    // The default has to be enforced, not merely available: a caller that passes
+    // no options is the one this protects.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const oversized = raw + " ".repeat(DEFAULT_MAX_MESSAGE_LENGTH)
+    const result = await verifyDkim(oversized, publicKey)
+    assertEquals(result.valid, false)
+    assertStringIncludes(result.reason ?? "", `over the ${DEFAULT_MAX_MESSAGE_LENGTH}-character`)
+    assertEquals(DEFAULT_MAX_MESSAGE_LENGTH, 10 * 1024 * 1024)
   })
 })
 

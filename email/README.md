@@ -179,6 +179,12 @@ htmlWrap({ body: `<p>${escapeHtml(name)}</p>` }) // correct
 htmlWrap({ body: escapeHtml(`<p>${name}</p>`) }) // escapes the markup too
 ```
 
+`brandUrl` must be an absolute `http:`, `https:` or `mailto:` URL and throws a
+`TypeError` otherwise. Escaping leaves `javascript:alert(1)` a well-formed link —
+the characters that need escaping are not the ones that make a scheme dangerous —
+and the value comes from a caller's configuration rather than from a recipient, so
+a wrong one is a bug to surface rather than input to sanitise.
+
 ## Per-recipient timezone framing
 
 `frameWallClockLong(date, time, sourceTz, recipientTz?)` turns a wall clock
@@ -244,13 +250,34 @@ question: **does this message's `DKIM-Signature` verify against this key?**
 - `rsa-sha256` (RSASSA-PKCS1-v1_5) and `ed25519-sha256`, the latter signing
   `SHA-256` of the canonical input as RFC 8463 §3 requires.
 - `parseDkimPublicKey` from a DNS TXT record, including revoked keys (`p=`).
-- Expiry (`x=`) against an injectable clock.
+- Expiry (`x=`) against an injectable clock, and that `x=` is later than `t=`.
+- **That `h=` names `From`** (§6.1.1), and that the message has a `From` field to
+  sign. A signature that does not cover `From` says nothing about who sent the
+  mail, and this verifier used to call one valid.
+- **That `d=` is the `i=` domain or a parent of it** (§6.1.1), and exactly `d=`
+  when the key record carries `t=s`.
+- **The key record's own tags** (§3.6.1): `v=` must be `DKIM1` and come first,
+  `h=` must allow `sha256`, `s=` must name `email` or `*`, and `t=y` — the domain
+  is only testing DKIM — never produces a valid verdict.
+- **RSA keys of at least 1 024 bits** (RFC 8301 §3.2). A 512-bit key is refused
+  however well its signature verifies. The bits are counted from the modulus
+  itself: `CryptoKey.algorithm.modulusLength` reports an imported key's modulus
+  rounded up to a whole byte, so a 1 023-bit key claims 1 024 there.
+- **Every `DKIM-Signature` field**, not just the first (§6.1). `verifyDkim`
+  reports the first valid one; `verifyDkimSignatures` returns one result per
+  field, so a caller can see which domains signed.
 - The header/body boundary, which RFC 5322 §2.2 puts at the **first** empty line.
   A body whose first line begins with SP or HTAB is body, not a folded header —
   reading it as a header left those octets outside the body hash entirely.
 - The DKIM-Signature field **name the message actually spells**. §3.7 step 2
   hashes "the DKIM-Signature header field that exists", and under `simple`
   canonicalization the name's case is part of the signed bytes.
+
+Every result that hashed a body also carries `bodyCoverage`: how many canonical
+octets the signature covers, how many the body has, and whether they are the same.
+A signer may bound the body hash with `l=`, and with `l=0` the signature covers no
+body at all — the verdict is still `valid`, because RFC 6376 §3.5 allows it, so
+**a caller that shows the body to a person must check `bodyCoverage.complete`**.
 
 The signature input follows §3.7 step 2 exactly: every header named in `h=`, in
 the order `h=` declares (so repeated fields are consumed from the bottom of the
@@ -281,8 +308,9 @@ confirmed by `openssl dgst -sha256 -verify` against the §3.7 reconstruction. Se
   that fails: no quarantine, no scoring, no reporting. That belongs in the
   caller.
 - **No replay, freshness or `Received`-chain protection.** A valid signature
-  stays valid unless `x=` says otherwise. `t=` is parsed but not enforced beyond
-  what the signature already binds.
+  stays valid unless `x=` says otherwise. `t=` is parsed, and the only rule
+  applied to it is §3.5's: `x=` must be later than `t=` when both are present.
+  Nothing here refuses a signature for being old.
 - **No signature generation.** Verification only; there is no signer here.
 
 ## Injected resolver contract
@@ -295,6 +323,10 @@ interface DnsTxtResolver {
 interface DkimVerifyOptions {
   now?: bigint
   resolver?: DnsTxtResolver
+  maxMessageLength?: number // default DEFAULT_MAX_MESSAGE_LENGTH, 10 MiB
+  maxSignatures?: number // default DEFAULT_MAX_SIGNATURES, 10
+  maxHeaderFields?: number // default DEFAULT_MAX_HEADER_FIELDS, 1000
+  maxSignedHeaderNames?: number // default DEFAULT_MAX_SIGNED_HEADER_NAMES, 200
 }
 ```
 
@@ -310,10 +342,30 @@ interface DkimVerifyOptions {
   and `verifyDkim` reports `"DKIM key revoked (p= is empty)"`.
 - `publicKey` wins over `resolver` in `verifyDkim`: pass a key and no lookup
   happens at all.
+- Several records come back for one name often enough — a domain publishes what it
+  likes beside its key — so each is tried and the first that parses is the key.
+  When none parses, the first record's own error is what the caller sees.
+- `d=` and `s=` are checked against §3.1's grammar before the name is built, so a
+  resolver that puts the name into a URL or a command line cannot be handed
+  anything but letters, digits, hyphens and dots. Three spellings a verifier
+  without that check would have looked up are refused with
+  `"DKIM d= tag is not a domain name"` (or `s=`): an **underscore**
+  (`s=sel_1`), a **trailing dot** (`d=example.com.`), and **non-ASCII letters**
+  (`d=münchen.example`, which RFC 8616 permits — publish the A-label
+  `xn--mnchen-3ya.example` instead). The check reads `d=` and `s=` separately, so
+  the `_domainkey` label the lookup itself adds is unaffected, and ordinary
+  selectors (`selector1`, `hs1-12345`, `2026`) are unaffected too.
 
 `verifyDkim` returns a result for every message-shaped failure — missing header,
-bad grammar, expiry, body mismatch, unverifiable signature. Only a throwing
-injected resolver escapes it.
+bad grammar, expiry, unsigned `From`, body mismatch, unverifiable signature — and
+for a resolver that throws, whose message becomes `result.reason`. Nothing escapes
+it, which the docs used to deny.
+
+One consequence is worth knowing: the result says `valid: false` for a DNS lookup
+that failed, and does not distinguish that from a signature that is wrong. RFC
+6376 §6.1.2 calls the first TEMPFAIL and the second PERMFAIL, and a caller that
+needs to tell them apart should fetch the key itself with `fetchDkimPublicKey`,
+which propagates the resolver's rejection instead of reporting it.
 
 ## Decisions a reviewer should weigh
 
@@ -330,12 +382,14 @@ injected resolver escapes it.
   over an 18-octet body, and appending a single byte to it still fails). It is
   inside the signed field, so an attacker cannot add or enlarge it. Rejecting
   instead would convert a harmless signer tag into a false rejection.
-- **An unsigned `From:` verifies, and that check is the caller's.** §5.4 requires
-  a _signer_ to list `From:` in `h=`, while §6.1.1 and §6.1.2 add no verifier
-  check that it did — so `verifyDkim` accepts a signature whose `h=` never names
-  `From:`, and a `From:`-less message too (malformed per RFC 5322, but malformed
-  is not unverified). Domain policy is where that belongs: read
-  `result.parsed.signedHeaders` and require `"from"` before trusting a verdict.
+- **An unsigned `From:` is refused.** §6.1.1: "If the 'h=' tag does not include
+  the From header field, the Verifier MUST ignore the DKIM-Signature header field
+  and return PERMFAIL (From field not signed)." An earlier revision of this file
+  read §5.4 as binding the signer only and accepted such a signature, which is the
+  first finding of issue #62: a message signed with `h=to:subject` kept a valid
+  signature while its `From:` line was rewritten to any address at all. A message
+  with no `From:` field is refused for the same reason — `h=from` over a message
+  without one hashes nothing for it.
 - **The DKIM-Signature field name comes from the message.** §3.7 step 2 hashes
   "the DKIM-Signature header field that exists", and `simple` preserves the
   name's case (§3.4.1), so the name is signed bytes: renaming the field to
@@ -358,8 +412,10 @@ injected resolver escapes it.
   and it rejected conformant mail.
 - **A repeated tag is rejected.** §3.2 forbids duplicates. Silently keeping the
   last one let an attacker append `; b=<their own signature>` and win.
-- **An unknown tag is ignored.** §3.5 allows extensions; real signatures carry
-  them (`r=`, `dt=`).
+- **An unknown tag is ignored, whatever its value.** §3.2: "Unrecognized tags
+  MUST be ignored." Real signatures carry them (`r=`, `dt=`). An earlier revision
+  rejected `dt=` with any value but `1` — an invented rule this file documented as
+  an ignored tag, and a rule no test could reach.
 - **Unfolding deletes the line ending, it does not turn it into a space.**
   §3.4.2 unfolds by removing the CRLF and then compressing the WSP that followed
   it, so `one<CRLF><HTAB>two` canonicalizes to `one two` and `a<LF>b` to `ab`.
@@ -379,6 +435,29 @@ injected resolver escapes it.
   example record publishes a complete SubjectPublicKeyInfo. The envelope is
   detected, not guessed. `DkimPublicKey.keyBytes` therefore holds whatever the
   record carried — SPKI bytes for an SPKI `p=` — rather than a normalised form.
+- **The work is bounded, because the sender is not trusted.** Four limits, each
+  with a `reason` that names it: a message longer than `maxMessageLength` (10 MiB)
+  is refused before it is canonicalized, a message with more than
+  `maxHeaderFields` (1 000) fields is refused before any signature is looked at,
+  `maxSignedHeaderNames` (200) bounds the names one `h=` may list, and at most
+  `maxSignatures` (10) `DKIM-Signature` fields are verified — §6.1 allows that
+  one, and each extra field otherwise buys a key lookup and a public-key
+  operation. Inside those limits every pass over the message is linear: twice the
+  message costs about twice the time. Two things used to make it quadratic — four
+  times the time for twice the input, so a message an attacker sizes freezes the
+  process — and both are gone. Two backtracking regular expressions did it to the
+  body, and the selection of signed headers did it to the header block, by walking
+  the whole `h=` list again for every distinct header name in the message.
+- **Several signatures are all verified, and the first valid one is the verdict.**
+  §6.1 treats each field independently. A broken signature above a good one no
+  longer condemns the message, and one an attacker prepends no longer decides it —
+  but "valid" still only says _that domain signed it_, so a caller that cares
+  whether the signer has anything to do with the `From:` address must compare
+  `result.parsed.domain` itself. That comparison is DMARC alignment, which is out
+  of scope here. `verifyDkim` reports the **first valid** signature, which on a
+  mailing-list message is the list's rather than the author's, so a caller making
+  that comparison should read every result from `verifyDkimSignatures` and look
+  for the one whose domain lines up.
 - **`b=` need not be the last tag, in either mode.** §3.7 step 2 deletes only the
   _value_ of `b=`, bounded by the value's parsed offsets, so the deletion is
   byte-exact wherever the tag sits; a field ending `…; b=SIG; x=1800000000`

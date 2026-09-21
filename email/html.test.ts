@@ -4,7 +4,7 @@
 // half is asserted on the composition rule — a value is escaped exactly once, by
 // `escapeHtml` at the interpolation, and the shell never escapes its body.
 
-import { assertEquals, assertFalse, assertStringIncludes } from "@std/assert"
+import { assertEquals, assertFalse, assertStringIncludes, assertThrows } from "@std/assert"
 import { escapeHtml, htmlWrap } from "./html.ts"
 
 Deno.test("escapes the five HTML metacharacters", () => {
@@ -89,4 +89,45 @@ Deno.test("omits the brand block and the signature when no brand is given", () =
 Deno.test("appends a footer without escaping it", () => {
   const html = htmlWrap({ body: "<p>hi</p>", footer: '<p><a href="https://x.example">x</a></p>' })
   assertStringIncludes(html, '<p><a href="https://x.example">x</a></p>')
+})
+
+Deno.test("refuses a brand link a mail client should not follow", () => {
+  // Escaping leaves `javascript:alert(1)` a perfectly well-formed link: the
+  // characters that need escaping are not the ones that make the scheme
+  // dangerous. Each spelling below is one a string comparison against
+  // "javascript:" would miss, and every one parses to the same scheme.
+  for (
+    const brandUrl of [
+      "javascript:alert(1)",
+      "JaVaScRiPt:alert(1)",
+      "  javascript:alert(1)",
+      "java\nscript:alert(1)",
+      "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+      "vbscript:msgbox(1)",
+    ]
+  ) {
+    assertThrows(
+      () => htmlWrap({ body: "<p>hi</p>", brand: "Ben & Co", brandUrl }),
+      TypeError,
+      "brandUrl must use",
+      `brandUrl ${JSON.stringify(brandUrl)} must be refused`,
+    )
+  }
+})
+
+Deno.test("refuses a brand link that is not an absolute URL", () => {
+  // A message is read outside any page, so a relative link resolves against
+  // nothing and is a configuration mistake rather than a working link.
+  assertThrows(
+    () => htmlWrap({ body: "<p>hi</p>", brand: "Ben & Co", brandUrl: "/pricing" }),
+    TypeError,
+    "brandUrl must be an absolute URL",
+  )
+})
+
+Deno.test("links a brand to the schemes a mail client does follow", () => {
+  for (const brandUrl of ["https://example.com/", "http://example.com/", "mailto:hi@example.com"]) {
+    const html = htmlWrap({ body: "<p>hi</p>", brand: "Ben & Co", brandUrl })
+    assertStringIncludes(html, `<a href="${brandUrl}"`)
+  }
 })
