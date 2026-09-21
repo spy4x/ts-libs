@@ -268,6 +268,75 @@ export async function validatePublicUrl(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// The second layer: address ranges the runtime should refuse to dial
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Addresses to refuse at connection time, in the spelling `--deny-net` takes.
+ *
+ * This guard resolves a hostname and then hands the *name* to `fetch`, which
+ * resolves it a second time. A DNS server under someone else's control can
+ * answer with a public address for the first lookup and an internal one for the
+ * second, and the request then goes where the guard never looked. Nothing this
+ * module can do closes that gap: the platform `fetch` takes no resolved address.
+ *
+ * `--deny-net` does close it, because Deno applies it at connect time, against
+ * the address the connection is actually going to. Start the process with these
+ * denied and a rebind lands on a refused connection instead of on the internal
+ * service — see `denyNetFlag()` and the README.
+ *
+ * **What this layer cannot cover.** Deno 2.9.7 takes a CIDR range for IPv4 but
+ * not for IPv6: `--deny-net=fc00::/7` stops the process from starting at all
+ * ("ipv6 addresses must be enclosed in square brackets") and `[fc00::]/7` is
+ * rejected as a host, so an IPv6 range cannot be written down. Only single
+ * bracketed addresses can — `[::1]` and `[::]` are the two worth naming — so
+ * unique-local and link-local IPv6 have the classifier above as their only layer.
+ *
+ * **The gap it leaves.** `0.0.0.0` still reaches a service on the same machine,
+ * and it cannot be denied from here: a denied address cannot be listened on
+ * either, and `Deno.serve` binds the wildcard address by default, so
+ * `0.0.0.0/8` or `0.0.0.0/32` in this list stops the application from starting
+ * its own server. A process that never listens can add `0.0.0.0/32` to the flag
+ * itself and close it; one that serves cannot, and the README says so plainly.
+ *
+ * Every address here is one `isPublicAddress` also refuses, which
+ * `url-policy.test.ts` checks; the other direction does not hold, and this list
+ * is the shorter of the two.
+ */
+export const DENY_NET_ADDRESSES: readonly string[] = [
+  "10.0.0.0/8", // private (RFC 1918)
+  "100.64.0.0/10", // carrier-grade NAT (RFC 6598)
+  "127.0.0.0/8", // loopback
+  "169.254.0.0/16", // link-local, including the cloud metadata address
+  "172.16.0.0/12", // private (RFC 1918)
+  "192.0.0.0/24", // IETF protocol assignments
+  "192.0.2.0/24", // documentation (TEST-NET-1)
+  "192.88.99.0/24", // 6to4 relay anycast, decommissioned
+  "192.168.0.0/16", // private (RFC 1918)
+  "198.18.0.0/15", // benchmarking (RFC 2544)
+  "198.51.100.0/24", // documentation (TEST-NET-2)
+  "203.0.113.0/24", // documentation (TEST-NET-3)
+  "224.0.0.0/4", // multicast
+  "240.0.0.0/4", // reserved, including the broadcast address
+  // The two IPv6 addresses the flag can express. `[::]` is the IPv6 spelling of
+  // "this machine" and is safe to deny: unlike `0.0.0.0`, denying it does not
+  // stop `Deno.serve` binding its default address.
+  "[::1]", // IPv6 loopback
+  "[::]", // IPv6 unspecified — reaches local services when dialled
+]
+
+/**
+ * `DENY_NET_ADDRESSES` as the command-line flag that applies them.
+ *
+ * Meant for whatever writes the command: a task definition, a Dockerfile, a
+ * deploy script. It cannot restrict the process it is called from — permissions
+ * are fixed when that process starts.
+ */
+export function denyNetFlag(): string {
+  return `--deny-net=${DENY_NET_ADDRESSES.join(",")}`
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Hostname + IP classifiers
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -363,6 +432,12 @@ export function isPublicIpv6(addr: string): boolean {
     return isPublicIpv4(ipv4)
   }
 
+  // ::ffff:0:0:0/96 — IPv4-translated (RFC 2765 §2.1, dropped by RFC 6145). It
+  // wraps an IPv4 address one group further along than the mapped form above,
+  // so `::ffff:0:7f00:1` is loopback written in a way the mapped check does not
+  // see. The whole prefix goes: it is obsolete, so no destination needs it.
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0xffff && f === 0) return false
+
   // ::/128 unspecified
   if (groups.every((x) => x === 0)) return false
   // ::1/128 loopback — must precede the IPv4-compatible check below so a
@@ -383,16 +458,30 @@ export function isPublicIpv6(addr: string): boolean {
     const ipv4 = `${(g >> 8) & 0xff}.${g & 0xff}.${(h >> 8) & 0xff}.${h & 0xff}`
     return isPublicIpv4(ipv4)
   }
+  // 64:ff9b:1::/48 — local-use NAT64 (RFC 8215). Unlike the well-known prefix
+  // above it is chosen by whoever runs the network, and what it translates to is
+  // their business, so the address says nothing about where the packet lands.
+  if (a === 0x0064 && b === 0xff9b && c === 0x0001) return false
+  // 2002::/16 — 6to4 (RFC 3056), deprecated by RFC 7526. The second and third
+  // groups are an IPv4 address, so `2002:7f00:1::` is 127.0.0.1 in costume.
+  if (a === 0x2002) return false
   // 100::/64 discard prefix — block the whole prefix, not just the all-zero
   // address (RFC 6666). Any address whose first 64 bits are 0x0100:: is
   // reserved for discard.
   if (a === 0x0100 && b === 0 && c === 0 && d === 0) return false
   // 2001:db8::/32 documentation
   if (a === 0x2001 && b === 0x0db8) return false
-  // 2001::/32 Teredo (RFC 4380) — tunneling, not a real destination
-  if (a === 0x2001 && b === 0) return false
-  // 2001:2::/48 benchmarking (RFC 5180)
-  if (a === 0x2001 && b === 0x0002) return false
+  // 2001::/23 — the IETF protocol assignments block (RFC 2928). Teredo
+  // (2001::/32), benchmarking (2001:2::/48) and ORCHID (2001:10::/28 and
+  // 2001:20::/28) all sit inside it, and so does whatever is assigned there
+  // next. The neighbouring 2001:200::/23 and up are ordinary allocations and
+  // stay public — only the first 512 blocks are reserved.
+  if (a === 0x2001 && (b & 0xfe00) === 0) return false
+  // 3fff::/20 — documentation (RFC 9637)
+  if (a === 0x3fff && (b & 0xf000) === 0) return false
+  // 5f00::/16 — segment routing identifiers (RFC 9602): inside one operator's
+  // network by construction.
+  if (a === 0x5f00) return false
   // fec0::/10 deprecated site-local (RFC 3879)
   if ((a & 0xffc0) === 0xfec0) return false
   // fc00::/7 unique local addresses (ULA)

@@ -47,7 +47,14 @@ export class BodyReadTimeoutError extends Error {
 /** Default ceiling for a body read: 5 MiB. */
 export const DEFAULT_MAX_BYTES: number = 5 * 1024 * 1024
 
-/** Default stall budget: 10s without a chunk. */
+/**
+ * Default stall budget: 10s without a chunk.
+ *
+ * This is the value a read uses when the caller passes no `timeoutMs`. A caller
+ * who wants no stall budget at all asks for it with `timeoutMs: 0`; a default of
+ * "wait forever" is not something anybody would choose deliberately, and a
+ * response that stops mid-body is exactly what a hostile server sends.
+ */
 export const DEFAULT_BODY_TIMEOUT_MS: number = 10_000
 
 /**
@@ -65,8 +72,10 @@ export interface BodySource {
 
 export interface BodyReadOptions {
   /**
-   * Stall budget in ms: the maximum time to wait for the next chunk. `0` or
-   * omitted disables the timeout entirely and the cap alone governs.
+   * Stall budget in ms: the maximum time to wait for the next chunk. Defaults
+   * to `DEFAULT_BODY_TIMEOUT_MS` (10s). `0` turns the budget off and leaves the
+   * byte cap alone governing, which means a body that goes quiet is waited on
+   * for as long as the connection lives.
    */
   timeoutMs?: number
   /** Byte cap for this read. Defaults to `DEFAULT_MAX_BYTES`. */
@@ -100,7 +109,8 @@ export function readContentLength(headers: { get(name: string): string | null })
  * is read, and again against the running total while streaming, so a lying or
  * absent header cannot get past it. The stall budget covers waiting for the
  * *next* chunk, so a slow-but-live transfer may take as long as it needs while
- * a hung one fails fast.
+ * a hung one fails fast. Both limits apply whether or not the caller asked for
+ * them: the defaults are 5 MiB and 10s.
  *
  * The reader is cancelled and unlocked on every exit path, including the two
  * throws — a failed bounded read must not leave the socket open.
@@ -113,7 +123,7 @@ async function* readBoundedChunks(
   options: BodyReadOptions,
 ): AsyncGenerator<Uint8Array> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
-  const timeoutMs = options.timeoutMs ?? 0
+  const timeoutMs = options.timeoutMs ?? DEFAULT_BODY_TIMEOUT_MS
 
   const declaredLength = readContentLength(source.headers)
   if (declaredLength !== null && declaredLength > maxBytes) {

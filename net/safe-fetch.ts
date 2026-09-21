@@ -24,6 +24,11 @@
  * against the current URL (`new URL(location, currentUrl)`), which is what
  * RFC 9110 requires. A `Location` that parses to a non-http(s) scheme — a
  * crafted `javascript:` header, say — is rejected by the policy, never fetched.
+ *
+ * CREDENTIALS DO NOT CROSS AN ORIGIN: taking redirect handling away from the
+ * platform `fetch` also took away its header rules, so the caller's
+ * `Authorization`, `Cookie` and `Proxy-Authorization` are dropped here the
+ * moment a hop changes origin — see `CREDENTIAL_HEADERS`.
  */
 
 import {
@@ -38,6 +43,25 @@ export const DEFAULT_MAX_REDIRECTS: number = 3
 
 /** Total budget for the whole redirect chain. */
 export const DEFAULT_TIMEOUT_MS: number = 10_000
+
+/**
+ * Request headers that must not follow a redirect to another origin.
+ *
+ * Lower-case, because a caller's header record is keyed however they spelled it
+ * and HTTP field names are case-insensitive. The list is the one the platform
+ * `fetch` strips on a cross-origin redirect: everything that authenticates the
+ * caller to the origin it was addressed to and to nobody else.
+ *
+ * It is the standard names only, exactly like the platform. A house header that
+ * carries a secret — `X-Api-Key`, `X-Auth-Token` — is not on it and does follow
+ * a redirect to another origin. A caller who sends one either adds it to the
+ * request only when it is needed, or does not use `safeFetch` for that request.
+ */
+export const CREDENTIAL_HEADERS: readonly string[] = [
+  "authorization",
+  "cookie",
+  "proxy-authorization",
+]
 
 /** Request methods a redirect is allowed to carry unchanged. */
 export enum SafeFetchMethod {
@@ -96,8 +120,18 @@ export interface SafeFetchOptions {
   timeoutMs?: number
   /** Fetcher implementation; defaults to the global `fetch`. */
   fetcher?: Fetcher
-  /** Request headers (e.g. User-Agent). */
-  headers?: Record<string, string>
+  /**
+   * Request headers, in any shape the platform `fetch` accepts: a `Headers`, an
+   * array of name/value pairs, or a plain object.
+   *
+   * Whatever arrives is normalised through the platform `Headers` before
+   * anything in this module reads it, so the names compared against
+   * `CREDENTIAL_HEADERS` are real header names rather than whatever keys the
+   * value happened to have. Anything the platform refuses — a malformed pair, an
+   * invalid name, a value with a newline in it — is refused here too, with
+   * `UrlValidationError` and code `invalid_format`.
+   */
+  headers?: HeadersInit
   /** Request method. Defaults to `GET`. */
   method?: SafeFetchMethod | string
 }
@@ -119,9 +153,16 @@ export interface SafeFetchResult {
  * Method handling follows RFC 9110: a 301/302/303 downgrades any non-`GET`/`HEAD`
  * request to `GET`; a 307/308 preserves the method.
  *
+ * `options.headers` are normalised through the platform `Headers`, sent on the
+ * first request and carried along the chain, except that the headers in
+ * `CREDENTIAL_HEADERS` are dropped as soon as a hop lands on a different origin
+ * — and stay dropped for the rest of the chain, so neither a bounce back to the
+ * first origin nor a further hop inside the second one gets them back.
+ *
  * @throws `UrlValidationError` when the initial URL or any redirect target
- * fails the policy, when a redirect carries no `Location`, or when the chain
- * exceeds `maxRedirects`.
+ * fails the policy, when a redirect carries no `Location`, when the chain
+ * exceeds `maxRedirects`, or when an option — `timeoutMs`, `maxRedirects`,
+ * `headers` — is not something this module can use.
  */
 export async function safeFetch(
   startUrl: string,
@@ -136,8 +177,19 @@ export async function safeFetch(
       "timeoutMs must be a positive number of milliseconds",
     )
   }
+  // `NaN` is what `Number(process.env.MAX_REDIRECTS)` gives for a typo, and it
+  // compares false against everything: the loop would end on its first turn and
+  // report "too many redirects" for a chain of none. `Infinity` would let the
+  // chain run until the timeout instead of until the cap.
+  if (!Number.isInteger(maxRedirects) || maxRedirects < 0) {
+    throw new UrlValidationError(
+      "invalid_format",
+      "maxRedirects must be a non-negative whole number",
+    )
+  }
   const resolver = options.resolver ?? defaultResolver
   let method = options.method ?? SafeFetchMethod.Get
+  let headers = normalizeHeaders(options.headers)
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -150,7 +202,7 @@ export async function safeFetch(
         signal: controller.signal,
         redirect: "manual",
         method,
-        headers: options.headers,
+        headers,
       })
 
       if (!isRedirectStatus(response.status)) {
@@ -167,8 +219,14 @@ export async function safeFetch(
       }
 
       const location = response.headers.get("location")
+
+      // Nothing below reads the redirect body, and everything below can throw.
+      // Cancelling here — before the header is even looked at — is what makes
+      // "a refused chain does not leak a socket" true on every path out of this
+      // loop, rather than on the two that were remembered.
+      await tryCancel(response)
+
       if (!location) {
-        await tryCancel(response)
         throw new UrlValidationError(
           "invalid_redirect",
           "Redirect response missing Location header",
@@ -179,16 +237,26 @@ export async function safeFetch(
       // result through the full public-URL policy (scheme, host, credentials,
       // IP family, DNS). This is the only place a redirect target is allowed to
       // become a request target.
-      const next = new URL(location, currentUrl)
-      currentUrl = await validatePublicUrl(next.href, { resolver })
-
-      if (response.status === 301 || response.status === 302 || response.status === 303) {
-        method = SafeFetchMethod.Get
+      //
+      // The `Location` is upstream's text, so a value the URL parser refuses is
+      // a bad redirect, not a bug here: it leaves as this module's own error
+      // with a code a caller can branch on, never as a raw `TypeError`. The
+      // value itself is left out of the message — it is attacker-chosen text and
+      // this message reaches logs.
+      let next: URL
+      try {
+        next = new URL(location, currentUrl)
+      } catch {
+        throw new UrlValidationError(
+          "invalid_redirect",
+          "Redirect Location is not a valid URL",
+        )
       }
+      const target = await validatePublicUrl(next.href, { resolver })
+      headers = headersForHop(headers, currentUrl, target)
+      currentUrl = target
 
-      // Drop the redirect response so the next iteration can issue a fresh
-      // fetch against the new URL.
-      await tryCancel(response)
+      method = methodAfterRedirect(response.status, method)
     }
 
     // Unreachable: the loop returns or throws.
@@ -196,6 +264,85 @@ export async function safeFetch(
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * The method the next hop is issued with, per RFC 9110 §15.4.
+ *
+ * A 303 rewrites everything to `GET`, a 301 or 302 rewrites everything that is
+ * not already `GET`, and 307/308 exist precisely so nothing is rewritten.
+ * `HEAD` is never rewritten by any of them: turning it into a `GET` downloads a
+ * body the caller asked not to receive, which is the opposite of what a caller
+ * who wrote `HEAD` wanted. The comparison is case-insensitive because `method`
+ * is a free string as well as a `SafeFetchMethod`.
+ */
+function methodAfterRedirect(status: number, method: string): string {
+  const upper = method.toUpperCase()
+  if (upper === SafeFetchMethod.Head) return method
+  if (status === 303) return SafeFetchMethod.Get
+  if (status === 301 || status === 302) {
+    return upper === SafeFetchMethod.Get ? method : SafeFetchMethod.Get
+  }
+  return method
+}
+
+/**
+ * Turn whatever the caller passed into a record of real header names.
+ *
+ * The platform `Headers` is the parser for every shape `fetch` takes, so it is
+ * the parser here: a `Headers`, an array of pairs and a plain object all come
+ * out as lower-cased names with their values, and nothing else gets past.
+ *
+ * This is a security boundary, not a convenience. Reading an array of pairs
+ * with `Object.entries` gives the *indices* as names — `0`, `1` — and the pair
+ * as the value, so a credential crosses an origin under a name no list of
+ * credential headers will ever match, with the secret still in the value. A
+ * `Headers` object read the same way gives nothing at all, and the caller's
+ * headers silently vanish. One parser removes both.
+ *
+ * @throws `UrlValidationError` with code `invalid_format` for anything the
+ * platform refuses, which includes an invalid header name and a value carrying
+ * a newline.
+ */
+function normalizeHeaders(init: HeadersInit | undefined): Record<string, string> | undefined {
+  if (init === undefined) return undefined
+  let parsed: Headers
+  try {
+    parsed = new Headers(init)
+  } catch {
+    throw new UrlValidationError(
+      "invalid_format",
+      "headers must be a Headers, an array of name/value pairs, or a plain object",
+    )
+  }
+  return Object.fromEntries(parsed)
+}
+
+/**
+ * The headers the next hop may carry.
+ *
+ * Same origin — same scheme, host and port — keeps the record untouched. Any
+ * other target gets a copy without the `CREDENTIAL_HEADERS`, matched
+ * case-insensitively because a caller's record is keyed however they spelled it.
+ *
+ * Origin, not registrable domain: `https://pay.example.com` and
+ * `https://blog.example.com` are one site and two origins, and a guard whose
+ * whole job is to distrust the destination has no reason to hand a token to the
+ * second because the first asked it to.
+ */
+function headersForHop(
+  headers: Record<string, string> | undefined,
+  fromUrl: string,
+  toUrl: string,
+): Record<string, string> | undefined {
+  if (!headers) return headers
+  if (new URL(fromUrl).origin === new URL(toUrl).origin) return headers
+  const kept: Record<string, string> = {}
+  for (const [name, value] of Object.entries(headers)) {
+    if (CREDENTIAL_HEADERS.includes(name.toLowerCase())) continue
+    kept[name] = value
+  }
+  return kept
 }
 
 async function tryCancel(response: Response): Promise<void> {

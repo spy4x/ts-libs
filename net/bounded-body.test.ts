@@ -269,9 +269,19 @@ describe("readBoundedJson", () => {
 })
 
 describe("defaults", () => {
-  it("caps at 5 MiB and stalls out after 10s when unset", () => {
-    assertEquals(DEFAULT_MAX_BYTES, 5 * 1024 * 1024)
-    assertEquals(DEFAULT_BODY_TIMEOUT_MS, 10_000)
+  it("caps a body at 5 MiB when the caller sets no cap", async () => {
+    // Declared length rather than five megabytes of stream: it proves the
+    // default cap at its documented value, one byte either side of it, without
+    // the allocation. Asserting `DEFAULT_MAX_BYTES === 5 * 1024 * 1024` instead
+    // would pass with the default unused, which is how the stall budget stayed
+    // switched off for as long as it did.
+    const oversized = { "content-length": String(DEFAULT_MAX_BYTES + 1) }
+    await assertRejects(
+      () => readBoundedText(response(null, { headers: oversized })),
+      PayloadTooLargeError,
+    )
+    const atCap = { "content-length": String(DEFAULT_MAX_BYTES) }
+    assertEquals(await readBoundedText(response(null, { headers: atCap })), "")
   })
 
   it("reads a body larger than the default cap only when the cap is raised", async () => {
@@ -288,15 +298,62 @@ describe("defaults", () => {
     )
   })
 
-  it("does not start a timer when the stall budget is disabled", async () => {
-    // With `timeoutMs` unset a stalled body simply never settles; assert the
-    // read rejects promptly when the budget IS set, so the gate is not inert.
-    const started = Date.now()
-    await assertRejects(
-      () => readBoundedText(response(stalledStream()), { maxBytes: 64, timeoutMs: 1 }),
-      BodyReadTimeoutError,
-    )
-    assertEquals(Date.now() - started < 5000, true)
+  it("times out a stalled body when the caller sets no stall budget", async () => {
+    // A test may not sit out the real 10s, so the platform timer is wrapped and
+    // a timer armed for exactly the default budget is re-armed for 1ms. What is
+    // asserted is still the rejection and the budget it reports — not that some
+    // timer exists somewhere.
+    const realSet = setTimeout
+    const setDescriptor = Object.getOwnPropertyDescriptor(globalThis, "setTimeout")!
+    let armedAtDefault = 0
+    Object.defineProperty(globalThis, "setTimeout", {
+      value: ((...args: Parameters<typeof setTimeout>) => {
+        if (args[1] === DEFAULT_BODY_TIMEOUT_MS) {
+          armedAtDefault++
+          return realSet(args[0], 1)
+        }
+        return realSet(...args)
+      }) as typeof setTimeout,
+      configurable: true,
+    })
+    // Not a measurement of how long anything took: it is the only way a read
+    // that never settles can end as a red test instead of a hung run.
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    try {
+      const outcome = await Promise.race([
+        readBoundedText(response(stalledStream())).then(() => "the read returned"),
+        new Promise((resolve) => {
+          deadline = realSet(() => resolve("the read never settled"), 1000)
+        }),
+      ]).catch((error: unknown) => error)
+      assertEquals(outcome instanceof BodyReadTimeoutError, true, String(outcome))
+      assertEquals((outcome as BodyReadTimeoutError).timeoutMs, DEFAULT_BODY_TIMEOUT_MS)
+      assertEquals(armedAtDefault, 1)
+    } finally {
+      if (deadline !== undefined) clearTimeout(deadline)
+      Object.defineProperty(globalThis, "setTimeout", setDescriptor)
+    }
+  })
+
+  it("arms no stall timer when the caller passes 0", async () => {
+    // `0` is the documented way to ask for no stall budget. It has to stay an
+    // opt-out that a caller types, not the behaviour of saying nothing.
+    const realSet = setTimeout
+    const setDescriptor = Object.getOwnPropertyDescriptor(globalThis, "setTimeout")!
+    let armed = 0
+    Object.defineProperty(globalThis, "setTimeout", {
+      value: ((...args: Parameters<typeof setTimeout>) => {
+        armed++
+        return realSet(...args)
+      }) as typeof setTimeout,
+      configurable: true,
+    })
+    try {
+      assertEquals(await readBoundedText(response("abc"), { timeoutMs: 0 }), "abc")
+      assertEquals(armed, 0)
+    } finally {
+      Object.defineProperty(globalThis, "setTimeout", setDescriptor)
+    }
   })
 
   it("clears the stall timer once a read finishes", async () => {

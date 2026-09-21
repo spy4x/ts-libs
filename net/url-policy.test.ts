@@ -2,6 +2,8 @@ import { assertEquals, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import {
   defaultResolver,
+  DENY_NET_ADDRESSES,
+  denyNetFlag,
   DnsResolutionError,
   isLocalHostname,
   isPublicAddress,
@@ -218,6 +220,26 @@ describe("validatePublicUrl", () => {
         "http://[::127.0.0.1]/",
         "http://[::169.254.169.254]/",
         "http://[::10.0.0.1]/",
+      ]
+    ) {
+      await assertRejects(() => validatePublicUrl(input), UrlValidationError, "non-public")
+    }
+  })
+
+  it("rejects an IPv6 literal that wraps an internal IPv4 address", async () => {
+    // Every one of these was accepted as public before #61: the wrapper hides
+    // the address the packet actually reaches.
+    for (
+      const input of [
+        "http://[2002:7f00:1::]/",
+        "http://[2002:a9fe:a9fe::1]/",
+        "http://[2002:c0a8:101::1]/",
+        "http://[64:ff9b:1::7f00:1]/",
+        "http://[::ffff:0:7f00:1]/",
+        "http://[2001:10::1]/",
+        "http://[2001:20::1]/",
+        "http://[3fff::1]/",
+        "http://[5f00::1]/",
       ]
     ) {
       await assertRejects(() => validatePublicUrl(input), UrlValidationError, "non-public")
@@ -735,15 +757,113 @@ describe("isPublicIpv6", () => {
     assertEquals(isPublicIpv6("feb0::1"), false)
     assertEquals(isPublicIpv6("2606:4700:4700::1111"), true)
     assertEquals(isPublicIpv6("2001:4860:4860::8888"), true)
-    // 2001:1::/32 is real (APNIC), not blocked.
-    assertEquals(isPublicIpv6("2001:1::1"), true)
+    // 2001:200::/23 is the real APNIC block. The line that used to stand here
+    // called 2001:1::/32 an APNIC allocation and expected `true`; it is inside
+    // the IETF protocol assignments block, and 2001:1::1 is the Port Control
+    // Protocol anycast address, so it is now refused with the rest of
+    // 2001::/23.
+    assertEquals(isPublicIpv6("2001:200::1"), true)
+    assertEquals(isPublicIpv6("2001:1::1"), false)
     assertEquals(isPublicIpv6("2001:2::1"), false)
+  })
+
+  it("rejects a wrapper around an internal IPv4 address", () => {
+    // 6to4 carries the IPv4 address in groups 2 and 3; local-use NAT64 and the
+    // IPv4-translated form carry it in the last two. All three are ways of
+    // writing an address inside the network the process is running in.
+    for (
+      const addr of [
+        "2002:7f00:1::", // 6to4 around 127.0.0.1
+        "2002:a9fe:a9fe::1", // 6to4 around the cloud metadata address
+        "2002:c0a8:101::1", // 6to4 around 192.168.1.1
+        "2002:5db8:d822::1", // 6to4 around a public address: the prefix goes regardless
+        "64:ff9b:1::7f00:1", // local-use NAT64 around 127.0.0.1
+        "::ffff:0:7f00:1", // IPv4-translated 127.0.0.1
+        "::ffff:0:0:1", // the same prefix, whatever it wraps
+      ]
+    ) {
+      assertEquals(isPublicIpv6(addr), false, addr)
+    }
+  })
+
+  it("rejects the reserved and documentation blocks", () => {
+    for (
+      const addr of [
+        "2001:10::1", // ORCHID
+        "2001:20::1", // ORCHIDv2
+        "2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff", // last address of 2001::/23
+        "3fff::1", // documentation (RFC 9637)
+        "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff", // last address of 3fff::/20
+        "5f00::1", // segment routing identifiers
+        "5f00:ffff::1",
+      ]
+    ) {
+      assertEquals(isPublicIpv6(addr), false, addr)
+    }
+  })
+
+  it("accepts the addresses one block outside each new range", () => {
+    // The blocks have to stop where the registries say they stop, or the guard
+    // starts refusing ordinary destinations.
+    assertEquals(isPublicIpv6("2001:200::1"), true) // first block past 2001::/23
+    assertEquals(isPublicIpv6("2003::1"), true) // first group past 2002::/16
+    assertEquals(isPublicIpv6("2001:ff:ffff::1"), false) // still inside 2001::/23
+    assertEquals(isPublicIpv6("3fff:1000::1"), true) // first block past 3fff::/20
+    assertEquals(isPublicIpv6("5f01::1"), true) // first group past 5f00::/16
+    assertEquals(isPublicIpv6("64:ff9b::8.8.8.8"), true) // well-known NAT64 stays decoded
   })
 
   it("rejects malformed input", () => {
     assertEquals(isPublicIpv6("not::an::addr"), false)
     assertEquals(isPublicIpv6(":::"), false)
     assertEquals(isPublicIpv6(""), false)
+  })
+})
+
+describe("DENY_NET_ADDRESSES", () => {
+  it("names only addresses this policy also refuses", () => {
+    // The two layers have to agree about what is internal, or the flag becomes
+    // a second, quieter policy that nobody reads.
+    for (const entry of DENY_NET_ADDRESSES) {
+      assertEquals(isPublicAddress(entry.split("/")[0]), false, entry)
+    }
+  })
+
+  it("covers the ranges a rebind would aim at", () => {
+    for (
+      const range of [
+        "127.0.0.0/8", // loopback
+        "169.254.0.0/16", // cloud metadata
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "[::1]",
+        "[::]", // the IPv6 spelling of "this machine"
+      ]
+    ) {
+      assertEquals(DENY_NET_ADDRESSES.includes(range), true, range)
+    }
+  })
+
+  it("leaves out what the runtime will not start with", () => {
+    // Both verified against Deno 2.9.7 by starting a process with the flag: an
+    // IPv6 range is rejected as a host ("ipv6 addresses must be enclosed in
+    // square brackets"), and denying 0.0.0.0 in any form also stops
+    // `Deno.serve` binding its default wildcard address, which stops the
+    // application dead. That is why `0.0.0.0` is the gap the README names and
+    // `[::]` is not: denying `[::]` leaves the default bind working.
+    assertEquals(DENY_NET_ADDRESSES.filter((e) => e.includes(":") && e.includes("/")), [])
+    assertEquals(DENY_NET_ADDRESSES.filter((e) => e.startsWith("0.0.0.0")), [])
+  })
+
+  it("builds one flag with one entry per address", () => {
+    const flag = denyNetFlag()
+    assertEquals(flag.startsWith("--deny-net="), true)
+    const listed = flag.slice("--deny-net=".length).split(",")
+    assertEquals(listed.length, DENY_NET_ADDRESSES.length)
+    assertEquals(listed.includes("127.0.0.0/8"), true)
+    // An entry carrying a comma would silently become two entries here.
+    assertEquals(DENY_NET_ADDRESSES.some((entry) => entry.includes(",")), false)
   })
 })
 
