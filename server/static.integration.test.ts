@@ -1,12 +1,24 @@
 /**
  * `server/static.ts` against a real disk, through `denoStaticFs` (#58).
  *
- * The unit tier proves the module's own streaming and close logic with a fake
- * `StaticFs`. This file proves the concrete `Deno.*` adapter on top of it: a real
- * file larger than one internal read chunk arrives as more than one chunk, its
- * `Content-Length` matches the real file size from `Deno.stat`, and repeatedly
- * cancelling a real file's stream early never runs out of file descriptors —
- * the practical symptom of a handle that is not released.
+ * The unit tier proves the module's own streaming and close logic — including
+ * closing the handle on a full read, a client cancel and a failed read — with a
+ * fake `StaticFs`, so this file does not repeat that with real files. What it
+ * proves instead, against the concrete `Deno.*` adapter: a real file larger than
+ * one internal read chunk arrives as more than one chunk, and `Content-Length`
+ * matches the real file size from `Deno.stat`.
+ *
+ * An earlier version of this file also looped many cancelled requests and
+ * asserted the loop never hit "too many open files", as a proxy for the
+ * descriptor being released. A review confirmed that proxy does not work:
+ * `Deno.FsFile.readable` releases its own descriptor on cancel independently of
+ * this module, and five hundred descriptors are far below any real per-process
+ * limit, so the loop passed even with the close deliberately removed and even
+ * with the handle deliberately never closed at all. Proving the descriptor
+ * count directly would need to read `/proc/self/fd`, which needs `--allow-all`
+ * and so cannot run inside this tier's `--allow-read --allow-env --allow-net
+ * --allow-write=.volumes` grant. The unit tier's fake-filesystem tests are the
+ * ones that actually pin the close behaviour; this file stays real-disk-only.
  */
 
 import { assertEquals, assertGreater } from "@std/assert"
@@ -52,32 +64,6 @@ Deno.test("static integration: a real file larger than one chunk streams as seve
       offset += chunk.length
     }
     assertEquals(joined, bytes)
-  } finally {
-    await removeScratchFolder(folder)
-  }
-})
-
-Deno.test("static integration: cancelling many real-file streams early never exhausts file handles", async () => {
-  const folder = await createScratchFolder("it_static")
-  try {
-    await Deno.writeFile(`${folder}/asset.bin`, new Uint8Array(FILE_SIZE).fill(1))
-
-    // Well past a typical per-process file descriptor limit if a handle leaked
-    // on every request; if `close` is not wired to `cancel`, this loop fails
-    // with "too many open files" long before it completes.
-    for (let i = 0; i < 500; i++) {
-      const response = await serveStatic("/asset.bin", { root: folder, fs: denoStaticFs })
-      if (!response) throw new Error("expected a response")
-      const reader = response.body!.getReader()
-      await reader.read() // read exactly one chunk, well short of the whole file
-      await reader.cancel("client aborted")
-    }
-
-    // The filesystem is still usable: one more full read succeeds.
-    const response = await serveStatic("/asset.bin", { root: folder, fs: denoStaticFs })
-    if (!response) throw new Error("expected a response")
-    const bytes = await response.arrayBuffer()
-    assertEquals(bytes.byteLength, FILE_SIZE)
   } finally {
     await removeScratchFolder(folder)
   }
