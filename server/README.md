@@ -745,18 +745,41 @@ still harmless.
 everything — inside `MigrationDriver.withLock`. Locking one migration at a time would not help: the
 race is between the two runners' _reads_ of the history, not between their writes.
 
-| Adapter  | What the lock is                                                      | What it covers                                              |
-| -------- | --------------------------------------------------------------------- | ----------------------------------------------------------- |
-| Postgres | `pg_advisory_lock` on the connection `sql.reserve()` pins for the run | every runner that reaches that history table once it exists |
-| SQLite   | a queue per handle and history table                                  | every runner sharing one `SqliteDb`, and no wider           |
+| Adapter  | What the lock is                                                          | What it covers                                              |
+| -------- | ------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Postgres | `pg_try_advisory_lock` on the connection `sql.reserve()` pins for the run | every runner that reaches that history table once it exists |
+| SQLite   | a queue per handle and history table                                      | every runner sharing one `SqliteDb`, and no wider           |
 
 The Postgres lock is held on the connection the migrations themselves run on, because a session lock
 protects the session it was taken on and nothing else. Its key follows the table as the _server_
 resolves the name — quoted, so a name with a capital letter is found rather than folded away — not
 as the caller spelled it, so a driver given `schema: "app"` and a driver that reaches an existing
-`app.migrations` through its search path lock each other out. It waits rather than failing, with no
-bound (#109), and a runner that dies releases it when its connection closes, so there is no stale
-lock to clear by hand.
+`app.migrations` through its search path lock each other out. A runner that dies releases it when its
+connection closes, so there is no stale lock to clear by hand.
+
+**The wait is bounded** (#109). A second runner retries `pg_try_advisory_lock` every
+`lockRetryMs` (250 ms by default) and gives up after `lockWaitMs` — one minute by default — with
+`PostgresMigrationLockError`, having applied nothing. Raise `lockWaitMs` when the slowest honest run
+in the deployment is longer than that. When it is hit, find the holder: `SELECT * FROM pg_locks WHERE
+locktype = 'advisory'` names the backend and `pg_stat_activity` says what it is running. A holder
+that is genuinely still migrating needs a longer bound behind it; a holder that is stuck needs
+dealing with, and killing its backend releases the lock with its session. `lockWaitMs` counts the
+time spent waiting between attempts, not the round trips, which is what lets a test of the bound
+inject a delay and finish at once. Before this, the lock was `pg_advisory_lock`, which waits for
+ever: one stuck runner stopped every other instance from starting and the deployment hung with
+nothing in the log.
+
+**Two runs on one `PostgresMigrationDriver` object** are refused with
+`PostgresMigrationRunInProgressError` rather than deadlocking. The object points itself at the
+connection a run reserved, so the second run used to send its statements on the first run's
+connection, both held a lock, and the process hung until it was killed. Two concurrent runs are two
+driver objects, which is also what two application instances are.
+
+**A connection lost mid-run is not a catchable error**, and it cannot be made one from here. The
+server releases the advisory lock when the session ends and the run does not continue, so nothing is
+applied twice; what the caller sees is an uncaught `TypeError: Cannot read properties of null
+(reading 'write')` raised from inside `postgres@3.4.7/src/connection.js:250` on a timer the driver
+owns, not a rejected promise. Written down rather than dressed up.
 
 **Every runner of one history table must share a `search_path` or pass the same `schema`.** The key
 is resolved before the lock is taken, and on a first run there is no table to resolve, so each runner

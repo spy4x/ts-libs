@@ -76,7 +76,15 @@ export {
   type RowMethods,
 } from "./services.ts"
 
-export { PostgresMigrationDriver, type PostgresMigrationDriverOptions } from "./postgres-migrate.ts"
+export {
+  DEFAULT_MIGRATION_LOCK_RETRY_MS,
+  DEFAULT_MIGRATION_LOCK_WAIT_MS,
+  type MigrationDelay,
+  PostgresMigrationDriver,
+  type PostgresMigrationDriverOptions,
+  PostgresMigrationLockError,
+  PostgresMigrationRunInProgressError,
+} from "./postgres-migrate.ts"
 
 export {
   ENV_NAME,

@@ -38,12 +38,103 @@ import type { Sql } from "./ports.ts"
 /** The default history table name, matching the template's `migrations` table. */
 export const DEFAULT_MIGRATIONS_TABLE = "migrations"
 
+/**
+ * How long a runner waits for another runner's lock before giving up, in milliseconds.
+ *
+ * A minute, which is longer than any migration run this library has measured and short
+ * enough that a deployment blocked behind a stuck runner says so rather than hanging. A
+ * deployment whose slowest honest run is longer raises it with
+ * {@link PostgresMigrationDriverOptions.lockWaitMs}; failing loudly is the trade.
+ */
+export const DEFAULT_MIGRATION_LOCK_WAIT_MS = 60_000
+
+/** How long a runner waits between attempts to take the lock, in milliseconds. */
+export const DEFAULT_MIGRATION_LOCK_RETRY_MS = 250
+
+/**
+ * A delay, so a test of the bound does not have to sleep through it.
+ *
+ * The same shape as `SqliteDelay` in `sqlite.ts` minus the cancellation, which this one
+ * does not need: every wait here is awaited to completion before the next attempt.
+ */
+export type MigrationDelay = (milliseconds: number) => Promise<void>
+
+/** The default delay: `setTimeout`. */
+const defaultDelay: MigrationDelay = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds))
+
+/**
+ * Thrown when a runner waited out its bound without taking the migration lock.
+ *
+ * Another runner is holding the lock on this history table and has been for longer than
+ * {@link PostgresMigrationDriverOptions.lockWaitMs}. Nothing has been applied by this
+ * runner and nothing is half-done; the run simply did not start.
+ *
+ * What to do: find the holder. `SELECT * FROM pg_locks WHERE locktype = 'advisory'` names
+ * the backend, and `pg_stat_activity` says what it is running. A holder that is genuinely
+ * still migrating needs a longer bound on the instances behind it; a holder that is stuck
+ * needs to be dealt with, and killing its backend releases the lock with its session.
+ */
+export class PostgresMigrationLockError extends Error {
+  /** The bound that was exceeded, in milliseconds. */
+  readonly lockWaitMs: number
+
+  constructor(lockWaitMs: number) {
+    super(
+      `another migration runner has held the lock on this history table for longer than ` +
+        `${lockWaitMs}ms, so this run gave up without applying anything; find the holder ` +
+        `in pg_locks and pg_stat_activity, or raise lockWaitMs if the run behind it is ` +
+        `honestly that slow`,
+    )
+    this.name = "PostgresMigrationLockError"
+    this.lockWaitMs = lockWaitMs
+  }
+}
+
+/**
+ * Thrown when a second run is started on a driver object that is already running one.
+ *
+ * {@link PostgresMigrationDriver.withLock} points the instance at one reserved connection
+ * for the length of a run, so a second run on the same object would send its statements on
+ * the first run's connection. Both then hold an advisory lock, the winner's statements
+ * queue behind the loser's, and the process hangs with nothing in the log — measured on
+ * issue #109. Two concurrent runs are two driver objects, which is also what two
+ * application instances are.
+ */
+export class PostgresMigrationRunInProgressError extends Error {
+  constructor() {
+    super(
+      `this PostgresMigrationDriver is already running a migration; it pins one connection ` +
+        `for the length of a run, so a second run on the same object would deadlock — give ` +
+        `the second run its own driver`,
+    )
+    this.name = "PostgresMigrationRunInProgressError"
+  }
+}
+
 /** Options for {@link PostgresMigrationDriver}. */
 export interface PostgresMigrationDriverOptions {
   /** Client to run through. */
   sql: Sql
   /** History table name. Defaults to `migrations`. */
   table?: string
+  /**
+   * Milliseconds to wait for another runner's lock before {@link PostgresMigrationLockError}.
+   *
+   * Defaults to {@link DEFAULT_MIGRATION_LOCK_WAIT_MS}. It counts the time this runner
+   * spends *waiting between attempts*; the attempts themselves are round trips to the
+   * server and are not added to it, which is what lets a test of the bound inject a delay
+   * and finish immediately. `0` gives up on the first refusal.
+   */
+  lockWaitMs?: number
+  /**
+   * Milliseconds between attempts to take the lock. Defaults to
+   * {@link DEFAULT_MIGRATION_LOCK_RETRY_MS}. Values below 1 are raised to 1, so a run
+   * cannot spin.
+   */
+  lockRetryMs?: number
+  /** Delay used while waiting. Defaults to `setTimeout`. See {@link MigrationDelay}. */
+  delay?: MigrationDelay
   /**
    * Schema holding the history table. Defaults to the connection's `search_path`.
    *
@@ -78,8 +169,9 @@ interface HistoryProbe {
  *
  * **One run at a time per instance.** {@link withLock} pins a connection and points this
  * instance's statements at it for the length of the run, so a second run started on the
- * *same instance* while the first is still going would share that connection. Two
- * concurrent runs are two instances, which is also what two application instances are.
+ * *same instance* while the first is still going would share that connection. That is now
+ * refused with {@link PostgresMigrationRunInProgressError} rather than deadlocking (#109).
+ * Two concurrent runs are two instances, which is also what two application instances are.
  */
 export class PostgresMigrationDriver implements MigrationDriver {
   /**
@@ -94,8 +186,13 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * a defect in the driver rather than a choice here; see that method.
    */
   private pinned = false
+  /** `true` between the start and the end of a {@link withLock} run on this object. */
+  private running = false
   private readonly table: string
   private readonly schema: string | undefined
+  private readonly lockWaitMs: number
+  private readonly lockRetryMs: number
+  private readonly delay: MigrationDelay
   /** `"migrations"` or `"public.migrations"`, as the driver's identifier helper takes it. */
   private readonly tableRef: string
 
@@ -103,6 +200,9 @@ export class PostgresMigrationDriver implements MigrationDriver {
     this.sql = options.sql
     this.table = options.table ?? DEFAULT_MIGRATIONS_TABLE
     this.schema = options.schema
+    this.lockWaitMs = options.lockWaitMs ?? DEFAULT_MIGRATION_LOCK_WAIT_MS
+    this.lockRetryMs = Math.max(1, options.lockRetryMs ?? DEFAULT_MIGRATION_LOCK_RETRY_MS)
+    this.delay = options.delay ?? defaultDelay
     // `postgres` renders a dot inside an identifier as a quoted separator —
     // `escapeIdentifier` in `postgres@3.4.7/src/types.js:216` turns `a.b` into `"a"."b"`
     // — so one splice carries a qualified name and both halves are still quoted.
@@ -129,12 +229,39 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * two ran at the same time and one of them crashed inside Postgres's own catalogue.
    * {@link resolvedTableRef} has the one case the resolution cannot cover.
    *
-   * `pg_advisory_lock` waits rather than failing: a second runner starting during a
-   * migration should apply nothing and carry on, not crash the instance. A runner that
-   * dies holding the lock releases it when its connection closes, so there is no stale
-   * lock to clear by hand. It has no bound, which #109 records.
+   * **The wait is bounded** (#109). `pg_try_advisory_lock` in a retry loop rather than
+   * `pg_advisory_lock`, which waits for ever: a second runner starting during a migration
+   * should apply nothing and carry on, but one stuck runner used to stop every other
+   * instance from starting, with nothing in the log to say why. After
+   * {@link PostgresMigrationDriverOptions.lockWaitMs} the runner gives up with
+   * {@link PostgresMigrationLockError}, having applied nothing. A runner that dies holding
+   * the lock releases it when its connection closes, so there is no stale lock to clear by
+   * hand.
+   *
+   * **A second run on this same object is refused at once**, with
+   * {@link PostgresMigrationRunInProgressError}, rather than deadlocking against the
+   * connection the first run pinned.
+   *
+   * **A connection lost mid-run is not a catchable error, and cannot be made one here.**
+   * The server releases the advisory lock when the session ends, which is correct, and
+   * nothing is applied twice because the run does not continue. What the caller sees is an
+   * uncaught `TypeError: Cannot read properties of null (reading 'write')` raised from
+   * inside `postgres@3.4.7/src/connection.js:250` on a timer the driver owns, not a
+   * rejected promise this method could wrap. Written down rather than dressed up (#109).
    */
   async withLock<T>(run: () => Promise<T>): Promise<T> {
+    // Before the first `await`, so two runs started together cannot both pass it.
+    if (this.running) throw new PostgresMigrationRunInProgressError()
+    this.running = true
+    try {
+      return await this.withReservedLock(run)
+    } finally {
+      this.running = false
+    }
+  }
+
+  /** {@link withLock} with the one-run-per-object guard already passed. */
+  private async withReservedLock<T>(run: () => Promise<T>): Promise<T> {
     const reserved = await this.sql.reserve()
     const pooled = this.sql
     this.sql = reserved as unknown as Sql
@@ -143,7 +270,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
       // On the reserved connection, because the answer depends on that session's
       // `search_path` and the run is about to use that same session.
       const key = await advisoryLockKey(await this.resolvedTableRef(reserved as unknown as Sql))
-      await reserved`SELECT pg_advisory_lock(${key})`
+      await this.takeLock(reserved as unknown as Sql, key)
       try {
         return await run()
       } finally {
@@ -153,6 +280,28 @@ export class PostgresMigrationDriver implements MigrationDriver {
       this.sql = pooled
       this.pinned = false
       reserved.release()
+    }
+  }
+
+  /**
+   * Take the advisory lock, or give up after the bound.
+   *
+   * One attempt is always made, so `lockWaitMs: 0` means "fail on the first refusal"
+   * rather than "do not try". The accumulated wait is what the bound is measured against —
+   * see {@link PostgresMigrationDriverOptions.lockWaitMs} — so an injected delay makes this
+   * loop finish in no time at all and a test of the bound never sleeps.
+   */
+  private async takeLock(sql: Sql, key: bigint): Promise<void> {
+    let waited = 0
+    for (;;) {
+      const rows = await sql<{ locked: boolean }[]>`
+        SELECT pg_try_advisory_lock(${key}) AS locked
+      `
+      if (rows[0]?.locked === true) return
+      if (waited >= this.lockWaitMs) throw new PostgresMigrationLockError(this.lockWaitMs)
+      const step = Math.max(1, Math.min(this.lockRetryMs, this.lockWaitMs - waited))
+      await this.delay(step)
+      waited += step
     }
   }
 
