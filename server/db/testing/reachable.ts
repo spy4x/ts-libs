@@ -16,7 +16,7 @@
  * nothing about what a call *returns*, and returned values are deliberately left as the
  * driver built them so that fragments and parameters passed back into a query are still
  * recognised — which is how the driver's execute function stays reachable on a returned
- * query object. That route, and the two others, are listed on `PostgresScopeEndedError`.
+ * query object. That route is described on `PostgresScopeEndedError`.
  *
  * What the walk follows, from every object and every function it meets:
  *

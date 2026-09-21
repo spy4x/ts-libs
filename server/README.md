@@ -706,22 +706,33 @@ object whose `constructor` is that function. What a _call_ returns is handed bac
 the driver recognises a fragment, a `json` or `array` value or a query object by its class, and a
 wrapper would not be one.
 
+**Two moments other than a call through the clone are checked too** (#108), because a call through
+the clone is not the only way a statement reaches the transaction's connection.
+
+A `postgres` query is lazy: nothing is sent when it is built, and `then`, `catch`, `finally`,
+`execute` and `forEach` all reach the query's `handle()`, which is where the statement goes on the
+connection. So a query built inside the callback and awaited after `begin()` has returned used to run
+inside whatever transaction that connection held by then and vanish with its rollback — a forgotten
+`await` is enough to write it. The guard now sits on the query's own `handle` as well: the first send
+after the scope has ended is refused. Awaiting a query that already ran inside the callback sends
+nothing and is not refused. `handle` is not documented driver API, which is why an integration test
+awaits such a query and expects the error — a driver that renamed the method turns that test red
+instead of reopening the route in silence.
+
+`sql.savepoint(fn)` calls `fn` with a handle the driver built and passed in, so that handle never
+went through the wrapper. The callback now receives a scoped handle instead, retired when the
+savepoint returns.
+
 **It is a guard against a mistake, not a security boundary.** The mistake is the one #96 describes: a
-service stores the clone (`this.db = tx`) and writes through it after the transaction has returned.
-Code that goes looking for the driver's internals is not making that mistake and could in any case
-import `postgres` and open a connection of its own.
+service stores the clone (`this.db = tx`) and writes through it after the transaction has returned,
+or forgets an `await` on a query it built inside the callback. Code that goes looking for the
+driver's internals is not making that mistake and could in any case import `postgres` and open a
+connection of its own.
 
-Three known routes remain, all of them writing into a later transaction and losing the row, and all
-three present before this check existed. They are tracked in #108:
-
-1. a query _built_ inside the callback and awaited after it — the call that built it happened while
-   the clone was live;
-2. a raw handle taken from `this.sql.savepoint(...)`'s callback — the driver hands that over itself,
-   so it never passed through the wrapper;
-3. the driver's own internals carried on a value a call _returned_, for example
-   `new q.constructor(…, q.handler, …)`, since every query object holds the transaction's execute
-   function. Return values are deliberately not wrapped, so this one cannot be closed by wrapping
-   reads.
+One known route remains, recorded on #108. The driver's own internals ride on a value a call
+_returned_ — for example `new q.constructor(…, q.handler, …)`, since every query object holds the
+transaction's execute function. Return values are deliberately not wrapped, so this one cannot be
+closed by wrapping reads, and it is not the mistake the guard is for.
 
 `SqliteDb.close()` goes through the same gate: it waits for an open transaction rather than closing
 the connection under it, and a scoped handle cannot close a connection it never owned. Two `close()`

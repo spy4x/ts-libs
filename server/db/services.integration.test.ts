@@ -25,14 +25,13 @@
  *
  * **What the kept-clone tests here cover, and what they do not.** They cover the guard's
  * promise: every call form a person would write through a clone kept past `begin()` or a
- * nested `begin()` is refused, and so is anything read off the handle at any depth. They do
- * not cover code that goes looking for the driver's internals; `services.ts` lists the
- * three known routes that remain, all tracked in #108. The most reachable of them is a
- * query built inside the callback and awaited after it, which a forgotten `await` is enough
- * to write; another — the transaction's execute function carried on a value a call
- * *returned* — is a
- * consequence of leaving return values as the driver built them, which the return-value
- * test below is there to keep.
+ * nested `begin()` is refused, anything read off the handle at any depth is refused, a query
+ * built inside the callback and awaited after it is refused when it is sent, and a handle
+ * the driver gives a `savepoint` callback is retired when that savepoint returns. They do
+ * not cover code that goes looking for the driver's internals; `services.ts` describes the
+ * one route that remains, recorded on #108 — the transaction's execute function carried on
+ * a value a call *returned*, which is a consequence of leaving return values as the driver
+ * built them and is what the return-value test below is there to keep.
  *
  * Isolation: every test creates its own schema from a random suffix and drops it in a
  * `finally`. Nothing shared is touched.
@@ -481,6 +480,112 @@ describe("DbServiceBase against a real server", () => {
       })
 
       assertEquals(await service.ids(schema), [1, 3])
+    })
+  })
+
+  it("refuses a query built inside begin and awaited after it", async () => {
+    // Issue #108's first route, in the shape a person writes it: the writes are collected
+    // inside the callback and awaited outside, which is a forgotten `await` rather than a
+    // deliberate act. The query is lazy — `postgres` sends nothing until `then`, `catch`,
+    // `finally`, `execute` or `forEach` reaches its `handle()` — so it used to be sent on
+    // the transaction's connection inside whatever transaction was open there by then,
+    // report success, and go with that transaction's rollback.
+    await withSchema({ max: 1 }, async (sql, schema) => {
+      const service = new NoteService({ sql })
+
+      const pending: Array<Promise<unknown>> = []
+      await service.begin(async (tx) => {
+        await tx.insert(schema, 1, "committed")
+        pending.push(tx.insert(schema, 3, "built inside, awaited outside"))
+      })
+
+      await assertRejects(
+        () =>
+          service.begin(async (tx) => {
+            await tx.insert(schema, 2, "second")
+            await Promise.all(pending)
+            throw new Error("the second transaction fails")
+          }),
+        PostgresScopeEndedError,
+      )
+
+      // Row 1 committed; rows 2 and 3 were never kept. Before the guard, row 3's insert
+      // resolved inside the second transaction and the table looked exactly like this
+      // afterwards — the loss the error replaces is silent, so the error is the pin.
+      assertEquals(await service.ids(schema), [1])
+    })
+  })
+
+  it("refuses an unsafe query built inside begin and awaited after it", async () => {
+    // The same route through `sql.unsafe(...)`, which is also a lazy query object.
+    await withSchema({ max: 1 }, async (sql, schema) => {
+      const service = new NoteService({ sql })
+
+      let pending: PromiseLike<unknown> | undefined
+      await service.begin((tx) => {
+        // deno-lint-ignore no-explicit-any
+        const q = tx.executor() as any
+        pending = q.unsafe(`INSERT INTO "${schema}".note (id, body) VALUES (3, 'unsafe')`)
+        return Promise.resolve()
+      })
+
+      assertExists(pending)
+      await assertRejects(() => Promise.resolve(pending), PostgresScopeEndedError)
+      assertEquals(await service.ids(schema), [])
+    })
+  })
+
+  it("retires a handle taken from sql.savepoint when that savepoint returns", async () => {
+    // Issue #108's second route. `savepoint` hands its callback the driver's own handle,
+    // so that handle never passed through the wrapper and a service that kept it held an
+    // open door onto the connection for the rest of the process.
+    await withSchema({ max: 1 }, async (sql, schema) => {
+      const service = new NoteService({ sql })
+
+      // deno-lint-ignore no-explicit-any
+      let raw: any
+      await service.begin(async (tx) => {
+        // deno-lint-ignore no-explicit-any
+        const q = tx.executor() as any
+        await q.savepoint(async (inside: unknown) => {
+          raw = inside
+          // deno-lint-ignore no-explicit-any
+          const sp = inside as any
+          await sp`INSERT INTO ${sp(schema)}.note (id, body) VALUES (1, 'inside')`
+        })
+        await tx.insert(schema, 2, "after the savepoint")
+      })
+
+      assertExists(raw)
+      assertThrows(
+        () => raw`INSERT INTO ${raw(schema)}.note (id, body) VALUES (3, 'kept')`,
+        PostgresScopeEndedError,
+      )
+      assertEquals(await service.ids(schema), [1, 2])
+    })
+  })
+
+  it("still runs a query that is built and awaited inside the callback", async () => {
+    // The other half of the guard, and the thing it must not cost: a query built through
+    // the clone and awaited where it was built still works, and so does a fragment built
+    // by one call and spliced into another.
+    await withSchema({ max: 1 }, async (sql, schema) => {
+      const service = new NoteService({ sql })
+
+      await service.begin(async (tx) => {
+        // deno-lint-ignore no-explicit-any
+        const q = tx.executor() as any
+        const built = q`INSERT INTO ${q(schema)}.note (id, body) VALUES (1, 'built')`
+        await built
+        // Awaiting the same query a second time is not a second send, so it is allowed.
+        await built
+        await q.unsafe(`INSERT INTO "${schema}".note (id, body) VALUES (2, 'unsafe')`)
+        const where = q`WHERE id = ${1}`
+        const filtered = await q`SELECT id FROM ${q(schema)}.note ${where}`
+        assertEquals(filtered.map((row: { id: number }) => row.id), [1])
+      })
+
+      assertEquals(await service.ids(schema), [1, 2])
     })
   })
 

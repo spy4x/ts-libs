@@ -381,6 +381,94 @@ function fakeTemplate(text: string): TemplateStringsArray {
 }
 
 /**
+ * A query that is sent only when somebody awaits it, as `postgres`'s queries are.
+ *
+ * {@link createFakeSql} answers every statement straight away, which is the shape the
+ * assertions about rendered SQL want. It cannot express the thing #108 is about: a
+ * `postgres@3.4.7` query sends nothing when it is built, and `then` is one of the five
+ * methods that reach its `handle()` and put the statement on the connection
+ * (`postgres@3.4.7/src/query.js:123-161`).
+ *
+ * `handle` is on the prototype here because it is on the prototype there. That matters:
+ * the guard in `services.ts` shadows it with an own property, and a fake that carried its
+ * own would be skipped and would report the route closed while it was open.
+ */
+class FakeLazyQuery {
+  private readonly statement: string
+  private readonly log: string[]
+  private hasBeenSent = false
+
+  constructor(statement: string, log: string[]) {
+    this.statement = statement
+    this.log = log
+  }
+
+  /** Send the statement, once. A second call is a no-op, as the driver's is. */
+  handle(): void {
+    if (this.hasBeenSent) return
+    this.hasBeenSent = true
+    this.log.push(this.statement)
+  }
+
+  then<T>(onfulfilled?: ((value: unknown[]) => T | PromiseLike<T>) | null): Promise<T> {
+    this.handle()
+    return Promise.resolve([]).then(onfulfilled)
+  }
+}
+
+/**
+ * A fake whose transaction handle builds lazy queries, for the #108 tests.
+ *
+ * Deliberately small: a tag, a `savepoint` and nothing else. `sent` records a statement
+ * when it is *sent*, not when it is built, which is the whole point.
+ */
+function createLazyFakeSql() {
+  const sent: string[] = []
+
+  const handle = Object.assign(
+    function (strings: unknown): unknown {
+      return Array.isArray(strings)
+        ? new FakeLazyQuery(String((strings as unknown as string[])[0]), sent)
+        : { __identifier: String(strings) }
+    },
+    {
+      savepoint: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
+        return Promise.resolve().then(() => callback(handle as unknown as Transaction))
+      },
+    },
+  )
+
+  const client = Object.assign(
+    function (): unknown {
+      return undefined
+    },
+    {
+      begin: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
+        return Promise.resolve().then(() => callback(handle as unknown as Transaction))
+      },
+    },
+  )
+
+  return { sql: client as unknown as Sql, handle, sent }
+}
+
+/** A service that can build a query without awaiting it, and hand out its executor. */
+class LazyService extends DbServiceBase {
+  /** Build a query and return it unsent — the forgotten `await`. */
+  build(statement: string): PromiseLike<unknown> {
+    const tag = this.sql as unknown as (strings: TemplateStringsArray) => PromiseLike<unknown>
+    return tag(fakeTemplate(statement))
+  }
+
+  /** The executor this instance writes through — the clone's wrapper, on a clone. */
+  executor(): { savepoint: (callback: (handle: unknown) => Promise<void>) => Promise<void> } {
+    return this.sql as unknown as {
+      savepoint: (callback: (handle: unknown) => Promise<void>) => Promise<void>
+    }
+  }
+}
+
+/**
  * Every way a caller can reach the driver through the clone's executor and get an answer.
  *
  * Table-driven on purpose. The `Proxy` exists so that a property nobody listed cannot
@@ -1019,6 +1107,74 @@ Deno.test("a write through a kept clone cannot land in a later transaction", asy
 
   assertEquals(fake.inner, ["SELECT $1", "SELECT $1"])
   assertEquals(fake.topLevel, ["BEGIN", "COMMIT", "BEGIN", "ROLLBACK"])
+})
+
+Deno.test("a query built inside begin and awaited after it is never sent", async () => {
+  // Issue #108's first route, and the one a forgotten `await` is enough to write. The
+  // query is lazy, so building it inside the callback runs nothing; awaiting it after the
+  // transaction has returned used to put the statement on that connection, inside
+  // whatever transaction was open there by then.
+  const fake = createLazyFakeSql()
+  const service = new LazyService({ sql: fake.sql })
+
+  let pending: PromiseLike<unknown> | undefined
+  await service.begin((tx) => {
+    pending = tx.build("INSERT INTO note VALUES (3)")
+    return Promise.resolve()
+  })
+
+  assertExists(pending)
+  // Nothing was sent while the clone was live, which is what makes the late send possible.
+  assertEquals(fake.sent, [])
+  await assertRejects(() => Promise.resolve(pending), PostgresScopeEndedError)
+  assertEquals(fake.sent, [])
+})
+
+Deno.test("a query built and awaited inside the callback still runs, and reads back after", async () => {
+  // The other half: only the *first* send is checked, so a result awaited again after the
+  // transaction is not refused — the statement had already run inside it.
+  const fake = createLazyFakeSql()
+  const service = new LazyService({ sql: fake.sql })
+
+  let settled: PromiseLike<unknown> | undefined
+  await service.begin(async (tx) => {
+    const query = tx.build("INSERT INTO note VALUES (1)")
+    await query
+    settled = query
+  })
+
+  assertEquals(fake.sent, ["INSERT INTO note VALUES (1)"])
+  assertExists(settled)
+  await settled
+  assertEquals(fake.sent, ["INSERT INTO note VALUES (1)"])
+})
+
+Deno.test("a handle taken from sql.savepoint is retired when that savepoint returns", async () => {
+  // Issue #108's second route. `savepoint` calls its callback with a handle the driver
+  // built, so that handle never passed through the wrapper; the clone's own `begin` was
+  // guarded and this way round was not.
+  const fake = createLazyFakeSql()
+  const service = new LazyService({ sql: fake.sql })
+
+  let raw: unknown
+  await service.begin(async (tx) => {
+    await tx.executor().savepoint((inside) => {
+      raw = inside
+      return Promise.resolve()
+    })
+
+    assertExists(raw)
+    // Not the driver's own handle, and dead as soon as the savepoint returned — while the
+    // transaction it sat inside is still open and still usable.
+    assertStrictEquals(raw === fake.handle, false, "savepoint handed over the raw handle")
+    assertThrows(
+      () => (raw as (strings: TemplateStringsArray) => unknown)(fakeTemplate("INSERT INTO note")),
+      PostgresScopeEndedError,
+    )
+    await tx.build("INSERT INTO note VALUES (2)")
+  })
+
+  assertEquals(fake.sent, ["INSERT INTO note VALUES (2)"])
 })
 
 Deno.test("a clone kept past a savepoint refuses every later statement", async () => {
