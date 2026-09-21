@@ -543,20 +543,40 @@ which propagates the resolver's rejection instead of reporting it.
   `main` — so the growth guard refuses the extra instance instead of missing
   it.
 
-  A name's two ends are not the only place a disguising byte can sit. A byte
-  outside 0x21-0x7E placed _inside_ a name — `Fr­om:` (a soft hyphen),
-  `Fr\0om:` (a NUL) — survives the end-trim untouched and used to slip past
-  both checks (issue #113), because they bucketed a header purely by its
+  A name's two ends are not the only place a disguising byte can sit, and a
+  name can need more than one kind of disguise at once. A byte outside
+  0x21-0x7E placed _inside_ a name — `Fr<U+00AD>om:` (a soft hyphen),
+  `From<NUL>x:` (a NUL) — survives the end-trim untouched and used to slip
+  past both checks (issue #113), because they bucketed a header purely by its
   exact trimmed name and never noticed that a name they never asked about
-  could still read, to a lenient mail program, as one they did. Both checks
-  now also read the trimmed name two further ways — with every such byte
-  removed wherever it sits, and cut at the first one — and count a match on
-  either reading the same as a match on the plain trimmed name. The two
-  readings catch different shapes: stripping the byte out of `Fr­om`
-  leaves `From`, but stripping the NUL out of `From\0x` leaves `Fromx`, which
-  the second reading catches by cutting at the NUL instead. Neither reading
-  ever matches a name `h=` does not list, so a genuine, unrelated, unsigned
-  field with a stray byte in its name is untouched.
+  could still read, to a lenient mail program, as one they did. A first fix
+  for that read the trimmed name two further ways, independently over the
+  whole name — every such byte stripped out wherever it sits, and the name
+  cut at the first one — but a name that needs both readings _at the same
+  time_ defeated it: `Fr<U+00AD>om<NUL>x:` strips to `Fromx` and cuts to `Fr`,
+  and neither is `from`.
+
+  Both checks now instead walk the trimmed name once, building up the
+  stripped prefix as they go, and test that prefix against `h=`'s names every
+  time a run of padding bytes _begins_ — as if a lenient reader had silently
+  swallowed the run and kept going — and once more after the whole name, as
+  if it had read to the end; a match at either point counts the same as a
+  match on the plain trimmed name. `Fr<U+00AD>om<NUL>x:` now matches at the
+  NUL, because by then the walk has already absorbed the soft hyphen and its
+  prefix reads `From`. Because the prefix only ever grows, the walk stops as
+  soon as it is longer than the longest name in `h=` — no later point can
+  match one either — which is what keeps the cost linear in the name's length
+  rather than proportional to how many padding runs an attacker packs into
+  it. A candidate is only ever compared against the names `h=` actually
+  lists, so a genuine, unrelated, unsigned field with a stray byte in its name
+  is untouched — but a plain, otherwise-ordinary field whose name starts with
+  a signed name and then a padding byte is not: `Subject Line:` (the space is
+  one of the padding bytes) or `To Name:` now count as an extra, unsigned
+  instance of `subject` or `to` and are refused, where they verified on
+  `main`. This is not a new trade this round invents — issue #113's own
+  reproduction table lists exactly this shape, `Fr om:`, as one a lenient
+  reader could read as `From` — it is stated here because a reader checking
+  this file's claims against its behaviour should not have to discover it.
 - **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
   `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
   example record publishes a complete SubjectPublicKeyInfo. The envelope is
