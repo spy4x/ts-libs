@@ -12,6 +12,7 @@ import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert"
 import postgres from "postgres"
 import {
   buildPostgresOptions,
+  createSql,
   createSqlFromEnv,
   DEFAULT_POOL_OPTIONS,
   parsePostgresEnv,
@@ -93,11 +94,14 @@ Deno.test("parsePostgresEnv returns undefined when DB_HOST is unset or empty", (
 })
 
 Deno.test("parsePostgresEnv defaults the port to 5432 when DB_PORT is unset", () => {
-  assertEquals(parsePostgresEnv({ [PostgresEnvName.Host]: "db.internal" })?.port, 5432)
-  assertEquals(
-    parsePostgresEnv({ [PostgresEnvName.Host]: "db.internal", [PostgresEnvName.Port]: "" })?.port,
-    5432,
-  )
+  const credentials = {
+    [PostgresEnvName.Host]: "db.internal",
+    [PostgresEnvName.User]: "app",
+    [PostgresEnvName.Pass]: "not-a-real-password",
+    [PostgresEnvName.Name]: "app",
+  }
+  assertEquals(parsePostgresEnv(credentials)?.port, 5432)
+  assertEquals(parsePostgresEnv({ ...credentials, [PostgresEnvName.Port]: "" })?.port, 5432)
 })
 
 Deno.test("parsePostgresEnv reads every field from the record it is given", () => {
@@ -141,14 +145,57 @@ Deno.test("parsePostgresEnv rejects a port outside the TCP range", () => {
   )
 })
 
-Deno.test("parsePostgresEnv leaves an unset user, password and database empty", () => {
-  assertEquals(parsePostgresEnv({ [PostgresEnvName.Host]: "db.internal" }), {
+Deno.test("parsePostgresEnv names the variable that is missing rather than defaulting it", () => {
+  // It used to fall back to the empty string for all three. The client then dialled the
+  // right host and failed authentication, so a variable missing from a deployment looked
+  // like wrong credentials.
+  const complete = {
+    [PostgresEnvName.Host]: "db.internal",
+    [PostgresEnvName.User]: "app",
+    [PostgresEnvName.Pass]: "not-a-real-password",
+    [PostgresEnvName.Name]: "app",
+  }
+  for (const missing of [PostgresEnvName.User, PostgresEnvName.Pass, PostgresEnvName.Name]) {
+    assertThrows(
+      () => parsePostgresEnv({ ...complete, [missing]: undefined }),
+      Error,
+      `${missing} is required when ${PostgresEnvName.Host} is set`,
+    )
+    assertThrows(() => parsePostgresEnv({ ...complete, [missing]: "" }), Error, missing)
+  }
+
+  assertEquals(parsePostgresEnv(complete), {
     host: "db.internal",
     port: 5432,
-    user: "",
-    password: "",
-    database: "",
+    user: "app",
+    password: "not-a-real-password",
+    database: "app",
   })
+})
+
+Deno.test("buildPostgresOptions passes ssl through and omits it when it is not asked for", () => {
+  const connection = { host: "db.internal", user: "app", password: "p", database: "app" }
+
+  assertStrictEquals(Object.hasOwn(buildPostgresOptions({ connection }), "ssl"), false)
+  assertStrictEquals(buildPostgresOptions({ connection, ssl: "verify-full" }).ssl, "verify-full")
+  assertStrictEquals(buildPostgresOptions({ connection, ssl: false }).ssl, false)
+})
+
+Deno.test("createSql hands the four pool values to the driver", () => {
+  // `buildPostgresOptions` is asserted above, but nothing proved `createSql` passes that
+  // object on rather than building its own. `postgres` opens no connection until the
+  // first query, and it keeps the resolved options on the client, so this reads them
+  // without a server.
+  const sql = createSql({
+    connection: { host: "db.internal", user: "app", password: "p", database: "app" },
+  })
+  const options = (sql as unknown as { options: Record<string, unknown> }).options
+
+  assertStrictEquals(options.max, DEFAULT_POOL_OPTIONS.max)
+  assertStrictEquals(options.connect_timeout, DEFAULT_POOL_OPTIONS.connectTimeout)
+  assertStrictEquals(options.idle_timeout, DEFAULT_POOL_OPTIONS.idleTimeout)
+  assertStrictEquals(options.max_lifetime, DEFAULT_POOL_OPTIONS.maxLifetimeSeconds)
+  assertStrictEquals(options.host?.toString(), "db.internal")
 })
 
 Deno.test("createSqlFromEnv returns undefined rather than a client pointed at nothing", () => {

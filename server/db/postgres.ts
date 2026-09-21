@@ -39,6 +39,18 @@ export interface PoolOptions {
    * passes and accept hand-built objects the driver does not support.
    */
   transform?: typeof postgres.camel
+  /**
+   * TLS for the connection, in the driver's own shape.
+   *
+   * `false` (the driver's default) sends no TLS at all, `"require"` demands an
+   * encrypted connection without checking the certificate, `"verify-full"` also checks
+   * the name, and a `node:tls` options object carries a custom certificate authority.
+   * Typed from the driver's own option so the values here cannot drift from the values
+   * it accepts. There is no default: a managed Postgres almost always needs one of
+   * these, and picking it for the caller would be picking how much of the connection
+   * is verified.
+   */
+  ssl?: postgres.Options<Record<string, postgres.PostgresType>>["ssl"]
 }
 
 /**
@@ -95,6 +107,11 @@ const DECIMAL_INTEGER = /^[0-9]+$/
  *
  * A `DB_PORT` that is not a decimal integer throws: `Number("")` is `0` and
  * `Number("abc")` is `NaN`, and both would be handed to the driver as a port.
+ *
+ * A missing `DB_USER`, `DB_PASS` or `DB_NAME` throws too, once `DB_HOST` is set. They
+ * used to default to the empty string, which is a valid value to hand a driver and
+ * never the value anybody meant: the client then dialled the right host and failed
+ * authentication, so a missing variable in a deployment looked like wrong credentials.
  */
 export function parsePostgresEnv(
   environment: Record<string, string | undefined>,
@@ -118,10 +135,19 @@ export function parsePostgresEnv(
   return {
     host,
     port: rawPort === undefined || rawPort === "" ? DEFAULT_PORT : Number(rawPort),
-    user: environment[PostgresEnvName.User] ?? "",
-    password: environment[PostgresEnvName.Pass] ?? "",
-    database: environment[PostgresEnvName.Name] ?? "",
+    user: required(environment, PostgresEnvName.User),
+    password: required(environment, PostgresEnvName.Pass),
+    database: required(environment, PostgresEnvName.Name),
   }
+}
+
+/** Read a variable that has no sensible default, or say which one is missing. */
+function required(environment: Record<string, string | undefined>, name: PostgresEnvName): string {
+  const value = environment[name]
+  if (value === undefined || value === "") {
+    throw new Error(`${name} is required when ${PostgresEnvName.Host} is set`)
+  }
+  return value
 }
 
 /**
@@ -144,6 +170,7 @@ export function buildPostgresOptions(
     max = DEFAULT_POOL_OPTIONS.max,
     applicationName,
     transform,
+    ssl,
   } = options
 
   return {
@@ -158,6 +185,7 @@ export function buildPostgresOptions(
     max,
     ...(applicationName === undefined ? {} : { connection: { application_name: applicationName } }),
     ...(transform === undefined ? {} : { transform }),
+    ...(ssl === undefined ? {} : { ssl }),
   }
 }
 
