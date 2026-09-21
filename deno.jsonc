@@ -56,7 +56,11 @@
     // "10.200.2.4:1025"`), which Woodpecker assigns per run and no list can predict.
     // `--allow-read` and `--allow-env` stay as narrow as the unit tier's, and no
     // integration test may reach anything but the three services regardless.
-    "test:integration": "deno test --no-prompt --allow-read --allow-env --allow-net **/*.integration.test.ts",
+    // `--allow-write=.volumes` is the one write grant in either tier, and it is narrow on
+    // purpose: a test that needs a real folder (not a fake filesystem) gets one under
+    // `.volumes/it/` through `createScratchFolder` (#73), never `Deno.makeTempDir()`, which
+    // writes outside this grant and stays refused.
+    "test:integration": "deno test --no-prompt --allow-read --allow-env --allow-net --allow-write=.volumes **/*.integration.test.ts",
     "services:up": "docker compose -f infra/compose.integration.yml up -d --wait",
     "services:down": "docker compose -f infra/compose.integration.yml down -v",
     "services:logs": "docker compose -f infra/compose.integration.yml logs",
