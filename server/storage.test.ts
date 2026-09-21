@@ -1225,14 +1225,15 @@ describe("createDenoObjectFs", () => {
     assertEquals(statCalls, ["/present", "/missing"])
   })
 
-  it("reports absence for any stat failure, not just a missing file", async () => {
+  it("rethrows a stat failure that is not NotFound, instead of reporting it absent", async () => {
     const fs = createDenoObjectFs(fakeDenoHost({
       stat: () => Promise.reject(new Deno.errors.PermissionDenied("denied")),
     }))
 
-    // Documented behaviour: `doesExist` on the provider makes the absent/denied
-    // distinction, this adapter only answers "can I stat it".
-    assertEquals(await fs.existsObject("/whatever"), false)
+    // `LocalStorage.doesExist` used to answer `false` here, which the port's
+    // contract forbids: only a missing object may read as absent, never a
+    // denied or otherwise-failed probe.
+    await assertRejects(() => fs.existsObject("/whatever"), Deno.errors.PermissionDenied)
   })
 
   it("writes through the injected host and returns the byte count", async () => {
