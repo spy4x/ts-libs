@@ -17,7 +17,6 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@ts-libs/server/http/cors`         | Exact-match origin allowlist and the `hono/cors` origin resolver                     |
 | `@ts-libs/server/http/bearer-auth`  | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)    |
 | `@ts-libs/server/export`            | Versioned export envelope and `Content-Disposition` download response                |
-| `@ts-libs/server/export-client`     | Browser-only: save a response body as a file (DOM, so never imported server-side)    |
 | `@ts-libs/server/static`            | Static-file serving with a MIME table and path-traversal protection                  |
 | `@ts-libs/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
 | `@ts-libs/server/storage`           | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning |
@@ -116,11 +115,6 @@ server to drain, and a stall now surfaces as `BodyReadTimeoutError` rather than 
 Repository-agnostic: the caller supplies the user value and one `{ name, load }` per collection. The
 filename uses the **local** calendar day, not `toISOString().slice(0, 10)`, which named an export for
 a day the user was not on.
-
-## `server/export-client`
-
-`downloadResponseAsFile` plus the injected `DownloadOptions`. Browser-only (`document`, object URL),
-so it is a separate subpath — a server import of `@ts-libs/server/export` never pulls a DOM type.
 
 ## `server/static`
 

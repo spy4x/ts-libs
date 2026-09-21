@@ -4,6 +4,7 @@
   "exports": {
     ".": "./universal.ts",
     "./browser": "./browser.ts",
+    "./browser/download": "./browser/download.ts",
     "./browser/storage": "./browser/storage.ts",
     "./rate-limit": "./rate-limit/mod.ts",
     "./rate-limit/client-ip": "./rate-limit/client-ip.ts",

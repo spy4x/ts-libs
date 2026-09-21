@@ -1,10 +1,11 @@
 /**
- * Client-side half of a data export: turn a response body into a saved file.
+ * Turn a `Response` body into a file the browser saves.
  *
- * Browser-only. `document` and an object URL are the two things a server cannot
- * provide, so this module lives behind its own subpath
- * (`@ts-libs/server/export-client`) and is never reachable from a server import.
- * The server-side envelope and header builder is `server/export.ts`.
+ * `document` and an object URL are the two things a server cannot provide, so
+ * this lives in `@ts-libs/platform/browser`, never in `@ts-libs/server`. It
+ * pairs with the download response `@ts-libs/server/export` builds, but the
+ * two are separate packages on purpose: a server import must never pull in a
+ * DOM type.
  */
 
 /** Minimal document surface this helper needs, so the caller passes its own `document`. */
