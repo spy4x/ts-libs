@@ -118,16 +118,18 @@ gh pr create --fill --base main
 
 ```bash
 deno task check
-# CI emulation — the only real evidence. The cache directory is created and removed
-# here on purpose: `DENO_DIR=$(mktemp -d)` leaves ~2 000 files under /tmp per run,
-# and a wave of parallel agents filled the machine's /tmp doing exactly that.
-D=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" denodir.XXXXXX)
-CI=true DENO_DIR=$D deno task check; echo "exit=$?"
-rm -rf -- "$D"
+deno task check:cold              # CI emulation — the only real evidence
+deno task check:cold check:all    # the same, plus the integration tier; needs the containers up
 ```
 
-Swap `check` for `check:all` in that same cold form when the change touches the integration tier —
-`deno task check:all` runs `check`, then `test:integration`, and needs the containers up.
+`check:cold` runs the named tasks (default `check`) with `CI=true` and an empty `DENO_DIR` that it
+creates under `.volumes/denodir/` and removes again, pass or fail. It prints `cold <task>: exit=<n>`
+after each task. Use it instead of a hand-written `DENO_DIR=$(mktemp -d …)` block: that form left
+~2 000 files behind per run until a wave of parallel agents filled `/tmp`, and its `rm -rf -- "$D"`
+makes an agent harness stop and ask a person before every run, because the variable could be empty.
+For the same reason, never put a shell variable inside an `rm` path anywhere in this repo's
+workflows — undo a throw-away checkout with `git checkout -- .`, `git clean` and
+`git worktree remove`, or name the literal path.
 
 A warm local run is not evidence: it hides `$HOME`, `DENO_DIR` and cache assumptions. Never assert a
 path under `$HOME` in a test — resolve it through `import.meta.resolve` or an injected config. A test
@@ -137,6 +139,7 @@ that can silently skip when its dependency is missing must fail loudly instead.
 | ---------------------------- | ---------------------------------------------------------- |
 | `deno task check`            | format, lint, types and the unit tier; needs no containers |
 | `deno task check:all`        | `check`, then the integration tier                         |
+| `deno task check:cold`       | the named tasks as CI runs them: `CI=true`, empty cache    |
 | `deno task fmt`              | format (`fmt:check` in CI)                                 |
 | `deno task lint`             | lint (`lint:fix` to apply suggestions)                     |
 | `deno task ts:check`         | `deno check` over every `.ts`/`.tsx` in the tree           |
