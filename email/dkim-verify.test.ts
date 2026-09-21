@@ -3174,10 +3174,10 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
 // here alike, because the growth guard bucketed a header purely by its exact
 // end-trimmed name and never noticed that a bucket it never asked about could
 // still read, to a lenient mail program, as a name it did ask about.
-// `looseHeaderNameReadings` closes that: it reads a name two further ways --
-// with every such byte stripped out wherever it sits, and cut at the first
-// one -- and the growth guard now treats a match on either reading as an
-// instance of the name it disguises as.
+// `looseHeaderNameMatch` closes that: it walks a name once, testing the
+// stripped-so-far prefix every time a run of padding bytes begins and once
+// more at the end, and the growth guard treats a match at any of those points
+// as an instance of the name it disguises as.
 //
 // Every non-ASCII or control character below is built with
 // `String.fromCodePoint`, matching this file's existing convention for the
@@ -3193,9 +3193,11 @@ describe("a disguised byte inside a header name (issue #113)", () => {
   // caught because stripping the stray byte out of the name, wherever it
   // sits, leaves exactly "From"; the fourth is not caught by stripping alone
   // (that leaves "Fromx") and needs the second reading -- the name cut at the
-  // first stray byte -- which leaves "From" too. Neither test would fail if
-  // `looseHeaderNameReadings` returned only one of its two readings, which is
-  // why both are exercised rather than just one representative shape.
+  // first stray byte -- which leaves "From" too. Not every one of these tests
+  // would fail if `looseHeaderNameMatch` tested only the fully-stripped name
+  // or only the name cut at the first padding byte: dropping the "cut" case
+  // turns the two `From<NUL>x` tests red, and dropping the "strip" case turns
+  // the other eight red. Both are exercised for that reason.
   const INSIDE_NAME_SHAPES = [
     ["a soft hyphen inside the name (Fr<U+00AD>om)", `Fr${SOFT_HYPHEN}om`],
     ["a zero-width space inside the name (F<U+200B>rom)", `F${ZERO_WIDTH_SPACE}rom`],
@@ -3250,5 +3252,101 @@ describe("a disguised byte inside a header name (issue #113)", () => {
     const { raw, publicKey } = await sign(headers, BODY)
     const result = await verifyDkim(raw, publicKey)
     assert(result.valid, `reason=${result.reason}`)
+  })
+
+  // Round 2 review of #119: `Fr<U+00AD>om<NUL>x:` needs both readings *at the
+  // same time* and escaped the version of this fix that computed them
+  // independently over the whole name -- stripping every padding byte gives
+  // "Fromx", cutting at the first one gives "Fr", and neither is "from".
+  // `looseHeaderNameMatch`'s single walk closes this: it tests the
+  // stripped-so-far prefix at the NUL, by which point the soft hyphen is
+  // already behind it, and gets "From". Placement matters here too -- the
+  // guard scans every header regardless of where it sits, but nothing in this
+  // file pinned that below the signed block until this round, so one pair of
+  // these tests inserts the forged line there instead of above it.
+  const COMBINED_FROM = `Fr${SOFT_HYPHEN}om${NUL}x`
+  const COMBINED_SUBJECT = `Su${SOFT_HYPHEN}bject${NUL}x`
+
+  /** Inserts `forgedLine` right after the signed fields, before DKIM-Signature. */
+  function insertBelowSignedFields(raw: string, forgedLine: string): string {
+    const marker = "\r\nDKIM-Signature:"
+    const index = raw.indexOf(marker)
+    assert(index !== -1, "raw message must carry a DKIM-Signature field")
+    return raw.slice(0, index) + "\r\n" + forgedLine + raw.slice(index)
+  }
+
+  it("still rejects a From: with a soft hyphen then a NUL inside the name (string, top)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `${COMBINED_FROM}: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+  })
+
+  it("still rejects a From: with a soft hyphen then a NUL inside the name (bytes, top)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `${COMBINED_FROM}: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(new TextEncoder().encode(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+  })
+
+  it(
+    "still rejects a From: with a soft hyphen then a NUL inside the name, below the signed fields (string, bottom)",
+    async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = insertBelowSignedFields(raw, `${COMBINED_FROM}: ceo@bank.example`)
+      const result = await verifyDkim(attacked, publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+    },
+  )
+
+  it(
+    "still rejects a From: with a soft hyphen then a NUL inside the name, below the signed fields (bytes, bottom)",
+    async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = insertBelowSignedFields(raw, `${COMBINED_FROM}: ceo@bank.example`)
+      const result = await verifyDkim(new TextEncoder().encode(attacked), publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+    },
+  )
+
+  it("still rejects a Subject: with a soft hyphen then a NUL inside the name (string, top)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `${COMBINED_SUBJECT}: a subject the signer never saw\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: subject")
+  })
+
+  it("still rejects a Subject: with a soft hyphen then a NUL inside the name (bytes, top)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `${COMBINED_SUBJECT}: a subject the signer never saw\r\n${raw}`
+    const result = await verifyDkim(new TextEncoder().encode(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: subject")
+  })
+
+  // Round 2 review of #119: the widened no-From check fed a colon-less line
+  // straight into `line.slice(0, line.indexOf(":"))`, which is
+  // `line.slice(0, -1)` when there is no colon -- dropping only the line's
+  // last character rather than naming the whole line. A line reading "From"
+  // then a NUL then one more letter, with no colon anywhere, reduced under
+  // that bug to "From" once the NUL was end-trimmed, so a message with no
+  // genuine From: field at all was treated as having one. There is no real
+  // From: header among these headers, so with the colon-less line correctly
+  // ignored the message must be refused for having none.
+  it("does not let a header line with no colon stand in for the From field", async () => {
+    const headers = [
+      `From${NUL}x`,
+      "To: recipient@example.org",
+      "Subject: DKIM port smoke test",
+    ]
+    const { raw, publicKey } = await sign(headers, BODY, { names: ["from", "to", "subject"] })
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "From field not signed (the message has no From field)")
   })
 })
