@@ -24,23 +24,21 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@ts-libs/server/crypto`            | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                  |
 | `@ts-libs/server/user-secrets`      | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert            |
 | `@ts-libs/server/quota`             | Usage metering with an atomic reserve and 429/503 — not a rate limiter               |
-
-**Merge order:** the four issues that added files here (`#28`, `#30`, `#35`, `#6`) were cut from
-different points on `main` and each carries the earlier ones, so whoever merges later rebases with a
-**union** on `server/deno.json` exports and this README — never by dropping another package's entries.
-`server/http/bounded-body.ts` is the exception: `#28`/`#30` carried a byte-identical copy of
-`net/bounded-body.ts` (`sha256 5fc55e75`) and that copy has since collapsed into the canonical module
-(`#43`), so this file no longer matches the pre-collapse branches by design. `#6` added `./auth*`
-and the `server/auth` section; `#17` adds `./crypto`, `./user-secrets` and `./quota` plus their
-sections below. Resolving the conflict by keeping one side would silently drop the
-`export`/`static`/`healthcheck` entries, the `auth` ones, or these three.
+| `@ts-libs/server/db`                | Barrel: Postgres and SQLite adapters plus the migration runner they share            |
+| `@ts-libs/server/db/migrate`        | Migration runner: discovers, orders and applies `.sql` files, one port for both      |
+| `@ts-libs/server/db/postgres`       | Postgres pool with sane connect/idle/statement timeout defaults                      |
+| `@ts-libs/server/db/sqlite`         | SQLite adapter behind an injectable driver port; ships no driver                     |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
 
 ```bash
-deno publish --dry-run --allow-dirty                          # exit 0
-CI=true DENO_DIR=$(mktemp -d) deno publish --dry-run --allow-dirty   # exit 0, cold
+deno publish --dry-run --allow-dirty   # exit 0
+
+# cold: DENO_DIR under the cache dir, per AGENTS.md — never DENO_DIR=$(mktemp -d)
+D=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" denodir.XXXXXX)
+CI=true DENO_DIR=$D deno publish --dry-run --allow-dirty; echo "exit=$?"
+rm -rf -- "$D"
 ```
 
 That is the check that catches a dangling target (`TS2307`, exit 1) — the failure mode that blocked
