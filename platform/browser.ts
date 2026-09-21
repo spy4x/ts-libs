@@ -2,7 +2,9 @@
  * `@ts-libs/platform/browser` — helpers that need a browser.
  *
  * Nothing here touches a global at import time: `makeStorage` takes its storage object as a
- * parameter, so it is safe under SSR and testable with a `Map`-backed fake.
+ * parameter, and `downloadResponseAsFile` takes its `document`, object-URL factory and timer the
+ * same way, defaulting to the real globals only when the caller passes none. Both are safe under
+ * SSR and testable with fakes.
  */
 
 export * from "./browser/download.ts"

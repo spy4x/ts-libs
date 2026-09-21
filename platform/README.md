@@ -69,16 +69,16 @@ so `axis.test.ts` can assert against it, and a regression tripwire inside the lo
 bound is ever weakened back to plain `steps + 1`, so a future revert of the fix fails a test instead
 of hanging the suite.
 
-### `./browser` → `browser.ts` (2 modules, 223 LOC)
+### `./browser` → `browser.ts` (2 modules, 266 LOC)
 
 Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `makeStorage` and
 `downloadResponseAsFile` both take their DOM surface (`Storage`, `document`, the object-URL
-factory) as a parameter, defaulting to the real global only when the caller passes none.
+factory, a timer) as a parameter, defaulting to the real global only when the caller passes none.
 
-| Module             | Contents                                                                            |
-| ------------------ | ----------------------------------------------------------------------------------- |
-| `browser/download` | `downloadResponseAsFile`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter` |
-| `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike`, `TypedStorage`                       |
+| Module             | Contents                                                                                            |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| `browser/download` | `downloadResponseAsFile`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter` |
+| `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike`, `TypedStorage`                                       |
 
 `browser/download` moved here from `@ts-libs/server/export-client`: it is a browser download
 helper (`document`, an object URL) that has nothing to do with a server, and it pairs with the
