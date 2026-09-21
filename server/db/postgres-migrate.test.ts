@@ -12,7 +12,7 @@
  * server is not covered here and is named in the PR body.
  */
 
-import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert"
+import { assertEquals, assertRejects, assertStrictEquals, assertThrows } from "@std/assert"
 import type { Migration } from "./migrate.ts"
 import type { Sql, Transaction } from "./ports.ts"
 import { DEFAULT_MIGRATIONS_TABLE, PostgresMigrationDriver } from "./postgres-migrate.ts"
@@ -32,12 +32,21 @@ interface FakeSqlOptions {
  * `sql("migrations")` renders as a double-quoted identifier, as the driver does, and every
  * other value renders as `$1`, `$2`, …. Identifiers are recognised by the marker the
  * `sql(value)` call form returns, so the rendering does not depend on the statement text.
+ *
+ * A dot inside an identifier becomes a quoted separator, which is what the driver's own
+ * `escapeIdentifier` does (`postgres@3.4.7/src/types.js:216`): `sql("public.migrations")`
+ * is `"public"."migrations"`, not one identifier with a dot in its name. The driver is the
+ * schema-qualified form's only implementation, so a fake that quoted the whole string
+ * would assert SQL the driver never produces.
  */
 function createFakeSql(options: FakeSqlOptions = {}) {
   const topLevel: string[] = []
   const inner: string[] = []
+  const boundValues: unknown[] = []
   const answers = options.answers ?? []
   let inTransaction = false
+  let reserves = 0
+  let releases = 0
 
   const render = (strings: TemplateStringsArray, values: unknown[]): string => {
     let text = strings[0]
@@ -47,9 +56,10 @@ function createFakeSql(options: FakeSqlOptions = {}) {
       const value = values[index]
       const identifier = identifierOf(value)
       if (identifier !== undefined) {
-        text += `"${identifier}"${tail}`
+        text += `"${identifier.replaceAll(`"`, `""`).replaceAll(".", `"."`)}"${tail}`
       } else {
         bound.push(value)
+        boundValues.push(value)
         text += `$${bound.length}${tail}`
       }
     }
@@ -61,25 +71,53 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     else topLevel.push(query)
   }
 
-  const statement = (strings: unknown, ...values: unknown[]): unknown => {
-    if (!Array.isArray(strings)) return { __identifier: String(strings) }
-    const query = render(strings as unknown as TemplateStringsArray, values)
-    record(query)
-    return Promise.resolve(answers.shift() ?? [])
+  /** One tag function over the shared recorder. Called once per client the fake hands out. */
+  const makeTag = () => {
+    const statement = (strings: unknown, ...values: unknown[]): unknown => {
+      if (!Array.isArray(strings)) return { __identifier: String(strings) }
+      const query = render(strings as unknown as TemplateStringsArray, values)
+      record(query)
+      return Promise.resolve(answers.shift() ?? [])
+    }
+    return Object.assign(
+      statement as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>,
+      {
+        unsafe: (text: string) => {
+          const query = text.trim().replace(/\s+/g, " ")
+          record(query)
+          return options.failOn !== undefined && query.includes(options.failOn)
+            ? Promise.reject(new Error(`fake sql rejects: ${query}`))
+            : Promise.resolve([])
+        },
+      },
+    )
   }
 
-  const asTag = statement as (
-    strings: TemplateStringsArray,
-    ...values: unknown[]
-  ) => Promise<unknown>
+  const asTag = makeTag()
 
   const client = Object.assign(asTag, {
-    unsafe: (text: string) => {
-      const query = text.trim().replace(/\s+/g, " ")
-      record(query)
-      return options.failOn !== undefined && query.includes(options.failOn)
-        ? Promise.reject(new Error(`fake sql rejects: ${query}`))
-        : Promise.resolve([])
+    /**
+     * `sql.reserve()`, as `postgres@3.4.7` really has it.
+     *
+     * The lock is a session lock, so the run has to happen on the connection the lock was
+     * taken on — a fake without `reserve` would let `withLock` pass while the real driver
+     * locked a session the run never used.
+     *
+     * **The reserved client has no `begin`.** `postgres@3.4.7` assigns `begin` to the pool
+     * object alone (`src/index.js:68-81`) although `ReservedSql` is typed as inheriting
+     * it, so calling it there is a `TypeError` at runtime and nothing at compile time. The
+     * fake leaves it out for that reason: with `begin` on it, a driver that reached for it
+     * would pass here and fail against the server.
+     */
+    reserve: () => {
+      reserves += 1
+      return Promise.resolve(
+        Object.assign(makeTag(), {
+          release: () => {
+            releases += 1
+          },
+        }),
+      )
     },
     begin: async <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> => {
       topLevel.push("BEGIN")
@@ -98,7 +136,13 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     end: () => Promise.resolve(),
   })
 
-  return { sql: client as unknown as Sql, topLevel, inner }
+  return {
+    sql: client as unknown as Sql,
+    topLevel,
+    inner,
+    boundValues,
+    connections: () => ({ reserves, releases }),
+  }
 }
 
 function identifierOf(value: unknown): string | undefined {
@@ -113,51 +157,174 @@ function migration(overrides: Partial<Migration> = {}): Migration {
     fileName: "0001_init.sql",
     name: "0001_init",
     sqlText: "CREATE TABLE users (id SERIAL PRIMARY KEY)",
+    checksum: "a".repeat(64),
     withoutTransaction: false,
     ...overrides,
   }
 }
 
+/**
+ * The advisory-lock key for the default, unqualified `migrations` table.
+ *
+ * Written out rather than recomputed from the implementation, so a change to how the key
+ * is derived shows up here as a failure instead of agreeing with itself.
+ */
+const PINNED_LOCK_KEY = -8426173881649192450n
+
+/**
+ * The one probe `createHistoryTable` sends when no schema was named.
+ *
+ * It answers both questions at once — is the table there, and does it already carry the
+ * checksum column — so the ordinary case of an up-to-date table costs one round trip and
+ * sends no `ALTER`.
+ */
+const SEARCH_PATH_PROBE = "SELECT exists ( SELECT FROM information_schema.tables WHERE " +
+  "table_name = $1 AND table_schema = ANY (current_schemas(false)) ) AS table_exists, " +
+  "exists ( SELECT FROM information_schema.columns WHERE table_name = $2 AND " +
+  "column_name = 'checksum' AND table_schema = ANY (current_schemas(false)) ) AS checksum_exists"
+
 Deno.test("createHistoryTable creates the table once, with a unique name column", async () => {
-  const fake = createFakeSql({ answers: [[{ exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ table_exists: false, checksum_exists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
   assertEquals(fake.topLevel, [
-    "SELECT exists ( SELECT FROM information_schema.tables WHERE table_name = $1 ) AS exists",
-    `CREATE TABLE "migrations" ( id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL UNIQUE, ` +
-    `created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP )`,
+    SEARCH_PATH_PROBE,
+    `CREATE TABLE "migrations" ( id SERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE, ` +
+    `checksum TEXT, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP )`,
   ])
 })
 
-Deno.test("createHistoryTable leaves an existing table alone", async () => {
-  const fake = createFakeSql({ answers: [[{ exists: true }]] })
+Deno.test("createHistoryTable adds the checksum column to a table that predates it", async () => {
+  // The upgrade path for a deployment that already ran migrations, which is the one that
+  // most needs the drift check. `ADD COLUMN IF NOT EXISTS` makes it a no-op afterwards.
+  const fake = createFakeSql({ answers: [[{ table_exists: true, checksum_exists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
-  assertEquals(fake.topLevel.length, 1)
-  assertStrictEquals(fake.topLevel[0].startsWith("SELECT exists"), true)
+  assertEquals(fake.topLevel, [
+    SEARCH_PATH_PROBE,
+    `ALTER TABLE "migrations" ADD COLUMN IF NOT EXISTS checksum TEXT`,
+  ])
+})
+
+Deno.test("createHistoryTable touches nothing when the table is already up to date", async () => {
+  const fake = createFakeSql({ answers: [[{ table_exists: true, checksum_exists: true }]] })
+  await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
+
+  assertEquals(fake.topLevel, [SEARCH_PATH_PROBE])
+})
+
+Deno.test("the history table is looked for on the search path, not on the whole server", async () => {
+  // The probe used to ask for the name alone, so a `migrations` table in any other
+  // schema on the server — another tenant's, another application's — answered yes and
+  // the driver created nothing. The first history insert then failed on a table that
+  // was not there.
+  const fake = createFakeSql({ answers: [[{ table_exists: false, checksum_exists: false }]] })
+  await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
+
+  assertStrictEquals(fake.topLevel[0].includes("current_schemas(false)"), true)
+})
+
+Deno.test("a named schema qualifies both the probe and every statement", async () => {
+  const fake = createFakeSql({
+    answers: [[{ table_exists: false, checksum_exists: false }], [{ name: "0001_init" }]],
+  })
+  const driver = new PostgresMigrationDriver({ sql: fake.sql, schema: "tenant_1" })
+
+  await driver.createHistoryTable()
+  await driver.appliedMigrations()
+  await driver.applyWithoutTransaction(migration({ withoutTransaction: true }))
+
+  assertEquals(fake.topLevel, [
+    "SELECT exists ( SELECT FROM information_schema.tables WHERE table_name = $1 AND " +
+    "table_schema = $2 ) AS table_exists, exists ( SELECT FROM information_schema.columns " +
+    "WHERE table_name = $3 AND column_name = 'checksum' AND table_schema = $4 ) AS " +
+    "checksum_exists",
+    `CREATE TABLE "tenant_1"."migrations" ( id SERIAL PRIMARY KEY, name TEXT NOT NULL ` +
+    `UNIQUE, checksum TEXT, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP )`,
+    `SELECT name, checksum FROM "tenant_1"."migrations" ORDER BY id`,
+    "CREATE TABLE users (id SERIAL PRIMARY KEY)",
+    `INSERT INTO "tenant_1"."migrations" (name, checksum) VALUES ($1, $2)`,
+  ])
 })
 
 Deno.test("createHistoryTable honours a custom table name", async () => {
-  const fake = createFakeSql({ answers: [[{ exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ table_exists: false, checksum_exists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql, table: "schema_migrations" })
     .createHistoryTable()
 
   // The existence probe binds the name as a value; the `CREATE` splices it as an identifier.
-  assertEquals(
-    fake.topLevel[0],
-    [
-      "SELECT exists ( SELECT FROM information_schema.tables WHERE table_name = $1 ) AS exists",
-    ].join(""),
-  )
+  assertEquals(fake.topLevel[0], SEARCH_PATH_PROBE)
   assertStrictEquals(fake.topLevel[1].startsWith(`CREATE TABLE "schema_migrations" (`), true)
 })
 
-Deno.test("appliedNames reads the recorded names in id order", async () => {
-  const fake = createFakeSql({ answers: [[{ name: "0001_init" }, { name: "0002_index" }]] })
-  const names = await new PostgresMigrationDriver({ sql: fake.sql }).appliedNames()
+Deno.test("appliedMigrations reads the recorded rows in id order", async () => {
+  const fake = createFakeSql({
+    answers: [[{ name: "0001_init", checksum: "abc" }, { name: "0002_index", checksum: null }]],
+  })
+  const rows = await new PostgresMigrationDriver({ sql: fake.sql }).appliedMigrations()
 
-  assertEquals(names, ["0001_init", "0002_index"])
-  assertEquals(fake.topLevel, [`SELECT name FROM "migrations" ORDER BY id`])
+  assertEquals(rows, [
+    { name: "0001_init", checksum: "abc" },
+    { name: "0002_index", checksum: null },
+  ])
+  assertEquals(fake.topLevel, [`SELECT name, checksum FROM "migrations" ORDER BY id`])
+})
+
+Deno.test("withLock reserves one connection, locks it, and gives it back", async () => {
+  // The lock is a *session* lock, so it must be taken on a connection that outlives the
+  // per-migration transactions — and the run has to use that same connection, or the
+  // lock would protect a session the run never touches.
+  // The first answer is drained by `pg_advisory_lock`; the second is the existence probe.
+  const fake = createFakeSql({ answers: [[], [{ table_exists: true, checksum_exists: false }]] })
+  const driver = new PostgresMigrationDriver({ sql: fake.sql })
+
+  const inside = await driver.withLock(async () => {
+    await driver.createHistoryTable()
+    return "ran"
+  })
+
+  assertStrictEquals(inside, "ran")
+  assertEquals(fake.connections(), { reserves: 1, releases: 1 })
+  assertEquals(fake.topLevel, [
+    "SELECT pg_advisory_lock($1)",
+    SEARCH_PATH_PROBE,
+    `ALTER TABLE "migrations" ADD COLUMN IF NOT EXISTS checksum TEXT`,
+    "SELECT pg_advisory_unlock($1)",
+  ])
+})
+
+Deno.test("withLock unlocks and releases the connection when the run throws", async () => {
+  const fake = createFakeSql()
+  const driver = new PostgresMigrationDriver({ sql: fake.sql })
+
+  await assertRejects(
+    () => driver.withLock(() => Promise.reject(new Error("the run failed"))),
+    Error,
+    "the run failed",
+  )
+
+  assertEquals(fake.topLevel, ["SELECT pg_advisory_lock($1)", "SELECT pg_advisory_unlock($1)"])
+  assertEquals(fake.connections(), { reserves: 1, releases: 1 })
+})
+
+Deno.test("the advisory lock key follows the qualified table name and does not drift", async () => {
+  // Two deployments sharing a server must lock each other out exactly when they share a
+  // history table, so the key has to follow the name — and it has to be the same value in
+  // every process and every release, or an instance running the old code and one running
+  // the new code would lock different things and race each other anyway.
+  const keyFor = async (options: { table?: string; schema?: string }): Promise<bigint> => {
+    const fake = createFakeSql()
+    await new PostgresMigrationDriver({ sql: fake.sql, ...options })
+      .withLock(() => Promise.resolve())
+    return fake.boundValues[0] as bigint
+  }
+
+  const plain = await keyFor({})
+  assertStrictEquals(typeof plain, "bigint")
+  assertStrictEquals(plain, await keyFor({}))
+  assertStrictEquals(plain, PINNED_LOCK_KEY)
+  assertStrictEquals(plain === await keyFor({ table: "other" }), false)
+  assertStrictEquals(plain === await keyFor({ schema: "tenant_1" }), false)
 })
 
 Deno.test("applyInTransaction runs the body and the history insert in one transaction", async () => {
@@ -167,7 +334,51 @@ Deno.test("applyInTransaction runs the body and the history insert in one transa
   assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
   assertEquals(fake.inner, [
     "CREATE TABLE users (id SERIAL PRIMARY KEY)",
-    `INSERT INTO "migrations" (name) VALUES ($1)`,
+    `INSERT INTO "migrations" (name, checksum) VALUES ($1, $2)`,
+  ])
+})
+
+Deno.test("inside the lock the transaction is sent as statements on the pinned connection", async () => {
+  // `postgres@3.4.7` puts `begin` on the pool object only, so the reserved connection
+  // `withLock` pins has none and the transaction has to be sent as statements. That is
+  // safe here because every one of them goes to the one connection the run pinned.
+  const fake = createFakeSql()
+  const driver = new PostgresMigrationDriver({ sql: fake.sql })
+
+  await driver.withLock(() => driver.applyInTransaction(migration()))
+
+  assertEquals(fake.inner, [])
+  assertEquals(fake.topLevel, [
+    "SELECT pg_advisory_lock($1)",
+    "BEGIN",
+    "CREATE TABLE users (id SERIAL PRIMARY KEY)",
+    `INSERT INTO "migrations" (name, checksum) VALUES ($1, $2)`,
+    "COMMIT",
+    "SELECT pg_advisory_unlock($1)",
+  ])
+})
+
+Deno.test("a migration that fails inside the lock is rolled back and never recorded", async () => {
+  const fake = createFakeSql({ failOn: "CREATE TABLE broken" })
+  const driver = new PostgresMigrationDriver({ sql: fake.sql })
+
+  await assertRejects(
+    () =>
+      driver.withLock(() =>
+        driver.applyInTransaction(
+          migration({ sqlText: "CREATE TABLE broken (id INTEGER", name: "0003_broken" }),
+        )
+      ),
+    Error,
+    "fake sql rejects",
+  )
+
+  assertEquals(fake.topLevel, [
+    "SELECT pg_advisory_lock($1)",
+    "BEGIN",
+    "CREATE TABLE broken (id INTEGER",
+    "ROLLBACK",
+    "SELECT pg_advisory_unlock($1)",
   ])
 })
 
@@ -185,7 +396,7 @@ Deno.test("applyWithoutTransaction runs the body and the history insert with no 
   assertEquals(fake.inner, [])
   assertEquals(fake.topLevel, [
     "CREATE INDEX CONCURRENTLY idx_users ON users (id)",
-    `INSERT INTO "migrations" (name) VALUES ($1)`,
+    `INSERT INTO "migrations" (name, checksum) VALUES ($1, $2)`,
   ])
 })
 

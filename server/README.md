@@ -666,3 +666,58 @@ Found by an audit of the extracted code, not inherited from a source.
 | a user could store an internal address as the outbound base URL                  | `refuses an internal base URL by default`                                     |
 | a row was decrypted without checking whose it was                                | `refuses to open a row that belongs to another user`                          |
 | a ciphertext copied into another row still opened                                | `does not open a real ciphertext that was copied into another row`            |
+
+## `server/db`
+
+Two adapters, one migration runner. `@ts-libs/server/db` is the barrel; `db/migrate`,
+`db/postgres` and `db/sqlite` are the subpaths. Nothing here ships a driver: `postgres` is pinned in
+the root import map and the SQLite driver is the caller's own, passed through `SqliteDriver`.
+
+### A transaction handle stops working when its transaction ends
+
+Both adapters hand a callback a handle scoped to the transaction — a `SqliteDb` on one side, a
+`DbServiceBase` clone on the other — and both retire it when the transaction returns, on the
+rollback path as well as the commit path. A service that stores it (`this.db = tx`) and writes
+through it later gets `SqliteScopeEndedError` or `PostgresScopeEndedError` instead of a write that
+lands in whatever transaction that connection is running next and disappears with that
+transaction's rollback. The Postgres refusal is thrown rather than rejected, because the check sits
+on the executor, which the driver also calls synchronously (`sql(table)`); a method declared `async`
+turns it into the rejection its caller expects.
+
+`SqliteDb.close()` goes through the same gate: it waits for an open transaction rather than closing
+the connection under it, and a scoped handle cannot close a connection it never owned.
+
+### Migrations: one runner at a time, and no editing what has run
+
+`runMigrations` does the whole run — create the history table, read the applied set, apply
+everything — inside `MigrationDriver.withLock`. Locking one migration at a time would not help: the
+race is between the two runners' _reads_ of the history, not between their writes.
+
+| Adapter  | What the lock is                                                      | What it covers                     |
+| -------- | --------------------------------------------------------------------- | ---------------------------------- |
+| Postgres | `pg_advisory_lock` on the connection `sql.reserve()` pins for the run | every runner against that database |
+| SQLite   | a queue per connection and history table                              | every runner in this process       |
+
+The Postgres lock waits rather than failing, and a runner that dies releases it when its connection
+closes, so there is no stale lock to clear by hand. The SQLite queue is in-process only, because
+SQLite has no advisory locks and its own locks end with the transaction that took them. Across two
+operating-system processes SQLite's single-writer lock still keeps a _transactional_ migration from
+being applied twice — the loser's whole transaction, migration and history row together, rolls back
+— but a `.no_transaction` migration has no such protection there.
+
+Every run hashes each migration file and compares it with the SHA-256 the history row carries. A
+file edited after it was applied stops the run with `MigrationEditedError`, instead of being skipped
+in silence and leaving the edit unapplied everywhere. A row written before checksums existed carries
+`null` and is not checked, because back-filling it from the file in front of the runner would record
+the current file as the one that ran. The cost is that a run reads every migration from disk, not
+only the pending ones.
+
+The history table gains its `checksum` column on the next run whether it is new or already there, so
+an existing deployment upgrades without a manual step.
+
+### Purging
+
+`purgeDatabase` refuses unless `ENV` names one of `SAFE_ENV_VALUES` — `dev`, `development`, `local`,
+`test`, `ci`, compared trimmed and lower-cased — or the caller passes `--prod`. The list is frozen:
+`readonly` is a compile-time claim, and a consumer that cast the array and pushed onto it would arm
+the purge for that environment process-wide.

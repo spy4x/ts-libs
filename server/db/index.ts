@@ -43,10 +43,13 @@ export {
 } from "./sqlite.ts"
 
 export {
+  type AppliedMigration,
+  checksumOf,
   discoverMigrations,
   type DiscoverMigrationsOptions,
   type Migration,
   type MigrationDriver,
+  MigrationEditedError,
   type MigrationReport,
   NO_TRANSACTION_SUFFIX,
   parseMigrationName,

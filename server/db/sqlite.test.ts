@@ -918,16 +918,21 @@ Deno.test("a legitimate history table name is quoted in every statement", async 
     fileName: "0001_one.sql",
     name: "0001_one",
     sqlText: "CREATE TABLE one (id INTEGER)",
+    checksum: "a".repeat(64),
     withoutTransaction: false,
   })
-  assertEquals(await driver.appliedNames(), ["0001_one"])
+  assertEquals((await driver.appliedMigrations()).map((row) => row.name), ["0001_one"])
   await driver.applyWithoutTransaction({
     fileName: "0002_two.no_transaction.sql",
     name: "0002_two",
     sqlText: "SELECT 1",
+    checksum: "b".repeat(64),
     withoutTransaction: true,
   })
-  assertEquals(await driver.appliedNames(), ["0001_one", "0002_two"])
+  assertEquals((await driver.appliedMigrations()).map((row) => row.name), [
+    "0001_one",
+    "0002_two",
+  ])
 
   // The `exec` path: the history table, then the `BEGIN`/`COMMIT` around the first
   // migration. The second migration runs bare, which is the `.no_transaction` contract.
@@ -942,13 +947,13 @@ Deno.test("a legitimate history table name is quoted in every statement", async 
   // them spelling the identifier in its quoted form.
   const inserts = prepared.filter((sql) => sql.startsWith("INSERT INTO"))
   assertEquals(inserts, [
-    'INSERT INTO "migrations_v2" (name) VALUES (?)',
-    'INSERT INTO "migrations_v2" (name) VALUES (?)',
+    'INSERT INTO "migrations_v2" (name, checksum) VALUES (?, ?)',
+    'INSERT INTO "migrations_v2" (name, checksum) VALUES (?, ?)',
   ])
-  const reads = prepared.filter((sql) => sql.startsWith("SELECT name FROM"))
+  const reads = prepared.filter((sql) => sql.startsWith("SELECT name, checksum FROM"))
   assertEquals(reads, [
-    'SELECT name FROM "migrations_v2" ORDER BY id',
-    'SELECT name FROM "migrations_v2" ORDER BY id',
+    'SELECT name, checksum FROM "migrations_v2" ORDER BY id',
+    'SELECT name, checksum FROM "migrations_v2" ORDER BY id',
   ])
   await db.close()
 })
@@ -957,7 +962,50 @@ Deno.test("the default history table name is accepted and quoted", async () => {
   const { db, issued, prepared } = await recordingMemory()
   await new SqliteMigrationDriver({ db }).createHistoryTable()
   assertMatch(issued[0], new RegExp(`CREATE TABLE IF NOT EXISTS "${DEFAULT_MIGRATIONS_TABLE}"`))
-  assertEquals(prepared, [])
+  // The column probe is the one statement `createHistoryTable` prepares, and the table
+  // name reaches it as a bound value rather than as SQL text.
+  assertEquals(prepared, ["SELECT name FROM pragma_table_info(?)"])
+  await db.close()
+})
+
+Deno.test("two runners on one connection do not both hold the migration lock", async () => {
+  // The in-process half of the lock, measured directly rather than through the runner:
+  // the second `withLock` must not enter until the first has returned.
+  const { db } = await recordingMemory()
+  const order: string[] = []
+  const driver = () => new SqliteMigrationDriver({ db })
+  let release = (): void => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+
+  const first = driver().withLock(async () => {
+    order.push("first in")
+    await held
+    order.push("first out")
+  })
+  const second = driver().withLock(() => {
+    order.push("second in")
+    return Promise.resolve()
+  })
+
+  release()
+  await Promise.all([first, second])
+
+  assertEquals(order, ["first in", "first out", "second in"])
+  await db.close()
+})
+
+Deno.test("a run that threw still hands the migration lock on", async () => {
+  const { db } = await recordingMemory()
+  const driver = () => new SqliteMigrationDriver({ db })
+
+  await assertRejects(
+    () => driver().withLock(() => Promise.reject(new Error("the run failed"))),
+    Error,
+    "the run failed",
+  )
+  assertStrictEquals(await driver().withLock(() => Promise.resolve("second ran")), "second ran")
   await db.close()
 })
 
