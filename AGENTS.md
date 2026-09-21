@@ -16,8 +16,8 @@ exactly one top-level directory.
 | `net/`          | url-shape, url-policy (SSRF guard), safe-fetch, bounded-body                                                        |
 | `integrations/` | healthchecks, ntfy, webhooks                                                                                        |
 | `time/`         | tz, ics                                                                                                             |
-| `ai/`           | chatCompletion, chatJson, JSON-from-fence recovery                                                                  |
-| `email/`        | smtp transport, dkim-verify                                                                                         |
+| `ai/`           | chatCompletion, chatJson, JSON-from-fence recovery — planned, not built (#11, #76)                                  |
+| `email/`        | address, html, message, sender, smtp transport, dkim-verify                                                         |
 | `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync                                                     |
 | `validation/`   | arktype validate helpers, validation model                                                                          |
 
@@ -125,6 +125,9 @@ D=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" denodir.XXXXXX)
 CI=true DENO_DIR=$D deno task check; echo "exit=$?"
 rm -rf -- "$D"
 ```
+
+Swap `check` for `check:all` in that same cold form when the change touches the integration tier —
+`deno task check:all` runs `check`, then `test:integration`, and needs the containers up.
 
 A warm local run is not evidence: it hides `$HOME`, `DENO_DIR` and cache assumptions. Never assert a
 path under `$HOME` in a test — resolve it through `import.meta.resolve` or an injected config. A test

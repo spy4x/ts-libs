@@ -1,6 +1,6 @@
 # ts-libs
 
-Framework-agnostic TypeScript reusable libraries. Deno-first, JSR-published.
+Framework-agnostic TypeScript reusable libraries. Deno-first; publishing to JSR is planned (#78).
 
 No Preact, no app shells, no product domain. Everything here is a technical primitive or adapter
 that is useful to more than one product.
@@ -11,11 +11,11 @@ that is useful to more than one product.
 platform/     types (arktype), helpers, rate-limit, fs
 server/       auth, storage, crypto, db, http (bounded-body, cors, bearer-auth), static,
               healthcheck, user-secrets, quota, export
-net/          url-policy (SSRF guard), safe-fetch, bounded-body
+net/          url-shape, url-policy (SSRF guard), safe-fetch, bounded-body
 integrations/ healthchecks, ntfy, webhooks
 time/         tz, ics
-ai/           chatCompletion, chatJson, JSON-from-fence recovery
-email/        smtp transport, dkim-verify
+ai/           chatCompletion, chatJson, JSON-from-fence recovery — planned, not built (#11, #76)
+email/        address, html, message, sender, smtp transport, dkim-verify
 realtime/     hint-only websocket transport, registry, heartbeat, cursor sync
 validation/   arktype validate helpers, validation model
 ```
@@ -42,7 +42,8 @@ the address and the command that starts it — it never skips. `AGENTS.md` has t
 ## Relationship to other repos
 
 - `spy4x/preact-components` — Preact + Tailwind layer. Independent package; no workspace coupling.
-- `spy4x/template` — the SaaS app template, imports both.
+- `spy4x/template` — the SaaS app template; it will import both once #78 publishes them. No other
+  repository imports `@ts-libs/*` yet.
 
 ## Naming policy
 
