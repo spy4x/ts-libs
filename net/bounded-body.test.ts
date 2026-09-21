@@ -236,6 +236,26 @@ describe("readBoundedBody", () => {
       BodyReadTimeoutError,
     )
   })
+
+  it("rejects a non-finite cap before a byte is read", async () => {
+    for (const cap of [NaN, Infinity, -Infinity]) {
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new Uint8Array([1]))
+          controller.close()
+        },
+      })
+      const request = new Request("http://example.test", { method: "POST", body: stream })
+      await assertRejects(
+        () => readBoundedBody(request, { maxBytes: cap }),
+        RangeError,
+        String(cap),
+      )
+      // `getReader()` is never called for a rejected cap, so the body stream
+      // stays unlocked and unread — the reader is not taken before the throw.
+      assertEquals(request.bodyUsed, false, `${cap} must reject before the body is read`)
+    }
+  })
 })
 
 describe("readBoundedJson", () => {
