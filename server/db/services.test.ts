@@ -23,8 +23,16 @@ import { DbServiceBase } from "./services.ts"
 interface FakeSqlOptions {
   /** Statements that should reject instead of answering, matched by substring. */
   failOn?: string[]
-  /** Answers, drained from the front. A missing entry answers no rows. */
+  /** Answers, drained from the front. A missing entry answers no rows, as an empty list. */
   answers?: unknown[][]
+  /**
+   * Answer from the statement text instead of from the queue.
+   *
+   * `undefined` falls through to {@link answers}. This is how a test stands in for a
+   * server that holds a particular row: a `WHERE` the statement carries changes what
+   * comes back, which a queue of answers cannot express.
+   */
+  answerFor?: (query: string) => unknown[] | undefined
 }
 
 /** A value `postgres` splices in as a quoted identifier. */
@@ -89,7 +97,12 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     if (failOn.some((fragment) => query.includes(fragment))) {
       return Promise.reject(new Error(`fake sql rejects: ${query}`))
     }
-    return Promise.resolve(answers.shift())
+    const scripted = options.answerFor?.(query)
+    if (scripted !== undefined) return Promise.resolve(scripted)
+    // `?? []` and not `?? undefined`: the driver answers a query that matched nothing
+    // with an empty list, and a fake that answered `undefined` made every caller of
+    // `rows[0]` throw a TypeError where the real one returns no row.
+    return Promise.resolve(answers.shift() ?? [])
   }
 
   /**
@@ -118,16 +131,37 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     ...values: unknown[]
   ) => Promise<unknown>
 
+  /**
+   * The transaction handle, with the two nesting calls `postgres` puts on it.
+   *
+   * `savepoint` is the real one and is recorded in `inner`, because a savepoint is a
+   * statement on the connection the transaction already holds. `begin` is there so the
+   * fake can be asked for it: `postgres` does put `begin` on a transaction handle, and
+   * calling it takes a *second* connection out of the pool, which is the bug this fake
+   * used to label "BEGIN NESTED" and assert as correct. It is recorded in `topLevel`,
+   * where a second `BEGIN` is visible.
+   */
   const transaction = Object.assign(statement, {
-    begin: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> => {
+    savepoint: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> => {
       inner.push("SAVEPOINT")
-      return Promise.resolve(callback(transaction as unknown as Transaction))
+      return Promise.resolve()
+        .then(() => callback(transaction as unknown as Transaction))
+        .then((result) => {
+          inner.push("RELEASE SAVEPOINT")
+          return result
+        })
+        .catch((error: unknown) => {
+          inner.push("ROLLBACK TO SAVEPOINT")
+          throw error
+        })
     },
+    begin: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> =>
+      client.begin(callback),
   })
 
   const client = Object.assign(asTag, {
     begin: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> => {
-      topLevel.push(inTransaction ? "BEGIN NESTED" : "BEGIN")
+      topLevel.push("BEGIN")
       inTransaction = true
       return Promise.resolve()
         .then(() => callback(transaction as unknown as Transaction))
@@ -361,7 +395,7 @@ Deno.test("begin routes the callback's queries through the transaction handle", 
   assertEquals(fake.inner, ["SELECT $1"])
 })
 
-Deno.test("a nested begin opens a savepoint through the transaction", async () => {
+Deno.test("a nested begin opens a savepoint on the transaction, not a second transaction", async () => {
   const fake = createFakeSql()
   const service = new TestService({ sql: fake.sql })
 
@@ -371,12 +405,102 @@ Deno.test("a nested begin opens a savepoint through the transaction", async () =
     })
   })
 
-  // A nested call reaches `this.client.begin`, and a `BEGIN` that arrives inside a
-  // transaction is the savepoint `postgres` opens there — the fake labels that as
-  // `BEGIN NESTED`, and the point is that it does not open a second client transaction.
-  // The callback then writes through the clone, whose executor is still the transaction.
-  assertEquals(fake.topLevel, ["BEGIN", "BEGIN NESTED", "COMMIT", "COMMIT"])
-  assertEquals(fake.inner, ["SELECT $1"])
+  // One BEGIN and one COMMIT, on the client. A second BEGIN here would be a second
+  // connection out of the pool carrying a transaction of its own, which commits
+  // separately and survives the outer rollback; that is what this used to do.
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
+  assertEquals(fake.inner, ["SAVEPOINT", "SELECT $1", "RELEASE SAVEPOINT"])
+})
+
+Deno.test("a nested begin that throws rolls back to the savepoint and leaves the outer open", async () => {
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  await service.begin(async (tx) => {
+    let message = ""
+    try {
+      await tx.begin(async (innerTx) => {
+        await innerTx.select(2)
+        throw new Error("the savepoint fails")
+      })
+    } catch (error) {
+      message = (error as Error).message
+    }
+    assertStrictEquals(message, "the savepoint fails")
+    await tx.select(3)
+  })
+
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
+  assertEquals(fake.inner, [
+    "SAVEPOINT",
+    "SELECT $1",
+    "ROLLBACK TO SAVEPOINT",
+    "SELECT $1",
+  ])
+})
+
+Deno.test("a cache write made inside a savepoint waits for the outermost commit", async () => {
+  const fake = createFakeSql({ answers: [[{ id: 21, name: "inner" }]] })
+  const service = new DbServiceBase({ sql: fake.sql })
+  const { cache, calls } = createFakeCache<Record<string, unknown>>()
+
+  await service.begin(async (tx) => {
+    await tx.begin(async (innerTx) => {
+      await innerTx.createOne(cache, fake.sql`INSERT INTO users DEFAULT VALUES RETURNING *`)
+    })
+    // The savepoint has returned and the row is still not committed: the outer
+    // transaction can roll it back, so nothing may reach the cache yet.
+    assertEquals(calls, [])
+  })
+
+  assertEquals(calls, ["set:21"])
+})
+
+Deno.test("a cache write made inside a savepoint that threw never runs", async () => {
+  const fake = createFakeSql({ answers: [[{ id: 22, name: "discarded" }]] })
+  const service = new DbServiceBase({ sql: fake.sql })
+  const { cache, calls } = createFakeCache<Record<string, unknown>>()
+
+  await service.begin(async (tx) => {
+    let message = ""
+    try {
+      await tx.begin(async (innerTx) => {
+        await innerTx.createOne(cache, fake.sql`INSERT INTO users DEFAULT VALUES RETURNING *`)
+        throw new Error("the savepoint fails")
+      })
+    } catch (error) {
+      message = (error as Error).message
+    }
+    assertStrictEquals(message, "the savepoint fails")
+  })
+
+  // The outer transaction committed, and the row the savepoint rolled back is not in
+  // the cache. A cache holding a row the database never kept is the failure the whole
+  // deferral exists to prevent.
+  assertEquals(calls, [])
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
+})
+
+Deno.test("a cache write made inside a savepoint is discarded when the outer transaction fails", async () => {
+  const fake = createFakeSql({ answers: [[{ id: 23, name: "rolled back" }]] })
+  const service = new DbServiceBase({ sql: fake.sql })
+  const { cache, calls } = createFakeCache<Record<string, unknown>>()
+
+  let message = ""
+  try {
+    await service.begin(async (tx) => {
+      await tx.begin(async (innerTx) => {
+        await innerTx.createOne(cache, fake.sql`INSERT INTO users DEFAULT VALUES RETURNING *`)
+      })
+      throw new Error("the outer transaction fails")
+    })
+  } catch (error) {
+    message = (error as Error).message
+  }
+
+  assertStrictEquals(message, "the outer transaction fails")
+  assertEquals(calls, [])
+  assertEquals(fake.topLevel, ["BEGIN", "ROLLBACK"])
 })
 
 Deno.test("buildMethods produces the template SQL for read, create, update and soft delete", async () => {
@@ -398,11 +522,113 @@ Deno.test("buildMethods produces the template SQL for read, create, update and s
   await methods.findChanged(new Date("2026-01-01T00:00:00Z"))
 
   assertEquals(fake.topLevel, [
-    `SELECT * FROM "users" WHERE id = $1`,
+    `SELECT * FROM "users" WHERE id = $1 AND deleted_at IS NULL`,
     `INSERT INTO "users" "name" = $1 RETURNING *`,
-    `UPDATE "users" SET updated_at = NOW(), "name" = $1 WHERE id = $2 RETURNING *`,
+    `UPDATE "users" SET updated_at = NOW(), "name" = $1 WHERE id = $2 AND deleted_at IS NULL ` +
+    `RETURNING *`,
     `UPDATE "users" SET updated_at = NOW(), deleted_at = NOW() WHERE id = $1 RETURNING *`,
+    // `undeleteOne` keeps a statement of its own, and it is the one update that has to
+    // reach a deleted row.
     `UPDATE "users" SET updated_at = NOW(), deleted_at = NULL WHERE id = $1 RETURNING *`,
     `SELECT * FROM "users" WHERE updated_at > $1 ORDER BY updated_at DESC`,
   ])
+})
+
+Deno.test("updateOne with no fields touches updated_at instead of building invalid SQL", async () => {
+  const fake = createFakeSql({ answers: [[{ id: 4 }]] })
+  const service = new DbServiceBase({ sql: fake.sql })
+  const { cache } = createFakeCache<{ id: number }>()
+  const methods = service.buildMethods<{ id: number }, { name: string }, { name?: string }>(
+    "users",
+    cache,
+  )
+
+  // `sql({})` renders an empty column list, so the general form produced
+  // `SET updated_at = NOW(), WHERE id = $1` and the server answered with a syntax error.
+  await methods.updateOne({ id: 4, data: {} })
+  await methods.updateOne({ id: 4, data: { name: undefined } })
+
+  assertEquals(fake.topLevel, [
+    `UPDATE "users" SET updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
+    `UPDATE "users" SET updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
+  ])
+})
+
+/**
+ * A fake server holding exactly one soft-deleted row.
+ *
+ * A statement carrying `deleted_at IS NULL` matches nothing; every other statement
+ * matches the row. That is the difference the filter makes, and a queue of answers
+ * cannot express it — with a queue, a `findOne` that forgot the filter still reads
+ * `null` simply because the queue ran out.
+ */
+const DELETED_ROW = { id: 4, name: "deleted" }
+
+function createServerHoldingADeletedRow() {
+  return createFakeSql({
+    answerFor: (query) => (query.includes("deleted_at IS NULL") ? [] : [DELETED_ROW]),
+  })
+}
+
+Deno.test("a soft-deleted row read with the opt-out does not leak into the next plain read", async () => {
+  const fake = createServerHoldingADeletedRow()
+  const service = new DbServiceBase({ sql: fake.sql })
+  const { cache, stored } = createFakeCache<{ id: number; name: string }>()
+  const methods = service.buildMethods<{ id: number; name: string }, never, never>("users", cache)
+
+  assertEquals(await methods.findOne({ id: 4, includeDeleted: true }), DELETED_ROW)
+
+  assertStrictEquals(stored.has(4), false)
+  assertStrictEquals(await methods.findOne({ id: 4 }), null)
+})
+
+Deno.test("an update cannot put a soft-deleted row back where a plain read finds it", async () => {
+  const fake = createServerHoldingADeletedRow()
+  const service = new DbServiceBase({ sql: fake.sql })
+  const { cache, stored } = createFakeCache<{ id: number; name: string }>()
+  const methods = service.buildMethods<{ id: number; name: string }, never, { name: string }>(
+    "users",
+    cache,
+  )
+
+  await methods.deleteOne({ id: 4 })
+  // The update matches nothing, so it returns no row and writes nothing to the cache.
+  // Without `AND deleted_at IS NULL` it matched the deleted row, returned it, and stored
+  // it — and the next plain read then answered from the cache, where no filter applies.
+  await methods.updateOne({ id: 4, data: { name: "resurrected" } })
+
+  assertStrictEquals(stored.has(4), false)
+  assertStrictEquals(await methods.findOne({ id: 4 }), null)
+})
+
+Deno.test("the includeDeleted read neither reads the cache nor writes to it", async () => {
+  const fake = createFakeSql({ answers: [[{ id: 5, name: "deleted" }]] })
+  const service = new DbServiceBase({ sql: fake.sql })
+  const { cache, calls, stored } = createFakeCache<{ id: number; name: string }>()
+  const methods = service.buildMethods<{ id: number; name: string }, never, never>("users", cache)
+
+  const row = await methods.findOne({ id: 5, includeDeleted: true })
+
+  assertEquals(row, { id: 5, name: "deleted" })
+  // No `wrap` and no `set`: a deleted row that entered the cache would be handed to the
+  // next plain `findOne` as if it were live.
+  assertEquals(calls, [])
+  assertStrictEquals(stored.has(5), false)
+  assertEquals(fake.topLevel, [`SELECT * FROM "users" WHERE id = $1`])
+})
+
+Deno.test("findOne reports a miss as null whether or not a transaction is open", async () => {
+  const fake = createFakeSql({ answers: [[], []] })
+  const service = new DbServiceBase({ sql: fake.sql })
+  const { cache } = createFakeCache<{ id: number }>()
+
+  const outside = await service.findOne(cache, 8, fake.sql`SELECT * FROM users WHERE id = ${8}`)
+  const inside = await service.begin((tx) =>
+    tx.findOne(cache, 9, fake.sql`SELECT * FROM users WHERE id = ${9}`)
+  )
+
+  // It used to be `undefined` outside a transaction and `null` inside one, although the
+  // declared return type said `null | T` on both paths.
+  assertStrictEquals(outside, null)
+  assertStrictEquals(inside, null)
 })

@@ -29,26 +29,52 @@
 import { dirname, isAbsolute, join } from "@std/path"
 import type { Migration, MigrationDriver } from "./migrate.ts"
 
-/** One prepared statement. `get` is a single row or `undefined`, never a throw. */
+/** What a write reports back: the driver's own counts, unconverted. */
+export interface SqliteRunResult {
+  changes: number | bigint
+  lastInsertRowid: number | bigint
+}
+
+/**
+ * One prepared statement. `get` is a single row or `undefined`, never a throw.
+ *
+ * Every method may answer with a value or with a promise of one, because the drivers
+ * people actually pass are synchronous: `node:sqlite`'s `StatementSync.get` returns
+ * the row itself. The adapter awaits each result, and awaiting a plain value is a
+ * no-op, so one port serves a synchronous and an asynchronous driver.
+ */
 export interface SqliteStatement {
-  get(...parameters: unknown[]): Promise<unknown>
-  all(...parameters: unknown[]): Promise<unknown[]>
-  run(...parameters: unknown[]): Promise<{ changes: number; lastInsertRowid: number | bigint }>
+  get(...parameters: unknown[]): unknown
+  all(...parameters: unknown[]): unknown[] | Promise<unknown[]>
+  run(...parameters: unknown[]): SqliteRunResult | Promise<SqliteRunResult>
 }
 
 /**
  * The database handle this adapter drives.
  *
- * Four methods, which is the whole surface used. `node:sqlite`'s `DatabaseSync` and
- * `better-sqlite3`'s `Database` each satisfy the shape as they are, so a consumer
- * writes `createDriver: ({ path }) => new DatabaseSync(path)` and nothing else.
- * Values come back as the driver's own — a `bigint` column stays a `bigint` — so no
- * conversion happens that a caller cannot see.
+ * Three methods, which is the whole surface used. `node:sqlite`'s `DatabaseSync`
+ * satisfies the shape as it is, so a consumer writes
+ * `createDriver: ({ path }) => new DatabaseSync(path)` and nothing else. Values come
+ * back as the driver's own — a `bigint` column stays a `bigint` — so no conversion
+ * happens that a caller cannot see.
+ *
+ * **Only `node:sqlite` is tested.** `server/db/testing/node-sqlite-driver.ts` is the
+ * one driver this repository exercises against a real engine. `better-sqlite3` fits
+ * the same port and is the driver one source application uses, but no test here
+ * loads it: adding it would put a native npm binary in `deno.lock`. What is checked
+ * is the shape — `sqlite.test.ts` declares a class with `better-sqlite3`'s
+ * signatures, including an `exec` that returns `this`, and assigns it to
+ * {@link SqliteDriverFactory}. That is a compile-time claim about the types, not a
+ * claim that the driver works.
+ *
+ * `exec` and `close` are typed `unknown` rather than `void | Promise<void>` for that
+ * shape check: `better-sqlite3`'s `exec` returns the database for chaining, and
+ * `void` rejects it.
  */
 export interface SqliteDriver {
-  exec(sql: string): Promise<void>
-  prepare(sql: string): Promise<SqliteStatement>
-  close(): Promise<void>
+  exec(sql: string): unknown
+  prepare(sql: string): SqliteStatement | Promise<SqliteStatement>
+  close(): unknown
 }
 
 /** Options accepted by a driver factory. `:memory:` is passed through resolved. */
@@ -82,6 +108,96 @@ export interface OpenSqliteDbOptions {
   foreignKeys?: boolean
   /** Apply to the connection. Defaults to `PRAGMA journal_mode = WAL`. */
   writeAheadLog?: boolean
+  /**
+   * Milliseconds a statement on the returned handle waits for an open transaction.
+   * Defaults to {@link DEFAULT_TRANSACTION_WAIT_MS}. See {@link SqliteDbOptions}.
+   */
+  transactionWaitMs?: number
+  /** Delay used while waiting. Defaults to `setTimeout`. See {@link SqliteDelay}. */
+  delay?: SqliteDelay
+}
+
+/**
+ * Extra options for {@link SqliteDb}, all of them about the transaction gate.
+ *
+ * One SQLite connection runs one transaction at a time, so while a transaction is
+ * open every statement issued on the root handle waits for it. The wait is bounded
+ * because one waiter can never be served: a callback that reaches for the root handle
+ * instead of the handle it was given is waiting for its own transaction to finish. The
+ * adapter cannot tell that caller apart from a second, genuine caller — there is no
+ * `AsyncLocalStorage` here, because a literal `node:` import breaks this repository's
+ * type check — so it lets both wait and gives up after {@link transactionWaitMs} with
+ * {@link SqliteTransactionWaitError}.
+ */
+export interface SqliteDbOptions {
+  /** Milliseconds to wait. Defaults to {@link DEFAULT_TRANSACTION_WAIT_MS}. */
+  transactionWaitMs?: number
+  /** Delay used while waiting. Defaults to `setTimeout`, injected so a test never sleeps. */
+  delay?: SqliteDelay
+}
+
+/**
+ * A cancellable delay.
+ *
+ * Injected rather than called directly so a test can expire the wait in the same tick
+ * instead of sleeping for seconds. `cancel` must stop the underlying timer, so a
+ * caller that got through immediately leaves nothing pending behind it.
+ */
+export type SqliteDelay = (milliseconds: number) => {
+  expired: Promise<void>
+  cancel: () => void
+}
+
+/**
+ * How long a statement waits for an open transaction before it gives up.
+ *
+ * Five seconds: long enough that an honest transaction doing real work is not cut off,
+ * short enough that a caller waiting for itself is reported rather than hung. A
+ * deployment whose transactions legitimately run longer raises
+ * {@link SqliteDbOptions.transactionWaitMs}; failing loudly is the trade this number
+ * makes, against the silent corruption that having no bound at all replaced.
+ */
+export const DEFAULT_TRANSACTION_WAIT_MS = 5_000
+
+/**
+ * Thrown when a handle is used after the transaction it belongs to has ended.
+ *
+ * The handle a transaction callback is given is scoped to that transaction: it is the
+ * one way past the gate, and it stops working the moment the transaction commits or
+ * rolls back. A service that stores it — `this.db = db` inside the callback — would
+ * otherwise keep a permanent door around the gate, and a write through that door lands
+ * in whatever transaction is open when it runs and disappears with that transaction's
+ * rollback. It reports one change on the way out, which is what makes the loss silent.
+ */
+export class SqliteScopeEndedError extends Error {
+  constructor() {
+    super(
+      `this sqlite handle belonged to a transaction that has already committed or ` +
+        `rolled back; a statement after the transaction goes through the connection ` +
+        `the transaction was opened on, not through the handle the callback was given`,
+    )
+    this.name = "SqliteScopeEndedError"
+  }
+}
+
+/**
+ * Thrown when a statement waited out {@link SqliteDbOptions.transactionWaitMs}.
+ *
+ * Almost always the same mistake: code inside a transaction callback issued a
+ * statement on the root handle rather than on the handle the callback was given, so it
+ * is waiting for a transaction that cannot finish until it returns.
+ */
+export class SqliteTransactionWaitError extends Error {
+  constructor(milliseconds: number) {
+    super(
+      `sqlite connection is held by an open transaction and did not become free within ` +
+        `${milliseconds}ms; either that transaction is slower than the bound, or this ` +
+        `statement was issued inside a transaction callback on the connection the ` +
+        `transaction was opened on rather than on the handle the callback was given, ` +
+        `in which case it was waiting for itself`,
+    )
+    this.name = "SqliteTransactionWaitError"
+  }
 }
 
 /** Environment variable names this module reads. */
@@ -153,22 +269,124 @@ export const DEFAULT_TRANSACTION_STATEMENTS: TransactionStatements = {
 }
 
 /**
+ * The one-writer gate a root {@link SqliteDb} holds.
+ *
+ * A SQLite connection runs one transaction at a time. While a transaction is open the
+ * gate is held, and every statement that goes through the connection it was opened on
+ * waits for it to be given back. The scoped handle the callback receives has no gate,
+ * which is how its own statements get through.
+ */
+class TransactionGate {
+  private holder: Promise<void> | null = null
+
+  /** `undefined` when the connection is free, otherwise a promise that settles when it is. */
+  held(): Promise<void> | undefined {
+    return this.holder ?? undefined
+  }
+
+  /** Take the connection. The returned function gives it back and never throws. */
+  claim(): () => void {
+    let release = (): void => {}
+    const holder = new Promise<void>((resolve) => {
+      release = () => {
+        if (this.holder === holder) this.holder = null
+        resolve()
+      }
+    })
+    this.holder = holder
+    return release
+  }
+}
+
+/** Outcomes of the race in {@link awaitGate}, kept distinguishable from any row value. */
+const GATE_FREE = Symbol("sqlite gate free")
+const GATE_EXPIRED = Symbol("sqlite gate expired")
+
+/** The default delay: `setTimeout`, cancellable so a finished wait keeps nothing pending. */
+const defaultDelay: SqliteDelay = (milliseconds) => {
+  let handle: number | undefined
+  const expired = new Promise<void>((resolve) => {
+    handle = setTimeout(resolve, milliseconds)
+  })
+  return {
+    expired,
+    cancel: () => {
+      if (handle !== undefined) clearTimeout(handle)
+    },
+  }
+}
+
+/**
+ * Wait until `gate` is free, or throw {@link SqliteTransactionWaitError}.
+ *
+ * The loop matters: several statements may be waiting on the same transaction, and the
+ * one that wakes first may not be the one that claims the connection, so a waiter
+ * re-checks rather than assuming the gate it was woken for is still open. The delay is
+ * started once and cancelled in a `finally`, so the bound covers the whole wait and
+ * nothing is left pending when the wait ends early.
+ */
+async function awaitGate(
+  gate: TransactionGate,
+  milliseconds: number,
+  delay: SqliteDelay,
+): Promise<void> {
+  const timer = delay(milliseconds)
+  const expired = timer.expired.then(() => GATE_EXPIRED)
+  try {
+    while (true) {
+      const held = gate.held()
+      if (held === undefined) return
+      const outcome = await Promise.race([held.then(() => GATE_FREE), expired])
+      if (outcome === GATE_EXPIRED) throw new SqliteTransactionWaitError(milliseconds)
+    }
+  } finally {
+    timer.cancel()
+  }
+}
+
+/**
  * A SQLite connection with the pragmas applied and statements prepared on demand.
  *
  * No statement is cached: both drivers cache prepared statements internally, and a
  * cache here would keep a statement alive past {@link close}.
+ *
+ * **One caller at a time while a transaction is open.** {@link transaction} hands its
+ * callback a scoped handle over the same driver and holds the connection until the
+ * callback has committed or rolled back. Everything issued on the handle the
+ * connection was opened on — including a statement prepared before the transaction
+ * started — waits for that, so a second caller's write can no longer land inside
+ * somebody else's transaction and disappear with its rollback. The wait is bounded;
+ * see {@link SqliteDbOptions}.
  */
 export class SqliteDb {
   private readonly driver: SqliteDriver
   private readonly path: string
   private readonly transactions: TransactionStatements
-  private inTransaction = false
+  private readonly waitMilliseconds: number
+  private readonly delay: SqliteDelay
+  /** The gate, or `null` on the scoped handle a transaction callback is given. */
+  private gate: TransactionGate | null = new TransactionGate()
+  /**
+   * `true` once the transaction this handle was scoped to has ended.
+   *
+   * Only ever set on a scoped handle. It is what stops a callback that kept its handle
+   * from writing through it afterwards, which would go around the gate and land inside
+   * whatever transaction happened to be open at the time.
+   */
+  private ended = false
   private closed = false
 
-  constructor(driver: SqliteDriver, path: string, transactions = DEFAULT_TRANSACTION_STATEMENTS) {
+  constructor(
+    driver: SqliteDriver,
+    path: string,
+    transactions = DEFAULT_TRANSACTION_STATEMENTS,
+    options: SqliteDbOptions = {},
+  ) {
     this.driver = driver
     this.path = path
     this.transactions = transactions
+    this.waitMilliseconds = options.transactionWaitMs ?? DEFAULT_TRANSACTION_WAIT_MS
+    this.delay = options.delay ?? defaultDelay
   }
 
   /** The path this connection was opened with, or `:memory:`. */
@@ -183,12 +401,20 @@ export class SqliteDb {
 
   /** Run one or more statements, discarding any result. */
   async exec(sql: string): Promise<void> {
-    await this.driver.exec(sql)
+    await this.guard(() => this.driver.exec(sql))
   }
 
-  /** Prepare a statement. The caller runs it; nothing is cached. */
+  /**
+   * Prepare a statement. The caller runs it; nothing is cached.
+   *
+   * The returned statement carries this handle's gate, not the gate the connection had
+   * when it was prepared. That is the point: a statement prepared before a transaction
+   * opened would otherwise be a way to reach the connection around the gate and write
+   * inside somebody else's transaction.
+   */
   async prepare(sql: string): Promise<SqliteStatement> {
-    return await this.driver.prepare(sql)
+    const statement = await this.guard(() => this.driver.prepare(sql))
+    return this.guardStatement(statement)
   }
 
   /** Read one row, or `undefined`. */
@@ -210,10 +436,7 @@ export class SqliteDb {
   }
 
   /** Run a write, returning the driver's own change count and last row id. */
-  async execute(
-    sql: string,
-    ...parameters: unknown[]
-  ): Promise<{ changes: number; lastInsertRowid: number | bigint }> {
+  async execute(sql: string, ...parameters: unknown[]): Promise<SqliteRunResult> {
     const statement = await this.prepare(sql)
     return await statement.run(...parameters)
   }
@@ -244,26 +467,70 @@ export class SqliteDb {
   /**
    * Run `fn` inside a transaction, rolling back when it throws.
    *
-   * Not re-entrant: neither `node:sqlite` nor `better-sqlite3` nests a transaction
-   * through the same handle — a `BEGIN` inside one is the driver's "cannot start a
-   * transaction within a transaction" error — so this reports the misuse directly
-   * instead of leaving the caller to read a driver message.
+   * `fn` is given a **scoped handle** over the same driver, and that handle is the only
+   * way into the connection until the transaction ends. Two callers may therefore call
+   * this method at the same time: the second waits for the first and then runs its own
+   * transaction, rather than writing into the first one and losing the write to its
+   * rollback.
+   *
+   * Three rules fall out of that, and each one is a case a caller can hit:
+   *
+   *  - calling this method again **on the scoped handle** throws at once. SQLite does
+   *    not nest transactions on one connection, and a savepoint is a different feature
+   *    with different rollback semantics, so the misuse is reported rather than guessed
+   *    at;
+   *  - a statement issued **on the root handle** from inside the callback waits, and
+   *    then fails with {@link SqliteTransactionWaitError}. It is waiting for its own
+   *    transaction, which cannot finish until the callback returns. The adapter cannot
+   *    tell that caller from a second, genuine one, so it bounds the wait instead of
+   *    hanging for ever;
+   *  - a failed `BEGIN` gives the connection straight back, so one bad statement does
+   *    not leave the handle refusing every later transaction;
+   *  - the scoped handle **stops working** when the transaction ends, with
+   *    {@link SqliteScopeEndedError}. A callback that stored it would otherwise keep a
+   *    permanent way past the gate, and a write through it later lands in whatever
+   *    transaction is open at the time and disappears with that one's rollback.
    */
   async transaction<T>(fn: (db: SqliteDb) => Promise<T>): Promise<T> {
-    if (this.inTransaction) {
+    this.assertUsable()
+    const gate = this.gate
+    if (gate === null) {
       throw new Error("sqlite transaction is already open; SQLite does not nest transactions")
     }
-    this.inTransaction = true
-    await this.exec(this.transactions.begin)
+    while (gate.held() !== undefined) {
+      await awaitGate(gate, this.waitMilliseconds, this.delay)
+    }
+    const release = gate.claim()
+    const scoped = this.createScopedHandle()
     try {
-      const result = await fn(this)
-      await this.exec(this.transactions.commit)
+      // The gate is claimed before `BEGIN` rather than after it, so two callers cannot
+      // both send a `BEGIN`. It is given straight back when `BEGIN` fails, which is the
+      // behaviour a flag set before the statement used to get wrong: one syntax error
+      // left the connection refusing every later transaction.
+      await scoped.exec(this.transactions.begin)
+    } catch (error) {
+      scoped.ended = true
+      release()
+      throw error
+    }
+    try {
+      const result = await fn(scoped)
+      await scoped.exec(this.transactions.commit)
       return result
     } catch (error) {
-      await this.exec(this.transactions.rollback)
+      try {
+        await scoped.exec(this.transactions.rollback)
+      } catch {
+        // The callback's error is what the caller can act on, so a rollback that failed
+        // on top of it is dropped rather than thrown in its place.
+      }
       throw error
     } finally {
-      this.inTransaction = false
+      // The handle stops working here, and not only when the callback returns normally:
+      // a callback that stored it has no way to tell the difference, and the write it
+      // would make through a kept handle is lost either way.
+      scoped.ended = true
+      release()
     }
   }
 
@@ -272,6 +539,58 @@ export class SqliteDb {
     if (this.closed) return
     this.closed = true
     await this.driver.close()
+  }
+
+  /**
+   * A handle over the same driver with no gate, for one transaction callback.
+   *
+   * Not a clone of the connection: there is one driver and one SQLite connection. It is
+   * a second front door that the gate does not cover.
+   */
+  private createScopedHandle(): SqliteDb {
+    const scoped = new SqliteDb(this.driver, this.path, this.transactions, {
+      transactionWaitMs: this.waitMilliseconds,
+      delay: this.delay,
+    })
+    scoped.gate = null
+    return scoped
+  }
+
+  /**
+   * Refuse a handle whose transaction has ended.
+   *
+   * @throws {SqliteScopeEndedError} on a scoped handle used after its transaction
+   * committed or rolled back.
+   */
+  private assertUsable(): void {
+    if (this.ended) throw new SqliteScopeEndedError()
+  }
+
+  /** Refuse an ended handle, wait for an open transaction, and then run `operation`. */
+  private async guard<T>(operation: () => T | Promise<T>): Promise<T> {
+    this.assertUsable()
+    const gate = this.gate
+    if (gate !== null) {
+      while (gate.held() !== undefined) {
+        await awaitGate(gate, this.waitMilliseconds, this.delay)
+      }
+    }
+    return await operation()
+  }
+
+  /**
+   * Put this handle's own checks in front of a prepared statement's three run methods.
+   *
+   * Both kinds of handle wrap. On the root handle the wrapper is the gate; on a scoped
+   * handle it is the end-of-transaction check, because a statement prepared inside the
+   * callback is as good a way around the gate afterwards as the handle itself.
+   */
+  private guardStatement(statement: SqliteStatement): SqliteStatement {
+    return {
+      get: (...parameters: unknown[]) => this.guard(() => statement.get(...parameters)),
+      all: (...parameters: unknown[]) => this.guard(() => statement.all(...parameters)),
+      run: (...parameters: unknown[]) => this.guard(() => statement.run(...parameters)),
+    }
   }
 }
 
@@ -320,7 +639,10 @@ export async function openSqliteDb(options: OpenSqliteDbOptions): Promise<Sqlite
   ensureDirectory(path, options.createDirectory ?? defaultCreateDirectory)
   const driver = await options.createDriver({ path })
   try {
-    const db = new SqliteDb(driver, path)
+    const db = new SqliteDb(driver, path, DEFAULT_TRANSACTION_STATEMENTS, {
+      transactionWaitMs: options.transactionWaitMs,
+      delay: options.delay,
+    })
     if (options.foreignKeys ?? true) {
       await db.exec("PRAGMA foreign_keys = ON")
       if (!(await db.foreignKeysEnabled())) {

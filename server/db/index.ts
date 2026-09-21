@@ -20,19 +20,25 @@ export {
   DEFAULT_MIGRATIONS_TABLE,
   DEFAULT_SQLITE_FILE,
   DEFAULT_TRANSACTION_STATEMENTS,
+  DEFAULT_TRANSACTION_WAIT_MS,
   MEMORY_PATH,
   openSqliteDb,
   type OpenSqliteDbOptions,
   removeSqliteFiles,
   resolveSqlitePath,
   SqliteDb,
+  type SqliteDbOptions,
+  type SqliteDelay,
   type SqliteDriver,
   type SqliteDriverFactory,
   SqliteEnvName,
   SqliteMigrationDriver,
   type SqliteOpenOptions,
+  type SqliteRunResult,
   type SqliteSchema,
+  SqliteScopeEndedError,
   type SqliteStatement,
+  SqliteTransactionWaitError,
   type TransactionStatements,
 } from "./sqlite.ts"
 
@@ -59,17 +65,22 @@ export {
   PostgresEnvName,
 } from "./postgres.ts"
 
-export { DbServiceBase, type DbServiceBaseOptions } from "./services.ts"
+export {
+  DbServiceBase,
+  type DbServiceBaseOptions,
+  type FindOneParams,
+  type RowMethods,
+} from "./services.ts"
 
 export { PostgresMigrationDriver, type PostgresMigrationDriverOptions } from "./postgres-migrate.ts"
 
 export {
   ENV_NAME,
   PROD_FLAG,
-  PRODUCTION_ENV_VALUE,
   purgeDatabase,
   type PurgeOptions,
   type PurgeResult,
+  SAFE_ENV_VALUES,
 } from "./postgres-purge.ts"
 
 export type { RowCache, Sql, Transaction } from "./ports.ts"

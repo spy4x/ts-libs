@@ -62,9 +62,14 @@ interface NodeDatabase {
 /**
  * Open a `node:sqlite` database through the {@link SqliteDriver} port.
  *
- * The driver is synchronous and the port is not, so each method is wrapped in
- * `Promise.resolve` — the cost the port's async shape accepts so one migration
- * runner serves a synchronous and an asynchronous driver.
+ * The database is handed over as it is, with no promise wrapper around any method.
+ * That is the documented wiring — `createDriver: ({ path }) => new DatabaseSync(path)`
+ * — and passing the synchronous object straight through is what makes every real-engine
+ * test in `sqlite.test.ts` an exercise of the synchronous path. The asynchronous path
+ * stays covered by the recording doubles there, which answer with promises.
+ *
+ * Only `loadNodeSqlite` is asynchronous, because the module is loaded through a
+ * non-literal specifier; see the header for why.
  */
 export async function createNodeSqliteDriver(
   options: SqliteOpenOptions,
@@ -73,30 +78,8 @@ export async function createNodeSqliteDriver(
   const DatabaseSync = module.DatabaseSync
   const database = new DatabaseSync(options.path)
   return {
-    exec: (sql: string) => {
-      database.exec(sql)
-      return Promise.resolve()
-    },
-    prepare: (sql: string) => {
-      const statement = database.prepare(sql)
-      const wrapped: SqliteStatement = {
-        get: (...parameters: unknown[]) => Promise.resolve(statement.get(...parameters)),
-        all: (...parameters: unknown[]) => Promise.resolve(statement.all(...parameters)),
-        run: (...parameters: unknown[]) => {
-          const result = statement.run(...parameters)
-          return Promise.resolve({
-            changes: Number(result.changes),
-            lastInsertRowid: typeof result.lastInsertRowid === "bigint"
-              ? result.lastInsertRowid
-              : Number(result.lastInsertRowid),
-          })
-        },
-      }
-      return Promise.resolve(wrapped)
-    },
-    close: () => {
-      database.close()
-      return Promise.resolve()
-    },
+    exec: (sql: string) => database.exec(sql),
+    prepare: (sql: string): SqliteStatement => database.prepare(sql),
+    close: () => database.close(),
   }
 }
