@@ -1041,6 +1041,37 @@ Deno.test("two runners on one connection do not both hold the migration lock", a
   await db.close()
 })
 
+Deno.test("the migration queue is per handle, so two handles on one database do not share it", async () => {
+  // The documented boundary, pinned rather than left as prose. Two `SqliteDb` objects
+  // over the same connection are two queues, so both runners are inside `withLock` at the
+  // same time — which is why the class says one handle per database, and why two handles
+  // on one file were measured running a `.no_transaction` body twice.
+  const real = await createNodeSqliteDriver({ path: ":memory:" })
+  const first = new SqliteDb(real, ":memory:")
+  const second = new SqliteDb(real, ":memory:")
+  let inside = 0
+  let both = 0
+  let release = (): void => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+
+  const enter = (db: SqliteDb): Promise<void> =>
+    new SqliteMigrationDriver({ db }).withLock(async () => {
+      inside += 1
+      both = Math.max(both, inside)
+      await held
+      inside -= 1
+    })
+
+  const runs = Promise.all([enter(first), enter(second)])
+  release()
+  await runs
+
+  assertStrictEquals(both, 2)
+  await first.close()
+})
+
 Deno.test("a run that threw still hands the migration lock on", async () => {
   const { db } = await recordingMemory()
   const driver = () => new SqliteMigrationDriver({ db })

@@ -270,7 +270,10 @@ export class DbServiceBase {
    * {@link PostgresScopeEndedError}. A service that stores it — `this.db = tx` — would
    * otherwise keep writing through the connection that transaction ran on, into whatever
    * transaction that connection is running next, and the row would disappear with that
-   * transaction's rollback after the write had reported success.
+   * transaction's rollback after the write had reported success. That error is **thrown**
+   * rather than rejected, so a caller that chains `.catch(...)` on an unawaited query
+   * will not see it; see {@link PostgresScopeEndedError} for why, and for the two routes
+   * past the check that #108 records.
    */
   async begin<T>(fn: (tx: this) => Promise<T>): Promise<T> {
     if (this.pendingCacheOperations !== null) {

@@ -820,19 +820,26 @@ export async function removeSqliteFiles(
  * identifier allowlist **and** quoted; see {@link assertIdentifier}. Migration names
  * are bound, and the schema's `sql`/`upgrade` are the caller's own SQL text.
  *
- * **{@link withLock} is in-process only**, and that is the honest limit of what SQLite
- * offers here: it has no advisory locks, and its own locks last no longer than the
- * transaction that took them, while a migration run is a transaction per migration plus
- * the bare statements a `.no_transaction` migration needs. What the queue does cover is
- * the case that was measured: two runners started together in one process applied every
- * migration twice, because both read an empty history before either wrote to it.
+ * **{@link withLock} covers the runners that share one {@link SqliteDb}, and nothing
+ * wider.** The queue is held per handle, so two runners given the same handle — the case
+ * that was measured, where both read an empty history before either wrote to it and every
+ * migration was applied twice — are serialised. Two handles opened on the same file are
+ * not: measured, that pair still ran a `.no_transaction` body twice, whether the two
+ * handles are in one process or in two.
  *
- * Across two operating-system processes, SQLite's single-writer lock still stands
- * between them, so a *transactional* migration cannot be applied twice: the loser's
- * write fails and its whole transaction — the migration and its history row together —
- * rolls back. A `.no_transaction` migration has no such protection in that case, because
- * its body and its history row are separate statements; that residual hole needs a lock
- * SQLite does not have, and a lock table would trade it for a stale lock after a crash.
+ * That is the honest limit of what SQLite offers here. It has no advisory locks, and its
+ * own locks last no longer than the transaction that took them, while a migration run is
+ * a transaction per migration plus the bare statements a `.no_transaction` migration
+ * needs. What SQLite's single-writer lock does still give, between any two handles, is
+ * that a *transactional* migration cannot be applied twice: the loser's write fails and
+ * its whole transaction — the migration and its history row together — rolls back. A
+ * `.no_transaction` migration has no such protection, because its body and its history
+ * row are separate statements.
+ *
+ * Closing that needs a lock SQLite does not have. A lock table would trade it for a stale
+ * lock after a crash; an operating-system file lock beside the database would not, and is
+ * recorded in #110. Until then: one handle per database in a process, and one process
+ * running migrations at a time.
  */
 export class SqliteMigrationDriver implements MigrationDriver {
   private readonly db: SqliteDb
@@ -863,11 +870,12 @@ export class SqliteMigrationDriver implements MigrationDriver {
   }
 
   /**
-   * Run `run` with no other runner in this process working on the same history table.
+   * Run `run` with no other runner **on this same handle** working on the same history
+   * table.
    *
-   * A queue keyed by connection and table name, not a database lock: see the class
-   * documentation for what SQLite does and does not offer, and for what is left
-   * uncovered across processes. A runner that dies mid-run releases its place through
+   * A queue keyed by handle and table name, not a database lock: see the class
+   * documentation for what SQLite does and does not offer, and for what two handles on
+   * one file are still exposed to. A runner that dies mid-run releases its place through
    * the `finally`, so nothing has to be cleared by hand.
    */
   async withLock<T>(run: () => Promise<T>): Promise<T> {
@@ -950,8 +958,9 @@ export class SqliteMigrationDriver implements MigrationDriver {
  * The queues {@link SqliteMigrationDriver.withLock} hands out, by connection and table.
  *
  * Keyed by the {@link SqliteDb} rather than by the driver instance, because two runners
- * are two driver instances over one connection — which is what two `runMigrations` calls
- * in one process look like. A `WeakMap`, so a closed connection's queue goes with it.
+ * are two driver instances over one handle — which is what two `runMigrations` calls
+ * against one connection look like. A `WeakMap`, so a closed connection's queue goes with
+ * it. Two handles on one file have two queues, which is the limit the class documents.
  */
 const migrationQueues = new WeakMap<SqliteDb, Map<string, Promise<void>>>()
 

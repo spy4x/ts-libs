@@ -684,8 +684,14 @@ transaction's rollback. The Postgres refusal is thrown rather than rejected, bec
 on the executor, which the driver also calls synchronously (`sql(table)`); a method declared `async`
 turns it into the rejection its caller expects.
 
+Two routes stay open and were open before this check existed: a query _built_ inside the callback
+and awaited afterwards, and a raw handle taken straight from `this.sql.savepoint(...)`. Both still
+write into a later transaction and lose the row; they are tracked in #108.
+
 `SqliteDb.close()` goes through the same gate: it waits for an open transaction rather than closing
-the connection under it, and a scoped handle cannot close a connection it never owned.
+the connection under it, and a scoped handle cannot close a connection it never owned. Two `close()`
+calls issued together share one close and both return, so a shutdown handler that fires twice is
+still harmless.
 
 ### Migrations: one runner at a time, and no editing what has run
 
@@ -693,17 +699,27 @@ the connection under it, and a scoped handle cannot close a connection it never 
 everything — inside `MigrationDriver.withLock`. Locking one migration at a time would not help: the
 race is between the two runners' _reads_ of the history, not between their writes.
 
-| Adapter  | What the lock is                                                      | What it covers                     |
-| -------- | --------------------------------------------------------------------- | ---------------------------------- |
-| Postgres | `pg_advisory_lock` on the connection `sql.reserve()` pins for the run | every runner against that database |
-| SQLite   | a queue per connection and history table                              | every runner in this process       |
+| Adapter  | What the lock is                                                      | What it covers                                    |
+| -------- | --------------------------------------------------------------------- | ------------------------------------------------- |
+| Postgres | `pg_advisory_lock` on the connection `sql.reserve()` pins for the run | every runner that reaches that history table      |
+| SQLite   | a queue per handle and history table                                  | every runner sharing one `SqliteDb`, and no wider |
 
-The Postgres lock waits rather than failing, and a runner that dies releases it when its connection
-closes, so there is no stale lock to clear by hand. The SQLite queue is in-process only, because
-SQLite has no advisory locks and its own locks end with the transaction that took them. Across two
-operating-system processes SQLite's single-writer lock still keeps a _transactional_ migration from
-being applied twice — the loser's whole transaction, migration and history row together, rolls back
-— but a `.no_transaction` migration has no such protection there.
+The Postgres lock is held on the connection the migrations themselves run on, because a session lock
+protects the session it was taken on and nothing else. Its key follows the table as the _server_
+resolves the name, not as the caller spelled it, so a driver given `schema: "app"` and a driver that
+reaches `app.migrations` through its search path lock each other out. It waits rather than failing,
+with no bound (#109), and a runner that dies releases it when its connection closes, so there is no
+stale lock to clear by hand.
+
+The SQLite queue is narrower, and the difference matters. It is held per `SqliteDb`, so two runners
+given the same handle are serialised and two handles opened on the same file are not — measured,
+that pair still ran a `.no_transaction` body twice, in one process as much as in two. SQLite has no
+advisory locks and its own locks end with the transaction that took them, so nothing here spans a
+run. What its single-writer lock does still give, between any two handles, is that a _transactional_
+migration cannot be applied twice: the loser's whole transaction, migration and history row
+together, rolls back. A `.no_transaction` migration has no such protection. Until #110 replaces this
+with an operating-system file lock: one handle per database in a process, and one process running
+migrations at a time.
 
 Every run hashes each migration file and compares it with the SHA-256 the history row carries. A
 file edited after it was applied stops the run with `MigrationEditedError`, instead of being skipped
