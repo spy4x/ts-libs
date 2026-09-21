@@ -837,9 +837,16 @@ export async function removeSqliteFiles(
  * row are separate statements.
  *
  * Closing that needs a lock SQLite does not have. A lock table would trade it for a stale
- * lock after a crash; an operating-system file lock beside the database would not, and is
- * recorded in #110. Until then: one handle per database in a process, and one process
- * running migrations at a time.
+ * lock after a crash; an operating-system file lock on a sibling file
+ * (`<database>.migrate.lock`, `Deno.FsFile.lock()`) would not, because the kernel releases
+ * it when the process dies.
+ *
+ * **That file lock is deliberately not built** (#110). It needs write permission next to
+ * the database, it does not apply to `:memory:`, and no project this library serves runs
+ * two processes against one SQLite file — a SQLite deployment here is one process with
+ * Litestream behind it. Building it now would add a permission requirement and a second
+ * lock mechanism for a case nobody has. Until a project does have it, the rule is: one
+ * handle per database in a process, and one process running migrations at a time.
  */
 export class SqliteMigrationDriver implements MigrationDriver {
   private readonly db: SqliteDb

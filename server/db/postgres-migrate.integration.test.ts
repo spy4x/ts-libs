@@ -313,7 +313,7 @@ describe("the Postgres migration runner against a real server", () => {
         folder: "/migrations",
         reader: memoryReader({ "0001_init.sql": applied }),
       })
-      assertEquals(report, { applied: [], skipped: ["0001_init"] })
+      assertEquals(report, { applied: [], skipped: ["0001_init"], missing: [] })
     })
   })
 
@@ -339,7 +339,7 @@ describe("the Postgres migration runner against a real server", () => {
         }),
       })
 
-      assertEquals(report, { applied: ["0002_add"], skipped: ["0001_init"] })
+      assertEquals(report, { applied: ["0002_add"], skipped: ["0001_init"], missing: [] })
       const history = await new PostgresMigrationDriver({ sql, table }).appliedMigrations()
       assertEquals(history.map((row) => row.name), ["0001_init", "0002_add"])
       assertStrictEquals(history[0].checksum, null)

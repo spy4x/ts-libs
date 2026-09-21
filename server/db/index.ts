@@ -50,6 +50,7 @@ export {
   type Migration,
   type MigrationDriver,
   MigrationEditedError,
+  MigrationRenamedError,
   type MigrationReport,
   NO_TRANSACTION_SUFFIX,
   parseMigrationName,

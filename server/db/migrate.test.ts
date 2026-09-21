@@ -37,6 +37,7 @@ import {
   type MigrationDriver,
   MigrationEditedError,
   type MigrationReader,
+  MigrationRenamedError,
   NO_TRANSACTION_SUFFIX,
   parseMigrationName,
   runMigrations,
@@ -127,7 +128,11 @@ Deno.test("runMigrations applies every pending migration in name order", async (
     }),
   })
 
-  assertEquals(report, { applied: ["0001_one", "0002_two", "0003_three"], skipped: [] })
+  assertEquals(report, {
+    applied: ["0001_one", "0002_two", "0003_three"],
+    skipped: [],
+    missing: [],
+  })
   assertEquals(calls, [
     { method: "withLock" },
     { method: "createHistoryTable" },
@@ -191,7 +196,7 @@ Deno.test("runMigrations skips what the history table already records", async ()
   })
 
   assertEquals(applied, ["0001_one", "0002_two"])
-  assertEquals(report, { applied: [], skipped: ["0001_one", "0002_two"] })
+  assertEquals(report, { applied: [], skipped: ["0001_one", "0002_two"], missing: [] })
   assertEquals(second.calls, [
     { method: "withLock" },
     { method: "createHistoryTable" },
@@ -206,7 +211,7 @@ Deno.test("runMigrations recognises a history row recorded with the file extensi
     reader: memoryReader({ "0001_one.sql": "CREATE TABLE one (id INTEGER)" }),
   })
 
-  assertEquals(report, { applied: [], skipped: ["0001_one"] })
+  assertEquals(report, { applied: [], skipped: ["0001_one"], missing: [] })
 })
 
 Deno.test("runMigrations ignores a file that is not a migration", async () => {
@@ -216,7 +221,7 @@ Deno.test("runMigrations ignores a file that is not a migration", async () => {
     reader: memoryReader({ "README.md": "not a migration" }),
   })
 
-  assertEquals(report, { applied: [], skipped: [] })
+  assertEquals(report, { applied: [], skipped: [], missing: [] })
   assertEquals(calls, [
     { method: "withLock" },
     { method: "createHistoryTable" },
@@ -350,7 +355,7 @@ Deno.test("a migration recorded with a checksum is skipped when the file is unch
     reader: memoryReader({ "0001_one.sql": body }),
   })
 
-  assertEquals(report, { applied: [], skipped: ["0001_one"] })
+  assertEquals(report, { applied: [], skipped: ["0001_one"], missing: [] })
 })
 
 Deno.test("an applied migration that was edited afterwards stops the run", async () => {
@@ -383,6 +388,111 @@ Deno.test("an applied migration that was edited afterwards stops the run", async
   assertEquals(calls.filter((call) => call.method.startsWith("apply")), [])
 })
 
+Deno.test("a run that is going to be refused applies nothing first", async () => {
+  // Issue #110's ordering half. The checks used to run file by file as the run went, so a
+  // pending file that sorted *before* an edited one was applied and only then did the run
+  // stop — "the run was refused" did not mean "nothing was applied". Measured on 6bfa1e8:
+  // `0000_early` was in the history although the run ended in MigrationEditedError.
+  const applied = "CREATE TABLE one (id INTEGER)"
+  const { driver, calls } = recordingDriver([
+    { name: "0001_a", checksum: await checksumOf(applied) },
+  ])
+
+  await assertRejects(
+    () =>
+      runMigrations(driver, {
+        folder: "/migrations",
+        reader: memoryReader({
+          // Sorts first, and is new: it used to be applied on the way to the error.
+          "0000_early.sql": "CREATE TABLE early (id INTEGER)",
+          "0001_a.sql": `${applied}, extra TEXT`,
+        }),
+      }),
+    MigrationEditedError,
+  )
+
+  assertEquals(calls.filter((call) => call.method.startsWith("apply")), [])
+  assertEquals(await appliedNames(driver), ["0001_a"])
+})
+
+Deno.test("a history row with no file on disk is reported as missing", async () => {
+  // Issue #110. An applied migration whose file was deleted used to be ignored, so the
+  // history and the folder disagreed with nobody told. It is reported rather than
+  // refused: squashing old migrations away is legitimate and there is no opt-out yet.
+  const first = "CREATE TABLE one (id INTEGER)"
+  const { driver } = recordingDriver([
+    { name: "0001_gone", checksum: await checksumOf(first) },
+    { name: "0002_kept", checksum: await checksumOf("CREATE TABLE two (id INTEGER)") },
+  ])
+
+  const report = await runMigrations(driver, {
+    folder: "/migrations",
+    reader: memoryReader({
+      "0002_kept.sql": "CREATE TABLE two (id INTEGER)",
+      "0003_new.sql": "CREATE TABLE three (id INTEGER)",
+    }),
+  })
+
+  assertEquals(report, {
+    applied: ["0003_new"],
+    skipped: ["0002_kept"],
+    missing: ["0001_gone"],
+  })
+})
+
+Deno.test("a renamed applied migration is refused instead of applied a second time", async () => {
+  // Issue #110's damaging case. The renamed file looked new, so its body ran again
+  // against a database that already had it — measured: `INSERT INTO counter VALUES (1)`
+  // ran twice and the history held both names.
+  const body = "INSERT INTO counter VALUES (1)"
+  const checksum = await checksumOf(body)
+  const { driver, calls } = recordingDriver([{ name: "0001_a", checksum }])
+
+  const error = await assertRejects(
+    () =>
+      runMigrations(driver, {
+        folder: "/migrations",
+        reader: memoryReader({ "0001_renamed.sql": body }),
+      }),
+    MigrationRenamedError,
+    "has the body of 0001_a",
+  )
+
+  assertStrictEquals(error.recordedName, "0001_a")
+  assertStrictEquals(error.pendingName, "0001_renamed")
+  assertStrictEquals(error.checksum, checksum)
+  assertEquals(calls.filter((call) => call.method.startsWith("apply")), [])
+})
+
+Deno.test("a new migration that repeats a still-present migration's body is applied", async () => {
+  // The limit of the rename check, written down rather than implied. A body shared with a
+  // migration whose file is still on disk is a copy, not a rename — two `ANALYZE` files
+  // are a legitimate thing to have — so only a history row with no file triggers it.
+  const body = "ANALYZE"
+  const { driver } = recordingDriver([{ name: "0001_a", checksum: await checksumOf(body) }])
+
+  const report = await runMigrations(driver, {
+    folder: "/migrations",
+    reader: memoryReader({ "0001_a.sql": body, "0002_b.sql": body }),
+  })
+
+  assertEquals(report, { applied: ["0002_b"], skipped: ["0001_a"], missing: [] })
+})
+
+Deno.test("renaming only the transaction mode is not read as a rename", async () => {
+  // `parseMigrationName` strips `.no_transaction` before the history name, so switching a
+  // migration's transaction mode keeps its row. The rename check must not undo that.
+  const body = "CREATE INDEX CONCURRENTLY idx ON one (id)"
+  const { driver } = recordingDriver([{ name: "0001_one", checksum: await checksumOf(body) }])
+
+  const report = await runMigrations(driver, {
+    folder: "/migrations",
+    reader: memoryReader({ "0001_one.no_transaction.sql": body }),
+  })
+
+  assertEquals(report, { applied: [], skipped: ["0001_one"], missing: [] })
+})
+
 Deno.test("whitespace alone is enough to count as an edit", async () => {
   const applied = "CREATE TABLE one (id INTEGER)"
   const { driver } = recordingDriver([{ name: "0001_one", checksum: await checksumOf(applied) }])
@@ -408,7 +518,7 @@ Deno.test("a history row written before checksums existed is not checked", async
     reader: memoryReader({ "0001_one.sql": "CREATE TABLE one (id INTEGER, changed TEXT)" }),
   })
 
-  assertEquals(report, { applied: [], skipped: ["0001_one"] })
+  assertEquals(report, { applied: [], skipped: ["0001_one"], missing: [] })
 })
 
 Deno.test("the checksum a driver records is the SHA-256 of the body it was given", async () => {
@@ -559,6 +669,51 @@ Deno.test("the SQLite migrator refuses a migration whose file changed after it r
   await db.close()
 })
 
+Deno.test("the SQLite migrator refuses a renamed migration instead of running it again", async () => {
+  // Issue #110's measured case, against the real driver: `INSERT INTO counter VALUES (1)`
+  // ran a second time under the new name and the history held both, so the table ended up
+  // with rows [1, 2, 1].
+  const { db, migrations } = await recordingSqlite()
+  await db.exec("CREATE TABLE counter (n INTEGER)")
+  const body = "INSERT INTO counter VALUES (1)"
+  await runMigrations(migrations(), {
+    folder: "/migrations",
+    reader: memoryReader({ "0001_a.sql": body }),
+  })
+
+  const error = await assertRejects(
+    () =>
+      runMigrations(migrations(), {
+        folder: "/migrations",
+        reader: memoryReader({ "0001_renamed.sql": body }),
+      }),
+    MigrationRenamedError,
+    "0001_a",
+  )
+
+  assertStrictEquals(error.pendingName, "0001_renamed")
+  // The body ran once, and the history still holds only the name it ran under.
+  assertEquals((await db.queryAll<{ n: number }>("SELECT n FROM counter")).map((row) => row.n), [1])
+  assertEquals(await appliedNames(migrations()), ["0001_a"])
+  await db.close()
+})
+
+Deno.test("the SQLite migrator reports an applied migration whose file was deleted", async () => {
+  const { db, migrations } = await recordingSqlite()
+  await runMigrations(migrations(), {
+    folder: "/migrations",
+    reader: memoryReader({ "0001_gone.sql": "CREATE TABLE one (id INTEGER)" }),
+  })
+
+  const report = await runMigrations(migrations(), {
+    folder: "/migrations",
+    reader: memoryReader({ "0002_new.sql": "CREATE TABLE two (id INTEGER)" }),
+  })
+
+  assertEquals(report, { applied: ["0002_new"], skipped: [], missing: ["0001_gone"] })
+  await db.close()
+})
+
 Deno.test("the SQLite migrator adds the checksum column to a table that predates it", async () => {
   // The upgrade path a deployment that already ran migrations takes. Without it the
   // drift check would never see a checksum on the databases that most need it.
@@ -582,7 +737,7 @@ Deno.test("the SQLite migrator adds the checksum column to a table that predates
 
   // The old row is unknown, so it is skipped without a comparison; the new one is
   // recorded with its checksum.
-  assertEquals(report, { applied: ["0002_two"], skipped: ["0001_one"] })
+  assertEquals(report, { applied: ["0002_two"], skipped: ["0001_one"], missing: [] })
   assertEquals(await migrations().appliedMigrations(), [
     { name: "0001_one", checksum: null },
     { name: "0002_two", checksum: await checksumOf("CREATE TABLE two (id INTEGER)") },
@@ -601,7 +756,7 @@ Deno.test("the SQLite migrator is idempotent across two runs", async () => {
   const before = statements.length
   const second = await runMigrations(migrations(), options)
 
-  assertEquals(second, { applied: [], skipped: ["0001_one"] })
+  assertEquals(second, { applied: [], skipped: ["0001_one"], missing: [] })
   // `createHistoryTable` runs every time and is idempotent by `IF NOT EXISTS`; the
   // migration itself and its `BEGIN`/`COMMIT` are what must not run again. The table
   // name is quoted, which is what the statement's own text shows.

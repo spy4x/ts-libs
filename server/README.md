@@ -795,16 +795,40 @@ that pair still ran a `.no_transaction` body twice, in one process as much as in
 advisory locks and its own locks end with the transaction that took them, so nothing here spans a
 run. What its single-writer lock does still give, between any two handles, is that a _transactional_
 migration cannot be applied twice: the loser's whole transaction, migration and history row
-together, rolls back. A `.no_transaction` migration has no such protection. Until #110 replaces this
-with an operating-system file lock: one handle per database in a process, and one process running
-migrations at a time.
+together, rolls back. A `.no_transaction` migration has no such protection.
 
-Every run hashes each migration file and compares it with the SHA-256 the history row carries. A
-file edited after it was applied stops the run with `MigrationEditedError`, instead of being skipped
-in silence and leaving the edit unapplied everywhere. A row written before checksums existed carries
-`null` and is not checked, because back-filling it from the file in front of the runner would record
-the current file as the one that ran. The cost is that a run reads every migration from disk, not
-only the pending ones.
+**A cross-process SQLite lock is deliberately not built** (#110). The design that would work is an
+operating-system file lock on a sibling file (`<database>.migrate.lock`, `Deno.FsFile.lock()`), which
+the kernel releases when the process dies and so has no stale-lock problem. It is not built because
+it needs write permission next to the database, does not apply to `:memory:`, and no project this
+library serves runs two processes against one SQLite file — a SQLite deployment here is one process
+with Litestream behind it. The rule until one does: one handle per database in a process, and one
+process running migrations at a time.
+
+### Migrations: drift between the folder and the history
+
+Every run hashes each migration file and compares it with the SHA-256 the history row carries, and
+**the whole plan is checked before anything is applied**. A file edited after it was applied stops
+the run with `MigrationEditedError`, instead of being skipped in silence and leaving the edit
+unapplied everywhere. A row written before checksums existed carries `null` and is not checked,
+because back-filling it from the file in front of the runner would record the current file as the one
+that ran. The cost is that a run reads every migration from disk, not only the pending ones.
+
+Three neighbouring kinds of drift used to pass without a word (#110):
+
+| Drift                                   | Now                                                                        |
+| --------------------------------------- | -------------------------------------------------------------------------- |
+| a new file sorts before an edited one   | nothing is applied; the plan is checked first, so the run is refused whole |
+| an applied migration's file was deleted | reported in `MigrationReport.missing`, oldest row first                    |
+| an applied migration's file was renamed | `MigrationRenamedError` instead of running its body a second time          |
+
+A deleted file is reported rather than refused, because squashing old migrations away is legitimate
+and there is no opt-out for a refusal yet; a caller that wants a run to stop on one checks the
+`missing` list itself. A rename is recognised by checksum, and only against a history row that has no
+file of its own — a pending file sharing its body with a migration whose file is still on disk is a
+copy, not a rename, and two honestly identical bodies must still be allowed. A migration that really
+is new and really does repeat a deleted one's body needs a body of its own; a comment naming what it
+is for is enough.
 
 The history table gains its `checksum` column on the next run whether it is new or already there, so
 an existing deployment upgrades without a manual step.
