@@ -270,18 +270,19 @@ Deno.test("readBoundedBody rejects an unusable cap instead of reading", async ()
   }
 })
 
-Deno.test("readBoundedBody fails open on a non-finite cap (known gap in net/)", async () => {
-  // `NaN` and `Infinity` compare false against the running total, so the cap is
-  // silently disabled and the body is read in full — the one `maxBytes` value
-  // the pre-collapse module's `RangeError` caught and the canonical reader does
-  // not. Documented here rather than left silent: it belongs in `net/`'s
-  // validation, and this test must be inverted when that lands.
-  const request = new Request(ORIGIN, { method: "POST", body: "abcdef" })
-
-  assertEquals(
-    await readBoundedBody(request, { maxBytes: NaN }),
-    new TextEncoder().encode("abcdef"),
-  )
+Deno.test("readBoundedBody rejects a non-finite cap instead of reading (was: fails open)", async () => {
+  // `NaN` and `Infinity` used to compare false against the running total, so
+  // the cap was silently disabled and the body read in full. `net/` now
+  // rejects both before the reader is taken.
+  for (const cap of [NaN, Infinity]) {
+    const request = new Request(ORIGIN, { method: "POST", body: "abcdef" })
+    await assertRejects(
+      () => readBoundedBody(request, { maxBytes: cap }),
+      RangeError,
+      String(cap),
+    )
+    assertEquals(request.bodyUsed, false, `${cap} must reject before the body is read`)
+  }
 })
 
 Deno.test("PayloadTooLargeError names itself and carries the cap", async () => {
