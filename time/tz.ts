@@ -242,9 +242,10 @@ export function hhmmInTz(instant: Date, tz: string): string {
  * - **spring-forward gap** — the wall clock does not exist, so no candidate
  *   reproduces it and the requested value falls strictly between two candidate
  *   readings. The earliest candidate that has moved past the requested wall
- *   clock wins: Berlin's nonexistent `02:30` resolves to 01:00Z, the instant
- *   the clock jumps to `03:00`. Also Temporal's `"compatible"` shift-forward,
- *   and it never returns a nonexistent local time.
+ *   clock wins: Berlin's nonexistent `02:30` resolves to 01:30Z, which reads
+ *   `03:30` local — the first candidate after the clock jumps from `02:00` to
+ *   `03:00`. Also Temporal's `"compatible"` shift-forward, and it never
+ *   returns a nonexistent local time.
  *
  * Both rules compare local date-times as `YYYY-MM-DD` + `HH:MM` strings, which
  * order identically to the values they denote precisely because the format is
