@@ -153,24 +153,25 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
     },
 
     get(inner, property) {
-      return guard(Reflect.get(inner, property))
+      const value = Reflect.get(inner, property)
+      if (unsubstitutable(inner, property)) {
+        assertUsable()
+        return value
+      }
+      return guard(value)
     },
 
     /**
      * A descriptor read must not hand out the function the wrapper is standing in for.
      *
      * The value is replaced by its wrapper, so a descriptor taken while the scope was
-     * live is as dead as the handle afterwards. A non-configurable property is the one
-     * case where that is impossible: the engine requires such a descriptor to be reported
-     * with the target's own value unless it is a writable data property, and reporting
-     * anything else is a `TypeError` from the engine rather than a refusal from here. No
-     * property of a driver function is shaped that way, but if one ever is, the read is
-     * refused once the scope has ended rather than quietly handing the driver over.
+     * live is as dead as the handle afterwards, and `Object.getOwnPropertyDescriptor`
+     * stops being the way to keep the driver's own function past the transaction.
      */
     getOwnPropertyDescriptor(inner, property) {
       const descriptor = Reflect.getOwnPropertyDescriptor(inner, property)
       if (descriptor === undefined) return undefined
-      if (descriptor.configurable !== true && descriptor.writable !== true) {
+      if (unsubstitutable(inner, property)) {
         assertUsable()
         return descriptor
       }
@@ -183,6 +184,23 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
         set: guard(descriptor.set) as ((value: unknown) => void) | undefined,
       }
     },
+  }
+
+  /**
+   * `true` when the engine will not let a wrapper stand in for this property.
+   *
+   * A non-configurable own property that is not a writable data property has to be read
+   * back, and reported, as the target's own value; a proxy that answers with anything else
+   * gets a `TypeError` from the engine rather than refusing on its own terms. No property
+   * of a driver function is shaped that way — `length` and `name` are configurable and
+   * `prototype` is writable — so this is the shape the wrapper cannot serve rather than
+   * one it meets. Where it does occur the value is handed over while the scope is live,
+   * which is what the caller would have had anyway, and the read is refused once the scope
+   * has ended.
+   */
+  function unsubstitutable(target: object, property: string | symbol): boolean {
+    const own = Reflect.getOwnPropertyDescriptor(target, property)
+    return own !== undefined && own.configurable !== true && own.writable !== true
   }
 
   /** Guard a value reached through the handle: functions are wrapped, anything else is not. */

@@ -648,6 +648,44 @@ Deno.test("a property descriptor taken while the clone was live dies with it", a
   assertEquals(fake.inner, [])
 })
 
+Deno.test("a property the engine will not let the wrapper stand in for is refused after the scope", async () => {
+  // The one shape the wrapper cannot serve: a non-configurable, non-writable own data
+  // property has to be read back as the target's own value, so a proxy that answered with
+  // a wrapper would get a `TypeError` from the engine instead of refusing on its own
+  // terms. No property of a driver function is shaped that way — `length` and `name` are
+  // configurable, `prototype` is writable — so this builds one to pin what happens.
+  const fake = createFakeSql()
+  Object.defineProperty(fake.sql, "frozenHelper", {
+    value: (): string => "the driver's own function",
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  })
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await service.begin((tx) => {
+    const sql = tx.executor() as unknown as Record<string, unknown>
+    // While live it is handed over unwrapped, which is what the caller would have had
+    // without the clone at all. That is the limit, written down rather than implied.
+    assertStrictEquals(typeof sql.frozenHelper, "function")
+    assertStrictEquals(
+      Object.getOwnPropertyDescriptor(sql, "frozenHelper")?.value,
+      sql.frozenHelper,
+    )
+    kept = tx
+    return Promise.resolve()
+  })
+
+  assertExists(kept)
+  const retired = kept!.executor() as unknown as Record<string, unknown>
+  assertThrows(() => retired.frozenHelper, PostgresScopeEndedError)
+  assertThrows(
+    () => Object.getOwnPropertyDescriptor(retired, "frozenHelper"),
+    PostgresScopeEndedError,
+  )
+})
+
 Deno.test("every call form works while the clone is still live", async () => {
   // The other half of the same table, walked rather than sampled. A wrapper that refused
   // everything would pass the test above and be useless, and the custom type helper is
