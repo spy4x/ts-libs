@@ -2643,6 +2643,16 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
     assertEquals(result.reason, "unsigned additional instances of a signed header: from")
   })
 
+  it("cannot have its exemption list widened at runtime", () => {
+    // The list is the one place a header may be added to a signed message without
+    // the checker objecting, so widening it is a privilege escalation: any code in
+    // the process could have pushed "from" onto it and turned the forgery above
+    // into an accepted message. `readonly` is a compile-time claim only.
+    assert(Object.isFrozen(TRANSIT_ADDED_HEADER_NAMES), "the list must be frozen")
+    assertThrows(() => (TRANSIT_ADDED_HEADER_NAMES as string[]).push("from"), TypeError)
+    assertEquals(TRANSIT_ADDED_HEADER_NAMES.includes("from"), false)
+  })
+
   it("still rejects a gained Resent-From: when the signer oversigned it", async () => {
     // The remedy the documentation points a signer at, pinned: listing a name in
     // h= once more than the message carries it keeps the added instance inside the

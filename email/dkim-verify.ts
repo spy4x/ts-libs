@@ -912,7 +912,7 @@ function parseHeaders(block: string): string[] {
  *
  * An entry ending in `-*` matches every name that starts with it.
  */
-export const TRANSIT_ADDED_HEADER_NAMES: readonly string[] = [
+export const TRANSIT_ADDED_HEADER_NAMES: readonly string[] = Object.freeze([
   "received",
   "x-received",
   "return-path",
@@ -920,7 +920,7 @@ export const TRANSIT_ADDED_HEADER_NAMES: readonly string[] = [
   "authentication-results",
   "resent-*",
   "arc-*",
-]
+])
 
 /** True when `name`, already lowercased, is in {@link TRANSIT_ADDED_HEADER_NAMES}. */
 function isTransitAddedHeaderName(name: string): boolean {
