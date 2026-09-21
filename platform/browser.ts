@@ -5,4 +5,5 @@
  * parameter, so it is safe under SSR and testable with a `Map`-backed fake.
  */
 
+export * from "./browser/download.ts"
 export * from "./browser/storage.ts"

@@ -6,7 +6,6 @@
     "./http/cors": "./http/cors.ts",
     "./http/bearer-auth": "./http/bearer-auth.ts",
     "./export": "./export.ts",
-    "./export-client": "./export-client.ts",
     "./static": "./static.ts",
     "./healthcheck": "./healthcheck.ts",
     "./storage": "./storage/index.ts",
