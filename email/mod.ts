@@ -77,6 +77,7 @@ export {
   refuseHeaderLineEndings,
   sha256Base64,
   splitMessage,
+  TRANSIT_ADDED_HEADER_NAMES,
   verifyDkim,
   verifyDkimSignatures,
 } from "./dkim-verify.ts"

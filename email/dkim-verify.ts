@@ -881,6 +881,43 @@ function parseHeaders(block: string): string[] {
 }
 
 /**
+ * Header field names a relay is expected to add to a message in transit.
+ *
+ * RFC 6376 §5.4.2 lets a signer detect an added field by listing its name in `h=`
+ * more often than the message carries it, and {@link selectSignedHeaders} refuses
+ * a message that grew one. Trace fields break that: every hop that forwards a
+ * message prepends its own `Received:`, and a signature over `Received` would be
+ * refused the moment the mail was forwarded, which is ordinary mail rather than
+ * an attack.
+ *
+ * So these names, and only these, are exempt from that refusal; the added
+ * instances are simply not selected, because §5.4.2's bottom-up pairing already
+ * reaches the instances the signer signed. Every other name — `From` above all —
+ * keeps the refusal.
+ *
+ * What makes a name safe to put here is that a mail client does not show it as
+ * part of the message: these are the audit trail of the delivery path, which the
+ * receiving domain re-derives for itself. An entry ending in `-*` matches every
+ * name that starts with it.
+ */
+export const TRANSIT_ADDED_HEADER_NAMES: readonly string[] = [
+  "received",
+  "x-received",
+  "return-path",
+  "delivered-to",
+  "authentication-results",
+  "resent-*",
+  "arc-*",
+]
+
+/** True when `name`, already lowercased, is in {@link TRANSIT_ADDED_HEADER_NAMES}. */
+function isTransitAddedHeaderName(name: string): boolean {
+  return TRANSIT_ADDED_HEADER_NAMES.some((entry) =>
+    entry.endsWith("*") ? name.startsWith(entry.slice(0, -1)) : name === entry
+  )
+}
+
+/**
  * Select the raw header lines named by an `h=` list.
  *
  * RFC 6376 §5.4.2: a signer signs repeated instances "in order from the bottom
@@ -893,7 +930,9 @@ function parseHeaders(block: string): string[] {
  * explicitly allowed to list more instances than exist.
  *
  * Throws {@link DkimParseError} when a name matches more occurrences than the
- * `h=` list consumes, which means the message grew a field after signing.
+ * `h=` list consumes, which means the message grew a field after signing —
+ * unless the name is one of {@link TRANSIT_ADDED_HEADER_NAMES}, which a relay
+ * adds on the way and a forwarded message therefore always has more of.
  */
 function selectSignedHeaders(
   headers: string[],
@@ -942,6 +981,11 @@ function selectSignedHeaders(
     // a name it does ask for has a defined number of expected instances.
     const count = asked.get(name) ?? 0
     if (count === 0 || count >= list.length) continue
+    // A relay adds its trace fields above the message it forwards, so a mail that
+    // was forwarded carries more of them than the signer signed. Refusing that is
+    // refusing ordinary mail; the instances the signer signed are still the ones
+    // §5.4.2's bottom-up pairing selected above.
+    if (isTransitAddedHeaderName(name)) continue
     throw new DkimParseError(`unsigned additional instances of a signed header: ${name}`)
   }
   return selected
