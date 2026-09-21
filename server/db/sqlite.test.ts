@@ -24,15 +24,23 @@ import {
   assertStrictEquals,
   assertThrows,
 } from "@std/assert"
-import type { SqliteDriver, SqliteStatement } from "./sqlite.ts"
+import type {
+  SqliteDbOptions,
+  SqliteDelay,
+  SqliteDriver,
+  SqliteDriverFactory,
+  SqliteStatement,
+} from "./sqlite.ts"
 import {
   applySqliteSchema,
   DEFAULT_MIGRATIONS_TABLE,
+  DEFAULT_TRANSACTION_STATEMENTS,
   openSqliteDb,
   resolveSqlitePath,
   SqliteDb,
   SqliteEnvName,
   SqliteMigrationDriver,
+  SqliteTransactionWaitError,
 } from "./sqlite.ts"
 import { createNodeSqliteDriver } from "./testing/node-sqlite-driver.ts"
 
@@ -45,9 +53,27 @@ const SCHEMA = `
 `
 
 /** Opens an in-memory database on the real driver, with no pragmas read back. */
-async function openMemory(): Promise<SqliteDb> {
+async function openMemory(options: SqliteDbOptions = {}): Promise<SqliteDb> {
   const driver = await createNodeSqliteDriver({ path: ":memory:" })
-  return new SqliteDb(driver, ":memory:")
+  return new SqliteDb(driver, ":memory:", DEFAULT_TRANSACTION_STATEMENTS, options)
+}
+
+/**
+ * A delay that has already expired, so the bounded wait is proven without sleeping.
+ *
+ * Every test that expects {@link SqliteTransactionWaitError} injects this. A test that
+ * expects a wait to *succeed* must not: with this delay the first check of a held gate
+ * is also the last.
+ */
+const instantDelay: SqliteDelay = () => ({ expired: Promise.resolve(), cancel: () => {} })
+
+/** A pair of resolvers, so two overlapping callers meet at a known point. */
+function signal(): { reached: Promise<void>; arrive: () => void } {
+  let arrive = (): void => {}
+  const reached = new Promise<void>((resolve) => {
+    arrive = resolve
+  })
+  return { reached, arrive }
 }
 
 /**
@@ -395,12 +421,146 @@ Deno.test("a transaction that throws is rolled back and leaves no row", async ()
   await db.close()
 })
 
-Deno.test("a nested transaction is rejected instead of silently joining the outer one", async () => {
-  const db = await openMemory()
+Deno.test("a nested transaction on the handle the callback was given is rejected at once", async () => {
+  const db = await openMemory({ transactionWaitMs: 25, delay: instantDelay })
+  await db.transaction(async (transaction) => {
+    await assertRejects(
+      () => transaction.transaction(() => Promise.resolve(undefined)),
+      Error,
+      "sqlite transaction is already open",
+    )
+  })
+  await db.close()
+})
+
+Deno.test("a transaction opened on the root handle inside a callback gives up rather than hanging", async () => {
+  // This used to be the "nested transaction is rejected" test, and it nested through the
+  // root handle. The handle cannot tell this caller from a second, genuine one — it is
+  // waiting for its own transaction — so it waits and then names the mistake. With a
+  // plain queue and no bound it would hang, and a Deno test has no timeout of its own.
+  const db = await openMemory({ transactionWaitMs: 25, delay: instantDelay })
   await assertRejects(
     () => db.transaction(() => db.transaction(() => Promise.resolve(undefined))),
+    SqliteTransactionWaitError,
+    "sqlite connection is held by an open transaction",
+  )
+  await db.close()
+})
+
+Deno.test("a statement on the root handle inside a callback gives up rather than joining", async () => {
+  const db = await openMemory({ transactionWaitMs: 25, delay: instantDelay })
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+  await db.transaction(async (transaction) => {
+    await transaction.execute("INSERT INTO rows (id, label) VALUES (?, ?)", 1, "through the handle")
+    await assertRejects(
+      () => db.execute("INSERT INTO rows (id, label) VALUES (?, ?)", 2, "through the connection"),
+      SqliteTransactionWaitError,
+    )
+  })
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM rows ORDER BY id"), [{ id: 1 }])
+  await db.close()
+})
+
+Deno.test("a statement prepared before a transaction cannot run inside it", async () => {
+  const db = await openMemory({ transactionWaitMs: 25, delay: instantDelay })
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+  // Prepared while the connection was free, which is the way around the gate that a
+  // handle-level check alone would leave open.
+  const prepared = await db.prepare("INSERT INTO rows (id, label) VALUES (?, ?)")
+
+  await db.transaction(async (transaction) => {
+    await transaction.execute("INSERT INTO rows (id, label) VALUES (?, ?)", 1, "through the handle")
+    await assertRejects(
+      () => prepared.run(2, "prepared earlier") as Promise<unknown>,
+      SqliteTransactionWaitError,
+    )
+  })
+
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM rows ORDER BY id"), [{ id: 1 }])
+  await db.close()
+})
+
+Deno.test("a second caller's write survives a rollback in the transaction it overlapped", async () => {
+  // The data loss this gate exists for. Before it, the second caller wrote through the
+  // same connection, so its INSERT landed inside the first caller's open transaction and
+  // the first caller's rollback took it away — or, when the second caller opened a
+  // transaction of its own, it was refused as "already open" although nothing of its own
+  // was open. The default delay is used deliberately: an expired one would fail the
+  // legitimate wait this test depends on.
+  const db = await openMemory()
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+  const opened = signal()
+  const mayFinish = signal()
+
+  const first = assertRejects(
+    () =>
+      db.transaction(async (transaction) => {
+        await transaction.execute("INSERT INTO rows (id, label) VALUES (?, ?)", 1, "rolled back")
+        opened.arrive()
+        await mayFinish.reached
+        throw new Error("the first caller fails")
+      }),
     Error,
-    "sqlite transaction is already open",
+    "the first caller fails",
+  )
+  await opened.reached
+
+  const second = db.transaction(async (transaction) => {
+    await transaction.execute("INSERT INTO rows (id, label) VALUES (?, ?)", 2, "kept")
+  })
+  mayFinish.arrive()
+  await first
+  await second
+
+  assertEquals(await db.queryAll<{ id: number; label: string }>("SELECT id, label FROM rows"), [
+    { id: 2, label: "kept" },
+  ])
+  await db.close()
+})
+
+Deno.test("a transaction whose BEGIN fails leaves the connection open for the next one", async () => {
+  const real = await createNodeSqliteDriver({ path: ":memory:" })
+  let failNextBegin = true
+  const db = new SqliteDb({
+    exec: (sql: string) => {
+      if (sql === "BEGIN" && failNextBegin) {
+        failNextBegin = false
+        throw new Error(`near "BOGUS": syntax error`)
+      }
+      return real.exec(sql)
+    },
+    prepare: (sql: string) => real.prepare(sql),
+    close: () => real.close(),
+  }, ":memory:")
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+
+  await assertRejects(() => db.transaction(() => Promise.resolve(undefined)), Error, "syntax error")
+  // The connection is not stuck. The flag used to be set before `BEGIN` and outside the
+  // `try`, so one failed `BEGIN` made every later transaction on the handle report
+  // "already open" for the rest of the process.
+  await db.transaction(async (transaction) => {
+    await transaction.execute("INSERT INTO rows (id) VALUES (?)", 1)
+  })
+
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM rows"), [{ id: 1 }])
+  await db.close()
+})
+
+Deno.test("a rollback that fails does not replace the error the callback threw", async () => {
+  const real = await createNodeSqliteDriver({ path: ":memory:" })
+  const db = new SqliteDb({
+    exec: (sql: string) => {
+      if (sql === "ROLLBACK") throw new Error("the rollback itself failed")
+      return real.exec(sql)
+    },
+    prepare: (sql: string) => real.prepare(sql),
+    close: () => real.close(),
+  }, ":memory:")
+
+  await assertRejects(
+    () => db.transaction(() => Promise.reject(new Error("the callback failed"))),
+    Error,
+    "the callback failed",
   )
   await db.close()
 })
@@ -616,5 +776,123 @@ Deno.test("a schema table that is not a bare identifier is rejected", async () =
     "schema table must be a bare identifier",
   )
   assertEquals(issued, [])
+  await db.close()
+})
+
+/**
+ * `node:sqlite`'s `DatabaseSync`, declared here rather than imported.
+ *
+ * The claim under test is that the documented wiring —
+ * `createDriver: ({ path }) => new DatabaseSync(path)` — type-checks. Importing
+ * `node:sqlite` with a literal specifier to prove it would break the repository's own
+ * type check: it pulls Node's typings into the workspace compilation and
+ * `server/healthcheck.ts:109` then fails on `Timeout` versus `number`. See the header
+ * of `testing/node-sqlite-driver.ts`. So the signatures are written out, and what this
+ * proves is exactly that: the shape is accepted, not that the driver works.
+ */
+class DatabaseSyncShape {
+  readonly path: string
+
+  constructor(path: string) {
+    this.path = path
+  }
+
+  exec(_sql: string): void {}
+
+  prepare(_sql: string): StatementSyncShape {
+    return new StatementSyncShape()
+  }
+
+  close(): void {}
+}
+
+/** `node:sqlite`'s `StatementSync`: synchronous, and `changes` may be a `bigint`. */
+class StatementSyncShape {
+  get(..._parameters: unknown[]): unknown {
+    return undefined
+  }
+
+  all(..._parameters: unknown[]): unknown[] {
+    return []
+  }
+
+  run(..._parameters: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint } {
+    return { changes: 0, lastInsertRowid: 0 }
+  }
+}
+
+/**
+ * `better-sqlite3`'s `Database`, declared here for the same reason.
+ *
+ * It differs from `node:sqlite` in the one way that matters to the port: `exec` and
+ * `close` return the database itself, for chaining. A port that typed them `void` or
+ * `Promise<void>` rejected this class, which is why they are `unknown`.
+ *
+ * No test loads `better-sqlite3`. It is a native npm binary and would land in
+ * `deno.lock`; this is a claim about the types and nothing more.
+ */
+class BetterSqliteShape {
+  readonly path: string
+
+  constructor(path: string) {
+    this.path = path
+  }
+
+  exec(_sql: string): this {
+    return this
+  }
+
+  prepare(_sql: string): BetterStatementShape {
+    return new BetterStatementShape()
+  }
+
+  close(): this {
+    return this
+  }
+}
+
+/** `better-sqlite3`'s `Statement`, as far as the port reads it. */
+class BetterStatementShape {
+  get(..._parameters: unknown[]): unknown {
+    return undefined
+  }
+
+  all(..._parameters: unknown[]): unknown[] {
+    return []
+  }
+
+  run(..._parameters: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
+    return { changes: 0, lastInsertRowid: 0 }
+  }
+}
+
+Deno.test("the documented synchronous wiring is accepted as a driver factory", async () => {
+  // The exact line `sqlite.ts` tells a consumer to write. It did not compile before the
+  // port was widened: `exec` returned `void` where the port demanded `Promise<void>`.
+  const nodeSqlite: SqliteDriverFactory = ({ path }) => new DatabaseSyncShape(path)
+  const betterSqlite: SqliteDriverFactory = ({ path }) => new BetterSqliteShape(path)
+
+  for (const createDriver of [nodeSqlite, betterSqlite]) {
+    const db = await openSqliteDb({
+      createDriver,
+      path: ":memory:",
+      foreignKeys: false,
+      writeAheadLog: false,
+    })
+    assertEquals(db.databasePath, ":memory:")
+    await db.close()
+  }
+})
+
+Deno.test("a synchronous driver's rows and change counts reach the caller unwrapped", async () => {
+  // `testing/node-sqlite-driver.ts` hands `DatabaseSync` over as it is, with no promise
+  // wrapper on any method, so this exercises the synchronous path against the engine.
+  const db = await openMemory()
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+
+  const written = await db.execute("INSERT INTO rows (id, label) VALUES (?, ?)", 1, "written")
+
+  assertEquals(Number(written.changes), 1)
+  assertEquals(await db.queryOne<{ label: string }>("SELECT label FROM rows"), { label: "written" })
   await db.close()
 })
