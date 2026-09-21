@@ -221,7 +221,15 @@ Deno.test("the history table is looked for on the search path, not on the whole 
   const fake = createFakeSql({ answers: [[{ table_exists: false, checksum_exists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
-  assertStrictEquals(fake.topLevel[0].includes("current_schemas(false)"), true)
+  // Each half of the probe carries the scope, and it is the table half that matters here:
+  // an unscoped one answers yes for somebody else's table and the driver creates nothing.
+  assertStrictEquals(
+    fake.topLevel[0].includes(
+      "table_name = $1 AND table_schema = ANY (current_schemas(false)) ) AS table_exists",
+    ),
+    true,
+  )
+  assertStrictEquals(fake.topLevel[0].split("current_schemas(false)").length - 1, 2)
 })
 
 Deno.test("a named schema qualifies both the probe and every statement", async () => {
