@@ -231,30 +231,55 @@ describe("DbServiceBase against a real server", () => {
     })
   })
 
-  it("hands out nothing of the real driver's, however far the reader walks", async () => {
-    // The closure proof against the driver itself rather than the fake. `postgres` builds
-    // its helpers as ordinary functions, so each carries a `prototype` object whose
-    // `constructor` is that helper — the route round 3 of the review found, and the one a
-    // list of call forms could never have contained. The walk follows own keys including
-    // symbols, descriptors' `value`, `get` and `set`, the prototype chain, `prototype` and
-    // `constructor`, so it finds that route without being told about it.
+  it("reads off the real driver's handle never give back the driver's own value", async () => {
+    // A regression test over the whole property graph, not a proof about the wrapper. It
+    // says one thing: nothing *read* off the clone's handle is a value the driver owns, at
+    // any depth. That is what rounds 2, 3 and 4 kept finding a new spelling of, most
+    // recently `prototype.constructor`, which a list of call forms could never contain
+    // because every ordinary function carries a `prototype` object whose `constructor` is
+    // the function itself. What a call *returns* is outside this test on purpose; see the
+    // header of this file for the routes that remain.
     await withSchema({ max: 1 }, async (sql) => {
       const service = new NoteService({ sql })
 
-      let walk: ReturnType<typeof reachableFrom> | undefined
-      await service.begin((tx) => {
-        walk = reachableFrom(tx.executor())
-        return Promise.resolve()
-      })
+      // The reference set has to hold the values of *this* transaction, not just the root
+      // client's: `postgres` builds `sql`, `typed`, `unsafe`, `file`, `savepoint` and
+      // `prepare` fresh for every transaction, so a set taken from the root alone holds
+      // none of the functions that send a statement here — and a set taken from a second,
+      // separate transaction holds none of them either, because those are fresh again.
+      // `begin` is intercepted so the handle recorded is the one this clone wraps.
+      let rawTransaction: unknown
+      // deno-lint-ignore no-explicit-any
+      const client = sql as any
+      const originalBegin = client.begin.bind(sql)
+      // deno-lint-ignore no-explicit-any
+      client.begin = (callback: (transaction: any) => Promise<unknown>) =>
+        // deno-lint-ignore no-explicit-any
+        originalBegin((transaction: any) => {
+          rawTransaction = transaction
+          return callback(transaction)
+        })
 
+      let walk: ReturnType<typeof reachableFrom> | undefined
+      try {
+        await service.begin((tx) => {
+          walk = reachableFrom(tx.executor())
+          return Promise.resolve()
+        })
+      } finally {
+        client.begin = originalBegin
+      }
+
+      assertExists(rawTransaction)
       assertExists(walk)
       assertStrictEquals(walk.truncated, false, "the walk hit its limit instead of finishing")
       assertEquals(walk.refused, [], "a read refused while the clone was live")
 
-      // Everything the real client owns, minus everything any function at all can reach,
-      // which leaves the driver's own tag, `unsafe`, `array`, `json`, `file`, `notify`,
-      // the type helpers and the objects hanging off them.
-      const driverOwned = ownedBy(sql)
+      // Everything the root client and one raw transaction handle own, minus everything any
+      // function at all can reach. That leaves the driver's own tag, `unsafe`, `file`,
+      // `savepoint`, `prepare`, `array`, `json`, `notify`, the type helpers and the objects
+      // hanging off them.
+      const driverOwned = ownedBy(sql, rawTransaction)
       assertStrictEquals(
         driverOwned.size > 0,
         true,
@@ -265,7 +290,7 @@ describe("DbServiceBase against a real server", () => {
       assertEquals(
         leaked.map((value) => typeof value === "function" ? value.name || "anonymous" : "object"),
         [],
-        "the wrapper handed out something the driver owns",
+        "a read off the handle gave back something the driver owns",
       )
     })
   })

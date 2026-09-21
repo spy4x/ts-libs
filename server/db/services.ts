@@ -165,8 +165,17 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
       )
     },
 
-    get(inner, property) {
-      const value = Reflect.get(inner, property)
+    /**
+     * The receiver is passed on, so an accessor runs with the wrapper as `this`.
+     *
+     * `Reflect.get` without one runs a getter with the *target* as `this`, which handed a
+     * getter planted through a live clone the driver's own handle — a read that gave back
+     * the very thing the wrapper stands in for. Passing the receiver changes nothing for a
+     * data property, and the invariant on a non-configurable property is about the value,
+     * not the receiver, so it still holds.
+     */
+    get(inner, property, receiver) {
+      const value = Reflect.get(inner, property, receiver)
       if (unsubstitutable(inner, property)) {
         assertUsable()
         return value
@@ -179,7 +188,14 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
      *
      * The value is replaced by its wrapper, so a descriptor taken while the scope was
      * live is as dead as the handle afterwards, and `Object.getOwnPropertyDescriptor`
-     * stops being the way to keep the driver's own function past the transaction.
+     * stops being the way to keep the driver's own function past the transaction. An
+     * accessor's `get` and `set` are wrapped the same way.
+     *
+     * A wrapped accessor is called by whoever took the descriptor, so the `apply` trap
+     * passes its `this` through unchanged rather than substituting a receiver of its own.
+     * That is the right way round: the caller has named a receiver, and a wrapper that
+     * replaced it would change what a legitimate call means. A caller who names the raw
+     * handle as the receiver already holds the raw handle, so nothing is given away.
      */
     getOwnPropertyDescriptor(inner, property) {
       const descriptor = Reflect.getOwnPropertyDescriptor(inner, property)

@@ -720,6 +720,41 @@ Deno.test("a property descriptor taken while the clone was live dies with it", a
   assertEquals(fake.inner, [])
 })
 
+Deno.test("a getter planted on a live clone runs with the wrapper as this, not the raw handle", async () => {
+  // A read through the wrapper must not be a way to obtain the handle the wrapper stands
+  // in for. `Reflect.get` without a receiver runs an accessor with the *target* as `this`,
+  // so a getter planted through the live clone was handed the driver's own handle and
+  // could write through it after the transaction had ended.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let receiver: unknown
+  let kept: TestService | undefined
+  await service.begin((tx) => {
+    const sql = tx.executor() as unknown as Record<string, unknown>
+    Object.defineProperty(sql, "planted", {
+      get: function (this: unknown): number {
+        receiver = this
+        return 1
+      },
+      configurable: true,
+    })
+    void sql.planted
+    kept = tx
+    return Promise.resolve()
+  })
+
+  // Not the driver's handle, and not something that still works after the scope: the
+  // receiver is this scope's wrapper, so every call through it is checked like any other.
+  assertStrictEquals(receiver === fake.sql, false, "the getter received the raw handle")
+  assertExists(kept)
+  assertStrictEquals(receiver, kept!.executor())
+  assertThrows(
+    () => (receiver as { unsafe: (text: string) => unknown }).unsafe("SELECT 1"),
+    PostgresScopeEndedError,
+  )
+})
+
 Deno.test("a property the engine will not let the wrapper stand in for is refused after the scope", async () => {
   // The one shape the wrapper cannot serve: a non-configurable, non-writable own data
   // property has to be read back as the target's own value, so a proxy that answered with

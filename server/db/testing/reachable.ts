@@ -128,16 +128,24 @@ export function intrinsics(): Set<unknown> {
 }
 
 /**
- * The values reachable from `root` that are not part of the language itself.
+ * The values reachable from `roots` that are not part of the language itself.
  *
- * Subtracting {@link intrinsics} from a walk of `root` leaves exactly what `root` itself
- * owns. That is the set a wrapper must never hand out.
+ * Subtracting {@link intrinsics} from a walk of each root leaves exactly what those roots
+ * own. That is the set a wrapper must never hand out on a read.
+ *
+ * Several roots, because one is usually not enough to describe a driver. `postgres` builds
+ * a transaction handle's `sql`, `typed`, `unsafe`, `file`, `savepoint` and `prepare` fresh
+ * for every transaction, so a reference set taken from the root client alone holds none of
+ * the functions that send a statement on *that* transaction, and a test comparing against
+ * it passes while those are handed out raw.
  */
-export function ownedBy(root: unknown): Set<unknown> {
+export function ownedBy(...roots: unknown[]): Set<unknown> {
   const shared = intrinsics()
   const owned = new Set<unknown>()
-  for (const value of reachableFrom(root).values) {
-    if (!shared.has(value)) owned.add(value)
+  for (const root of roots) {
+    for (const value of reachableFrom(root).values) {
+      if (!shared.has(value)) owned.add(value)
+    }
   }
   return owned
 }
