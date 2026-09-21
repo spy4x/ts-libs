@@ -718,6 +718,75 @@ Deno.test("close is idempotent and closes the driver once", async () => {
   assertStrictEquals(db.isOpen, false)
 })
 
+Deno.test("close waits for an open transaction instead of closing under it", async () => {
+  // `close` used to go straight to the driver, so a caller closing the root handle while
+  // somebody else's transaction was open pulled the connection out from under it and
+  // that transaction rejected with "database is not open". It now waits like every other
+  // operation. The default delay is used deliberately: an expired one would fail the
+  // legitimate wait this test depends on.
+  const db = await openMemory()
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+  const opened = signal()
+  const mayFinish = signal()
+
+  const open = db.transaction(async (transaction) => {
+    await transaction.execute("INSERT INTO rows (id) VALUES (?)", 1)
+    opened.arrive()
+    await mayFinish.reached
+    return "committed"
+  })
+  await opened.reached
+
+  const closing = db.close()
+  // The close has not landed: the transaction is still open and still reports a change.
+  assertStrictEquals(db.isOpen, true)
+  mayFinish.arrive()
+
+  assertStrictEquals(await open, "committed")
+  await closing
+  assertStrictEquals(db.isOpen, false)
+})
+
+Deno.test("close from inside a transaction callback gives up rather than hanging", async () => {
+  const db = await openMemory({ transactionWaitMs: 25, delay: instantDelay })
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+
+  await assertRejects(
+    () => db.transaction(() => db.close()),
+    SqliteTransactionWaitError,
+    "did not become free within 25ms",
+  )
+
+  // The connection is still there, which is the point: the transaction that was waiting
+  // for itself failed rather than closing the connection it was running on.
+  assertStrictEquals(db.isOpen, true)
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM rows"), [])
+  await db.close()
+})
+
+Deno.test("a scoped handle cannot close the connection it does not own", async () => {
+  // A scoped handle used to reach `driver.close()` directly, so a callback that kept its
+  // handle could close the root's connection: `close()` returned, the root still reported
+  // `isOpen: true`, and its next read threw "database is not open".
+  const db = await openMemory()
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+  let kept: SqliteDb | undefined
+
+  await db.transaction(async (transaction) => {
+    await assertRejects(
+      () => transaction.close(),
+      Error,
+      "scoped to a transaction and does not own the connection",
+    )
+    kept = transaction
+  })
+
+  await assertRejects(() => kept!.close(), Error, "does not own the connection")
+  assertStrictEquals(db.isOpen, true)
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM rows"), [])
+  await db.close()
+})
+
 Deno.test("pragma rejects a name that is not a bare identifier", async () => {
   const db = await openMemory()
   await assertRejects(

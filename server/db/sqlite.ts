@@ -183,9 +183,12 @@ export class SqliteScopeEndedError extends Error {
 /**
  * Thrown when a statement waited out {@link SqliteDbOptions.transactionWaitMs}.
  *
- * Almost always the same mistake: code inside a transaction callback issued a
- * statement on the root handle rather than on the handle the callback was given, so it
- * is waiting for a transaction that cannot finish until it returns.
+ * Two causes, and the message names both. Either an open transaction is genuinely
+ * slower than the bound, in which case the bound is the thing to raise; or code inside a
+ * transaction callback issued a statement on the root handle rather than on the handle
+ * the callback was given, in which case it was waiting for a transaction that cannot
+ * finish until it returns. The adapter cannot tell the two apart, which is why the error
+ * describes both rather than naming one.
  */
 export class SqliteTransactionWaitError extends Error {
   constructor(milliseconds: number) {
@@ -534,11 +537,35 @@ export class SqliteDb {
     }
   }
 
-  /** Close the connection. Idempotent: a second call does nothing. */
+  /**
+   * Close the connection. Idempotent: a second call does nothing.
+   *
+   * It goes through the gate like every other operation, so a `close` issued while
+   * another caller's transaction is open waits for that transaction instead of pulling
+   * the connection out from under it — the transaction used to reject with "database is
+   * not open" at its next statement. A `close` called from *inside* a transaction
+   * callback is waiting for itself, so it fails after the bounded wait with
+   * {@link SqliteTransactionWaitError}, as any other statement on the root handle does.
+   *
+   * A scoped handle cannot close anything. It never owned the connection: it is a second
+   * front door onto the connection the root handle opened, handed out for the length of
+   * one transaction.
+   *
+   * @throws {Error} on a scoped handle.
+   * @throws {SqliteTransactionWaitError} when an open transaction outlasts the bound.
+   */
   async close(): Promise<void> {
+    if (this.gate === null) {
+      throw new Error(
+        `this sqlite handle is scoped to a transaction and does not own the connection, ` +
+          `so it cannot close it; close the handle the connection was opened on`,
+      )
+    }
     if (this.closed) return
+    await this.guard(() => this.driver.close())
+    // Marked closed only once the driver agreed, so a close that the gate refused leaves
+    // the handle reporting the connection it still has.
     this.closed = true
-    await this.driver.close()
   }
 
   /**

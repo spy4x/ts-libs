@@ -12,7 +12,7 @@
  * server is not covered here and is named in the PR body.
  */
 
-import { assertEquals, assertStrictEquals } from "@std/assert"
+import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert"
 import type { Migration } from "./migrate.ts"
 import type { Sql, Transaction } from "./ports.ts"
 import { DEFAULT_MIGRATIONS_TABLE, PostgresMigrationDriver } from "./postgres-migrate.ts"
@@ -265,6 +265,15 @@ Deno.test("purgeDatabase runs for each safe environment, spelled loosely", async
 
     assertEquals(result, { dropped: ["users"], refused: false })
   }
+})
+
+Deno.test("SAFE_ENV_VALUES cannot be extended at runtime", () => {
+  // `readonly` is a compile-time claim and nothing more. A consumer that casts the array
+  // and pushes onto it used to arm the purge for that environment in every module that
+  // had imported it, for the rest of the process.
+  assertThrows(() => (SAFE_ENV_VALUES as string[]).push("production"), TypeError)
+  assertThrows(() => ((SAFE_ENV_VALUES as string[])[0] = "production"), TypeError)
+  assertEquals(SAFE_ENV_VALUES, ["dev", "development", "local", "test", "ci"])
 })
 
 Deno.test("purgeDatabase is not armed by an argument that is not the flag", async () => {
