@@ -8,6 +8,8 @@
 import { assertEquals, assertFalse, assertInstanceOf, assertNotEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 
+import type { DnsResolver } from "@ts-libs/net/url-policy"
+
 import { CryptoError, CryptoErrorCode, CryptoService, maskKey } from "./crypto.ts"
 import type { SecretCipher } from "./crypto.ts"
 import {
@@ -73,11 +75,18 @@ class FakePort implements UserSecretPort {
     )
   }
 
+  /**
+   * The row for the pair, **including an inactive one**.
+   *
+   * The port deliberately does not filter on `isActive`, although the real contract says it only
+   * returns active rows: a fake that filters here hides whether the store checks `isActive` itself,
+   * and the inactive-row test then passes with that check deleted from the library. A fake that
+   * hands over everything it has is what makes the store's own refusal observable.
+   */
   findActive(userId: string, provider: string): Promise<StoredUserSecret | null> {
     this.findActiveCalls.push({ userId, provider })
     const row = this.rows.find(
-      (candidate) =>
-        candidate.userId === userId && candidate.provider === provider && candidate.isActive,
+      (candidate) => candidate.userId === userId && candidate.provider === provider,
     )
     return Promise.resolve(row ? { ...row } : null)
   }
@@ -255,8 +264,29 @@ interface Harness {
   cipher: SecretCipher
 }
 
+/**
+ * The resolver every test injects.
+ *
+ * The unit tier has no network permission, so a store that fell back to the system resolver would
+ * fail every test that saves a host name — which is also the point: the fallback is real, and a
+ * test must not hide it. `93.184.216.34` is a routable address; the documentation ranges of
+ * RFC 5737 cannot be used here, because the policy guard refuses them as non-public.
+ */
+const TEST_RESOLVER: DnsResolver = {
+  resolve: (hostname: string) => {
+    if (hostname === "api.example.com" || hostname === "api.provider.example") {
+      return Promise.resolve(["93.184.216.34"])
+    }
+    if (hostname === "internal.example.com") return Promise.resolve(["10.0.0.5"])
+    return Promise.reject(new Error(`no such host: ${hostname}`))
+  },
+}
+
 /** Wires a store over the fakes with a clock that advances one second per read. */
-function createHarness(cipher: SecretCipher = new FakeCipher()): Harness {
+function createHarness(
+  cipher: SecretCipher = new FakeCipher(),
+  overrides: { allowInternalBaseUrl?: boolean; resolver?: DnsResolver } = {},
+): Harness {
   const port = new FakePort()
   const start = Date.parse("2026-01-01T00:00:00.000Z")
   let reads = 0
@@ -264,6 +294,8 @@ function createHarness(cipher: SecretCipher = new FakeCipher()): Harness {
     port,
     cipher,
     now: () => new Date(start + reads++ * 1000),
+    resolver: overrides.resolver ?? TEST_RESOLVER,
+    allowInternalBaseUrl: overrides.allowInternalBaseUrl,
   })
   return { store, port, cipher }
 }
@@ -1061,5 +1093,321 @@ describe("real cipher", () => {
     assertFalse(port.rows[0].secretEncrypted.includes(FAKE_API_KEY))
     assertFalse(JSON.stringify(port.rows[0]).includes(FAKE_API_KEY))
     assertEquals(await store.openSecret(USER_ID, PROVIDER), FAKE_API_KEY)
+  })
+})
+
+// ── baseUrl: the outbound endpoint a user chooses ────────────────────────────────────────────
+
+describe("baseUrl policy", () => {
+  /** The destinations a caller must not be able to make the server talk to. */
+  const INTERNAL_BASE_URLS = [
+    "http://169.254.169.254/latest/meta-data/", // cloud metadata
+    "http://127.0.0.1:6379", // a local Redis
+    "http://[::1]/",
+    "http://10.0.0.5/",
+    "http://localhost:11434/v1", // a self-hosted model server
+    "https://internal.example.com/v1", // resolves to a private address
+  ]
+
+  it("refuses an internal base URL by default", async () => {
+    for (const baseUrl of INTERNAL_BASE_URLS) {
+      const { store, port } = createHarness()
+      const error = await rejectionWith(
+        () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY, baseUrl }),
+        UserSecretErrorCode.InvalidBaseUrl,
+      )
+      // The store's own constant message, never the guard's — which names the resolver's failure
+      // and the address family, and so describes this installation's network.
+      assertEquals(error.message, "baseUrl is invalid")
+      assertFalse(error.message.includes(baseUrl))
+      assertEquals(port.rows.length, 0)
+      assertEquals(port.upserted.length, 0)
+    }
+  })
+
+  it("refuses credentials in a base URL, with or without the internal opt-in", async () => {
+    for (const allowInternalBaseUrl of [false, true]) {
+      const { store } = createHarness(new FakeCipher(), { allowInternalBaseUrl })
+      for (
+        const baseUrl of ["https://user:pw@api.example.com/v1", "https://user:pw@localhost/v1"]
+      ) {
+        await rejectionWith(
+          () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY, baseUrl }),
+          UserSecretErrorCode.InvalidBaseUrl,
+        )
+      }
+    }
+  })
+
+  it("refuses a base URL with no scheme, which the guard would have completed", async () => {
+    // `validatePublicUrl` prepends `https://` to a scheme-less input and would accept this; the
+    // store's own absolute-URL check runs first, so a caller's half-written value is not repaired.
+    const { store } = createHarness()
+    await rejectionWith(
+      () =>
+        store.save(USER_ID, {
+          provider: PROVIDER,
+          apiKey: FAKE_API_KEY,
+          baseUrl: "api.example.com/v1",
+        }),
+      UserSecretErrorCode.InvalidBaseUrl,
+    )
+  })
+
+  it("refuses a base URL carrying a control character", async () => {
+    const { store } = createHarness()
+    const withNul = `https://api.example.com/v1${String.fromCodePoint(0)}`
+    const withEscape = `https://api.example.com/${String.fromCodePoint(27)}[0m`
+    for (const baseUrl of [withNul, withEscape]) {
+      await rejectionWith(
+        () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY, baseUrl }),
+        UserSecretErrorCode.InvalidBaseUrl,
+      )
+    }
+  })
+
+  it("refuses a host the injected resolver cannot resolve", async () => {
+    const { store } = createHarness()
+    await rejectionWith(
+      () =>
+        store.save(USER_ID, {
+          provider: PROVIDER,
+          apiKey: FAKE_API_KEY,
+          baseUrl: "https://nowhere.example/v1",
+        }),
+      UserSecretErrorCode.InvalidBaseUrl,
+    )
+  })
+
+  it("stores a public base URL exactly as it was written", async () => {
+    const { store, port } = createHarness()
+    const baseUrl = "https://api.provider.example:8443/v1/"
+
+    const summary = await store.save(USER_ID, {
+      provider: PROVIDER,
+      apiKey: FAKE_API_KEY,
+      baseUrl,
+    })
+
+    assertEquals(summary.baseUrl, baseUrl)
+    assertEquals(port.rows[0].baseUrl, baseUrl)
+  })
+
+  it("accepts an internal base URL only when the store was opted in", async () => {
+    const opted = createHarness(new FakeCipher(), { allowInternalBaseUrl: true })
+    const summary = await opted.store.save(USER_ID, {
+      provider: PROVIDER,
+      apiKey: FAKE_API_KEY,
+      baseUrl: "http://localhost:11434/v1",
+    })
+    assertEquals(summary.baseUrl, "http://localhost:11434/v1")
+
+    // The same value, with the option left at its default, is refused.
+    const strict = createHarness()
+    await rejectionWith(
+      () =>
+        strict.store.save(USER_ID, {
+          provider: PROVIDER,
+          apiKey: FAKE_API_KEY,
+          baseUrl: "http://localhost:11434/v1",
+        }),
+      UserSecretErrorCode.InvalidBaseUrl,
+    )
+  })
+
+  it("keeps refusing internal addresses when the opt-in arrives undefined", async () => {
+    // A configuration value that is read but never set must not turn the guard off.
+    const port = new FakePort()
+    const store = createUserSecretStore({
+      port,
+      cipher: new FakeCipher(),
+      resolver: TEST_RESOLVER,
+      allowInternalBaseUrl: undefined,
+    })
+    await rejectionWith(
+      () =>
+        store.save(USER_ID, {
+          provider: PROVIDER,
+          apiKey: FAKE_API_KEY,
+          baseUrl: "http://127.0.0.1:6379",
+        }),
+      UserSecretErrorCode.InvalidBaseUrl,
+    )
+  })
+
+  it("still refuses a non-http scheme with the internal opt-in on", async () => {
+    const { store } = createHarness(new FakeCipher(), { allowInternalBaseUrl: true })
+    for (const baseUrl of ["ftp://localhost/v1", "file:///etc/passwd", "not a url"]) {
+      await rejectionWith(
+        () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY, baseUrl }),
+        UserSecretErrorCode.InvalidBaseUrl,
+      )
+    }
+  })
+})
+
+// ── Row ownership: the port is not trusted to have filtered ──────────────────────────────────
+
+/** A stored row for a user who is not the one asking. */
+function victimRow(): StoredUserSecret {
+  return {
+    userId: OTHER_USER_ID,
+    provider: PROVIDER,
+    secretEncrypted: `enc:${OTHER_FAKE_API_KEY}`,
+    keyHint: maskKey(OTHER_FAKE_API_KEY, 4),
+    baseUrl: "",
+    model: "",
+    isActive: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }
+}
+
+/** A port that answers every read with one row, whatever it was asked for. */
+class IndifferentPort implements UserSecretPort {
+  constructor(private readonly row: StoredUserSecret) {}
+
+  upsert(_record: StoredUserSecret): Promise<void> {
+    return Promise.resolve()
+  }
+
+  listByUser(_userId: string): Promise<StoredUserSecret[]> {
+    return Promise.resolve([{ ...this.row }])
+  }
+
+  findActive(_userId: string, _provider: string): Promise<StoredUserSecret | null> {
+    return Promise.resolve({ ...this.row })
+  }
+
+  remove(_userId: string, _provider: string): Promise<void> {
+    return Promise.resolve()
+  }
+}
+
+describe("row ownership", () => {
+  it("refuses to open a row that belongs to another user", async () => {
+    const store = createUserSecretStore({
+      port: new IndifferentPort(victimRow()),
+      cipher: new FakeCipher(),
+      resolver: TEST_RESOLVER,
+    })
+
+    const error = await rejectionWith(
+      () => store.openSecret(USER_ID, PROVIDER),
+      UserSecretErrorCode.RowMismatch,
+    )
+
+    assertEquals(error.message, "the port returned a row for a different user or provider")
+    assertNothingReachable(error, [OTHER_FAKE_API_KEY, `enc:${OTHER_FAKE_API_KEY}`])
+  })
+
+  it("refuses to open a row stored under another provider", async () => {
+    const row = { ...victimRow(), userId: USER_ID, provider: OTHER_PROVIDER }
+    const store = createUserSecretStore({
+      port: new IndifferentPort(row),
+      cipher: new FakeCipher(),
+      resolver: TEST_RESOLVER,
+    })
+
+    await rejectionWith(
+      () => store.openSecret(USER_ID, PROVIDER),
+      UserSecretErrorCode.RowMismatch,
+    )
+  })
+
+  it("refuses a listing that contains another user's row", async () => {
+    const store = createUserSecretStore({
+      port: new IndifferentPort(victimRow()),
+      cipher: new FakeCipher(),
+      resolver: TEST_RESOLVER,
+    })
+
+    await rejectionWith(() => store.list(USER_ID), UserSecretErrorCode.RowMismatch)
+  })
+
+  it("refuses a save whose re-read comes back as another user's row", async () => {
+    const store = createUserSecretStore({
+      port: new IndifferentPort(victimRow()),
+      cipher: new FakeCipher(),
+      resolver: TEST_RESOLVER,
+    })
+
+    await rejectionWith(
+      () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY }),
+      UserSecretErrorCode.RowMismatch,
+    )
+  })
+
+  it("passes a matching row through untouched", async () => {
+    const { store } = createHarness()
+    await store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY })
+    assertEquals(await store.openSecret(USER_ID, PROVIDER), FAKE_API_KEY)
+    assertEquals((await store.list(USER_ID)).length, 1)
+  })
+})
+
+// ── The ciphertext is bound to its row ───────────────────────────────────────────────────────
+
+/** Records the context the store binds each call to; otherwise it is {@link FakeCipher}. */
+class ContextRecordingCipher implements SecretCipher {
+  readonly encryptContexts: Array<string | undefined> = []
+  readonly decryptContexts: Array<string | undefined> = []
+
+  encrypt(plaintext: string, context?: string): Promise<string> {
+    this.encryptContexts.push(context)
+    return Promise.resolve(`enc:${plaintext}`)
+  }
+
+  decrypt(ciphertext: string, context?: string): Promise<string> {
+    this.decryptContexts.push(context)
+    return Promise.resolve(ciphertext.slice(4))
+  }
+}
+
+describe("row binding", () => {
+  it("binds every secret to its user and provider, on both paths", async () => {
+    const cipher = new ContextRecordingCipher()
+    const { store } = createHarness(cipher)
+
+    await store.save(USER_ID, { provider: "OpenAI", apiKey: FAKE_API_KEY })
+    await store.openSecret(USER_ID, PROVIDER)
+
+    // Length-prefixed, and the provider is the normalised row key rather than what was typed.
+    const expected = `user-secret:v1:${USER_ID.length}:${USER_ID}:${PROVIDER.length}:${PROVIDER}`
+    assertEquals(cipher.encryptContexts, [expected])
+    assertEquals(cipher.decryptContexts, [expected])
+  })
+
+  it("does not open a real ciphertext that was copied into another row", async () => {
+    const cipher = new CryptoService("test-secret-not-real-0123456789abcdef")
+    const victimPort = new FakePort()
+    const victimStore = createUserSecretStore({ port: victimPort, cipher, resolver: TEST_RESOLVER })
+    await victimStore.save(OTHER_USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY })
+    const stolen = victimPort.rows[0].secretEncrypted
+
+    // The same blob, filed under a different user and provider — the shape of a copied row or a
+    // mixed-up restore.
+    const attackerPort = new FakePort()
+    attackerPort.seed({
+      ...victimPort.rows[0],
+      userId: USER_ID,
+      provider: OTHER_PROVIDER,
+      secretEncrypted: stolen,
+    })
+    const attackerStore = createUserSecretStore({
+      port: attackerPort,
+      cipher,
+      resolver: TEST_RESOLVER,
+    })
+
+    const error = await rejectionWith(
+      () => attackerStore.openSecret(USER_ID, OTHER_PROVIDER),
+      UserSecretErrorCode.DecryptionFailed,
+    )
+    assertEquals(error.rejectionName, "CryptoError")
+    assertNothingReachable(error, [FAKE_API_KEY, stolen])
+
+    // The row it was written for still opens.
+    assertEquals(await victimStore.openSecret(OTHER_USER_ID, PROVIDER), FAKE_API_KEY)
   })
 })

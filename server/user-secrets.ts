@@ -26,23 +26,43 @@
  *   {@link UserSecretErrorCode.DecryptionFailed}, whatever the underlying error says.
  * - The source accepted any non-empty provider string, which stores rows no adapter can ever
  *   match; {@link PROVIDER_PATTERN} bounds that at the edge.
+ * - `keys.ts:26` accepted any `http(s)` base URL, so a user could point the outbound call at
+ *   `http://169.254.169.254/` — the cloud metadata service — or at anything else inside the
+ *   network. A non-empty base URL now goes through `validatePublicUrl` from
+ *   `@ts-libs/net/url-policy` with an injected resolver, and an installation that really does host
+ *   its own model server opts into internal addresses explicitly
+ *   ({@link UserSecretStoreOptions.allowInternalBaseUrl}).
+ * - The source trusted its query to have filtered by user. Every row this store receives is
+ *   checked against the user and provider that were asked for, and a row that does not match is
+ *   refused as {@link UserSecretErrorCode.RowMismatch} rather than decrypted.
+ * - Nothing bound a ciphertext to its row, so a blob copied into another user's row opened
+ *   normally. Each secret is now sealed against {@link secretContext} — this module's name, a
+ *   version, and the row's user and provider — which the cipher authenticates as additional data.
+ *   A value copied to another row no longer opens.
+ *
+ * **Stored values written before the row binding cannot be opened.** A ciphertext written without a
+ * context fails authentication once one is always supplied. No project stores secrets with this
+ * module yet, so there is nothing to migrate; an installation that had one would re-encrypt from
+ * the plaintext it still holds, because the old value cannot be read here any more.
  *
  * The mask and the cipher have exactly one implementation in this package (`./crypto.ts`); this
  * module never re-implements AES or masking.
  */
 
 import { type } from "arktype"
+import { defaultResolver, validatePublicUrl } from "@ts-libs/net/url-policy"
+import type { DnsResolver } from "@ts-libs/net/url-policy"
 
-import { CryptoError, maskKey } from "./crypto.ts"
+import { CryptoError, DEFAULT_MASK_VISIBLE, maskKey } from "./crypto.ts"
 import type { SecretCipher } from "./crypto.ts"
 
 /**
  * Failure codes, stable integers so a caller can switch without string matching.
  *
  * `1`-`4` are input rejections, `5` a missing (or inactive) row, `6` a stored secret the cipher
- * could not open, `7` a rejection from the injected port or cipher. `6`-`7` report the identity of
- * a known rejection type and nothing else the rejection carried — no message, no stack, no cause,
- * no implementation-supplied name.
+ * could not open, `7` a rejection from the injected port or cipher, `8` a row that belongs to
+ * somebody else. `6`-`7` report the identity of a known rejection type and nothing else the
+ * rejection carried — no message, no stack, no cause, no implementation-supplied name.
  */
 export enum UserSecretErrorCode {
   InvalidUserId = 1,
@@ -52,6 +72,12 @@ export enum UserSecretErrorCode {
   NotFound = 5,
   DecryptionFailed = 6,
   PortFailure = 7,
+  /**
+   * A row came back for a different user or a different provider than the one
+   * asked for. The port broke its contract, and the row is dropped rather than
+   * decrypted — one user's key must never be opened on another user's request.
+   */
+  RowMismatch = 8,
 }
 
 /**
@@ -61,9 +87,10 @@ export enum UserSecretErrorCode {
  * name (`keys.ts:93`) or a raw driver message (`keys.ts:133`) ends up rendered to a user next to
  * secret material. The error therefore carries **no `cause`** either: `cause` is a live handle on
  * a rejection that a driver or cipher may have populated with the value it failed on, and the
- * reviewer recovered a plaintext api key from exactly that handle. `server/http/redact.ts:50-57`
- * is the house rule — only the error's *name* crosses a boundary, never `message`, `stack`,
- * `cause` or any field of the error.
+ * reviewer recovered a plaintext api key from exactly that handle. The house rule is that only the
+ * error's *type* crosses a boundary, never `message`, `stack`, `cause` or any field of the error.
+ * (It used to be stated by `server/http/redact.ts`, which was deleted with `server/jwt.ts` in
+ * #60/PR #79; the rule outlived the file.)
  *
  * What a caller gets for an underlying failure is {@link UserSecretError.rejectionName}: one of a
  * closed set of known type identities, or a primitive `typeof` for a non-`Error` throw (see
@@ -176,8 +203,31 @@ export interface UserSecretStoreOptions {
   cipher: SecretCipher
   /** Injected clock for deterministic tests. Defaults to `() => new Date()`. */
   now?: () => Date
-  /** How many trailing characters the hint keeps. Defaults to 4. */
+  /**
+   * How many trailing characters the hint may keep. Defaults to 4, and `maskKey` caps it again —
+   * both by an absolute maximum and by a share of the key's length — so a caller cannot widen a
+   * hint into a usable key.
+   */
   maskVisible?: number
+  /**
+   * Resolves host names while a `baseUrl` is validated. Defaults to the system resolver, which
+   * needs `--allow-net`; a unit test (and anything else without network permission) injects its
+   * own. Unused when {@link UserSecretStoreOptions.allowInternalBaseUrl} is true, because nothing
+   * is resolved then.
+   */
+  resolver?: DnsResolver
+  /**
+   * Allow a `baseUrl` that points inside the network — `localhost`, a private address, a `.local`
+   * name. Defaults to refusing them, and only the literal `true` turns it on, so a config value
+   * that arrives as `undefined` cannot flip it.
+   *
+   * It exists because a self-hosted model server on `http://localhost:11434/v1` is a real thing a
+   * user configures. Turning it on gives up the SSRF guard for this field: the store's own rules
+   * still apply (absolute `http:`/`https:`, no user name or password, no control characters), but a
+   * caller can then reach anything the server itself can reach, including a cloud metadata service.
+   * Turn it on only where the user who saves the URL is already trusted with that reach.
+   */
+  allowInternalBaseUrl?: boolean
 }
 
 export interface UserSecretStore {
@@ -199,6 +249,7 @@ const INVALID_BASE_URL_MESSAGE = "baseUrl is invalid"
 const NOT_FOUND_MESSAGE = "no active secret is stored for that provider"
 const DECRYPTION_FAILED_MESSAGE = "the stored secret could not be decrypted"
 const PORT_FAILURE_MESSAGE = "the user secret port failed"
+const ROW_MISMATCH_MESSAGE = "the port returned a row for a different user or provider"
 
 // ── Shape and rule checks ────────────────────────────────────────────────────────────────────
 
@@ -302,14 +353,84 @@ function tryParseUrl(value: string): URL | null {
 
 /**
  * An empty or omitted `baseUrl` is valid (the adapter falls back to its own default, as `keys.ts:98`
- * does). A non-empty one must be an absolute http(s) URL: this value is concatenated into an
- * outbound endpoint, so `ftp:`, `file:` or a relative path is a request the caller did not mean.
+ * does). A non-empty one has to survive three checks, in this order:
+ *
+ * 1. **This module's own shape rules.** An absolute `http:`/`https:` URL, with no user name or
+ *    password in it and no control characters. These run first and always, including when internal
+ *    addresses are allowed. Absoluteness is checked here rather than left to the guard, because
+ *    `validatePublicUrl` completes a missing scheme with `https://` and would quietly accept
+ *    `api.example.com/v1`, which is not what a caller who typed a bare host meant to store.
+ * 2. **The SSRF guard**, `validatePublicUrl` from `@ts-libs/net/url-policy`, unless internal
+ *    addresses were explicitly allowed. It resolves the host name and refuses loopback, link-local
+ *    (including the cloud metadata address `169.254.169.254`), private and other special-use
+ *    destinations.
+ * 3. Nothing else: the value is stored exactly as the caller wrote it. The guard's canonical form is
+ *    deliberately not stored, because a stored value that differs from the one that was sent is a
+ *    surprise a caller cannot see in its own request.
+ *
+ * The guard's own message never travels: it names the resolver's failure and the address family it
+ * disliked, which is information about this installation's network. Every rejection here is the one
+ * constant {@link INVALID_BASE_URL_MESSAGE}, whichever check refused.
+ *
+ * Validating at save time does **not** make the outbound call safe. A host name that resolves to a
+ * public address today can resolve to `127.0.0.1` tomorrow, and the guard cannot see that. The
+ * request that uses this base URL has to go through `safeFetch` from `@ts-libs/net/safe-fetch`,
+ * which re-checks at connect time and follows redirects under the same policy.
  */
-function assertBaseUrl(baseUrl: string): void {
+async function assertBaseUrl(
+  baseUrl: string,
+  options: { allowInternal: boolean; resolver: DnsResolver },
+): Promise<void> {
   if (baseUrl === "") return
+
   const parsed = tryParseUrl(baseUrl)
-  if (parsed === null || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+  if (
+    parsed === null ||
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.username !== "" || parsed.password !== "" ||
+    hasControlCharacter(baseUrl)
+  ) {
     throw new UserSecretError(UserSecretErrorCode.InvalidBaseUrl, INVALID_BASE_URL_MESSAGE)
+  }
+
+  if (options.allowInternal) return
+
+  try {
+    await validatePublicUrl(baseUrl, { resolver: options.resolver })
+  } catch {
+    // Type-blind on purpose: every reason the guard refuses is the same answer here, and its
+    // message and code stay inside this block.
+    throw new UserSecretError(UserSecretErrorCode.InvalidBaseUrl, INVALID_BASE_URL_MESSAGE)
+  }
+}
+
+/**
+ * The context a stored secret is bound to: this module's name, a version, and the row's identity.
+ *
+ * Unambiguous by construction — each part is preceded by its length in code units, so no user id
+ * and provider pair can encode to the same string as another (`("a:b", "c")` and `("a", "b:c")`
+ * differ here, and would not if the parts were simply joined). The cipher authenticates this string
+ * without storing it, so a ciphertext lifted into another user's row no longer opens.
+ *
+ * The version prefix is what makes a later change to this encoding a readable migration rather than
+ * a silent failure to decrypt.
+ */
+function secretContext(userId: string, provider: string): string {
+  return `user-secret:v1:${userId.length}:${userId}:${provider.length}:${provider}`
+}
+
+/**
+ * Refuse a row that is not the one that was asked for.
+ *
+ * The port is injected, so this module cannot assume its `WHERE` clause is right: a driver with a
+ * mis-written query, a cache keyed on the provider alone, or a test double that ignores its
+ * arguments all hand back somebody else's row, and the next line would decrypt it and return the
+ * plaintext to the caller who asked. The store checks the identity of every row it receives instead
+ * of trusting that check to happen elsewhere.
+ */
+function assertRowMatches(row: StoredUserSecret, userId: string, provider: string): void {
+  if (row.userId !== userId || row.provider !== provider) {
+    throw new UserSecretError(UserSecretErrorCode.RowMismatch, ROW_MISMATCH_MESSAGE)
   }
 }
 
@@ -344,8 +465,9 @@ async function callPort<T>(operation: () => Promise<T>): Promise<T> {
  * `"DOMException"`, `"TypeError"`, `"RangeError"`, `"SyntaxError"`, `"Error"`, or a primitive
  * `typeof` such as `"string"`.
  *
- * `server/http/redact.ts:50-57` is the house precedent — identify a failure by type, never by
- * `message`, `stack`, `cause` or any field of the error. Nothing else from the rejection is copied.
+ * The house rule, once written down in the since-deleted `server/http/redact.ts`: identify a
+ * failure by type, never by `message`, `stack`, `cause` or any field of the error. Nothing else
+ * from the rejection is copied.
  */
 function rejectionNameOf(error: unknown): string {
   if (error instanceof CryptoError) return "CryptoError"
@@ -398,6 +520,9 @@ function toSummary(row: StoredUserSecret): UserSecretSummary {
  *   port's job).
  * - `remove` — `keys.ts:69-82` + `db/mod.ts:296-304`: idempotent, so no row count is checked and
  *   deleting what was never stored is not an error.
+ * - every row the port hands back is checked against the user and provider that were asked for
+ *   (`save`'s re-read, `list`, `openSecret`), and every secret is sealed against
+ *   {@link secretContext}, so neither a wrong row nor a copied ciphertext can become a plaintext.
  * - `openSecret` — `keys.ts:88-98` + `db/mod.ts:281-295`: opens the active row for an outbound
  *   call, reports a missing or unknown provider as `NotFound` (never a hint in its place), and
  *   reports any cipher rejection as `DecryptionFailed` — classified by type, never by message, and
@@ -406,7 +531,11 @@ function toSummary(row: StoredUserSecret): UserSecretSummary {
 export function createUserSecretStore(options: UserSecretStoreOptions): UserSecretStore {
   const { port, cipher } = options
   const now = options.now ?? (() => new Date())
-  const maskVisible = options.maskVisible ?? 4
+  const maskVisible = options.maskVisible ?? DEFAULT_MASK_VISIBLE
+  const resolver = options.resolver ?? defaultResolver
+  // `=== true`, never truthiness: a config value that arrives as `undefined`, `""` or `0` means
+  // "not configured", and the safe reading of "not configured" is the refusing default.
+  const allowInternal = options.allowInternalBaseUrl === true
 
   return {
     async save(userId, input) {
@@ -416,13 +545,16 @@ export function createUserSecretStore(options: UserSecretStoreOptions): UserSecr
       assertProvider(shape.provider)
       assertApiKey(shape.apiKey)
       const baseUrl = shape.baseUrl ?? ""
-      assertBaseUrl(baseUrl)
+      await assertBaseUrl(baseUrl, { allowInternal, resolver })
 
-      const secretEncrypted = await callPort(() => cipher.encrypt(shape.apiKey))
+      const provider = providerKey(shape.provider)
+      const secretEncrypted = await callPort(() =>
+        cipher.encrypt(shape.apiKey, secretContext(userId, provider))
+      )
       const timestamp = now().toISOString()
       const record: StoredUserSecret = {
         userId,
-        provider: providerKey(shape.provider),
+        provider,
         secretEncrypted,
         keyHint: maskKey(shape.apiKey, maskVisible),
         baseUrl,
@@ -434,12 +566,20 @@ export function createUserSecretStore(options: UserSecretStoreOptions): UserSecr
 
       await callPort(() => port.upsert(record))
       const stored = await callPort(() => port.findActive(userId, record.provider))
+      if (stored !== null) assertRowMatches(stored, userId, record.provider)
       return toSummary(stored ?? record)
     },
 
     async list(userId) {
       assertUserId(userId)
       const rows = await callPort(() => port.listByUser(userId))
+      // One foreign row makes the whole answer untrustworthy, so the call fails rather than
+      // quietly returning the rows that did match.
+      for (const row of rows) {
+        if (row.userId !== userId) {
+          throw new UserSecretError(UserSecretErrorCode.RowMismatch, ROW_MISMATCH_MESSAGE)
+        }
+      }
       return rows.map(toSummary)
     },
 
@@ -451,8 +591,9 @@ export function createUserSecretStore(options: UserSecretStoreOptions): UserSecr
       if (row === null || !row.isActive) {
         throw new UserSecretError(UserSecretErrorCode.NotFound, NOT_FOUND_MESSAGE)
       }
+      assertRowMatches(row, userId, key)
       try {
-        return await cipher.decrypt(row.secretEncrypted)
+        return await cipher.decrypt(row.secretEncrypted, secretContext(userId, key))
       } catch (error) {
         // Type-only classification: the cipher is the only thing in this block, so its rejection
         // is a decryption failure no matter what its message claims. Only the identity of a known
