@@ -63,7 +63,10 @@ export interface HtmlShellOptions {
    * {@link htmlWrap} on why anything else throws.
    */
   theme?: Partial<HtmlShellTheme>
-  /** Width, in pixels, of the letter column. Default `480`. */
+  /**
+   * Width, in pixels, of the letter column. Default `480`. Must be a finite
+   * positive number — see {@link htmlWrap} on why anything else throws.
+   */
   maxWidth?: number
   /**
    * Text before the linked or plain brand in the footer signature, shown only
@@ -128,13 +131,14 @@ export const DARK_HTML_SHELL_THEME: HtmlShellTheme = Object.freeze({
  * that matters is an attribute.
  *
  * @throws {TypeError} when `brandUrl` is not an absolute `http:`, `https:` or
- * `mailto:` URL, or when a `theme` colour is not a `#rgb`/`#rrggbb` hex colour.
- * Escaping made `javascript:alert(1)` a perfectly well-formed link, and a shell
- * that quietly dropped it instead would hide the same mistake; a theme colour
- * that is not a plain hex value could close the `style` attribute early and
- * inject markup of its own. Both values come from a caller's configuration
- * rather than from a recipient, so a wrong one is a bug to surface, not input
- * to sanitise.
+ * `mailto:` URL, when a `theme` colour is not a `#rgb`/`#rrggbb` hex colour, or
+ * when `maxWidth` is not a finite positive number. Escaping made
+ * `javascript:alert(1)` a perfectly well-formed link, and a shell that quietly
+ * dropped it instead would hide the same mistake; a theme colour that is not a
+ * plain hex value, or a `maxWidth` that is not a finite positive number, could
+ * each close the `style` attribute early and inject markup of its own. All
+ * three come from a caller's configuration rather than from a recipient, so a
+ * wrong one is a bug to surface, not input to sanitise.
  */
 export function htmlWrap(options: HtmlShellOptions): string {
   const theme: HtmlShellTheme = { ...DEFAULT_HTML_SHELL_THEME, ...options.theme }
@@ -143,6 +147,7 @@ export function htmlWrap(options: HtmlShellOptions): string {
   assertHexColor(theme.mutedColor, "theme.mutedColor")
   assertHexColor(theme.linkColor, "theme.linkColor")
   const maxWidth = options.maxWidth ?? 480
+  assertPositiveFiniteWidth(maxWidth)
 
   const brand = options.brand === undefined ? "" : escapeHtml(options.brand)
   const header = brand === ""
@@ -208,6 +213,26 @@ function assertHexColor(value: string, fieldName: string): void {
       `HtmlShellOptions.${fieldName} must be a #rgb or #rrggbb hex colour, got ${
         JSON.stringify(value)
       }`,
+    )
+  }
+}
+
+/**
+ * Reject a `maxWidth` that is not a finite positive number.
+ *
+ * `maxWidth` lands unquoted inside a `style` attribute as
+ * `max-width:${maxWidth}px`, with nothing around it to close: a string value
+ * — reachable from an untyped caller despite the `number` type — ends the
+ * attribute early and can inject markup of its own (`'480px"><script>…'`),
+ * and even a well-typed but non-finite number renders literally (`NaN`,
+ * `Infinity`, a negative width). Checked with `typeof` first because
+ * `Number.isFinite` alone returns `false` for a non-number without throwing a
+ * clearer error.
+ */
+function assertPositiveFiniteWidth(value: number): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new TypeError(
+      `HtmlShellOptions.maxWidth must be a finite positive number, got ${JSON.stringify(value)}`,
     )
   }
 }
