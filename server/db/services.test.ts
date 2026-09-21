@@ -15,9 +15,16 @@
  * satisfies it. The cast is confined to `createFakeSql`.
  */
 
-import { assertEquals, assertStrictEquals } from "@std/assert"
+import {
+  assertEquals,
+  assertExists,
+  assertRejects,
+  assertStrictEquals,
+  assertThrows,
+} from "@std/assert"
 import type { RowCache, Sql, Transaction } from "./ports.ts"
-import { DbServiceBase } from "./services.ts"
+import { DbServiceBase, PostgresScopeEndedError } from "./services.ts"
+import { ownedBy, reachableFrom } from "./testing/reachable.ts"
 
 /** Options for {@link createFakeSql}. */
 interface FakeSqlOptions {
@@ -113,8 +120,14 @@ function createFakeSql(options: FakeSqlOptions = {}) {
    * `postgres@3.4.7`: `sql("users")` returns an `Identifier`, not a promise and not the
    * string, so the fake has to make the same distinction by looking for a template
    * strings array.
+   *
+   * **Written as a `function`, not an arrow**, and so is every callable this fake hands
+   * out. `postgres` declares them the same way, which makes them constructible, and
+   * `new sql.unsafe(...)` was a live route past the scope check for exactly that reason.
+   * An arrow-function fake cannot be constructed at all, so it reported the route closed
+   * while the driver's own shape left it open.
    */
-  const statement = (strings: unknown, ...values: unknown[]): unknown => {
+  const statement = function (strings: unknown, ...values: unknown[]): unknown {
     if (!Array.isArray(strings)) {
       return typeof strings === "string"
         ? { __identifier: strings } satisfies FakeIdentifier
@@ -132,6 +145,23 @@ function createFakeSql(options: FakeSqlOptions = {}) {
   ) => Promise<unknown>
 
   /**
+   * `sql.types` / `sql.typed`, as `postgres` builds them.
+   *
+   * A function that also carries one named helper per custom type the caller registered
+   * (`postgres@3.4.7/src/index.js:86-102`). `shout` stands in for such a helper.
+   */
+  const customTypes = Object.assign(
+    function (value: unknown): unknown {
+      return { __typed: value }
+    },
+    {
+      shout: function (value: string): unknown {
+        return { __shout: value.toUpperCase() }
+      },
+    },
+  )
+
+  /**
    * The transaction handle, with the two nesting calls `postgres` puts on it.
    *
    * `savepoint` is the real one and is recorded in `inner`, because a savepoint is a
@@ -142,7 +172,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
    * where a second `BEGIN` is visible.
    */
   const transaction = Object.assign(statement, {
-    savepoint: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> => {
+    savepoint: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
       inner.push("SAVEPOINT")
       return Promise.resolve()
         .then(() => callback(transaction as unknown as Transaction))
@@ -155,12 +185,36 @@ function createFakeSql(options: FakeSqlOptions = {}) {
           throw error
         })
     },
-    begin: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> =>
-      client.begin(callback),
+    begin: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
+      return client.begin(callback)
+    },
+    // The rest of the driver's surface, as far as a caller can reach it. They are here so
+    // that the `Proxy` in `services.ts` can be walked: the reason it is a `Proxy` rather
+    // than a hand-written stand-in is that a property nobody listed must not become a way
+    // around the check, and a fake that offered only `savepoint` could not show that.
+    unsafe: function (text: string): Promise<unknown> {
+      return execute(text, (it) => (inTransaction ? inner : topLevel).push(it))
+    },
+    file: function (path: string): Promise<unknown> {
+      return execute(`file(${path})`, (it) => (inTransaction ? inner : topLevel).push(it))
+    },
+    reserve: function (): Promise<unknown> {
+      topLevel.push("reserve()")
+      return Promise.resolve(client)
+    },
+    json: function (value: unknown): unknown {
+      return { __json: value }
+    },
+    // `types` and `typed` are the driver's own shape: a *function* carrying one helper per
+    // custom type the caller registered. A wrapper that replaced functions with plain
+    // arrows lost `shout` here, and `sql.types.shout(...)` became a TypeError inside a
+    // transaction.
+    types: customTypes,
+    typed: customTypes,
   })
 
   const client = Object.assign(asTag, {
-    begin: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> => {
+    begin: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
       topLevel.push("BEGIN")
       inTransaction = true
       return Promise.resolve()
@@ -176,7 +230,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
           throw error
         })
     },
-    end: (endOptions?: { timeout?: number }) => {
+    end: function (endOptions?: { timeout?: number }): Promise<void> {
       topLevel.push(`end(${endOptions?.timeout ?? ""})`)
       return Promise.resolve()
     },
@@ -212,6 +266,130 @@ class TestService extends DbServiceBase {
   select(value: number): Promise<unknown> {
     return this.sql`SELECT ${value}`
   }
+
+  /** The executor this instance writes through — the clone's wrapper, on a clone. */
+  executor(): FakeExecutor {
+    return this.sql as unknown as FakeExecutor
+  }
+}
+
+/** The driver surface {@link createFakeSql} offers, as the scope tests reach for it. */
+interface FakeExecutor {
+  (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown>
+  (identifier: string): unknown
+  unsafe(text: string): Promise<unknown>
+  file(path: string): Promise<unknown>
+  reserve(): Promise<unknown>
+  json(value: unknown): unknown
+  begin<T>(callback: (transaction: Transaction) => Promise<T>): Promise<T>
+  savepoint<T>(callback: (transaction: Transaction) => Promise<T>): Promise<T>
+  types: { (value: unknown): unknown; shout(value: string): unknown }
+  typed: { (value: unknown): unknown; shout(value: string): unknown }
+}
+
+/** A template strings array, for the `new sql(template)` route. */
+function fakeTemplate(text: string): TemplateStringsArray {
+  return Object.assign([text], { raw: [text] }) as unknown as TemplateStringsArray
+}
+
+/**
+ * Every way a caller can reach the driver through the clone's executor and get an answer.
+ *
+ * Table-driven on purpose. The `Proxy` exists so that a property nobody listed cannot
+ * become a way around the check, and a test that named only `savepoint` could not show
+ * that: letting `unsafe` through the `get` trap unchecked left both tiers green.
+ *
+ * Every form here works while the clone is live and is refused once it is not, which is
+ * why one table drives both tests. Construction is the exception and has a table of its
+ * own; see {@link constructForms}.
+ */
+function callForms(sql: FakeExecutor): Array<[string, () => unknown]> {
+  return [
+    ["tagged template", () => sql`SELECT ${1}`],
+    ["identifier helper", () => sql("users")],
+    ["unsafe", () => sql.unsafe("SELECT 1")],
+    ["file", () => sql.file("/migrations/0001.sql")],
+    ["reserve", () => sql.reserve()],
+    ["json", () => sql.json({ a: 1 })],
+    ["begin", () => sql.begin(() => Promise.resolve(undefined))],
+    ["savepoint", () => sql.savepoint(() => Promise.resolve(undefined))],
+    ["a custom type helper", () => sql.types.shout("hello")],
+    ["the typed alias of the same helper", () => sql.typed.shout("hello")],
+    [
+      "a property descriptor's own value",
+      () => {
+        const descriptor = Object.getOwnPropertyDescriptor(sql, "unsafe")
+        return (descriptor?.value as (text: string) => unknown)("SELECT 1")
+      },
+    ],
+  ]
+}
+
+/**
+ * Every way the review found to reach the driver through a `prototype` object.
+ *
+ * Its own table because none of these is a call on the handle or on something read off it:
+ * each one walks to the `prototype` object every ordinary function carries and takes the
+ * `constructor` back off it, which is the function itself. All six wrote a row after the
+ * transaction had ended, reported success, and lost it to the next rollback.
+ */
+function prototypeForms(sql: FakeExecutor): Array<[string, () => unknown]> {
+  const raw = sql as unknown as Record<string, Raw>
+  return [
+    ["sql.prototype.constructor", () => raw.prototype.constructor(fakeTemplate("SELECT 1"))],
+    [
+      "sql.prototype.constructor.unsafe",
+      () => raw.prototype.constructor.unsafe("SELECT 1"),
+    ],
+    ["unsafe.prototype.constructor", () => raw.unsafe.prototype.constructor("SELECT 1")],
+    [
+      "savepoint.prototype.constructor",
+      () => raw.savepoint.prototype.constructor(() => Promise.resolve(undefined)),
+    ],
+    [
+      "a descriptor's prototype value, then its constructor",
+      () => Object.getOwnPropertyDescriptor(raw.unsafe, "prototype")?.value.constructor("SELECT 1"),
+    ],
+    [
+      "types.prototype.constructor",
+      () => raw.types.prototype.constructor("hello"),
+    ],
+  ]
+}
+
+/** The untyped view the prototype walk needs; every step of it is a property read. */
+// deno-lint-ignore no-explicit-any
+type Raw = any
+
+/**
+ * Every way to reach the driver through `new`.
+ *
+ * Apart on purpose: these are refused whether the clone is live or not, so they cannot
+ * join {@link callForms}, which every live test expects to succeed. A `TypeError` while
+ * the clone is live, {@link PostgresScopeEndedError} once it is not.
+ */
+function constructForms(sql: FakeExecutor): Array<[string, () => unknown]> {
+  return [
+    [
+      "new on unsafe",
+      () => new (sql.unsafe as unknown as new (text: string) => unknown)("SELECT 1"),
+    ],
+    ["new on the handle itself", () =>
+      new (sql as unknown as new (s: unknown) => unknown)(
+        fakeTemplate("SELECT 1"),
+      )],
+    [
+      "Reflect.construct on unsafe",
+      () => Reflect.construct(sql.unsafe as unknown as new (text: string) => unknown, ["SELECT 1"]),
+    ],
+    [
+      "Reflect.construct on the handle itself",
+      () =>
+        Reflect.construct(sql as unknown as new (s: unknown) => unknown, [
+          fakeTemplate("SELECT 1"),
+        ]),
+    ],
+  ]
 }
 
 /** A `RowCache` that records its calls. */
@@ -437,6 +615,304 @@ Deno.test("a nested begin that throws rolls back to the savepoint and leaves the
     "ROLLBACK TO SAVEPOINT",
     "SELECT $1",
   ])
+})
+
+Deno.test("a clone kept past begin refuses every later statement", async () => {
+  // The clone is the one handle on the connection the transaction ran on. A service that
+  // stores it — `this.db = tx` — keeps that handle for the rest of the process, and a
+  // write through it later lands inside whatever transaction that connection is running
+  // then and goes with that transaction's rollback, after reporting success.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await service.begin(async (tx) => {
+    kept = tx
+    await tx.select(1)
+  })
+
+  assertExists(kept)
+  // Thrown, not rejected: the check sits on the executor, which the driver also calls
+  // synchronously. `select` returns the tagged template unawaited, so the throw reaches
+  // the caller directly; an `async` method turns the same throw into a rejection.
+  assertThrows(
+    () => kept!.select(2),
+    PostgresScopeEndedError,
+    "belonged to a transaction that has already committed or rolled back",
+  )
+  // A nested `begin` on the kept clone is the same door, and closes with it.
+  await assertRejects(() => kept!.begin(() => Promise.resolve(undefined)), PostgresScopeEndedError)
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
+  assertEquals(fake.inner, ["SELECT $1"])
+})
+
+Deno.test("every call form through a kept clone is refused, not only the ones we thought of", async () => {
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await service.begin((tx) => {
+    kept = tx
+    return Promise.resolve()
+  })
+  assertExists(kept)
+  const sql = kept.executor()
+
+  for (
+    const [name, call] of [...callForms(sql), ...constructForms(sql), ...prototypeForms(sql)]
+  ) {
+    assertThrows(call, PostgresScopeEndedError, undefined, `${name} was not refused`)
+  }
+  // Nothing reached the driver: neither the transaction that ended nor the client.
+  assertEquals(fake.inner, [])
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
+})
+
+Deno.test("reads off the clone's executor never give back the fake's own function or object", async () => {
+  // A regression test over the property graph, and the reason it is a walk rather than a
+  // list: round 3 of the review found `sql.prototype.constructor`, which no list of call
+  // forms had, because every ordinary function carries a `prototype` object whose
+  // `constructor` is the function itself. A list can only ever cover the routes somebody
+  // thought of. It covers *reads* only; what a call returns is left as the driver built
+  // it on purpose, and the route that opens is listed on `PostgresScopeEndedError`.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let walk: ReturnType<typeof reachableFrom> | undefined
+  await service.begin((tx) => {
+    walk = reachableFrom(tx.executor())
+    return Promise.resolve()
+  })
+
+  assertExists(walk)
+  assertStrictEquals(walk.truncated, false, "the walk hit its limit instead of finishing")
+  assertEquals(walk.refused, [], "a read refused while the clone was live")
+
+  // Everything the raw fake owns, minus what any function at all can reach: the fake's own
+  // tag, `unsafe`, `file`, `reserve`, `json`, `begin`, `savepoint`, the type helpers and
+  // every object hanging off them.
+  const driverOwned = ownedBy(fake.sql)
+  assertStrictEquals(driverOwned.size > 0, true, "the fake owns nothing, so this proves nothing")
+
+  const leaked = [...walk.values].filter((value) => driverOwned.has(value))
+  assertEquals(
+    leaked.map((value) => (typeof value === "function" ? value.name || "anonymous" : "object")),
+    [],
+    "a read off the handle gave back something the fake owns",
+  )
+})
+
+Deno.test("a property descriptor taken while the clone was live dies with it", async () => {
+  // Reading the descriptor early used to be the way to keep the driver's own function
+  // rather than the wrapper, so the check was gone before the transaction was.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: PropertyDescriptor | undefined
+  await service.begin((tx) => {
+    kept = Object.getOwnPropertyDescriptor(tx.executor(), "unsafe")
+    return Promise.resolve()
+  })
+
+  assertExists(kept)
+  assertThrows(
+    () => (kept!.value as (text: string) => unknown)("SELECT 1"),
+    PostgresScopeEndedError,
+  )
+  assertEquals(fake.inner, [])
+})
+
+Deno.test("a getter planted on a live clone runs with the wrapper as this, not the raw handle", async () => {
+  // A read through the wrapper must not be a way to obtain the handle the wrapper stands
+  // in for. `Reflect.get` without a receiver runs an accessor with the *target* as `this`,
+  // so a getter planted through the live clone was handed the driver's own handle and
+  // could write through it after the transaction had ended.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let receiver: unknown
+  let kept: TestService | undefined
+  await service.begin((tx) => {
+    const sql = tx.executor() as unknown as Record<string, unknown>
+    Object.defineProperty(sql, "planted", {
+      get: function (this: unknown): number {
+        receiver = this
+        return 1
+      },
+      configurable: true,
+    })
+    void sql.planted
+    kept = tx
+    return Promise.resolve()
+  })
+
+  // Not the driver's handle, and not something that still works after the scope: the
+  // receiver is this scope's wrapper, so every call through it is checked like any other.
+  assertStrictEquals(receiver === fake.sql, false, "the getter received the raw handle")
+  assertExists(kept)
+  assertStrictEquals(receiver, kept!.executor())
+  assertThrows(
+    () => (receiver as { unsafe: (text: string) => unknown }).unsafe("SELECT 1"),
+    PostgresScopeEndedError,
+  )
+})
+
+Deno.test("a property the engine will not let the wrapper stand in for is refused after the scope", async () => {
+  // The one shape the wrapper cannot serve: a non-configurable, non-writable own data
+  // property has to be read back as the target's own value, so a proxy that answered with
+  // a wrapper would get a `TypeError` from the engine instead of refusing on its own
+  // terms. No property of a driver function is shaped that way — `length` and `name` are
+  // configurable, `prototype` is writable — so this builds one to pin what happens.
+  const fake = createFakeSql()
+  Object.defineProperty(fake.sql, "frozenHelper", {
+    value: (): string => "the driver's own function",
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  })
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await service.begin((tx) => {
+    const sql = tx.executor() as unknown as Record<string, unknown>
+    // While live it is handed over unwrapped, which is what the caller would have had
+    // without the clone at all. That is the limit, written down rather than implied.
+    assertStrictEquals(typeof sql.frozenHelper, "function")
+    assertStrictEquals(
+      Object.getOwnPropertyDescriptor(sql, "frozenHelper")?.value,
+      sql.frozenHelper,
+    )
+    kept = tx
+    return Promise.resolve()
+  })
+
+  assertExists(kept)
+  const retired = kept!.executor() as unknown as Record<string, unknown>
+  assertThrows(() => retired.frozenHelper, PostgresScopeEndedError)
+  assertThrows(
+    () => Object.getOwnPropertyDescriptor(retired, "frozenHelper"),
+    PostgresScopeEndedError,
+  )
+})
+
+Deno.test("every call form works while the clone is still live", async () => {
+  // The other half of the same table, walked rather than sampled. A wrapper that refused
+  // everything would pass the test above and be useless, and the custom type helper is
+  // the one that was actually lost: replacing each function with a plain arrow threw away
+  // the properties it carried, so `sql.types.shout` did not exist inside a transaction
+  // although it does outside one.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  await service.begin(async (tx) => {
+    const sql = tx.executor()
+    for (const [name, call] of callForms(sql)) {
+      let answer: unknown
+      try {
+        answer = call()
+      } catch (error) {
+        throw new Error(`${name} threw while the clone was live: ${String(error)}`)
+      }
+      // Several of these are queries; awaiting them keeps the fake's recording in order
+      // and leaves nothing pending behind the test.
+      if (answer instanceof Promise) await answer
+    }
+
+    // The values the wrapper has to carry through unchanged, spelled out.
+    assertEquals(sql.types.shout("hello"), { __shout: "HELLO" })
+    assertEquals(sql.typed.shout("hello"), { __shout: "HELLO" })
+    assertEquals(sql.json({ a: 1 }), { __json: { a: 1 } })
+    assertEquals(sql("users"), { __identifier: "users" })
+    // Reading the same helper twice gives the same function, so an identity comparison
+    // still holds through the wrapper.
+    assertStrictEquals(sql.types.shout, sql.types.shout)
+    // And the descriptor read hands out the wrapper, not the driver's own function.
+    assertStrictEquals(Object.getOwnPropertyDescriptor(sql, "unsafe")?.value, sql.unsafe)
+  })
+})
+
+Deno.test("construction through a live clone is refused as well, by name", async () => {
+  // `postgres` exposes no constructor. `new sql.unsafe(...)` runs the statement only
+  // because any plain function can be constructed, so it is refused outright rather than
+  // passed through and checked — one rule, and no route that exists only after the scope.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  await service.begin((tx) => {
+    for (const [name, call] of constructForms(tx.executor())) {
+      assertThrows(call, TypeError, "is not a constructor", `${name} was not refused`)
+    }
+    return Promise.resolve()
+  })
+
+  assertEquals(fake.inner, [])
+})
+
+Deno.test("a clone kept past a begin that rolled back refuses too", async () => {
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await assertRejects(
+    () =>
+      service.begin((tx) => {
+        kept = tx
+        return Promise.reject(new Error("the callback failed"))
+      }),
+    Error,
+    "the callback failed",
+  )
+
+  assertExists(kept)
+  assertThrows(() => kept!.select(1), PostgresScopeEndedError)
+  assertEquals(fake.topLevel, ["BEGIN", "ROLLBACK"])
+  assertEquals(fake.inner, [])
+})
+
+Deno.test("a write through a kept clone cannot land in a later transaction", async () => {
+  // The reproduction from issue #96, as a statement count. Before the fix the kept
+  // clone's `SELECT` was recorded inside the second transaction — three inner
+  // statements and a COMMIT — and it disappeared when that transaction rolled back.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await service.begin(async (tx) => {
+    kept = tx
+    await tx.select(1)
+  })
+
+  await assertRejects(
+    () =>
+      service.begin(async (tx) => {
+        await tx.select(2)
+        await kept!.select(3)
+      }),
+    PostgresScopeEndedError,
+  )
+
+  assertEquals(fake.inner, ["SELECT $1", "SELECT $1"])
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT", "BEGIN", "ROLLBACK"])
+})
+
+Deno.test("a clone kept past a savepoint refuses every later statement", async () => {
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await service.begin(async (tx) => {
+    await tx.begin(async (innerTx) => {
+      kept = innerTx
+      await innerTx.select(1)
+    })
+    assertExists(kept)
+    assertThrows(() => kept!.select(2), PostgresScopeEndedError)
+    // The transaction the savepoint sat inside is untouched by the refusal.
+    await tx.select(3)
+  })
+
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
+  assertEquals(fake.inner, ["SAVEPOINT", "SELECT $1", "RELEASE SAVEPOINT", "SELECT $1"])
 })
 
 Deno.test("a cache write made inside a savepoint waits for the outermost commit", async () => {

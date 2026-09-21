@@ -27,7 +27,7 @@
  */
 
 import { dirname, isAbsolute, join } from "@std/path"
-import type { Migration, MigrationDriver } from "./migrate.ts"
+import type { AppliedMigration, Migration, MigrationDriver } from "./migrate.ts"
 
 /** What a write reports back: the driver's own counts, unconverted. */
 export interface SqliteRunResult {
@@ -183,9 +183,12 @@ export class SqliteScopeEndedError extends Error {
 /**
  * Thrown when a statement waited out {@link SqliteDbOptions.transactionWaitMs}.
  *
- * Almost always the same mistake: code inside a transaction callback issued a
- * statement on the root handle rather than on the handle the callback was given, so it
- * is waiting for a transaction that cannot finish until it returns.
+ * Two causes, and the message names both. Either an open transaction is genuinely
+ * slower than the bound, in which case the bound is the thing to raise; or code inside a
+ * transaction callback issued a statement on the root handle rather than on the handle
+ * the callback was given, in which case it was waiting for a transaction that cannot
+ * finish until it returns. The adapter cannot tell the two apart, which is why the error
+ * describes both rather than naming one.
  */
 export class SqliteTransactionWaitError extends Error {
   constructor(milliseconds: number) {
@@ -375,6 +378,8 @@ export class SqliteDb {
    */
   private ended = false
   private closed = false
+  /** The close in flight, so two callers racing share one, or `null` when none is. */
+  private closing: Promise<void> | null = null
 
   constructor(
     driver: SqliteDriver,
@@ -534,11 +539,56 @@ export class SqliteDb {
     }
   }
 
-  /** Close the connection. Idempotent: a second call does nothing. */
+  /**
+   * Close the connection. Idempotent: a second call does nothing, and a second call made
+   * *while the first is still in flight* waits for it and returns with it.
+   *
+   * It goes through the gate like every other operation, so a `close` issued while
+   * another caller's transaction is open waits for that transaction instead of pulling
+   * the connection out from under it — the transaction used to reject with "database is
+   * not open" at its next statement. A `close` called from *inside* a transaction
+   * callback is waiting for itself, so it fails after the bounded wait with
+   * {@link SqliteTransactionWaitError}, as any other statement on the root handle does.
+   *
+   * That wait is why the in-flight close is remembered rather than only the finished one:
+   * a shutdown handler that fires twice, or two callers racing, would otherwise both pass
+   * the `closed` check while the first was still waiting on the gate, and the second
+   * would reach a driver the first had already closed.
+   *
+   * A scoped handle cannot close anything. It never owned the connection: it is a second
+   * front door onto the connection the root handle opened, handed out for the length of
+   * one transaction.
+   *
+   * @throws {Error} on a scoped handle.
+   * @throws {SqliteTransactionWaitError} when an open transaction outlasts the bound.
+   */
   async close(): Promise<void> {
+    if (this.gate === null) {
+      throw new Error(
+        `this sqlite handle is scoped to a transaction and does not own the connection, ` +
+          `so it cannot close it; close the handle the connection was opened on`,
+      )
+    }
     if (this.closed) return
-    this.closed = true
-    await this.driver.close()
+    this.closing ??= this.closeOnce()
+    await this.closing
+  }
+
+  /**
+   * The one close every concurrent caller of {@link close} shares.
+   *
+   * The `finally` drops the attempt either way, which is what keeps a refused close
+   * retryable: `closed` is set only when the driver agreed, so a close the gate turned
+   * down leaves the handle reporting the connection it still has, and the next call
+   * starts a fresh attempt rather than replaying the refusal for ever.
+   */
+  private async closeOnce(): Promise<void> {
+    try {
+      await this.guard(() => this.driver.close())
+      this.closed = true
+    } finally {
+      this.closing = null
+    }
   }
 
   /**
@@ -769,10 +819,34 @@ export async function removeSqliteFiles(
  * into SQL text rather than bound as a parameter. It is validated against an
  * identifier allowlist **and** quoted; see {@link assertIdentifier}. Migration names
  * are bound, and the schema's `sql`/`upgrade` are the caller's own SQL text.
+ *
+ * **{@link withLock} covers the runners that share one {@link SqliteDb}, and nothing
+ * wider.** The queue is held per handle, so two runners given the same handle — the case
+ * that was measured, where both read an empty history before either wrote to it and every
+ * migration was applied twice — are serialised. Two handles opened on the same file are
+ * not: measured, that pair still ran a `.no_transaction` body twice, whether the two
+ * handles are in one process or in two.
+ *
+ * That is the honest limit of what SQLite offers here. It has no advisory locks, and its
+ * own locks last no longer than the transaction that took them, while a migration run is
+ * a transaction per migration plus the bare statements a `.no_transaction` migration
+ * needs. What SQLite's single-writer lock does still give, between any two handles, is
+ * that a *transactional* migration cannot be applied twice: the loser's write fails and
+ * its whole transaction — the migration and its history row together — rolls back. A
+ * `.no_transaction` migration has no such protection, because its body and its history
+ * row are separate statements.
+ *
+ * Closing that needs a lock SQLite does not have. A lock table would trade it for a stale
+ * lock after a crash; an operating-system file lock beside the database would not, and is
+ * recorded in #110. Until then: one handle per database in a process, and one process
+ * running migrations at a time.
  */
 export class SqliteMigrationDriver implements MigrationDriver {
   private readonly db: SqliteDb
+  /** The validated name, quoted, as every statement splices it. */
   private readonly table: string
+  /** The same name unquoted, for the one place it is *bound* rather than spliced. */
+  private readonly unquotedTable: string
 
   /**
    * @throws {RangeError} when `table` is not a bare identifier. Validated here, in
@@ -788,43 +862,107 @@ export class SqliteMigrationDriver implements MigrationDriver {
     // Validated and then quoted. Validation is the barrier that runs before any SQL
     // exists; quoting is what makes the splice safe on its own terms, the way
     // `postgres-migrate.ts` gets it from `sql(this.table)`.
-    this.table = quoteIdentifier(
-      assertIdentifier(options.table ?? DEFAULT_MIGRATIONS_TABLE, "table name"),
+    this.unquotedTable = assertIdentifier(
+      options.table ?? DEFAULT_MIGRATIONS_TABLE,
+      "table name",
     )
+    this.table = quoteIdentifier(this.unquotedTable)
   }
 
-  /** Idempotent: a second call leaves the table and its rows untouched. */
+  /**
+   * Run `run` with no other runner **on this same handle** working on the same history
+   * table.
+   *
+   * A queue keyed by handle and table name, not a database lock: see the class
+   * documentation for what SQLite does and does not offer, and for what two handles on
+   * one file are still exposed to. A runner that dies mid-run releases its place through
+   * the `finally`, so nothing has to be cleared by hand.
+   */
+  async withLock<T>(run: () => Promise<T>): Promise<T> {
+    const byTable = migrationQueues.get(this.db) ?? new Map<string, Promise<void>>()
+    migrationQueues.set(this.db, byTable)
+    const ahead = byTable.get(this.table) ?? Promise.resolve()
+    let release = (): void => {}
+    // Only ever resolved, never rejected, so a run that threw does not reject the runner
+    // queued behind it.
+    byTable.set(
+      this.table,
+      new Promise<void>((resolve) => {
+        release = resolve
+      }),
+    )
+    await ahead
+    try {
+      return await run()
+    } finally {
+      release()
+    }
+  }
+
+  /**
+   * Idempotent: a second call leaves the table and its rows untouched.
+   *
+   * A table created before checksums existed gains the column here, so a database that
+   * already ran migrations gets the drift check on its next run. SQLite has no
+   * `ADD COLUMN IF NOT EXISTS`, so the column list is read first.
+   */
   async createHistoryTable(): Promise<void> {
     await this.db.exec(`
       CREATE TABLE IF NOT EXISTS ${this.table}
       (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         name       TEXT NOT NULL UNIQUE,
+        checksum   TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `)
+    const columns = await this.db.queryAll<{ name: string }>(
+      `SELECT name FROM pragma_table_info(?)`,
+      this.unquotedTable,
+    )
+    if (!columns.some((column) => column.name === "checksum")) {
+      await this.db.exec(`ALTER TABLE ${this.table} ADD COLUMN checksum TEXT`)
+    }
   }
 
-  /** Every recorded name, oldest first. */
-  async appliedNames(): Promise<string[]> {
-    const rows = await this.db.queryAll<{ name: string }>(
-      `SELECT name FROM ${this.table} ORDER BY id`,
+  /** Every recorded row, oldest first. */
+  async appliedMigrations(): Promise<AppliedMigration[]> {
+    const rows = await this.db.queryAll<{ name: string; checksum: string | null }>(
+      `SELECT name, checksum FROM ${this.table} ORDER BY id`,
     )
-    return rows.map((row) => row.name)
+    return rows.map((row) => ({ name: row.name, checksum: row.checksum ?? null }))
   }
 
   async applyInTransaction(migration: Migration): Promise<void> {
     await this.db.transaction(async (transaction) => {
       await transaction.exec(migration.sqlText)
-      await transaction.execute(`INSERT INTO ${this.table} (name) VALUES (?)`, migration.name)
+      await transaction.execute(
+        `INSERT INTO ${this.table} (name, checksum) VALUES (?, ?)`,
+        migration.name,
+        migration.checksum,
+      )
     })
   }
 
   async applyWithoutTransaction(migration: Migration): Promise<void> {
     await this.db.exec(migration.sqlText)
-    await this.db.execute(`INSERT INTO ${this.table} (name) VALUES (?)`, migration.name)
+    await this.db.execute(
+      `INSERT INTO ${this.table} (name, checksum) VALUES (?, ?)`,
+      migration.name,
+      migration.checksum,
+    )
   }
 }
+
+/**
+ * The queues {@link SqliteMigrationDriver.withLock} hands out, by connection and table.
+ *
+ * Keyed by the {@link SqliteDb} rather than by the driver instance, because two runners
+ * are two driver instances over one handle — which is what two `runMigrations` calls
+ * against one connection look like. A `WeakMap`, so a closed connection's queue goes with
+ * it. Two handles on one file have two queues, which is the limit the class documents.
+ */
+const migrationQueues = new WeakMap<SqliteDb, Map<string, Promise<void>>>()
 
 /** Assert a table by name exists, so an upgrade step that dropped it fails loudly. */
 async function assertTableExists(db: SqliteDb, table: string): Promise<void> {

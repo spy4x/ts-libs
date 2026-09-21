@@ -675,3 +675,109 @@ Found by an audit of the extracted code, not inherited from a source.
 | a user could store an internal address as the outbound base URL                  | `refuses an internal base URL by default`                                     |
 | a row was decrypted without checking whose it was                                | `refuses to open a row that belongs to another user`                          |
 | a ciphertext copied into another row still opened                                | `does not open a real ciphertext that was copied into another row`            |
+
+## `server/db`
+
+Two adapters, one migration runner. `@ts-libs/server/db` is the barrel; `db/migrate`,
+`db/postgres` and `db/sqlite` are the subpaths. Nothing here ships a driver: `postgres` is pinned in
+the root import map and the SQLite driver is the caller's own, passed through `SqliteDriver`.
+
+### A transaction handle stops working when its transaction ends
+
+Both adapters hand a callback a handle scoped to the transaction — a `SqliteDb` on one side, a
+`DbServiceBase` clone on the other — and both retire it when the transaction returns, on the
+rollback path as well as the commit path. A service that stores it (`this.db = tx`) and writes
+through it later gets `SqliteScopeEndedError` or `PostgresScopeEndedError` instead of a write that
+lands in whatever transaction that connection is running next and disappears with that
+transaction's rollback. The Postgres refusal is thrown rather than rejected, because the check sits
+on the executor, which the driver also calls synchronously (`sql(table)`); a method declared `async`
+turns it into the rejection its caller expects.
+
+**What the Postgres guard promises.** A clone kept past `begin()` or past a nested `begin()` refuses,
+with `PostgresScopeEndedError`, every call form a person would write through it: the tagged template,
+the `sql(...)` helper forms, `unsafe`, `file`, `json`, `array`, `types` and `typed`, `savepoint`,
+`notify`, `prepare`, `new`, the service's own nested `begin()`, and anything read off the handle at
+any depth. A transaction handle has no `begin`, `reserve` or `listen` of its own; those throw a
+`TypeError`, live and retired alike. The executor is a
+`Proxy` and everything it hands out on a _read_ is itself a wrapper — functions and objects alike,
+recursively — which is why the refusal covers helpers nobody listed. `prototype.constructor` was the
+spelling that showed why a list is not enough, since every ordinary function carries a `prototype`
+object whose `constructor` is that function. What a _call_ returns is handed back untouched, because
+the driver recognises a fragment, a `json` or `array` value or a query object by its class, and a
+wrapper would not be one.
+
+**It is a guard against a mistake, not a security boundary.** The mistake is the one #96 describes: a
+service stores the clone (`this.db = tx`) and writes through it after the transaction has returned.
+Code that goes looking for the driver's internals is not making that mistake and could in any case
+import `postgres` and open a connection of its own.
+
+Three known routes remain, all of them writing into a later transaction and losing the row, and all
+three present before this check existed. They are tracked in #108:
+
+1. a query _built_ inside the callback and awaited after it — the call that built it happened while
+   the clone was live;
+2. a raw handle taken from `this.sql.savepoint(...)`'s callback — the driver hands that over itself,
+   so it never passed through the wrapper;
+3. the driver's own internals carried on a value a call _returned_, for example
+   `new q.constructor(…, q.handler, …)`, since every query object holds the transaction's execute
+   function. Return values are deliberately not wrapped, so this one cannot be closed by wrapping
+   reads.
+
+`SqliteDb.close()` goes through the same gate: it waits for an open transaction rather than closing
+the connection under it, and a scoped handle cannot close a connection it never owned. Two `close()`
+calls issued together share one close and both return, so a shutdown handler that fires twice is
+still harmless.
+
+### Migrations: one runner at a time, and no editing what has run
+
+`runMigrations` does the whole run — create the history table, read the applied set, apply
+everything — inside `MigrationDriver.withLock`. Locking one migration at a time would not help: the
+race is between the two runners' _reads_ of the history, not between their writes.
+
+| Adapter  | What the lock is                                                      | What it covers                                              |
+| -------- | --------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Postgres | `pg_advisory_lock` on the connection `sql.reserve()` pins for the run | every runner that reaches that history table once it exists |
+| SQLite   | a queue per handle and history table                                  | every runner sharing one `SqliteDb`, and no wider           |
+
+The Postgres lock is held on the connection the migrations themselves run on, because a session lock
+protects the session it was taken on and nothing else. Its key follows the table as the _server_
+resolves the name — quoted, so a name with a capital letter is found rather than folded away — not
+as the caller spelled it, so a driver given `schema: "app"` and a driver that reaches an existing
+`app.migrations` through its search path lock each other out. It waits rather than failing, with no
+bound (#109), and a runner that dies releases it when its connection closes, so there is no stale
+lock to clear by hand.
+
+**Every runner of one history table must share a `search_path` or pass the same `schema`.** The key
+is resolved before the lock is taken, and on a first run there is no table to resolve, so each runner
+answers with its own `current_schema()`. Two runners whose search paths start with different schemas,
+both started before the table exists, take two keys; if the second one's existence probe then finds
+the table the first has just created, they work on one table under two locks. That is a
+misconfiguration rather than a race the library can settle, and it is the one case the resolved key
+does not cover.
+
+The SQLite queue is narrower, and the difference matters. It is held per `SqliteDb`, so two runners
+given the same handle are serialised and two handles opened on the same file are not — measured,
+that pair still ran a `.no_transaction` body twice, in one process as much as in two. SQLite has no
+advisory locks and its own locks end with the transaction that took them, so nothing here spans a
+run. What its single-writer lock does still give, between any two handles, is that a _transactional_
+migration cannot be applied twice: the loser's whole transaction, migration and history row
+together, rolls back. A `.no_transaction` migration has no such protection. Until #110 replaces this
+with an operating-system file lock: one handle per database in a process, and one process running
+migrations at a time.
+
+Every run hashes each migration file and compares it with the SHA-256 the history row carries. A
+file edited after it was applied stops the run with `MigrationEditedError`, instead of being skipped
+in silence and leaving the edit unapplied everywhere. A row written before checksums existed carries
+`null` and is not checked, because back-filling it from the file in front of the runner would record
+the current file as the one that ran. The cost is that a run reads every migration from disk, not
+only the pending ones.
+
+The history table gains its `checksum` column on the next run whether it is new or already there, so
+an existing deployment upgrades without a manual step.
+
+### Purging
+
+`purgeDatabase` refuses unless `ENV` names one of `SAFE_ENV_VALUES` — `dev`, `development`, `local`,
+`test`, `ci`, compared trimmed and lower-cased — or the caller passes `--prod`. The list is frozen:
+`readonly` is a compile-time claim, and a consumer that cast the array and pushed onto it would arm
+the purge for that environment process-wide.

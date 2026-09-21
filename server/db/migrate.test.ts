@@ -20,48 +20,73 @@
  * filesystem path is covered without a write.
  */
 
-import { assertEquals, assertMatch, assertNotMatch, assertStrictEquals } from "@std/assert"
+import {
+  assertEquals,
+  assertMatch,
+  assertNotMatch,
+  assertRejects,
+  assertStrictEquals,
+} from "@std/assert"
 import { fromFileUrl } from "@std/path"
 import {
+  type AppliedMigration,
+  checksumOf,
   denoMigrationReader,
   discoverMigrations,
   type Migration,
   type MigrationDriver,
+  MigrationEditedError,
   type MigrationReader,
   NO_TRANSACTION_SUFFIX,
   parseMigrationName,
   runMigrations,
 } from "./migrate.ts"
 import { SqliteDb, SqliteMigrationDriver } from "./sqlite.ts"
+import { migrationRace } from "./testing/migration-race.ts"
 import { createNodeSqliteDriver } from "./testing/node-sqlite-driver.ts"
 
 /** One call the runner made, in order. */
 type Call = { method: string; name?: string; withoutTransaction?: boolean }
 
-/** A {@link MigrationDriver} that records its calls and keeps a name set. */
-function recordingDriver(alreadyApplied: string[] = []) {
+/**
+ * A {@link MigrationDriver} that records its calls and keeps a history.
+ *
+ * `alreadyApplied` seeds the history. A bare string is a row written before checksums
+ * existed, which the runner must treat as unknown rather than as a match.
+ */
+function recordingDriver(alreadyApplied: Array<string | AppliedMigration> = []) {
   const calls: Call[] = []
-  const applied = new Set(alreadyApplied)
+  const applied = new Map<string, string | null>(
+    alreadyApplied.map((entry) =>
+      typeof entry === "string" ? [entry, null] : [entry.name, entry.checksum]
+    ),
+  )
   const record = (method: string, migration: Migration) => {
     calls.push({
       method,
       name: migration.name,
       withoutTransaction: migration.withoutTransaction,
     })
-    applied.add(migration.name)
+    applied.set(migration.name, migration.checksum)
     return Promise.resolve()
   }
   return {
     calls,
     applied,
     driver: {
+      withLock: <T>(run: () => Promise<T>): Promise<T> => {
+        calls.push({ method: "withLock" })
+        return run()
+      },
       createHistoryTable: () => {
         calls.push({ method: "createHistoryTable" })
         return Promise.resolve()
       },
-      appliedNames: () => {
-        calls.push({ method: "appliedNames" })
-        return Promise.resolve([...applied])
+      appliedMigrations: () => {
+        calls.push({ method: "appliedMigrations" })
+        return Promise.resolve(
+          [...applied].map(([name, checksum]) => ({ name, checksum })),
+        )
       },
       applyInTransaction: (migration: Migration) => record("applyInTransaction", migration),
       applyWithoutTransaction: (migration: Migration) =>
@@ -86,6 +111,11 @@ function memoryReader(files: Record<string, string>): MigrationReader {
 /** The on-disk fixtures read by the `denoMigrationReader` test. */
 const FIXTURE_FOLDER = fromFileUrl(new URL("./testing/migrations", import.meta.url))
 
+/** The recorded names of a driver's history, for the assertions that only need those. */
+async function appliedNames(driver: MigrationDriver): Promise<string[]> {
+  return (await driver.appliedMigrations()).map((row) => row.name)
+}
+
 Deno.test("runMigrations applies every pending migration in name order", async () => {
   const { driver, calls } = recordingDriver()
   const report = await runMigrations(driver, {
@@ -99,8 +129,9 @@ Deno.test("runMigrations applies every pending migration in name order", async (
 
   assertEquals(report, { applied: ["0001_one", "0002_two", "0003_three"], skipped: [] })
   assertEquals(calls, [
+    { method: "withLock" },
     { method: "createHistoryTable" },
-    { method: "appliedNames" },
+    { method: "appliedMigrations" },
     { method: "applyInTransaction", name: "0001_one", withoutTransaction: false },
     { method: "applyInTransaction", name: "0002_two", withoutTransaction: false },
     { method: "applyInTransaction", name: "0003_three", withoutTransaction: false },
@@ -119,8 +150,9 @@ Deno.test("runMigrations routes a no_transaction migration around the transactio
 
   assertEquals(report.applied, ["0001_plain", "0002_index"])
   assertEquals(calls, [
+    { method: "withLock" },
     { method: "createHistoryTable" },
-    { method: "appliedNames" },
+    { method: "appliedMigrations" },
     { method: "applyInTransaction", name: "0001_plain", withoutTransaction: false },
     { method: "applyWithoutTransaction", name: "0002_index", withoutTransaction: true },
   ])
@@ -160,7 +192,11 @@ Deno.test("runMigrations skips what the history table already records", async ()
 
   assertEquals(applied, ["0001_one", "0002_two"])
   assertEquals(report, { applied: [], skipped: ["0001_one", "0002_two"] })
-  assertEquals(second.calls, [{ method: "createHistoryTable" }, { method: "appliedNames" }])
+  assertEquals(second.calls, [
+    { method: "withLock" },
+    { method: "createHistoryTable" },
+    { method: "appliedMigrations" },
+  ])
 })
 
 Deno.test("runMigrations recognises a history row recorded with the file extension", async () => {
@@ -181,7 +217,11 @@ Deno.test("runMigrations ignores a file that is not a migration", async () => {
   })
 
   assertEquals(report, { applied: [], skipped: [] })
-  assertEquals(calls, [{ method: "createHistoryTable" }, { method: "appliedNames" }])
+  assertEquals(calls, [
+    { method: "withLock" },
+    { method: "createHistoryTable" },
+    { method: "appliedMigrations" },
+  ])
 })
 
 Deno.test("discoverMigrations filters by extension and sorts by name", async () => {
@@ -254,6 +294,146 @@ Deno.test("a driver failure stops the run and propagates unchanged", async () =>
   assertEquals(attempted, ["0001_one"])
 })
 
+Deno.test("the whole run happens inside the lock, history read included", async () => {
+  // The order is the whole point. The race #59 measured is two runners each reading an
+  // empty history before either applies anything, so a lock taken after the read — or
+  // around one migration at a time — would not see it.
+  const { driver, calls } = recordingDriver()
+  await runMigrations(driver, {
+    folder: "/migrations",
+    reader: memoryReader({ "0001_one.sql": "CREATE TABLE one (id INTEGER)" }),
+  })
+
+  assertStrictEquals(calls[0].method, "withLock")
+  assertEquals(calls.map((call) => call.method).slice(1), [
+    "createHistoryTable",
+    "appliedMigrations",
+    "applyInTransaction",
+  ])
+})
+
+Deno.test("the lock is released when a migration fails", async () => {
+  const { driver } = recordingDriver()
+  let held = 0
+  let highWater = 0
+  driver.withLock = async <T>(run: () => Promise<T>): Promise<T> => {
+    held += 1
+    highWater = Math.max(highWater, held)
+    try {
+      return await run()
+    } finally {
+      held -= 1
+    }
+  }
+  driver.applyInTransaction = () => Promise.reject(new Error("driver refused"))
+
+  await assertRejects(
+    () =>
+      runMigrations(driver, {
+        folder: "/migrations",
+        reader: memoryReader({ "0001_one.sql": "CREATE TABLE one (id INTEGER)" }),
+      }),
+    Error,
+    "driver refused",
+  )
+
+  assertStrictEquals(highWater, 1)
+  assertStrictEquals(held, 0)
+})
+
+Deno.test("a migration recorded with a checksum is skipped when the file is unchanged", async () => {
+  const body = "CREATE TABLE one (id INTEGER)"
+  const { driver } = recordingDriver([{ name: "0001_one", checksum: await checksumOf(body) }])
+
+  const report = await runMigrations(driver, {
+    folder: "/migrations",
+    reader: memoryReader({ "0001_one.sql": body }),
+  })
+
+  assertEquals(report, { applied: [], skipped: ["0001_one"] })
+})
+
+Deno.test("an applied migration that was edited afterwards stops the run", async () => {
+  // It used to be skipped in silence: the runner compared names only, so the edit was
+  // never applied anywhere and no database matched the file.
+  const applied = "CREATE TABLE one (id INTEGER)"
+  const edited = "CREATE TABLE one (id INTEGER, extra TEXT)"
+  const recorded = await checksumOf(applied)
+  const { driver, calls } = recordingDriver([{ name: "0001_one", checksum: recorded }])
+
+  const error = await assertRejects(
+    () =>
+      runMigrations(driver, {
+        folder: "/migrations",
+        reader: memoryReader({
+          "0001_one.sql": edited,
+          "0002_two.sql": "CREATE TABLE two (id INTEGER)",
+        }),
+      }),
+    MigrationEditedError,
+    "was applied from a different body than the file now holds",
+  )
+
+  assertStrictEquals(error.migration, "0001_one")
+  assertStrictEquals(error.recordedChecksum, recorded)
+  assertStrictEquals(error.fileChecksum, await checksumOf(edited))
+  // The run stops there: the migration after the edited one is not applied either,
+  // because the history the edit calls into question is the history it would be
+  // applied against.
+  assertEquals(calls.filter((call) => call.method.startsWith("apply")), [])
+})
+
+Deno.test("whitespace alone is enough to count as an edit", async () => {
+  const applied = "CREATE TABLE one (id INTEGER)"
+  const { driver } = recordingDriver([{ name: "0001_one", checksum: await checksumOf(applied) }])
+
+  await assertRejects(
+    () =>
+      runMigrations(driver, {
+        folder: "/migrations",
+        reader: memoryReader({ "0001_one.sql": `${applied}\n` }),
+      }),
+    MigrationEditedError,
+  )
+})
+
+Deno.test("a history row written before checksums existed is not checked", async () => {
+  // `null` is unknown, not "matches". The alternative — back-filling the row from the
+  // file in front of the runner — would record the current file as the one that ran,
+  // which is the assumption the check exists to stop making.
+  const { driver } = recordingDriver([{ name: "0001_one", checksum: null }])
+
+  const report = await runMigrations(driver, {
+    folder: "/migrations",
+    reader: memoryReader({ "0001_one.sql": "CREATE TABLE one (id INTEGER, changed TEXT)" }),
+  })
+
+  assertEquals(report, { applied: [], skipped: ["0001_one"] })
+})
+
+Deno.test("the checksum a driver records is the SHA-256 of the body it was given", async () => {
+  const body = "CREATE TABLE one (id INTEGER)"
+  const seen: Migration[] = []
+  const { driver } = recordingDriver()
+  driver.applyInTransaction = (migration: Migration) => {
+    seen.push(migration)
+    return Promise.resolve()
+  }
+
+  await runMigrations(driver, {
+    folder: "/migrations",
+    reader: memoryReader({ "0001_one.sql": body }),
+  })
+
+  assertStrictEquals(seen.length, 1)
+  assertStrictEquals(seen[0].checksum, await checksumOf(body))
+  // A known vector, so the hash cannot drift to another algorithm unnoticed.
+  assertStrictEquals(
+    await checksumOf(""),
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  )
+})
+
 /**
  * The real SQLite driver, with every statement it receives recorded.
  *
@@ -294,7 +474,7 @@ Deno.test("the SQLite migrator wraps a transactional migration in BEGIN and COMM
     "CREATE TABLE one (id INTEGER)",
     "COMMIT",
   ])
-  assertEquals(await migrations().appliedNames(), ["0001_one"])
+  assertEquals(await appliedNames(migrations()), ["0001_one"])
   await db.close()
 })
 
@@ -310,7 +490,7 @@ Deno.test("the SQLite migrator runs a no_transaction migration with no BEGIN and
   assertEquals(report.applied, ["0002_vacuum"])
   assertEquals(statements.slice(1), ["CREATE TABLE two (id INTEGER)"])
   assertEquals(statements.filter((sql) => sql === "BEGIN" || sql === "COMMIT"), [])
-  assertEquals(await migrations().appliedNames(), ["0002_vacuum"])
+  assertEquals(await appliedNames(migrations()), ["0002_vacuum"])
   await db.close()
 })
 
@@ -329,7 +509,84 @@ Deno.test("the SQLite migrator rolls a failing migration back and records nothin
 
   assertMatch(message, /table one already exists/)
   assertEquals(statements.includes("ROLLBACK"), true)
-  assertEquals(await migrations().appliedNames(), [])
+  assertEquals(await appliedNames(migrations()), [])
+  await db.close()
+})
+
+Deno.test("two SQLite runners started together apply each migration once", async () => {
+  // Measured on `5c7a40f`: the body ran twice — `INSERT INTO counter` inserted two rows
+  // — and the second runner then failed on `UNIQUE constraint failed: migrations.name`.
+  // Both runners had read an empty history before either wrote to it, which is what the
+  // barrier below makes certain rather than likely.
+  const { db, migrations } = await recordingSqlite()
+  await db.exec("CREATE TABLE counter (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+  const race = migrationRace({
+    // A `.no_transaction` migration on purpose: its body and its history row are separate
+    // statements, so the `UNIQUE` constraint on the name cannot undo a doubled body.
+    "0001_bump.no_transaction.sql": "INSERT INTO counter DEFAULT VALUES",
+  }, 2)
+  const options = { folder: "/migrations", reader: race.reader }
+
+  const outcomes = await Promise.all([
+    runMigrations(race.gate(migrations()), options),
+    runMigrations(race.gate(migrations()), options),
+  ])
+
+  assertEquals(outcomes.map((report) => report.applied).flat(), ["0001_bump"])
+  assertEquals(outcomes.map((report) => report.skipped).flat(), ["0001_bump"])
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM counter"), [{ id: 1 }])
+  assertEquals(await appliedNames(migrations()), ["0001_bump"])
+  await db.close()
+})
+
+Deno.test("the SQLite migrator refuses a migration whose file changed after it ran", async () => {
+  const { db, migrations } = await recordingSqlite()
+  const options = {
+    folder: "/migrations",
+    reader: memoryReader({ "0001_one.sql": "CREATE TABLE one (id INTEGER)" }),
+  }
+  await runMigrations(migrations(), options)
+
+  await assertRejects(
+    () =>
+      runMigrations(migrations(), {
+        folder: "/migrations",
+        reader: memoryReader({ "0001_one.sql": "CREATE TABLE one (id INTEGER, extra TEXT)" }),
+      }),
+    MigrationEditedError,
+    "0001_one",
+  )
+  await db.close()
+})
+
+Deno.test("the SQLite migrator adds the checksum column to a table that predates it", async () => {
+  // The upgrade path a deployment that already ran migrations takes. Without it the
+  // drift check would never see a checksum on the databases that most need it.
+  const { db, migrations } = await recordingSqlite()
+  await db.exec(`
+    CREATE TABLE "migrations" (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `)
+  await db.execute(`INSERT INTO "migrations" (name) VALUES (?)`, "0001_one")
+
+  const report = await runMigrations(migrations(), {
+    folder: "/migrations",
+    reader: memoryReader({
+      "0001_one.sql": "CREATE TABLE one (id INTEGER)",
+      "0002_two.sql": "CREATE TABLE two (id INTEGER)",
+    }),
+  })
+
+  // The old row is unknown, so it is skipped without a comparison; the new one is
+  // recorded with its checksum.
+  assertEquals(report, { applied: ["0002_two"], skipped: ["0001_one"] })
+  assertEquals(await migrations().appliedMigrations(), [
+    { name: "0001_one", checksum: null },
+    { name: "0002_two", checksum: await checksumOf("CREATE TABLE two (id INTEGER)") },
+  ])
   await db.close()
 })
 
@@ -354,11 +611,12 @@ Deno.test("the SQLite migrator is idempotent across two runs", async () => {
     "      (\n" +
     "        id         INTEGER PRIMARY KEY AUTOINCREMENT,\n" +
     "        name       TEXT NOT NULL UNIQUE,\n" +
+    "        checksum   TEXT,\n" +
     "        created_at TEXT NOT NULL DEFAULT (datetime('now'))\n" +
     "      )\n" +
     "    ",
   ])
   assertEquals(statements.includes("BEGIN"), true)
-  assertEquals(await migrations().appliedNames(), ["0001_one"])
+  assertEquals(await appliedNames(migrations()), ["0001_one"])
   await db.close()
 })

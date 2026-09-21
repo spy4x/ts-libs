@@ -31,8 +31,19 @@ export const ENV_NAME = "ENV"
  * it is one `--prod` flag, and the cost of a production name being absent from a
  * denylist is the database. Compared after trimming and lower-casing, so `" Dev "` is
  * `dev`; anything else, including an unset variable, is refused.
+ *
+ * Frozen. `readonly` is a compile-time claim only, and a consumer that casts the array
+ * and pushes a name onto it would arm the purge for that environment in every module
+ * that imports this one, for the rest of the process. `Object.freeze` makes that push
+ * throw instead.
  */
-export const SAFE_ENV_VALUES: readonly string[] = ["dev", "development", "local", "test", "ci"]
+export const SAFE_ENV_VALUES: readonly string[] = Object.freeze([
+  "dev",
+  "development",
+  "local",
+  "test",
+  "ci",
+])
 
 /** The argument that overrides the guard. */
 export const PROD_FLAG = "--prod"

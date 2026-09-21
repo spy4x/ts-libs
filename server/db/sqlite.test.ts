@@ -718,6 +718,120 @@ Deno.test("close is idempotent and closes the driver once", async () => {
   assertStrictEquals(db.isOpen, false)
 })
 
+Deno.test("two close calls issued together both return and close the driver once", async () => {
+  // A shutdown handler that fires twice is the ordinary way here. The second call used to
+  // pass the `closed` check while the first was still waiting on the gate, reach a driver
+  // the first had already closed, and reject with "database is not open".
+  let closes = 0
+  const db = new SqliteDb({
+    exec: () => Promise.resolve(),
+    prepare: () => Promise.reject(new Error("no prepare in this double")),
+    close: () => {
+      closes += 1
+      // A tick later, so the second caller gets its turn while the first is in flight —
+      // which is the window the bug lived in.
+      return new Promise<void>((resolve) => setTimeout(resolve, 0))
+    },
+  }, ":memory:")
+
+  const outcomes = await Promise.all([
+    db.close().then(() => "returned", (error: unknown) => String(error)),
+    db.close().then(() => "returned", (error: unknown) => String(error)),
+  ])
+
+  assertEquals(outcomes, ["returned", "returned"])
+  assertEquals(closes, 1)
+  assertStrictEquals(db.isOpen, false)
+  // And a third, after both have finished.
+  await db.close()
+  assertEquals(closes, 1)
+})
+
+Deno.test("a close the gate refused leaves the handle open and can be tried again", async () => {
+  // The in-flight close is remembered, not the refusal: a `close` that gave up waiting
+  // must not turn the handle into one that can never be closed.
+  const db = await openMemory({ transactionWaitMs: 25, delay: instantDelay })
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+
+  await assertRejects(
+    () => db.transaction(() => db.close()),
+    SqliteTransactionWaitError,
+  )
+  assertStrictEquals(db.isOpen, true)
+
+  await db.close()
+  assertStrictEquals(db.isOpen, false)
+})
+
+Deno.test("close waits for an open transaction instead of closing under it", async () => {
+  // `close` used to go straight to the driver, so a caller closing the root handle while
+  // somebody else's transaction was open pulled the connection out from under it and
+  // that transaction rejected with "database is not open". It now waits like every other
+  // operation. The default delay is used deliberately: an expired one would fail the
+  // legitimate wait this test depends on.
+  const db = await openMemory()
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+  const opened = signal()
+  const mayFinish = signal()
+
+  const open = db.transaction(async (transaction) => {
+    await transaction.execute("INSERT INTO rows (id) VALUES (?)", 1)
+    opened.arrive()
+    await mayFinish.reached
+    return "committed"
+  })
+  await opened.reached
+
+  const closing = db.close()
+  // The close has not landed: the transaction is still open and still reports a change.
+  assertStrictEquals(db.isOpen, true)
+  mayFinish.arrive()
+
+  assertStrictEquals(await open, "committed")
+  await closing
+  assertStrictEquals(db.isOpen, false)
+})
+
+Deno.test("close from inside a transaction callback gives up rather than hanging", async () => {
+  const db = await openMemory({ transactionWaitMs: 25, delay: instantDelay })
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+
+  await assertRejects(
+    () => db.transaction(() => db.close()),
+    SqliteTransactionWaitError,
+    "did not become free within 25ms",
+  )
+
+  // The connection is still there, which is the point: the transaction that was waiting
+  // for itself failed rather than closing the connection it was running on.
+  assertStrictEquals(db.isOpen, true)
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM rows"), [])
+  await db.close()
+})
+
+Deno.test("a scoped handle cannot close the connection it does not own", async () => {
+  // A scoped handle used to reach `driver.close()` directly, so a callback that kept its
+  // handle could close the root's connection: `close()` returned, the root still reported
+  // `isOpen: true`, and its next read threw "database is not open".
+  const db = await openMemory()
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+  let kept: SqliteDb | undefined
+
+  await db.transaction(async (transaction) => {
+    await assertRejects(
+      () => transaction.close(),
+      Error,
+      "scoped to a transaction and does not own the connection",
+    )
+    kept = transaction
+  })
+
+  await assertRejects(() => kept!.close(), Error, "does not own the connection")
+  assertStrictEquals(db.isOpen, true)
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM rows"), [])
+  await db.close()
+})
+
 Deno.test("pragma rejects a name that is not a bare identifier", async () => {
   const db = await openMemory()
   await assertRejects(
@@ -849,16 +963,21 @@ Deno.test("a legitimate history table name is quoted in every statement", async 
     fileName: "0001_one.sql",
     name: "0001_one",
     sqlText: "CREATE TABLE one (id INTEGER)",
+    checksum: "a".repeat(64),
     withoutTransaction: false,
   })
-  assertEquals(await driver.appliedNames(), ["0001_one"])
+  assertEquals((await driver.appliedMigrations()).map((row) => row.name), ["0001_one"])
   await driver.applyWithoutTransaction({
     fileName: "0002_two.no_transaction.sql",
     name: "0002_two",
     sqlText: "SELECT 1",
+    checksum: "b".repeat(64),
     withoutTransaction: true,
   })
-  assertEquals(await driver.appliedNames(), ["0001_one", "0002_two"])
+  assertEquals((await driver.appliedMigrations()).map((row) => row.name), [
+    "0001_one",
+    "0002_two",
+  ])
 
   // The `exec` path: the history table, then the `BEGIN`/`COMMIT` around the first
   // migration. The second migration runs bare, which is the `.no_transaction` contract.
@@ -873,13 +992,13 @@ Deno.test("a legitimate history table name is quoted in every statement", async 
   // them spelling the identifier in its quoted form.
   const inserts = prepared.filter((sql) => sql.startsWith("INSERT INTO"))
   assertEquals(inserts, [
-    'INSERT INTO "migrations_v2" (name) VALUES (?)',
-    'INSERT INTO "migrations_v2" (name) VALUES (?)',
+    'INSERT INTO "migrations_v2" (name, checksum) VALUES (?, ?)',
+    'INSERT INTO "migrations_v2" (name, checksum) VALUES (?, ?)',
   ])
-  const reads = prepared.filter((sql) => sql.startsWith("SELECT name FROM"))
+  const reads = prepared.filter((sql) => sql.startsWith("SELECT name, checksum FROM"))
   assertEquals(reads, [
-    'SELECT name FROM "migrations_v2" ORDER BY id',
-    'SELECT name FROM "migrations_v2" ORDER BY id',
+    'SELECT name, checksum FROM "migrations_v2" ORDER BY id',
+    'SELECT name, checksum FROM "migrations_v2" ORDER BY id',
   ])
   await db.close()
 })
@@ -888,7 +1007,81 @@ Deno.test("the default history table name is accepted and quoted", async () => {
   const { db, issued, prepared } = await recordingMemory()
   await new SqliteMigrationDriver({ db }).createHistoryTable()
   assertMatch(issued[0], new RegExp(`CREATE TABLE IF NOT EXISTS "${DEFAULT_MIGRATIONS_TABLE}"`))
-  assertEquals(prepared, [])
+  // The column probe is the one statement `createHistoryTable` prepares, and the table
+  // name reaches it as a bound value rather than as SQL text.
+  assertEquals(prepared, ["SELECT name FROM pragma_table_info(?)"])
+  await db.close()
+})
+
+Deno.test("two runners on one connection do not both hold the migration lock", async () => {
+  // The in-process half of the lock, measured directly rather than through the runner:
+  // the second `withLock` must not enter until the first has returned.
+  const { db } = await recordingMemory()
+  const order: string[] = []
+  const driver = () => new SqliteMigrationDriver({ db })
+  let release = (): void => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+
+  const first = driver().withLock(async () => {
+    order.push("first in")
+    await held
+    order.push("first out")
+  })
+  const second = driver().withLock(() => {
+    order.push("second in")
+    return Promise.resolve()
+  })
+
+  release()
+  await Promise.all([first, second])
+
+  assertEquals(order, ["first in", "first out", "second in"])
+  await db.close()
+})
+
+Deno.test("the migration queue is per handle, so two handles on one database do not share it", async () => {
+  // The documented boundary, pinned rather than left as prose. Two `SqliteDb` objects
+  // over the same connection are two queues, so both runners are inside `withLock` at the
+  // same time — which is why the class says one handle per database, and why two handles
+  // on one file were measured running a `.no_transaction` body twice.
+  const real = await createNodeSqliteDriver({ path: ":memory:" })
+  const first = new SqliteDb(real, ":memory:")
+  const second = new SqliteDb(real, ":memory:")
+  let inside = 0
+  let both = 0
+  let release = (): void => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+
+  const enter = (db: SqliteDb): Promise<void> =>
+    new SqliteMigrationDriver({ db }).withLock(async () => {
+      inside += 1
+      both = Math.max(both, inside)
+      await held
+      inside -= 1
+    })
+
+  const runs = Promise.all([enter(first), enter(second)])
+  release()
+  await runs
+
+  assertStrictEquals(both, 2)
+  await first.close()
+})
+
+Deno.test("a run that threw still hands the migration lock on", async () => {
+  const { db } = await recordingMemory()
+  const driver = () => new SqliteMigrationDriver({ db })
+
+  await assertRejects(
+    () => driver().withLock(() => Promise.reject(new Error("the run failed"))),
+    Error,
+    "the run failed",
+  )
+  assertStrictEquals(await driver().withLock(() => Promise.resolve("second ran")), "second ran")
   await db.close()
 })
 
