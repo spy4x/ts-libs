@@ -950,6 +950,25 @@ describe("LocalStorage", () => {
     assertEquals(await provider.doesExist("examplebucket", "other.png"), false)
   })
 
+  it("rejects instead of reporting a permission-denied probe as absent", async () => {
+    // Pinned at the provider, not just at `createDenoObjectFs`: nothing here
+    // stops a future `doesExist` from wrapping its own call to `fs.existsObject`
+    // in a swallowing `catch` — a fake `ObjectFs` that rejects proves the
+    // rejection survives the provider's own method, whichever layer holds the
+    // guard.
+    const deniedFs: ObjectFs = {
+      readObject: () => Promise.reject(new Error("not used by this test")),
+      writeObject: () => Promise.reject(new Error("not used by this test")),
+      existsObject: () => Promise.reject(new Deno.errors.PermissionDenied("denied")),
+    }
+    const provider = new LocalStorage({ fs: deniedFs })
+
+    await assertRejects(
+      () => provider.doesExist("examplebucket", "photo.png"),
+      Deno.errors.PermissionDenied,
+    )
+  })
+
   it("refuses a key that climbs out of the bucket", async () => {
     const provider = new LocalStorage({ fs: createMemoryObjectFs() })
 
