@@ -124,9 +124,10 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * The key is the first eight bytes of the SHA-256 of the table's **resolved** name,
    * read as a signed 64-bit integer. Resolved, not as the caller spelled it: the server
    * is asked which schema the name reaches, so a driver given `schema: "app"` and a
-   * driver that reaches `app.migrations` through its search path take the same key and
-   * lock each other out. Deriving it from the spelling alone did not — the two ran at the
-   * same time and one of them crashed inside Postgres's own catalogue.
+   * driver that reaches an existing `app.migrations` through its search path take the
+   * same key and lock each other out. Deriving it from the spelling alone did not — the
+   * two ran at the same time and one of them crashed inside Postgres's own catalogue.
+   * {@link resolvedTableRef} has the one case the resolution cannot cover.
    *
    * `pg_advisory_lock` waits rather than failing: a second runner starting during a
    * migration should apply nothing and carry on, not crash the instance. A runner that
@@ -163,6 +164,24 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * found it in, and when the table does not exist yet `current_schema()` is where
    * `CREATE TABLE` will put it. Both are the schema this run ends up working in, which is
    * what the lock key has to follow.
+   *
+   * The name goes through `quote_ident` first. `to_regclass` parses its argument as SQL
+   * text, so a bare `Hist` is folded to `hist` and found nowhere, while every other
+   * statement in this driver spells the name exactly as the caller gave it. Measured: with
+   * a mixed-case name the lookup missed, the key fell back to `current_schema()`, a driver
+   * naming the schema and a driver reaching the same table through its search path took
+   * two keys, both held a lock at once and a `.no_transaction` body ran twice.
+   * `quote_ident` also doubles an embedded double quote, so a name that carries one
+   * resolves too.
+   *
+   * **One limit stays, and it is not closable here.** The key is resolved before the lock
+   * is taken and, on a first run, before the table exists, so `current_schema()` is the
+   * answer for both runners — and two runners whose search paths *start* with different
+   * schemas resolve two keys. If the second one's existence probe then finds the table the
+   * first has just created, they work on one table under two keys. Every runner of one
+   * history table must therefore share a `search_path` or pass the same {@link
+   * PostgresMigrationDriverOptions.schema}; that is a deployment rule, not something this
+   * method can check.
    */
   private async resolvedTableRef(sql: Sql): Promise<string> {
     if (this.schema !== undefined) return `${this.schema}.${this.table}`
@@ -171,7 +190,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
         (
           SELECT n.nspname
           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE c.oid = to_regclass(${this.table})
+          WHERE c.oid = to_regclass(quote_ident(${this.table}))
         ),
         current_schema()
       ) AS schema
@@ -307,8 +326,11 @@ export class PostgresMigrationDriver implements MigrationDriver {
  * one runner a wait, never a wrong answer.
  *
  * `qualifiedTable` is always `schema.table` with the schema resolved by the server — see
- * {@link PostgresMigrationDriver.withLock} — so two runners that reach one table lock
- * each other out however each of them spelled it.
+ * {@link PostgresMigrationDriver.resolvedTableRef} — so two runners that reach one
+ * *existing* table lock each other out however each of them spelled it. Before the table
+ * exists there is nothing to resolve and the answer is each runner's own
+ * `current_schema()`, so every runner of one history table must share a `search_path` or
+ * pass the same schema; that limit is stated where the resolution happens.
  */
 async function advisoryLockKey(qualifiedTable: string): Promise<bigint> {
   const digest = await crypto.subtle.digest(

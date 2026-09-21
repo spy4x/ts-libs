@@ -202,7 +202,7 @@ const PINNED_LOCK_KEY = 2145828090877900021n
  * and let them run at the same time.
  */
 const RESOLVED_SCHEMA_PROBE = "SELECT coalesce( ( SELECT n.nspname FROM pg_class c JOIN " +
-  "pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = to_regclass($1) ), " +
+  "pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = to_regclass(quote_ident($1)) ), " +
   "current_schema() ) AS schema"
 
 /**
@@ -382,6 +382,22 @@ Deno.test("the advisory lock key follows the resolved table and does not drift",
   assertStrictEquals(plain === await keyFor({ table: "other" }), false)
   assertStrictEquals(plain === await keyFor({ schema: "tenant_1" }), false)
   assertStrictEquals(plain === await keyFor({ currentSchema: "tenant_1" }), false)
+})
+
+Deno.test("the resolution probe quotes the table name before looking it up", async () => {
+  // `to_regclass` parses its argument as SQL text, so a bare `Hist` is folded to `hist`
+  // and found nowhere, while every other statement in this driver spells the name exactly
+  // as given. The key then fell back to `current_schema()`, and a driver naming the schema
+  // and a driver reaching the same table through its search path took two keys, held both
+  // locks at once, and ran a `.no_transaction` body twice.
+  const fake = createFakeSql()
+  await new PostgresMigrationDriver({ sql: fake.sql, table: "Hist" })
+    .withLock(() => Promise.resolve())
+
+  assertStrictEquals(fake.reserved[0].includes("to_regclass(quote_ident($1))"), true)
+  // The name is bound, not spliced, so quoting is the server's job and injection is not
+  // a question here.
+  assertEquals(fake.boundValues[0], "Hist")
 })
 
 Deno.test("applyInTransaction runs the body and the history insert in one transaction", async () => {

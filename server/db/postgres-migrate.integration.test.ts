@@ -22,6 +22,7 @@
 
 import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
+import postgres from "postgres"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { MigrationEditedError, type MigrationReader, runMigrations } from "./migrate.ts"
 import { PostgresMigrationDriver } from "./postgres-migrate.ts"
@@ -180,6 +181,63 @@ describe("the Postgres migration runner against a real server", () => {
       const rows = await sql<{ id: number }[]>`SELECT id FROM ${sql(subject)}`
       assertStrictEquals(rows.length, 1)
     })
+  })
+
+  it("does the same for a history table whose name needs quoting", async () => {
+    // `to_regclass` parses its argument as SQL text, so a mixed-case name was folded and
+    // found nowhere, and the key fell back to `current_schema()` — which here is a schema
+    // the table is *not* in. Measured on the round 2 head, three rounds out of three: two
+    // keys, both locks held at once, and the `.no_transaction` body ran twice.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const other = uniqueIdentifier("it_other")
+    const table = `${uniqueIdentifier("it")}_MixedHist`
+    const subject = uniqueIdentifier("it_subject")
+    // `search_path` is a connection setting, and `withLock` reserves a connection of its
+    // own, so it goes in the startup parameters rather than a `SET` on one session. Its
+    // first schema is deliberately not the one the history table lives in.
+    const sql = postgres({
+      host: settings.connection.host,
+      port: settings.connection.port,
+      user: settings.connection.user,
+      pass: settings.connection.password,
+      db: settings.connection.database,
+      connection: { application_name: table, search_path: `${other},public` },
+    }) as unknown as Sql
+
+    try {
+      await sql`SET client_min_messages = warning`
+      await sql`CREATE SCHEMA ${sql(other)}`
+      await sql`CREATE TABLE public.${sql(subject)} (id serial PRIMARY KEY)`
+      // The history table exists before the race and lives in `public`, so there is
+      // something for the resolution to find.
+      await new PostgresMigrationDriver({ sql, table, schema: "public" }).createHistoryTable()
+
+      const race = migrationRace({
+        "0001_bump.no_transaction.sql": `INSERT INTO public.${subject} DEFAULT VALUES`,
+      }, 2)
+      const options = { folder: "/migrations", reader: race.reader }
+
+      const reports = await Promise.all([
+        // Reaches `public.<table>` through the search path, whose first schema is `other`.
+        runMigrations(race.gate(new PostgresMigrationDriver({ sql, table })), options),
+        runMigrations(
+          race.gate(new PostgresMigrationDriver({ sql, table, schema: "public" })),
+          options,
+        ),
+      ])
+
+      assertEquals(reports.flatMap((report) => report.applied), ["0001_bump"])
+      assertEquals(reports.flatMap((report) => report.skipped), ["0001_bump"])
+      const rows = await sql<{ id: number }[]>`SELECT id FROM public.${sql(subject)}`
+      assertStrictEquals(rows.length, 1)
+    } finally {
+      await sql`DROP TABLE IF EXISTS public.${sql(subject)}`
+      await sql`DROP TABLE IF EXISTS public.${sql(table)}`
+      await sql`DROP SCHEMA IF EXISTS ${sql(other)} CASCADE`
+      await sql.end()
+    }
   })
 
   it("refuses to run when an applied migration's file changed afterwards", async () => {

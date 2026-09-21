@@ -699,17 +699,26 @@ still harmless.
 everything — inside `MigrationDriver.withLock`. Locking one migration at a time would not help: the
 race is between the two runners' _reads_ of the history, not between their writes.
 
-| Adapter  | What the lock is                                                      | What it covers                                    |
-| -------- | --------------------------------------------------------------------- | ------------------------------------------------- |
-| Postgres | `pg_advisory_lock` on the connection `sql.reserve()` pins for the run | every runner that reaches that history table      |
-| SQLite   | a queue per handle and history table                                  | every runner sharing one `SqliteDb`, and no wider |
+| Adapter  | What the lock is                                                      | What it covers                                              |
+| -------- | --------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Postgres | `pg_advisory_lock` on the connection `sql.reserve()` pins for the run | every runner that reaches that history table once it exists |
+| SQLite   | a queue per handle and history table                                  | every runner sharing one `SqliteDb`, and no wider           |
 
 The Postgres lock is held on the connection the migrations themselves run on, because a session lock
 protects the session it was taken on and nothing else. Its key follows the table as the _server_
-resolves the name, not as the caller spelled it, so a driver given `schema: "app"` and a driver that
-reaches `app.migrations` through its search path lock each other out. It waits rather than failing,
-with no bound (#109), and a runner that dies releases it when its connection closes, so there is no
-stale lock to clear by hand.
+resolves the name — quoted, so a name with a capital letter is found rather than folded away — not
+as the caller spelled it, so a driver given `schema: "app"` and a driver that reaches an existing
+`app.migrations` through its search path lock each other out. It waits rather than failing, with no
+bound (#109), and a runner that dies releases it when its connection closes, so there is no stale
+lock to clear by hand.
+
+**Every runner of one history table must share a `search_path` or pass the same `schema`.** The key
+is resolved before the lock is taken, and on a first run there is no table to resolve, so each runner
+answers with its own `current_schema()`. Two runners whose search paths start with different schemas,
+both started before the table exists, take two keys; if the second one's existence probe then finds
+the table the first has just created, they work on one table under two locks. That is a
+misconfiguration rather than a race the library can settle, and it is the one case the resolved key
+does not cover.
 
 The SQLite queue is narrower, and the difference matters. It is held per `SqliteDb`, so two runners
 given the same handle are serialised and two handles opened on the same file are not — measured,
