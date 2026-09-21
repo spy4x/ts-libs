@@ -28,7 +28,9 @@ import {
   isHexKey,
   IV_LENGTH,
   KEY_BITS,
+  MASK_LENGTH,
   maskKey,
+  MAX_MASK_VISIBLE,
 } from "./crypto.ts"
 
 /** Obviously fake fixture — never a realistic key format. */
@@ -293,6 +295,66 @@ Deno.test("crypto: the constructor rejects empty and blank secrets without echoi
   }
 })
 
+Deno.test("crypto: an instance shows no key material when printed, listed or copied", async () => {
+  const instances: Array<[string, CryptoService]> = [
+    ["passphrase instance", new CryptoService(SECRET)],
+    ["hex-key instance", CryptoService.fromHexKey(HEX_KEY)],
+  ]
+
+  for (const [label, service] of instances) {
+    const renderings: Array<[string, string]> = [
+      ["JSON.stringify", JSON.stringify(service)],
+      ["Deno.inspect", Deno.inspect(service)],
+      ["Deno.inspect showHidden", Deno.inspect(service, { showHidden: true })],
+      ["Object.keys", JSON.stringify(Object.keys(service))],
+      ["Object.getOwnPropertyNames", JSON.stringify(Object.getOwnPropertyNames(service))],
+      ["structuredClone", JSON.stringify(structuredClone(service))],
+    ]
+
+    for (const [how, rendering] of renderings) {
+      for (const material of [SECRET, HEX_KEY, HEX_KEY.toUpperCase(), HEX_KEY.slice(0, 16)]) {
+        assertFalse(
+          rendering.toLowerCase().includes(material.toLowerCase()),
+          `${label}: ${how} exposed key material`,
+        )
+      }
+    }
+    assertEquals(Object.keys(service).length, 0, `${label}: has an enumerable own property`)
+  }
+
+  // The instances still work — the secret is reachable by the cipher and by
+  // nothing else.
+  const service = instances[1][1]
+  assertEquals(await service.decrypt(await service.encrypt("still usable")), "still usable")
+})
+
+Deno.test("crypto: a context binds a ciphertext to one place, and no other opens it", async () => {
+  const service = CryptoService.fromHexKey(HEX_KEY)
+  const context = "user-secret:v1:6:user-1:6:openai"
+  const sealed = await service.encrypt("bound payload", context)
+
+  assertEquals(await service.decrypt(sealed, context), "bound payload")
+  // A different context, and no context at all, are both tag mismatches.
+  await captureCryptoError(
+    service.decrypt(sealed, "user-secret:v1:6:user-2:6:openai"),
+    CryptoErrorCode.DecryptionFailed,
+  )
+  await captureCryptoError(service.decrypt(sealed), CryptoErrorCode.DecryptionFailed)
+  // And a blob sealed without a context does not open with one.
+  const unbound = await service.encrypt("bound payload")
+  await captureCryptoError(service.decrypt(unbound, context), CryptoErrorCode.DecryptionFailed)
+})
+
+Deno.test("crypto: a context changes the tag, never the wire format", async () => {
+  await withFixedRandomValues(FIXED_IV, async () => {
+    const bound = await cryptoService.encrypt("pinned wire format check", "a context")
+    // Base64 of the 12-byte IV is exactly the first 16 characters.
+    assertEquals(bound.slice(0, 16), PINNED_CIPHERTEXT.slice(0, 16))
+    assertEquals(bound.length, PINNED_CIPHERTEXT.length)
+    assertFalse(bound === PINNED_CIPHERTEXT)
+  })
+})
+
 Deno.test("crypto: encryption failures are typed and carry the cause", async () => {
   const service = new CryptoService(SECRET)
   const original = crypto.subtle.importKey.bind(crypto.subtle)
@@ -337,39 +399,50 @@ Deno.test("crypto: a failed key import is not cached — the next call retries",
 })
 
 Deno.test("maskKey: reveals only trailing code points and never the whole key", () => {
-  const masked = maskKey("sk-abcdefgh", 4)
-  assertEquals(masked, "*******efgh")
-  assertEquals(masked.slice(0, 7), "*******")
-  assertEquals(masked.endsWith("efgh"), true)
+  // 11 code points, so two of them may show: a quarter, rounded down.
+  assertEquals(maskKey("sk-abcdefgh", 4), `${"*".repeat(MASK_LENGTH - 2)}gh`)
 
   const key40 = "abcdefghijklmnopqrstuvwxyz0123456789abcd"
-  assertEquals(maskKey(key40).length, key40.length)
+  assertEquals(maskKey(key40), `${"*".repeat(MASK_LENGTH - MAX_MASK_VISIBLE)}abcd`)
   assertEquals(maskKey(key40).slice(-DEFAULT_MASK_VISIBLE), "abcd")
-  assertEquals(maskKey(key40), `${"*".repeat(36)}abcd`)
 
   for (const key of ["sk-abcdefgh", key40, "a", "🔐🔑", "🔐🔑🗝🔒🧪🌟🔥🧩"]) {
     assertFalse(maskKey(key) === key, `maskKey leaked the key ${JSON.stringify(key)}`)
   }
 })
 
-Deno.test("maskKey: a key no longer than visible becomes all asterisks", () => {
-  assertEquals(maskKey("abc", 4), "***")
-  assertEquals(maskKey("abcd", 4), "****")
-  assertEquals(maskKey("a", 4), "*")
-  assertEquals(maskKey("ab", 2), "**")
-  assertEquals(maskKey("abcd", 3), "*bcd")
-  assertEquals(maskKey("abcd", 0), "****")
-  assertEquals(maskKey("abcd", -1), "****")
-  assertEquals(maskKey("abcd", 2.5), "****")
-  assertEquals(maskKey("abcd", Number.NaN), "****")
+Deno.test("maskKey: every hint is the same width, so none reports its key's length", () => {
+  // Keys of very different lengths; the hints are all MASK_LENGTH wide, and that
+  // width is unrelated to any of them.
+  for (const key of ["a", "12345678", "a".repeat(40), "b".repeat(400), "🔐🔑🗝🔒"]) {
+    assertEquals(Array.from(maskKey(key)).length, MASK_LENGTH, `hint width for ${key.length}`)
+  }
+})
+
+Deno.test("maskKey: shows at most a quarter of the key and never more than the maximum", () => {
+  const stars = (shown: number): string => "*".repeat(MASK_LENGTH - shown)
+  // An 8-character key is the shortest the secret store accepts: two code
+  // points, a quarter, not the six a caller asking for 7 would otherwise get.
+  assertEquals(maskKey("12345678", 7), `${stars(2)}78`)
+  assertEquals(maskKey("12345678", 4), `${stars(2)}78`)
+  assertEquals(maskKey("12345678"), `${stars(2)}78`)
+  // The ceiling holds for a long key too: 400 code points, still four shown.
+  assertEquals(maskKey("z".repeat(400), 64), `${stars(4)}zzzz`)
+  assertEquals(maskKey("abcd", 3), `${stars(1)}d`)
+  assertEquals(maskKey("abc", 4), stars(0))
+  assertEquals(maskKey("a", 4), stars(0))
+  assertEquals(maskKey("ab", 2), stars(0))
+  assertEquals(maskKey("abcd", 0), stars(0))
+  assertEquals(maskKey("abcd", -1), stars(0))
+  assertEquals(maskKey("abcd", 2.5), stars(0))
+  assertEquals(maskKey("abcd", Number.NaN), stars(0))
   assertEquals(maskKey(""), "")
 })
 
 Deno.test("maskKey: masks by code point so a surrogate pair is never split", () => {
   const key = "🔐🔑🗝🔒🧪🌟🔥🧩"
   const masked = maskKey(key, 2)
-  assertEquals(masked, "******🔥🧩")
-  assertEquals(Array.from(masked).length, Array.from(key).length)
+  assertEquals(masked, `${"*".repeat(MASK_LENGTH - 2)}🔥🧩`)
   assertFalse(masked === key)
   // No unpaired surrogate survived masking.
   assertFalse(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(masked))
