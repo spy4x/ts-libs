@@ -154,13 +154,13 @@ not a warning to ignore.
 Two tiers, agreed in issue #74. They differ in what they are allowed to touch, not in how carefully
 they are written.
 
-|              | Unit tier                  | Integration tier                 |
-| ------------ | -------------------------- | -------------------------------- |
-| File name    | `*.test.ts`                | `*.integration.test.ts`          |
-| Task         | `deno task test`           | `deno task test:integration`     |
-| Talks to     | fakes only                 | real Postgres, MinIO and Mailpit |
-| Permissions  | `--allow-read --allow-env` | the above plus `--allow-net`     |
-| Needs Docker | no                         | yes                              |
+|              | Unit tier                  | Integration tier                                                   |
+| ------------ | -------------------------- | ------------------------------------------------------------------ |
+| File name    | `*.test.ts`                | `*.integration.test.ts`                                            |
+| Task         | `deno task test`           | `deno task test:integration`                                       |
+| Talks to     | fakes only                 | real Postgres, MinIO and Mailpit                                   |
+| Permissions  | `--allow-read --allow-env` | the above plus `--allow-net` and a narrow `--allow-write=.volumes` |
+| Needs Docker | no                         | yes                                                                |
 
 The suffix is the only thing that puts a file in a tier: `deno task test` ignores `**/*.integration.test.ts`
 and `deno task test:integration` runs nothing else. Both tiers are formatted, linted and type-checked
@@ -205,6 +205,12 @@ Three rules, and a test that breaks one breaks somebody else's run:
   message in the mailbox.
 - **Clean up in a `finally`.** Drop the schema, delete the object, delete the mail. A test that
   failed still cleans up.
+
+A test that needs a real folder on disk, not a fake filesystem, calls `createScratchFolder(prefix)`
+from `@integration-testing`: it creates `.volumes/it/<prefix>_<suffix>` and returns its absolute
+path, inside the tier's own `--allow-write=.volumes` grant. Remove it again with
+`removeScratchFolder(path)` in the test's `finally`. `Deno.makeTempDir()` stays refused in this
+tier — it writes outside `.volumes`.
 
 Addresses come from one environment variable each, defaulting to the compose file. CI sets them to
 the Woodpecker service host names.
