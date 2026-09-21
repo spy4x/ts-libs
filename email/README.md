@@ -530,13 +530,33 @@ which propagates the resolver's rejection instead of reporting it.
   review of the pull request that added it) and every control character and
   zero-width space RFC 5322 never allows in a name either (issue #106). This
   also means CR and LF are trimmed now, which is load-bearing rather than a
-  side effect: a field name may fold before its own colon
-  (`From<CRLF><TAB>: ceo@bank.example` is a _uniform_ CRLF block, so the
-  header block's line-ending refusal above accepts it), and the raw name
-  still carries the CRLF and the tab at that point. Trimming them is what
-  lets the comparison still read that line as `From` — the same thing
-  `String.trim()` did on `main` — so the growth guard refuses the extra
-  instance instead of missing it.
+  side effect: RFC 5322 does not let a field name fold before its own colon —
+  the obsolete syntax it does allow there is plain spaces and tabs,
+  `obs-from = "From" *WSP ":"` — but unfolding is defined as deleting every
+  CRLF immediately followed by WSP wherever it sits, so a reader that unfolds
+  first, as this verifier and most mail programs do, turns
+  `From<CRLF><TAB>: ceo@bank.example` (a _uniform_ CRLF block, so the header
+  block's line-ending refusal above accepts it) into `From<TAB>: ...` and
+  reads it as that same obsolete `From` form. The raw name this comparison
+  reads still carries the CRLF and the tab; trimming them is what lets it
+  still read that line as `From` — the same thing `String.trim()` did on
+  `main` — so the growth guard refuses the extra instance instead of missing
+  it.
+
+  A name's two ends are not the only place a disguising byte can sit. A byte
+  outside 0x21-0x7E placed _inside_ a name — `Fr­om:` (a soft hyphen),
+  `Fr\0om:` (a NUL) — survives the end-trim untouched and used to slip past
+  both checks (issue #113), because they bucketed a header purely by its
+  exact trimmed name and never noticed that a name they never asked about
+  could still read, to a lenient mail program, as one they did. Both checks
+  now also read the trimmed name two further ways — with every such byte
+  removed wherever it sits, and cut at the first one — and count a match on
+  either reading the same as a match on the plain trimmed name. The two
+  readings catch different shapes: stripping the byte out of `Fr­om`
+  leaves `From`, but stripping the NUL out of `From\0x` leaves `Fromx`, which
+  the second reading catches by cutting at the NUL instead. Neither reading
+  ever matches a name `h=` does not list, so a genuine, unrelated, unsigned
+  field with a stray byte in its name is untouched.
 - **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
   `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
   example record publishes a complete SubjectPublicKeyInfo. The envelope is
