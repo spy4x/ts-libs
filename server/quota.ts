@@ -489,10 +489,16 @@ export interface QuotaMeter {
    * A session principal spends twice: first from the pool every session shares
    * ({@link QuotaPolicy.sessions}), then from its own counter. Reserving two
    * counters is not one atomic step, so the order matters and is fixed — pool
-   * first, own counter second, and the pool is given back when the own counter
-   * refuses. In the window between the two the pool counts a unit that was never
-   * spent, which can refuse another session that would just have fit; the refund
-   * closes it, and no over-*spend* is possible in either order.
+   * first, own counter second, and the pool unit is given back both when the own
+   * counter refuses and when the store throws instead of answering. In the window
+   * between the two calls the pool counts a unit that was never spent, which can
+   * refuse another session that would just have fit; the refund closes that
+   * window, and no over-*spend* is possible in either order.
+   *
+   * One case the refund cannot close: a process that dies between the two calls
+   * leaves a pool unit taken until the window rolls, and a lifetime window never
+   * rolls. A budget that must survive that needs reservations stored with an
+   * expiry, which this port deliberately does not have.
    *
    * @throws {QuotaError} `InvalidCount` when `count` is not an integer between 1
    * and 1_000_000, `SessionPrincipalNotAllowed` when the policy has no
@@ -512,10 +518,25 @@ export interface QuotaMeter {
    * reserve hands out budget, and a store never lets a counter fall below zero,
    * so a double refund is absorbed rather than detected.
    *
+   * `options` mirrors {@link QuotaMeter.reserve}'s, and a caller passes the same
+   * value to both: a request that brought its own key reserved nothing, so its
+   * release must spend nothing either. Passing `hasOwnKey` on the reserve and
+   * not on the release refunds a metered unit that was never taken.
+   *
+   * A release keys by the window the clock is in **now**, not by the window the
+   * reservation was taken in. A reservation that outlives a window boundary is
+   * therefore refunded against the new window, and the old one keeps the unit
+   * until it rolls. Keep the work shorter than the window, or use a lifetime
+   * window, where this cannot happen.
+   *
    * @throws {QuotaError} `InvalidCount`, `SessionPrincipalNotAllowed` — as
    * {@link QuotaMeter.reserve}.
    */
-  release(principal: QuotaPrincipal, count?: number): Promise<QuotaState>
+  release(
+    principal: QuotaPrincipal,
+    count?: number,
+    options?: { hasOwnKey?: boolean },
+  ): Promise<QuotaState>
   /**
    * Add `count` (default 1) units of completed business work and return the
    * resulting state (source `apps/api/services/demo-usage.ts:63-80`). Call it
@@ -744,9 +765,15 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
   const sessions = policy.sessions
   const sessionPoolLimit = sessions?.poolLimit ?? 0
 
-  const keyFor = (principal: QuotaPrincipal): QuotaKey => quotaKey(principal, policy, clock())
+  // Every method reads the clock once, into `nowMs`, and derives both keys from
+  // that one reading. Two readings inside one call can fall on either side of a
+  // window boundary, and a session reservation would then take the pool unit in
+  // one window and its own unit in the next — leaving a pool unit behind that
+  // the matching release, keyed by the later window, could not give back.
+  const keyFor = (principal: QuotaPrincipal, nowMs: number): QuotaKey =>
+    quotaKey(principal, policy, nowMs)
 
-  const poolKey = (): QuotaKey => sessionPoolKey(policy, clock())
+  const poolKeyAt = (nowMs: number): QuotaKey => sessionPoolKey(policy, nowMs)
 
   const isSession = (principal: QuotaPrincipal): boolean =>
     principal.kind === QuotaPrincipalKind.Session
@@ -816,14 +843,32 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
    * numbers — the pool is a ceiling on the whole anonymous population and is
    * not a counter any single visitor can be shown as theirs.
    */
-  const readState = async (principal: QuotaPrincipal): Promise<QuotaState> => {
-    const used = await store.read(keyFor(principal))
+  const readState = async (principal: QuotaPrincipal, nowMs: number): Promise<QuotaState> => {
+    const used = await store.read(keyFor(principal, nowMs))
     let decision = decisionFor(used)
     if (decision === QuotaDecision.Allowed && isSession(principal)) {
-      const pooled = await store.read(poolKey())
+      const pooled = await store.read(poolKeyAt(nowMs))
       if (pooled >= sessionPoolLimit) decision = QuotaDecision.Exhausted
     }
     return stateOf(decision, used, true)
+  }
+
+  /**
+   * Give a pool unit back after the reservation it belonged to could not be
+   * completed, without replacing the failure the caller has to see.
+   *
+   * A refund that throws is swallowed on purpose: the store that just rejected
+   * the metered reservation is quite likely to reject this too, and the caller
+   * needs the original failure, not a second one about the cleanup. What is
+   * left behind in that case is one pool unit until the window rolls, which is
+   * the same cost as a process that dies between the two calls.
+   */
+  const releasePoolQuietly = async (nowMs: number, count: number): Promise<void> => {
+    try {
+      await store.release(poolKeyAt(nowMs), count)
+    } catch {
+      return
+    }
   }
 
   return {
@@ -831,7 +876,7 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
       assertPrincipalAllowed(principal)
       if (!meteredResourceAvailable) return unavailable()
       if (checkOptions?.hasOwnKey && bypassWithOwnKey) return ownKeyState()
-      return await readState(principal)
+      return await readState(principal, clock())
     },
 
     async reserve(principal, count = 1, reserveOptions) {
@@ -842,20 +887,32 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
       if (!meteredResourceAvailable) return unavailable()
       if (reserveOptions?.hasOwnKey && bypassWithOwnKey) return ownKeyState()
 
+      const nowMs = clock()
       const pooled = isSession(principal)
       if (pooled) {
         // Pool first. Taking the shared budget before the private one means the
         // worst case is a unit held in the pool for the length of one store
         // round trip and then refunded; the reverse order would let a rotating
         // session id spend its own fresh counter before the pool ever saw it.
-        const pool = await store.reserve(poolKey(), count, sessionPoolLimit)
+        const pool = await store.reserve(poolKeyAt(nowMs), count, sessionPoolLimit)
         if (!pool.granted) {
-          return stateOf(QuotaDecision.Exhausted, await store.read(keyFor(principal)), true)
+          return stateOf(QuotaDecision.Exhausted, await store.read(keyFor(principal, nowMs)), true)
         }
       }
 
-      const own = await store.reserve(keyFor(principal), count, limit)
-      if (!own.granted && pooled) await store.release(poolKey(), count)
+      let own: QuotaReservation
+      try {
+        own = await store.reserve(keyFor(principal, nowMs), count, limit)
+      } catch (error) {
+        // The pool unit is already taken at this point, and nothing else will
+        // ever give it back: the caller sees a failure, so it has nothing to
+        // release. A store that goes down would otherwise close the anonymous
+        // tier one unit at a time.
+        if (pooled) await releasePoolQuietly(nowMs, count)
+        throw error
+      }
+
+      if (!own.granted && pooled) await releasePoolQuietly(nowMs, count)
       return stateOf(
         own.granted ? QuotaDecision.Allowed : QuotaDecision.Exhausted,
         own.used,
@@ -863,14 +920,21 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
       )
     },
 
-    async release(principal, count = 1) {
+    async release(principal, count = 1, releaseOptions) {
       assertPrincipalAllowed(principal)
       assertCount(count)
       if (!meteredResourceAvailable) return unavailable()
-      // Both counters the reservation took, in the reverse order, so the shared
-      // one is never the one left holding a unit that no work spent.
-      if (isSession(principal)) await store.release(poolKey(), count)
-      const used = await store.release(keyFor(principal), count)
+      // The mirror of `reserve`: a bypassed request took nothing, so there is
+      // nothing to give back. Without this, the documented reserve-work-release
+      // pattern refunds a metered unit for a request that never spent one.
+      if (releaseOptions?.hasOwnKey && bypassWithOwnKey) return ownKeyState()
+
+      const nowMs = clock()
+      // The same order `reserve` takes them in. Order does not matter for a
+      // refund — neither counter can go below zero — but keeping it identical
+      // means one reading of the code covers both paths.
+      if (isSession(principal)) await store.release(poolKeyAt(nowMs), count)
+      const used = await store.release(keyFor(principal, nowMs), count)
       return stateOf(decisionFor(used), used, true)
     },
 
@@ -880,8 +944,9 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
       // Deviation from the source, which recorded unconditionally: a service
       // that cannot serve does not spend the principal's budget.
       if (!meteredResourceAvailable) return unavailable()
-      if (isSession(principal)) await store.increment(poolKey(), count)
-      const used = await store.increment(keyFor(principal), count)
+      const nowMs = clock()
+      if (isSession(principal)) await store.increment(poolKeyAt(nowMs), count)
+      const used = await store.increment(keyFor(principal, nowMs), count)
       // Above the limit on purpose: the work already happened, so it is
       // recorded and reported, never clamped (source demo-usage.ts:63-80).
       return stateOf(decisionFor(used), used, true)
@@ -890,7 +955,7 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
     async get(principal) {
       assertPrincipalAllowed(principal)
       if (!meteredResourceAvailable) return unavailable()
-      return await readState(principal)
+      return await readState(principal, clock())
     },
   }
 }

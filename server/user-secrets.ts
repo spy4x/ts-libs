@@ -352,8 +352,8 @@ function tryParseUrl(value: string): URL | null {
 }
 
 /**
- * An empty or omitted `baseUrl` is valid (the adapter falls back to its own default, as `keys.ts:98`
- * does). A non-empty one has to survive three checks, in this order:
+ * An empty or omitted `baseUrl` is valid (the adapter falls back to its own default, as
+ * `keys.ts:98` does). A non-empty one has to survive three checks, in this order:
  *
  * 1. **This module's own shape rules.** An absolute `http:`/`https:` URL, with no user name or
  *    password in it and no control characters. These run first and always, including when internal
@@ -364,9 +364,9 @@ function tryParseUrl(value: string): URL | null {
  *    addresses were explicitly allowed. It resolves the host name and refuses loopback, link-local
  *    (including the cloud metadata address `169.254.169.254`), private and other special-use
  *    destinations.
- * 3. Nothing else: the value is stored exactly as the caller wrote it. The guard's canonical form is
- *    deliberately not stored, because a stored value that differs from the one that was sent is a
- *    surprise a caller cannot see in its own request.
+ * 3. Nothing else: the value is stored exactly as the caller wrote it. The guard's canonical form
+ *    is deliberately not stored, because a stored value that differs from the one that was sent is
+ *    a surprise a caller cannot see in its own request.
  *
  * The guard's own message never travels: it names the resolver's failure and the address family it
  * disliked, which is information about this installation's network. Every rejection here is the one

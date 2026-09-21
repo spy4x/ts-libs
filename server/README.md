@@ -572,15 +572,24 @@ all ten are told they may proceed. `reserve` is the gate, because the decision a
 store operation:
 
 ```ts
-const state = await meter.reserve(principal)
+// The same options on both calls: a request that brought its own key reserved
+// nothing, and refunding it would hand out a unit that was never taken.
+const metering = { hasOwnKey: callerKey !== undefined }
+
+const state = await meter.reserve(principal, 1, metering)
 if (state.decision !== QuotaDecision.Allowed) return respond(quotaStatusCode(state.decision), state)
 try {
   await doTheWork()
 } catch (error) {
-  await meter.release(principal) // the units were not spent after all
+  await meter.release(principal, 1, metering) // the units were not spent after all
   throw error
 }
 ```
+
+A `release` keys by the window the clock is in when it runs, not the one the reservation was taken
+in. Work that outlives a window boundary is refunded against the new window, and the old one keeps
+the unit until it rolls — keep a unit of work shorter than the window, or use a lifetime window,
+where this cannot happen.
 
 **A real store makes `reserve` one statement.** The in-memory store in the tests is atomic because
 nothing is awaited between its read and its write; a SQL store buys the same property with a
@@ -615,12 +624,16 @@ createQuotaMeter({
 })
 ```
 
-A session principal spends the pool first and then its own counter; when its own counter refuses,
-the pool unit is given back. The two counters are not one atomic step, so for the length of one
-store round trip the pool can hold a unit no work spent, which can refuse another session that would
-just have fit. Nothing can over-_spend_ in either order, and the refund closes the window. A session
-id must still be issued and verified by the server — a signed cookie, a server-side session record.
-The pool bounds what an unverified id can cost; it does not make the id trustworthy.
+A session principal spends the pool first and then its own counter; the pool unit is given back both
+when the own counter refuses and when the store throws instead of answering. The two counters are
+not one atomic step, so for the length of one store round trip the pool can hold a unit no work
+spent, which can refuse another session that would just have fit. Nothing can over-_spend_ in either
+order, and the refund closes that window. What the refund cannot close is a process that dies
+between the two calls: the pool then keeps the unit until the window rolls, and a lifetime window
+never rolls. A budget that has to survive that needs reservations stored with an expiry, which this
+port deliberately does not have. A session id must still be issued and verified by the server — a
+signed cookie, a server-side session record. The pool bounds what an unverified id can cost; it does
+not make the id trustworthy.
 
 **This is not a rate limiter.** A quota counts business work in a long window, keyed by principal,
 enforced at the costly action _after_ authentication; a rate limiter counts requests per second,
@@ -635,7 +648,7 @@ smoothing is `platform/rate-limit` (issue #4), which does not live here.
 | `offer-lens/libs/encrypt/mod.ts:13-18`         | a 16-byte AES-128 key was accepted next to AES-256                    | `fromHexKey rejects a 32-hex-character AES-128 key`                                 |
 | `offer-lens/libs/scraper/mod.ts:132`           | failures classified with `msg.includes("abort")`                      | `reports DecryptionFailed for any cipher rejection, classified by type not message` |
 | `offer-lens/apps/api/routes/keys.ts:93,133`    | the provider name and a raw `err.message` were echoed into a response | `never echoes the apiKey in a validation message`                                   |
-| `offer-lens/apps/api/services/auth.ts:157-164` | the per-user quota used a different limit from the session quota      | `quota: a limit of 0 is a disabled budget, not an error` + the window tests         |
+| `offer-lens/apps/api/services/auth.ts:157-164` | the per-user quota used a different limit from the session quota      | `check: a limit of 0 is a disabled budget, not an error` + the window tests         |
 
 ### Fixes applied after extraction (issue #60)
 

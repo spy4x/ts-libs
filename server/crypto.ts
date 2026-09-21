@@ -377,7 +377,8 @@ function decodeHex(hex: string): Uint8Array<ArrayBuffer> {
  *   of the key, so an eight-character key shows two characters and not six.
  *
  * Every non-empty hint is {@link MASK_LENGTH} code points wide, so the hint no
- * longer reports the key's length — the asterisk run absorbs the difference. Masking is per code point (`Array.from`), so a surrogate pair or an
+ * longer reports the key's length — the asterisk run absorbs the difference.
+ * Masking is per code point (`Array.from`), so a surrogate pair or an
  * emoji is never split. An empty key masks to the empty string — an absent key
  * should not render as a hint that a key exists. A non-string argument is
  * refused with {@link CryptoErrorCode.InvalidSecret} rather than coerced.

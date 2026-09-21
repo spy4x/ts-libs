@@ -1154,15 +1154,22 @@ describe("baseUrl policy", () => {
     )
   })
 
-  it("refuses a base URL carrying a control character", async () => {
-    const { store } = createHarness()
-    const withNul = `https://api.example.com/v1${String.fromCodePoint(0)}`
-    const withEscape = `https://api.example.com/${String.fromCodePoint(27)}[0m`
-    for (const baseUrl of [withNul, withEscape]) {
-      await rejectionWith(
-        () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY, baseUrl }),
-        UserSecretErrorCode.InvalidBaseUrl,
-      )
+  it("refuses a base URL carrying a control character, with or without the opt-in", async () => {
+    // Both values of the option, because with the opt-in on the store's own rule is the only one
+    // left: the SSRF guard, which also refuses control characters, is not called at all then.
+    for (const allowInternalBaseUrl of [false, true]) {
+      const { store, port } = createHarness(new FakeCipher(), { allowInternalBaseUrl })
+      const host = allowInternalBaseUrl ? "http://localhost:11434" : "https://api.example.com"
+      const withNul = `${host}/v1${String.fromCodePoint(0)}`
+      const withEscape = `${host}/${String.fromCodePoint(27)}[0m`
+      const withNewline = `${host}/v1\n`
+      for (const baseUrl of [withNul, withEscape, withNewline]) {
+        await rejectionWith(
+          () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY, baseUrl }),
+          UserSecretErrorCode.InvalidBaseUrl,
+        )
+      }
+      assertEquals(port.rows.length, 0)
     }
   })
 

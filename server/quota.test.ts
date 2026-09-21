@@ -1056,3 +1056,108 @@ Deno.test("createQuotaMeter: rejects a sessions block whose poolLimit is not a c
     assertFalse(thrown.message.includes("1.5"))
   }
 })
+
+// ── reserve and release on the failure paths ───────────────────────────────
+
+/** Wraps a store and makes `reserve` reject for one principal, as a store outage would. */
+function storeFailingReserveFor(store: QuotaStore, principal: string): QuotaStore {
+  return {
+    ...store,
+    reserve: (key, count, limit) =>
+      key.principal === principal
+        ? Promise.reject(new Error("store unavailable"))
+        : store.reserve(key, count, limit),
+  }
+}
+
+Deno.test("reserve: a store that throws does not strand the session's pool unit", async () => {
+  // The pool unit is taken before the metered one. When the second call throws, the caller sees a
+  // failure and has nothing to release, so the meter has to give the pool unit back itself —
+  // otherwise every store hiccup closes the anonymous tier a little further.
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, sessions: { poolLimit: 1 } }
+  const meter = createQuotaMeter({
+    policy,
+    store: storeFailingReserveFor(store, "session:session-1"),
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+
+  const thrown = await rejectedError(() => meter.reserve(SESSION))
+  assertEquals(thrown.message, "store unavailable")
+  assertEquals(await store.read(sessionPoolKey(policy, 0)), 0)
+  // The pool is intact, so the next anonymous caller still gets its unit.
+  const survivor = createQuotaMeter({ policy, store, meteredResourceAvailable: true, now: () => 0 })
+  assertEquals((await survivor.reserve(SESSION)).decision, QuotaDecision.Allowed)
+})
+
+Deno.test("reserve: a failing refund does not replace the failure the caller must see", async () => {
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, sessions: { poolLimit: 1 } }
+  const meter = createQuotaMeter({
+    policy,
+    store: {
+      ...storeFailingReserveFor(store, "session:session-1"),
+      release: () => Promise.reject(new Error("release also unavailable")),
+    },
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+
+  const thrown = await rejectedError(() => meter.reserve(SESSION))
+  assertEquals(thrown.message, "store unavailable")
+})
+
+Deno.test("release: a request that brought its own key refunds nothing", async () => {
+  // The documented pattern passes the same options to `reserve` and `release`. A bypassed reserve
+  // spends nothing, so its release must spend nothing either — a refund here is free budget.
+  const store = inMemoryStore()
+  const meter = createQuotaMeter({
+    policy: { limit: 3 },
+    store,
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+  const key = quotaKey(USER, { limit: 3 }, 0)
+
+  await meter.reserve(USER, 2)
+  const bypassed = await meter.reserve(USER, 1, { hasOwnKey: true })
+  assertEquals(bypassed.metered, false)
+
+  const state = await meter.release(USER, 1, { hasOwnKey: true })
+  assertEquals(state.metered, false)
+  assertEquals(await store.read(key), 2)
+})
+
+Deno.test("release: bypassWithOwnKey false keeps an own-key release metered", async () => {
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 3, bypassWithOwnKey: false }
+  const meter = createQuotaMeter({ policy, store, meteredResourceAvailable: true, now: () => 0 })
+
+  await meter.reserve(USER, 2, { hasOwnKey: true })
+  const state = await meter.release(USER, 1, { hasOwnKey: true })
+  assertEquals(state.used, 1)
+  assertEquals(await store.read(quotaKey(USER, policy, 0)), 1)
+})
+
+Deno.test("reserve: one call reads the clock once, even across a window boundary", async () => {
+  // A clock that moves between the two store calls of one reservation would take the pool unit in
+  // one window and the metered unit in the next, and the refund could never reach the first.
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, windowSeconds: 60, sessions: { poolLimit: 5 } }
+  let reads = 0
+  const meter = createQuotaMeter({
+    policy,
+    store,
+    meteredResourceAvailable: true,
+    now: () => (reads++ === 0 ? 59_999 : 60_000),
+  })
+
+  await meter.reserve(SESSION)
+
+  assertEquals(await store.read(sessionPoolKey(policy, 59_999)), 1)
+  assertEquals(await store.read(quotaKey(SESSION, policy, 59_999)), 1)
+  assertEquals(await store.read(sessionPoolKey(policy, 60_000)), 0)
+  assertEquals(await store.read(quotaKey(SESSION, policy, 60_000)), 0)
+  assertEquals(reads, 1)
+})
