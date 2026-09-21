@@ -76,12 +76,20 @@ export interface RowMethods<
   /** Every row touched since `updatedAtGt`, deleted ones included; this is the sync read. */
   findChanged(updatedAtGt: Date): Promise<M[]>
   createOne(params: { data: C }): Promise<M>
-  /** Updates a live row. An empty `data` touches `updated_at` and nothing else. */
-  updateOne(params: { id: string | number; data: U }): Promise<M>
-  /** Soft delete: sets `deleted_at`. */
-  deleteOne(params: { id: string | number }): Promise<M>
-  /** Reverses {@link deleteOne}, and is the one update that reaches a deleted row. */
-  undeleteOne(params: { id: string | number }): Promise<M>
+  /**
+   * Updates a live row. An empty `data` touches `updated_at` and nothing else.
+   *
+   * `undefined` when no live row has that id — the id is unknown, or the row is
+   * soft-deleted, which this statement does not match. `undeleteOne` is the way back.
+   */
+  updateOne(params: { id: string | number; data: U }): Promise<M | undefined>
+  /** Soft delete: sets `deleted_at`. `undefined` when no row has that id. */
+  deleteOne(params: { id: string | number }): Promise<M | undefined>
+  /**
+   * Reverses {@link deleteOne}, and is the one update that reaches a deleted row.
+   * `undefined` when no row has that id.
+   */
+  undeleteOne(params: { id: string | number }): Promise<M | undefined>
 }
 
 export class DbServiceBase {
@@ -239,10 +247,11 @@ export class DbServiceBase {
     return created
   }
 
+  /** The updated row, or `undefined` when the statement matched none. */
   async updateOne<T extends postgres.Row>(
     cache: RowCache<T>,
     command: postgres.PendingQuery<T[]>,
-  ): Promise<T> {
+  ): Promise<T | undefined> {
     const updated = (await command)[0]
     if (updated) {
       await this.setCache(cache, updated["id"] as string | number, updated)
@@ -250,10 +259,11 @@ export class DbServiceBase {
     return updated
   }
 
+  /** The deleted row, or `undefined` when the statement matched none. */
   async deleteOne<T extends postgres.Row>(
     cache: RowCache<T>,
     command: postgres.PendingQuery<T[]>,
-  ): Promise<T> {
+  ): Promise<T | undefined> {
     const deleted = (await command)[0]
     if (deleted) {
       await this.deleteCache(cache, deleted["id"] as string | number)
@@ -314,7 +324,7 @@ export class DbServiceBase {
             RETURNING *
           `,
         ),
-      updateOne: (params: { id: string | number; data: U }): Promise<M> => {
+      updateOne: (params: { id: string | number; data: U }): Promise<M | undefined> => {
         const data = this.sanitize(params.data)
         // `sql({})` renders an empty column list, so the general form would produce
         // `SET updated_at = NOW(), WHERE id = $1` — a syntax error from the server. An
@@ -335,7 +345,7 @@ export class DbServiceBase {
           `
         return this.updateOne<M>(cache, command)
       },
-      deleteOne: ({ id }: { id: string | number }): Promise<M> =>
+      deleteOne: ({ id }: { id: string | number }): Promise<M | undefined> =>
         this.deleteOne<M>(
           cache,
           this.sql<M[]>`
@@ -346,7 +356,7 @@ export class DbServiceBase {
           `,
         ),
       // Its own statement, and the one update that must reach a deleted row.
-      undeleteOne: ({ id }: { id: string | number }): Promise<M> =>
+      undeleteOne: ({ id }: { id: string | number }): Promise<M | undefined> =>
         this.updateOne<M>(
           cache,
           this.sql<M[]>`

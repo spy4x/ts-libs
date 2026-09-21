@@ -20,7 +20,7 @@
  * `finally`. Nothing shared is touched.
  */
 
-import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert"
+import { assertEquals, assertExists, assertRejects, assertStrictEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import type { RowCache, Sql } from "./ports.ts"
@@ -180,6 +180,7 @@ describe("DbServiceBase against a real server", () => {
       // object, and the server answers `42601: syntax error at or near "WHERE"`.
       const touched = await notes.updateOne({ id: 1, data: {} })
 
+      assertExists(touched)
       assertStrictEquals(touched.id, 1)
       assertStrictEquals(touched.updated_at > created.updated_at, true)
     })
@@ -200,11 +201,11 @@ describe("DbServiceBase against a real server", () => {
       const audited = await notes.findOne({ id: 1, includeDeleted: true })
       assertStrictEquals(audited?.body, "live")
       // An update must match nothing, so it cannot hand a deleted row to a cache as if
-      // it were live.
-      const updated: Note | undefined = await notes.updateOne({ id: 1, data: { body: "changed" } })
-      assertStrictEquals(updated, undefined)
+      // it were live. No hand-written wider type here: `RowMethods.updateOne` says so.
+      assertStrictEquals(await notes.updateOne({ id: 1, data: { body: "changed" } }), undefined)
       // `undeleteOne` keeps its own statement and is the one update that reaches it.
-      assertStrictEquals((await notes.undeleteOne({ id: 1 })).body, "live")
+      const revivedRow = await notes.undeleteOne({ id: 1 })
+      assertStrictEquals(revivedRow?.body, "live")
       const revived = await notes.findOne({ id: 1 })
       assertStrictEquals(revived?.body, "live")
     })
