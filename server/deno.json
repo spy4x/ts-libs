@@ -2,7 +2,6 @@
   "name": "@ts-libs/server",
   "version": "0.1.0",
   "exports": {
-    ".": "./http/bounded-body.ts",
     "./http/bounded-body": "./http/bounded-body.ts",
     "./http/cors": "./http/cors.ts",
     "./http/bearer-auth": "./http/bearer-auth.ts",
