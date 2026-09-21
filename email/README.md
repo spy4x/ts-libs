@@ -57,13 +57,13 @@ point.
 
 ## Exports
 
-| Specifier                | Contents                                                      |
-| ------------------------ | ------------------------------------------------------------- |
-| `@ts-libs/email/smtp`    | `createSmtpSender`, `SmtpOptions`, the transport factory seam |
-| `@ts-libs/email/sender`  | `EmailSender`, `SendResult`, `createConsoleSender`            |
-| `@ts-libs/email/message` | `EmailMessage`, validation, timezone framing, ICS attachment  |
-| `@ts-libs/email/html`    | `escapeHtml`, `htmlWrap`                                      |
-| `@ts-libs/email/address` | mailbox parsing, formatting and list deduplication            |
+| Specifier                | Contents                                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `@ts-libs/email/smtp`    | `createSmtpSender`, `SmtpOptions`, the transport factory seam                                   |
+| `@ts-libs/email/sender`  | `EmailSender`, `SendResult`, `createConsoleSender`                                              |
+| `@ts-libs/email/message` | `EmailMessage`, validation, timezone framing, ICS attachment                                    |
+| `@ts-libs/email/html`    | `escapeHtml`, `htmlWrap`, `HtmlShellTheme`, `DEFAULT_HTML_SHELL_THEME`, `DARK_HTML_SHELL_THEME` |
+| `@ts-libs/email/address` | mailbox parsing, formatting and list deduplication                                              |
 
 ## The `EmailSender` port
 
@@ -185,6 +185,19 @@ the characters that need escaping are not the ones that make a scheme dangerous 
 and the value comes from a caller's configuration rather than from a recipient, so
 a wrong one is a bug to surface rather than input to sanitise.
 
+`htmlWrap` defaults to a neutral light shell (`DEFAULT_HTML_SHELL_THEME`) —
+white background, dark text, a plain blue link — rather than the dark navy
+body with an orange link it shipped with before `theme` existed. **This is a
+breaking change for any caller that already copied that dark look**, though
+nothing in this repository does: pass `theme: DARK_HTML_SHELL_THEME` to keep
+it exactly. `theme` accepts a partial override (`{ background: "#000000" }`
+keeps the rest of the default); every colour must be a `#rgb`/`#rrggbb` hex
+value or `htmlWrap` throws, because a colour lands inside a double-quoted
+`style` attribute and an unvalidated one could close it early. `maxWidth`
+(default `480`) is the letter column's width in pixels, and `signaturePrefix`
+(default `"— Sent by"`) is the footer wording before the brand — pass `null`
+to drop the footer line while keeping the header brand block.
+
 ## Per-recipient timezone framing
 
 `frameWallClockLong(date, time, sourceTz, recipientTz?)` turns a wall clock
@@ -237,6 +250,14 @@ const live = await verifyDkim(rawMessage)
 if (!live.valid) console.warn(live.reason)
 ```
 
+`rawMessage` may be a `string` or a `Uint8Array`. DKIM is defined over octets
+(RFC 6376 §2.4), and a `string` cannot represent 8-bit content that is not
+valid UTF-8 — decoding it as UTF-8 rewrites the bytes, and decoding it as
+`latin1` actually runs windows-1252 and remaps 0x80-0x9F. Pass the raw bytes
+for mail that might not be UTF-8; a `string` keeps working exactly as before,
+UTF-8 encoded first. `maxMessageLength` and the message-too-large reason both
+count octets, not UTF-16 code units, either way.
+
 ## What this verifies
 
 Given a raw RFC 5322 message and a DKIM public key, `verifyDkim` answers one
@@ -246,7 +267,10 @@ question: **does this message's `DKIM-Signature` verify against this key?**
 - `simple` and `relaxed` canonicalization, for headers and for bodies
   (`canonicalizeHeader`, `canonicalizeBody`).
 - The body hash (`bh=`), computed over the canonicalized body truncated to the
-  `l=` bound when one is present, as RFC 6376 §3.7 step 1 requires.
+  `l=` bound when one is present, as RFC 6376 §3.7 step 1 requires. Canonicalized
+  and hashed at most once per distinct `(c=, l=)` combination for the whole
+  message, however many `DKIM-Signature` fields share it (§6.1 verifies every
+  field independently, and most real mail signs the body once).
 - `rsa-sha256` (RSASSA-PKCS1-v1_5) and `ed25519-sha256`, the latter signing
   `SHA-256` of the canonical input as RFC 8463 §3 requires.
 - `parseDkimPublicKey` from a DNS TXT record, including revoked keys (`p=`).
@@ -273,7 +297,14 @@ question: **does this message's `DKIM-Signature` verify against this key?**
   carriage return that no line feed follows is refused before a single field is
   parsed, and so is a block that ends some lines with CRLF and others with a bare
   LF. A block that uses a bare LF throughout keeps verifying: that is what mailbox
-  storage produces, and RFC 6376's own example message is stored that way.
+  storage produces, and RFC 6376's own example message is stored that way. **The
+  body's line endings are a separate, looser rule:** only CRLF and a bare LF end a
+  body line; a lone CR there is an ordinary octet, hashed as one, matching RFC
+  6376 §3.4.3/§3.4.4 and how dkimpy and OpenDKIM canonicalize a body. A CR in the
+  body cannot hide a header field, so the header block's stricter refusal has no
+  reason to apply there — treating a lone CR as a line ending in the body used to
+  disagree with every RFC-faithful signer on a body that legitimately carries one
+  and reported it as tampered with (issue #94).
 - **That the message did not grow an instance of a header the signature covers**
   (§5.4.2). A signer lists a name in `h=` as many times as the message carried it,
   so an instance left over after the pairing means the message gained one after
@@ -333,7 +364,7 @@ interface DnsTxtResolver {
 interface DkimVerifyOptions {
   now?: bigint
   resolver?: DnsTxtResolver
-  maxMessageLength?: number // default DEFAULT_MAX_MESSAGE_LENGTH, 10 MiB
+  maxMessageLength?: number // default DEFAULT_MAX_MESSAGE_LENGTH, 10 MiB of octets
   maxSignatures?: number // default DEFAULT_MAX_SIGNATURES, 10
   maxHeaderFields?: number // default DEFAULT_MAX_HEADER_FIELDS, 1000
   maxSignedHeaderNames?: number // default DEFAULT_MAX_SIGNED_HEADER_NAMES, 200
@@ -430,16 +461,19 @@ which propagates the resolver's rejection instead of reporting it.
   §3.4.2 unfolds by removing the CRLF and then compressing the WSP that followed
   it, so `one<CRLF><HTAB>two` canonicalizes to `one two` and `a<LF>b` to `ab`.
   A bare LF inside a value is not a line ending (RFC 5322 §2.3): `simple` keeps
-  it byte for byte, `relaxed` deletes it as part of unfolding. A **non-trailing**
-  lone CR likewise survives both modes: §3.4.2 unfolds CRLF only, and the relaxed
-  path trims the ends of the value, not its interior. That trim **is**
-  `String.trim()` (`canonicalizeHeader`), so a _trailing_ lone CR is kept by
-  `simple` and stripped by `relaxed` — a leading or trailing CR is whitespace to
-  `trim()`, an interior one is not. (An earlier revision of this file claimed the
-  relaxed path avoided `trim()` to preserve a lone CR; it does not, and the tests
-  pin the interior-CR expectation rather than that rationale.) Body handling still
-  normalises bare LF to CRLF, because mailbox storage rewrites line endings and
-  nothing else references the body's original bytes.
+  it byte for byte, `relaxed` deletes it as part of unfolding. A lone CR
+  survives both modes, at the ends of the value as much as in the middle:
+  §3.4.2 unfolds CRLF only, and the relaxed path trims the ends of the value
+  with WSP only — SP and HTAB, RFC 5234's own definition, via a hand-written
+  `trimWsp` rather than `String.trim()`. An earlier revision used `trim()`
+  there, for which CR is whitespace, so a leading or trailing lone CR was
+  stripped by `relaxed` and kept by `simple`; that asymmetry is gone. It
+  mattered once this file could handle raw octets rather than decoded text
+  (see `verifyDkim`'s `Uint8Array` support): `trim()` also strips U+00A0, so a
+  raw UTF-8 value ending in the byte 0xA0 — the second byte of "à" (0xC3 0xA0)
+  — would have lost that byte under relaxed canonicalization. Body handling no
+  longer normalises a lone CR at all — see the body line-endings paragraph
+  above.
 - **A header block with a lone carriage return is refused outright.** This is the
   first finding of issue #88, and what it costs to get wrong is a forged sender.
   Readers do not agree on whether a bare CR ends a line: this verifier keeps the
@@ -480,24 +514,53 @@ which propagates the resolver's rejection instead of reporting it.
   instances selected are still the ones the signer signed, and altering a signed
   `Received:` still fails the signature. The list is exported so the choice is
   visible, and a caller who disagrees can see exactly what it admits.
+
+  Both this check and the unsigned-`From` check compare a header **name**
+  loosely on purpose: every octet outside printable ASCII (0x21-0x7E) is
+  trimmed from both ends of the name before it is compared (`trimHeaderName`),
+  so `From\x0B:` and `From` padded with a no-break space, a byte order mark, a
+  zero-width space or a C0 control character all still count as `from`. A
+  client that reads the field the same loose way would display the forged
+  address, so refusing to match it here would be the unsafe choice. RFC 5322's
+  `ftext` already restricts a genuine field name to this same range, so
+  trimming anything outside it can only make a disguised name easier to
+  recognise, never harder — an earlier revision trimmed a narrower, explicit
+  byte set copied from what `String.prototype.trim()` stripped, which missed
+  several of `trim()`'s own Unicode whitespace characters (found in round 1
+  review of the pull request that added it) and every control character and
+  zero-width space RFC 5322 never allows in a name either (issue #106). This
+  also means CR and LF are trimmed now, which is load-bearing rather than a
+  side effect: a field name may fold before its own colon
+  (`From<CRLF><TAB>: ceo@bank.example` is a _uniform_ CRLF block, so the
+  header block's line-ending refusal above accepts it), and the raw name
+  still carries the CRLF and the tab at that point. Trimming them is what
+  lets the comparison still read that line as `From` — the same thing
+  `String.trim()` did on `main` — so the growth guard refuses the extra
+  instance instead of missing it.
 - **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
   `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
   example record publishes a complete SubjectPublicKeyInfo. The envelope is
   detected, not guessed. `DkimPublicKey.keyBytes` therefore holds whatever the
   record carried — SPKI bytes for an SPKI `p=` — rather than a normalised form.
 - **The work is bounded, because the sender is not trusted.** Four limits, each
-  with a `reason` that names it: a message longer than `maxMessageLength` (10 MiB)
-  is refused before it is canonicalized, a message with more than
+  with a `reason` that names it: a message longer than `maxMessageLength` (10 MiB
+  of octets) is refused before it is canonicalized, a message with more than
   `maxHeaderFields` (1 000) fields is refused before any signature is looked at,
   `maxSignedHeaderNames` (200) bounds the names one `h=` may list, and at most
   `maxSignatures` (10) `DKIM-Signature` fields are verified — §6.1 allows that
   one, and each extra field otherwise buys a key lookup and a public-key
   operation. Inside those limits every pass over the message is linear: twice the
-  message costs about twice the time. Two things used to make it quadratic — four
-  times the time for twice the input, so a message an attacker sizes freezes the
-  process — and both are gone. Two backtracking regular expressions did it to the
-  body, and the selection of signed headers did it to the header block, by walking
-  the whole `h=` list again for every distinct header name in the message.
+  message costs about twice the time. Three things used to cost more than that,
+  and all three are gone. Two backtracking regular expressions made the body
+  canonicalizer quadratic — four times the time for twice the input, so a message
+  an attacker sizes froze the process. The selection of signed headers did the
+  same to the header block, by walking the whole `h=` list again for every
+  distinct header name in the message. And the body itself used to be
+  canonicalized and hashed once per `DKIM-Signature` field rather than once per
+  distinct `(c=, l=)` combination, so a message with several signatures — up to
+  `maxSignatures` of them — multiplied the one linear pass that scales with the
+  body's size by however many fields shared it, even though real mail signs the
+  body once (issue #88's third finding).
 - **Several signatures are all verified, and the first valid one is the verdict.**
   §6.1 treats each field independently. A broken signature above a good one no
   longer condemns the message, and one an attacker prepends no longer decides it —

@@ -20,7 +20,14 @@ export {
   type ParsedRecipients,
 } from "./address.ts"
 
-export { escapeHtml, type HtmlShellOptions, htmlWrap } from "./html.ts"
+export {
+  DARK_HTML_SHELL_THEME,
+  DEFAULT_HTML_SHELL_THEME,
+  escapeHtml,
+  type HtmlShellOptions,
+  type HtmlShellTheme,
+  htmlWrap,
+} from "./html.ts"
 
 export {
   assertSendableMessage,

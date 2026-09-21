@@ -5,7 +5,7 @@
 // `escapeHtml` at the interpolation, and the shell never escapes its body.
 
 import { assertEquals, assertFalse, assertStringIncludes, assertThrows } from "@std/assert"
-import { escapeHtml, htmlWrap } from "./html.ts"
+import { DARK_HTML_SHELL_THEME, DEFAULT_HTML_SHELL_THEME, escapeHtml, htmlWrap } from "./html.ts"
 
 Deno.test("escapes the five HTML metacharacters", () => {
   assertEquals(escapeHtml("<"), "&lt;")
@@ -130,4 +130,128 @@ Deno.test("links a brand to the schemes a mail client does follow", () => {
     const html = htmlWrap({ body: "<p>hi</p>", brand: "Ben & Co", brandUrl })
     assertStringIncludes(html, `<a href="${brandUrl}"`)
   }
+})
+
+// --- issue #88's fifth finding: the shell had one app's theme baked in ------
+
+Deno.test("defaults to a neutral light shell, not the old dark theme", () => {
+  const html = htmlWrap({ body: "<p>hi</p>" })
+  assertStringIncludes(html, `background:${DEFAULT_HTML_SHELL_THEME.background}`)
+  assertStringIncludes(html, `color:${DEFAULT_HTML_SHELL_THEME.color}`)
+  // The dark navy background and the orange link colour this function used to
+  // hard-code must be gone from the default output.
+  assertFalse(html.includes("#0f172a"))
+  assertFalse(html.includes("#f97316"))
+})
+
+Deno.test("restores the pre-theme look exactly via DARK_HTML_SHELL_THEME", () => {
+  const html = htmlWrap({
+    body: "<p>hi</p>",
+    brand: "Ben & Co",
+    brandUrl: "https://example.com",
+    theme: DARK_HTML_SHELL_THEME,
+  })
+  assertStringIncludes(html, "background:#0f172a;color:#e2e8f0")
+  assertStringIncludes(html, "color:#f97316;font-weight:600")
+})
+
+Deno.test("applies a partial theme over the defaults", () => {
+  const html = htmlWrap({ body: "<p>hi</p>", theme: { background: "#000000" } })
+  assertStringIncludes(html, `background:#000000;color:${DEFAULT_HTML_SHELL_THEME.color}`)
+})
+
+Deno.test("refuses a theme colour that is not a plain hex value", () => {
+  // A value that could close the style attribute early and inject markup of
+  // its own — a caller's configuration mistake, surfaced rather than emitted.
+  assertThrows(
+    () => htmlWrap({ body: "<p>hi</p>", theme: { background: '"onmouseover="alert(1)' } }),
+    TypeError,
+    "theme.background must be a #rgb or #rrggbb hex colour",
+  )
+  assertThrows(
+    () => htmlWrap({ body: "<p>hi</p>", theme: { linkColor: "red" } }),
+    TypeError,
+    "theme.linkColor must be a #rgb or #rrggbb hex colour",
+  )
+})
+
+// Every one of the four theme fields lands inside a double-quoted `style`
+// attribute, and each has its own `assertHexColor` call in `htmlWrap` — a
+// review round 1 finding was that deleting only the `mutedColor` (or, by the
+// same reading, the `color`) call left the suite green, because no test asked
+// for either. This loop asks for all four, plus three shapes that a narrower
+// pattern (no `^`, no `$`) would let through: appended markup, a leading
+// character before the `#`, and a trailing newline.
+const THEME_FIELDS = ["background", "color", "mutedColor", "linkColor"] as const
+const REFUSED_COLOURS = ['#fff"><script>', "x#fff", "#fff\n"]
+
+for (const field of THEME_FIELDS) {
+  for (const value of REFUSED_COLOURS) {
+    Deno.test(`refuses theme.${field} = ${JSON.stringify(value)}`, () => {
+      assertThrows(
+        () => htmlWrap({ body: "<p>hi</p>", theme: { [field]: value } }),
+        TypeError,
+        `theme.${field} must be a #rgb or #rrggbb hex colour`,
+      )
+    })
+  }
+}
+
+Deno.test("widens or narrows the letter column via maxWidth", () => {
+  const html = htmlWrap({ body: "<p>hi</p>", maxWidth: 600 })
+  assertStringIncludes(html, "max-width:600px")
+  assertFalse(html.includes("max-width:480px"))
+})
+
+Deno.test("defaults the letter column to 480px", () => {
+  assertStringIncludes(htmlWrap({ body: "<p>hi</p>" }), "max-width:480px")
+})
+
+// The type says `number`, but nothing stops an untyped caller (plain JS, or a
+// `.ts` file that casts around the type) from reaching htmlWrap with
+// something else, and maxWidth lands unquoted inside a style attribute with
+// no escaping possible for a string value.
+Deno.test("refuses a maxWidth that would break out of the style attribute or inject CSS", () => {
+  for (
+    const maxWidth of [
+      '480px"><script>alert(1)</script><i x="',
+      "480px;background:url(javascript:alert(1))",
+    ] as const
+  ) {
+    assertThrows(
+      // deno-lint-ignore no-explicit-any
+      () => htmlWrap({ body: "<p>hi</p>", maxWidth: maxWidth as any }),
+      TypeError,
+      "maxWidth must be a finite positive number",
+      `maxWidth ${JSON.stringify(maxWidth)} must be refused`,
+    )
+  }
+})
+
+Deno.test("refuses a non-finite or non-positive maxWidth", () => {
+  for (const maxWidth of [NaN, Infinity, -Infinity, -5, 0]) {
+    assertThrows(
+      () => htmlWrap({ body: "<p>hi</p>", maxWidth }),
+      TypeError,
+      "maxWidth must be a finite positive number",
+      `maxWidth ${maxWidth} must be refused`,
+    )
+  }
+})
+
+Deno.test("overrides the footer signature's wording via signaturePrefix", () => {
+  const html = htmlWrap({ body: "<p>hi</p>", brand: "Ben & Co", signaturePrefix: "Courtesy of" })
+  assertStringIncludes(html, "Courtesy of Ben &amp; Co</p>")
+  assertFalse(html.includes("Sent by"))
+})
+
+Deno.test("escapes a caller-supplied signaturePrefix", () => {
+  const html = htmlWrap({ body: "<p>hi</p>", brand: "Ben & Co", signaturePrefix: "<b>Sent</b> by" })
+  assertStringIncludes(html, "&lt;b&gt;Sent&lt;/b&gt; by Ben &amp; Co</p>")
+})
+
+Deno.test("omits the signature line but keeps the header brand when signaturePrefix is null", () => {
+  const html = htmlWrap({ body: "<p>hi</p>", brand: "Ben & Co", signaturePrefix: null })
+  assertFalse(html.includes("Sent by"))
+  assertStringIncludes(html, '<div style="margin-bottom:16px">Ben &amp; Co</div>')
 })

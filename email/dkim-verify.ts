@@ -4,9 +4,13 @@
 // whether the message's DKIM-Signature verifies against that key. It fetches
 // nothing on its own unless a caller injects a DNS TXT resolver.
 //
-// Zero imports on purpose — Web Crypto (`crypto.subtle`) and platform
-// primitives (`atob`/`btoa`, `TextEncoder`, `Deno.resolveDns`) only. Anything
-// this file "needs" from `@std/*` is a smell, not a dependency to add.
+// Zero external imports on purpose — Web Crypto (`crypto.subtle`) and
+// platform primitives (`atob`/`btoa`, `TextEncoder`, `Deno.resolveDns`) only.
+// Anything this file "needs" from `@std/*` is a smell, not a dependency to
+// add. The one import below, of `./dkim-body-hash.ts`, is a sibling module of
+// this same package rather than a dependency — see that file's module note.
+
+import { type BodyHashCache, createBodyHashCache } from "./dkim-body-hash.ts"
 
 /** Which canonicalization RFC 6376 §3.4 applies to a header or a body. */
 export type Canonicalization = "simple" | "relaxed"
@@ -107,7 +111,12 @@ export interface DkimVerificationResult {
   parsed?: DkimSignatureHeader
   /** The recomputed body hash, for diagnostics. */
   computedBodyHash?: string
-  /** First 240 characters of the recomputed signature input, for diagnostics. */
+  /**
+   * First 240 octets of the recomputed signature input, for diagnostics — one
+   * character of this string per octet (see the module note on `verifyDkim`),
+   * so non-ASCII text shows as its raw UTF-8 bytes rather than as the
+   * characters they encode.
+   */
   computedInputPreview?: string
   /** How much of the body the signature covers; present once the body was hashed. */
   bodyCoverage?: DkimBodyCoverage
@@ -133,10 +142,12 @@ export interface DkimVerifyOptions {
   /** DNS TXT resolver used to fetch the public key when none is supplied. */
   resolver?: DnsTxtResolver
   /**
-   * Longest message this verifier will look at, in characters. Defaults to
+   * Longest message this verifier will look at, in octets. Defaults to
    * {@link DEFAULT_MAX_MESSAGE_LENGTH}. A longer message is refused before it is
    * canonicalized: every pass here is linear, and the cap is what bounds the work
-   * an unauthenticated sender can ask for.
+   * an unauthenticated sender can ask for. Counted in octets, not in UTF-16 code
+   * units, whether `rawMessage` was passed as a `string` or a `Uint8Array` — RFC
+   * 6376 sizes a message in octets, and a string's `.length` is code units.
    */
   maxMessageLength?: number
   /**
@@ -168,8 +179,8 @@ export interface DkimVerifyOptions {
 export const DEFAULT_MAX_SIGNATURES = 10
 
 /**
- * Default {@link DkimVerifyOptions.maxMessageLength}: 10 MiB of characters, which
- * is above the message size limit relays usually impose and far below anything
+ * Default {@link DkimVerifyOptions.maxMessageLength}: 10 MiB of octets, which is
+ * above the message size limit relays usually impose and far below anything
  * that takes a noticeable time to canonicalize.
  */
 export const DEFAULT_MAX_MESSAGE_LENGTH = 10 * 1024 * 1024
@@ -497,9 +508,26 @@ export function canonicalizeHeader(
   // every fold (CRLF *and* any bare LF) with nothing in its place, compress WSP
   // runs to one SP, strip WSP from both ends of the value. §3.4.2 step 5 puts no
   // SP after the colon either — Example 1 requires `a:X`, not `a: X`.
+  //
+  // The trim is `trimWsp`, not `String.trim()`: WSP (RFC 5234) is SP and HTAB
+  // only, and `trim()` also strips CR, LF, vertical tab, form feed and U+00A0.
+  // Once this file's input can be raw octets rather than decoded text (see the
+  // module note on {@link verifyDkim}), a header value legitimately ends in the
+  // byte 0xA0 — the second byte of a UTF-8 "à" (0xC3 0xA0) split across a fold,
+  // for instance — and `trim()` stripped exactly that byte, hashing one octet
+  // fewer than the signer did and rejecting a genuine non-ASCII header.
   const unfolded = value.replace(/\r?\n/g, "")
-  const collapsed = unfolded.replace(/[ \t]+/g, " ").trim()
-  return `${name.toLowerCase().trim()}:${collapsed}\r\n`
+  const collapsed = trimWsp(unfolded.replace(/[ \t]+/g, " "))
+  return `${trimWsp(name).toLowerCase()}:${collapsed}\r\n`
+}
+
+/** Delete SP and HTAB — RFC 5234's `WSP`, and nothing else — from both ends. */
+function trimWsp(value: string): string {
+  let start = 0
+  let end = value.length
+  while (start < end && isWsp(value.charCodeAt(start))) start++
+  while (end > start && isWsp(value.charCodeAt(end - 1))) end--
+  return value.slice(start, end)
 }
 
 /**
@@ -540,20 +568,33 @@ export function canonicalizeBody(body: string, algorithm: Canonicalization): str
 /**
  * Split a body into lines, dropping the line endings.
  *
- * CRLF, a bare LF and a lone CR each end a line, which is how the canonical body
- * comes out CRLF-terminated whatever the message's storage did to it. The last
- * element is what followed the final line ending — the empty string when the body
- * ends with one.
+ * Only CRLF and a bare LF end a line here. A lone CR — one not immediately
+ * followed by LF — is an ordinary octet of whatever line it sits in, per RFC
+ * 6376 §3.4.3/§3.4.4: neither section lists CR among what a body
+ * canonicalizer treats specially, and dkimpy and OpenDKIM read it the same
+ * way. An earlier revision of this file treated a lone CR as a line ending
+ * too, rewriting it to CRLF — which disagreed with every RFC-faithful signer
+ * on a body that legitimately carries one (classic-Mac text pasted inline, an
+ * 8-bit part that was never quoted-printable encoded) and reported it as
+ * tampered with (issue #94). The last element is what followed the final line
+ * ending — the empty string when the body ends with one, and the whole
+ * remaining text when it does not end with one at all.
  */
 function splitBodyLines(body: string): string[] {
   const lines: string[] = []
   let start = 0
   for (let i = 0; i < body.length; i++) {
     const code = body.charCodeAt(i)
-    if (code !== 0x0d && code !== 0x0a) continue
-    lines.push(body.slice(start, i))
-    if (code === 0x0d && body.charCodeAt(i + 1) === 0x0a) i++
-    start = i + 1
+    if (code === 0x0d && body.charCodeAt(i + 1) === 0x0a) {
+      lines.push(body.slice(start, i))
+      i++ // the LF is part of this ending too; do not let it start a new line
+      start = i + 1
+      continue
+    }
+    if (code === 0x0a) {
+      lines.push(body.slice(start, i))
+      start = i + 1
+    }
   }
   lines.push(body.slice(start))
   return lines
@@ -934,6 +975,68 @@ function isTransitAddedHeaderName(name: string): boolean {
 }
 
 /**
+ * True for an octet **outside** RFC 5322's printable-ASCII range, 0x21-0x7E —
+ * the same range `ftext` restricts a genuine field name to (`HEADER_NAME_RE`,
+ * minus the colon it also excludes). {@link trimHeaderName} strips every
+ * octet this returns `true` for from a name's ends, which is why the two
+ * ranges do not need to match exactly: a byte this returns `true` for is
+ * never part of a name a conformant sender would write, so stripping it can
+ * only ever make a forged line's name easier to recognise, never harder.
+ */
+function isHeaderNamePadding(code: number): boolean {
+  return code < 0x21 || code > 0x7e
+}
+
+/**
+ * Trim every octet outside printable ASCII (0x21-0x7E) from both ends of a
+ * header **name**, before {@link selectSignedHeaders} and
+ * {@link refuseSignatureHeader} compare it against a name in `h=`.
+ *
+ * The previous version of this comparison trimmed an explicit byte set
+ * — space, tab, vertical tab, form feed and U+00A0 — copied from what
+ * `String.prototype.trim()` stripped on `main` before this file could handle
+ * raw octets. That set was narrower than `trim()`'s own Unicode whitespace
+ * list, which also strips U+FEFF, U+1680, U+2000-U+200A, U+2028, U+2029,
+ * U+202F, U+205F and U+3000 — each several bytes in UTF-8, none in the old
+ * set — so a genuine signed mail with, for instance, `From` followed by
+ * U+00A0 (a no-break space, still one of `trim()`'s own characters) and then
+ * the colon, placed above it, verified here and was refused on `main`: the
+ * guard's name match had shrunk, the opposite of what widening it to handle
+ * bytes was supposed to do. Review of this pull request found it does not go
+ * far enough either: a control character (U+0000-U+001F, U+007F), U+0085 or a
+ * zero-width space (U+200B) before the colon verifies on `main` too (issue
+ * #106) — `trim()` never stripped any of those, so the byte set inherited
+ * from it never could either.
+ *
+ * Stripping everything *outside* printable ASCII, rather than enumerating
+ * more characters to strip, closes both at once and cannot regress again the
+ * same way: RFC 5322's `ftext` restricts a genuine field name to exactly this
+ * range already (`HEADER_NAME_RE`), so every character this now strips is one
+ * no conformant sender's field name would contain in the first place, and
+ * removing it can only ever make a disguised name easier to recognise as the
+ * name it is disguising.
+ *
+ * This also means CR and LF are stripped now, unlike the narrower set before
+ * — and that is load-bearing, not incidental. A field name may fold before
+ * its own colon: `From<CRLF><TAB>: ceo@bank.example` is a *uniform* CRLF
+ * block, so {@link refuseHeaderLineEndings} accepts it, and the raw name
+ * substring `selectSignedHeaders` reads still carries the CRLF and the tab.
+ * Stripping them is what lets the comparison still read that line as `From`
+ * — the same thing `String.trim()` did on `main` — so the growth guard in
+ * {@link selectSignedHeaders} refuses the extra instance instead of missing
+ * it. Leaving CR and LF in the padding set is therefore not a safe
+ * simplification: a version of this file that stopped trimming them let
+ * `From<CRLF><TAB>: ceo@bank.example` verify, which `main` refuses.
+ */
+function trimHeaderName(value: string): string {
+  let start = 0
+  let end = value.length
+  while (start < end && isHeaderNamePadding(value.charCodeAt(start))) start++
+  while (end > start && isHeaderNamePadding(value.charCodeAt(end - 1))) end--
+  return value.slice(start, end)
+}
+
+/**
  * Select the raw header lines named by an `h=` list.
  *
  * RFC 6376 §5.4.2: a signer signs repeated instances "in order from the bottom
@@ -958,7 +1061,7 @@ function selectSignedHeaders(
   headers.forEach((header, index) => {
     const colon = header.indexOf(":")
     if (colon === -1) return
-    const name = header.slice(0, colon).trim().toLowerCase()
+    const name = trimHeaderName(header.slice(0, colon)).toLowerCase()
     const list = occurrences.get(name)
     if (list) list.push(index)
     else occurrences.set(name, [index])
@@ -1029,6 +1132,40 @@ function base64Encode(bytes: Uint8Array): string {
 }
 
 /**
+ * Decode raw octets into the byte-exact string this module scans and hashes:
+ * one UTF-16 code unit per octet, values 0-255.
+ *
+ * This is not text decoding, on purpose: `new TextDecoder("latin1")` is
+ * really windows-1252 in the WHATWG standard and remaps the bytes 0x80-0x9F
+ * to different code points, which corrupts exactly the bytes DKIM most needs
+ * kept whole. `String.fromCharCode(...bytes)` would do the identity mapping
+ * this wants, but it blows the call stack on a multi-megabyte body, hence the
+ * chunking.
+ */
+function bytesToBinaryString(bytes: Uint8Array): string {
+  const CHUNK = 0x8000
+  let out = ""
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    out += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return out
+}
+
+/**
+ * The inverse of {@link bytesToBinaryString}: one octet per code unit.
+ *
+ * Not `TextEncoder`: `canonicalInput` and a cached canonical body are already
+ * this module's byte-exact strings, where a code unit in 0x80-0xFF *is* one
+ * raw octet already — UTF-8 encoding one would turn it into two bytes,
+ * corrupting the very content {@link bytesToBinaryString} preserved.
+ */
+function binaryStringToBytes(value: string): Uint8Array {
+  const out = new Uint8Array(value.length)
+  for (let i = 0; i < value.length; i++) out[i] = value.charCodeAt(i) & 0xff
+  return out
+}
+
+/**
  * Verify a message's DKIM signatures and report one verdict.
  *
  * A message may carry several `DKIM-Signature` fields, and RFC 6376 §6.1 treats
@@ -1042,6 +1179,14 @@ function base64Encode(bytes: Uint8Array): string {
  * When `publicKey` is omitted the key is fetched from `options.resolver`,
  * defaulting to `Deno.resolveDns` and therefore to needing `--allow-net`.
  *
+ * `rawMessage` may be a `string` or a `Uint8Array`. DKIM is defined over
+ * octets (RFC 6376 §2.4: "the entire, unaltered message body, including any
+ * MIME framing"), and a JavaScript string cannot represent an 8-bit body
+ * faithfully — decoding it as UTF-8 rewrites bytes outside that encoding, and
+ * decoding it as `latin1` actually runs windows-1252 and remaps 0x80-0x9F.
+ * Pass the raw bytes for mail that might not be UTF-8; a `string` keeps
+ * working exactly as before, UTF-8 encoded first.
+ *
  * Message-shaped failures — missing header, bad grammar, expired signature,
  * unsigned `From`, body mismatch, unverifiable signature — all come back as a
  * {@link DkimVerificationResult}, and so does a resolver that throws: its message
@@ -1051,7 +1196,7 @@ function base64Encode(bytes: Uint8Array): string {
  * propagates the resolver's rejection.
  */
 export async function verifyDkim(
-  rawMessage: string,
+  rawMessage: string | Uint8Array,
   publicKey?: DkimPublicKey,
   options: DkimVerifyOptions = {},
 ): Promise<DkimVerificationResult> {
@@ -1069,30 +1214,49 @@ export async function verifyDkim(
  * {@link refuseHeaderLineEndings}. Fields past
  * {@link DkimVerifyOptions.maxSignatures} get a result saying they were not
  * checked, rather than disappearing.
+ *
+ * See {@link verifyDkim} for `rawMessage`'s `string | Uint8Array` contract.
  */
 export async function verifyDkimSignatures(
-  rawMessage: string,
+  rawMessage: string | Uint8Array,
   publicKey?: DkimPublicKey,
   options: DkimVerifyOptions = {},
 ): Promise<DkimVerificationResult[]> {
+  // Every octet, header scan and canonicalization step below works on one
+  // byte-exact string — one UTF-16 code unit per octet — whether the caller
+  // passed a `string` or a `Uint8Array`. A `string` is UTF-8 encoded first,
+  // which is what this verifier hashed all along; that also makes the size
+  // cap below count octets rather than code units, matching what §2.4 and
+  // §3.7 size a message and a body in.
+  const octets = typeof rawMessage === "string" ? new TextEncoder().encode(rawMessage) : rawMessage
+
   const maxMessageLength = options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH
-  if (rawMessage.length > maxMessageLength) {
+  if (octets.length > maxMessageLength) {
     return [{
       valid: false,
-      reason: `message is ${rawMessage.length} characters, over the ` +
-        `${maxMessageLength}-character limit`,
+      reason: `message is ${octets.length} octets, over the ` +
+        `${maxMessageLength}-octet limit`,
     }]
   }
+
+  // A pure-ASCII string round-trips through UTF-8 as itself — every code unit
+  // is already its own octet — so rebuilding it byte by byte below would only
+  // waste a second linear pass over the whole message. `octets.length ===
+  // rawMessage.length` holds exactly then: any non-ASCII character encodes to
+  // more than one octet, which can only make the encoded form longer.
+  const raw = typeof rawMessage === "string" && octets.length === rawMessage.length
+    ? rawMessage
+    : bytesToBinaryString(octets)
 
   // Before any field is parsed: a header block whose line endings are not uniform
   // does not have one reading, and this verifier's reading is the one an attacker
   // gets to choose against. See `refuseHeaderLineEndings`.
-  const lineEndings = refuseHeaderLineEndings(rawMessage)
+  const lineEndings = refuseHeaderLineEndings(raw)
   if (lineEndings !== undefined) {
     return [{ valid: false, reason: lineEndings }]
   }
 
-  const { headers, body } = splitMessage(rawMessage)
+  const { headers, body } = splitMessage(raw)
   const maxHeaderFields = options.maxHeaderFields ?? DEFAULT_MAX_HEADER_FIELDS
   if (headers.length > maxHeaderFields) {
     return [{
@@ -1110,6 +1274,17 @@ export async function verifyDkimSignatures(
     return [{ valid: false, reason: "no DKIM-Signature header found" }]
   }
 
+  // One cache for the whole message: RFC 6376 §6.1 verifies every signature
+  // field independently, and most real messages sign the body once — the same
+  // `c=` and `l=` — no matter how many `DKIM-Signature` fields they carry. See
+  // `dkim-body-hash.ts` for why splitting this out gave the caching seam a
+  // name a test could reach without widening the package's exports.
+  const bodyHashCache = createBodyHashCache({
+    canonicalize: (algorithm) => canonicalizeBody(body, algorithm),
+    encode: binaryStringToBytes,
+    digest: (bytes) => sha256Base64(bytes),
+  })
+
   const maxSignatures = options.maxSignatures ?? DEFAULT_MAX_SIGNATURES
   const results: DkimVerificationResult[] = []
   for (const [index, field] of fields.entries()) {
@@ -1124,7 +1299,7 @@ export async function verifyDkimSignatures(
       })
       continue
     }
-    results.push(await verifyOneSignature(field, headers, body, publicKey, options))
+    results.push(await verifyOneSignature(field, headers, publicKey, options, bodyHashCache))
   }
   return results
 }
@@ -1132,9 +1307,9 @@ export async function verifyDkimSignatures(
 async function verifyOneSignature(
   dkimHeaderLine: string,
   headers: string[],
-  body: string,
   publicKey: DkimPublicKey | undefined,
   options: DkimVerifyOptions,
+  bodyHashCache: BodyHashCache,
 ): Promise<DkimVerificationResult> {
   // §3.7 step 2 hashes "the DKIM-Signature header field that exists" in the
   // message, so the field name is taken from the message rather than assumed.
@@ -1191,29 +1366,29 @@ async function verifyOneSignature(
     // §3.7 step 1: the body is hashed "canonicalized using the body
     // canonicalization algorithm specified in the c= tag and then truncated to
     // the length specified in the l= tag". The bound counts canonical *octets*,
-    // so the truncation happens on the UTF-8 bytes: `String.prototype.slice`
-    // counts UTF-16 code units, which diverge from octets at the first non-ASCII
-    // character, and the verifier hashed a different byte range than the signer
-    // did — falsely rejecting valid non-ASCII mail. The bound may also land
-    // inside a multi-octet character, which is what rules out decoding the sliced
-    // bytes back to a string: U+FFFD would be hashed in place of the declared
-    // octets. A bound longer than the body it accompanies is not an error: the
-    // slice then covers all of it, which is what a signer that declared a longer
-    // bound produced.
-    const canonicalBody = new TextEncoder().encode(
-      canonicalizeBody(body, parsed.canonicalization.body),
-    )
-    const signedOctets = parsed.bodyLength === undefined
-      ? canonicalBody.length
-      : Math.min(parsed.bodyLength, canonicalBody.length)
+    // so the truncation happens on encoded bytes, not on `String.prototype.slice`
+    // — which counts UTF-16 code units and, before every octet here was already
+    // byte-exact, diverged from octets at the first non-ASCII character and
+    // falsely rejected valid non-ASCII mail. The bound may also land inside a
+    // multi-octet character, which is what rules out decoding the sliced bytes
+    // back to a string: U+FFFD would be hashed in place of the declared octets.
+    // A bound longer than the body it accompanies is not an error: the slice
+    // then covers all of it, which is what a signer that declared a longer bound
+    // produced.
+    //
+    // `bodyHashCache` does the canonicalizing and hashing, at most once per
+    // `(c=, l=)` combination for the whole message — see `dkim-body-hash.ts`
+    // and issue #88's third finding: verifying this per signature field, as an
+    // earlier revision did, cost one full canonicalize-and-hash pass over the
+    // body for every `DKIM-Signature` field, so a message with several of them
+    // multiplied the one thing here that scales with the body's size.
+    const hashed = await bodyHashCache.get(parsed.canonicalization.body, parsed.bodyLength)
+    computedBodyHash = hashed.hash
     bodyCoverage = {
-      signedOctets,
-      totalOctets: canonicalBody.length,
-      complete: signedOctets === canonicalBody.length,
+      signedOctets: hashed.signedOctets,
+      totalOctets: hashed.totalOctets,
+      complete: hashed.signedOctets === hashed.totalOctets,
     }
-    computedBodyHash = await sha256Base64(
-      signedOctets === canonicalBody.length ? canonicalBody : canonicalBody.slice(0, signedOctets),
-    )
   } catch (err) {
     return { valid: false, parsed, reason: errorMessage(err) }
   }
@@ -1306,7 +1481,11 @@ function refuseSignatureHeader(
   // §5.4 requires the From field to be signed, which a message that has no From
   // field cannot satisfy: `h=from` over a message with no From hashes nothing for
   // it, so the signature would say nothing about the author either.
-  if (!headers.some((line) => line.slice(0, line.indexOf(":")).trim().toLowerCase() === "from")) {
+  if (
+    !headers.some((line) =>
+      trimHeaderName(line.slice(0, line.indexOf(":"))).toLowerCase() === "from"
+    )
+  ) {
     return "From field not signed (the message has no From field)"
   }
 
@@ -1433,7 +1612,11 @@ async function verifySignature(
   publicKey: DkimPublicKey,
 ): Promise<boolean> {
   const signatureBytes = asBytes(base64Decode(parsed.signature))
-  const data = asBytes(new TextEncoder().encode(canonicalInput))
+  // `canonicalInput` is this module's byte-exact string (see `verifyDkimSignatures`
+  // and `bytesToBinaryString`), not decoded text — `TextEncoder` would re-encode
+  // any octet at or above 0x80 as two or more UTF-8 bytes, hashing bytes the
+  // signer never signed. `binaryStringToBytes` is the matching inverse.
+  const data = asBytes(binaryStringToBytes(canonicalInput))
 
   if (parsed.algorithm === "rsa-sha256") {
     if (publicKey.algorithm !== "rsa") {
