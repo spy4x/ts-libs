@@ -13,10 +13,13 @@
  * template's shape and ports offer-lens's two improvements into it:
  *
  *  - `begin` recurses correctly. The template called `this.sql.begin(...)`, and a
- *    clone's `sql` is a transaction handle, which has no `begin` of its own —
- *    `postgres` opens a savepoint through `savepoint()` there instead. This calls
- *    `begin` on the *client* the instance was built with, so a nested `begin` lands
- *    on the client and opens a savepoint as `postgres` intends.
+ *    clone's `sql` is a transaction handle, which has no `begin` of its own. Neither
+ *    source got the nested case right, and neither does calling `begin` on the client:
+ *    measured against `postgres@3.4.7`, `sql.begin` inside an open transaction takes a
+ *    *second connection* out of the pool and opens a *second, independent*
+ *    transaction there, which commits on its own and survives the outer rollback. A
+ *    nested `begin` here calls `savepoint` on the transaction handle instead, which is
+ *    the only nesting `postgres` has.
  *  - the clone is created through `Object.create(this)` and nothing else. Class
  *    fields, including `readonly` ones, do not survive that: a subclass must not
  *    keep per-instance state the callback depends on, and every field the clone
@@ -41,6 +44,44 @@ import type { RowCache, Sql, Transaction } from "./ports.ts"
 export interface DbServiceBaseOptions {
   /** The client every method runs against. */
   sql: Sql
+}
+
+/** Arguments to {@link RowMethods.findOne}. */
+export interface FindOneParams {
+  id: string | number
+  /**
+   * Return the row even when it is soft-deleted. Defaults to `false`.
+   *
+   * The read then bypasses the cache in both directions, because the cache is keyed by
+   * id alone and cannot hold a deleted row and a live one apart. Use it for an audit
+   * view or for an undelete flow that has to show what it is about to restore; a
+   * caller that just wants "the row, if it is there" should leave it alone.
+   */
+  includeDeleted?: boolean
+}
+
+/**
+ * What {@link DbServiceBase.buildMethods} returns.
+ *
+ * Written out as an interface rather than inferred, because `deno publish` rejects an
+ * exported method whose return type it cannot write down.
+ */
+export interface RowMethods<
+  M extends postgres.Row,
+  C extends Partial<unknown>,
+  U extends Partial<unknown>,
+> {
+  /** One row by id. `null` when it is missing, and when it is soft-deleted. */
+  findOne(params: FindOneParams): Promise<null | M>
+  /** Every row touched since `updatedAtGt`, deleted ones included; this is the sync read. */
+  findChanged(updatedAtGt: Date): Promise<M[]>
+  createOne(params: { data: C }): Promise<M>
+  /** Updates a live row. An empty `data` touches `updated_at` and nothing else. */
+  updateOne(params: { id: string | number; data: U }): Promise<M>
+  /** Soft delete: sets `deleted_at`. */
+  deleteOne(params: { id: string | number }): Promise<M>
+  /** Reverses {@link deleteOne}, and is the one update that reaches a deleted row. */
+  undeleteOne(params: { id: string | number }): Promise<M>
 }
 
 export class DbServiceBase {
@@ -76,16 +117,27 @@ export class DbServiceBase {
    * transaction handle.
    *
    * Cache writes made by the callback are deferred until after the commit and are
-   * discarded when the callback throws. A nested `begin` in `fn` opens a savepoint
-   * on the client, so the helper composes.
+   * discarded when the callback throws.
+   *
+   * A nested call — `begin` on the clone the callback was given — opens a **savepoint**
+   * on the transaction handle, so the inner unit rolls back on its own and still rolls
+   * back with the outer transaction. Reaching for `client.begin` instead would take a
+   * second connection out of the pool and open an independent transaction on it, and
+   * the inner rows would survive the outer rollback.
+   *
+   * Cache writes made inside a savepoint are held separately until the savepoint
+   * returns, and then joined to the outer transaction's queue. Nothing runs before the
+   * outermost commit, and a savepoint that threw contributes nothing: the outer
+   * transaction can still roll back, and a cache holding rows the database never kept
+   * is the failure this deferral exists to prevent.
    */
   async begin<T>(fn: (tx: this) => Promise<T>): Promise<T> {
+    if (this.pendingCacheOperations !== null) {
+      return await this.beginSavepoint(fn, this.pendingCacheOperations)
+    }
     const pendingCacheOperations: Array<() => Promise<void>> = []
     const result = await this.client.begin(async (transaction: Transaction) => {
-      const service = Object.create(this) as this
-      service.setSql(transaction as unknown as Sql)
-      service.pendingCacheOperations = pendingCacheOperations
-      return await fn(service)
+      return await fn(this.cloneFor(transaction, pendingCacheOperations))
     })
     for (const operation of pendingCacheOperations) {
       await operation()
@@ -95,6 +147,34 @@ export class DbServiceBase {
     // unwrapping only removes promises the caller's array elements already were, which
     // awaiting the result removes too.
     return result as T
+  }
+
+  /**
+   * The nested half of {@link begin}: a savepoint on the transaction handle.
+   *
+   * `outerQueue` is the queue of the transaction this savepoint sits inside. Inner
+   * cache writes go to a queue of their own and are appended to it only once the
+   * savepoint has returned, which is what makes a thrown savepoint leave no trace.
+   */
+  private async beginSavepoint<T>(
+    fn: (tx: this) => Promise<T>,
+    outerQueue: Array<() => Promise<void>>,
+  ): Promise<T> {
+    const innerQueue: Array<() => Promise<void>> = []
+    const transaction = this.sql as unknown as Transaction
+    const result = await transaction.savepoint(async (savepoint: Transaction) => {
+      return await fn(this.cloneFor(savepoint, innerQueue))
+    })
+    outerQueue.push(...innerQueue)
+    return result as T
+  }
+
+  /** A clone of this service that writes through `executor` and queues its cache writes. */
+  private cloneFor(executor: Transaction, queue: Array<() => Promise<void>>): this {
+    const service = Object.create(this) as this
+    service.setSql(executor as unknown as Sql)
+    service.pendingCacheOperations = queue
+    return service
   }
 
   /** Fail now when the database is unreachable, rather than on the first query. */
@@ -128,7 +208,14 @@ export class DbServiceBase {
     }, {})
   }
 
-  /** Read one row through the cache, or straight from the database inside a transaction. */
+  /**
+   * Read one row through the cache, or straight from the database inside a transaction.
+   *
+   * A miss is `null` on both paths. It used to be `null` inside a transaction and
+   * `undefined` outside one, because the cached path returned whatever `wrap` handed
+   * back: `RowCache.wrap` is typed to return a row, and the only thing its compute can
+   * produce for a query that matched nothing is `undefined`.
+   */
   async findOne<T extends postgres.Row>(
     cache: RowCache<T>,
     id: string | number,
@@ -137,7 +224,8 @@ export class DbServiceBase {
     if (this.pendingCacheOperations) {
       return (await command)[0] ?? null
     }
-    return cache.wrap(id, async () => (await command)[0] as T)
+    const cached = await cache.wrap(id, async () => (await command)[0] as T)
+    return (cached as T | undefined) ?? null
   }
 
   async createOne<T extends postgres.Row>(
@@ -174,24 +262,43 @@ export class DbServiceBase {
   }
 
   /**
-   * The five row operations every table in the template schema exposes.
+   * The six row operations every table in the template schema exposes.
    *
    * `deleteOne` is a soft delete (`deleted_at = NOW()`), matching the schema's
    * `deleted_at` columns and the auditability behind them; `undeleteOne` reverses
    * it. Identifiers are passed through `this.sql(...)`, so the driver quotes the
    * table name instead of the template interpolating it.
+   *
+   * The return type is written out rather than inferred. An inferred one is not a
+   * problem for a caller, but it is for publishing: `deno publish` requires an explicit
+   * type on an exported method, and this one method failed that check for the whole
+   * workspace.
    */
   buildMethods<M extends postgres.Row, C extends Partial<unknown>, U extends Partial<unknown>>(
     table: string,
     cache: RowCache<M>,
-  ) {
+  ): RowMethods<M, C, U> {
     return {
-      findOne: ({ id }: { id: string | number }): Promise<null | M> =>
-        this.findOne<M>(
+      findOne: ({ id, includeDeleted = false }: FindOneParams): Promise<null | M> => {
+        if (includeDeleted) {
+          // The opt-out goes around the cache in both directions, and it has to. The
+          // cache is keyed by id alone, so a deleted row read through it would be
+          // handed to the next plain `findOne` as if it were live, and a filter in the
+          // SQL would only hold while the cache missed.
+          return this.sql<M[]>`
+            SELECT * FROM ${this.sql(table)} WHERE id = ${id}
+          `.then((rows) => rows[0] ?? null)
+        }
+        return this.findOne<M>(
           cache,
           id,
-          this.sql<M[]>`SELECT * FROM ${this.sql(table)} WHERE id = ${id}`,
-        ),
+          this.sql<M[]>`
+            SELECT * FROM ${this.sql(table)} WHERE id = ${id} AND deleted_at IS NULL
+          `,
+        )
+      },
+      // Deliberately unfiltered: this is the sync read, and a client that is catching up
+      // has to learn that a row was deleted. `deleted_at` is on the row it returns.
       findChanged: (updatedAtGt: Date): Promise<M[]> =>
         this.sql<M[]>`
           SELECT * FROM ${this.sql(table)}
@@ -207,16 +314,27 @@ export class DbServiceBase {
             RETURNING *
           `,
         ),
-      updateOne: (params: { id: string | number; data: U }): Promise<M> =>
-        this.updateOne<M>(
-          cache,
-          this.sql<M[]>`
+      updateOne: (params: { id: string | number; data: U }): Promise<M> => {
+        const data = this.sanitize(params.data)
+        // `sql({})` renders an empty column list, so the general form would produce
+        // `SET updated_at = NOW(), WHERE id = $1` — a syntax error from the server. An
+        // update of nothing but the timestamp is a legitimate touch, so it gets its own
+        // statement instead of being rejected here.
+        const command = Object.keys(data).length === 0
+          ? this.sql<M[]>`
             UPDATE ${this.sql(table)}
-            SET updated_at = NOW(), ${this.sql(this.sanitize(params.data))}
-            WHERE id = ${params.id}
+            SET updated_at = NOW()
+            WHERE id = ${params.id} AND deleted_at IS NULL
             RETURNING *
-          `,
-        ),
+          `
+          : this.sql<M[]>`
+            UPDATE ${this.sql(table)}
+            SET updated_at = NOW(), ${this.sql(data)}
+            WHERE id = ${params.id} AND deleted_at IS NULL
+            RETURNING *
+          `
+        return this.updateOne<M>(cache, command)
+      },
       deleteOne: ({ id }: { id: string | number }): Promise<M> =>
         this.deleteOne<M>(
           cache,
@@ -227,6 +345,7 @@ export class DbServiceBase {
             RETURNING *
           `,
         ),
+      // Its own statement, and the one update that must reach a deleted row.
       undeleteOne: ({ id }: { id: string | number }): Promise<M> =>
         this.updateOne<M>(
           cache,
