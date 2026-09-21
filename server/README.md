@@ -126,8 +126,11 @@ route paths.
 
 A file is streamed, not read whole: `StaticFs.open` returns the file's size and a `ReadableStream`, so
 serving a large file costs the same per-request memory as serving a small one. `Content-Length` comes
-from that size, never from a buffer. The handle is released exactly once, whichever way the stream
-stops — fully read, cancelled by the client, or a failure right after the file was opened. Range and
+from that size, never from a buffer. For a `GET`, the handle is released the first time the body is
+fully read, is cancelled by the client, or fails on a read — but a `GET` response whose body is never
+read and never cancelled still holds the handle until garbage collection, which is exactly what a
+framework does to a `HEAD` response it builds fresh and discards unread. Pass `method: "HEAD"` and the
+response carries the same headers with no body, closed before `serveStatic` returns. Range and
 conditional requests are not implemented; a request for either is served the same as a plain `GET`.
 
 ## `server/healthcheck`

@@ -22,9 +22,13 @@
  * A file is opened, not read whole. `StaticFs.open` returns the file's size and a
  * `ReadableStream` of its bytes, so memory use stays flat for a request whatever
  * the file's size — a directory of large videos costs the same per-request memory
- * as a directory of icons. The handle is released exactly once: when the stream
- * finishes, when the client cancels it, or, if something fails between opening
- * the file and returning the response, right there.
+ * as a directory of icons. For a `GET`, the handle is released the first time one
+ * of three things happens to the response body: it is read to the end, the client
+ * cancels it, or a read fails. **A `GET` response whose body is never read and
+ * never cancelled still holds the handle until garbage collection** — this is
+ * exactly what a framework does to a `HEAD` response it discards unread, which is
+ * why `HEAD` is handled separately: pass `method: "HEAD"` and the handle is closed
+ * before `serveStatic` returns, with no stream ever opened.
  */
 
 /** Result of resolving a request path against the static root. */
@@ -211,6 +215,15 @@ export interface ServeStaticOptions {
   spaFallback?: boolean
   /** `Cache-Control` value to set on served files. Omitted means no header. */
   cacheControl?: string
+  /**
+   * HTTP method of the request. Defaults to `"GET"`. Pass `"HEAD"` (for
+   * example `c.req.method` from Hono) and the response carries the same
+   * headers, including the correct `Content-Length`, with no body — and the
+   * file handle is closed before `serveStatic` returns, instead of being
+   * handed to a stream the caller is never going to read. Any other value is
+   * treated the same as `"GET"`.
+   */
+  method?: string
 }
 
 /** File name served for a directory request and for the SPA fallback. */
@@ -220,11 +233,14 @@ const INDEX_FILE = "index.html"
  * Serve one request path from the static root.
  *
  * @param requestPath `URL.pathname` of the request, still percent-encoded.
- * @param options Root directory plus optional filesystem, SPA flag and cache header.
- * @returns A `200` response with the file as a streamed body, its content type
- * and a `Content-Length` taken from the file's own size (never from a buffer),
- * or `undefined` when the path is refused or the file does not exist. Callers
- * turn `undefined` into their own `404` (or into an SPA route).
+ * @param options Root directory plus optional filesystem, SPA flag, cache header
+ * and request method.
+ * @returns A `200` response with the same content type and `Content-Length`
+ * (taken from the file's own size, never from a buffer) whatever the method: a
+ * streamed body for `GET`, no body at all for `HEAD` — with the handle already
+ * closed in that case. Resolves to `undefined` when the path is refused or the
+ * file does not exist. Callers turn `undefined` into their own `404` (or into
+ * an SPA route).
  */
 export async function serveStatic(
   requestPath: string,
@@ -259,16 +275,26 @@ export async function serveStatic(
   const handle = await fs.open(realFile).catch(() => null)
   if (!handle) return undefined
 
-  try {
-    const headers = new Headers({
-      "Content-Type": contentTypeFor(realFile),
-      "Content-Length": String(handle.size),
-      // A static asset is served with the content type this table chose; a browser
-      // must not sniff a different one, which is how a `.txt` upload becomes script.
-      "X-Content-Type-Options": "nosniff",
-    })
-    if (options.cacheControl) headers.set("Cache-Control", options.cacheControl)
+  const headers = new Headers({
+    "Content-Type": contentTypeFor(realFile),
+    "Content-Length": String(handle.size),
+    // A static asset is served with the content type this table chose; a browser
+    // must not sniff a different one, which is how a `.txt` upload becomes script.
+    "X-Content-Type-Options": "nosniff",
+  })
+  if (options.cacheControl) headers.set("Cache-Control", options.cacheControl)
 
+  // A HEAD response carries no body, so there is nothing to stream and nothing
+  // a caller might forget to read or cancel. Close right here instead of
+  // handing the handle to a stream a framework's HEAD handling is going to
+  // discard unread — that discard is exactly how a `GET` handle leaks until
+  // garbage collection, and `HEAD` has no reason to risk the same thing.
+  if (options.method === "HEAD") {
+    handle.close()
+    return new Response(null, { headers })
+  }
+
+  try {
     return new Response(closingStream(handle), { headers })
   } catch (error) {
     handle.close()
@@ -277,9 +303,16 @@ export async function serveStatic(
 }
 
 /**
- * Wrap a file handle's body so `close` runs exactly once, whichever way the
- * stream stops: fully read, cancelled by the client, or a read that fails. A
+ * Wrap a file handle's body so `close` runs exactly once, the first time the
+ * stream is fully read, is cancelled by the client, or fails on a read. A
  * `StaticFs` implementation is not required to manage this itself.
+ *
+ * This only covers a body a caller actually reads or cancels. A `GET`
+ * response whose body nobody touches — the shape of a HEAD response most
+ * frameworks build for themselves, discarding the one `serveStatic` returned
+ * — never calls `pull` or `cancel`, so the handle is not released until
+ * garbage collection notices the abandoned stream. `serveStatic` avoids that
+ * case for `HEAD` entirely by never calling this function for one.
  */
 function closingStream(handle: StaticFileHandle): ReadableStream<Uint8Array> {
   const reader = handle.body.getReader()

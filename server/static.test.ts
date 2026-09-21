@@ -483,6 +483,86 @@ Deno.test("static: the handle is closed when an error happens after the open", a
   assertStrictEquals(closeCount, 1, "the handle was not closed after the post-open error")
 })
 
+Deno.test("static: the handle is closed when the underlying stream errors mid-read", async () => {
+  let closeCount = 0
+  let pulls = 0
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls++
+      if (pulls === 1) {
+        controller.enqueue(new TextEncoder().encode("partial-"))
+        return
+      }
+      controller.error(new Error("disk read failed"))
+    },
+  })
+  const fs: StaticFs = {
+    open: () =>
+      Promise.resolve(
+        {
+          size: 100,
+          body,
+          close: () => {
+            closeCount++
+          },
+        } satisfies StaticFileHandle,
+      ),
+    stat: () => Promise.resolve({ isFile: true }),
+    realPath: (path) => Promise.resolve(path),
+  }
+
+  const response = await serveStatic("/flaky.bin", { root: ROOT, fs })
+  assertStrictEquals(response !== undefined, true)
+
+  const reader = response!.body!.getReader()
+  await reader.read() // the one chunk that arrives before the read fails
+  assertStrictEquals(closeCount, 0, "the handle was closed before the read actually failed")
+
+  await assertRejects(() => reader.read(), Error, "disk read failed")
+  assertStrictEquals(closeCount, 1, "the handle was not closed after the read failed")
+})
+
+Deno.test("static: a HEAD request gets a bodiless response with the handle already closed", async () => {
+  let closeCount = 0
+  let bodyAccessed = false
+  const fs: StaticFs = {
+    open: () =>
+      Promise.resolve(
+        {
+          size: 42,
+          // Accessing `body` at all would mean a stream was opened for a HEAD
+          // request; the getter throws so any such access fails the test
+          // instead of silently succeeding.
+          get body(): ReadableStream<Uint8Array> {
+            bodyAccessed = true
+            throw new Error("a HEAD request must never read the body")
+          },
+          close: () => {
+            closeCount++
+          },
+        } satisfies StaticFileHandle,
+      ),
+    stat: () => Promise.resolve({ isFile: true }),
+    realPath: (path) => Promise.resolve(path),
+  }
+
+  const response = await serveStatic("/video.mp4", { root: ROOT, fs, method: "HEAD" })
+  assertStrictEquals(response !== undefined, true)
+  assertEquals(response!.body, null)
+  assertEquals(response!.headers.get("content-length"), "42")
+  assertEquals(response!.status, 200)
+  assertStrictEquals(closeCount, 1, "the handle was not closed before the HEAD response returned")
+  assertStrictEquals(bodyAccessed, false, "a HEAD request opened a stream for the body")
+})
+
+Deno.test("static: a GET request for the same path still streams normally", async () => {
+  const spy = spyFs({ "/srv/app/static/app.css": "body { color: red }" })
+  const response = await serveStatic("/app.css", { root: ROOT, fs: spy.fs, method: "GET" })
+  assertStrictEquals(response !== undefined, true)
+  assertStrictEquals(response!.body !== null, true)
+  assertEquals(await response!.text(), "body { color: red }")
+})
+
 Deno.test("static: a real file is fully readable start to finish through denoStaticFs", async () => {
   const response = await serveStatic("/index.html", { root: FIXTURE_ROOT, fs: fixtureFs })
   assertStrictEquals(response !== undefined, true)
