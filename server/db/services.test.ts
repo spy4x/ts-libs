@@ -119,8 +119,14 @@ function createFakeSql(options: FakeSqlOptions = {}) {
    * `postgres@3.4.7`: `sql("users")` returns an `Identifier`, not a promise and not the
    * string, so the fake has to make the same distinction by looking for a template
    * strings array.
+   *
+   * **Written as a `function`, not an arrow**, and so is every callable this fake hands
+   * out. `postgres` declares them the same way, which makes them constructible, and
+   * `new sql.unsafe(...)` was a live route past the scope check for exactly that reason.
+   * An arrow-function fake cannot be constructed at all, so it reported the route closed
+   * while the driver's own shape left it open.
    */
-  const statement = (strings: unknown, ...values: unknown[]): unknown => {
+  const statement = function (strings: unknown, ...values: unknown[]): unknown {
     if (!Array.isArray(strings)) {
       return typeof strings === "string"
         ? { __identifier: strings } satisfies FakeIdentifier
@@ -144,8 +150,14 @@ function createFakeSql(options: FakeSqlOptions = {}) {
    * (`postgres@3.4.7/src/index.js:86-102`). `shout` stands in for such a helper.
    */
   const customTypes = Object.assign(
-    (value: unknown): unknown => ({ __typed: value }),
-    { shout: (value: string): unknown => ({ __shout: value.toUpperCase() }) },
+    function (value: unknown): unknown {
+      return { __typed: value }
+    },
+    {
+      shout: function (value: string): unknown {
+        return { __shout: value.toUpperCase() }
+      },
+    },
   )
 
   /**
@@ -178,15 +190,19 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     // that the `Proxy` in `services.ts` can be walked: the reason it is a `Proxy` rather
     // than a hand-written stand-in is that a property nobody listed must not become a way
     // around the check, and a fake that offered only `savepoint` could not show that.
-    unsafe: (text: string): Promise<unknown> =>
-      execute(text, (it) => (inTransaction ? inner : topLevel).push(it)),
-    file: (path: string): Promise<unknown> =>
-      execute(`file(${path})`, (it) => (inTransaction ? inner : topLevel).push(it)),
-    reserve: (): Promise<unknown> => {
+    unsafe: function (text: string): Promise<unknown> {
+      return execute(text, (it) => (inTransaction ? inner : topLevel).push(it))
+    },
+    file: function (path: string): Promise<unknown> {
+      return execute(`file(${path})`, (it) => (inTransaction ? inner : topLevel).push(it))
+    },
+    reserve: function (): Promise<unknown> {
       topLevel.push("reserve()")
       return Promise.resolve(client)
     },
-    json: (value: unknown): unknown => ({ __json: value }),
+    json: function (value: unknown): unknown {
+      return { __json: value }
+    },
     // `types` and `typed` are the driver's own shape: a *function* carrying one helper per
     // custom type the caller registered. A wrapper that replaced functions with plain
     // arrows lost `shout` here, and `sql.types.shout(...)` became a TypeError inside a
@@ -269,12 +285,21 @@ interface FakeExecutor {
   typed: { (value: unknown): unknown; shout(value: string): unknown }
 }
 
+/** A template strings array, for the `new sql(template)` route. */
+function fakeTemplate(text: string): TemplateStringsArray {
+  return Object.assign([text], { raw: [text] }) as unknown as TemplateStringsArray
+}
+
 /**
- * Every way a caller can reach the driver through the clone's executor.
+ * Every way a caller can reach the driver through the clone's executor and get an answer.
  *
  * Table-driven on purpose. The `Proxy` exists so that a property nobody listed cannot
  * become a way around the check, and a test that named only `savepoint` could not show
  * that: letting `unsafe` through the `get` trap unchecked left both tiers green.
+ *
+ * Every form here works while the clone is live and is refused once it is not, which is
+ * why one table drives both tests. Construction is the exception and has a table of its
+ * own; see {@link constructForms}.
  */
 function callForms(sql: FakeExecutor): Array<[string, () => unknown]> {
   return [
@@ -288,6 +313,44 @@ function callForms(sql: FakeExecutor): Array<[string, () => unknown]> {
     ["savepoint", () => sql.savepoint(() => Promise.resolve(undefined))],
     ["a custom type helper", () => sql.types.shout("hello")],
     ["the typed alias of the same helper", () => sql.typed.shout("hello")],
+    [
+      "a property descriptor's own value",
+      () => {
+        const descriptor = Object.getOwnPropertyDescriptor(sql, "unsafe")
+        return (descriptor?.value as (text: string) => unknown)("SELECT 1")
+      },
+    ],
+  ]
+}
+
+/**
+ * Every way to reach the driver through `new`.
+ *
+ * Apart on purpose: these are refused whether the clone is live or not, so they cannot
+ * join {@link callForms}, which every live test expects to succeed. A `TypeError` while
+ * the clone is live, {@link PostgresScopeEndedError} once it is not.
+ */
+function constructForms(sql: FakeExecutor): Array<[string, () => unknown]> {
+  return [
+    [
+      "new on unsafe",
+      () => new (sql.unsafe as unknown as new (text: string) => unknown)("SELECT 1"),
+    ],
+    ["new on the handle itself", () =>
+      new (sql as unknown as new (s: unknown) => unknown)(
+        fakeTemplate("SELECT 1"),
+      )],
+    [
+      "Reflect.construct on unsafe",
+      () => Reflect.construct(sql.unsafe as unknown as new (text: string) => unknown, ["SELECT 1"]),
+    ],
+    [
+      "Reflect.construct on the handle itself",
+      () =>
+        Reflect.construct(sql as unknown as new (s: unknown) => unknown, [
+          fakeTemplate("SELECT 1"),
+        ]),
+    ],
   ]
 }
 
@@ -557,7 +620,7 @@ Deno.test("every call form through a kept clone is refused, not only the ones we
   assertExists(kept)
   const sql = kept.executor()
 
-  for (const [name, call] of callForms(sql)) {
+  for (const [name, call] of [...callForms(sql), ...constructForms(sql)]) {
     assertThrows(call, PostgresScopeEndedError, undefined, `${name} was not refused`)
   }
   // Nothing reached the driver: neither the transaction that ended nor the client.
@@ -565,16 +628,50 @@ Deno.test("every call form through a kept clone is refused, not only the ones we
   assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
 })
 
+Deno.test("a property descriptor taken while the clone was live dies with it", async () => {
+  // Reading the descriptor early used to be the way to keep the driver's own function
+  // rather than the wrapper, so the check was gone before the transaction was.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: PropertyDescriptor | undefined
+  await service.begin((tx) => {
+    kept = Object.getOwnPropertyDescriptor(tx.executor(), "unsafe")
+    return Promise.resolve()
+  })
+
+  assertExists(kept)
+  assertThrows(
+    () => (kept!.value as (text: string) => unknown)("SELECT 1"),
+    PostgresScopeEndedError,
+  )
+  assertEquals(fake.inner, [])
+})
+
 Deno.test("every call form works while the clone is still live", async () => {
-  // The other half of the table. A wrapper that refused everything would pass the test
-  // above and be useless, and the custom type helper is the one that was actually lost:
-  // replacing each function with a plain arrow threw away the properties it carried, so
-  // `sql.types.shout` did not exist inside a transaction although it does outside one.
+  // The other half of the same table, walked rather than sampled. A wrapper that refused
+  // everything would pass the test above and be useless, and the custom type helper is
+  // the one that was actually lost: replacing each function with a plain arrow threw away
+  // the properties it carried, so `sql.types.shout` did not exist inside a transaction
+  // although it does outside one.
   const fake = createFakeSql()
   const service = new TestService({ sql: fake.sql })
 
   await service.begin(async (tx) => {
     const sql = tx.executor()
+    for (const [name, call] of callForms(sql)) {
+      let answer: unknown
+      try {
+        answer = call()
+      } catch (error) {
+        throw new Error(`${name} threw while the clone was live: ${String(error)}`)
+      }
+      // Several of these are queries; awaiting them keeps the fake's recording in order
+      // and leaves nothing pending behind the test.
+      if (answer instanceof Promise) await answer
+    }
+
+    // The values the wrapper has to carry through unchanged, spelled out.
     assertEquals(sql.types.shout("hello"), { __shout: "HELLO" })
     assertEquals(sql.typed.shout("hello"), { __shout: "HELLO" })
     assertEquals(sql.json({ a: 1 }), { __json: { a: 1 } })
@@ -582,11 +679,26 @@ Deno.test("every call form works while the clone is still live", async () => {
     // Reading the same helper twice gives the same function, so an identity comparison
     // still holds through the wrapper.
     assertStrictEquals(sql.types.shout, sql.types.shout)
-    await sql.unsafe("SELECT 1")
-    await sql`SELECT ${2}`
+    // And the descriptor read hands out the wrapper, not the driver's own function.
+    assertStrictEquals(Object.getOwnPropertyDescriptor(sql, "unsafe")?.value, sql.unsafe)
+  })
+})
+
+Deno.test("construction through a live clone is refused as well, by name", async () => {
+  // `postgres` exposes no constructor. `new sql.unsafe(...)` runs the statement only
+  // because any plain function can be constructed, so it is refused outright rather than
+  // passed through and checked — one rule, and no route that exists only after the scope.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  await service.begin((tx) => {
+    for (const [name, call] of constructForms(tx.executor())) {
+      assertThrows(call, TypeError, "is not a constructor", `${name} was not refused`)
+    }
+    return Promise.resolve()
   })
 
-  assertEquals(fake.inner, ["SELECT 1", "SELECT $1"])
+  assertEquals(fake.inner, [])
 })
 
 Deno.test("a clone kept past a begin that rolled back refuses too", async () => {

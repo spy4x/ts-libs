@@ -94,9 +94,26 @@ interface ScopedExecutor {
  * A `Proxy` rather than a hand-written stand-in, because the driver's handle is a tag
  * function carrying a dozen properties — `savepoint`, `unsafe`, `json`, `file`, the type
  * helpers — and a stand-in would have to list them, so a property nobody thought of
- * would quietly go around the check. The two traps cover the only two ways the handle is
- * reached: calling it (`` sql`…` `` and `sql(identifier)`) and calling something on it
- * (`sql.savepoint(…)`, `sql.unsafe(…)`).
+ * would quietly go around the check.
+ *
+ * **Four traps, because there are four ways to reach the driver through the handle**:
+ * calling it (`` sql`…` `` and `sql(identifier)`), calling something on it
+ * (`sql.savepoint(…)`, `sql.unsafe(…)`), constructing through it
+ * (`new sql.unsafe(…)`, `Reflect.construct(…)`) and reading a property *descriptor* off
+ * it (`Object.getOwnPropertyDescriptor(sql, "unsafe").value(…)`). An earlier version had
+ * the first two, and each of the other two wrote a row after the transaction had ended
+ * and lost it to the next rollback, reporting success on the way out. The remaining traps
+ * cannot hand out the driver: `has` and `ownKeys` answer with names, `getPrototypeOf`
+ * answers `Function.prototype`, and `set`, `defineProperty` and `deleteProperty` change
+ * the handle rather than reading from it and can execute no statement.
+ *
+ * **Construction is refused outright, live as well as retired.** `postgres` exposes no
+ * constructor: `new sql.unsafe(…)` "works" only because any plain function can be
+ * constructed and a constructor that returns an object returns that object, so the query
+ * object comes back by accident of the language. Refusing is both the simpler trap — no
+ * `newTarget` to carry — and the honest one, and the refusal after the scope is
+ * {@link PostgresScopeEndedError} while the refusal before it is a `TypeError` naming the
+ * rule.
  *
  * **A function reached through the handle is wrapped, not replaced.** An earlier version
  * of this returned a plain arrow function for every function-valued property, and that
@@ -104,7 +121,8 @@ interface ScopedExecutor {
  * helpers on `sql.types` and `sql.typed`, which are themselves functions, so
  * `sql.types.myType(value)` became a `TypeError` inside a transaction. Each function is
  * now wrapped in a `Proxy` of its own, recursively, so its properties survive and every
- * call through any of them is still refused once the scope has ended.
+ * call through any of them is still refused once the scope has ended. One handler serves
+ * the root and every nested wrapper, so a route closed here is closed everywhere.
  *
  * Wrappers are remembered per value, so reading the same property twice gives the same
  * function and an identity comparison still holds.
@@ -119,36 +137,68 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
   }
   const wrappers = new WeakMap<object, unknown>()
 
-  /** Guard a value reached through the handle: functions are wrapped, anything else is not. */
-  const guard = (value: unknown): unknown => {
-    if (typeof value !== "function") return value
-    const cached = wrappers.get(value as object)
-    if (cached !== undefined) return cached
-    const wrapper = new Proxy(value as (...parameters: unknown[]) => unknown, {
-      apply(inner, thisArg, parameters: unknown[]) {
-        assertUsable()
-        return Reflect.apply(inner, thisArg, parameters)
-      },
-      get(inner, property) {
-        return guard(Reflect.get(inner, property))
-      },
-    })
-    wrappers.set(value as object, wrapper)
-    return wrapper
-  }
-
-  const target = executor as unknown as (...parameters: unknown[]) => unknown
-  const proxy = new Proxy(target, {
+  const handler: ProxyHandler<(...parameters: unknown[]) => unknown> = {
     apply(inner, thisArg, parameters: unknown[]) {
       assertUsable()
       return Reflect.apply(inner, thisArg, parameters)
     },
+
+    construct() {
+      assertUsable()
+      throw new TypeError(
+        `a Postgres transaction handle is not a constructor; \`new sql.unsafe(...)\` runs ` +
+          `the statement only because any plain function can be constructed, and it is ` +
+          `refused here so that it cannot become a way around the end of a transaction`,
+      )
+    },
+
     get(inner, property) {
       return guard(Reflect.get(inner, property))
     },
-  })
+
+    /**
+     * A descriptor read must not hand out the function the wrapper is standing in for.
+     *
+     * The value is replaced by its wrapper, so a descriptor taken while the scope was
+     * live is as dead as the handle afterwards. A non-configurable property is the one
+     * case where that is impossible: the engine requires such a descriptor to be reported
+     * with the target's own value unless it is a writable data property, and reporting
+     * anything else is a `TypeError` from the engine rather than a refusal from here. No
+     * property of a driver function is shaped that way, but if one ever is, the read is
+     * refused once the scope has ended rather than quietly handing the driver over.
+     */
+    getOwnPropertyDescriptor(inner, property) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(inner, property)
+      if (descriptor === undefined) return undefined
+      if (descriptor.configurable !== true && descriptor.writable !== true) {
+        assertUsable()
+        return descriptor
+      }
+      if ("value" in descriptor) {
+        return { ...descriptor, value: guard(descriptor.value) }
+      }
+      return {
+        ...descriptor,
+        get: guard(descriptor.get) as (() => unknown) | undefined,
+        set: guard(descriptor.set) as ((value: unknown) => void) | undefined,
+      }
+    },
+  }
+
+  /** Guard a value reached through the handle: functions are wrapped, anything else is not. */
+  function guard(value: unknown): unknown {
+    if (typeof value !== "function") return value
+    const cached = wrappers.get(value as object)
+    if (cached !== undefined) return cached
+    const wrapper = new Proxy(value as (...parameters: unknown[]) => unknown, handler)
+    wrappers.set(value as object, wrapper)
+    return wrapper
+  }
+
   return {
-    executor: proxy as unknown as Transaction,
+    // The root goes through the same `guard` as everything reached from it, so the handle
+    // and its helpers are one shape with one set of rules.
+    executor: guard(executor) as Transaction,
     end: () => {
       ended = true
     },

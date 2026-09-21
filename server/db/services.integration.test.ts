@@ -63,6 +63,11 @@ class NoteService extends DbServiceBase {
     return this.sql`INSERT INTO ${this.sql(schema)}.note (id, body) VALUES (${id}, ${body})`
   }
 
+  /** The executor this instance writes through — the clone's wrapper, on a clone. */
+  executor(): { unsafe(text: string): Promise<unknown> } {
+    return this.sql as unknown as { unsafe(text: string): Promise<unknown> }
+  }
+
   /**
    * Every id in the table, as a plain array.
    *
@@ -215,6 +220,36 @@ describe("DbServiceBase against a real server", () => {
           service.begin(async (tx) => {
             await tx.insert(schema, 2, "second")
             await kept!.insert(schema, 3, "through the kept clone")
+          }),
+        PostgresScopeEndedError,
+      )
+
+      assertEquals(await service.ids(schema), [1])
+    })
+  })
+
+  it("refuses a kept clone reached with new, against the real driver", async () => {
+    // `postgres` declares its helpers as ordinary functions, so they can be constructed,
+    // and a constructor that returns an object returns that object: `new sql.unsafe(...)`
+    // ran the statement. Against the server, on the round 2 head, row 3 was written,
+    // reported success, and went with this transaction's rollback.
+    await withSchema({ max: 1 }, async (sql, schema) => {
+      const service = new NoteService({ sql })
+
+      let kept: NoteService | undefined
+      await service.begin(async (tx) => {
+        kept = tx
+        await tx.insert(schema, 1, "committed")
+      })
+      assertExists(kept)
+      const executor = kept.executor()
+      const statement = `INSERT INTO "${schema}".note (id, body) VALUES (3, 'through new')`
+
+      await assertRejects(
+        () =>
+          service.begin(async (tx) => {
+            await tx.insert(schema, 2, "second")
+            await new (executor.unsafe as unknown as new (text: string) => unknown)(statement)
           }),
         PostgresScopeEndedError,
       )
