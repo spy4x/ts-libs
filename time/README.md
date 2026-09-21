@@ -194,20 +194,6 @@ generateIcs({ ...event, start: zonedDateTime("2026-08-28", "10:00", "Europe/Berl
 generateIcs(event, { prodid, dtstamp })
 ```
 
-**The trap is on the caller's side, not in this API.** `start` and `end` must be `Date` objects — a
-string throws (`TypeError: event.start.getTime is not a function`), so nothing is silently converted
-for you. What _is_ silent is how you make that `Date`: `new Date("2026-08-28T10:00:00")` — no offset —
-is parsed by JavaScript as **host-local**, so the same call means different instants on a laptop and
-in CI. Always name the zone explicitly, with `zonedDateTime(date, time, zone)` from `time/tz` or a
-`Z`-suffixed ISO string:
-
-```ts
-// Wrong: host-local, differs per machine.
-generateIcs({ ...event, start: new Date("2026-08-28T10:00:00") }, options)
-// Right: the wall clock is tied to a zone, or the instant is given outright.
-generateIcs({ ...event, start: zonedDateTime("2026-08-28", "10:00", "Europe/Berlin") }, options)
-```
-
 ## Not in scope
 
 **Across the package.** Inputs are typed values, and anything outside the type throws rather than
