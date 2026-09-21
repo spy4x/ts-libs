@@ -152,8 +152,9 @@ that can silently skip when its dependency is missing must fail loudly instead.
 
 If `deno task check` fails because the lockfile is stale, run the task that needs the new dependency
 once with network access and commit the updated `deno.lock`. Never delete or hand-edit the lockfile.
-`CI=true` makes Deno treat the lockfile as frozen — a cold run that wants to rewrite it is a failure,
-not a warning to ignore.
+`CI=true` does not freeze the lockfile — Deno rewrites it and still exits 0 — so `check:cold` compares
+`deno.lock` before and after the run and fails when it changed. A cold run that wants to rewrite the
+lockfile is a failure, not a warning to ignore.
 
 ## Test tiers
 
