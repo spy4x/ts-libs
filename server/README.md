@@ -686,8 +686,10 @@ turns it into the rejection its caller expects.
 
 **What the Postgres guard promises.** A clone kept past `begin()` or past a nested `begin()` refuses,
 with `PostgresScopeEndedError`, every call form a person would write through it: the tagged template,
-the `sql(...)` helper forms, `unsafe`, `file`, `json`, `array`, `types` and `typed`, `begin`,
-`savepoint`, `reserve`, `new`, and anything read off the handle at any depth. The executor is a
+the `sql(...)` helper forms, `unsafe`, `file`, `json`, `array`, `types` and `typed`, `savepoint`,
+`notify`, `prepare`, `new`, the service's own nested `begin()`, and anything read off the handle at
+any depth. A transaction handle has no `begin`, `reserve` or `listen` of its own; those throw a
+`TypeError`, live and retired alike. The executor is a
 `Proxy` and everything it hands out on a _read_ is itself a wrapper — functions and objects alike,
 recursively — which is why the refusal covers helpers nobody listed. `prototype.constructor` was the
 spelling that showed why a list is not enough, since every ordinary function carries a `prototype`

@@ -43,8 +43,10 @@
  * because several comments below depend on it. A clone kept past `begin()` or past a
  * nested `begin()` refuses, with {@link PostgresScopeEndedError}, every call form a person
  * would write through it — the tagged template, the `sql(...)` helper forms, `unsafe`,
- * `file`, `json`, `array`, `types` and `typed`, `begin`, `savepoint`, `reserve`, `new`,
- * and anything read off the handle at any depth. It is a guard against the mistake issue
+ * `file`, `json`, `array`, `types` and `typed`, `savepoint`, `notify`, `prepare`, `new`,
+ * the service's own nested `begin()` (which rejects, being `async`), and anything read off
+ * the handle at any depth. A transaction handle has no `begin`, `reserve` or `listen` of its
+ * own; those throw a `TypeError`, live and retired alike. It is a guard against the mistake issue
  * #96 describes, a service that stores the clone and writes through it later, and **not a
  * security boundary**: code that deliberately reaches into the driver's internals is not
  * making that mistake, and could in any case import `postgres` and open a connection of
@@ -73,8 +75,10 @@ import type { RowCache, Sql, Transaction } from "./ports.ts"
  * that awaits its query, turns the throw into the rejection its caller expects; a method
  * that returns the tagged template unawaited sees it one tick earlier, as a throw.
  *
- * **Three known routes remain.** None of them is a call form a person would write, and all
- * three were there before this check existed:
+ * **Three known routes remain.** None of them is a call made through the clone after its
+ * transaction has ended, which is the only moment this check sees, and all three were
+ * there before this check existed. The first needs no knowledge of the driver — a
+ * forgotten `await` is enough — and is the one most worth closing:
  *
  *  1. a query *built* inside the callback and awaited afterwards. It runs when it is
  *     awaited, and the call that built it happened while the clone was live, so nothing
