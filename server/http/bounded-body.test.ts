@@ -255,9 +255,10 @@ Deno.test("readBoundedBody reports the read error even when cancel rejects", asy
 })
 
 Deno.test("readBoundedBody rejects an unusable cap instead of reading", async () => {
-  // The canonical reader has no `RangeError` branch: a cap that cannot be
-  // satisfied fails closed on the same error a real over-cap body raises. Both
-  // values below were rejected by a `RangeError` before the collapse.
+  // The canonical reader's `RangeError` branch only fires for a cap that is
+  // not finite (`NaN`, `Infinity`). `-1` and `1.5` are both finite, so they
+  // still fail closed on the same `PayloadTooLargeError` a real over-cap body
+  // raises, exactly as they did before the collapse.
   for (const cap of [-1, 1.5]) {
     // A fresh request per case: a body can only be read once, so reusing one
     // would test the second read against an already-drained stream.
@@ -281,7 +282,11 @@ Deno.test("readBoundedBody rejects a non-finite cap instead of reading (was: fai
       RangeError,
       String(cap),
     )
-    assertEquals(request.bodyUsed, false, `${cap} must reject before the body is read`)
+    // `bodyUsed` stays `false` even once `getReader()` has locked the stream,
+    // as long as nothing was read from it, so it cannot see this regression.
+    // `locked` is what actually pins "the reader is not taken before the
+    // throw".
+    assertEquals(request.body?.locked, false, `${cap} must reject before the reader is taken`)
   }
 })
 

@@ -251,9 +251,12 @@ describe("readBoundedBody", () => {
         RangeError,
         String(cap),
       )
-      // `getReader()` is never called for a rejected cap, so the body stream
-      // stays unlocked and unread — the reader is not taken before the throw.
-      assertEquals(request.bodyUsed, false, `${cap} must reject before the body is read`)
+      // `bodyUsed` alone does not prove this: it stays `false` even once
+      // `getReader()` has locked the stream, as long as nothing was read from
+      // it. `locked` is the property that actually pins "the reader is not
+      // taken before the throw" — a caller left with a locked-but-unread
+      // stream cannot read it either, so this is the real regression to catch.
+      assertEquals(request.body?.locked, false, `${cap} must reject before the reader is taken`)
     }
   })
 })
