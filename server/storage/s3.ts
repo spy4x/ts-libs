@@ -10,7 +10,17 @@ import {
 
 /** Default AWS region; overridden by configuration, never read from the environment here. */
 export const DEFAULT_S3_REGION = "us-east-1"
-export const DEFAULT_S3_ENDPOINT = "https://s3.amazonaws.com"
+
+/**
+ * AWS's regional S3 endpoint, used when `config.endpoint` is not set.
+ *
+ * Not checked against a real AWS endpoint in this repository — no third-party
+ * network call is made from here — so this is pinned only as a URL-shape unit
+ * test, against the documented `s3.<region>.amazonaws.com` pattern.
+ */
+export function defaultS3Endpoint(region: string): string {
+  return `https://s3.${region}.amazonaws.com`
+}
 
 /** Loopback hosts where a bucket as subdomain cannot resolve, e.g. the MinIO default. */
 const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)$/
@@ -157,7 +167,7 @@ export class S3Storage implements FileStorage {
    * separately is how a signature silently stops covering the request it signs.
    */
   private addressFor(bucket: string, path: string): { origin: string; key: string } {
-    const endpoint = new URL(this.config.endpoint ?? DEFAULT_S3_ENDPOINT)
+    const endpoint = new URL(this.config.endpoint ?? defaultS3Endpoint(this.config.region))
     const objectKey = resolveObjectKey(bucket, path)
     const pathStyle = this.config.forcePathStyle ?? LOOPBACK_HOST.test(endpoint.hostname)
     return pathStyle
