@@ -25,7 +25,7 @@ import { describe, it } from "@std/testing/bdd"
 import postgres from "postgres"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { MigrationEditedError, type MigrationReader, runMigrations } from "./migrate.ts"
-import { PostgresMigrationDriver } from "./postgres-migrate.ts"
+import { PostgresMigrationDriver, PostgresMigrationLockError } from "./postgres-migrate.ts"
 import { createSql } from "./postgres.ts"
 import type { Sql } from "./ports.ts"
 import { migrationRace } from "./testing/migration-race.ts"
@@ -156,6 +156,54 @@ describe("the Postgres migration runner against a real server", () => {
     })
   })
 
+  it("gives up by name when another runner holds the lock past the bound", async () => {
+    // Issue #109. The lock used to be `pg_advisory_lock`, which waits for ever, so one
+    // stuck runner stopped every other instance from starting and the deployment hung with
+    // nothing in the log. The holder here is a real backend holding a real advisory lock,
+    // which is the part a fake cannot show.
+    await withRun(async ({ sql, table, applicationName, observer }) => {
+      const holder = new PostgresMigrationDriver({ sql, table })
+      const blocked = new PostgresMigrationDriver({
+        sql,
+        table,
+        lockWaitMs: 30,
+        lockRetryMs: 10,
+        // The bound counts the waits, so an injected delay makes this test finish at the
+        // speed of three round trips instead of sleeping through it.
+        delay: () => Promise.resolve(),
+      })
+
+      let lockTaken: () => void = () => {}
+      let releaseHolder: () => void = () => {}
+      const granted = new Promise<void>((resolve) => {
+        lockTaken = resolve
+      })
+      const held = new Promise<void>((resolve) => {
+        releaseHolder = resolve
+      })
+
+      const first = holder.withLock(() => {
+        lockTaken()
+        return held
+      })
+      await granted
+      assertStrictEquals((await advisoryLockHolders(observer, applicationName)).length, 1)
+
+      await assertRejects(
+        () => blocked.withLock(() => Promise.resolve()),
+        PostgresMigrationLockError,
+        "30ms",
+      )
+
+      releaseHolder()
+      await first
+      // The runner that gave up took no lock, and the holder let its own go.
+      assertEquals(await advisoryLockHolders(observer, applicationName), [])
+      // And the lock is free again for a runner that comes along afterwards.
+      assertStrictEquals(await blocked.withLock(() => Promise.resolve("ran")), "ran")
+    })
+  })
+
   it("makes two runners that spell the same table differently wait for each other", async () => {
     // The lock key follows the table as the server resolves it, not as the caller spelled
     // it. Deriving it from the spelling gave a driver with `schema: "public"` and a driver
@@ -265,7 +313,7 @@ describe("the Postgres migration runner against a real server", () => {
         folder: "/migrations",
         reader: memoryReader({ "0001_init.sql": applied }),
       })
-      assertEquals(report, { applied: [], skipped: ["0001_init"] })
+      assertEquals(report, { applied: [], skipped: ["0001_init"], missing: [] })
     })
   })
 
@@ -291,7 +339,7 @@ describe("the Postgres migration runner against a real server", () => {
         }),
       })
 
-      assertEquals(report, { applied: ["0002_add"], skipped: ["0001_init"] })
+      assertEquals(report, { applied: ["0002_add"], skipped: ["0001_init"], missing: [] })
       const history = await new PostgresMigrationDriver({ sql, table }).appliedMigrations()
       assertEquals(history.map((row) => row.name), ["0001_init", "0002_add"])
       assertStrictEquals(history[0].checksum, null)

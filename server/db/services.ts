@@ -46,11 +46,14 @@
  * `file`, `json`, `array`, `types` and `typed`, `savepoint`, `notify`, `prepare`, `new`,
  * the service's own nested `begin()` (which rejects, being `async`), and anything read off
  * the handle at any depth. A transaction handle has no `begin`, `reserve` or `listen` of its
- * own; those throw a `TypeError`, live and retired alike. It is a guard against the mistake issue
+ * own; those throw a `TypeError`, live and retired alike. A query *built* through the clone
+ * and awaited after the transaction is refused when it is sent, and a handle the driver
+ * hands to a `savepoint` callback is retired when that savepoint returns — the two routes
+ * #108 opened with. It is a guard against the mistake issue
  * #96 describes, a service that stores the clone and writes through it later, and **not a
  * security boundary**: code that deliberately reaches into the driver's internals is not
  * making that mistake, and could in any case import `postgres` and open a connection of
- * its own. Three known routes remain and are listed on {@link PostgresScopeEndedError}.
+ * its own. One known route remains and is described on {@link PostgresScopeEndedError}.
  */
 
 import type postgres from "postgres"
@@ -75,26 +78,28 @@ import type { RowCache, Sql, Transaction } from "./ports.ts"
  * that awaits its query, turns the throw into the rejection its caller expects; a method
  * that returns the tagged template unawaited sees it one tick earlier, as a throw.
  *
- * **Three known routes remain.** None of them is a call made through the clone after its
- * transaction has ended, which is the only moment this check sees, and all three were
- * there before this check existed. The first needs no knowledge of the driver — a
- * forgotten `await` is enough — and is the one most worth closing:
+ * **Two more moments are checked than a call through the clone**, because a call through
+ * the clone is not the only way a statement reaches the transaction's connection. Both
+ * were routes #108 measured, and both lose the row to the next rollback after reporting
+ * success:
  *
- *  1. a query *built* inside the callback and awaited afterwards. It runs when it is
- *     awaited, and the call that built it happened while the clone was live, so nothing
- *     here sees it — #108;
- *  2. a raw handle taken straight from `this.sql.savepoint(...)`. The driver hands that to
- *     the callback itself, so it never passed through the wrapper — #108;
- *  3. the driver's own internals carried on a value a call *returned*. Every query object
- *     `postgres` builds holds the transaction's execute function as `q.handler`, so
- *     `new q.constructor(…, q.handler, …)` sends a statement on that connection. Return
- *     values are deliberately not wrapped — the driver recognises a fragment or a
- *     parameter passed back into a query by its class, and a wrapper is not that class —
- *     so this one cannot be closed by wrapping reads at all. It is recorded on #108 with
- *     the other two.
+ *  1. a query *built* inside the callback and awaited afterwards. `postgres` queries are
+ *     lazy, so the call that built it happened while the clone was live and the statement
+ *     is sent later. The check moves to the send: the query's own `handle` refuses the
+ *     first send once the scope has ended. A forgotten `await` is enough to write this
+ *     one, which is why it is closed rather than written down;
+ *  2. a handle the driver hands to a `savepoint` callback. That handle is built by the
+ *     driver and passed in, so it never passed through this wrapper; the callback now
+ *     receives a scoped one that is retired when the savepoint returns.
  *
- * All three lose the row to the next rollback after reporting success, which is why they
- * are written down rather than left to be found again.
+ * **One known route remains.** The driver's own internals ride on a value a call
+ * *returned*. Every query object `postgres` builds holds the transaction's execute
+ * function as `q.handler`, so `new q.constructor(…, q.handler, …)` sends a statement on
+ * that connection. Return values are deliberately not wrapped — the driver recognises a
+ * fragment or a parameter passed back into a query by its class, and a wrapper is not that
+ * class — so this one cannot be closed by wrapping reads at all. Building a query out of
+ * the driver's internals is not the mistake this guard is for, and the owner's decision on
+ * #96 is that it ships recorded rather than chased.
  */
 export class PostgresScopeEndedError extends Error {
   constructor() {
@@ -140,7 +145,7 @@ interface ScopedExecutor {
  * test in each tier walks the whole property graph — own keys including symbols,
  * descriptors, the prototype chain, `prototype` and `constructor` — and fails if a *read*
  * gives back a value the driver owns. It says nothing about what a call **returns**, which
- * is route 3 on {@link PostgresScopeEndedError}.
+ * is the one route that remains open on {@link PostgresScopeEndedError}.
  *
  * **Construction is refused outright, live as well as retired.** `postgres` exposes no
  * constructor: `new sql.unsafe(…)` "works" only because any plain function can be
@@ -176,10 +181,19 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
   }
   const wrappers = new WeakMap<object, unknown>()
 
+  /**
+   * The driver's own `savepoint`, read once so {@link ProxyHandler.apply} can recognise it.
+   *
+   * Read now rather than per call: it is a configurable data property on the handle, so
+   * reading it costs nothing and cannot execute a statement.
+   */
+  const rawSavepoint: unknown = (executor as unknown as Record<string, unknown>)["savepoint"]
+
   const handler: ProxyHandler<(...parameters: unknown[]) => unknown> = {
     apply(inner, thisArg, parameters: unknown[]) {
       assertUsable()
-      return Reflect.apply(inner, thisArg, parameters)
+      const scoped = inner === rawSavepoint ? scopeSavepointCallback(parameters) : parameters
+      return armQuery(Reflect.apply(inner, thisArg, scoped))
     },
 
     construct() {
@@ -282,8 +296,8 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
    * therefore stay exactly what the driver built, awaitable and with `values`, `simple`,
    * `cursor`, `forEach` and `describe` intact. That is why the `apply` trap hands the
    * result straight back, and it is also why a query object carries the transaction's own
-   * execute function within reach — route 3 on {@link PostgresScopeEndedError}, which this
-   * design accepts rather than closes.
+   * execute function within reach — the one route that remains open on
+   * {@link PostgresScopeEndedError}, which this design accepts rather than closes.
    */
   function guard(value: unknown): unknown {
     if (typeof value !== "function" && (typeof value !== "object" || value === null)) {
@@ -294,6 +308,93 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
     const wrapper = new Proxy(value as (...parameters: unknown[]) => unknown, handler)
     wrappers.set(value as object, wrapper)
     return wrapper
+  }
+
+  /**
+   * Make a query the driver just built refuse to be *sent* once the scope has ended.
+   *
+   * A `postgres@3.4.7` query is lazy. Nothing reaches the server when the query is built;
+   * `then`, `catch`, `finally`, `execute` and `forEach` all go through the query's
+   * `handle()` method, and that is where the statement is put on the transaction's
+   * connection (`postgres@3.4.7/src/query.js:123-161`). So a query built through a live
+   * clone and awaited after `begin()` has returned used to run inside whatever transaction
+   * that connection held by then. A forgotten `await` is enough to write it, which is why
+   * it is closed here rather than only written down (#108).
+   *
+   * The check goes on the query's own `handle`, shadowing the one it inherits, and only the
+   * **first** send is checked: awaiting a query a second time sends nothing, so a result
+   * read again after the transaction is not refused. The class of the object is untouched,
+   * which matters — the driver recognises a fragment, a parameter or a nested query by its
+   * class, so this could not have been done by wrapping the query in a `Proxy`.
+   *
+   * `handle` is not documented API. The integration tier awaits a query built inside the
+   * callback and expects {@link PostgresScopeEndedError}, so a driver that renamed the
+   * method would turn that test red rather than silently reopen the route.
+   */
+  function armQuery(value: unknown): unknown {
+    if (typeof value !== "object" || value === null) return value
+    const send = (value as { handle?: unknown }).handle
+    if (typeof send !== "function") return value
+    // Already armed, by this scope or by a nested one whose scope ends no later.
+    if (Object.prototype.hasOwnProperty.call(value, "handle")) return value
+    let sent = false
+    Object.defineProperty(value, "handle", {
+      value: function (this: unknown, ...parameters: unknown[]): unknown {
+        if (!sent) {
+          assertUsable()
+          sent = true
+        }
+        return Reflect.apply(send as (...rest: unknown[]) => unknown, this, parameters)
+      },
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    })
+    return value
+  }
+
+  /**
+   * Give a `savepoint` callback a scoped handle instead of the driver's own.
+   *
+   * `sql.savepoint(fn)` calls `fn` with a handle the driver built, so that handle never
+   * passed through this wrapper and a caller who kept it held an open door onto the
+   * connection for the rest of the process (#108). Replacing the callback is the only
+   * place it can be caught, because the driver hands the handle over rather than returning
+   * it.
+   *
+   * The nested scope is retired when the callback settles, exactly as {@link
+   * DbServiceBase.begin} retires its own clone, and on the failure path as well.
+   *
+   * The callback is the last function argument, which covers both of the driver's forms,
+   * `savepoint(fn)` and `savepoint(name, fn)`. An array the callback returns is awaited
+   * here, because the driver awaits one itself and would not once the callback's result is
+   * a promise.
+   */
+  function scopeSavepointCallback(parameters: unknown[]): unknown[] {
+    let index = -1
+    for (let position = parameters.length - 1; position >= 0; position -= 1) {
+      if (typeof parameters[position] === "function") {
+        index = position
+        break
+      }
+    }
+    if (index === -1) return parameters
+    const callback = parameters[index] as (handle: Transaction) => unknown
+    const scoped = (handle: Transaction): unknown => {
+      const nested = scopeExecutor(handle)
+      let outcome: unknown
+      try {
+        outcome = callback(nested.executor)
+      } catch (error) {
+        nested.end()
+        throw error
+      }
+      const settled = Array.isArray(outcome) ? Promise.all(outcome) : outcome
+      return Promise.resolve(settled).finally(() => nested.end())
+    }
+    const scopedParameters = [...parameters]
+    scopedParameters[index] = scoped
+    return scopedParameters
   }
 
   return {
@@ -426,7 +527,14 @@ export class DbServiceBase {
    * guards against; it is not a boundary against code that goes looking for the driver's
    * internals. That error is **thrown** rather than rejected, so a caller that chains
    * `.catch(...)` on an unawaited query will not see it; see
-   * {@link PostgresScopeEndedError} for why, and for the three known routes that remain.
+   * {@link PostgresScopeEndedError} for why, and for the one known route that remains.
+   *
+   * **A query built inside the callback must not be awaited outside it either.** `postgres`
+   * queries are lazy, so a query the callback built and did not await — a forgotten
+   * `await` is enough — would otherwise be sent on that connection later, inside whatever
+   * transaction is open there by then. Awaiting it after the transaction has returned
+   * rejects with {@link PostgresScopeEndedError} instead; awaiting one that already ran
+   * inside the callback is not refused, because that sends nothing.
    */
   async begin<T>(fn: (tx: this) => Promise<T>): Promise<T> {
     if (this.pendingCacheOperations !== null) {

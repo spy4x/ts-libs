@@ -702,22 +702,33 @@ object whose `constructor` is that function. What a _call_ returns is handed bac
 the driver recognises a fragment, a `json` or `array` value or a query object by its class, and a
 wrapper would not be one.
 
+**Two moments other than a call through the clone are checked too** (#108), because a call through
+the clone is not the only way a statement reaches the transaction's connection.
+
+A `postgres` query is lazy: nothing is sent when it is built, and `then`, `catch`, `finally`,
+`execute` and `forEach` all reach the query's `handle()`, which is where the statement goes on the
+connection. So a query built inside the callback and awaited after `begin()` has returned used to run
+inside whatever transaction that connection held by then and vanish with its rollback — a forgotten
+`await` is enough to write it. The guard now sits on the query's own `handle` as well: the first send
+after the scope has ended is refused. Awaiting a query that already ran inside the callback sends
+nothing and is not refused. `handle` is not documented driver API, which is why an integration test
+awaits such a query and expects the error — a driver that renamed the method turns that test red
+instead of reopening the route in silence.
+
+`sql.savepoint(fn)` calls `fn` with a handle the driver built and passed in, so that handle never
+went through the wrapper. The callback now receives a scoped handle instead, retired when the
+savepoint returns.
+
 **It is a guard against a mistake, not a security boundary.** The mistake is the one #96 describes: a
-service stores the clone (`this.db = tx`) and writes through it after the transaction has returned.
-Code that goes looking for the driver's internals is not making that mistake and could in any case
-import `postgres` and open a connection of its own.
+service stores the clone (`this.db = tx`) and writes through it after the transaction has returned,
+or forgets an `await` on a query it built inside the callback. Code that goes looking for the
+driver's internals is not making that mistake and could in any case import `postgres` and open a
+connection of its own.
 
-Three known routes remain, all of them writing into a later transaction and losing the row, and all
-three present before this check existed. They are tracked in #108:
-
-1. a query _built_ inside the callback and awaited after it — the call that built it happened while
-   the clone was live;
-2. a raw handle taken from `this.sql.savepoint(...)`'s callback — the driver hands that over itself,
-   so it never passed through the wrapper;
-3. the driver's own internals carried on a value a call _returned_, for example
-   `new q.constructor(…, q.handler, …)`, since every query object holds the transaction's execute
-   function. Return values are deliberately not wrapped, so this one cannot be closed by wrapping
-   reads.
+One known route remains, recorded on #108. The driver's own internals ride on a value a call
+_returned_ — for example `new q.constructor(…, q.handler, …)`, since every query object holds the
+transaction's execute function. Return values are deliberately not wrapped, so this one cannot be
+closed by wrapping reads, and it is not the mistake the guard is for.
 
 `SqliteDb.close()` goes through the same gate: it waits for an open transaction rather than closing
 the connection under it, and a scoped handle cannot close a connection it never owned. Two `close()`
@@ -730,18 +741,41 @@ still harmless.
 everything — inside `MigrationDriver.withLock`. Locking one migration at a time would not help: the
 race is between the two runners' _reads_ of the history, not between their writes.
 
-| Adapter  | What the lock is                                                      | What it covers                                              |
-| -------- | --------------------------------------------------------------------- | ----------------------------------------------------------- |
-| Postgres | `pg_advisory_lock` on the connection `sql.reserve()` pins for the run | every runner that reaches that history table once it exists |
-| SQLite   | a queue per handle and history table                                  | every runner sharing one `SqliteDb`, and no wider           |
+| Adapter  | What the lock is                                                          | What it covers                                              |
+| -------- | ------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Postgres | `pg_try_advisory_lock` on the connection `sql.reserve()` pins for the run | every runner that reaches that history table once it exists |
+| SQLite   | a queue per handle and history table                                      | every runner sharing one `SqliteDb`, and no wider           |
 
 The Postgres lock is held on the connection the migrations themselves run on, because a session lock
 protects the session it was taken on and nothing else. Its key follows the table as the _server_
 resolves the name — quoted, so a name with a capital letter is found rather than folded away — not
 as the caller spelled it, so a driver given `schema: "app"` and a driver that reaches an existing
-`app.migrations` through its search path lock each other out. It waits rather than failing, with no
-bound (#109), and a runner that dies releases it when its connection closes, so there is no stale
-lock to clear by hand.
+`app.migrations` through its search path lock each other out. A runner that dies releases it when its
+connection closes, so there is no stale lock to clear by hand.
+
+**The wait is bounded** (#109). A second runner retries `pg_try_advisory_lock` every
+`lockRetryMs` (250 ms by default) and gives up after `lockWaitMs` — one minute by default — with
+`PostgresMigrationLockError`, having applied nothing. Raise `lockWaitMs` when the slowest honest run
+in the deployment is longer than that. When it is hit, find the holder: `SELECT * FROM pg_locks WHERE
+locktype = 'advisory'` names the backend and `pg_stat_activity` says what it is running. A holder
+that is genuinely still migrating needs a longer bound behind it; a holder that is stuck needs
+dealing with, and killing its backend releases the lock with its session. `lockWaitMs` counts the
+time spent waiting between attempts, not the round trips, which is what lets a test of the bound
+inject a delay and finish at once. Before this, the lock was `pg_advisory_lock`, which waits for
+ever: one stuck runner stopped every other instance from starting and the deployment hung with
+nothing in the log.
+
+**Two runs on one `PostgresMigrationDriver` object** are refused with
+`PostgresMigrationRunInProgressError` rather than deadlocking. The object points itself at the
+connection a run reserved, so the second run used to send its statements on the first run's
+connection, both held a lock, and the process hung until it was killed. Two concurrent runs are two
+driver objects, which is also what two application instances are.
+
+**A connection lost mid-run is not a catchable error**, and it cannot be made one from here. The
+server releases the advisory lock when the session ends and the run does not continue, so nothing is
+applied twice; what the caller sees is an uncaught `TypeError: Cannot read properties of null
+(reading 'write')` raised from inside `postgres@3.4.7/src/connection.js:250` on a timer the driver
+owns, not a rejected promise. Written down rather than dressed up.
 
 **Every runner of one history table must share a `search_path` or pass the same `schema`.** The key
 is resolved before the lock is taken, and on a first run there is no table to resolve, so each runner
@@ -757,16 +791,40 @@ that pair still ran a `.no_transaction` body twice, in one process as much as in
 advisory locks and its own locks end with the transaction that took them, so nothing here spans a
 run. What its single-writer lock does still give, between any two handles, is that a _transactional_
 migration cannot be applied twice: the loser's whole transaction, migration and history row
-together, rolls back. A `.no_transaction` migration has no such protection. Until #110 replaces this
-with an operating-system file lock: one handle per database in a process, and one process running
-migrations at a time.
+together, rolls back. A `.no_transaction` migration has no such protection.
 
-Every run hashes each migration file and compares it with the SHA-256 the history row carries. A
-file edited after it was applied stops the run with `MigrationEditedError`, instead of being skipped
-in silence and leaving the edit unapplied everywhere. A row written before checksums existed carries
-`null` and is not checked, because back-filling it from the file in front of the runner would record
-the current file as the one that ran. The cost is that a run reads every migration from disk, not
-only the pending ones.
+**A cross-process SQLite lock is deliberately not built** (#110). The design that would work is an
+operating-system file lock on a sibling file (`<database>.migrate.lock`, `Deno.FsFile.lock()`), which
+the kernel releases when the process dies and so has no stale-lock problem. It is not built because
+it needs write permission next to the database, does not apply to `:memory:`, and no project this
+library serves runs two processes against one SQLite file — a SQLite deployment here is one process
+with Litestream behind it. The rule until one does: one handle per database in a process, and one
+process running migrations at a time.
+
+### Migrations: drift between the folder and the history
+
+Every run hashes each migration file and compares it with the SHA-256 the history row carries, and
+**the whole plan is checked before anything is applied**. A file edited after it was applied stops
+the run with `MigrationEditedError`, instead of being skipped in silence and leaving the edit
+unapplied everywhere. A row written before checksums existed carries `null` and is not checked,
+because back-filling it from the file in front of the runner would record the current file as the one
+that ran. The cost is that a run reads every migration from disk, not only the pending ones.
+
+Three neighbouring kinds of drift used to pass without a word (#110):
+
+| Drift                                   | Now                                                                        |
+| --------------------------------------- | -------------------------------------------------------------------------- |
+| a new file sorts before an edited one   | nothing is applied; the plan is checked first, so the run is refused whole |
+| an applied migration's file was deleted | reported in `MigrationReport.missing`, oldest row first                    |
+| an applied migration's file was renamed | `MigrationRenamedError` instead of running its body a second time          |
+
+A deleted file is reported rather than refused, because squashing old migrations away is legitimate
+and there is no opt-out for a refusal yet; a caller that wants a run to stop on one checks the
+`missing` list itself. A rename is recognised by checksum, and only against a history row that has no
+file of its own — a pending file sharing its body with a migration whose file is still on disk is a
+copy, not a rename, and two honestly identical bodies must still be allowed. A migration that really
+is new and really does repeat a deleted one's body needs a body of its own; a comment naming what it
+is for is enough.
 
 The history table gains its `checksum` column on the next run whether it is new or already there, so
 an existing deployment upgrades without a manual step.

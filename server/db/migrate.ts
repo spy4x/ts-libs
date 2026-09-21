@@ -33,6 +33,18 @@
  *    existed carries `null` and is not checked, because there is nothing to compare it
  *    with and assuming the current file is the one that ran would be the silent answer
  *    this check exists to replace.
+ *
+ * Three neighbouring kinds of drift were added after #110 found them passing without a
+ * word:
+ *
+ *  - **nothing is applied by a run that is going to be refused.** Every file is read,
+ *    hashed and checked before the first apply, so a new file that sorts before an edited
+ *    one no longer lands in the database on the way to the error.
+ *  - **a history row with no file is reported**, as {@link MigrationReport.missing}. Not
+ *    refused: squashing old migrations away is legitimate and there is no opt-out yet.
+ *  - **a renamed migration is refused.** A pending file whose body is exactly what a
+ *    missing row recorded is {@link MigrationRenamedError}; it used to be treated as new
+ *    and its body ran a second time.
  */
 
 import { extname, join } from "@std/path"
@@ -116,12 +128,57 @@ export async function checksumOf(sqlText: string): Promise<string> {
   return encodeHex(new Uint8Array(digest))
 }
 
+/**
+ * Thrown when a pending file carries the body of an applied migration whose file is gone.
+ *
+ * That is what a rename looks like from the runner's side: the history holds a name with
+ * no file behind it any more, and a file the history has never seen hashes to exactly what
+ * that row recorded. Treating it as new would run the body a second time against a
+ * database that already has it, which is the one kind of drift in issue #110 that can
+ * damage data.
+ *
+ * The way out is to rename the file back. A migration that really is new and really does
+ * have the same body as a deleted one needs a body that differs — a comment naming what it
+ * is for is enough — because the runner has nothing else to tell the two apart by.
+ */
+export class MigrationRenamedError extends Error {
+  /** The history name whose file is gone. */
+  readonly recordedName: string
+  /** The pending migration carrying that body. */
+  readonly pendingName: string
+  /** The checksum both of them have. */
+  readonly checksum: string
+
+  constructor(recordedName: string, pendingName: string, checksum: string) {
+    super(
+      `migration ${pendingName} has the body of ${recordedName}, which was applied and ` +
+        `whose file is no longer on disk (checksum ${checksum}); applying it would run that ` +
+        `body a second time against a database that already has it, so rename the file back ` +
+        `or give the new migration a body of its own`,
+    )
+    this.name = "MigrationRenamedError"
+    this.recordedName = recordedName
+    this.pendingName = pendingName
+    this.checksum = checksum
+  }
+}
+
 /** What one run did. Returned instead of logged, so a caller owns its output. */
 export interface MigrationReport {
   /** Names applied by this run, in application order. */
   applied: string[]
   /** Names already present in the history table. */
   skipped: string[]
+  /**
+   * Names in the history table that no file on disk accounts for, oldest row first.
+   *
+   * A migration that was applied and then deleted used to be ignored in silence, so the
+   * history and the folder disagreed with nobody told (#110). It is reported rather than
+   * refused, because squashing old migrations away is a legitimate thing to do and this
+   * library has no opt-out for it yet; a caller that wants a run to stop on one checks
+   * this list. It is also what the rename check is derived from.
+   */
+  missing: string[]
 }
 
 /**
@@ -240,10 +297,12 @@ export function parseMigrationName(fileName: string, extension = ".sql"): Migrat
  * reads the history it wrote. Locking a single migration would not do it, because the
  * race is between the two reads of the history, not between the two writes.
  *
- * Every file is read and hashed, applied or not, and a file whose hash differs from the
- * one its history row carries stops the run with {@link MigrationEditedError}. That is
- * the cost of the check: a run reads every migration from disk rather than only the
- * pending ones.
+ * Every file is read and hashed, applied or not, and **the whole plan is checked before
+ * anything is applied**. A file whose hash differs from the one its history row carries
+ * stops the run with {@link MigrationEditedError}, and a pending file carrying the body of
+ * an applied migration whose own file is gone stops it with {@link MigrationRenamedError};
+ * either way nothing has been applied by the time the error is thrown. That is the cost of
+ * the check: a run reads every migration from disk rather than only the pending ones.
  *
  * Reads the whole applied set once, then applies sequentially: order is significant
  * for migrations and a driver that serialises writes itself would otherwise reorder
@@ -258,7 +317,25 @@ export function runMigrations(
   return driver.withLock(() => applyPending(driver, options))
 }
 
-/** The body of one {@link runMigrations} run, with the lock already held. */
+/** One file, read and hashed, with whatever history row it matched. */
+interface PlannedMigration {
+  /** The file, ready for a driver. */
+  migration: Migration
+  /** The history name this file matched, or `undefined` when the history has never seen it. */
+  recordedUnder: string | undefined
+  /** The checksum that row carries; `null` when it predates checksums or there is no row. */
+  recordedChecksum: string | null
+}
+
+/**
+ * The body of one {@link runMigrations} run, with the lock already held.
+ *
+ * Three passes, and the split is the point (#110). Every file is read and hashed first,
+ * then the whole plan is checked, and only then is anything applied. Applying as it went
+ * meant a new file that sorted *before* an edited one was applied and only then did the
+ * run stop, so "the run was refused" did not mean "nothing was applied". The extra pass
+ * costs nothing: every file is read either way.
+ */
 async function applyPending(
   driver: MigrationDriver,
   options: DiscoverMigrationsOptions,
@@ -271,9 +348,8 @@ async function applyPending(
     known.set(row.name, row.checksum)
   }
 
-  const appliedNow: string[] = []
-  const skipped: string[] = []
-
+  const planned: PlannedMigration[] = []
+  const accountedFor = new Set<string>()
   for (const fileName of await discoverMigrations(options)) {
     const name = parseMigrationName(fileName, extension)
     const sqlText = await reader.readText(options.folder, fileName)
@@ -281,28 +357,75 @@ async function applyPending(
     // The file-name form only matches a history written by a runner that recorded the
     // file name; the template runner (`template/libs/server/db/migrate.ts:55`) did.
     const recordedUnder = known.has(name) ? name : known.has(fileName) ? fileName : undefined
-    if (recordedUnder !== undefined) {
-      const recorded = known.get(recordedUnder) ?? null
-      if (recorded !== null && recorded !== checksum) {
-        throw new MigrationEditedError(name, recorded, checksum)
-      }
-      skipped.push(name)
-      continue
-    }
-    const migration: Migration = {
-      fileName,
-      name,
-      sqlText,
-      checksum,
-      withoutTransaction: fileName.endsWith(`${NO_TRANSACTION_SUFFIX}${extension}`),
-    }
-    if (migration.withoutTransaction) {
-      await driver.applyWithoutTransaction(migration)
-    } else {
-      await driver.applyInTransaction(migration)
-    }
-    appliedNow.push(name)
+    if (recordedUnder !== undefined) accountedFor.add(recordedUnder)
+    planned.push({
+      migration: {
+        fileName,
+        name,
+        sqlText,
+        checksum,
+        withoutTransaction: fileName.endsWith(`${NO_TRANSACTION_SUFFIX}${extension}`),
+      },
+      recordedUnder,
+      recordedChecksum: recordedUnder === undefined ? null : known.get(recordedUnder) ?? null,
+    })
   }
 
-  return { applied: appliedNow, skipped }
+  const missing = [...known.keys()].filter((name) => !accountedFor.has(name))
+  refuseDrift(planned, known, missing)
+
+  const appliedNow: string[] = []
+  const skipped: string[] = []
+  for (const entry of planned) {
+    if (entry.recordedUnder !== undefined) {
+      skipped.push(entry.migration.name)
+      continue
+    }
+    if (entry.migration.withoutTransaction) {
+      await driver.applyWithoutTransaction(entry.migration)
+    } else {
+      await driver.applyInTransaction(entry.migration)
+    }
+    appliedNow.push(entry.migration.name)
+  }
+
+  return { applied: appliedNow, skipped, missing }
+}
+
+/**
+ * Stop the run when the folder and the history disagree in a way that would damage data.
+ *
+ * Two refusals, both checked over the whole plan before anything is applied, and reported
+ * in file-name order so the message names the first problem a reader would find.
+ *
+ * An **edited** file is one whose history row records a different body. A **renamed** one
+ * is a file the history has never seen whose body is exactly what a row with no file of
+ * its own recorded: applying it would run that body a second time against a database that
+ * already has it. The rename check is deliberately limited to rows in `missing` — a
+ * pending file that shares its body with an applied migration whose file is still there is
+ * a copy, not a rename, and refusing that would stop two honestly identical bodies.
+ */
+function refuseDrift(
+  planned: PlannedMigration[],
+  known: Map<string, string | null>,
+  missing: string[],
+): void {
+  for (const entry of planned) {
+    if (entry.recordedUnder !== undefined) {
+      if (
+        entry.recordedChecksum !== null && entry.recordedChecksum !== entry.migration.checksum
+      ) {
+        throw new MigrationEditedError(
+          entry.migration.name,
+          entry.recordedChecksum,
+          entry.migration.checksum,
+        )
+      }
+      continue
+    }
+    const renamedFrom = missing.find((name) => known.get(name) === entry.migration.checksum)
+    if (renamedFrom !== undefined) {
+      throw new MigrationRenamedError(renamedFrom, entry.migration.name, entry.migration.checksum)
+    }
+  }
 }

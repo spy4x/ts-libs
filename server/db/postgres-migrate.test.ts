@@ -15,7 +15,12 @@
 import { assertEquals, assertRejects, assertStrictEquals, assertThrows } from "@std/assert"
 import type { Migration } from "./migrate.ts"
 import type { Sql, Transaction } from "./ports.ts"
-import { DEFAULT_MIGRATIONS_TABLE, PostgresMigrationDriver } from "./postgres-migrate.ts"
+import {
+  DEFAULT_MIGRATIONS_TABLE,
+  PostgresMigrationDriver,
+  PostgresMigrationLockError,
+  PostgresMigrationRunInProgressError,
+} from "./postgres-migrate.ts"
 import { ENV_NAME, PROD_FLAG, purgeDatabase, SAFE_ENV_VALUES } from "./postgres-purge.ts"
 
 /** Options for {@link createFakeSql}. */
@@ -26,6 +31,13 @@ interface FakeSqlOptions {
   failOn?: string
   /** What the server answers for the resolved-schema probe. Defaults to `public`. */
   currentSchema?: string
+  /**
+   * How many times `pg_try_advisory_lock` answers `false` before it answers `true`.
+   *
+   * Defaults to `0` — the lock is free. `Infinity` stands for a holder that never lets go,
+   * which is what the bound is for.
+   */
+  lockRefusals?: number
 }
 
 /**
@@ -56,6 +68,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
   let inTransaction = false
   let reserves = 0
   let releases = 0
+  let lockAttempts = 0
 
   const render = (strings: TemplateStringsArray, values: unknown[]): string => {
     let text = strings[0]
@@ -96,6 +109,13 @@ function createFakeSql(options: FakeSqlOptions = {}) {
       // moment the lock changes shape.
       if (query.includes("current_schema()")) {
         return Promise.resolve([{ schema: options.currentSchema ?? "public" }])
+      }
+      // The lock attempt answers a row, as `pg_try_advisory_lock` does. `lockRefusals`
+      // is how a test stands in for another runner holding it.
+      if (query.includes("pg_try_advisory_lock")) {
+        lockAttempts += 1
+        const refused = lockAttempts <= (options.lockRefusals ?? 0)
+        return Promise.resolve([{ locked: !refused }])
       }
       if (query.includes("pg_advisory_")) return Promise.resolve([])
       return Promise.resolve(answers.shift() ?? [])
@@ -164,6 +184,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     reserved,
     boundValues,
     connections: () => ({ reserves, releases }),
+    lockAttempts: () => lockAttempts,
   }
 }
 
@@ -328,7 +349,7 @@ Deno.test("the lock, the run and the unlock all go through the reserved connecti
   assertEquals(fake.connections(), { reserves: 1, releases: 1 })
   assertEquals(fake.reserved, [
     RESOLVED_SCHEMA_PROBE,
-    "SELECT pg_advisory_lock($1)",
+    "SELECT pg_try_advisory_lock($1) AS locked",
     SEARCH_PATH_PROBE,
     `ALTER TABLE "migrations" ADD COLUMN IF NOT EXISTS checksum TEXT`,
     "SELECT pg_advisory_unlock($1)",
@@ -349,11 +370,112 @@ Deno.test("withLock unlocks and releases the connection when the run throws", as
 
   assertEquals(fake.reserved, [
     RESOLVED_SCHEMA_PROBE,
-    "SELECT pg_advisory_lock($1)",
+    "SELECT pg_try_advisory_lock($1) AS locked",
     "SELECT pg_advisory_unlock($1)",
   ])
   assertEquals(fake.topLevel, [])
   assertEquals(fake.connections(), { reserves: 1, releases: 1 })
+})
+
+Deno.test("a runner that cannot take the lock within the bound fails by name", async () => {
+  // Issue #109: `pg_advisory_lock` waits for ever, so one stuck runner stopped every other
+  // instance from starting and the deployment hung with nothing in the log. The bound is
+  // measured against the time spent waiting *between* attempts, so this test injects a
+  // delay that returns at once and never sleeps.
+  const waits: number[] = []
+  const fake = createFakeSql({ lockRefusals: Infinity })
+  const driver = new PostgresMigrationDriver({
+    sql: fake.sql,
+    lockWaitMs: 500,
+    lockRetryMs: 200,
+    delay: (milliseconds) => {
+      waits.push(milliseconds)
+      return Promise.resolve()
+    },
+  })
+
+  let ran = false
+  const error = await assertRejects(
+    () =>
+      driver.withLock(() => {
+        ran = true
+        return Promise.resolve()
+      }),
+    PostgresMigrationLockError,
+    "500ms",
+  )
+
+  assertStrictEquals(error.lockWaitMs, 500)
+  // Nothing was applied: the run never started.
+  assertStrictEquals(ran, false)
+  // 200 + 200 + 100 spends exactly the bound, and the fourth refusal is the one that gives
+  // up — so four attempts and three waits.
+  assertEquals(waits, [200, 200, 100])
+  assertStrictEquals(fake.lockAttempts(), 4)
+  // The connection is handed back and no lock is left behind: nothing was taken, so there
+  // is nothing to unlock.
+  assertEquals(fake.connections(), { reserves: 1, releases: 1 })
+  assertEquals(fake.reserved, [
+    RESOLVED_SCHEMA_PROBE,
+    ...Array.from({ length: 4 }, () => "SELECT pg_try_advisory_lock($1) AS locked"),
+  ])
+})
+
+Deno.test("a lock bound of zero gives up on the first refusal without waiting", async () => {
+  const fake = createFakeSql({ lockRefusals: Infinity })
+  const driver = new PostgresMigrationDriver({
+    sql: fake.sql,
+    lockWaitMs: 0,
+    delay: () => Promise.reject(new Error("the bound of zero must not wait")),
+  })
+
+  await assertRejects(() => driver.withLock(() => Promise.resolve()), PostgresMigrationLockError)
+  assertStrictEquals(fake.lockAttempts(), 1)
+})
+
+Deno.test("a runner that takes the lock on a later attempt runs normally", async () => {
+  // The other half of the bound: waiting is still what a second instance does, and it is
+  // only giving up that is new.
+  const fake = createFakeSql({ lockRefusals: 2 })
+  const driver = new PostgresMigrationDriver({
+    sql: fake.sql,
+    lockWaitMs: 1_000,
+    lockRetryMs: 10,
+    delay: () => Promise.resolve(),
+  })
+
+  assertStrictEquals(await driver.withLock(() => Promise.resolve("ran")), "ran")
+  assertStrictEquals(fake.lockAttempts(), 3)
+  assertEquals(fake.reserved.at(-1), "SELECT pg_advisory_unlock($1)")
+})
+
+Deno.test("a second run on the same driver object is refused instead of deadlocking", async () => {
+  // Issue #109's other half. `withLock` points this instance at the connection it
+  // reserved, so a second run on the same object sent its statements down the first run's
+  // connection: both held an advisory lock, the winner queued behind the loser, and the
+  // process hung until it was killed.
+  const fake = createFakeSql()
+  const driver = new PostgresMigrationDriver({ sql: fake.sql })
+
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const first = driver.withLock(() => held)
+
+  await assertRejects(
+    () => driver.withLock(() => Promise.resolve()),
+    PostgresMigrationRunInProgressError,
+    "already running a migration",
+  )
+
+  release()
+  await first
+  // One reservation, one release: the refused run touched no connection at all.
+  assertEquals(fake.connections(), { reserves: 1, releases: 1 })
+
+  // And the guard is not sticky — the object works again once the first run is over.
+  assertStrictEquals(await driver.withLock(() => Promise.resolve("again")), "again")
 })
 
 Deno.test("the advisory lock key follows the resolved table and does not drift", async () => {
@@ -424,7 +546,7 @@ Deno.test("inside the lock the transaction is sent as statements on the pinned c
   assertEquals(fake.topLevel, [])
   assertEquals(fake.reserved, [
     RESOLVED_SCHEMA_PROBE,
-    "SELECT pg_advisory_lock($1)",
+    "SELECT pg_try_advisory_lock($1) AS locked",
     "BEGIN",
     "CREATE TABLE users (id SERIAL PRIMARY KEY)",
     `INSERT INTO "migrations" (name, checksum) VALUES ($1, $2)`,
@@ -451,7 +573,7 @@ Deno.test("a migration that fails inside the lock is rolled back and never recor
   assertEquals(fake.topLevel, [])
   assertEquals(fake.reserved, [
     RESOLVED_SCHEMA_PROBE,
-    "SELECT pg_advisory_lock($1)",
+    "SELECT pg_try_advisory_lock($1) AS locked",
     "BEGIN",
     "CREATE TABLE broken (id INTEGER",
     "ROLLBACK",
