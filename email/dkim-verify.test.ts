@@ -45,6 +45,11 @@ import {
   verifyDkim,
   verifyDkimSignatures,
 } from "./dkim-verify.ts"
+import {
+  canonicalizationPassesForTests,
+  hashPassesForTests,
+  resetBodyHashCountersForTests,
+} from "./dkim-body-hash.ts"
 
 const FIXTURE_DIR = new URL("./fixtures/", import.meta.url)
 
@@ -125,9 +130,17 @@ function canonHeader(name: string, value: string, mode: string): string {
   return `${name.toLowerCase().replace(/[ \t]+/g, "")}:${squashed.trim()}\r\n`
 }
 
-/** §3.4.3 simple / §3.4.4 relaxed, written independently of the module. */
+/**
+ * §3.4.3 simple / §3.4.4 relaxed, written independently of the module.
+ *
+ * Only CRLF and a bare LF are folded to CRLF here — a lone CR is left alone,
+ * as RFC 6376 §3.4.3/§3.4.4 describe and dkimpy and OpenDKIM implement (issue
+ * #94). An earlier revision of this helper also rewrote a lone CR, which
+ * meant the one body test carrying one was really pinning agreement between
+ * two copies of this file's own convention rather than the RFC reading.
+ */
 function canonBody(body: string, mode: string): string {
-  const crlf = body.replace(/\r\n|\r|\n/g, "\r\n")
+  const crlf = body.replace(/\r\n|\n/g, "\r\n")
   if (mode === "simple") {
     const trimmed = crlf.replace(/(?:\r\n)+$/, "")
     return trimmed === "" ? "\r\n" : `${trimmed}\r\n`
@@ -242,6 +255,18 @@ interface SignOptions {
   foldSignature?: boolean
   /** Modulus length of the RSA pair to sign with. Defaults to 2048. */
   rsaBits?: number
+  /**
+   * Hash the canonical body as the raw octets its code units name (`ascii()`,
+   * one octet per code unit) instead of encoding it as UTF-8 text first.
+   *
+   * `body` is still an ordinary JS string, so a code unit in `\x80`-`\xff`
+   * reads the same either way; the difference is only which bytes `bh=` ends
+   * up covering — one octet per code unit here, versus that code unit's
+   * multi-byte UTF-8 encoding otherwise. This is what a genuine signer does
+   * when it has 8-bit content that is not UTF-8 (issue #88's fourth finding):
+   * it hashes the bytes it was handed, not a re-encoding of them.
+   */
+  rawBodyOctets?: boolean
 }
 
 /**
@@ -260,10 +285,13 @@ async function sign(
   const bodyMode = options.bodyMode ?? mode
   const names = options.names ?? ["from", "to", "subject"]
   const canonicalBody = canonBody(body, bodyMode)
+  const canonicalBodyBytes = options.rawBodyOctets
+    ? ascii(canonicalBody)
+    : new TextEncoder().encode(canonicalBody)
   const bodyHash = await sha256Base64(
     options.bodyLength === undefined
-      ? canonicalBody
-      : new TextEncoder().encode(canonicalBody).slice(0, options.bodyLength),
+      ? (options.rawBodyOctets ? canonicalBodyBytes : canonicalBody)
+      : canonicalBodyBytes.slice(0, options.bodyLength),
   )
   const signedBodyHash = options.bodyHashWsp ? spliceWsp(bodyHash, options.bodyHashWsp) : bodyHash
   const stub = `v=1; a=${options.ed25519 ? "ed25519-sha256" : "rsa-sha256"}; ` +
@@ -734,6 +762,67 @@ describe("the l= body bound is counted in octets", () => {
   })
 })
 
+// --- accepting raw octets (issue #88's fourth finding) ----------------------
+
+/**
+ * DKIM is defined over octets (RFC 6376 §2.4: "the entire, unaltered message
+ * body"), and a JavaScript `string` cannot represent 8-bit content that is not
+ * valid UTF-8: decoding it as UTF-8 rewrites the bytes, and `latin1` is really
+ * windows-1252 and remaps 0x80-0x9F. `verifyDkim`/`verifyDkimSignatures` now
+ * accept a `Uint8Array` for exactly this case, alongside the `string` overload
+ * that keeps working as before.
+ */
+describe("accepting raw octets (issue #88)", () => {
+  it("verifies 8-bit content that is not valid UTF-8, passed as bytes", async () => {
+    // The body is one line, no WSP, so it is its own canonicalization under
+    // both modes — the octets `bh=` covers are exactly the ones in `body`.
+    // 0xe9 alone is not valid UTF-8 (it is a lead byte with no continuation),
+    // so this body cannot be represented as a well-formed Unicode string.
+    const body = "h\xe9llo\r\n"
+    const { raw, publicKey } = await sign(TEST_HEADERS, body, { rawBodyOctets: true })
+
+    const bytes = ascii(raw)
+    assertEquals(bytes[raw.indexOf("h\xe9llo")], 0x68)
+    assertEquals(bytes[raw.indexOf("h\xe9llo") + 1], 0xe9)
+
+    const result = await verifyDkim(bytes, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.bodyCoverage, { signedOctets: 7, totalOctets: 7, complete: true })
+  })
+
+  it("rejects the same message decoded as UTF-8 text instead of passed as bytes", async () => {
+    // The trap issue #88 names: decoding 0xe9 as UTF-8 either produces the
+    // replacement character or, read one code unit at a time as this file's
+    // `sign()` does, a JS string whose hash re-encodes that code unit as the
+    // two-byte UTF-8 form of "é" — neither is the one raw octet the signer
+    // covered, so the body hash the string path computes does not match.
+    const body = "h\xe9llo\r\n"
+    const { raw, publicKey } = await sign(TEST_HEADERS, body, { rawBodyOctets: true })
+
+    const result = await verifyDkim(raw, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "body hash mismatch (body modified after signing)")
+  })
+
+  it("gives an ASCII message the same verdict as a string or as bytes", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const fromString = await verifyDkim(raw, publicKey)
+    const fromBytes = await verifyDkim(ascii(raw), publicKey)
+    assert(fromString.valid, `reason=${fromString.reason}`)
+    assertEquals(fromBytes, fromString)
+  })
+
+  it("still refuses a From: hidden behind a lone CR when the message is bytes", async () => {
+    // The header-block security rules (#88's first and second findings)
+    // apply the same way whichever input form carried the message in.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
+    const attacked = `X-Note: a\rFrom: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertStringIncludes(result.reason ?? "", "carriage return that no line feed follows")
+  })
+})
+
 describe("policy RFC 6376 leaves to the caller", () => {
   it("accepts an l= bound longer than the body without enlarging what it covers", async () => {
     // §3.5: "the signer MUST NOT use a value in the l= tag that is greater than
@@ -1025,6 +1114,83 @@ describe("a message carrying several signatures (§6.1)", () => {
     const result = await verifyDkim(allBroken, publicKey)
     assertEquals(result.valid, false)
     assertEquals(result.reason, "signature did not verify against public key")
+  })
+})
+
+// --- the body is hashed once per c=/l= combination (issue #88's third finding) --
+
+/**
+ * `verifyOneSignature` used to canonicalize and hash the body itself, for
+ * every `DKIM-Signature` field — so a message with several signatures did the
+ * one thing here that scales with the body's size once per field, whatever
+ * they shared. `dkim-body-hash.ts`'s cache is what fixed that; its two
+ * test-only counters (`canonicalizationPassesForTests`,
+ * `hashPassesForTests`) are the seam this test counts through, since the
+ * defect is about *how many times* the body was processed, not about how long
+ * that took — a count is deterministic where a clock is not, on a shared
+ * machine running other tests at the same time.
+ */
+describe("the body is hashed once per c=/l= combination, not once per signature", () => {
+  const BODY = "This is a test.\r\n"
+
+  /** The message's `DKIM-Signature:` field, as one raw line. */
+  function dkimField(raw: string): string {
+    const line = splitMessage(raw).headers.find((header) =>
+      header.toLowerCase().startsWith("dkim-signature:")
+    )
+    if (line === undefined) throw new Error("message has no DKIM-Signature field")
+    return line
+  }
+
+  it("canonicalises the body once per mode and hashes once per (mode, l=) pair", async () => {
+    // Three independent signatures, all under the one key `sign()` reuses by
+    // default, over three distinct (c=, l=) combinations.
+    const relaxedFull = await sign(TEST_HEADERS, BODY, { mode: "relaxed" })
+    const relaxedBounded = await sign(TEST_HEADERS, BODY, { mode: "relaxed", bodyLength: 4 })
+    const simpleFull = await sign(TEST_HEADERS, BODY, { mode: "simple" })
+
+    // Five `DKIM-Signature` fields over those three combinations, two of them
+    // repeated: relaxed/no-l= twice, relaxed/l=4 twice, simple/no-l= once.
+    const extra = [
+      dkimField(relaxedBounded.raw),
+      dkimField(simpleFull.raw),
+      dkimField(relaxedFull.raw),
+      dkimField(relaxedBounded.raw),
+    ]
+    const combined = extra.map((field) => `${field}\r\n`).join("") + relaxedFull.raw
+    assertEquals(
+      splitMessage(combined).headers.filter((h) => h.toLowerCase().startsWith("dkim-signature:"))
+        .length,
+      5,
+    )
+
+    resetBodyHashCountersForTests()
+    const results = await verifyDkimSignatures(combined, relaxedFull.publicKey)
+    assertEquals(results.length, 5)
+    for (const result of results) assert(result.valid, `reason=${result.reason}`)
+
+    // Two distinct canonicalization modes were asked for, however many
+    // signatures and `l=` values used each — `relaxed` is not re-canonicalized
+    // for its `l=4` signatures, and `simple` costs one pass on top of that.
+    assertEquals(canonicalizationPassesForTests(), 2)
+    // Three distinct (mode, l=) pairs were asked for; the fourth and fifth
+    // fields — the second relaxed/no-l= and the second relaxed/l=4 — are cache
+    // hits and must not add a fourth or fifth hash pass.
+    assertEquals(hashPassesForTests(), 3)
+  })
+
+  it("does not share a cache between two different messages", async () => {
+    // A regression the counters alone would not catch: a cache that leaked
+    // across `verifyDkimSignatures` calls would under-count the second
+    // message's own work instead of doing none of it.
+    const first = await sign(TEST_HEADERS, BODY, { mode: "relaxed" })
+    const second = await sign(TEST_HEADERS, "A different body.\r\n", { mode: "relaxed" })
+
+    resetBodyHashCountersForTests()
+    await verifyDkimSignatures(first.raw, first.publicKey)
+    assertEquals(canonicalizationPassesForTests(), 1)
+    await verifyDkimSignatures(second.raw, second.publicKey)
+    assertEquals(canonicalizationPassesForTests(), 2)
   })
 })
 
@@ -1495,21 +1661,35 @@ describe("canonicalizeHeader", () => {
     assertEquals(canonicalizeHeader("X-Lf", "a\nb", "relaxed"), "x-lf:ab\r\n")
   })
 
-  it("treats a lone CR inside a value as a literal CR", () => {
+  it("treats a lone CR inside or at the edge of a value as a literal CR", () => {
     // RFC 5322 §2.3: a bare CR is not a line ending, and §3.4.2 unfolds CRLF
-    // only, so the CR survives in both modes.
+    // only and deletes WSP only — RFC 5234's WSP is SP and HTAB, nothing else —
+    // so a CR survives in both modes, at the edges of the value as much as in
+    // the middle. An earlier revision trimmed the ends of a relaxed value with
+    // `String.trim()`, for which CR is whitespace, so a trailing or leading
+    // lone CR was stripped there and kept by simple; that asymmetry is gone
+    // now that this file may handle raw octets rather than decoded text (see
+    // the module note on `verifyDkim`), because `trim()` also strips U+00A0,
+    // and a raw UTF-8 header value ending in the byte 0xA0 — the second byte
+    // of "à" (0xC3 0xA0) — would lose that byte under relaxed
+    // canonicalization if the trim stayed that broad.
     assertEquals(canonicalizeHeader("X-Cr", "a\rb", "simple"), "X-Cr:a\rb\r\n")
     assertEquals(canonicalizeHeader("X-Cr", "a\rb", "relaxed"), "x-cr:a\rb\r\n")
     assertEquals(
       [...canonicalizeHeader("X-Cr", "a\rb", "relaxed")].map((c) => c.charCodeAt(0)),
       [120, 45, 99, 114, 58, 97, 13, 98, 13, 10],
     )
-    // At the ends of the value it is a different story: the relaxed path trims
-    // with `String.trim()`, for which CR is whitespace, so a trailing lone CR is
-    // stripped there and kept by simple.
     assertEquals(canonicalizeHeader("X-Cr", "a\r", "simple"), "X-Cr:a\r\r\n")
-    assertEquals(canonicalizeHeader("X-Cr", "a\r", "relaxed"), "x-cr:a\r\n")
-    assertEquals(canonicalizeHeader("X-Cr", "\ra", "relaxed"), "x-cr:a\r\n")
+    assertEquals(canonicalizeHeader("X-Cr", "a\r", "relaxed"), "x-cr:a\r\r\n")
+    assertEquals(canonicalizeHeader("X-Cr", "\ra", "relaxed"), "x-cr:\ra\r\n")
+  })
+
+  it("still trims SP and HTAB from a relaxed value's ends", () => {
+    // The replacement for `String.trim()` must keep doing what RFC 3.4.2 step 5
+    // actually asks for — deleting WSP at the start and end of the value —
+    // even though it no longer deletes CR along with it.
+    assertEquals(canonicalizeHeader("X-Sp", "  a  ", "relaxed"), "x-sp:a\r\n")
+    assertEquals(canonicalizeHeader("X-Tab", "\ta\t", "relaxed"), "x-tab:a\r\n")
   })
 })
 
@@ -1549,17 +1729,30 @@ describe("canonicalizeBody", () => {
     assertEquals(canonicalizeBody("a\n\n\n", "relaxed"), "a\r\n")
   })
 
-  it("treats a lone CR in a body as a line ending", () => {
-    // Mailbox storage rewrites line endings and nothing else references the
-    // body's original bytes, so every ending — CRLF, bare LF, lone CR — becomes
-    // one canonical CRLF. Deleting this rewrite left the suite green before
-    // (#74), because every other body test uses CRLF or LF.
-    assertEquals(canonicalizeBody("line one\rline two\r\n", "simple"), "line one\r\nline two\r\n")
-    assertEquals(canonicalizeBody("a\rb", "relaxed"), "a\r\nb\r\n")
-    assertEquals(canonicalizeBody("a\r\r\r", "simple"), "a\r\n")
-    // A CR that ends the body is a line ending too, so the trailing empty line
-    // it opens is dropped rather than kept as content.
-    assertEquals(canonicalizeBody("a\r", "relaxed"), "a\r\n")
+  it("treats a lone CR in a body as an ordinary octet, not a line ending", () => {
+    // Issue #94: only CRLF and a bare LF end a body line, per RFC 6376
+    // §3.4.3/§3.4.4 and how dkimpy and OpenDKIM canonicalize a body — neither
+    // section lists CR among what a body canonicalizer treats specially. An
+    // earlier revision of this file rewrote a lone CR to CRLF here, which
+    // disagreed with every RFC-faithful signer on a body that legitimately
+    // carries one (classic-Mac text pasted inline, an 8-bit part that was
+    // never quoted-printable encoded) and reported it as tampered with.
+    assertEquals(canonicalizeBody("line one\rline two\r\n", "simple"), "line one\rline two\r\n")
+    assertEquals(canonicalizeBody("a\rb", "relaxed"), "a\rb\r\n")
+    assertEquals(canonicalizeBody("a\r\r\r", "simple"), "a\r\r\r\r\n")
+    // A CR at the end of the body is content too, not a line ending that opens
+    // a trailing empty line to drop — the canonical form still ends in exactly
+    // one CRLF, appended after the CR rather than in place of it.
+    assertEquals(canonicalizeBody("a\r", "relaxed"), "a\r\r\n")
+  })
+
+  it("hashes the exact octets a signer that follows the RFC hashed (issue #94)", () => {
+    // The reproduction from issue #94: a genuine signer canonicalizes
+    // `before\rafter\r\n` to itself — 13 octets, no rewrite — because the body
+    // already ends in CRLF and the interior CR is not a line ending. The old
+    // behaviour turned it into `before\r\nafter\r\n` (14 octets) instead.
+    assertEquals(canonicalizeBody("before\rafter\r\n", "relaxed"), "before\rafter\r\n")
+    assertEquals(canonicalizeBody("before\rafter\r\n", "simple"), "before\rafter\r\n")
   })
 
   it("keeps the internal empty lines and drops only the trailing ones", () => {
@@ -2237,12 +2430,14 @@ describe("verifyDkim", () => {
   })
 
   it("refuses a message larger than the cap it was given", async () => {
+    // `raw` is ASCII, so its UTF-16 length and its UTF-8 octet count agree —
+    // the octet-vs-code-unit distinction has its own tests below.
     const { raw, publicKey } = await sign(TEST_HEADERS, "This is a test.\r\n")
     const result = await verifyDkim(raw, publicKey, { maxMessageLength: raw.length - 1 })
     assertEquals(result.valid, false)
     assertEquals(
       result.reason,
-      `message is ${raw.length} characters, over the ${raw.length - 1}-character limit`,
+      `message is ${raw.length} octets, over the ${raw.length - 1}-octet limit`,
     )
     // Nothing was parsed or hashed: the message never reached the verifier.
     assertEquals(result.parsed, undefined)
@@ -2262,8 +2457,28 @@ describe("verifyDkim", () => {
     const oversized = raw + " ".repeat(DEFAULT_MAX_MESSAGE_LENGTH)
     const result = await verifyDkim(oversized, publicKey)
     assertEquals(result.valid, false)
-    assertStringIncludes(result.reason ?? "", `over the ${DEFAULT_MAX_MESSAGE_LENGTH}-character`)
+    assertStringIncludes(result.reason ?? "", `over the ${DEFAULT_MAX_MESSAGE_LENGTH}-octet`)
     assertEquals(DEFAULT_MAX_MESSAGE_LENGTH, 10 * 1024 * 1024)
+  })
+
+  it("counts the cap in octets, not UTF-16 code units", async () => {
+    // A message this many *code units* long is under the cap; encoded as
+    // UTF-8, where every "é" costs two octets, it is over. The old check
+    // compared `rawMessage.length` — code units — directly against the cap.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "héllo\r\n")
+    assert(raw.includes("é"), "the message must carry a non-ASCII character")
+    const octetLength = new TextEncoder().encode(raw).length
+    assert(octetLength > raw.length, "the message must cost more octets than code units")
+
+    const result = await verifyDkim(raw, publicKey, { maxMessageLength: raw.length })
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      `message is ${octetLength} octets, over the ${raw.length}-octet limit`,
+    )
+
+    const fits = await verifyDkim(raw, publicKey, { maxMessageLength: octetLength })
+    assert(fits.valid, `reason=${fits.reason}`)
   })
 })
 
@@ -2510,8 +2725,14 @@ describe("a header block whose line endings are not uniform", () => {
   })
 
   it("verifies a message whose body carries a lone carriage return", async () => {
-    // The rule is about the header block only. A CR in the body cannot hide a
+    // The rule is about the header block only: a CR in the body cannot hide a
     // header field, and both signer and verifier hash the same body octets.
+    // This is issue #94's exact reproduction — `sign()`'s `canonBody` no longer
+    // rewrites a lone CR either (see its own doc comment), so this now proves
+    // the RFC reading rather than agreement between two copies of one
+    // convention: an earlier revision of the verifier rewrote a lone CR to
+    // CRLF before hashing, which disagreed with every RFC-faithful signer and
+    // reported this exact message as tampered with.
     const { raw, publicKey } = await sign(TEST_HEADERS, "before\rafter\r\n")
     assert(raw.includes("before\rafter"), "the body must carry the lone CR")
 
@@ -2631,17 +2852,34 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
     assertEquals(result.reason, "unsigned additional instances of a signed header: from")
   })
 
-  it("still rejects a From: whose name carries a vertical tab", async () => {
-    // `trim()` strips vertical tab, form feed and U+00A0, so `From\x0B:` counts as
-    // `from` for the guard and is refused. A client that reads the field the same
-    // way would display the forged address, which is why the loose match is the
-    // safe one here.
-    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
-    const attacked = `From\x0B: ceo@bank.example\r\n${raw}`
-    const result = await verifyDkim(attacked, publicKey)
-    assertEquals(result.valid, false)
-    assertEquals(result.reason, "unsigned additional instances of a signed header: from")
-  })
+  for (
+    const [label, whitespace] of [
+      ["a vertical tab", "\x0B"],
+      ["a form feed", "\x0C"],
+      ["a non-breaking space", "\xA0"],
+    ] as const
+  ) {
+    it(`still rejects a From: whose name carries ${label}`, async () => {
+      // The guard's name comparison trims a fixed byte set — space, tab,
+      // vertical tab, form feed and the single byte 0xA0 — precisely so
+      // `From${whitespace}:` still counts as `from` here. Issue #88's
+      // byte-safety work replaced the `String.trim()` this used to lean on
+      // with that explicit set; this test is what pins that the replacement
+      // did not shrink it. A client that reads the field the same loose way
+      // would display the forged address.
+      //
+      // Passed as bytes, not as a string: 0xA0 is also the *decoded* Unicode
+      // character U+00A0, which the string path re-encodes as two UTF-8
+      // bytes (0xC2 0xA0) — a genuine, different octet sequence this test is
+      // not about. `ascii()` puts the single raw byte 0xA0 into the message
+      // exactly where the fixed byte set expects to find it.
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = `From${whitespace}: ceo@bank.example\r\n${raw}`
+      const result = await verifyDkim(ascii(attacked), publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+    })
+  }
 
   it("cannot have its exemption list widened at runtime", () => {
     // The list is the one place a header may be added to a signed message without
