@@ -22,9 +22,9 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@ts-libs/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
 | `@ts-libs/server/storage`           | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning |
 | `@ts-libs/server/auth`              | Multi-provider auth (`#6`): see the `server/auth` section below                      |
-| `@ts-libs/server/crypto`            | AES-256-GCM at-rest cipher, hex-key constructor, `maskKey` display hint              |
-| `@ts-libs/server/user-secrets`      | BYOK store pattern over an injected port: validate, encrypt, mask, upsert, delete    |
-| `@ts-libs/server/quota`             | Usage metering with 429/503 semantics — not a rate limiter                           |
+| `@ts-libs/server/crypto`            | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                  |
+| `@ts-libs/server/user-secrets`      | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert            |
+| `@ts-libs/server/quota`             | Usage metering with an atomic reserve and 429/503 — not a rate limiter               |
 
 **Merge order:** the four issues that added files here (`#28`, `#30`, `#35`, `#6`) were cut from
 different points on `main` and each carries the earlier ones, so whoever merges later rebases with a
@@ -454,21 +454,48 @@ transport supplies a `SessionSink` instead. `KeyKind.OAuth2` replaces the separa
 ## `server/crypto`
 
 `CryptoService`, `CryptoError`, `CryptoErrorCode`, `SecretCipher`, `maskKey`, `isHexKey`,
-`AES_ALGORITHM`, `AES_KEY_BYTES`, `KEY_BITS`, `IV_LENGTH`, `HEX_KEY_LENGTH`, `DEFAULT_MASK_VISIBLE`.
+`AES_ALGORITHM`, `AES_KEY_BYTES`, `KEY_BITS`, `IV_LENGTH`, `HEX_KEY_LENGTH`, `DEFAULT_MASK_VISIBLE`,
+`MAX_MASK_VISIBLE`, `MASK_VISIBLE_DIVISOR`, `MASK_LENGTH`.
 
 The scheme is `template/libs/server/crypto`'s, folded in unchanged: AES-256-GCM, the key derived as
 `SHA-256(utf8(secret))`, a 12-byte IV per call, wire format standard base64 of `[IV][ciphertext+tag]`
 — so a ciphertext written by that module stays readable. `CryptoService.fromHexKey` is the second
 entry point: 64 hex characters are decoded and imported as the 32 raw key bytes, never hashed, so the
 two constructors produce different keys for the same characters. AES-128 (32 hex characters) is
-rejected with `CryptoErrorCode.InvalidHexKey`. `maskKey` is the display hint: it keeps the trailing
-code points and never returns the whole key.
+rejected with `CryptoErrorCode.InvalidHexKey`.
+
+**Prefer `fromHexKey` with 32 random bytes** — `encodeHex(crypto.getRandomValues(new Uint8Array(32)))`
+— over a passphrase. The passphrase path is one SHA-256 pass, which is a derivation and not a key
+derivation function: it inherits whatever guessing resistance the passphrase has, and a passphrase
+reused as, say, a password pepper weakens both. A random 32-byte key has none of those questions.
+
+**The secret is not a property of the service.** It is read by the constructor, closed over by the
+key derivation, and unreachable afterwards, so `JSON.stringify`, `Deno.inspect` (with `showHidden`
+too), `Object.keys` and `structuredClone` of an instance show nothing. Logging a service object, or
+an object holding one, cannot print the key.
+
+**`encrypt(plaintext, context?)` binds a ciphertext to where it is stored.** The context is passed to
+AES-GCM as additional authenticated data: it is not stored, cannot be recovered from the blob, and
+the same string has to be supplied to `decrypt`. A wrong context fails exactly as a wrong key does,
+with `CryptoErrorCode.DecryptionFailed`. Passing no context produces the byte-identical format the
+template's module reads, so the format is unchanged for anything written before this existed.
+
+**`maskKey` is a display hint, not a shortened key.** Every non-empty hint is `MASK_LENGTH` code
+points wide whatever the key's length, and it shows at most `MAX_MASK_VISIBLE` trailing code points
+and at most one per `MASK_VISIBLE_DIVISOR` code points of the key — so an eight-character key shows
+two characters, and a 400-character one still shows four. The `visible` argument is a request that
+those two ceilings override; a caller cannot widen a hint into something usable.
+
+**Deliberately not added:** a key version byte and a stronger passphrase derivation. Both change the
+stored format or the key, and both would break the promise that this module and
+`template/libs/server/crypto` read each other's values. A deployment that wants a derivation with a
+work factor should use `fromHexKey` with a key its own key management produced.
 
 ## `server/user-secrets`
 
 `createUserSecretStore`, `UserSecretError`, `UserSecretErrorCode`, `UserSecretPort`,
-`StoredUserSecret`, `SaveUserSecretInput`, `UserSecretSummary`, `PROVIDER_PATTERN`,
-`MIN_API_KEY_LENGTH`, `MAX_API_KEY_LENGTH`, `MAX_PROVIDER_LENGTH`.
+`StoredUserSecret`, `SaveUserSecretInput`, `UserSecretSummary`, `UserSecretStoreOptions`,
+`PROVIDER_PATTERN`, `MIN_API_KEY_LENGTH`, `MAX_API_KEY_LENGTH`, `MAX_PROVIDER_LENGTH`.
 
 The BYOK pattern: validate → `cipher.encrypt` at rest → keep `maskKey`'s hint → upsert per
 `(user, provider)` → delete, with persistence behind an injected `UserSecretPort` (no SQL, no driver)
@@ -479,33 +506,147 @@ for the outbound provider request. The port's `upsert` contract is the source's
 `updatedAt`, preserve `createdAt`. Neither the cipher nor the mask is re-implemented here; both come
 from `server/crypto.ts`.
 
+**A base URL is an outbound destination, so it is checked like one.** A non-empty `baseUrl` must be
+an absolute `http:`/`https:` URL with no user name or password and no control characters — the
+store's own rules, which run first and always — and then passes `validatePublicUrl` from
+`@ts-libs/net/url-policy`, which resolves the host and refuses loopback, link-local (including the
+cloud metadata address `169.254.169.254`), private and special-use destinations. The store keeps its
+own constant `baseUrl is invalid` message for every rejection: the guard's message names the
+resolver's failure and the address family it disliked, which is information about the installation's
+network. The absolute-URL check is first on purpose, because the guard completes a missing scheme
+with `https://` and would otherwise accept a half-written `api.example.com/v1`.
+
+```ts
+const store = createUserSecretStore({
+  port,
+  cipher: CryptoService.fromHexKey(hexKey),
+  resolver: defaultResolver, // injected: a test without --allow-net supplies its own
+  allowInternalBaseUrl: false, // the default; true only where localhost is a real endpoint
+})
+```
+
+`allowInternalBaseUrl` exists because a self-hosted model server on `http://localhost:11434/v1` is a
+real configuration. Only the literal `true` turns it on, so a config value that arrives as
+`undefined` cannot flip the default. With it on there is no SSRF guard for this field at all — the
+guard has no switch for "internal but not everything" — and only the store's own rules apply;
+`https://user:pw@localhost/v1` is still refused.
+
+**Checking at save time does not make the call safe.** A host name that resolves to a public address
+today can resolve to `127.0.0.1` tomorrow, and a stored URL is checked once. The outbound request
+has to go through `safeFetch` from `@ts-libs/net/safe-fetch`, which re-checks at connect time and
+follows redirects under the same policy. A store that validates and then calls `fetch` directly is
+still vulnerable.
+
+**Every row the port returns is checked against what was asked for.** `openSecret`, `list` and
+`save`'s re-read refuse a row whose `userId` or `provider` differs, with
+`UserSecretErrorCode.RowMismatch`, rather than decrypting it. The port is injected, so a mis-written
+`WHERE` clause, a cache keyed on the provider alone or a test double that ignores its arguments all
+produce somebody else's row, and the store does not rely on a check it cannot see.
+
+**Every secret is bound to its row.** The store passes
+`user-secret:v1:<len>:<userId>:<len>:<provider>` — length-prefixed, so no two pairs encode the same
+way — as the cipher's context, which AES-GCM authenticates. A ciphertext copied into another user's
+row, or into another provider's, no longer opens. **Values stored before this change cannot be
+opened**, because they carry no bound context; no project uses this store yet, so there is nothing
+to migrate.
+
 ## `server/quota`
 
-`createQuotaMeter`, `quotaKey`, `quotaHttpStatus`, `resolveQuotaPrincipal`, `QuotaError`,
-`QuotaErrorCode`, `QuotaDecision`, `QuotaPrincipalKind`, `QuotaPolicy`, `QuotaPrincipal`, `QuotaState`,
-`QuotaStore`, `QuotaKey`, `QuotaMeter`, `QuotaMeterOptions`.
+`createQuotaMeter`, `quotaKey`, `sessionPoolKey`, `quotaStatusCode`, `resolveQuotaPrincipal`,
+`SESSION_POOL_PRINCIPAL`, `QuotaError`, `QuotaErrorCode`, `QuotaDecision`, `QuotaPrincipalKind`,
+`QuotaPolicy`, `QuotaPrincipal`, `QuotaState`, `QuotaStore`, `QuotaReservation`, `QuotaKey`,
+`QuotaMeter`, `QuotaMeterOptions`.
 
-A countable budget per principal, decremented by units of _business work_: `check` (per-user limit,
-session fallback, BYOK bypass), `record` (after the work, may overshoot), `get` (read-only).
-`QuotaDecision` maps to 200/429/503 through `quotaHttpStatus`; `Unavailable` is the service condition
-(no metered provider key configured) and is deliberately not the source's `limit === 0` sentinel,
-because 0 is also a legitimate disabled budget. State lives in the injected `QuotaStore`, so two
-processes share one budget and a restart cannot reset usage. The policy and the recorded count parse
-through arktype; the failures map to constant messages, because an arktype summary echoes the value.
+A countable budget per principal, decremented by units of _business work_: `reserve` (before the
+work, the only gate), `release` (a refund when the work did not happen), `record` (after the work,
+may overshoot), `check` and `get` (read-only). `QuotaDecision` maps to 200/429/503 through
+`quotaStatusCode`; `Unavailable` is the service condition (the metered resource is not configured)
+and is deliberately not the source's `limit === 0` sentinel, because 0 is also a legitimate disabled
+budget. State lives in the injected `QuotaStore`, so two processes share one budget and a restart
+cannot reset usage. The policy and the recorded count parse through arktype; the failures map to
+constant messages, because an arktype summary echoes the value.
+
+**`check` is for display only.** It reads a counter and returns; between that answer and the work,
+any number of other requests spend the same budget. With a limit of one and ten parallel callers,
+all ten are told they may proceed. `reserve` is the gate, because the decision and the spend are one
+store operation:
+
+```ts
+const state = await meter.reserve(principal)
+if (state.decision !== QuotaDecision.Allowed) return respond(quotaStatusCode(state.decision), state)
+try {
+  await doTheWork()
+} catch (error) {
+  await meter.release(principal) // the units were not spent after all
+  throw error
+}
+```
+
+**A real store makes `reserve` one statement.** The in-memory store in the tests is atomic because
+nothing is awaited between its read and its write; a SQL store buys the same property with a
+conditional update, and anything that reads, awaits and then writes is not a correct implementation:
+
+```sql
+-- reserve(key, count, limit)
+UPDATE quota SET used = used + $count
+ WHERE principal = $principal AND window = $window AND used + $count <= $limit
+ RETURNING used;                      -- a row means granted; no row means refused
+-- refused: report the counter as it stands
+SELECT used FROM quota WHERE principal = $principal AND window = $window;
+-- release(key, count) — never below zero, or a refund would hand out budget
+UPDATE quota SET used = GREATEST(used - $count, 0)
+ WHERE principal = $principal AND window = $window
+ RETURNING used;
+```
+
+An upsert-shaped store writes the same reservation as
+`INSERT … ON CONFLICT (principal, window) DO UPDATE SET used = quota.used + $count WHERE quota.used + $count <= $limit`.
+
+**Anonymous callers share one pool.** A session id is chosen by the caller, so a per-session counter
+bounds nothing on its own — rotating the id gives a fresh budget every request.
+`QuotaPolicy.sessions` is the one place that allows session principals at all, and it carries the
+budget all of them share:
+
+```ts
+createQuotaMeter({
+  policy: { limit: 3, sessions: { poolLimit: 200 } }, // omit `sessions` to refuse anonymous callers
+  store,
+  meteredResourceAvailable: true,
+})
+```
+
+A session principal spends the pool first and then its own counter; when its own counter refuses,
+the pool unit is given back. The two counters are not one atomic step, so for the length of one
+store round trip the pool can hold a unit no work spent, which can refuse another session that would
+just have fit. Nothing can over-_spend_ in either order, and the refund closes the window. A session
+id must still be issued and verified by the server — a signed cookie, a server-side session record.
+The pool bounds what an unverified id can cost; it does not make the id trustworthy.
 
 **This is not a rate limiter.** A quota counts business work in a long window, keyed by principal,
-enforced at the costly action _after_ authentication and recorded after the fact; a rate limiter
-counts requests per second, keyed by whatever is cheap and not attacker-controlled, and runs as
-middleware before routing. `429` here means "this principal has spent their budget", never "you are
-going too fast". Request smoothing is `platform/rate-limit` (issue #4), which does not live here.
+enforced at the costly action _after_ authentication; a rate limiter counts requests per second,
+keyed by whatever is cheap and not attacker-controlled, and runs as middleware before routing. `429`
+here means "this principal has spent their budget", never "you are going too fast". Request
+smoothing is `platform/rate-limit` (issue #4), which does not live here.
 
 ### Fixes applied at extraction time (`server/crypto`, `server/user-secrets`, `server/quota`)
 
-| Source                                         | Bug                                                                                 | Pinned by                                                                           |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `offer-lens/libs/encrypt/mod.ts:13-18`         | a 16-byte AES-128 key was accepted next to AES-256                                  | `fromHexKey rejects a 32-hex-character AES-128 key`                                 |
-| `offer-lens/libs/scraper/mod.ts:132`           | failures classified with `msg.includes("abort")`                                    | `reports DecryptionFailed for any cipher rejection, classified by type not message` |
-| `offer-lens/apps/api/routes/keys.ts:93,133`    | the provider name and a raw `err.message` were echoed into a response               | `never echoes the apiKey in a validation message`                                   |
-| `offer-lens/apps/api/services/auth.ts:157-164` | the per-user quota used `ANONYMOUS_LIMIT = 3` while sessions used `DEMO_LIMIT = 50` | `quota: a limit of 0 is a disabled budget, not an error` + the window tests         |
-| `mig/routes/api/_validators.ts:35`             | the honeypot was `z.string()`: required, never checked                              | `honeypotField accepts only the empty string`                                       |
-| `mig/lib/tokens.ts:38-44`                      | no secret check, so a missing secret hashed against `"undefined"`                   | `newCancelToken — a blank secret fails closed`                                      |
+| Source                                         | Bug                                                                   | Pinned by                                                                           |
+| ---------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `offer-lens/libs/encrypt/mod.ts:13-18`         | a 16-byte AES-128 key was accepted next to AES-256                    | `fromHexKey rejects a 32-hex-character AES-128 key`                                 |
+| `offer-lens/libs/scraper/mod.ts:132`           | failures classified with `msg.includes("abort")`                      | `reports DecryptionFailed for any cipher rejection, classified by type not message` |
+| `offer-lens/apps/api/routes/keys.ts:93,133`    | the provider name and a raw `err.message` were echoed into a response | `never echoes the apiKey in a validation message`                                   |
+| `offer-lens/apps/api/services/auth.ts:157-164` | the per-user quota used a different limit from the session quota      | `quota: a limit of 0 is a disabled budget, not an error` + the window tests         |
+
+### Fixes applied after extraction (issue #60)
+
+Found by an audit of the extracted code, not inherited from a source.
+
+| Bug                                                                              | Pinned by                                                                     |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| the cipher kept its key in an enumerable field, so logging the object printed it | `crypto: an instance shows no key material when printed, listed or copied`    |
+| a hint could show almost the whole key, and always its length                    | `maskKey: shows at most a quarter of the key and never more than the maximum` |
+| check-then-record let parallel callers overspend one budget                      | `reserve: ten parallel callers of a budget of three run the work three times` |
+| a rotating session id never reached any limit                                    | `sessions: a rotating session id stops at the shared pool limit`              |
+| a user could store an internal address as the outbound base URL                  | `refuses an internal base URL by default`                                     |
+| a row was decrypted without checking whose it was                                | `refuses to open a row that belongs to another user`                          |
+| a ciphertext copied into another row still opened                                | `does not open a real ciphertext that was copied into another row`            |
