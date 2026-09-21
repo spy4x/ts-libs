@@ -52,24 +52,28 @@ const platformTimer: TimerAdapter = {
 }
 
 /**
- * Delay, in milliseconds, before the anchor is detached and its object URL revoked.
+ * Delay, in milliseconds, before the object URL is revoked.
  *
- * A browser reads the blob once the click starts the download, on its own task; revoking or
- * detaching before that read finishes has historically cancelled the download outright. A few
- * seconds is long enough for that read to start on a slow machine and short enough that the blob
- * does not outlive the click by any meaningful margin.
+ * Not a measured figure: the issue this fixes asked for "a `setTimeout` of a few seconds", and this
+ * is a plain reading of that phrase, chosen rather than derived. There is no single reference value
+ * to match — FileSaver.js 2.0.5 waits 40 000 ms before revoking, at the far end of what a common
+ * implementation does. Five seconds sits inside that spread: long enough for the browser to start
+ * reading the blob on a slow machine, short enough that the blob does not outlive the click by much.
  */
 const REVOKE_DELAY_MS = 5000
 
 /**
  * Save a response body to disk under `filename`.
  *
- * Reads the body into a `Blob`, hands it to an object URL, and clicks a synthetic anchor built
- * from it. The anchor is attached to the document before the click and detached after it, because
- * some browsers never fire a download for an anchor that was never in the document. The object URL
- * is revoked, and the anchor removed, from a later task via the injected timer rather than in the
- * same task as the click: revoking too early has historically cancelled a download that was still
- * starting.
+ * Reads the body into a `Blob`, hands it to an object URL, and clicks a synthetic anchor built from
+ * it. The anchor is attached to the document before the click and detached right after, in the same
+ * task, because some browsers never fire a download for an anchor that was never in the document —
+ * and because attaching and detaching both happen inside the `try`, a document whose `body` refuses
+ * either call still reaches the `finally` below rather than leaking the object URL created one line
+ * earlier. The object URL itself is revoked from a later task through the injected timer, not in the
+ * click's own task: revoking too early has historically cancelled a download that was still
+ * starting. Revoking is the one thing the `finally` always does, even if attaching or detaching the
+ * anchor throws, so a DOM call failing never leaves the blob pinned for the page's lifetime.
  *
  * @param response Response whose body should be saved. Consumed by this call.
  * @param filename Value for the anchor's `download` attribute. The export
@@ -93,15 +97,18 @@ export async function downloadResponseAsFile(
 
   const blob = await response.blob()
   const url = objectUrl.create(blob)
-  const anchor = doc.createElement("a")
-  anchor.href = url
-  anchor.download = filename
-  doc.body.appendChild(anchor)
   try {
-    anchor.click()
+    const anchor = doc.createElement("a")
+    anchor.href = url
+    anchor.download = filename
+    try {
+      doc.body.appendChild(anchor)
+      anchor.click()
+    } finally {
+      doc.body.removeChild(anchor)
+    }
   } finally {
     timer.setTimeout(() => {
-      doc.body.removeChild(anchor)
       objectUrl.revoke(url)
     }, REVOKE_DELAY_MS)
   }

@@ -92,7 +92,7 @@ describe("downloadResponseAsFile", () => {
     expect(log).toContain("click")
   })
 
-  it("attaches the anchor before the click and detaches it after the timer fires", async () => {
+  it("attaches the anchor before the click and detaches it in the same task, revoking only once the timer fires", async () => {
     const log = callLog()
     const anchor = fakeAnchor(log)
     const doc = fakeDocument(anchor, log)
@@ -104,10 +104,54 @@ describe("downloadResponseAsFile", () => {
       objectUrl,
       timer,
     })
-    expect(log).toEqual(["create", "appendChild", "click", "setTimeout"])
+    expect(log).toEqual(["create", "appendChild", "click", "removeChild", "setTimeout"])
 
     timer.run()
-    expect(log).toEqual(["create", "appendChild", "click", "setTimeout", "removeChild", "revoke"])
+    expect(log).toEqual(["create", "appendChild", "click", "removeChild", "setTimeout", "revoke"])
+  })
+
+  it("asks the timer to wait five seconds before the revoke", async () => {
+    const doc = fakeDocument(fakeAnchor([]), [])
+    const objectUrl = fakeObjectUrl([])
+    let requestedDelayMs: number | undefined
+    const timer: TimerAdapter = {
+      setTimeout: (callback, delayMs) => {
+        requestedDelayMs = delayMs
+        callback()
+        return 0
+      },
+    }
+
+    await downloadResponseAsFile(new Response("data"), "f.csv", { document: doc, objectUrl, timer })
+
+    // A literal, not the module's own constant: this pins the actual number the module asks
+    // for, rather than comparing the source against itself if the constant were ever changed.
+    expect(requestedDelayMs).toBe(5000)
+  })
+
+  it("passes the module's own delay to the platform's setTimeout when no timer is injected", async () => {
+    const anchor = fakeAnchor([])
+    const doc = fakeDocument(anchor, [])
+    const objectUrl = fakeObjectUrl([], "blob:default-timer")
+
+    // No `timer` in options: this exercises `options.timer ?? platformTimer`, the real
+    // `setTimeout`. The platform `setTimeout` is swapped for a stand-in that records the delay
+    // it was asked for and never fires, so nothing here waits five real seconds or needs a fake
+    // clock library; the original is always restored, even if the assertions below throw.
+    const realSetTimeout = globalThis.setTimeout
+    let requestedDelayMs: number | undefined
+    globalThis.setTimeout = ((_callback: () => void, delayMs?: number) => {
+      requestedDelayMs = delayMs
+      return 0
+    }) as typeof setTimeout
+    try {
+      await downloadResponseAsFile(new Response("data"), "f.csv", { document: doc, objectUrl })
+    } finally {
+      globalThis.setTimeout = realSetTimeout
+    }
+
+    expect(anchor.href).toBe("blob:default-timer")
+    expect(requestedDelayMs).toBe(5000)
   })
 
   it("keeps the object URL alive when the call resolves, and revokes it once the timer fires", async () => {
@@ -139,6 +183,34 @@ describe("downloadResponseAsFile", () => {
 
     timer.run()
     expect(objectUrl.revoked).toEqual(["blob:leak-check"])
+  })
+
+  it("still revokes the object URL once the timer fires, even when removeChild throws", async () => {
+    const log = callLog()
+    const anchor = fakeAnchor(log)
+    const doc: DownloadDocument = {
+      createElement: () => anchor,
+      body: {
+        appendChild: (node) => {
+          expect(node).toBe(anchor)
+          log.push("appendChild")
+        },
+        removeChild: () => {
+          log.push("removeChild")
+          throw new DOMException("node is not a child of this node", "NotFoundError")
+        },
+      },
+    }
+    const objectUrl = fakeObjectUrl(log, "blob:detach-fails")
+    const timer = fakeTimer(log)
+
+    await expect(
+      downloadResponseAsFile(new Response("data"), "f.csv", { document: doc, objectUrl, timer }),
+    ).rejects.toThrow("node is not a child of this node")
+    expect(objectUrl.revoked).toEqual([])
+
+    timer.run()
+    expect(objectUrl.revoked).toEqual(["blob:detach-fails"])
   })
 
   it("rejects without a document rather than touching a global one", async () => {

@@ -69,7 +69,7 @@ so `axis.test.ts` can assert against it, and a regression tripwire inside the lo
 bound is ever weakened back to plain `steps + 1`, so a future revert of the fix fails a test instead
 of hanging the suite.
 
-### `./browser` → `browser.ts` (2 modules, 259 LOC)
+### `./browser` → `browser.ts` (2 modules, 266 LOC)
 
 Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `makeStorage` and
 `downloadResponseAsFile` both take their DOM surface (`Storage`, `document`, the object-URL
