@@ -148,6 +148,7 @@ that can silently skip when its dependency is missing must fail loudly instead.
 | `deno task services:up`      | start Postgres, MinIO and Mailpit, wait until healthy      |
 | `deno task services:down`    | stop them and drop their volumes                           |
 | `deno task services:logs`    | logs of the three containers                               |
+| `deno task publish:dry`      | `deno publish --dry-run` over the workspace; not run in CI |
 | `deno task fix`              | `lint --fix` then format                                   |
 
 If `deno task check` fails because the lockfile is stale, run the task that needs the new dependency

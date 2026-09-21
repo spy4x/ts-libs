@@ -70,6 +70,11 @@
     "services:up": "docker compose -f infra/compose.integration.yml up -d --wait",
     "services:down": "docker compose -f infra/compose.integration.yml down -v",
     "services:logs": "docker compose -f infra/compose.integration.yml logs",
+    // Simulates a JSR publish of every workspace member and fails on a dangling `exports`
+    // target (TS2307) — the failure mode that blocked the sibling `time/` package. A task
+    // rather than a bare command so `deno task check:cold publish:dry` can wrap it (#111);
+    // `check:cold` only accepts task names, not an arbitrary command line.
+    "publish:dry": "deno publish --dry-run --allow-dirty",
     "fix": {
       "command": "echo 'Fixes applied!'",
       "description": "Run all fixes",

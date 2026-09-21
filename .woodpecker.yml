@@ -48,7 +48,10 @@ steps:
     image: denoland/deno:2.9.7
     commands:
       - deno --version
-      - deno task check
+      # `check:cold` (#112), not `check`: `CI=true` alone does not freeze `deno.lock` — a task
+      # that resolves an import missing from the lockfile rewrites it and still exits 0. The
+      # cold script compares the lockfile before and after and fails the run when it changed.
+      - deno task check:cold
 
   integration:
     image: denoland/deno:2.9.7

@@ -33,12 +33,8 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
 
 ```bash
-deno publish --dry-run --allow-dirty   # exit 0
-
-# cold: DENO_DIR under the cache dir, per AGENTS.md — never DENO_DIR=$(mktemp -d)
-D=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" denodir.XXXXXX)
-CI=true DENO_DIR=$D deno publish --dry-run --allow-dirty; echo "exit=$?"
-rm -rf -- "$D"
+deno task publish:dry            # warm, exit 0
+deno task check:cold publish:dry # cold, per AGENTS.md — CI does not run this; run it yourself
 ```
 
 That is the check that catches a dangling target (`TS2307`, exit 1) — the failure mode that blocked
