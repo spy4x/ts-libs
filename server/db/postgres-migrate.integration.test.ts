@@ -49,6 +49,10 @@ interface Run {
   table: string
   /** A table the migrations under test create or write to, unique to this run. */
   subject: string
+  /** `application_name` of {@link sql}, so this run's backends can be found in the catalogue. */
+  applicationName: string
+  /** A second client, for looking at the server while the run is going on. */
+  observer: Sql
 }
 
 /** Open a client, run `body`, and drop both of this run's tables afterwards. */
@@ -61,14 +65,33 @@ async function withRun(body: (run: Run) => Promise<void>): Promise<void> {
   // The default pool size: `withLock` reserves a connection for the run, and a second
   // runner needs one of its own to wait for the lock on.
   const sql = createSql({ connection: settings.connection, applicationName: table })
+  // A separate client, under a name of its own, so a query about the run's backends is
+  // never answered about itself.
+  const observer = createSql({
+    connection: settings.connection,
+    max: 1,
+    applicationName: `${table}_observer`,
+  })
   try {
     await sql`SET client_min_messages = warning`
-    await body({ sql, table, subject })
+    await body({ sql, table, subject, applicationName: table, observer })
   } finally {
     await sql`DROP TABLE IF EXISTS ${sql(subject)}`
     await sql`DROP TABLE IF EXISTS ${sql(table)}`
     await sql.end()
+    await observer.end()
   }
+}
+
+/** The backends of `applicationName` that hold a granted advisory lock, right now. */
+async function advisoryLockHolders(observer: Sql, applicationName: string): Promise<number[]> {
+  const rows = await observer<{ pid: number }[]>`
+    SELECT l.pid
+    FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+    WHERE l.locktype = 'advisory' AND l.granted AND a.application_name = ${applicationName}
+    ORDER BY l.pid
+  `
+  return rows.map((row) => row.pid)
 }
 
 describe("the Postgres migration runner against a real server", () => {
@@ -96,6 +119,66 @@ describe("the Postgres migration runner against a real server", () => {
       assertStrictEquals(rows.length, 1)
       const history = await new PostgresMigrationDriver({ sql, table }).appliedMigrations()
       assertEquals(history.map((row) => row.name), ["0001_bump"])
+    })
+  })
+
+  it("holds the lock on the very backend the migrations run on, and lets it go", async () => {
+    // The design the lock rests on: a *session* lock protects the session it was taken
+    // on, so taking it on a pooled connection while the migrations run on the reserved
+    // one protects a session nothing uses. Reading the statements alone cannot see that —
+    // the reviewer sent lock and unlock through the pool and every assertion stayed green
+    // — so this asks the server which backend holds the lock and which backend is running
+    // the migration.
+    await withRun(async ({ sql, table, subject, applicationName, observer }) => {
+      let holdersDuringRun: number[] = []
+      const reader: MigrationReader = {
+        list: () => Promise.resolve(["0001_pid.sql"]),
+        readText: async () => {
+          // Called inside the lock, before the migration is applied.
+          holdersDuringRun = await advisoryLockHolders(observer, applicationName)
+          return `CREATE TABLE ${subject} (pid integer);
+                  INSERT INTO ${subject} (pid) SELECT pg_backend_pid()`
+        },
+      }
+
+      await runMigrations(new PostgresMigrationDriver({ sql, table }), {
+        folder: "/migrations",
+        reader,
+      })
+
+      const rows = await sql<{ pid: number }[]>`SELECT pid FROM ${sql(subject)}`
+      assertStrictEquals(rows.length, 1)
+      // One lock, and it is held by the backend the migration's own statement ran on.
+      assertEquals(holdersDuringRun, [rows[0].pid])
+      // And nothing of this run's is still holding one.
+      assertEquals(await advisoryLockHolders(observer, applicationName), [])
+    })
+  })
+
+  it("makes two runners that spell the same table differently wait for each other", async () => {
+    // The lock key follows the table as the server resolves it, not as the caller spelled
+    // it. Deriving it from the spelling gave a driver with `schema: "public"` and a driver
+    // reaching `public.migrations` through its search path two different keys: they ran at
+    // the same time, and one crashed inside Postgres's own catalogue.
+    await withRun(async ({ sql, table, subject }) => {
+      await sql`CREATE TABLE ${sql(subject)} (id serial PRIMARY KEY)`
+      const race = migrationRace({
+        "0001_bump.no_transaction.sql": `INSERT INTO ${subject} DEFAULT VALUES`,
+      }, 2)
+      const options = { folder: "/migrations", reader: race.reader }
+
+      const reports = await Promise.all([
+        runMigrations(race.gate(new PostgresMigrationDriver({ sql, table })), options),
+        runMigrations(
+          race.gate(new PostgresMigrationDriver({ sql, table, schema: "public" })),
+          options,
+        ),
+      ])
+
+      assertEquals(reports.flatMap((report) => report.applied), ["0001_bump"])
+      assertEquals(reports.flatMap((report) => report.skipped), ["0001_bump"])
+      const rows = await sql<{ id: number }[]>`SELECT id FROM ${sql(subject)}`
+      assertStrictEquals(rows.length, 1)
     })
   })
 

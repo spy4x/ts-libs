@@ -24,6 +24,8 @@ interface FakeSqlOptions {
   answers?: unknown[][]
   /** Statement text that should reject when executed through `unsafe`. */
   failOn?: string
+  /** What the server answers for the resolved-schema probe. Defaults to `public`. */
+  currentSchema?: string
 }
 
 /**
@@ -38,10 +40,17 @@ interface FakeSqlOptions {
  * is `"public"."migrations"`, not one identifier with a dot in its name. The driver is the
  * schema-qualified form's only implementation, so a fake that quoted the whole string
  * would assert SQL the driver never produces.
+ *
+ * **Statements are recorded per handle.** `topLevel` is the pool, `reserved` is the
+ * connection `sql.reserve()` handed out, and `inner` is inside a `sql.begin` callback.
+ * One list for all of them could not tell them apart, and the whole point of the lock is
+ * that it is held on the same session the migrations run on: sending the advisory lock
+ * through the pool instead left every assertion green.
  */
 function createFakeSql(options: FakeSqlOptions = {}) {
   const topLevel: string[] = []
   const inner: string[] = []
+  const reserved: string[] = []
   const boundValues: unknown[] = []
   const answers = options.answers ?? []
   let inTransaction = false
@@ -66,17 +75,29 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     return text.trim().replace(/\s+/g, " ")
   }
 
-  const record = (query: string): void => {
+  /** Which handle a statement went through. */
+  type Handle = "pool" | "reserved"
+
+  const record = (query: string, handle: Handle): void => {
     if (inTransaction) inner.push(query)
+    else if (handle === "reserved") reserved.push(query)
     else topLevel.push(query)
   }
 
-  /** One tag function over the shared recorder. Called once per client the fake hands out. */
-  const makeTag = () => {
+  /** One tag function over the shared recorder, bound to the handle it belongs to. */
+  const makeTag = (handle: Handle) => {
     const statement = (strings: unknown, ...values: unknown[]): unknown => {
       if (!Array.isArray(strings)) return { __identifier: String(strings) }
       const query = render(strings as unknown as TemplateStringsArray, values)
-      record(query)
+      record(query, handle)
+      // `withLock`'s own three statements answer themselves and do not draw on the
+      // queue. A test scripts what its *driver method* reads; padding the queue for
+      // statements the lock sends is a trap that moves every answer along by one the
+      // moment the lock changes shape.
+      if (query.includes("current_schema()")) {
+        return Promise.resolve([{ schema: options.currentSchema ?? "public" }])
+      }
+      if (query.includes("pg_advisory_")) return Promise.resolve([])
       return Promise.resolve(answers.shift() ?? [])
     }
     return Object.assign(
@@ -84,7 +105,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
       {
         unsafe: (text: string) => {
           const query = text.trim().replace(/\s+/g, " ")
-          record(query)
+          record(query, handle)
           return options.failOn !== undefined && query.includes(options.failOn)
             ? Promise.reject(new Error(`fake sql rejects: ${query}`))
             : Promise.resolve([])
@@ -93,7 +114,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     )
   }
 
-  const asTag = makeTag()
+  const asTag = makeTag("pool")
 
   const client = Object.assign(asTag, {
     /**
@@ -112,7 +133,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     reserve: () => {
       reserves += 1
       return Promise.resolve(
-        Object.assign(makeTag(), {
+        Object.assign(makeTag("reserved"), {
           release: () => {
             releases += 1
           },
@@ -140,6 +161,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
     sql: client as unknown as Sql,
     topLevel,
     inner,
+    reserved,
     boundValues,
     connections: () => ({ reserves, releases }),
   }
@@ -164,12 +186,24 @@ function migration(overrides: Partial<Migration> = {}): Migration {
 }
 
 /**
- * The advisory-lock key for the default, unqualified `migrations` table.
+ * The advisory-lock key for the default `migrations` table resolved to `public`.
  *
  * Written out rather than recomputed from the implementation, so a change to how the key
  * is derived shows up here as a failure instead of agreeing with itself.
  */
-const PINNED_LOCK_KEY = -8426173881649192450n
+const PINNED_LOCK_KEY = 2145828090877900021n
+
+/**
+ * The probe `withLock` sends before it derives the key.
+ *
+ * It asks the server which schema the table name actually reaches, so that a driver given
+ * `schema: "public"` and a driver reaching `public.migrations` through its search path
+ * take the same key. Deriving the key from the spelling alone gave them different keys
+ * and let them run at the same time.
+ */
+const RESOLVED_SCHEMA_PROBE = "SELECT coalesce( ( SELECT n.nspname FROM pg_class c JOIN " +
+  "pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = to_regclass($1) ), " +
+  "current_schema() ) AS schema"
 
 /**
  * The one probe `createHistoryTable` sends when no schema was named.
@@ -278,12 +312,11 @@ Deno.test("appliedMigrations reads the recorded rows in id order", async () => {
   assertEquals(fake.topLevel, [`SELECT name, checksum FROM "migrations" ORDER BY id`])
 })
 
-Deno.test("withLock reserves one connection, locks it, and gives it back", async () => {
-  // The lock is a *session* lock, so it must be taken on a connection that outlives the
-  // per-migration transactions — and the run has to use that same connection, or the
-  // lock would protect a session the run never touches.
-  // The first answer is drained by `pg_advisory_lock`; the second is the existence probe.
-  const fake = createFakeSql({ answers: [[], [{ table_exists: true, checksum_exists: false }]] })
+Deno.test("the lock, the run and the unlock all go through the reserved connection", async () => {
+  // The lock is a *session* lock, so it has to be taken on the session the migrations run
+  // on. Sending it through the pool instead protects a session the run never touches, and
+  // that is exactly what a fake recording every handle into one list could not see.
+  const fake = createFakeSql({ answers: [[{ table_exists: true, checksum_exists: false }]] })
   const driver = new PostgresMigrationDriver({ sql: fake.sql })
 
   const inside = await driver.withLock(async () => {
@@ -293,12 +326,15 @@ Deno.test("withLock reserves one connection, locks it, and gives it back", async
 
   assertStrictEquals(inside, "ran")
   assertEquals(fake.connections(), { reserves: 1, releases: 1 })
-  assertEquals(fake.topLevel, [
+  assertEquals(fake.reserved, [
+    RESOLVED_SCHEMA_PROBE,
     "SELECT pg_advisory_lock($1)",
     SEARCH_PATH_PROBE,
     `ALTER TABLE "migrations" ADD COLUMN IF NOT EXISTS checksum TEXT`,
     "SELECT pg_advisory_unlock($1)",
   ])
+  // Nothing at all went through the pool.
+  assertEquals(fake.topLevel, [])
 })
 
 Deno.test("withLock unlocks and releases the connection when the run throws", async () => {
@@ -311,28 +347,41 @@ Deno.test("withLock unlocks and releases the connection when the run throws", as
     "the run failed",
   )
 
-  assertEquals(fake.topLevel, ["SELECT pg_advisory_lock($1)", "SELECT pg_advisory_unlock($1)"])
+  assertEquals(fake.reserved, [
+    RESOLVED_SCHEMA_PROBE,
+    "SELECT pg_advisory_lock($1)",
+    "SELECT pg_advisory_unlock($1)",
+  ])
+  assertEquals(fake.topLevel, [])
   assertEquals(fake.connections(), { reserves: 1, releases: 1 })
 })
 
-Deno.test("the advisory lock key follows the qualified table name and does not drift", async () => {
-  // Two deployments sharing a server must lock each other out exactly when they share a
-  // history table, so the key has to follow the name — and it has to be the same value in
-  // every process and every release, or an instance running the old code and one running
-  // the new code would lock different things and race each other anyway.
-  const keyFor = async (options: { table?: string; schema?: string }): Promise<bigint> => {
-    const fake = createFakeSql()
-    await new PostgresMigrationDriver({ sql: fake.sql, ...options })
+Deno.test("the advisory lock key follows the resolved table and does not drift", async () => {
+  // Two deployments sharing a server must lock each other out exactly when they reach the
+  // same history table, however each of them spelled it — and the key has to be the same
+  // value in every process and every release, or an instance running the old code and one
+  // running the new code would lock different things and race each other anyway.
+  const keyFor = async (
+    options: { table?: string; schema?: string; currentSchema?: string },
+  ): Promise<bigint> => {
+    const { currentSchema, ...driverOptions } = options
+    const fake = createFakeSql(currentSchema === undefined ? {} : { currentSchema })
+    await new PostgresMigrationDriver({ sql: fake.sql, ...driverOptions })
       .withLock(() => Promise.resolve())
-    return fake.boundValues[0] as bigint
+    return fake.boundValues.find((value) => typeof value === "bigint") as bigint
   }
 
   const plain = await keyFor({})
   assertStrictEquals(typeof plain, "bigint")
   assertStrictEquals(plain, await keyFor({}))
   assertStrictEquals(plain, PINNED_LOCK_KEY)
+  // The one that matters: naming the schema the search path would have resolved to takes
+  // the same key. Deriving it from the spelling alone gave these two different keys, and
+  // they ran at the same time.
+  assertStrictEquals(plain, await keyFor({ schema: "public" }))
   assertStrictEquals(plain === await keyFor({ table: "other" }), false)
   assertStrictEquals(plain === await keyFor({ schema: "tenant_1" }), false)
+  assertStrictEquals(plain === await keyFor({ currentSchema: "tenant_1" }), false)
 })
 
 Deno.test("applyInTransaction runs the body and the history insert in one transaction", async () => {
@@ -356,7 +405,9 @@ Deno.test("inside the lock the transaction is sent as statements on the pinned c
   await driver.withLock(() => driver.applyInTransaction(migration()))
 
   assertEquals(fake.inner, [])
-  assertEquals(fake.topLevel, [
+  assertEquals(fake.topLevel, [])
+  assertEquals(fake.reserved, [
+    RESOLVED_SCHEMA_PROBE,
     "SELECT pg_advisory_lock($1)",
     "BEGIN",
     "CREATE TABLE users (id SERIAL PRIMARY KEY)",
@@ -381,7 +432,9 @@ Deno.test("a migration that fails inside the lock is rolled back and never recor
     "fake sql rejects",
   )
 
-  assertEquals(fake.topLevel, [
+  assertEquals(fake.topLevel, [])
+  assertEquals(fake.reserved, [
+    RESOLVED_SCHEMA_PROBE,
     "SELECT pg_advisory_lock($1)",
     "BEGIN",
     "CREATE TABLE broken (id INTEGER",
