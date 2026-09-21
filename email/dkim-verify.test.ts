@@ -2947,6 +2947,61 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
     })
   }
 
+  // Round 2 review of #104: the two most ordinary shapes of this forgery had
+  // no test either. Stopping `isHeaderNamePadding` from treating a plain
+  // space, then a plain tab, as padding left the whole `email/` suite green
+  // while `From : ceo@bank.example` or `From<TAB>: ceo@bank.example`
+  // verified — and `From :` (obsolete FWS before the colon) is valid syntax
+  // every mail program reads as `From`, so it is the first line an attacker
+  // would try.
+  for (
+    const [label, padding] of [
+      ["a space", " "],
+      ["a tab", "\t"],
+    ] as const
+  ) {
+    it(`still rejects a From: whose name carries ${label} before the colon (string)`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = `From${padding}: ceo@bank.example\r\n${raw}`
+      const result = await verifyDkim(attacked, publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+    })
+
+    it(`still rejects a From: whose name carries ${label} before the colon (bytes)`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = `From${padding}: ceo@bank.example\r\n${raw}`
+      const result = await verifyDkim(ascii(attacked), publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+    })
+  }
+
+  // The shape that matters most: a genuine RFC 5322 fold before the field's
+  // own colon, not the lone-CR forgery wave 3 already closed. `From<CRLF>
+  // <TAB>: ...` is a *uniform* CRLF block, so `refuseHeaderLineEndings`
+  // accepts it — this is ordinary folding syntax, and `parseHeaders` joins it
+  // into one field whose name, read up to the first colon, is
+  // `From<CRLF><TAB>`. It verified at this pull request's round 1 head and is
+  // refused on `main`, which made it a second regression round 1 missed:
+  // trimming CR and LF out of the name (not the line-ending refusal) is what
+  // lets the comparison still read the joined line as `From`.
+  it("still rejects a From: whose name is folded before its colon (string)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `From\r\n\t: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+  })
+
+  it("still rejects a From: whose name is folded before its colon (bytes)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `From\r\n\t: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+  })
+
   it("still rejects a From: whose name carries the raw byte 0xA0 (bytes)", async () => {
     // The single byte 0xA0 is not valid standalone UTF-8, so this is a bytes-
     // only case: ascii() puts that one raw byte into the message, which is a
@@ -3065,8 +3120,9 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
 
   it("still rejects a Subject: whose name carries a zero-width space (issue #106)", async () => {
     // The Done-when box asks that the rule hold for a second Subject too, not
-    // only for From; one representative character from each end of the list
-    // above is enough to show the guard is not From-specific.
+    // only for From. The guard has one code path for every field name, so one
+    // character (U+200B) is enough to show it is not From-specific; the loop
+    // above already runs the full list against From.
     const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
     const zeroWidthSpace = String.fromCodePoint(0x200b)
     const attacked = `Subject${zeroWidthSpace}: a subject the signer never saw\r\n${raw}`

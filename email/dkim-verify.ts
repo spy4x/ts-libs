@@ -975,13 +975,13 @@ function isTransitAddedHeaderName(name: string): boolean {
 }
 
 /**
- * True for an octet in RFC 5322's printable-ASCII range, 0x21-0x7E — the same
- * range `ftext` restricts a genuine field name to (`HEADER_NAME_RE`, minus the
- * colon it also excludes). {@link trimHeaderName} strips everything *outside*
- * this range from a name's ends, which is why the two ranges do not need to
- * match exactly: a byte this returns `false` for is never part of a name a
- * conformant sender would write, so stripping it can only ever make a forged
- * line's name easier to recognise, never harder.
+ * True for an octet **outside** RFC 5322's printable-ASCII range, 0x21-0x7E —
+ * the same range `ftext` restricts a genuine field name to (`HEADER_NAME_RE`,
+ * minus the colon it also excludes). {@link trimHeaderName} strips every
+ * octet this returns `true` for from a name's ends, which is why the two
+ * ranges do not need to match exactly: a byte this returns `true` for is
+ * never part of a name a conformant sender would write, so stripping it can
+ * only ever make a forged line's name easier to recognise, never harder.
  */
 function isHeaderNamePadding(code: number): boolean {
   return code < 0x21 || code > 0x7e
@@ -1002,8 +1002,8 @@ function isHeaderNamePadding(code: number): boolean {
  * U+00A0 (a no-break space, still one of `trim()`'s own characters) and then
  * the colon, placed above it, verified here and was refused on `main`: the
  * guard's name match had shrunk, the opposite of what widening it to handle
- * bytes was supposed to do. The two review rounds that found this also found
- * it does not go far enough: a control character (U+0000-U+001F, U+007F), U+0085 or a
+ * bytes was supposed to do. Review of this pull request found it does not go
+ * far enough either: a control character (U+0000-U+001F, U+007F), U+0085 or a
  * zero-width space (U+200B) before the colon verifies on `main` too (issue
  * #106) — `trim()` never stripped any of those, so the byte set inherited
  * from it never could either.
@@ -1014,11 +1014,19 @@ function isHeaderNamePadding(code: number): boolean {
  * range already (`HEADER_NAME_RE`), so every character this now strips is one
  * no conformant sender's field name would contain in the first place, and
  * removing it can only ever make a disguised name easier to recognise as the
- * name it is disguising. This also means CR and LF are stripped now, unlike
- * the narrower set before: a name substring cannot legitimately carry either
- * by the time this runs, because {@link refuseHeaderLineEndings} has already
- * refused any header block whose line endings are ambiguous, and a
- * well-formed fold never continues before a field's own colon.
+ * name it is disguising.
+ *
+ * This also means CR and LF are stripped now, unlike the narrower set before
+ * — and that is load-bearing, not incidental. A field name may fold before
+ * its own colon: `From<CRLF><TAB>: ceo@bank.example` is a *uniform* CRLF
+ * block, so {@link refuseHeaderLineEndings} accepts it, and the raw name
+ * substring `selectSignedHeaders` reads still carries the CRLF and the tab.
+ * Stripping them is what lets the comparison still read that line as `From`
+ * — the same thing `String.trim()` did on `main` — so the growth guard in
+ * {@link selectSignedHeaders} refuses the extra instance instead of missing
+ * it. Leaving CR and LF in the padding set is therefore not a safe
+ * simplification: a version of this file that stopped trimming them let
+ * `From<CRLF><TAB>: ceo@bank.example` verify, which `main` refuses.
  */
 function trimHeaderName(value: string): string {
   let start = 0

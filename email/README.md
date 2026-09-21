@@ -529,9 +529,14 @@ which propagates the resolver's rejection instead of reporting it.
   several of `trim()`'s own Unicode whitespace characters (found in round 1
   review of the pull request that added it) and every control character and
   zero-width space RFC 5322 never allows in a name either (issue #106). This
-  also means CR and LF are trimmed now: a name substring cannot legitimately
-  carry either by the time this runs, because the header block's line-ending
-  refusal above has already ruled out an ambiguous one.
+  also means CR and LF are trimmed now, which is load-bearing rather than a
+  side effect: a field name may fold before its own colon
+  (`From<CRLF><TAB>: ceo@bank.example` is a _uniform_ CRLF block, so the
+  header block's line-ending refusal above accepts it), and the raw name
+  still carries the CRLF and the tab at that point. Trimming them is what
+  lets the comparison still read that line as `From` — the same thing
+  `String.trim()` did on `main` — so the growth guard refuses the extra
+  instance instead of missing it.
 - **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
   `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
   example record publishes a complete SubjectPublicKeyInfo. The envelope is
