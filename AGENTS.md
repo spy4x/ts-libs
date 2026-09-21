@@ -106,7 +106,9 @@ docs: document the workspace member rule
   incomplete and drop the prefix when the work is done.
 - Base every PR on `main`. One package per PR — keep diffs disjoint from other packages.
 - Update the PR body after every significant change; state the decisions you made.
-- Never merge your own PR, and never merge a PR you authored. Human review merges it.
+- Never self-review a diff you wrote. A passing verdict from a separate reviewer agent is the merge
+  authority — merge on it without asking. Leave the PR open instead, and say so, when the gate
+  fails or when a revert could not undo the change.
 
 ```bash
 gh pr create --fill --base main
@@ -278,4 +280,5 @@ dependency in the PR body. No speculative entries.
 - Never commit a secret, token, credential, `.env` value or raw production URL.
 - One logical change per commit. Keep commits small.
 - Do not reformat or edit a directory another agent owns.
-- Never merge your own PR.
+- Never self-review. A separate reviewer's green gate is the merge authority, not the author's own
+  read of the diff.
