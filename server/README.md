@@ -124,6 +124,12 @@ adapter then compares the realpath of the resolved file against the realpath of 
 the realpath can reveal a symlink that points outside. An SPA fallback is one flag, not a list of
 route paths.
 
+A file is streamed, not read whole: `StaticFs.open` returns the file's size and a `ReadableStream`, so
+serving a large file costs the same per-request memory as serving a small one. `Content-Length` comes
+from that size, never from a buffer. The handle is released exactly once, whichever way the stream
+stops — fully read, cancelled by the client, or a failure right after the file was opened. Range and
+conditional requests are not implemented; a request for either is served the same as a plain `GET`.
+
 ## `server/healthcheck`
 
 `probeLoopback`, `healthcheckExitCode`, `runHealthcheck`, `resolveHealthcheckPort`, `denoConnector`,
