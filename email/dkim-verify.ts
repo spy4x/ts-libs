@@ -1017,16 +1017,22 @@ function isHeaderNamePadding(code: number): boolean {
  * name it is disguising.
  *
  * This also means CR and LF are stripped now, unlike the narrower set before
- * — and that is load-bearing, not incidental. A field name may fold before
- * its own colon: `From<CRLF><TAB>: ceo@bank.example` is a *uniform* CRLF
- * block, so {@link refuseHeaderLineEndings} accepts it, and the raw name
- * substring `selectSignedHeaders` reads still carries the CRLF and the tab.
- * Stripping them is what lets the comparison still read that line as `From`
- * — the same thing `String.trim()` did on `main` — so the growth guard in
- * {@link selectSignedHeaders} refuses the extra instance instead of missing
- * it. Leaving CR and LF in the padding set is therefore not a safe
- * simplification: a version of this file that stopped trimming them let
- * `From<CRLF><TAB>: ceo@bank.example` verify, which `main` refuses.
+ * — and that is load-bearing, not incidental. RFC 5322 does not let a field
+ * name fold before its own colon — the obsolete syntax it does allow there is
+ * plain spaces and tabs, `obs-from = "From" *WSP ":"` — but §2.2.3 defines
+ * unfolding as deleting every CRLF that is immediately followed by WSP,
+ * without asking where the CRLF sits, so a reader that unfolds first (this
+ * verifier, and most mail programs) turns `From<CRLF><TAB>: ceo@bank.example`
+ * into `From<TAB>: ceo@bank.example` and reads it as that same obsolete
+ * `From` form. `From<CRLF><TAB>:` is a *uniform* CRLF block, so
+ * {@link refuseHeaderLineEndings} accepts it, and the raw name substring
+ * `selectSignedHeaders` reads still carries the CRLF and the tab before this
+ * function runs. Stripping them is what lets the comparison still read that
+ * line as `From` — the same thing `String.trim()` did on `main` — so the
+ * growth guard in {@link selectSignedHeaders} refuses the extra instance
+ * instead of missing it. Leaving CR and LF in the padding set is therefore
+ * not a safe simplification: a version of this file that stopped trimming
+ * them let `From<CRLF><TAB>: ceo@bank.example` verify, which `main` refuses.
  */
 function trimHeaderName(value: string): string {
   let start = 0
@@ -1034,6 +1040,49 @@ function trimHeaderName(value: string): string {
   while (start < end && isHeaderNamePadding(value.charCodeAt(start))) start++
   while (end > start && isHeaderNamePadding(value.charCodeAt(end - 1))) end--
   return value.slice(start, end)
+}
+
+/**
+ * Two further readings of an already end-trimmed header name ({@link
+ * trimHeaderName}), for a padding byte ({@link isHeaderNamePadding}) that sits
+ * *inside* the name rather than at an end (issue #113, the inside-the-name
+ * half of #106). A byte there is never part of a name a conformant sender
+ * would write, same as at an end, but no single rule reads it the way every
+ * lenient mail program might: a program that deletes an invisible or control
+ * byte wherever it finds one reads `Fr<U+00AD>om` as `From` — stripping the
+ * byte out is what catches that — while a program that stops reading a field
+ * name at the first byte it cannot render reads `From<NUL>x` as `From` too —
+ * only truncating at that byte catches that one, since stripping it out
+ * instead leaves `Fromx`. Neither reading subsumes the other, so both are
+ * returned and a caller checks each.
+ */
+function looseHeaderNameReadings(trimmedName: string): string[] {
+  let strippedAll = ""
+  let truncated = ""
+  let pastFirstPadding = false
+  for (let i = 0; i < trimmedName.length; i++) {
+    if (isHeaderNamePadding(trimmedName.charCodeAt(i))) {
+      pastFirstPadding = true
+      continue
+    }
+    strippedAll += trimmedName[i]
+    if (!pastFirstPadding) truncated += trimmedName[i]
+  }
+  return [strippedAll, truncated]
+}
+
+/**
+ * True when `rawName`, read the way {@link selectSignedHeaders} and {@link
+ * refuseSignatureHeader} read a header name — end-trimmed, and then also
+ * through {@link looseHeaderNameReadings} for a byte disguised inside it —
+ * could be mistaken for `target` (already lowercase). `target` is compared
+ * against the end-trimmed name first because that is the common case and
+ * needs no extra work; the loose readings only matter when it does not match.
+ */
+function headerNameMatches(rawName: string, target: string): boolean {
+  const trimmedName = trimHeaderName(rawName)
+  if (trimmedName.toLowerCase() === target) return true
+  return looseHeaderNameReadings(trimmedName).some((reading) => reading.toLowerCase() === target)
 }
 
 /**
@@ -1051,7 +1100,13 @@ function trimHeaderName(value: string): string {
  * Throws {@link DkimParseError} when a name matches more occurrences than the
  * `h=` list consumes, which means the message grew a field after signing —
  * unless the name is one of {@link TRANSIT_ADDED_HEADER_NAMES}, which a relay
- * adds on the way and a forwarded message therefore always has more of.
+ * adds on the way and a forwarded message therefore always has more of. It
+ * also throws when a header line's name is not `h=`-asked-for as written but
+ * a lenient mail program could still read it as one ({@link
+ * looseHeaderNameReadings}, issue #113): such a line is never selected by the
+ * bottom-up pairing above — it sits in its own bucket, under its own literal
+ * name — so it is always an instance beyond what the signer signed, for
+ * every name it disguises as that `h=` actually lists.
  */
 function selectSignedHeaders(
   headers: string[],
@@ -1107,6 +1162,29 @@ function selectSignedHeaders(
     if (isTransitAddedHeaderName(name)) continue
     throw new DkimParseError(`unsigned additional instances of a signed header: ${name}`)
   }
+
+  // #113: a header line whose end-trimmed name is not itself asked for can
+  // still disguise as one that is, by a padding byte sitting inside the name
+  // rather than at an end. Such a line was bucketed above under its own
+  // literal (undisguised) name and so never took part in the pairing or the
+  // leftover count either — it is unconditionally an extra instance of
+  // whichever asked-for name it disguises as, for the same reason a real
+  // extra instance is: the signer never had the chance to sign it under that
+  // name.
+  for (const header of headers) {
+    const colon = header.indexOf(":")
+    if (colon === -1) continue
+    const rawName = header.slice(0, colon)
+    const exact = trimHeaderName(rawName).toLowerCase()
+    if (asked.has(exact)) continue // already accounted for above
+    for (const reading of looseHeaderNameReadings(trimHeaderName(rawName))) {
+      const loose = reading.toLowerCase()
+      if (!asked.has(loose)) continue
+      if (isTransitAddedHeaderName(loose)) continue
+      throw new DkimParseError(`unsigned additional instances of a signed header: ${loose}`)
+    }
+  }
+
   return selected
 }
 
@@ -1480,12 +1558,13 @@ function refuseSignatureHeader(
   }
   // §5.4 requires the From field to be signed, which a message that has no From
   // field cannot satisfy: `h=from` over a message with no From hashes nothing for
-  // it, so the signature would say nothing about the author either.
-  if (
-    !headers.some((line) =>
-      trimHeaderName(line.slice(0, line.indexOf(":"))).toLowerCase() === "from"
-    )
-  ) {
+  // it, so the signature would say nothing about the author either. The name is
+  // read through `headerNameMatches`, not a plain end-trimmed comparison, so a
+  // line whose only "From" is disguised inside the name still counts as present
+  // here (issue #113) — this check only ever widens what counts as an instance
+  // to reject; `selectSignedHeaders`' own #113 guard is what actually refuses
+  // such a line, whether or not a genuine `From:` sits elsewhere in the message.
+  if (!headers.some((line) => headerNameMatches(line.slice(0, line.indexOf(":")), "from"))) {
     return "From field not signed (the message has no From field)"
   }
 
