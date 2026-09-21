@@ -1225,7 +1225,7 @@ function selectSignedHeaders(
   // correctly named trace field, and the remedy for a signer who wants one
   // protected — oversigning it — reaches that field, since it has an exact
   // name and is paired and hashed like any other. Neither holds for a name
-  // that only reads as `resent-from` or `received-spf` once a padding byte is
+  // that only reads as `resent-from` or `received` once a padding byte is
   // dropped or a name is cut short: no relay wrote it that way, and
   // oversigning cannot reach it, because a disguised line is never selected
   // or hashed by the pairing loop at all — it sits in its own bucket. Exempting
