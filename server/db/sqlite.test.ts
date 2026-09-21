@@ -40,6 +40,7 @@ import {
   SqliteDb,
   SqliteEnvName,
   SqliteMigrationDriver,
+  SqliteScopeEndedError,
   SqliteTransactionWaitError,
 } from "./sqlite.ts"
 import { createNodeSqliteDriver } from "./testing/node-sqlite-driver.ts"
@@ -514,6 +515,141 @@ Deno.test("a second caller's write survives a rollback in the transaction it ove
 
   assertEquals(await db.queryAll<{ id: number; label: string }>("SELECT id, label FROM rows"), [
     { id: 2, label: "kept" },
+  ])
+  await db.close()
+})
+
+Deno.test("a handle kept past its own transaction refuses every later statement", async () => {
+  // The leak a gate alone does not close. A service that stores the handle the callback
+  // was given — `this.db = db`, which is the shape the Postgres half of this package
+  // uses — keeps a way past the gate for the rest of the process, and the write it makes
+  // later lands inside whatever transaction is open then and goes with that rollback.
+  const db = await openMemory()
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+  let kept: SqliteDb | undefined
+  let keptStatement: SqliteStatement | undefined
+  await db.transaction(async (transaction) => {
+    kept = transaction
+    keptStatement = await transaction.prepare("INSERT INTO rows (id, label) VALUES (?, ?)")
+    await transaction.execute("INSERT INTO rows (id, label) VALUES (?, ?)", 1, "committed")
+  })
+
+  await assertRejects(
+    () => kept!.execute("INSERT INTO rows (id, label) VALUES (?, ?)", 2, "leaked"),
+    SqliteScopeEndedError,
+    "belonged to a transaction that has already committed or rolled back",
+  )
+  await assertRejects(() => kept!.exec("DELETE FROM rows"), SqliteScopeEndedError)
+  await assertRejects(() => kept!.prepare("SELECT 1"), SqliteScopeEndedError)
+  await assertRejects(
+    () => kept!.transaction(() => Promise.resolve(undefined)),
+    SqliteScopeEndedError,
+  )
+  // A statement prepared inside the callback is the same door, so it closes too.
+  await assertRejects(
+    () => keptStatement!.run(3, "leaked through a statement") as Promise<unknown>,
+    SqliteScopeEndedError,
+  )
+
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM rows ORDER BY id"), [{ id: 1 }])
+  await db.close()
+})
+
+Deno.test("a handle kept past a rolled-back transaction refuses too", async () => {
+  const db = await openMemory()
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+  let kept: SqliteDb | undefined
+
+  await assertRejects(
+    () =>
+      db.transaction((transaction) => {
+        kept = transaction
+        return Promise.reject(new Error("the callback failed"))
+      }),
+    Error,
+    "the callback failed",
+  )
+
+  await assertRejects(
+    () => kept!.execute("INSERT INTO rows (id) VALUES (?)", 1),
+    SqliteScopeEndedError,
+  )
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM rows"), [])
+  await db.close()
+})
+
+/**
+ * A driver whose every call settles a tick after it was made.
+ *
+ * `node:sqlite` is synchronous, so on it a gate check and the `BEGIN` that follows
+ * happen in one run of the event loop and nothing can interleave between them. That
+ * hides the ordering the gate depends on. Here each call yields first, so a second
+ * caller gets a turn in exactly the gap the real port allows for — the port admits a
+ * driver that answers with a promise, and this is that driver.
+ *
+ * Statements are recorded when they reach the engine, not when they were asked for.
+ */
+async function laterDriver(): Promise<{ driver: SqliteDriver; issued: string[] }> {
+  const real = await createNodeSqliteDriver({ path: ":memory:" })
+  const issued: string[] = []
+  const nextTick = (): Promise<void> =>
+    new Promise((resolve) => {
+      setTimeout(resolve, 0)
+    })
+  return {
+    issued,
+    driver: {
+      exec: async (sql: string) => {
+        await nextTick()
+        issued.push(sql)
+        return real.exec(sql)
+      },
+      prepare: async (sql: string) => {
+        await nextTick()
+        const statement = await real.prepare(sql)
+        const wrapped: SqliteStatement = {
+          get: async (...parameters: unknown[]) => {
+            await nextTick()
+            return await statement.get(...parameters)
+          },
+          all: async (...parameters: unknown[]) => {
+            await nextTick()
+            return await statement.all(...parameters)
+          },
+          run: async (...parameters: unknown[]) => {
+            await nextTick()
+            return await statement.run(...parameters)
+          },
+        }
+        return wrapped
+      },
+      close: () => real.close(),
+    },
+  }
+}
+
+Deno.test("the connection is claimed before BEGIN, so two callers never both send one", async () => {
+  // The ordering this pins is invisible on a synchronous driver: there, the gate check
+  // and the BEGIN that follows it run without interruption whichever way round they are
+  // written. On a driver that answers a tick later, claiming the connection only after
+  // BEGIN succeeded lets the second caller through the check while the first caller's
+  // BEGIN is still in flight, and both send one.
+  const { driver, issued } = await laterDriver()
+  const db = new SqliteDb(driver, ":memory:")
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+
+  await Promise.all([
+    db.transaction((transaction) => transaction.execute("INSERT INTO rows (id) VALUES (?)", 1)),
+    db.transaction((transaction) => transaction.execute("INSERT INTO rows (id) VALUES (?)", 2)),
+  ])
+
+  const boundaries = issued.filter((sql) =>
+    sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK"
+  )
+  assertEquals(boundaries, ["BEGIN", "COMMIT", "BEGIN", "COMMIT"])
+  assertEquals(await db.queryAll<{ id: number }>("SELECT id FROM rows ORDER BY id"), [
+    { id: 1 },
+    { id: 2 },
   ])
   await db.close()
 })

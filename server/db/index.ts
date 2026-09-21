@@ -36,6 +36,7 @@ export {
   type SqliteOpenOptions,
   type SqliteRunResult,
   type SqliteSchema,
+  SqliteScopeEndedError,
   type SqliteStatement,
   SqliteTransactionWaitError,
   type TransactionStatements,

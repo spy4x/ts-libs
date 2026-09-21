@@ -148,8 +148,37 @@ export type SqliteDelay = (milliseconds: number) => {
   cancel: () => void
 }
 
-/** How long a statement waits for an open transaction before it gives up. */
+/**
+ * How long a statement waits for an open transaction before it gives up.
+ *
+ * Five seconds: long enough that an honest transaction doing real work is not cut off,
+ * short enough that a caller waiting for itself is reported rather than hung. A
+ * deployment whose transactions legitimately run longer raises
+ * {@link SqliteDbOptions.transactionWaitMs}; failing loudly is the trade this number
+ * makes, against the silent corruption that having no bound at all replaced.
+ */
 export const DEFAULT_TRANSACTION_WAIT_MS = 5_000
+
+/**
+ * Thrown when a handle is used after the transaction it belongs to has ended.
+ *
+ * The handle a transaction callback is given is scoped to that transaction: it is the
+ * one way past the gate, and it stops working the moment the transaction commits or
+ * rolls back. A service that stores it — `this.db = db` inside the callback — would
+ * otherwise keep a permanent door around the gate, and a write through that door lands
+ * in whatever transaction is open when it runs and disappears with that transaction's
+ * rollback. It reports one change on the way out, which is what makes the loss silent.
+ */
+export class SqliteScopeEndedError extends Error {
+  constructor() {
+    super(
+      `this sqlite handle belonged to a transaction that has already committed or ` +
+        `rolled back; a statement after the transaction goes through the connection ` +
+        `the transaction was opened on, not through the handle the callback was given`,
+    )
+    this.name = "SqliteScopeEndedError"
+  }
+}
 
 /**
  * Thrown when a statement waited out {@link SqliteDbOptions.transactionWaitMs}.
@@ -162,9 +191,10 @@ export class SqliteTransactionWaitError extends Error {
   constructor(milliseconds: number) {
     super(
       `sqlite connection is held by an open transaction and did not become free within ` +
-        `${milliseconds}ms; a statement issued inside a transaction callback must go ` +
-        `through the handle that callback was given, not through the connection it was ` +
-        `opened on`,
+        `${milliseconds}ms; either that transaction is slower than the bound, or this ` +
+        `statement was issued inside a transaction callback on the connection the ` +
+        `transaction was opened on rather than on the handle the callback was given, ` +
+        `in which case it was waiting for itself`,
     )
     this.name = "SqliteTransactionWaitError"
   }
@@ -336,6 +366,14 @@ export class SqliteDb {
   private readonly delay: SqliteDelay
   /** The gate, or `null` on the scoped handle a transaction callback is given. */
   private gate: TransactionGate | null = new TransactionGate()
+  /**
+   * `true` once the transaction this handle was scoped to has ended.
+   *
+   * Only ever set on a scoped handle. It is what stops a callback that kept its handle
+   * from writing through it afterwards, which would go around the gate and land inside
+   * whatever transaction happened to be open at the time.
+   */
+  private ended = false
   private closed = false
 
   constructor(
@@ -447,9 +485,14 @@ export class SqliteDb {
    *    tell that caller from a second, genuine one, so it bounds the wait instead of
    *    hanging for ever;
    *  - a failed `BEGIN` gives the connection straight back, so one bad statement does
-   *    not leave the handle refusing every later transaction.
+   *    not leave the handle refusing every later transaction;
+   *  - the scoped handle **stops working** when the transaction ends, with
+   *    {@link SqliteScopeEndedError}. A callback that stored it would otherwise keep a
+   *    permanent way past the gate, and a write through it later lands in whatever
+   *    transaction is open at the time and disappears with that one's rollback.
    */
   async transaction<T>(fn: (db: SqliteDb) => Promise<T>): Promise<T> {
+    this.assertUsable()
     const gate = this.gate
     if (gate === null) {
       throw new Error("sqlite transaction is already open; SQLite does not nest transactions")
@@ -466,6 +509,7 @@ export class SqliteDb {
       // left the connection refusing every later transaction.
       await scoped.exec(this.transactions.begin)
     } catch (error) {
+      scoped.ended = true
       release()
       throw error
     }
@@ -482,6 +526,10 @@ export class SqliteDb {
       }
       throw error
     } finally {
+      // The handle stops working here, and not only when the callback returns normally:
+      // a callback that stored it has no way to tell the difference, and the write it
+      // would make through a kept handle is lost either way.
+      scoped.ended = true
       release()
     }
   }
@@ -508,8 +556,19 @@ export class SqliteDb {
     return scoped
   }
 
-  /** Wait for an open transaction, if this handle has a gate, and then run `operation`. */
+  /**
+   * Refuse a handle whose transaction has ended.
+   *
+   * @throws {SqliteScopeEndedError} on a scoped handle used after its transaction
+   * committed or rolled back.
+   */
+  private assertUsable(): void {
+    if (this.ended) throw new SqliteScopeEndedError()
+  }
+
+  /** Refuse an ended handle, wait for an open transaction, and then run `operation`. */
   private async guard<T>(operation: () => T | Promise<T>): Promise<T> {
+    this.assertUsable()
     const gate = this.gate
     if (gate !== null) {
       while (gate.held() !== undefined) {
@@ -519,9 +578,14 @@ export class SqliteDb {
     return await operation()
   }
 
-  /** Put this handle's gate in front of a prepared statement's three run methods. */
+  /**
+   * Put this handle's own checks in front of a prepared statement's three run methods.
+   *
+   * Both kinds of handle wrap. On the root handle the wrapper is the gate; on a scoped
+   * handle it is the end-of-transaction check, because a statement prepared inside the
+   * callback is as good a way around the gate afterwards as the handle itself.
+   */
   private guardStatement(statement: SqliteStatement): SqliteStatement {
-    if (this.gate === null) return statement
     return {
       get: (...parameters: unknown[]) => this.guard(() => statement.get(...parameters)),
       all: (...parameters: unknown[]) => this.guard(() => statement.all(...parameters)),
