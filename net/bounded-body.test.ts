@@ -236,6 +236,29 @@ describe("readBoundedBody", () => {
       BodyReadTimeoutError,
     )
   })
+
+  it("rejects a non-finite cap before a byte is read", async () => {
+    for (const cap of [NaN, Infinity, -Infinity]) {
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new Uint8Array([1]))
+          controller.close()
+        },
+      })
+      const request = new Request("http://example.test", { method: "POST", body: stream })
+      await assertRejects(
+        () => readBoundedBody(request, { maxBytes: cap }),
+        RangeError,
+        String(cap),
+      )
+      // `bodyUsed` alone does not prove this: it stays `false` even once
+      // `getReader()` has locked the stream, as long as nothing was read from
+      // it. `locked` is the property that actually pins "the reader is not
+      // taken before the throw" — a caller left with a locked-but-unread
+      // stream cannot read it either, so this is the real regression to catch.
+      assertEquals(request.body?.locked, false, `${cap} must reject before the reader is taken`)
+    }
+  })
 })
 
 describe("readBoundedJson", () => {

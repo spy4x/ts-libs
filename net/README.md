@@ -219,7 +219,9 @@ always the canonical URL that actually answered.
 
 - **a hard byte cap** (`maxBytes`, default 5 MiB), checked against both the
   declared `Content-Length` and the running total, so a missing or lying header
-  cannot get past it;
+  cannot get past it. A `maxBytes` that is not a finite number (`NaN` or
+  `Infinity`, the shape of a misparsed env var) is rejected with a `RangeError`
+  before the reader is taken, instead of silently disabling the cap;
 - **a stall budget** (`timeoutMs`, default 10s), the maximum wait for the _next_
   chunk — so a slow-but-live transfer is allowed to finish while a hung one
   fails fast with `BodyReadTimeoutError`. `timeoutMs: 0` turns it off, which is

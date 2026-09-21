@@ -255,9 +255,10 @@ Deno.test("readBoundedBody reports the read error even when cancel rejects", asy
 })
 
 Deno.test("readBoundedBody rejects an unusable cap instead of reading", async () => {
-  // The canonical reader has no `RangeError` branch: a cap that cannot be
-  // satisfied fails closed on the same error a real over-cap body raises. Both
-  // values below were rejected by a `RangeError` before the collapse.
+  // The canonical reader's `RangeError` branch only fires for a cap that is
+  // not finite (`NaN`, `Infinity`). `-1` and `1.5` are both finite, so they
+  // still fail closed on the same `PayloadTooLargeError` a real over-cap body
+  // raises, exactly as they did before the collapse.
   for (const cap of [-1, 1.5]) {
     // A fresh request per case: a body can only be read once, so reusing one
     // would test the second read against an already-drained stream.
@@ -270,18 +271,23 @@ Deno.test("readBoundedBody rejects an unusable cap instead of reading", async ()
   }
 })
 
-Deno.test("readBoundedBody fails open on a non-finite cap (known gap in net/)", async () => {
-  // `NaN` and `Infinity` compare false against the running total, so the cap is
-  // silently disabled and the body is read in full — the one `maxBytes` value
-  // the pre-collapse module's `RangeError` caught and the canonical reader does
-  // not. Documented here rather than left silent: it belongs in `net/`'s
-  // validation, and this test must be inverted when that lands.
-  const request = new Request(ORIGIN, { method: "POST", body: "abcdef" })
-
-  assertEquals(
-    await readBoundedBody(request, { maxBytes: NaN }),
-    new TextEncoder().encode("abcdef"),
-  )
+Deno.test("readBoundedBody rejects a non-finite cap instead of reading (was: fails open)", async () => {
+  // `NaN` and `Infinity` used to compare false against the running total, so
+  // the cap was silently disabled and the body read in full. `net/` now
+  // rejects both before the reader is taken.
+  for (const cap of [NaN, Infinity]) {
+    const request = new Request(ORIGIN, { method: "POST", body: "abcdef" })
+    await assertRejects(
+      () => readBoundedBody(request, { maxBytes: cap }),
+      RangeError,
+      String(cap),
+    )
+    // `bodyUsed` stays `false` even once `getReader()` has locked the stream,
+    // as long as nothing was read from it, so it cannot see this regression.
+    // `locked` is what actually pins "the reader is not taken before the
+    // throw".
+    assertEquals(request.body?.locked, false, `${cap} must reject before the reader is taken`)
+  }
 })
 
 Deno.test("PayloadTooLargeError names itself and carries the cap", async () => {
