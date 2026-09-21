@@ -121,22 +121,27 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * anyway and it removes the pool-starvation trap a lock held on a *second* connection
    * would carry for a client with `max: 1`.
    *
-   * The key is the first eight bytes of the SHA-256 of the qualified table name, read as
-   * a signed 64-bit integer. Two deployments sharing a server lock each other out only
-   * when they share a history table, which is when they must.
+   * The key is the first eight bytes of the SHA-256 of the table's **resolved** name,
+   * read as a signed 64-bit integer. Resolved, not as the caller spelled it: the server
+   * is asked which schema the name reaches, so a driver given `schema: "app"` and a
+   * driver that reaches `app.migrations` through its search path take the same key and
+   * lock each other out. Deriving it from the spelling alone did not — the two ran at the
+   * same time and one of them crashed inside Postgres's own catalogue.
    *
    * `pg_advisory_lock` waits rather than failing: a second runner starting during a
    * migration should apply nothing and carry on, not crash the instance. A runner that
    * dies holding the lock releases it when its connection closes, so there is no stale
-   * lock to clear by hand.
+   * lock to clear by hand. It has no bound, which #109 records.
    */
   async withLock<T>(run: () => Promise<T>): Promise<T> {
-    const key = await advisoryLockKey(this.tableRef)
     const reserved = await this.sql.reserve()
     const pooled = this.sql
     this.sql = reserved as unknown as Sql
     this.pinned = true
     try {
+      // On the reserved connection, because the answer depends on that session's
+      // `search_path` and the run is about to use that same session.
+      const key = await advisoryLockKey(await this.resolvedTableRef(reserved as unknown as Sql))
       await reserved`SELECT pg_advisory_lock(${key})`
       try {
         return await run()
@@ -148,6 +153,30 @@ export class PostgresMigrationDriver implements MigrationDriver {
       this.pinned = false
       reserved.release()
     }
+  }
+
+  /**
+   * `schema.table` for the table this driver will actually read and write.
+   *
+   * A named schema is the answer already. Without one, the server is asked: `to_regclass`
+   * resolves the bare name through this session's `search_path` and gives the schema it
+   * found it in, and when the table does not exist yet `current_schema()` is where
+   * `CREATE TABLE` will put it. Both are the schema this run ends up working in, which is
+   * what the lock key has to follow.
+   */
+  private async resolvedTableRef(sql: Sql): Promise<string> {
+    if (this.schema !== undefined) return `${this.schema}.${this.table}`
+    const rows = await sql<{ schema: string | null }[]>`
+      SELECT coalesce(
+        (
+          SELECT n.nspname
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.oid = to_regclass(${this.table})
+        ),
+        current_schema()
+      ) AS schema
+    `
+    return `${rows[0]?.schema ?? ""}.${this.table}`
   }
 
   /**
@@ -276,6 +305,10 @@ export class PostgresMigrationDriver implements MigrationDriver {
  * deterministic across processes and releases, and spread widely enough that two
  * different history tables colliding is not a thing that happens. A collision would cost
  * one runner a wait, never a wrong answer.
+ *
+ * `qualifiedTable` is always `schema.table` with the schema resolved by the server — see
+ * {@link PostgresMigrationDriver.withLock} — so two runners that reach one table lock
+ * each other out however each of them spelled it.
  */
 async function advisoryLockKey(qualifiedTable: string): Promise<bigint> {
   const digest = await crypto.subtle.digest(
