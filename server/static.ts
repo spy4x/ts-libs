@@ -19,9 +19,18 @@
  * list — is **not** ported: an SPA fallback is a single flag (`spaFallback`) or
  * the caller's own catch-all route, not a list of page paths.
  *
- * The native `Response` streams a `ReadableStream` body, so a large asset is not
- * buffered twice; `Deno.readFile` returns the bytes and Deno's `Response`
- * implementation streams them.
+ * A file is opened, not read whole. `StaticFs.open` returns the file's size and a
+ * `ReadableStream` of its bytes, so memory use stays flat for a request whatever
+ * the file's size — a directory of large videos costs the same per-request memory
+ * as a directory of icons. For a `GET`, the handle is released the first time one
+ * of three things happens to the response body: it is read to the end, the client
+ * cancels it, or a read fails. **A `GET` response whose body is never read and
+ * never cancelled still holds the handle until garbage collection** — this is
+ * exactly what a framework does to a `HEAD` response it discards unread, which is
+ * why `HEAD` is handled separately: pass `method: "HEAD"` and the handle is closed
+ * before `serveStatic` returns, without `serveStatic` ever wrapping or reading the
+ * stream. (`denoStaticFs.open` still builds that stream eagerly as `file.readable`
+ * — it exists, `serveStatic` just never touches it for `HEAD`.)
  */
 
 /** Result of resolving a request path against the static root. */
@@ -168,10 +177,29 @@ export interface StaticFileInfo {
   isFile: boolean
 }
 
+/** A file opened for streaming, returned by {@link StaticFs.open}. */
+export interface StaticFileHandle {
+  /** Total size in bytes, used for the `Content-Length` header. */
+  size: number
+  /** File contents, read lazily as the response body is consumed. */
+  body: ReadableStream<Uint8Array>
+  /**
+   * Releases the file handle. `serveStatic` never calls this more than once for
+   * a handle, so an implementation does not need to guard against a second
+   * call. It is not guaranteed to be called at all: a `GET` response whose body
+   * is never read and never cancelled leaves the handle to garbage collection,
+   * as the module comment above describes.
+   */
+  close: () => void
+}
+
 /** Filesystem surface the static handler needs; injected so tests need no files. */
 export interface StaticFs {
-  /** File bytes. Throws when the path does not exist or is a directory. */
-  readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>
+  /**
+   * Opens a file for streaming. Resolves to `null` when the path does not exist
+   * or is not a regular file, so a directory is never streamed as a file.
+   */
+  open: (path: string) => Promise<StaticFileHandle | null>
   /** Entry metadata, or `null` when it does not exist. */
   stat: (path: string) => Promise<StaticFileInfo | null>
   /** Canonical absolute path, resolving symlinks. */
@@ -191,6 +219,15 @@ export interface ServeStaticOptions {
   spaFallback?: boolean
   /** `Cache-Control` value to set on served files. Omitted means no header. */
   cacheControl?: string
+  /**
+   * HTTP method of the request. Defaults to `"GET"`. Pass `"HEAD"` (for
+   * example `c.req.method` from Hono) and the response carries the same
+   * headers, including the correct `Content-Length`, with no body — and the
+   * file handle is closed before `serveStatic` returns, instead of being
+   * handed to a stream the caller is never going to read. Any other value is
+   * treated the same as `"GET"`.
+   */
+  method?: string
 }
 
 /** File name served for a directory request and for the SPA fallback. */
@@ -200,10 +237,14 @@ const INDEX_FILE = "index.html"
  * Serve one request path from the static root.
  *
  * @param requestPath `URL.pathname` of the request, still percent-encoded.
- * @param options Root directory plus optional filesystem, SPA flag and cache header.
- * @returns A `200` response with the file's bytes and content type, or
- * `undefined` when the path is refused or the file does not exist. Callers turn
- * `undefined` into their own `404` (or into an SPA route).
+ * @param options Root directory plus optional filesystem, SPA flag, cache header
+ * and request method.
+ * @returns A `200` response with the same content type and `Content-Length`
+ * (taken from the file's own size, never from a buffer) whatever the method: a
+ * streamed body for `GET`, no body at all for `HEAD` — with the handle already
+ * closed in that case. Resolves to `undefined` when the path is refused or the
+ * file does not exist. Callers turn `undefined` into their own `404` (or into
+ * an SPA route).
  */
 export async function serveStatic(
   requestPath: string,
@@ -235,23 +276,104 @@ export async function serveStatic(
   ])
   if (!realFile || !realRoot || !isPathInsideRoot(realFile, realRoot)) return undefined
 
-  const bytes = await fs.readFile(realFile).catch(() => null)
-  if (!bytes) return undefined
+  const handle = await fs.open(realFile).catch(() => null)
+  if (!handle) return undefined
 
   const headers = new Headers({
     "Content-Type": contentTypeFor(realFile),
+    "Content-Length": String(handle.size),
     // A static asset is served with the content type this table chose; a browser
     // must not sniff a different one, which is how a `.txt` upload becomes script.
     "X-Content-Type-Options": "nosniff",
   })
   if (options.cacheControl) headers.set("Cache-Control", options.cacheControl)
 
-  return new Response(bytes, { headers })
+  // A HEAD response carries no body, so there is nothing to stream and nothing
+  // a caller might forget to read or cancel. Close right here instead of
+  // handing the handle to a stream a framework's HEAD handling is going to
+  // discard unread — that discard is exactly how a `GET` handle leaks until
+  // garbage collection, and `HEAD` has no reason to risk the same thing.
+  if (options.method === "HEAD") {
+    handle.close()
+    return new Response(null, { headers })
+  }
+
+  try {
+    return new Response(closingStream(handle), { headers })
+  } catch (error) {
+    handle.close()
+    throw error
+  }
+}
+
+/**
+ * Wrap a file handle's body so `close` runs exactly once, the first time the
+ * stream is fully read, is cancelled by the client, or fails on a read. A
+ * `StaticFs` implementation is not required to manage this itself.
+ *
+ * This only covers a body a caller actually reads or cancels. A `GET`
+ * response whose body nobody touches — the shape of a HEAD response most
+ * frameworks build for themselves, discarding the one `serveStatic` returned
+ * — never calls `pull` or `cancel`, so the handle is not released until
+ * garbage collection notices the abandoned stream. `serveStatic` avoids that
+ * case for `HEAD` entirely by never calling this function for one.
+ */
+function closingStream(handle: StaticFileHandle): ReadableStream<Uint8Array> {
+  const reader = handle.body.getReader()
+  let closed = false
+  const closeOnce = () => {
+    if (closed) return
+    closed = true
+    handle.close()
+  }
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          closeOnce()
+          controller.close()
+          return
+        }
+        controller.enqueue(value)
+      } catch (error) {
+        closeOnce()
+        controller.error(error)
+      }
+    },
+    cancel(reason) {
+      closeOnce()
+      return reader.cancel(reason)
+    },
+  })
 }
 
 /** Filesystem implementation backed by `Deno.*`, used when none is injected. */
 export const denoStaticFs: StaticFs = {
-  readFile: (path) => Deno.readFile(path) as Promise<Uint8Array<ArrayBuffer>>,
+  async open(path) {
+    let file: Deno.FsFile
+    try {
+      file = await Deno.open(path, { read: true })
+    } catch {
+      return null
+    }
+    let info: Deno.FileInfo
+    try {
+      info = await file.stat()
+    } catch {
+      closeQuietly(file)
+      return null
+    }
+    if (!info.isFile) {
+      closeQuietly(file)
+      return null
+    }
+    return {
+      size: info.size,
+      body: file.readable,
+      close: () => closeQuietly(file),
+    }
+  },
   async stat(path) {
     try {
       const info = await Deno.stat(path)
@@ -261,4 +383,18 @@ export const denoStaticFs: StaticFs = {
     }
   },
   realPath: (path) => Deno.realPath(path),
+}
+
+/**
+ * Closes a file, ignoring a resource that is already gone. `Deno.FsFile`'s
+ * `readable` stream releases the underlying resource itself once fully read or
+ * cancelled, so a later explicit close from {@link closingStream} routinely
+ * finds nothing left to close.
+ */
+function closeQuietly(file: Deno.FsFile): void {
+  try {
+    file.close()
+  } catch {
+    // already closed by the stream finishing or being cancelled
+  }
 }

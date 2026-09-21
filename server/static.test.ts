@@ -1,4 +1,4 @@
-import { assertEquals, assertStrictEquals, assertStringIncludes } from "@std/assert"
+import { assertEquals, assertRejects, assertStrictEquals, assertStringIncludes } from "@std/assert"
 import {
   contentTypeFor,
   denoStaticFs,
@@ -6,6 +6,7 @@ import {
   KNOWN_EXTENSIONS,
   resolveStaticPath,
   serveStatic,
+  type StaticFileHandle,
   type StaticFs,
 } from "./static.ts"
 
@@ -25,27 +26,51 @@ const fixtureFs: StaticFs = denoStaticFs
 /** Where a spy filesystem was asked to look, for assertions about refusal. */
 interface FsSpy {
   fs: StaticFs
-  read: string[]
+  /** Paths `open` was called with. */
+  opened: string[]
+  /** Paths whose handle's `close` was called. One entry per close call. */
+  closed: string[]
   real: string[]
+}
+
+/**
+ * A single-chunk `ReadableStream` for a spy filesystem's handle, plus a size
+ * derived from the same bytes so `Content-Length` matches what was served.
+ */
+function singleChunkBody(text: string): { size: number; body: ReadableStream<Uint8Array> } {
+  const bytes = new TextEncoder().encode(text)
+  return {
+    size: bytes.length,
+    body: new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(bytes)
+        controller.close()
+      },
+    }),
+  }
 }
 
 /**
  * Filesystem over an in-memory file map that records every path it was asked for.
  *
- * A refusal test asserts `read` and `real` stayed empty: "returned undefined" alone
- * would also be true for a filesystem that was probed and found nothing.
+ * A refusal test asserts `opened` and `real` stayed empty: "returned undefined"
+ * alone would also be true for a filesystem that was probed and found nothing.
  */
 function spyFs(files: Record<string, string>): FsSpy {
-  const encoder = new TextEncoder()
-  const read: string[] = []
+  const opened: string[] = []
+  const closed: string[] = []
   const real: string[] = []
   const fs: StaticFs = {
-    readFile: (path) => {
-      read.push(path)
-      const bytes = files[path]
-      return bytes === undefined
-        ? Promise.reject(new Error("not found"))
-        : Promise.resolve(encoder.encode(bytes))
+    open: (path) => {
+      opened.push(path)
+      const text = files[path]
+      if (text === undefined) return Promise.resolve(null)
+      const { size, body } = singleChunkBody(text)
+      return Promise.resolve({
+        size,
+        body,
+        close: () => closed.push(path),
+      })
     },
     stat: (path) => Promise.resolve(files[path] === undefined ? null : { isFile: true }),
     realPath: (path) => {
@@ -53,7 +78,7 @@ function spyFs(files: Record<string, string>): FsSpy {
       return Promise.resolve(path)
     },
   }
-  return { fs, read, real }
+  return { fs, opened, closed, real }
 }
 
 Deno.test("static: a plain file path resolves under the root", () => {
@@ -212,7 +237,7 @@ Deno.test("static: a refused path never reaches the filesystem", async () => {
     const response = await serveStatic(path, { root: ROOT, fs: spy.fs })
     assertEquals(response, undefined, `${path} was served`)
   }
-  assertEquals(spy.read, [], "a refused path was read from disk")
+  assertEquals(spy.opened, [], "a refused path was read from disk")
   assertEquals(spy.real, [], "a refused path was resolved on disk")
 })
 
@@ -222,14 +247,17 @@ Deno.test("static: a traversal path cannot read a file outside the root", async 
   const spy = spyFs({ "/etc/passwd": "root:x:0:0:root:/root:/bin/sh" })
   const response = await serveStatic("/../etc/passwd", { root: ROOT, fs: spy.fs })
   assertEquals(response, undefined)
-  assertEquals(spy.read, [])
+  assertEquals(spy.opened, [])
 })
 
 Deno.test("static: a symlink escaping the root is refused", async () => {
   // The request path is inside the root; only the realpath reveals that the
-  // target is not.
+  // target is not. `open` throws if it is ever reached: this refusal must
+  // happen before any file is opened.
   const fs: StaticFs = {
-    readFile: () => Promise.resolve(new TextEncoder().encode("secret")),
+    open: () => {
+      throw new Error("open must not be called for a path outside the root")
+    },
     stat: () => Promise.resolve({ isFile: true }),
     realPath: (path) => {
       if (path === ROOT) return Promise.resolve(ROOT)
@@ -264,7 +292,7 @@ Deno.test("static: the SPA fallback still refuses a traversal path", async () =>
     spaFallback: true,
   })
   assertEquals(response, undefined)
-  assertEquals(spy.read, [], "the SPA fallback read a traversal path")
+  assertEquals(spy.opened, [], "the SPA fallback read a traversal path")
 })
 
 Deno.test("static: the SPA fallback serves index.html for the root path", async () => {
@@ -300,12 +328,256 @@ Deno.test("static: cache-control is set only when configured", async () => {
   assertEquals(cached?.headers.get("cache-control"), "public, max-age=31536000, immutable")
 })
 
-Deno.test("static: a file that disappears between stat and read is not served", async () => {
+Deno.test("static: a file that disappears between stat and open is not served", async () => {
   const fs: StaticFs = {
-    readFile: () => Promise.reject(new Error("ENOENT")),
+    open: () => Promise.reject(new Error("ENOENT")),
     stat: () => Promise.resolve({ isFile: true }),
     realPath: (path) => Promise.resolve(path),
   }
   const response = await serveStatic("/gone.css", { root: ROOT, fs })
   assertEquals(response, undefined)
+})
+
+Deno.test("static: the content-length header comes from the file's size", async () => {
+  const spy = spyFs({ "/srv/app/static/app.css": "body { color: red }" })
+  const response = await serveStatic("/app.css", { root: ROOT, fs: spy.fs })
+  assertStrictEquals(response !== undefined, true)
+  assertEquals(response!.headers.get("content-length"), "19")
+})
+
+Deno.test("static: a real fixture file's content-length matches its size on disk", async () => {
+  const response = await serveStatic("/app.css", { root: FIXTURE_ROOT, fs: fixtureFs })
+  assertStrictEquals(response !== undefined, true)
+  const info = await Deno.stat(`${FIXTURE_ROOT}/app.css`)
+  assertEquals(response!.headers.get("content-length"), String(info.size))
+})
+
+Deno.test("static: the body streams in more than one chunk, unread by the module", async () => {
+  const chunks = ["first-", "second-", "third-", "fourth-", "fifth-chunk"]
+  const encoder = new TextEncoder()
+  const encoded = chunks.map((chunk) => encoder.encode(chunk))
+  const totalSize = encoded.reduce((sum, chunk) => sum + chunk.length, 0)
+
+  let pullCount = 0
+  let index = 0
+  let closeCount = 0
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pullCount++
+      if (index < encoded.length) {
+        controller.enqueue(encoded[index])
+        index++
+      } else {
+        controller.close()
+      }
+    },
+  })
+  const fs: StaticFs = {
+    open: () =>
+      Promise.resolve(
+        {
+          size: totalSize,
+          body,
+          close: () => {
+            closeCount++
+          },
+        } satisfies StaticFileHandle,
+      ),
+    stat: () => Promise.resolve({ isFile: true }),
+    realPath: (path) => Promise.resolve(path),
+  }
+
+  const response = await serveStatic("/video.mp4", { root: ROOT, fs })
+  assertStrictEquals(response !== undefined, true)
+  assertEquals(response!.headers.get("content-length"), String(totalSize))
+
+  // The stream's own backpressure-driven pulling has, at most, primed a couple of
+  // chunks ahead by the time `serveStatic` returns. If the module instead
+  // buffered the whole file before answering (e.g. via `.arrayBuffer()`), every
+  // one of the five chunks would already be pulled at this point.
+  assertStrictEquals(
+    pullCount < chunks.length,
+    true,
+    `expected fewer than ${chunks.length} pulls before the caller reads anything, got ${pullCount}`,
+  )
+  assertStrictEquals(closeCount, 0, "the handle was closed before the body was read")
+
+  const reader = response!.body!.getReader()
+  const received: Uint8Array[] = []
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    received.push(value)
+  }
+  assertStrictEquals(received.length, chunks.length, "the file did not arrive as separate chunks")
+  assertEquals(
+    received.map((chunk) => new TextDecoder().decode(chunk)).join(""),
+    chunks.join(""),
+  )
+  assertStrictEquals(closeCount, 1, "the handle was not closed exactly once after a full read")
+})
+
+Deno.test("static: the handle is closed when the client cancels the stream", async () => {
+  let index = 0
+  let closeCount = 0
+  const chunks = ["one-", "two-", "three"]
+  const encoder = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index < chunks.length) {
+        controller.enqueue(encoder.encode(chunks[index]))
+        index++
+      } else {
+        controller.close()
+      }
+    },
+  })
+  const fs: StaticFs = {
+    open: () =>
+      Promise.resolve(
+        {
+          size: chunks.join("").length,
+          body,
+          close: () => {
+            closeCount++
+          },
+        } satisfies StaticFileHandle,
+      ),
+    stat: () => Promise.resolve({ isFile: true }),
+    realPath: (path) => Promise.resolve(path),
+  }
+
+  const response = await serveStatic("/video.mp4", { root: ROOT, fs })
+  assertStrictEquals(response !== undefined, true)
+
+  const reader = response!.body!.getReader()
+  await reader.read() // read exactly one chunk, well short of the whole file
+  assertStrictEquals(closeCount, 0, "the handle was closed before the client cancelled")
+
+  await reader.cancel("client aborted")
+  assertStrictEquals(closeCount, 1, "the handle was not closed after the client cancelled")
+})
+
+Deno.test("static: the handle is closed when an error happens after the open", async () => {
+  let closeCount = 0
+  const fs: StaticFs = {
+    open: () =>
+      Promise.resolve(
+        {
+          size: 10,
+          // Accessing `body` throws, simulating a failure between a successful
+          // open and the response being constructed.
+          get body(): ReadableStream<Uint8Array> {
+            throw new Error("boom")
+          },
+          close: () => {
+            closeCount++
+          },
+        } satisfies StaticFileHandle,
+      ),
+    stat: () => Promise.resolve({ isFile: true }),
+    realPath: (path) => Promise.resolve(path),
+  }
+
+  await assertRejects(() => serveStatic("/broken.bin", { root: ROOT, fs }), Error, "boom")
+  assertStrictEquals(closeCount, 1, "the handle was not closed after the post-open error")
+})
+
+Deno.test("static: the handle is closed when the underlying stream errors mid-read", async () => {
+  let closeCount = 0
+  let pulls = 0
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls++
+      if (pulls === 1) {
+        controller.enqueue(new TextEncoder().encode("partial-"))
+        return
+      }
+      controller.error(new Error("disk read failed"))
+    },
+  })
+  const fs: StaticFs = {
+    open: () =>
+      Promise.resolve(
+        {
+          size: 100,
+          body,
+          close: () => {
+            closeCount++
+          },
+        } satisfies StaticFileHandle,
+      ),
+    stat: () => Promise.resolve({ isFile: true }),
+    realPath: (path) => Promise.resolve(path),
+  }
+
+  const response = await serveStatic("/flaky.bin", { root: ROOT, fs })
+  assertStrictEquals(response !== undefined, true)
+
+  const reader = response!.body!.getReader()
+  await reader.read() // the one chunk that arrives before the read fails
+  assertStrictEquals(closeCount, 0, "the handle was closed before the read actually failed")
+
+  await assertRejects(() => reader.read(), Error, "disk read failed")
+  assertStrictEquals(closeCount, 1, "the handle was not closed after the read failed")
+})
+
+Deno.test("static: a HEAD request gets a bodiless response with the handle already closed", async () => {
+  let closeCount = 0
+  let bodyAccessed = false
+  const fs: StaticFs = {
+    open: () =>
+      Promise.resolve(
+        {
+          size: 42,
+          // Accessing `body` at all would mean a stream was opened for a HEAD
+          // request; the getter throws so any such access fails the test
+          // instead of silently succeeding.
+          get body(): ReadableStream<Uint8Array> {
+            bodyAccessed = true
+            throw new Error("a HEAD request must never read the body")
+          },
+          close: () => {
+            closeCount++
+          },
+        } satisfies StaticFileHandle,
+      ),
+    stat: () => Promise.resolve({ isFile: true }),
+    realPath: (path) => Promise.resolve(path),
+  }
+
+  const response = await serveStatic("/video.mp4", { root: ROOT, fs, method: "HEAD" })
+  assertStrictEquals(response !== undefined, true)
+  assertEquals(response!.body, null)
+  assertEquals(response!.headers.get("content-length"), "42")
+  assertEquals(response!.status, 200)
+  assertStrictEquals(closeCount, 1, "the handle was not closed before the HEAD response returned")
+  assertStrictEquals(bodyAccessed, false, "a HEAD request opened a stream for the body")
+})
+
+Deno.test("static: a GET request for the same path still streams normally", async () => {
+  const spy = spyFs({ "/srv/app/static/app.css": "body { color: red }" })
+  const response = await serveStatic("/app.css", { root: ROOT, fs: spy.fs, method: "GET" })
+  assertStrictEquals(response !== undefined, true)
+  assertStrictEquals(response!.body !== null, true)
+  assertEquals(await response!.text(), "body { color: red }")
+})
+
+Deno.test("static: a real file is fully readable start to finish through denoStaticFs", async () => {
+  const response = await serveStatic("/index.html", { root: FIXTURE_ROOT, fs: fixtureFs })
+  assertStrictEquals(response !== undefined, true)
+  const reader = response!.body!.getReader()
+  const chunks: Uint8Array[] = []
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+  }
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+  assertEquals(String(total), response!.headers.get("content-length"))
+})
+
+Deno.test("static: denoStaticFs refuses to open a directory as a file", async () => {
+  const handle = await denoStaticFs.open(FIXTURE_ROOT)
+  assertEquals(handle, null)
 })
