@@ -16,7 +16,7 @@ import { assertEquals, assertStrictEquals } from "@std/assert"
 import type { Migration } from "./migrate.ts"
 import type { Sql, Transaction } from "./ports.ts"
 import { DEFAULT_MIGRATIONS_TABLE, PostgresMigrationDriver } from "./postgres-migrate.ts"
-import { ENV_NAME, PROD_FLAG, PRODUCTION_ENV_VALUE, purgeDatabase } from "./postgres-purge.ts"
+import { ENV_NAME, PROD_FLAG, purgeDatabase, SAFE_ENV_VALUES } from "./postgres-purge.ts"
 
 /** Options for {@link createFakeSql}. */
 interface FakeSqlOptions {
@@ -211,54 +211,76 @@ Deno.test("DEFAULT_MIGRATIONS_TABLE is the template's own table name", () => {
   assertStrictEquals(DEFAULT_MIGRATIONS_TABLE, "migrations")
 })
 
-Deno.test("purgeDatabase refuses in production without the --prod flag and runs no query", async () => {
-  const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
-  const result = await purgeDatabase({
-    sql: fake.sql,
-    environment: { [ENV_NAME]: PRODUCTION_ENV_VALUE },
-  })
+/** A `test` environment: one of the values the guard admits without the flag. */
+const SAFE_ENVIRONMENT = { [ENV_NAME]: "test" }
 
-  assertEquals(result, { dropped: [], refused: true })
-  assertEquals(fake.topLevel, [])
+Deno.test("purgeDatabase refuses every environment it does not recognise", async () => {
+  // The guard used to compare against the single literal "prod", so each of these
+  // dropped the database: the ones that spell production differently, and the deployment
+  // that sets no ENV at all.
+  const unsafe = ["prod", "production", "PROD", "Prod", "prod ", "staging", "preview", ""]
+  for (const value of unsafe) {
+    const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+    const result = await purgeDatabase({ sql: fake.sql, environment: { [ENV_NAME]: value } })
+
+    assertEquals(result, { dropped: [], refused: true })
+    // Refused before the listing query, so nothing is even read.
+    assertEquals(fake.topLevel, [])
+  }
 })
 
-Deno.test("purgeDatabase proceeds in production when --prod is passed", async () => {
+Deno.test("purgeDatabase refuses when ENV is unset and when no environment is given", async () => {
+  const unset = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  assertEquals(await purgeDatabase({ sql: unset.sql, environment: {} }), {
+    dropped: [],
+    refused: true,
+  })
+  assertEquals(unset.topLevel, [])
+
+  const missing = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  assertEquals(await purgeDatabase({ sql: missing.sql }), { dropped: [], refused: true })
+  assertEquals(missing.topLevel, [])
+})
+
+Deno.test("purgeDatabase runs for each safe environment, spelled loosely", async () => {
+  for (const value of [...SAFE_ENV_VALUES, " Dev ", "TEST", "CI"]) {
+    const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+    const result = await purgeDatabase({ sql: fake.sql, environment: { [ENV_NAME]: value } })
+
+    assertEquals(result, { dropped: ["users"], refused: false })
+  }
+})
+
+Deno.test("purgeDatabase proceeds in an unsafe environment when --prod is passed", async () => {
   const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
   const result = await purgeDatabase({
     sql: fake.sql,
-    environment: { [ENV_NAME]: PRODUCTION_ENV_VALUE },
+    environment: { [ENV_NAME]: "production" },
     args: [PROD_FLAG],
   })
 
   assertEquals(result, { dropped: ["users"], refused: false })
 })
 
-Deno.test("purgeDatabase proceeds in a non-production environment without the flag", async () => {
-  const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
-  const result = await purgeDatabase({ sql: fake.sql, environment: { [ENV_NAME]: "staging" } })
-
-  assertEquals(result, { dropped: ["users"], refused: false })
-})
-
-Deno.test("purgeDatabase drops every base table in public, CASCADE", async () => {
+Deno.test("purgeDatabase drops every base table, schema-qualified and CASCADE", async () => {
   const fake = createFakeSql({
     answers: [[{ table_name: "users" }, { table_name: "sessions" }, { table_name: "migrations" }]],
   })
-  const result = await purgeDatabase({ sql: fake.sql })
+  const result = await purgeDatabase({ sql: fake.sql, environment: SAFE_ENVIRONMENT })
 
   assertEquals(result, { dropped: ["users", "sessions", "migrations"], refused: false })
   assertEquals(fake.topLevel, [
     "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND " +
     "table_type = 'BASE TABLE'",
-    `DROP TABLE "users" CASCADE`,
-    `DROP TABLE "sessions" CASCADE`,
-    `DROP TABLE "migrations" CASCADE`,
+    `DROP TABLE "public"."users" CASCADE`,
+    `DROP TABLE "public"."sessions" CASCADE`,
+    `DROP TABLE "public"."migrations" CASCADE`,
   ])
 })
 
 Deno.test("purgeDatabase reports an empty database without dropping anything", async () => {
   const fake = createFakeSql({ answers: [[]] })
-  const result = await purgeDatabase({ sql: fake.sql })
+  const result = await purgeDatabase({ sql: fake.sql, environment: SAFE_ENVIRONMENT })
 
   assertEquals(result, { dropped: [], refused: false })
   assertEquals(fake.topLevel.length, 1)
@@ -268,14 +290,24 @@ Deno.test("purgeDatabase reads the snake_case column a plain client returns", as
   // A client without `transform: postgres.camel` returns `table_name`; reading `tableName`
   // would drop nothing and report success, which is what the source did.
   const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
-  const result = await purgeDatabase({ sql: fake.sql })
+  const result = await purgeDatabase({ sql: fake.sql, environment: SAFE_ENVIRONMENT })
 
   assertEquals(result.dropped, ["users"])
 })
 
-Deno.test("purgeDatabase honours a custom schema", async () => {
-  const fake = createFakeSql({ answers: [[]] })
-  await purgeDatabase({ sql: fake.sql, schema: "tenant_1" })
+Deno.test("purgeDatabase drops a custom schema's own tables, not public's", async () => {
+  // The listing is answered with a table name, so a DROP is actually issued and can be
+  // read. The earlier version of this test answered with no rows, so it asserted the
+  // listing and never saw that the DROP dropped an unqualified name — which
+  // `search_path` resolves to `public`, a different table that happens to share a name.
+  const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  const result = await purgeDatabase({
+    sql: fake.sql,
+    schema: "tenant_1",
+    environment: SAFE_ENVIRONMENT,
+  })
 
+  assertEquals(result, { dropped: ["users"], refused: false })
   assertEquals(fake.topLevel[0].includes("table_schema = $1"), true)
+  assertEquals(fake.topLevel[1], `DROP TABLE "tenant_1"."users" CASCADE`)
 })
