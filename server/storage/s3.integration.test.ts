@@ -48,4 +48,31 @@ describe("s3 storage against a real object store", () => {
       await deleteObject(settings, key)
     }
   })
+
+  it("reports doesExist true for an uploaded object and false once it is gone", async () => {
+    const settings = s3Settings()
+    await requireReachable(settings.address)
+    await ensureBucket(settings)
+
+    const key = `${uniqueKeyPrefix("integration")}/exists.txt`
+    const storage = new S3Storage({
+      region: settings.region,
+      accessKeyId: settings.accessKeyId,
+      secretAccessKey: settings.secretAccessKey,
+      endpoint: settings.endpoint,
+      forcePathStyle: true,
+    })
+
+    // Before the fix, `doesExist` signed this HEAD request with the GET
+    // signature from `getDownloadURL`, and MinIO answered every such request
+    // with 403 regardless of whether the object existed.
+    assertEquals(await storage.doesExist(settings.bucket, key), false)
+
+    try {
+      await storage.upload(settings.bucket, key, new TextEncoder().encode("present"))
+      assertEquals(await storage.doesExist(settings.bucket, key), true)
+    } finally {
+      await deleteObject(settings, key)
+    }
+  })
 })

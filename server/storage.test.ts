@@ -26,7 +26,7 @@ import {
   resolveStoragePath,
 } from "./storage/paths.ts"
 import type { ObjectFs } from "./storage/ports.ts"
-import { S3Storage } from "./storage/s3.ts"
+import { defaultS3Endpoint, S3Storage } from "./storage/s3.ts"
 import {
   DEFAULT_EXPIRES_IN_SECONDS,
   formatAmzDate,
@@ -618,6 +618,109 @@ describe("S3Storage with an injected fetch", () => {
     )
 
     assertEquals(error.status, 403)
+  })
+
+  it("releases the upload response body instead of leaking it", async () => {
+    // Deleting `response.body?.cancel()` from `upload` used to leave every test
+    // in this file green: none of them checked the body was ever touched.
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true
+      },
+    })
+    const { fetch: fetchImpl } = fakeFetch(() => new Response(body, { status: 200 }))
+    const provider = makeS3Storage({ fetch: fetchImpl })
+
+    await provider.upload("examplebucket", "photo.png", BINARY_PAYLOAD)
+
+    assertEquals(cancelled, true, "the upload response body must be released")
+  })
+})
+
+describe("S3Storage signs the request for the method it actually sends", () => {
+  it("pins upload, download and exists to a signature for their own method", async () => {
+    const { fetch: fetchImpl, calls } = fakeFetch((_url, init) =>
+      init?.method === "GET" ? bodyResponse([BINARY_PAYLOAD]) : new Response(null, { status: 200 })
+    )
+    const provider = makeS3Storage({ fetch: fetchImpl, fs: createMemoryObjectFs() })
+
+    await provider.upload("examplebucket", "test.txt", BINARY_PAYLOAD)
+    await provider.download("examplebucket", "test.txt", "/tmp/test.txt")
+    await provider.doesExist("examplebucket", "test.txt")
+
+    // Virtual-hosted addressing, the same address `addressFor` builds for a
+    // non-loopback endpoint: the bucket in the host, the bare key in the path.
+    const expectedFor = (method: "PUT" | "GET" | "HEAD") =>
+      signS3Request({
+        method,
+        endpoint: "https://examplebucket.s3.eu-central-1.amazonaws.com",
+        key: "test.txt",
+        region: "eu-central-1",
+        credentials: CREDENTIALS,
+        expiresIn: DEFAULT_EXPIRES_IN_SECONDS,
+        now: FIXED_NOW,
+      })
+
+    assertEquals(calls.length, 3)
+    assertEquals(calls[0].url, await expectedFor("PUT"))
+    assertEquals(calls[1].url, await expectedFor("GET"))
+    assertEquals(calls[2].url, await expectedFor("HEAD"))
+    // A test that only checked that a signature exists would pass even if
+    // `doesExist` sent its HEAD against the download's GET-signed URL.
+    assert(
+      calls[2].url !== calls[1].url,
+      "the exists probe must not reuse the download's GET signature",
+    )
+  })
+})
+
+describe("S3Storage wraps a network failure", () => {
+  it("never leaks the signed url through the message or the cause", async () => {
+    // What a real failed `fetch` looked like on Deno 2.9.7: the signed URL,
+    // access key id and signature all sat in the rejection's `cause`.
+    const leakyFetch = (): Promise<Response> =>
+      Promise.reject(
+        new TypeError("fetch failed", {
+          cause: new Error(
+            "error sending request for url (http://127.0.0.1:1/x?X-Amz-Signature=leaked-signature)",
+          ),
+        }),
+      )
+    const provider = makeS3Storage({
+      fetch: leakyFetch as unknown as typeof fetch,
+      fs: createMemoryObjectFs(),
+    })
+
+    for (
+      const attempt of [
+        () => provider.upload("examplebucket", "photo.png", BINARY_PAYLOAD),
+        () => provider.download("examplebucket", "photo.png", "/tmp/photo.png"),
+        () => provider.doesExist("examplebucket", "photo.png"),
+      ]
+    ) {
+      const error = await rejectsWithCode("request_failed", attempt)
+      assertEquals(error.cause, undefined)
+      assert(!error.message.includes("X-Amz-Signature"), error.message)
+      assert(!JSON.stringify(error).includes("X-Amz-Signature"))
+    }
+  })
+})
+
+describe("S3Storage default endpoint", () => {
+  it("derives the regional AWS endpoint when none is configured", async () => {
+    const provider = makeS3Storage({ endpoint: undefined, region: "ap-southeast-2" })
+
+    const url = await provider.getUploadURL("examplebucket", "test.txt")
+
+    assertEquals(new URL(url).host, "examplebucket.s3.ap-southeast-2.amazonaws.com")
+  })
+
+  it("builds the documented regional host shape, not checked against AWS", () => {
+    // No third-party network call is made from this repository: this pins the
+    // URL shape only.
+    assertEquals(defaultS3Endpoint("ap-southeast-2"), "https://s3.ap-southeast-2.amazonaws.com")
+    assertEquals(defaultS3Endpoint("us-east-1"), "https://s3.us-east-1.amazonaws.com")
   })
 })
 
