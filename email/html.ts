@@ -56,45 +56,113 @@ export interface HtmlShellOptions {
    * same contract as `body`.
    */
   footer?: string
+  /**
+   * Colours for the shell. Defaults to {@link DEFAULT_HTML_SHELL_THEME}. Pass
+   * {@link DARK_HTML_SHELL_THEME} for the look this function had before this
+   * option existed. Every field must be a `#rgb` or `#rrggbb` hex colour — see
+   * {@link htmlWrap} on why anything else throws.
+   */
+  theme?: Partial<HtmlShellTheme>
+  /** Width, in pixels, of the letter column. Default `480`. */
+  maxWidth?: number
+  /**
+   * Text before the linked or plain brand in the footer signature, shown only
+   * when `brand` is set. Default `"— Sent by"`. Pass `null` to keep the header
+   * brand block but drop the footer signature line entirely.
+   */
+  signaturePrefix?: string | null
 }
+
+/** The four colours {@link htmlWrap} draws the shell in. */
+export interface HtmlShellTheme {
+  /** Page and letter background. */
+  background: string
+  /** Body text. */
+  color: string
+  /** Footer signature text. */
+  mutedColor: string
+  /** The brand link, header and footer alike. */
+  linkColor: string
+}
+
+/**
+ * `htmlWrap`'s default look: a neutral light shell with no product association,
+ * so a caller gets a plain, readable letter unless it asks for something else.
+ */
+export const DEFAULT_HTML_SHELL_THEME: HtmlShellTheme = Object.freeze({
+  background: "#ffffff",
+  color: "#1f2937",
+  mutedColor: "#64748b",
+  linkColor: "#2563eb",
+})
+
+/**
+ * The look `htmlWrap` had before {@link HtmlShellOptions.theme} existed: a dark
+ * navy body with light text and an orange brand link, ported as-is from `mig`.
+ * Pass this as `theme` for a caller that already copied that appearance and
+ * wants to keep it.
+ */
+export const DARK_HTML_SHELL_THEME: HtmlShellTheme = Object.freeze({
+  background: "#0f172a",
+  color: "#e2e8f0",
+  mutedColor: "#64748b",
+  linkColor: "#f97316",
+})
 
 /**
  * Wrap a body in the shared letter-shaped shell.
  *
- * Ported from `mig`'s `htmlWrap`, with the app-specific config removed: the brand
- * label and link are options now instead of a hard-coded product name and
- * `githubUrl`. The dark palette is kept, because a mail client that drops the
- * background colour then renders light text on white — the reason `mig` chose a
- * dark body with light text rather than the reverse.
+ * Ported from `mig`'s `htmlWrap`, with the app-specific config removed: the
+ * brand label and link were already options instead of a hard-coded product
+ * name and `githubUrl`; the colours, the column width and the footer's
+ * "Sent by" wording are options now too; a caller with no opinion gets a
+ * neutral light shell ({@link DEFAULT_HTML_SHELL_THEME}) rather than one
+ * `mig`'s own dark palette baked in as the only look. Nothing in this
+ * repository imports `htmlWrap`, so nothing here needed the old default kept —
+ * an outside caller that already copied `mig`'s look gets it back by passing
+ * `theme: DARK_HTML_SHELL_THEME`.
  *
- * The body is constrained to 480px so a letter reads as a letter instead of
+ * The letter column defaults to 480px so it reads as a letter instead of
  * stretching across a desktop pane; the background still reaches the viewport
  * edges. No inline `<style>` block: Gmail strips `<head>` styles, so every rule
  * that matters is an attribute.
  *
  * @throws {TypeError} when `brandUrl` is not an absolute `http:`, `https:` or
- * `mailto:` URL. Escaping made `javascript:alert(1)` a perfectly well-formed
- * link, and a shell that quietly dropped it instead would hide the same mistake.
- * The value comes from a caller's configuration rather than from a recipient, so
- * a wrong one is a bug to surface, not input to sanitise.
+ * `mailto:` URL, or when a `theme` colour is not a `#rgb`/`#rrggbb` hex colour.
+ * Escaping made `javascript:alert(1)` a perfectly well-formed link, and a shell
+ * that quietly dropped it instead would hide the same mistake; a theme colour
+ * that is not a plain hex value could close the `style` attribute early and
+ * inject markup of its own. Both values come from a caller's configuration
+ * rather than from a recipient, so a wrong one is a bug to surface, not input
+ * to sanitise.
  */
 export function htmlWrap(options: HtmlShellOptions): string {
+  const theme: HtmlShellTheme = { ...DEFAULT_HTML_SHELL_THEME, ...options.theme }
+  assertHexColor(theme.background, "theme.background")
+  assertHexColor(theme.color, "theme.color")
+  assertHexColor(theme.mutedColor, "theme.mutedColor")
+  assertHexColor(theme.linkColor, "theme.linkColor")
+  const maxWidth = options.maxWidth ?? 480
+
   const brand = options.brand === undefined ? "" : escapeHtml(options.brand)
   const header = brand === ""
     ? ""
-    : `<div style="margin-bottom:16px">${brandAnchor(options, brand)}</div>`
-  const signature = brand === ""
+    : `<div style="margin-bottom:16px">${brandAnchor(options, brand, theme)}</div>`
+  const signaturePrefix = options.signaturePrefix === undefined
+    ? "— Sent by"
+    : options.signaturePrefix
+  const signature = brand === "" || signaturePrefix === null
     ? ""
-    : `<p style="color:#64748b;font-size:14px;margin-top:24px">— Sent by ${
-      brandAnchor(options, brand)
-    }</p>`
+    : `<p style="color:${theme.mutedColor};font-size:14px;margin-top:24px">${
+      escapeHtml(signaturePrefix)
+    } ${brandAnchor(options, brand, theme)}</p>`
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:24px;background:#0f172a;color:#e2e8f0;
+<body style="margin:0;padding:24px;background:${theme.background};color:${theme.color};
              font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;
              font-size:16px;line-height:1.6">
-<div style="max-width:480px;margin:0 auto">
+<div style="max-width:${maxWidth}px;margin:0 auto">
 ${header}
 ${options.body}
 ${options.footer ?? ""}
@@ -110,12 +178,38 @@ ${signature}
  * open links in the system browser, so the opener-isolation concern is the mail
  * client's, and a `target` attribute is stripped by most of them anyway.
  */
-function brandAnchor(options: HtmlShellOptions, escapedBrand: string): string {
+function brandAnchor(
+  options: HtmlShellOptions,
+  escapedBrand: string,
+  theme: HtmlShellTheme,
+): string {
   if (options.brandUrl === undefined) return escapedBrand
   assertLinkableUrl(options.brandUrl)
   return `<a href="${
     escapeHtml(options.brandUrl)
-  }" style="color:#f97316;font-weight:600;text-decoration:none">${escapedBrand}</a>`
+  }" style="color:${theme.linkColor};font-weight:600;text-decoration:none">${escapedBrand}</a>`
+}
+
+/** A `#rgb` or `#rrggbb` hex colour, case-insensitive — nothing a browser reads as a CSS colour. */
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/
+
+/**
+ * Reject a theme colour that is not a plain hex value.
+ *
+ * Every colour here lands inside a double-quoted `style` attribute
+ * (`background:${theme.background}`), so a value carrying a `"` could close
+ * that attribute early and add markup of its own — a caller's configuration
+ * mistake, not a recipient's, but one this shell should surface rather than
+ * emit.
+ */
+function assertHexColor(value: string, fieldName: string): void {
+  if (!HEX_COLOR_RE.test(value)) {
+    throw new TypeError(
+      `HtmlShellOptions.${fieldName} must be a #rgb or #rrggbb hex colour, got ${
+        JSON.stringify(value)
+      }`,
+    )
+  }
 }
 
 /** Schemes a mail client may follow from a link in a message. */
