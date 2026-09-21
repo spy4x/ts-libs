@@ -2952,8 +2952,9 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
   // space, then a plain tab, as padding left the whole `email/` suite green
   // while `From : ceo@bank.example` or `From<TAB>: ceo@bank.example`
   // verified — and `From :` is obsolete syntax RFC 5322 allows
-  // (`obs-from = "From" *WSP ":"`) that every mail program reads as `From`,
-  // so it is the first line an attacker would try.
+  // (`obs-from = "From" *WSP ":"`) that a reader which trims white space
+  // before the colon reads as `From`, so it is the first line an attacker
+  // would try.
   for (
     const [label, padding] of [
       ["a space", " "],
@@ -3348,5 +3349,55 @@ describe("a disguised byte inside a header name (issue #113)", () => {
     const result = await verifyDkim(raw, publicKey)
     assertEquals(result.valid, false)
     assertEquals(result.reason, "From field not signed (the message has no From field)")
+  })
+
+  // Round 3 review of #119: the #113 scan used to exempt a name from the
+  // growth guard whenever its *loose* reading was one of
+  // `TRANSIT_ADDED_HEADER_NAMES` -- the same exemption the pairing loop above
+  // gives a genuine `Received:` or `Resent-From:`. Neither justification for
+  // that exemption holds here: no relay wrote `Resent-From<NUL>x:`, and the
+  // documented remedy for a signer who wants a trace field protected --
+  // oversigning it -- cannot reach a disguised line, because such a line is
+  // never selected or hashed by the pairing loop; it sits in its own bucket.
+  // The exemption handed a forged `Resent-From` exactly the bypass this scan
+  // exists to close, even under an `h=` that oversigns `resent-from` the
+  // documented way. This file's own documentation says some mail clients
+  // display `Resent-From` as the sender.
+  it("still rejects a Resent-From: with a NUL followed by another letter, oversigned (string)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      names: ["from", "to", "subject", "resent-from", "resent-from"],
+    })
+    const attacked = `Resent-From${NUL}x: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: resent-from")
+  })
+
+  it("still rejects a Resent-From: with a NUL followed by another letter, oversigned (bytes)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      names: ["from", "to", "subject", "resent-from", "resent-from"],
+    })
+    const attacked = `Resent-From${NUL}x: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(new TextEncoder().encode(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: resent-from")
+  })
+
+  // Round 3 review of #119: oversigning is the one condition where the
+  // pairing loop above consumes instances of a name before the #113 scan
+  // runs at all -- placement and canonicalisation cannot change the scan's
+  // outcome, since it is one pass over the already-parsed header list, run
+  // before canonicalisation, but an oversigned h= changes what the pairing
+  // loop leaves behind for the scan to see. One case, not the full matrix:
+  // this pins that oversigning `from` does not let the combined shape
+  // through either.
+  it("still rejects a From: with a soft hyphen then a NUL inside the name, oversigned h=from:from (string)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY, {
+      names: ["from", "from", "to", "subject"],
+    })
+    const attacked = `${COMBINED_FROM}: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: from")
   })
 })
