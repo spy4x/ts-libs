@@ -269,6 +269,16 @@ question: **does this message's `DKIM-Signature` verify against this key?**
 - The header/body boundary, which RFC 5322 §2.2 puts at the **first** empty line.
   A body whose first line begins with SP or HTAB is body, not a folded header —
   reading it as a header left those octets outside the body hash entirely.
+- **That the header block's line endings are uniform.** A block carrying a
+  carriage return that no line feed follows is refused before a single field is
+  parsed, and so is a block that ends some lines with CRLF and others with a bare
+  LF. A block that uses a bare LF throughout keeps verifying: that is what mailbox
+  storage produces, and RFC 6376's own example message is stored that way.
+- **That the message did not grow an instance of a header the signature covers**
+  (§5.4.2). A signer lists a name in `h=` as many times as the message carried it,
+  so an instance left over after the pairing means the message gained one after
+  signing. The trace fields in `TRANSIT_ADDED_HEADER_NAMES` are exempt, because a
+  relay adds those on the way; every other name, `From` above all, is refused.
 - The DKIM-Signature field **name the message actually spells**. §3.7 step 2
   hashes "the DKIM-Signature header field that exists", and under `simple`
   canonicalization the name's case is part of the signed bytes.
@@ -430,6 +440,38 @@ which propagates the resolver's rejection instead of reporting it.
   pin the interior-CR expectation rather than that rationale.) Body handling still
   normalises bare LF to CRLF, because mailbox storage rewrites line endings and
   nothing else references the body's original bytes.
+- **A header block with a lone carriage return is refused outright.** This is the
+  first finding of issue #88, and what it costs to get wrong is a forged sender.
+  Readers do not agree on whether a bare CR ends a line: this verifier keeps the
+  CR inside the value it sits in, so a message carrying
+  `X-Note: a<CR>From: ceo@bank.example` above a signed block has one `From:` here
+  — the genuine one, which the signature covers — and two in a client that breaks
+  the line, where the forged one is what a person reads. The verdict was `valid`
+  and the sender shown was not the sender signed for. Guessing which reading is
+  right is not available to a verifier, so the message is refused with a reason
+  that names the problem, and a block that mixes CRLF with bare LF is refused for
+  the same reason: it has already passed through something that rewrote line
+  endings, and which ending a later reader honours is again a guess. A block that
+  is uniformly bare LF is **accepted**, because refusing it would reject ordinary
+  mail out of a mailbox — the alternative reading of the issue's checkbox, "refuse
+  every bare LF", turns RFC 6376's own example message invalid. The rule covers
+  the header block only; a carriage return in the body cannot hide a header field.
+- **Trace fields a relay adds are exempt from the §5.4.2 growth check.** The check
+  refuses a message that still holds an instance of a name `h=` asked for, which is
+  how a prepended second `From:` or `Subject:` is caught — it must not be removed,
+  and removing it makes those forgeries verify again. It did, however, refuse
+  ordinary forwarded mail: every hop prepends its own `Received:`, so a signature
+  covering `Received` broke the moment the mail was forwarded. The names in
+  `TRANSIT_ADDED_HEADER_NAMES` — `received`, `x-received`, `return-path`,
+  `delivered-to`, `authentication-results`, `resent-*` and `arc-*` — are therefore
+  exempt, and no others. What makes a name safe to put there is that a mail client
+  does not show it as part of the message: these are the delivery audit trail,
+  which the receiving domain re-derives for itself, rather than anything a person
+  reads as the message. The exemption does not change which bytes are hashed: §5.4.2
+  pairs `h=` with the message from the bottom up and a relay prepends, so the
+  instances selected are still the ones the signer signed, and altering a signed
+  `Received:` still fails the signature. The list is exported so the choice is
+  visible, and a caller who disagrees can see exactly what it admits.
 - **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
   `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
   example record publishes a complete SubjectPublicKeyInfo. The envelope is
