@@ -821,6 +821,68 @@ describe("accepting raw octets (issue #88)", () => {
     assertEquals(result.valid, false)
     assertStringIncludes(result.reason ?? "", "carriage return that no line feed follows")
   })
+
+  it("verifies a body containing every octet from 0x80 to 0x9F, unlike a windows-1252 decode", async () => {
+    // Round 1 review of #104: swapping `bytesToBinaryString` for
+    // `new TextDecoder("latin1").decode(octets)` left every existing test
+    // green. `TextDecoder("latin1")` is really windows-1252 per the WHATWG
+    // encoding standard, and windows-1252 does not map most of 0x80-0x9F to
+    // themselves the way real Latin-1 (ISO-8859-1) would — it remaps them to
+    // smart quotes, an ellipsis, an em dash and so on, several of them above
+    // U+00FF. A body of exactly these 32 bytes is where that swap and the
+    // real byte-identity decode disagree.
+    const bodyBytes: number[] = []
+    for (let byte = 0x80; byte <= 0x9f; byte++) bodyBytes.push(byte)
+    const bodyString = String.fromCharCode(...bodyBytes) + "\r\n"
+    const { raw, publicKey } = await sign(TEST_HEADERS, bodyString, { rawBodyOctets: true })
+
+    const result = await verifyDkim(ascii(raw), publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.bodyCoverage, { signedOctets: 34, totalOctets: 34, complete: true })
+  })
+
+  it("verifies a signed header carrying valid UTF-8 the same way as bytes and as a string", async () => {
+    // Round 1 review of #104: swapping `binaryStringToBytes` for
+    // `new TextEncoder().encode(canonicalInput)` in `verifySignature` also
+    // left every existing test green. Built by hand rather than through
+    // `sign()`, because `sign()`'s own RSA step always uses `ascii()` — one
+    // raw byte per code unit — which is the wrong thing to sign a *real*
+    // non-ASCII character with; this message is signed over the actual UTF-8
+    // bytes of "é" (0xC3 0xA9) in a Subject field, the way a genuine signer
+    // would, so the string path (which UTF-8 encodes internally) and the
+    // bytes path (which is hashed as written) must reach the same verdict.
+    const headers = [
+      "From: sender@example.com",
+      "To: recipient@example.org",
+      `Subject: h${String.fromCharCode(0xe9)}llo`,
+    ]
+    const body = "This is a test.\r\n"
+    const names = ["from", "to", "subject"]
+    const bodyHash = await sha256Base64(canonBody(body, "relaxed"))
+    const stub = `v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=sel; ` +
+      `h=${names.join(":")}; bh=${bodyHash}`
+    const head = headers.map((h) => {
+      const colon = h.indexOf(":")
+      return canonHeader(h.slice(0, colon), h.slice(colon + 1), "relaxed")
+    }).join("")
+    const field = canonHeader("DKIM-Signature", ` ${stub}; b=`, "relaxed").replace(/\r\n$/, "")
+    const input = head + field
+    // The real UTF-8 bytes of the canonical input, not `ascii()`'s one raw
+    // byte per code unit — this is what makes "é" two bytes here.
+    const inputBytes = new TextEncoder().encode(input)
+    const pair = await rsa()
+    const signature = new Uint8Array(
+      await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, pair.privateKey, inputBytes),
+    )
+    const dkimLine = `DKIM-Signature: ${stub}; b=${base64(signature)}`
+    const raw = `${[...headers, dkimLine].join("\r\n")}\r\n\r\n${body}`
+    const publicKey = await rsaKey(pair)
+
+    const fromString = await verifyDkim(raw, publicKey)
+    const fromBytes = await verifyDkim(new TextEncoder().encode(raw), publicKey)
+    assert(fromString.valid, `reason=${fromString.reason}`)
+    assertEquals(fromBytes, fromString)
+  })
 })
 
 describe("policy RFC 6376 leaves to the caller", () => {
@@ -1748,9 +1810,9 @@ describe("canonicalizeBody", () => {
 
   it("hashes the exact octets a signer that follows the RFC hashed (issue #94)", () => {
     // The reproduction from issue #94: a genuine signer canonicalizes
-    // `before\rafter\r\n` to itself — 13 octets, no rewrite — because the body
+    // `before\rafter\r\n` to itself — 14 octets, no rewrite — because the body
     // already ends in CRLF and the interior CR is not a line ending. The old
-    // behaviour turned it into `before\r\nafter\r\n` (14 octets) instead.
+    // behaviour turned it into `before\r\nafter\r\n` (15 octets) instead.
     assertEquals(canonicalizeBody("before\rafter\r\n", "relaxed"), "before\rafter\r\n")
     assertEquals(canonicalizeBody("before\rafter\r\n", "simple"), "before\rafter\r\n")
   })
@@ -2852,27 +2914,31 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
     assertEquals(result.reason, "unsigned additional instances of a signed header: from")
   })
 
+  // The guard's name comparison trims every octet outside printable ASCII
+  // (0x21-0x7E) from a name's ends before comparing it (trimHeaderName),
+  // which is why "From" followed by a vertical tab or a form feed still
+  // counts as "from" here: RFC 5322's ftext never allows either byte in a
+  // real field name, so removing it only ever helps recognise a disguised
+  // one. A client that reads the field the same loose way would display the
+  // forged address.
   for (
     const [label, whitespace] of [
       ["a vertical tab", "\x0B"],
       ["a form feed", "\x0C"],
-      ["a non-breaking space", "\xA0"],
     ] as const
   ) {
-    it(`still rejects a From: whose name carries ${label}`, async () => {
-      // The guard's name comparison trims a fixed byte set — space, tab,
-      // vertical tab, form feed and the single byte 0xA0 — precisely so
-      // `From${whitespace}:` still counts as `from` here. Issue #88's
-      // byte-safety work replaced the `String.trim()` this used to lean on
-      // with that explicit set; this test is what pins that the replacement
-      // did not shrink it. A client that reads the field the same loose way
-      // would display the forged address.
-      //
-      // Passed as bytes, not as a string: 0xA0 is also the *decoded* Unicode
-      // character U+00A0, which the string path re-encodes as two UTF-8
-      // bytes (0xC2 0xA0) — a genuine, different octet sequence this test is
-      // not about. `ascii()` puts the single raw byte 0xA0 into the message
-      // exactly where the fixed byte set expects to find it.
+    it(`still rejects a From: whose name carries ${label} (string)`, async () => {
+      // The wave 3 pin, restored as a plain string: VT and FF are single-byte
+      // ASCII, so the string path's UTF-8 round trip leaves them unchanged,
+      // and this is the input shape an ordinary caller actually has.
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = `From${whitespace}: ceo@bank.example\r\n${raw}`
+      const result = await verifyDkim(attacked, publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+    })
+
+    it(`still rejects a From: whose name carries ${label} (bytes)`, async () => {
       const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
       const attacked = `From${whitespace}: ceo@bank.example\r\n${raw}`
       const result = await verifyDkim(ascii(attacked), publicKey)
@@ -2880,6 +2946,134 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
       assertEquals(result.reason, "unsigned additional instances of a signed header: from")
     })
   }
+
+  it("still rejects a From: whose name carries the raw byte 0xA0 (bytes)", async () => {
+    // The single byte 0xA0 is not valid standalone UTF-8, so this is a bytes-
+    // only case: ascii() puts that one raw byte into the message, which is a
+    // different octet sequence from the two-byte UTF-8 encoding of U+00A0
+    // tested below.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `From\xA0: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+  })
+
+  // Round 1 review of #104: the byte set trimHeaderName used before this
+  // (space, tab, vertical tab, form feed, 0xA0) was narrower than
+  // String.prototype.trim()'s own Unicode whitespace list, which also strips
+  // U+FEFF, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F and U+3000
+  // -- each several bytes in UTF-8 and none in the old set. A genuine signed
+  // mail with one of these characters padding a forged From: or Subject:
+  // therefore verified on that branch and was refused on main: the guard's
+  // match had shrunk, the opposite of what widening it to handle bytes was
+  // supposed to do. Trimming every octet outside printable ASCII fixes all
+  // of these at once, because none of them is printable ASCII.
+  //
+  // Every non-ASCII character below is built with String.fromCodePoint
+  // rather than written as a literal or a \u escape in this source file, on
+  // purpose: several of them (a byte order mark, a zero-width space, C0
+  // controls) are invisible or easy to mistake for something else in an
+  // editor or a diff, and a test file is exactly the place that should not
+  // rely on a reader spotting one by eye.
+  const NBSP = String.fromCodePoint(0x00a0)
+  const BOM = String.fromCodePoint(0xfeff)
+  const EM_SPACE = String.fromCodePoint(0x2003)
+  const IDEOGRAPHIC_SPACE = String.fromCodePoint(0x3000)
+
+  for (
+    const [label, build] of [
+      [
+        "a From: whose name carries U+00A0 (no-break space)",
+        (raw: string) => `From${NBSP}: ceo@bank.example\r\n${raw}`,
+      ],
+      [
+        "a From: preceded by a byte order mark (U+FEFF)",
+        (raw: string) => `${BOM}From: ceo@bank.example\r\n${raw}`,
+      ],
+      [
+        "a From: whose name carries U+2003 (em space)",
+        (raw: string) => `From${EM_SPACE}: ceo@bank.example\r\n${raw}`,
+      ],
+      [
+        "a From: whose name carries U+3000 (ideographic space)",
+        (raw: string) => `From${IDEOGRAPHIC_SPACE}: ceo@bank.example\r\n${raw}`,
+      ],
+      [
+        "a Subject: whose name carries U+00A0 (no-break space)",
+        (raw: string) => `Subject${NBSP}: a subject the signer never saw\r\n${raw}`,
+      ],
+    ] as const
+  ) {
+    it(`still rejects ${label} (string)`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = build(raw)
+      const result = await verifyDkim(attacked, publicKey)
+      assertEquals(result.valid, false)
+      assertStringIncludes(result.reason ?? "", "unsigned additional instances of a signed header:")
+    })
+  }
+
+  it("still rejects a From: whose name carries the UTF-8 bytes of U+00A0, passed as bytes", async () => {
+    // From\xC2\xA0: -- the same forgery as the string-form U+00A0 test above,
+    // this time handed in as the literal bytes a caller reading mail off the
+    // wire would have, to show the two input forms agree.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attackedString = `From${NBSP}: ceo@bank.example\r\n${raw}`
+    const attackedBytes = new TextEncoder().encode(attackedString)
+    assertEquals(
+      [...attackedBytes.slice(4, 6)],
+      [0xc2, 0xa0],
+      "must carry the UTF-8 form of U+00A0",
+    )
+    const result = await verifyDkim(attackedBytes, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+  })
+
+  // Issue #106: the same guard let a second From: or Subject: through when
+  // its name carried a control character or a zero-width space, on main and
+  // here alike, for the same reason as the Unicode-whitespace forgeries
+  // above -- none of these six characters was in the old fixed byte set
+  // either.
+  const CONTROL_AND_ZERO_WIDTH_CHARACTERS = [
+    ["U+0000 (NUL)", String.fromCodePoint(0x0000)],
+    ["U+0001", String.fromCodePoint(0x0001)],
+    ["U+001F", String.fromCodePoint(0x001f)],
+    ["U+007F (DEL)", String.fromCodePoint(0x007f)],
+    ["U+0085 (NEL)", String.fromCodePoint(0x0085)],
+    ["U+200B (zero-width space)", String.fromCodePoint(0x200b)],
+  ] as const
+
+  for (const [label, char] of CONTROL_AND_ZERO_WIDTH_CHARACTERS) {
+    it(`still rejects a From: whose name carries ${label} (string, issue #106)`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = `From${char}: ceo@bank.example\r\n${raw}`
+      const result = await verifyDkim(attacked, publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+    })
+
+    it(`still rejects a From: whose name carries ${label} (bytes, issue #106)`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = `From${char}: ceo@bank.example\r\n${raw}`
+      const result = await verifyDkim(new TextEncoder().encode(attacked), publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+    })
+  }
+
+  it("still rejects a Subject: whose name carries a zero-width space (issue #106)", async () => {
+    // The Done-when box asks that the rule hold for a second Subject too, not
+    // only for From; one representative character from each end of the list
+    // above is enough to show the guard is not From-specific.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const zeroWidthSpace = String.fromCodePoint(0x200b)
+    const attacked = `Subject${zeroWidthSpace}: a subject the signer never saw\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: subject")
+  })
 
   it("cannot have its exemption list widened at runtime", () => {
     // The list is the one place a header may be added to a signed message without

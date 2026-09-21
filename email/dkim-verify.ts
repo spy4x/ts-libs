@@ -111,7 +111,12 @@ export interface DkimVerificationResult {
   parsed?: DkimSignatureHeader
   /** The recomputed body hash, for diagnostics. */
   computedBodyHash?: string
-  /** First 240 characters of the recomputed signature input, for diagnostics. */
+  /**
+   * First 240 octets of the recomputed signature input, for diagnostics — one
+   * character of this string per octet (see the module note on `verifyDkim`),
+   * so non-ASCII text shows as its raw UTF-8 bytes rather than as the
+   * characters they encode.
+   */
   computedInputPreview?: string
   /** How much of the body the signature covers; present once the body was hashed. */
   bodyCoverage?: DkimBodyCoverage
@@ -970,28 +975,56 @@ function isTransitAddedHeaderName(name: string): boolean {
 }
 
 /**
- * Bytes a header **name** comparison trims, kept as an explicit set rather
- * than `String.prototype.trim()`'s full Unicode whitespace list.
- *
- * `trim()` strips SP, HTAB, VT, FF, CR, LF and U+00A0. This set drops CR and
- * LF — a name substring comes from before a colon on one already-split line,
- * so a line ending has no business being "trimmed" out of it — and keeps the
- * rest, on purpose: `From\x0B:` (a vertical tab before the colon) must go on
- * matching `from` here, because a message with two spellings of `From:` and
- * only one of them recognised is how the growth guard in
- * {@link selectSignedHeaders} and the unsigned-`From` check in
- * {@link refuseSignatureHeader} were bypassed before this set existed —
- * whichever spelling a mail client also folds into "From" is the one this
- * comparison must not miss.
+ * True for an octet in RFC 5322's printable-ASCII range, 0x21-0x7E — the same
+ * range `ftext` restricts a genuine field name to (`HEADER_NAME_RE`, minus the
+ * colon it also excludes). {@link trimHeaderName} strips everything *outside*
+ * this range from a name's ends, which is why the two ranges do not need to
+ * match exactly: a byte this returns `false` for is never part of a name a
+ * conformant sender would write, so stripping it can only ever make a forged
+ * line's name easier to recognise, never harder.
  */
-const HEADER_NAME_TRIM_BYTES = new Set([0x20, 0x09, 0x0b, 0x0c, 0xa0])
+function isHeaderNamePadding(code: number): boolean {
+  return code < 0x21 || code > 0x7e
+}
 
-/** Trim {@link HEADER_NAME_TRIM_BYTES} from both ends of a header name. */
+/**
+ * Trim every octet outside printable ASCII (0x21-0x7E) from both ends of a
+ * header **name**, before {@link selectSignedHeaders} and
+ * {@link refuseSignatureHeader} compare it against a name in `h=`.
+ *
+ * The previous version of this comparison trimmed an explicit byte set
+ * — space, tab, vertical tab, form feed and U+00A0 — copied from what
+ * `String.prototype.trim()` stripped on `main` before this file could handle
+ * raw octets. That set was narrower than `trim()`'s own Unicode whitespace
+ * list, which also strips U+FEFF, U+1680, U+2000-U+200A, U+2028, U+2029,
+ * U+202F, U+205F and U+3000 — each several bytes in UTF-8, none in the old
+ * set — so a genuine signed mail with, for instance, `From` followed by
+ * U+00A0 (a no-break space, still one of `trim()`'s own characters) and then
+ * the colon, placed above it, verified here and was refused on `main`: the
+ * guard's name match had shrunk, the opposite of what widening it to handle
+ * bytes was supposed to do. The two review rounds that found this also found
+ * it does not go far enough: a control character (U+0000-U+001F, U+007F), U+0085 or a
+ * zero-width space (U+200B) before the colon verifies on `main` too (issue
+ * #106) — `trim()` never stripped any of those, so the byte set inherited
+ * from it never could either.
+ *
+ * Stripping everything *outside* printable ASCII, rather than enumerating
+ * more characters to strip, closes both at once and cannot regress again the
+ * same way: RFC 5322's `ftext` restricts a genuine field name to exactly this
+ * range already (`HEADER_NAME_RE`), so every character this now strips is one
+ * no conformant sender's field name would contain in the first place, and
+ * removing it can only ever make a disguised name easier to recognise as the
+ * name it is disguising. This also means CR and LF are stripped now, unlike
+ * the narrower set before: a name substring cannot legitimately carry either
+ * by the time this runs, because {@link refuseHeaderLineEndings} has already
+ * refused any header block whose line endings are ambiguous, and a
+ * well-formed fold never continues before a field's own colon.
+ */
 function trimHeaderName(value: string): string {
   let start = 0
   let end = value.length
-  while (start < end && HEADER_NAME_TRIM_BYTES.has(value.charCodeAt(start))) start++
-  while (end > start && HEADER_NAME_TRIM_BYTES.has(value.charCodeAt(end - 1))) end--
+  while (start < end && isHeaderNamePadding(value.charCodeAt(start))) start++
+  while (end > start && isHeaderNamePadding(value.charCodeAt(end - 1))) end--
   return value.slice(start, end)
 }
 
