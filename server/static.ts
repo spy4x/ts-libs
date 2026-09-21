@@ -28,7 +28,9 @@
  * never cancelled still holds the handle until garbage collection** — this is
  * exactly what a framework does to a `HEAD` response it discards unread, which is
  * why `HEAD` is handled separately: pass `method: "HEAD"` and the handle is closed
- * before `serveStatic` returns, with no stream ever opened.
+ * before `serveStatic` returns, without `serveStatic` ever wrapping or reading the
+ * stream. (`denoStaticFs.open` still builds that stream eagerly as `file.readable`
+ * — it exists, `serveStatic` just never touches it for `HEAD`.)
  */
 
 /** Result of resolving a request path against the static root. */
@@ -182,9 +184,11 @@ export interface StaticFileHandle {
   /** File contents, read lazily as the response body is consumed. */
   body: ReadableStream<Uint8Array>
   /**
-   * Releases the file handle. The caller (`serveStatic`) guarantees this runs
-   * exactly once per handle, so an implementation does not need to guard against
-   * being called twice.
+   * Releases the file handle. `serveStatic` never calls this more than once for
+   * a handle, so an implementation does not need to guard against a second
+   * call. It is not guaranteed to be called at all: a `GET` response whose body
+   * is never read and never cancelled leaves the handle to garbage collection,
+   * as the module comment above describes.
    */
   close: () => void
 }
