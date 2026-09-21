@@ -4,8 +4,17 @@
  * A distroless image has no `curl`, no `wget` and no `/bin/sh`, so a
  * `HEALTHCHECK` that tries to run one can never work. The compiled binary is the
  * only executable in the image, so it has to probe itself: TCP-connect to the
- * loopback port it is listening on, write one byte, read one byte back, and exit
- * `0` when the echo arrives and `1` otherwise.
+ * loopback port it is listening on and close the socket again, exiting `0` when
+ * the connection succeeds and `1` otherwise. That is what the app this was
+ * ported from did.
+ *
+ * An earlier version of this file also wrote one byte after connecting and
+ * waited for it to be echoed back, and reported a real, running web server as
+ * down: a web server never echoes a raw TCP byte, it answers HTTP or nothing, so
+ * the echo step always timed out against a live server. Connect-and-close is
+ * the whole probe now. A real HTTP request would tell more — a server that
+ * accepts connections but never answers one still reads healthy here — and is a
+ * deliberate follow-up (#58), not built in this change.
  *
  * Where it lives: **`server/healthcheck.ts`, not a separate deploy-tooling package.**
  * `ops/` used to be that package (issue #18) and would have needed its own config for
@@ -23,15 +32,8 @@
  * ts-libs; a project built from the template has its own `infra/scripts/`.
  */
 
-/** The byte written to the socket. NUL is not valid HTTP, so it cannot be read as a request. */
-const PROBE_BYTE = new Uint8Array([0])
-
-/** A connected socket, narrowed to what a probe needs. */
+/** A connected socket, narrowed to what a probe needs: closing it again. */
 export interface ProbeConnection {
-  /** Send the probe byte. */
-  write: (data: Uint8Array) => Promise<number>
-  /** Read the echo. Returns `null` at EOF. */
-  read: (buffer: Uint8Array) => Promise<number | null>
   /** Release the socket. Must not escape; always called by the probe. */
   close: () => void
 }
@@ -62,8 +64,8 @@ export const LOOPBACK_HOSTS: readonly string[] = [
   "0.0.0.0",
 ]
 
-/** Why a probe failed. Every value is a constant; no provider or network text is carried. */
-export type ProbeFailure = "connect_failed" | "write_failed" | "no_echo" | "read_timeout"
+/** Why a probe failed. The only value today is a failed or timed-out connect. */
+export type ProbeFailure = "connect_failed"
 
 /** Probe outcome, kept as data so the caller — not the probe — decides what to do. */
 export interface ProbeResult {
@@ -87,10 +89,10 @@ export interface HealthcheckOptions {
   /** Connector. Defaults to {@link denoConnector}. */
   connector?: ProbeConnector
   /**
-   * Per-step deadline in milliseconds. Defaults to {@link DEFAULT_TIMEOUT_MS}.
-   * `0` disables it; a negative or non-finite value is rejected, because a
-   * negative deadline silently disables the probe's only bound and `NaN` would
-   * fire immediately.
+   * Deadline for the connect step, in milliseconds. Defaults to
+   * {@link DEFAULT_TIMEOUT_MS}. `0` disables it; a negative or non-finite value
+   * is rejected, because a negative deadline silently disables the probe's only
+   * bound and `NaN` would fire immediately.
    */
   timeoutMs?: number
   /** Timer for the deadline. Defaults to the platform timers. */
@@ -144,11 +146,12 @@ export async function withDeadline<T>(
 }
 
 /**
- * Probe a loopback port by connecting, echoing one byte, and closing.
+ * Probe a loopback port by connecting and closing again.
  *
- * @returns `{ healthy: true }`, or `{ healthy: false, reason }` with a constant
- * reason — never a message from the network stack, which could name an internal
- * address.
+ * @returns `{ healthy: true }` when the connect succeeds, or
+ * `{ healthy: false, reason: "connect_failed" }` when it is refused or misses
+ * its deadline — never a message from the network stack, which could name an
+ * internal address.
  * @throws {RangeError} When `port` is not an integer in 1-65535, when `hostname`
  * is not a {@link LOOPBACK_HOSTS} entry, or when `timeoutMs` is negative or not
  * an integer. All three are configuration errors rather than an unhealthy
@@ -184,38 +187,10 @@ export async function probeLoopback(options: HealthcheckOptions): Promise<ProbeR
     return { healthy: false, reason: "connect_failed" }
   }
 
-  try {
-    try {
-      await withDeadline(connection.write(PROBE_BYTE), timeoutMs, () => connection.close(), timer)
-    } catch {
-      return { healthy: false, reason: "write_failed" }
-    }
-
-    const echo = new Uint8Array(1)
-    let readCount: number | null
-    try {
-      readCount = await withDeadline(
-        connection.read(echo),
-        timeoutMs,
-        () => connection.close(),
-        timer,
-      )
-    } catch {
-      // A read that fails or misses its deadline is reported the same way: the
-      // detail would name the network stack, and the caller only branches on 0/1.
-      return { healthy: false, reason: "read_timeout" }
-    }
-
-    if (readCount === null || readCount < 1 || echo[0] !== PROBE_BYTE[0]) {
-      return { healthy: false, reason: "no_echo" }
-    }
-
-    return { healthy: true }
-  } finally {
-    // A leaked probe socket every 30 seconds is a file-descriptor leak in a
-    // container that has no way to report it.
-    connection.close()
-  }
+  // A leaked probe socket every 30 seconds is a file-descriptor leak in a
+  // container that has no way to report it.
+  connection.close()
+  return { healthy: true }
 }
 
 /**
@@ -289,10 +264,6 @@ export function resolveHealthcheckPort(
 export const denoConnector: ProbeConnector = {
   connect: async (options) => {
     const connection = await Deno.connect(options)
-    return {
-      write: (data) => connection.write(data),
-      read: (buffer) => connection.read(buffer),
-      close: () => connection.close(),
-    }
+    return { close: () => connection.close() }
   },
 }

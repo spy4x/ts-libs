@@ -25,7 +25,7 @@ export {
   type PresignRequest,
   signS3Request,
 } from "./sigv4.ts"
-export { DEFAULT_S3_ENDPOINT, DEFAULT_S3_REGION, S3Storage, type S3StorageConfig } from "./s3.ts"
+export { DEFAULT_S3_REGION, defaultS3Endpoint, S3Storage, type S3StorageConfig } from "./s3.ts"
 
 /** A `FileStorage` provider bound to one bucket, with the bucket argument removed. */
 export interface BucketStorage {

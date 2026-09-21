@@ -16,8 +16,8 @@ export type UploadBody = Uint8Array | string
  *
  * Contract:
  * - `bucket` and `path` are joined after both are validated. A path that is
- *   absolute or contains a `..` segment is rejected with a `TypeError`, in both
- *   providers, so a crafted key cannot leave the bucket.
+ *   absolute or contains a `..` segment is rejected with a `StorageError`, in
+ *   both providers, so a crafted key cannot leave the bucket.
  * - `upload` is byte-exact. An implementation that decodes the body to text
  *   silently corrupts binary payloads and violates this port.
  * - `download` streams to `toPath` and returns the number of bytes written.

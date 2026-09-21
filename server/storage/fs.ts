@@ -153,8 +153,12 @@ export function createDenoObjectFs(host: DenoFsHost = denoFsHost): ObjectFs {
       try {
         await host.stat(path)
         return true
-      } catch {
-        return false
+      } catch (error) {
+        if (error instanceof Deno.errors.NotFound) return false
+        // A denied or otherwise-failed stat is not "missing": rethrowing lets
+        // `doesExist` tell the two apart instead of reading a permission error
+        // as an absent object.
+        throw error
       }
     },
     writeObject: (path, data) => writeToFile(path, data, (target) => host.open(target)),

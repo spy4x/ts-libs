@@ -10,7 +10,17 @@ import {
 
 /** Default AWS region; overridden by configuration, never read from the environment here. */
 export const DEFAULT_S3_REGION = "us-east-1"
-export const DEFAULT_S3_ENDPOINT = "https://s3.amazonaws.com"
+
+/**
+ * AWS's regional S3 endpoint, used when `config.endpoint` is not set.
+ *
+ * Not checked against a real AWS endpoint in this repository — no third-party
+ * network call is made from here — so this is pinned only as a URL-shape unit
+ * test, against the documented `s3.<region>.amazonaws.com` pattern.
+ */
+export function defaultS3Endpoint(region: string): string {
+  return `https://s3.${region}.amazonaws.com`
+}
 
 /** Loopback hosts where a bucket as subdomain cannot resolve, e.g. the MinIO default. */
 const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)$/
@@ -95,10 +105,16 @@ export class S3Storage implements FileStorage {
   async upload(bucket: string, path: string, body: UploadBody): Promise<void> {
     const url = await this.getUploadURL(bucket, path)
     const payload = body instanceof Uint8Array ? body : new TextEncoder().encode(body)
-    const response = await this.fetcher(url, {
-      method: "PUT",
-      body: new Uint8Array(payload).slice(),
-    })
+    const response = await this.fetchOrFail(
+      url,
+      {
+        method: "PUT",
+        body: new Uint8Array(payload).slice(),
+      },
+      "upload",
+      bucket,
+      path,
+    )
     if (!response.ok) {
       throw await this.failure("upload", response, bucket, path)
     }
@@ -108,24 +124,33 @@ export class S3Storage implements FileStorage {
   /**
    * Stream the object into `toPath` and return the byte count written.
    *
-   * `toPath` is validated as an absolute, `..`-free local destination: it is the
-   * caller's file rather than an object key, but a filename that can climb is
-   * still a filename that can climb.
+   * `toPath` is the caller's file rather than an object key, so a relative
+   * destination is accepted and resolves against the process working
+   * directory; what is rejected is a `..` segment or a NUL byte, because a
+   * filename that can climb is still a filename that can climb.
    */
   async download(bucket: string, fromPath: string, toPath: string): Promise<number> {
     const destination = assertDestinationPath(toPath)
     const url = await this.getDownloadURL(bucket, fromPath)
-    const response = await this.fetcher(url, { method: "GET" })
+    const response = await this.fetchOrFail(url, { method: "GET" }, "download", bucket, fromPath)
     if (!response.ok || response.body === null) {
       throw await this.failure("download", response, bucket, fromPath)
     }
     return await this.fs.writeObject(destination, response.body)
   }
 
-  /** `false` for a 404, and a thrown `StorageError` for every other failure. */
+  /**
+   * `false` for a 404, and a thrown `StorageError` for every other failure.
+   *
+   * Signed for `HEAD` on its own presign, not by reusing `getDownloadURL`'s
+   * `GET` signature with the method swapped on the request: a signature covers
+   * the method, so a HEAD sent against a GET-signed URL is rejected by a real
+   * bucket even though nothing in this package's own tests noticed.
+   */
   async doesExist(bucket: string, path: string): Promise<boolean> {
-    const url = await this.getDownloadURL(bucket, path)
-    const response = await this.fetcher(url, { method: "HEAD" })
+    const address = await Promise.resolve().then(() => this.addressFor(bucket, path))
+    const url = await this.presign("HEAD", address)
+    const response = await this.fetchOrFail(url, { method: "HEAD" }, "doesExist", bucket, path)
     if (response.ok) return true
     if (response.status === 404) return false
     throw await this.failure("doesExist", response, bucket, path)
@@ -142,7 +167,7 @@ export class S3Storage implements FileStorage {
    * separately is how a signature silently stops covering the request it signs.
    */
   private addressFor(bucket: string, path: string): { origin: string; key: string } {
-    const endpoint = new URL(this.config.endpoint ?? DEFAULT_S3_ENDPOINT)
+    const endpoint = new URL(this.config.endpoint ?? defaultS3Endpoint(this.config.region))
     const objectKey = resolveObjectKey(bucket, path)
     const pathStyle = this.config.forcePathStyle ?? LOOPBACK_HOST.test(endpoint.hostname)
     return pathStyle
@@ -156,7 +181,7 @@ export class S3Storage implements FileStorage {
    * canonical request carries no ACL at all.
    */
   private presign(
-    method: "GET" | "PUT",
+    method: "GET" | "PUT" | "HEAD",
     address: { origin: string; key: string },
     options?: PresignOptions,
   ): Promise<string> {
@@ -176,6 +201,33 @@ export class S3Storage implements FileStorage {
       now: this.clock(),
       ...(options?.acl !== undefined ? { acl: options.acl } : {}),
     })
+  }
+
+  /**
+   * Call `fetcher` and turn a network failure into a `StorageError`.
+   *
+   * The original error is not kept as the message or the `cause`: on Deno 2.9.7
+   * a failed `fetch` reports the request URL in its `cause`, and the request
+   * URL here is a presigned S3 URL carrying the access key id and the
+   * signature — forwarding that error, including through `console.error`,
+   * would leak both.
+   */
+  private async fetchOrFail(
+    url: string,
+    init: RequestInit,
+    operation: string,
+    bucket: string,
+    path: string,
+  ): Promise<Response> {
+    try {
+      return await this.fetcher(url, init)
+    } catch {
+      throw new StorageError(
+        "request_failed",
+        `${operation} failed for ${bucket}/${path}: the request could not be sent`,
+        { operation },
+      )
+    }
   }
 
   /** Read the response body once and turn a non-2xx reply into a `StorageError`. */

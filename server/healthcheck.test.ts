@@ -13,27 +13,16 @@ import {
   withDeadline,
 } from "./healthcheck.ts"
 
-/** A socket that echoes the probe byte, recording what it was asked to do. */
-function echoSocket(overrides: Partial<ProbeConnection> = {}) {
-  const writes: Uint8Array[] = []
+/** A socket that connects successfully, recording whether it was closed. */
+function closableSocket() {
   let closed = false
   const connection: ProbeConnection = {
-    write: (data) => {
-      writes.push(data.slice())
-      return Promise.resolve(data.byteLength)
-    },
-    read: (buffer) => {
-      buffer[0] = 0
-      return Promise.resolve(1)
-    },
     close: () => {
       closed = true
     },
-    ...overrides,
   }
   return {
     connection,
-    writes,
     get closed() {
       return closed
     },
@@ -91,13 +80,10 @@ function manualTimer() {
   }
 }
 
-Deno.test("healthcheck: a loopback socket that echoes is healthy", async () => {
-  const socket = echoSocket()
+Deno.test("healthcheck: a loopback socket that connects is healthy", async () => {
+  const socket = closableSocket()
   const result = await probeLoopback({ port: 3000, connector: staticConnector(socket.connection) })
   assertEquals(result, { healthy: true })
-  assertEquals(socket.writes.length, 1)
-  assertEquals(socket.writes[0].byteLength, 1)
-  assertEquals(socket.writes[0][0], 0)
 })
 
 Deno.test("healthcheck: the probe connects to loopback by default", async () => {
@@ -105,7 +91,7 @@ Deno.test("healthcheck: the probe connects to loopback by default", async () => 
   const connector: ProbeConnector = {
     connect: (options) => {
       targets.push(options)
-      return Promise.resolve(echoSocket().connection)
+      return Promise.resolve(closableSocket().connection)
     },
   }
   await probeLoopback({ port: 8080, connector })
@@ -117,26 +103,16 @@ Deno.test("healthcheck: an explicit host is used when given", async () => {
   const connector: ProbeConnector = {
     connect: (options) => {
       targets.push(options)
-      return Promise.resolve(echoSocket().connection)
+      return Promise.resolve(closableSocket().connection)
     },
   }
   await probeLoopback({ port: 8080, hostname: "::1", connector })
   assertEquals(targets, [{ hostname: "::1", port: 8080 }])
 })
 
-Deno.test("healthcheck: the socket is always closed", async () => {
-  const socket = echoSocket()
+Deno.test("healthcheck: a successful connect is always closed", async () => {
+  const socket = closableSocket()
   await probeLoopback({ port: 3000, connector: staticConnector(socket.connection) })
-  assertEquals(socket.closed, true)
-})
-
-Deno.test("healthcheck: the socket is closed even when the write fails", async () => {
-  const socket = echoSocket({ write: () => Promise.reject(new Error("EPIPE")) })
-  const result = await probeLoopback({
-    port: 3000,
-    connector: staticConnector(socket.connection),
-  })
-  assertEquals(result, { healthy: false, reason: "write_failed" })
   assertEquals(socket.closed, true)
 })
 
@@ -162,39 +138,6 @@ Deno.test("healthcheck: a failure reason never carries network text", async () =
   assertStrictEquals(serialised.includes("EHOSTUNREACH"), false, "reason leaked an errno")
 })
 
-Deno.test("healthcheck: a read that ends at EOF is not healthy", async () => {
-  const socket = echoSocket({ read: () => Promise.resolve(null) })
-  const result = await probeLoopback({
-    port: 3000,
-    connector: staticConnector(socket.connection),
-  })
-  assertEquals(result, { healthy: false, reason: "no_echo" })
-  assertEquals(socket.closed, true)
-})
-
-Deno.test("healthcheck: a read that returns a different byte is not healthy", async () => {
-  const socket = echoSocket({
-    read: (buffer) => {
-      buffer[0] = 0xff
-      return Promise.resolve(1)
-    },
-  })
-  const result = await probeLoopback({
-    port: 3000,
-    connector: staticConnector(socket.connection),
-  })
-  assertEquals(result, { healthy: false, reason: "no_echo" })
-})
-
-Deno.test("healthcheck: a read that returns zero bytes is not healthy", async () => {
-  const socket = echoSocket({ read: () => Promise.resolve(0) })
-  const result = await probeLoopback({
-    port: 3000,
-    connector: staticConnector(socket.connection),
-  })
-  assertEquals(result, { healthy: false, reason: "no_echo" })
-})
-
 Deno.test("healthcheck: a hanging connect fails when the deadline fires", async () => {
   const manual = manualTimer()
   const pending = probeLoopback({
@@ -208,25 +151,8 @@ Deno.test("healthcheck: a hanging connect fails when the deadline fires", async 
   assertEquals(manual.cleared.length, 1, "the deadline timer was not cleared")
 })
 
-Deno.test("healthcheck: a hanging read closes the socket and fails", async () => {
-  const socket = echoSocket({ read: () => new Promise<number | null>(() => {}) })
-  const manual = manualTimer()
-  const pending = probeLoopback({
-    port: 3000,
-    connector: staticConnector(socket.connection),
-    timeoutMs: 50,
-    timer: manual.timer,
-  })
-  // The read never settles, so only the injected deadline can end the probe.
-  // `fire(2)` waits for that deadline to be armed — the connect and write
-  // deadlines count as 1 and 2 — then fires it.
-  await manual.fire(3)
-  assertEquals(await pending, { healthy: false, reason: "read_timeout" })
-  assertEquals(socket.closed, true, "the hung socket was left open")
-})
-
 Deno.test("healthcheck: a zero timeout disables the deadline", async () => {
-  const socket = echoSocket()
+  const socket = closableSocket()
   const manual = manualTimer()
   const result = await probeLoopback({
     port: 3000,
@@ -291,7 +217,7 @@ Deno.test("healthcheck: a non-loopback hostname is refused, not probed", async (
 
 Deno.test("healthcheck: every allow-listed loopback host is accepted", async () => {
   for (const hostname of LOOPBACK_HOSTS) {
-    const socket = echoSocket()
+    const socket = closableSocket()
     assertEquals(
       await probeLoopback({ port: 3000, hostname, connector: staticConnector(socket.connection) }),
       { healthy: true },
@@ -300,7 +226,7 @@ Deno.test("healthcheck: every allow-listed loopback host is accepted", async () 
 })
 
 Deno.test("healthcheck: a negative or non-integer deadline is refused", async () => {
-  const socket = echoSocket()
+  const socket = closableSocket()
   for (const timeoutMs of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
     await assertRejects(
       () =>
@@ -332,7 +258,7 @@ Deno.test("healthcheck: a valid decimal port is accepted after trimming", () => 
 })
 
 Deno.test("healthcheck: the exit code is 0 for a healthy service", async () => {
-  const socket = echoSocket()
+  const socket = closableSocket()
   const code = await healthcheckExitCode({
     port: 3000,
     connector: staticConnector(socket.connection),
@@ -349,7 +275,7 @@ Deno.test("healthcheck: the exit code is 1 for a dead service", async () => {
 
 Deno.test("healthcheck: runHealthcheck passes the exit code to the process exit", async () => {
   const exits: number[] = []
-  const socket = echoSocket()
+  const socket = closableSocket()
   await runHealthcheck({
     port: 3000,
     connector: staticConnector(socket.connection),

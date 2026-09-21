@@ -3,8 +3,9 @@
 Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 
 - **HTTP** — bounded request bodies, CORS origin allow-listing, bearer-token verification, export
-  envelopes, static-file serving and a distroless healthcheck. Zero dependencies except `hono`,
-  which is already pinned in the root import map and used only for the `hono/cors` resolver type.
+  envelopes, static-file serving and a distroless healthcheck. Zero runtime dependencies: `hono` is
+  pinned in the root import map, but `cors.ts` imports nothing — only `cors.test.ts` imports the
+  `hono/cors` resolver type, for its own assertions.
 - **Storage** — the `FileStorage` port with a local-filesystem provider, an S3-compatible provider
   and a bucket-binding wrapper. Zero dependencies.
 
@@ -90,7 +91,7 @@ nothing MCP-specific about it. Both sides of the comparison are SHA-256 digested
 timing. `redactor`/`formatLogLine` strip every configured secret from a log line, so a raw
 `Authorization` header cannot reach a log by accident.
 
-### Fixes applied at extraction time
+## Fixes applied at extraction time (`server/http/bounded-body`, `server/http/cors`)
 
 | Source                                       | Bug                                                                                                                                 | Pinned by                                                                     |
 | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
@@ -101,6 +102,11 @@ timing. `redactor`/`formatLogLine` strip every configured secret from a log line
 | `offer-lens/libs/scraper/mod.ts:184-186`     | when the deadline won the `Promise.race` the reader was only cancelled "best effort", leaving a pending `read()` that never settles | `readBoundedBody rejects a stalled body once the stall budget expires`        |
 | `offer-lens/libs/scraper/mod.ts:206`         | the oversized `content-length` early-out was absent, so a body declaring 4 GiB was streamed before being rejected                   | `readBoundedBody rejects an oversized declared content-length before reading` |
 | `offer-lens/apps/api/services/cors.ts:53-60` | an `https://` host missing from the allowlist fell through to the dev-host check                                                    | `cors: https dev origins are refused`                                         |
+
+Two rows changed meaning when `server/http/bounded-body.ts` collapsed into the canonical
+reader (`net/bounded-body.ts`): the canonical one rejects an over-cap `content-length` before
+taking a reader, so there is no reader to cancel and an unread request body is left to the
+server to drain, and a stall now surfaces as `BodyReadTimeoutError` rather than a bare `Error`.
 
 ## `server/export`
 
@@ -131,6 +137,17 @@ route paths.
 `probeLoopback`, `healthcheckExitCode`, `runHealthcheck`, `resolveHealthcheckPort`, `denoConnector`,
 `LOOPBACK_HOSTS`, `DEFAULT_TIMEOUT_MS`, `DEFAULT_PORT`.
 
+The probe connects to the loopback port and closes the socket again: `{ healthy: true }` when the
+connect succeeds, `{ healthy: false, reason: "connect_failed" }` when it is refused or misses its
+deadline. An earlier version also wrote one byte after connecting and waited for it to be echoed
+back, and reported a real, running web server as down — a web server answers HTTP or nothing, it
+never echoes a raw TCP byte, so the echo step timed out against every live server it was pointed at.
+That step, `ProbeConnection.write`/`.read` and the three failure reasons `write_failed`, `no_echo`
+and `read_timeout` are removed here as a breaking change: this package is `0.1.0` and has never been
+published, so there is no consumer to carry the old shape forward. A real HTTP request against the
+server would tell more — a server that accepts connections but never answers one still reads healthy
+under connect-and-close — and is tracked as a follow-up (#58), not built in this change.
+
 `hostname` must be a `LOOPBACK_HOSTS` entry, so a probe cannot be aimed at a public bind; `timeoutMs`
 must be a non-negative integer; and `HEALTHCHECK_PORT`/`PORT` must be bare decimal digits
 (`0x1f90`, `1e3`, `+8080` are refused rather than parsed), the same rule this package applies to
@@ -141,10 +158,7 @@ needed its own `deno.json` for 60 LOC, and `ops/` was later removed from ts-libs
 probe is separated from the exit so the decision is a return value a test can assert with
 `--allow-read --allow-env` and no socket.
 
-Two rows changed meaning when this module collapsed into the canonical reader: the canonical one
-rejects an over-cap `content-length` before taking a reader, so there is no reader to cancel and an
-unread request body is left to the server to drain, and a stall now surfaces as
-`BodyReadTimeoutError` rather than a bare `Error`.
+## `server/storage`
 
 ## The port
 
@@ -228,18 +242,18 @@ provider that could not be tested this way would be a design defect.
 
 ## Environment
 
-| Variable                  | Required       | Meaning                                                                  |
-| ------------------------- | -------------- | ------------------------------------------------------------------------ |
-| `FILE_STORAGE_PROVIDER`   | yes, to enable | `local` or `s3`. Unset or empty → `createStorage()` returns `undefined`. |
-| `FILE_STORAGE_BUCKET`     | yes            | Bucket to bind. Not defaulted: a wrong bucket must not be guessed.       |
-| `FILE_STORAGE_LOCAL_PATH` | no             | Local base directory. Defaults to `./file-storage`.                      |
-| `S3_REGION`               | for `s3`       | e.g. `eu-central-1`.                                                     |
-| `S3_ENDPOINT`             | no             | Custom endpoint, e.g. `http://127.0.0.1:9000`. Default: AWS.             |
-| `S3_ACCESS_KEY_ID`        | for `s3`       | Access key.                                                              |
-| `S3_SECRET_ACCESS_KEY`    | for `s3`       | Secret key.                                                              |
-| `S3_SESSION_TOKEN`        | no             | Session token, signed into the presign when set.                         |
-| `S3_FORCE_PATH_STYLE`     | no             | `true`/`false`/`1`/`0`. Default: auto (loopback → path-style).           |
-| `S3_PRESIGN_EXPIRES_IN`   | no             | Whole seconds, 1–604800. Default 3600.                                   |
+| Variable                  | Required       | Meaning                                                                          |
+| ------------------------- | -------------- | -------------------------------------------------------------------------------- |
+| `FILE_STORAGE_PROVIDER`   | yes, to enable | `local` or `s3`. Unset or empty → `createStorage()` returns `undefined`.         |
+| `FILE_STORAGE_BUCKET`     | yes            | Bucket to bind. Not defaulted: a wrong bucket must not be guessed.               |
+| `FILE_STORAGE_LOCAL_PATH` | no             | Local base directory. Defaults to `./file-storage`.                              |
+| `S3_REGION`               | for `s3`       | e.g. `eu-central-1`.                                                             |
+| `S3_ENDPOINT`             | no             | Custom endpoint, e.g. `http://127.0.0.1:9000`. Default: derived from the region. |
+| `S3_ACCESS_KEY_ID`        | for `s3`       | Access key.                                                                      |
+| `S3_SECRET_ACCESS_KEY`    | for `s3`       | Secret key.                                                                      |
+| `S3_SESSION_TOKEN`        | no             | Session token, signed into the presign when set.                                 |
+| `S3_FORCE_PATH_STYLE`     | no             | `true`/`false`/`1`/`0`. Default: auto (loopback → path-style).                   |
+| `S3_PRESIGN_EXPIRES_IN`   | no             | Whole seconds, 1–604800. Default 3600.                                           |
 
 Placeholders only — `AKIAIOSFODNN7EXAMPLE`, `http://127.0.0.1:9000`. Never a real
 bucket, key or endpoint. A required variable that is missing or empty throws at
@@ -314,7 +328,12 @@ Deno 2.9.7, reproduced in a pristine worktree with no workspace config, so it is
 not this repo's `deno.jsonc`. If it succeeds under a `DENO_DIR`-less default on
 another box, the tests still must not depend on it: the CI gate runs
 `deno task test`, and a test that needs a permission the task does not grant
-fails there. No test in this package uses a temp directory.
+fails there. No unit-tier test in this package uses `Deno.makeTempDir`, for the
+reason above — that gap stands. The integration tier is a different grant:
+`server/storage/local.integration.test.ts` and the `S3Storage.download` case in
+`server/storage/s3.integration.test.ts` do write to a real folder, obtained from
+`createScratchFolder` (`@integration-testing`) rather than `Deno.makeTempDir`,
+inside the tier's narrower `--allow-write=.volumes`.
 
 **`download`'s `toPath` is validated, and it is the caller's file.** It is not
 derived from an object key, so it is not confined to a bucket — a relative

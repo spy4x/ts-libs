@@ -9,7 +9,8 @@ const UNRESERVED = /[A-Za-z0-9\-._~]/
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i
 
 /**
- * Normalise one path segment into a `file://` URL.
+ * Report whether one path is safe to join onto a bucket: relative, free of a
+ * scheme, a backslash or a NUL byte, and free of a `..` segment.
  *
  * Exported for testability: it must reject a `..` segment and an absolute path,
  * because the local provider builds its object path from caller-supplied keys.
