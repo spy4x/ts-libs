@@ -1155,8 +1155,10 @@ describe("baseUrl policy", () => {
   })
 
   it("refuses a base URL carrying a control character, with or without the opt-in", async () => {
-    // Both values of the option, because with the opt-in on the store's own rule is the only one
-    // left: the SSRF guard, which also refuses control characters, is not called at all then.
+    // Both values of the option, because the store's own rule is the only defence on more of this
+    // ground than it looks. With the opt-in on, the SSRF guard is not called at all; with it off,
+    // the guard refuses an embedded control character but trims the input first, so a trailing
+    // newline reaches neither of its checks and only this rule catches it.
     for (const allowInternalBaseUrl of [false, true]) {
       const { store, port } = createHarness(new FakeCipher(), { allowInternalBaseUrl })
       const host = allowInternalBaseUrl ? "http://localhost:11434" : "https://api.example.com"

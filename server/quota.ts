@@ -514,9 +514,19 @@ export interface QuotaMeter {
    * — the provider call failed, the upload was rejected, the job was cancelled.
    * Returns the state after the refund.
    *
-   * Only for units {@link QuotaMeter.reserve} took. A release without a matching
-   * reserve hands out budget, and a store never lets a counter fall below zero,
-   * so a double refund is absorbed rather than detected.
+   * Only for units {@link QuotaMeter.reserve} took.
+   *
+   * **A refund is not idempotent, and a `release` that threw must not be
+   * retried for a session principal.** Releasing the same reservation twice
+   * gives the units back twice; only a counter already at zero absorbs the
+   * second one, because a store never goes below zero. For a session principal
+   * a release is two store calls — the principal's own counter first, then the
+   * shared pool — so after one of them has failed the other has already been
+   * refunded, and a retry would credit the pool a unit nobody gave back, which
+   * any other anonymous caller can then spend. The own counter is refunded
+   * first so that a failure part-way through leaves the pool holding a unit
+   * that nothing holds any more: short rather than over-credited, and cleared
+   * when the window rolls.
    *
    * `options` mirrors {@link QuotaMeter.reserve}'s, and a caller passes the same
    * value to both: a request that brought its own key reserved nothing, so its
@@ -526,8 +536,11 @@ export interface QuotaMeter {
    * A release keys by the window the clock is in **now**, not by the window the
    * reservation was taken in. A reservation that outlives a window boundary is
    * therefore refunded against the new window, and the old one keeps the unit
-   * until it rolls. Keep the work shorter than the window, or use a lifetime
-   * window, where this cannot happen.
+   * until it rolls: the unit moves between windows and the total across the two
+   * is unchanged. Keep a unit of work shorter than the window, or use a lifetime
+   * window, where this cannot happen. Closing it properly is a small API change
+   * — `release` would take the clock reading `reserve` used — and nothing on the
+   * store; it is deliberately not in this change.
    *
    * @throws {QuotaError} `InvalidCount`, `SessionPrincipalNotAllowed` — as
    * {@link QuotaMeter.reserve}.
@@ -930,11 +943,14 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
       if (releaseOptions?.hasOwnKey && bypassWithOwnKey) return ownKeyState()
 
       const nowMs = clock()
-      // The same order `reserve` takes them in. Order does not matter for a
-      // refund — neither counter can go below zero — but keeping it identical
-      // means one reading of the code covers both paths.
-      if (isSession(principal)) await store.release(poolKeyAt(nowMs), count)
+      // The reverse of `reserve`, and the order is the whole point: the private
+      // counter is refunded first, so a store that fails between the two calls
+      // leaves the shared pool holding a unit nothing holds any more. That is
+      // the failing-closed direction — the pool refuses a caller it could have
+      // served — where refunding the pool first would hand a unit to whoever
+      // asks next.
       const used = await store.release(keyFor(principal, nowMs), count)
+      if (isSession(principal)) await store.release(poolKeyAt(nowMs), count)
       return stateOf(decisionFor(used), used, true)
     },
 

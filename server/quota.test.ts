@@ -1161,3 +1161,34 @@ Deno.test("reserve: one call reads the clock once, even across a window boundary
   assertEquals(await store.read(quotaKey(SESSION, policy, 60_000)), 0)
   assertEquals(reads, 1)
 })
+
+Deno.test("release: a store that fails part-way leaves the pool short, never over-credited", async () => {
+  // The private counter is refunded first on purpose. When the second call
+  // fails, the pool keeps a unit nothing holds any more — it refuses a caller
+  // it could have served, which is the safe direction. Refunding the pool first
+  // would instead hand that unit to whoever asks next, and the caller cannot
+  // repair it: retrying a release that threw refunds the half that succeeded a
+  // second time.
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, sessions: { poolLimit: 1 } }
+  const meter = createQuotaMeter({
+    policy,
+    store: {
+      ...store,
+      release: (key, count) =>
+        key.principal === SESSION_POOL_PRINCIPAL
+          ? Promise.reject(new Error("pool release unavailable"))
+          : store.release(key, count),
+    },
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+
+  await meter.reserve(SESSION)
+  const thrown = await rejectedError(() => meter.release(SESSION))
+
+  assertEquals(thrown.message, "pool release unavailable")
+  // The private counter came back before the failure; the pool did not.
+  assertEquals(await store.read(quotaKey(SESSION, policy, 0)), 0)
+  assertEquals(await store.read(sessionPoolKey(policy, 0)), 1)
+})

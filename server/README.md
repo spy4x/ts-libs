@@ -586,10 +586,21 @@ try {
 }
 ```
 
+**A refund is not idempotent, and a `release` that threw must not be retried for a session
+principal.** Releasing the same reservation twice gives the units back twice; only a counter already
+at zero absorbs the second one, because a store never goes below zero. For a session principal a
+release is two store calls — the principal's own counter first, then the shared pool — so after one
+of them has failed the other has already been refunded, and a retry would credit the pool a unit
+nobody gave back, which any other anonymous caller can then spend. The own counter is refunded first
+so that a failure part-way through leaves the pool holding a unit that nothing holds any more: short
+rather than over-credited, and cleared when the window rolls.
+
 A `release` keys by the window the clock is in when it runs, not the one the reservation was taken
 in. Work that outlives a window boundary is refunded against the new window, and the old one keeps
-the unit until it rolls — keep a unit of work shorter than the window, or use a lifetime window,
-where this cannot happen.
+the unit until it rolls: the unit moves between windows and the total across the two is unchanged.
+Keep a unit of work shorter than the window, or use a lifetime window, where this cannot happen.
+Closing it properly is a small API change — `release` would take the clock reading `reserve` used —
+and nothing on the store; it is deliberately not part of this change.
 
 **A real store makes `reserve` one statement.** The in-memory store in the tests is atomic because
 nothing is awaited between its read and its write; a SQL store buys the same property with a
