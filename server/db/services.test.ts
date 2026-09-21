@@ -113,7 +113,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
   }
 
   /**
-   * One call form, as the driver has it.
+   * One call form, as the driver has it, built fresh for each handle.
    *
    * `sql` is a single callable used two ways: as a tag, and as `sql("users")` /
    * `sql({ name })`, which render a value for a later template. Measured against
@@ -122,56 +122,106 @@ function createFakeSql(options: FakeSqlOptions = {}) {
    * strings array.
    *
    * **Written as a `function`, not an arrow**, and so is every callable this fake hands
-   * out. `postgres` declares them the same way, which makes them constructible, and
-   * `new sql.unsafe(...)` was a live route past the scope check for exactly that reason.
-   * An arrow-function fake cannot be constructed at all, so it reported the route closed
-   * while the driver's own shape left it open.
+   * out except `prepare`. `postgres` declares them the same way, which makes them
+   * constructible, and `new sql.unsafe(...)` was a live route past the scope check for
+   * exactly that reason. An arrow-function fake cannot be constructed at all, so it
+   * reported the route closed while the driver's own shape left it open. `prepare` is an
+   * arrow in the driver (`postgres@3.4.7/src/index.js:253`), so it is one here too.
+   *
+   * A fresh function per handle, because `postgres` builds one per `Sql(handler)` call:
+   * the root client's tag and a transaction's tag are two different function objects.
    */
-  const statement = function (strings: unknown, ...values: unknown[]): unknown {
-    if (!Array.isArray(strings)) {
-      return typeof strings === "string"
-        ? { __identifier: strings } satisfies FakeIdentifier
-        : { __columns: strings as Record<string, unknown> } satisfies FakeColumnList
+  const makeTag = () =>
+    function (strings: unknown, ...values: unknown[]): unknown {
+      if (!Array.isArray(strings)) {
+        return typeof strings === "string"
+          ? { __identifier: strings } satisfies FakeIdentifier
+          : { __columns: strings as Record<string, unknown> } satisfies FakeColumnList
+      }
+      const query = render(strings as unknown as TemplateStringsArray, values)
+      return inTransaction
+        ? execute(query, (it) => inner.push(it))
+        : execute(query, (it) => topLevel.push(it))
     }
-    const query = render(strings as unknown as TemplateStringsArray, values)
-    return inTransaction
-      ? execute(query, (it) => inner.push(it))
-      : execute(query, (it) => topLevel.push(it))
-  }
-
-  const asTag = statement as (
-    strings: TemplateStringsArray,
-    ...values: unknown[]
-  ) => Promise<unknown>
 
   /**
    * `sql.types` / `sql.typed`, as `postgres` builds them.
    *
    * A function that also carries one named helper per custom type the caller registered
-   * (`postgres@3.4.7/src/index.js:86-102`). `shout` stands in for such a helper.
+   * (`postgres@3.4.7/src/index.js:86-102`). `shout` stands in for such a helper. Built
+   * per handle, because `typed` is declared inside `Sql(handler)` and is therefore a
+   * different function on the client and on a transaction handle.
    */
-  const customTypes = Object.assign(
-    function (value: unknown): unknown {
-      return { __typed: value }
-    },
-    {
-      shout: function (value: string): unknown {
-        return { __shout: value.toUpperCase() }
+  const makeCustomTypes = () =>
+    Object.assign(
+      function (value: unknown): unknown {
+        return { __typed: value }
       },
-    },
-  )
+      {
+        shout: function (value: string): unknown {
+          return { __shout: value.toUpperCase() }
+        },
+      },
+    )
 
   /**
-   * The transaction handle, with the two nesting calls `postgres` puts on it.
+   * The helpers `Sql(handler)` puts on every handle, client and transaction alike.
    *
-   * `savepoint` is the real one and is recorded in `inner`, because a savepoint is a
-   * statement on the connection the transaction already holds. `begin` is there so the
-   * fake can be asked for it: `postgres` does put `begin` on a transaction handle, and
-   * calling it takes a *second* connection out of the pool, which is the bug this fake
-   * used to label "BEGIN NESTED" and assert as correct. It is recorded in `topLevel`,
-   * where a second `BEGIN` is visible.
+   * `unsafe`, `file` and the type helpers are declared inside `Sql` in the driver, so each
+   * handle gets its own; `json`, `array` and `notify` are declared once in the enclosing
+   * `Postgres()` scope and are therefore literally shared between the client and every
+   * transaction handle (`postgres@3.4.7/src/index.js:84-101,199,318-326`). The fake copies
+   * that split, because the graph-walk test asks which values a handle owns.
    */
-  const transaction = Object.assign(statement, {
+  const makeSqlHelpers = () => {
+    const customTypes = makeCustomTypes()
+    return {
+      unsafe: function (text: string): Promise<unknown> {
+        return execute(text, (it) => (inTransaction ? inner : topLevel).push(it))
+      },
+      file: function (path: string): Promise<unknown> {
+        return execute(`file(${path})`, (it) => (inTransaction ? inner : topLevel).push(it))
+      },
+      json: sharedJson,
+      array: sharedArray,
+      notify: sharedNotify,
+      // `types` and `typed` are the driver's own shape: a *function* carrying one helper
+      // per custom type the caller registered. A wrapper that replaced functions with
+      // plain arrows lost `shout` here, and `sql.types.shout(...)` became a TypeError
+      // inside a transaction.
+      types: customTypes,
+      typed: customTypes,
+    }
+  }
+
+  const sharedJson = function (value: unknown): unknown {
+    return { __json: value }
+  }
+  const sharedArray = function (value: unknown[]): unknown {
+    return { __array: value }
+  }
+  const sharedNotify = async function (channel: string, payload: string): Promise<unknown> {
+    return await execute(
+      `pg_notify(${channel}, ${payload})`,
+      (it) => (inTransaction ? inner : topLevel).push(it),
+    )
+  }
+
+  /**
+   * The transaction handle, carrying the properties the real one carries and no others.
+   *
+   * Measured against `postgres@3.4.7` and a real server (#115), a transaction handle's own
+   * keys are `length`, `name`, `prototype`, `types`, `typed`, `unsafe`, `notify`, `array`,
+   * `json`, `file`, `savepoint` and `prepare`. It has **no `begin`, no `reserve` and no
+   * `listen`** — those are assigned to the root client alone (`src/index.js:69-82`), and
+   * calling one on a transaction handle is a plain `TypeError`. An earlier version of this
+   * fake carried `begin` and `reserve` here and a comment claiming the driver does too,
+   * which put two call forms nobody can write into `services.ts`'s list of refusals.
+   *
+   * `savepoint` is recorded in `inner`, because a savepoint is a statement on the
+   * connection the transaction already holds.
+   */
+  const transaction = Object.assign(makeTag(), {
     savepoint: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
       inner.push("SAVEPOINT")
       return Promise.resolve()
@@ -185,35 +235,22 @@ function createFakeSql(options: FakeSqlOptions = {}) {
           throw error
         })
     },
-    begin: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
-      return client.begin(callback)
+    // An arrow, as in the driver, which is why it is the one callable here that cannot be
+    // constructed and carries no `prototype`.
+    prepare: (name: string): string => {
+      inner.push(`prepare(${name})`)
+      return name
     },
-    // The rest of the driver's surface, as far as a caller can reach it. They are here so
-    // that the `Proxy` in `services.ts` can be walked: the reason it is a `Proxy` rather
-    // than a hand-written stand-in is that a property nobody listed must not become a way
-    // around the check, and a fake that offered only `savepoint` could not show that.
-    unsafe: function (text: string): Promise<unknown> {
-      return execute(text, (it) => (inTransaction ? inner : topLevel).push(it))
-    },
-    file: function (path: string): Promise<unknown> {
-      return execute(`file(${path})`, (it) => (inTransaction ? inner : topLevel).push(it))
-    },
-    reserve: function (): Promise<unknown> {
-      topLevel.push("reserve()")
-      return Promise.resolve(client)
-    },
-    json: function (value: unknown): unknown {
-      return { __json: value }
-    },
-    // `types` and `typed` are the driver's own shape: a *function* carrying one helper per
-    // custom type the caller registered. A wrapper that replaced functions with plain
-    // arrows lost `shout` here, and `sql.types.shout(...)` became a TypeError inside a
-    // transaction.
-    types: customTypes,
-    typed: customTypes,
+    ...makeSqlHelpers(),
   })
 
-  const client = Object.assign(asTag, {
+  /**
+   * The root client: the same `Sql(handler)` helpers plus the four the pool alone carries.
+   *
+   * `begin`, `reserve`, `listen` and `end` live here and nowhere else, which is what makes
+   * `tx.begin(...)` a `TypeError` against the real driver.
+   */
+  const client = Object.assign(makeTag(), {
     begin: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
       topLevel.push("BEGIN")
       inTransaction = true
@@ -230,14 +267,31 @@ function createFakeSql(options: FakeSqlOptions = {}) {
           throw error
         })
     },
+    reserve: async function (): Promise<unknown> {
+      topLevel.push("reserve()")
+      return await Promise.resolve(client)
+    },
+    listen: async function (channel: string): Promise<unknown> {
+      topLevel.push(`listen(${channel})`)
+      return await Promise.resolve({ unlisten: () => Promise.resolve() })
+    },
     end: function (endOptions?: { timeout?: number }): Promise<void> {
       topLevel.push(`end(${endOptions?.timeout ?? ""})`)
       return Promise.resolve()
     },
+    ...makeSqlHelpers(),
   })
 
   return {
     sql: client as unknown as Sql,
+    /**
+     * The raw transaction handle, for the graph walk.
+     *
+     * The client no longer leads to it: the two are separate function objects now, as they
+     * are in the driver, so a reference set built from `sql` alone holds none of the
+     * functions that send a statement on a transaction.
+     */
+    handle: transaction,
     topLevel,
     inner,
   }
@@ -273,19 +327,53 @@ class TestService extends DbServiceBase {
   }
 }
 
-/** The driver surface {@link createFakeSql} offers, as the scope tests reach for it. */
+/**
+ * The transaction-handle surface {@link createFakeSql} offers, as the scope tests reach
+ * for it.
+ *
+ * It lists what a `postgres@3.4.7` transaction handle actually carries. `begin`, `reserve`
+ * and `listen` are absent because the driver's handle does not have them (#115).
+ */
 interface FakeExecutor {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown>
   (identifier: string): unknown
   unsafe(text: string): Promise<unknown>
   file(path: string): Promise<unknown>
-  reserve(): Promise<unknown>
   json(value: unknown): unknown
-  begin<T>(callback: (transaction: Transaction) => Promise<T>): Promise<T>
+  array(value: unknown[]): unknown
+  notify(channel: string, payload: string): Promise<unknown>
+  prepare(name: string): string
   savepoint<T>(callback: (transaction: Transaction) => Promise<T>): Promise<T>
   types: { (value: unknown): unknown; shout(value: string): unknown }
   typed: { (value: unknown): unknown; shout(value: string): unknown }
 }
+
+/**
+ * The own keys of a `postgres@3.4.7` transaction handle, measured against a real server.
+ *
+ * `length`, `name` and `prototype` are what any ordinary function carries; the rest is what
+ * `Sql(handler)` assigns plus the `savepoint` and `prepare` that `scope` adds
+ * (`postgres@3.4.7/src/index.js:84-101,251-254`). `begin`, `reserve` and `listen` are not
+ * here: they are assigned to the root client alone (`src/index.js:69-82`).
+ *
+ * `services.integration.test.ts` asserts this same list against the driver itself, so a
+ * driver upgrade that changes the shape turns that test red instead of leaving this fake
+ * quietly describing a handle nobody has (#115).
+ */
+const TRANSACTION_HANDLE_KEYS: string[] = [
+  "array",
+  "file",
+  "json",
+  "length",
+  "name",
+  "notify",
+  "prepare",
+  "prototype",
+  "savepoint",
+  "types",
+  "typed",
+  "unsafe",
+]
 
 /** A template strings array, for the `new sql(template)` route. */
 function fakeTemplate(text: string): TemplateStringsArray {
@@ -309,9 +397,10 @@ function callForms(sql: FakeExecutor): Array<[string, () => unknown]> {
     ["identifier helper", () => sql("users")],
     ["unsafe", () => sql.unsafe("SELECT 1")],
     ["file", () => sql.file("/migrations/0001.sql")],
-    ["reserve", () => sql.reserve()],
     ["json", () => sql.json({ a: 1 })],
-    ["begin", () => sql.begin(() => Promise.resolve(undefined))],
+    ["array", () => sql.array([1, 2])],
+    ["notify", () => sql.notify("channel", "payload")],
+    ["prepare", () => sql.prepare("tx1")],
     ["savepoint", () => sql.savepoint(() => Promise.resolve(undefined))],
     ["a custom type helper", () => sql.types.shout("hello")],
     ["the typed alias of the same helper", () => sql.typed.shout("hello")],
@@ -617,6 +706,37 @@ Deno.test("a nested begin that throws rolls back to the savepoint and leaves the
   ])
 })
 
+Deno.test("the fake transaction handle carries the driver's own keys and no others", () => {
+  // The fake is the shape a contributor reads to learn the driver's surface. It used to
+  // offer `begin` and `reserve` on the transaction handle, with a comment saying the
+  // driver does too, and that put two call forms nobody can write into the list of
+  // refusals `services.ts` documents (#115).
+  const fake = createFakeSql()
+
+  assertEquals(
+    [...Reflect.ownKeys(fake.handle)].map(String).sort(),
+    [
+      ...TRANSACTION_HANDLE_KEYS,
+    ].sort(),
+  )
+
+  for (const clientOnly of ["begin", "reserve", "listen", "end"]) {
+    assertStrictEquals(
+      clientOnly in fake.handle,
+      false,
+      `the transaction handle must not carry ${clientOnly}`,
+    )
+    assertStrictEquals(
+      typeof (fake.sql as unknown as Record<string, unknown>)[clientOnly],
+      "function",
+      `the client must carry ${clientOnly}`,
+    )
+  }
+
+  // The client and the handle are two objects, as they are in the driver.
+  assertStrictEquals(fake.sql as unknown === fake.handle, false)
+})
+
 Deno.test("a clone kept past begin refuses every later statement", async () => {
   // The clone is the one handle on the connection the transaction ran on. A service that
   // stores it — `this.db = tx` — keeps that handle for the rest of the process, and a
@@ -689,9 +809,14 @@ Deno.test("reads off the clone's executor never give back the fake's own functio
   assertEquals(walk.refused, [], "a read refused while the clone was live")
 
   // Everything the raw fake owns, minus what any function at all can reach: the fake's own
-  // tag, `unsafe`, `file`, `reserve`, `json`, `begin`, `savepoint`, the type helpers and
-  // every object hanging off them.
-  const driverOwned = ownedBy(fake.sql)
+  // tags, `unsafe`, `file`, `json`, `array`, `notify`, `savepoint`, `prepare`, the type
+  // helpers and every object hanging off them.
+  //
+  // Both roots, and that is not tidiness. The client and the transaction handle are two
+  // separate function objects, as they are in the driver, so a set built from `fake.sql`
+  // alone holds none of the functions that send a statement on *this* transaction — and a
+  // leak of one of those is exactly what this test is for.
+  const driverOwned = ownedBy(fake.sql, fake.handle)
   assertStrictEquals(driverOwned.size > 0, true, "the fake owns nothing, so this proves nothing")
 
   const leaked = [...walk.values].filter((value) => driverOwned.has(value))
@@ -748,7 +873,7 @@ Deno.test("a getter planted on a live clone runs with the wrapper as this, not t
 
   // Not the driver's handle, and not something that still works after the scope: the
   // receiver is this scope's wrapper, so every call through it is checked like any other.
-  assertStrictEquals(receiver === fake.sql, false, "the getter received the raw handle")
+  assertStrictEquals(receiver === fake.handle, false, "the getter received the raw handle")
   assertExists(kept)
   assertStrictEquals(receiver, kept!.executor())
   assertThrows(
@@ -764,7 +889,8 @@ Deno.test("a property the engine will not let the wrapper stand in for is refuse
   // terms. No property of a driver function is shaped that way — `length` and `name` are
   // configurable, `prototype` is writable — so this builds one to pin what happens.
   const fake = createFakeSql()
-  Object.defineProperty(fake.sql, "frozenHelper", {
+  // On the transaction handle, because that is what the clone's executor wraps.
+  Object.defineProperty(fake.handle, "frozenHelper", {
     value: (): string => "the driver's own function",
     writable: false,
     enumerable: false,

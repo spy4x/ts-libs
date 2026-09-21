@@ -168,7 +168,53 @@ async function withSchema(
   }
 }
 
+/**
+ * The own keys of a `postgres@3.4.7` transaction handle.
+ *
+ * The same list is written down in `services.test.ts`, where the fake has to match it.
+ * Keeping it in both files is deliberate: this one is measured against the driver, so a
+ * driver upgrade that changes the shape fails here, and the fake's copy is then a comment
+ * that no longer matches a test somebody has to look at (#115).
+ */
+const TRANSACTION_HANDLE_KEYS: string[] = [
+  "array",
+  "file",
+  "json",
+  "length",
+  "name",
+  "notify",
+  "prepare",
+  "prototype",
+  "savepoint",
+  "types",
+  "typed",
+  "unsafe",
+]
+
 describe("DbServiceBase against a real server", () => {
+  it("gives a transaction callback a handle with no begin, reserve or listen", async () => {
+    // What `services.test.ts`'s fake has to copy. `postgres` assigns `begin`, `reserve`
+    // and `listen` to the root client alone (`src/index.js:69-82`), and `scope` builds the
+    // handle with `Sql(handler)` plus `savepoint` and `prepare` (`src/index.js:251-254`).
+    // The fake used to offer `begin` and `reserve` here, which is how two call forms
+    // nobody can write reached the documentation (#115).
+    await withSchema({ max: 1 }, async (sql) => {
+      let keys: string[] = []
+      let callable: string[] = []
+      await sql.begin((tx) => {
+        const handle = tx as unknown as Record<string, unknown>
+        keys = [...Reflect.ownKeys(tx as unknown as object)].map(String).sort()
+        callable = ["begin", "reserve", "listen"].filter(
+          (name) => typeof handle[name] === "function",
+        )
+        return Promise.resolve()
+      })
+
+      assertEquals(keys, [...TRANSACTION_HANDLE_KEYS].sort())
+      assertEquals(callable, [], "the driver's transaction handle grew a client-only method")
+    })
+  })
+
   it("rolls a nested begin back together with the transaction it sits inside", async () => {
     await withSchema({}, async (sql, schema) => {
       const service = new NoteService({ sql })
