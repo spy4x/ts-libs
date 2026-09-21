@@ -895,10 +895,22 @@ function parseHeaders(block: string): string[] {
  * reaches the instances the signer signed. Every other name — `From` above all —
  * keeps the refusal.
  *
- * What makes a name safe to put here is that a mail client does not show it as
- * part of the message: these are the audit trail of the delivery path, which the
- * receiving domain re-derives for itself. An entry ending in `-*` matches every
- * name that starts with it.
+ * What makes a name belong here is that a later hop prepends it by design, so a
+ * message that arrives with one more of it than the signer signed is ordinary
+ * mail rather than a forgery. It is not that a person never sees these fields:
+ * `Resent-From` is on the list and some mail clients display it as the sender. It
+ * is on the list because a redirect prepends a fresh `Resent-*` block exactly the
+ * way a relay prepends a `Received:` field, and a verifier that implements RFC
+ * 6376 and nothing more accepts that message too, having no growth check at all.
+ *
+ * A signer who wants one of these names protected has the remedy RFC 6376 §5.4
+ * gives for exactly this: list the name in `h=` once more than the message
+ * carries it. That oversigned instance is still paired and still hashed, so a
+ * message that gained a field of that name fails the signature — the exemption
+ * only stops the *growth check* from refusing the message, it never removes bytes
+ * from the hash.
+ *
+ * An entry ending in `-*` matches every name that starts with it.
  */
 export const TRANSIT_ADDED_HEADER_NAMES: readonly string[] = [
   "received",

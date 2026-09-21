@@ -2643,6 +2643,24 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
     assertEquals(result.reason, "unsigned additional instances of a signed header: from")
   })
 
+  it("still rejects a gained Resent-From: when the signer oversigned it", async () => {
+    // The remedy the documentation points a signer at, pinned: listing a name in
+    // h= once more than the message carries it keeps the added instance inside the
+    // hash, so the exemption stops the growth check from refusing the message but
+    // never removes bytes from what is hashed. This is what makes `resent-*` safe
+    // to exempt although some clients display `Resent-From:`.
+    const headers = ["Resent-From: agent@example.net", ...TEST_HEADERS]
+    const { raw, publicKey } = await sign(headers, BODY, {
+      names: ["resent-from", "resent-from", "from", "to", "subject"],
+    })
+    assert((await verifyDkim(raw, publicKey)).valid)
+
+    const attacked = `Resent-From: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "signature did not verify against public key")
+  })
+
   it("still rejects an added instance of a name the list does not carry", async () => {
     const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
     const attacked = `Subject: a subject the signer never saw\r\n${raw}`

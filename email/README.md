@@ -464,10 +464,18 @@ which propagates the resolver's rejection instead of reporting it.
   covering `Received` broke the moment the mail was forwarded. The names in
   `TRANSIT_ADDED_HEADER_NAMES` — `received`, `x-received`, `return-path`,
   `delivered-to`, `authentication-results`, `resent-*` and `arc-*` — are therefore
-  exempt, and no others. What makes a name safe to put there is that a mail client
-  does not show it as part of the message: these are the delivery audit trail,
-  which the receiving domain re-derives for itself, rather than anything a person
-  reads as the message. The exemption does not change which bytes are hashed: §5.4.2
+  exempt, and no others. What makes a name belong there is that a later hop
+  prepends it by design, so a message that carries one more of it than the signer
+  signed is ordinary mail and not a forgery. It is **not** that a person never sees
+  these fields — `Resent-From` is on the list and some mail clients display it as
+  the sender. It is there because a redirect prepends a fresh `Resent-*` block
+  exactly the way a relay prepends a `Received:` field, and a verifier that
+  implements RFC 6376 and nothing more accepts that message as well, having no
+  growth check at all. A signer who wants one of these names protected has the
+  remedy §5.4 gives for it: list the name in `h=` once more than the message
+  carries it. The oversigned instance is still hashed, so a message that gained a
+  field of that name fails the signature. The exemption does not change which
+  bytes are hashed: §5.4.2
   pairs `h=` with the message from the bottom up and a relay prepends, so the
   instances selected are still the ones the signer signed, and altering a signed
   `Received:` still fails the signature. The list is exported so the choice is
