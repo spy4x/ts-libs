@@ -2951,9 +2951,9 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
   // no test either. Stopping `isHeaderNamePadding` from treating a plain
   // space, then a plain tab, as padding left the whole `email/` suite green
   // while `From : ceo@bank.example` or `From<TAB>: ceo@bank.example`
-  // verified — and `From :` (obsolete FWS before the colon) is valid syntax
-  // every mail program reads as `From`, so it is the first line an attacker
-  // would try.
+  // verified — and `From :` is obsolete syntax RFC 5322 allows
+  // (`obs-from = "From" *WSP ":"`) that every mail program reads as `From`,
+  // so it is the first line an attacker would try.
   for (
     const [label, padding] of [
       ["a space", " "],
@@ -2977,15 +2977,15 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
     })
   }
 
-  // The shape that matters most: a genuine RFC 5322 fold before the field's
-  // own colon, not the lone-CR forgery wave 3 already closed. `From<CRLF>
-  // <TAB>: ...` is a *uniform* CRLF block, so `refuseHeaderLineEndings`
-  // accepts it — this is ordinary folding syntax, and `parseHeaders` joins it
-  // into one field whose name, read up to the first colon, is
-  // `From<CRLF><TAB>`. It verified at this pull request's round 1 head and is
-  // refused on `main`, which made it a second regression round 1 missed:
-  // trimming CR and LF out of the name (not the line-ending refusal) is what
-  // lets the comparison still read the joined line as `From`.
+  // The shape that matters most: not the lone-CR forgery wave 3 already
+  // closed, but the CRLF a reader that unfolds first turns into the obsolete
+  // `From *WSP ":"` form RFC 5322 does allow. `From<CRLF><TAB>: ...` is a
+  // *uniform* CRLF block, so `refuseHeaderLineEndings` accepts it, and
+  // `parseHeaders` joins it into one field whose name, read up to the first
+  // colon, is `From<CRLF><TAB>`. It verified at this pull request's round 1
+  // head and is refused on `main`, which made it a second regression round 1
+  // missed: trimming CR and LF out of the name (not the line-ending refusal)
+  // is what lets the comparison still read the joined line as `From`.
   it("still rejects a From: whose name is folded before its colon (string)", async () => {
     const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
     const attacked = `From\r\n\t: ceo@bank.example\r\n${raw}`
@@ -3165,5 +3165,90 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
     const result = await verifyDkim(attacked, publicKey)
     assertEquals(result.valid, false)
     assertEquals(result.reason, "unsigned additional instances of a signed header: subject")
+  })
+})
+
+// Issue #113: the inside-the-name half of #106. #106 widened `trimHeaderName`
+// to strip every octet outside printable ASCII (0x21-0x7E) from a name's two
+// *ends*; a byte placed *inside* a name still slipped through, on main and
+// here alike, because the growth guard bucketed a header purely by its exact
+// end-trimmed name and never noticed that a bucket it never asked about could
+// still read, to a lenient mail program, as a name it did ask about.
+// `looseHeaderNameReadings` closes that: it reads a name two further ways --
+// with every such byte stripped out wherever it sits, and cut at the first
+// one -- and the growth guard now treats a match on either reading as an
+// instance of the name it disguises as.
+//
+// Every non-ASCII or control character below is built with
+// `String.fromCodePoint`, matching this file's existing convention for the
+// same reason: several of these are invisible or easy to mistake for
+// something else in an editor or a diff.
+describe("a disguised byte inside a header name (issue #113)", () => {
+  const BODY = "This is a test.\r\n"
+  const SOFT_HYPHEN = String.fromCodePoint(0x00ad)
+  const ZERO_WIDTH_SPACE = String.fromCodePoint(0x200b)
+  const NUL = String.fromCodePoint(0x0000)
+
+  // The four shapes issue #113 lists as its reproduction. The first three are
+  // caught because stripping the stray byte out of the name, wherever it
+  // sits, leaves exactly "From"; the fourth is not caught by stripping alone
+  // (that leaves "Fromx") and needs the second reading -- the name cut at the
+  // first stray byte -- which leaves "From" too. Neither test would fail if
+  // `looseHeaderNameReadings` returned only one of its two readings, which is
+  // why both are exercised rather than just one representative shape.
+  const INSIDE_NAME_SHAPES = [
+    ["a soft hyphen inside the name (Fr<U+00AD>om)", `Fr${SOFT_HYPHEN}om`],
+    ["a zero-width space inside the name (F<U+200B>rom)", `F${ZERO_WIDTH_SPACE}rom`],
+    ["a NUL inside the name (Fr<NUL>om)", `Fr${NUL}om`],
+    ["a NUL followed by another letter (From<NUL>x)", `From${NUL}x`],
+  ] as const
+
+  for (const [label, forgedName] of INSIDE_NAME_SHAPES) {
+    it(`still rejects a From: with ${label} (string)`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = `${forgedName}: ceo@bank.example\r\n${raw}`
+      const result = await verifyDkim(attacked, publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+    })
+
+    it(`still rejects a From: with ${label} (bytes)`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      const attacked = `${forgedName}: ceo@bank.example\r\n${raw}`
+      const result = await verifyDkim(new TextEncoder().encode(attacked), publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+    })
+  }
+
+  // The Done-when box asks that the rule hold for a second Subject too, not
+  // only for From. The guard has one code path for every asked-for name, so
+  // one shape is enough to show it is not From-specific; the loop above
+  // already runs the full shape list against From.
+  it("still rejects a Subject: with a soft hyphen inside the name (string)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `Su${SOFT_HYPHEN}bject: a subject the signer never saw\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: subject")
+  })
+
+  it("still rejects a Subject: with a soft hyphen inside the name (bytes)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `Su${SOFT_HYPHEN}bject: a subject the signer never saw\r\n${raw}`
+    const result = await verifyDkim(new TextEncoder().encode(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: subject")
+  })
+
+  it("still verifies mail with an unrelated unsigned field whose name carries a disguised byte", async () => {
+    // Option A from the issue: the loose readings only ever add an instance of
+    // a name h= actually names. "X-Custom-Info" is not in h= below (h= is
+    // still just from:to:subject, as `sign()` defaults to), so a byte disguised
+    // inside *its* name matches no asked-for name and changes nothing.
+    const headers = [`X-Custom${SOFT_HYPHEN}Info: anything`, ...TEST_HEADERS]
+    const { raw, publicKey } = await sign(headers, BODY)
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
   })
 })
