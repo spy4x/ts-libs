@@ -668,11 +668,13 @@ Deno.test("every call form through a kept clone is refused, not only the ones we
   assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
 })
 
-Deno.test("nothing the clone's executor hands out is the driver's own function or object", async () => {
-  // The closure proof, and the reason it is a walk rather than a list: round 3 of the
-  // review found `sql.prototype.constructor`, which no list of call forms had, because
-  // every ordinary function carries a `prototype` object whose `constructor` is the
-  // function itself. A list can only ever cover the routes somebody thought of.
+Deno.test("reads off the clone's executor never give back the fake's own function or object", async () => {
+  // A regression test over the property graph, and the reason it is a walk rather than a
+  // list: round 3 of the review found `sql.prototype.constructor`, which no list of call
+  // forms had, because every ordinary function carries a `prototype` object whose
+  // `constructor` is the function itself. A list can only ever cover the routes somebody
+  // thought of. It covers *reads* only; what a call returns is left as the driver built
+  // it on purpose, and the route that opens is listed on `PostgresScopeEndedError`.
   const fake = createFakeSql()
   const service = new TestService({ sql: fake.sql })
 
@@ -696,7 +698,7 @@ Deno.test("nothing the clone's executor hands out is the driver's own function o
   assertEquals(
     leaked.map((value) => (typeof value === "function" ? value.name || "anonymous" : "object")),
     [],
-    "the wrapper handed out something the fake owns",
+    "a read off the handle gave back something the fake owns",
   )
 })
 

@@ -23,6 +23,15 @@
  * call — waits for a connection that can never be free, and a Deno test has no timeout
  * of its own, so it would hang the tier instead of failing an assertion.
  *
+ * **What the kept-clone tests here cover, and what they do not.** They cover the guard's
+ * promise: every call form a person would write through a clone kept past `begin()` or a
+ * nested `begin()` is refused, and so is anything read off the handle at any depth. They do
+ * not cover code that goes looking for the driver's internals; `services.ts` lists the
+ * three known routes that remain, all tracked in #108, and the most reachable of them —
+ * the transaction's execute function carried on a value a call *returned* — is a
+ * consequence of leaving return values as the driver built them, which the return-value
+ * test below is there to keep.
+ *
  * Isolation: every test creates its own schema from a random suffix and drops it in a
  * `finally`. Nothing shared is touched.
  */

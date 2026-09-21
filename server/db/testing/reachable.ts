@@ -4,13 +4,19 @@
  * This file is a **test helper**, not part of the package's public surface. It sits in
  * `server/db/testing/`, which `deno.jsonc`'s `publish.exclude` keeps out of the package.
  *
- * The clone's executor in `services.ts` is a `Proxy` whose job is to be *closed*: nothing
- * read through it may be the driver's own function or object, however many property reads
- * away it is. A test that lists the routes somebody thought of cannot show that — round 3
+ * The clone's executor in `services.ts` is a `Proxy`, and one rule it has to keep is that
+ * nothing *read* off it is the driver's own function or object, however many property
+ * reads away. A test that lists the routes somebody thought of cannot check that — round 3
  * of the review found `sql.prototype.constructor`, which no list had, because every
  * ordinary function carries a `prototype` object and that object's `constructor` is the
  * function itself. So the test walks instead of listing: it collects everything reachable
- * and asks whether any of it is a value the driver owns.
+ * by reading and asks whether any of it is a value the driver owns.
+ *
+ * **This is a regression test, not a proof about the wrapper.** It covers reads. It says
+ * nothing about what a call *returns*, and returned values are deliberately left as the
+ * driver built them so that fragments and parameters passed back into a query are still
+ * recognised — which is how the driver's execute function stays reachable on a returned
+ * query object. That route, and the two others, are listed on `PostgresScopeEndedError`.
  *
  * What the walk follows, from every object and every function it meets:
  *

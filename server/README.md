@@ -684,19 +684,33 @@ transaction's rollback. The Postgres refusal is thrown rather than rejected, bec
 on the executor, which the driver also calls synchronously (`sql(table)`); a method declared `async`
 turns it into the rejection its caller expects.
 
-The Postgres clone's executor is a `Proxy`, and everything it hands out on a _read_ is itself a
-wrapper — functions and objects alike, recursively. That is what makes the refusal closed rather
-than a list of the spellings somebody thought of: there is no path of property reads, however long,
-that arrives at the driver's own handle. `prototype.constructor` was the route that showed why the
-list is not enough, since every ordinary function carries a `prototype` object whose `constructor`
-is that function. What a _call_ returns is handed back untouched, because the driver recognises a
-fragment, a `json` or `array` value or a query object by its class, and a wrapper would not be one.
+**What the Postgres guard promises.** A clone kept past `begin()` or past a nested `begin()` refuses,
+with `PostgresScopeEndedError`, every call form a person would write through it: the tagged template,
+the `sql(...)` helper forms, `unsafe`, `file`, `json`, `array`, `types` and `typed`, `begin`,
+`savepoint`, `reserve`, `new`, and anything read off the handle at any depth. The executor is a
+`Proxy` and everything it hands out on a _read_ is itself a wrapper — functions and objects alike,
+recursively — which is why the refusal covers helpers nobody listed. `prototype.constructor` was the
+spelling that showed why a list is not enough, since every ordinary function carries a `prototype`
+object whose `constructor` is that function. What a _call_ returns is handed back untouched, because
+the driver recognises a fragment, a `json` or `array` value or a query object by its class, and a
+wrapper would not be one.
 
-Two routes stay open and were open before this check existed, and both are ones that do not go
-through the executor at the moment of the write: a query _built_ inside the callback and awaited
-afterwards, and a raw handle taken straight from `this.sql.savepoint(...)`, which the driver hands
-to the callback rather than the wrapper handing it out. Both still write into a later transaction
-and lose the row; they are tracked in #108.
+**It is a guard against a mistake, not a security boundary.** The mistake is the one #96 describes: a
+service stores the clone (`this.db = tx`) and writes through it after the transaction has returned.
+Code that goes looking for the driver's internals is not making that mistake and could in any case
+import `postgres` and open a connection of its own.
+
+Three known routes remain, all of them writing into a later transaction and losing the row, and all
+three present before this check existed. They are tracked in #108:
+
+1. a query _built_ inside the callback and awaited after it — the call that built it happened while
+   the clone was live;
+2. a raw handle taken from `this.sql.savepoint(...)`'s callback — the driver hands that over itself,
+   so it never passed through the wrapper;
+3. the driver's own internals carried on a value a call _returned_, for example
+   `new q.constructor(…, q.handler, …)`, since every query object holds the transaction's execute
+   function. Return values are deliberately not wrapped, so this one cannot be closed by wrapping
+   reads.
 
 `SqliteDb.close()` goes through the same gate: it waits for an open transaction rather than closing
 the connection under it, and a scoped handle cannot close a connection it never owned. Two `close()`

@@ -38,6 +38,17 @@
  * cannot leave a cache holding a row the database never stored; and a failed cache
  * write is logged, never thrown, because a cache that rejected a write must not
  * fail a query that already committed.
+ *
+ * **What the transaction clone's guard promises**, and it is worth stating once here
+ * because several comments below depend on it. A clone kept past `begin()` or past a
+ * nested `begin()` refuses, with {@link PostgresScopeEndedError}, every call form a person
+ * would write through it — the tagged template, the `sql(...)` helper forms, `unsafe`,
+ * `file`, `json`, `array`, `types` and `typed`, `begin`, `savepoint`, `reserve`, `new`,
+ * and anything read off the handle at any depth. It is a guard against the mistake issue
+ * #96 describes, a service that stores the clone and writes through it later, and **not a
+ * security boundary**: code that deliberately reaches into the driver's internals is not
+ * making that mistake, and could in any case import `postgres` and open a connection of
+ * its own. Three known routes remain and are listed on {@link PostgresScopeEndedError}.
  */
 
 import type postgres from "postgres"
@@ -62,15 +73,24 @@ import type { RowCache, Sql, Transaction } from "./ports.ts"
  * that awaits its query, turns the throw into the rejection its caller expects; a method
  * that returns the tagged template unawaited sees it one tick earlier, as a throw.
  *
- * **Two routes are still open, and both were open before this check existed.** They are
- * the two that do not go through the clone's executor at the moment of the write. A query
- * *built* inside the callback and awaited afterwards runs when it is awaited, and the call
- * that built it happened while the clone was live, so nothing here sees it. A raw handle
- * taken straight from `this.sql.savepoint(...)` is the driver's own object, handed to the
- * callback by the driver rather than read out of the wrapper, so it was never wrapped.
- * Both still write into a later transaction and lose the row. They are tracked in #108.
- * Every route that *is* a read or a call through the clone's executor is closed; a graph
- * walk in `services.test.ts` is what keeps that claim honest.
+ * **Three known routes remain.** None of them is a call form a person would write, and all
+ * three were there before this check existed:
+ *
+ *  1. a query *built* inside the callback and awaited afterwards. It runs when it is
+ *     awaited, and the call that built it happened while the clone was live, so nothing
+ *     here sees it — #108;
+ *  2. a raw handle taken straight from `this.sql.savepoint(...)`. The driver hands that to
+ *     the callback itself, so it never passed through the wrapper — #108;
+ *  3. the driver's own internals carried on a value a call *returned*. Every query object
+ *     `postgres` builds holds the transaction's execute function as `q.handler`, so
+ *     `new q.constructor(…, q.handler, …)` sends a statement on that connection. Return
+ *     values are deliberately not wrapped — the driver recognises a fragment or a
+ *     parameter passed back into a query by its class, and a wrapper is not that class —
+ *     so this one cannot be closed by wrapping reads at all. It is recorded on #108 with
+ *     the other two.
+ *
+ * All three lose the row to the next rollback after reporting success, which is why they
+ * are written down rather than left to be found again.
  */
 export class PostgresScopeEndedError extends Error {
   constructor() {
@@ -99,23 +119,24 @@ interface ScopedExecutor {
  * helpers — and a stand-in would have to list them, so a property nobody thought of
  * would quietly go around the check.
  *
- * **Four traps.** Two of them are where a statement can actually be run — calling the
- * handle (`` sql`…` `` and `sql(identifier)`) and constructing through it
- * (`new sql.unsafe(…)`, `Reflect.construct(…)`) — and the other two are the two ways to
- * *read* something out of it: {@link ProxyHandler.get} and
- * {@link ProxyHandler.getOwnPropertyDescriptor}. Each of the four was added after a
- * measured route past the previous set wrote a row into a later transaction and lost it to
- * that transaction's rollback, reporting success on the way out.
+ * **Four traps.** Two of them are where a statement is run — calling the handle
+ * (`` sql`…` `` and `sql(identifier)`) and constructing through it (`new sql.unsafe(…)`,
+ * `Reflect.construct(…)`) — and the other two are the two ways to *read* something out of
+ * it: {@link ProxyHandler.get} and {@link ProxyHandler.getOwnPropertyDescriptor}. Each of
+ * the four was added after a measured route past the previous set wrote a row into a later
+ * transaction and lost it to that transaction's rollback, reporting success on the way out.
  *
- * The two read traps are what make the set closed rather than a list of the routes
- * somebody thought of: everything they hand back is wrapped, so a path of reads cannot
- * arrive at the driver however long it is. The remaining traps cannot hand the driver out
- * at all: `has` and `ownKeys` answer with names, `getPrototypeOf` answers an intrinsic
- * (`Function.prototype`, or `AsyncFunction.prototype` for the driver's one `async`
- * helper), and `set`, `defineProperty` and `deleteProperty` change the handle rather than
- * reading from it and can execute no statement. A test walks the whole graph — own keys
- * including symbols, descriptors, the prototype chain, `prototype` and `constructor` — and
- * fails if any of the driver's own functions is reachable unwrapped.
+ * The two read traps are what let the guard cover every call form a person would write
+ * rather than a list of spellings: everything they hand back is wrapped, at any depth, so
+ * a helper read off the handle is refused exactly as the handle itself is. The remaining
+ * traps do not hand the driver out: `has` and `ownKeys` answer with names,
+ * `getPrototypeOf` answers an intrinsic (`Function.prototype`, or `AsyncFunction.prototype`
+ * for the driver's one `async` helper), and `set`, `defineProperty` and `deleteProperty`
+ * change the handle rather than reading from it and can execute no statement. A regression
+ * test in each tier walks the whole property graph — own keys including symbols,
+ * descriptors, the prototype chain, `prototype` and `constructor` — and fails if a *read*
+ * gives back a value the driver owns. It says nothing about what a call **returns**, which
+ * is route 3 on {@link PostgresScopeEndedError}.
  *
  * **Construction is refused outright, live as well as retired.** `postgres` exposes no
  * constructor: `new sql.unsafe(…)` "works" only because any plain function can be
@@ -135,7 +156,8 @@ interface ScopedExecutor {
  * `sql.prototype.constructor` was the driver's own handle. Each function *and* each object
  * is now wrapped in a `Proxy` of its own, recursively, so properties survive and every
  * call through any of them is still refused once the scope has ended. One handler serves
- * the root and every nested wrapper, so a route closed here is closed everywhere.
+ * the root and every nested wrapper, so a rule written here holds at every depth of a
+ * read.
  *
  * Wrappers are remembered per value, so reading the same property twice gives the same
  * function and an identity comparison still holds.
@@ -228,9 +250,9 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
    * `Function.prototype` and the like are non-configurable and non-writable on their
    * constructors, and a long enough walk of `constructor` and `prototype` reaches them.
    * Those are intrinsics shared by the whole program, not the driver, and nothing the
-   * driver owns hangs off them, so handing one over costs nothing. The value is therefore
-   * handed over while the scope is live — which is what the caller would have had anyway —
-   * and the read is refused once the scope has ended.
+   * driver owns hangs off them, which the graph-walk tests check rather than assume. The
+   * value is therefore handed over while the scope is live — which is what the caller would
+   * have had anyway — and the read is refused once the scope has ended.
    */
   function unsubstitutable(target: object, property: string | symbol): boolean {
     const own = Reflect.getOwnPropertyDescriptor(target, property)
@@ -245,9 +267,9 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
    * object whose `constructor` is that function itself. Wrapping functions alone handed
    * that object over untouched, so `sql.prototype.constructor` was the driver's own handle
    * and a write through it after the transaction had ended reported success and went with
-   * the next rollback. Wrapping objects too makes the rule closed rather than partial:
-   * everything read through a wrapper is a wrapper or a primitive, so there is no path of
-   * property reads, however long, that arrives at the driver.
+   * the next rollback. With objects wrapped too the rule holds for reads at any depth:
+   * everything *read* through a wrapper is a wrapper or a primitive, so a helper found by
+   * following properties is refused exactly as the handle itself is.
    *
    * **A value *returned by a call* is not wrapped**, and must not be. The driver
    * recognises what it is handed back by class — a fragment, a `Parameter` from
@@ -255,7 +277,9 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
    * template — and a wrapper would not be that class. Returned promises and query objects
    * therefore stay exactly what the driver built, awaitable and with `values`, `simple`,
    * `cursor`, `forEach` and `describe` intact. That is why the `apply` trap hands the
-   * result straight back.
+   * result straight back, and it is also why a query object carries the transaction's own
+   * execute function within reach — route 3 on {@link PostgresScopeEndedError}, which this
+   * design accepts rather than closes.
    */
   function guard(value: unknown): unknown {
     if (typeof value !== "function" && (typeof value !== "object" || value === null)) {
@@ -389,14 +413,16 @@ export class DbServiceBase {
    * is the failure this deferral exists to prevent.
    *
    * **The clone stops working when the transaction returns**, on the rollback path as
-   * well as the commit path, and every statement through it afterwards throws
+   * well as the commit path. Every call form a person would write through it afterwards —
+   * a query, a helper, a helper read off a helper — throws
    * {@link PostgresScopeEndedError}. A service that stores it — `this.db = tx` — would
    * otherwise keep writing through the connection that transaction ran on, into whatever
    * transaction that connection is running next, and the row would disappear with that
-   * transaction's rollback after the write had reported success. That error is **thrown**
-   * rather than rejected, so a caller that chains `.catch(...)` on an unawaited query
-   * will not see it; see {@link PostgresScopeEndedError} for why, and for the two routes
-   * past the check that #108 records.
+   * transaction's rollback after the write had reported success. That is the mistake this
+   * guards against; it is not a boundary against code that goes looking for the driver's
+   * internals. That error is **thrown** rather than rejected, so a caller that chains
+   * `.catch(...)` on an unawaited query will not see it; see
+   * {@link PostgresScopeEndedError} for why, and for the three known routes that remain.
    */
   async begin<T>(fn: (tx: this) => Promise<T>): Promise<T> {
     if (this.pendingCacheOperations !== null) {
