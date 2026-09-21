@@ -39,8 +39,9 @@ export class LocalStorage implements FileStorage {
    * Copy one object to a local file.
    *
    * `toPath` is the caller's destination, not an object key, so it is not
-   * constrained to the bucket — but it must be absolute and `..`-free, so a
-   * caller-supplied filename cannot redirect the write. See
+   * constrained to the bucket — a relative path is accepted and resolves
+   * against the process working directory, but a `..` segment or a NUL byte
+   * is rejected, so a caller-supplied filename cannot redirect the write. See
    * `assertDestinationPath`.
    */
   async download(bucket: string, fromPath: string, toPath: string): Promise<number> {
