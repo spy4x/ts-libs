@@ -684,9 +684,19 @@ transaction's rollback. The Postgres refusal is thrown rather than rejected, bec
 on the executor, which the driver also calls synchronously (`sql(table)`); a method declared `async`
 turns it into the rejection its caller expects.
 
-Two routes stay open and were open before this check existed: a query _built_ inside the callback
-and awaited afterwards, and a raw handle taken straight from `this.sql.savepoint(...)`. Both still
-write into a later transaction and lose the row; they are tracked in #108.
+The Postgres clone's executor is a `Proxy`, and everything it hands out on a _read_ is itself a
+wrapper — functions and objects alike, recursively. That is what makes the refusal closed rather
+than a list of the spellings somebody thought of: there is no path of property reads, however long,
+that arrives at the driver's own handle. `prototype.constructor` was the route that showed why the
+list is not enough, since every ordinary function carries a `prototype` object whose `constructor`
+is that function. What a _call_ returns is handed back untouched, because the driver recognises a
+fragment, a `json` or `array` value or a query object by its class, and a wrapper would not be one.
+
+Two routes stay open and were open before this check existed, and both are ones that do not go
+through the executor at the moment of the write: a query _built_ inside the callback and awaited
+afterwards, and a raw handle taken straight from `this.sql.savepoint(...)`, which the driver hands
+to the callback rather than the wrapper handing it out. Both still write into a later transaction
+and lose the row; they are tracked in #108.
 
 `SqliteDb.close()` goes through the same gate: it waits for an open transaction rather than closing
 the connection under it, and a scoped handle cannot close a connection it never owned. Two `close()`

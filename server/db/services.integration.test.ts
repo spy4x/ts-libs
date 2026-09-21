@@ -40,6 +40,7 @@ import { postgresSettings, requireReachable, uniqueIdentifier } from "@integrati
 import type { RowCache, Sql } from "./ports.ts"
 import { createSql } from "./postgres.ts"
 import { DbServiceBase, PostgresScopeEndedError } from "./services.ts"
+import { ownedBy, reachableFrom } from "./testing/reachable.ts"
 
 /** A note row, as the table below stores it. */
 interface Note extends Record<string, unknown> {
@@ -64,8 +65,10 @@ class NoteService extends DbServiceBase {
   }
 
   /** The executor this instance writes through — the clone's wrapper, on a clone. */
-  executor(): { unsafe(text: string): Promise<unknown> } {
-    return this.sql as unknown as { unsafe(text: string): Promise<unknown> }
+  executor(): { unsafe(text: string): Promise<unknown> } & Record<string, unknown> {
+    return this.sql as unknown as
+      & { unsafe(text: string): Promise<unknown> }
+      & Record<string, unknown>
   }
 
   /**
@@ -228,6 +231,94 @@ describe("DbServiceBase against a real server", () => {
     })
   })
 
+  it("hands out nothing of the real driver's, however far the reader walks", async () => {
+    // The closure proof against the driver itself rather than the fake. `postgres` builds
+    // its helpers as ordinary functions, so each carries a `prototype` object whose
+    // `constructor` is that helper — the route round 3 of the review found, and the one a
+    // list of call forms could never have contained. The walk follows own keys including
+    // symbols, descriptors' `value`, `get` and `set`, the prototype chain, `prototype` and
+    // `constructor`, so it finds that route without being told about it.
+    await withSchema({ max: 1 }, async (sql) => {
+      const service = new NoteService({ sql })
+
+      let walk: ReturnType<typeof reachableFrom> | undefined
+      await service.begin((tx) => {
+        walk = reachableFrom(tx.executor())
+        return Promise.resolve()
+      })
+
+      assertExists(walk)
+      assertStrictEquals(walk.truncated, false, "the walk hit its limit instead of finishing")
+      assertEquals(walk.refused, [], "a read refused while the clone was live")
+
+      // Everything the real client owns, minus everything any function at all can reach,
+      // which leaves the driver's own tag, `unsafe`, `array`, `json`, `file`, `notify`,
+      // the type helpers and the objects hanging off them.
+      const driverOwned = ownedBy(sql)
+      assertStrictEquals(
+        driverOwned.size > 0,
+        true,
+        "the driver owns nothing reachable, so this proves nothing",
+      )
+
+      const leaked = [...walk.values].filter((value) => driverOwned.has(value))
+      assertEquals(
+        leaked.map((value) => typeof value === "function" ? value.name || "anonymous" : "object"),
+        [],
+        "the wrapper handed out something the driver owns",
+      )
+    })
+  })
+
+  it("hands back what a call returns untouched, so the driver still recognises it", async () => {
+    // The other side of wrapping everything a *read* hands out. A value a *call* returns
+    // must not be wrapped: the driver recognises what it is given back by class — a
+    // fragment, a `Parameter` from `json` or `array`, an `Identifier`, a `Query` — and a
+    // wrapper would not be that class, so nested fragments would stop composing. It also
+    // has to stay a real query object, with the five methods a caller reaches for.
+    await withSchema({ max: 1 }, async (sql, schema) => {
+      const service = new NoteService({ sql })
+
+      await service.begin(async (tx) => {
+        // deno-lint-ignore no-explicit-any
+        const q = tx.executor() as any
+        await q`INSERT INTO ${q(schema)}.note (id, body) VALUES (1, 'one'), (2, 'two')`
+
+        // A fragment built by one call and spliced into another.
+        const where = q`WHERE id = ${1}`
+        const filtered = await q`SELECT id FROM ${q(schema)}.note ${where}`
+        assertEquals(filtered.map((row: { id: number }) => row.id), [1])
+
+        // The value helpers, each recognised by its class on the way back in.
+        const asJson = await q`SELECT ${q.json({ a: 1 })}::jsonb AS v`
+        assertEquals(asJson[0].v, { a: 1 })
+        const asArray = await q`SELECT ${q.array([1, 2, 3])}::int[] AS v`
+        assertEquals(asArray[0].v, [1, 2, 3])
+        const byIdentifier = await q`SELECT id FROM ${q(schema)}.${q("note")} ORDER BY id`
+        assertEquals(byIdentifier.map((row: { id: number }) => row.id), [1, 2])
+
+        // And the query object keeps its own methods.
+        // `values()` answers with a `Result`, an `Array` subclass, and `assertEquals`
+        // compares prototypes — so the rows are mapped out, as `ids` above does.
+        const asValues = await q`SELECT id FROM ${q(schema)}.note ORDER BY id`.values()
+        assertEquals(asValues.map((row: number[]) => row), [[1], [2]])
+        assertStrictEquals((await q`SELECT 1 AS v`.simple())[0].v, 1)
+        const described = await q`SELECT id FROM ${q(schema)}.note`.describe()
+        assertEquals(described.columns.map((column: { name: string }) => column.name), ["id"])
+        const forEached: number[] = []
+        await q`SELECT id FROM ${q(schema)}.note ORDER BY id`.forEach((row: { id: number }) => {
+          forEached.push(row.id)
+        })
+        assertEquals(forEached, [1, 2])
+        const cursored: number[] = []
+        for await (const batch of q`SELECT id FROM ${q(schema)}.note ORDER BY id`.cursor(1)) {
+          cursored.push(batch[0].id)
+        }
+        assertEquals(cursored, [1, 2])
+      })
+    })
+  })
+
   it("refuses a kept clone reached with new, against the real driver", async () => {
     // `postgres` declares its helpers as ordinary functions, so they can be constructed,
     // and a constructor that returns an object returns that object: `new sql.unsafe(...)`
@@ -250,6 +341,37 @@ describe("DbServiceBase against a real server", () => {
           service.begin(async (tx) => {
             await tx.insert(schema, 2, "second")
             await new (executor.unsafe as unknown as new (text: string) => unknown)(statement)
+          }),
+        PostgresScopeEndedError,
+      )
+
+      assertEquals(await service.ids(schema), [1])
+    })
+  })
+
+  it("refuses a kept clone reached through prototype.constructor, against the real driver", async () => {
+    // `unsafe.prototype.constructor` is `unsafe` itself, and it used to come back
+    // unwrapped: on the round 3 head this wrote row 3, reported success, and lost it to
+    // this transaction's rollback, on all three paths.
+    await withSchema({ max: 1 }, async (sql, schema) => {
+      const service = new NoteService({ sql })
+
+      let kept: NoteService | undefined
+      await service.begin(async (tx) => {
+        kept = tx
+        await tx.insert(schema, 1, "committed")
+      })
+      assertExists(kept)
+      const executor = kept.executor() as unknown as {
+        unsafe: { prototype: { constructor: (text: string) => Promise<unknown> } }
+      }
+      const statement = `INSERT INTO "${schema}".note (id, body) VALUES (3, 'through prototype')`
+
+      await assertRejects(
+        () =>
+          service.begin(async (tx) => {
+            await tx.insert(schema, 2, "second")
+            await executor.unsafe.prototype.constructor(statement)
           }),
         PostgresScopeEndedError,
       )

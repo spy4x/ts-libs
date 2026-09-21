@@ -62,12 +62,15 @@ import type { RowCache, Sql, Transaction } from "./ports.ts"
  * that awaits its query, turns the throw into the rejection its caller expects; a method
  * that returns the tagged template unawaited sees it one tick earlier, as a throw.
  *
- * **Two routes are still open, and they are open on the version before this check too.**
- * A query *built* inside the callback and awaited afterwards runs when it is awaited,
- * and the call that built it happened while the clone was live, so nothing here sees it.
- * The same goes for a raw handle taken straight from `this.sql.savepoint(...)`, which is
- * the driver's own object rather than the clone's. Both still write into a later
- * transaction and lose the row. They are tracked in #108.
+ * **Two routes are still open, and both were open before this check existed.** They are
+ * the two that do not go through the clone's executor at the moment of the write. A query
+ * *built* inside the callback and awaited afterwards runs when it is awaited, and the call
+ * that built it happened while the clone was live, so nothing here sees it. A raw handle
+ * taken straight from `this.sql.savepoint(...)` is the driver's own object, handed to the
+ * callback by the driver rather than read out of the wrapper, so it was never wrapped.
+ * Both still write into a later transaction and lose the row. They are tracked in #108.
+ * Every route that *is* a read or a call through the clone's executor is closed; a graph
+ * walk in `services.test.ts` is what keeps that claim honest.
  */
 export class PostgresScopeEndedError extends Error {
   constructor() {
@@ -96,16 +99,23 @@ interface ScopedExecutor {
  * helpers — and a stand-in would have to list them, so a property nobody thought of
  * would quietly go around the check.
  *
- * **Four traps, because there are four ways to reach the driver through the handle**:
- * calling it (`` sql`…` `` and `sql(identifier)`), calling something on it
- * (`sql.savepoint(…)`, `sql.unsafe(…)`), constructing through it
- * (`new sql.unsafe(…)`, `Reflect.construct(…)`) and reading a property *descriptor* off
- * it (`Object.getOwnPropertyDescriptor(sql, "unsafe").value(…)`). An earlier version had
- * the first two, and each of the other two wrote a row after the transaction had ended
- * and lost it to the next rollback, reporting success on the way out. The remaining traps
- * cannot hand out the driver: `has` and `ownKeys` answer with names, `getPrototypeOf`
- * answers `Function.prototype`, and `set`, `defineProperty` and `deleteProperty` change
- * the handle rather than reading from it and can execute no statement.
+ * **Four traps.** Two of them are where a statement can actually be run — calling the
+ * handle (`` sql`…` `` and `sql(identifier)`) and constructing through it
+ * (`new sql.unsafe(…)`, `Reflect.construct(…)`) — and the other two are the two ways to
+ * *read* something out of it: {@link ProxyHandler.get} and
+ * {@link ProxyHandler.getOwnPropertyDescriptor}. Each of the four was added after a
+ * measured route past the previous set wrote a row into a later transaction and lost it to
+ * that transaction's rollback, reporting success on the way out.
+ *
+ * The two read traps are what make the set closed rather than a list of the routes
+ * somebody thought of: everything they hand back is wrapped, so a path of reads cannot
+ * arrive at the driver however long it is. The remaining traps cannot hand the driver out
+ * at all: `has` and `ownKeys` answer with names, `getPrototypeOf` answers an intrinsic
+ * (`Function.prototype`, or `AsyncFunction.prototype` for the driver's one `async`
+ * helper), and `set`, `defineProperty` and `deleteProperty` change the handle rather than
+ * reading from it and can execute no statement. A test walks the whole graph — own keys
+ * including symbols, descriptors, the prototype chain, `prototype` and `constructor` — and
+ * fails if any of the driver's own functions is reachable unwrapped.
  *
  * **Construction is refused outright, live as well as retired.** `postgres` exposes no
  * constructor: `new sql.unsafe(…)` "works" only because any plain function can be
@@ -115,12 +125,15 @@ interface ScopedExecutor {
  * {@link PostgresScopeEndedError} while the refusal before it is a `TypeError` naming the
  * rule.
  *
- * **A function reached through the handle is wrapped, not replaced.** An earlier version
- * of this returned a plain arrow function for every function-valued property, and that
+ * **A function or object reached through the handle is wrapped, not replaced.** An earlier
+ * version returned a plain arrow function for every function-valued property, and that
  * threw away the properties the function carried: the driver hangs a caller's custom type
  * helpers on `sql.types` and `sql.typed`, which are themselves functions, so
- * `sql.types.myType(value)` became a `TypeError` inside a transaction. Each function is
- * now wrapped in a `Proxy` of its own, recursively, so its properties survive and every
+ * `sql.types.myType(value)` became a `TypeError` inside a transaction. A later one wrapped
+ * functions but handed objects over as they were, and every ordinary function carries a
+ * `prototype` object whose `constructor` is that function itself, so
+ * `sql.prototype.constructor` was the driver's own handle. Each function *and* each object
+ * is now wrapped in a `Proxy` of its own, recursively, so properties survive and every
  * call through any of them is still refused once the scope has ended. One handler serves
  * the root and every nested wrapper, so a route closed here is closed everywhere.
  *
@@ -191,21 +204,47 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
    *
    * A non-configurable own property that is not a writable data property has to be read
    * back, and reported, as the target's own value; a proxy that answers with anything else
-   * gets a `TypeError` from the engine rather than refusing on its own terms. No property
-   * of a driver function is shaped that way — `length` and `name` are configurable and
-   * `prototype` is writable — so this is the shape the wrapper cannot serve rather than
-   * one it meets. Where it does occur the value is handed over while the scope is live,
-   * which is what the caller would have had anyway, and the read is refused once the scope
-   * has ended.
+   * gets a `TypeError` from the engine rather than refusing on its own terms.
+   *
+   * No property of the driver's handle or of any function it carries is shaped that way —
+   * `length` and `name` are configurable and an ordinary function's `prototype` is
+   * writable. The shape does occur out in the language's own objects: `Object.prototype`,
+   * `Function.prototype` and the like are non-configurable and non-writable on their
+   * constructors, and a long enough walk of `constructor` and `prototype` reaches them.
+   * Those are intrinsics shared by the whole program, not the driver, and nothing the
+   * driver owns hangs off them, so handing one over costs nothing. The value is therefore
+   * handed over while the scope is live — which is what the caller would have had anyway —
+   * and the read is refused once the scope has ended.
    */
   function unsubstitutable(target: object, property: string | symbol): boolean {
     const own = Reflect.getOwnPropertyDescriptor(target, property)
     return own !== undefined && own.configurable !== true && own.writable !== true
   }
 
-  /** Guard a value reached through the handle: functions are wrapped, anything else is not. */
+  /**
+   * Guard a value *read* through the handle: functions and objects are wrapped, primitives
+   * are not.
+   *
+   * Objects and not only functions, because every ordinary function carries a `prototype`
+   * object whose `constructor` is that function itself. Wrapping functions alone handed
+   * that object over untouched, so `sql.prototype.constructor` was the driver's own handle
+   * and a write through it after the transaction had ended reported success and went with
+   * the next rollback. Wrapping objects too makes the rule closed rather than partial:
+   * everything read through a wrapper is a wrapper or a primitive, so there is no path of
+   * property reads, however long, that arrives at the driver.
+   *
+   * **A value *returned by a call* is not wrapped**, and must not be. The driver
+   * recognises what it is handed back by class — a fragment, a `Parameter` from
+   * `sql.json(...)` or a custom type helper, a `PendingQuery` nested in another tagged
+   * template — and a wrapper would not be that class. Returned promises and query objects
+   * therefore stay exactly what the driver built, awaitable and with `values`, `simple`,
+   * `cursor`, `forEach` and `describe` intact. That is why the `apply` trap hands the
+   * result straight back.
+   */
   function guard(value: unknown): unknown {
-    if (typeof value !== "function") return value
+    if (typeof value !== "function" && (typeof value !== "object" || value === null)) {
+      return value
+    }
     const cached = wrappers.get(value as object)
     if (cached !== undefined) return cached
     const wrapper = new Proxy(value as (...parameters: unknown[]) => unknown, handler)

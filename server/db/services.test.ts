@@ -24,6 +24,7 @@ import {
 } from "@std/assert"
 import type { RowCache, Sql, Transaction } from "./ports.ts"
 import { DbServiceBase, PostgresScopeEndedError } from "./services.ts"
+import { ownedBy, reachableFrom } from "./testing/reachable.ts"
 
 /** Options for {@link createFakeSql}. */
 interface FakeSqlOptions {
@@ -171,7 +172,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
    * where a second `BEGIN` is visible.
    */
   const transaction = Object.assign(statement, {
-    savepoint: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> => {
+    savepoint: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
       inner.push("SAVEPOINT")
       return Promise.resolve()
         .then(() => callback(transaction as unknown as Transaction))
@@ -184,8 +185,9 @@ function createFakeSql(options: FakeSqlOptions = {}) {
           throw error
         })
     },
-    begin: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> =>
-      client.begin(callback),
+    begin: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
+      return client.begin(callback)
+    },
     // The rest of the driver's surface, as far as a caller can reach it. They are here so
     // that the `Proxy` in `services.ts` can be walked: the reason it is a `Proxy` rather
     // than a hand-written stand-in is that a property nobody listed must not become a way
@@ -212,7 +214,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
   })
 
   const client = Object.assign(asTag, {
-    begin: <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> => {
+    begin: function <T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
       topLevel.push("BEGIN")
       inTransaction = true
       return Promise.resolve()
@@ -228,7 +230,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
           throw error
         })
     },
-    end: (endOptions?: { timeout?: number }) => {
+    end: function (endOptions?: { timeout?: number }): Promise<void> {
       topLevel.push(`end(${endOptions?.timeout ?? ""})`)
       return Promise.resolve()
     },
@@ -322,6 +324,42 @@ function callForms(sql: FakeExecutor): Array<[string, () => unknown]> {
     ],
   ]
 }
+
+/**
+ * Every way the review found to reach the driver through a `prototype` object.
+ *
+ * Its own table because none of these is a call on the handle or on something read off it:
+ * each one walks to the `prototype` object every ordinary function carries and takes the
+ * `constructor` back off it, which is the function itself. All six wrote a row after the
+ * transaction had ended, reported success, and lost it to the next rollback.
+ */
+function prototypeForms(sql: FakeExecutor): Array<[string, () => unknown]> {
+  const raw = sql as unknown as Record<string, Raw>
+  return [
+    ["sql.prototype.constructor", () => raw.prototype.constructor(fakeTemplate("SELECT 1"))],
+    [
+      "sql.prototype.constructor.unsafe",
+      () => raw.prototype.constructor.unsafe("SELECT 1"),
+    ],
+    ["unsafe.prototype.constructor", () => raw.unsafe.prototype.constructor("SELECT 1")],
+    [
+      "savepoint.prototype.constructor",
+      () => raw.savepoint.prototype.constructor(() => Promise.resolve(undefined)),
+    ],
+    [
+      "a descriptor's prototype value, then its constructor",
+      () => Object.getOwnPropertyDescriptor(raw.unsafe, "prototype")?.value.constructor("SELECT 1"),
+    ],
+    [
+      "types.prototype.constructor",
+      () => raw.types.prototype.constructor("hello"),
+    ],
+  ]
+}
+
+/** The untyped view the prototype walk needs; every step of it is a property read. */
+// deno-lint-ignore no-explicit-any
+type Raw = any
 
 /**
  * Every way to reach the driver through `new`.
@@ -620,12 +658,46 @@ Deno.test("every call form through a kept clone is refused, not only the ones we
   assertExists(kept)
   const sql = kept.executor()
 
-  for (const [name, call] of [...callForms(sql), ...constructForms(sql)]) {
+  for (
+    const [name, call] of [...callForms(sql), ...constructForms(sql), ...prototypeForms(sql)]
+  ) {
     assertThrows(call, PostgresScopeEndedError, undefined, `${name} was not refused`)
   }
   // Nothing reached the driver: neither the transaction that ended nor the client.
   assertEquals(fake.inner, [])
   assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
+})
+
+Deno.test("nothing the clone's executor hands out is the driver's own function or object", async () => {
+  // The closure proof, and the reason it is a walk rather than a list: round 3 of the
+  // review found `sql.prototype.constructor`, which no list of call forms had, because
+  // every ordinary function carries a `prototype` object whose `constructor` is the
+  // function itself. A list can only ever cover the routes somebody thought of.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let walk: ReturnType<typeof reachableFrom> | undefined
+  await service.begin((tx) => {
+    walk = reachableFrom(tx.executor())
+    return Promise.resolve()
+  })
+
+  assertExists(walk)
+  assertStrictEquals(walk.truncated, false, "the walk hit its limit instead of finishing")
+  assertEquals(walk.refused, [], "a read refused while the clone was live")
+
+  // Everything the raw fake owns, minus what any function at all can reach: the fake's own
+  // tag, `unsafe`, `file`, `reserve`, `json`, `begin`, `savepoint`, the type helpers and
+  // every object hanging off them.
+  const driverOwned = ownedBy(fake.sql)
+  assertStrictEquals(driverOwned.size > 0, true, "the fake owns nothing, so this proves nothing")
+
+  const leaked = [...walk.values].filter((value) => driverOwned.has(value))
+  assertEquals(
+    leaked.map((value) => (typeof value === "function" ? value.name || "anonymous" : "object")),
+    [],
+    "the wrapper handed out something the fake owns",
+  )
 })
 
 Deno.test("a property descriptor taken while the clone was live dies with it", async () => {
