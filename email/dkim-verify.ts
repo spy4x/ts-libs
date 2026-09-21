@@ -754,7 +754,11 @@ function base64Decode(input: string): Uint8Array {
  * Split a raw RFC 5322 message into raw header lines and a raw body.
  *
  * RFC 5322 mandates CRLF, but messages that round-tripped through mailbox
- * storage often carry bare LF, so either separator is accepted.
+ * storage often carry bare LF, so either separator is accepted. A bare CR is not
+ * a separator here and stays inside the value it sits in, which is a reading a
+ * mail client may not share: a caller who splits a message for a security
+ * decision should run {@link refuseHeaderLineEndings} over it first, as
+ * {@link verifyDkimSignatures} does.
  *
  * RFC 5322 §2.2 ends the header section at the **first** empty line,
  * unconditionally. What follows that empty line is body, WSP or not: a fold
