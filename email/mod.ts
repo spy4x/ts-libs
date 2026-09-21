@@ -74,8 +74,10 @@ export {
   MIN_RSA_KEY_BITS,
   parseDkimPublicKey,
   parseDkimSignature,
+  refuseHeaderLineEndings,
   sha256Base64,
   splitMessage,
+  TRANSIT_ADDED_HEADER_NAMES,
   verifyDkim,
   verifyDkimSignatures,
 } from "./dkim-verify.ts"

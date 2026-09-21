@@ -754,7 +754,11 @@ function base64Decode(input: string): Uint8Array {
  * Split a raw RFC 5322 message into raw header lines and a raw body.
  *
  * RFC 5322 mandates CRLF, but messages that round-tripped through mailbox
- * storage often carry bare LF, so either separator is accepted.
+ * storage often carry bare LF, so either separator is accepted. A bare CR is not
+ * a separator here and stays inside the value it sits in, which is a reading a
+ * mail client may not share: a caller who splits a message for a security
+ * decision should run {@link refuseHeaderLineEndings} over it first, as
+ * {@link verifyDkimSignatures} does.
  *
  * RFC 5322 §2.2 ends the header section at the **first** empty line,
  * unconditionally. What follows that empty line is body, WSP or not: a fold
@@ -765,8 +769,28 @@ function base64Decode(input: string): Uint8Array {
  * RFC 6376 §3.4.5 Example 1's own body begins with a space.
  */
 export function splitMessage(raw: string): { headers: string[]; body: string } {
-  let headerEnd = -1
-  let sepLen = 0
+  const { headerEnd, sepLen } = locateHeaderEnd(raw)
+
+  if (headerEnd === -1) {
+    return { headers: parseHeaders(raw), body: "" }
+  }
+  return {
+    headers: parseHeaders(raw.slice(0, headerEnd)),
+    body: raw.slice(headerEnd + sepLen),
+  }
+}
+
+/**
+ * Find the empty line that ends the header section, as RFC 5322 §2.2 defines it:
+ * the first line ending immediately followed by a second one.
+ *
+ * `headerEnd` is the offset of the first of those two line endings, or `-1` when
+ * the message has no empty line at all; `sepLen` is how many characters the two
+ * endings occupy together. Shared by {@link splitMessage} and
+ * {@link refuseHeaderLineEndings} so the two can never disagree about where the
+ * header block stops.
+ */
+function locateHeaderEnd(raw: string): { headerEnd: number; sepLen: number } {
   for (let i = 0; i < raw.length - 1; i++) {
     const at = (pos: number) => raw.charCodeAt(pos)
     let len1 = 0
@@ -782,18 +806,62 @@ export function splitMessage(raw: string): { headers: string[]; body: string } {
 
     // Two consecutive line endings: the header section ends here, whatever
     // the next character is.
-    headerEnd = i
-    sepLen = len1 + len2
-    break
+    return { headerEnd: i, sepLen: len1 + len2 }
   }
+  return { headerEnd: -1, sepLen: 0 }
+}
 
-  if (headerEnd === -1) {
-    return { headers: parseHeaders(raw), body: "" }
+/**
+ * Refuse a header block whose line endings are not uniform, and say why.
+ *
+ * Returns a reason string for a block that carries a carriage return no line
+ * feed follows, or one that ends some lines with CRLF and others with a bare LF;
+ * `undefined` for a block this verifier will read. The check runs before a single
+ * field is parsed, because the disagreement it catches is about *where the fields
+ * are*, not about their contents.
+ *
+ * A lone CR is what hides a header field. Every reader downstream — this
+ * verifier, a mail store, a mail client — decides for itself whether a bare CR
+ * ends a line, and they do not all decide the same way. A message carrying
+ * `X-Note: a<CR>From: ceo@bank.example` above a signed block therefore has one
+ * `From:` here, where the CR stays inside the `X-Note:` value and the signature
+ * covers the genuine field, and two in a client that breaks the line, where the
+ * forged one is displayed. The signature verified, the sender shown was not the
+ * sender signed for.
+ *
+ * Mixed endings are refused for the same reason and not because RFC 5322 says
+ * CRLF: a block whose lines end both ways has already passed through something
+ * that rewrote line endings, and which of the two a later reader honours is again
+ * a guess. A block that uses a bare LF *throughout* keeps verifying, because that
+ * is what mailbox storage produces — RFC 6376 §3.4.5's own example message, as
+ * this package's `rfc6376-rsa` fixture carries it, has no CR anywhere.
+ */
+export function refuseHeaderLineEndings(raw: string): string | undefined {
+  const { headerEnd, sepLen } = locateHeaderEnd(raw)
+  // With no empty line the whole message is header (see `splitMessage`), and the
+  // empty line that ends the block is part of it.
+  const end = headerEnd === -1 ? raw.length : headerEnd + sepLen
+
+  let sawCrLf = false
+  let sawBareLf = false
+  for (let i = 0; i < end; i++) {
+    const code = raw.charCodeAt(i)
+    if (code === 0x0d) {
+      if (raw.charCodeAt(i + 1) !== 0x0a) {
+        return "header block carries a carriage return that no line feed follows, " +
+          "so where its header fields end is ambiguous"
+      }
+      sawCrLf = true
+      i++
+      continue
+    }
+    if (code === 0x0a) sawBareLf = true
   }
-  return {
-    headers: parseHeaders(raw.slice(0, headerEnd)),
-    body: raw.slice(headerEnd + sepLen),
+  if (sawCrLf && sawBareLf) {
+    return "header block mixes CRLF and bare LF line endings, " +
+      "so where its header fields end is ambiguous"
   }
+  return undefined
 }
 
 function parseHeaders(block: string): string[] {
@@ -817,6 +885,55 @@ function parseHeaders(block: string): string[] {
 }
 
 /**
+ * Header field names a relay is expected to add to a message in transit.
+ *
+ * RFC 6376 §5.4.2 lets a signer detect an added field by listing its name in `h=`
+ * more often than the message carries it, and {@link selectSignedHeaders} refuses
+ * a message that grew one. Trace fields break that: every hop that forwards a
+ * message prepends its own `Received:`, and a signature over `Received` would be
+ * refused the moment the mail was forwarded, which is ordinary mail rather than
+ * an attack.
+ *
+ * So these names, and only these, are exempt from that refusal; the added
+ * instances are simply not selected, because §5.4.2's bottom-up pairing already
+ * reaches the instances the signer signed. Every other name — `From` above all —
+ * keeps the refusal.
+ *
+ * What makes a name belong here is that a later hop prepends it by design, so a
+ * message that arrives with one more of it than the signer signed is ordinary
+ * mail rather than a forgery. It is not that a person never sees these fields:
+ * `Resent-From` is on the list and some mail clients display it as the sender. It
+ * is on the list because a redirect prepends a fresh `Resent-*` block exactly the
+ * way a relay prepends a `Received:` field, and a verifier that implements RFC
+ * 6376 and nothing more accepts that message too, having no growth check at all.
+ *
+ * A signer who wants one of these names protected has the remedy RFC 6376 §5.4
+ * gives for exactly this: list the name in `h=` once more than the message
+ * carries it. That oversigned instance is still paired and still hashed, so a
+ * message that gained a field of that name fails the signature — the exemption
+ * only stops the *growth check* from refusing the message, it never removes bytes
+ * from the hash.
+ *
+ * An entry ending in `-*` matches every name that starts with it.
+ */
+export const TRANSIT_ADDED_HEADER_NAMES: readonly string[] = Object.freeze([
+  "received",
+  "x-received",
+  "return-path",
+  "delivered-to",
+  "authentication-results",
+  "resent-*",
+  "arc-*",
+])
+
+/** True when `name`, already lowercased, is in {@link TRANSIT_ADDED_HEADER_NAMES}. */
+function isTransitAddedHeaderName(name: string): boolean {
+  return TRANSIT_ADDED_HEADER_NAMES.some((entry) =>
+    entry.endsWith("*") ? name.startsWith(entry.slice(0, -1)) : name === entry
+  )
+}
+
+/**
  * Select the raw header lines named by an `h=` list.
  *
  * RFC 6376 §5.4.2: a signer signs repeated instances "in order from the bottom
@@ -829,7 +946,9 @@ function parseHeaders(block: string): string[] {
  * explicitly allowed to list more instances than exist.
  *
  * Throws {@link DkimParseError} when a name matches more occurrences than the
- * `h=` list consumes, which means the message grew a field after signing.
+ * `h=` list consumes, which means the message grew a field after signing —
+ * unless the name is one of {@link TRANSIT_ADDED_HEADER_NAMES}, which a relay
+ * adds on the way and a forwarded message therefore always has more of.
  */
 function selectSignedHeaders(
   headers: string[],
@@ -878,6 +997,11 @@ function selectSignedHeaders(
     // a name it does ask for has a defined number of expected instances.
     const count = asked.get(name) ?? 0
     if (count === 0 || count >= list.length) continue
+    // A relay adds its trace fields above the message it forwards, so a mail that
+    // was forwarded carries more of them than the signer signed. Refusing that is
+    // refusing ordinary mail; the instances the signer signed are still the ones
+    // §5.4.2's bottom-up pairing selected above.
+    if (isTransitAddedHeaderName(name)) continue
     throw new DkimParseError(`unsigned additional instances of a signed header: ${name}`)
   }
   return selected
@@ -941,7 +1065,8 @@ export async function verifyDkim(
  *
  * The list is never empty: a message with no signature at all produces the single
  * "no DKIM-Signature header found" result, and so does a message longer than
- * {@link DkimVerifyOptions.maxMessageLength}. Fields past
+ * {@link DkimVerifyOptions.maxMessageLength} or one whose header block fails
+ * {@link refuseHeaderLineEndings}. Fields past
  * {@link DkimVerifyOptions.maxSignatures} get a result saying they were not
  * checked, rather than disappearing.
  */
@@ -957,6 +1082,14 @@ export async function verifyDkimSignatures(
       reason: `message is ${rawMessage.length} characters, over the ` +
         `${maxMessageLength}-character limit`,
     }]
+  }
+
+  // Before any field is parsed: a header block whose line endings are not uniform
+  // does not have one reading, and this verifier's reading is the one an attacker
+  // gets to choose against. See `refuseHeaderLineEndings`.
+  const lineEndings = refuseHeaderLineEndings(rawMessage)
+  if (lineEndings !== undefined) {
+    return [{ valid: false, reason: lineEndings }]
   }
 
   const { headers, body } = splitMessage(rawMessage)

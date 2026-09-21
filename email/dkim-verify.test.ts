@@ -38,8 +38,10 @@ import {
   fetchDkimPublicKey,
   parseDkimPublicKey,
   parseDkimSignature,
+  refuseHeaderLineEndings,
   sha256Base64,
   splitMessage,
+  TRANSIT_ADDED_HEADER_NAMES,
   verifyDkim,
   verifyDkimSignatures,
 } from "./dkim-verify.ts"
@@ -2413,5 +2415,267 @@ describe("whitespace inside the bh= tag (§3.5)", () => {
     const result = await verifyDkim(folded, publicKey)
     assertEquals(result.valid, false)
     assertEquals(result.reason, "signature did not verify against public key")
+  })
+})
+
+// --- a header block whose line endings are not uniform ----------------------
+
+/**
+ * A lone CR in the header block is how a `From:` field is hidden. Readers do not
+ * agree on whether a bare CR ends a line: this verifier keeps it inside the value
+ * it sits in, so it sees one `From:` and the signature covers the genuine one,
+ * while a client that breaks the line sees two and displays the forged one. The
+ * message came back valid and the sender shown was not the sender signed for.
+ *
+ * Each case below asserts both halves: the forged field is in the message, and
+ * the verifier's own `splitMessage` cannot see it. `valid === false` alone would
+ * not be evidence — a signature mismatch returns that too — so the reason string
+ * is the assertion.
+ */
+describe("a header block whose line endings are not uniform", () => {
+  const BODY = "This is a test.\r\n"
+  const FORGED = "From: ceo@bank.example"
+  const CR_REASON = "header block carries a carriage return that no line feed follows, " +
+    "so where its header fields end is ambiguous"
+  const MIXED_REASON = "header block mixes CRLF and bare LF line endings, " +
+    "so where its header fields end is ambiguous"
+
+  /** The `From:` fields `splitMessage` sees, which are the ones DKIM can protect. */
+  function visibleFromFields(raw: string): string[] {
+    return splitMessage(raw).headers.filter((line) => line.toLowerCase().startsWith("from:"))
+  }
+
+  it("rejects a From: hidden behind a lone carriage return above the block", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+
+    const attacked = `X-Note: a\r${FORGED}\r\n${raw}`
+    assert(attacked.includes(FORGED), "the forged From: must be in the message")
+    assertEquals(
+      visibleFromFields(attacked).length,
+      1,
+      "the point of the attack: the verifier sees only the signed From:",
+    )
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, CR_REASON)
+  })
+
+  it("rejects a From: hidden behind a lone carriage return below the signature", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const blankLine = raw.indexOf("\r\n\r\n")
+    const attacked = `${raw.slice(0, blankLine)}\r\nX-Note: a\r${FORGED}${raw.slice(blankLine)}`
+    assert(attacked.includes(FORGED), "the forged From: must be in the message")
+    assertEquals(visibleFromFields(attacked).length, 1)
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, CR_REASON)
+  })
+
+  it("rejects a From: hidden behind a lone carriage return inside a fold", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    // The CR sits in the continuation line of an unsigned field, so the header
+    // hash is untouched and nothing but the line-ending rule can refuse it.
+    const attacked = `X-Note: a\r\n\tb\r${FORGED}\r\n${raw}`
+    assert(attacked.includes(FORGED), "the forged From: must be in the message")
+    assertEquals(visibleFromFields(attacked).length, 1)
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, CR_REASON)
+  })
+
+  it("rejects a header block that ends some lines with CRLF and others with LF", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const mixed = raw.replace("To: recipient@example.org\r\n", "To: recipient@example.org\n")
+    assert(mixed !== raw, "one line ending must have changed")
+
+    const result = await verifyDkim(mixed, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, MIXED_REASON)
+  })
+
+  it("verifies a message whose header block ends every line with a bare LF", async () => {
+    // Mailbox storage rewrites CRLF to LF, and RFC 6376's own example message is
+    // stored that way. Refusing a bare LF as such would reject ordinary mail —
+    // what is refused is a block that is not consistent with itself.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const lfOnly = raw.replace(/\r\n/g, "\n")
+    assert(!lfOnly.includes("\r"), "the message must carry no CR at all")
+
+    const result = await verifyDkim(lfOnly, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("verifies a message whose body carries a lone carriage return", async () => {
+    // The rule is about the header block only. A CR in the body cannot hide a
+    // header field, and both signer and verifier hash the same body octets.
+    const { raw, publicKey } = await sign(TEST_HEADERS, "before\rafter\r\n")
+    assert(raw.includes("before\rafter"), "the body must carry the lone CR")
+
+    const result = await verifyDkim(raw, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("reports no fault for a header block that is uniformly CRLF or LF", () => {
+    assertEquals(refuseHeaderLineEndings("From: a@example.com\r\n\r\nbody\r\n"), undefined)
+    assertEquals(refuseHeaderLineEndings("From: a@example.com\n\nbody\n"), undefined)
+    assertEquals(refuseHeaderLineEndings("From: a@example.com\r"), CR_REASON)
+    assertEquals(
+      refuseHeaderLineEndings("From: a@example.com\r\nTo: b@example.org\n\n"),
+      MIXED_REASON,
+    )
+  })
+})
+
+// --- trace fields a relay adds after signing (§5.4.2) -----------------------
+
+/**
+ * §5.4.2's "the message grew a field of a name h= consumed" guard is what refuses
+ * a prepended second `From:` or `Subject:`, so it cannot be removed. It did,
+ * however, refuse forwarded mail: every hop prepends its own `Received:`, so a
+ * signature that covers `Received` was invalid the moment the mail was forwarded.
+ *
+ * The guard is therefore narrowed to the trace fields a relay is expected to add,
+ * named in {@link TRANSIT_ADDED_HEADER_NAMES}. The tests below are in two halves:
+ * mail that grew a trace field verifies, and mail that grew anything else — a
+ * `From:` above all — is still refused with the guard's own reason.
+ */
+describe("trace fields a relay adds after signing (§5.4.2)", () => {
+  const BODY = "This is a test.\r\n"
+  const RELAY_ONE = "Received: from one.example by mx.example; Fri, 1 Jan 2027 00:00:00 +0000"
+  const RELAY_TWO = "Received: from two.example by mx.example; Fri, 1 Jan 2027 00:00:01 +0000"
+  const RELAY_THREE = "Received: from three.example by mx.example; Fri, 1 Jan 2027 00:00:02 +0000"
+
+  /**
+   * One header name per entry of {@link TRANSIT_ADDED_HEADER_NAMES}, spelled as a
+   * relay spells it. The `-*` entries are prefixes, so they get a real field name
+   * that starts with them.
+   */
+  const SAMPLES: Record<string, string> = {
+    "received": "Received",
+    "x-received": "X-Received",
+    "return-path": "Return-Path",
+    "delivered-to": "Delivered-To",
+    "authentication-results": "Authentication-Results",
+    "resent-*": "Resent-From",
+    "arc-*": "ARC-Seal",
+  }
+
+  it("has a case for every name the exemption list carries", () => {
+    // Adding a name to the list without adding a case here fails this test, so
+    // the list cannot grow unexamined.
+    assertEquals(Object.keys(SAMPLES).sort(), [...TRANSIT_ADDED_HEADER_NAMES].sort())
+  })
+
+  for (const [entry, field] of Object.entries(SAMPLES)) {
+    it(`verifies mail that gained a ${field}: after signing (${entry})`, async () => {
+      const name = field.toLowerCase()
+      const headers = [`${field}: signed by the sender`, ...TEST_HEADERS]
+      const { raw, publicKey } = await sign(headers, BODY, {
+        names: [name, "from", "to", "subject"],
+      })
+      assert((await verifyDkim(raw, publicKey)).valid)
+
+      const forwarded = `${field}: added by a relay\r\n${raw}`
+      const result = await verifyDkim(forwarded, publicKey)
+      assert(result.valid, `reason=${result.reason}`)
+    })
+  }
+
+  it("verifies mail signed over one Received that two relays forwarded", async () => {
+    const { raw, publicKey } = await sign([RELAY_ONE, ...TEST_HEADERS], BODY, {
+      names: ["received", "from", "to", "subject"],
+    })
+    assert((await verifyDkim(raw, publicKey)).valid)
+
+    const forwarded = `${RELAY_THREE}\r\n${RELAY_TWO}\r\n${raw}`
+    const result = await verifyDkim(forwarded, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("verifies mail signed over two Received fields that gained one more", async () => {
+    const { raw, publicKey } = await sign([RELAY_ONE, RELAY_TWO, ...TEST_HEADERS], BODY, {
+      names: ["received", "received", "from", "to", "subject"],
+    })
+    assert((await verifyDkim(raw, publicKey)).valid)
+
+    const forwarded = `${RELAY_THREE}\r\n${raw}`
+    const result = await verifyDkim(forwarded, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+    assertEquals(result.parsed?.signedHeaders, ["received", "received", "from", "to", "subject"])
+  })
+
+  it("selects the Received fields the signer signed, not a relay's", async () => {
+    // Why the exemption is safe: §5.4.2 pairs h= with the message from the bottom
+    // up, and a relay prepends, so the instances selected are the signed ones.
+    // Changing a signed Received still fails, which is what this asserts.
+    const { raw, publicKey } = await sign([RELAY_ONE, ...TEST_HEADERS], BODY, {
+      names: ["received", "from", "to", "subject"],
+    })
+    const tampered = `${RELAY_THREE}\r\n${raw.replace("one.example", "evil.example")}`
+    const result = await verifyDkim(tampered, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "signature did not verify against public key")
+  })
+
+  it("still rejects a From: prepended above forwarded mail", async () => {
+    const { raw, publicKey } = await sign([RELAY_ONE, ...TEST_HEADERS], BODY, {
+      names: ["received", "from", "to", "subject"],
+    })
+    const attacked = `From: ceo@bank.example\r\n${RELAY_THREE}\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+  })
+
+  it("still rejects a From: whose name carries a vertical tab", async () => {
+    // `trim()` strips vertical tab, form feed and U+00A0, so `From\x0B:` counts as
+    // `from` for the guard and is refused. A client that reads the field the same
+    // way would display the forged address, which is why the loose match is the
+    // safe one here.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `From\x0B: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+  })
+
+  it("cannot have its exemption list widened at runtime", () => {
+    // The list is the one place a header may be added to a signed message without
+    // the checker objecting, so widening it is a privilege escalation: any code in
+    // the process could have pushed "from" onto it and turned the forgery above
+    // into an accepted message. `readonly` is a compile-time claim only.
+    assert(Object.isFrozen(TRANSIT_ADDED_HEADER_NAMES), "the list must be frozen")
+    assertThrows(() => (TRANSIT_ADDED_HEADER_NAMES as string[]).push("from"), TypeError)
+    assertEquals(TRANSIT_ADDED_HEADER_NAMES.includes("from"), false)
+  })
+
+  it("still rejects a gained Resent-From: when the signer oversigned it", async () => {
+    // The remedy the documentation points a signer at, pinned: listing a name in
+    // h= once more than the message carries it keeps the added instance inside the
+    // hash, so the exemption stops the growth check from refusing the message but
+    // never removes bytes from what is hashed. This is what makes `resent-*` safe
+    // to exempt although some clients display `Resent-From:`.
+    const headers = ["Resent-From: agent@example.net", ...TEST_HEADERS]
+    const { raw, publicKey } = await sign(headers, BODY, {
+      names: ["resent-from", "resent-from", "from", "to", "subject"],
+    })
+    assert((await verifyDkim(raw, publicKey)).valid)
+
+    const attacked = `Resent-From: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "signature did not verify against public key")
+  })
+
+  it("still rejects an added instance of a name the list does not carry", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `Subject: a subject the signer never saw\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, "unsigned additional instances of a signed header: subject")
   })
 })
