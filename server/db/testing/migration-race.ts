@@ -45,8 +45,17 @@ export function migrationRace(files: Record<string, string>, runners: number): M
   const opened = new Promise<void>((resolve) => {
     open = resolve
   })
+  /**
+   * Open once every runner is accounted for and at least one has reached the barrier.
+   *
+   * The second half is not decoration. `Promise.all` calls every runner before any of
+   * them has done more than one `await`, so for a moment they are all counted as waiting
+   * for the lock and none has read anything yet; opening there would release the barrier
+   * before it had held anybody, and the test would be back to the race it exists to
+   * remove.
+   */
   const maybeOpen = (): void => {
-    if (atBarrier + waitingForLock >= runners) open()
+    if (atBarrier >= 1 && atBarrier + waitingForLock >= runners) open()
   }
 
   return {
