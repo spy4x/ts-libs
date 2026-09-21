@@ -154,6 +154,20 @@ describe("downloadResponseAsFile", () => {
     expect(requestedDelayMs).toBe(5000)
   })
 
+  it("falls back to the platform's URL.createObjectURL when no objectUrl option is given", async () => {
+    // No `objectUrl` in options: this exercises `options.objectUrl ?? platformObjectUrl`, the
+    // real `URL.createObjectURL` / `URL.revokeObjectURL`. Deno implements both, so this needs no
+    // DOM and no fake `URL` global — the anchor's `href` is asserted to come from a real blob URL.
+    const log = callLog()
+    const anchor = fakeAnchor(log)
+    const doc = fakeDocument(anchor, log)
+    const timer = fakeTimer(log)
+
+    await downloadResponseAsFile(new Response("data"), "f.csv", { document: doc, timer })
+
+    expect(anchor.href.startsWith("blob:")).toBe(true)
+  })
+
   it("keeps the object URL alive when the call resolves, and revokes it once the timer fires", async () => {
     const log = callLog()
     const doc = fakeDocument(fakeAnchor(log), log)
@@ -211,6 +225,34 @@ describe("downloadResponseAsFile", () => {
 
     timer.run()
     expect(objectUrl.revoked).toEqual(["blob:detach-fails"])
+  })
+
+  it("still schedules the revoke when appendChild throws, and revokes only once the timer fires", async () => {
+    const log = callLog()
+    const anchor = fakeAnchor(log)
+    const doc: DownloadDocument = {
+      createElement: () => anchor,
+      body: {
+        appendChild: () => {
+          log.push("appendChild")
+          throw new DOMException("body refused the anchor", "HierarchyRequestError")
+        },
+        removeChild: (node) => {
+          expect(node).toBe(anchor)
+          log.push("removeChild")
+        },
+      },
+    }
+    const objectUrl = fakeObjectUrl(log, "blob:attach-fails")
+    const timer = fakeTimer(log)
+
+    await expect(
+      downloadResponseAsFile(new Response("data"), "f.csv", { document: doc, objectUrl, timer }),
+    ).rejects.toThrow("body refused the anchor")
+    expect(objectUrl.revoked).toEqual([])
+
+    timer.run()
+    expect(objectUrl.revoked).toEqual(["blob:attach-fails"])
   })
 
   it("rejects without a document rather than touching a global one", async () => {
