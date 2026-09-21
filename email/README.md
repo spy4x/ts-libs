@@ -516,14 +516,22 @@ which propagates the resolver's rejection instead of reporting it.
   visible, and a caller who disagrees can see exactly what it admits.
 
   Both this check and the unsigned-`From` check compare a header **name**
-  loosely on purpose: the name is trimmed of space, tab, vertical tab, form
-  feed and the byte 0xA0 before it is compared, so `From\x0B:` still counts as
-  `from`. A client that reads the field the same loose way would display the
-  forged address, so refusing to match it here would be the unsafe choice.
-  That set is explicit (`HEADER_NAME_TRIM_BYTES`) rather than
-  `String.prototype.trim()`'s full Unicode whitespace list, which also strips
-  CR and LF — a name substring comes from before a colon on one already-split
-  line, so a line ending has no business being trimmed out of it.
+  loosely on purpose: every octet outside printable ASCII (0x21-0x7E) is
+  trimmed from both ends of the name before it is compared (`trimHeaderName`),
+  so `From\x0B:` and `From` padded with a no-break space, a byte order mark, a
+  zero-width space or a C0 control character all still count as `from`. A
+  client that reads the field the same loose way would display the forged
+  address, so refusing to match it here would be the unsafe choice. RFC 5322's
+  `ftext` already restricts a genuine field name to this same range, so
+  trimming anything outside it can only make a disguised name easier to
+  recognise, never harder — an earlier revision trimmed a narrower, explicit
+  byte set copied from what `String.prototype.trim()` stripped, which missed
+  several of `trim()`'s own Unicode whitespace characters (found in round 1
+  review of the pull request that added it) and every control character and
+  zero-width space RFC 5322 never allows in a name either (issue #106). This
+  also means CR and LF are trimmed now: a name substring cannot legitimately
+  carry either by the time this runs, because the header block's line-ending
+  refusal above has already ruled out an ambiguous one.
 - **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
   `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
   example record publishes a complete SubjectPublicKeyInfo. The envelope is
