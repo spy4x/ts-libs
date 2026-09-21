@@ -19,9 +19,12 @@
  * list — is **not** ported: an SPA fallback is a single flag (`spaFallback`) or
  * the caller's own catch-all route, not a list of page paths.
  *
- * The native `Response` streams a `ReadableStream` body, so a large asset is not
- * buffered twice; `Deno.readFile` returns the bytes and Deno's `Response`
- * implementation streams them.
+ * A file is opened, not read whole. `StaticFs.open` returns the file's size and a
+ * `ReadableStream` of its bytes, so memory use stays flat for a request whatever
+ * the file's size — a directory of large videos costs the same per-request memory
+ * as a directory of icons. The handle is released exactly once: when the stream
+ * finishes, when the client cancels it, or, if something fails between opening
+ * the file and returning the response, right there.
  */
 
 /** Result of resolving a request path against the static root. */
@@ -168,10 +171,27 @@ export interface StaticFileInfo {
   isFile: boolean
 }
 
+/** A file opened for streaming, returned by {@link StaticFs.open}. */
+export interface StaticFileHandle {
+  /** Total size in bytes, used for the `Content-Length` header. */
+  size: number
+  /** File contents, read lazily as the response body is consumed. */
+  body: ReadableStream<Uint8Array>
+  /**
+   * Releases the file handle. The caller (`serveStatic`) guarantees this runs
+   * exactly once per handle, so an implementation does not need to guard against
+   * being called twice.
+   */
+  close: () => void
+}
+
 /** Filesystem surface the static handler needs; injected so tests need no files. */
 export interface StaticFs {
-  /** File bytes. Throws when the path does not exist or is a directory. */
-  readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>
+  /**
+   * Opens a file for streaming. Resolves to `null` when the path does not exist
+   * or is not a regular file, so a directory is never streamed as a file.
+   */
+  open: (path: string) => Promise<StaticFileHandle | null>
   /** Entry metadata, or `null` when it does not exist. */
   stat: (path: string) => Promise<StaticFileInfo | null>
   /** Canonical absolute path, resolving symlinks. */
@@ -201,9 +221,10 @@ const INDEX_FILE = "index.html"
  *
  * @param requestPath `URL.pathname` of the request, still percent-encoded.
  * @param options Root directory plus optional filesystem, SPA flag and cache header.
- * @returns A `200` response with the file's bytes and content type, or
- * `undefined` when the path is refused or the file does not exist. Callers turn
- * `undefined` into their own `404` (or into an SPA route).
+ * @returns A `200` response with the file as a streamed body, its content type
+ * and a `Content-Length` taken from the file's own size (never from a buffer),
+ * or `undefined` when the path is refused or the file does not exist. Callers
+ * turn `undefined` into their own `404` (or into an SPA route).
  */
 export async function serveStatic(
   requestPath: string,
@@ -235,23 +256,87 @@ export async function serveStatic(
   ])
   if (!realFile || !realRoot || !isPathInsideRoot(realFile, realRoot)) return undefined
 
-  const bytes = await fs.readFile(realFile).catch(() => null)
-  if (!bytes) return undefined
+  const handle = await fs.open(realFile).catch(() => null)
+  if (!handle) return undefined
 
-  const headers = new Headers({
-    "Content-Type": contentTypeFor(realFile),
-    // A static asset is served with the content type this table chose; a browser
-    // must not sniff a different one, which is how a `.txt` upload becomes script.
-    "X-Content-Type-Options": "nosniff",
+  try {
+    const headers = new Headers({
+      "Content-Type": contentTypeFor(realFile),
+      "Content-Length": String(handle.size),
+      // A static asset is served with the content type this table chose; a browser
+      // must not sniff a different one, which is how a `.txt` upload becomes script.
+      "X-Content-Type-Options": "nosniff",
+    })
+    if (options.cacheControl) headers.set("Cache-Control", options.cacheControl)
+
+    return new Response(closingStream(handle), { headers })
+  } catch (error) {
+    handle.close()
+    throw error
+  }
+}
+
+/**
+ * Wrap a file handle's body so `close` runs exactly once, whichever way the
+ * stream stops: fully read, cancelled by the client, or a read that fails. A
+ * `StaticFs` implementation is not required to manage this itself.
+ */
+function closingStream(handle: StaticFileHandle): ReadableStream<Uint8Array> {
+  const reader = handle.body.getReader()
+  let closed = false
+  const closeOnce = () => {
+    if (closed) return
+    closed = true
+    handle.close()
+  }
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          closeOnce()
+          controller.close()
+          return
+        }
+        controller.enqueue(value)
+      } catch (error) {
+        closeOnce()
+        controller.error(error)
+      }
+    },
+    cancel(reason) {
+      closeOnce()
+      return reader.cancel(reason)
+    },
   })
-  if (options.cacheControl) headers.set("Cache-Control", options.cacheControl)
-
-  return new Response(bytes, { headers })
 }
 
 /** Filesystem implementation backed by `Deno.*`, used when none is injected. */
 export const denoStaticFs: StaticFs = {
-  readFile: (path) => Deno.readFile(path) as Promise<Uint8Array<ArrayBuffer>>,
+  async open(path) {
+    let file: Deno.FsFile
+    try {
+      file = await Deno.open(path, { read: true })
+    } catch {
+      return null
+    }
+    let info: Deno.FileInfo
+    try {
+      info = await file.stat()
+    } catch {
+      closeQuietly(file)
+      return null
+    }
+    if (!info.isFile) {
+      closeQuietly(file)
+      return null
+    }
+    return {
+      size: info.size,
+      body: file.readable,
+      close: () => closeQuietly(file),
+    }
+  },
   async stat(path) {
     try {
       const info = await Deno.stat(path)
@@ -261,4 +346,18 @@ export const denoStaticFs: StaticFs = {
     }
   },
   realPath: (path) => Deno.realPath(path),
+}
+
+/**
+ * Closes a file, ignoring a resource that is already gone. `Deno.FsFile`'s
+ * `readable` stream releases the underlying resource itself once fully read or
+ * cancelled, so a later explicit close from {@link closingStream} routinely
+ * finds nothing left to close.
+ */
+function closeQuietly(file: Deno.FsFile): void {
+  try {
+    file.close()
+  } catch {
+    // already closed by the stream finishing or being cancelled
+  }
 }
