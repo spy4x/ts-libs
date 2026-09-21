@@ -378,6 +378,8 @@ export class SqliteDb {
    */
   private ended = false
   private closed = false
+  /** The close in flight, so two callers racing share one, or `null` when none is. */
+  private closing: Promise<void> | null = null
 
   constructor(
     driver: SqliteDriver,
@@ -538,7 +540,8 @@ export class SqliteDb {
   }
 
   /**
-   * Close the connection. Idempotent: a second call does nothing.
+   * Close the connection. Idempotent: a second call does nothing, and a second call made
+   * *while the first is still in flight* waits for it and returns with it.
    *
    * It goes through the gate like every other operation, so a `close` issued while
    * another caller's transaction is open waits for that transaction instead of pulling
@@ -546,6 +549,11 @@ export class SqliteDb {
    * not open" at its next statement. A `close` called from *inside* a transaction
    * callback is waiting for itself, so it fails after the bounded wait with
    * {@link SqliteTransactionWaitError}, as any other statement on the root handle does.
+   *
+   * That wait is why the in-flight close is remembered rather than only the finished one:
+   * a shutdown handler that fires twice, or two callers racing, would otherwise both pass
+   * the `closed` check while the first was still waiting on the gate, and the second
+   * would reach a driver the first had already closed.
    *
    * A scoped handle cannot close anything. It never owned the connection: it is a second
    * front door onto the connection the root handle opened, handed out for the length of
@@ -562,10 +570,25 @@ export class SqliteDb {
       )
     }
     if (this.closed) return
-    await this.guard(() => this.driver.close())
-    // Marked closed only once the driver agreed, so a close that the gate refused leaves
-    // the handle reporting the connection it still has.
-    this.closed = true
+    this.closing ??= this.closeOnce()
+    await this.closing
+  }
+
+  /**
+   * The one close every concurrent caller of {@link close} shares.
+   *
+   * The `finally` drops the attempt either way, which is what keeps a refused close
+   * retryable: `closed` is set only when the driver agreed, so a close the gate turned
+   * down leaves the handle reporting the connection it still has, and the next call
+   * starts a fresh attempt rather than replaying the refusal for ever.
+   */
+  private async closeOnce(): Promise<void> {
+    try {
+      await this.guard(() => this.driver.close())
+      this.closed = true
+    } finally {
+      this.closing = null
+    }
   }
 
   /**

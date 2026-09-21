@@ -718,6 +718,51 @@ Deno.test("close is idempotent and closes the driver once", async () => {
   assertStrictEquals(db.isOpen, false)
 })
 
+Deno.test("two close calls issued together both return and close the driver once", async () => {
+  // A shutdown handler that fires twice is the ordinary way here. The second call used to
+  // pass the `closed` check while the first was still waiting on the gate, reach a driver
+  // the first had already closed, and reject with "database is not open".
+  let closes = 0
+  const db = new SqliteDb({
+    exec: () => Promise.resolve(),
+    prepare: () => Promise.reject(new Error("no prepare in this double")),
+    close: () => {
+      closes += 1
+      // A tick later, so the second caller gets its turn while the first is in flight —
+      // which is the window the bug lived in.
+      return new Promise<void>((resolve) => setTimeout(resolve, 0))
+    },
+  }, ":memory:")
+
+  const outcomes = await Promise.all([
+    db.close().then(() => "returned", (error: unknown) => String(error)),
+    db.close().then(() => "returned", (error: unknown) => String(error)),
+  ])
+
+  assertEquals(outcomes, ["returned", "returned"])
+  assertEquals(closes, 1)
+  assertStrictEquals(db.isOpen, false)
+  // And a third, after both have finished.
+  await db.close()
+  assertEquals(closes, 1)
+})
+
+Deno.test("a close the gate refused leaves the handle open and can be tried again", async () => {
+  // The in-flight close is remembered, not the refusal: a `close` that gave up waiting
+  // must not turn the handle into one that can never be closed.
+  const db = await openMemory({ transactionWaitMs: 25, delay: instantDelay })
+  await db.exec("CREATE TABLE rows (id INTEGER PRIMARY KEY)")
+
+  await assertRejects(
+    () => db.transaction(() => db.close()),
+    SqliteTransactionWaitError,
+  )
+  assertStrictEquals(db.isOpen, true)
+
+  await db.close()
+  assertStrictEquals(db.isOpen, false)
+})
+
 Deno.test("close waits for an open transaction instead of closing under it", async () => {
   // `close` used to go straight to the driver, so a caller closing the root handle while
   // somebody else's transaction was open pulled the connection out from under it and
