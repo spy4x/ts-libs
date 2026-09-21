@@ -78,7 +78,12 @@ export interface BodyReadOptions {
    * for as long as the connection lives.
    */
   timeoutMs?: number
-  /** Byte cap for this read. Defaults to `DEFAULT_MAX_BYTES`. */
+  /**
+   * Byte cap for this read. Defaults to `DEFAULT_MAX_BYTES`. Must be a
+   * positive finite number: `NaN` and `Infinity` both compare false against
+   * a running total, which switches the cap off instead of raising it, so
+   * both are rejected before the reader is taken.
+   */
   maxBytes?: number
 }
 
@@ -115,6 +120,8 @@ export function readContentLength(headers: { get(name: string): string | null })
  * The reader is cancelled and unlocked on every exit path, including the two
  * throws — a failed bounded read must not leave the socket open.
  *
+ * @throws `RangeError` when `maxBytes` is not a finite number (`NaN` or
+ * `Infinity`), before the reader is taken.
  * @throws `PayloadTooLargeError` when the body exceeds `maxBytes`.
  * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
  */
@@ -124,6 +131,10 @@ async function* readBoundedChunks(
 ): AsyncGenerator<Uint8Array> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
   const timeoutMs = options.timeoutMs ?? DEFAULT_BODY_TIMEOUT_MS
+
+  if (!Number.isFinite(maxBytes)) {
+    throw new RangeError(`maxBytes must be a finite number, got ${maxBytes}`)
+  }
 
   const declaredLength = readContentLength(source.headers)
   if (declaredLength !== null && declaredLength > maxBytes) {
@@ -179,6 +190,7 @@ async function* readBoundedChunks(
 /**
  * Read a body into bytes under the hard cap and stall budget.
  *
+ * @throws `RangeError` when `maxBytes` is not a finite number.
  * @throws `PayloadTooLargeError` when the body exceeds `maxBytes`.
  * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
  */
@@ -206,6 +218,7 @@ export async function readBoundedBody(
  * Read a body as text, decoding incrementally so the cap is enforced before the
  * whole payload is materialised as one string.
  *
+ * @throws `RangeError` when `maxBytes` is not a finite number.
  * @throws `PayloadTooLargeError` when the body exceeds `maxBytes`.
  * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
  */
