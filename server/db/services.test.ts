@@ -15,9 +15,15 @@
  * satisfies it. The cast is confined to `createFakeSql`.
  */
 
-import { assertEquals, assertStrictEquals } from "@std/assert"
+import {
+  assertEquals,
+  assertExists,
+  assertRejects,
+  assertStrictEquals,
+  assertThrows,
+} from "@std/assert"
 import type { RowCache, Sql, Transaction } from "./ports.ts"
-import { DbServiceBase } from "./services.ts"
+import { DbServiceBase, PostgresScopeEndedError } from "./services.ts"
 
 /** Options for {@link createFakeSql}. */
 interface FakeSqlOptions {
@@ -437,6 +443,102 @@ Deno.test("a nested begin that throws rolls back to the savepoint and leaves the
     "ROLLBACK TO SAVEPOINT",
     "SELECT $1",
   ])
+})
+
+Deno.test("a clone kept past begin refuses every later statement", async () => {
+  // The clone is the one handle on the connection the transaction ran on. A service that
+  // stores it — `this.db = tx` — keeps that handle for the rest of the process, and a
+  // write through it later lands inside whatever transaction that connection is running
+  // then and goes with that transaction's rollback, after reporting success.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await service.begin(async (tx) => {
+    kept = tx
+    await tx.select(1)
+  })
+
+  assertExists(kept)
+  // Thrown, not rejected: the check sits on the executor, which the driver also calls
+  // synchronously. `select` returns the tagged template unawaited, so the throw reaches
+  // the caller directly; an `async` method turns the same throw into a rejection.
+  assertThrows(
+    () => kept!.select(2),
+    PostgresScopeEndedError,
+    "belonged to a transaction that has already committed or rolled back",
+  )
+  // A nested `begin` on the kept clone is the same door, and closes with it.
+  await assertRejects(() => kept!.begin(() => Promise.resolve(undefined)), PostgresScopeEndedError)
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
+  assertEquals(fake.inner, ["SELECT $1"])
+})
+
+Deno.test("a clone kept past a begin that rolled back refuses too", async () => {
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await assertRejects(
+    () =>
+      service.begin((tx) => {
+        kept = tx
+        return Promise.reject(new Error("the callback failed"))
+      }),
+    Error,
+    "the callback failed",
+  )
+
+  assertExists(kept)
+  assertThrows(() => kept!.select(1), PostgresScopeEndedError)
+  assertEquals(fake.topLevel, ["BEGIN", "ROLLBACK"])
+  assertEquals(fake.inner, [])
+})
+
+Deno.test("a write through a kept clone cannot land in a later transaction", async () => {
+  // The reproduction from issue #96, as a statement count. Before the fix the kept
+  // clone's `SELECT` was recorded inside the second transaction — three inner
+  // statements and a COMMIT — and it disappeared when that transaction rolled back.
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await service.begin(async (tx) => {
+    kept = tx
+    await tx.select(1)
+  })
+
+  await assertRejects(
+    () =>
+      service.begin(async (tx) => {
+        await tx.select(2)
+        await kept!.select(3)
+      }),
+    PostgresScopeEndedError,
+  )
+
+  assertEquals(fake.inner, ["SELECT $1", "SELECT $1"])
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT", "BEGIN", "ROLLBACK"])
+})
+
+Deno.test("a clone kept past a savepoint refuses every later statement", async () => {
+  const fake = createFakeSql()
+  const service = new TestService({ sql: fake.sql })
+
+  let kept: TestService | undefined
+  await service.begin(async (tx) => {
+    await tx.begin(async (innerTx) => {
+      kept = innerTx
+      await innerTx.select(1)
+    })
+    assertExists(kept)
+    assertThrows(() => kept!.select(2), PostgresScopeEndedError)
+    // The transaction the savepoint sat inside is untouched by the refusal.
+    await tx.select(3)
+  })
+
+  assertEquals(fake.topLevel, ["BEGIN", "COMMIT"])
+  assertEquals(fake.inner, ["SAVEPOINT", "SELECT $1", "RELEASE SAVEPOINT", "SELECT $1"])
 })
 
 Deno.test("a cache write made inside a savepoint waits for the outermost commit", async () => {

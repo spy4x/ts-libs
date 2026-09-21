@@ -69,6 +69,7 @@ export {
   DbServiceBase,
   type DbServiceBaseOptions,
   type FindOneParams,
+  PostgresScopeEndedError,
   type RowMethods,
 } from "./services.ts"
 

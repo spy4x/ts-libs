@@ -9,7 +9,14 @@
  *    that is a label; against a server it is whether the row is still there;
  *  - `updateOne` with an empty data object used to render `SET updated_at = NOW(),
  *    WHERE …`. Only a server says whether that is valid SQL;
- *  - the soft-delete filter has to match a real `deleted_at` column.
+ *  - the soft-delete filter has to match a real `deleted_at` column;
+ *  - a clone kept past `begin` has to be refused. Against a fake that is a flag; against
+ *    a server it is whether the write reaches the transaction that connection is running
+ *    next and vanishes with that transaction's rollback.
+ *
+ * The kept-clone tests use `max: 1`, so the clone and the later transaction are certain
+ * to share the one connection and the collision is deterministic rather than a matter of
+ * which connection the pool happened to hand out.
  *
  * The nested-`begin` tests leave the pool at its default size on purpose. With `max: 1`
  * the unfixed code — which takes a second connection out of the pool for the nested
@@ -20,12 +27,18 @@
  * `finally`. Nothing shared is touched.
  */
 
-import { assertEquals, assertExists, assertRejects, assertStrictEquals } from "@std/assert"
+import {
+  assertEquals,
+  assertExists,
+  assertRejects,
+  assertStrictEquals,
+  assertThrows,
+} from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import type { RowCache, Sql } from "./ports.ts"
 import { createSql } from "./postgres.ts"
-import { DbServiceBase } from "./services.ts"
+import { DbServiceBase, PostgresScopeEndedError } from "./services.ts"
 
 /** A note row, as the table below stores it. */
 interface Note extends Record<string, unknown> {
@@ -159,6 +172,55 @@ describe("DbServiceBase against a real server", () => {
             }),
           Error,
           "the savepoint fails",
+        )
+        await tx.insert(schema, 3, "after the savepoint")
+      })
+
+      assertEquals(await service.ids(schema), [1, 3])
+    })
+  })
+
+  it("refuses a clone kept past begin, so its write cannot join a later transaction", async () => {
+    await withSchema({ max: 1 }, async (sql, schema) => {
+      const service = new NoteService({ sql })
+
+      let kept: NoteService | undefined
+      await service.begin(async (tx) => {
+        kept = tx
+        await tx.insert(schema, 1, "committed")
+      })
+      assertExists(kept)
+
+      // The reproduction from issue #96. The kept clone used to write through the
+      // connection its own transaction had run on, so row 3 landed inside this second
+      // transaction, reported success, and disappeared when this one rolled back.
+      await assertRejects(
+        () =>
+          service.begin(async (tx) => {
+            await tx.insert(schema, 2, "second")
+            await kept!.insert(schema, 3, "through the kept clone")
+          }),
+        PostgresScopeEndedError,
+      )
+
+      assertEquals(await service.ids(schema), [1])
+    })
+  })
+
+  it("refuses a clone kept past a savepoint and leaves the outer transaction usable", async () => {
+    await withSchema({ max: 1 }, async (sql, schema) => {
+      const service = new NoteService({ sql })
+
+      let kept: NoteService | undefined
+      await service.begin(async (tx) => {
+        await tx.begin(async (inner) => {
+          kept = inner
+          await inner.insert(schema, 1, "inside the savepoint")
+        })
+        assertExists(kept)
+        assertThrows(
+          () => kept!.insert(schema, 2, "through the kept clone"),
+          PostgresScopeEndedError,
         )
         await tx.insert(schema, 3, "after the savepoint")
       })

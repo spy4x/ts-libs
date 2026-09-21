@@ -20,12 +20,15 @@
  *    transaction there, which commits on its own and survives the outer rollback. A
  *    nested `begin` here calls `savepoint` on the transaction handle instead, which is
  *    the only nesting `postgres` has.
- *  - the clone is created through `Object.create(this)` and nothing else. Class
- *    fields, including `readonly` ones, do not survive that: a subclass must not
- *    keep per-instance state the callback depends on, and every field the clone
- *    reads must be assigned in the constructor or be a prototype member. That is
- *    documented rather than worked around — any fix that copied fields would have
- *    to know them, which a base class cannot.
+ *  - the clone is created through `Object.create(this)` and nothing else. The clone's
+ *    prototype is the instance it was made from, so every field of that instance is
+ *    *readable* through the prototype chain — an earlier version of this comment said
+ *    they were not, which is wrong. What does not carry is a *write*: assigning to a
+ *    field on the clone creates an own property on the clone and leaves the original's
+ *    untouched, which is exactly why `pendingCacheOperations` can be swapped per clone
+ *    without disturbing the instance the callback was called on. A subclass that mutates
+ *    a field inside the callback and expects the change to outlive the transaction is
+ *    the case to avoid.
  *
  * The cache helper set is the template's `findOne`, `createOne`, `updateOne`,
  * `deleteOne` and `buildMethods`, unchanged apart from `RowCache` replacing the
@@ -39,6 +42,96 @@
 
 import type postgres from "postgres"
 import type { RowCache, Sql, Transaction } from "./ports.ts"
+
+/**
+ * Thrown when a transaction clone is used after its transaction has ended.
+ *
+ * The clone {@link DbServiceBase.begin} hands its callback is scoped to that
+ * transaction. A service that stores it — `this.db = tx` inside the callback — would
+ * otherwise keep a handle on the connection the transaction ran on, and a write through
+ * that handle later lands inside whatever transaction that connection is running next
+ * and disappears with that transaction's rollback. The write reports success on the way
+ * out, which is what makes the loss silent.
+ *
+ * This is the Postgres half of `SqliteScopeEndedError` in `sqlite.ts`, and it is thrown
+ * for the same reason.
+ *
+ * **It is thrown, not rejected.** The check sits on the executor itself, which the
+ * driver also uses synchronously (`sql(table)` renders an identifier and returns it), so
+ * one rule covers every call form. A method declared `async`, or one that awaits its
+ * query, turns the throw into the rejection its caller expects; a method that returns
+ * the tagged template unawaited sees it one tick earlier, as a throw.
+ */
+export class PostgresScopeEndedError extends Error {
+  constructor() {
+    super(
+      `this transaction clone belonged to a transaction that has already committed or ` +
+        `rolled back; a statement through it afterwards runs on the connection that ` +
+        `transaction was opened on, inside whatever transaction is open there now`,
+    )
+    this.name = "PostgresScopeEndedError"
+  }
+}
+
+/** A transaction executor that can be switched off, and the switch. */
+interface ScopedExecutor {
+  /** What the clone writes through until {@link end} is called. */
+  executor: Transaction
+  /** Retire the executor. Every later call through it throws. */
+  end: () => void
+}
+
+/**
+ * Wrap a transaction handle so it stops working when its transaction ends.
+ *
+ * A `Proxy` rather than a hand-written stand-in, because the driver's handle is a tag
+ * function carrying a dozen properties — `savepoint`, `unsafe`, `json`, the type
+ * helpers — and a stand-in would have to list them, so a property nobody thought of
+ * would quietly go around the check. The two traps cover the only two ways the handle is
+ * reached: calling it (`` sql`…` `` and `sql(identifier)`) and calling something on it
+ * (`sql.savepoint(…)`).
+ *
+ * Methods are applied to the real handle, not to the proxy, so `this` inside the driver
+ * is what it would have been without the wrapper.
+ */
+function scopeExecutor(executor: Transaction): ScopedExecutor {
+  let ended = false
+  const assertUsable = (): void => {
+    if (ended) throw new PostgresScopeEndedError()
+  }
+  const target = executor as unknown as (...parameters: unknown[]) => unknown
+  const proxy = new Proxy(target, {
+    apply(inner, _thisArg, parameters: unknown[]) {
+      assertUsable()
+      return Reflect.apply(inner, executor, parameters)
+    },
+    get(inner, property) {
+      const value = Reflect.get(inner, property)
+      if (typeof value !== "function") return value
+      return (...parameters: unknown[]) => {
+        assertUsable()
+        return Reflect.apply(value as (...args: unknown[]) => unknown, inner, parameters)
+      }
+    },
+  })
+  return {
+    executor: proxy as unknown as Transaction,
+    end: () => {
+      ended = true
+    },
+  }
+}
+
+/** The scope-ender used before a clone exists, so `begin`'s `finally` is unconditional. */
+const endNothing = (): void => {}
+
+/** A transaction clone and the switch that retires it. */
+interface TransactionClone<S> {
+  /** The service the callback is given. */
+  service: S
+  /** Retire the clone's executor. Every statement through it afterwards throws. */
+  endScope: () => void
+}
 
 /** Configuration for {@link DbServiceBase}. */
 export interface DbServiceBaseOptions {
@@ -138,15 +231,33 @@ export class DbServiceBase {
    * outermost commit, and a savepoint that threw contributes nothing: the outer
    * transaction can still roll back, and a cache holding rows the database never kept
    * is the failure this deferral exists to prevent.
+   *
+   * **The clone stops working when the transaction returns**, on the rollback path as
+   * well as the commit path, and every statement through it afterwards throws
+   * {@link PostgresScopeEndedError}. A service that stores it — `this.db = tx` — would
+   * otherwise keep writing through the connection that transaction ran on, into whatever
+   * transaction that connection is running next, and the row would disappear with that
+   * transaction's rollback after the write had reported success.
    */
   async begin<T>(fn: (tx: this) => Promise<T>): Promise<T> {
     if (this.pendingCacheOperations !== null) {
       return await this.beginSavepoint(fn, this.pendingCacheOperations)
     }
     const pendingCacheOperations: Array<() => Promise<void>> = []
-    const result = await this.client.begin(async (transaction: Transaction) => {
-      return await fn(this.cloneFor(transaction, pendingCacheOperations))
-    })
+    let endScope: () => void = endNothing
+    let result: unknown
+    try {
+      result = await this.client.begin(async (transaction: Transaction) => {
+        const clone = this.cloneFor(transaction, pendingCacheOperations)
+        endScope = clone.endScope
+        return await fn(clone.service)
+      })
+    } finally {
+      // Here and not inside the callback: the clone is dead once the transaction has
+      // returned, whether it committed or rolled back, and a callback that stored it
+      // cannot tell those apart either.
+      endScope()
+    }
     for (const operation of pendingCacheOperations) {
       await operation()
     }
@@ -163,6 +274,10 @@ export class DbServiceBase {
    * `outerQueue` is the queue of the transaction this savepoint sits inside. Inner
    * cache writes go to a queue of their own and are appended to it only once the
    * savepoint has returned, which is what makes a thrown savepoint leave no trace.
+   *
+   * The savepoint's clone is retired when the savepoint returns, exactly as
+   * {@link begin} retires its own: a clone kept past a savepoint is the same open door
+   * onto the connection, and the outer transaction is still running on it.
    */
   private async beginSavepoint<T>(
     fn: (tx: this) => Promise<T>,
@@ -170,19 +285,36 @@ export class DbServiceBase {
   ): Promise<T> {
     const innerQueue: Array<() => Promise<void>> = []
     const transaction = this.sql as unknown as Transaction
-    const result = await transaction.savepoint(async (savepoint: Transaction) => {
-      return await fn(this.cloneFor(savepoint, innerQueue))
-    })
+    let endScope: () => void = endNothing
+    let result: unknown
+    try {
+      result = await transaction.savepoint(async (savepoint: Transaction) => {
+        const clone = this.cloneFor(savepoint, innerQueue)
+        endScope = clone.endScope
+        return await fn(clone.service)
+      })
+    } finally {
+      endScope()
+    }
     outerQueue.push(...innerQueue)
     return result as T
   }
 
-  /** A clone of this service that writes through `executor` and queues its cache writes. */
-  private cloneFor(executor: Transaction, queue: Array<() => Promise<void>>): this {
+  /**
+   * A clone of this service that writes through `executor` and queues its cache writes.
+   *
+   * The executor the clone is given is a wrapper, not the driver's handle: `endScope`
+   * switches it off, and that is what stops a kept clone writing after its transaction.
+   */
+  private cloneFor(
+    executor: Transaction,
+    queue: Array<() => Promise<void>>,
+  ): TransactionClone<this> {
+    const scope = scopeExecutor(executor)
     const service = Object.create(this) as this
-    service.setSql(executor as unknown as Sql)
+    service.setSql(scope.executor as unknown as Sql)
     service.pendingCacheOperations = queue
-    return service
+    return { service, endScope: scope.end }
   }
 
   /** Fail now when the database is unreachable, rather than on the first query. */
