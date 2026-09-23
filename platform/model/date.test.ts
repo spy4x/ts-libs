@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 import { type } from "arktype"
+import { validate } from "@spy4x/validation"
 
 import { BaseModelSchema } from "./base-model.ts"
 import { DateNullableSchema, dateSchema } from "./date.ts"
@@ -202,6 +203,30 @@ describe("dateSchema", () => {
       expect((result as type.errors).summary).toContain(
         "createdAt must name a time zone: end the time with `Z` or an offset such as `+02:00`",
       )
+    })
+
+    /**
+     * `ctx.reject({ problem })` alone is not enough: arktype's `ArkError.expected` getter falls
+     * back to a per-node default config when `input.expected` is unset, and a bare `.narrow`
+     * predicate has none — reading it throws `Cannot read properties of undefined (reading
+     * 'name')`. That getter runs inside `toJSON`, so `JSON.stringify` on the rejection threw, and
+     * so did anything that serializes it downstream, such as `validate` from `@spy4x/validation`.
+     * Passing `expected` alongside `problem` fixes both without changing the rendered message
+     * (pinned above).
+     */
+    it("keeps the rejection JSON-serializable instead of throwing from a missing expected", () => {
+      const result = dateSchema("2024-02-29T10:00:00")
+      expect(result instanceof type.errors).toBe(true)
+      const json = JSON.stringify(result)
+      expect(json).toContain("must name a time zone")
+    })
+
+    it("keeps validate() from @spy4x/validation working, with the time-zone message reachable", () => {
+      const schema = type({ d: dateSchema.or("''") })
+      const result = validate(schema, { d: "2024-02-29T10:00" })
+      expect(result.error).not.toBeNull()
+      const json = JSON.stringify(result.error?.details)
+      expect(json).toContain("must name a time zone")
     })
 
     it("still accepts the same date-time with a lower-case z", () => {

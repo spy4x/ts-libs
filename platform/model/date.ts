@@ -108,7 +108,12 @@ const isoCalendarDateSchema = type("string.date.iso")
     // "must be {text}", which reads oddly ("must be name a time zone…") for a message that is
     // not a noun phrase completing "must be". Setting `problem` directly writes the message
     // verbatim (after the path prefix arktype still adds), so it reads as ordinary prose.
+    // `expected` is required too, even though `problem` already covers the rendered message:
+    // arktype's default `expected` config for a bare predicate node reads a property off
+    // `undefined` when nothing sets it, so `JSON.stringify` on the rejection (and anything that
+    // serializes it, like `validate` from `@spy4x/validation`) throws instead of returning it.
     ctx.reject({
+      expected: "a date-time ending in Z or an offset",
       problem: "must name a time zone: end the time with `Z` or an offset such as `+02:00`",
     })
   )
