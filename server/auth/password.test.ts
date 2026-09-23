@@ -6,7 +6,7 @@ import {
   SecondFactorStatus,
   SessionManager,
   SessionStatus,
-} from "@ts-libs/server/sign-in"
+} from "@spy4x/server/sign-in"
 import { createClock, createFakeStore, PEPPER } from "../sign-in/fake-store.test.ts"
 import { MemoryAuthStore } from "./memory-store.ts"
 import type { AuthSessionRecord } from "./model.ts"

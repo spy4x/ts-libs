@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/net` — outbound-request primitives.
+ * `@spy4x/net` — outbound-request primitives.
  *
  * Three layers, usable independently:
  *

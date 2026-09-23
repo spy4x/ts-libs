@@ -111,19 +111,19 @@ export function isHoneypotFilled(value: string): boolean {
  * why `"Europe/Berlin"` and `"UTC"` pass while `"EST5EDT "` — one trailing space — fails.
  *
  * `time/tz.ts:107` is the canonical plain version of this predicate (`isValidTimeZone`). A sibling
- * *subpath* import (`@ts-libs/time/tz`) does resolve and does pass the publish gate; only the bare
- * `@ts-libs/time` specifier fails, because that package declares no `"."` export. The probe is
- * still repeated here, as a decision rather than a constraint: it keeps `@ts-libs/platform` free of
+ * *subpath* import (`@spy4x/time/tz`) does resolve and does pass the publish gate; only the bare
+ * `@spy4x/time` specifier fails, because that package declares no `"."` export. The probe is
+ * still repeated here, as a decision rather than a constraint: it keeps `@spy4x/platform` free of
  * a cross-package dependency edge (`#17` must not couple to `#2`/`#10`'s packages) for three lines
  * of platform API, not an algorithm. The exported name is {@link isValidTimeZoneName} so this one
  * and the canonical one can not be confused or shadow each other.
  *
- * @see `@ts-libs/time/tz` (`isValidTimeZone`) — the implementation a caller with a larger time-zone
+ * @see `@spy4x/time/tz` (`isValidTimeZone`) — the implementation a caller with a larger time-zone
  * need should use.
  */
 export function isValidTimeZoneName(value: string): boolean {
   try {
-    // Canonical sibling equivalent: `import { isValidTimeZone } from "@ts-libs/time/tz"`.
+    // Canonical sibling equivalent: `import { isValidTimeZone } from "@spy4x/time/tz"`.
     new Intl.DateTimeFormat("en", { timeZone: value })
     return true
   } catch {

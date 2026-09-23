@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/server/config` — environment to typed config, over an injected `EnvReader`.
+ * `@spy4x/server/config` — environment to typed config, over an injected `EnvReader`.
  *
  * Import the barrel for both halves, or a subpath (`./env.ts`, `./config.ts`) directly within the
  * package.

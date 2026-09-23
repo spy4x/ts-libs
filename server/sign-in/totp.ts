@@ -17,11 +17,11 @@
 //
 // Guessing is not limited here. Six digits across three accepted steps means a random guess succeeds
 // about once in 333 000 tries, so the app must rate-limit this check per user (see
-// `@ts-libs/platform/rate-limit`).
+// `@spy4x/platform/rate-limit`).
 
 import * as OTPAuth from "otpauth"
 import { qrcode } from "qrcode"
-import { type Clock, systemClock } from "@ts-libs/platform/universal/time"
+import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 
 /** Digits in a code. */
 export const TOTP_DIGITS = 6

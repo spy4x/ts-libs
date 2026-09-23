@@ -42,7 +42,7 @@
  * index; it is not enforced here because this repository reads and updates rows but
  * never creates or migrates the table.
  */
-import type { Sql } from "@ts-libs/server/db"
+import type { Sql } from "@spy4x/server/db"
 import type { OutboxEvent, OutboxRepository } from "./processor.ts"
 
 export class PostgresOutboxRepository implements OutboxRepository {
@@ -68,7 +68,7 @@ export class PostgresOutboxRepository implements OutboxRepository {
    *
    * Every returned column is aliased to its `OutboxEvent` field name in the query
    * itself, rather than relying on the caller's `Sql` having been created with a
-   * snake-to-camel row transform. `@ts-libs/server/db`'s `createSql` does not default
+   * snake-to-camel row transform. `@spy4x/server/db`'s `createSql` does not default
    * to one (unlike the template's own client, which set `transform: postgres.camel`
    * globally) — aliasing here means this repository's row shape does not depend on
    * how the caller configured their pool.

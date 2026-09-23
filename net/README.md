@@ -1,4 +1,4 @@
-# `@ts-libs/net`
+# `@spy4x/net`
 
 Outbound-request primitives for Deno: a URL shape normaliser, an SSRF guard, a
 redirect-safe `fetch`, and bounded body readers.
@@ -55,7 +55,7 @@ are allowed.
 ## The injectable resolver
 
 ```ts
-import { type DnsResolver, validatePublicUrl } from "@ts-libs/net/url-policy"
+import { type DnsResolver, validatePublicUrl } from "@spy4x/net/url-policy"
 
 export const staticResolver: DnsResolver = {
   resolve: (host) => Promise.resolve(host === "example.com" ? ["93.184.216.34"] : []),
@@ -119,7 +119,7 @@ One spelling of "this machine" is left over, and it is named below. The list is
 exported so it does not have to be retyped:
 
 ```ts
-import { DENY_NET_ADDRESSES, denyNetFlag } from "@ts-libs/net/url-policy"
+import { DENY_NET_ADDRESSES, denyNetFlag } from "@spy4x/net/url-policy"
 
 console.log(denyNetFlag())
 // --deny-net=10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,…,[::1],[::]

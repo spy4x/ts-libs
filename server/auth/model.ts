@@ -15,8 +15,8 @@
  * @module
  */
 
-import { isAddress } from "@ts-libs/email/address"
-import type { SessionRecord } from "@ts-libs/server/sign-in"
+import { isAddress } from "@spy4x/email/address"
+import type { SessionRecord } from "@spy4x/server/sign-in"
 
 /** A signed-in person. Minimal on purpose: the app keeps its profile in its own table keyed by `id`. */
 export interface AuthUser {
@@ -67,7 +67,7 @@ export interface NewAuthKey {
   provenAt: Date | null
 }
 
-/** Session row: `SessionRecord` from `@ts-libs/server/sign-in` plus the key that created it. */
+/** Session row: `SessionRecord` from `@spy4x/server/sign-in` plus the key that created it. */
 export interface AuthSessionRecord extends SessionRecord {
   keyId: number
 }
@@ -79,7 +79,7 @@ export const MAX_EMAIL_LENGTH = 254
  * Lower-cases and trims an address and checks its shape; null when it is not an address.
  * "A@X.com" and "a@x.com" normalise to the same value.
  *
- * The shape check is `isAddress` from `@ts-libs/email/address`, so every address this accepts is
+ * The shape check is `isAddress` from `@spy4x/email/address`, so every address this accepts is
  * one the email package will send to.
  */
 export function normalizeEmail(raw: unknown): string | null {

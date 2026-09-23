@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/server/sign-in` — the building blocks a sign-in method stands on: server-side sessions
+ * `@spy4x/server/sign-in` — the building blocks a sign-in method stands on: server-side sessions
  * behind an app-supplied store, the signed session cookie, Hono middleware and guards, password
  * hashing with a pepper, and authenticator-app codes. See `server/README.md`.
  *

@@ -1,4 +1,4 @@
-# @ts-libs/email
+# @spy4x/email
 
 Email primitives: an SMTP transport behind a small `EmailSender` port, and a pure
 RFC 6376 DKIM verifier. The root entry point `"."` re-exports both halves
@@ -6,8 +6,8 @@ RFC 6376 DKIM verifier. The root entry point `"."` re-exports both halves
 `./smtp` and `./dkim-verify`.
 
 ```ts
-import { createSmtpSender } from "@ts-libs/email/smtp"
-import { escapeHtml, htmlWrap } from "@ts-libs/email/html"
+import { createSmtpSender } from "@spy4x/email/smtp"
+import { escapeHtml, htmlWrap } from "@spy4x/email/html"
 
 const sender = createSmtpSender({
   host: "smtp.example.com",
@@ -57,13 +57,13 @@ point.
 
 ## Exports
 
-| Specifier                | Contents                                                                                        |
-| ------------------------ | ----------------------------------------------------------------------------------------------- |
-| `@ts-libs/email/smtp`    | `createSmtpSender`, `SmtpOptions`, the transport factory seam                                   |
-| `@ts-libs/email/sender`  | `EmailSender`, `SendResult`, `createConsoleSender`                                              |
-| `@ts-libs/email/message` | `EmailMessage`, validation, timezone framing, ICS attachment                                    |
-| `@ts-libs/email/html`    | `escapeHtml`, `htmlWrap`, `HtmlShellTheme`, `DEFAULT_HTML_SHELL_THEME`, `DARK_HTML_SHELL_THEME` |
-| `@ts-libs/email/address` | mailbox parsing, formatting and list deduplication                                              |
+| Specifier              | Contents                                                                                        |
+| ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `@spy4x/email/smtp`    | `createSmtpSender`, `SmtpOptions`, the transport factory seam                                   |
+| `@spy4x/email/sender`  | `EmailSender`, `SendResult`, `createConsoleSender`                                              |
+| `@spy4x/email/message` | `EmailMessage`, validation, timezone framing, ICS attachment                                    |
+| `@spy4x/email/html`    | `escapeHtml`, `htmlWrap`, `HtmlShellTheme`, `DEFAULT_HTML_SHELL_THEME`, `DARK_HTML_SHELL_THEME` |
+| `@spy4x/email/address` | mailbox parsing, formatting and list deduplication                                              |
 
 ## The `EmailSender` port
 
@@ -207,7 +207,7 @@ same for an absolute instant, and the `*Short` variants drop the zone name for a
 subject line. An unknown recipient zone falls back to the source zone; an unknown
 _source_ zone throws `RangeError` rather than reaching `Intl`.
 
-The zone math is `@ts-libs/time/tz` — `zonedDateTime`, `formatInstantLong`,
+The zone math is `@spy4x/time/tz` — `zonedDateTime`, `formatInstantLong`,
 `formatInstantShort`, `validTimeZoneOr`, `isValidTimeZone`. Nothing here
 reimplements it, and nothing reads the host `TZ`, so the same input produces the
 same output on every machine.
@@ -215,7 +215,7 @@ same output on every machine.
 ## ICS attachments
 
 `icalAttachment(event, { ics, filename? })` builds a `text/calendar` attachment
-from `@ts-libs/time/ics` (`generateIcs`) — there is no second ICS writer here. The
+from `@spy4x/time/ics` (`generateIcs`) — there is no second ICS writer here. The
 MIME type's `method` parameter is read back out of the generated document, so a
 `Content-Type` announcing `REQUEST` for a body that says `CANCEL` is not
 expressible. Non-ASCII filenames are emitted per RFC 2231 (`filename*0*=utf-8''…`)
@@ -239,7 +239,7 @@ by the transport.
 ## DKIM verification
 
 ```ts
-import { fetchDkimPublicKey, verifyDkim } from "@ts-libs/email"
+import { fetchDkimPublicKey, verifyDkim } from "@spy4x/email"
 
 // Key supplied by the caller — no permissions needed.
 const key = await fetchDkimPublicKey("example.com", "sel", { resolver })

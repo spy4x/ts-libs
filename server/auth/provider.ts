@@ -1,12 +1,12 @@
 /**
  * The shared shape every sign-in provider (password, email code, OAuth) returns and depends on.
- * Additive to `@ts-libs/server/auth`: it names no new store method and changes no existing export.
+ * Additive to `@spy4x/server/auth`: it names no new store method and changes no existing export.
  *
  * @module
  */
 
-import type { Clock } from "@ts-libs/platform/universal/time"
-import type { CreatedSession, SecondFactorStatus, SessionManager } from "@ts-libs/server/sign-in"
+import type { Clock } from "@spy4x/platform/universal/time"
+import type { CreatedSession, SecondFactorStatus, SessionManager } from "@spy4x/server/sign-in"
 
 import type { AuthKey, AuthSessionRecord, AuthUser } from "./model.ts"
 import type { AuthStore } from "./store.ts"

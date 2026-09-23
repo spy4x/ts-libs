@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/platform/cache` — a JSON cache in front of a pluggable {@link ICacheStorage}.
+ * `@spy4x/platform/cache` — a JSON cache in front of a pluggable {@link ICacheStorage}.
  *
  * - {@link CacheService} — `get`/`set`/`delete`/`wrap`/`reset` over one `ICacheStorage`.
  * - {@link buildMethods} — a namespaced, optionally schema-validated view for one record type.

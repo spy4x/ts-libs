@@ -8,7 +8,7 @@
 import { assertEquals, assertFalse, assertInstanceOf, assertNotEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 
-import type { DnsResolver } from "@ts-libs/net/url-policy"
+import type { DnsResolver } from "@spy4x/net/url-policy"
 
 import { CryptoError, CryptoErrorCode, CryptoService, maskKey } from "./crypto.ts"
 import type { SecretCipher } from "./crypto.ts"

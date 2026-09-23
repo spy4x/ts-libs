@@ -12,7 +12,7 @@
 
 import { deleteCookie, getSignedCookie, setCookie, setSignedCookie } from "hono/cookie"
 import type { Context } from "hono"
-import { type Clock, systemClock } from "@ts-libs/platform/universal/time"
+import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import { requireSecret } from "./secret.ts"
 
 /** Default name of the signed session cookie, as in the template. */

@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/platform/cqrs` — an in-process command bus, query bus and event bus.
+ * `@spy4x/platform/cqrs` — an in-process command bus, query bus and event bus.
  *
  * - {@link CommandBus} — one handler per command class, type-inferred result.
  * - {@link QueryBus} — same shape as `CommandBus`, kept distinct so a read cannot register where a

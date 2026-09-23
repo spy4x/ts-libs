@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/server/db` — the Postgres and SQLite layers, plus the migration runner
+ * `@spy4x/server/db` — the Postgres and SQLite layers, plus the migration runner
  * they share.
  *
  * Nothing here reads `Deno.env` at import time and nothing opens a connection at

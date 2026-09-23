@@ -1,4 +1,4 @@
-# @ts-libs/integrations
+# @spy4x/integrations
 
 Outbound integration clients and inbound webhook verification. Zero dependencies, no SDKs — every
 client is a thin `fetch` wrapper with an injectable transport.

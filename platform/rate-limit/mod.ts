@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/platform/rate-limit` — sliding-window rate limiting with a pluggable store.
+ * `@spy4x/platform/rate-limit` — sliding-window rate limiting with a pluggable store.
  *
  * - {@link createMemoryRateLimiter} — in-process, for one isolate.
  * - {@link createStoreLimiter} + `kv.ts` — shared store, for several instances.

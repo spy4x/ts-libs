@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert"
-import type { ICacheStorage } from "@ts-libs/platform/cache"
+import type { ICacheStorage } from "@spy4x/platform/cache"
 import type { RedisKvStore } from "./mod.ts"
 
 // `server/kv` and `platform/cache` were extracted side by side in wave 6 (#75), so the store could

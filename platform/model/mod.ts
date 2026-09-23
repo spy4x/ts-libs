@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/platform/model` — arktype schemas for the shapes shared across products: dates, the
+ * `@spy4x/platform/model` — arktype schemas for the shapes shared across products: dates, the
  * base persisted-record schema, and the Web Push wire format.
  *
  * - {@link dateSchema} / {@link DateNullableSchema} — a field that accepts a `Date` or an ISO 8601

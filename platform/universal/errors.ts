@@ -2,12 +2,12 @@
  * The error vocabulary the inventory batch agreed on, and the `Result` used to return one.
  *
  * `ErrType` is the discriminant: a caller switches on `error.type` and gets a narrowed interface,
- * never a bare `Error` string. `ValidationError` is *re-exported* from `@ts-libs/validation`
+ * never a bare `Error` string. `ValidationError` is *re-exported* from `@spy4x/validation`
  * rather than redeclared — this package does not own a validation model, and issue #23 owns the
  * single `{ description, details }` envelope.
  */
 
-import type { ValidationError as ValidationErrorShape } from "@ts-libs/validation"
+import type { ValidationError as ValidationErrorShape } from "@spy4x/validation"
 
 /** Category of a failed operation. Numeric so it is cheap to switch on and serialise. */
 export enum ErrType {
@@ -34,7 +34,7 @@ export interface Err {
 /**
  * A rejected input, carrying arktype's own errors.
  *
- * Alias of `@ts-libs/validation`'s `ValidationError` — kept under this name because
+ * Alias of `@spy4x/validation`'s `ValidationError` — kept under this name because
  * {@link ServerError} / {@link ConnectionError} live here and a caller should be able to import
  * the whole vocabulary from one place. It is not a second envelope.
  */

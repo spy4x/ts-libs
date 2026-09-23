@@ -20,13 +20,13 @@
  * 4. `wrap` lets a caller that finds another caller's `fn()` for the same key still running on
  *    this instance await that call instead of starting its own; it is not a lock.
  *
- * A fifth change: `schema` is an arktype `Type`, validated through `@ts-libs/validation`'s
+ * A fifth change: `schema` is an arktype `Type`, validated through `@spy4x/validation`'s
  * `validate`, not the source's `ValidationSchema` from its own `@platform/types` — this package
  * has no validator of its own and never will (issue #23).
  */
 
 import type { Type } from "arktype"
-import { validate } from "@ts-libs/validation"
+import { validate } from "@spy4x/validation"
 
 /** ISO-8601 UTC timestamp, with or without milliseconds. */
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/

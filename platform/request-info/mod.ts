@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/platform/request-info` — request metadata for a log line or an error report, built
+ * `@spy4x/platform/request-info` — request metadata for a log line or an error report, built
  * from a Hono context.
  *
  * {@link requestInfoFromContext} reads the client IP through `platform/rate-limit/client-ip.ts`'s

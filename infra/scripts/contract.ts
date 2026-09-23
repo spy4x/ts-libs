@@ -16,55 +16,55 @@ interface Entry {
 }
 
 const ENTRIES: Entry[] = [
-  { specifier: "@ts-libs/validation", capability: "schema validation" },
-  { specifier: "@ts-libs/platform/cqrs", capability: "command, query and event bus" },
-  { specifier: "@ts-libs/platform/cache", capability: "cache with `wrap()`" },
-  { specifier: "@ts-libs/platform/tokens", capability: "random tokens" },
-  { specifier: "@ts-libs/platform/rate-limit", capability: "rate limiting" },
-  { specifier: "@ts-libs/platform/rate-limit/hono", capability: "rate limiting" },
-  { specifier: "@ts-libs/platform/api", capability: "shared API and model types" },
-  { specifier: "@ts-libs/platform/request-info", capability: "shared API and model types" },
-  { specifier: "@ts-libs/platform/model", capability: "shared API and model types" },
-  { specifier: "@ts-libs/server/kv", capability: "Redis key-value store" },
-  { specifier: "@ts-libs/server/outbox", capability: "transactional outbox" },
+  { specifier: "@spy4x/validation", capability: "schema validation" },
+  { specifier: "@spy4x/platform/cqrs", capability: "command, query and event bus" },
+  { specifier: "@spy4x/platform/cache", capability: "cache with `wrap()`" },
+  { specifier: "@spy4x/platform/tokens", capability: "random tokens" },
+  { specifier: "@spy4x/platform/rate-limit", capability: "rate limiting" },
+  { specifier: "@spy4x/platform/rate-limit/hono", capability: "rate limiting" },
+  { specifier: "@spy4x/platform/api", capability: "shared API and model types" },
+  { specifier: "@spy4x/platform/request-info", capability: "shared API and model types" },
+  { specifier: "@spy4x/platform/model", capability: "shared API and model types" },
+  { specifier: "@spy4x/server/kv", capability: "Redis key-value store" },
+  { specifier: "@spy4x/server/outbox", capability: "transactional outbox" },
   {
-    specifier: "@ts-libs/server/sign-in",
+    specifier: "@spy4x/server/sign-in",
     capability: "session, cookie, TOTP, password hash, auth guards",
   },
   {
-    specifier: "@ts-libs/server/auth",
+    specifier: "@spy4x/server/auth",
     capability: "password sign-up and sign-in, mail codes, OAuth (the account model and store)",
   },
   {
-    specifier: "@ts-libs/server/auth/postgres",
+    specifier: "@spy4x/server/auth/postgres",
     capability: "password sign-up and sign-in, mail codes, OAuth (the account model and store)",
   },
   {
-    specifier: "@ts-libs/server/auth/password",
+    specifier: "@spy4x/server/auth/password",
     capability: "password sign-up and sign-in, mail codes, OAuth (password)",
   },
   {
-    specifier: "@ts-libs/server/auth/email-code",
+    specifier: "@spy4x/server/auth/email-code",
     capability: "password sign-up and sign-in, mail codes, OAuth (mail codes)",
   },
   {
-    specifier: "@ts-libs/server/auth/oauth",
+    specifier: "@spy4x/server/auth/oauth",
     capability: "password sign-up and sign-in, mail codes, OAuth (OAuth)",
   },
   {
-    specifier: "@ts-libs/server/auth/oauth-google",
+    specifier: "@spy4x/server/auth/oauth-google",
     capability: "password sign-up and sign-in, mail codes, OAuth (Google)",
   },
-  { specifier: "@ts-libs/server/request-log", capability: "request logging" },
-  { specifier: "@ts-libs/server/config", capability: "typed config from the environment" },
-  { specifier: "@ts-libs/server/crypto", capability: "field encryption" },
-  { specifier: "@ts-libs/server/db", capability: "Postgres access, transactions, migrations" },
+  { specifier: "@spy4x/server/request-log", capability: "request logging" },
+  { specifier: "@spy4x/server/config", capability: "typed config from the environment" },
+  { specifier: "@spy4x/server/crypto", capability: "field encryption" },
+  { specifier: "@spy4x/server/db", capability: "Postgres access, transactions, migrations" },
   {
-    specifier: "@ts-libs/server/db/migrate",
+    specifier: "@spy4x/server/db/migrate",
     capability: "Postgres access, transactions, migrations",
   },
   {
-    specifier: "@ts-libs/server/db/postgres",
+    specifier: "@spy4x/server/db/postgres",
     capability: "Postgres access, transactions, migrations",
   },
 ]
@@ -94,7 +94,7 @@ interface DocSymbol {
   declarations: DocDeclaration[]
 }
 
-/** Resolves `@ts-libs/<package>/<subpath>` to a file through that package's `deno.json`. */
+/** Resolves `@spy4x/<package>/<subpath>` to a file through that package's `deno.json`. */
 async function resolveEntry(specifier: string): Promise<string> {
   const [, pkg, ...rest] = specifier.split("/")
   const config = JSON.parse(await Deno.readTextFile(`${pkg}/deno.json`))

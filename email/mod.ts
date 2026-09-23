@@ -1,5 +1,5 @@
 /**
- * Barrel entry point for `@ts-libs/email`: the whole public surface, both halves.
+ * Barrel entry point for `@spy4x/email`: the whole public surface, both halves.
  *
  * Created at merge time. Neither feature branch owned `"."` — the SMTP branch
  * shipped five subpaths and no root entry, and the DKIM branch's `"."` pointed at

@@ -1,6 +1,6 @@
 {
-  "name": "@ts-libs/time",
-  "version": "0.1.0",
+  "name": "@spy4x/time",
+  "version": "1.0.0",
   "exports": {
     "./tz": "./tz.ts",
     "./ics": "./ics.ts",

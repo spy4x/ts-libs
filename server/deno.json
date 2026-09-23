@@ -1,6 +1,6 @@
 {
-  "name": "@ts-libs/server",
-  "version": "0.1.0",
+  "name": "@spy4x/server",
+  "version": "1.0.0",
   "exports": {
     "./http/bounded-body": "./http/bounded-body.ts",
     "./http/cors": "./http/cors.ts",

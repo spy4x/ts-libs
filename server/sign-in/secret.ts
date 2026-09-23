@@ -3,7 +3,7 @@
 // `platform/tokens.ts` has the same rule in `assertUsableSecret`, but does not export it. Only its
 // floor, `MIN_SECRET_LENGTH`, is shared, so both modules reject the same secrets.
 
-import { MIN_SECRET_LENGTH } from "@ts-libs/platform/tokens"
+import { MIN_SECRET_LENGTH } from "@spy4x/platform/tokens"
 
 /**
  * Throws unless `value` is a printable-ASCII string of at least {@link MIN_SECRET_LENGTH}

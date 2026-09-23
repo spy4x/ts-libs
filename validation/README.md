@@ -1,11 +1,11 @@
-# @ts-libs/validation
+# @spy4x/validation
 
 arktype parsing and form-validation state. Framework-agnostic: it imports `arktype` and nothing
 else, has no framework import of any kind, and mutates no global state.
 
 ```ts
 import { type } from "arktype"
-import { isValid, validate, validateSchema } from "@ts-libs/validation"
+import { isValid, validate, validateSchema } from "@spy4x/validation"
 
 const userSchema = type({ name: "1 <= string <= 10", joinedAt: "string.date.iso.parse" })
 
@@ -31,7 +31,7 @@ only wants one line reads `.error.description`, and a consumer that wants per-fi
 `.error.details.flatByPath`. One shape means `platform/helpers` (#10) does not ship a fourth variant.
 
 **Template migration.** Replace `import { validate } from "@template/platform/types"` with
-`import { validate } from "@ts-libs/validation"`. The result is unchanged, except that this package
+`import { validate } from "@spy4x/validation"`. The result is unchanged, except that this package
 does **not** run `configure({ onUndeclaredKey: "reject", onDeepUndeclaredKey: "reject" })` — see
 below.
 

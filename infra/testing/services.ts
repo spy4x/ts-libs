@@ -4,7 +4,7 @@
  *
  * This module lives in `infra/` rather than in a package because it is repository
  * tooling: `infra/` is deliberately not a workspace member, so nothing here can be
- * published to JSR by accident or imported by a consumer of `@ts-libs/*`.
+ * published to JSR by accident or imported by a consumer of `@spy4x/*`.
  *
  * Every address has a default that matches `infra/compose.integration.yml`, and an
  * environment variable that overrides it. CI sets the variables to the Woodpecker
@@ -58,7 +58,7 @@ export interface ServiceAddress {
   envName: IntegrationEnvName
 }
 
-/** Connection fields for `createSql` from `@ts-libs/server/db`, plus the address to probe. */
+/** Connection fields for `createSql` from `@spy4x/server/db`, plus the address to probe. */
 export interface PostgresSettings {
   connection: {
     host: string

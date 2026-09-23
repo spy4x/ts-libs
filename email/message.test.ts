@@ -6,7 +6,7 @@
 // is expected to pass identically under `TZ=Pacific/Kiritimati`.
 
 import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert"
-import { type IcsEvent, IcsEventStatus, type IcsOptions } from "@ts-libs/time/ics"
+import { type IcsEvent, IcsEventStatus, type IcsOptions } from "@spy4x/time/ics"
 import {
   assertSendableMessage,
   type EmailMessage,

@@ -8,7 +8,7 @@
  *    makes the module untestable without a global stub. Here the `Storage`-shaped object is a
  *    parameter, so this works against a real `localStorage`, a `Map`-backed fake, or a namespaced
  *    adapter.
- * 2. **Validation through `@ts-libs/validation`.** The written value is checked against the schema
+ * 2. **Validation through `@spy4x/validation`.** The written value is checked against the schema
  *    before it is stored, not only on read — an invalid writer is a bug, and a test is where it
  *    should surface. A read that fails validation evicts the entry, because a stored value that no
  *    longer matches its schema is stale, not merely missing.
@@ -17,7 +17,7 @@
 import type { Type } from "arktype"
 
 import type { InferSchema } from "../universal/schema.ts"
-import { validate } from "@ts-libs/validation"
+import { validate } from "@spy4x/validation"
 
 /** The subset of the DOM `Storage` interface this module uses. */
 export interface StorageLike {

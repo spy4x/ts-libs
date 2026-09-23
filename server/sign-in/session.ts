@@ -21,8 +21,8 @@
 //   compared false and so never expired. Expiry is now `expiresAt <= now`, and a value that is not
 //   a valid `Date` stops the request.
 
-import { constantTimeEquals, randomBase64Url } from "@ts-libs/platform/tokens"
-import { type Clock, systemClock } from "@ts-libs/platform/universal/time"
+import { constantTimeEquals, randomBase64Url } from "@spy4x/platform/tokens"
+import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import { encodeHex } from "@std/encoding/hex"
 import { requireSecret } from "./secret.ts"
 

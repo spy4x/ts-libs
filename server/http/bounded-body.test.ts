@@ -2,7 +2,7 @@ import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert"
 import {
   BodyReadTimeoutError as NetBodyReadTimeoutError,
   PayloadTooLargeError as NetPayloadTooLargeError,
-} from "@ts-libs/net/bounded-body"
+} from "@spy4x/net/bounded-body"
 import {
   // `BodySource` and `ReadBoundedBodyOptions` are imported for the compile-time
   // pin only. A type has no runtime presence, so the `in surface` test below can
