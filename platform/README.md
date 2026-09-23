@@ -119,14 +119,58 @@ stream, and nothing in this workspace called `sha256OfStream`) were removed, alo
 `platform/scripts/memory-probe.ts` script that measured `hash-file`'s buffering — a script is not a
 module and would have shipped with the package.
 
-Not in this package, deliberately: `cqrs`, `types`, `cache`, `config`, `uuid`, `rate-limit` (owned
-by `@ts-libs/*` template modules or issue #4), money/currency helpers (their own issue), and
-anything Preact- or DOM-component-shaped.
+Not in this package, deliberately: `types`, `config`, `uuid`, `rate-limit` (owned by `@ts-libs/*`
+template modules or issue #4), money/currency helpers (their own issue), and anything Preact- or
+DOM-component-shaped.
 
-`cache` includes `gb`'s `publicAPICache` registry (`buildMethods` / `CacheTTL`) and its
-`redis.expiretime` re-verification on read. `spy4x/template` already ships `libs/platform/cache`
-with `CacheService` and `ICacheStorage`, so neither is duplicated here; the registry and the
-expiretime re-check belong in that module.
+### `./cqrs` → `cqrs/mod.ts` (4 modules)
+
+An in-process command bus, query bus and event bus, ported from `template/libs/platform/cqrs`
+(cross-checked against `financy/libs/shared/cqrs`, which differs only in comments — the two are the
+same code). `~/sync/code/gb` was not present in this checkout, so it could not be compared; issue
+#75 names it as a possible third source and this is recorded here in case a later PR finds one.
+
+| Module             | Contents                                                           |
+| ------------------ | ------------------------------------------------------------------ |
+| `cqrs/command-bus` | `CommandBus` — one handler per command class                       |
+| `cqrs/query-bus`   | `QueryBus` — same shape, kept a distinct type from the command bus |
+| `cqrs/event-bus`   | `EventBus` — publish/subscribe, delivered on a microtask           |
+| `cqrs/types`       | `Command`, `Query`, `Event` and their constructor/handler types    |
+
+`EventBus.emit` isolates listeners from each other: the source's `for` loop let the first listener
+that threw abort every listener after it, and the throw surfaced as an uncaught exception inside
+the microtask `emit` schedules it on. Here a listener failure — a synchronous throw or a rejected
+returned promise — is reported through a constructor-supplied `onListenerError` (`console.error` by
+default) instead. `once` also used to leak a subscription when its listener threw, because the
+source unsubscribed _after_ calling the listener; here the unsubscribe runs first.
+
+### `./cache` → `cache/mod.ts` (1 module)
+
+A JSON cache in front of a pluggable `ICacheStorage`, ported from `template/libs/platform/cache`
+(cross-checked against `financy/libs/shared/cache`, which differs from the template only in using a
+hardcoded `number` id instead of `string | number`, and lacking the date-reviving `JSON.parse`
+reviver — template's is kept, made opt-in). `ICacheStorage`'s method names and meaning are unchanged
+from the source: `server/kv`, a later unit of the same wave, implements it over Redis.
+
+Four behaviour changes, all because this package ships to consumers it does not control, unlike an
+app's own `libs/`:
+
+- The date-reviving reviver (a property named `...At` holding an ISO string becomes a `Date`) is
+  opt-in (`reviveIsoDatesEndingInAt`, passed via `CacheServiceOptions.reviver`), not applied to
+  every cached value unconditionally. The unconditional version also fires on any field that merely
+  ends in "At" without meaning a date.
+- `set`/`wrap`'s TTL is named and typed as seconds throughout. The source's `ICacheService`
+  interface named the parameter `ttlMs` while every implementation and caller treated it as seconds
+  with no conversion — a caller trusting the interface's name and passing milliseconds would get a
+  cache entry roughly 1000x longer-lived than intended.
+- A TTL is validated and rounded up to a whole second before it reaches storage, so a sub-second
+  request cannot arrive as `0` — which Redis's `EXPIRE` and other stores read as "no expiry" or
+  reject outright.
+- `wrap` coalesces concurrent calls for the same key on one instance into a single `fn()` call,
+  instead of letting every caller past the first start its own.
+
+No in-memory `ICacheStorage` ships from this package, matching the source: its own fake
+(`MemoryCacheStorage`) lived in its test file, not as a library export, and stays that way here too.
 
 ## The error vocabulary and the result convention
 
@@ -189,6 +233,6 @@ what makes it runnable under the root test task's permission grant. Two conseque
 ## Out of scope
 
 - Money and currency (see the dedicated issue).
-- `cqrs`, `types`, `cache`, `config`, `uuid` — already template modules; not re-extracted.
+- `types`, `config`, `uuid` — still template modules; not re-extracted here.
 - `rate-limit` — issue #4.
 - Preact components and anything that renders markup.
