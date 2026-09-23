@@ -6,15 +6,19 @@
  * to a `Date`.
  *
  * Moved from `template/libs/platform/types/+index.ts`. **Bugs fixed at extraction time (#131,
- * #136).** The source was `type("Date | string.date.iso.parse")`: arktype's
+ * #136, #135).** The source was `type("Date | string.date.iso.parse")`: arktype's
  * `string.date.iso.parse` checks the string's *shape* against the ISO 8601 grammar and then parses
  * it with `new Date(...)`. `new Date` silently rolls an out-of-range day or month into the next one
  * instead of refusing it — `new Date("2026-02-30")` is 2 March 2026, not an error — so the source
  * accepted and stored a date that was never on any calendar (#131). V8 also reads two shapes the
  * grammar allows as the wrong date: an ordinal date (`"2024-005"`, 5 January, becomes 1 May) and a
  * year with a sign (`"-2024-01-01"` becomes 2024, `"+0099-12-31"` becomes 1999) (#136). See
- * {@link isRealCalendarDate} for how each is refused. A string that is a year, a year and month, or
- * a `YYYY-MM-DD` date, with or without a time, parses as the source parsed it.
+ * {@link isRealCalendarDate} for how each is refused. A date-time string with a time but no offset
+ * and no `Z`, such as `"2024-02-29T10:00:00"`, is refused too (#135): the ECMA-262 date-time
+ * production reads it in the host's own time zone, so the same string names a different instant on
+ * a laptop set to one zone and a server set to another. A year, a year and month, or a `YYYY-MM-DD`
+ * date — with no time part at all — is read as UTC midnight by the same specification and stays
+ * accepted, because that reading does not depend on the host's time zone.
  */
 import { type Out, type Type, type } from "arktype"
 
@@ -22,6 +26,12 @@ const ISO_CALENDAR_DATE_PREFIX = /^(\d{4})-(\d{2})-(\d{2})/
 
 /** An ordinal date, `YYYY-DDD`, with or without a time after it. */
 const ISO_ORDINAL_DATE = /^\d{4}-\d{3}(?!\d)/
+
+/**
+ * A time-of-day (`Thh:mm` or `Thh:mm:ss[.fff]`) that is not followed by `Z` or a numeric offset.
+ * Anchored at the end of the string: an offset or `Z` after the time means this does not match.
+ */
+const ISO_TIME_WITHOUT_OFFSET = /T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/
 
 /**
  * Whether `new Date` reads an ISO 8601 string as the date it names and, when the string starts with
@@ -44,6 +54,10 @@ const ISO_ORDINAL_DATE = /^\d{4}-\d{3}(?!\d)/
  * The first two are refused even where V8 happens to get the date right (`"+2024-01-01"`,
  * `"2024-001"`): `JSON.stringify` never writes an ordinal date, and writes a signed year only with
  * six digits, which the sign rule refuses too.
+ *
+ * A fourth shape — a time with no offset and no `Z` — is also wrong, but for a reason unrelated to
+ * the calendar, so {@link isoCalendarDateSchema} refuses it in its own `.narrow` step, with its own
+ * message, before this function ever runs. See `ISO_TIME_WITHOUT_OFFSET`.
  *
  * For a string that starts with `YYYY-MM-DD`, this rebuilds a date from the three digit groups and
  * reads its fields back. `setUTCFullYear` is used rather than `Date.UTC`, which maps a two-digit
@@ -77,8 +91,32 @@ function isRealCalendarDate(iso: string): boolean {
   )
 }
 
-/** An ISO 8601 date string naming a real calendar date, parsed to a `Date`. */
+/**
+ * An ISO 8601 date string naming a real calendar date, parsed to a `Date`.
+ *
+ * Two `.narrow` steps, each with its own message: the first refuses a time with no `Z` and no
+ * numeric offset (#135 — see `ISO_TIME_WITHOUT_OFFSET`), because that string names no single
+ * instant rather than naming the wrong one; the second, {@link isRealCalendarDate}, refuses a
+ * calendar date that does not exist or that V8 would misread (#131, #136). Kept separate so a
+ * caller reading the message can tell "add a time zone" from "this date does not exist" — merging
+ * them into one `.narrow` would report only whichever ran last.
+ */
 const isoCalendarDateSchema = type("string.date.iso")
+  .narrow((value, ctx) =>
+    !ISO_TIME_WITHOUT_OFFSET.test(value) ||
+    // `ctx.reject({ problem })` rather than `ctx.mustBe`: `mustBe` always renders as
+    // "must be {text}", which reads oddly ("must be name a time zone…") for a message that is
+    // not a noun phrase completing "must be". Setting `problem` directly writes the message
+    // verbatim (after the path prefix arktype still adds), so it reads as ordinary prose.
+    // `expected` is required too, even though `problem` already covers the rendered message:
+    // arktype's default `expected` config for a bare predicate node reads a property off
+    // `undefined` when nothing sets it, so `JSON.stringify` on the rejection (and anything that
+    // serializes it, like `validate` from `@spy4x/validation`) throws instead of returning it.
+    ctx.reject({
+      expected: "a date-time ending in Z or an offset",
+      problem: "must name a time zone: end the time with `Z` or an offset such as `+02:00`",
+    })
+  )
   .narrow((value, ctx) =>
     isRealCalendarDate(value) ||
     ctx.mustBe("a calendar date that exists, with an unsigned year and no ordinal day")

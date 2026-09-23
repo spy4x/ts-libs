@@ -1,7 +1,9 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 import { type } from "arktype"
+import { validate } from "@spy4x/validation"
 
+import { BaseModelSchema } from "./base-model.ts"
 import { DateNullableSchema, dateSchema } from "./date.ts"
 
 describe("dateSchema", () => {
@@ -156,6 +158,116 @@ describe("dateSchema", () => {
       expect((dateSchema("2024") as Date).toISOString()).toBe("2024-01-01T00:00:00.000Z")
       expect((dateSchema("2024-05") as Date).toISOString()).toBe("2024-05-01T00:00:00.000Z")
       expect((dateSchema("2024-01-05") as Date).toISOString()).toBe("2024-01-05T00:00:00.000Z")
+    })
+  })
+
+  /**
+   * #135: a date-time string with a time but no offset and no `Z` is read in the host's own time
+   * zone by `new Date`, so the same wire string would parse to a different instant depending on
+   * where the process runs. These cases pin the fix without depending on the host's `TZ` — they
+   * assert only that the string is refused, never a particular instant — and are also proven by
+   * hand in the PR body: the same script run once under `TZ=UTC` and once under `TZ=Asia/Bangkok`.
+   */
+  describe("offset-less date-time strings depend on the host time zone (#135)", () => {
+    it("rejects a date-time with no offset and no Z", () => {
+      expect(dateSchema("2024-02-29T10:00:00") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects a date-time with no offset and no Z, with a fractional second", () => {
+      expect(dateSchema("2024-02-29T10:00:00.500") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects a date-time with no offset and no Z, with minutes but no seconds", () => {
+      expect(dateSchema("2024-02-29T10:00") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects a date-time with no offset and no Z, with a fraction longer than 3 digits", () => {
+      expect(dateSchema("2024-02-29T10:00:00.123456789") instanceof type.errors).toBe(true)
+    })
+
+    it("reports its own message, not the calendar-date message, for a missing time zone", () => {
+      const result = dateSchema("2024-02-29T10:00:00")
+      expect(result instanceof type.errors).toBe(true)
+      expect((result as type.errors).summary).toContain(
+        "must name a time zone: end the time with `Z` or an offset such as `+02:00`",
+      )
+    })
+
+    it("reports the same message through BaseModelSchema, with the field name prefixed", () => {
+      const result = BaseModelSchema({
+        id: 1,
+        createdAt: "2024-02-29T10:00:00",
+        updatedAt: new Date(),
+      })
+      expect(result instanceof type.errors).toBe(true)
+      expect((result as type.errors).summary).toContain(
+        "createdAt must name a time zone: end the time with `Z` or an offset such as `+02:00`",
+      )
+    })
+
+    /**
+     * `ctx.reject({ problem })` alone is not enough: arktype's `ArkError.expected` getter falls
+     * back to a per-node default config when `input.expected` is unset, and a bare `.narrow`
+     * predicate has none — reading it throws `Cannot read properties of undefined (reading
+     * 'name')`. That getter runs inside `toJSON`, so `JSON.stringify` on the rejection threw, and
+     * so did anything that serializes it downstream, such as `validate` from `@spy4x/validation`.
+     * Passing `expected` alongside `problem` fixes both without changing the rendered message
+     * (pinned above).
+     */
+    it("keeps the rejection JSON-serializable instead of throwing from a missing expected", () => {
+      const result = dateSchema("2024-02-29T10:00:00")
+      expect(result instanceof type.errors).toBe(true)
+      const json = JSON.stringify(result)
+      expect(json).toContain("must name a time zone")
+    })
+
+    it("keeps validate() from @spy4x/validation working, with the time-zone message reachable", () => {
+      const schema = type({ d: dateSchema.or("''") })
+      const result = validate(schema, { d: "2024-02-29T10:00" })
+      expect(result.error).not.toBeNull()
+      const json = JSON.stringify(result.error?.details)
+      expect(json).toContain("must name a time zone")
+    })
+
+    it("names what it expected when the refusal is one branch of a union", () => {
+      const result = type({ d: dateSchema.or("''") })({ d: "2024-02-29T10:00" })
+      expect((result as type.errors).summary).toContain(
+        "must be a date-time ending in Z or an offset",
+      )
+    })
+
+    it("still accepts the same date-time with a lower-case z", () => {
+      const result = dateSchema("2024-02-29T10:00:00z")
+      expect(result instanceof type.errors).toBe(false)
+      expect((result as Date).toISOString()).toBe("2024-02-29T10:00:00.000Z")
+    })
+
+    it("still accepts the same date-time with a trailing Z", () => {
+      const result = dateSchema("2024-02-29T10:00:00Z")
+      expect(result instanceof type.errors).toBe(false)
+      expect((result as Date).toISOString()).toBe("2024-02-29T10:00:00.000Z")
+    })
+
+    it("still accepts the same date-time with a numeric offset", () => {
+      const result = dateSchema("2024-02-29T10:00:00+02:00")
+      expect(result instanceof type.errors).toBe(false)
+      expect((result as Date).toISOString()).toBe("2024-02-29T08:00:00.000Z")
+    })
+
+    it("still accepts a date-only string, which ECMA-262 reads as UTC midnight regardless of host TZ", () => {
+      const result = dateSchema("2024-02-29")
+      expect(result instanceof type.errors).toBe(false)
+      expect((result as Date).toISOString()).toBe("2024-02-29T00:00:00.000Z")
+    })
+
+    it("still accepts a year and a year-month, which ECMA-262 also reads as UTC", () => {
+      expect((dateSchema("2024") as Date).toISOString()).toBe("2024-01-01T00:00:00.000Z")
+      expect((dateSchema("2024-05") as Date).toISOString()).toBe("2024-05-01T00:00:00.000Z")
+    })
+
+    it("still rejects an ordinal date regardless of a time part, unaffected by host TZ (#136)", () => {
+      expect(dateSchema("2024-001") instanceof type.errors).toBe(true)
+      expect(dateSchema("2024-001T10:00:00Z") instanceof type.errors).toBe(true)
     })
   })
 

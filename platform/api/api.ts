@@ -18,6 +18,13 @@
  * `content-type` wins because it is applied after the default, and `headers` is the only field
  * `init` does not get to overwrite by a later spread — every other `init` field (`credentials`,
  * `signal`, `method`, `body`, …) still reaches `fetch` exactly as the caller set it.
+ *
+ * **Bug fixed at extraction time (#132).** The source always set the default `content-type` to
+ * `application/json`, even when `body` was a `FormData`: the request reached the server labelled
+ * as JSON, without a multipart boundary, and the caller had no way to make `fetch` choose the right
+ * type. The default is now applied only when `body` is a string or absent; any other body shape
+ * (`FormData`, `URLSearchParams`, `Blob`, `ArrayBuffer`/typed array, a stream) is left without a
+ * default so `fetch` sets its own `content-type`.
  */
 
 /** One failure `apiFetch` can report: an HTTP status and a message meant to be shown as-is. */
@@ -34,11 +41,18 @@ export type ApiResult<T> =
 /**
  * `fetch` a JSON API and report the outcome as an {@link ApiResult} instead of throwing.
  *
- * Always sends `credentials: "include"` and a `content-type: application/json` header, both
- * overridable through `init`. The response body is read as JSON regardless of status; a body that
- * is not valid JSON (including an empty body) is treated as `null` rather than failing the call.
- * On a non-2xx response, the error message is the body's own `error` string when it has one string
- * `error` field, else the fallback `"Request failed"`.
+ * Always sends `credentials: "include"`, overridable through `init`. A `content-type:
+ * application/json` header is added by default only when `body` is a string or absent; a
+ * `FormData`, `URLSearchParams`, `Blob`, `ArrayBuffer`/typed array, stream, or explicit `null` body
+ * is left without a default `content-type` so `fetch` sets the right one itself (a
+ * `multipart/form-data` boundary for `FormData`, for instance) — the caller can still override it
+ * explicitly through `init.headers`. `null` takes this path rather than the "absent" one: it is
+ * neither `undefined` nor a `string`, so a caller who passes `body: null` gets the same behaviour as
+ * one who passes `FormData`, not the same behaviour as one who passes no `body` at all.
+ * The response body is read as JSON regardless of status; a body that is not valid JSON (including
+ * an empty body) is treated as `null` rather than failing the call. On a non-2xx response, the
+ * error message is the body's own `error` string when it has one string `error` field, else the
+ * fallback `"Request failed"`.
  *
  * @example
  * ```ts
@@ -51,8 +65,11 @@ export async function apiFetch<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<ApiResult<T>> {
-  const { headers: callerHeaders, ...rest } = init
-  const headers = new Headers({ "content-type": "application/json" })
+  const { headers: callerHeaders, body, ...rest } = init
+  const headers = new Headers()
+  if (body === undefined || typeof body === "string") {
+    headers.set("content-type", "application/json")
+  }
   if (callerHeaders !== undefined) {
     for (const [name, value] of new Headers(callerHeaders)) {
       headers.set(name, value)
@@ -62,6 +79,7 @@ export async function apiFetch<T>(
   const response = await fetch(path, {
     credentials: "include",
     ...rest,
+    body,
     headers,
   })
 
