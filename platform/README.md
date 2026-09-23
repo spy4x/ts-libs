@@ -214,7 +214,8 @@ already are — by where the code can run:
   rolls an out-of-range day or month into the next one (#131). Fixed by refusing a string `new Date`
   cannot read, then rebuilding the date from the string's own `YYYY-MM-DD` digits (with or without a
   sign before the year) and comparing it back against them; a string without that prefix that `new
-  Date` can read (a year, a year and month, or an ordinal date) parses as the source parsed it.
+  Date` can read (a year, a year and month, or an ordinal date) parses as the source parsed it. A
+  date written without dashes is refused, because V8 reads its digits as a year.
 
 **The `"+": "reject"` decision splits by whether a schema is composed.** `model/base-model.ts`'s
 three schemas declare it on none of them: an app is meant to `.and()` its own fields onto

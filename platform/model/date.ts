@@ -15,7 +15,8 @@
  * string that starts with a `YYYY-MM-DD` date, with or without a `+` or `-` before the year, a UTC
  * date is rebuilt from those year, month and day digits and the string is refused when the rebuilt
  * date's fields differ from them. A string without that prefix that `new Date` can read (a year, a
- * year and month, or an ordinal date such as `2024-001`) parses as the source parsed it.
+ * year and month, or an ordinal date such as `2024-001`) parses as the source parsed it. A date
+ * written without dashes is refused, because V8 reads its digits as a year.
  */
 import { type } from "arktype"
 
@@ -26,14 +27,16 @@ const ISO_CALENDAR_DATE_PREFIX = /^[+-]?(\d{4})-(\d{2})-(\d{2})/
  * whether that date exists.
  *
  * A string `Date.parse` cannot read is refused first, because `new Date` would hand back an
- * `Invalid Date` with no error. arktype's ISO 8601 grammar accepts several shapes V8 cannot read: an
- * hour with no minutes (`2024-01-01T10`), a comma before the fraction, an offset with no minutes
- * (`+05`), a week date, and the compact form without dashes.
+ * `Invalid Date` with no error. arktype's ISO 8601 grammar accepts several shapes V8 cannot read:
+ * an hour with no minutes (`2024-01-01T10`), a comma before the fraction, an offset with no
+ * minutes (`+05`), and a week date. A date written without dashes (`20240101`, `0001366`) is
+ * refused too: V8 either cannot read it or reads the digits as a year (`00010101` becomes the year
+ * 10101).
  *
  * For a string that starts with `YYYY-MM-DD`, with or without a `+` or `-` before the year, this
- * rebuilds a date from the three digit groups and reads its fields back. `setUTCFullYear` is used rather
- * than `Date.UTC`, which maps a two-digit year into 1900-1999 (`Date.UTC(99, 0, 1)` is 1999, not
- * year 99) — `setUTCFullYear(99, 0, 1)` sets the year exactly as given. An out-of-range day or
+ * rebuilds a date from the three digit groups and reads its fields back. `setUTCFullYear` is used
+ * rather than `Date.UTC`, which maps a two-digit year into 1900-1999 (`Date.UTC(99, 0, 1)` is
+ * 1999, not year 99) — `setUTCFullYear(99, 0, 1)` sets the year exactly as given. An out-of-range day or
  * month still does not throw (`setUTCFullYear(2026, 1, 30)` on a fresh date reads back as 2 March,
  * not an error), so a date that overflowed reads back with different fields than the ones it was
  * built from: for 30 February, the rebuilt date's month reads back as 3 (March), not 2 (February),
@@ -45,6 +48,7 @@ const ISO_CALENDAR_DATE_PREFIX = /^[+-]?(\d{4})-(\d{2})-(\d{2})/
  */
 function isRealCalendarDate(iso: string): boolean {
   if (Number.isNaN(Date.parse(iso))) return false
+  if (/^[+-]?\d{5}/.test(iso)) return false
   const match = ISO_CALENDAR_DATE_PREFIX.exec(iso)
   if (match === null) return true
   const [, yearStr, monthStr, dayStr] = match
