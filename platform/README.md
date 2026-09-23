@@ -163,14 +163,20 @@ app's own `libs/`:
   interface named the parameter `ttlMs` while every implementation and caller treated it as seconds
   with no conversion — a caller trusting the interface's name and passing milliseconds would get a
   cache entry roughly 1000x longer-lived than intended.
-- A TTL is validated and rounded up to a whole second before it reaches storage, so a sub-second
-  request cannot arrive as `0` — which Redis's `EXPIRE` and other stores read as "no expiry" or
-  reject outright.
-- `wrap` coalesces concurrent calls for the same key on one instance into a single `fn()` call,
-  instead of letting every caller past the first start its own.
+- A TTL is validated and rounded up to a whole second before it reaches storage. Redis refuses a
+  fractional or zero expiry — `SET … EX 0.2` and `SET … EX 0` are both errors, and `EXPIRE key 0`
+  deletes the key immediately — so this is done here, once, rather than in every `ICacheStorage`.
+- `wrap` coalesces an in-flight `fn()` call for a key: a caller that reads the cache while another
+  caller's `fn()` for the same key is still running awaits that same call instead of starting its
+  own. Two different keys never share a call.
 
 No in-memory `ICacheStorage` ships from this package, matching the source: its own fake
 (`MemoryCacheStorage`) lived in its test file, not as a library export, and stays that way here too.
+
+An earlier draft of this section said `gb` re-verifies `redis.expiretime` on read, on top of its own
+`buildMethods`-shaped registry. That could not be confirmed here — `~/sync/code/gb` was not present
+in this checkout (see the `cqrs` section above) — so whoever next extracts from `gb`, if it turns
+out to have one, should check for that re-verification and decide whether `server/kv` needs it too.
 
 ## The error vocabulary and the result convention
 
