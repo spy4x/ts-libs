@@ -210,6 +210,60 @@ export function describeAuthStoreContract(
         }
       }))
 
+    it("refuses a NUL character in text the database cannot store", () =>
+      withStore(async (store) => {
+        const withNul = "ann\u0000@example.com"
+        await expectRejects(
+          store.createUserWithKey({
+            ...emailKey("password", "ann@example.com"),
+            method: "pa\u0000ss",
+          }),
+          TypeError,
+        )
+        await expectRejects(
+          store.createUserWithKey({ ...emailKey("password", "ann@example.com"), subject: withNul }),
+          TypeError,
+        )
+        await expectRejects(
+          store.createUserWithKey({
+            ...emailKey("password", "ann@example.com"),
+            secret: "h\u0000",
+          }),
+          TypeError,
+        )
+        const { user, key } = await store.createUserWithKey(emailKey("password", "ann@example.com"))
+        await expectRejects(store.updateKeySecret(key.id, "h\u0000"), TypeError)
+        const challenge = {
+          purpose: "email-code",
+          subject: "ann@example.com",
+          secretHash: "hash",
+          expiresAt: LATER,
+          now: NOW,
+        }
+        await expectRejects(store.issueChallenge({ ...challenge, purpose: "e\u0000" }), TypeError)
+        await expectRejects(store.issueChallenge({ ...challenge, subject: withNul }), TypeError)
+        await expectRejects(
+          store.issueChallenge({ ...challenge, secretHash: "h\u0000" }),
+          TypeError,
+        )
+        await expectRejects(
+          store.attemptChallenge({
+            purpose: "email-code",
+            subject: withNul,
+            secretHash: "hash",
+            maxAttempts: 5,
+            now: NOW,
+          }),
+          TypeError,
+        )
+
+        expect(await store.findKey("pa\u0000ss", "ann@example.com")).toBeNull()
+        expect(await store.findKey("password", withNul)).toBeNull()
+        expect(await store.findUserIdByProvenEmail(withNul)).toBeNull()
+        expect(await store.listKeys(user.id)).toEqual([key])
+        expect(await store.findUser(user.id + 1)).toBeNull()
+      }))
+
     it("replaces a key's secret, and answers false for a key that does not exist", () =>
       withStore(async (store) => {
         const { key } = await store.createUserWithKey({

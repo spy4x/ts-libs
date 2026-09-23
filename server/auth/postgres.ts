@@ -37,6 +37,7 @@ import {
   checkNewKey,
   checkSecret,
   isStoreId,
+  isStoreText,
 } from "./input.ts"
 
 /**
@@ -186,7 +187,7 @@ class PostgresAuthStore implements AuthStore {
   }
 
   async findKey(method: string, subject: string): Promise<AuthKey | null> {
-    if (typeof method !== "string" || typeof subject !== "string") return null
+    if (!isStoreText(method) || !isStoreText(subject)) return null
     const [row] = await this.#sql<KeyRow[]>`
       SELECT ${keyColumns(this.#sql)} FROM auth_keys
       WHERE method = ${method} AND subject = ${subject}
@@ -211,7 +212,7 @@ class PostgresAuthStore implements AuthStore {
   }
 
   async findUserIdByProvenEmail(email: string): Promise<number | null> {
-    if (typeof email !== "string") return null
+    if (!isStoreText(email)) return null
     const [row] = await this.#sql<{ userId: number }[]>`
       SELECT user_id AS "userId" FROM auth_email_owners WHERE email = ${email}
     `

@@ -22,9 +22,16 @@ export const MAX_ID = 2_147_483_647
 const validDate = type("Date").narrow((value, ctx) =>
   !Number.isNaN(value.getTime()) || ctx.mustBe("a valid Date")
 )
-const method = type(`0 < string <= ${MAX_METHOD_LENGTH}`)
-const subject = type(`0 < string <= ${MAX_SUBJECT_LENGTH}`)
-const secret = type(`0 < string <= ${MAX_SECRET_LENGTH}`)
+/** A string of 1 to `max` characters without NUL, which a Postgres `text` value cannot hold. */
+function storeText(max: number) {
+  return type(`0 < string <= ${max}`).narrow((value, ctx) =>
+    !value.includes("\u0000") || ctx.mustBe("free of NUL characters")
+  )
+}
+
+const method = storeText(MAX_METHOD_LENGTH)
+const subject = storeText(MAX_SUBJECT_LENGTH)
+const secret = storeText(MAX_SECRET_LENGTH)
 
 const newAuthKey = type({
   method,
@@ -59,6 +66,11 @@ const attemptChallengeInput = type({
   ),
   now: validDate,
 })
+
+/** True for a string Postgres can compare: `text` cannot hold the NUL character. */
+export function isStoreText(value: unknown): value is string {
+  return typeof value === "string" && !value.includes("\u0000")
+}
 
 /** True for an id either store could have assigned: an integer from 1 to {@link MAX_ID}. */
 export function isStoreId(value: unknown): value is number {
