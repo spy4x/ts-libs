@@ -2,8 +2,8 @@
 // and their signatures, taken from `deno doc`. Run with `deno task contract`. The list of entry
 // points below is the only hand-written part; every name and signature comes from the code.
 //
-// A signature is the declaration line `deno doc` prints, and for a class, an interface or an enum,
-// the lines of its members. JSDoc prose is left out: the contract is names, parameters and return
+// A signature is the declaration line `deno doc` prints and, for a class or an interface, the lines
+// of its public members; an enum's members and their values come from `deno doc --json`. JSDoc prose is left out: the contract is names, parameters and return
 // types (#77, "The interfaces are frozen at 1.0").
 
 const OUTPUT = "docs/1.0-contract.md"
@@ -54,8 +54,13 @@ interface DocDeclaration {
   def?: {
     properties?: { name: string }[]
     methods?: { name: string }[]
-    members?: { name: string }[]
+    members?: EnumMember[]
   }
+}
+
+interface EnumMember {
+  name: string
+  init?: { repr: string; value?: { kind: string } }
 }
 
 interface DocSymbol {
@@ -82,36 +87,57 @@ async function denoDoc(args: string[]): Promise<string> {
   return new TextDecoder().decode(stdout)
 }
 
-/** Member names of every class, interface and enum exported by the file, keyed by symbol name. */
-async function memberNames(file: string): Promise<Map<string, Set<string>>> {
+interface Members {
+  /** Member names of every class, interface and enum exported by the file, keyed by symbol name. */
+  names: Map<string, Set<string>>
+  /**
+   * The member lines of every enum, keyed by symbol name, as `Name = value`. `deno doc`'s text
+   * rendering prints an enum member's name alone, so these come from its JSON output.
+   */
+  enums: Map<string, string[]>
+}
+
+async function members(file: string): Promise<Members> {
   const json = JSON.parse(await denoDoc(["--json", file]))
   const symbols = Object.values(json.nodes as Record<string, { symbols: DocSymbol[] }>)
     .flatMap((node) => node.symbols)
-  const members = new Map<string, Set<string>>()
+  const names = new Map<string, Set<string>>()
+  const enums = new Map<string, string[]>()
   for (const symbol of symbols) {
-    const names = new Set<string>(["constructor"])
+    const own = new Set<string>(["constructor"])
     for (const declaration of symbol.declarations) {
       const def = declaration.def ?? {}
-      for (const item of [...def.properties ?? [], ...def.methods ?? [], ...def.members ?? []]) {
-        names.add(item.name)
+      for (const item of [...def.properties ?? [], ...def.methods ?? []]) own.add(item.name)
+      if (declaration.kind === "enum") {
+        enums.set(symbol.name, (def.members ?? []).map((member) => `  ${enumMember(member)}`))
       }
     }
-    members.set(symbol.name, names)
+    names.set(symbol.name, own)
   }
-  return members
+  return { names, enums }
+}
+
+/** `Name = value`, with a string value quoted; `Name` alone when the member has no initialiser. */
+function enumMember(member: EnumMember): string {
+  if (member.init === undefined) return member.name
+  const value = member.init.value?.kind === "string"
+    ? JSON.stringify(member.init.repr)
+    : member.init.repr
+  return `${member.name} = ${value}`
 }
 
 const MODIFIERS = /^(?:(?:public|private|protected|static|readonly|abstract|async|get|set)\s+)*/
 
 /** The signature lines of one `deno doc` text block: the declaration and its member lines. */
-function signatures(block: string[], members: Map<string, Set<string>>): string[] {
+function signatures(block: string[], { names, enums }: Members): string[] {
   const lines = block.filter((line) => line.trim() !== "" && !line.startsWith("Defined in "))
   const head = lines.find((line) => !line.startsWith(" "))
   if (head === undefined) return []
   const name = head.match(
     /^(?:\w+\s+)*?(?:class|interface|enum|type|function|const|let|var|namespace)\s+([\w$]+)/,
   )?.[1]
-  const own = name === undefined ? undefined : members.get(name)
+  if (name !== undefined && enums.has(name)) return [head, ...enums.get(name)!]
+  const own = name === undefined ? undefined : names.get(name)
   const out = [head]
   if (own === undefined) return out
   for (const line of lines) {
@@ -132,7 +158,7 @@ function signatures(block: string[], members: Map<string, Set<string>>): string[
 
 async function entrySection(entry: Entry): Promise<string> {
   const file = await resolveEntry(entry.specifier)
-  const members = await memberNames(file)
+  const own = await members(file)
   const text = await denoDoc([file])
   const blocks: string[][] = []
   for (const line of text.split("\n")) {
@@ -140,7 +166,7 @@ async function entrySection(entry: Entry): Promise<string> {
     else blocks.at(-1)?.push(line)
   }
   const rendered = blocks
-    .map((block) => signatures(block, members))
+    .map((block) => signatures(block, own))
     .filter((lines) => lines.length > 0)
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map((lines) => lines.join("\n"))
