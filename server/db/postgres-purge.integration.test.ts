@@ -156,3 +156,34 @@ describe("purgeDatabase against a camelCase client", () => {
     }
   })
 })
+
+describe("purgeDatabase through a transaction handle", () => {
+  it("drops the schema's tables when handed the handle `sql.begin` passes in", async () => {
+    // `postgres@3.4.7` sets `options` on the pool object alone (`src/index.js:69-81`); the
+    // handle `sql.begin` passes to its callback has none, although `TransactionSql` is
+    // typed as extending `Sql`. A purge run inside a transaction, so that a failed `DROP`
+    // rolls every other one back, has to keep working on such a handle.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const schema = uniqueIdentifier("it_purge_tx")
+    const table = uniqueIdentifier("note")
+    const sql = createSql({ connection: settings.connection, max: 1, applicationName: schema })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      await sql`CREATE SCHEMA ${sql(schema)}`
+      await sql`CREATE TABLE ${sql(schema)}.${sql(table)} (id integer PRIMARY KEY)`
+
+      const purged = await sql.begin((transaction) =>
+        purgeDatabase({ sql: transaction, schema, environment: { [ENV_NAME]: "test" } })
+      )
+
+      assertEquals(purged, { dropped: [table], refused: false })
+      assertEquals(await tableExists(sql, schema, table), false)
+    } finally {
+      await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
+      await sql.end()
+    }
+  })
+})
