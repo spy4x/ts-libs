@@ -13,10 +13,11 @@
  * run created. Nothing shared is touched and nothing is truncated.
  */
 
-import { assertEquals } from "@std/assert"
+import { assertEquals, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import postgres from "postgres"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
+import { PostgresIdentifierTransformError } from "./postgres-migrate.ts"
 import { ENV_NAME, purgeDatabase } from "./postgres-purge.ts"
 import { createSql } from "./postgres.ts"
 import type { Sql } from "./ports.ts"
@@ -74,7 +75,7 @@ describe("purgeDatabase against a real server", () => {
 describe("purgeDatabase against a camelCase client", () => {
   it("reports and drops the named schema's table, not a same-named one in public", async () => {
     // `transform: postgres.camel` is what the template's own client used
-    // (`template/libs/server/db/+index.ts:9`). `TableRow`'s column is aliased to one
+    // (`template/libs/server/db/+index.ts:13`). `TableRow`'s column is aliased to one
     // lower-case word precisely so this client reads the same `tablename` a plain client
     // does; before that alias existed, the row's `table_name` came back as `tableName`
     // under this transform, `row.table_name` was `undefined`, and the identifier splice
@@ -105,6 +106,51 @@ describe("purgeDatabase against a camelCase client", () => {
       assertEquals(await tableExists(sql, "public", table), true)
     } finally {
       await sql`DROP TABLE IF EXISTS public.${sql(table)}`
+      await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
+      await sql.end()
+    }
+  })
+
+  it("refuses to purge when a listed table's name would be rewritten, and drops nothing", async () => {
+    // Round 2 found the alias fix above incomplete: `DROP TABLE ${sql(schema)}.${sql(table)}`
+    // runs the client's own `transform.column.to` on both names, but the listing above reads
+    // `table_name` as a bound value, which that transform never touches. A camelCase client
+    // asked to purge a schema holding "UserProfile" would list it and then try to drop
+    // `_user_profile`, which does not exist — reproduced here rather than assumed.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const schema = uniqueIdentifier("it_purge_camel_refuse")
+    const plainTable = uniqueIdentifier("plain_one")
+    const mixedTable = "UserProfile"
+    const sql = createSql({
+      connection: settings.connection,
+      transform: postgres.camel,
+      max: 1,
+      applicationName: schema,
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      await sql`CREATE SCHEMA ${sql(schema)}`
+      await sql`CREATE TABLE ${sql(schema)}.${sql(plainTable)} (id integer PRIMARY KEY)`
+      // Created through `unsafe`, not `sql(mixedTable)`: creating it through the identifier
+      // form would send `mixedTable` through the very transform this test is about, and the
+      // table would not exist under the exact spelling the test needs.
+      await sql.unsafe(`CREATE TABLE "${schema}"."${mixedTable}" (id integer PRIMARY KEY)`)
+
+      const error = await assertRejects(
+        () => purgeDatabase({ sql, schema, environment: { [ENV_NAME]: "test" } }),
+        PostgresIdentifierTransformError,
+      )
+      assertEquals(error.kind, "table")
+      assertEquals(error.identifier, mixedTable)
+
+      // Every name was checked before the first `DROP` ran, so the plain table the listing
+      // also returned is untouched too, not only the one that caused the refusal.
+      assertEquals(await tableExists(sql, schema, plainTable), true)
+      assertEquals(await tableExists(sql, schema, mixedTable), true)
+    } finally {
       await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
       await sql.end()
     }
