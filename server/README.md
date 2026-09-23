@@ -823,7 +823,9 @@ if (state.decision !== QuotaDecision.Allowed) return respond(quotaStatusCode(sta
 try {
   await doTheWork()
 } catch (error) {
-  await meter.release(principal, 1, metering) // the units were not spent after all
+  // `reservedAt` keys the refund by the window the reservation was taken
+  // from, not whatever window the clock is in when the refund runs.
+  await meter.release(principal, 1, { ...metering, reservedAt: state.reservedAt })
   throw error
 }
 ```
@@ -832,17 +834,22 @@ try {
 principal.** Releasing the same reservation twice gives the units back twice; only a counter already
 at zero absorbs the second one, because a store never goes below zero. For a session principal a
 release is two store calls — the principal's own counter first, then the shared pool — so after one
-of them has failed the other has already been refunded, and a retry would credit the pool a unit
-nobody gave back, which any other anonymous caller can then spend. The own counter is refunded first
-so that a failure part-way through leaves the pool holding a unit that nothing holds any more: short
-rather than over-credited, and cleared when the window rolls.
+of them has failed the other has already been refunded, and a retry gives that refund a second time.
+The caller cannot tell which of the two calls failed, so it cannot tell which counter a retry would
+double-refund: if the own-counter call failed nothing was refunded and a retry is exact; if the pool
+call failed the own counter was already refunded and a retry refunds it again, over-crediting the
+caller's own counter (absorbed at zero once it gets there). The pool itself is never over-credited by
+a retry — it is refunded once, on the call that succeeds. The own counter is refunded first so that a
+failure part-way through leaves the pool holding a unit that nothing holds any more: short rather
+than over-credited, and cleared when the window rolls.
 
-A `release` keys by the window the clock is in when it runs, not the one the reservation was taken
-in. Work that outlives a window boundary is refunded against the new window, and the old one keeps
-the unit until it rolls: the unit moves between windows and the total across the two is unchanged.
-Keep a unit of work shorter than the window, or use a lifetime window, where this cannot happen.
-Closing it properly is a small API change — `release` would take the clock reading `reserve` used —
-and nothing on the store; it is deliberately not part of this change.
+A `release` keys by the window the clock is in when it runs, unless the caller passes `reservedAt` —
+the clock reading `reserve` used, carried on the `QuotaState` `reserve` returned — in which case it
+keys the refund by that reading instead. Without `reservedAt`, work that outlives a window boundary
+is refunded against the new window, and the old one keeps the unit until it rolls: the unit moves
+between windows and the total across the two is unchanged. Pass `reservedAt` through (the documented
+pattern above does), keep a unit of work shorter than the window, or use a lifetime window, to avoid
+this.
 
 **A real store makes `reserve` one statement.** The in-memory store in the tests is atomic because
 nothing is awaited between its read and its write; a SQL store buys the same property with a

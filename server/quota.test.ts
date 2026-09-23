@@ -1192,3 +1192,62 @@ Deno.test("release: a store that fails part-way leaves the pool short, never ove
   assertEquals(await store.read(quotaKey(SESSION, policy, 0)), 0)
   assertEquals(await store.read(sessionPoolKey(policy, 0)), 1)
 })
+
+Deno.test("release: reservedAt refunds the window the reservation was taken from, across a boundary", async () => {
+  // Reserve while the clock reads 59_999 (window w0), release while it reads 60_000 (window w1),
+  // passing the `reservedAt` the reservation carried. Both w0 counters — the session's own and the
+  // shared pool — must read 0 afterwards: the refund followed the reservation, not the clock.
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, windowSeconds: 60, sessions: { poolLimit: 5 } }
+  const meterAtReserve = createQuotaMeter({
+    policy,
+    store,
+    meteredResourceAvailable: true,
+    now: () => 59_999,
+  })
+  const meterAtRelease = createQuotaMeter({
+    policy,
+    store,
+    meteredResourceAvailable: true,
+    now: () => 60_000,
+  })
+
+  const reserved = await meterAtReserve.reserve(SESSION)
+  assertEquals(reserved.reservedAt, 59_999)
+
+  await meterAtRelease.release(SESSION, 1, { reservedAt: reserved.reservedAt })
+
+  assertEquals(await store.read(quotaKey(SESSION, policy, 59_999)), 0)
+  assertEquals(await store.read(sessionPoolKey(policy, 59_999)), 0)
+  // w1 was never touched: nothing was reserved there, and nothing was refunded there either.
+  assertEquals(await store.read(quotaKey(SESSION, policy, 60_000)), 0)
+  assertEquals(await store.read(sessionPoolKey(policy, 60_000)), 0)
+})
+
+Deno.test("release: without reservedAt, a refund across a boundary still moves the unit to the new window", async () => {
+  // Same reserve/release timing as above, but the release omits `reservedAt` — today's behaviour,
+  // which the `reservedAt` argument is additive to. w0 keeps the unit until it rolls, and w1 is
+  // refunded a unit it never gave out, clamped at 0 by the store's own floor.
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, windowSeconds: 60, sessions: { poolLimit: 5 } }
+  const meterAtReserve = createQuotaMeter({
+    policy,
+    store,
+    meteredResourceAvailable: true,
+    now: () => 59_999,
+  })
+  const meterAtRelease = createQuotaMeter({
+    policy,
+    store,
+    meteredResourceAvailable: true,
+    now: () => 60_000,
+  })
+
+  await meterAtReserve.reserve(SESSION)
+  await meterAtRelease.release(SESSION)
+
+  assertEquals(await store.read(quotaKey(SESSION, policy, 59_999)), 1)
+  assertEquals(await store.read(sessionPoolKey(policy, 59_999)), 1)
+  assertEquals(await store.read(quotaKey(SESSION, policy, 60_000)), 0)
+  assertEquals(await store.read(sessionPoolKey(policy, 60_000)), 0)
+})

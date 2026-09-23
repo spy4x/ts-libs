@@ -318,6 +318,14 @@ export interface QuotaState {
   windowSeconds: number
   /** false when a caller-supplied (BYOK) key bypassed the metered budget, or when no metered key exists. */
   metered: boolean
+  /**
+   * The clock reading {@link QuotaMeter.reserve} used to key the units it took,
+   * present only on the state `reserve` itself returns. Pass it straight through
+   * to the matching {@link QuotaMeter.release} so a refund lands in the window
+   * the reservation was taken from rather than whatever window the clock is in
+   * when the refund runs.
+   */
+  reservedAt?: number
 }
 
 /** The budget a principal is entitled to. */
@@ -500,6 +508,10 @@ export interface QuotaMeter {
    * rolls. A budget that must survive that needs reservations stored with an
    * expiry, which this port deliberately does not have.
    *
+   * The returned {@link QuotaState} carries `reservedAt`, the clock reading this
+   * call used to key the units it took. Pass it to the matching
+   * {@link QuotaMeter.release} so the refund lands in the same window.
+   *
    * @throws {QuotaError} `InvalidCount` when `count` is not an integer between 1
    * and 1_000_000, `SessionPrincipalNotAllowed` when the policy has no
    * `sessions` budget and the principal is a session.
@@ -522,25 +534,32 @@ export interface QuotaMeter {
    * second one, because a store never goes below zero. For a session principal
    * a release is two store calls — the principal's own counter first, then the
    * shared pool — so after one of them has failed the other has already been
-   * refunded, and a retry would credit the pool a unit nobody gave back, which
-   * any other anonymous caller can then spend. The own counter is refunded
-   * first so that a failure part-way through leaves the pool holding a unit
-   * that nothing holds any more: short rather than over-credited, and cleared
-   * when the window rolls.
+   * refunded, and a retry gives that refund a second time. The caller cannot
+   * tell which of the two calls failed, so it cannot tell which counter a retry
+   * would double-refund: if the own-counter call failed nothing was refunded
+   * and a retry is exact; if the pool call failed the own counter was already
+   * refunded and a retry refunds it again, over-crediting the caller's own
+   * counter (absorbed at zero once it gets there). The pool itself is never
+   * over-credited by a retry — it is refunded once, on the call that succeeds.
+   * The own counter is refunded first so that a failure part-way through leaves
+   * the pool holding a unit that nothing holds any more: short rather than
+   * over-credited, and cleared when the window rolls.
    *
    * `options` mirrors {@link QuotaMeter.reserve}'s, and a caller passes the same
    * value to both: a request that brought its own key reserved nothing, so its
    * release must spend nothing either. Passing `hasOwnKey` on the reserve and
    * not on the release refunds a metered unit that was never taken.
    *
-   * A release keys by the window the clock is in **now**, not by the window the
-   * reservation was taken in. A reservation that outlives a window boundary is
-   * therefore refunded against the new window, and the old one keeps the unit
-   * until it rolls: the unit moves between windows and the total across the two
-   * is unchanged. Keep a unit of work shorter than the window, or use a lifetime
-   * window, where this cannot happen. Closing it properly is a small API change
-   * — `release` would take the clock reading `reserve` used — and nothing on the
-   * store; it is deliberately not in this change.
+   * `options.reservedAt`, when passed, is the clock reading `reserve` used
+   * (`QuotaState.reservedAt` on the state `reserve` returned) — pass it straight
+   * through and the refund keys both the principal's own counter and the shared
+   * pool by that reading instead of the current clock. Omitted, `release` keys
+   * by the window the clock is in **now**, exactly as before: a reservation that
+   * outlives a window boundary is then refunded against the new window, and the
+   * old one keeps the unit until it rolls. The unit moves between windows and
+   * the total across the two is unchanged either way; keep a unit of work
+   * shorter than the window, use a lifetime window, or pass `reservedAt` to make
+   * this impossible.
    *
    * @throws {QuotaError} `InvalidCount`, `SessionPrincipalNotAllowed` — as
    * {@link QuotaMeter.reserve}.
@@ -548,7 +567,7 @@ export interface QuotaMeter {
   release(
     principal: QuotaPrincipal,
     count?: number,
-    options?: { hasOwnKey?: boolean },
+    options?: { hasOwnKey?: boolean; reservedAt?: number },
   ): Promise<QuotaState>
   /**
    * Add `count` (default 1) units of completed business work and return the
@@ -926,11 +945,14 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
       }
 
       if (!own.granted && pooled) await releasePoolQuietly(nowMs, count)
-      return stateOf(
-        own.granted ? QuotaDecision.Allowed : QuotaDecision.Exhausted,
-        own.used,
-        true,
-      )
+      return {
+        ...stateOf(
+          own.granted ? QuotaDecision.Allowed : QuotaDecision.Exhausted,
+          own.used,
+          true,
+        ),
+        reservedAt: nowMs,
+      }
     },
 
     async release(principal, count = 1, releaseOptions) {
@@ -942,7 +964,10 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
       // pattern refunds a metered unit for a request that never spent one.
       if (releaseOptions?.hasOwnKey && bypassWithOwnKey) return ownKeyState()
 
-      const nowMs = clock()
+      // `reservedAt`, when the caller passes the reading `reserve` used, keys
+      // the refund by the window the reservation was taken from instead of
+      // whatever window the clock is in when the refund runs.
+      const nowMs = releaseOptions?.reservedAt ?? clock()
       // The reverse of `reserve`, and the order is the whole point: the private
       // counter is refunded first, so a store that fails between the two calls
       // leaves the shared pool holding a unit nothing holds any more. That is
