@@ -178,6 +178,58 @@ An earlier draft of this section said `gb` re-verifies `redis.expiretime` on rea
 in this checkout (see the `cqrs` section above) — so whoever next extracts from `gb`, if it turns
 out to have one, should check for that re-verification and decide whether `server/kv` needs it too.
 
+### `./model`, `./api`, `./request-info` — the shared API, model and push types
+
+Moved from `template/libs/platform/types/+index.ts` and its two request helpers, part of the
+template's shared surface the 2026-09-23 decision in issue #77 moved into this package instead of
+recopying it into every product. Three directories, split the same way `./browser` and `./server`
+already are — by where the code can run:
+
+| Directory       | Contents                                                                                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model/`        | `dateSchema`/`DateNullableSchema`, the `ImmutableBaseModelSchema`/`UndeletableBaseModelSchema`/`BaseModelSchema` tiers, and the Web Push wire schemas — universal, arktype only |
+| `api/`          | `ApiError`, `ApiResult<T>`, `apiFetch` — browser-only, needs `fetch`                                                                                                            |
+| `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                               |
+
+**Three bugs fixed at extraction time**, two in the request helpers and one in `model/`:
+
+- `apiFetch` (`api/api.ts`) built its request as `{ headers: { "content-type": ..., ...init.headers },
+  ...init }`. Spreading `init` last meant a caller's own `headers` replaced the whole merged object
+  instead of adding to it — passing `headers: { authorization }` silently dropped `content-type`.
+  Fixed by merging into one `Headers` instance first, so the caller's headers add to the default, the
+  caller's own `content-type` wins, and every other `init` field still reaches `fetch` unchanged.
+- `requestInfoFromContext` (`request-info/request-info.ts`) read `X-Forwarded-For` off the request
+  unconditionally, so any client could set its own value and have it logged as its IP. Fixed by
+  routing it through `rate-limit/client-ip.ts`'s `clientIp`, which already carries this exact trust
+  boundary for the rate limiter — untrusted by default, and a `trustedProxy` option the caller opts
+  into behind a proxy that actually rewrites the header. The helper also no longer imports the
+  template's `APIContext`; it takes a plain, `Env`-generic Hono `Context` and reads `requestId` off
+  the context variables defensively, matching how `rate-limit/hono.ts` stays app-agnostic. `ip`
+  (and `userAgent`) stay unset when nothing identifies the client, exactly as the source left them
+  — `clientIp`'s placeholder address is a made-up value, not a real one, and the source itself
+  wrote `request.ip || null` into an audit row, so surfacing that placeholder here would have
+  logged it as though it were real.
+- `dateSchema` (`model/date.ts`) accepted an ISO date string whose calendar day did not exist —
+  `"2026-02-30"` parsed to 2 March 2026 instead of being refused, because `new Date(...)` silently
+  rolls an out-of-range day or month into the next one (#131). Fixed by refusing a string `new Date`
+  cannot read, then rebuilding the date from the string's own `YYYY-MM-DD` digits (with or without a
+  sign before the year) and comparing it back against them; a string without that prefix that `new
+  Date` can read (a year, a year and month, or an ordinal date) parses as the source parsed it. A
+  date written without dashes is refused, because V8 reads its digits as a year.
+
+**The `"+": "reject"` decision splits by whether a schema is composed.** `model/base-model.ts`'s
+three schemas declare it on none of them: an app is meant to `.and()` its own fields onto
+`BaseModelSchema`, and arktype resolves `"+": "reject"` at intersection time by making every key
+the left side does not already declare resolve to `never` on that side — declaring it there breaks
+composition immediately, even inside `base-model.ts` itself (confirmed by constructing that
+composition directly: `ParseError: Intersection at updatedAt of never and Date results in an
+unsatisfiable type`). `model/push.ts`'s five wire schemas all declare it, at every object level
+including the nested `keys`: none of them is ever composed further, they are the whole shape a
+server receives from a browser it does not control, and nesting a `"+": "reject"` schema as another
+object's _property_ (as `keys` sits inside `pushSubscriptionSchema`) does not carry the same hazard
+as intersecting one in with `.and()` — confirmed the same way, by constructing it and reading the
+result.
+
 ## The error vocabulary and the result convention
 
 Three shapes, three jobs. They are not interchangeable, and picking the wrong one is the most common
