@@ -1251,3 +1251,111 @@ Deno.test("release: without reservedAt, a refund across a boundary still moves t
   assertEquals(await store.read(quotaKey(SESSION, policy, 60_000)), 0)
   assertEquals(await store.read(sessionPoolKey(policy, 60_000)), 0)
 })
+
+Deno.test("reserve: reservedAt is on the returned state whether the pool or the own counter refused", async () => {
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, sessions: { poolLimit: 0 } }
+  const meter = createQuotaMeter({ policy, store, meteredResourceAvailable: true, now: () => 42 })
+
+  // Refused by the pool (poolLimit: 0): the early return before the own-counter reserve.
+  const refusedByPool = await meter.reserve(SESSION)
+  assertEquals(refusedByPool.decision, QuotaDecision.Exhausted)
+  assertEquals(refusedByPool.reservedAt, 42)
+
+  // Refused by the own counter: a user has no pool to be refused by first.
+  const tiny: QuotaPolicy = { limit: 1 }
+  const tinyMeter = createQuotaMeter({
+    policy: tiny,
+    store,
+    meteredResourceAvailable: true,
+    now: () => 42,
+  })
+  await tinyMeter.reserve(USER)
+  const refusedByOwn = await tinyMeter.reserve(USER)
+  assertEquals(refusedByOwn.decision, QuotaDecision.Exhausted)
+  assertEquals(refusedByOwn.reservedAt, 42)
+})
+
+Deno.test("release: reservedAt of 0 is honored, not treated as absent (?? not ||)", async () => {
+  // `0` is a real clock reading — a reservation taken at the epoch — not an absent one.
+  // `releaseOptions?.reservedAt || clock()` would read `0` as falsy and substitute the
+  // current clock reading instead, refunding the wrong window; `??` does not.
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, windowSeconds: 60 }
+  const meterAtZero = createQuotaMeter({
+    policy,
+    store,
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+  const meterLater = createQuotaMeter({
+    policy,
+    store,
+    meteredResourceAvailable: true,
+    now: () => 60_000,
+  })
+
+  const reserved = await meterAtZero.reserve(USER)
+  assertStrictEquals(reserved.reservedAt, 0)
+
+  await meterLater.release(USER, 1, { reservedAt: 0 })
+
+  // Window w0 (from ms=0) must be refunded. Under `||`, `reservedAt` would be read as
+  // absent and the refund would key by `60_000` (window w1) instead, leaving w0 at 1.
+  assertEquals(await store.read(quotaKey(USER, policy, 0)), 0)
+})
+
+Deno.test("release: reservedAt rejects NaN, Infinity, a negative value and a value later than now", async () => {
+  const store = inMemoryStore()
+  const meter = createQuotaMeter({
+    policy: { limit: 5 },
+    store,
+    meteredResourceAvailable: true,
+    now: () => 100,
+  })
+
+  for (const bad of [NaN, Infinity, -Infinity, -1, 101, 100.5]) {
+    const thrown = await rejectedError(() => meter.release(USER, 1, { reservedAt: bad }))
+    assertInstanceOf(thrown, QuotaError)
+    assertEquals((thrown as QuotaError).code, QuotaErrorCode.InvalidReservedAt)
+  }
+  // 100 — exactly the current clock reading — is not later than now, and is accepted.
+  const state = await meter.release(USER, 1, { reservedAt: 100 })
+  assertEquals(state.decision, QuotaDecision.Allowed)
+})
+
+Deno.test("release: with reservedAt, the returned state is the current window's, not the refunded window's", async () => {
+  // The reviewer's case: window w1 (the current window) is already exhausted on its own,
+  // independent of anything this release does, and a release against the older window w0
+  // must report that — not the refunded window's now-emptier count, which release() used to
+  // return regardless of which window the caller is actually in right now.
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 2, windowSeconds: 60 }
+  const meterAtW0 = createQuotaMeter({
+    policy,
+    store,
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+  const meterAtW1 = createQuotaMeter({
+    policy,
+    store,
+    meteredResourceAvailable: true,
+    now: () => 60_000,
+  })
+
+  const reserved = await meterAtW0.reserve(USER)
+  assertEquals(reserved.decision, QuotaDecision.Allowed)
+
+  const fillW1 = await meterAtW1.reserve(USER, 2)
+  assertEquals(fillW1.decision, QuotaDecision.Allowed)
+  assertEquals(fillW1.used, 2)
+
+  const released = await meterAtW1.release(USER, 1, { reservedAt: reserved.reservedAt })
+
+  assertEquals(released.decision, QuotaDecision.Exhausted)
+  assertEquals(released.used, 2)
+  assertEquals(released.limit, 2)
+  // w0 was still refunded underneath; only the *returned state* describes w1 instead.
+  assertEquals(await store.read(quotaKey(USER, policy, 0)), 0)
+})
