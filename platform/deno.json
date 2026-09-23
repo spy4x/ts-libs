@@ -6,6 +6,8 @@
     "./browser": "./browser.ts",
     "./browser/download": "./browser/download.ts",
     "./browser/storage": "./browser/storage.ts",
+    "./cache": "./cache/mod.ts",
+    "./cqrs": "./cqrs/mod.ts",
     "./rate-limit": "./rate-limit/mod.ts",
     "./rate-limit/client-ip": "./rate-limit/client-ip.ts",
     "./rate-limit/hono": "./rate-limit/hono.ts",

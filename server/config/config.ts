@@ -48,7 +48,7 @@
  */
 import { type SchemaOutput, validate, type ValidationResult } from "@ts-libs/validation/validate"
 import { type } from "arktype"
-import type { Type } from "arktype"
+import type { Out, Type } from "arktype"
 import { type EnvReader, systemEnv } from "./env.ts"
 
 /** A root-level failure (a `.narrow()` rejection with no single field) reads as this label. */
@@ -76,7 +76,8 @@ export class ConfigError extends Error {
  * not inferred from `"1"`, `"yes"` or an empty string. See the module-level note on why the set of
  * accepted spellings is kept to two.
  */
-export const stringBoolean = type("'true' | 'false'").pipe((value) => value === "true")
+export const stringBoolean: Type<(In: "true" | "false") => Out<boolean>> = type("'true' | 'false'")
+  .pipe((value) => value === "true")
 
 /**
  * The environment-variable names a flat arktype object schema declares, required, optional and
