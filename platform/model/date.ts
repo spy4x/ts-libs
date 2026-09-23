@@ -6,15 +6,19 @@
  * to a `Date`.
  *
  * Moved from `template/libs/platform/types/+index.ts`. **Bugs fixed at extraction time (#131,
- * #136).** The source was `type("Date | string.date.iso.parse")`: arktype's
+ * #136, #135).** The source was `type("Date | string.date.iso.parse")`: arktype's
  * `string.date.iso.parse` checks the string's *shape* against the ISO 8601 grammar and then parses
  * it with `new Date(...)`. `new Date` silently rolls an out-of-range day or month into the next one
  * instead of refusing it — `new Date("2026-02-30")` is 2 March 2026, not an error — so the source
  * accepted and stored a date that was never on any calendar (#131). V8 also reads two shapes the
  * grammar allows as the wrong date: an ordinal date (`"2024-005"`, 5 January, becomes 1 May) and a
  * year with a sign (`"-2024-01-01"` becomes 2024, `"+0099-12-31"` becomes 1999) (#136). See
- * {@link isRealCalendarDate} for how each is refused. A string that is a year, a year and month, or
- * a `YYYY-MM-DD` date, with or without a time, parses as the source parsed it.
+ * {@link isRealCalendarDate} for how each is refused. A date-time string with a time but no offset
+ * and no `Z`, such as `"2024-02-29T10:00:00"`, is refused too (#135): the ECMA-262 date-time
+ * production reads it in the host's own time zone, so the same string names a different instant on
+ * a laptop set to one zone and a server set to another. A year, a year and month, or a `YYYY-MM-DD`
+ * date — with no time part at all — is read as UTC midnight by the same specification and stays
+ * accepted, because that reading does not depend on the host's time zone.
  */
 import { type Out, type Type, type } from "arktype"
 
@@ -22,6 +26,12 @@ const ISO_CALENDAR_DATE_PREFIX = /^(\d{4})-(\d{2})-(\d{2})/
 
 /** An ordinal date, `YYYY-DDD`, with or without a time after it. */
 const ISO_ORDINAL_DATE = /^\d{4}-\d{3}(?!\d)/
+
+/**
+ * A time-of-day (`Thh:mm` or `Thh:mm:ss[.fff]`) that is not followed by `Z` or a numeric offset.
+ * Anchored at the end of the string: an offset or `Z` after the time means this does not match.
+ */
+const ISO_TIME_WITHOUT_OFFSET = /T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/
 
 /**
  * Whether `new Date` reads an ISO 8601 string as the date it names and, when the string starts with
@@ -45,6 +55,13 @@ const ISO_ORDINAL_DATE = /^\d{4}-\d{3}(?!\d)/
  * `"2024-001"`): `JSON.stringify` never writes an ordinal date, and writes a signed year only with
  * six digits, which the sign rule refuses too.
  *
+ * A fourth shape is refused for a different reason: a time with no offset and no `Z`
+ * (`ISO_TIME_WITHOUT_OFFSET`). V8 reads this one correctly for the time zone it is asked about —
+ * the bug is that the zone is the host's, not the wire's. `"2024-02-29T10:00:00"` is 10:00 UTC on a
+ * host set to UTC and 03:00 UTC on one set to `Asia/Bangkok`; refusing the shape means every string
+ * this schema accepts names exactly one instant, everywhere it runs.
+ *
+
  * For a string that starts with `YYYY-MM-DD`, this rebuilds a date from the three digit groups and
  * reads its fields back. `setUTCFullYear` is used rather than `Date.UTC`, which maps a two-digit
  * year into 1900-1999 (`Date.UTC(99, 0, 1)` is 1999, not year 99) — `setUTCFullYear(99, 0, 1)` sets
@@ -62,6 +79,7 @@ function isRealCalendarDate(iso: string): boolean {
   if (/^[+-]/.test(iso)) return false
   if (/^\d{5}/.test(iso)) return false
   if (ISO_ORDINAL_DATE.test(iso)) return false
+  if (ISO_TIME_WITHOUT_OFFSET.test(iso)) return false
   const match = ISO_CALENDAR_DATE_PREFIX.exec(iso)
   if (match === null) return true
   const [, yearStr, monthStr, dayStr] = match

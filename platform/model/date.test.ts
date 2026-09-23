@@ -159,6 +159,55 @@ describe("dateSchema", () => {
     })
   })
 
+  /**
+   * #135: a date-time string with a time but no offset and no `Z` is read in the host's own time
+   * zone by `new Date`, so the same wire string would parse to a different instant depending on
+   * where the process runs. These cases pin the fix without depending on the host's `TZ` — they
+   * assert only that the string is refused, never a particular instant — and are also proven by
+   * hand in the PR body: the same script run once under `TZ=UTC` and once under `TZ=Asia/Bangkok`.
+   */
+  describe("offset-less date-time strings depend on the host time zone (#135)", () => {
+    it("rejects a date-time with no offset and no Z", () => {
+      expect(dateSchema("2024-02-29T10:00:00") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects a date-time with no offset and no Z, with a fractional second", () => {
+      expect(dateSchema("2024-02-29T10:00:00.500") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects a date-time with no offset and no Z, with minutes but no seconds", () => {
+      expect(dateSchema("2024-02-29T10:00") instanceof type.errors).toBe(true)
+    })
+
+    it("still accepts the same date-time with a trailing Z", () => {
+      const result = dateSchema("2024-02-29T10:00:00Z")
+      expect(result instanceof type.errors).toBe(false)
+      expect((result as Date).toISOString()).toBe("2024-02-29T10:00:00.000Z")
+    })
+
+    it("still accepts the same date-time with a numeric offset", () => {
+      const result = dateSchema("2024-02-29T10:00:00+02:00")
+      expect(result instanceof type.errors).toBe(false)
+      expect((result as Date).toISOString()).toBe("2024-02-29T08:00:00.000Z")
+    })
+
+    it("still accepts a date-only string, which ECMA-262 reads as UTC midnight regardless of host TZ", () => {
+      const result = dateSchema("2024-02-29")
+      expect(result instanceof type.errors).toBe(false)
+      expect((result as Date).toISOString()).toBe("2024-02-29T00:00:00.000Z")
+    })
+
+    it("still accepts a year and a year-month, which ECMA-262 also reads as UTC", () => {
+      expect((dateSchema("2024") as Date).toISOString()).toBe("2024-01-01T00:00:00.000Z")
+      expect((dateSchema("2024-05") as Date).toISOString()).toBe("2024-05-01T00:00:00.000Z")
+    })
+
+    it("still rejects an ordinal date regardless of a time part, unaffected by host TZ (#136)", () => {
+      expect(dateSchema("2024-001") instanceof type.errors).toBe(true)
+      expect(dateSchema("2024-001T10:00:00Z") instanceof type.errors).toBe(true)
+    })
+  })
+
   /** The ISO shape check, not just the calendar check, must still apply. */
   describe("non-ISO strings Date.parse can read but the ISO shape check refuses", () => {
     it("rejects a slash-separated date", () => {
