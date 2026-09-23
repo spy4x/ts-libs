@@ -20,12 +20,16 @@
  * touched and nothing is truncated.
  */
 
-import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert"
+import { assertEquals, assertRejects, assertStrictEquals, assertThrows } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import postgres from "postgres"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { MigrationEditedError, type MigrationReader, runMigrations } from "./migrate.ts"
-import { PostgresMigrationDriver, PostgresMigrationLockError } from "./postgres-migrate.ts"
+import {
+  PostgresIdentifierTransformError,
+  PostgresMigrationDriver,
+  PostgresMigrationLockError,
+} from "./postgres-migrate.ts"
 import { createSql } from "./postgres.ts"
 import type { Sql } from "./ports.ts"
 import { migrationRace } from "./testing/migration-race.ts"
@@ -61,7 +65,7 @@ interface Run {
  *
  * `transform` defaults to none — a plain client, column names exactly as Postgres sends
  * them. Passing `postgres.camel` is what the template's own client used
- * (`template/libs/server/db/+index.ts:9`); the "against a camelCase client" tests below
+ * (`template/libs/server/db/+index.ts:13`); the "against a camelCase client" tests below
  * pass it to prove the same driver behaviour holds under that transform, which is the
  * client shape #77 found failing.
  */
@@ -415,5 +419,77 @@ describe("the Postgres migration runner against a camelCase client", () => {
       const history = await new PostgresMigrationDriver({ sql, table }).appliedMigrations()
       assertEquals(history.map((row) => row.name), ["0001_init", "0002_add"])
     }, { transform: postgres.camel })
+  })
+
+  // Round 2 found the fix above incomplete: `sql(name)` — the identifier form every
+  // `CREATE TABLE`/`ALTER TABLE`/`INSERT` in this driver uses — runs the client's own
+  // `transform.column.to` on the name first, but every *other* place the driver names the
+  // table or schema (this probe, `to_regclass`, the lock key) passes it as a bound value,
+  // which that transform never touches. A mixed-case name therefore creates one object and
+  // looks the rest of the driver's statements up against a differently-spelled one.
+  // `PostgresIdentifierTransformError` refuses instead of trying to reconcile the two.
+
+  it("refuses a mixed-case table name the transform would rewrite, before creating anything", async () => {
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    // `fromCamel` turns this into `..._mixed_hist`; the driver would create one and the
+    // probe would keep asking about the other.
+    const table = `${uniqueIdentifier("it")}_MixedHist`
+    const sql = createSql({
+      connection: settings.connection,
+      transform: postgres.camel,
+      applicationName: uniqueIdentifier("it_migrations_camel_refuse"),
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      const error = assertThrows(
+        () => new PostgresMigrationDriver({ sql, table }),
+        PostgresIdentifierTransformError,
+      )
+      assertEquals(error.kind, "table")
+      assertEquals(error.identifier, table)
+
+      const rows = await sql<{ present: boolean }[]>`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables WHERE table_name = ${table}
+        ) AS present
+      `
+      assertStrictEquals(rows[0].present, false)
+    } finally {
+      await sql`DROP TABLE IF EXISTS ${sql(table)}`
+      await sql.end()
+    }
+  })
+
+  it("refuses a camelCase schema name the transform would rewrite, before creating anything", async () => {
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const schema = `${uniqueIdentifier("it")}TenantOne`
+    const sql = createSql({
+      connection: settings.connection,
+      transform: postgres.camel,
+      applicationName: uniqueIdentifier("it_migrations_camel_refuse"),
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      const error = assertThrows(
+        () => new PostgresMigrationDriver({ sql, schema }),
+        PostgresIdentifierTransformError,
+      )
+      assertEquals(error.kind, "schema")
+      assertEquals(error.identifier, schema)
+
+      const rows = await sql<{ present: boolean }[]>`
+        SELECT EXISTS (SELECT FROM information_schema.schemata WHERE schema_name = ${schema}) AS present
+      `
+      assertStrictEquals(rows[0].present, false)
+    } finally {
+      await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
+      await sql.end()
+    }
   })
 })

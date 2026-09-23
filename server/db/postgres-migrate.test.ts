@@ -17,6 +17,7 @@ import type { Migration } from "./migrate.ts"
 import type { Sql, Transaction } from "./ports.ts"
 import {
   DEFAULT_MIGRATIONS_TABLE,
+  PostgresIdentifierTransformError,
   PostgresMigrationDriver,
   PostgresMigrationLockError,
   PostgresMigrationRunInProgressError,
@@ -38,6 +39,12 @@ interface FakeSqlOptions {
    * which is what the bound is for.
    */
   lockRefusals?: number
+  /**
+   * `sql.options.transform.column.to`, as a real client configured with `postgres.camel`
+   * carries it. Defaults to `undefined` — a plain client, no transform — which is what
+   * every test not about {@link PostgresIdentifierTransformError} needs.
+   */
+  columnTransformTo?: (identifier: string) => string
 }
 
 /**
@@ -175,6 +182,9 @@ function createFakeSql(options: FakeSqlOptions = {}) {
       }
     },
     end: () => Promise.resolve(),
+    // Only the one field `assertStableIdentifier` reads. A real client always carries a
+    // full `ParsedOptions`; the cast to `Sql` below is what lets this fake carry only it.
+    options: { transform: { column: { to: options.columnTransformTo } } },
   })
 
   return {
@@ -318,6 +328,47 @@ Deno.test("createHistoryTable honours a custom table name", async () => {
   // The existence probe binds the name as a value; the `CREATE` splices it as an identifier.
   assertEquals(fake.topLevel[0], SEARCH_PATH_PROBE)
   assertStrictEquals(fake.topLevel[1].startsWith(`CREATE TABLE "schema_migrations" (`), true)
+})
+
+/**
+ * `postgres@3.4.7`'s `fromCamel` (`src/types.js:334`), the half of `postgres.camel` that
+ * `transform.column.to` carries. Reproduced here rather than imported, so these tests do
+ * not depend on the driver's internals staying named the way they are today.
+ */
+const decamelize = (identifier: string): string =>
+  identifier.replace(/([A-Z])/g, "_$1").toLowerCase()
+
+Deno.test("the constructor refuses a table name the transform would rewrite, before any SQL runs", () => {
+  const fake = createFakeSql({ columnTransformTo: decamelize })
+
+  const error = assertThrows(
+    () => new PostgresMigrationDriver({ sql: fake.sql, table: "x_MixedHist" }),
+    PostgresIdentifierTransformError,
+  )
+  assertEquals(error.kind, "table")
+  assertEquals(error.identifier, "x_MixedHist")
+  assertEquals(error.rewrittenTo, "x__mixed_hist")
+  assertEquals(fake.topLevel, [])
+  assertEquals(fake.reserved, [])
+})
+
+Deno.test("the constructor refuses a schema name the transform would rewrite, before any SQL runs", () => {
+  const fake = createFakeSql({ columnTransformTo: decamelize })
+
+  const error = assertThrows(
+    () => new PostgresMigrationDriver({ sql: fake.sql, schema: "UserProfile" }),
+    PostgresIdentifierTransformError,
+  )
+  assertEquals(error.kind, "schema")
+  assertEquals(error.identifier, "UserProfile")
+  assertEquals(error.rewrittenTo, "_user_profile")
+  assertEquals(fake.topLevel, [])
+})
+
+Deno.test("the constructor accepts a table and schema name the transform leaves unchanged", () => {
+  const fake = createFakeSql({ columnTransformTo: decamelize })
+  // Does not throw: lower-case with underscores is exactly what `decamelize` gives back.
+  new PostgresMigrationDriver({ sql: fake.sql, table: "migrations", schema: "tenant_1" })
 })
 
 Deno.test("appliedMigrations reads the recorded rows in id order", async () => {
@@ -728,6 +779,34 @@ Deno.test("purgeDatabase drops every base table, schema-qualified and CASCADE", 
     `DROP TABLE "public"."sessions" CASCADE`,
     `DROP TABLE "public"."migrations" CASCADE`,
   ])
+})
+
+Deno.test("purgeDatabase refuses a table name the transform would rewrite, and drops nothing", async () => {
+  const fake = createFakeSql({
+    answers: [[{ tablename: "plain_one" }, { tablename: "UserProfile" }]],
+    columnTransformTo: decamelize,
+  })
+
+  const error = await assertRejects(
+    () => purgeDatabase({ sql: fake.sql, environment: SAFE_ENVIRONMENT }),
+    PostgresIdentifierTransformError,
+  )
+  assertEquals(error.kind, "table")
+  assertEquals(error.identifier, "UserProfile")
+  // The listing ran — it is a read, and it is what names the tables to check — but no
+  // `DROP` did: every name is checked before the first one runs.
+  assertEquals(fake.topLevel.length, 1)
+})
+
+Deno.test("purgeDatabase refuses a schema name the transform would rewrite, and drops nothing", async () => {
+  const fake = createFakeSql({ answers: [[]], columnTransformTo: decamelize })
+
+  const error = await assertRejects(
+    () => purgeDatabase({ sql: fake.sql, schema: "UserProfile", environment: SAFE_ENVIRONMENT }),
+    PostgresIdentifierTransformError,
+  )
+  assertEquals(error.kind, "schema")
+  assertEquals(error.identifier, "UserProfile")
 })
 
 Deno.test("purgeDatabase reports an empty database without dropping anything", async () => {
