@@ -87,10 +87,11 @@ export class EventBus {
   /**
    * Deliver `event` to every listener subscribed to its class, on a microtask.
    *
-   * Listeners run in subscription order against the list as it stood when this microtask runs;
-   * a listener that subscribes or unsubscribes during dispatch affects only later `emit` calls.
-   * A synchronous throw or a rejected returned promise is caught per listener and handed to the
-   * constructor's `onListenerError`, so it cannot stop a sibling listener in the same dispatch.
+   * Listeners run in subscription order against a snapshot of the list taken when this microtask
+   * runs, so a listener that subscribes or unsubscribes during dispatch affects only later `emit`
+   * calls, never the one in progress. A synchronous throw or a rejected returned promise is caught
+   * per listener and handed to the constructor's `onListenerError`, so it cannot stop a sibling
+   * listener in the same dispatch.
    */
   emit<T extends Event<unknown>>(event: T): void {
     queueMicrotask(() => {
@@ -99,7 +100,7 @@ export class EventBus {
       if (!callbacks) {
         return
       }
-      for (const callback of callbacks) {
+      for (const callback of [...callbacks]) {
         try {
           const result = callback(event as Event<unknown>)
           if (result instanceof Promise) {

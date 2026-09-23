@@ -95,6 +95,27 @@ describe("EventBus", () => {
     expect(errors).toEqual([new Error("async boom")])
   })
 
+  it("does not run a listener subscribed during the current dispatch until the next emit", async () => {
+    const bus = new EventBus()
+    const ran: string[] = []
+    bus.on(PingEvent, () => {
+      ran.push("first")
+      bus.on(PingEvent, () => {
+        ran.push("late")
+      })
+    })
+
+    bus.emit(new PingEvent({ value: "a" }))
+    await flush()
+
+    expect(ran).toEqual(["first"])
+
+    bus.emit(new PingEvent({ value: "b" }))
+    await flush()
+
+    expect(ran).toEqual(["first", "first", "late"])
+  })
+
   it("unsubscribes a once listener even when it throws", async () => {
     const bus = new EventBus(() => {})
     let hits = 0
