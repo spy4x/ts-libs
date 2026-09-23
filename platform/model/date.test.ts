@@ -64,6 +64,41 @@ describe("dateSchema", () => {
       expect(result instanceof type.errors).toBe(false)
       expect((result as Date).toISOString()).toBe("2024-02-29T00:00:00.000Z")
     })
+
+    it("accepts year 0000 and year 0099 (setUTCFullYear, not Date.UTC's two-digit-year mapping)", () => {
+      const y0000 = dateSchema("0000-01-01")
+      expect(y0000 instanceof type.errors).toBe(false)
+      expect((y0000 as Date).toISOString()).toBe("0000-01-01T00:00:00.000Z")
+
+      const y0099 = dateSchema("0099-12-31")
+      expect(y0099 instanceof type.errors).toBe(false)
+      expect((y0099 as Date).toISOString()).toBe("0099-12-31T00:00:00.000Z")
+    })
+
+    it("rejects a week date and the compact no-dashes form instead of returning an unusable Invalid Date", () => {
+      expect(dateSchema("2024-W01-1") instanceof type.errors).toBe(true)
+      expect(dateSchema("20240230") instanceof type.errors).toBe(true)
+    })
+
+    it("checks the string's own YYYY-MM-DD digits, not the UTC date after the time and offset are applied", () => {
+      // 23:30 on 29 February at -05:00 is 04:30 UTC on 1 March — a check built from the fully
+      // parsed date (`new Date(iso)`) would read back month 3 / day 1 in UTC and wrongly reject a
+      // string whose own date part, 2024-02-29, is a real (leap-year) calendar date.
+      const result = dateSchema("2024-02-29T23:30:00-05:00")
+      expect(result instanceof type.errors).toBe(false)
+      expect((result as Date).toISOString()).toBe("2024-03-01T04:30:00.000Z")
+    })
+  })
+
+  /** The ISO shape check, not just the calendar check, must still apply. */
+  describe("non-ISO strings Date.parse can read but the ISO shape check refuses", () => {
+    it("rejects a slash-separated date", () => {
+      expect(dateSchema("2024/01/02") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects a month-name date", () => {
+      expect(dateSchema("Jan 2 2024") instanceof type.errors).toBe(true)
+    })
   })
 })
 
@@ -96,6 +131,11 @@ describe("DateNullableSchema", () => {
 
   it("still rejects garbage", () => {
     const result = wrapper({ d: "not a date" })
+    expect(result instanceof type.errors).toBe(true)
+  })
+
+  it("inherits the calendar-date check (#131): still rejects 30 February", () => {
+    const result = wrapper({ d: "2026-02-30" })
     expect(result instanceof type.errors).toBe(true)
   })
 })
