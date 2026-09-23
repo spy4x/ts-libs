@@ -55,7 +55,7 @@ export const DEFAULT_CODE_MAX_ATTEMPTS = 5
 export type EmailCodeErrorReason =
   /** The address is not one `normalizeEmail` accepts. */
   | "invalid-email"
-  /** The code did not match. The guess was counted. */
+  /** The code did not match, or was not a string. A compared guess was counted. */
   | "wrong-code"
   /** The code has used up its guesses. Nothing was compared. */
   | "locked-out"
@@ -112,8 +112,9 @@ export interface EmailCodeSignIn {
    *
    * @throws {EmailCodeError} `invalid-email`, `wrong-code`, `locked-out`, `no-code`, or
    *     `account-deleted`.
-   * @throws {AuthConflictError} When another sign-in for the same address wrote first; a new code
-   *     then succeeds.
+   * @throws {AuthConflictError} When another sign-in for the same address wrote first (a new code
+   *     then succeeds), or an email-code key for the address carries no `email` and so cannot be
+   *     evicted.
    */
   verifyCode(email: string, code: string): Promise<SignInResult>
 }
