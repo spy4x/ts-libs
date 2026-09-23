@@ -152,10 +152,21 @@ interface MigrationRow {
   checksum: string | null
 }
 
-/** What `createHistoryTable`'s one probe answers: is the table there, is it up to date. */
+/**
+ * What `createHistoryTable`'s one probe answers: is the table there, is it up to date.
+ *
+ * Aliased to one lower-case word with no underscore, not `table_exists`/`checksum_exists`:
+ * `postgres.camel` — a transform a caller may configure on its own client, same as
+ * `PostgresOutboxRepository` — turns a returned `table_exists` into `tableExists`, which
+ * left this probe reading `undefined` for both flags on a camelCase client, so
+ * `createHistoryTable` treated an existing history table as absent and reissued
+ * `CREATE TABLE`, failing every run after the first with `relation already exists`. A
+ * bare lower-case word has no underscore for the transform to act on, so it comes back
+ * unchanged whether the client transforms or not.
+ */
 interface HistoryProbe {
-  table_exists: boolean
-  checksum_exists: boolean
+  tableexists: boolean
+  checksumexists: boolean
 }
 
 /**
@@ -368,26 +379,26 @@ export class PostgresMigrationDriver implements MigrationDriver {
           exists (
             SELECT FROM information_schema.tables
             WHERE table_name = ${this.table} AND table_schema = ANY (current_schemas(false))
-          ) AS table_exists,
+          ) AS tableexists,
           exists (
             SELECT FROM information_schema.columns
             WHERE table_name = ${this.table} AND column_name = 'checksum'
             AND table_schema = ANY (current_schemas(false))
-          ) AS checksum_exists
+          ) AS checksumexists
       `
       : await this.sql<HistoryProbe[]>`
         SELECT
           exists (
             SELECT FROM information_schema.tables
             WHERE table_name = ${this.table} AND table_schema = ${this.schema}
-          ) AS table_exists,
+          ) AS tableexists,
           exists (
             SELECT FROM information_schema.columns
             WHERE table_name = ${this.table} AND column_name = 'checksum'
             AND table_schema = ${this.schema}
-          ) AS checksum_exists
+          ) AS checksumexists
       `
-    if (!probe[0]?.table_exists) {
+    if (!probe[0]?.tableexists) {
       await this.sql`
         CREATE TABLE ${this.sql(this.tableRef)}
         (
@@ -399,7 +410,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
       `
       return
     }
-    if (probe[0].checksum_exists) return
+    if (probe[0].checksumexists) return
     await this.sql`
       ALTER TABLE ${this.sql(this.tableRef)} ADD COLUMN IF NOT EXISTS checksum TEXT
     `

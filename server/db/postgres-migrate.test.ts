@@ -234,12 +234,12 @@ const RESOLVED_SCHEMA_PROBE = "SELECT coalesce( ( SELECT n.nspname FROM pg_class
  * sends no `ALTER`.
  */
 const SEARCH_PATH_PROBE = "SELECT exists ( SELECT FROM information_schema.tables WHERE " +
-  "table_name = $1 AND table_schema = ANY (current_schemas(false)) ) AS table_exists, " +
+  "table_name = $1 AND table_schema = ANY (current_schemas(false)) ) AS tableexists, " +
   "exists ( SELECT FROM information_schema.columns WHERE table_name = $2 AND " +
-  "column_name = 'checksum' AND table_schema = ANY (current_schemas(false)) ) AS checksum_exists"
+  "column_name = 'checksum' AND table_schema = ANY (current_schemas(false)) ) AS checksumexists"
 
 Deno.test("createHistoryTable creates the table once, with a unique name column", async () => {
-  const fake = createFakeSql({ answers: [[{ table_exists: false, checksum_exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: false, checksumexists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
   assertEquals(fake.topLevel, [
@@ -252,7 +252,7 @@ Deno.test("createHistoryTable creates the table once, with a unique name column"
 Deno.test("createHistoryTable adds the checksum column to a table that predates it", async () => {
   // The upgrade path for a deployment that already ran migrations, which is the one that
   // most needs the drift check. `ADD COLUMN IF NOT EXISTS` makes it a no-op afterwards.
-  const fake = createFakeSql({ answers: [[{ table_exists: true, checksum_exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: true, checksumexists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
   assertEquals(fake.topLevel, [
@@ -262,7 +262,7 @@ Deno.test("createHistoryTable adds the checksum column to a table that predates 
 })
 
 Deno.test("createHistoryTable touches nothing when the table is already up to date", async () => {
-  const fake = createFakeSql({ answers: [[{ table_exists: true, checksum_exists: true }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: true, checksumexists: true }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
   assertEquals(fake.topLevel, [SEARCH_PATH_PROBE])
@@ -273,14 +273,14 @@ Deno.test("the history table is looked for on the search path, not on the whole 
   // schema on the server — another tenant's, another application's — answered yes and
   // the driver created nothing. The first history insert then failed on a table that
   // was not there.
-  const fake = createFakeSql({ answers: [[{ table_exists: false, checksum_exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: false, checksumexists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
   // Each half of the probe carries the scope, and it is the table half that matters here:
   // an unscoped one answers yes for somebody else's table and the driver creates nothing.
   assertStrictEquals(
     fake.topLevel[0].includes(
-      "table_name = $1 AND table_schema = ANY (current_schemas(false)) ) AS table_exists",
+      "table_name = $1 AND table_schema = ANY (current_schemas(false)) ) AS tableexists",
     ),
     true,
   )
@@ -289,7 +289,7 @@ Deno.test("the history table is looked for on the search path, not on the whole 
 
 Deno.test("a named schema qualifies both the probe and every statement", async () => {
   const fake = createFakeSql({
-    answers: [[{ table_exists: false, checksum_exists: false }], [{ name: "0001_init" }]],
+    answers: [[{ tableexists: false, checksumexists: false }], [{ name: "0001_init" }]],
   })
   const driver = new PostgresMigrationDriver({ sql: fake.sql, schema: "tenant_1" })
 
@@ -299,9 +299,9 @@ Deno.test("a named schema qualifies both the probe and every statement", async (
 
   assertEquals(fake.topLevel, [
     "SELECT exists ( SELECT FROM information_schema.tables WHERE table_name = $1 AND " +
-    "table_schema = $2 ) AS table_exists, exists ( SELECT FROM information_schema.columns " +
+    "table_schema = $2 ) AS tableexists, exists ( SELECT FROM information_schema.columns " +
     "WHERE table_name = $3 AND column_name = 'checksum' AND table_schema = $4 ) AS " +
-    "checksum_exists",
+    "checksumexists",
     `CREATE TABLE "tenant_1"."migrations" ( id SERIAL PRIMARY KEY, name TEXT NOT NULL ` +
     `UNIQUE, checksum TEXT, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP )`,
     `SELECT name, checksum FROM "tenant_1"."migrations" ORDER BY id`,
@@ -311,7 +311,7 @@ Deno.test("a named schema qualifies both the probe and every statement", async (
 })
 
 Deno.test("createHistoryTable honours a custom table name", async () => {
-  const fake = createFakeSql({ answers: [[{ table_exists: false, checksum_exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: false, checksumexists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql, table: "schema_migrations" })
     .createHistoryTable()
 
@@ -337,7 +337,7 @@ Deno.test("the lock, the run and the unlock all go through the reserved connecti
   // The lock is a *session* lock, so it has to be taken on the session the migrations run
   // on. Sending it through the pool instead protects a session the run never touches, and
   // that is exactly what a fake recording every handle into one list could not see.
-  const fake = createFakeSql({ answers: [[{ table_exists: true, checksum_exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: true, checksumexists: false }]] })
   const driver = new PostgresMigrationDriver({ sql: fake.sql })
 
   const inside = await driver.withLock(async () => {
