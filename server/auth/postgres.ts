@@ -186,6 +186,7 @@ class PostgresAuthStore implements AuthStore {
   }
 
   async findKey(method: string, subject: string): Promise<AuthKey | null> {
+    if (typeof method !== "string" || typeof subject !== "string") return null
     const [row] = await this.#sql<KeyRow[]>`
       SELECT ${keyColumns(this.#sql)} FROM auth_keys
       WHERE method = ${method} AND subject = ${subject}
@@ -210,6 +211,7 @@ class PostgresAuthStore implements AuthStore {
   }
 
   async findUserIdByProvenEmail(email: string): Promise<number | null> {
+    if (typeof email !== "string") return null
     const [row] = await this.#sql<{ userId: number }[]>`
       SELECT user_id AS "userId" FROM auth_email_owners WHERE email = ${email}
     `
@@ -338,6 +340,10 @@ class PostgresAuthStore implements AuthStore {
 export function createPostgresSessionStore(sql: Sql): SessionStore<AuthSessionRecord> {
   return {
     async create(session: Omit<AuthSessionRecord, "id">): Promise<AuthSessionRecord> {
+      if (!isStoreId(session.userId) || !isStoreId(session.keyId)) {
+        throw new TypeError("a session needs a userId and a keyId the auth store could assign")
+      }
+      checkDate(session.expiresAt, "expiresAt")
       const [row] = await sql<AuthSessionRecord[]>`
         INSERT INTO auth_sessions (user_id, key_id, token_hash, status, second_factor, expires_at)
         VALUES (
@@ -356,6 +362,7 @@ export function createPostgresSessionStore(sql: Sql): SessionStore<AuthSessionRe
       return row ? toSession(row) : null
     },
     async extend(id: number, expiresAt: Date): Promise<boolean> {
+      checkDate(expiresAt, "expiresAt")
       if (!isStoreId(id)) return false
       const rows = await sql`
         UPDATE auth_sessions SET expires_at = ${expiresAt}
@@ -380,15 +387,17 @@ export function createPostgresSessionStore(sql: Sql): SessionStore<AuthSessionRe
         WHERE id = ${id} AND status = ${SessionStatus.Active}
       `
     },
+    // An `exceptId` no store could have assigned matches no session, so nothing is kept.
     async signOutUser(userId: number, exceptId: number | null): Promise<void> {
       if (!isStoreId(userId)) return
       await sql`
         UPDATE auth_sessions SET status = ${SessionStatus.SignedOut}
         WHERE user_id = ${userId} AND status = ${SessionStatus.Active}
-        ${exceptId === null ? sql`` : sql`AND id <> ${exceptId}`}
+        ${isStoreId(exceptId) ? sql`AND id <> ${exceptId}` : sql``}
       `
     },
     async expire(now: Date): Promise<void> {
+      checkDate(now, "now")
       await sql`
         UPDATE auth_sessions SET status = ${SessionStatus.Expired}
         WHERE status = ${SessionStatus.Active} AND expires_at <= ${now}

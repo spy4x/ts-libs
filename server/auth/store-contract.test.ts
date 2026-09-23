@@ -200,6 +200,16 @@ export function describeAuthStoreContract(
         }
       }))
 
+    it("answers null for a lookup by a value that is not a string", () =>
+      withStore(async (store) => {
+        await store.createUserWithKey(emailKey("password", "ann@example.com", NOW))
+        for (const value of [42, null, undefined, {}] as unknown as string[]) {
+          expect(await store.findKey(value, "ann@example.com")).toBeNull()
+          expect(await store.findKey("password", value)).toBeNull()
+          expect(await store.findUserIdByProvenEmail(value)).toBeNull()
+        }
+      }))
+
     it("replaces a key's secret, and answers false for a key that does not exist", () =>
       withStore(async (store) => {
         const { key } = await store.createUserWithKey({

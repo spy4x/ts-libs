@@ -312,6 +312,43 @@ describe("createPostgresSessionStore driven by SessionManager", () => {
       expect(await sessions.validate(byCode.cookieValue)).not.toBeNull()
     }))
 
+  it("refuses a session whose ids no store could assign, without asking Postgres", () =>
+    withDatabase(async ({ sql }) => {
+      const { store, ann } = await setup(sql)
+      const base = {
+        userId: ann.user.id,
+        keyId: ann.key.id,
+        tokenHash: "hash",
+        status: SessionStatus.Active,
+        secondFactor: SecondFactorStatus.NotRequired,
+        expiresAt: new Date(NOW.getTime() + MINUTE),
+      }
+      for (const bad of [{ keyId: 2 ** 31 }, { userId: 2 ** 31 }, { keyId: 1.5 }]) {
+        const error = await store.create({ ...base, ...bad }).then(
+          () => null,
+          (caught: unknown) => caught,
+        )
+        expect(error).toBeInstanceOf(TypeError)
+      }
+      const invalidDate = await store.create({ ...base, expiresAt: new Date(Number.NaN) }).then(
+        () => null,
+        (caught: unknown) => caught,
+      )
+      expect(invalidDate).toBeInstanceOf(TypeError)
+    }))
+
+  it("keeps no session when the one to keep has an id no store could assign", () =>
+    withDatabase(async ({ sql }) => {
+      const { sessions, ann } = await setup(sql)
+      const { cookieValue } = await sessions.create({
+        userId: ann.user.id,
+        keyId: ann.key.id,
+        secondFactor: SecondFactorStatus.NotRequired,
+      })
+      await sessions.signOutUser(ann.user.id, { except: 2 ** 31 })
+      expect(await sessions.validate(cookieValue)).toBeNull()
+    }))
+
   it("refuses a session whose key belongs to another user", () =>
     withDatabase(async ({ sql }) => {
       const { sessions, ann, authStore } = await setup(sql)
