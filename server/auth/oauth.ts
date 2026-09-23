@@ -4,11 +4,11 @@
  * Written from the rules in issue #57, finding 2, not moved from the earlier
  * `providers/oauth2.ts`. The rules this file carries:
  *
- * - A person is matched by the provider's own user id (`sub`), never by email. The key's `method`
- *   is `oauth:<provider id>` and its `subject` is the `sub`, looked up with `findKey`.
- * - An address links a new `sub` to an existing user only when the provider vouches for it
- *   (`emailVerified`) and that user already owns the address as a proven one. An address the
- *   provider does not vouch for is not stored on the key at all.
+ * - An existing key is matched by the provider's own user id (`sub`), never by email. The key's
+ *   `method` is `oauth:<provider id>` and its `subject` is the `sub`, looked up with `findKey`. An
+ *   address decides only where a new `sub` lands, and only when the provider vouches for it
+ *   (`emailVerified`) and a user already owns that address as a proven one.
+ * - An address the provider does not vouch for is not stored on the key at all.
  * - Every flow uses PKCE (S256) and a single-use, expiring `state`, which must also match the value
  *   the app kept in the browser that started the flow.
  * - The pending flow is deleted before anything else happens in the callback, so it is gone on
@@ -161,7 +161,8 @@ export interface OAuthSignIn {
   handleCallback(input: OAuthCallbackInput): Promise<OAuthSignInResult>
   /**
    * Deletes the key `keyId` when it is this provider's key of `userId`, and nothing else. false
-   * when there is no such key. Its sessions end with it (the store cascades).
+   * when there is no such key. Its sessions end with it on the Postgres store, which cascades the
+   * delete; the in-memory store has no sessions to cascade.
    */
   disconnect(userId: number, keyId: number): Promise<boolean>
 }
