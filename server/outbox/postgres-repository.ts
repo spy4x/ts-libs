@@ -42,7 +42,7 @@
  * index; it is not enforced here because this repository reads and updates rows but
  * never creates or migrates the table.
  */
-import type { Sql } from "@spy4x/server/db"
+import type { Sql } from "../db/index.ts"
 import type { OutboxEvent, OutboxRepository } from "./processor.ts"
 
 export class PostgresOutboxRepository implements OutboxRepository {

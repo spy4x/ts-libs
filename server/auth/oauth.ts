@@ -25,7 +25,7 @@ import { encodeBase64Url } from "@std/encoding/base64url"
 import { type } from "arktype"
 import { constantTimeEquals, randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import { systemClock } from "@spy4x/platform/universal/time"
-import { SecondFactorStatus } from "@spy4x/server/sign-in"
+import { SecondFactorStatus } from "../sign-in/mod.ts"
 import { validate } from "@spy4x/validation"
 
 import { isStoreText, MAX_SUBJECT_LENGTH } from "./input.ts"

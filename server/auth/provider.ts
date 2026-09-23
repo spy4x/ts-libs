@@ -6,7 +6,7 @@
  */
 
 import type { Clock } from "@spy4x/platform/universal/time"
-import type { CreatedSession, SecondFactorStatus, SessionManager } from "@spy4x/server/sign-in"
+import type { CreatedSession, SecondFactorStatus, SessionManager } from "../sign-in/mod.ts"
 
 import type { AuthKey, AuthSessionRecord, AuthUser } from "./model.ts"
 import type { AuthStore } from "./store.ts"

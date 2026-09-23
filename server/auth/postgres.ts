@@ -19,8 +19,8 @@
  * @module
  */
 
-import type { Sql } from "@spy4x/server/db"
-import { SecondFactorStatus, SessionStatus, type SessionStore } from "@spy4x/server/sign-in"
+import type { Sql } from "../db/index.ts"
+import { SecondFactorStatus, SessionStatus, type SessionStore } from "../sign-in/mod.ts"
 import {
   AuthConflictError,
   type AuthKey,
