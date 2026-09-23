@@ -75,6 +75,9 @@
     // rather than a bare command so `deno task check:cold publish:dry` can wrap it (#111);
     // `check:cold` only accepts task names, not an arbitrary command line.
     "publish:dry": "deno publish --dry-run --allow-dirty",
+    // Regenerates `docs/1.0-contract.md` (#77): the exported names and signatures of every entry
+    // point the template will import, from `deno doc`. See `infra/scripts/contract.ts`.
+    "contract": "deno run --allow-read --allow-write=docs/1.0-contract.md --allow-run=deno infra/scripts/contract.ts",
     "fix": {
       "command": "echo 'Fixes applied!'",
       "description": "Run all fixes",
