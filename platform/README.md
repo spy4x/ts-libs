@@ -191,7 +191,7 @@ already are — by where the code can run:
 | `api/`          | `ApiError`, `ApiResult<T>`, `apiFetch` — browser-only, needs `fetch`                                                                                                            |
 | `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                               |
 
-**Three bugs fixed at extraction time**, two in the request helpers and one in `model/`:
+**Four bugs fixed at extraction time**, two in the request helpers and two in `model/`:
 
 - `apiFetch` (`api/api.ts`) built its request as `{ headers: { "content-type": ..., ...init.headers },
   ...init }`. Spreading `init` last meant a caller's own `headers` replaced the whole merged object
@@ -212,10 +212,22 @@ already are — by where the code can run:
 - `dateSchema` (`model/date.ts`) accepted an ISO date string whose calendar day did not exist —
   `"2026-02-30"` parsed to 2 March 2026 instead of being refused, because `new Date(...)` silently
   rolls an out-of-range day or month into the next one (#131). Fixed by refusing a string `new Date`
-  cannot read, then rebuilding the date from the string's own `YYYY-MM-DD` digits (with or without a
-  sign before the year) and comparing it back against them; a string without that prefix that `new
-  Date` can read (a year, a year and month, or an ordinal date) parses as the source parsed it. A
-  date written without dashes is refused, because V8 reads its digits as a year.
+  cannot read, then rebuilding the date from the string's own `YYYY-MM-DD` digits and comparing it
+  back against them; a year, or a year and month, parses as the source parsed it. A date written
+  without dashes is refused, because V8 reads its digits as a year.
+- `dateSchema` also accepted two ISO 8601 shapes that `new Date` reads as a different date, with no
+  error (#136): an ordinal date (`"2024-005"`, 5 January, became 1 May) and a year with a sign
+  (`"-0001-01-01"` became 2001, `"+0099-12-31"` became 1999). Both shapes are now refused, even
+  where V8 happens to read them right (`"2024-001"`, `"+2024-01-01"`). `JSON.stringify` never
+  writes an ordinal date, and writes a signed year only with six digits, which was already refused.
+
+**Every exported schema declares its type.** JSR refuses an exported constant whose type is only
+inferred, so each schema in `model/` carries an explicit arktype `Type<…>` annotation (#141). The
+annotation spells out what arktype infers: `dateSchema` is `Type<Date | ((In: string) => Out<Date>)>`,
+a pipe from a string to a `Date`, and a field with a default is `Default<T, V>`, imported from
+`arktype/internal/attributes.ts` because arktype's main entry point does not export it.
+`model/types.test.ts` fails to compile if `DateType`, `BaseModel`, a push type, or the input a
+schema accepts changes.
 
 **The `"+": "reject"` decision splits by whether a schema is composed.** `model/base-model.ts`'s
 three schemas declare it on none of them: an app is meant to `.and()` its own fields onto

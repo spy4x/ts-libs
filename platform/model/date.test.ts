@@ -113,7 +113,49 @@ describe("dateSchema", () => {
       expect(dateSchema("+2023-02-29") instanceof type.errors).toBe(true)
       expect(dateSchema("+2026-04-31") instanceof type.errors).toBe(true)
       expect(dateSchema("-1900-02-29") instanceof type.errors).toBe(true)
-      expect(dateSchema("+2024-02-29") instanceof type.errors).toBe(false)
+      // Refused since #136: a signed year is refused even when the date exists.
+      expect(dateSchema("+2024-02-29") instanceof type.errors).toBe(true)
+    })
+  })
+
+  /**
+   * #136: V8's `new Date` reads an ordinal date's day of the year as a month, and drops the sign
+   * of a signed four-digit year, with no error. Both shapes are refused rather than mis-dated.
+   */
+  describe("shapes new Date reads as the wrong date (#136)", () => {
+    it("rejects an ordinal date that new Date would read as the first of a month", () => {
+      // "2024-005" is 5 January; new Date reads it as 1 May.
+      for (const input of ["2024-002", "2024-005", "2024-012"]) {
+        expect(dateSchema(input) instanceof type.errors).toBe(true)
+      }
+    })
+
+    it("rejects an ordinal date even where new Date happens to read it right", () => {
+      expect(dateSchema("2024-001") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects an ordinal date followed by a time", () => {
+      expect(dateSchema("2024-005T10:00:00Z") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects a year with a minus sign, which new Date reads as a positive year", () => {
+      // "-2024-01-01" becomes 2024; "-0001-01-01" becomes 2001.
+      for (const input of ["-2024-01-01", "-0001-01-01", "-2024-05"]) {
+        expect(dateSchema(input) instanceof type.errors).toBe(true)
+      }
+    })
+
+    it("rejects a year with a plus sign, which new Date can read in the wrong century", () => {
+      // "+0099-12-31" becomes 1999.
+      for (const input of ["+0099-12-31", "+2024-01-01", "+2024"]) {
+        expect(dateSchema(input) instanceof type.errors).toBe(true)
+      }
+    })
+
+    it("still accepts a year, a year and month, and an unsigned calendar date", () => {
+      expect((dateSchema("2024") as Date).toISOString()).toBe("2024-01-01T00:00:00.000Z")
+      expect((dateSchema("2024-05") as Date).toISOString()).toBe("2024-05-01T00:00:00.000Z")
+      expect((dateSchema("2024-01-05") as Date).toISOString()).toBe("2024-01-05T00:00:00.000Z")
     })
   })
 
