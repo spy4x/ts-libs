@@ -1,6 +1,8 @@
 /**
- * Input checks shared by both `AuthStore` implementations, so the memory store refuses exactly what
- * Postgres refuses. Internal: not an entry point of the package.
+ * Input checks shared by both `AuthStore` implementations, so the memory store refuses what Postgres
+ * refuses: the same lengths, NUL, and strings that are not well-formed UTF-16. One difference
+ * remains: a `Date` before year 1 or after year 9999 is refused by Postgres as out of range and
+ * accepted by the memory store. Internal: not an entry point of the package.
  *
  * The limits match the `CHECK` constraints in `AUTH_POSTGRES_SCHEMA`.
  */
@@ -22,10 +24,13 @@ export const MAX_ID = 2_147_483_647
 const validDate = type("Date").narrow((value, ctx) =>
   !Number.isNaN(value.getTime()) || ctx.mustBe("a valid Date")
 )
-/** A string of 1 to `max` characters without NUL, which a Postgres `text` value cannot hold. */
+/**
+ * A string of 1 to `max` characters that Postgres stores as given: no NUL (a `text` value cannot
+ * hold it) and no lone surrogate (the driver's UTF-8 encoding turns it into U+FFFD).
+ */
 function storeText(max: number) {
   return type(`0 < string <= ${max}`).narrow((value, ctx) =>
-    !value.includes("\u0000") || ctx.mustBe("free of NUL characters")
+    isStoreText(value) || ctx.mustBe("free of NUL characters and lone surrogates")
   )
 }
 
@@ -67,9 +72,12 @@ const attemptChallengeInput = type({
   now: validDate,
 })
 
-/** True for a string Postgres can compare: `text` cannot hold the NUL character. */
+/**
+ * True for a string Postgres stores and compares as given: `text` cannot hold NUL, and a lone
+ * surrogate would reach the database as U+FFFD.
+ */
 export function isStoreText(value: unknown): value is string {
-  return typeof value === "string" && !value.includes("\u0000")
+  return typeof value === "string" && !value.includes("\u0000") && value.isWellFormed()
 }
 
 /** True for an id either store could have assigned: an integer from 1 to {@link MAX_ID}. */
