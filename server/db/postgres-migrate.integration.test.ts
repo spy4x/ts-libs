@@ -29,7 +29,9 @@ import {
   PostgresIdentifierTransformError,
   PostgresMigrationDriver,
   PostgresMigrationLockError,
+  PostgresUnexpectedRowError,
 } from "./postgres-migrate.ts"
+import { ENV_NAME, purgeDatabase } from "./postgres-purge.ts"
 import { createSql } from "./postgres.ts"
 import type { Sql } from "./ports.ts"
 import { migrationRace } from "./testing/migration-race.ts"
@@ -67,11 +69,14 @@ interface Run {
  * them. Passing `postgres.camel` is what the template's own client used
  * (`template/libs/server/db/+index.ts:13`); the "against a camelCase client" tests below
  * pass it to prove the same driver behaviour holds under that transform, which is the
- * client shape #77 found failing.
+ * client shape #77 found failing. Passing `postgres.pascal` is what the "against a
+ * postgres.pascal client" tests below use for #137: unlike `postgres.camel`, it rewrites
+ * every column name, including the bare lower-case words (`locked`, `tableexists`, …)
+ * `postgres.camel` leaves alone.
  */
 async function withRun(
   body: (run: Run) => Promise<void>,
-  options: { transform?: typeof postgres.camel } = {},
+  options: { transform?: typeof postgres.camel | typeof postgres.pascal } = {},
 ): Promise<void> {
   const settings = postgresSettings()
   await requireReachable(settings.address)
@@ -368,13 +373,16 @@ describe("the Postgres migration runner against a real server", () => {
 })
 
 describe("the Postgres migration runner against a camelCase client", () => {
-  // `HistoryProbe`'s columns are aliased to one lower-case word (`tableexists`,
+  // This probe's columns were originally aliased to one lower-case word (`tableexists`,
   // `checksumexists`) precisely so a client configured with `transform: postgres.camel`
-  // reads them the same way a plain client does. Before that alias existed, this probe
-  // read `undefined` for both flags on a camelCase client, so `createHistoryTable` treated
-  // an existing history table as absent and reissued `CREATE TABLE`, failing every run
-  // after the first with `relation "migrations" already exists` — measured on #77, where
-  // the template's API container runs migrations on every start.
+  // read them the same way a plain client does. Before that alias existed, the probe read
+  // `undefined` for both flags on a camelCase client, so `createHistoryTable` treated an
+  // existing history table as absent and reissued `CREATE TABLE`, failing every run after
+  // the first with `relation "migrations" already exists` — measured on #77, where the
+  // template's API container runs migrations on every start. The alias no longer does the
+  // work — every probe is read by column position now, which is what also fixed
+  // `postgres.pascal` below (#137) — but this test still holds and the alias still reads
+  // fine under `postgres.camel`, so it stays as the regression test for #77.
 
   it("skips on the second run instead of failing on relation already exists", async () => {
     await withRun(async ({ sql, table, subject }) => {
@@ -489,6 +497,271 @@ describe("the Postgres migration runner against a camelCase client", () => {
       assertStrictEquals(rows[0].present, false)
     } finally {
       await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
+      await sql.end()
+    }
+  })
+})
+
+describe("the Postgres migration runner against a postgres.pascal client", () => {
+  // #137. `postgres.pascal` upper-cases every column's first letter, including a bare
+  // lower-case word with no underscore — `locked` back as `Locked`, `tableexists` as
+  // `Tableexists` — which is exactly what the `postgres.camel` alias above does not
+  // rewrite. Before the fix every probe in this driver, and the table listing in
+  // `purgeDatabase`, read `undefined` for the field it expected: `takeLock` never saw
+  // `locked === true`, so every run waited out `lockWaitMs` and failed with
+  // `PostgresMigrationLockError` although nothing else held the lock.
+  // `lockWaitMs` is set to a few milliseconds here so a regression fails fast instead of
+  // waiting out the real one-minute default.
+
+  it("runs twice without ever taking the lock error", async () => {
+    await withRun(async ({ sql, table, subject }) => {
+      const reader = memoryReader({
+        "0001_init.sql": `CREATE TABLE ${subject} (id serial PRIMARY KEY)`,
+      })
+      const options = { folder: "/migrations", reader }
+      const driverOptions = { sql, table, lockWaitMs: 200, lockRetryMs: 10 }
+
+      const first = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(first, { applied: ["0001_init"], skipped: [], missing: [] })
+
+      // Reproduces #137 as reported: before the fix this run's `takeLock` read `Locked`
+      // where it looked for `locked`, always found it `undefined`, and gave up with
+      // `PostgresMigrationLockError` after waiting out `lockWaitMs` — although this
+      // process itself was the only one that ever tried to take the lock.
+      const second = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(second, { applied: [], skipped: ["0001_init"], missing: [] })
+
+      const history = await new PostgresMigrationDriver(driverOptions).appliedMigrations()
+      assertEquals(history.map((row) => row.name), ["0001_init"])
+    }, { transform: postgres.pascal })
+  })
+
+  it("purgeDatabase reports and drops the tables the migration created", async () => {
+    // A schema of its own, not `withRun`'s unqualified default: `purgeDatabase` without a
+    // named schema purges `public`, which every test in this suite shares, and dropping
+    // `public`'s tables is not this test's to do. Isolated the same way
+    // `postgres-purge.integration.test.ts` isolates its own camelCase-client purge test.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const schema = uniqueIdentifier("it_migrations_pascal_purge")
+    const table = uniqueIdentifier("it_migrations")
+    const subject = uniqueIdentifier("it_subject")
+    const sql = createSql({
+      connection: settings.connection,
+      transform: postgres.pascal,
+      applicationName: schema,
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      await sql`CREATE SCHEMA ${sql(schema)}`
+
+      const reader = memoryReader({
+        "0001_init.sql": `CREATE TABLE ${schema}.${subject} (id serial PRIMARY KEY)`,
+      })
+      await runMigrations(
+        new PostgresMigrationDriver({ sql, table, schema, lockWaitMs: 200 }),
+        { folder: "/migrations", reader },
+      )
+
+      // Before the fix, `TableRow`'s `tablename` came back as `Tablename` under this
+      // transform, `row.tablename` was `undefined`, and the identifier splice inside
+      // `purgeDatabase` threw rather than dropping anything.
+      const purged = await purgeDatabase({ sql, schema, environment: { [ENV_NAME]: "test" } })
+      assertEquals(new Set(purged.dropped), new Set([table, subject]))
+      assertEquals(purged.refused, false)
+    } finally {
+      await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
+      await sql.end()
+    }
+  })
+
+  it('a driver with no schema and a driver with schema: "public" lock each other out', async () => {
+    // `resolvedTableRef`'s schema probe is read through `.values()` too (round 2 of #137):
+    // reverting it to a name-based `rows[0]?.schema` read left every other test in this file
+    // green, because `takeLock` and the rest already worked under pascal — only the *key* was
+    // wrong, silently, with the old fallback ("" instead of "public") producing a `.table` key
+    // that a schema-qualified driver's `public.table` key never collides with. This test is
+    // the one that goes red on that mutation: two runners that should share a lock, on a
+    // `postgres.pascal` client, actually do.
+    await withRun(async ({ sql, table, applicationName, observer }) => {
+      const holder = new PostgresMigrationDriver({ sql, table })
+      const blocked = new PostgresMigrationDriver({
+        sql,
+        table,
+        schema: "public",
+        lockWaitMs: 30,
+        lockRetryMs: 10,
+        delay: () => Promise.resolve(),
+      })
+
+      let lockTaken: () => void = () => {}
+      let releaseHolder: () => void = () => {}
+      const granted = new Promise<void>((resolve) => {
+        lockTaken = resolve
+      })
+      const held = new Promise<void>((resolve) => {
+        releaseHolder = resolve
+      })
+
+      const first = holder.withLock(() => {
+        lockTaken()
+        return held
+      })
+      await granted
+      assertStrictEquals((await advisoryLockHolders(observer, applicationName)).length, 1)
+
+      // `releaseHolder` must fire whether or not the assertion below passes — the holder's
+      // reserved connection stays pinned, and its lock stays held, until `held` resolves, so
+      // an assertion failure that skipped this would leak the connection and hang the pool's
+      // own `end()` in `withRun`'s `finally` rather than reporting a clean failure.
+      try {
+        // If the two drivers resolved different keys, this would take the lock at once
+        // instead of waiting out `lockWaitMs`.
+        await assertRejects(
+          () => blocked.withLock(() => Promise.resolve()),
+          PostgresMigrationLockError,
+          "30ms",
+        )
+      } finally {
+        releaseHolder()
+        await first
+      }
+      assertEquals(await advisoryLockHolders(observer, applicationName), [])
+    }, { transform: postgres.pascal })
+  })
+})
+
+/**
+ * A `transform.row.from` that adds a field to a row without changing its shape: a `.values()`
+ * row stays an array of the same length (`.slice()`, then a non-index property), an ordinary
+ * object row stays an object with its original keys plus one more. A caller writing an
+ * audit/debug hook is the plausible shape this stands in for.
+ */
+const auditFieldTransform = {
+  row: {
+    from: (row: unknown) => {
+      if (Array.isArray(row)) {
+        const copy = row.slice() as unknown[] & { auditedAt?: string }
+        copy.auditedAt = "audit-marker"
+        return copy
+      }
+      return { ...(row as Record<string, unknown>), auditedAt: "audit-marker" }
+    },
+  },
+}
+
+/**
+ * A `transform.column.from` that collapses every column to the same output name — the
+ * sharpest case of "two columns, one name" a custom transform could produce. `column.to` is
+ * left unset, so it only affects reads: every identifier this driver writes (`sql(name)`)
+ * still goes through unchanged.
+ */
+const collidingColumnTransform = {
+  column: {
+    from: () => "col",
+  },
+}
+
+describe("the Postgres migration runner against a client with a custom row or column transform", () => {
+  // #137 round 2. The positional `resultColumns`/`Object.values(row)` fix this replaced read
+  // whatever a name-keyed row object happened to look like after a client's own transform ran
+  // on it — which a `transform.row.from` that added a field (by spreading, `{ ...row, x: 1 }`)
+  // could reorder, and which a `transform.column.from` that mapped two columns to the same
+  // name would silently collapse to one, losing a column outright. `.values()` reads a row
+  // that was never built from names at all, so neither case is a special case here — both
+  // migrate correctly instead of misreading a field or losing one.
+
+  it("migrates correctly under a transform.row.from that adds a field to every row", async () => {
+    await withRun(async ({ sql, table, subject }) => {
+      const reader = memoryReader({
+        "0001_init.sql": `CREATE TABLE ${subject} (id serial PRIMARY KEY)`,
+      })
+      const options = { folder: "/migrations", reader }
+      const driverOptions = { sql, table, lockWaitMs: 200, lockRetryMs: 10 }
+
+      const first = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(first, { applied: ["0001_init"], skipped: [], missing: [] })
+
+      const second = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(second, { applied: [], skipped: ["0001_init"], missing: [] })
+
+      const history = await new PostgresMigrationDriver(driverOptions).appliedMigrations()
+      assertEquals(history.map((row) => row.name), ["0001_init"])
+      assertStrictEquals(history[0].checksum?.length, 64)
+    }, { transform: auditFieldTransform as unknown as typeof postgres.camel })
+  })
+
+  it("migrates correctly, and does not re-apply the first migration, when every column reads back with the same name", async () => {
+    await withRun(async ({ sql, table, subject }) => {
+      const reader = memoryReader({
+        "0001_init.sql": `CREATE TABLE ${subject} (id serial PRIMARY KEY)`,
+      })
+      const options = { folder: "/migrations", reader }
+      const driverOptions = { sql, table, lockWaitMs: 200, lockRetryMs: 10 }
+
+      const first = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(first, { applied: ["0001_init"], skipped: [], missing: [] })
+
+      // Reproduces the regression a name-keyed read would have: `createHistoryTable`'s probe
+      // returns `tableexists` and `checksumexists` as the same column name under this
+      // transform, so an object built by name would carry only the second value and read the
+      // table as absent — reissuing `CREATE TABLE` and failing on `relation already exists`,
+      // or (worse, on `appliedMigrations`) reading `name` and `checksum` as the same field and
+      // re-applying migration 1.
+      const second = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(second, { applied: [], skipped: ["0001_init"], missing: [] })
+
+      const history = await new PostgresMigrationDriver(driverOptions).appliedMigrations()
+      assertEquals(history.map((row) => row.name), ["0001_init"])
+    }, { transform: collidingColumnTransform as unknown as typeof postgres.camel })
+  })
+})
+
+describe("the Postgres migration runner against a client with a custom value transform", () => {
+  it("takeLock refuses a stringified lock flag instead of reporting a false lock conflict", async () => {
+    // #137 round 3. `.values()` sidesteps a column-name transform, but a client's
+    // `transform.value.from` still runs on the value itself
+    // (`postgres@3.4.7/src/connection.js:505-509`). A client whose value transform
+    // stringifies every boolean — or a custom bool parser doing the same — turns
+    // `locked: true` into `locked: "true"`, which `typeof locked !== "boolean"` catches
+    // before it can be misread as `locked !== true` and reported as a lock conflict that
+    // does not exist.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const table = uniqueIdentifier("it_migrations_value_xform")
+    const stringifyBooleans = {
+      value: {
+        from: (value: unknown) => typeof value === "boolean" ? String(value) : value,
+      },
+    }
+    const sql = createSql({
+      connection: settings.connection,
+      transform: stringifyBooleans as unknown as typeof postgres.camel,
+      applicationName: table,
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      const driver = new PostgresMigrationDriver({ sql, table })
+      // `withLock` reserves a connection and, on this rejection, its own `finally` releases
+      // it back to the pool before the error propagates here — nothing to release by hand.
+      await assertRejects(
+        () => driver.withLock(() => Promise.resolve()),
+        PostgresUnexpectedRowError,
+        "takeLock's lock probe",
+      )
+      // `pg_try_advisory_lock` granted the lock before the reply was misread; `takeLock`
+      // must give it back before refusing, or the pooled connection keeps holding it.
+      const holders = await sql`
+        SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+        WHERE l.locktype = 'advisory' AND l.granted AND a.application_name = ${table}
+      `
+      assertEquals(holders.length, 0)
+    } finally {
+      // Cleanup only: the lock was already given back above.
       await sql.end()
     }
   })

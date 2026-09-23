@@ -21,6 +21,7 @@ import {
   PostgresMigrationDriver,
   PostgresMigrationLockError,
   PostgresMigrationRunInProgressError,
+  PostgresUnexpectedRowError,
 } from "./postgres-migrate.ts"
 import { ENV_NAME, PROD_FLAG, purgeDatabase, SAFE_ENV_VALUES } from "./postgres-purge.ts"
 
@@ -119,17 +120,17 @@ function createFakeSql(options: FakeSqlOptions = {}) {
       // statements the lock sends is a trap that moves every answer along by one the
       // moment the lock changes shape.
       if (query.includes("current_schema()")) {
-        return Promise.resolve([{ schema: options.currentSchema ?? "public" }])
+        return withValues(Promise.resolve([{ schema: options.currentSchema ?? "public" }]))
       }
       // The lock attempt answers a row, as `pg_try_advisory_lock` does. `lockRefusals`
       // is how a test stands in for another runner holding it.
       if (query.includes("pg_try_advisory_lock")) {
         lockAttempts += 1
         const refused = lockAttempts <= (options.lockRefusals ?? 0)
-        return Promise.resolve([{ locked: !refused }])
+        return withValues(Promise.resolve([{ locked: !refused }]))
       }
-      if (query.includes("pg_advisory_")) return Promise.resolve([])
-      return Promise.resolve(answers.shift() ?? [])
+      if (query.includes("pg_advisory_")) return withValues(Promise.resolve([]))
+      return withValues(Promise.resolve(answers.shift() ?? []))
     }
     return Object.assign(
       statement as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>,
@@ -201,6 +202,27 @@ function createFakeSql(options: FakeSqlOptions = {}) {
 
 function identifierOf(value: unknown): string | undefined {
   return value instanceof FakeIdentifier ? value.value : undefined
+}
+
+/**
+ * Attach `.values()` to a fake query's result promise, the way `postgres@3.4.7` attaches it
+ * to a real one — `.values()` resolves to each row rendered as a plain array of its values,
+ * in the order the row's own keys were set, rather than as the name-keyed object the rest of
+ * this fake builds for convenience. The driver builds a `.values()` row positionally from the
+ * wire in the first place and never consults a name at all (`src/connection.js:489,505-509`);
+ * building it from a plain object's key order here is a faithful enough stand-in, because
+ * every row this fake hands out is built with `{ ... }` object literals whose keys are written
+ * in the query's own `SELECT` order.
+ */
+function withValues<T extends Promise<unknown[]>>(
+  promise: T,
+): T & { values(): Promise<unknown[][]> } {
+  return Object.assign(promise, {
+    values: () =>
+      promise.then((rows) =>
+        rows.map((row) => Array.isArray(row) ? row : Object.values(row as object))
+      ),
+  })
 }
 
 /** `postgres@3.4.7`'s `Identifier` (`src/types.js:44-48`): the quoted text, in `value`. */
@@ -386,6 +408,24 @@ Deno.test("appliedMigrations reads the recorded rows in id order", async () => {
     { name: "0002_index", checksum: null },
   ])
   assertEquals(fake.topLevel, [`SELECT name, checksum FROM "migrations" ORDER BY id`])
+})
+
+Deno.test("appliedMigrations throws a named, clear error on a row that is not two columns", async () => {
+  // A row this shape only happens if something reshaped it after `.values()` built it — a
+  // `transform.row.from` that restructures the row, most plausibly. Before this check
+  // existed, a wrong-length row was read positionally anyway: index 0 and 1 held whatever
+  // landed there, not necessarily `name` and `checksum`, and the caller got silently wrong
+  // data instead of a diagnosable failure.
+  const fake = createFakeSql({
+    answers: [[{ name: "0001_init", checksum: "abc", extra: "unexpected" }]],
+  })
+
+  const thrown = await assertRejects(
+    () => new PostgresMigrationDriver({ sql: fake.sql }).appliedMigrations(),
+    PostgresUnexpectedRowError,
+  )
+  assertStrictEquals(thrown.message.includes("appliedMigrations"), true)
+  assertStrictEquals(thrown.message.includes("3"), true)
 })
 
 Deno.test("the lock, the run and the unlock all go through the reserved connection", async () => {
@@ -575,6 +615,16 @@ Deno.test("the resolution probe quotes the table name before looking it up", asy
   // The name is bound, not spliced, so quoting is the server's job and injection is not
   // a question here.
   assertEquals(fake.boundValues[0], "Hist")
+})
+
+Deno.test("withLock refuses an empty resolved schema instead of locking on `.table`", async () => {
+  const fake = createFakeSql({ currentSchema: "" })
+  await assertRejects(
+    () => new PostgresMigrationDriver({ sql: fake.sql }).withLock(() => Promise.resolve()),
+    PostgresUnexpectedRowError,
+    "resolvedTableRef",
+  )
+  assertStrictEquals(fake.boundValues.some((value) => typeof value === "bigint"), false)
 })
 
 Deno.test("applyInTransaction runs the body and the history insert in one transaction", async () => {

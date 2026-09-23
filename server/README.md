@@ -823,26 +823,39 @@ if (state.decision !== QuotaDecision.Allowed) return respond(quotaStatusCode(sta
 try {
   await doTheWork()
 } catch (error) {
-  await meter.release(principal, 1, metering) // the units were not spent after all
+  // `reservedAt` keys the refund by the window the reservation was taken
+  // from, not whatever window the clock is in when the refund runs.
+  await meter.release(principal, 1, { ...metering, reservedAt: state.reservedAt })
   throw error
 }
 ```
 
 **A refund is not idempotent, and a `release` that threw must not be retried for a session
-principal.** Releasing the same reservation twice gives the units back twice; only a counter already
-at zero absorbs the second one, because a store never goes below zero. For a session principal a
-release is two store calls — the principal's own counter first, then the shared pool — so after one
-of them has failed the other has already been refunded, and a retry would credit the pool a unit
-nobody gave back, which any other anonymous caller can then spend. The own counter is refunded first
-so that a failure part-way through leaves the pool holding a unit that nothing holds any more: short
-rather than over-credited, and cleared when the window rolls.
+principal, or for any principal when `reservedAt` is given.** Releasing the same reservation twice
+gives the units back twice; only a counter already at zero absorbs the second one, because a store
+never goes below zero. For a session principal a release is two store calls — the principal's own
+counter first, then the shared pool — so after one of them has failed the other has already been
+refunded, and a retry gives that refund a second time. The caller cannot tell which of the two calls
+failed, so it cannot tell which counter a retry would double-refund: if the own-counter call failed
+nothing was refunded and a retry is exact; if the pool call failed the own counter was already
+refunded and a retry refunds it again, over-crediting the caller's own counter (absorbed at zero once
+it gets there). With `reservedAt`, `release` makes a third store call — a read of the current
+window's state — after both refunds have landed; if that read throws, both counters were already
+refunded, and a retry refunds both again, the pool included. The own counter is refunded first so
+that a failure part-way through the refund pair leaves the pool holding a unit that nothing holds any
+more: short rather than over-credited, and cleared when the window rolls — that ordering says nothing
+about the third call, which runs after both refunds regardless of `reservedAt`.
 
-A `release` keys by the window the clock is in when it runs, not the one the reservation was taken
-in. Work that outlives a window boundary is refunded against the new window, and the old one keeps
-the unit until it rolls: the unit moves between windows and the total across the two is unchanged.
-Keep a unit of work shorter than the window, or use a lifetime window, where this cannot happen.
-Closing it properly is a small API change — `release` would take the clock reading `reserve` used —
-and nothing on the store; it is deliberately not part of this change.
+A `release` keys by the window the clock is in when it runs, unless the caller passes `reservedAt` —
+the clock reading `reserve` used, carried on the `QuotaState` `reserve` returned — in which case it
+keys the refund by that reading instead. Without `reservedAt`, work that outlives a window boundary
+is refunded against the new window, and the old one keeps the unit until it rolls: the unit moves
+between windows and the total across the two is unchanged. Pass `reservedAt` through (the documented
+pattern above does), keep a unit of work shorter than the window, or use a lifetime window, to avoid
+this. A `reservedAt` that is not a non-negative integer throws `InvalidReservedAt`; one later than
+`release`'s own clock reading is clamped to that reading rather than refused, because a wall clock
+can step backward between the two calls (an NTP correction, a second host) and a value that only
+looks like it is from the future is still a real reservation.
 
 **A real store makes `reserve` one statement.** The in-memory store in the tests is atomic because
 nothing is awaited between its read and its write; a SQL store buys the same property with a
@@ -923,6 +936,37 @@ Two adapters, one migration runner. `@spy4x/server/db` is the barrel; `db/migrat
 `db/postgres` and `db/sqlite` are the subpaths. Nothing here ships a driver: `postgres` is pinned in
 the root import map and the SQLite driver is the caller's own, passed through `SqliteDriver`.
 
+### A deferred constraint's failure at implicit commit is not reported on a single statement
+
+**Do not declare a `DEFERRABLE INITIALLY DEFERRED` constraint and write to it through anything but
+`sql.begin`** (#134). The pinned driver, `postgres@3.4.7`, resolves a single statement's promise
+from the server's `CommandComplete` message, which arrives _before_ the implicit commit that
+actually checks a deferred constraint. When that commit then fails, the `ErrorResponse` it carries
+arrives on a query the driver has already resolved and cleared, so it has nothing left to reject —
+the promise reports success (`count: 1`, any `RETURNING` row returned) and the write is not there.
+No exception is thrown and no `unhandledrejection` fires: this is not a caught-and-swallowed error,
+the failure never reaches a handler at all.
+
+This is not only the tagged-template path. `sql.unsafe(text, params)` — any call that passes a
+non-empty parameter list — takes the same extended-protocol route and loses the failure the same
+way; only a _parameterless_ `sql.unsafe(text)` (no second argument, or `sql.unsafe(text, [])`) is
+safe, because the driver takes the simple-protocol path (which resolves after the server's own
+commit) only when it is not asked to bind parameters (`postgres@3.4.7/src/index.js`, `unsafe`:
+`simple: 'simple' in options ? options.simple : args.length === 0`). `sql.begin` is the one path
+that is always safe, parameters or not — not because a statement _inside_ it resolves any
+differently (it still resolves early, the same way a bare tagged-template statement does), but
+because `sql.begin` sends an explicit `COMMIT` as its own statement and rejects its own returned
+promise when that commit fails; a caller awaits `sql.begin`'s promise, not the inner statement's,
+so the inner statement resolving on its own does not matter — use it for a write against a
+deferred constraint instead of a bare statement, parameterised or not.
+
+Nothing shipped in this repository declares a deferred constraint today, so no module here is
+affected; it is documented and pinned because a caller of `@spy4x/server/db` might add one.
+Reproduced and pinned to `postgres@3.4.7` by
+`server/db/postgres.integration.test.ts`, which fails loudly — not silently skips — the day an
+upstream fix changes this. Reported upstream:
+[porsager/postgres#1117](https://github.com/porsager/postgres/issues/1117).
+
 ### A transaction handle stops working when its transaction ends
 
 Both adapters hand a callback a handle scoped to the transaction — a `SqliteDb` on one side, a
@@ -997,6 +1041,23 @@ resolves the name — quoted, so a name with a capital letter is found rather th
 as the caller spelled it, so a driver given `schema: "app"` and a driver that reaches an existing
 `app.migrations` through its search path lock each other out. A runner that dies releases it when its
 connection closes, so there is no stale lock to clear by hand.
+
+**The driver works on a client built with any column-name transform** (`postgres.camel`,
+`postgres.pascal`, `postgres.kebab`, or a custom `transform.column.from`, including one that maps
+two different columns to the same name) — `#137`. Every probe this driver runs (the lock check, the
+schema resolution, the history-table existence check, the applied-migrations read) is read through
+`.values()`, not by the name written in the query: the driver builds a `.values()` row as a plain
+array in `SELECT` order and never keys it by a column's (possibly transformed) name at all
+(`postgres@3.4.7/src/query.js`, `src/connection.js`), so no column-name transform can affect it,
+however it rewrites — or collides — names. Before this, every one of these reads went by name,
+which broke under `postgres.pascal` (it upper-cases a column's first letter regardless of case or
+underscores; the lock probe read `undefined` where it expected `locked`, so a run never took the
+lock and failed with `PostgresMigrationLockError` as though another runner held it, although none
+did) and, separately, would have silently misread a history row under any transform that mapped two
+of these columns to the same name. A row that is not shaped the way a query expects — a
+`transform.row.from` that restructures it, rather than merely relabelling its columns — is refused
+with `PostgresUnexpectedRowError` naming the query and what came back, instead of being read
+positionally anyway and misreported as something else.
 
 **The wait is bounded** (#109). A second runner retries `pg_try_advisory_lock` every
 `lockRetryMs` (250 ms by default) and gives up after `lockWaitMs` — one minute by default — with
@@ -1080,6 +1141,10 @@ an existing deployment upgrades without a manual step.
 `test`, `ci`, compared trimmed and lower-cased — or the caller passes `--prod`. The list is frozen:
 `readonly` is a compile-time claim, and a consumer that cast the array and pushed onto it would arm
 the purge for that environment process-wide.
+
+Like the migration driver, the table listing it purges from is read through `.values()`, not by the
+`tablename` alias written in the query, so it survives any column-name transform the caller's client
+carries — including a custom one that maps two different columns to the same name (`#137`).
 
 ## `server/sign-in`
 

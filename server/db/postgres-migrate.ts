@@ -245,28 +245,57 @@ export interface PostgresMigrationDriverOptions {
   schema?: string
 }
 
-/** A row of the history table, read for its name and its checksum. */
-interface MigrationRow {
-  name: string
-  checksum: string | null
+/**
+ * Thrown when a result row this driver or {@link purgeDatabase} (in `postgres-purge.ts`) read
+ * back through {@link expectRowShape} is not what the query expects.
+ *
+ * Every read here goes through `.values()`, so a row is ordinarily a plain positional array —
+ * see {@link expectRowShape} for why that is what makes the read survive any column-name
+ * transform. This error is what happens when something *else* changed the row's shape, chiefly
+ * a client's own `transform.row.from` rebuilding it: spreading an array, `{ ...row, extra: 1 }`,
+ * produces a plain object with no `length`, not a longer array. Before this check existed, a
+ * reshaped row was still read positionally and produced whatever landed at the index asked for
+ * — measured as a spurious `PostgresMigrationLockError` out of `takeLock` (index 0 held the
+ * transform's own added field, not `locked`) rather than the row-shape problem it actually was.
+ * Naming the query and what came back replaces that with a message diagnosable on sight.
+ */
+export class PostgresUnexpectedRowError extends Error {
+  constructor(context: string, expected: string, got: unknown) {
+    super(`${context}: expected ${expected}, got ${describeUnexpectedRow(got)}`)
+    this.name = "PostgresUnexpectedRowError"
+  }
+}
+
+/** `got`, rendered for {@link PostgresUnexpectedRowError}'s message. */
+function describeUnexpectedRow(value: unknown): string {
+  if (Array.isArray(value)) return `an array of ${value.length}: ${JSON.stringify(value)}`
+  return `${typeof value}: ${JSON.stringify(value)}`
 }
 
 /**
- * What `createHistoryTable`'s one probe answers: is the table there, is it up to date.
+ * Read a `.values()` row of exactly `expectedLength` columns, or throw
+ * {@link PostgresUnexpectedRowError} naming `context`.
  *
- * Aliased to one lower-case word with no underscore, not `table_exists`/`checksum_exists`:
- * `postgres.camel` — a transform a caller may configure on its own client, the transform
- * `PostgresOutboxRepository` also guards against — turns a returned `table_exists` into
- * `tableExists`, which left this probe reading `undefined` for both flags on a camelCase
- * client, so
- * `createHistoryTable` treated an existing history table as absent and reissued
- * `CREATE TABLE`, failing every run after the first with `relation already exists`. A
- * bare lower-case word has no underscore for the transform to act on, so it comes back
- * unchanged whether the client transforms or not.
+ * `.values()` is what makes this survive any column-name transform: `postgres@3.4.7` sets
+ * `query.isRaw = 'values'` and then builds each row as `new Array(query.statement.columns.length)`
+ * indexed by position, never as `row[column.name] = value` (`postgres@3.4.7/src/query.js:134-136`,
+ * `src/connection.js:489,505-509`). A name-keyed object is what every read here used to build,
+ * which broke under `postgres.pascal` (every column's first letter rewritten, #137) and would
+ * silently drop a column under a transform that maps two different names to the same one — a
+ * `.values()` row was never built from names at all, so neither failure mode exists here: this
+ * is what "survives any column transform" now actually means, built-in (`postgres.camel`,
+ * `postgres.pascal`, `postgres.kebab`) or a custom `transform.column.from`.
+ *
+ * `transform.row.from` still runs on the array afterwards (`connection.js:513-514`), and a
+ * transform written for the common case — an object row — can turn that array into something
+ * else. That is refused here rather than read positionally anyway; see
+ * {@link PostgresUnexpectedRowError}.
  */
-interface HistoryProbe {
-  tableexists: boolean
-  checksumexists: boolean
+export function expectRowShape(context: string, row: unknown, expectedLength: number): unknown[] {
+  if (!Array.isArray(row) || row.length !== expectedLength) {
+    throw new PostgresUnexpectedRowError(context, `an array of ${expectedLength} column(s)`, row)
+  }
+  return row
 }
 
 /**
@@ -414,10 +443,25 @@ export class PostgresMigrationDriver implements MigrationDriver {
   private async takeLock(sql: Sql, key: bigint): Promise<void> {
     let waited = 0
     for (;;) {
-      const rows = await sql<{ locked: boolean }[]>`
+      const rows = await sql<Record<string, unknown>[]>`
         SELECT pg_try_advisory_lock(${key}) AS locked
-      `
-      if (rows[0]?.locked === true) return
+      `.values()
+      const locked = Array.isArray(rows[0]) && rows[0].length === 1 ? rows[0][0] : undefined
+      // `.values()` sidesteps a column-name transform, but a client's `transform.value.from`
+      // still runs on the value itself (`postgres@3.4.7/src/connection.js:505-509`) — a
+      // custom bool parser, or a transform that stringifies every value, would otherwise turn
+      // `locked` into `"true"` or `1`, which `=== true` never matches, and the driver would
+      // wait out `lockWaitMs` and report a lock conflict that does not exist. Refusing loudly
+      // here is the same shape check `expectRowShape` does for the row, one level down: for
+      // its one value instead of its length.
+      if (typeof locked !== "boolean") {
+        // The server may have granted the lock and only the reply was misread: give it back,
+        // or the reserved connection returns to the pool still holding the migration lock.
+        await sql`SELECT pg_advisory_unlock(${key})`
+        expectRowShape("takeLock's lock probe", rows[0], 1)
+        throw new PostgresUnexpectedRowError("takeLock's lock probe", "a boolean", locked)
+      }
+      if (locked) return
       if (waited >= this.lockWaitMs) throw new PostgresMigrationLockError(this.lockWaitMs)
       const step = Math.max(1, Math.min(this.lockRetryMs, this.lockWaitMs - waited))
       await this.delay(step)
@@ -451,10 +495,16 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * history table must therefore share a `search_path` or pass the same {@link
    * PostgresMigrationDriverOptions.schema}; that is a deployment rule, not something this
    * method can check.
+   *
+   * **A resolved value that is not a usable schema name throws**, rather than falling back
+   * to an empty string. An empty-string fallback used to turn a broken read silently into
+   * `.table` instead of `public.table`: still a valid-looking key, just the wrong one, so two
+   * runners that should lock each other out could take different keys instead and both apply
+   * the same migration — worse than failing the run outright.
    */
   private async resolvedTableRef(sql: Sql): Promise<string> {
     if (this.schema !== undefined) return `${this.schema}.${this.table}`
-    const rows = await sql<{ schema: string | null }[]>`
+    const rows = await sql<Record<string, unknown>[]>`
       SELECT coalesce(
         (
           SELECT n.nspname
@@ -463,8 +513,16 @@ export class PostgresMigrationDriver implements MigrationDriver {
         ),
         current_schema()
       ) AS schema
-    `
-    return `${rows[0]?.schema ?? ""}.${this.table}`
+    `.values()
+    const [resolved] = expectRowShape("resolvedTableRef's schema probe", rows[0], 1)
+    if (typeof resolved !== "string" || resolved === "") {
+      throw new PostgresUnexpectedRowError(
+        "resolvedTableRef's schema probe",
+        "a non-empty schema name",
+        resolved,
+      )
+    }
+    return `${resolved}.${this.table}`
   }
 
   /**
@@ -483,7 +541,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
    */
   async createHistoryTable(): Promise<void> {
     const probe = this.schema === undefined
-      ? await this.sql<HistoryProbe[]>`
+      ? await this.sql<Record<string, unknown>[]>`
         SELECT
           exists (
             SELECT FROM information_schema.tables
@@ -494,8 +552,8 @@ export class PostgresMigrationDriver implements MigrationDriver {
             WHERE table_name = ${this.table} AND column_name = 'checksum'
             AND table_schema = ANY (current_schemas(false))
           ) AS checksumexists
-      `
-      : await this.sql<HistoryProbe[]>`
+      `.values()
+      : await this.sql<Record<string, unknown>[]>`
         SELECT
           exists (
             SELECT FROM information_schema.tables
@@ -506,8 +564,13 @@ export class PostgresMigrationDriver implements MigrationDriver {
             WHERE table_name = ${this.table} AND column_name = 'checksum'
             AND table_schema = ${this.schema}
           ) AS checksumexists
-      `
-    if (!probe[0]?.tableexists) {
+      `.values()
+    const [tableExists, checksumExists] = expectRowShape(
+      "createHistoryTable's probe",
+      probe[0],
+      2,
+    )
+    if (tableExists !== true) {
       await this.sql`
         CREATE TABLE ${this.sql(this.tableRef)}
         (
@@ -519,7 +582,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
       `
       return
     }
-    if (probe[0].checksumexists) return
+    if (checksumExists === true) return
     await this.sql`
       ALTER TABLE ${this.sql(this.tableRef)} ADD COLUMN IF NOT EXISTS checksum TEXT
     `
@@ -527,10 +590,13 @@ export class PostgresMigrationDriver implements MigrationDriver {
 
   /** Every recorded row, oldest first. Order is not used by the runner; it is stable for readers. */
   async appliedMigrations(): Promise<AppliedMigration[]> {
-    const rows = await this.sql<MigrationRow[]>`
+    const rows = await this.sql<Record<string, unknown>[]>`
       SELECT name, checksum FROM ${this.sql(this.tableRef)} ORDER BY id
-    `
-    return rows.map((row) => ({ name: row.name, checksum: row.checksum ?? null }))
+    `.values()
+    return rows.map((row) => {
+      const [name, checksum] = expectRowShape("appliedMigrations' read", row, 2)
+      return { name: name as string, checksum: (checksum as string | null | undefined) ?? null }
+    })
   }
 
   /**
