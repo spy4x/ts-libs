@@ -145,9 +145,9 @@ that can silently skip when its dependency is missing must fail loudly instead.
 | `deno task ts:check`         | `deno check` over every `.ts`/`.tsx` in the tree           |
 | `deno task test`             | the unit tier — every test except `*.integration.test.ts`  |
 | `deno task test:integration` | the integration tier — only `*.integration.test.ts`        |
-| `deno task services:up`      | start Postgres, MinIO and Mailpit, wait until healthy      |
+| `deno task services:up`      | start the four integration services, wait until healthy    |
 | `deno task services:down`    | stop them and drop their volumes                           |
-| `deno task services:logs`    | logs of the three containers                               |
+| `deno task services:logs`    | logs of the four containers                                |
 | `deno task publish:dry`      | `deno publish --dry-run` over the workspace; not run in CI |
 | `deno task fix`              | `lint --fix` then format                                   |
 
