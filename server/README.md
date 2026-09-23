@@ -23,6 +23,10 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@ts-libs/server/auth`              | Sign-in account model and `AuthStore`: see the `server/auth` section below           |
 | `@ts-libs/server/auth/postgres`     | The Postgres `AuthStore` and `SessionStore`, and the `AUTH_POSTGRES_SCHEMA` tables   |
 | `@ts-libs/server/auth/memory-store` | The in-memory `AuthStore`, held to the same contract as the Postgres one, for tests  |
+| `@ts-libs/server/auth/password`     | Password sign-up, sign-in, change and reset: see `server/auth/password` below        |
+| `@ts-libs/server/auth/email-code`   | Sign-in with a one-time code sent by email: see `server/auth/email-code` below       |
+| `@ts-libs/server/auth/oauth`        | OAuth2 sign-in with PKCE, matched by the provider's `sub`: see `server/auth/oauth`   |
+| `@ts-libs/server/auth/oauth-google` | Google's provider configuration for `@ts-libs/server/auth/oauth`                     |
 | `@ts-libs/server/sign-in`           | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP      |
 | `@ts-libs/server/crypto`            | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                  |
 | `@ts-libs/server/user-secrets`      | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert            |
@@ -379,6 +383,12 @@ OpenID Connect) are built on it; sessions, the cookie and password hashing come 
 | `@ts-libs/server/auth/postgres`     | `AUTH_POSTGRES_SCHEMA`, `createPostgresAuthStore`, the session store         |
 | `@ts-libs/server/auth/memory-store` | `MemoryAuthStore`: the same rules in memory, for unit tests                  |
 
+`@ts-libs/server/auth` also exports `ProviderDeps` and `SignInResult`, the shape every provider
+takes and returns: the store, the `SessionManager`, an optional clock and an optional
+`secondFactorFor(user)`. When the app leaves `secondFactorFor` out, a provider creates the session
+with `SecondFactorStatus.NotRequired`. The providers themselves are separate entry points, each with
+its own section below.
+
 ```ts
 import { createSqlFromEnv } from "@ts-libs/server/db"
 import { SessionManager } from "@ts-libs/server/sign-in"
@@ -463,6 +473,225 @@ Ids are Postgres `integer`s, so every id fits in a JavaScript number.
 - **It does not delete a user who has no keys left.** A user whose last key was evicted or deleted
   keeps their user row; the app treats a user with no keys as unable to sign in.
 - **It does not have an anonymous provider.** Guest accounts were not rebuilt.
+
+## `server/auth/password`
+
+`createPasswordSignIn`, `PasswordSignInError`, `PasswordSignInFailure`, `PASSWORD_METHOD`,
+`PASSWORD_RESET_PURPOSE`, `DEFAULT_MIN_PASSWORD_LENGTH`, `DEFAULT_RESET_TTL_MINUTES`,
+`DEFAULT_MAX_RESET_ATTEMPTS`, and the input and option interfaces.
+
+Sign-up, sign-in, password change and password reset with an address and a password, on the
+`server/auth` store and the `server/sign-in` session manager and hasher (#57). Written from #57's
+rules, not moved from the earlier `email-password.ts`. Every refusal is thrown as a
+`PasswordSignInError` whose `reason` names it.
+
+```ts
+import { createPasswordHasher } from "@ts-libs/server/sign-in"
+import { createPasswordSignIn } from "@ts-libs/server/auth/password"
+
+const passwords = createPasswordSignIn({
+  store,
+  sessions,
+  hasher: createPasswordHasher({ pepper: Deno.env.get("PASSWORD_PEPPER") ?? "" }),
+})
+
+const { session } = await passwords.signIn({ email, password })
+const reset = await passwords.requestReset({ email }) // the app mails reset.code to reset.email
+```
+
+### What it does
+
+**Sign-in costs the same whether or not the account exists.** A dummy hash is made once, when the
+provider is created, with the same hasher. Every `signIn` runs exactly one `verify`: against the
+key's hash, or against the dummy one when there is no key or the address is malformed. A wrong
+password, a missing account, a malformed address and a deleted user all answer
+`invalid-credentials`. A legacy or lower-iteration hash still verifies faster than the dummy until
+its first successful sign-in, which rehashes it.
+
+**Sign-up does not prove the address.** The key starts unproven, with `email` equal to its subject,
+the normalised address. Sign-up is refused as `email-taken` when another user owns the address or a
+password key for it already exists.
+
+**Create before revoke.** `changePassword` (which checks the current password) and `completeReset`
+store the new secret, then create the new session, and only then sign out the user's other sessions.
+A failure part-way never leaves the person signed out while the old password still works. The
+caller replaces its cookie with the returned session's.
+
+**A reset hands the address to whoever receives the code.** `requestReset` issues a code for every
+valid address, whether or not an account uses it, and returns it for the app to deliver: 32 random
+bytes, of which only the SHA-256 is stored, valid 30 minutes and for 5 guesses by default.
+`completeReset` checks the new password before it spends a guess, then, on a matching code, takes
+one of three branches:
+
+1. The password key's own user owns the address: the key is kept, proven if it was not, and given
+   the new secret.
+2. Another user owns the address: a proven password key is added to that owner, and the proven
+   insert deletes the unproven claim in the same write.
+3. Nobody owns the address: a new user is created with a proven password key, which deletes the
+   unproven claim the same way.
+
+So the `user` a reset returns can differ from the one that held the key. A matching code with no
+password key for the address, or whose account is deleted, answers `no-account`, which only the
+person who received the code learns. A write that raced the reset answers `conflict`; the code is
+used by then, so the person asks for a new one.
+
+### What it does not do
+
+- **It does not send mail.** `requestReset` returns the code; the app sends it.
+- **It does not limit guesses per account or per client.** A reset code allows its own few guesses,
+  but nothing limits how often codes are asked for or passwords tried. Put
+  `@ts-libs/platform/rate-limit` in front of every route that calls this provider.
+- **It does not hide an address in use at sign-up.** `email-taken` tells the caller; a reset is the
+  way in for the address's owner.
+- **It cannot tell a squatter from a person who never proved their own sign-up.** Both lose an
+  unproven account to a reset by branch 2 or 3. Prove the key after sign-up (with an email code) to
+  keep it.
+
+## `server/auth/email-code`
+
+`createEmailCodeSignIn`, `EmailCodeError`, `EmailCodeErrorReason`, `EMAIL_CODE_METHOD`,
+`EMAIL_CODE_PURPOSE`, `EMAIL_CODE_BYTES`, `DEFAULT_CODE_TTL_MINUTES`, `DEFAULT_CODE_MAX_ATTEMPTS`,
+`EmailCodeSignIn`, `EmailCodeSignInDeps`.
+
+Sign-in with a one-time code sent by email (#57). `requestCode(email)` issues a guess-counted
+challenge and hands the raw code to the app's `sendCode`; `verifyCode(email, code)` checks one guess
+and, on a match, signs the person in and creates a session. Refusals are `EmailCodeError`s with a
+fixed message per `reason`, which never echoes the input.
+
+```ts
+import { createEmailCodeSignIn } from "@ts-libs/server/auth/email-code"
+
+const codes = createEmailCodeSignIn({
+  store,
+  sessions,
+  sendCode: (email, code) => mailer.send(email, `Your sign-in code: ${code}`),
+})
+
+await codes.requestCode(email)
+const { session } = await codes.verifyCode(email, typedCode)
+```
+
+### What it does
+
+**A code login never deletes the login method.** A matched code signs in, in this order:
+
+1. The email-code key for the address, proven again with `proveKey`, when its user owns the address.
+   Every repeat login takes this path, so the same person keeps one key and one account.
+2. Otherwise the user who owns the proven address, through a new proven email-code key.
+3. Otherwise a new user with a proven email-code key.
+
+An email-code key whose user does not own the address is an unproven claim made without receiving
+mail there. It is never proven for its user, because that would sign the mailbox owner in to the
+account of whoever registered it; the proven write of path 2 or 3 deletes it instead.
+
+**Asking again never buys more guesses.** A new code replaces a live one and keeps its guess counter.
+A code is 6 random bytes (8 base64url characters, case-sensitive), valid 10 minutes and for 5
+guesses by default; surrounding whitespace in the typed code is ignored. The stored hash binds the
+address, so one digest never stands for the same code at two addresses.
+
+**A deleted owner is refused before any key is written.** When the address's owner is
+soft-deleted, `verifyCode` answers `account-deleted` and adds or proves no key, whichever method the
+owner signed in with.
+
+**The same answer with or without an account.** `requestCode` issues a code for every address
+`normalizeEmail` accepts and refuses nothing else. `sendCode` receives the normalised address; if it
+rejects, the rejection reaches the caller and the code is already issued.
+
+### What it does not do
+
+- **It does not rate-limit, and that is the caller's job.** It limits guesses per code, not how often
+  a code is asked for, and every new code moves the expiry of a locked challenge. Put
+  `createRateLimitMiddleware` from `@ts-libs/platform/rate-limit` in front of the `requestCode` route
+  with two limiters, one keyed by the normalised address and one by `clientIp`, and in front of the
+  `verifyCode` route keyed by `clientIp`. No limiter is built in: the client address exists only in
+  the HTTP layer, and a built-in one would force a choice of store into the provider.
+- **It does not retry a race.** When another sign-in for the same address writes between the lookup
+  and the write, `verifyCode` throws the store's `AuthConflictError`; the code is used by then, and a
+  new code succeeds. The same error is thrown on every verification when an email-code key for the
+  address that the owner does not hold carries no `email`, because the proven write cannot evict
+  it. This provider never writes such a key.
+- **It does not write the mail.** Sender, text and transport are the app's, inside `sendCode`.
+
+## `server/auth/oauth`
+
+`createOAuthSignIn`, `OAuthSignInError`, `OAuthFailure`, `OAuthOutcome`, `OAuthProviderConfig`,
+`OAuthProfile`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, and the option, input and result
+interfaces. Google's configuration is `@ts-libs/server/auth/oauth-google`:
+`createGoogleOAuthProvider`, `readGoogleProfile` and Google's endpoint and default-scope constants.
+
+OAuth2 sign-in with any provider that has a user-info endpoint (#57). The provider is configuration,
+not an enum: an `id` (lower-case letters, digits and `-`, 1 to 58 characters), the client
+credentials, three `https:` endpoints, scopes, and a `profile(body)` function that reads the
+user-info answer. Refusals are `OAuthSignInError`s with a `reason`.
+
+```ts
+import { createOAuthSignIn } from "@ts-libs/server/auth/oauth"
+import { createGoogleOAuthProvider } from "@ts-libs/server/auth/oauth-google"
+
+const google = createOAuthSignIn({
+  store,
+  sessions,
+  redirectUri: "https://app.example.com/auth/google/callback",
+  provider: createGoogleOAuthProvider({
+    clientId: Deno.env.get("GOOGLE_CLIENT_ID") ?? "",
+    clientSecret: Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "",
+  }),
+})
+
+const { url, state } = await google.authorizationUrl() // keep `state` in an HttpOnly cookie
+// …in the callback route:
+const result = await google.handleCallback({ query: callbackUrl.searchParams, browserState })
+```
+
+### What it does
+
+**A person is matched by the provider's `sub`, never by email.** The key's method is
+`oauth:<provider id>` and its subject is the `sub`. `handleCallback` resolves the person in this
+order, and reports which in `result.outcome`:
+
+1. A key with this `sub` exists: its user signs in (`SignedIn`), whatever the address says now.
+2. The provider vouches for the address (`emailVerified`) and a user owns it proven: a proven key is
+   added to that user (`Linked`). This is the only way an address links accounts.
+3. The provider vouches for the address and nobody owns it: a new user with a proven key
+   (`SignedUp`), which deletes every other user's unproven claim to the address.
+4. Otherwise: a new user whose key carries no address and is unproven (`SignedUp`).
+
+An address the provider does not vouch for is not stored on the key at all; the app still sees it
+in `result.profile`. A deleted user is refused as `user-deleted`, both on sign-in and as a link
+target. When a parallel callback or a proof changes what the resolution read, it reads again once; a
+second conflict is thrown. `readGoogleProfile` counts only the boolean `email_verified: true`, with
+an address present, as vouched for.
+
+**PKCE and a single-use, expiring `state`.** `authorizationUrl()` makes a 256-bit `state` and a
+256-bit verifier and sends the S256 challenge. The flow lives 600 seconds by default
+(`flowTtlSeconds`). `handleCallback` needs `browserState`, the `state` the app kept in the browser
+that started the flow, and compares it with the query's in constant time, so a flow cannot be
+completed in another browser. As soon as the callback names a `state`, its flow is removed: before
+the browser check, the expiry check and both provider requests, so a failed callback cannot be
+retried with the same `state`.
+
+**`disconnect(userId, keyId)` deletes one key.** Only when the key exists, belongs to `userId`, and
+has this provider's method; any other id returns `false` and deletes nothing. On the Postgres store
+the key's sessions end with it, through the cascade.
+
+**The provider requests are bounded.** Endpoints must be `https:`. The client secret goes in the
+token request's form body. Each request has a 10-second limit by default (`timeoutMs`), and a token
+answer whose `token_type` is present and not `bearer` is refused. The redirect URI is sent exactly
+as given, because providers compare it character by character.
+
+### What it does not do
+
+- **It does not share pending flows between processes.** They live in memory inside the object
+  `createOAuthSignIn` returns, at most `MAX_PENDING_OAUTH_FLOWS` (10 000; expired flows are dropped
+  first, then the oldest). A callback must reach the process that built its authorization URL, so an
+  app with more than one process needs sticky routing for the callback. A pluggable flow store is
+  tracked in #150, after 1.0.
+- **It does not verify an ID token or send a `nonce`.** The profile comes from the user-info
+  endpoint, called with the access token the token endpoint returned over TLS.
+- **It does not update a key's address** when the provider later reports a different one.
+- **It does not connect a provider to the signed-in user.** Only sign-in, sign-up and linking by a
+  vouched-for address.
+- **It does not refuse to disconnect a user's last key.** The app decides whether that is allowed.
 
 ## `server/crypto`
 
