@@ -118,9 +118,9 @@ export class PostgresMigrationRunInProgressError extends Error {
  * `postgres-purge.ts` — was given it, before any statement runs.
  *
  * `sql(name)` — the identifier form every `CREATE TABLE`/`ALTER TABLE`/`INSERT`/`DROP TABLE`
- * in this package uses — runs the client's `transform.column.to` on `name` first
- * (`postgres@3.4.7/src/index.js:114`), the transform `PostgresOutboxRepository` also guards
- * against on the read side. `postgres.camel`'s half of it, `fromCamel`, turns a mixed-case
+ * in this driver and in {@link purgeDatabase} uses — runs the client's `transform.column.to`
+ * on `name` first (`postgres@3.4.7/src/index.js:114`), the transform `PostgresOutboxRepository`
+ * also guards against on the read side. `postgres.camel`'s half of it, `fromCamel`, turns a mixed-case
  * name like `x_MixedHist` into `x__mixed_hist`, and `"UserProfile"` into `_user_profile`.
  * Every *other* place this driver or the purge helper names a table or schema —
  * `createHistoryTable`'s probe, `to_regclass`, the advisory-lock key, the purge listing —
@@ -165,10 +165,17 @@ export class PostgresIdentifierTransformError extends Error {
  * `identifier` as `sql`'s own `transform.column.to` would rewrite it, or `undefined` when
  * the client has no such transform, or this identifier already has the one spelling the
  * transform would give it.
+ *
+ * `postgres@3.4.7` sets `options` on the pool object alone (`src/index.js:69-81`): the handle
+ * `sql.begin` passes to its callback and the one `sql.reserve()` returns have none, although
+ * both are typed as `Sql`. On such a handle the transform cannot be read, so the name is not
+ * checked and `undefined` is returned; pass the pool client to have it checked.
  */
 export function identifierRewrittenBy(sql: Sql, identifier: string): string | undefined {
-  const to = sql.options.transform.column.to
-  if (to === undefined) return undefined
+  // Optional: see above. `!to` rather than `=== undefined`, as the driver's own `sql(name)`
+  // tests it (`src/index.js:114`).
+  const to = sql.options?.transform.column.to
+  if (!to) return undefined
   const rewritten = to(identifier)
   return rewritten === identifier ? undefined : rewritten
 }
