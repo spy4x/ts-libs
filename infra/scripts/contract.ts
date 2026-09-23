@@ -24,6 +24,7 @@ const ENTRIES: Entry[] = [
   { specifier: "@ts-libs/platform/rate-limit/hono", capability: "rate limiting" },
   { specifier: "@ts-libs/platform/api", capability: "shared API and model types" },
   { specifier: "@ts-libs/platform/request-info", capability: "shared API and model types" },
+  { specifier: "@ts-libs/platform/model", capability: "shared API and model types" },
   { specifier: "@ts-libs/server/kv", capability: "Redis key-value store" },
   { specifier: "@ts-libs/server/outbox", capability: "transactional outbox" },
   {
@@ -37,6 +38,22 @@ const ENTRIES: Entry[] = [
   {
     specifier: "@ts-libs/server/auth/postgres",
     capability: "password sign-up and sign-in, mail codes, OAuth (the account model and store)",
+  },
+  {
+    specifier: "@ts-libs/server/auth/password",
+    capability: "password sign-up and sign-in, mail codes, OAuth (password)",
+  },
+  {
+    specifier: "@ts-libs/server/auth/email-code",
+    capability: "password sign-up and sign-in, mail codes, OAuth (mail codes)",
+  },
+  {
+    specifier: "@ts-libs/server/auth/oauth",
+    capability: "password sign-up and sign-in, mail codes, OAuth (OAuth)",
+  },
+  {
+    specifier: "@ts-libs/server/auth/oauth-google",
+    capability: "password sign-up and sign-in, mail codes, OAuth (Google)",
   },
   { specifier: "@ts-libs/server/request-log", capability: "request logging" },
   { specifier: "@ts-libs/server/config", capability: "typed config from the environment" },
@@ -52,12 +69,11 @@ const ENTRIES: Entry[] = [
   },
 ]
 
-/** Capabilities in #77's table that have no entry point ready yet, each with the issue that holds it. */
-const NOT_READY = [
-  "the sign-in providers: password, one-time code by email, OAuth (`server/auth`): #57",
-  "the model and push schemas (`@ts-libs/platform/model`): not publishable yet (#141), and " +
-  "`dateSchema` reads an ordinal date or a signed year as the wrong date (#136)",
-]
+/**
+ * Capabilities in #77's table that have no entry point ready yet, each with the issue that holds it.
+ * Empty when every capability has one; the document then leaves the list out.
+ */
+const NOT_READY: string[] = []
 
 interface DocDeclaration {
   kind: string
@@ -218,10 +234,12 @@ const document = [
   "omit it. Where a line here and the source file named under its heading differ, the source file",
   "is the contract.",
   "",
-  "Not in this draft, because no entry point is ready yet:",
-  "",
-  ...NOT_READY.map((line) => `- ${line}`),
-  "",
+  ...(NOT_READY.length === 0 ? [] : [
+    "Not in this draft, because no entry point is ready yet:",
+    "",
+    ...NOT_READY.map((line) => `- ${line}`),
+    "",
+  ]),
   ...sections,
 ].join("\n")
 
