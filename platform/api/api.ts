@@ -41,11 +41,14 @@ export type ApiResult<T> =
 /**
  * `fetch` a JSON API and report the outcome as an {@link ApiResult} instead of throwing.
  *
- * Always sends `credentials: "include"`, both overridable through `init`. A `content-type:
+ * Always sends `credentials: "include"`, overridable through `init`. A `content-type:
  * application/json` header is added by default only when `body` is a string or absent; a
- * `FormData`, `URLSearchParams`, `Blob`, `ArrayBuffer`/typed array or stream body is left without a
- * default `content-type` so `fetch` sets the right one itself (a `multipart/form-data` boundary for
- * `FormData`, for instance) — the caller can still override it explicitly through `init.headers`.
+ * `FormData`, `URLSearchParams`, `Blob`, `ArrayBuffer`/typed array, stream, or explicit `null` body
+ * is left without a default `content-type` so `fetch` sets the right one itself (a
+ * `multipart/form-data` boundary for `FormData`, for instance) — the caller can still override it
+ * explicitly through `init.headers`. `null` takes this path rather than the "absent" one: it is
+ * neither `undefined` nor a `string`, so a caller who passes `body: null` gets the same behaviour as
+ * one who passes `FormData`, not the same behaviour as one who passes no `body` at all.
  * The response body is read as JSON regardless of status; a body that is not valid JSON (including
  * an empty body) is treated as `null` rather than failing the call. On a non-2xx response, the
  * error message is the body's own `error` string when it has one string `error` field, else the

@@ -210,6 +210,54 @@ describe("apiFetch — content-type by body shape (#132)", () => {
     expect(seenContentType).toMatch(/^multipart\/form-data; boundary=/)
   })
 
+  it("sends no content-type of its own for every other body shape fetch understands", async () => {
+    const bodies: Array<[string, BodyInit]> = [
+      ["URLSearchParams", new URLSearchParams({ a: "1" })],
+      ["Blob", new Blob(["hi"])],
+      ["ArrayBuffer", new ArrayBuffer(4)],
+      ["Uint8Array", new Uint8Array([1, 2, 3])],
+      [
+        "ReadableStream",
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1]))
+            controller.close()
+          },
+        }),
+      ],
+    ]
+    for (const [label, body] of bodies) {
+      let seen: Headers | undefined
+      await withFakeFetch(
+        (_input, init) => {
+          seen = new Headers(init?.headers)
+          return jsonResponse({})
+        },
+        async () => {
+          await apiFetch("/x", { method: "POST", body })
+        },
+      )
+      expect(seen?.has("content-type"), label).toBe(false)
+    }
+  })
+
+  it("sets no default content-type for an explicit null body either", async () => {
+    // `body: null` takes the same path as `FormData` etc, not the `body === undefined` path:
+    // it is neither `undefined` nor a `string`, so the default is left off. Pinned because a
+    // reader could otherwise expect "no body" and "null body" to behave the same way.
+    let seen: Headers | undefined
+    await withFakeFetch(
+      (_input, init) => {
+        seen = new Headers(init?.headers)
+        return jsonResponse({})
+      },
+      async () => {
+        await apiFetch("/x", { method: "POST", body: null })
+      },
+    )
+    expect(seen?.has("content-type")).toBe(false)
+  })
+
   it("still lets a caller's explicit content-type win for a FormData body", async () => {
     let seen: Headers | undefined
     await withFakeFetch(
