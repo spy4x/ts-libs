@@ -211,10 +211,10 @@ already are — by where the code can run:
   logged it as though it were real.
 - `dateSchema` (`model/date.ts`) accepted an ISO date string whose calendar day did not exist —
   `"2026-02-30"` parsed to 2 March 2026 instead of being refused, because `new Date(...)` silently
-  rolls an out-of-range day or month into the next one (#131). Fixed by rebuilding the date from the
-  string's own `YYYY-MM-DD` digits and comparing it back against them; a string without that prefix
-  (a week date, an ordinal date, or the compact form without dashes) is refused when `new Date`
-  cannot read it.
+  rolls an out-of-range day or month into the next one (#131). Fixed by refusing a string `new Date`
+  cannot read, then rebuilding the date from the string's own `YYYY-MM-DD` digits (with or without a
+  sign before the year) and comparing it back against them; a string without that prefix that `new
+  Date` can read (a year, a year and month, or an ordinal date) parses as the source parsed it.
 
 **The `"+": "reject"` decision splits by whether a schema is composed.** `model/base-model.ts`'s
 three schemas declare it on none of them: an app is meant to `.and()` its own fields onto

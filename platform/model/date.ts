@@ -10,21 +10,28 @@
  * the string's *shape* against the ISO 8601 grammar and then parses it with `new Date(...)`,
  * which silently rolls an out-of-range day or month into the next one instead of refusing it —
  * `new Date("2026-02-30")` is 2 March 2026, not an error, so the source accepted and stored a date
- * that was never on any calendar. Fixed by rebuilding a UTC date from the year, month and day
- * digits of the string's `YYYY-MM-DD` prefix and refusing the string when the rebuilt date's
- * fields differ from those digits (see {@link isRealCalendarDate}). A string without that prefix
- * (a week date, an ordinal date, or the compact form without dashes) is refused when `new Date`
- * cannot read it, and otherwise parses as the source parsed it.
+ * that was never on any calendar. Fixed in two steps (see {@link isRealCalendarDate}): a string
+ * `new Date` cannot read is refused, so no `Invalid Date` comes out without an error; and for a
+ * string that starts with a `YYYY-MM-DD` date, with or without a `+` or `-` before the year, a UTC
+ * date is rebuilt from those year, month and day digits and the string is refused when the rebuilt
+ * date's fields differ from them. A string without that prefix that `new Date` can read (a year, a
+ * year and month, or an ordinal date such as `2024-001`) parses as the source parsed it.
  */
 import { type } from "arktype"
 
-const ISO_CALENDAR_DATE_PREFIX = /^(\d{4})-(\d{2})-(\d{2})/
+const ISO_CALENDAR_DATE_PREFIX = /^[+-]?(\d{4})-(\d{2})-(\d{2})/
 
 /**
- * Whether an ISO 8601 string names a date `new Date` can actually read.
+ * Whether `new Date` can read an ISO 8601 string and, when the string starts with a calendar date,
+ * whether that date exists.
  *
- * For the `YYYY-MM-DD` prefix every date-only and date-time ISO string starts with, this rebuilds
- * a date from the three digit groups and reads its fields back. `setUTCFullYear` is used rather
+ * A string `Date.parse` cannot read is refused first, because `new Date` would hand back an
+ * `Invalid Date` with no error. arktype's ISO 8601 grammar accepts several shapes V8 cannot read: an
+ * hour with no minutes (`2024-01-01T10`), a comma before the fraction, an offset with no minutes
+ * (`+05`), a week date, and the compact form without dashes.
+ *
+ * For a string that starts with `YYYY-MM-DD`, with or without a `+` or `-` before the year, this
+ * rebuilds a date from the three digit groups and reads its fields back. `setUTCFullYear` is used rather
  * than `Date.UTC`, which maps a two-digit year into 1900-1999 (`Date.UTC(99, 0, 1)` is 1999, not
  * year 99) — `setUTCFullYear(99, 0, 1)` sets the year exactly as given. An out-of-range day or
  * month still does not throw (`setUTCFullYear(2026, 1, 30)` on a fresh date reads back as 2 March,
@@ -32,14 +39,14 @@ const ISO_CALENDAR_DATE_PREFIX = /^(\d{4})-(\d{2})-(\d{2})/
  * built from: for 30 February, the rebuilt date's month reads back as 3 (March), not 2 (February),
  * and its day as 2, not 30.
  *
- * A string with no such prefix (a week date, an ordinal date, or the compact form without dashes)
- * has nothing here to rebuild and compare, so it falls back to asking `Date.parse` whether it can
- * be read at all — refusing it only when parsing would otherwise silently hand back an unusable
- * `Invalid Date` with no error, and accepting it exactly as the source did otherwise.
+ * A string with no such prefix (a year, a year and month, or an ordinal date such as `2024-001`)
+ * has nothing here to rebuild and compare; once `Date.parse` has read it, it is accepted exactly as
+ * the source accepted it.
  */
 function isRealCalendarDate(iso: string): boolean {
+  if (Number.isNaN(Date.parse(iso))) return false
   const match = ISO_CALENDAR_DATE_PREFIX.exec(iso)
-  if (match === null) return !Number.isNaN(Date.parse(iso))
+  if (match === null) return true
   const [, yearStr, monthStr, dayStr] = match
   const year = Number(yearStr)
   const month = Number(monthStr)
