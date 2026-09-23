@@ -39,8 +39,8 @@
  * index on `(aggregate_type, aggregate_id, aggregate_version, event_kind)`, which is
  * what makes a retried `INSERT` (after a crash between the state change and the
  * outbox row) idempotent instead of writing the event twice — the template had this
- * index; it is not enforced here because this repository only ever reads the table,
- * never creates it.
+ * index; it is not enforced here because this repository reads and updates rows but
+ * never creates or migrates the table.
  */
 import type { Sql } from "@ts-libs/server/db"
 import type { OutboxEvent, OutboxRepository } from "./processor.ts"

@@ -120,7 +120,7 @@ export function retryDelayMs(
  * writable property, so nothing stops a caller's `Error` carrying a non-string `name`.
  * The ported original was `error.name || "Error"`, which is truthy — and therefore
  * used as-is — for any non-empty, non-zero `name`, including a number; the value then
- * reached `.slice(64)` and threw `TypeError: name.slice is not a function`, which
+ * reached `.slice(0, 64)` and threw `TypeError: name.slice is not a function`, which
  * `drainOnce` never caught (it is thrown by the code inside its own `catch` block), so
  * one such event stopped the whole batch instead of being rescheduled.
  */
@@ -191,11 +191,12 @@ export class OutboxProcessor {
    * Drains until aborted, waiting `idleDelayMs` only when a drain came back empty so a
    * backlog is worked through without pausing between batches.
    *
-   * A failure in `repository.claimBatch`, `markProcessed` or `scheduleRetry` itself
-   * (a database blip, unlike a failing `publisher.publish`, which `drainOnce` already
-   * catches and reschedules) rejects this call and ends the loop — unchanged from the
-   * ported original. The caller must restart `run()` after such a rejection; it does
-   * not retry itself.
+   * A failure in `repository.claimBatch` or `scheduleRetry` rejects this call and ends
+   * the loop, unchanged from the ported original; the caller must restart `run()` —
+   * it does not retry itself. A failing `markProcessed` is different: it sits inside
+   * `drainOnce`'s own `try`, so it is handled like a failing `publisher.publish` — the
+   * row is rescheduled rather than the loop stopping, which means an event that was
+   * already published can be delivered again once the retry runs.
    */
   async run(signal: AbortSignal, idleDelayMs = 1_000): Promise<void> {
     while (!signal.aborted) {
