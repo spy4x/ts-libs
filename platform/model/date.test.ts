@@ -88,6 +88,27 @@ describe("dateSchema", () => {
       expect(result instanceof type.errors).toBe(false)
       expect((result as Date).toISOString()).toBe("2024-03-01T04:30:00.000Z")
     })
+
+    it("rejects a date-time new Date cannot read instead of returning an unusable Invalid Date", () => {
+      for (
+        const input of [
+          "2024-01-01T",
+          "2024-01-01T10",
+          "2024-01-01T1030",
+          "2024-01-01T10:30+05",
+          "2024-01-01T10:30:45,123",
+        ]
+      ) {
+        expect(dateSchema(input) instanceof type.errors).toBe(true)
+      }
+    })
+
+    it("rejects a calendar date that does not exist when the year carries a sign", () => {
+      expect(dateSchema("+2023-02-29") instanceof type.errors).toBe(true)
+      expect(dateSchema("+2026-04-31") instanceof type.errors).toBe(true)
+      expect(dateSchema("-1900-02-29") instanceof type.errors).toBe(true)
+      expect(dateSchema("+2024-02-29") instanceof type.errors).toBe(false)
+    })
   })
 
   /** The ISO shape check, not just the calendar check, must still apply. */
