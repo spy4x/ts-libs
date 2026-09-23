@@ -6,11 +6,13 @@
 # git history (`git log --all | grep -i bad_habit` finds nothing, and no sibling
 # repo under ~/sync/code carries that fix), so this is the standard Woodpecker
 # shape: pushes to main, pull requests targeting main, and tag builds. PRs are
-# what the reviewer gate needs; tags are kept so #20's JSR publish can hang off
-# a tag build later without another workflow edit.
+# what the reviewer gate needs. A tag build runs the same checks and then publishes to JSR
+# (#78). Tags get their own entry because a tag build has no branch to match `main` against.
 when:
-  event: [push, pull_request, tag]
-  branch: main
+  - event: [push, pull_request]
+    branch: main
+  - event: tag
+    ref: refs/tags/v*
 
 # The integration tier's dependencies (#74). Same four images as
 # `infra/compose.integration.yml`, same exact version pins; only the addresses
@@ -68,3 +70,19 @@ steps:
       TS_LIBS_IT_REDIS_PORT: "6379"
     commands:
       - deno task test:integration
+
+  # Publishes every workspace member to JSR (`jsr:@spy4x/*`), only on a `v*` tag and only after
+  # both check steps above passed. `AGENTS.md` ("Releasing") has the process; the owner gives the
+  # go-ahead for every tag, because JSR never deletes a version. A version already on JSR is
+  # skipped, so re-running a tag build that failed part-way publishes only what is missing.
+  # `$$` stops Woodpecker substituting the variable itself; the shell reads the secret.
+  publish:
+    image: denoland/deno:2.9.7
+    when:
+      event: tag
+      ref: refs/tags/v*
+    environment:
+      JSR_TOKEN:
+        from_secret: JSR_TOKEN
+    commands:
+      - deno publish --token "$${JSR_TOKEN}"
