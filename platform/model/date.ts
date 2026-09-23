@@ -55,13 +55,10 @@ const ISO_TIME_WITHOUT_OFFSET = /T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/
  * `"2024-001"`): `JSON.stringify` never writes an ordinal date, and writes a signed year only with
  * six digits, which the sign rule refuses too.
  *
- * A fourth shape is refused for a different reason: a time with no offset and no `Z`
- * (`ISO_TIME_WITHOUT_OFFSET`). V8 reads this one correctly for the time zone it is asked about —
- * the bug is that the zone is the host's, not the wire's. `"2024-02-29T10:00:00"` is 10:00 UTC on a
- * host set to UTC and 03:00 UTC on one set to `Asia/Bangkok`; refusing the shape means every string
- * this schema accepts names exactly one instant, everywhere it runs.
+ * A fourth shape — a time with no offset and no `Z` — is also wrong, but for a reason unrelated to
+ * the calendar, so {@link isoCalendarDateSchema} refuses it in its own `.narrow` step, with its own
+ * message, before this function ever runs. See `ISO_TIME_WITHOUT_OFFSET`.
  *
-
  * For a string that starts with `YYYY-MM-DD`, this rebuilds a date from the three digit groups and
  * reads its fields back. `setUTCFullYear` is used rather than `Date.UTC`, which maps a two-digit
  * year into 1900-1999 (`Date.UTC(99, 0, 1)` is 1999, not year 99) — `setUTCFullYear(99, 0, 1)` sets
@@ -79,7 +76,6 @@ function isRealCalendarDate(iso: string): boolean {
   if (/^[+-]/.test(iso)) return false
   if (/^\d{5}/.test(iso)) return false
   if (ISO_ORDINAL_DATE.test(iso)) return false
-  if (ISO_TIME_WITHOUT_OFFSET.test(iso)) return false
   const match = ISO_CALENDAR_DATE_PREFIX.exec(iso)
   if (match === null) return true
   const [, yearStr, monthStr, dayStr] = match
@@ -95,8 +91,27 @@ function isRealCalendarDate(iso: string): boolean {
   )
 }
 
-/** An ISO 8601 date string naming a real calendar date, parsed to a `Date`. */
+/**
+ * An ISO 8601 date string naming a real calendar date, parsed to a `Date`.
+ *
+ * Two `.narrow` steps, each with its own message: the first refuses a time with no `Z` and no
+ * numeric offset (#135 — see `ISO_TIME_WITHOUT_OFFSET`), because that string names no single
+ * instant rather than naming the wrong one; the second, {@link isRealCalendarDate}, refuses a
+ * calendar date that does not exist or that V8 would misread (#131, #136). Kept separate so a
+ * caller reading the message can tell "add a time zone" from "this date does not exist" — merging
+ * them into one `.narrow` would report only whichever ran last.
+ */
 const isoCalendarDateSchema = type("string.date.iso")
+  .narrow((value, ctx) =>
+    !ISO_TIME_WITHOUT_OFFSET.test(value) ||
+    // `ctx.reject({ problem })` rather than `ctx.mustBe`: `mustBe` always renders as
+    // "must be {text}", which reads oddly ("must be name a time zone…") for a message that is
+    // not a noun phrase completing "must be". Setting `problem` directly writes the message
+    // verbatim (after the path prefix arktype still adds), so it reads as ordinary prose.
+    ctx.reject({
+      problem: "must name a time zone: end the time with `Z` or an offset such as `+02:00`",
+    })
+  )
   .narrow((value, ctx) =>
     isRealCalendarDate(value) ||
     ctx.mustBe("a calendar date that exists, with an unsigned year and no ordinal day")

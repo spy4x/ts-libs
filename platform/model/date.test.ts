@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 import { type } from "arktype"
 
+import { BaseModelSchema } from "./base-model.ts"
 import { DateNullableSchema, dateSchema } from "./date.ts"
 
 describe("dateSchema", () => {
@@ -177,6 +178,36 @@ describe("dateSchema", () => {
 
     it("rejects a date-time with no offset and no Z, with minutes but no seconds", () => {
       expect(dateSchema("2024-02-29T10:00") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects a date-time with no offset and no Z, with a fraction longer than 3 digits", () => {
+      expect(dateSchema("2024-02-29T10:00:00.123456789") instanceof type.errors).toBe(true)
+    })
+
+    it("reports its own message, not the calendar-date message, for a missing time zone", () => {
+      const result = dateSchema("2024-02-29T10:00:00")
+      expect(result instanceof type.errors).toBe(true)
+      expect((result as type.errors).summary).toContain(
+        "must name a time zone: end the time with `Z` or an offset such as `+02:00`",
+      )
+    })
+
+    it("reports the same message through BaseModelSchema, with the field name prefixed", () => {
+      const result = BaseModelSchema({
+        id: 1,
+        createdAt: "2024-02-29T10:00:00",
+        updatedAt: new Date(),
+      })
+      expect(result instanceof type.errors).toBe(true)
+      expect((result as type.errors).summary).toContain(
+        "createdAt must name a time zone: end the time with `Z` or an offset such as `+02:00`",
+      )
+    })
+
+    it("still accepts the same date-time with a lower-case z", () => {
+      const result = dateSchema("2024-02-29T10:00:00z")
+      expect(result instanceof type.errors).toBe(false)
+      expect((result as Date).toISOString()).toBe("2024-02-29T10:00:00.000Z")
     })
 
     it("still accepts the same date-time with a trailing Z", () => {
