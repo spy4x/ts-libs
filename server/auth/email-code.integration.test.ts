@@ -182,4 +182,25 @@ describe("createEmailCodeSignIn on Postgres", () => {
       )
       expect((await store.listKeys(first.user.id)).length).toBe(1)
     }))
+
+  it("refuses a code for a deleted owner who has only a password key, and adds no key", () =>
+    withProvider(async ({ sql, store, provider, codeFor }) => {
+      const owner = await store.createUserWithKey({
+        method: "password",
+        subject: ADDRESS,
+        email: ADDRESS,
+        secret: "owner-hash",
+        provenAt: new Date(),
+      })
+      await sql`UPDATE auth_users SET deleted_at = now() WHERE id = ${owner.user.id}`
+
+      expect(await refusalOf(provider.verifyCode(ADDRESS, await codeFor()))).toBe(
+        "account-deleted",
+      )
+      const keys = await store.listKeys(owner.user.id)
+      expect(keys.map((key) => [key.id, key.method, key.subject])).toEqual([
+        [owner.key.id, "password", ADDRESS],
+      ])
+      expect(await store.findKey(EMAIL_CODE_METHOD, ADDRESS)).toBeNull()
+    }))
 })
