@@ -194,6 +194,49 @@ describe("loadConfig", () => {
     }
   })
 
+  it("names only the declared field, never a key from inside a parsed value", () => {
+    // A token-to-role map: a failure on one entry must not report the token as a path segment.
+    const tokensSchema = type({
+      API_TOKENS: type("string.json.parse").to({ "[string]": "'admin' | 'reader'" }),
+    })
+    const env = createEnvReader({
+      API_TOKENS: JSON.stringify({ "LEAKED-KEY-7": "owner" }), // "owner" is not admin | reader
+    })
+
+    try {
+      loadConfig(tokensSchema, env)
+      throw new Error("expected loadConfig to throw")
+    } catch (error) {
+      const configError = error as ConfigError
+      expect(configError.variables).toEqual(["API_TOKENS"])
+      expect(configError.message).not.toContain("LEAKED-KEY-7")
+    }
+  })
+
+  it("falls back to the cross-field label instead of crashing on ctx.reject({ message })", () => {
+    // arktype's own documented style for a narrow rejection — no expected field at all.
+    const schema = type({
+      ENV: "'dev' | 'prod'",
+      "URL?": "string",
+    }).narrow((data, ctx) => {
+      if (data.ENV !== "dev" && !data.URL) {
+        return ctx.reject({ message: "URL is required outside dev" })
+      }
+      return true
+    })
+    const env = createEnvReader({ ENV: "prod" })
+
+    let thrown: unknown
+    try {
+      loadConfig(schema, env)
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(ConfigError)
+    expect((thrown as ConfigError).variables).toEqual(["(cross-field check)"])
+  })
+
   it("never leaks the value when a schema's morph throws instead of rejecting", () => {
     const throwingSchema = type({
       SECRET: type("string").pipe((value) => {

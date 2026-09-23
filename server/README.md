@@ -937,31 +937,27 @@ read at all. The original had the same property already (it built its path with
 request header`) instead of leaving it incidental.
 
 **Arrows: `<--` on the way in, `-->` on the way out**, matching both the source and Hono's own
-built-in `hono/logger`. An earlier version of this port had the two reversed; caught in review,
-fixed, and `log.test.ts` now pins the direction by name (`logs incoming then outgoing, in the
-source's own arrow direction`) instead of only checking each line's other fields.
+built-in `hono/logger`. `log.test.ts` pins the direction by name (`logs incoming then outgoing, in
+the source's own arrow direction`) instead of only checking each line's other fields.
 
-**The color table's reach was checked, not assumed, and the claim it can never carry a value
-outside 1xx–5xx was wrong.** `c.res.status` is read as a plain property, never checked against
-`instanceof Response`, so two paths reach the color table's edges without needing a status the
-`Response` constructor itself would refuse: a handler that returns `Response.error()` produces the
-network-error status `0` (checked: `app.get("/err", () => Response.error())` logs `<-- GET /err`
-then `--> GET /err 0 0ms`), and a handler that bypasses Hono's own return type and hands back a
-plain object is logged by whatever `.status` that object carries — `700`, in a check that returned
-`{ status: 700 } as unknown as Response`. Both are asserted in `log.test.ts`. The color table keeps
-its original entries for classes `0` and `7` for exactly this reason, and falls back to the plain,
-uncolored status number for any class it does not carry, so nothing here throws or prints the
-literal text `undefined` regardless of what a handler returns.
+**The color table's reach: checked, not assumed.** `c.res.status` is read as a plain property,
+never checked against `instanceof Response`, so two paths reach the color table's edges without
+needing a status the `Response` constructor itself would refuse: a handler that returns
+`Response.error()` produces the network-error status `0` (checked: `app.get("/err", () =>
+Response.error())` logs `<-- GET /err` then `--> GET /err 0 0ms`), and a handler that bypasses
+Hono's own return type and hands back a plain object is logged by whatever `.status` that object
+carries — `700`, in a check that returned `{ status: 700 } as unknown as Response`. Both are
+asserted in `log.test.ts`. The color table carries entries for classes `0` and `7` for exactly this
+reason, and falls back to the plain, uncolored status number for any class it does not carry, so
+nothing here throws or prints the literal text `undefined` regardless of what a handler returns.
 
 **Decisions.** `hono/utils/color` is not the internal it looks like: `./utils/*` is part of the
 published `hono` package's own `exports` map (checked against the pinned `hono@4.13.8`'s
 `package.json`), so this middleware is layered on hono's public surface, not reaching past it —
-consistent with hono staying a kept dependency. (`hono/utils/url` was used by an earlier draft that
-built the path with `getPath(c.req.raw)`; the shipped code reads `c.req.path` instead, which is
-Hono's own public, equivalent property, so this port does not import `hono/utils/url` at all.)
-Color output is ported as-is (same classes, same codes) rather than dropped, since
-`getColorEnabled()` already turns it off for a non-TTY or `NO_COLOR` environment, so nothing new
-needs deciding to keep it.
+consistent with hono staying a kept dependency. This port reads Hono's own public `c.req.path`, not
+`getPath(c.req.raw)`, so it imports `hono/utils/color` only — never `hono/utils/url`. Color output
+is ported as-is (same classes, same codes) rather than dropped, since `getColorEnabled()` already
+turns it off for a non-TTY or `NO_COLOR` environment, so nothing new needs deciding to keep it.
 
 ## `server/config`
 
@@ -999,15 +995,12 @@ broken deploy script configure a service with `""` instead of failing at start-u
 arktype object schema declares — `type({ AUTH_PEPPER: "string", PORT: "string.integer.parse" })`
 — as environment variable names, one level deep. It finds those keys through arktype's own
 documented `Type.props` (`required`/`optional`/defaulted, each `{ key, kind, ... }` —
-`arktype/out/variants/object.ts`'s object-type interface), not the internal `Type.json`
-representation an earlier version of this module read: `.props` gives the same list for a plain
-schema, stays correct through `.describe()` and `.configure()` (which changed `.json`'s shape
-enough to make that version misread a perfectly flat schema as not an object at all — caught in
-review, fixed, and pinned by a test for each), and throws arktype's own `ParseError` on a union or
-a piped root, which `loadConfig` wraps as `TypeError`. A schema whose `.props` comes back empty
-(an index-signature-only schema such as `type({ "[/^APP_/]": "string" })`, which validates but
-names no field) is refused the same way, rather than silently reading nothing. A nested object in
-the schema is not read from nested environment variables — there is no such thing here.
+`arktype/out/variants/object.ts`'s object-type interface): `.props` stays correct through
+`.describe()` and `.configure()`, and throws arktype's own `ParseError` on a union or a piped root,
+which `loadConfig` wraps as `TypeError`. A schema whose `.props` comes back empty (an
+index-signature-only schema such as `type({ "[/^APP_/]": "string" })`, which validates but names no
+field) is refused the same way, rather than silently reading nothing. A nested object in the schema
+is not read from nested environment variables — there is no such thing here.
 
 **Numbers and booleans are strings until a morph says otherwise.** Every environment variable
 arrives as `string | undefined`. arktype's own `"string.integer.parse"` and `"string.numeric.parse"`
@@ -1024,16 +1017,27 @@ also what lets a defaulted key (`PORT: "string.integer.parse = '3000'"` — requ
 arktype's default syntax is its own way of saying "may be absent") fall back to its schema default
 when the variable is absent.
 
-**The failure never carries a value — for an arktype rejection, and for a root-level check.**
-arktype's own rejection text echoes the offending input (`must be a well-formed integer string (was
-"admin")`), which is exactly the kind of text a container orchestrator's log capture was never meant
-to hold a secret in. `ConfigError.variables` lists only the names of the environment variables that
-failed, sorted; nothing here reads arktype's `.message`, `.summary` or `.actual` for a value that
-reached validation. A cross-field rule written with `.narrow()` (financy's "`TELEGRAM_WEBHOOK_URL`
-is required outside dev", checked across two fields) fails at no single key — arktype reports it at
-the root path, which named nothing until this was fixed to use the issue's own `expected` label
-(never `actual`, which is the whole rejected object) instead, falling back to a fixed
-`(cross-field check)` label when a caller's rule did not supply one.
+**The failure never carries a value — for an arktype rejection.** arktype's own rejection text
+echoes the offending input (`must be a well-formed integer string (was "admin")`), which is exactly
+the kind of text a container orchestrator's log capture was never meant to hold a secret in.
+`ConfigError.variables` lists only the top-level environment-variable names that failed, sorted;
+nothing here reads arktype's `.message`, `.summary` or `.actual` for a value that reached
+validation. That top-level restriction is deliberate: a failure inside a _parsed_ value — a JSON map
+whose entries are checked one by one, say — puts the value's own keys deeper in arktype's path
+(`API_TOKENS["sk_live_…"]`), so only `issue.path`'s first segment is used, and only when it is one
+of the schema's own declared keys. A hand-set `ctx.reject({ path: [...] })` inside a `.narrow()`
+could otherwise put anything at all in that first segment; the same restriction closes that route
+too.
+
+**A root-level check is reported by its own `expected` text, printed verbatim.** A cross-field rule
+written with `.narrow()` (financy's "`TELEGRAM_WEBHOOK_URL` is required outside dev", checked across
+two fields) fails at no single key, so arktype reports it at the root path, mapped here to the
+issue's own `expected` text — never `actual`, which is the whole rejected object. Write it as a rule
+(`TELEGRAM_WEBHOOK_URL is required outside dev`), never built from the value:
+``ctx.mustBe(`shorter than ${value}`)`` would print the value. Reading `expected` is guarded: it is
+a getter that throws for a rejection built with arktype's other documented style,
+`ctx.reject({ message })` or `ctx.reject({ problem })`, so a thrown or empty `expected` falls back
+to a fixed `(cross-field check)` label instead of crashing `loadConfig`.
 
 **A morph that throws is not an arktype rejection, and cannot be scrubbed the same way.** A morph
 written as a `.pipe` callback that throws its own `Error` (`bad ${value}`, say) escapes arktype's
@@ -1041,7 +1045,10 @@ own error path entirely — the thrown error's message can carry the value, and 
 that message, so nothing here can safely rewrite it. `loadConfig` catches anything thrown while
 validating and rethrows a `ConfigError` with an empty `variables` list and a generic message,
 explicitly without keeping the original as `cause` — a `cause` is exactly a place for the original's
-message, value included, to survive un-scrubbed onto the new error.
+message, value included, to survive un-scrubbed onto the new error. A morph that needs to fail
+without carrying its own value can report the variable by name instead: write it with `.pipe.try` or
+`ctx.error` (both arktype's own), either of which reports through the normal rejection path above
+rather than throwing.
 
 ```ts
 import { type } from "arktype"

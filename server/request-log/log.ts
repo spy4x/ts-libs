@@ -2,8 +2,8 @@
  * Request-logging middleware for Hono: one line when a request comes in, one line when the
  * response goes out.
  *
- * Ported from `template/apps/api/middlewares/log.ts` (identical in `financy`; `gb` has no copy of
- * this file to compare — not part of this extraction). The original imported the app's
+ * Ported from `template/apps/api/middlewares/log.ts` (identical in `financy`; `gb` was not
+ * available on this machine, so it is not part of the comparison). The original imported the app's
  * `APIContext` type and its `log` service directly, which a library cannot do. Here the write
  * function is a constructor argument instead — the app wires in whatever it wants (a
  * request-id-tagged logger, a line shipped somewhere, or nothing) — and the hardcoded

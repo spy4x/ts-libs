@@ -32,14 +32,19 @@
  * message echoes the offending input (`"must be a well-formed integer string (was \"admin\")"`),
  * which is exactly the kind of text a container orchestrator captures into a log it did not ask to
  * hold a secret. `loadConfig` only ever reports which environment variables failed, by name, in
- * {@link ConfigError.variables} — never the arktype summary, never `.message`, never `.actual`. A
- * root-level check written with `.narrow()` (a cross-field rule such as "X is required outside
- * dev") fails at no single key, so its failure is reported by its `expected` label instead — never
- * its `actual`, which is the whole parsed object. A morph that *throws* rather than reporting
- * through arktype's own rejection path is a second case: nothing here can recover the value such a
- * throw might carry in its own message, so `loadConfig` catches anything thrown while validating
- * and rethrows a `ConfigError` that carries none of it, without keeping the original as `cause` (a
- * `cause` is exactly a place for the original's message, value included, to survive un-scrubbed).
+ * {@link ConfigError.variables} — never the arktype summary, never `.message`, never `.actual`, and
+ * never a path segment that came from inside a parsed value (a JSON map's own key, for example) —
+ * only the top-level key a declared field owns. A root-level check written with `.narrow()` (a
+ * cross-field rule such as "X is required outside dev") fails at no single key, so its failure is
+ * reported by its own `expected` text, printed verbatim. Write it as a rule
+ * (`TELEGRAM_WEBHOOK_URL is required outside dev`), never built from the value:
+ * `ctx.mustBe(\`shorter than ${value}\`)` would print the value. A morph that *throws* rather than
+ * reporting through arktype's own rejection path is a second case: nothing here can recover the
+ * value such a throw might carry in its own message, so `loadConfig` catches anything thrown while
+ * validating and rethrows a `ConfigError` that carries none of it, without keeping the original as
+ * `cause` (a `cause` is exactly a place for the original's message, value included, to survive
+ * un-scrubbed). A morph that needs to fail without carrying its own value can report the variable
+ * by name instead, with `.pipe.try` or `ctx.error` — see `server/README.md`.
  */
 import { type SchemaOutput, validate, type ValidationResult } from "@ts-libs/validation/validate"
 import { type } from "arktype"
@@ -110,15 +115,20 @@ function objectSchemaKeys(schema: Type): string[] {
 }
 
 /**
- * The value-free label for one failing top-level path: the path itself when it names a key, or
- * `expected` (never `actual`, which is the whole rejected value) for a root-level `.narrow()`
- * failure, falling back to a fixed label when even `expected` was not a plain string.
+ * The value-free label for a failing issue that names no declared key: a root-level `.narrow()`
+ * failure, or a hand-set `path` that does not start with one. Reads `issue.expected` (never
+ * `actual`, which can be the whole rejected value) — never `.message` or `.summary`, and the read
+ * itself is guarded, because `expected` is a getter that throws for a rejection built with
+ * `ctx.reject({ message })` or `ctx.reject({ problem })` instead of `ctx.reject({ expected })`.
+ * Falls back to a fixed label when the read throws, or when it is not a non-empty string.
  */
-function failingVariableLabel(path: string, issue: { expected: string }): string {
-  if (path !== "") return path
-  return typeof issue.expected === "string" && issue.expected.length > 0
-    ? issue.expected
-    : CROSS_FIELD_LABEL
+function crossFieldLabel(issue: { expected: string }): string {
+  try {
+    const expected = issue.expected
+    return typeof expected === "string" && expected.length > 0 ? expected : CROSS_FIELD_LABEL
+  } catch {
+    return CROSS_FIELD_LABEL
+  }
 }
 
 /**
@@ -142,8 +152,10 @@ function failingVariableLabel(path: string, issue: { expected: string }): string
  * ```
  */
 export function loadConfig<T extends Type>(schema: T, env: EnvReader = systemEnv): SchemaOutput<T> {
+  const keys = objectSchemaKeys(schema)
+  const declaredKeys = new Set(keys)
   const raw: Record<string, string> = {}
-  for (const name of objectSchemaKeys(schema)) {
+  for (const name of keys) {
     const value = env.get(name)
     if (value !== undefined) raw[name] = value
   }
@@ -158,10 +170,18 @@ export function loadConfig<T extends Type>(schema: T, env: EnvReader = systemEnv
   }
   const { data, error } = result
   if (error) {
-    const variables = Object.keys(error.details.byPath)
-      .map((path) => failingVariableLabel(path, error.details.byPath[path]))
-      .sort()
-    throw new ConfigError(variables)
+    const variables = new Set<string>()
+    for (const issue of error.details) {
+      // Only the first path segment, and only when it is one of the schema's own keys: a failure
+      // inside a parsed value (a JSON map, say) puts the value's own keys deeper in the path, and
+      // a hand-set `ctx.reject({ path: [...] })` can put anything at all in the first segment. A
+      // path this schema never declared goes through the value-free cross-field label instead.
+      const first = issue.path[0]
+      variables.add(
+        typeof first === "string" && declaredKeys.has(first) ? first : crossFieldLabel(issue),
+      )
+    }
+    throw new ConfigError([...variables].sort())
   }
   return data
 }
