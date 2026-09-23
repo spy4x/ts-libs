@@ -10,7 +10,7 @@
  * Promise<void>`, `reset(): Promise<void>`. TypeScript's structural typing makes an
  * instance assignable to `ICacheStorage` without either module importing the other.
  */
-import { type Command, RedisClient, type Reply } from "@iuioiua/redis"
+import { type Command, RedisClient, RedisError, type Reply } from "@iuioiua/redis"
 
 /** Keys `{@link RedisKvStore.reset}` asks Redis to look at per `SCAN` round trip. */
 const SCAN_COUNT = 200
@@ -37,6 +37,11 @@ export class RedisKvStoreClosedError extends Error {
 /**
  * Thrown once this store's connection has failed — a write rejected, or a read did,
  * most often because the connection was closed by Redis rather than by this store.
+ *
+ * Never thrown for an ordinary error reply from Redis itself (`WRONGTYPE`, an
+ * out-of-memory refusal, `READONLY`, `BUSY`): that is a `RedisError` from
+ * `@iuioiua/redis`, the socket is fine, and {@link RedisKvStore.#send} rethrows it
+ * unchanged instead of treating the connection as dead.
  */
 export class RedisKvStoreConnectionError extends Error {
   constructor(cause: unknown) {
@@ -58,9 +63,9 @@ interface ConnectionErrorHolder {
  * `@iuioiua/redis`'s source), so a write that rejects — a closed or reset socket —
  * becomes an unhandled promise rejection, which crashes the whole Deno process even
  * from inside a caller's `try`/`catch`. This wrapper's `write` never rejects: it
- * records the failure on `holder` instead, and {@link RedisKvStore.#send} checks
- * `holder.current` before and after every command, so the failure surfaces as an
- * ordinary rejected promise from the next call rather than as a crash.
+ * records the failure on `holder` instead, and `#send` checks `holder.current` before
+ * every command, and records a failed read in its own `catch`, so the failure
+ * surfaces as an ordinary rejected promise from the next call rather than as a crash.
  */
 function trapWriteErrors(
   writable: WritableStream<Uint8Array>,
@@ -174,6 +179,12 @@ export class RedisKvStore {
    * it is wrapped the same way a write failure is, so every failure after this
    * connection dies looks the same to a caller: a catchable
    * {@link RedisKvStoreConnectionError}, never an unhandled rejection.
+   *
+   * A `RedisError` — an ordinary error reply from Redis itself, such as `WRONGTYPE` or
+   * an out-of-memory refusal — is neither recorded nor wrapped. The connection answered
+   * fine; only the command was refused, and a store that treated every refused command
+   * as a dead connection would disable itself for good the first time a caller sent
+   * one bad command, or Redis briefly refused writes.
    */
   async #send<T extends Reply = Reply>(command: Command): Promise<T> {
     if (this.#closed) {
@@ -185,6 +196,9 @@ export class RedisKvStore {
     try {
       return await this.client.sendCommand<T>(command)
     } catch (error) {
+      if (error instanceof RedisError) {
+        throw error
+      }
       this.#connectionError.current ??= error
       throw new RedisKvStoreConnectionError(error)
     }

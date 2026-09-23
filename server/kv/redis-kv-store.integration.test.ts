@@ -8,9 +8,9 @@
  * store's own `clientId()` reports, never a filter broad enough to reach another
  * worktree's connection.
  */
-import { assertEquals, assertRejects } from "@std/assert"
+import { assertEquals, assertInstanceOf, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
-import { RedisClient } from "@iuioiua/redis"
+import { RedisClient, RedisError } from "@iuioiua/redis"
 import { redisSettings, requireReachable, uniqueKeyPrefix } from "@integration-testing"
 import {
   RedisKvStore,
@@ -221,12 +221,78 @@ describe("RedisKvStore against a real server", () => {
 
       // Reaching these assertions at all is most of what this test proves: the ported
       // original crashed the whole process here instead of rejecting.
-      await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
-      // The failure is remembered: a second call fails the same way rather than
-      // reaching for the dead connection again.
-      await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+      const first = await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+      // The failure is remembered rather than the dead connection being tried again:
+      // a second call fails the same way, with the exact same recorded cause.
+      const second = await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+      assertEquals(second.cause, first.cause)
     } finally {
       adminConnection.close()
+      store.close()
+    }
+  })
+
+  it("rejects every call still queued at the moment the connection is killed", async () => {
+    const settings = redisSettings()
+    await requireReachable(settings.address)
+
+    const prefix = uniqueKeyPrefix("it_kv_killed_queued")
+    const store = await RedisKvStore.connect(settings.hostname, settings.port, prefix)
+    const ownId = await store.clientId()
+
+    const adminConnection = await Deno.connect({ hostname: settings.hostname, port: settings.port })
+    const admin = new RedisClient(adminConnection)
+    try {
+      // 20 calls are sent (and their writes trapped) before the connection dies, not
+      // after: this is what proves the write trap itself, not just the #closed/
+      // recorded-error checks a call made after the kill would hit before ever
+      // writing anything.
+      const queued = Array.from(
+        { length: 20 },
+        (_, index) => store.get(`q${index}`),
+      )
+      // Promise.allSettled attaches its handlers to all 20 immediately, in this same
+      // microtask turn — before awaiting the kill below gives any of them a chance to
+      // reject with no handler attached yet, which is what an unhandled rejection is.
+      const settledPromise = Promise.allSettled(queued)
+      await admin.sendCommand(["CLIENT", "KILL", "ID", ownId])
+
+      const settled = await settledPromise
+      const rejected = settled.filter((result) => result.status === "rejected")
+      // At least one call was still in flight when the kill landed; every one of
+      // those, not just the first to notice, rejects catchably.
+      assertEquals(rejected.length > 0, true)
+      for (const result of rejected) {
+        assertInstanceOf(result.reason, RedisKvStoreConnectionError)
+      }
+    } finally {
+      adminConnection.close()
+      store.close()
+    }
+  })
+
+  it("keeps working after Redis answers one command with an error", async () => {
+    const settings = redisSettings()
+    await requireReachable(settings.address)
+
+    const prefix = uniqueKeyPrefix("it_kv_wrongtype")
+    const store = await RedisKvStore.connect(settings.hostname, settings.port, prefix)
+    const sideConnection = await Deno.connect({ hostname: settings.hostname, port: settings.port })
+    const side = new RedisClient(sideConnection)
+    try {
+      // A list, written directly through a side connection so GET on it is guaranteed
+      // to be refused with WRONGTYPE — an ordinary error reply, not a dead connection.
+      await side.sendCommand(["LPUSH", `${prefix}:list`, "x"])
+
+      await assertRejects(() => store.get("list"), RedisError)
+
+      // The connection is still good: a command after the error reply succeeds.
+      await store.set("fine", "v", 60)
+      assertEquals(await store.get("fine"), "v")
+    } finally {
+      await side.sendCommand(["DEL", `${prefix}:list`])
+      await store.del("fine")
+      sideConnection.close()
       store.close()
     }
   })
