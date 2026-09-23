@@ -1,8 +1,8 @@
 /**
  * Input checks shared by both `AuthStore` implementations, so the memory store refuses what Postgres
  * refuses: the same lengths, NUL, and strings that are not well-formed UTF-16. One difference
- * remains: a `Date` before year 1 or after year 9999 is refused by Postgres as out of range and
- * accepted by the memory store. Internal: not an entry point of the package.
+ * remains: a `Date` outside years 1–9999 is refused by Postgres with a `PostgresError` and accepted
+ * by the memory store. Internal: not an entry point of the package.
  *
  * The limits match the `CHECK` constraints in `AUTH_POSTGRES_SCHEMA`.
  */
