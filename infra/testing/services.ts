@@ -27,9 +27,10 @@ export enum IntegrationEnvName {
 }
 
 /**
- * The credentials every container in `infra/compose.integration.yml` is started
- * with. Deliberately one obviously fake literal: these containers are throw-away,
- * listen on the loopback interface only, and hold nothing worth reading.
+ * The credentials every container in `infra/compose.integration.yml` that takes one
+ * is started with (Redis takes none). Deliberately one obviously fake literal: these
+ * containers are throw-away, listen on the loopback interface only, and hold nothing
+ * worth reading.
  */
 export const THROWAWAY_CREDENTIAL = "integration-test-only"
 

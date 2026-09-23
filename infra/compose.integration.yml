@@ -13,7 +13,7 @@
 #    `services:*` tasks do.
 # 2. **Loopback only.** Every published port is bound to `127.0.0.1`, and the host
 #    ports are deliberately unusual (the 5xxxx range) so they cannot collide with a
-#    Postgres, MinIO or mail server already running on the developer's machine.
+#    Postgres, MinIO, mail or Redis server already running on the developer's machine.
 # 3. **Obviously fake credentials.** `integration-test-only` is the user, the
 #    password and the database name everywhere a service takes one (Redis takes
 #    none: no `requirepass`, same as every other service here on a loopback-only
