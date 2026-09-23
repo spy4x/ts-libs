@@ -3129,6 +3129,42 @@ describe("a From hidden behind a header line-break byte other than CR (issue #12
     )
   })
 
+  it("refuses every 2-to-6-byte UTF-8 packing of all ten code points, and no packing too short to hold one", () => {
+    // An independent copy of the FSS-UTF rule, so a generator that drops a code point's
+    // packings, or emits a form whose payload spills into the lead byte's marker bits,
+    // goes red here: a 2-byte form cannot hold U+2028, and forcing it in yields C0 A8, an
+    // overlong "(" that must stay legitimate.
+    const codePoints: [number, string][] = [
+      [0x0a, "a line feed (LF, U+000A)"],
+      [0x0d, "a carriage return (CR, U+000D)"],
+      [0x0b, "a vertical tab (0x0B)"],
+      [0x0c, "a form feed (0x0C)"],
+      [0x1c, "a file separator (0x1C)"],
+      [0x1d, "a group separator (0x1D)"],
+      [0x1e, "a record separator (0x1E)"],
+      [0x85, "a NEL character (0x85)"],
+      [0x2028, "a Unicode line separator (U+2028)"],
+      [0x2029, "a Unicode paragraph separator (U+2029)"],
+    ]
+    let forms = 0
+    for (const [codePoint, name] of codePoints) {
+      for (let n = 2; n <= 6; n++) {
+        if (codePoint >= 2 ** (5 * n + 1)) continue
+        const bytes = [((0xff << (8 - n)) & 0xff) | (codePoint >> (6 * (n - 1)))]
+        for (let k = n - 2; k >= 0; k--) bytes.push(0x80 | ((codePoint >> (6 * k)) & 0x3f))
+        const hex = bytes.map((b) => b.toString(16).padStart(2, "0")).join(" ")
+        const reason = refuseHeaderLineEndings(`X-Note: a${String.fromCharCode(...bytes)}b\r\n\r\n`)
+        assert(reason !== undefined && reason.includes(name), `${hex} -> ${reason}`)
+        forms++
+      }
+    }
+    assertEquals(forms, 48)
+    assertEquals(
+      refuseHeaderLineEndings(`X-Note: a${String.fromCharCode(0xc0, 0xa8)}b\r\n\r\n`),
+      undefined,
+    )
+  })
+
   // Round 1 review, item 2: every case above places its forged byte in the
   // first header line (`X-Note:`, prepended before everything else). Limiting
   // the scan to the first line ending would have left every one of them
