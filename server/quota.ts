@@ -1048,9 +1048,9 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
       // `reservedAt`, when the caller passes the reading `reserve` used, keys the refund by
       // the window the reservation was taken from instead of whatever window the clock is
       // in when the refund runs — clamped to `actualNow` when it names a later moment (see
-      // `clampReservedAt`). `??`, not `||`: `0` is a real clock reading (a reservation taken
-      // at the epoch), not an absent one, and `||` would silently substitute `actualNow` for
-      // it.
+      // `clampReservedAt`). The test is `=== undefined`, not truthiness: `0` is a real clock
+      // reading (a reservation taken at the epoch), not an absent one, and a truthiness test
+      // would silently substitute `actualNow` for it.
       const refundAt = reservedAt === undefined ? actualNow : clampReservedAt(reservedAt, actualNow)
       // The reverse of `reserve`, and the order is the whole point: the private
       // counter is refunded first, so a store that fails between the two calls

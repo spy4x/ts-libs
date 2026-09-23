@@ -1276,7 +1276,7 @@ Deno.test("reserve: reservedAt is on the returned state whether the pool or the 
   assertEquals(refusedByOwn.reservedAt, 42)
 })
 
-Deno.test("release: reservedAt of 0 is honored, not treated as absent (?? not ||)", async () => {
+Deno.test("release: reservedAt of 0 is honored, not treated as absent", async () => {
   // `0` is a real clock reading — a reservation taken at the epoch — not an absent one.
   // `releaseOptions?.reservedAt || clock()` would read `0` as falsy and substitute the
   // current clock reading instead, refunding the wrong window; `??` does not.

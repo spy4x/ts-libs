@@ -753,10 +753,15 @@ describe("the Postgres migration runner against a client with a custom value tra
         PostgresUnexpectedRowError,
         "takeLock's lock probe",
       )
+      // `pg_try_advisory_lock` granted the lock before the reply was misread; `takeLock`
+      // must give it back before refusing, or the pooled connection keeps holding it.
+      const holders = await sql`
+        SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+        WHERE l.locktype = 'advisory' AND l.granted AND a.application_name = ${table}
+      `
+      assertEquals(holders.length, 0)
     } finally {
-      // `.end()`, not just letting the pool idle out: `pg_try_advisory_lock` ran and
-      // granted the lock at the server before the misread was caught, so the session
-      // itself — not only the connection object — must close to release it.
+      // Cleanup only: the lock was already given back above.
       await sql.end()
     }
   })

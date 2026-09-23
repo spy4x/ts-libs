@@ -446,7 +446,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
       const rows = await sql<Record<string, unknown>[]>`
         SELECT pg_try_advisory_lock(${key}) AS locked
       `.values()
-      const [locked] = expectRowShape("takeLock's lock probe", rows[0], 1)
+      const locked = Array.isArray(rows[0]) && rows[0].length === 1 ? rows[0][0] : undefined
       // `.values()` sidesteps a column-name transform, but a client's `transform.value.from`
       // still runs on the value itself (`postgres@3.4.7/src/connection.js:505-509`) — a
       // custom bool parser, or a transform that stringifies every value, would otherwise turn
@@ -455,6 +455,10 @@ export class PostgresMigrationDriver implements MigrationDriver {
       // here is the same shape check `expectRowShape` does for the row, one level down: for
       // its one value instead of its length.
       if (typeof locked !== "boolean") {
+        // The server may have granted the lock and only the reply was misread: give it back,
+        // or the reserved connection returns to the pool still holding the migration lock.
+        await sql`SELECT pg_advisory_unlock(${key})`
+        expectRowShape("takeLock's lock probe", rows[0], 1)
         throw new PostgresUnexpectedRowError("takeLock's lock probe", "a boolean", locked)
       }
       if (locked) return
