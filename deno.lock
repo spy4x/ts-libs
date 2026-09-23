@@ -1,7 +1,9 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@hectorm/otpauth@9.5.2": "9.5.2",
     "jsr:@hono/hono@4.13.8": "4.13.8",
+    "jsr:@libs/qrcode@3.1.0": "3.1.0",
     "jsr:@std/assert@1.0.19": "1.0.19",
     "jsr:@std/assert@^1.0.19": "1.0.19",
     "jsr:@std/crypto@1.1.0": "1.1.0",
@@ -18,8 +20,14 @@
     "npm:postgres@3.4.7": "3.4.7"
   },
   "jsr": {
+    "@hectorm/otpauth@9.5.2": {
+      "integrity": "efe9d019825c3262b32c144dd2316fa4c3b4537ce025e9d009948e78a28fb55e"
+    },
     "@hono/hono@4.13.8": {
       "integrity": "bbb566d9ebb81e74c0d7eeff1f9221ba9f3fda6f1832e5ca66cbddcecb2f7fec"
+    },
+    "@libs/qrcode@3.1.0": {
+      "integrity": "1d65698d3cbaf1d5e2e0b025f7d8572e8b2c485dcfa81d485e0bf0ce607e9c2b"
     },
     "@std/assert@1.0.19": {
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
@@ -94,7 +102,9 @@
   },
   "workspace": {
     "dependencies": [
+      "jsr:@hectorm/otpauth@9.5.2",
       "jsr:@hono/hono@4.13.8",
+      "jsr:@libs/qrcode@3.1.0",
       "jsr:@std/assert@1.0.19",
       "jsr:@std/crypto@1.1.0",
       "jsr:@std/encoding@1.0.11",

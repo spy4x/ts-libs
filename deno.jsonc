@@ -110,7 +110,12 @@
     "hono": "jsr:@hono/hono@4.13.8",
 
     // Postgres driver for `server/db` (#15).
-    "postgres": "npm:postgres@3.4.7"
+    "postgres": "npm:postgres@3.4.7",
+
+    // Authenticator-app codes (TOTP) and their enrolment QR code for the sign-in set (#75).
+    // Both are on the house "keep" list; the template uses the same two packages.
+    "otpauth": "jsr:@hectorm/otpauth@9.5.2",
+    "qrcode": "jsr:@libs/qrcode@3.1.0"
   },
   "compilerOptions": {
     // An explicit "lib" replaces Deno's default lib set, so "deno.ns" has to be

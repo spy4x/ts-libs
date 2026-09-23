@@ -282,6 +282,8 @@ arktype                          2.2.3
 @std/ulid                        1.0.0
 hono                            4.13.8
 postgres                         3.4.7
+@hectorm/otpauth                 9.5.2
+@libs/qrcode                     3.1.0
 ```
 
 Adding an import-map entry is a root-file change: it needs the issue number that needs the
