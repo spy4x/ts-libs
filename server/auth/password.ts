@@ -4,10 +4,11 @@
  * Written from the rules in issue #57, not moved from the earlier `providers/email-password.ts`. The
  * rules this file carries:
  *
- * - **Sign-in takes the same work whether or not the account exists.** A missing account is checked
- *   against a fixed dummy hash made once when the provider is created, so every `signIn` runs
- *   exactly one `PasswordHasher.verify`, and a wrong password and a missing account fail with the
- *   same error.
+ * - **Sign-in takes the same work as an account whose hash the current hasher made, whether or not
+ *   the account exists.** A missing account is checked against a fixed dummy hash made once when
+ *   the provider is created, so every `signIn` runs exactly one `PasswordHasher.verify`, and a
+ *   wrong password and a missing account fail with the same error. A legacy or lower-iteration
+ *   hash still verifies faster than the dummy until its first successful sign-in rehashes it.
  * - **Addresses are compared in one form.** Every address goes through `normalizeEmail`, and a key's
  *   `email` is always set to its subject, so eviction can find it.
  * - **Password sign-up does not prove the address.** The key starts unproven. Sign-up is refused
