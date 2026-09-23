@@ -853,75 +853,180 @@ function locateHeaderEnd(raw: string): { headerEnd: number; sepLen: number } {
 }
 
 /**
- * A header-block byte that some reader treats as a line break, hiding a
- * header field the same way a lone CR does (issue #121). Refused wherever it
- * occurs in the header block, with no exemption for context: round 1 review
- * found that exempting 0x85 when it looked like a UTF-8 continuation byte
- * (`Å` is C3 85) reopened the bug, because a reader is not obliged to decode
- * the block as UTF-8 at all. A reader that decodes header octets as Latin-1
- * — or falls back to it the moment it meets one byte that is not valid
- * UTF-8, which a single stray byte anywhere in the message is enough to
- * trigger — reads a bare 0x85 as NEL regardless of what bytes sit next to
- * it, so `X-Note: a<C3><85>From: ceo@bank.example` hides a second `From:`
- * from such a reader exactly as `X-Note: a<85>From: ceo@bank.example` does.
- * No conformant *sender* emits any byte here, though RFC 5322 is not silent
- * on all of them: §4.1's `obs-NO-WS-CTL` is where VT, FF and 0x1C-0x1E do
- * appear in the grammar, inside the *obsolete* syntax a generator "MUST NOT"
+ * A code point this file treats as hiding a header line break the way a lone
+ * CR does (issue #121), and everything {@link FORBIDDEN_HEADER_BYTES} and
+ * {@link FORBIDDEN_MULTIBYTE_SEQUENCES} are generated from — round 2 review
+ * asked for the table to be generated from this list rather than hand-listed
+ * byte sequences, after finding gaps a hand-picked list kept leaving: round 1
+ * caught 0x85 exempted as a false continuation byte, round 2 found the same
+ * exemption problem applies to *any* of these code points once an attacker
+ * is allowed to pick *any* UTF-8 byte length and any amount of overlong
+ * padding, including of LF and CR themselves — `C0 8A` is an overlong 2-byte
+ * encoding of LF that a lenient decoder reads as a line break, even though
+ * the raw byte 0x0A never appears in the message at all, so the CR/LF
+ * uniformity check above never sees it either.
+ *
+ * `minimalLength` is how many bytes RFC 3629 needs to reach this code point
+ * *as UTF-8* without padding — 1 for the seven that are ASCII (a 1-byte
+ * value is already valid UTF-8), 3 for the two Unicode separators, and 2 for
+ * NEL: 0x85 is not ASCII, so its own least-overlong *UTF-8* encoding is the
+ * two-byte `C2 85`, one byte longer than its raw-octet form. That raw form
+ * is a different thing entirely — not UTF-8 at all, just the byte value
+ * 0x85 on its own, the Latin-1/windows-1252 reading round 1 review named —
+ * which is exactly what `flatScanSingleByte` covers instead, so 0x85 is the
+ * one code point both fields apply to. `minimalLength` tells
+ * {@link FORBIDDEN_MULTIBYTE_SEQUENCES} which generated packing is the
+ * non-overlong one, for its description; getting it wrong for 0x85 would
+ * call its ordinary, minimal two-byte UTF-8 form "overlong", which it is
+ * not. `flatScanSingleByte` is false only for LF and CR: their *raw*
+ * single-byte form is ordinary, necessary content — every header line
+ * legitimately ends in one — governed by the CR/LF uniformity check above
+ * instead, so only their multi-byte (inherently overlong, since 1 byte
+ * already suffices) forms are refused here.
+ *
+ * No conformant *sender* emits any of these code points in a header value.
+ * RFC 5322 §4.1's `obs-NO-WS-CTL` is where VT, FF and 0x1C-0x1E appear in
+ * the grammar at all, inside the *obsolete* syntax a generator "MUST NOT"
  * produce — a parser may still accept it from someone else's mail, but this
  * verifier is not obliged to. 0x85 and the two Unicode separators are not
  * ASCII at all; RFC 6532 is what lets a header value carry them, as UTF-8.
- * Refusing every one of these here is therefore the safe direction, not a
- * free one: it costs genuine RFC 6532 mail whose text needs one of the two
- * rare code points this rule reaches by UTF-8 byte content rather than by
- * meaning. `email/README.md` states that cost beside this rule: a legitimate
- * header value whose UTF-8 encoding happens to contain 0x85 (`Å` C3 85, `ą`
- * C4 85, `久` E4 B9 85, `😅` F0 9F 98 85) is refused too.
+ * Refusing every UTF-8 packing of every one of these here is therefore the
+ * safe direction, not a free one: it costs genuine RFC 6532 mail whose text
+ * needs one of the two rare Unicode code points, by UTF-8 byte content
+ * rather than by meaning. `email/README.md` states that cost beside this
+ * rule: a legitimate header value whose UTF-8 encoding happens to contain
+ * 0x85 (`Å` C3 85, `ą` C4 85, `久` E4 B9 85, `😅` F0 9F 98 85) is refused too.
  */
-const FORBIDDEN_HEADER_BYTES: ReadonlyMap<number, string> = new Map([
-  [0x0b, "a vertical tab (0x0B)"],
-  [0x0c, "a form feed (0x0C)"],
-  [0x1c, "a file separator (0x1C)"],
-  [0x1d, "a group separator (0x1D)"],
-  [0x1e, "a record separator (0x1E)"],
-  [0x85, "a NEL character (0x85)"],
-])
+const FORBIDDEN_LINE_BREAKS: readonly {
+  codePoint: number
+  name: string
+  minimalLength: number
+  flatScanSingleByte: boolean
+}[] = [
+  {
+    codePoint: 0x0a,
+    name: "a line feed (LF, U+000A)",
+    minimalLength: 1,
+    flatScanSingleByte: false,
+  },
+  {
+    codePoint: 0x0d,
+    name: "a carriage return (CR, U+000D)",
+    minimalLength: 1,
+    flatScanSingleByte: false,
+  },
+  { codePoint: 0x0b, name: "a vertical tab (0x0B)", minimalLength: 1, flatScanSingleByte: true },
+  { codePoint: 0x0c, name: "a form feed (0x0C)", minimalLength: 1, flatScanSingleByte: true },
+  { codePoint: 0x1c, name: "a file separator (0x1C)", minimalLength: 1, flatScanSingleByte: true },
+  { codePoint: 0x1d, name: "a group separator (0x1D)", minimalLength: 1, flatScanSingleByte: true },
+  {
+    codePoint: 0x1e,
+    name: "a record separator (0x1E)",
+    minimalLength: 1,
+    flatScanSingleByte: true,
+  },
+  { codePoint: 0x85, name: "a NEL character (0x85)", minimalLength: 2, flatScanSingleByte: true },
+  {
+    codePoint: 0x2028,
+    name: "a Unicode line separator (U+2028)",
+    minimalLength: 3,
+    flatScanSingleByte: false,
+  },
+  {
+    codePoint: 0x2029,
+    name: "a Unicode paragraph separator (U+2029)",
+    minimalLength: 3,
+    flatScanSingleByte: false,
+  },
+]
 
 /**
- * U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) have no one-byte
- * form, so {@link FORBIDDEN_HEADER_BYTES} cannot name them; this refuses
- * their UTF-8 encodings by literal byte sequence instead. Each is listed
- * twice: the minimal, RFC 3629-conformant 3-byte form a real UTF-8 encoder
- * emits, and the one-step-more-overlong 4-byte form — computed directly from
- * the code point's 21-bit binary representation, the way a decoder that
- * packs bits without enforcing the shortest-form rule reads it — because a
- * lenient decoder does not require the shortest encoding either.
- *
- * A shorter overlong form does not exist for either code point: 3 bytes is
- * already the minimum RFC 3629 UTF-8 needs to reach U+0800 and above, so
- * there is no valid or overlong *2*-byte encoding of either one, and no
- * sequence of bytes decodes to U+2028 or U+2029 in fewer than 3 bytes under
- * any packing of the bits. (A 3-byte sequence that starts `E0 80 …` is not a
- * second, overlong 3-byte form of either character — packing its bits the
- * same way gives U+0028 and U+0029, ordinary parentheses, a different code
- * point that already has a 1-byte form; RFC 3629 itself does not allow a
- * "5-byte" or "6-byte" UTF-8 form at all, so no encoding past 4 bytes is
- * checked here either.)
+ * Every 2-to-6-byte UTF-8 packing of `codePoint`: the minimal one RFC 3629
+ * would emit (when its length is 2-6) and every overlong one past it, using
+ * the classic FSS-UTF capacity an `n`-byte form has — an `n`-bit-1 marker
+ * plus a zero separator bit in the lead byte (`7 - n` payload bits there)
+ * and 6 payload bits in each of the `n - 1` continuation bytes, `5n + 1`
+ * bits total. A form whose capacity is smaller than `codePoint` needs is
+ * skipped rather than built: forcing the value in anyway would spill into
+ * the lead byte's marker bits and corrupt the very shape that says how many
+ * bytes the sequence is. Only U+2028/U+2029 are large enough (2047 is the
+ * largest 2-byte form can hold) to skip `n = 2` here; every code point in
+ * {@link FORBIDDEN_LINE_BREAKS} fits every other length.
+ */
+function utf8Packings(codePoint: number): number[][] {
+  const forms: number[][] = []
+  for (let n = 2; n <= 6; n++) {
+    const capacityBits = 5 * n + 1
+    if (codePoint >= 2 ** capacityBits) continue
+    const bytes = [((0xff << (8 - n)) & 0xff) | (codePoint >> (6 * (n - 1)))]
+    for (let k = n - 2; k >= 0; k--) bytes.push(0x80 | ((codePoint >> (6 * k)) & 0x3f))
+    forms.push(bytes)
+  }
+  return forms
+}
+
+/**
+ * The six {@link FORBIDDEN_LINE_BREAKS} entries whose raw single byte is
+ * itself refused, wherever it occurs in the header block — generated rather
+ * than hand-listed so it cannot drift from {@link FORBIDDEN_MULTIBYTE_SEQUENCES}.
+ * LF and CR are excluded on purpose; see the note on {@link FORBIDDEN_LINE_BREAKS}.
+ */
+const FORBIDDEN_HEADER_BYTES: ReadonlyMap<number, string> = new Map(
+  FORBIDDEN_LINE_BREAKS
+    .filter((entry) => entry.flatScanSingleByte)
+    .map((entry) => [entry.codePoint, entry.name]),
+)
+
+/**
+ * Every UTF-8 packing of every {@link FORBIDDEN_LINE_BREAKS} code point,
+ * generated by {@link utf8Packings} rather than hand-listed. A packing whose
+ * length equals the code point's `minimalLength` is described as itself
+ * (only reachable for U+2028/U+2029, at 3 bytes); every other one — which is
+ * every packing of the eight single-byte code points, since none of their
+ * multi-byte forms is ever the shortest — is described as an overlong
+ * encoding of it. Grouped by lead byte in
+ * {@link FORBIDDEN_MULTIBYTE_SEQUENCES_BY_LEAD_BYTE}, which is what
+ * {@link scanForbiddenHeaderBytes} actually scans with.
  */
 const FORBIDDEN_MULTIBYTE_SEQUENCES: readonly { bytes: readonly number[]; description: string }[] =
-  [
-    { bytes: [0xe2, 0x80, 0xa8], description: "a Unicode line separator (U+2028)" },
-    { bytes: [0xe2, 0x80, 0xa9], description: "a Unicode paragraph separator (U+2029)" },
-    {
-      bytes: [0xf0, 0x82, 0x80, 0xa8],
-      description: "an overlong-encoded Unicode line separator (U+2028)",
-    },
-    {
-      bytes: [0xf0, 0x82, 0x80, 0xa9],
-      description: "an overlong-encoded Unicode paragraph separator (U+2029)",
-    },
-  ]
+  FORBIDDEN_LINE_BREAKS.flatMap(({ codePoint, name, minimalLength }) =>
+    utf8Packings(codePoint).map((bytes) => ({
+      bytes,
+      description: bytes.length === minimalLength ? name : `an overlong UTF-8 encoding of ${name}`,
+    }))
+  )
 
-/** True when `raw` holds `sequence` starting at `i`, entirely before `end`. */
+/**
+ * {@link FORBIDDEN_MULTIBYTE_SEQUENCES} indexed by each sequence's first
+ * byte, so {@link scanForbiddenHeaderBytes} does one map lookup per header
+ * position — matching only the handful of sequences that could possibly
+ * start there — rather than testing all of them, which is what keeps the
+ * scan linear in the header block's length rather than in the size of this
+ * table.
+ */
+const FORBIDDEN_MULTIBYTE_SEQUENCES_BY_LEAD_BYTE: ReadonlyMap<
+  number,
+  readonly { bytes: readonly number[]; description: string }[]
+> = (() => {
+  const byLeadByte = new Map<number, { bytes: readonly number[]; description: string }[]>()
+  for (const sequence of FORBIDDEN_MULTIBYTE_SEQUENCES) {
+    const lead = sequence.bytes[0]
+    const existing = byLeadByte.get(lead)
+    if (existing) existing.push(sequence)
+    else byLeadByte.set(lead, [sequence])
+  }
+  return byLeadByte
+})()
+
+/**
+ * True when `raw` holds `sequence` starting at `i`, entirely before `end`.
+ *
+ * `i + sequence.length > end`, not `>=`: a sequence that ends *exactly* at
+ * `end` — the last bytes in a header block that has no trailing empty line
+ * — fits entirely inside the block and must match, not be treated as
+ * spilling past it. Round 2 review asked this boundary be pinned by a test
+ * rather than left to reviewers to notice by reading the comparison.
+ */
 function matchesSequenceAt(
   raw: string,
   i: number,
@@ -938,21 +1043,29 @@ function matchesSequenceAt(
 /**
  * Scan a header block for {@link FORBIDDEN_HEADER_BYTES} and
  * {@link FORBIDDEN_MULTIBYTE_SEQUENCES}, byte by byte with no decoding step
- * for the single-byte set (issue #121, round 1 review). `end` is the same
- * header-block boundary {@link refuseHeaderLineEndings} computes and passes
- * in, so the two checks can never disagree about where the block stops, and
- * the scan runs the full block rather than stopping at the first line
- * ending — the whole point is to catch a forgery placed *anywhere* in it.
+ * for the single-byte set (issue #121). `end` is the same header-block
+ * boundary {@link refuseHeaderLineEndings} computes and passes in, so the
+ * two checks can never disagree about where the block stops, and the scan
+ * runs the full block rather than stopping at the first line ending — the
+ * whole point is to catch a forgery placed *anywhere* in it. Every
+ * multi-byte candidate is matched in full (see {@link matchesSequenceAt}),
+ * lead byte included, so a legitimate character that merely happens to
+ * *end* the same way as a forbidden sequence — U+3028 is `E3 80 A8`, the
+ * same last two bytes as U+2028's `E2 80 A8` — is not mistaken for one.
  */
 function scanForbiddenHeaderBytes(raw: string, end: number): string | undefined {
   for (let i = 0; i < end; i++) {
-    for (const sequence of FORBIDDEN_MULTIBYTE_SEQUENCES) {
-      if (matchesSequenceAt(raw, i, end, sequence.bytes)) {
-        return `header block carries ${sequence.description}, which some readers treat as ` +
-          "a line break, so where its header fields end is ambiguous"
+    const code = raw.charCodeAt(i)
+    const candidates = FORBIDDEN_MULTIBYTE_SEQUENCES_BY_LEAD_BYTE.get(code)
+    if (candidates !== undefined) {
+      for (const sequence of candidates) {
+        if (matchesSequenceAt(raw, i, end, sequence.bytes)) {
+          return `header block carries ${sequence.description}, which some readers treat as ` +
+            "a line break, so where its header fields end is ambiguous"
+        }
       }
     }
-    const description = FORBIDDEN_HEADER_BYTES.get(raw.charCodeAt(i))
+    const description = FORBIDDEN_HEADER_BYTES.get(code)
     if (description !== undefined) {
       return `header block carries ${description}, which some readers treat as a line break, ` +
         "so where its header fields end is ambiguous"
@@ -988,16 +1101,20 @@ function scanForbiddenHeaderBytes(raw: string, end: number): string | undefined 
  * is what mailbox storage produces — RFC 6376 §3.4.5's own example message, as
  * this package's `rfc6376-rsa` fixture carries it, has no CR anywhere.
  *
- * Issue #121: CR and LF are not the only bytes a reader can take for a line
- * break inside a header value. A vertical tab, a form feed, the file/group/
- * record separators (0x1C-0x1E), NEL (0x85) and the Unicode LINE/PARAGRAPH
- * SEPARATOR characters (U+2028/U+2029, minimal or overlong-encoded) are
- * refused the same way, anywhere in the block, for the same reason the lone
- * CR is: `X-Note: a<FF>From: ceo@bank.example` hides a second `From:` from
- * this verifier exactly as the CR form does, behind a byte a lenient reader
- * may still break a line on. See {@link FORBIDDEN_HEADER_BYTES}'s own note
- * for why 0x85 is refused unconditionally, with no exemption for a byte that
- * merely looks like part of a longer UTF-8 character.
+ * Issue #121: a raw CR or LF are not the only way a reader can take a byte
+ * sequence for a line break inside a header value. A vertical tab, a form
+ * feed, the file/group/record separators (0x1C-0x1E) and NEL (0x85) are
+ * refused as raw bytes wherever they occur, and every UTF-8 packing — the
+ * minimal one and every overlong one, up to 6 bytes — of all ten of LF, CR,
+ * those five, and the Unicode LINE/PARAGRAPH SEPARATOR characters
+ * (U+2028/U+2029) is refused as well: an overlong `C0 8A` reads as LF to a
+ * decoder that does not enforce the shortest-form rule, hiding a header
+ * boundary this verifier would otherwise never see, exactly as
+ * `X-Note: a<FF>From: ceo@bank.example` hides one behind a raw byte. See the
+ * note on {@link FORBIDDEN_LINE_BREAKS} for why every packing of every one
+ * of these ten code points is refused unconditionally, with no exemption for
+ * a byte or sequence that merely looks like part of a longer, legitimate
+ * UTF-8 character.
  */
 export function refuseHeaderLineEndings(raw: string): string | undefined {
   const { headerEnd, sepLen } = locateHeaderEnd(raw)

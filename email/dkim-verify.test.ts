@@ -2907,7 +2907,10 @@ describe("a From hidden behind a header line-break byte other than CR (issue #12
 
     const result = await verifyDkim(ascii(attacked), publicKey)
     assertEquals(result.valid, false)
-    assertEquals(result.reason, reasonFor("an overlong-encoded Unicode line separator (U+2028)"))
+    assertEquals(
+      result.reason,
+      reasonFor("an overlong UTF-8 encoding of a Unicode line separator (U+2028)"),
+    )
   })
 
   it("rejects a From: hidden behind a Unicode paragraph separator, as a string", async () => {
@@ -2941,7 +2944,7 @@ describe("a From hidden behind a header line-break byte other than CR (issue #12
       assertEquals(result.valid, false)
       assertEquals(
         result.reason,
-        reasonFor("an overlong-encoded Unicode paragraph separator (U+2029)"),
+        reasonFor("an overlong UTF-8 encoding of a Unicode paragraph separator (U+2029)"),
       )
     },
   )
@@ -2976,19 +2979,33 @@ describe("a From hidden behind a header line-break byte other than CR (issue #12
     assertEquals(result.reason, reasonFor("a NEL character (0x85)"))
   })
 
-  // Round 1 review, item 3: confirms the flat byte scan has no residual
-  // UTF-8 exemption in any surrounding byte context, whatever precedes the
-  // 0x85 — an invalid two-byte lead (C1, an overlong lead RFC 3629 forbids),
-  // an invalid three-byte prefix, or an invalid four-byte prefix. None of
-  // these decode `0x85` as a continuation byte of anything (C1 85 alone
-  // packs to 0x45, not a real character), so the only way any of them can be
-  // refused at all is the flat, context-free byte scan — which is exactly
-  // what round 1 asked for.
+  // Round 1 review, item 3: confirms 0x85 is caught whatever precedes it,
+  // C1 and E0 81 packing to code points unrelated to NEL (C1 85 alone packs
+  // to 0x45, not a real character; neither is one of FORBIDDEN_LINE_BREAKS'
+  // ten code points), so those two are only ever caught by the flat,
+  // context-free byte scan finding the trailing 0x85 on its own. F0 80 82 is
+  // different, and deliberately kept in this list rather than moved: once
+  // round 2's generated table exists, `F0 80 82 85` *is* one of its entries
+  // — cp=0x85's own overlong 4-byte packing — so this case is now caught
+  // earlier, by the multi-byte match starting at the F0, with a reason that
+  // names the overlong encoding rather than the bare byte. Both are safe
+  // refusals; only which check catches it changed, the same shape as round
+  // 1's VT/FF-in-a-name pins.
   for (
-    const [label, bytes] of [
-      ["C1 85 (invalid two-byte lead)", [0xc1, 0x85]],
-      ["E0 81 85 (invalid three-byte prefix)", [0xe0, 0x81, 0x85]],
-      ["F0 80 82 85 (invalid four-byte prefix)", [0xf0, 0x80, 0x82, 0x85]],
+    const [label, bytes, reason] of [
+      ["C1 85 (invalid two-byte lead)", [0xc1, 0x85], reasonFor("a NEL character (0x85)")],
+      [
+        "E0 81 85 (invalid three-byte prefix)",
+        [0xe0, 0x81, 0x85],
+        reasonFor(
+          "a NEL character (0x85)",
+        ),
+      ],
+      [
+        "F0 80 82 85 (0x85's own overlong 4-byte packing)",
+        [0xf0, 0x80, 0x82, 0x85],
+        reasonFor("an overlong UTF-8 encoding of a NEL character (0x85)"),
+      ],
     ] as const
   ) {
     it(`rejects a From: hidden behind 0x85 preceded by ${label}`, async () => {
@@ -2998,7 +3015,44 @@ describe("a From hidden behind a header line-break byte other than CR (issue #12
 
       const result = await verifyDkim(ascii(attacked), publicKey)
       assertEquals(result.valid, false)
-      assertEquals(result.reason, reasonFor("a NEL character (0x85)"))
+      assertEquals(result.reason, reason)
+    })
+  }
+
+  // Round 2 review: refusing only the minimal and one-step-overlong form of
+  // U+2028/U+2029 left every *other* overlong packing open, and — worse —
+  // left LF and CR themselves reachable the same way: an attacker does not
+  // need a raw 0x0A byte to hide a line break from the CR/LF uniformity
+  // check above if an overlong UTF-8 encoding of LF reads as one to whatever
+  // decodes the header afterwards. `FORBIDDEN_MULTIBYTE_SEQUENCES` is now
+  // generated from `FORBIDDEN_LINE_BREAKS` by `utf8Packings`, covering every
+  // 2-to-6-byte packing of all ten code points, not four hand-picked
+  // sequences. These pin the cases round 2 named explicitly.
+  const overlongCases: { name: string; bytes: number[]; description: string }[] = [
+    { name: "LF", bytes: [0xc0, 0x8a], description: "a line feed (LF, U+000A)" },
+    { name: "CR", bytes: [0xc0, 0x8d], description: "a carriage return (CR, U+000D)" },
+    { name: "LF (3-byte)", bytes: [0xe0, 0x80, 0x8a], description: "a line feed (LF, U+000A)" },
+    {
+      name: "U+2028 (5-byte)",
+      bytes: [0xf8, 0x80, 0x82, 0x80, 0xa8],
+      description: "a Unicode line separator (U+2028)",
+    },
+    {
+      name: "U+2029 (6-byte)",
+      bytes: [0xfc, 0x80, 0x80, 0x82, 0x80, 0xa9],
+      description: "a Unicode paragraph separator (U+2029)",
+    },
+  ]
+
+  for (const { name, bytes, description } of overlongCases) {
+    it(`rejects a From: hidden behind an overlong UTF-8 encoding of ${name}, as bytes`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      assert((await verifyDkim(raw, publicKey)).valid)
+      const attacked = `X-Note: a${String.fromCharCode(...bytes)}${FORGED}\r\n${raw}`
+
+      const result = await verifyDkim(ascii(attacked), publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, reasonFor(`an overlong UTF-8 encoding of ${description}`))
     })
   }
 
@@ -3024,6 +3078,55 @@ describe("a From hidden behind a header line-break byte other than CR (issue #12
 
     const result = await verifyDkim(attacked, publicKey)
     assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("verifies a legitimate 3-byte character sharing its last two bytes with U+2028", async () => {
+    // U+3028 (a CJK stroke character) is E3 80 A8 — the same trailing "80 A8"
+    // as U+2028's own E2 80 A8, but a different lead byte. Confirmed by
+    // mutation: a scan that looks candidates up by lead byte but then only
+    // compares a match's *remaining* bytes leaves this green regardless
+    // (the lookup itself already establishes the lead byte, so skipping it
+    // a second time inside `matchesSequenceAt` changes nothing) — this test
+    // only goes red once the lead byte is dropped from the match entirely,
+    // e.g. a scan that finds candidates by *any* byte at any position and
+    // compares only their tails. `matchesSequenceAt` and the by-lead-byte
+    // index both agree on the sequence's first byte, so neither mistake
+    // reaches this far.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `X-Note: a${String.fromCharCode(0xe3, 0x80, 0xa8)}b\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("verifies a raw Latin-1 ü (0xFC) that starts no forbidden sequence", async () => {
+    // 0xFC is also the lead byte of every 6-byte packing in
+    // FORBIDDEN_MULTIBYTE_SEQUENCES (one per code point in
+    // FORBIDDEN_LINE_BREAKS), so this is the control for the by-lead-byte
+    // index: a lone 0xFC not followed by the exact continuation bytes any of
+    // those packings need must not match, whatever else shares its lead
+    // byte in the table.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `X-Note: a${String.fromCharCode(0xfc)}ber\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("rejects a forbidden sequence that is the last thing in a block with no empty line", () => {
+    // Round 2 review: `matchesSequenceAt` compares `i + sequence.length` to
+    // `end` with `>`, not `>=`, so a sequence that ends *exactly* at the
+    // header block's boundary still matches. With no empty line anywhere in
+    // the message, `end` is `raw.length` (see `locateHeaderEnd`), so this
+    // puts the forbidden sequence's last byte at the very last position in
+    // the string — the one place a `>` vs `>=` mistake would show up.
+    const raw = `X-Note: a${String.fromCharCode(0xc0, 0x8a)}`
+    assertEquals(raw.length, "X-Note: a".length + 2, "the sequence must end the string exactly")
+
+    assertEquals(
+      refuseHeaderLineEndings(raw),
+      reasonFor("an overlong UTF-8 encoding of a line feed (LF, U+000A)"),
+    )
   })
 
   // Round 1 review, item 2: every case above places its forged byte in the

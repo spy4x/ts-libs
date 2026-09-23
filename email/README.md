@@ -490,42 +490,57 @@ which propagates the resolver's rejection instead of reporting it.
   mail out of a mailbox — the alternative reading of the issue's checkbox, "refuse
   every bare LF", turns RFC 6376's own example message invalid. The rule covers
   the header block only; a carriage return in the body cannot hide a header field.
-- **A header block carrying a vertical tab, a form feed, a file/group/record
-  separator, NEL or a Unicode line/paragraph separator is refused outright.**
-  Issue #121, the same shape as the lone-CR rule above for a different set of
-  bytes: `X-Note: a<FF>From: ceo@bank.example` above a signed block hides a
-  second `From:` from this verifier the way the CR form does, behind a byte
-  some reader still treats as ending the line. No conformant _sender_ emits
-  any of 0x0B (VT), 0x0C (FF), 0x1C-0x1E (file/group/record separator), 0x85
-  (NEL) or U+2028/U+2029 (Unicode LINE/PARAGRAPH SEPARATOR): RFC 5322 §4.1
-  puts VT, FF and 0x1C-0x1E only in the _obsolete_ syntax a generator "MUST
-  NOT" produce, and 0x85/U+2028/U+2029 are not ASCII at all — RFC 6532 is
-  what lets a header value carry them, as UTF-8. So refusing all of them,
-  anywhere in the block, is the safe direction rather than a free one.
-  Round 1 review of this rule found a real gap in an earlier draft: it
-  exempted 0x85 whenever it looked like a UTF-8 continuation byte of a longer
-  character (`Å` is C3 85, `ą` is C4 85), on the theory that a reader
-  decoding the block as UTF-8 would never mistake it for NEL. That exemption
-  reopened the bug — a reader is not obliged to decode as UTF-8 at all, and
-  one that decodes header octets as Latin-1, or falls back to it the moment
-  it meets one byte that is not valid UTF-8 (a single stray byte anywhere in
-  the message is enough to trigger that fallback), reads a bare 0x85 as NEL
-  regardless of what bytes sit next to it. `X-Note: a<C3><85>From:
-  ceo@bank.example` hid a second `From:` from such a reader exactly as the
-  bare-byte form did, while this verifier kept calling the message valid.
-  0x85 is now refused unconditionally, with no exemption for context, which
+- **A header block carrying LF, CR, a vertical tab, a form feed, a
+  file/group/record separator, NEL or a Unicode line/paragraph separator — as
+  any UTF-8 packing, minimal or overlong, of any length from 2 to 6 bytes —
+  is refused outright.** Issue #121, the same shape as the lone-CR rule
+  above for a wider set of code points: `X-Note: a<FF>From: ceo@bank.example`
+  above a signed block hides a second `From:` from this verifier the way the
+  CR form does, behind a byte some reader still treats as ending the line.
+  No conformant _sender_ emits any of these code points in a header value.
+  RFC 5322 §4.1 puts VT, FF and 0x1C-0x1E only in the _obsolete_ syntax a
+  generator "MUST NOT" produce, and 0x85/U+2028/U+2029 are not ASCII at all
+  — RFC 6532 is what lets a header value carry them, as UTF-8. So refusing
+  all of them, anywhere in the block, is the safe direction rather than a
+  free one.
+
+  The rule is generated from ten code points — LF, CR, VT, FF, the
+  file/group/record separators, NEL, and U+2028/U+2029 — rather than
+  hand-listed as byte sequences, because two review rounds each found the
+  hand-picked list still had gaps. Round 1: an earlier draft exempted 0x85
+  whenever it looked like a UTF-8 continuation byte of a longer character
+  (`Å` is C3 85, `ą` is C4 85), on the theory that a reader decoding the
+  block as UTF-8 would never mistake it for NEL — wrong, because a reader is
+  not obliged to decode as UTF-8 at all, and one that decodes header octets
+  as Latin-1, or falls back to it the moment it meets one byte that is not
+  valid UTF-8, reads a bare 0x85 as NEL regardless of what bytes sit next to
+  it. Round 2: refusing only the minimal and one-step-overlong UTF-8 form of
+  U+2028/U+2029 left every other overlong packing open, and, worse, left LF
+  and CR themselves reachable the same way — `C0 8A` is an overlong 2-byte
+  UTF-8 encoding of LF, so a decoder that does not enforce the shortest-form
+  rule reads it as a line break even though the raw byte 0x0A never appears
+  in the message at all, which is invisible to the CR/LF uniformity check
+  above.
+
+  So every 2-to-6-byte UTF-8 packing of every one of the ten code points is
+  generated and refused: the classic FSS-UTF byte shapes (an `n`-byte form
+  reserves `n` one-bits and a zero separator bit in its lead byte, 6 payload
+  bits in each of the other `n - 1` bytes), skipping only a length too small
+  to hold the code point without corrupting its own marker bits. LF and CR's
+  _raw_ single-byte form stays legitimate, necessary content — every header
+  line ends in one — governed by the CR/LF uniformity check above instead;
+  only their multi-byte (inherently overlong) packings are refused here. The
+  other five single-byte code points, plus NEL's own two-byte minimal UTF-8
+  form (`C2 85`), are refused directly, with no exemption for context, which
   has a real cost: a genuine RFC 6532 (SMTPUTF8) header value whose UTF-8
   encoding happens to contain 0x85 — `Å` (C3 85), `ą` (C4 85), `久` (E4 B9
   85), `😅` (F0 9F 98 85) — is refused too, and so is a raw windows-1252
   ellipsis (`…`, byte 0x85) in an 8-bit header nobody encoded as UTF-8 at
   all. An RFC 2047-encoded value (`=?UTF-8?B?w4U=?=` for `Å`) is untouched,
-  because every one of its octets is printable ASCII.
-  U+2028 and U+2029 have no one-byte form, so the bytes path also refuses
-  their UTF-8 encodings by literal sequence: the minimal 3-byte form (`E2 80
-  A8` / `E2 80 A9`) and the one-step-more-overlong 4-byte form (`F0 82 80
-  A8` / `F0 82 80 A9`) a decoder that does not enforce the shortest-form rule
-  still reads as the same character. A `string` input can only ever produce
-  the minimal form, because `TextEncoder` never emits an overlong sequence.
+  because every one of its octets is printable ASCII. A `string` input can
+  only ever produce a minimal UTF-8 form, never an overlong one, because
+  `TextEncoder` never emits one; overlong packings only ever reach this
+  verifier through the `Uint8Array` path.
 - **Trace fields a relay adds are exempt from the §5.4.2 growth check.** The check
   refuses a message that still holds an instance of a name `h=` asked for, which is
   how a prepended second `From:` or `Subject:` is caught — it must not be removed,
