@@ -3,6 +3,7 @@
   "specifiers": {
     "jsr:@hectorm/otpauth@9.5.2": "9.5.2",
     "jsr:@hono/hono@4.13.8": "4.13.8",
+    "jsr:@iuioiua/redis@1.1.10": "1.1.10",
     "jsr:@libs/qrcode@3.1.0": "3.1.0",
     "jsr:@std/assert@1.0.19": "1.0.19",
     "jsr:@std/assert@^1.0.19": "1.0.19",
@@ -25,6 +26,9 @@
     },
     "@hono/hono@4.13.8": {
       "integrity": "bbb566d9ebb81e74c0d7eeff1f9221ba9f3fda6f1832e5ca66cbddcecb2f7fec"
+    },
+    "@iuioiua/redis@1.1.10": {
+      "integrity": "b743e861a77a874fb7b310e0e4e3f5077300f5c8a13c398c31844ef4fc5353bf"
     },
     "@libs/qrcode@3.1.0": {
       "integrity": "1d65698d3cbaf1d5e2e0b025f7d8572e8b2c485dcfa81d485e0bf0ce607e9c2b"
@@ -104,6 +108,7 @@
     "dependencies": [
       "jsr:@hectorm/otpauth@9.5.2",
       "jsr:@hono/hono@4.13.8",
+      "jsr:@iuioiua/redis@1.1.10",
       "jsr:@libs/qrcode@3.1.0",
       "jsr:@std/assert@1.0.19",
       "jsr:@std/crypto@1.1.0",

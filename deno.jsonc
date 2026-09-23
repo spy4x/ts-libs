@@ -115,7 +115,14 @@
     // Authenticator-app codes (TOTP) and their enrolment QR code for the sign-in set (#75).
     // Both are on the house "keep" list; the template uses the same two packages.
     "otpauth": "jsr:@hectorm/otpauth@9.5.2",
-    "qrcode": "jsr:@libs/qrcode@3.1.0"
+    "qrcode": "jsr:@libs/qrcode@3.1.0",
+
+    // Redis client for `server/kv` (#75): a small Deno-native RESP client on
+    // `Deno.Conn`, already run by the template this is ported from. Chosen over
+    // `ioredis` (the house dependency-keep list's suggestion) because `ioredis` is
+    // `npm:` and pulls in Node compatibility the house rules call "only when
+    // unavoidable", and it is not unavoidable here.
+    "@iuioiua/redis": "jsr:@iuioiua/redis@1.1.10"
   },
   "compilerOptions": {
     // An explicit "lib" replaces Deno's default lib set, so "deno.ns" has to be
