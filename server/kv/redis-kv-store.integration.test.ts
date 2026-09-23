@@ -12,7 +12,11 @@ import { assertEquals, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import { RedisClient } from "@iuioiua/redis"
 import { redisSettings, requireReachable, uniqueKeyPrefix } from "@integration-testing"
-import { RedisKvStore, RedisKvStoreClosedError, RedisKvStoreConnectionError } from "./redis-kv-store.ts"
+import {
+  RedisKvStore,
+  RedisKvStoreClosedError,
+  RedisKvStoreConnectionError,
+} from "./redis-kv-store.ts"
 
 describe("RedisKvStore against a real server", () => {
   it("sets, gets, deletes and resets within its own prefix only", async () => {
@@ -81,10 +85,26 @@ describe("RedisKvStore against a real server", () => {
     const base = uniqueKeyPrefix("it_kv_glob")
     const starStore = await RedisKvStore.connect(settings.hostname, settings.port, `${base}_app*`)
     const starSibling = await RedisKvStore.connect(settings.hostname, settings.port, `${base}_app2`)
-    const questionStore = await RedisKvStore.connect(settings.hostname, settings.port, `${base}_a?p`)
-    const questionSibling = await RedisKvStore.connect(settings.hostname, settings.port, `${base}_abp`)
-    const bracketStore = await RedisKvStore.connect(settings.hostname, settings.port, `${base}_t[12]`)
-    const bracketSibling = await RedisKvStore.connect(settings.hostname, settings.port, `${base}_t1`)
+    const questionStore = await RedisKvStore.connect(
+      settings.hostname,
+      settings.port,
+      `${base}_a?p`,
+    )
+    const questionSibling = await RedisKvStore.connect(
+      settings.hostname,
+      settings.port,
+      `${base}_abp`,
+    )
+    const bracketStore = await RedisKvStore.connect(
+      settings.hostname,
+      settings.port,
+      `${base}_t[12]`,
+    )
+    const bracketSibling = await RedisKvStore.connect(
+      settings.hostname,
+      settings.port,
+      `${base}_t1`,
+    )
 
     try {
       await starSibling.set("k", "from-star-sibling", 60)
