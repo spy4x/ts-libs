@@ -16,7 +16,7 @@
  * {@link isRealCalendarDate} for how each is refused. A string that is a year, a year and month, or
  * a `YYYY-MM-DD` date, with or without a time, parses as the source parsed it.
  */
-import { type } from "arktype"
+import { type Out, type Type, type } from "arktype"
 
 const ISO_CALENDAR_DATE_PREFIX = /^(\d{4})-(\d{2})-(\d{2})/
 
@@ -86,10 +86,16 @@ const isoCalendarDateSchema = type("string.date.iso")
   .pipe((value) => new Date(value))
 
 /** `Date`, or an ISO 8601 date string naming a real calendar date, parsed to a `Date`. */
-export const dateSchema = type("Date").or(isoCalendarDateSchema)
+export const dateSchema: Type<Date | ((In: string) => Out<Date>)> = type("Date").or(
+  isoCalendarDateSchema,
+)
 
 /** Value {@link dateSchema} produces: always a `Date`, regardless of which input form it parsed. */
 export type DateType = typeof dateSchema.infer
 
 /** {@link dateSchema}, also accepting `null` and defaulting to it when the field is absent. */
-export const DateNullableSchema = dateSchema.or("null").default(null)
+export const DateNullableSchema: [
+  Type<Date | ((In: string) => Out<Date>) | null>,
+  "=",
+  null,
+] = dateSchema.or("null").default(null)

@@ -19,23 +19,36 @@
  * `push.ts` do exactly that — not on a base an app or a sibling schema in this file is meant to
  * extend.
  */
-import { type } from "arktype"
+import { type Out, type Type, type } from "arktype"
+import type { Default } from "arktype/internal/attributes.ts"
 
 import { DateNullableSchema, dateSchema } from "./date.ts"
 
 /** The two fields present on every record: its id and when it was created. */
-export const ImmutableBaseModelSchema = type({
+export const ImmutableBaseModelSchema: Type<{
+  id: number
+  createdAt: Date | ((In: string) => Out<Date>)
+}> = type({
   id: "number",
   createdAt: dateSchema,
 })
 
 /** {@link ImmutableBaseModelSchema} plus `updatedAt`, for a record that can be edited. */
-export const UndeletableBaseModelSchema = ImmutableBaseModelSchema.and({
+export const UndeletableBaseModelSchema: Type<{
+  id: number
+  createdAt: Date | ((In: string) => Out<Date>)
+  updatedAt: Date | ((In: string) => Out<Date>)
+}> = ImmutableBaseModelSchema.and({
   updatedAt: dateSchema,
 })
 
 /** {@link UndeletableBaseModelSchema} plus a nullable `deletedAt`, for a soft-deletable record. */
-export const BaseModelSchema = UndeletableBaseModelSchema.and({
+export const BaseModelSchema: Type<{
+  id: number
+  createdAt: Date | ((In: string) => Out<Date>)
+  updatedAt: Date | ((In: string) => Out<Date>)
+  deletedAt: Default<Date | null, null> | ((In: Default<string, null>) => Out<Date>)
+}> = UndeletableBaseModelSchema.and({
   deletedAt: DateNullableSchema,
 })
 
