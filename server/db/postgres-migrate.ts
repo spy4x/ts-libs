@@ -245,28 +245,35 @@ export interface PostgresMigrationDriverOptions {
   schema?: string
 }
 
-/** A row of the history table, read for its name and its checksum. */
-interface MigrationRow {
-  name: string
-  checksum: string | null
-}
-
 /**
- * What `createHistoryTable`'s one probe answers: is the table there, is it up to date.
+ * Read a result row by column position, not by name.
  *
- * Aliased to one lower-case word with no underscore, not `table_exists`/`checksum_exists`:
- * `postgres.camel` — a transform a caller may configure on its own client, the transform
- * `PostgresOutboxRepository` also guards against — turns a returned `table_exists` into
- * `tableExists`, which left this probe reading `undefined` for both flags on a camelCase
- * client, so
- * `createHistoryTable` treated an existing history table as absent and reissued
- * `CREATE TABLE`, failing every run after the first with `relation already exists`. A
- * bare lower-case word has no underscore for the transform to act on, so it comes back
- * unchanged whether the client transforms or not.
+ * `postgres@3.4.7` builds every row by assigning `row[column.name] = value` once per
+ * column, strictly in the order the server described them (`RowDescription`, then
+ * `DataRow`, in `postgres@3.4.7/src/connection.js:614-646,483-511`) — the same order the
+ * `SELECT` list gave. `column.name` is already the client's *transformed* name
+ * (`transform.column.from`, applied while parsing `RowDescription`), so looking a row up
+ * by the name this driver wrote in the query breaks under any transform that rewrites it:
+ * `postgres.pascal` upper-cases every column's first letter, so a `locked` alias comes
+ * back as `Locked`, a `tableexists` as `Tableexists`, and so on for every probe and
+ * listing this driver and {@link purgeDatabase} (in `postgres-purge.ts`) run — aliasing to
+ * a lower-case word with no underscore, the fix for `postgres.camel`, does not survive
+ * `postgres.pascal`, which rewrites a name with no underscore too.
+ *
+ * Reading by position instead needs no knowledge of what the transform did, and — unlike
+ * asking the client for its own `transform.column.from` — works identically on the pool, a
+ * `sql.reserve()` connection and a `sql.begin` handle: `postgres@3.4.7` assigns `.options`
+ * to the pool object alone (`src/index.js:69-81`, the same fact {@link
+ * identifierRewrittenBy} works around on the write side), so a reserved or transaction
+ * handle's `.options` is `undefined` at runtime despite the type saying otherwise.
+ *
+ * `Object.values` is what does the reading, and it is safe here because every column this
+ * driver and `purgeDatabase` select is a lower-case word — never a string that parses as
+ * an array index — so JavaScript's own insertion-order rule for string keys lines up with
+ * the server's column order.
  */
-interface HistoryProbe {
-  tableexists: boolean
-  checksumexists: boolean
+export function resultColumns(row: Record<string, unknown> | undefined): unknown[] {
+  return row === undefined ? [] : Object.values(row)
 }
 
 /**
@@ -414,10 +421,11 @@ export class PostgresMigrationDriver implements MigrationDriver {
   private async takeLock(sql: Sql, key: bigint): Promise<void> {
     let waited = 0
     for (;;) {
-      const rows = await sql<{ locked: boolean }[]>`
+      const rows = await sql<Record<string, unknown>[]>`
         SELECT pg_try_advisory_lock(${key}) AS locked
       `
-      if (rows[0]?.locked === true) return
+      // Read by position, not by the `locked` name written above — see `resultColumns`.
+      if (resultColumns(rows[0])[0] === true) return
       if (waited >= this.lockWaitMs) throw new PostgresMigrationLockError(this.lockWaitMs)
       const step = Math.max(1, Math.min(this.lockRetryMs, this.lockWaitMs - waited))
       await this.delay(step)
@@ -454,7 +462,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
    */
   private async resolvedTableRef(sql: Sql): Promise<string> {
     if (this.schema !== undefined) return `${this.schema}.${this.table}`
-    const rows = await sql<{ schema: string | null }[]>`
+    const rows = await sql<Record<string, unknown>[]>`
       SELECT coalesce(
         (
           SELECT n.nspname
@@ -464,7 +472,9 @@ export class PostgresMigrationDriver implements MigrationDriver {
         current_schema()
       ) AS schema
     `
-    return `${rows[0]?.schema ?? ""}.${this.table}`
+    // Read by position, not by the `schema` name written above — see `resultColumns`.
+    const resolved = resultColumns(rows[0])[0]
+    return `${typeof resolved === "string" ? resolved : ""}.${this.table}`
   }
 
   /**
@@ -483,7 +493,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
    */
   async createHistoryTable(): Promise<void> {
     const probe = this.schema === undefined
-      ? await this.sql<HistoryProbe[]>`
+      ? await this.sql<Record<string, unknown>[]>`
         SELECT
           exists (
             SELECT FROM information_schema.tables
@@ -495,7 +505,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
             AND table_schema = ANY (current_schemas(false))
           ) AS checksumexists
       `
-      : await this.sql<HistoryProbe[]>`
+      : await this.sql<Record<string, unknown>[]>`
         SELECT
           exists (
             SELECT FROM information_schema.tables
@@ -507,7 +517,10 @@ export class PostgresMigrationDriver implements MigrationDriver {
             AND table_schema = ${this.schema}
           ) AS checksumexists
       `
-    if (!probe[0]?.tableexists) {
+    // Read by position, not by the `tableexists`/`checksumexists` names written above —
+    // see `resultColumns`.
+    const [tableExists, checksumExists] = resultColumns(probe[0])
+    if (tableExists !== true) {
       await this.sql`
         CREATE TABLE ${this.sql(this.tableRef)}
         (
@@ -519,7 +532,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
       `
       return
     }
-    if (probe[0].checksumexists) return
+    if (checksumExists === true) return
     await this.sql`
       ALTER TABLE ${this.sql(this.tableRef)} ADD COLUMN IF NOT EXISTS checksum TEXT
     `
@@ -527,10 +540,15 @@ export class PostgresMigrationDriver implements MigrationDriver {
 
   /** Every recorded row, oldest first. Order is not used by the runner; it is stable for readers. */
   async appliedMigrations(): Promise<AppliedMigration[]> {
-    const rows = await this.sql<MigrationRow[]>`
+    const rows = await this.sql<Record<string, unknown>[]>`
       SELECT name, checksum FROM ${this.sql(this.tableRef)} ORDER BY id
     `
-    return rows.map((row) => ({ name: row.name, checksum: row.checksum ?? null }))
+    // Read by position, not by the `name`/`checksum` names written above — see
+    // `resultColumns`.
+    return rows.map((row) => {
+      const [name, checksum] = resultColumns(row)
+      return { name: name as string, checksum: (checksum as string | null | undefined) ?? null }
+    })
   }
 
   /**

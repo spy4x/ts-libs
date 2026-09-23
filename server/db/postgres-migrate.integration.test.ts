@@ -30,6 +30,7 @@ import {
   PostgresMigrationDriver,
   PostgresMigrationLockError,
 } from "./postgres-migrate.ts"
+import { ENV_NAME, purgeDatabase } from "./postgres-purge.ts"
 import { createSql } from "./postgres.ts"
 import type { Sql } from "./ports.ts"
 import { migrationRace } from "./testing/migration-race.ts"
@@ -67,11 +68,14 @@ interface Run {
  * them. Passing `postgres.camel` is what the template's own client used
  * (`template/libs/server/db/+index.ts:13`); the "against a camelCase client" tests below
  * pass it to prove the same driver behaviour holds under that transform, which is the
- * client shape #77 found failing.
+ * client shape #77 found failing. Passing `postgres.pascal` is what the "against a
+ * postgres.pascal client" tests below use for #137: unlike `postgres.camel`, it rewrites
+ * every column name, including the bare lower-case words (`locked`, `tableexists`, …)
+ * `postgres.camel` leaves alone.
  */
 async function withRun(
   body: (run: Run) => Promise<void>,
-  options: { transform?: typeof postgres.camel } = {},
+  options: { transform?: typeof postgres.camel | typeof postgres.pascal } = {},
 ): Promise<void> {
   const settings = postgresSettings()
   await requireReachable(settings.address)
@@ -368,13 +372,16 @@ describe("the Postgres migration runner against a real server", () => {
 })
 
 describe("the Postgres migration runner against a camelCase client", () => {
-  // `HistoryProbe`'s columns are aliased to one lower-case word (`tableexists`,
+  // This probe's columns were originally aliased to one lower-case word (`tableexists`,
   // `checksumexists`) precisely so a client configured with `transform: postgres.camel`
-  // reads them the same way a plain client does. Before that alias existed, this probe
-  // read `undefined` for both flags on a camelCase client, so `createHistoryTable` treated
-  // an existing history table as absent and reissued `CREATE TABLE`, failing every run
-  // after the first with `relation "migrations" already exists` — measured on #77, where
-  // the template's API container runs migrations on every start.
+  // read them the same way a plain client does. Before that alias existed, the probe read
+  // `undefined` for both flags on a camelCase client, so `createHistoryTable` treated an
+  // existing history table as absent and reissued `CREATE TABLE`, failing every run after
+  // the first with `relation "migrations" already exists` — measured on #77, where the
+  // template's API container runs migrations on every start. The alias no longer does the
+  // work — every probe is read by column position now, which is what also fixed
+  // `postgres.pascal` below (#137) — but this test still holds and the alias still reads
+  // fine under `postgres.camel`, so it stays as the regression test for #77.
 
   it("skips on the second run instead of failing on relation already exists", async () => {
     await withRun(async ({ sql, table, subject }) => {
@@ -487,6 +494,82 @@ describe("the Postgres migration runner against a camelCase client", () => {
         SELECT EXISTS (SELECT FROM information_schema.schemata WHERE schema_name = ${schema}) AS present
       `
       assertStrictEquals(rows[0].present, false)
+    } finally {
+      await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
+      await sql.end()
+    }
+  })
+})
+
+describe("the Postgres migration runner against a postgres.pascal client", () => {
+  // #137. `postgres.pascal` upper-cases every column's first letter, including a bare
+  // lower-case word with no underscore — `locked` back as `Locked`, `tableexists` as
+  // `Tableexists` — which is exactly what the `postgres.camel` alias above does not
+  // rewrite. Before the fix every probe in this driver, and the table listing in
+  // `purgeDatabase`, read `undefined` for the field it expected: `takeLock` never saw
+  // `locked === true`, so every run waited out `lockWaitMs` and failed with
+  // `PostgresMigrationLockError` although nothing else held the lock.
+  // `lockWaitMs` is set to a few milliseconds here so a regression fails fast instead of
+  // waiting out the real one-minute default.
+
+  it("runs twice without ever taking the lock error", async () => {
+    await withRun(async ({ sql, table, subject }) => {
+      const reader = memoryReader({
+        "0001_init.sql": `CREATE TABLE ${subject} (id serial PRIMARY KEY)`,
+      })
+      const options = { folder: "/migrations", reader }
+      const driverOptions = { sql, table, lockWaitMs: 200, lockRetryMs: 10 }
+
+      const first = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(first, { applied: ["0001_init"], skipped: [], missing: [] })
+
+      // Reproduces #137 as reported: before the fix this run's `takeLock` read `Locked`
+      // where it looked for `locked`, always found it `undefined`, and gave up with
+      // `PostgresMigrationLockError` after waiting out `lockWaitMs` — although this
+      // process itself was the only one that ever tried to take the lock.
+      const second = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(second, { applied: [], skipped: ["0001_init"], missing: [] })
+
+      const history = await new PostgresMigrationDriver(driverOptions).appliedMigrations()
+      assertEquals(history.map((row) => row.name), ["0001_init"])
+    }, { transform: postgres.pascal })
+  })
+
+  it("purgeDatabase reports and drops the tables the migration created", async () => {
+    // A schema of its own, not `withRun`'s unqualified default: `purgeDatabase` without a
+    // named schema purges `public`, which every test in this suite shares, and dropping
+    // `public`'s tables is not this test's to do. Isolated the same way
+    // `postgres-purge.integration.test.ts` isolates its own camelCase-client purge test.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const schema = uniqueIdentifier("it_migrations_pascal_purge")
+    const table = uniqueIdentifier("it_migrations")
+    const subject = uniqueIdentifier("it_subject")
+    const sql = createSql({
+      connection: settings.connection,
+      transform: postgres.pascal,
+      applicationName: schema,
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      await sql`CREATE SCHEMA ${sql(schema)}`
+
+      const reader = memoryReader({
+        "0001_init.sql": `CREATE TABLE ${schema}.${subject} (id serial PRIMARY KEY)`,
+      })
+      await runMigrations(
+        new PostgresMigrationDriver({ sql, table, schema, lockWaitMs: 200 }),
+        { folder: "/migrations", reader },
+      )
+
+      // Before the fix, `TableRow`'s `tablename` came back as `Tablename` under this
+      // transform, `row.tablename` was `undefined`, and the identifier splice inside
+      // `purgeDatabase` threw rather than dropping anything.
+      const purged = await purgeDatabase({ sql, schema, environment: { [ENV_NAME]: "test" } })
+      assertEquals(new Set(purged.dropped), new Set([table, subject]))
+      assertEquals(purged.refused, false)
     } finally {
       await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
       await sql.end()
