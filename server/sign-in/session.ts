@@ -196,6 +196,8 @@ export class SessionManager<S extends SessionRecord = SessionRecord> {
       status: SessionStatus.Active,
       expiresAt: new Date(this.#now() + this.#durationMs),
     } as Omit<S, "id">
+    // The store assigns the id. One passed in with the app's fields would otherwise reach the insert.
+    delete (record as { id?: unknown }).id
     const session = await this.#store.create(record)
     if (!Number.isSafeInteger(session.id) || session.id < 1) {
       throw new TypeError("the session store returned an id that is not a positive integer")

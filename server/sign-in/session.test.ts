@@ -103,17 +103,29 @@ describe("SessionManager.create", () => {
     expect(rows.get(session.id)?.keyId).toBe(42)
   })
 
-  it("ignores status, expiry and hash smuggled in with the app's fields", async () => {
-    const { sessions, rows } = setup()
+  it("ignores an id, status, expiry and hash smuggled in with the app's fields", async () => {
+    const fake = createFakeStore()
+    const received: object[] = []
+    const store: SessionStore = {
+      ...fake.store,
+      create: (session) => {
+        received.push({ ...session })
+        return fake.store.create(session)
+      },
+    }
+    const { sessions, rows } = setup({ ...fake, store })
     const smuggled = {
+      id: 999,
       userId: 7,
       secondFactor: SecondFactorStatus.NotRequired,
-      status: SessionStatus.Active,
+      status: SessionStatus.SignedOut,
       tokenHash: "0".repeat(64),
       expiresAt: new Date(T0 + 10_000 * MINUTE),
     }
     const { session } = await sessions.create(smuggled)
+    expect(Object.hasOwn(received[0], "id")).toBe(false)
     const row = rows.get(session.id)
+    expect(row?.status).toBe(SessionStatus.Active)
     expect(row?.tokenHash).not.toBe("0".repeat(64))
     expect(row?.expiresAt.getTime()).toBe(T0 + DURATION_MINUTES * MINUTE)
   })
