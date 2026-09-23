@@ -22,6 +22,8 @@ export enum IntegrationEnvName {
   SmtpHost = "TS_LIBS_IT_SMTP_HOST",
   SmtpPort = "TS_LIBS_IT_SMTP_PORT",
   MailpitUrl = "TS_LIBS_IT_MAILPIT_URL",
+  RedisHost = "TS_LIBS_IT_REDIS_HOST",
+  RedisPort = "TS_LIBS_IT_REDIS_PORT",
 }
 
 /**
@@ -41,6 +43,8 @@ export const LOCAL_DEFAULTS = {
   smtpHost: "127.0.0.1",
   smtpPort: 51025,
   mailpitUrl: "http://127.0.0.1:58025",
+  redisHost: "127.0.0.1",
+  redisPort: 56379,
 } as const
 
 /** One TCP endpoint, named well enough for a failure message to be actionable. */
@@ -88,6 +92,13 @@ export interface SmtpSettings {
 export interface MailpitSettings {
   /** Origin with no trailing slash, e.g. `http://127.0.0.1:58025`. */
   baseUrl: string
+  address: ServiceAddress
+}
+
+/** Connection fields for the Redis container, plus the address to probe. */
+export interface RedisSettings {
+  hostname: string
+  port: number
   address: ServiceAddress
 }
 
@@ -210,6 +221,26 @@ export function mailpitSettings(): MailpitSettings {
       hostname: url.hostname,
       port: url.port === "" ? (url.protocol === "https:" ? 443 : 80) : Number(url.port),
       envName: IntegrationEnvName.MailpitUrl,
+    },
+  }
+}
+
+/**
+ * Redis connection settings, host and port only: the container takes no `requirepass`
+ * (see `infra/compose.integration.yml`), so there is no credential to carry.
+ */
+export function redisSettings(): RedisSettings {
+  const hostname = readEnv(IntegrationEnvName.RedisHost) ?? LOCAL_DEFAULTS.redisHost
+  const port = readPort(IntegrationEnvName.RedisPort, LOCAL_DEFAULTS.redisPort)
+
+  return {
+    hostname,
+    port,
+    address: {
+      service: "Redis",
+      hostname,
+      port,
+      envName: IntegrationEnvName.RedisHost,
     },
   }
 }
