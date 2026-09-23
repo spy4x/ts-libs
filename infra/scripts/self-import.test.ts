@@ -39,23 +39,38 @@ async function packageName(member: string): Promise<string | undefined> {
 
 Deno.test("no published file imports its own package by name", async () => {
   const offenders: string[] = []
+  const members = await workspaceMembers()
   let scanned = 0
-  for (const member of await workspaceMembers()) {
+  for (const member of members) {
     const name = await packageName(member)
     if (name === undefined) continue
     scanned++
     // `from "…"`, a side-effect `import "…"` and a dynamic `import("…")`: `deno publish`
     // rewrites all three, so all three fail on JSR the same way.
-    const ownName = new RegExp(`(?:from|import)\\s*\\(?\\s*["']${name}["'/]`)
+    // The whole text, not line by line, so a dynamic import split across lines is seen too;
+    // a backtick only after `import(`, since doc comments quote package names in backticks.
+    const ownName = new RegExp(
+      `(?:(?:from|import)\\s*["']|import\\s*\\(\\s*["'\`])${name}["'\`/]`,
+      "g",
+    )
     for await (const file of publishedSources(join(root, member))) {
       const text = await Deno.readTextFile(file)
-      text.split("\n").forEach((line, index) => {
-        if (ownName.test(line)) offenders.push(`${relative(root, file)}:${index + 1}`)
-      })
+      for (const match of text.matchAll(ownName)) {
+        const line = text.slice(0, match.index).split("\n").length
+        offenders.push(`${relative(root, file)}:${line}`)
+      }
     }
   }
-  // Every package on JSR today; a wrong `root` or a broken member list must not pass by scanning
-  // nothing.
+  // A wrong `root` or a member the list parser dropped must not pass by scanning less: every
+  // member whose directory exists is scanned, and that is at least the eight on JSR today.
+  const existing = members.filter((member) => {
+    try {
+      return Deno.statSync(join(root, member)).isDirectory
+    } catch {
+      return false
+    }
+  })
+  assertEquals(scanned, existing.length)
   assert(scanned >= 8, `scanned ${scanned} packages, expected at least 8`)
   assertEquals(offenders, [])
 })
