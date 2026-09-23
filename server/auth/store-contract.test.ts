@@ -264,6 +264,51 @@ export function describeAuthStoreContract(
         expect(await store.findUser(user.id + 1)).toBeNull()
       }))
 
+    it("refuses a string that is not well-formed UTF-16, which Postgres would store as U+FFFD", () =>
+      withStore(async (store) => {
+        const loneSurrogate = "sub-\uD800"
+        const key = {
+          method: "oauth:x",
+          subject: "sub-1",
+          email: null,
+          secret: null,
+          provenAt: null,
+        }
+        await expectRejects(store.createUserWithKey({ ...key, subject: loneSurrogate }), TypeError)
+        await expectRejects(store.createUserWithKey({ ...key, method: loneSurrogate }), TypeError)
+        await expectRejects(store.createUserWithKey({ ...key, secret: loneSurrogate }), TypeError)
+        const created = await store.createUserWithKey(key)
+        await expectRejects(
+          store.addKey(created.user.id, { ...key, subject: loneSurrogate }),
+          TypeError,
+        )
+        await expectRejects(store.updateKeySecret(created.key.id, loneSurrogate), TypeError)
+        const challenge = {
+          purpose: "email-code",
+          subject: "ann@example.com",
+          secretHash: "hash",
+          expiresAt: LATER,
+          now: NOW,
+        }
+        await expectRejects(
+          store.issueChallenge({ ...challenge, subject: loneSurrogate }),
+          TypeError,
+        )
+        await expectRejects(
+          store.issueChallenge({ ...challenge, secretHash: loneSurrogate }),
+          TypeError,
+        )
+        await expectRejects(
+          store.attemptChallenge({ ...challenge, subject: loneSurrogate, maxAttempts: 5 }),
+          TypeError,
+        )
+
+        expect(await store.findKey("oauth:x", loneSurrogate)).toBeNull()
+        expect(await store.findKey(loneSurrogate, "sub-1")).toBeNull()
+        expect(await store.findUserIdByProvenEmail(loneSurrogate)).toBeNull()
+        expect(await store.findKeyById(created.key.id)).toEqual(created.key)
+      }))
+
     it("replaces a key's secret, and answers false for a key that does not exist", () =>
       withStore(async (store) => {
         const { key } = await store.createUserWithKey({
