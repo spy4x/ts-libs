@@ -30,6 +30,8 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@ts-libs/server/db/sqlite`         | SQLite adapter behind an injectable driver port; ships no driver                     |
 | `@ts-libs/server/request-log`       | Hono request-logging middleware, method/path/status/elapsed only, injected writer    |
 | `@ts-libs/server/config`            | `EnvReader` + `loadConfig`: one arktype schema validated against the environment     |
+| `@ts-libs/server/kv`                | A Redis-backed key-value store, keys scoped under a caller-supplied prefix           |
+| `@ts-libs/server/outbox`            | Transactional outbox drain: claim, publish, retry, over a generic SQL table          |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -1064,3 +1066,141 @@ const configSchema = type({
 // reads Deno.env; a test injects createEnvReader({...}) instead
 export const config = loadConfig(configSchema)
 ```
+
+## `server/kv`
+
+`RedisKvStore`. A small wrapper over `@iuioiua/redis`'s `RedisClient`: `get`, `set` with a TTL,
+`del`, `reset`, `close`. Extracted from `template/libs/server/kv/+index.ts` (#75); `financy`'s copy
+differs from the template's by one import line (its own module alias for the cache interface) and
+was not otherwise consulted.
+
+**Structurally compatible with `ICacheStorage`.** `@ts-libs/platform/cache`'s `ICacheStorage` (#125)
+names `server/kv` in its own doc as the interface's Redis implementation, briefed against these exact
+signatures: `get(key): Promise<string | null>`, `set(key, value: string, ttlSec): Promise<void>`,
+`del(key): Promise<void>`, `reset(): Promise<void>`. This module does not import
+`@ts-libs/platform/cache` — the two were extracted in parallel and neither depends on the other's
+branch — so the match is verified structurally: `deno check` accepts `const _: ICacheStorage = store`
+and rejects a `{ get }`-only object with `TS2739`.
+
+**Every key lives under a mandatory prefix, and `reset()` only touches that prefix.** The ported
+original's `reset()` sent `FLUSHDB`, which deletes every key in the whole Redis database — another
+application's keys, another test run's keys, everything. A shared library should not offer that.
+`RedisKvStore.connect` takes a `keyPrefix` and refuses an empty one; every key is stored as
+`<prefix>:<key>`, and `reset()` walks only that prefix with `SCAN`/`DEL` — `SCAN` rather than `KEYS`,
+because `KEYS` blocks the whole server for the scan's duration on a large database, which is exactly
+the kind of shared-resource risk the prefix scoping exists to avoid.
+
+**A prefix is a string match, not a namespace hierarchy.** A store with prefix `app` also reads and
+resets the keys of a store with prefix `app:sub`: `app` addresses its own key `sub:k` at
+`app:sub:k`, which is exactly where `app:sub` addresses its key `k`. Choose prefixes that are not
+one another's sub-string across the `:` separator, unless that overlap is intended.
+
+**Fixed at extraction time**, all in `redis-kv-store.ts`:
+
+| Bug                                                                                                                                                                                      | Pinned by                                                                                                                                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reset()` sent `FLUSHDB`, wiping the whole database                                                                                                                                      | `sets, gets, deletes and resets within its own prefix only`                                                                                                                                                                   |
+| `reset()`'s `SCAN MATCH` pattern did not escape `*`, `?`, `[`, `]` or `\` in the prefix, so a prefix containing one of them matched other stores' keys                                   | `reset() escapes glob metacharacters in the prefix instead of matching them as a pattern`                                                                                                                                     |
+| `get<T extends Reply>` let a caller cast an arbitrary type onto a `GET` reply                                                                                                            | `get` is typed `Promise<string \| null>`, matching the protocol                                                                                                                                                               |
+| `set(key, value, ttlSec)` forwarded `ttlSec` straight to `SET … EX`, and Redis refuses a non-integer, zero, negative or infinite value with an opaque protocol error or a `NaN` argument | `rejects a ttlSec that is not a positive integer`                                                                                                                                                                             |
+| `close()` called `Deno.Conn.close()` unconditionally, which throws `BadResource` on a connection already closed                                                                          | `close() is safe to call more than once`                                                                                                                                                                                      |
+| every method called the client directly after `close()` or after the connection died, crashing the process with an uncaught `BadResource` instead of rejecting                           | `rejects instead of crashing after close()`; `get` after the connection is killed by `rejects instead of crashing once the connection is killed` and `rejects every call still queued at the moment the connection is killed` |
+
+An ordinary error reply from Redis (`WRONGTYPE`, an out-of-memory refusal, `READONLY`, `BUSY`)
+rejects that one call with `RedisError` from `@iuioiua/redis` and leaves the store usable; only a
+failed read or write marks the connection dead. Pinned by
+`keeps working after Redis answers one command with an error`.
+
+`connect()` also dropped the ported original's `console.log("✅ Connected to KV")`: a library
+primitive should not write to stdout on a caller's behalf. The caller decides whether connecting is
+worth logging.
+
+## `server/outbox`
+
+`OutboxProcessor`, `OutboxEvent`, `OutboxPublisher`, `OutboxRepository`, `PostgresOutboxRepository`,
+`LoggingOutboxPublisher`, `retryDelayMs`, `errorCodeOf`. Extracted from
+`template/libs/server/outbox/+index.ts` (#75) — the template is the only source of an outbox in this
+wave's source repositories.
+
+A transactional outbox: a command writes an identity-only row (aggregate, version, kind — never a
+payload) in the same transaction as its state change, and `OutboxProcessor.drainOnce`/`run` claim
+committed rows and hand them to a publisher, rescheduling a failing row with exponential backoff
+without blocking the rest of the batch. Consumers use a drained row to learn that something changed
+and pull the authoritative state, which is what keeps the outbox itself out of the correctness path.
+
+**The row this library defines is smaller than the template's.** The ported original's row also
+carried `groupId` and `actorUserId` — the template's own data model, not something a generic outbox
+needs to do its job. `OutboxEvent` here carries only `id`, `eventKind`, `aggregateType`,
+`aggregateId`, `aggregateVersion` and `attemptCount`. A consumer that wants to route or filter on
+more than the aggregate identity pulls the authoritative row instead, which is the pattern the module
+exists to enforce.
+
+**The retry delay reuses `@ts-libs/integrations`'s backoff for its clamp, but keeps the source's own
+numbers.** Issue #71 lists this doubling-and-capping formula as one of the duplicated retry helpers
+in the codebase. `retryDelayMs` computes the uncapped delay exactly as the ported original did —
+`Math.max(1, attemptCount)` before subtracting one for the exponent, and the same `exponent >= 32 ?
+Infinity : …` guard, which matters when `baseMs` is `0`: without it, `0 * 2 ** exponent` is `0` for a
+merely large exponent and `NaN` once the exponent overflows `2 ** exponent` to `Infinity` — then hands
+that number to `createExponentialBackoff`'s own `(attempt, retryAfterMs)` form so the final
+`Math.min`/`Math.max` clamp to `[0, maxDelayMs]` is not a second copy of that logic. `retryDelayMs(0,
+…)`, a negative attempt and a fractional attempt all return the same delay the source gave for
+attempt 1, matching the source rather than a shorter delay computed from a negative or fractional
+exponent. No jitter: one worker holds a claimed row at a time via its lease, so there is nothing to
+de-synchronise.
+
+**`errorCodeOf` falls back to `"Error"` when `name` is not a string**, the same rule
+`integrations/retry.ts`'s `readErrorName` follows. The ported original was `error.name || "Error"`
+inside an `instanceof Error` branch: `error.name || "Error"` is truthy for any non-empty, non-zero
+`name`, including a number, so an `Error` whose `name` was reassigned to something other than a
+string reached `.slice(0, 64)` on that value and threw `TypeError: name.slice is not a function` — from
+inside `OutboxProcessor.drainOnce`'s own `catch`, which meant one poisoned event stopped the whole
+batch and never rescheduled that event either. A non-`Error` thrown value is still reported by
+`typeof`, which returns one of a fixed, small set of strings and cannot carry arbitrary caller text.
+
+**`PostgresOutboxRepository` aliases every returned column to its `OutboxEvent` field name in SQL,**
+rather than relying on the caller's `Sql` having been created with a snake-to-camel row transform.
+The template's own client set `transform: postgres.camel` globally, but `@ts-libs/server/db`'s
+`createSql` does not default to one — aliasing in the query itself means this repository's row shape
+does not depend on how a caller configured their pool.
+
+**Lease expiry can still double-deliver, and that is inherent, not a bug this repository closes.**
+`FOR UPDATE SKIP LOCKED` only holds for the claiming statement; what actually keeps a claimed row
+invisible is pushing `available_at` forward by the lease. A worker that dies mid-publish releases its
+rows once the lease elapses rather than stranding them, but if the first worker's publish was still
+in flight when the lease ran out, a second worker can deliver the same event. A publisher that cannot
+tolerate a duplicate needs its own idempotency key; nothing on the SQL side removes this trade. What
+`FOR UPDATE SKIP LOCKED` does guarantee — that two connections claiming at the same time never both
+receive the same row — is pinned by `never claims the same row from two connections at once`, which
+opens an explicit transaction on one connection and claims from a second one while the first is still
+open.
+
+**The Postgres repository is part of this extraction, and the table it needs is small.** The
+claim/retry/mark-processed SQL is generic over any table shaped like this, and nothing in it
+references the template's `groups`/`users` tables:
+
+```sql
+CREATE TABLE outbox_events (
+  id                UUID PRIMARY KEY,
+  event_kind        VARCHAR(64) NOT NULL,
+  aggregate_type    VARCHAR(64) NOT NULL,
+  aggregate_id      UUID NOT NULL,
+  aggregate_version BIGINT NOT NULL,
+  attempt_count     INT4 NOT NULL DEFAULT 0,
+  available_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  claimed_at        TIMESTAMPTZ,
+  processed_at      TIMESTAMPTZ,
+  last_error_code   VARCHAR(64),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON outbox_events (available_at, created_at) WHERE processed_at IS NULL;
+```
+
+`aggregate_id` only needs to be a type Postgres returns as a string through this driver — `UUID`
+fits the template's own aggregates, but the repository never assumes it. An app may keep extra
+columns the repository neither reads nor returns, such as the template's own `group_id` and
+`actor_user_id`: the app's own `INSERT` still fills them, in the same transaction as the state
+change it records, which is the one line of SQL this package does not own. Recommended but not
+required: a unique index on `(aggregate_type, aggregate_id, aggregate_version, event_kind)`, which is
+what makes a retried `INSERT` (after a crash between the state change and the outbox row) idempotent
+instead of writing the event twice — the template had this index; it is not enforced here because
+the repository reads and updates rows but never creates or migrates the table.
