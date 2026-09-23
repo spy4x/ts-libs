@@ -9,17 +9,17 @@ exactly one top-level directory.
 
 ## Package layout
 
-| Directory       | Contents                                                                                                            |
-| --------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `platform/`     | types (arktype), helpers, rate-limit, fs                                                                            |
-| `server/`       | auth, storage, crypto, db, http (bounded-body, cors, bearer-auth), static, healthcheck, user-secrets, quota, export |
-| `net/`          | url-shape, url-policy (SSRF guard), safe-fetch, bounded-body                                                        |
-| `integrations/` | healthchecks, ntfy, webhooks                                                                                        |
-| `time/`         | tz, ics                                                                                                             |
-| `ai/`           | chatCompletion, chatJson, JSON-from-fence recovery — planned, not built (#11, #76)                                  |
-| `email/`        | address, html, message, sender, smtp transport, dkim-verify                                                         |
-| `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync                                                     |
-| `validation/`   | arktype validate helpers, validation model                                                                          |
+| Directory       | Contents                                                                                                                                                                                                                |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform/`     | types (arktype), helpers, rate-limit, fs, cqrs (command, query and event bus), cache                                                                                                                                    |
+| `server/`       | auth, sign-in (session, cookie, TOTP, password hashing, guards), storage, crypto, db, kv (Redis), outbox, http (bounded-body, cors, bearer-auth), request-log, config, static, healthcheck, user-secrets, quota, export |
+| `net/`          | url-shape, url-policy (SSRF guard), safe-fetch, bounded-body                                                                                                                                                            |
+| `integrations/` | healthchecks, ntfy, webhooks                                                                                                                                                                                            |
+| `time/`         | tz, ics                                                                                                                                                                                                                 |
+| `ai/`           | chatCompletion, chatJson, JSON-from-fence recovery — planned, not built (#11, #76)                                                                                                                                      |
+| `email/`        | address, html, message, sender, smtp transport, dkim-verify                                                                                                                                                             |
+| `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync                                                                                                                                                         |
+| `validation/`   | arktype validate helpers, validation model                                                                                                                                                                              |
 
 ## Adding a package
 
@@ -211,8 +211,9 @@ Three rules, and a test that breaks one breaks somebody else's run:
   same time. Take a fresh suffix — `uniqueIdentifier`, `uniqueKeyPrefix`, `uniqueRecipient` — for
   every schema, object key and mail recipient, and never truncate a shared table or delete every
   message in the mailbox.
-- **Clean up in a `finally`.** Drop the schema, delete the object, delete the mail. A test that
-  failed still cleans up.
+- **Clean up in a `finally`.** Drop the schema, delete the object, delete the mail, delete your own
+  prefixed Redis keys — never `FLUSHDB` or `FLUSHALL`, which wipe every other run's keys. A test
+  that failed still cleans up.
 
 A test that needs a real folder on disk, not a fake filesystem, calls `createScratchFolder(prefix)`
 from `@integration-testing`: it creates `.volumes/it/<prefix>_<suffix>` and returns its absolute

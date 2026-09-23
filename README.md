@@ -8,9 +8,10 @@ that is useful to more than one product.
 ## Scope
 
 ```
-platform/     types (arktype), helpers, rate-limit, fs
-server/       auth, storage, crypto, db, http (bounded-body, cors, bearer-auth), static,
-              healthcheck, user-secrets, quota, export
+platform/     types (arktype), helpers, rate-limit, fs, cqrs (command, query and event bus), cache
+server/       auth, sign-in (session, cookie, TOTP, password hashing, guards), storage, crypto,
+              db, kv (Redis), outbox, http (bounded-body, cors, bearer-auth), request-log,
+              config, static, healthcheck, user-secrets, quota, export
 net/          url-shape, url-policy (SSRF guard), safe-fetch, bounded-body
 integrations/ healthchecks, ntfy, webhooks
 time/         tz, ics
