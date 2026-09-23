@@ -186,4 +186,49 @@ describe("purgeDatabase through a transaction handle", () => {
       await sql.end()
     }
   })
+
+  it("refuses a camelCase handle's mixed-case schema and drops nothing in either", async () => {
+    // A transaction handle carries no `options`, but its `sql(name)` still runs the client's
+    // `transform.column.to`. Were the name check skipped there, the listing would read
+    // `mixed` while every `DROP` went to `decoy`: the purge would report success, leave
+    // `mixed` whole and empty `decoy`, a schema it was never asked to touch.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const base = uniqueIdentifier("it_purge_tx_camel")
+    const mixed = `${base}_Mixed`
+    const decoy = `${base}__mixed` // What `postgres.camel` sends for `mixed`.
+    const table = uniqueIdentifier("note")
+    const sql = createSql({
+      connection: settings.connection,
+      transform: postgres.camel,
+      max: 1,
+      applicationName: base,
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      // Through `unsafe`: `sql(mixed)` would send `mixed` through the transform under test.
+      for (const schema of [mixed, decoy]) {
+        await sql.unsafe(`CREATE SCHEMA "${schema}"`)
+        await sql.unsafe(`CREATE TABLE "${schema}"."${table}" (id integer PRIMARY KEY)`)
+      }
+
+      const error = await assertRejects(
+        () =>
+          sql.begin((transaction) =>
+            purgeDatabase({ sql: transaction, schema: mixed, environment: { [ENV_NAME]: "test" } })
+          ),
+        PostgresIdentifierTransformError,
+      )
+      assertEquals(error.kind, "schema")
+      assertEquals(error.rewrittenTo, decoy)
+      assertEquals(await tableExists(sql, mixed, table), true)
+      assertEquals(await tableExists(sql, decoy, table), true)
+    } finally {
+      await sql.unsafe(`DROP SCHEMA IF EXISTS "${mixed}" CASCADE`)
+      await sql.unsafe(`DROP SCHEMA IF EXISTS "${decoy}" CASCADE`)
+      await sql.end()
+    }
+  })
 })
