@@ -28,6 +28,8 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@ts-libs/server/db/migrate`        | Migration runner: discovers, orders and applies `.sql` files, one port for both      |
 | `@ts-libs/server/db/postgres`       | Postgres pool with sane connect/idle/statement timeout defaults                      |
 | `@ts-libs/server/db/sqlite`         | SQLite adapter behind an injectable driver port; ships no driver                     |
+| `@ts-libs/server/request-log`       | Hono request-logging middleware, method/path/status/elapsed only, injected writer    |
+| `@ts-libs/server/config`            | `EnvReader` + `loadConfig`: one arktype schema validated against the environment     |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -913,3 +915,111 @@ it per user with a conditional write (only if greater than the stored one), and 
   still owes its second factor like any other, so someone holding only the password can keep one
   alive by polling a route that needs one factor. Such a session never passes the second-factor
   guard, but the app should give the second-factor step a deadline of its own.
+
+## `server/request-log`
+
+`requestLog`, `RequestLogOptions`, `RequestLogWriter`.
+
+Ported from `template/apps/api/middlewares/log.ts` (byte-identical in `financy`; `gb` was not
+reachable from this extraction environment, so it is not part of the comparison). The original
+imported the app's own `APIContext` type and its `log` service directly — a library cannot import
+either — so both become constructor arguments here: `write` (defaults to `console.log`) replaces
+the app's `log` service, and the original's hardcoded `/api/health` skip becomes the `skipPaths`
+option, because which path is a health check is the app's decision, not this middleware's.
+
+**What is logged, checked.** Every line carries only the HTTP method, the request pathname, and —
+on the outgoing line — the response status and elapsed time. The pathname comes from Hono's own
+`c.req.path`, which stops at the first `?`, so a token or password passed as a query parameter
+never reaches a log line through this middleware; no header and no request or response body is
+read at all. The original had the same property already (it built its path with
+`getPath(c.req.raw)`, which has the same behaviour) — nothing was leaking, and
+`log.test.ts` now asserts it directly (`never logs the query string`, `does not read or log any
+request header`) instead of leaving it incidental.
+
+**Bug fixed at extraction time.** `colorStatus` looked up an ANSI color code in a table keyed by
+`status / 100`, and the table had no entry for class 6 (there is no 6xx HTTP status, but nothing
+stops a handler from returning one). Looking up a missing entry returned `undefined`, which was
+then embedded directly in the log line — a response with a 600+ status logged the literal text
+`undefined` in place of its status code. Fixed by falling back to the plain, uncolored status
+number when the table has no entry for its class, the same fallback the coloring already used when
+`getColorEnabled()` is false.
+
+**Decisions.** `hono/utils/color` and `hono/utils/url` are not the internals they look like: both
+`./utils/*` and `./logger` are part of the published `hono` package's own `exports` map (checked
+against the pinned `hono@4.13.8`'s `package.json`), so this middleware is layered on hono's public
+surface, not reaching past it — consistent with hono staying a kept dependency. Color output is
+ported as-is (same classes, same codes) rather than dropped, since `getColorEnabled()` already
+turns it off for a non-TTY or `NO_COLOR` environment, so nothing new needs deciding to keep it.
+
+## `server/config`
+
+`EnvReader`, `MissingEnvError`, `systemEnv`, `createEnvReader`, `readEnvVar`, `loadConfig`,
+`ConfigError`, `stringBoolean`.
+
+Six apps carry their own version of "read the environment into a config object" today — a class
+whose fields are one `getEnvVar("NAME")` call apiece (`template/apps/api/services/config.ts`,
+identical in `financy`), a type-cast (`as "dev" | "prod"`) standing in for a real check, and
+`Number(getEnvVar(...))` silently accepting `NaN` for a malformed number. `loadConfig` replaces the
+per-field calls with one arktype schema, validated once at start-up: every field is named once, its
+shape is checked once, and a bad or missing value fails loudly instead of turning into `NaN` or an
+unchecked cast three requests later.
+
+`EnvReader`/`systemEnv`/`createEnvReader` are moved from this repository's own `ops/env.ts`, removed
+from the tree in #67 (`git log --all --oneline -- ops/env.ts`), trimmed to the environment-reading
+primitive — `absPath`, `substituteEnvVars` and `rewriteEnvValues` were `ops`-specific
+deploy-templating helpers, not part of "environment to typed config", and are not ported.
+`readEnvVar` is the small single-variable helper for the one value a caller needs before the rest of
+its configuration can even be assembled (`ENV`, deciding which schema to validate against, for
+example); `loadConfig` is the entry point for everything else.
+
+**Bug fixed at extraction time.** The source's `systemEnv.get` returned a real blank environment
+variable unchanged, while `createEnvReader` — the only path the source's own tests exercised —
+folded a blank value to `undefined`. A variable that was genuinely blank in production therefore
+behaved differently from the identical case under test. Both readers now normalise a blank value to
+`undefined` at the same boundary, so "an empty string counts as missing" is one rule instead of two
+inconsistent ones. This is also this module's answer to what an empty string means: a placeholder
+that expanded to nothing (`${VAR}` with no value, a blank `.env` line) is indistinguishable from a
+real empty string once it reaches the process environment, and treating it as present would let a
+broken deploy script configure a service with `""` instead of failing at start-up.
+
+**Scope: a flat schema.** `loadConfig(schema, env = systemEnv)` reads exactly the top-level keys an
+arktype object schema declares — `type({ AUTH_PEPPER: "string", PORT: "string.integer.parse" })`
+— as environment variable names, one level deep. It finds those keys through arktype's own
+`Type.json` structure (`required`/`optional`, each `{ key }`), not a hand-rolled walk, so this stays
+correct for a schema built with morphs as well as plain strings; a schema that is not an object
+schema is refused with `TypeError` at call time rather than silently doing nothing. A nested object
+in the schema is not read from nested environment variables — there is no such thing here.
+
+**Numbers and booleans are strings until a morph says otherwise.** Every environment variable
+arrives as `string | undefined`. arktype's own `"string.integer.parse"` and `"string.numeric.parse"`
+cover the numeric cases. There is no built-in string-to-boolean morph, so this module exports
+`stringBoolean`: exactly `"true"` or `"false"`, nothing else — a format that also accepted `"1"`,
+`"yes"` or `"on"` is a format that will one day be typo'd into a fourth spelling that silently reads
+as false instead of failing.
+
+**A key is read only when it is not blank**, so `raw[name] = value` is skipped entirely rather than
+set to `undefined`: arktype's own `exactOptionalPropertyTypes` distinguishes an object key that is
+absent from one explicitly set to `undefined`, and would otherwise reject a genuinely-unset optional
+variable as "must be a string, was undefined" instead of accepting its absence.
+
+**The failure never carries a value.** arktype's own rejection text echoes the offending input
+(`must be a well-formed integer string (was "admin")`), which is exactly the kind of text a
+container orchestrator's log capture was never meant to hold a secret in. `ConfigError.variables`
+lists only the names of the environment variables that failed, sorted; nothing here reads arktype's
+`.message`, `.summary` or `.actual` for a value that reached validation, so neither a missing nor an
+invalid value is ever part of the thrown error.
+
+```ts
+import { type } from "arktype"
+import { loadConfig, stringBoolean } from "@ts-libs/server/config"
+
+const configSchema = type({
+  ENV: "'dev' | 'prod'",
+  AUTH_PEPPER: "string > 0",
+  PORT: "string.integer.parse",
+  "FEATURE_FLAG?": stringBoolean,
+})
+
+// reads Deno.env; a test injects createEnvReader({...}) instead
+export const config = loadConfig(configSchema)
+```
