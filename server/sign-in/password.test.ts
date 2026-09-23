@@ -174,6 +174,14 @@ describe("createPasswordHasher", () => {
     }
   })
 
+  it("refuses a stored value above the iteration ceiling, even one that would match", async () => {
+    const hasher = createPasswordHasher(FAST)
+    const rounds = MAX_PASSWORD_ITERATIONS + 1
+    const stored = await manualHash(PASSWORD, new Uint8Array(16), rounds)
+    expect(stored).toContain(`$${rounds}$`)
+    expect(await hasher.verify(PASSWORD, stored)).toEqual(NO_MATCH)
+  })
+
   it("refuses an empty or over-long password when hashing, and answers no when verifying", async () => {
     const hasher = createPasswordHasher(FAST)
     const stored = await hasher.hash(PASSWORD)
