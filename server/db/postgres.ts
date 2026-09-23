@@ -199,6 +199,19 @@ export function buildPostgresOptions(
  * Nothing here connects. `postgres` opens its first connection on the first query, so
  * a bad host surfaces at `connect()` rather than at this call, which is why
  * `DbServiceBase.connect` exists.
+ *
+ * **Do not declare a `DEFERRABLE INITIALLY DEFERRED` constraint and write to it through
+ * a single tagged-template statement outside `sql.begin`** (#134). The pinned driver,
+ * `postgres@3.4.7`, resolves a single statement's promise from the server's
+ * `CommandComplete`, which arrives before the implicit commit that actually checks a
+ * deferred constraint; when that commit then fails, the error has no query left to
+ * reject and the promise reports success — `count: 1`, any `RETURNING` row returned —
+ * while the write is not there, with no exception thrown and no `unhandledrejection`
+ * fired. `sql.unsafe` and any statement inside `sql.begin` both resolve after the
+ * server's own commit and do report the failure; use `sql.begin` for a write against a
+ * deferred constraint. Reproduced and pinned to this driver version in
+ * `server/db/postgres.integration.test.ts`. Reported upstream:
+ * https://github.com/porsager/postgres/issues/1117.
  */
 export function createSql(options: CreateSqlOptions): Sql {
   return postgres(buildPostgresOptions(options)) as Sql

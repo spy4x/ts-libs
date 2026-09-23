@@ -930,6 +930,27 @@ Two adapters, one migration runner. `@spy4x/server/db` is the barrel; `db/migrat
 `db/postgres` and `db/sqlite` are the subpaths. Nothing here ships a driver: `postgres` is pinned in
 the root import map and the SQLite driver is the caller's own, passed through `SqliteDriver`.
 
+### A deferred constraint's failure at implicit commit is not reported on a single statement
+
+**Do not declare a `DEFERRABLE INITIALLY DEFERRED` constraint and write to it through a single
+tagged-template statement outside `sql.begin`** (#134). The pinned driver, `postgres@3.4.7`,
+resolves a single statement's promise from the server's `CommandComplete` message, which arrives
+_before_ the implicit commit that actually checks a deferred constraint. When that commit then
+fails, the `ErrorResponse` it carries arrives on a query the driver has already resolved and cleared,
+so it has nothing left to reject — the promise reports success (`count: 1`, any `RETURNING` row
+returned) and the write is not there. No exception is thrown and no `unhandledrejection` fires: this
+is not a caught-and-swallowed error, the failure never reaches a handler at all. `sql.unsafe` (the
+simple protocol) and any statement inside `sql.begin` both resolve after the server's own commit, so
+both report the failure correctly — `sql.begin` is what a write against a deferred constraint should
+use instead of a bare statement.
+
+Nothing shipped in this repository declares a deferred constraint today, so no module here is
+affected; it is documented and pinned because a caller of `@spy4x/server/db` might add one.
+Reproduced and pinned to `postgres@3.4.7` by
+`server/db/postgres.integration.test.ts`, which fails loudly — not silently skips — the day an
+upstream fix changes this. Reported upstream:
+[porsager/postgres#1117](https://github.com/porsager/postgres/issues/1117).
+
 ### A transaction handle stops working when its transaction ends
 
 Both adapters hand a callback a handle scoped to the transaction — a `SqliteDb` on one side, a
