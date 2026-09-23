@@ -2954,6 +2954,51 @@ describe("a From hidden behind a header line-break byte other than CR (issue #12
   )
 })
 
+// --- an mbox envelope line above a signed message (issue #120) -------------
+
+/**
+ * Issue #120: a message that still carries its mbox envelope line — the
+ * `From sender@example.com Mon Sep 21 10:00:00 2026` line an mbox file puts
+ * in front of every message it stores — is not RFC 5322 at all: it has no
+ * colon before its first space, so this verifier reads it as a header field
+ * literally named `From sender@example.com Mon Sep 21 10` (the first colon
+ * sits inside the timestamp). Issue #113's loose name match then reads that
+ * name's `From` prefix, at the first space, as a second, unsigned `From:` and
+ * refuses the message.
+ *
+ * That is a change from what `main` did before #119 (no loose match existed,
+ * so this verified), but it is the safe direction, not a bug: nothing here
+ * calls a message with a plausible extra `From` line valid, and every mbox
+ * reader already strips the envelope line before treating what follows as
+ * RFC 5322 mail. `email/README.md`'s field-name paragraph states the rule; a
+ * caller verifying mbox records must strip the envelope line first.
+ */
+describe("an mbox envelope line above a signed message (issue #120)", () => {
+  const BODY = "This is a test.\r\n"
+  const ENVELOPE = "From sender@example.com Mon Sep 21 10:00:00 2026"
+  const REASON = "unsigned additional instances of a signed header: from"
+
+  it("refuses a message that still carries its mbox envelope line, as a string", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const withEnvelope = `${ENVELOPE}\r\n${raw}`
+
+    const result = await verifyDkim(withEnvelope, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, REASON)
+  })
+
+  it("refuses a message that still carries its mbox envelope line, as bytes", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const withEnvelope = `${ENVELOPE}\r\n${raw}`
+
+    const result = await verifyDkim(ascii(withEnvelope), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, REASON)
+  })
+})
+
 // --- trace fields a relay adds after signing (§5.4.2) -----------------------
 
 /**

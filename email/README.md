@@ -598,6 +598,19 @@ which propagates the resolver's rejection instead of reporting it.
   reproduction table lists exactly this shape, `Fr om:`, as one a lenient
   reader could read as `From` — it is stated here because a reader checking
   this file's claims against its behaviour should not have to discover it.
+
+  This is also why an mbox file's envelope line —
+  `From sender@example.com Mon Sep 21 10:00:00 2026`, the line mbox storage
+  puts in front of every message it holds — is refused (issue #120). That
+  line is not RFC 5322 at all: it has no colon before its first space, so this
+  verifier reads it as a header field literally named `From sender@example.com
+  Mon Sep 21 10` (the first colon sits inside the timestamp), and the loose
+  match above reads that name's `From` prefix, at the first space, as a
+  second, unsigned `From:`. Nothing here parses mbox framing, so a caller
+  verifying a message straight out of an mbox file must strip the envelope
+  line before calling `verifyDkim` — a message that still carries it is
+  refused as a forged sender rather than silently accepted or silently
+  stripped.
 - **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
   `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
   example record publishes a complete SubjectPublicKeyInfo. The envelope is
