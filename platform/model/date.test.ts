@@ -229,6 +229,13 @@ describe("dateSchema", () => {
       expect(json).toContain("must name a time zone")
     })
 
+    it("names what it expected when the refusal is one branch of a union", () => {
+      const result = type({ d: dateSchema.or("''") })({ d: "2024-02-29T10:00" })
+      expect((result as type.errors).summary).toContain(
+        "must be a date-time ending in Z or an offset",
+      )
+    })
+
     it("still accepts the same date-time with a lower-case z", () => {
       const result = dateSchema("2024-02-29T10:00:00z")
       expect(result instanceof type.errors).toBe(false)
