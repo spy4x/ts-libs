@@ -70,16 +70,20 @@ async function expectDriverStillLosesWrite<T>(promise: Promise<T>): Promise<T> {
 describe("postgres@3.4.7 against a real server — a deferred constraint at implicit commit (#134)", () => {
   // Pinned driver behaviour, not a bug this package can fix: a single statement through the
   // extended-protocol path — a tagged template, or `sql.unsafe(text, params)` with a
-  // parameters argument — resolves from the server's `CommandComplete`
+  // non-empty parameters argument — resolves from the server's `CommandComplete`
   // (`postgres@3.4.7/src/connection.js:568`), which arrives *before* the implicit commit that
   // actually checks a `DEFERRABLE INITIALLY DEFERRED` constraint. When that commit then fails,
   // the `ErrorResponse` it carries arrives on a query the driver has already resolved and
   // cleared (`:792`), so it has nothing left to reject — no thrown error, no
-  // `unhandledrejection`, just a resolved promise reporting a write that is not there. Only a
-  // *parameterless* `sql.unsafe(text)` and any statement inside `sql.begin` take the
-  // simple-protocol path, which resolves after the server's own commit and so does report the
-  // failure — which is why `server/db`'s prose says `sql.begin` is the one path that is always
-  // safe. Reported upstream: https://github.com/porsager/postgres/issues/1117 (reproduction:
+  // `unhandledrejection`, just a resolved promise reporting a write that is not there. A
+  // *parameterless* `sql.unsafe(text)` (no second argument, or an explicit empty array) takes
+  // the simple-protocol path instead, which resolves after the server's own commit and so does
+  // report the failure. A statement *inside* `sql.begin` still resolves early, the same way a
+  // bare statement does — what makes `sql.begin` safe is that it sends an explicit `COMMIT` as
+  // its own statement and rejects its *own* returned promise when that commit fails, which is
+  // the promise a caller actually awaits — which is why `server/db`'s prose says `sql.begin` is
+  // the one path that is always safe. Reported upstream:
+  // https://github.com/porsager/postgres/issues/1117 (reproduction:
   // https://github.com/porsager/postgres/issues/1117#issuecomment-5795651028). These tests are
   // the trip wire for an upgrade that fixes it — a version where one of them fails with
   // `UPSTREAM_FIXED_MESSAGE` is the version where the `server/db` prose and `createSql`'s

@@ -207,15 +207,19 @@ export function buildPostgresOptions(
  * fails, the error has no query left to reject and the promise reports success —
  * `count: 1`, any `RETURNING` row returned — while the write is not there, with no
  * exception thrown and no `unhandledrejection` fired. This is not only the tagged-template
- * path: `sql.unsafe(text, params)` — any call with a parameters argument — takes the same
- * extended-protocol route and loses the failure the same way. Only a *parameterless*
- * `sql.unsafe(text)` is safe outside `sql.begin`, because the driver only takes the
- * simple-protocol path (which resolves after the server's own commit) when it is not
- * asked to bind parameters (`postgres@3.4.7/src/index.js`, `unsafe`: `simple: 'simple' in
- * options ? options.simple : args.length === 0`). `sql.begin` is the one path that is
- * always safe, parameters or not, because every statement inside it resolves after the
- * transaction's own commit rather than before it. Reproduced and pinned to this driver
- * version in `server/db/postgres.integration.test.ts`. Reported upstream:
+ * path: `sql.unsafe(text, params)` — any call with a non-empty parameters argument — takes
+ * the same extended-protocol route and loses the failure the same way. Only a
+ * *parameterless* `sql.unsafe(text)` (no second argument, or an explicit empty array) is
+ * safe outside `sql.begin`, because the driver only takes the simple-protocol path (which
+ * resolves after the server's own commit) when it is not asked to bind parameters
+ * (`postgres@3.4.7/src/index.js`, `unsafe`: `simple: 'simple' in options ? options.simple :
+ * args.length === 0`). `sql.begin` is the one path that is always safe, parameters or not —
+ * not because a statement *inside* it resolves any differently (it still resolves early,
+ * the same way a bare tagged-template statement does), but because `sql.begin` sends an
+ * explicit `COMMIT` as its own statement and rejects its own returned promise when that
+ * commit fails; a caller awaits `sql.begin`'s promise, not the inner statement's, so the
+ * inner statement resolving on its own does not matter. Reproduced and pinned to this
+ * driver version in `server/db/postgres.integration.test.ts`. Reported upstream:
  * https://github.com/porsager/postgres/issues/1117.
  */
 export function createSql(options: CreateSqlOptions): Sql {

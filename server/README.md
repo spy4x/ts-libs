@@ -947,14 +947,18 @@ the promise reports success (`count: 1`, any `RETURNING` row returned) and the w
 No exception is thrown and no `unhandledrejection` fires: this is not a caught-and-swallowed error,
 the failure never reaches a handler at all.
 
-This is not only the tagged-template path. `sql.unsafe(text, params)` — any call that passes
-parameters — takes the same extended-protocol route and loses the failure the same way; only a
-_parameterless_ `sql.unsafe(text)` is safe, because the driver takes the simple-protocol path
-(which resolves after the server's own commit) only when it is not asked to bind parameters
-(`postgres@3.4.7/src/index.js`, `unsafe`: `simple: 'simple' in options ? options.simple :
-args.length === 0`). `sql.begin` is the one path that is always safe, parameters or not, because
-every statement inside it resolves after the transaction's own commit — use it for a write against
-a deferred constraint instead of a bare statement, parameterised or not.
+This is not only the tagged-template path. `sql.unsafe(text, params)` — any call that passes a
+non-empty parameter list — takes the same extended-protocol route and loses the failure the same
+way; only a _parameterless_ `sql.unsafe(text)` (no second argument, or `sql.unsafe(text, [])`) is
+safe, because the driver takes the simple-protocol path (which resolves after the server's own
+commit) only when it is not asked to bind parameters (`postgres@3.4.7/src/index.js`, `unsafe`:
+`simple: 'simple' in options ? options.simple : args.length === 0`). `sql.begin` is the one path
+that is always safe, parameters or not — not because a statement _inside_ it resolves any
+differently (it still resolves early, the same way a bare tagged-template statement does), but
+because `sql.begin` sends an explicit `COMMIT` as its own statement and rejects its own returned
+promise when that commit fails; a caller awaits `sql.begin`'s promise, not the inner statement's,
+so the inner statement resolving on its own does not matter — use it for a write against a
+deferred constraint instead of a bare statement, parameterised or not.
 
 Nothing shipped in this repository declares a deferred constraint today, so no module here is
 affected; it is documented and pinned because a caller of `@spy4x/server/db` might add one.
