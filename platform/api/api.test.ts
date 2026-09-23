@@ -176,6 +176,61 @@ describe("apiFetch — header merge", () => {
   })
 })
 
+describe("apiFetch — content-type by body shape (#132)", () => {
+  it("still sends application/json for a JSON string body", async () => {
+    let seen: Headers | undefined
+    await withFakeFetch(
+      (_input, init) => {
+        seen = new Headers(init?.headers)
+        return jsonResponse({})
+      },
+      async () => {
+        await apiFetch("/x", { method: "POST", body: JSON.stringify({ a: 1 }) })
+      },
+    )
+    expect(seen?.get("content-type")).toBe("application/json")
+  })
+
+  it("lets fetch set its own multipart content-type for a FormData body", async () => {
+    let seenContentType: string | null | undefined
+    await withFakeFetch(
+      (input, init) => {
+        // A fake fetch only sees the raw init; building a real Request from it is how the
+        // browser actually decides the content-type once the body is a FormData.
+        const request = new Request(new URL(String(input), "http://localhost"), init)
+        seenContentType = request.headers.get("content-type")
+        return jsonResponse({})
+      },
+      async () => {
+        const formData = new FormData()
+        formData.append("file", new Blob(["hi"]), "hi.txt")
+        await apiFetch("/x", { method: "POST", body: formData })
+      },
+    )
+    expect(seenContentType).toMatch(/^multipart\/form-data; boundary=/)
+  })
+
+  it("still lets a caller's explicit content-type win for a FormData body", async () => {
+    let seen: Headers | undefined
+    await withFakeFetch(
+      (_input, init) => {
+        seen = new Headers(init?.headers)
+        return jsonResponse({})
+      },
+      async () => {
+        const formData = new FormData()
+        formData.append("file", new Blob(["hi"]), "hi.txt")
+        await apiFetch("/x", {
+          method: "POST",
+          body: formData,
+          headers: { "content-type": "application/x-custom" },
+        })
+      },
+    )
+    expect(seen?.get("content-type")).toBe("application/x-custom")
+  })
+})
+
 describe("apiFetch — other init fields", () => {
   it("always sends credentials: include by default", async () => {
     let seenCredentials: RequestCredentials | undefined
