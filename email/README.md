@@ -490,6 +490,27 @@ which propagates the resolver's rejection instead of reporting it.
   mail out of a mailbox — the alternative reading of the issue's checkbox, "refuse
   every bare LF", turns RFC 6376's own example message invalid. The rule covers
   the header block only; a carriage return in the body cannot hide a header field.
+- **A header block carrying a vertical tab, a form feed, a file/group/record
+  separator, NEL or a Unicode line/paragraph separator is refused outright.**
+  Issue #121, the same shape as the lone-CR rule above for a different set of
+  bytes: `X-Note: a<FF>From: ceo@bank.example` above a signed block hides a
+  second `From:` from this verifier the way the CR form does, behind a byte
+  some reader still treats as ending the line. RFC 5322 never allows any of
+  0x0B (VT), 0x0C (FF), 0x1C-0x1E (file/group/record separator), 0x85 (NEL) or
+  U+2028/U+2029 (Unicode LINE/PARAGRAPH SEPARATOR) inside a header field at
+  all, so no conformant sender's message carries one, and the block is refused
+  with a reason naming the byte, anywhere in the block.
+  The tricky one is 0x85: it is also an ordinary _continuation_ byte of dozens
+  of legitimate multi-byte UTF-8 characters (`Å` is C3 85, `ą` is C4 85), so
+  refusing every occurrence of that raw byte would refuse header values that
+  hide nothing. The check decodes the header block as UTF-8 as it scans, one
+  well-formed sequence at a time, and refuses a byte only when it stands for
+  NEL itself — a bare, Latin-1-style 0x85 with no valid lead byte before it,
+  or a properly encoded C2 85 — never when 0x85 is a continuation byte inside
+  a different, legitimate character. A `string` input can only ever produce
+  the well-formed form, because `TextEncoder` never emits an unpaired byte; a
+  `Uint8Array` input can carry the bare form directly, which is the literal
+  shape of the issue's own proof of concept.
 - **Trace fields a relay adds are exempt from the §5.4.2 growth check.** The check
   refuses a message that still holds an instance of a name `h=` asked for, which is
   how a prepended second `From:` or `Subject:` is caught — it must not be removed,
