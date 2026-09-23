@@ -80,30 +80,56 @@ const DEFAULTS = {
  * Exponential backoff on the attempt just made, so the first failure waits `baseMs`
  * and each later one doubles up to `maxMs`.
  *
- * A thin wrapper over `@ts-libs/integrations`'s `createExponentialBackoff`, with
- * `jitterRatio: 0`. Issue #71 lists this exact doubling-and-capping formula as one of
- * the retry helpers duplicated across the codebase; the ported original recomputed it
- * by hand, including its own overflow guard for a very large `attemptCount`. That
- * guard is not needed here — `createExponentialBackoff` clamps with `Math.min` after
- * the power, so an exponent large enough to overflow to `Infinity` still clamps to
- * `maxMs` correctly. No jitter: only one worker holds a claimed row at a time (the
- * lease), so there is nothing to de-synchronise the way jitter de-synchronises a
- * fleet of independent reconnecting clients.
+ * Issue #71 lists this doubling-and-capping formula as one of the retry helpers
+ * duplicated across the codebase, so the final clamp to `[0, maxMs]` delegates to
+ * `@ts-libs/integrations`'s `createExponentialBackoff` (with `jitterRatio: 0`, since
+ * only one worker holds a claimed row at a time via its lease, so there is nothing to
+ * de-synchronise). The uncapped delay is still computed exactly as the ported
+ * original computed it, because a first review round found that a direct call —
+ * `createExponentialBackoff(...)  (attemptCount)` — quietly changed the source's own
+ * numbers: `attemptCount` fed straight into `createExponentialBackoff`'s `2 **
+ * (attempt - 1)` gives half the source's delay at `attemptCount === 0` (`baseMs / 2`
+ * instead of `baseMs`), a shorter delay for a negative or fractional `attemptCount`,
+ * and — with `baseMs === 0` — `0` instead of `maxMs` for a large attempt count, or
+ * `NaN` once the exponent overflowed to `Infinity` (`0 * Infinity`). `Math.max(1,
+ * attemptCount)` and the ported original's own `exponent >= 32 ? Infinity : …` guard
+ * (needed for exactly that `0 * Infinity` case) reproduce its numbers instead;
+ * `createExponentialBackoff`'s `retryAfterMs` parameter — meant for a provider's
+ * `Retry-After` header — is repurposed to hand it that already-computed delay, so the
+ * clamp is the only part still borrowed rather than copied.
  */
 export function retryDelayMs(
   attemptCount: number,
   baseMs: number = DEFAULTS.baseRetryDelayMs,
   maxMs: number = DEFAULTS.maxRetryDelayMs,
 ): number {
+  const attempt = Math.max(1, attemptCount)
+  const exponent = attempt - 1
+  const uncapped = exponent >= 32 ? Infinity : baseMs * 2 ** exponent
   return createExponentialBackoff({ baseDelayMs: baseMs, maxDelayMs: maxMs, jitterRatio: 0 })(
-    attemptCount,
+    attempt,
+    uncapped,
   )
 }
 
-/** Short, stable label recorded on the row so failures are greppable. */
+/**
+ * Short, stable label recorded on the row so failures are greppable.
+ *
+ * Falls back to `"Error"` when `name` is not a string, the same rule
+ * `integrations/retry.ts`'s `readErrorName` follows: `Error.prototype.name` is a
+ * writable property, so nothing stops a caller's `Error` carrying a non-string `name`.
+ * The ported original was `error.name || "Error"`, which is truthy — and therefore
+ * used as-is — for any non-empty, non-zero `name`, including a number; the value then
+ * reached `.slice(64)` and threw `TypeError: name.slice is not a function`, which
+ * `drainOnce` never caught (it is thrown by the code inside its own `catch` block), so
+ * one such event stopped the whole batch instead of being rescheduled.
+ */
 export function errorCodeOf(error: unknown): string {
-  const name = error instanceof Error ? (error.name || "Error") : typeof error
-  return name.slice(0, 64)
+  if (!(error instanceof Error)) {
+    return typeof error
+  }
+  const code = typeof error.name === "string" && error.name !== "" ? error.name : "Error"
+  return code.slice(0, 64)
 }
 
 export class OutboxProcessor {
@@ -164,6 +190,12 @@ export class OutboxProcessor {
   /**
    * Drains until aborted, waiting `idleDelayMs` only when a drain came back empty so a
    * backlog is worked through without pausing between batches.
+   *
+   * A failure in `repository.claimBatch`, `markProcessed` or `scheduleRetry` itself
+   * (a database blip, unlike a failing `publisher.publish`, which `drainOnce` already
+   * catches and reschedules) rejects this call and ends the loop — unchanged from the
+   * ported original. The caller must restart `run()` after such a rejection; it does
+   * not retry itself.
    */
   async run(signal: AbortSignal, idleDelayMs = 1_000): Promise<void> {
     while (!signal.aborted) {

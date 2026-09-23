@@ -30,6 +30,17 @@
  * qualified name), and a command that writes a row into it in the same transaction as
  * the state change it records — that command is the caller's own, not part of this
  * extraction, since it is one line embedded in application-specific write paths.
+ *
+ * `aggregate_id` only needs to be a type this driver returns as a string — `UUID`
+ * fits the template's own aggregates, but nothing here assumes it. An app may keep
+ * extra columns this repository neither reads nor returns, such as the template's own
+ * `group_id` and `actor_user_id`: the app's own `INSERT` still fills them, in the same
+ * transaction as the state change it records. Recommended but not required: a unique
+ * index on `(aggregate_type, aggregate_id, aggregate_version, event_kind)`, which is
+ * what makes a retried `INSERT` (after a crash between the state change and the
+ * outbox row) idempotent instead of writing the event twice — the template had this
+ * index; it is not enforced here because this repository only ever reads the table,
+ * never creates it.
  */
 import type { Sql } from "@ts-libs/server/db"
 import type { OutboxEvent, OutboxRepository } from "./processor.ts"

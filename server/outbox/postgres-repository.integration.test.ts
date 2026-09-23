@@ -3,13 +3,14 @@
  *
  * `processor.test.ts` covers `OutboxProcessor` against a fake `OutboxRepository`.
  * What only a real server answers: whether `FOR UPDATE SKIP LOCKED` plus the lease
- * actually keeps a claimed-but-unpublished row invisible until the lease expires,
- * whether the returned rows really carry the field names `OutboxEvent` promises, and
- * whether `attempt_count < maxAttempts` really excludes an exhausted row.
+ * actually keeps a claimed-but-unpublished row invisible until the lease expires and
+ * never lets two concurrent connections claim the same row, whether the returned rows
+ * really carry the field names `OutboxEvent` promises, and whether `attempt_count <
+ * maxAttempts` really excludes an exhausted row.
  *
- * Isolation: every run creates its own schema and table, points a single-connection
- * `Sql` at it with `search_path`, and drops the schema in a `finally`. Nothing shared
- * is touched.
+ * Isolation: every run creates its own schema and table, points one or two
+ * single-connection `Sql` clients at it with `search_path`, and drops the schema in a
+ * `finally`. Nothing shared is touched.
  */
 import { assertEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
@@ -17,8 +18,26 @@ import { createSql, type Sql } from "@ts-libs/server/db"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { PostgresOutboxRepository } from "./postgres-repository.ts"
 
+const OUTBOX_EVENTS_TABLE = `
+  CREATE TABLE outbox_events (
+    id                UUID PRIMARY KEY,
+    event_kind        VARCHAR(64) NOT NULL,
+    aggregate_type    VARCHAR(64) NOT NULL,
+    aggregate_id      UUID NOT NULL,
+    aggregate_version BIGINT NOT NULL,
+    attempt_count     INT4 NOT NULL DEFAULT 0,
+    available_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    claimed_at        TIMESTAMPTZ,
+    processed_at      TIMESTAMPTZ,
+    last_error_code   VARCHAR(64),
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`
+
 /** Open a client on a fresh schema holding an `outbox_events` table, dropped after. */
-async function withOutboxSchema(body: (sql: Sql) => Promise<void>): Promise<void> {
+async function withOutboxSchema(
+  body: (sql: Sql, schema: string) => Promise<void>,
+): Promise<void> {
   const settings = postgresSettings()
   await requireReachable(settings.address)
 
@@ -29,26 +48,28 @@ async function withOutboxSchema(body: (sql: Sql) => Promise<void>): Promise<void
     await sql`SET client_min_messages = warning`
     await sql`CREATE SCHEMA ${sql(schema)}`
     await sql`SELECT set_config('search_path', ${schema}, false)`
-    await sql`
-      CREATE TABLE outbox_events (
-        id                UUID PRIMARY KEY,
-        event_kind        VARCHAR(64) NOT NULL,
-        aggregate_type    VARCHAR(64) NOT NULL,
-        aggregate_id      UUID NOT NULL,
-        aggregate_version BIGINT NOT NULL,
-        attempt_count     INT4 NOT NULL DEFAULT 0,
-        available_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-        claimed_at        TIMESTAMPTZ,
-        processed_at      TIMESTAMPTZ,
-        last_error_code   VARCHAR(64),
-        created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
-      )
-    `
-    await body(sql)
+    await sql.unsafe(OUTBOX_EVENTS_TABLE)
+    await body(sql, schema)
   } finally {
     await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
     await sql.end()
   }
+}
+
+/**
+ * A second, independent client pointed at the same schema — a genuinely separate
+ * Postgres connection, for tests that need two connections talking to the table at
+ * once. The caller closes it with `sql.end()`.
+ */
+async function openSecondClient(schema: string): Promise<Sql> {
+  const settings = postgresSettings()
+  const sql = createSql({
+    connection: settings.connection,
+    max: 1,
+    applicationName: `${schema}_b`,
+  })
+  await sql`SELECT set_config('search_path', ${schema}, false)`
+  return sql
 }
 
 /** Inserts one row with the given id, kind and starting attempt count of 0. */
@@ -173,6 +194,44 @@ describe("PostgresOutboxRepository against a real server", () => {
       `
       assertEquals(rows[0].lastErrorCode, "TypeError")
       assertEquals(rows[0].availableAt.getTime() > Date.now(), true)
+    })
+  })
+
+  it("never claims the same row from two connections at once", async () => {
+    await withOutboxSchema(async (sql, schema) => {
+      await insertRow(sql, ROW_A, "group.created", ROW_A)
+      await insertRow(sql, ROW_B, "group.renamed", ROW_A)
+
+      const sqlB = await openSecondClient(schema)
+      try {
+        // Connection A claims inside an open transaction and then holds it open with a
+        // fixed server-side sleep — not by waiting on connection B — so this can never
+        // deadlock: if FOR UPDATE SKIP LOCKED were ever removed and B's own claim then
+        // blocked on A's row lock, A still commits on its own after the sleep, and B's
+        // claim finally goes through, red for the reason this test exists to catch.
+        const claimedAPromise = sql.begin(async (tx) => {
+          const repositoryA = new PostgresOutboxRepository(tx)
+          const claimed = await repositoryA.claimBatch(10, 5, 60)
+          await tx`SELECT pg_sleep(0.2)`
+          return claimed
+        })
+
+        // Give connection A's transaction time to acquire its row locks before B claims.
+        await new Promise((resolve) => setTimeout(resolve, 50))
+
+        const repositoryB = new PostgresOutboxRepository(sqlB)
+        const claimedB = await repositoryB.claimBatch(10, 5, 60)
+        const claimedA = await claimedAPromise
+
+        const claimedIds = [...claimedA, ...claimedB].map((event) => event.id)
+        // No row went to both connections...
+        assertEquals(claimedIds.length, new Set(claimedIds).size)
+        // ...and, since nothing else was competing for them, both rows went to exactly
+        // one of the two.
+        assertEquals(claimedIds.slice().sort(), [ROW_A, ROW_B].slice().sort())
+      } finally {
+        await sqlB.end()
+      }
     })
   })
 })

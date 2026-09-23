@@ -64,6 +64,24 @@ describe("retryDelayMs", () => {
   it("does not overflow on an absurd attempt count", () => {
     expect(retryDelayMs(1000, 1000, 60_000)).toBe(60_000)
   })
+
+  it("gives attempt 1's delay for attempt 0, a negative attempt and a fractional attempt", () => {
+    // A first review round found this call delegating straight to
+    // createExponentialBackoff(attemptCount), which computes 2 ** (attemptCount - 1)
+    // and so quietly halves (or otherwise shortens) the delay for any of these three
+    // instead of matching the ported original's own Math.max(0, attemptCount - 1).
+    expect(retryDelayMs(0, 1000, 60_000)).toBe(1000)
+    expect(retryDelayMs(-1, 1000, 60_000)).toBe(1000)
+    expect(retryDelayMs(0.5, 1000, 60_000)).toBe(1000)
+  })
+
+  it("caps at the maximum delay even with a base of 0, rather than returning 0 or NaN", () => {
+    // With baseMs 0, 0 * 2 ** exponent is 0 for a merely large exponent and NaN once
+    // the exponent overflows 2 ** exponent to Infinity (0 * Infinity). The ported
+    // original's exponent >= 32 guard exists for exactly this case.
+    expect(retryDelayMs(33, 0, 60_000)).toBe(60_000)
+    expect(retryDelayMs(1025, 0, 60_000)).toBe(60_000)
+  })
 })
 
 describe("errorCodeOf", () => {
@@ -74,6 +92,18 @@ describe("errorCodeOf", () => {
     const longName = new Error("boom")
     longName.name = "N".repeat(100)
     expect(errorCodeOf(longName).length).toBe(64)
+  })
+
+  it("falls back to Error when an Error's own name is not a string", () => {
+    const error = new Error("boom")
+    // Error.prototype.name is a writable string property in its type declaration only
+    // — nothing at runtime stops a caller assigning something else.
+    Object.assign(error, { name: 42 })
+    expect(errorCodeOf(error)).toBe("Error")
+
+    const emptyName = new Error("boom")
+    emptyName.name = ""
+    expect(errorCodeOf(emptyName)).toBe("Error")
   })
 })
 
@@ -115,6 +145,32 @@ describe("OutboxProcessor.drainOnce", () => {
     // attempt 3 -> base * 2^2 = 4000ms, recorded in seconds
     expect(repository.retries).toEqual([
       { id: "poison", delaySeconds: 4, errorCode: "TypeError" },
+    ])
+  })
+
+  it("reschedules a poisoned event whose thrown Error has a non-string name, and still publishes the rest", async () => {
+    const published: string[] = []
+    const poisonedError = new Error("boom")
+    Object.assign(poisonedError, { name: 42 })
+    const repository = new FakeRepository([[
+      event({ id: "poison", attemptCount: 1 }),
+      event({ id: "healthy" }),
+    ]])
+    const processor = new OutboxProcessor(repository, {
+      publish: (e) => {
+        if (e.id === "poison") return Promise.reject(poisonedError)
+        published.push(e.id)
+        return Promise.resolve()
+      },
+    })
+
+    const result = await processor.drainOnce()
+
+    expect(result).toEqual({ claimed: 2, published: 1, failed: 1 })
+    expect(published).toEqual(["healthy"])
+    expect(repository.processed).toEqual(["healthy"])
+    expect(repository.retries).toEqual([
+      { id: "poison", delaySeconds: 1, errorCode: "Error" },
     ])
   })
 
