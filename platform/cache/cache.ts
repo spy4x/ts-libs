@@ -14,8 +14,9 @@
  *    is a real bug: a caller trusting the interface's own name and passing milliseconds would get
  *    a cache entry roughly 1000x longer-lived than intended.
  * 3. A TTL is validated and rounded up to a whole second (`normalizeTtlSeconds`) before it reaches
- *    storage, so a sub-second request cannot become `0` — which several stores, including Redis's
- *    `EXPIRE`, either reject or read as "no expiry".
+ *    storage. Redis refuses a fractional or zero expiry — `SET … EX 0.2` and `SET … EX 0` are both
+ *    errors, and `EXPIRE key 0` deletes the key immediately — so this is done here, once, rather
+ *    than in every `ICacheStorage`.
  * 4. `wrap` coalesces concurrent calls for the same key on the same instance into one `fn()` call.
  *
  * A fifth change: `schema` is an arktype `Type`, validated through `@ts-libs/validation`'s
@@ -104,11 +105,10 @@ export interface CacheServiceOptions {
 /**
  * Round `ttlSec` up to the nearest whole second, and reject a non-positive or non-finite one.
  *
- * `ICacheStorage.set`'s contract is whole seconds, and a store on the other side of it — Redis's
- * `EXPIRE` included — truncates a fraction toward zero, so an un-rounded sub-second TTL would
- * either arrive as `0` (read by some stores as "never expires", rejected outright by others) or
- * expire the moment it is set. Rounding up here, once, keeps that decision out of every
- * `ICacheStorage` implementation.
+ * `ICacheStorage.set`'s contract is whole seconds. Redis refuses a fractional or zero expiry —
+ * `SET … EX 0.2` and `SET … EX 0` are both errors, and `EXPIRE key 0` deletes the key immediately
+ * — so a TTL is rounded up to a whole second here, once, rather than in every `ICacheStorage`
+ * implementation.
  */
 function normalizeTtlSeconds(ttlSec: number): number {
   if (!Number.isFinite(ttlSec) || ttlSec <= 0) {
@@ -150,11 +150,16 @@ export class CacheService implements ICacheService {
   /**
    * Return the cached value for `key`, or call `fn()` once, cache its result, and return it.
    *
-   * Concurrent `wrap` calls for the same key on this instance share one in-flight `fn()` call:
-   * every caller past the first awaits that same call instead of starting its own, and if `fn()`
-   * rejects, every waiting caller rejects with that same error and nothing is cached — the next
-   * `wrap` call for the key starts over. This is an in-process guard against a stampede on one hot
-   * key on one instance; it does not coordinate across instances or processes.
+   * A caller that reads the cache while another caller's `fn()` for the same key is still running
+   * awaits that same call instead of starting its own; a caller that reads storage just before the
+   * first call writes its result can still start its own `fn()` — this coalesces an in-flight call,
+   * it is not a lock. Two different keys never share an in-flight call. If `fn()` rejects, every
+   * waiting caller rejects with that same error and nothing is cached — the next `wrap` call for
+   * the key starts over. This is an in-process guard against a stampede on one hot key on one
+   * instance; it does not coordinate across instances or processes. A caller that joins a call
+   * already in flight has its own `ttlSec` and `shouldSaveFalsy` ignored: whether the result is
+   * cached at all, and for how long, is decided by the first caller's values, not the joining
+   * caller's.
    *
    * A cache *hit* is storage holding a value at all, not the decoded value being truthy: a key
    * explicitly cached as `null` (or `0`, `""`, `false`) is a hit and is returned as-is, without
@@ -176,18 +181,32 @@ export class CacheService implements ICacheService {
       return inFlight as Promise<T>
     }
 
+    // `fn` is only required to return a `Promise`, not to be declared `async`: a plain function
+    // that throws before ever returning one throws *synchronously*, inside this very call. Since
+    // this whole body is `async`, a synchronous throw becomes a rejection of `call` below — but it
+    // becomes that rejection immediately, before `call` has anywhere to be stored. If the `pending`
+    // cleanup ran inside this same function body (a `try`/`finally` around `await fn()`), it would
+    // run as part of that same synchronous unwind, deleting a `pending` entry that does not exist
+    // yet — and then the line after this call would go on to store the now-permanently-rejected
+    // `call`, with nothing left to ever remove it. Registering `call` in `pending` first, and
+    // cleaning it up in a `.finally()` chained onto the already-created promise, avoids the race:
+    // a promise reaction always runs as a later microtask, never synchronously, so `pending.set`
+    // below is guaranteed to run before this cleanup does, however `fn` fails.
     const call = (async () => {
-      try {
-        const value = await fn()
-        if (value || options.shouldSaveFalsy) {
-          await this.set(key, value, ttlSec)
-        }
-        return value
-      } finally {
-        this.pending.delete(key)
+      const value = await fn()
+      if (value || options.shouldSaveFalsy) {
+        await this.set(key, value, ttlSec)
       }
+      return value
     })()
     this.pending.set(key, call)
+    call.finally(() => {
+      // Only ever this call's own entry: nothing else may have replaced it by the time this runs.
+      if (this.pending.get(key) === call) {
+        this.pending.delete(key)
+      }
+    }).catch(() => {}) // `.finally` re-throws into its own promise; `call` itself still carries
+    // the rejection to whoever awaits it below, this branch exists only to run the cleanup.
     return call
   }
 
@@ -219,6 +238,10 @@ export interface PublicAPICacheModel<T, K extends string | number = number> {
  * `wrapMany`'s result is not run through `schema`: `schema` describes one `T`, and validating an
  * array would mean validating each element, which is a different, unrequested feature — see the
  * pull request body.
+ *
+ * `get` returns a falsy cached value (`0`, `""`, `false`) as-is. The source checked `if (!result)`
+ * on the *decoded* value and returned `null` for any of those, which is a bug: a cached `0` or
+ * `false` is indistinguishable from "not cached" to a caller of the source's `get`.
  */
 export function buildMethods<T, K extends string | number = number>(
   cacheService: ICacheService,

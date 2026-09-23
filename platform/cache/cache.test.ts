@@ -118,6 +118,15 @@ describe("CacheService", () => {
     await expect(cache.set("key", "value", -5)).rejects.toThrow(RangeError)
   })
 
+  it("rejects a NaN or Infinity TTL instead of forwarding it to storage", async () => {
+    const storage = new MemoryCacheStorage()
+    const cache = new CacheService(storage)
+
+    await expect(cache.set("key", "value", NaN)).rejects.toThrow(RangeError)
+    await expect(cache.set("key", "value", Infinity)).rejects.toThrow(RangeError)
+    expect(storage.setCalls).toEqual([])
+  })
+
   describe("wrap", () => {
     it("calls fn on a miss and caches the result", async () => {
       const cache = new CacheService(new MemoryCacheStorage())
@@ -214,6 +223,44 @@ describe("CacheService", () => {
       expect(calls).toBe(1)
     })
 
+    it("runs a separate fn for each key instead of coalescing across keys", async () => {
+      const cache = new CacheService(new MemoryCacheStorage())
+      const calls: string[] = []
+      const fn = (key: string) => () => {
+        calls.push(key)
+        return Promise.resolve(`computed-${key}`)
+      }
+
+      const [a, b] = await Promise.all([
+        cache.wrap("a", fn("a"), 60),
+        cache.wrap("b", fn("b"), 60),
+      ])
+
+      expect(a).toBe("computed-a")
+      expect(b).toBe("computed-b")
+      expect(calls.sort()).toEqual(["a", "b"])
+    })
+
+    it("retries fn on the next call after fn throws synchronously", async () => {
+      const cache = new CacheService(new MemoryCacheStorage())
+      let calls = 0
+      // A plain, non-`async` function: the throw happens synchronously, before `wrap` ever gets a
+      // promise from it, which is the case the in-flight bookkeeping has to survive.
+      const throwing = () => {
+        calls += 1
+        throw new Error("sync boom")
+      }
+
+      await expect(cache.wrap("key", throwing, 60)).rejects.toThrow("sync boom")
+      const result = await cache.wrap("key", () => {
+        calls += 1
+        return Promise.resolve("computed")
+      }, 60)
+
+      expect(result).toBe("computed")
+      expect(calls).toBe(2)
+    })
+
     it("rejects every waiting caller and caches nothing when fn rejects", async () => {
       const cache = new CacheService(new MemoryCacheStorage())
       const failing = () => Promise.reject(new Error("boom"))
@@ -264,6 +311,13 @@ describe("buildMethods", () => {
     await sessions.set("abc", { token: "abc" })
 
     expect(await sessions.get("abc")).toEqual({ token: "abc" })
+  })
+
+  it("returns a falsy cached value instead of coercing it to null", async () => {
+    const counters = buildMethods<number>(new CacheService(new MemoryCacheStorage()), "count", 60)
+    await counters.set(1, 0)
+
+    expect(await counters.get(1)).toBe(0)
   })
 
   it("deletes by id", async () => {
