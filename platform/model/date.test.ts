@@ -19,6 +19,18 @@ describe("dateSchema", () => {
     expect((result as Date).toISOString()).toBe("2024-01-01T00:00:00.000Z")
   })
 
+  it("parses a date-only ISO string", () => {
+    const result = dateSchema("2024-01-01")
+    expect(result instanceof type.errors).toBe(false)
+    expect((result as Date).toISOString()).toBe("2024-01-01T00:00:00.000Z")
+  })
+
+  it("parses an ISO date-time string with a numeric offset", () => {
+    const result = dateSchema("2024-01-01T10:00:00+02:00")
+    expect(result instanceof type.errors).toBe(false)
+    expect((result as Date).toISOString()).toBe("2024-01-01T08:00:00.000Z")
+  })
+
   it("rejects a string that is not an ISO 8601 date", () => {
     const result = dateSchema("not a date")
     expect(result instanceof type.errors).toBe(true)
@@ -27,6 +39,31 @@ describe("dateSchema", () => {
   it("rejects a plain number", () => {
     const result = dateSchema(1_700_000_000_000)
     expect(result instanceof type.errors).toBe(true)
+  })
+
+  /**
+   * #131: `new Date(...)` silently rolls an out-of-range day into the next month instead of
+   * refusing it (`new Date("2026-02-30")` is 2 March 2026), so the schema must catch this itself
+   * rather than delegate to `Date` parsing.
+   */
+  describe("calendar dates that do not exist (#131)", () => {
+    it("rejects 30 February", () => {
+      expect(dateSchema("2026-02-30") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects 31 April", () => {
+      expect(dateSchema("2024-04-31") instanceof type.errors).toBe(true)
+    })
+
+    it("rejects 29 February in a non-leap year", () => {
+      expect(dateSchema("2023-02-29") instanceof type.errors).toBe(true)
+    })
+
+    it("still accepts 29 February in a leap year", () => {
+      const result = dateSchema("2024-02-29")
+      expect(result instanceof type.errors).toBe(false)
+      expect((result as Date).toISOString()).toBe("2024-02-29T00:00:00.000Z")
+    })
   })
 })
 
