@@ -26,3 +26,4 @@ export {
   type AuthStore,
   type IssueChallengeInput,
 } from "./store.ts"
+export { type ProviderDeps, type SignInResult } from "./provider.ts"
