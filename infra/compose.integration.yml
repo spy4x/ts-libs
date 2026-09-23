@@ -1,7 +1,7 @@
 # Dependencies of the integration test tier (issue #74), for local runs.
 #
 # Start them with `deno task services:up` and stop them with `deno task services:down`.
-# CI does not use this file: Woodpecker starts the same three images through the
+# CI does not use this file: Woodpecker starts the same four images through the
 # `services:` block of `.woodpecker.yml`, and the tests find them through the same
 # environment variables.
 #
@@ -13,11 +13,13 @@
 #    `services:*` tasks do.
 # 2. **Loopback only.** Every published port is bound to `127.0.0.1`, and the host
 #    ports are deliberately unusual (the 5xxxx range) so they cannot collide with a
-#    Postgres, MinIO or mail server already running on the developer's machine.
+#    Postgres, MinIO, mail or Redis server already running on the developer's machine.
 # 3. **Obviously fake credentials.** `integration-test-only` is the user, the
-#    password and the database name everywhere. These containers hold throw-away
-#    data, are reachable from the loopback interface only, and the string is meant
-#    to be unmistakable if it ever shows up in a log or a bug report.
+#    password and the database name everywhere a service takes one (Redis takes
+#    none: no `requirepass`, same as every other service here on a loopback-only
+#    port). These containers hold throw-away data, are reachable from the
+#    loopback interface only, and the string is meant to be unmistakable if it
+#    ever shows up in a log or a bug report.
 #
 # Images are pinned to an exact version tag, never `latest`, for the same reason the
 # import map pins every dependency: a silent upgrade turns a green suite red with no
@@ -78,6 +80,20 @@ services:
       - "127.0.0.1:58025:8025"
     healthcheck:
       test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+  # No `requirepass`: the container is reachable from loopback only, like the other
+  # three, and the key-value adapter this tier exists for (#75) does not authenticate
+  # either. No volume: throw-away keys, nothing survives a restart.
+  redis:
+    image: redis:8.10.2-alpine
+    ports:
+      - "127.0.0.1:56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 3s
       retries: 30

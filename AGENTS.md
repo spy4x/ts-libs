@@ -145,9 +145,9 @@ that can silently skip when its dependency is missing must fail loudly instead.
 | `deno task ts:check`         | `deno check` over every `.ts`/`.tsx` in the tree           |
 | `deno task test`             | the unit tier — every test except `*.integration.test.ts`  |
 | `deno task test:integration` | the integration tier — only `*.integration.test.ts`        |
-| `deno task services:up`      | start Postgres, MinIO and Mailpit, wait until healthy      |
+| `deno task services:up`      | start the four integration services, wait until healthy    |
 | `deno task services:down`    | stop them and drop their volumes                           |
-| `deno task services:logs`    | logs of the three containers                               |
+| `deno task services:logs`    | logs of the four containers                                |
 | `deno task publish:dry`      | `deno publish --dry-run` over the workspace; not run in CI |
 | `deno task fix`              | `lint --fix` then format                                   |
 
@@ -166,7 +166,7 @@ they are written.
 | ------------ | -------------------------- | ------------------------------------------------------------------ |
 | File name    | `*.test.ts`                | `*.integration.test.ts`                                            |
 | Task         | `deno task test`           | `deno task test:integration`                                       |
-| Talks to     | fakes only                 | real Postgres, MinIO and Mailpit                                   |
+| Talks to     | fakes only                 | real Postgres, MinIO, Mailpit and Redis                            |
 | Permissions  | `--allow-read --allow-env` | the above plus `--allow-net` and a narrow `--allow-write=.volumes` |
 | Needs Docker | no                         | yes                                                                |
 
@@ -180,7 +180,7 @@ by `deno task check` — only the _running_ is split.
 ### Running the integration tier
 
 ```bash
-deno task services:up          # Postgres, MinIO and Mailpit; returns when all three are healthy
+deno task services:up          # Postgres, MinIO, Mailpit and Redis; returns when all are healthy
 deno task test:integration
 deno task services:down        # when you are done with them for the day
 ```
@@ -233,11 +233,14 @@ TS_LIBS_IT_S3_REGION             us-east-1
 TS_LIBS_IT_SMTP_HOST             127.0.0.1
 TS_LIBS_IT_SMTP_PORT             51025
 TS_LIBS_IT_MAILPIT_URL           http://127.0.0.1:58025
+TS_LIBS_IT_REDIS_HOST            127.0.0.1
+TS_LIBS_IT_REDIS_PORT            56379
 ```
 
-The containers' user, password and database name are all `integration-test-only`. They hold
-throw-away data and listen on loopback only; the literal is meant to be unmistakable if it ever
-turns up in a log. It is the one credential-shaped string this repository commits.
+Every container that takes a credential uses `integration-test-only` as the user, password and
+database name; Redis takes none. They hold throw-away data and listen on loopback only; the
+literal is meant to be unmistakable if it ever turns up in a log. It is the one credential-shaped
+string this repository commits.
 
 ## Code style
 
@@ -284,6 +287,7 @@ hono                            4.13.8
 postgres                         3.4.7
 otpauth                          9.5.2
 qrcode                           3.1.0
+@iuioiua/redis                   1.1.10
 ```
 
 Adding an import-map entry is a root-file change: it needs the issue number that needs the
