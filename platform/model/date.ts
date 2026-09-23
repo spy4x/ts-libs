@@ -36,11 +36,11 @@ const ISO_CALENDAR_DATE_PREFIX = /^[+-]?(\d{4})-(\d{2})-(\d{2})/
  * For a string that starts with `YYYY-MM-DD`, with or without a `+` or `-` before the year, this
  * rebuilds a date from the three digit groups and reads its fields back. `setUTCFullYear` is used
  * rather than `Date.UTC`, which maps a two-digit year into 1900-1999 (`Date.UTC(99, 0, 1)` is
- * 1999, not year 99) — `setUTCFullYear(99, 0, 1)` sets the year exactly as given. An out-of-range day or
- * month still does not throw (`setUTCFullYear(2026, 1, 30)` on a fresh date reads back as 2 March,
- * not an error), so a date that overflowed reads back with different fields than the ones it was
- * built from: for 30 February, the rebuilt date's month reads back as 3 (March), not 2 (February),
- * and its day as 2, not 30.
+ * 1999, not year 99) — `setUTCFullYear(99, 0, 1)` sets the year exactly as given. An
+ * out-of-range day or month still does not throw (`setUTCFullYear(2026, 1, 30)` on a fresh date
+ * reads back as 2 March, not an error), so a date that overflowed reads back with different fields
+ * than the ones it was built from: for 30 February, the rebuilt date's month reads back as 3
+ * (March), not 2 (February), and its day as 2, not 30.
  *
  * A string with no such prefix (a year, a year and month, or an ordinal date such as `2024-001`)
  * has nothing here to rebuild and compare; once `Date.parse` has read it, it is accepted exactly as
