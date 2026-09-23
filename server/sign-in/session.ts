@@ -2,9 +2,10 @@
 //
 // Rewritten from `template/apps/api/services/auth/session.ts`. What changed and why:
 //
-// - The token was hashed with PBKDF2 at 100 000 iterations and re-derived on every request, so any
-//   client could make the server do that work by sending junk cookies. A session token is 256
-//   random bits, so one HMAC-SHA-256 keyed by the pepper is enough and costs the same every time.
+// - The token was hashed with PBKDF2 at 100 000 iterations and re-derived on every request, so each
+//   authenticated request paid for a password-strength derivation, and any signed-in client could
+//   make the server repeat it at will. A session token is 256 random bits, so one HMAC-SHA-256
+//   keyed by the pepper is enough and costs the same every time.
 // - The token came from `getRandomString`, which maps each random byte to `byte % 36`; 256 is not a
 //   multiple of 36, so four characters were more likely than the rest. `randomBase64Url` has no
 //   such bias.
