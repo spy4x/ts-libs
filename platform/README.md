@@ -208,12 +208,13 @@ already are — by where the code can run:
   (and `userAgent`) stay unset when nothing identifies the client, exactly as the source left them
   — `clientIp`'s placeholder address is a made-up value, not a real one, and the source itself
   wrote `request.ip || null` into an audit row, so surfacing that placeholder here would have
-  logged it as though it were real (#129 round 1).
+  logged it as though it were real.
 - `dateSchema` (`model/date.ts`) accepted an ISO date string whose calendar day did not exist —
   `"2026-02-30"` parsed to 2 March 2026 instead of being refused, because `new Date(...)` silently
   rolls an out-of-range day or month into the next one (#131). Fixed by rebuilding the date from the
-  string's own `YYYY-MM-DD` digits and comparing it back against them; week dates and ordinal dates
-  are unaffected, since they carry no such prefix to check.
+  string's own `YYYY-MM-DD` digits and comparing it back against them; a string without that prefix
+  (a week date, an ordinal date, or the compact form without dashes) is refused when `new Date`
+  cannot read it.
 
 **The `"+": "reject"` decision splits by whether a schema is composed.** `model/base-model.ts`'s
 three schemas declare it on none of them: an app is meant to `.and()` its own fields onto
