@@ -237,6 +237,25 @@ describe("loadConfig", () => {
     expect((thrown as ConfigError).variables).toEqual(["(cross-field check)"])
   })
 
+  it("never names a path segment the schema did not declare, even one set by hand", () => {
+    // A cross-field rule may point its rejection at a path; one built from a value must not print.
+    const schema = type({ A: "string", B: "string" }).narrow((data, ctx) =>
+      ctx.reject({ path: [data.A], expected: "A and B must differ" })
+    )
+    const env = createEnvReader({ A: "LEAKED-PATH-8", B: "x" })
+
+    let thrown: unknown
+    try {
+      loadConfig(schema, env)
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(ConfigError)
+    expect((thrown as ConfigError).variables).toEqual(["A and B must differ"])
+    expect((thrown as ConfigError).message).not.toContain("LEAKED-PATH-8")
+  })
+
   it("never leaks the value when a schema's morph throws instead of rejecting", () => {
     const throwingSchema = type({
       SECRET: type("string").pipe((value) => {

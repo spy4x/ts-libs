@@ -82,7 +82,7 @@ export const stringBoolean = type("'true' | 'false'").pipe((value) => value === 
  * The environment-variable names a flat arktype object schema declares, required, optional and
  * defaulted together. Reads arktype's own, documented `Type.props`
  * (`arktype/out/variants/object.ts`'s object-type interface) rather than the internal `Type.json`
- * representation the first version of this module used — `.props` gives the same key list for a
+ * representation — `.props` gives the same key list for a
  * plain schema, is unaffected by `.describe()` or `.configure()`, and — its actual advantage over
  * `.json` — throws arktype's own `ParseError` on a union or a piped root, so a schema `loadConfig`
  * cannot make sense of is refused loudly.
