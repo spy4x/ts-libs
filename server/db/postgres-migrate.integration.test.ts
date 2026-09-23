@@ -29,6 +29,7 @@ import {
   PostgresIdentifierTransformError,
   PostgresMigrationDriver,
   PostgresMigrationLockError,
+  PostgresUnexpectedRowError,
 } from "./postgres-migrate.ts"
 import { ENV_NAME, purgeDatabase } from "./postgres-purge.ts"
 import { createSql } from "./postgres.ts"
@@ -715,5 +716,48 @@ describe("the Postgres migration runner against a client with a custom row or co
       const history = await new PostgresMigrationDriver(driverOptions).appliedMigrations()
       assertEquals(history.map((row) => row.name), ["0001_init"])
     }, { transform: collidingColumnTransform as unknown as typeof postgres.camel })
+  })
+})
+
+describe("the Postgres migration runner against a client with a custom value transform", () => {
+  it("takeLock refuses a stringified lock flag instead of reporting a false lock conflict", async () => {
+    // #137 round 3. `.values()` sidesteps a column-name transform, but a client's
+    // `transform.value.from` still runs on the value itself
+    // (`postgres@3.4.7/src/connection.js:505-509`). A client whose value transform
+    // stringifies every boolean — or a custom bool parser doing the same — turns
+    // `locked: true` into `locked: "true"`, which `typeof locked !== "boolean"` catches
+    // before it can be misread as `locked !== true` and reported as a lock conflict that
+    // does not exist.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const table = uniqueIdentifier("it_migrations_value_xform")
+    const stringifyBooleans = {
+      value: {
+        from: (value: unknown) => typeof value === "boolean" ? String(value) : value,
+      },
+    }
+    const sql = createSql({
+      connection: settings.connection,
+      transform: stringifyBooleans as unknown as typeof postgres.camel,
+      applicationName: table,
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      const driver = new PostgresMigrationDriver({ sql, table })
+      // `withLock` reserves a connection and, on this rejection, its own `finally` releases
+      // it back to the pool before the error propagates here — nothing to release by hand.
+      await assertRejects(
+        () => driver.withLock(() => Promise.resolve()),
+        PostgresUnexpectedRowError,
+        "takeLock's lock probe",
+      )
+    } finally {
+      // `.end()`, not just letting the pool idle out: `pg_try_advisory_lock` ran and
+      // granted the lock at the server before the misread was caught, so the session
+      // itself — not only the connection object — must close to release it.
+      await sql.end()
+    }
   })
 })

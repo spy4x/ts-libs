@@ -86,6 +86,7 @@ export {
   type PostgresMigrationDriverOptions,
   PostgresMigrationLockError,
   PostgresMigrationRunInProgressError,
+  PostgresUnexpectedRowError,
 } from "./postgres-migrate.ts"
 
 export {

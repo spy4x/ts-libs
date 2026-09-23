@@ -617,6 +617,16 @@ Deno.test("the resolution probe quotes the table name before looking it up", asy
   assertEquals(fake.boundValues[0], "Hist")
 })
 
+Deno.test("withLock refuses an empty resolved schema instead of locking on `.table`", async () => {
+  const fake = createFakeSql({ currentSchema: "" })
+  await assertRejects(
+    () => new PostgresMigrationDriver({ sql: fake.sql }).withLock(() => Promise.resolve()),
+    PostgresUnexpectedRowError,
+    "resolvedTableRef",
+  )
+  assertStrictEquals(fake.boundValues.some((value) => typeof value === "bigint"), false)
+})
+
 Deno.test("applyInTransaction runs the body and the history insert in one transaction", async () => {
   const fake = createFakeSql()
   await new PostgresMigrationDriver({ sql: fake.sql }).applyInTransaction(migration())

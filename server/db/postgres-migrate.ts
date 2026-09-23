@@ -447,7 +447,17 @@ export class PostgresMigrationDriver implements MigrationDriver {
         SELECT pg_try_advisory_lock(${key}) AS locked
       `.values()
       const [locked] = expectRowShape("takeLock's lock probe", rows[0], 1)
-      if (locked === true) return
+      // `.values()` sidesteps a column-name transform, but a client's `transform.value.from`
+      // still runs on the value itself (`postgres@3.4.7/src/connection.js:505-509`) — a
+      // custom bool parser, or a transform that stringifies every value, would otherwise turn
+      // `locked` into `"true"` or `1`, which `=== true` never matches, and the driver would
+      // wait out `lockWaitMs` and report a lock conflict that does not exist. Refusing loudly
+      // here is the same shape check `expectRowShape` does for the row, one level down: for
+      // its one value instead of its length.
+      if (typeof locked !== "boolean") {
+        throw new PostgresUnexpectedRowError("takeLock's lock probe", "a boolean", locked)
+      }
+      if (locked) return
       if (waited >= this.lockWaitMs) throw new PostgresMigrationLockError(this.lockWaitMs)
       const step = Math.max(1, Math.min(this.lockRetryMs, this.lockWaitMs - waited))
       await this.delay(step)

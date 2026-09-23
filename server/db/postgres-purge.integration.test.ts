@@ -235,3 +235,57 @@ describe("purgeDatabase through a transaction handle", () => {
     }
   })
 })
+
+/**
+ * A `transform.row.from` that adds a field without changing a row's shape: a `.values()` row
+ * (an array) stays an array of the same length, an object row stays an object with one more
+ * key. Mirrors `postgres-migrate.integration.test.ts`'s `auditFieldTransform`, kept local
+ * rather than imported so this file's tests stay self-contained.
+ */
+const auditFieldTransform = {
+  row: {
+    from: (row: unknown) => {
+      if (Array.isArray(row)) {
+        const copy = row.slice() as unknown[] & { auditedAt?: string }
+        copy.auditedAt = "audit-marker"
+        return copy
+      }
+      return { ...(row as Record<string, unknown>), auditedAt: "audit-marker" }
+    },
+  },
+}
+
+describe("purgeDatabase against a client with a transform.row.from that adds a field", () => {
+  it("still reports and drops the named schema's table", async () => {
+    // Pins that the table listing is read through `.values()`, not `Object.values(row)` on a
+    // name-keyed object (#137 round 3): a row transform that spreads `{ ...row, extra }` turns
+    // a name-keyed object into one with an extra key, but `.values()` builds a plain positional
+    // array in the first place, so an added field lands at the end and never shifts the
+    // `tablename` column out of position 0.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const schema = uniqueIdentifier("it_purge_audit")
+    const table = uniqueIdentifier("note")
+    const sql = createSql({
+      connection: settings.connection,
+      transform: auditFieldTransform as unknown as typeof postgres.camel,
+      max: 1,
+      applicationName: schema,
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      await sql`CREATE SCHEMA ${sql(schema)}`
+      await sql`CREATE TABLE ${sql(schema)}.${sql(table)} (id integer PRIMARY KEY)`
+
+      const purged = await purgeDatabase({ sql, schema, environment: { [ENV_NAME]: "test" } })
+
+      assertEquals(purged, { dropped: [table], refused: false })
+      assertEquals(await tableExists(sql, schema, table), false)
+    } finally {
+      await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
+      await sql.end()
+    }
+  })
+})
