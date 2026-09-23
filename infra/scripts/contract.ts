@@ -59,9 +59,6 @@ const NOT_READY = [
   "`dateSchema` reads an ordinal date or a signed year as the wrong date (#136)",
 ]
 
-/** Open `blocks-1.0` bugs in an entry point listed here: its interface stays, its behaviour changes. */
-const KNOWN_BUGS: string[][] = []
-
 interface DocDeclaration {
   kind: string
   def?: {
@@ -225,12 +222,6 @@ const document = [
   "",
   ...NOT_READY.map((line) => `- ${line}`),
   "",
-  ...(KNOWN_BUGS.length === 0 ? [] : [
-    "Known `blocks-1.0` bugs behind an interface listed here; the fix keeps the interface:",
-    "",
-    ...KNOWN_BUGS.map(([what, issue]) => `- ${what}: ${issue}`),
-    "",
-  ]),
   ...sections,
 ].join("\n")
 

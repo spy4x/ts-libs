@@ -23,6 +23,7 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@ts-libs/server/auth`              | Sign-in account model and `AuthStore`: see the `server/auth` section below           |
 | `@ts-libs/server/auth/postgres`     | The Postgres `AuthStore` and `SessionStore`, and the `AUTH_POSTGRES_SCHEMA` tables   |
 | `@ts-libs/server/auth/memory-store` | The in-memory `AuthStore`, held to the same contract as the Postgres one, for tests  |
+| `@ts-libs/server/sign-in`           | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP      |
 | `@ts-libs/server/crypto`            | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                  |
 | `@ts-libs/server/user-secrets`      | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert            |
 | `@ts-libs/server/quota`             | Usage metering with an atomic reserve and 429/503 — not a rate limiter               |
