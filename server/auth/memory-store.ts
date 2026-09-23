@@ -9,13 +9,13 @@
  *
  * Every row goes in and comes out as a copy, as it would through a database driver.
  *
- * Not re-exported from `@ts-libs/server/auth`: a test double does not belong on the production
- * entry point. Import it from `@ts-libs/server/auth/memory-store`.
+ * Not re-exported from `@spy4x/server/auth`: a test double does not belong on the production
+ * entry point. Import it from `@spy4x/server/auth/memory-store`.
  *
  * @module
  */
 
-import { type Clock, systemClock } from "@ts-libs/platform/universal/time"
+import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import {
   AuthConflictError,
   type AuthKey,

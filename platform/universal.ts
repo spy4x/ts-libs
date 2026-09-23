@@ -1,12 +1,12 @@
 /**
- * `@ts-libs/platform` — universal helpers only.
+ * `@spy4x/platform` — universal helpers only.
  *
  * Everything re-exported here runs in Deno, a browser, a worker and an SSR pass, and calls no
  * host API beyond `Date`, `Intl`, `crypto` and `TextEncoder`. Browser-only and server-only code
  * lives behind `./browser` and `./server` so an SSR bundle cannot reach it by accident.
  *
  * This package ships **no** validator: `validate` and the `{ description, details }` error
- * envelope belong to `@ts-libs/validation`, which is a peer dependency. {@link ValidationError}
+ * envelope belong to `@spy4x/validation`, which is a peer dependency. {@link ValidationError}
  * and friends below are re-exports, not second implementations.
  */
 

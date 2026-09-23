@@ -1,5 +1,5 @@
 /**
- * Google's {@link OAuthProviderConfig} for `createOAuthSignIn` from `@ts-libs/server/auth/oauth`.
+ * Google's {@link OAuthProviderConfig} for `createOAuthSignIn` from `@spy4x/server/auth/oauth`.
  *
  * The endpoints are the ones Google's OpenID Connect discovery document
  * (`https://accounts.google.com/.well-known/openid-configuration`) names. The person is read from
@@ -10,7 +10,7 @@
  */
 
 import { type } from "arktype"
-import { validate } from "@ts-libs/validation"
+import { validate } from "@spy4x/validation"
 
 import type { OAuthProfile, OAuthProviderConfig } from "./oauth.ts"
 

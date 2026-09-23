@@ -19,8 +19,8 @@
  * @module
  */
 
-import type { Sql } from "@ts-libs/server/db"
-import { SecondFactorStatus, SessionStatus, type SessionStore } from "@ts-libs/server/sign-in"
+import type { Sql } from "@spy4x/server/db"
+import { SecondFactorStatus, SessionStatus, type SessionStore } from "@spy4x/server/sign-in"
 import {
   AuthConflictError,
   type AuthKey,
@@ -91,7 +91,7 @@ CREATE INDEX auth_keys_user_id_idx ON auth_keys (user_id);
 CREATE INDEX auth_keys_email_idx ON auth_keys (email) WHERE email IS NOT NULL;
 
 -- Status: 1 = active, 2 = expired, 3 = signed out. Second factor: 1 = not required, 2 = pending,
--- 3 = completed. The values of SessionStatus and SecondFactorStatus in @ts-libs/server/sign-in.
+-- 3 = completed. The values of SessionStatus and SecondFactorStatus in @spy4x/server/sign-in.
 CREATE TABLE auth_sessions (
   id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id integer NOT NULL,

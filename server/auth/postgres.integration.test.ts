@@ -4,7 +4,7 @@
  * The same contract suite the memory store passes runs here, so every rule a provider's unit tests
  * rely on is shown to hold in Postgres too. The tests after it need a real database: the stored
  * guess counter, the constraints the tables enforce on their own, and `SessionManager` from
- * `@ts-libs/server/sign-in` driven end to end over `auth_sessions`.
+ * `@spy4x/server/sign-in` driven end to end over `auth_sessions`.
  *
  * Isolation: every test creates its own schema from `uniqueIdentifier`, applies
  * `AUTH_POSTGRES_SCHEMA` inside it, and drops it in a `finally`. The pool has ten connections, each
@@ -15,8 +15,8 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import postgres from "postgres"
-import { buildPostgresOptions, type Sql } from "@ts-libs/server/db"
-import { SecondFactorStatus, SessionManager, SessionStatus } from "@ts-libs/server/sign-in"
+import { buildPostgresOptions, type Sql } from "@spy4x/server/db"
+import { SecondFactorStatus, SessionManager, SessionStatus } from "@spy4x/server/sign-in"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import type { AuthSessionRecord } from "./model.ts"
 import {

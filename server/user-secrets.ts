@@ -29,7 +29,7 @@
  * - `keys.ts:26` accepted any `http(s)` base URL, so a user could point the outbound call at
  *   `http://169.254.169.254/` — the cloud metadata service — or at anything else inside the
  *   network. A non-empty base URL now goes through `validatePublicUrl` from
- *   `@ts-libs/net/url-policy` with an injected resolver, and an installation that really does host
+ *   `@spy4x/net/url-policy` with an injected resolver, and an installation that really does host
  *   its own model server opts into internal addresses explicitly
  *   ({@link UserSecretStoreOptions.allowInternalBaseUrl}).
  * - The source trusted its query to have filtered by user. Every row this store receives is
@@ -50,8 +50,8 @@
  */
 
 import { type } from "arktype"
-import { defaultResolver, validatePublicUrl } from "@ts-libs/net/url-policy"
-import type { DnsResolver } from "@ts-libs/net/url-policy"
+import { defaultResolver, validatePublicUrl } from "@spy4x/net/url-policy"
+import type { DnsResolver } from "@spy4x/net/url-policy"
 
 import { CryptoError, DEFAULT_MASK_VISIBLE, maskKey } from "./crypto.ts"
 import type { SecretCipher } from "./crypto.ts"
@@ -360,7 +360,7 @@ function tryParseUrl(value: string): URL | null {
  *    addresses are allowed. Absoluteness is checked here rather than left to the guard, because
  *    `validatePublicUrl` completes a missing scheme with `https://` and would quietly accept
  *    `api.example.com/v1`, which is not what a caller who typed a bare host meant to store.
- * 2. **The SSRF guard**, `validatePublicUrl` from `@ts-libs/net/url-policy`, unless internal
+ * 2. **The SSRF guard**, `validatePublicUrl` from `@spy4x/net/url-policy`, unless internal
  *    addresses were explicitly allowed. It resolves the host name and refuses loopback, link-local
  *    (including the cloud metadata address `169.254.169.254`), private and other special-use
  *    destinations.
@@ -374,7 +374,7 @@ function tryParseUrl(value: string): URL | null {
  *
  * Validating at save time does **not** make the outbound call safe. A host name that resolves to a
  * public address today can resolve to `127.0.0.1` tomorrow, and the guard cannot see that. The
- * request that uses this base URL has to go through `safeFetch` from `@ts-libs/net/safe-fetch`,
+ * request that uses this base URL has to go through `safeFetch` from `@spy4x/net/safe-fetch`,
  * which re-checks at connect time and follows redirects under the same policy.
  */
 async function assertBaseUrl(

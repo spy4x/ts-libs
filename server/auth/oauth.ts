@@ -23,10 +23,10 @@
 
 import { encodeBase64Url } from "@std/encoding/base64url"
 import { type } from "arktype"
-import { constantTimeEquals, randomBase64Url, sha256Hex } from "@ts-libs/platform/tokens"
-import { systemClock } from "@ts-libs/platform/universal/time"
-import { SecondFactorStatus } from "@ts-libs/server/sign-in"
-import { validate } from "@ts-libs/validation"
+import { constantTimeEquals, randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
+import { systemClock } from "@spy4x/platform/universal/time"
+import { SecondFactorStatus } from "@spy4x/server/sign-in"
+import { validate } from "@spy4x/validation"
 
 import { isStoreText, MAX_SUBJECT_LENGTH } from "./input.ts"
 import { AuthConflictError, type AuthKey, type AuthUser, normalizeEmail } from "./model.ts"

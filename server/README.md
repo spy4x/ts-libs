@@ -1,4 +1,4 @@
-# `@ts-libs/server`
+# `@spy4x/server`
 
 Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 
@@ -11,34 +11,34 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 
 ## Subpaths
 
-| Export                              | What it is                                                                           |
-| ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `@ts-libs/server/http/bounded-body` | Byte-capped, stall-budgeted request body reading; canonical `PayloadTooLargeError`   |
-| `@ts-libs/server/http/cors`         | Exact-match origin allowlist and the `hono/cors` origin resolver                     |
-| `@ts-libs/server/http/bearer-auth`  | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)    |
-| `@ts-libs/server/export`            | Versioned export envelope and `Content-Disposition` download response                |
-| `@ts-libs/server/static`            | Static-file serving with a MIME table and path-traversal protection                  |
-| `@ts-libs/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
-| `@ts-libs/server/storage`           | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning |
-| `@ts-libs/server/auth`              | Sign-in account model and `AuthStore`: see the `server/auth` section below           |
-| `@ts-libs/server/auth/postgres`     | The Postgres `AuthStore` and `SessionStore`, and the `AUTH_POSTGRES_SCHEMA` tables   |
-| `@ts-libs/server/auth/memory-store` | The in-memory `AuthStore`, held to the same contract as the Postgres one, for tests  |
-| `@ts-libs/server/auth/password`     | Password sign-up, sign-in, change and reset: see `server/auth/password` below        |
-| `@ts-libs/server/auth/email-code`   | Sign-in with a one-time code sent by email: see `server/auth/email-code` below       |
-| `@ts-libs/server/auth/oauth`        | OAuth2 sign-in with PKCE, matched by the provider's `sub`: see `server/auth/oauth`   |
-| `@ts-libs/server/auth/oauth-google` | Google's provider configuration for `@ts-libs/server/auth/oauth`                     |
-| `@ts-libs/server/sign-in`           | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP      |
-| `@ts-libs/server/crypto`            | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                  |
-| `@ts-libs/server/user-secrets`      | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert            |
-| `@ts-libs/server/quota`             | Usage metering with an atomic reserve and 429/503 — not a rate limiter               |
-| `@ts-libs/server/db`                | Barrel: Postgres and SQLite adapters plus the migration runner they share            |
-| `@ts-libs/server/db/migrate`        | Migration runner: discovers, orders and applies `.sql` files, one port for both      |
-| `@ts-libs/server/db/postgres`       | Postgres pool with sane connect/idle/statement timeout defaults                      |
-| `@ts-libs/server/db/sqlite`         | SQLite adapter behind an injectable driver port; ships no driver                     |
-| `@ts-libs/server/request-log`       | Hono request-logging middleware, method/path/status/elapsed only, injected writer    |
-| `@ts-libs/server/config`            | `EnvReader` + `loadConfig`: one arktype schema validated against the environment     |
-| `@ts-libs/server/kv`                | A Redis-backed key-value store, keys scoped under a caller-supplied prefix           |
-| `@ts-libs/server/outbox`            | Transactional outbox drain: claim, publish, retry, over a generic SQL table          |
+| Export                            | What it is                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------ |
+| `@spy4x/server/http/bounded-body` | Byte-capped, stall-budgeted request body reading; canonical `PayloadTooLargeError`   |
+| `@spy4x/server/http/cors`         | Exact-match origin allowlist and the `hono/cors` origin resolver                     |
+| `@spy4x/server/http/bearer-auth`  | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)    |
+| `@spy4x/server/export`            | Versioned export envelope and `Content-Disposition` download response                |
+| `@spy4x/server/static`            | Static-file serving with a MIME table and path-traversal protection                  |
+| `@spy4x/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
+| `@spy4x/server/storage`           | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning |
+| `@spy4x/server/auth`              | Sign-in account model and `AuthStore`: see the `server/auth` section below           |
+| `@spy4x/server/auth/postgres`     | The Postgres `AuthStore` and `SessionStore`, and the `AUTH_POSTGRES_SCHEMA` tables   |
+| `@spy4x/server/auth/memory-store` | The in-memory `AuthStore`, held to the same contract as the Postgres one, for tests  |
+| `@spy4x/server/auth/password`     | Password sign-up, sign-in, change and reset: see `server/auth/password` below        |
+| `@spy4x/server/auth/email-code`   | Sign-in with a one-time code sent by email: see `server/auth/email-code` below       |
+| `@spy4x/server/auth/oauth`        | OAuth2 sign-in with PKCE, matched by the provider's `sub`: see `server/auth/oauth`   |
+| `@spy4x/server/auth/oauth-google` | Google's provider configuration for `@spy4x/server/auth/oauth`                       |
+| `@spy4x/server/sign-in`           | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP      |
+| `@spy4x/server/crypto`            | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                  |
+| `@spy4x/server/user-secrets`      | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert            |
+| `@spy4x/server/quota`             | Usage metering with an atomic reserve and 429/503 — not a rate limiter               |
+| `@spy4x/server/db`                | Barrel: Postgres and SQLite adapters plus the migration runner they share            |
+| `@spy4x/server/db/migrate`        | Migration runner: discovers, orders and applies `.sql` files, one port for both      |
+| `@spy4x/server/db/postgres`       | Postgres pool with sane connect/idle/statement timeout defaults                      |
+| `@spy4x/server/db/sqlite`         | SQLite adapter behind an injectable driver port; ships no driver                     |
+| `@spy4x/server/request-log`       | Hono request-logging middleware, method/path/status/elapsed only, injected writer    |
+| `@spy4x/server/config`            | `EnvReader` + `loadConfig`: one arktype schema validated against the environment     |
+| `@spy4x/server/kv`                | A Redis-backed key-value store, keys scoped under a caller-supplied prefix           |
+| `@spy4x/server/outbox`            | Transactional outbox drain: claim, publish, retry, over a generic SQL table          |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -57,7 +57,7 @@ the sibling `time/` package. Every entry in this package's `exports` must resolv
 `readBoundedBody`, `readBoundedText`, `parseBoundedFormData`, `readContentLength`,
 `PayloadTooLargeError`, and the types `ReadBoundedBodyOptions` and `BodySource`.
 
-**Canonical home: `net/bounded-body.ts`** (`@ts-libs/net/bounded-body`). This module is a named
+**Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This module is a named
 re-export of it: `PayloadTooLargeError`, `readBoundedBody`, `readBoundedText` and
 `readContentLength` are the canonical symbols, so `PayloadTooLargeError` is one class object behind
 both specifiers and a single `catch` covers either import. The re-export is named rather than
@@ -69,7 +69,7 @@ reading the body, and the reader is cancelled on any failure. `maxBytes` is opti
 to 5 MiB; `timeoutMs` is a **per-chunk stall budget, not a single overall deadline** — a
 slow-but-live upload is never cut off by its own total duration, only by a gap between chunks. A
 stall rejects with the canonical `BodyReadTimeoutError`, importable from
-`@ts-libs/net/bounded-body`, rather than the bare `Error` this module threw before the collapse.
+`@spy4x/net/bounded-body`, rather than the bare `Error` this module threw before the collapse.
 
 ## `server/http/cors`
 
@@ -211,7 +211,7 @@ development. Use `upload`/`download` with a local provider.
 ### Provider selection
 
 ```ts
-import { createStorage } from "@ts-libs/server/storage"
+import { createStorage } from "@spy4x/server/storage"
 
 const storage = await createStorage() // reads Deno.env, returns undefined if unconfigured
 await storage?.upload("media/photo.png", bytes)
@@ -377,27 +377,27 @@ guess-counted challenges. The sign-in providers (password, a one-time code by em
 OpenID Connect) are built on it; sessions, the cookie and password hashing come from
 `server/sign-in`.
 
-| Export                              | What it is                                                                   |
-| ----------------------------------- | ---------------------------------------------------------------------------- |
-| `@ts-libs/server/auth`              | `AuthUser`, `AuthKey`, `normalizeEmail`, `ChallengeOutcome`, the `AuthStore` |
-| `@ts-libs/server/auth/postgres`     | `AUTH_POSTGRES_SCHEMA`, `createPostgresAuthStore`, the session store         |
-| `@ts-libs/server/auth/memory-store` | `MemoryAuthStore`: the same rules in memory, for unit tests                  |
+| Export                            | What it is                                                                   |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| `@spy4x/server/auth`              | `AuthUser`, `AuthKey`, `normalizeEmail`, `ChallengeOutcome`, the `AuthStore` |
+| `@spy4x/server/auth/postgres`     | `AUTH_POSTGRES_SCHEMA`, `createPostgresAuthStore`, the session store         |
+| `@spy4x/server/auth/memory-store` | `MemoryAuthStore`: the same rules in memory, for unit tests                  |
 
-`@ts-libs/server/auth` also exports `ProviderDeps` and `SignInResult`, the shape every provider
+`@spy4x/server/auth` also exports `ProviderDeps` and `SignInResult`, the shape every provider
 takes and returns: the store, the `SessionManager`, an optional clock and an optional
 `secondFactorFor(user)`. When the app leaves `secondFactorFor` out, a provider creates the session
 with `SecondFactorStatus.NotRequired`. The providers themselves are separate entry points, each with
 its own section below.
 
 ```ts
-import { createSqlFromEnv } from "@ts-libs/server/db"
-import { SessionManager } from "@ts-libs/server/sign-in"
-import type { AuthSessionRecord } from "@ts-libs/server/auth"
+import { createSqlFromEnv } from "@spy4x/server/db"
+import { SessionManager } from "@spy4x/server/sign-in"
+import type { AuthSessionRecord } from "@spy4x/server/auth"
 import {
   AUTH_POSTGRES_SCHEMA,
   createPostgresAuthStore,
   createPostgresSessionStore,
-} from "@ts-libs/server/auth/postgres"
+} from "@spy4x/server/auth/postgres"
 
 const sql = createSqlFromEnv(Deno.env.toObject())
 if (!sql) throw new Error("DB_HOST is not set")
@@ -436,7 +436,7 @@ case succeeds when retried. Proving an address another user owns is refused with
 address.
 
 **Addresses are compared in one form.** `normalizeEmail` trims and lower-cases, and accepts only
-what `@ts-libs/email` will send to. The store refuses a key whose `email` is not already in that form.
+what `@spy4x/email` will send to. The store refuses a key whose `email` is not already in that form.
 
 **A challenge counts guesses.** `issueChallenge` stores the hash of a code for a
 `(purpose, subject)`. Asking for a new code replaces the hash and the expiry but keeps the guess
@@ -465,7 +465,7 @@ Ids are Postgres `integer`s, so every id fits in a JavaScript number.
   issue a challenge. The store only keeps the rules that must hold whichever provider runs.
 - **It does not limit how often a code is asked for.** A challenge that has used up its guesses
   stays locked until it expires, and every new code moves the expiry. Put
-  `@ts-libs/platform/rate-limit` in front of the route that sends codes.
+  `@spy4x/platform/rate-limit` in front of the route that sends codes.
 - **It does not stop an unproven key for an owned address.** A provider that signs people up checks
   `findUserIdByProvenEmail` first. The owner's next proof or proven insert deletes such a key.
 - **It does not release addresses when a user is soft-deleted.** `deletedAt` stops sign-in; the app
@@ -486,8 +486,8 @@ rules, not moved from the earlier `email-password.ts`. Every refusal is thrown a
 `PasswordSignInError` whose `reason` names it.
 
 ```ts
-import { createPasswordHasher } from "@ts-libs/server/sign-in"
-import { createPasswordSignIn } from "@ts-libs/server/auth/password"
+import { createPasswordHasher } from "@spy4x/server/sign-in"
+import { createPasswordSignIn } from "@spy4x/server/auth/password"
 
 const passwords = createPasswordSignIn({
   store,
@@ -540,7 +540,7 @@ used by then, so the person asks for a new one.
 - **It does not send mail.** `requestReset` returns the code; the app sends it.
 - **It does not limit guesses per account or per client.** A reset code allows its own few guesses,
   but nothing limits how often codes are asked for or passwords tried. Put
-  `@ts-libs/platform/rate-limit` in front of every route that calls this provider.
+  `@spy4x/platform/rate-limit` in front of every route that calls this provider.
 - **It does not hide an address in use at sign-up.** `email-taken` tells the caller; a reset is the
   way in for the address's owner.
 - **It cannot tell a squatter from a person who never proved their own sign-up.** Both lose an
@@ -559,7 +559,7 @@ and, on a match, signs the person in and creates a session. Refusals are `EmailC
 fixed message per `reason`, which never echoes the input.
 
 ```ts
-import { createEmailCodeSignIn } from "@ts-libs/server/auth/email-code"
+import { createEmailCodeSignIn } from "@spy4x/server/auth/email-code"
 
 const codes = createEmailCodeSignIn({
   store,
@@ -601,7 +601,7 @@ rejects, the rejection reaches the caller and the code is already issued.
 
 - **It does not rate-limit, and that is the caller's job.** It limits guesses per code, not how often
   a code is asked for, and every new code moves the expiry of a locked challenge. Put
-  `createRateLimitMiddleware` from `@ts-libs/platform/rate-limit` in front of the `requestCode` route
+  `createRateLimitMiddleware` from `@spy4x/platform/rate-limit` in front of the `requestCode` route
   with two limiters, one keyed by the normalised address and one by `clientIp`, and in front of the
   `verifyCode` route keyed by `clientIp`. No limiter is built in: the client address exists only in
   the HTTP layer, and a built-in one would force a choice of store into the provider.
@@ -616,7 +616,7 @@ rejects, the rejection reaches the caller and the code is already issued.
 
 `createOAuthSignIn`, `OAuthSignInError`, `OAuthFailure`, `OAuthOutcome`, `OAuthProviderConfig`,
 `OAuthProfile`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, and the option, input and result
-interfaces. Google's configuration is `@ts-libs/server/auth/oauth-google`:
+interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
 `createGoogleOAuthProvider`, `readGoogleProfile` and Google's endpoint and default-scope constants.
 
 OAuth2 sign-in with any provider that has a user-info endpoint (#57). The provider is configuration,
@@ -625,8 +625,8 @@ credentials, three `https:` endpoints, scopes, and a `profile(body)` function th
 user-info answer. Refusals are `OAuthSignInError`s with a `reason`.
 
 ```ts
-import { createOAuthSignIn } from "@ts-libs/server/auth/oauth"
-import { createGoogleOAuthProvider } from "@ts-libs/server/auth/oauth-google"
+import { createOAuthSignIn } from "@spy4x/server/auth/oauth"
+import { createGoogleOAuthProvider } from "@spy4x/server/auth/oauth-google"
 
 const google = createOAuthSignIn({
   store,
@@ -751,7 +751,7 @@ from `server/crypto.ts`.
 **A base URL is an outbound destination, so it is checked like one.** A non-empty `baseUrl` must be
 an absolute `http:`/`https:` URL with no user name or password and no control characters — the
 store's own rules, which run first and always — and then passes `validatePublicUrl` from
-`@ts-libs/net/url-policy`, which resolves the host and refuses loopback, link-local (including the
+`@spy4x/net/url-policy`, which resolves the host and refuses loopback, link-local (including the
 cloud metadata address `169.254.169.254`), private and special-use destinations. The store keeps its
 own constant `baseUrl is invalid` message for every rejection: the guard's message names the
 resolver's failure and the address family it disliked, which is information about the installation's
@@ -775,7 +775,7 @@ guard has no switch for "internal but not everything" — and only the store's o
 
 **Checking at save time does not make the call safe.** A host name that resolves to a public address
 today can resolve to `127.0.0.1` tomorrow, and a stored URL is checked once. The outbound request
-has to go through `safeFetch` from `@ts-libs/net/safe-fetch`, which re-checks at connect time and
+has to go through `safeFetch` from `@spy4x/net/safe-fetch`, which re-checks at connect time and
 follows redirects under the same policy. A store that validates and then calls `fetch` directly is
 still vulnerable.
 
@@ -919,7 +919,7 @@ Found by an audit of the extracted code, not inherited from a source.
 
 ## `server/db`
 
-Two adapters, one migration runner. `@ts-libs/server/db` is the barrel; `db/migrate`,
+Two adapters, one migration runner. `@spy4x/server/db` is the barrel; `db/migrate`,
 `db/postgres` and `db/sqlite` are the subpaths. Nothing here ships a driver: `postgres` is pinned in
 the root import map and the SQLite driver is the caller's own, passed through `SqliteDriver`.
 
@@ -1138,7 +1138,7 @@ it per user with a conditional write (only if greater than the stored one), and 
 ### What it does not do
 
 - **It does not limit guesses.** Six digits across three accepted steps is one chance in about 333 000
-  per guess, and a password is only as strong as its user made it. Put `@ts-libs/platform/rate-limit`
+  per guess, and a password is only as strong as its user made it. Put `@spy4x/platform/rate-limit`
   in front of every route that checks a password or a code, keyed per account as well as per address.
 - **It does not hide whether an account exists.** When the account is missing, the app should still
   spend the time of one `verify` (against a hash made once at start-up) before answering.
@@ -1295,7 +1295,7 @@ rather than throwing.
 
 ```ts
 import { type } from "arktype"
-import { loadConfig, stringBoolean } from "@ts-libs/server/config"
+import { loadConfig, stringBoolean } from "@spy4x/server/config"
 
 const configSchema = type({
   ENV: "'dev' | 'prod'",
@@ -1315,11 +1315,11 @@ export const config = loadConfig(configSchema)
 differs from the template's by one import line (its own module alias for the cache interface) and
 was not otherwise consulted.
 
-**Structurally compatible with `ICacheStorage`.** `@ts-libs/platform/cache`'s `ICacheStorage` (#125)
+**Structurally compatible with `ICacheStorage`.** `@spy4x/platform/cache`'s `ICacheStorage` (#125)
 names `server/kv` in its own doc as the interface's Redis implementation, briefed against these exact
 signatures: `get(key): Promise<string | null>`, `set(key, value: string, ttlSec): Promise<void>`,
 `del(key): Promise<void>`, `reset(): Promise<void>`. This module does not import
-`@ts-libs/platform/cache` — the two were extracted in parallel and neither depends on the other's
+`@spy4x/platform/cache` — the two were extracted in parallel and neither depends on the other's
 branch — so the match is verified structurally: `deno check` accepts `const _: ICacheStorage = store`
 and rejects a `{ get }`-only object with `TS2739`.
 
@@ -1376,7 +1376,7 @@ needs to do its job. `OutboxEvent` here carries only `id`, `eventKind`, `aggrega
 more than the aggregate identity pulls the authoritative row instead, which is the pattern the module
 exists to enforce.
 
-**The retry delay reuses `@ts-libs/integrations`'s backoff for its clamp, but keeps the source's own
+**The retry delay reuses `@spy4x/integrations`'s backoff for its clamp, but keeps the source's own
 numbers.** Issue #71 lists this doubling-and-capping formula as one of the duplicated retry helpers
 in the codebase. `retryDelayMs` computes the uncapped delay exactly as the ported original did —
 `Math.max(1, attemptCount)` before subtracting one for the exponent, and the same `exponent >= 32 ?
@@ -1400,7 +1400,7 @@ batch and never rescheduled that event either. A non-`Error` thrown value is sti
 
 **`PostgresOutboxRepository` aliases every returned column to its `OutboxEvent` field name in SQL,**
 rather than relying on the caller's `Sql` having been created with a snake-to-camel row transform.
-The template's own client set `transform: postgres.camel` globally, but `@ts-libs/server/db`'s
+The template's own client set `transform: postgres.camel` globally, but `@spy4x/server/db`'s
 `createSql` does not default to one — aliasing in the query itself means this repository's row shape
 does not depend on how a caller configured their pool.
 

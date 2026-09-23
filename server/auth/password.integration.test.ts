@@ -10,8 +10,8 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import postgres from "postgres"
-import { buildPostgresOptions, type Sql } from "@ts-libs/server/db"
-import { createPasswordHasher, type PasswordHasher, SessionManager } from "@ts-libs/server/sign-in"
+import { buildPostgresOptions, type Sql } from "@spy4x/server/db"
+import { createPasswordHasher, type PasswordHasher, SessionManager } from "@spy4x/server/sign-in"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import type { AuthSessionRecord } from "./model.ts"
 import {

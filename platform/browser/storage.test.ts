@@ -81,7 +81,7 @@ describe("makeStorage with a schema", () => {
   })
 
   it("describes the write failure through the validation envelope, not a bespoke map", () => {
-    // `@ts-libs/validation` builds `description` from arktype's own issues.
+    // `@spy4x/validation` builds `description` from arktype's own issues.
     const store = makeStorage(memoryStorage(), "profile", { schema: profileSchema })
     const result = store.set(
       { name: "Ada", age: "old" } as unknown as { name: string; age: number },
@@ -126,7 +126,7 @@ describe("makeStorage with a schema", () => {
   const allowsUndeclared =
     "keeps an undeclared key when the schema allows it, not strict by default"
   it(allowsUndeclared, () => {
-    // `@ts-libs/validation` deliberately does not call `configure({ onUndeclaredKey: "reject" })`,
+    // `@spy4x/validation` deliberately does not call `configure({ onUndeclaredKey: "reject" })`,
     // so strictness is the schema's decision and this wrapper must not invent one. An undeclared key
     // survives, which is the behaviour arktype itself has.
     const store = makeStorage(memoryStorage(), "profile", { schema: profileSchema })

@@ -1,4 +1,4 @@
-# `@ts-libs/realtime`
+# `@spy4x/realtime`
 
 Transport mechanics for a hint-only realtime connection: a server-side
 connection registry and an aggregate-keyed notify adapter, and a client
@@ -160,7 +160,7 @@ recipients.
 ## Server wiring
 
 ```ts
-import { AggregateNotifier, ConnectionRegistry, createSystemClock } from "@ts-libs/realtime"
+import { AggregateNotifier, ConnectionRegistry, createSystemClock } from "@spy4x/realtime"
 
 const clock = createSystemClock()
 const registry = new ConnectionRegistry({
@@ -205,7 +205,7 @@ import {
   createWebSocketFactory,
   PersistentCursorStore,
   TransportStatus,
-} from "@ts-libs/realtime"
+} from "@spy4x/realtime"
 
 const cursors = new PersistentCursorStore({
   storage: localStorage,
@@ -410,7 +410,7 @@ needs `--allow-net` and no container â€” nothing it does reaches past loopback â
 and every server and socket it opens is closed before the test ends, so
 Deno's resource and op sanitizers stay on.
 
-The doubles are exported from `@ts-libs/realtime/testing` so a host can test its
+The doubles are exported from `@spy4x/realtime/testing` so a host can test its
 own wiring without inventing a second set.
 
 Dependencies: arktype (the repository's only validator) for the wire schemas,

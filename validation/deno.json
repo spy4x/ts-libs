@@ -1,6 +1,6 @@
 {
-  "name": "@ts-libs/validation",
-  "version": "0.1.0",
+  "name": "@spy4x/validation",
+  "version": "1.0.0",
   "exports": {
     ".": "./mod.ts",
     "./validate": "./validate.ts",

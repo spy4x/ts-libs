@@ -22,7 +22,7 @@ import {
   type SmtpTransportFactory,
 } from "./smtp.ts"
 import { type EmailMessage, icalAttachment } from "./message.ts"
-import { type IcsEvent, IcsEventStatus, type IcsOptions } from "@ts-libs/time/ics"
+import { type IcsEvent, IcsEventStatus, type IcsOptions } from "@spy4x/time/ics"
 import type { SendFailure, SendResult } from "./sender.ts"
 
 const PASSWORD = "test-password-not-real"

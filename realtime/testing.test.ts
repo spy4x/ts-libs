@@ -1,6 +1,6 @@
 /**
  * `FakeSocket`'s own contract: it stands in for a real `WebSocket` in every other suite in this
- * package (and in a host's own tests, via `@ts-libs/realtime/testing`), so a difference from the
+ * package (and in a host's own tests, via `@spy4x/realtime/testing`), so a difference from the
  * real thing here is a difference every test built on it inherits silently.
  *
  * `close()` closing asynchronously is the one case #74 named directly: "a real socket closes

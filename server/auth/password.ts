@@ -23,9 +23,9 @@
  * @module
  */
 
-import { randomBase64Url, sha256Hex } from "@ts-libs/platform/tokens"
-import { systemClock } from "@ts-libs/platform/universal/time"
-import { type PasswordHasher, SecondFactorStatus } from "@ts-libs/server/sign-in"
+import { randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
+import { systemClock } from "@spy4x/platform/universal/time"
+import { type PasswordHasher, SecondFactorStatus } from "@spy4x/server/sign-in"
 import {
   AuthConflictError,
   type AuthKey,

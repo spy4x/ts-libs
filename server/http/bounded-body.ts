@@ -8,7 +8,7 @@
  * `content-length` before touching the body, and cancels the reader on failure —
  * including a stall that outlives the budget.
  *
- * **Canonical home: `net/bounded-body.ts`** (`@ts-libs/net/bounded-body`). This
+ * **Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This
  * module is a named re-export of that implementation plus the one genuinely
  * server-specific entry point, `parseBoundedFormData`. Until this collapse the
  * module carried a byte-identical copy of the reader, which meant two distinct
@@ -24,7 +24,7 @@
  *
  * Two shape changes came with the collapse, both documented in the PR: a stall
  * rejects with the canonical `BodyReadTimeoutError` (importable from
- * `@ts-libs/net/bounded-body`) rather than a bare `Error` — both are `Error`
+ * `@spy4x/net/bounded-body`) rather than a bare `Error` — both are `Error`
  * subclasses, so an existing `catch (error: unknown)` keeps working — and
  * `maxBytes` is now optional, defaulting to 5 MiB. The injectable
  * `setTimer`/`clearTimer` surface is gone with the duplicate timer layer.
@@ -40,7 +40,7 @@ import {
   readBoundedBody,
   readBoundedText,
   readContentLength,
-} from "@ts-libs/net/bounded-body"
+} from "@spy4x/net/bounded-body"
 
 export { PayloadTooLargeError, readBoundedBody, readBoundedText, readContentLength }
 
@@ -68,7 +68,7 @@ export type BoundedBodyTimeout = Pick<BodyReadOptions, "timeoutMs">
  * canonical readers take this structural shape rather than a `Request`, and
  * `Request` and `Response` both satisfy it.
  */
-export type { BodySource } from "@ts-libs/net/bounded-body"
+export type { BodySource } from "@spy4x/net/bounded-body"
 
 /**
  * Parse a `multipart/form-data` (or url-encoded) body under the same cap.

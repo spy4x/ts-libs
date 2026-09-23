@@ -9,7 +9,7 @@
  * Consumers use them to decide that something changed and to pull the authoritative
  * state, which keeps the outbox out of the correctness path.
  */
-import { createExponentialBackoff } from "@ts-libs/integrations"
+import { createExponentialBackoff } from "@spy4x/integrations"
 
 /**
  * One outbox row.
@@ -82,7 +82,7 @@ const DEFAULTS = {
  *
  * Issue #71 lists this doubling-and-capping formula as one of the retry helpers
  * duplicated across the codebase, so the final clamp to `[0, maxMs]` delegates to
- * `@ts-libs/integrations`'s `createExponentialBackoff` (with `jitterRatio: 0`, since
+ * `@spy4x/integrations`'s `createExponentialBackoff` (with `jitterRatio: 0`, since
  * only one worker holds a claimed row at a time via its lease, so there is nothing to
  * de-synchronise). The uncapped delay is still computed exactly as the ported
  * original computed it, because a first review round found that a direct call —

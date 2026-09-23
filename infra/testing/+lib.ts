@@ -13,7 +13,7 @@
  *    that needs an actual filesystem, inside the tier's `--allow-write=.volumes` grant.
  *
  * It lives in `infra/` because `infra/` is not a workspace member: nothing here is
- * published to JSR and nothing here is reachable from a `@ts-libs/*` entry point.
+ * published to JSR and nothing here is reachable from a `@spy4x/*` entry point.
  */
 
 export {

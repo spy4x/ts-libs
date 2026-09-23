@@ -54,8 +54,8 @@ describe("error shapes", () => {
     expect(describeError(server)).toBe("HTTP 503")
   })
 
-  it("accepts a ValidationError from @ts-libs/validation without adaptation", () => {
-    // The envelope is owned by @ts-libs/validation: `{ description, details }`. If this package
+  it("accepts a ValidationError from @spy4x/validation without adaptation", () => {
+    // The envelope is owned by @spy4x/validation: `{ description, details }`. If this package
     // ever grows its own `errors` map again, this assignment stops compiling.
     const error: ValidationError = {
       description: "name must be a string",

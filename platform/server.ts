@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/platform/server` — helpers that touch a filesystem.
+ * `@spy4x/platform/server` — helpers that touch a filesystem.
  *
  * Every module here takes a `FileSystemPort` instead of calling `Deno.*` directly, so the decision
  * logic is testable under the root test task's `--allow-read --allow-env` grant (there is no

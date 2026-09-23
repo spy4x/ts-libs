@@ -1,8 +1,8 @@
 /**
  * `AuthStore`: persistence for users, keys and guess-counted challenges.
  *
- * Two implementations ship: `createPostgresAuthStore` (`@ts-libs/server/auth/postgres`) for
- * production and `MemoryAuthStore` (`@ts-libs/server/auth/memory-store`) for unit tests. One
+ * Two implementations ship: `createPostgresAuthStore` (`@spy4x/server/auth/postgres`) for
+ * production and `MemoryAuthStore` (`@spy4x/server/auth/memory-store`) for unit tests. One
  * contract suite (`store-contract.test.ts`) runs against both, so a provider tested against the
  * memory store relies only on behaviour Postgres also has.
  *

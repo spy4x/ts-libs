@@ -15,8 +15,8 @@ import {
   isValidTimeZone,
   validTimeZoneOr,
   zonedDateTime,
-} from "@ts-libs/time/tz"
-import { generateIcs, type IcsEvent, type IcsOptions } from "@ts-libs/time/ics"
+} from "@spy4x/time/tz"
+import { generateIcs, type IcsEvent, type IcsOptions } from "@spy4x/time/ics"
 import { assertNoControlCharacters } from "./address.ts"
 
 /** One attachment: text content plus the metadata the MIME part needs. */
@@ -44,7 +44,7 @@ export interface EmailMessage {
   text?: string
   /**
    * HTML body. **Must already be escaped** — build it with `escapeHtml` and
-   * `htmlWrap` from `@ts-libs/email/html`. It is never synthesised from `text`:
+   * `htmlWrap` from `@spy4x/email/html`. It is never synthesised from `text`:
    * `mig` sent `html: opts.html ?? opts.text` on every message, which mailed
    * plain text as HTML.
    */
@@ -169,7 +169,7 @@ export function frameWallClockShort(
 /**
  * Build the ICS attachment for an event.
  *
- * The calendar body comes from `@ts-libs/time/ics` — a second ICS writer is
+ * The calendar body comes from `@spy4x/time/ics` — a second ICS writer is
  * exactly the duplication this port exists to avoid — and the MIME type's
  * `method` parameter is read back out of the generated document instead of being
  * derived a second time from the event status. That makes it impossible for the

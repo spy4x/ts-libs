@@ -1,4 +1,4 @@
-# `@ts-libs/time`
+# `@spy4x/time`
 
 Time and calendar primitives with no application domain attached. IANA timezone math on `Intl`,
 plus an RFC 5545 iCalendar writer. Zero runtime dependencies.
@@ -10,7 +10,7 @@ plus an RFC 5545 iCalendar writer. Zero runtime dependencies.
 | `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                      |
 
 ```ts
-import { formatDateTimeLong, zonedDateTime } from "@ts-libs/time/tz"
+import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
 
 // A stored booking: a wall clock, the zone it was made in, the guest's zone.
 const instant = zonedDateTime("2026-08-28", "10:00", "Europe/Berlin")
@@ -18,8 +18,8 @@ formatDateTimeLong("2026-08-28", "10:00", "Europe/Berlin") // "Friday, 28 August
 ```
 
 ```ts
-import { generateIcs, IcsEventStatus } from "@ts-libs/time/ics"
-import { zonedDateTime } from "@ts-libs/time/tz"
+import { generateIcs, IcsEventStatus } from "@spy4x/time/ics"
+import { zonedDateTime } from "@spy4x/time/tz"
 
 const start = zonedDateTime("2026-08-28", "10:00", "Europe/Berlin")
 const ics = generateIcs(

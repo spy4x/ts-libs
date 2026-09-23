@@ -8,7 +8,7 @@
  */
 
 import { type } from "arktype"
-import { validate } from "@ts-libs/validation"
+import { validate } from "@spy4x/validation"
 import { type NewAuthKey, normalizeEmail } from "./model.ts"
 import type { AttemptChallengeInput, IssueChallengeInput } from "./store.ts"
 

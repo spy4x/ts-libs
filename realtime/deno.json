@@ -1,6 +1,6 @@
 {
-  "name": "@ts-libs/realtime",
-  "version": "0.1.0",
+  "name": "@spy4x/realtime",
+  "version": "1.0.0",
   "exports": {
     ".": "./mod.ts",
     "./client": "./client-transport.ts",

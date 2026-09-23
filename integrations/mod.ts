@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/integrations` — outbound integration clients and inbound webhook
+ * `@spy4x/integrations` — outbound integration clients and inbound webhook
  * verification. Every client is a thin `fetch` wrapper with an injectable
  * transport, so nothing here needs network access to be tested.
  */

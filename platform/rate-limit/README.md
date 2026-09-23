@@ -1,4 +1,4 @@
-# `@ts-libs/platform/rate-limit`
+# `@spy4x/platform/rate-limit`
 
 Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracted from
 `mig/lib/ratelimit.ts`, `gb/apps/api/{services,middlewares}/rateLimiter.ts` and
@@ -23,7 +23,7 @@ import {
   createMemoryRateLimiter,
   createRateLimitMiddleware,
   userThenIp,
-} from "@ts-libs/platform/rate-limit"
+} from "@spy4x/platform/rate-limit"
 
 const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 10 })
 const app = new Hono<{ Bindings: { remoteAddr?: string } }>()
@@ -43,7 +43,7 @@ headers; with it on and no proxy, the limiter is trivially defeated — see the 
 Several instances share one store:
 
 ```ts
-import { createKvStore, createStoreLimiter, denoKvBackend } from "@ts-libs/platform/rate-limit"
+import { createKvStore, createStoreLimiter, denoKvBackend } from "@spy4x/platform/rate-limit"
 
 const kv = await Deno.openKv() // caller owns the handle and must close() it
 const store = createKvStore({ backend: denoKvBackend(kv) })

@@ -1,16 +1,16 @@
-# `@ts-libs/platform`
+# `@spy4x/platform`
 
 Universal, server and browser helpers extracted from seven repositories into one cohesive package.
 No framework, no domain types, no validator.
 
 ```bash
-deno add jsr:@ts-libs/platform
+deno add jsr:@spy4x/platform
 ```
 
 ```ts
-import { formatDecimal, ok } from "@ts-libs/platform"
-import { makeStorage } from "@ts-libs/platform/browser"
-import { atomicWriteJson, denoFileSystem } from "@ts-libs/platform/server"
+import { formatDecimal, ok } from "@spy4x/platform"
+import { makeStorage } from "@spy4x/platform/browser"
+import { atomicWriteJson, denoFileSystem } from "@spy4x/platform/server"
 ```
 
 ## Module map
@@ -80,9 +80,9 @@ factory, a timer) as a parameter, defaulting to the real global only when the ca
 | `browser/download` | `downloadResponseAsFile`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter` |
 | `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike`, `TypedStorage`                                       |
 
-`browser/download` moved here from `@ts-libs/server/export-client`: it is a browser download
+`browser/download` moved here from `@spy4x/server/export-client`: it is a browser download
 helper (`document`, an object URL) that has nothing to do with a server, and it pairs with the
-download response `@ts-libs/server/export` builds without either package importing the other.
+download response `@spy4x/server/export` builds without either package importing the other.
 
 `browser/base64` (`@std/encoding`'s `decodeBase64Url` covers it, and already used by
 `platform/tokens.ts`) and `browser/dropdown` (an 11-line rule that is the dropdown component's own
@@ -119,7 +119,7 @@ stream, and nothing in this workspace called `sha256OfStream`) were removed, alo
 `platform/scripts/memory-probe.ts` script that measured `hash-file`'s buffering — a script is not a
 module and would have shipped with the package.
 
-Not in this package, deliberately: `types`, `config`, `uuid`, `rate-limit` (owned by `@ts-libs/*`
+Not in this package, deliberately: `types`, `config`, `uuid`, `rate-limit` (owned by `@spy4x/*`
 template modules or issue #4), money/currency helpers (their own issue), and anything Preact- or
 DOM-component-shaped.
 
@@ -258,12 +258,12 @@ const parsed = JSON.parse(raw) // throws: malformed input is a programming error
 const result: Result<number> = tryParse(text) // returns: malformed input is expected
 ```
 
-`ErrType` is the discriminant. `ValidationError` is **re-exported** from `@ts-libs/validation`, not
+`ErrType` is the discriminant. `ValidationError` is **re-exported** from `@spy4x/validation`, not
 redeclared: this package does not own a validation model.
 
-## Dependency on `@ts-libs/validation`
+## Dependency on `@spy4x/validation`
 
-`@ts-libs/platform` depends on `@ts-libs/validation` for exactly two things: the `ValidationError`
+`@spy4x/platform` depends on `@spy4x/validation` for exactly two things: the `ValidationError`
 type (`universal/errors`) and the `validate(schema, value)` call behind
 `makeStorage(..., { schema })`. There is **one** `validate` and **one**
 `{ description, details }` envelope in the ecosystem, and it lives there.
@@ -271,17 +271,17 @@ type (`universal/errors`) and the `validate(schema, value)` call behind
 Consequences a consumer should know:
 
 - **Peer dependency.** Both packages are workspace members, so `deno check` resolves
-  `@ts-libs/validation` with no `imports` entry here. Consuming from JSR or from a repo where
+  `@spy4x/validation` with no `imports` entry here. Consuming from JSR or from a repo where
   `validation/` is absent means adding that member first — the import is not optional, and until it
-  resolves `deno check` reports `TS2307: Import "@ts-libs/validation" not a dependency` at
+  resolves `deno check` reports `TS2307: Import "@spy4x/validation" not a dependency` at
   `platform/universal/errors.ts` and `platform/browser/storage.ts`.
 - This package ships **no** schema-parser adapter (no object exposing both a throwing parse and a
   non-throwing variant), no schema library of its own, and no second envelope. The source's
   `validate()` ran the parse twice (`gb/libs/shared/helpers.ts:147-185`); the bug is retired by not
-  porting the function at all — `@ts-libs/validation` parses once.
+  porting the function at all — `@spy4x/validation` parses once.
 - Validation is applied on **write** as well as read in `makeStorage`. A value that fails its own
   schema on read is evicted, because a stored value that no longer matches is stale, not missing.
-- **Strictness is the caller's schema's decision, never this package's.** `@ts-libs/validation`
+- **Strictness is the caller's schema's decision, never this package's.** `@spy4x/validation`
   deliberately does not call `configure({ onUndeclaredKey: ... })`, so nothing here reads or writes
   global arktype config either. A schema without that setting keeps an undeclared key, exactly as
   arktype defaults; a caller that wants unknown keys rejected writes

@@ -20,18 +20,18 @@
  *
  * **Rate-limit the route that calls `requestCode`.** This module limits guesses per code, not how
  * often a code is asked for, and every new code moves the expiry of a locked challenge. Put
- * `createRateLimitMiddleware` from `@ts-libs/platform/rate-limit` in front of that route with two
+ * `createRateLimitMiddleware` from `@spy4x/platform/rate-limit` in front of that route with two
  * limiters: one keyed by the normalised address (`normalizeEmail` of the submitted value), so one
- * mailbox cannot be flooded, and one keyed by `clientIp` from `@ts-libs/platform/rate-limit`, so one
+ * mailbox cannot be flooded, and one keyed by `clientIp` from `@spy4x/platform/rate-limit`, so one
  * client cannot walk through many addresses. Rate-limit the route that calls `verifyCode` by
  * `clientIp` too.
  *
  * @module
  */
 
-import { randomBase64Url, sha256Hex } from "@ts-libs/platform/tokens"
-import { systemClock } from "@ts-libs/platform/universal/time"
-import { SecondFactorStatus } from "@ts-libs/server/sign-in"
+import { randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
+import { systemClock } from "@spy4x/platform/universal/time"
+import { SecondFactorStatus } from "@spy4x/server/sign-in"
 import { type AuthKey, type AuthUser, ChallengeOutcome, normalizeEmail } from "./model.ts"
 import type { ProviderDeps, SignInResult } from "./provider.ts"
 import type { AuthStore } from "./store.ts"

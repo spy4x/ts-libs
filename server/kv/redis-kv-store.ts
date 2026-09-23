@@ -2,7 +2,7 @@
  * A Redis-backed key-value store: `GET`/`SET … EX`/`DEL`, plus a scoped `reset`.
  *
  * Ported from `template/libs/server/kv/+index.ts`. That file `implements ICacheStorage`
- * from the template's own cache module; `@ts-libs/platform/cache` is the extraction of
+ * from the template's own cache module; `@spy4x/platform/cache` is the extraction of
  * that interface (#125). This file does not import it — the two were extracted in
  * parallel and neither depends on the other's branch. Instead {@link RedisKvStore}
  * matches that interface's shape structurally: `get(key: string): Promise<string |

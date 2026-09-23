@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/platform/browser` — helpers that need a browser.
+ * `@spy4x/platform/browser` — helpers that need a browser.
  *
  * Nothing here touches a global at import time: `makeStorage` takes its storage object as a
  * parameter, and `downloadResponseAsFile` takes its `document`, object-URL factory and timer the

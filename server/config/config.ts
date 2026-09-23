@@ -46,7 +46,7 @@
  * un-scrubbed). A morph that needs to fail without carrying its own value can report the variable
  * by name instead, with `.pipe.try` or `ctx.error` — see `server/README.md`.
  */
-import { type SchemaOutput, validate, type ValidationResult } from "@ts-libs/validation/validate"
+import { type SchemaOutput, validate, type ValidationResult } from "@spy4x/validation/validate"
 import { type } from "arktype"
 import type { Out, Type } from "arktype"
 import { type EnvReader, systemEnv } from "./env.ts"

@@ -11,7 +11,7 @@
  * bucket as a subdomain.
  */
 
-import { signS3Request } from "@ts-libs/server/storage"
+import { signS3Request } from "@spy4x/server/storage"
 import type { S3Settings } from "./services.ts"
 
 /** Lifetime of a presigned URL used inside one test. Seconds, not hours. */

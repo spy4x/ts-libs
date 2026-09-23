@@ -1,5 +1,5 @@
 /**
- * `@ts-libs/server/outbox` — transactional outbox drain: claim, publish, retry.
+ * `@spy4x/server/outbox` — transactional outbox drain: claim, publish, retry.
  * Extracted from `template/libs/server/outbox/+index.ts` (#75).
  */
 export {

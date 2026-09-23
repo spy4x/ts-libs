@@ -32,7 +32,7 @@ package joins the workspace the moment you create its own config:
 mkdir <dir>
 cat > <dir>/deno.json <<'EOF'
 {
-  "name": "@ts-libs/<dir>",
+  "name": "@spy4x/<dir>",
   "version": "0.1.0",
   "exports": {
     ".": "./<entry>.ts"
@@ -46,13 +46,13 @@ do not treat it as a failure — a scaffold that faked members would break every
 
 Rules for a package config:
 
-- `name` is `@ts-libs/<directory>` — that is how sibling packages import you. The JSR publish scope is
-  confirmed by issue #20.
-- `version` starts at `0.1.0`. `exports` lists exactly the entry points that exist today; adding a
-  file does not add an export.
+- `name` is `@spy4x/<directory>` — that is how sibling packages import you, and the name it has on
+  JSR (`jsr:@spy4x/<directory>`, #78). Create the package on jsr.io before its first release.
+- `version` is the workspace's release version (see "Releasing"). `exports` lists exactly the entry
+  points that exist today; adding a file does not add an export.
 - Do not add an `imports` block unless you need a specifier the root does not provide. Shared deps
   (arktype, `@std/*`, hono, postgres) live in the root import map so every package resolves one copy.
-- Sibling imports use the member name: `import { normalizeUrlShape } from "@ts-libs/net"`.
+- Sibling imports use the member name: `import { normalizeUrlShape } from "@spy4x/net"`.
 - Do not add a package-level `lint`/`fmt` block: root config is the single source of truth.
 
 Type-checking, formatting, linting and tests are discovered by walking the tree, so a new package is
@@ -70,6 +70,21 @@ covered without touching root config or `infra/scripts/type-check.ts`.
   `fetch`) over a JS reimplementation of them, and prefer `@std/*` over a bespoke helper.
 - Extraction order and wave barriers are recorded in issue #22. Respect them — wave 5
   (`server/auth`) must not run parallel to anything auth-adjacent.
+
+## Releasing
+
+Every package carries the same version, and all of them are released together. After 1.0.0, an
+exported name, parameter or return type changes only additively, or it waits for 2.0
+(`docs/1.0-contract.md`, #77).
+
+1. One PR sets `version` in every `<dir>/deno.json` to the new version, and passes
+   `deno task check:cold publish:dry`.
+2. After it merges, tag `main` with `v<version>` and push the tag. Woodpecker's `publish` step runs
+   `deno publish` with the `JSR_TOKEN` secret, after the unit and integration steps pass.
+
+A publish cannot be undone: JSR never deletes a version. The owner gives the go-ahead for every
+tag. A version that is already on JSR is skipped, so re-running a tag build that failed part-way
+publishes only what is missing.
 
 ## Branch-first workflow
 

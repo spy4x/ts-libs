@@ -10,7 +10,7 @@
 // reports `needsRehash`.
 
 import { decodeHex, encodeHex } from "@std/encoding/hex"
-import { constantTimeEquals } from "@ts-libs/platform/tokens"
+import { constantTimeEquals } from "@spy4x/platform/tokens"
 import { requireSecret } from "./secret.ts"
 
 /** Scheme name written at the start of every hash this module produces. */
