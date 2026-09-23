@@ -626,6 +626,19 @@ which propagates the resolver's rejection instead of reporting it.
   line before calling `verifyDkim` — a message that still carries it is
   refused as a forged sender rather than silently accepted or silently
   stripped.
+
+  The refusal depends on that colon existing somewhere in the line, which is
+  why the wording above is exact about it rather than saying "the envelope
+  line": `From sender@example.com Mon Sep 21 2026`, a timestamp with no
+  `HH:MM:SS` and so no colon anywhere in the line, is _not_ refused — there
+  is then no colon at all before the next header's own, so this verifier
+  reads the whole line as one header field literally named `From
+  sender@example.com Mon Sep 21 2026` with an empty value, which is not
+  `From` under any reading and never enters the loose match at all. That is
+  not a gap this rule needs to close: no mail client displays this line as a
+  sender either way, colon or not, so a caller still has to strip it before
+  verifying — this paragraph documents what the current checks do with an
+  unstripped one, not a promise to catch every shape it can take.
 - **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
   `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
   example record publishes a complete SubjectPublicKeyInfo. The envelope is

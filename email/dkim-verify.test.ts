@@ -3146,6 +3146,32 @@ describe("an mbox envelope line above a signed message (issue #120)", () => {
     assertEquals(result.valid, false)
     assertEquals(result.reason, REASON)
   })
+
+  // Round 1 review of #120: the refusal above depends on the envelope line's
+  // timestamp carrying a colon — that is where `header.indexOf(":")` finds
+  // the split between the name it reads and the (empty) value. A timestamp
+  // with no `HH:MM:SS`, so no colon anywhere in the line, verifies instead:
+  // `email/README.md` states this precisely rather than claiming the rule
+  // catches every shape of envelope line, and this pins the exact behaviour
+  // it documents.
+  it("verifies a message carrying a colon-less mbox envelope line, as a string", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const colonLess = "From sender@example.com Mon Sep 21 2026"
+    assert(!colonLess.includes(":"), "the whole point: no colon anywhere in this line")
+    const withEnvelope = `${colonLess}\r\n${raw}`
+
+    const result = await verifyDkim(withEnvelope, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("verifies a message carrying a colon-less mbox envelope line, as bytes", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const colonLess = "From sender@example.com Mon Sep 21 2026"
+    const withEnvelope = `${colonLess}\r\n${raw}`
+
+    const result = await verifyDkim(ascii(withEnvelope), publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
 })
 
 // --- trace fields a relay adds after signing (§5.4.2) -----------------------
