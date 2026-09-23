@@ -191,7 +191,7 @@ already are — by where the code can run:
 | `api/`          | `ApiError`, `ApiResult<T>`, `apiFetch` — browser-only, needs `fetch`                                                                                                            |
 | `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                               |
 
-**Two bugs fixed at extraction time**, both in the request helpers, neither in `model/`:
+**Three bugs fixed at extraction time**, two in the request helpers and one in `model/`:
 
 - `apiFetch` (`api/api.ts`) built its request as `{ headers: { "content-type": ..., ...init.headers },
   ...init }`. Spreading `init` last meant a caller's own `headers` replaced the whole merged object
@@ -204,7 +204,16 @@ already are — by where the code can run:
   boundary for the rate limiter — untrusted by default, and a `trustedProxy` option the caller opts
   into behind a proxy that actually rewrites the header. The helper also no longer imports the
   template's `APIContext`; it takes a plain, `Env`-generic Hono `Context` and reads `requestId` off
-  the context variables defensively, matching how `rate-limit/hono.ts` stays app-agnostic.
+  the context variables defensively, matching how `rate-limit/hono.ts` stays app-agnostic. `ip`
+  (and `userAgent`) stay unset when nothing identifies the client, exactly as the source left them
+  — `clientIp`'s placeholder address is a made-up value, not a real one, and the source itself
+  wrote `request.ip || null` into an audit row, so surfacing that placeholder here would have
+  logged it as though it were real (#129 round 1).
+- `dateSchema` (`model/date.ts`) accepted an ISO date string whose calendar day did not exist —
+  `"2026-02-30"` parsed to 2 March 2026 instead of being refused, because `new Date(...)` silently
+  rolls an out-of-range day or month into the next one (#131). Fixed by rebuilding the date from the
+  string's own `YYYY-MM-DD` digits and comparing it back against them; week dates and ordinal dates
+  are unaffected, since they carry no such prefix to check.
 
 **The `"+": "reject"` decision splits by whether a schema is composed.** `model/base-model.ts`'s
 three schemas declare it on none of them: an app is meant to `.and()` its own fields onto
