@@ -22,8 +22,7 @@ export type Transaction = postgres.TransactionSql<Record<string, unknown>>
  * which this package cannot import: it is a domain class from a host app. The
  * four operations used are all that is required, so a caller passes the cache it
  * already has rather than one shaped here. Keys are `string | number` because the
- * template keyed rows by numeric id and `server/auth`'s {@link TenantCache} keys
- * by string.
+ * template keys rows by numeric id and other callers key by string.
  */
 export interface RowCache<T> {
   /** Return the cached row, or compute, store and return it. */
