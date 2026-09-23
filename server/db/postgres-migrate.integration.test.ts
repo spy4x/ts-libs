@@ -575,4 +575,145 @@ describe("the Postgres migration runner against a postgres.pascal client", () =>
       await sql.end()
     }
   })
+
+  it('a driver with no schema and a driver with schema: "public" lock each other out', async () => {
+    // `resolvedTableRef`'s schema probe is read through `.values()` too (round 2 of #137):
+    // reverting it to a name-based `rows[0]?.schema` read left every other test in this file
+    // green, because `takeLock` and the rest already worked under pascal — only the *key* was
+    // wrong, silently, with the old fallback ("" instead of "public") producing a `.table` key
+    // that a schema-qualified driver's `public.table` key never collides with. This test is
+    // the one that goes red on that mutation: two runners that should share a lock, on a
+    // `postgres.pascal` client, actually do.
+    await withRun(async ({ sql, table, applicationName, observer }) => {
+      const holder = new PostgresMigrationDriver({ sql, table })
+      const blocked = new PostgresMigrationDriver({
+        sql,
+        table,
+        schema: "public",
+        lockWaitMs: 30,
+        lockRetryMs: 10,
+        delay: () => Promise.resolve(),
+      })
+
+      let lockTaken: () => void = () => {}
+      let releaseHolder: () => void = () => {}
+      const granted = new Promise<void>((resolve) => {
+        lockTaken = resolve
+      })
+      const held = new Promise<void>((resolve) => {
+        releaseHolder = resolve
+      })
+
+      const first = holder.withLock(() => {
+        lockTaken()
+        return held
+      })
+      await granted
+      assertStrictEquals((await advisoryLockHolders(observer, applicationName)).length, 1)
+
+      // `releaseHolder` must fire whether or not the assertion below passes — the holder's
+      // reserved connection stays pinned, and its lock stays held, until `held` resolves, so
+      // an assertion failure that skipped this would leak the connection and hang the pool's
+      // own `end()` in `withRun`'s `finally` rather than reporting a clean failure.
+      try {
+        // If the two drivers resolved different keys, this would take the lock at once
+        // instead of waiting out `lockWaitMs`.
+        await assertRejects(
+          () => blocked.withLock(() => Promise.resolve()),
+          PostgresMigrationLockError,
+          "30ms",
+        )
+      } finally {
+        releaseHolder()
+        await first
+      }
+      assertEquals(await advisoryLockHolders(observer, applicationName), [])
+    }, { transform: postgres.pascal })
+  })
+})
+
+/**
+ * A `transform.row.from` that adds a field to a row without changing its shape: a `.values()`
+ * row stays an array of the same length (`.slice()`, then a non-index property), an ordinary
+ * object row stays an object with its original keys plus one more. A caller writing an
+ * audit/debug hook is the plausible shape this stands in for.
+ */
+const auditFieldTransform = {
+  row: {
+    from: (row: unknown) => {
+      if (Array.isArray(row)) {
+        const copy = row.slice() as unknown[] & { auditedAt?: string }
+        copy.auditedAt = "audit-marker"
+        return copy
+      }
+      return { ...(row as Record<string, unknown>), auditedAt: "audit-marker" }
+    },
+  },
+}
+
+/**
+ * A `transform.column.from` that collapses every column to the same output name — the
+ * sharpest case of "two columns, one name" a custom transform could produce. `column.to` is
+ * left unset, so it only affects reads: every identifier this driver writes (`sql(name)`)
+ * still goes through unchanged.
+ */
+const collidingColumnTransform = {
+  column: {
+    from: () => "col",
+  },
+}
+
+describe("the Postgres migration runner against a client with a custom row or column transform", () => {
+  // #137 round 2. The positional `resultColumns`/`Object.values(row)` fix this replaced read
+  // whatever a name-keyed row object happened to look like after a client's own transform ran
+  // on it — which a `transform.row.from` that added a field (by spreading, `{ ...row, x: 1 }`)
+  // could reorder, and which a `transform.column.from` that mapped two columns to the same
+  // name would silently collapse to one, losing a column outright. `.values()` reads a row
+  // that was never built from names at all, so neither case is a special case here — both
+  // migrate correctly instead of misreading a field or losing one.
+
+  it("migrates correctly under a transform.row.from that adds a field to every row", async () => {
+    await withRun(async ({ sql, table, subject }) => {
+      const reader = memoryReader({
+        "0001_init.sql": `CREATE TABLE ${subject} (id serial PRIMARY KEY)`,
+      })
+      const options = { folder: "/migrations", reader }
+      const driverOptions = { sql, table, lockWaitMs: 200, lockRetryMs: 10 }
+
+      const first = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(first, { applied: ["0001_init"], skipped: [], missing: [] })
+
+      const second = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(second, { applied: [], skipped: ["0001_init"], missing: [] })
+
+      const history = await new PostgresMigrationDriver(driverOptions).appliedMigrations()
+      assertEquals(history.map((row) => row.name), ["0001_init"])
+      assertStrictEquals(history[0].checksum?.length, 64)
+    }, { transform: auditFieldTransform as unknown as typeof postgres.camel })
+  })
+
+  it("migrates correctly, and does not re-apply the first migration, when every column reads back with the same name", async () => {
+    await withRun(async ({ sql, table, subject }) => {
+      const reader = memoryReader({
+        "0001_init.sql": `CREATE TABLE ${subject} (id serial PRIMARY KEY)`,
+      })
+      const options = { folder: "/migrations", reader }
+      const driverOptions = { sql, table, lockWaitMs: 200, lockRetryMs: 10 }
+
+      const first = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(first, { applied: ["0001_init"], skipped: [], missing: [] })
+
+      // Reproduces the regression a name-keyed read would have: `createHistoryTable`'s probe
+      // returns `tableexists` and `checksumexists` as the same column name under this
+      // transform, so an object built by name would carry only the second value and read the
+      // table as absent — reissuing `CREATE TABLE` and failing on `relation already exists`,
+      // or (worse, on `appliedMigrations`) reading `name` and `checksum` as the same field and
+      // re-applying migration 1.
+      const second = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
+      assertEquals(second, { applied: [], skipped: ["0001_init"], missing: [] })
+
+      const history = await new PostgresMigrationDriver(driverOptions).appliedMigrations()
+      assertEquals(history.map((row) => row.name), ["0001_init"])
+    }, { transform: collidingColumnTransform as unknown as typeof postgres.camel })
+  })
 })

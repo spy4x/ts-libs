@@ -6,9 +6,10 @@
  * `Deno.exit` inside its own `try` blocks (`:14,28,36,45`), and it read the table
  * list into `row.tableName` — a camelCase field that only exists because the
  * template client sets `transform: postgres.camel` (`template/libs/server/db/+index.ts:13`).
- * The table listing here is read by column position rather than by that or any other
+ * The table listing here is read through `.values()` rather than by that or any other
  * name, so it survives `postgres.camel`, `postgres.pascal`, `postgres.kebab` or a custom
- * transform alike; see `resultColumns` in `postgres-migrate.ts` (#137).
+ * `transform.column.from` alike, including one that maps two different columns to the same
+ * name; see `expectRowShape` in `postgres-migrate.ts` (#137).
  *
  * **A table or schema name the same transform would rewrite is refused before any `DROP`
  * runs**, with {@link PostgresIdentifierTransformError}, whether `sql` is the pool client, a
@@ -24,7 +25,7 @@
  * any query and against the caller's environment record, not `Deno.env`.
  */
 
-import { assertStableIdentifier, resultColumns } from "./postgres-migrate.ts"
+import { assertStableIdentifier, expectRowShape } from "./postgres-migrate.ts"
 import type { Sql } from "./ports.ts"
 
 /** The environment variable that names the deployment. */
@@ -98,11 +99,13 @@ export interface PurgeOptions {
  * handle and a `sql.reserve()` connection alike; see `PostgresIdentifierTransformError` and
  * `identifierRewrittenBy` in `postgres-migrate.ts`.
  *
- * **The listing is read by column position, not by the `tablename` alias written above**
- * (#137) — see `resultColumns` in `postgres-migrate.ts`. `postgres.camel` leaves a bare
+ * **The listing is read through `.values()`, not by the `tablename` alias written above**
+ * (#137) — see `expectRowShape` in `postgres-migrate.ts`. `postgres.camel` leaves a bare
  * lower-case word like `tablename` unchanged, but `postgres.pascal` upper-cases its first
- * letter regardless, so a `postgres.pascal` client read `row.tablename` as `undefined` and
- * the identifier splice below threw rather than dropping anything.
+ * letter regardless; a name-keyed read left `row.tablename` `undefined` on a
+ * `postgres.pascal` client and the identifier splice below threw rather than dropping
+ * anything. A row that is not an array of exactly one value throws
+ * {@link PostgresUnexpectedRowError} instead of being misread.
  */
 export async function purgeDatabase(options: PurgeOptions): Promise<PurgeResult> {
   const environment = options.environment ?? {}
@@ -117,8 +120,11 @@ export async function purgeDatabase(options: PurgeOptions): Promise<PurgeResult>
     FROM information_schema.tables
     WHERE table_schema = ${schema}
     AND table_type = 'BASE TABLE'
-  `
-  const tableNames = rows.map((row) => resultColumns(row)[0] as string)
+  `.values()
+  const tableNames = rows.map((row) => {
+    const [name] = expectRowShape("purgeDatabase's table listing", row, 1)
+    return name as string
+  })
 
   // Before any DROP: every name is checked first, so a refusal never leaves some
   // tables dropped and others not.

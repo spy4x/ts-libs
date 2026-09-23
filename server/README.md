@@ -1032,14 +1032,22 @@ as the caller spelled it, so a driver given `schema: "app"` and a driver that re
 `app.migrations` through its search path lock each other out. A runner that dies releases it when its
 connection closes, so there is no stale lock to clear by hand.
 
-**The driver works on a client built with any column transform** (`postgres.camel`,
-`postgres.pascal`, `postgres.kebab`, or a custom one) — `#137`. Every probe this driver runs (the
-lock check, the schema resolution, the history-table existence check, the applied-migrations read)
-is read by column position, not by the name written in the query, because a transform rewrites that
-name on the way back: `postgres.pascal` upper-cases a column's first letter regardless of case or
-underscores, which broke every one of these reads on a `postgres.pascal` client — the lock probe read
-`undefined` where it expected `locked`, so a run never took the lock and failed with
-`PostgresMigrationLockError` as though another runner held it, although none did.
+**The driver works on a client built with any column-name transform** (`postgres.camel`,
+`postgres.pascal`, `postgres.kebab`, or a custom `transform.column.from`, including one that maps
+two different columns to the same name) — `#137`. Every probe this driver runs (the lock check, the
+schema resolution, the history-table existence check, the applied-migrations read) is read through
+`.values()`, not by the name written in the query: the driver builds a `.values()` row as a plain
+array in `SELECT` order and never keys it by a column's (possibly transformed) name at all
+(`postgres@3.4.7/src/query.js`, `src/connection.js`), so no column-name transform can affect it,
+however it rewrites — or collides — names. Before this, every one of these reads went by name,
+which broke under `postgres.pascal` (it upper-cases a column's first letter regardless of case or
+underscores; the lock probe read `undefined` where it expected `locked`, so a run never took the
+lock and failed with `PostgresMigrationLockError` as though another runner held it, although none
+did) and, separately, would have silently misread a history row under any transform that mapped two
+of these columns to the same name. A row that is not shaped the way a query expects — a
+`transform.row.from` that restructures it, rather than merely relabelling its columns — is refused
+with `PostgresUnexpectedRowError` naming the query and what came back, instead of being read
+positionally anyway and misreported as something else.
 
 **The wait is bounded** (#109). A second runner retries `pg_try_advisory_lock` every
 `lockRetryMs` (250 ms by default) and gives up after `lockWaitMs` — one minute by default — with
@@ -1124,9 +1132,9 @@ an existing deployment upgrades without a manual step.
 `readonly` is a compile-time claim, and a consumer that cast the array and pushed onto it would arm
 the purge for that environment process-wide.
 
-Like the migration driver, the table listing it purges from is read by column position, not by the
-`tablename` alias written in the query, so it survives any column transform the caller's client
-carries (`#137`).
+Like the migration driver, the table listing it purges from is read through `.values()`, not by the
+`tablename` alias written in the query, so it survives any column-name transform the caller's client
+carries — including a custom one that maps two different columns to the same name (`#137`).
 
 ## `server/sign-in`
 
