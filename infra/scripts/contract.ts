@@ -22,11 +22,21 @@ const ENTRIES: Entry[] = [
   { specifier: "@ts-libs/platform/tokens", capability: "random tokens" },
   { specifier: "@ts-libs/platform/rate-limit", capability: "rate limiting" },
   { specifier: "@ts-libs/platform/rate-limit/hono", capability: "rate limiting" },
+  { specifier: "@ts-libs/platform/api", capability: "shared API and model types" },
+  { specifier: "@ts-libs/platform/request-info", capability: "shared API and model types" },
   { specifier: "@ts-libs/server/kv", capability: "Redis key-value store" },
   { specifier: "@ts-libs/server/outbox", capability: "transactional outbox" },
   {
     specifier: "@ts-libs/server/sign-in",
     capability: "session, cookie, TOTP, password hash, auth guards",
+  },
+  {
+    specifier: "@ts-libs/server/auth",
+    capability: "password sign-up and sign-in, mail codes, OAuth (the account model and store)",
+  },
+  {
+    specifier: "@ts-libs/server/auth/postgres",
+    capability: "password sign-up and sign-in, mail codes, OAuth (the account model and store)",
   },
   { specifier: "@ts-libs/server/request-log", capability: "request logging" },
   { specifier: "@ts-libs/server/config", capability: "typed config from the environment" },
@@ -42,12 +52,15 @@ const ENTRIES: Entry[] = [
   },
 ]
 
-/** Capabilities in #77's table that have no entry point ready yet, and the issue that holds them. */
+/** Capabilities in #77's table that have no entry point ready yet, each with the issue that holds it. */
 const NOT_READY = [
-  ["password sign-up and sign-in, mail codes, OAuth (`server/auth`)", "#57"],
-  ["shared API and model types (`ApiResult`, `BaseModel`, push schemas, `RequestInfo`)", "#131"],
-  ["Postgres migrations and purge on the template's camelCase client", "#138"],
+  "the sign-in providers: password, one-time code by email, OAuth (`server/auth`): #57",
+  "the model and push schemas (`@ts-libs/platform/model`): not publishable yet (#141), and " +
+  "`dateSchema` reads an ordinal date or a signed year as the wrong date (#136)",
 ]
+
+/** Open `blocks-1.0` bugs in an entry point listed here: its interface stays, its behaviour changes. */
+const KNOWN_BUGS: string[][] = []
 
 interface DocDeclaration {
   kind: string
@@ -134,8 +147,11 @@ const MODIFIERS = /^(?:(?:public|private|protected|static|readonly|abstract|asyn
 /** The signature lines of one `deno doc` text block: the declaration and its member lines. */
 function signatures(block: string[], { names, enums }: Members): string[] {
   const lines = block.filter((line) => line.trim() !== "" && !line.startsWith("Defined in "))
-  const head = lines.find((line) => !line.startsWith(" "))
-  if (head === undefined) return []
+  const found = lines.find((line) => !line.startsWith(" "))
+  if (found === undefined) return []
+  // A constant holding a multi-line template literal prints as its opening backtick alone, the
+  // literal's text following on lines that are not signatures; its type is `string`.
+  const head = found.replace(/^((?:export\s+)?const\s+[\w$]+): `$/, "$1: string")
   const name = head.match(
     /^(?:\w+\s+)*?(?:class|interface|enum|type|function|const|let|var|namespace)\s+([\w$]+)/,
   )?.[1]
@@ -200,13 +216,21 @@ const document = [
   "",
   "Each signature is `deno doc`'s own text rendering. That rendering leaves out a method's own type",
   "parameters (`register<T extends Command<unknown, unknown>>(…)` prints as `register(…)`) and",
-  "prints a mapped type without its braces. Where a line here and the source file named under its",
-  "heading differ, the source file is the contract.",
+  "prints a mapped type without its braces. It also leaves out a parameter's default value, so a",
+  "parameter with a default (`init: RequestInit = {}`) reads as required here although a caller may",
+  "omit it. Where a line here and the source file named under its heading differ, the source file",
+  "is the contract.",
   "",
   "Not in this draft, because no entry point is ready yet:",
   "",
-  ...NOT_READY.map(([what, issue]) => `- ${what}: ${issue}`),
+  ...NOT_READY.map((line) => `- ${line}`),
   "",
+  ...(KNOWN_BUGS.length === 0 ? [] : [
+    "Known `blocks-1.0` bugs behind an interface listed here; the fix keeps the interface:",
+    "",
+    ...KNOWN_BUGS.map(([what, issue]) => `- ${what}: ${issue}`),
+    "",
+  ]),
   ...sections,
 ].join("\n")
 

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "exports": {
     ".": "./universal.ts",
+    "./api": "./api/mod.ts",
     "./browser": "./browser.ts",
     "./browser/download": "./browser/download.ts",
     "./browser/storage": "./browser/storage.ts",
@@ -13,6 +14,7 @@
     "./rate-limit/hono": "./rate-limit/hono.ts",
     "./rate-limit/kv": "./rate-limit/kv.ts",
     "./rate-limit/memory": "./rate-limit/memory.ts",
+    "./request-info": "./request-info/mod.ts",
     "./server": "./server.ts",
     "./server/atomic-json": "./server/atomic-json.ts",
     "./server/deno-fs": "./server/deno-fs.ts",

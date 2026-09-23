@@ -8,7 +8,8 @@ that is useful to more than one product.
 ## Scope
 
 ```
-platform/     types (arktype), helpers, rate-limit, fs, cqrs (command, query and event bus), cache
+platform/     types (arktype), helpers, rate-limit, fs, cqrs (command, query and event bus), cache,
+              shared API and model types (api, request-info, model)
 server/       auth, sign-in (session, cookie, TOTP, password hashing, guards), storage, crypto,
               db, kv (Redis), outbox, http (bounded-body, cors, bearer-auth), request-log,
               config, static, healthcheck, user-secrets, quota, export

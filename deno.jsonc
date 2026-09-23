@@ -154,17 +154,15 @@
   ],
   // Every package inherits this from the workspace root (Deno 2.9.7, verified by dry run —
   // see PR #89's evidence block for the shipped file list per package). Three exports look
-  // test-only but stay published on purpose: `realtime/testing.ts` and
-  // `server/auth/testing/memory-adapter.ts` sit under a `testing` path, and
-  // `server/storage/memory-fs.ts` has a test-ish name. All three are real exports, listed in
-  // their package's `deno.json`.
+  // test-only but stay published on purpose: `realtime/testing.ts` sits under a `testing` path,
+  // and `server/auth/memory-store.ts` and `server/storage/memory-fs.ts` have test-ish names. All
+  // three are real exports, listed in their package's `deno.json`.
   "publish": {
     "exclude": [
       "**/*.test.ts",
       "email/fixtures",
       "server/__fixtures__",
       "platform/server/_fake-fs.ts",
-      "server/auth/testing/harness.ts",
       "server/db/testing"
     ]
   }
