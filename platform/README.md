@@ -191,13 +191,18 @@ already are — by where the code can run:
 | `api/`          | `ApiError`, `ApiResult<T>`, `apiFetch` — browser-only, needs `fetch`                                                                                                            |
 | `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                               |
 
-**Four bugs fixed at extraction time**, two in the request helpers and two in `model/`:
+**Six bugs fixed at extraction time**, three in the request helpers and three in `model/`:
 
 - `apiFetch` (`api/api.ts`) built its request as `{ headers: { "content-type": ..., ...init.headers },
   ...init }`. Spreading `init` last meant a caller's own `headers` replaced the whole merged object
   instead of adding to it — passing `headers: { authorization }` silently dropped `content-type`.
   Fixed by merging into one `Headers` instance first, so the caller's headers add to the default, the
   caller's own `content-type` wins, and every other `init` field still reaches `fetch` unchanged.
+- `apiFetch` also always sent `content-type: application/json`, even when `body` was a `FormData`
+  (#132): the request reached the server without a multipart boundary and the caller had no way to
+  remove the header. Fixed by applying the default only when `body` is a string or absent; a
+  `FormData`, `URLSearchParams`, `Blob`, `ArrayBuffer`/typed array, stream, or explicit `null` body is
+  left without a default so `fetch` sets its own.
 - `requestInfoFromContext` (`request-info/request-info.ts`) read `X-Forwarded-For` off the request
   unconditionally, so any client could set its own value and have it logged as its IP. Fixed by
   routing it through `rate-limit/client-ip.ts`'s `clientIp`, which already carries this exact trust
@@ -220,6 +225,11 @@ already are — by where the code can run:
   (`"-0001-01-01"` became 2001, `"+0099-12-31"` became 1999). Both shapes are now refused, even
   where V8 happens to read them right (`"2024-001"`, `"+2024-01-01"`). `JSON.stringify` never
   writes an ordinal date, and writes a signed year only with six digits, which was already refused.
+- `dateSchema` also read a date-time string with a time but no offset and no `Z`, such as
+  `"2024-02-29T10:00:00"`, in the host's own time zone (#135): the same wire string parsed to a
+  different instant on a laptop and on a UTC server. Fixed by refusing that shape, with its own
+  message ("must name a time zone: …") rather than the calendar-date one. A date-only, year, or
+  year-month string is unaffected — ECMA-262 already reads those as UTC regardless of host `TZ`.
 
 **Every exported schema declares its type.** JSR refuses an exported constant whose type is only
 inferred, so each schema in `model/` carries an explicit arktype `Type<…>` annotation (#141). The
