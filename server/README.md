@@ -901,8 +901,15 @@ it per user with a conditional write (only if greater than the stored one), and 
   built on this set.
 - **It does not know about roles, groups or users.** `loadUser` and `hasSecondFactor` come from the
   app, and so does the check given to `isAuthorized`.
-- **It does not use the `__Host-` cookie prefix.** A sibling subdomain that can set cookies for the
-  parent domain can therefore plant a session cookie of its own; serve untrusted content from a
-  separate registrable domain.
-- **It does not rotate the session when the second factor completes.** The session id and token stay
-  the same; `completeSecondFactor` only changes the stored state.
+- **It does not use the `__Host-` cookie prefix by default.** Pass `name: "__Host-sessionIdToken"`
+  in production: Hono then enforces `Secure`, `Path=/` and no `Domain`, and a sibling subdomain can
+  no longer plant or shadow the cookie. (`secure: false` and a `__Host-` name cannot be combined;
+  Hono throws.)
+- **It does not rotate the session when the second factor completes.** Without rotation, a
+  `Pending` session cookie planted in a victim's browser becomes fully signed in when the victim
+  enters their code. To rotate, end the `Pending` session (`sessions.signOut(cookieValue)`) and
+  start a new one with `secondFactor: Completed` instead of calling `completeSecondFactor`.
+- **It does not give a `Pending` session its own deadline.** `validate` extends a session that
+  still owes its second factor like any other, so someone holding only the password can keep one
+  alive by polling a route that needs one factor. Such a session never passes the second-factor
+  guard, but the app should give the second-factor step a deadline of its own.
