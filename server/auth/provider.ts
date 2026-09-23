@@ -20,8 +20,9 @@ export interface SignInResult {
 
 /**
  * What every provider needs, injected by the app. `secondFactorFor` decides the session's
- * {@link SecondFactorStatus}; a provider that omits it starts every session `NotRequired`, the
- * same default `SessionManager.create` applies when the field is left out.
+ * {@link SecondFactorStatus}. When the app leaves `secondFactorFor` out, a provider passes
+ * `SecondFactorStatus.NotRequired` itself. `SessionManager.create` has no default for this field:
+ * it requires it and throws a `TypeError` without it.
  */
 export interface ProviderDeps {
   store: AuthStore
