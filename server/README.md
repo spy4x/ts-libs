@@ -936,23 +936,32 @@ read at all. The original had the same property already (it built its path with
 `log.test.ts` now asserts it directly (`never logs the query string`, `does not read or log any
 request header`) instead of leaving it incidental.
 
-**Not a bug, checked and ruled out.** `colorStatus`'s lookup table has no entry for status class 6,
-and looking up a missing entry in the original would return the log line the literal text
-`undefined` in place of a color code. This looked like a defect worth fixing until checking what
-status values can actually reach it: `c.res.status` always comes from a real `Response`, and the
-Fetch API's `Response` constructor itself refuses any status outside `101` or `200`–`599`
-(`new Response("x", { status: 600 })` throws `RangeError` in Deno, checked directly) — so class 6,
-and the `0`/`7` entries the original also carried, can never be reached through this middleware.
-The rewritten `colorStatus` still falls back to the plain status number for any class the table
-does not carry, which costs nothing and removes the question, but no test claims to reach it: doing
-so would need a status this runtime cannot construct.
+**Arrows: `<--` on the way in, `-->` on the way out**, matching both the source and Hono's own
+built-in `hono/logger`. An earlier version of this port had the two reversed; caught in review,
+fixed, and `log.test.ts` now pins the direction by name (`logs incoming then outgoing, in the
+source's own arrow direction`) instead of only checking each line's other fields.
 
-**Decisions.** `hono/utils/color` and `hono/utils/url` are not the internals they look like: both
-`./utils/*` and `./logger` are part of the published `hono` package's own `exports` map (checked
-against the pinned `hono@4.13.8`'s `package.json`), so this middleware is layered on hono's public
-surface, not reaching past it — consistent with hono staying a kept dependency. Color output is
-ported as-is (same classes, same codes) rather than dropped, since `getColorEnabled()` already
-turns it off for a non-TTY or `NO_COLOR` environment, so nothing new needs deciding to keep it.
+**The color table's reach was checked, not assumed, and the claim it can never carry a value
+outside 1xx–5xx was wrong.** `c.res.status` is read as a plain property, never checked against
+`instanceof Response`, so two paths reach the color table's edges without needing a status the
+`Response` constructor itself would refuse: a handler that returns `Response.error()` produces the
+network-error status `0` (checked: `app.get("/err", () => Response.error())` logs `<-- GET /err`
+then `--> GET /err 0 0ms`), and a handler that bypasses Hono's own return type and hands back a
+plain object is logged by whatever `.status` that object carries — `700`, in a check that returned
+`{ status: 700 } as unknown as Response`. Both are asserted in `log.test.ts`. The color table keeps
+its original entries for classes `0` and `7` for exactly this reason, and falls back to the plain,
+uncolored status number for any class it does not carry, so nothing here throws or prints the
+literal text `undefined` regardless of what a handler returns.
+
+**Decisions.** `hono/utils/color` is not the internal it looks like: `./utils/*` is part of the
+published `hono` package's own `exports` map (checked against the pinned `hono@4.13.8`'s
+`package.json`), so this middleware is layered on hono's public surface, not reaching past it —
+consistent with hono staying a kept dependency. (`hono/utils/url` was used by an earlier draft that
+built the path with `getPath(c.req.raw)`; the shipped code reads `c.req.path` instead, which is
+Hono's own public, equivalent property, so this port does not import `hono/utils/url` at all.)
+Color output is ported as-is (same classes, same codes) rather than dropped, since
+`getColorEnabled()` already turns it off for a non-TTY or `NO_COLOR` environment, so nothing new
+needs deciding to keep it.
 
 ## `server/config`
 
@@ -960,8 +969,9 @@ turns it off for a non-TTY or `NO_COLOR` environment, so nothing new needs decid
 `ConfigError`, `stringBoolean`.
 
 Six apps carry their own version of "read the environment into a config object" today — a class
-whose fields are one `getEnvVar("NAME")` call apiece (`template/apps/api/services/config.ts`,
-identical in `financy`), a type-cast (`as "dev" | "prod"`) standing in for a real check, and
+whose fields are one `getEnvVar("NAME")` call apiece (`template/apps/api/services/config.ts`;
+`financy`'s carries the same shape plus three Telegram-specific fields of its own — not identical,
+just the same pattern), a type-cast (`as "dev" | "prod"`) standing in for a real check, and
 `Number(getEnvVar(...))` silently accepting `NaN` for a malformed number. `loadConfig` replaces the
 per-field calls with one arktype schema, validated once at start-up: every field is named once, its
 shape is checked once, and a bad or missing value fails loudly instead of turning into `NaN` or an
@@ -988,10 +998,16 @@ broken deploy script configure a service with `""` instead of failing at start-u
 **Scope: a flat schema.** `loadConfig(schema, env = systemEnv)` reads exactly the top-level keys an
 arktype object schema declares — `type({ AUTH_PEPPER: "string", PORT: "string.integer.parse" })`
 — as environment variable names, one level deep. It finds those keys through arktype's own
-`Type.json` structure (`required`/`optional`, each `{ key }`), not a hand-rolled walk, so this stays
-correct for a schema built with morphs as well as plain strings; a schema that is not an object
-schema is refused with `TypeError` at call time rather than silently doing nothing. A nested object
-in the schema is not read from nested environment variables — there is no such thing here.
+documented `Type.props` (`required`/`optional`/defaulted, each `{ key, kind, ... }` —
+`arktype/out/variants/object.ts`'s object-type interface), not the internal `Type.json`
+representation an earlier version of this module read: `.props` gives the same list for a plain
+schema, stays correct through `.describe()` and `.configure()` (which changed `.json`'s shape
+enough to make that version misread a perfectly flat schema as not an object at all — caught in
+review, fixed, and pinned by a test for each), and throws arktype's own `ParseError` on a union or
+a piped root, which `loadConfig` wraps as `TypeError`. A schema whose `.props` comes back empty
+(an index-signature-only schema such as `type({ "[/^APP_/]": "string" })`, which validates but
+names no field) is refused the same way, rather than silently reading nothing. A nested object in
+the schema is not read from nested environment variables — there is no such thing here.
 
 **Numbers and booleans are strings until a morph says otherwise.** Every environment variable
 arrives as `string | undefined`. arktype's own `"string.integer.parse"` and `"string.numeric.parse"`
@@ -1003,14 +1019,29 @@ as false instead of failing.
 **A key is read only when it is not blank**, so `raw[name] = value` is skipped entirely rather than
 set to `undefined`: arktype's own `exactOptionalPropertyTypes` distinguishes an object key that is
 absent from one explicitly set to `undefined`, and would otherwise reject a genuinely-unset optional
-variable as "must be a string, was undefined" instead of accepting its absence.
+variable as "must be a string, was undefined" instead of accepting its absence. The same omission is
+also what lets a defaulted key (`PORT: "string.integer.parse = '3000'"` — required, not optional;
+arktype's default syntax is its own way of saying "may be absent") fall back to its schema default
+when the variable is absent.
 
-**The failure never carries a value.** arktype's own rejection text echoes the offending input
-(`must be a well-formed integer string (was "admin")`), which is exactly the kind of text a
-container orchestrator's log capture was never meant to hold a secret in. `ConfigError.variables`
-lists only the names of the environment variables that failed, sorted; nothing here reads arktype's
-`.message`, `.summary` or `.actual` for a value that reached validation, so neither a missing nor an
-invalid value is ever part of the thrown error.
+**The failure never carries a value — for an arktype rejection, and for a root-level check.**
+arktype's own rejection text echoes the offending input (`must be a well-formed integer string (was
+"admin")`), which is exactly the kind of text a container orchestrator's log capture was never meant
+to hold a secret in. `ConfigError.variables` lists only the names of the environment variables that
+failed, sorted; nothing here reads arktype's `.message`, `.summary` or `.actual` for a value that
+reached validation. A cross-field rule written with `.narrow()` (financy's "`TELEGRAM_WEBHOOK_URL`
+is required outside dev", checked across two fields) fails at no single key — arktype reports it at
+the root path, which named nothing until this was fixed to use the issue's own `expected` label
+(never `actual`, which is the whole rejected object) instead, falling back to a fixed
+`(cross-field check)` label when a caller's rule did not supply one.
+
+**A morph that throws is not an arktype rejection, and cannot be scrubbed the same way.** A morph
+written as a `.pipe` callback that throws its own `Error` (`bad ${value}`, say) escapes arktype's
+own error path entirely — the thrown error's message can carry the value, and nothing here wrote
+that message, so nothing here can safely rewrite it. `loadConfig` catches anything thrown while
+validating and rethrows a `ConfigError` with an empty `variables` list and a generic message,
+explicitly without keeping the original as `cause` — a `cause` is exactly a place for the original's
+message, value included, to survive un-scrubbed onto the new error.
 
 ```ts
 import { type } from "arktype"

@@ -13,14 +13,14 @@ function appWithLog(options: Parameters<typeof requestLog>[0] = {}) {
 }
 
 describe("requestLog", () => {
-  it("logs one incoming and one outgoing line for a request", async () => {
+  it("logs incoming then outgoing, in the source's own arrow direction", async () => {
     const { app, lines } = appWithLog()
 
     await app.request("/users")
 
     expect(lines).toHaveLength(2)
-    expect(lines[0]).toBe("--> GET /users")
-    expect(lines[1].startsWith("<-- GET /users")).toBe(true)
+    expect(lines[0]).toBe("<-- GET /users")
+    expect(lines[1].startsWith("--> GET /users")).toBe(true)
     expect(lines[1]).toContain("200")
     expect(lines[1]).toMatch(/\dm?s$/)
   })
@@ -31,6 +31,30 @@ describe("requestLog", () => {
     await app.request("/boom")
 
     expect(lines[1]).toContain("500")
+  })
+
+  it("logs status 0 without throwing when a handler returns Response.error()", async () => {
+    const lines: string[] = []
+    const app = new Hono()
+    app.use(requestLog({ write: (line) => lines.push(line) }))
+    app.get("/err", () => Response.error())
+
+    await app.request("/err")
+
+    expect(lines[1]).toContain("0")
+  })
+
+  it("logs a status outside every real HTTP class without throwing", async () => {
+    const lines: string[] = []
+    const app = new Hono()
+    app.use(requestLog({ write: (line) => lines.push(line) }))
+    // A handler that bypasses Hono's own return type and hands back an object that merely looks
+    // like a Response — c.res.status is read as a plain property, so this reaches the logger too.
+    app.get("/odd", () => ({ status: 700 }) as unknown as Response)
+
+    await app.request("/odd")
+
+    expect(lines[1]).toContain("700")
   })
 
   it("never logs the query string", async () => {

@@ -2,12 +2,12 @@
  * A whole environment, read once and validated against one arktype schema.
  *
  * Six apps each carry their own version of this shape today: a class whose fields are one
- * `getEnvVar("NAME")` call apiece (`template/apps/api/services/config.ts`, identical in
- * `financy`), with a type-cast (`as "dev" | "prod"`) doing the work a real check should and
- * `Number(getEnvVar(...))` accepting `NaN` for a malformed number without complaint. `loadConfig`
- * replaces the per-field calls with one schema: every field is named once, its shape is checked
- * once, and a bad or missing value fails at start-up instead of turning into `NaN` or an
- * unchecked cast three requests later.
+ * `getEnvVar("NAME")` call apiece (`template/apps/api/services/config.ts`; `financy`'s carries the
+ * same shape plus three Telegram-specific fields of its own), with a type-cast
+ * (`as "dev" | "prod"`) doing the work a real check should and `Number(getEnvVar(...))` accepting
+ * `NaN` for a malformed number without complaint. `loadConfig` replaces the per-field calls with
+ * one schema: every field is named once, its shape is checked once, and a bad or missing value
+ * fails at start-up instead of turning into `NaN` or an unchecked cast three requests later.
  *
  * **Scope: a flat schema.** `loadConfig` reads exactly the top-level keys an arktype object
  * schema declares — `type({ AUTH_PEPPER: "string", PORT: "string.integer.parse" })` — as
@@ -28,16 +28,26 @@
  * placeholder that expanded to nothing looks exactly like a value that was never set, so both are
  * "missing" rather than one being a mysterious empty string three layers down.
  *
- * **The failure never carries a value.** arktype's own rejection message echoes the offending
- * input (`"must be a well-formed integer string (was \"admin\")"`), which is exactly the kind of
- * text a container orchestrator captures into a log it did not ask to hold a secret. `loadConfig`
- * only ever reports which environment variables failed, by name, in {@link ConfigError.variables} —
- * never the arktype summary, never `.message`, never the value that was rejected.
+ * **The failure never carries a value — for an arktype rejection.** arktype's own rejection
+ * message echoes the offending input (`"must be a well-formed integer string (was \"admin\")"`),
+ * which is exactly the kind of text a container orchestrator captures into a log it did not ask to
+ * hold a secret. `loadConfig` only ever reports which environment variables failed, by name, in
+ * {@link ConfigError.variables} — never the arktype summary, never `.message`, never `.actual`. A
+ * root-level check written with `.narrow()` (a cross-field rule such as "X is required outside
+ * dev") fails at no single key, so its failure is reported by its `expected` label instead — never
+ * its `actual`, which is the whole parsed object. A morph that *throws* rather than reporting
+ * through arktype's own rejection path is a second case: nothing here can recover the value such a
+ * throw might carry in its own message, so `loadConfig` catches anything thrown while validating
+ * and rethrows a `ConfigError` that carries none of it, without keeping the original as `cause` (a
+ * `cause` is exactly a place for the original's message, value included, to survive un-scrubbed).
  */
-import { type SchemaOutput, validate } from "@ts-libs/validation/validate"
+import { type SchemaOutput, validate, type ValidationResult } from "@ts-libs/validation/validate"
 import { type } from "arktype"
 import type { Type } from "arktype"
 import { type EnvReader, systemEnv } from "./env.ts"
+
+/** A root-level failure (a `.narrow()` rejection with no single field) reads as this label. */
+const CROSS_FIELD_LABEL = "(cross-field check)"
 
 /**
  * Raised by {@link loadConfig} when one or more environment variables are missing, blank, or fail
@@ -46,7 +56,12 @@ import { type EnvReader, systemEnv } from "./env.ts"
  */
 export class ConfigError extends Error {
   constructor(public readonly variables: readonly string[]) {
-    super(`invalid or missing environment variable(s): ${variables.join(", ")}`)
+    super(
+      variables.length > 0
+        ? `invalid or missing environment variable(s): ${variables.join(", ")}`
+        : "invalid or missing environment variable(s): a validation step threw instead of " +
+          "reporting an issue",
+    )
     this.name = "ConfigError"
   }
 }
@@ -59,27 +74,51 @@ export class ConfigError extends Error {
 export const stringBoolean = type("'true' | 'false'").pipe((value) => value === "true")
 
 /**
- * The environment-variable names a flat arktype object schema declares, required and optional
- * together. Reads arktype's own `Type.json` structure rather than re-deriving it, so this stays
- * correct for a schema built with morphs (`stringBoolean`, `"string.integer.parse"`) as well as
- * plain strings.
+ * The environment-variable names a flat arktype object schema declares, required, optional and
+ * defaulted together. Reads arktype's own, documented `Type.props`
+ * (`arktype/out/variants/object.ts`'s object-type interface) rather than the internal `Type.json`
+ * representation the first version of this module used — `.props` gives the same key list for a
+ * plain schema, is unaffected by `.describe()` or `.configure()`, and — its actual advantage over
+ * `.json` — throws arktype's own `ParseError` on a union or a piped root, so a schema `loadConfig`
+ * cannot make sense of is refused loudly.
  *
- * @throws {TypeError} When `schema` is not an object schema — {@link loadConfig}'s one
- * precondition.
+ * @throws {TypeError} When `schema` is not a flat object schema (a union or a piped root —
+ * arktype's own `ParseError` from `.props` is wrapped as the cause), or when it declares no
+ * properties at all
+ * (an index-signature-only schema such as `type({ "[/^APP_/]": "string" })`, which `.props` reports
+ * as an empty list — reading nothing from a schema that looks like it should read something is a
+ * silent no-op, not a valid empty config).
  */
-function objectSchemaKeys(schema: { json: object }): string[] {
-  const shape = schema.json as {
-    domain?: string
-    required?: { key: string }[]
-    optional?: { key: string }[]
+function objectSchemaKeys(schema: Type): string[] {
+  let props: unknown
+  try {
+    props = (schema as unknown as { props: unknown }).props
+  } catch (cause) {
+    throw new TypeError(
+      "loadConfig requires a flat object schema, built with `type({ ... })` — not a union or a " +
+        "piped root",
+      { cause },
+    )
   }
-  if (shape.domain !== "object") {
-    throw new TypeError("loadConfig requires a flat object schema, built with `type({ ... })`")
+  if (!Array.isArray(props) || props.length === 0) {
+    throw new TypeError(
+      "loadConfig requires a schema that declares at least one key by name " +
+        "(an index-signature-only schema declares none)",
+    )
   }
-  return [
-    ...(shape.required ?? []).map((entry) => entry.key),
-    ...(shape.optional ?? []).map((entry) => entry.key),
-  ]
+  return props.map((prop) => String((prop as { key: PropertyKey }).key))
+}
+
+/**
+ * The value-free label for one failing top-level path: the path itself when it names a key, or
+ * `expected` (never `actual`, which is the whole rejected value) for a root-level `.narrow()`
+ * failure, falling back to a fixed label when even `expected` was not a plain string.
+ */
+function failingVariableLabel(path: string, issue: { expected: string }): string {
+  if (path !== "") return path
+  return typeof issue.expected === "string" && issue.expected.length > 0
+    ? issue.expected
+    : CROSS_FIELD_LABEL
 }
 
 /**
@@ -89,7 +128,8 @@ function objectSchemaKeys(schema: { json: object }): string[] {
  * never set as the literal value `undefined` — so an optional key that is genuinely absent is
  * accepted as absent, and only a required key that is absent is reported as missing.
  *
- * @throws {ConfigError} One or more of the schema's keys is missing, blank, or fails its check.
+ * @throws {ConfigError} One or more of the schema's keys is missing, blank, or fails its check —
+ * or a morph inside the schema threw instead of reporting through arktype's own rejection path.
  * @example
  * ```ts
  * const configSchema = type({
@@ -107,9 +147,21 @@ export function loadConfig<T extends Type>(schema: T, env: EnvReader = systemEnv
     const value = env.get(name)
     if (value !== undefined) raw[name] = value
   }
-  const { data, error } = validate(schema, raw)
+  let result: ValidationResult<T>
+  try {
+    result = validate(schema, raw)
+  } catch {
+    // A morph that throws instead of reporting through arktype's own rejection path can carry the
+    // value in its own message (`Error: bad ${value}`). Nothing here can scrub a message it did
+    // not write, so the original is discarded rather than kept as `cause`.
+    throw new ConfigError([])
+  }
+  const { data, error } = result
   if (error) {
-    throw new ConfigError(Object.keys(error.details.byPath).sort())
+    const variables = Object.keys(error.details.byPath)
+      .map((path) => failingVariableLabel(path, error.details.byPath[path]))
+      .sort()
+    throw new ConfigError(variables)
   }
   return data
 }

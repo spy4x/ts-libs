@@ -27,9 +27,10 @@ export type RequestLogWriter = (line: string) => void
 /** Options for {@link requestLog}. */
 export interface RequestLogOptions {
   /**
-   * Called once per line: `--> GET /users` on the way in, `<-- GET /users 200 12ms` on the way
-   * out. Defaults to `console.log`. This is the one thing the app wires in — a logger that tags
-   * every line with a request id, ships it somewhere, or both.
+   * Called once per line: `<-- GET /users` on the way in, `--> GET /users 200 12ms` on the way
+   * out — the same direction as the source and Hono's own built-in `hono/logger`. Defaults to
+   * `console.log`. This is the one thing the app wires in — a logger that tags every line with a
+   * request id, ships it somewhere, or both.
    */
   write?: RequestLogWriter
   /**
@@ -41,19 +42,27 @@ export interface RequestLogOptions {
 }
 
 enum RequestLogPrefix {
-  Incoming = "-->",
-  Outgoing = "<--",
+  Incoming = "<--",
+  Outgoing = "-->",
 }
 
-/** HTTP status classes (`status / 100`, truncated) mapped to an ANSI color code. */
+/**
+ * HTTP status classes (`status / 100`, truncated) mapped to an ANSI color code. Keyed defensively
+ * beyond the real 1xx-5xx classes: `c.res.status` is read as a plain property, not checked against
+ * `instanceof Response`, so a handler that hands back `Response.error()` (status `0`) or, bypassing
+ * Hono's own types, a plain object carrying any number at all reaches this table verbatim — logged
+ * directly (checked: `Response.error()` logs status `0`, and a handler returning `{ status: 700 }`
+ * logs `700`). A class the table does not carry falls back to the plain, uncolored status number
+ * below rather than throwing or printing `undefined`.
+ */
 const STATUS_COLOR_BY_CLASS: Readonly<Record<number, string>> = {
-  0: "33", // no status yet
+  0: "33", // Response.error(), or a handler that returned an object with no real status at all
   1: "32",
   2: "32",
   3: "36",
   4: "33",
   5: "31",
-  7: "35", // defensive: a driver could hand back a status arktype's own routes never produce
+  7: "35", // e.g. a handler that bypassed Hono's types and returned an object with status 700
 }
 
 function colorStatus(status: number): string {

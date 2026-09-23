@@ -115,10 +115,102 @@ describe("loadConfig", () => {
     }
   })
 
-  it("rejects a schema that is not a flat object schema", () => {
+  it("rejects a schema that is not an object at all", () => {
     const stringSchema = type("string")
 
     expect(() => loadConfig(stringSchema, createEnvReader({}))).toThrow(TypeError)
+  })
+
+  it("rejects a union schema instead of reading nothing from it", () => {
+    const unionSchema = type("string | number")
+
+    expect(() => loadConfig(unionSchema, createEnvReader({}))).toThrow(TypeError)
+  })
+
+  it("rejects a piped (morphed) root schema instead of reading nothing from it", () => {
+    const pipedSchema = type("string").pipe((value) => value.length)
+
+    expect(() => loadConfig(pipedSchema, createEnvReader({}))).toThrow(TypeError)
+  })
+
+  it("rejects an index-signature-only schema instead of silently reading nothing", () => {
+    const indexOnlySchema = type({ "[/^APP_/]": "string" })
+
+    expect(() => loadConfig(indexOnlySchema, createEnvReader({ APP_NAME: "x" }))).toThrow(
+      TypeError,
+    )
+  })
+
+  it("reads its keys from a schema that carries a .describe()", () => {
+    const describedSchema = type({ AUTH_PEPPER: "string > 0" }).describe("app config")
+
+    const config = loadConfig(describedSchema, createEnvReader({ AUTH_PEPPER: "pepper" }))
+
+    expect(config).toEqual({ AUTH_PEPPER: "pepper" })
+  })
+
+  it("reads its keys from a schema that carries a .configure()", () => {
+    const configuredSchema = type({ AUTH_PEPPER: "string > 0" }).configure({
+      description: "app config",
+    })
+
+    const config = loadConfig(configuredSchema, createEnvReader({ AUTH_PEPPER: "pepper" }))
+
+    expect(config).toEqual({ AUTH_PEPPER: "pepper" })
+  })
+
+  it("fills a defaulted key from the schema when its variable is absent", () => {
+    const defaultedSchema = type({
+      AUTH_PEPPER: "string > 0",
+      PORT: "string.integer.parse = '3000'",
+    })
+
+    const config = loadConfig(defaultedSchema, createEnvReader({ AUTH_PEPPER: "pepper" }))
+
+    expect(config).toEqual({ AUTH_PEPPER: "pepper", PORT: 3000 })
+  })
+
+  it("names a value-free label, not an empty string, when a root-level check fails", () => {
+    // financy's shape: TELEGRAM_WEBHOOK_URL is required outside dev, checked across two fields.
+    const telegramSchema = type({
+      ENV: "'dev' | 'prod'",
+      "TELEGRAM_WEBHOOK_URL?": "string",
+    }).narrow((data, ctx) => {
+      if (data.ENV !== "dev" && !data.TELEGRAM_WEBHOOK_URL) {
+        return ctx.reject({ expected: "TELEGRAM_WEBHOOK_URL is required outside dev" })
+      }
+      return true
+    })
+    const env = createEnvReader({ ENV: "prod" })
+
+    try {
+      loadConfig(telegramSchema, env)
+      throw new Error("expected loadConfig to throw")
+    } catch (error) {
+      const configError = error as ConfigError
+      expect(configError.variables).toEqual(["TELEGRAM_WEBHOOK_URL is required outside dev"])
+      expect(configError.message.split(":")[1]?.trim()).not.toBe("")
+      expect(configError.message).not.toContain("prod")
+    }
+  })
+
+  it("never leaks the value when a schema's morph throws instead of rejecting", () => {
+    const throwingSchema = type({
+      SECRET: type("string").pipe((value) => {
+        if (value.length < 40) throw new Error(`bad ${value}`)
+        return value
+      }),
+    })
+    const env = createEnvReader({ SECRET: "LEAKED-SECRET-3" })
+
+    try {
+      loadConfig(throwingSchema, env)
+      throw new Error("expected loadConfig to throw")
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError)
+      expect((error as Error).message).not.toContain("LEAKED-SECRET-3")
+      expect((error as ConfigError).cause).toBeUndefined()
+    }
   })
 })
 
