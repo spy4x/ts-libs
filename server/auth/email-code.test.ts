@@ -1,6 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { SecondFactorStatus, SessionManager } from "@spy4x/server/sign-in"
+import { SecondFactorStatus, SessionManager } from "../sign-in/mod.ts"
 import {
   createClock,
   createFakeStore,

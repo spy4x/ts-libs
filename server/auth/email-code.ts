@@ -31,7 +31,7 @@
 
 import { randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import { systemClock } from "@spy4x/platform/universal/time"
-import { SecondFactorStatus } from "@spy4x/server/sign-in"
+import { SecondFactorStatus } from "../sign-in/mod.ts"
 import { type AuthKey, type AuthUser, ChallengeOutcome, normalizeEmail } from "./model.ts"
 import type { ProviderDeps, SignInResult } from "./provider.ts"
 import type { AuthStore } from "./store.ts"

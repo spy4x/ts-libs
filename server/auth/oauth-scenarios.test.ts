@@ -16,7 +16,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { encodeBase64Url } from "@std/encoding/base64url"
 import { Hono } from "hono"
-import { SessionManager } from "@spy4x/server/sign-in"
+import { SessionManager } from "../sign-in/mod.ts"
 
 import type { AuthSessionRecord } from "./model.ts"
 import {

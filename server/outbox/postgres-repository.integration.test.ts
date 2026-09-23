@@ -14,7 +14,7 @@
  */
 import { assertEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
-import { createSql, type Sql } from "@spy4x/server/db"
+import { createSql, type Sql } from "../db/index.ts"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { PostgresOutboxRepository } from "./postgres-repository.ts"
 

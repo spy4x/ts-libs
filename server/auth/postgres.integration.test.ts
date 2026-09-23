@@ -15,8 +15,8 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import postgres from "postgres"
-import { buildPostgresOptions, type Sql } from "@spy4x/server/db"
-import { SecondFactorStatus, SessionManager, SessionStatus } from "@spy4x/server/sign-in"
+import { buildPostgresOptions, type Sql } from "../db/index.ts"
+import { SecondFactorStatus, SessionManager, SessionStatus } from "../sign-in/mod.ts"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import type { AuthSessionRecord } from "./model.ts"
 import {

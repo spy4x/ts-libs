@@ -16,7 +16,7 @@
  */
 
 import { isAddress } from "@spy4x/email/address"
-import type { SessionRecord } from "@spy4x/server/sign-in"
+import type { SessionRecord } from "../sign-in/mod.ts"
 
 /** A signed-in person. Minimal on purpose: the app keeps its profile in its own table keyed by `id`. */
 export interface AuthUser {
