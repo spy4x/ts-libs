@@ -936,13 +936,16 @@ read at all. The original had the same property already (it built its path with
 `log.test.ts` now asserts it directly (`never logs the query string`, `does not read or log any
 request header`) instead of leaving it incidental.
 
-**Bug fixed at extraction time.** `colorStatus` looked up an ANSI color code in a table keyed by
-`status / 100`, and the table had no entry for class 6 (there is no 6xx HTTP status, but nothing
-stops a handler from returning one). Looking up a missing entry returned `undefined`, which was
-then embedded directly in the log line — a response with a 600+ status logged the literal text
-`undefined` in place of its status code. Fixed by falling back to the plain, uncolored status
-number when the table has no entry for its class, the same fallback the coloring already used when
-`getColorEnabled()` is false.
+**Not a bug, checked and ruled out.** `colorStatus`'s lookup table has no entry for status class 6,
+and looking up a missing entry in the original would return the log line the literal text
+`undefined` in place of a color code. This looked like a defect worth fixing until checking what
+status values can actually reach it: `c.res.status` always comes from a real `Response`, and the
+Fetch API's `Response` constructor itself refuses any status outside `101` or `200`–`599`
+(`new Response("x", { status: 600 })` throws `RangeError` in Deno, checked directly) — so class 6,
+and the `0`/`7` entries the original also carried, can never be reached through this middleware.
+The rewritten `colorStatus` still falls back to the plain status number for any class the table
+does not carry, which costs nothing and removes the question, but no test claims to reach it: doing
+so would need a status this runtime cannot construct.
 
 **Decisions.** `hono/utils/color` and `hono/utils/url` are not the internals they look like: both
 `./utils/*` and `./logger` are part of the published `hono` package's own `exports` map (checked
