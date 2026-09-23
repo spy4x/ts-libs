@@ -17,6 +17,7 @@ import type { Migration } from "./migrate.ts"
 import type { Sql, Transaction } from "./ports.ts"
 import {
   DEFAULT_MIGRATIONS_TABLE,
+  PostgresIdentifierTransformError,
   PostgresMigrationDriver,
   PostgresMigrationLockError,
   PostgresMigrationRunInProgressError,
@@ -38,6 +39,13 @@ interface FakeSqlOptions {
    * which is what the bound is for.
    */
   lockRefusals?: number
+  /**
+   * The client's `transform.column.to`, which `sql(name)` applies on every handle of a real
+   * client configured with `postgres.camel`: the pool, a reserved connection and a `begin`
+   * callback's. Defaults to `undefined` — a plain client, no transform — which is what
+   * every test not about {@link PostgresIdentifierTransformError} needs.
+   */
+  columnTransformTo?: (identifier: string) => string
 }
 
 /**
@@ -78,7 +86,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
       const value = values[index]
       const identifier = identifierOf(value)
       if (identifier !== undefined) {
-        text += `"${identifier.replaceAll(`"`, `""`).replaceAll(".", `"."`)}"${tail}`
+        text += `${identifier}${tail}`
       } else {
         bound.push(value)
         boundValues.push(value)
@@ -100,7 +108,10 @@ function createFakeSql(options: FakeSqlOptions = {}) {
   /** One tag function over the shared recorder, bound to the handle it belongs to. */
   const makeTag = (handle: Handle) => {
     const statement = (strings: unknown, ...values: unknown[]): unknown => {
-      if (!Array.isArray(strings)) return { __identifier: String(strings) }
+      if (!Array.isArray(strings)) {
+        const name = options.columnTransformTo?.(String(strings)) ?? String(strings)
+        return new FakeIdentifier(`"${name.replaceAll(`"`, `""`).replaceAll(".", `"."`)}"`)
+      }
       const query = render(strings as unknown as TemplateStringsArray, values)
       record(query, handle)
       // `withLock`'s own three statements answer themselves and do not draw on the
@@ -189,9 +200,12 @@ function createFakeSql(options: FakeSqlOptions = {}) {
 }
 
 function identifierOf(value: unknown): string | undefined {
-  return typeof value === "object" && value !== null && "__identifier" in value
-    ? String((value as { __identifier: unknown }).__identifier)
-    : undefined
+  return value instanceof FakeIdentifier ? value.value : undefined
+}
+
+/** `postgres@3.4.7`'s `Identifier` (`src/types.js:44-48`): the quoted text, in `value`. */
+class FakeIdentifier {
+  constructor(readonly value: string) {}
 }
 
 /** A migration as the runner hands it to a driver. */
@@ -234,12 +248,12 @@ const RESOLVED_SCHEMA_PROBE = "SELECT coalesce( ( SELECT n.nspname FROM pg_class
  * sends no `ALTER`.
  */
 const SEARCH_PATH_PROBE = "SELECT exists ( SELECT FROM information_schema.tables WHERE " +
-  "table_name = $1 AND table_schema = ANY (current_schemas(false)) ) AS table_exists, " +
+  "table_name = $1 AND table_schema = ANY (current_schemas(false)) ) AS tableexists, " +
   "exists ( SELECT FROM information_schema.columns WHERE table_name = $2 AND " +
-  "column_name = 'checksum' AND table_schema = ANY (current_schemas(false)) ) AS checksum_exists"
+  "column_name = 'checksum' AND table_schema = ANY (current_schemas(false)) ) AS checksumexists"
 
 Deno.test("createHistoryTable creates the table once, with a unique name column", async () => {
-  const fake = createFakeSql({ answers: [[{ table_exists: false, checksum_exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: false, checksumexists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
   assertEquals(fake.topLevel, [
@@ -252,7 +266,7 @@ Deno.test("createHistoryTable creates the table once, with a unique name column"
 Deno.test("createHistoryTable adds the checksum column to a table that predates it", async () => {
   // The upgrade path for a deployment that already ran migrations, which is the one that
   // most needs the drift check. `ADD COLUMN IF NOT EXISTS` makes it a no-op afterwards.
-  const fake = createFakeSql({ answers: [[{ table_exists: true, checksum_exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: true, checksumexists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
   assertEquals(fake.topLevel, [
@@ -262,7 +276,7 @@ Deno.test("createHistoryTable adds the checksum column to a table that predates 
 })
 
 Deno.test("createHistoryTable touches nothing when the table is already up to date", async () => {
-  const fake = createFakeSql({ answers: [[{ table_exists: true, checksum_exists: true }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: true, checksumexists: true }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
   assertEquals(fake.topLevel, [SEARCH_PATH_PROBE])
@@ -273,14 +287,14 @@ Deno.test("the history table is looked for on the search path, not on the whole 
   // schema on the server — another tenant's, another application's — answered yes and
   // the driver created nothing. The first history insert then failed on a table that
   // was not there.
-  const fake = createFakeSql({ answers: [[{ table_exists: false, checksum_exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: false, checksumexists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql }).createHistoryTable()
 
   // Each half of the probe carries the scope, and it is the table half that matters here:
   // an unscoped one answers yes for somebody else's table and the driver creates nothing.
   assertStrictEquals(
     fake.topLevel[0].includes(
-      "table_name = $1 AND table_schema = ANY (current_schemas(false)) ) AS table_exists",
+      "table_name = $1 AND table_schema = ANY (current_schemas(false)) ) AS tableexists",
     ),
     true,
   )
@@ -289,7 +303,7 @@ Deno.test("the history table is looked for on the search path, not on the whole 
 
 Deno.test("a named schema qualifies both the probe and every statement", async () => {
   const fake = createFakeSql({
-    answers: [[{ table_exists: false, checksum_exists: false }], [{ name: "0001_init" }]],
+    answers: [[{ tableexists: false, checksumexists: false }], [{ name: "0001_init" }]],
   })
   const driver = new PostgresMigrationDriver({ sql: fake.sql, schema: "tenant_1" })
 
@@ -299,9 +313,9 @@ Deno.test("a named schema qualifies both the probe and every statement", async (
 
   assertEquals(fake.topLevel, [
     "SELECT exists ( SELECT FROM information_schema.tables WHERE table_name = $1 AND " +
-    "table_schema = $2 ) AS table_exists, exists ( SELECT FROM information_schema.columns " +
+    "table_schema = $2 ) AS tableexists, exists ( SELECT FROM information_schema.columns " +
     "WHERE table_name = $3 AND column_name = 'checksum' AND table_schema = $4 ) AS " +
-    "checksum_exists",
+    "checksumexists",
     `CREATE TABLE "tenant_1"."migrations" ( id SERIAL PRIMARY KEY, name TEXT NOT NULL ` +
     `UNIQUE, checksum TEXT, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP )`,
     `SELECT name, checksum FROM "tenant_1"."migrations" ORDER BY id`,
@@ -311,13 +325,54 @@ Deno.test("a named schema qualifies both the probe and every statement", async (
 })
 
 Deno.test("createHistoryTable honours a custom table name", async () => {
-  const fake = createFakeSql({ answers: [[{ table_exists: false, checksum_exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: false, checksumexists: false }]] })
   await new PostgresMigrationDriver({ sql: fake.sql, table: "schema_migrations" })
     .createHistoryTable()
 
   // The existence probe binds the name as a value; the `CREATE` splices it as an identifier.
   assertEquals(fake.topLevel[0], SEARCH_PATH_PROBE)
   assertStrictEquals(fake.topLevel[1].startsWith(`CREATE TABLE "schema_migrations" (`), true)
+})
+
+/**
+ * `postgres@3.4.7`'s `fromCamel` (`src/types.js:334`), the half of `postgres.camel` that
+ * `transform.column.to` carries. Reproduced here rather than imported, so these tests do
+ * not depend on the driver's internals staying named the way they are today.
+ */
+const decamelize = (identifier: string): string =>
+  identifier.replace(/([A-Z])/g, "_$1").toLowerCase()
+
+Deno.test("the constructor refuses a table name the transform would rewrite, before any SQL runs", () => {
+  const fake = createFakeSql({ columnTransformTo: decamelize })
+
+  const error = assertThrows(
+    () => new PostgresMigrationDriver({ sql: fake.sql, table: "x_MixedHist" }),
+    PostgresIdentifierTransformError,
+  )
+  assertEquals(error.kind, "table")
+  assertEquals(error.identifier, "x_MixedHist")
+  assertEquals(error.rewrittenTo, "x__mixed_hist")
+  assertEquals(fake.topLevel, [])
+  assertEquals(fake.reserved, [])
+})
+
+Deno.test("the constructor refuses a schema name the transform would rewrite, before any SQL runs", () => {
+  const fake = createFakeSql({ columnTransformTo: decamelize })
+
+  const error = assertThrows(
+    () => new PostgresMigrationDriver({ sql: fake.sql, schema: "UserProfile" }),
+    PostgresIdentifierTransformError,
+  )
+  assertEquals(error.kind, "schema")
+  assertEquals(error.identifier, "UserProfile")
+  assertEquals(error.rewrittenTo, "_user_profile")
+  assertEquals(fake.topLevel, [])
+})
+
+Deno.test("the constructor accepts a table and schema name the transform leaves unchanged", () => {
+  const fake = createFakeSql({ columnTransformTo: decamelize })
+  // Does not throw: lower-case with underscores is exactly what `decamelize` gives back.
+  new PostgresMigrationDriver({ sql: fake.sql, table: "migrations", schema: "tenant_1" })
 })
 
 Deno.test("appliedMigrations reads the recorded rows in id order", async () => {
@@ -337,7 +392,7 @@ Deno.test("the lock, the run and the unlock all go through the reserved connecti
   // The lock is a *session* lock, so it has to be taken on the session the migrations run
   // on. Sending it through the pool instead protects a session the run never touches, and
   // that is exactly what a fake recording every handle into one list could not see.
-  const fake = createFakeSql({ answers: [[{ table_exists: true, checksum_exists: false }]] })
+  const fake = createFakeSql({ answers: [[{ tableexists: true, checksumexists: false }]] })
   const driver = new PostgresMigrationDriver({ sql: fake.sql })
 
   const inside = await driver.withLock(async () => {
@@ -646,7 +701,7 @@ Deno.test("purgeDatabase refuses every environment it does not recognise", async
     "prod-ci",
   ]
   for (const value of unsafe) {
-    const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+    const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
     const result = await purgeDatabase({ sql: fake.sql, environment: { [ENV_NAME]: value } })
 
     assertEquals(result, { dropped: [], refused: true })
@@ -656,21 +711,21 @@ Deno.test("purgeDatabase refuses every environment it does not recognise", async
 })
 
 Deno.test("purgeDatabase refuses when ENV is unset and when no environment is given", async () => {
-  const unset = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  const unset = createFakeSql({ answers: [[{ tablename: "users" }]] })
   assertEquals(await purgeDatabase({ sql: unset.sql, environment: {} }), {
     dropped: [],
     refused: true,
   })
   assertEquals(unset.topLevel, [])
 
-  const missing = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  const missing = createFakeSql({ answers: [[{ tablename: "users" }]] })
   assertEquals(await purgeDatabase({ sql: missing.sql }), { dropped: [], refused: true })
   assertEquals(missing.topLevel, [])
 })
 
 Deno.test("purgeDatabase runs for each safe environment, spelled loosely", async () => {
   for (const value of [...SAFE_ENV_VALUES, " Dev ", "TEST", "CI"]) {
-    const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+    const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
     const result = await purgeDatabase({ sql: fake.sql, environment: { [ENV_NAME]: value } })
 
     assertEquals(result, { dropped: ["users"], refused: false })
@@ -691,7 +746,7 @@ Deno.test("purgeDatabase is not armed by an argument that is not the flag", asyn
   // a `--dry-run`, a file path, the script's own name — must not count as asking for a
   // production purge.
   for (const args of [["--dry-run"], ["--PROD"], ["--prod=yes"], [" --prod"], ["purge.ts"]]) {
-    const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+    const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
     const result = await purgeDatabase({
       sql: fake.sql,
       environment: { [ENV_NAME]: "production" },
@@ -704,7 +759,7 @@ Deno.test("purgeDatabase is not armed by an argument that is not the flag", asyn
 })
 
 Deno.test("purgeDatabase proceeds in an unsafe environment when --prod is passed", async () => {
-  const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
   const result = await purgeDatabase({
     sql: fake.sql,
     environment: { [ENV_NAME]: "production" },
@@ -716,18 +771,46 @@ Deno.test("purgeDatabase proceeds in an unsafe environment when --prod is passed
 
 Deno.test("purgeDatabase drops every base table, schema-qualified and CASCADE", async () => {
   const fake = createFakeSql({
-    answers: [[{ table_name: "users" }, { table_name: "sessions" }, { table_name: "migrations" }]],
+    answers: [[{ tablename: "users" }, { tablename: "sessions" }, { tablename: "migrations" }]],
   })
   const result = await purgeDatabase({ sql: fake.sql, environment: SAFE_ENVIRONMENT })
 
   assertEquals(result, { dropped: ["users", "sessions", "migrations"], refused: false })
   assertEquals(fake.topLevel, [
-    "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND " +
+    "SELECT table_name AS tablename FROM information_schema.tables WHERE table_schema = $1 AND " +
     "table_type = 'BASE TABLE'",
     `DROP TABLE "public"."users" CASCADE`,
     `DROP TABLE "public"."sessions" CASCADE`,
     `DROP TABLE "public"."migrations" CASCADE`,
   ])
+})
+
+Deno.test("purgeDatabase refuses a table name the transform would rewrite, and drops nothing", async () => {
+  const fake = createFakeSql({
+    answers: [[{ tablename: "plain_one" }, { tablename: "UserProfile" }]],
+    columnTransformTo: decamelize,
+  })
+
+  const error = await assertRejects(
+    () => purgeDatabase({ sql: fake.sql, environment: SAFE_ENVIRONMENT }),
+    PostgresIdentifierTransformError,
+  )
+  assertEquals(error.kind, "table")
+  assertEquals(error.identifier, "UserProfile")
+  // The listing ran — it is a read, and it is what names the tables to check — but no
+  // `DROP` did: every name is checked before the first one runs.
+  assertEquals(fake.topLevel.length, 1)
+})
+
+Deno.test("purgeDatabase refuses a schema name the transform would rewrite, and drops nothing", async () => {
+  const fake = createFakeSql({ answers: [[]], columnTransformTo: decamelize })
+
+  const error = await assertRejects(
+    () => purgeDatabase({ sql: fake.sql, schema: "UserProfile", environment: SAFE_ENVIRONMENT }),
+    PostgresIdentifierTransformError,
+  )
+  assertEquals(error.kind, "schema")
+  assertEquals(error.identifier, "UserProfile")
 })
 
 Deno.test("purgeDatabase reports an empty database without dropping anything", async () => {
@@ -738,10 +821,14 @@ Deno.test("purgeDatabase reports an empty database without dropping anything", a
   assertEquals(fake.topLevel.length, 1)
 })
 
-Deno.test("purgeDatabase reads the snake_case column a plain client returns", async () => {
-  // A client without `transform: postgres.camel` returns `table_name`; reading `tableName`
-  // would drop nothing and report success, which is what the source did.
-  const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+Deno.test("purgeDatabase reads the aliased column, not the bare information_schema name", async () => {
+  // The listing is `SELECT table_name AS tablename`, and the code reads `row.tablename`.
+  // A fake answers whatever key it is given either way, so this only pins the reading
+  // side; whether a real `postgres.camel` client still returns `tablename` unchanged is
+  // `postgres-purge.integration.test.ts`'s "against a camelCase client" case — a bare
+  // `table_name` would come back as `tableName` under that transform and `row.tablename`
+  // would be `undefined`, which is the bug this alias fixes (#77).
+  const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
   const result = await purgeDatabase({ sql: fake.sql, environment: SAFE_ENVIRONMENT })
 
   assertEquals(result.dropped, ["users"])
@@ -752,7 +839,7 @@ Deno.test("purgeDatabase drops a custom schema's own tables, not public's", asyn
   // read. The earlier version of this test answered with no rows, so it asserted the
   // listing and never saw that the DROP dropped an unqualified name — which
   // `search_path` resolves to `public`, a different table that happens to share a name.
-  const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
   const result = await purgeDatabase({
     sql: fake.sql,
     schema: "tenant_1",

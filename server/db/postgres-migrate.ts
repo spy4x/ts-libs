@@ -112,9 +112,108 @@ export class PostgresMigrationRunInProgressError extends Error {
   }
 }
 
+/**
+ * Thrown when the client's own column-name transform would send a table or schema name to
+ * Postgres spelled differently than this driver — or {@link purgeDatabase} in
+ * `postgres-purge.ts` — was given it, before any statement runs.
+ *
+ * `sql(name)` — the identifier form every `CREATE TABLE`/`ALTER TABLE`/`INSERT`/`DROP TABLE`
+ * in this driver and in {@link purgeDatabase} uses — runs the client's `transform.column.to`
+ * on `name` first (`postgres@3.4.7/src/index.js:114`), the transform
+ * `PostgresOutboxRepository` also guards against on the read side. `postgres.camel`'s half
+ * of it, `fromCamel`, turns a mixed-case name like `x_MixedHist` into `x__mixed_hist`, and
+ * `"UserProfile"` into `_user_profile`.
+ * Every *other* place this driver or the purge helper names a table or schema —
+ * `createHistoryTable`'s probe, `to_regclass`, the advisory-lock key, the purge listing —
+ * passes the name as a bound *value*, which that transform never touches. A camelCase
+ * client given a name the transform rewrites therefore creates or drops one object and
+ * looks the rest of the statements up against a differently-spelled one: `CREATE TABLE`
+ * makes `x__mixed_hist` while `createHistoryTable`'s own probe still asks about
+ * `x_MixedHist`, finds nothing, and reissues `CREATE TABLE` on the next run — the same
+ * "relation already exists" failure this package fixed for the ordinary case, reopened by a
+ * name the transform does not leave alone.
+ *
+ * Reconciling the two spellings is not attempted: a name the transform leaves unchanged has
+ * one spelling everywhere, which is the property every other statement here relies on, so a
+ * name it would rewrite is refused up front instead — lower-case with underscores, or a
+ * client with no `transform.column.to`, is what to use instead.
+ */
+export class PostgresIdentifierTransformError extends Error {
+  /** `"table"` or `"schema"` — which name the transform would rewrite. */
+  readonly kind: "table" | "schema"
+  /** The name as given to this driver or to {@link purgeDatabase}. */
+  readonly identifier: string
+  /**
+   * What the client's `transform.column.to` would send to Postgres instead, or `"(unknown)"`
+   * when the client does not show it; see {@link identifierRewrittenBy}.
+   */
+  readonly rewrittenTo: string
+
+  constructor(kind: "table" | "schema", identifier: string, rewrittenTo: string) {
+    super(
+      `this client's transform.column.to would send the ${kind} name ` +
+        `${JSON.stringify(identifier)} to Postgres as ${JSON.stringify(rewrittenTo)}, and ` +
+        `only some of this driver's statements go through that transform, so the object it ` +
+        `creates or drops and the object its other statements look up would not be the ` +
+        `same one; use a ${kind} name the transform leaves unchanged — lower-case with ` +
+        `underscores, no other case change — or a client with no transform.column.to`,
+    )
+    this.name = "PostgresIdentifierTransformError"
+    this.kind = kind
+    this.identifier = identifier
+    this.rewrittenTo = rewrittenTo
+  }
+}
+
+/**
+ * `identifier` as `sql(identifier)` would send it to Postgres, or `undefined` when it would
+ * send it unchanged: the client has no `transform.column.to`, or the transform leaves this
+ * name as it is.
+ *
+ * Read from what `sql(identifier)` builds, not from `sql.options`. `postgres@3.4.7` sets
+ * `options` on the pool object alone (`src/index.js:69-81`), but the handle `sql.begin`
+ * passes to its callback and the one `sql.reserve()` returns run the same transform in
+ * `sql(name)` (`src/index.js:114`). The `Identifier` that call returns holds the quoted text
+ * it will send in `value` (`src/types.js:44-48,216-218`), so comparing it with `identifier`
+ * quoted the same way gives one answer on all three handles.
+ *
+ * When `value` is not a string, the rewrite cannot be read. A name holding an upper-case
+ * letter or a `-` is then treated as rewritten, to `"(unknown)"`: `postgres.camel`,
+ * `postgres.pascal` and `postgres.kebab` leave every other name unchanged.
+ */
+export function identifierRewrittenBy(sql: Sql, identifier: string): string | undefined {
+  const sent: unknown = (sql(identifier) as unknown as { value?: unknown }).value
+  if (typeof sent !== "string") return /[A-Z-]/.test(identifier) ? "(unknown)" : undefined
+  const given = `"${identifier.replaceAll(`"`, `""`).replaceAll(".", `"."`)}"`
+  if (sent === given) return undefined
+  return sent.slice(1, -1).replaceAll(`"."`, ".").replaceAll(`""`, `"`)
+}
+
+/**
+ * Throws {@link PostgresIdentifierTransformError} when `sql`'s own transform would rewrite
+ * `identifier` — see that error for why a rewritten name cannot be used as given.
+ */
+export function assertStableIdentifier(
+  sql: Sql,
+  kind: "table" | "schema",
+  identifier: string,
+): void {
+  const rewrittenTo = identifierRewrittenBy(sql, identifier)
+  if (rewrittenTo !== undefined) {
+    throw new PostgresIdentifierTransformError(kind, identifier, rewrittenTo)
+  }
+}
+
 /** Options for {@link PostgresMigrationDriver}. */
 export interface PostgresMigrationDriverOptions {
-  /** Client to run through. */
+  /**
+   * The pool client that `postgres()` or `createSql` returns.
+   *
+   * A run reserves its own connection from it (see {@link PostgresMigrationDriver.withLock}).
+   * A `sql.begin` transaction handle or a `sql.reserve()` connection has no `reserve`, so a
+   * driver built on one constructs, but `runMigrations` then fails with
+   * `TypeError: this.sql.reserve is not a function` before any statement runs.
+   */
   sql: Sql
   /** History table name. Defaults to `migrations`. */
   table?: string
@@ -152,10 +251,22 @@ interface MigrationRow {
   checksum: string | null
 }
 
-/** What `createHistoryTable`'s one probe answers: is the table there, is it up to date. */
+/**
+ * What `createHistoryTable`'s one probe answers: is the table there, is it up to date.
+ *
+ * Aliased to one lower-case word with no underscore, not `table_exists`/`checksum_exists`:
+ * `postgres.camel` — a transform a caller may configure on its own client, the transform
+ * `PostgresOutboxRepository` also guards against — turns a returned `table_exists` into
+ * `tableExists`, which left this probe reading `undefined` for both flags on a camelCase
+ * client, so
+ * `createHistoryTable` treated an existing history table as absent and reissued
+ * `CREATE TABLE`, failing every run after the first with `relation already exists`. A
+ * bare lower-case word has no underscore for the transform to act on, so it comes back
+ * unchanged whether the client transforms or not.
+ */
 interface HistoryProbe {
-  table_exists: boolean
-  checksum_exists: boolean
+  tableexists: boolean
+  checksumexists: boolean
 }
 
 /**
@@ -172,6 +283,11 @@ interface HistoryProbe {
  * *same instance* while the first is still going would share that connection. That is now
  * refused with {@link PostgresMigrationRunInProgressError} rather than deadlocking (#109).
  * Two concurrent runs are two instances, which is also what two application instances are.
+ *
+ * **A table or schema name the client's own transform would rewrite is refused at
+ * construction**, with {@link PostgresIdentifierTransformError}, before any statement runs,
+ * on whichever handle `sql` is — see that error for why this driver cannot reconcile the two
+ * spellings on its own.
  */
 export class PostgresMigrationDriver implements MigrationDriver {
   /**
@@ -203,6 +319,10 @@ export class PostgresMigrationDriver implements MigrationDriver {
     this.lockWaitMs = options.lockWaitMs ?? DEFAULT_MIGRATION_LOCK_WAIT_MS
     this.lockRetryMs = Math.max(1, options.lockRetryMs ?? DEFAULT_MIGRATION_LOCK_RETRY_MS)
     this.delay = options.delay ?? defaultDelay
+    // Before any SQL runs: see PostgresIdentifierTransformError for why a name the
+    // client's own transform would rewrite cannot be used as given.
+    assertStableIdentifier(this.sql, "table", this.table)
+    if (this.schema !== undefined) assertStableIdentifier(this.sql, "schema", this.schema)
     // `postgres` renders a dot inside an identifier as a quoted separator —
     // `escapeIdentifier` in `postgres@3.4.7/src/types.js:216` turns `a.b` into `"a"."b"`
     // — so one splice carries a qualified name and both halves are still quoted.
@@ -368,26 +488,26 @@ export class PostgresMigrationDriver implements MigrationDriver {
           exists (
             SELECT FROM information_schema.tables
             WHERE table_name = ${this.table} AND table_schema = ANY (current_schemas(false))
-          ) AS table_exists,
+          ) AS tableexists,
           exists (
             SELECT FROM information_schema.columns
             WHERE table_name = ${this.table} AND column_name = 'checksum'
             AND table_schema = ANY (current_schemas(false))
-          ) AS checksum_exists
+          ) AS checksumexists
       `
       : await this.sql<HistoryProbe[]>`
         SELECT
           exists (
             SELECT FROM information_schema.tables
             WHERE table_name = ${this.table} AND table_schema = ${this.schema}
-          ) AS table_exists,
+          ) AS tableexists,
           exists (
             SELECT FROM information_schema.columns
             WHERE table_name = ${this.table} AND column_name = 'checksum'
             AND table_schema = ${this.schema}
-          ) AS checksum_exists
+          ) AS checksumexists
       `
-    if (!probe[0]?.table_exists) {
+    if (!probe[0]?.tableexists) {
       await this.sql`
         CREATE TABLE ${this.sql(this.tableRef)}
         (
@@ -399,7 +519,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
       `
       return
     }
-    if (probe[0].checksum_exists) return
+    if (probe[0].checksumexists) return
     await this.sql`
       ALTER TABLE ${this.sql(this.tableRef)} ADD COLUMN IF NOT EXISTS checksum TEXT
     `

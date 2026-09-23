@@ -20,12 +20,16 @@
  * touched and nothing is truncated.
  */
 
-import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert"
+import { assertEquals, assertRejects, assertStrictEquals, assertThrows } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import postgres from "postgres"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { MigrationEditedError, type MigrationReader, runMigrations } from "./migrate.ts"
-import { PostgresMigrationDriver, PostgresMigrationLockError } from "./postgres-migrate.ts"
+import {
+  PostgresIdentifierTransformError,
+  PostgresMigrationDriver,
+  PostgresMigrationLockError,
+} from "./postgres-migrate.ts"
 import { createSql } from "./postgres.ts"
 import type { Sql } from "./ports.ts"
 import { migrationRace } from "./testing/migration-race.ts"
@@ -56,8 +60,19 @@ interface Run {
   observer: Sql
 }
 
-/** Open a client, run `body`, and drop both of this run's tables afterwards. */
-async function withRun(body: (run: Run) => Promise<void>): Promise<void> {
+/**
+ * Open a client, run `body`, and drop both of this run's tables afterwards.
+ *
+ * `transform` defaults to none — a plain client, column names exactly as Postgres sends
+ * them. Passing `postgres.camel` is what the template's own client used
+ * (`template/libs/server/db/+index.ts:13`); the "against a camelCase client" tests below
+ * pass it to prove the same driver behaviour holds under that transform, which is the
+ * client shape #77 found failing.
+ */
+async function withRun(
+  body: (run: Run) => Promise<void>,
+  options: { transform?: typeof postgres.camel } = {},
+): Promise<void> {
   const settings = postgresSettings()
   await requireReachable(settings.address)
 
@@ -65,7 +80,11 @@ async function withRun(body: (run: Run) => Promise<void>): Promise<void> {
   const subject = uniqueIdentifier("it_subject")
   // The default pool size: `withLock` reserves a connection for the run, and a second
   // runner needs one of its own to wait for the lock on.
-  const sql = createSql({ connection: settings.connection, applicationName: table })
+  const sql = createSql({
+    connection: settings.connection,
+    applicationName: table,
+    transform: options.transform,
+  })
   // A separate client, under a name of its own, so a query about the run's backends is
   // never answered about itself.
   const observer = createSql({
@@ -345,5 +364,132 @@ describe("the Postgres migration runner against a real server", () => {
       assertStrictEquals(history[0].checksum, null)
       assertStrictEquals(history[1].checksum?.length, 64)
     })
+  })
+})
+
+describe("the Postgres migration runner against a camelCase client", () => {
+  // `HistoryProbe`'s columns are aliased to one lower-case word (`tableexists`,
+  // `checksumexists`) precisely so a client configured with `transform: postgres.camel`
+  // reads them the same way a plain client does. Before that alias existed, this probe
+  // read `undefined` for both flags on a camelCase client, so `createHistoryTable` treated
+  // an existing history table as absent and reissued `CREATE TABLE`, failing every run
+  // after the first with `relation "migrations" already exists` — measured on #77, where
+  // the template's API container runs migrations on every start.
+
+  it("skips on the second run instead of failing on relation already exists", async () => {
+    await withRun(async ({ sql, table, subject }) => {
+      const reader = memoryReader({
+        "0001_init.sql": `CREATE TABLE ${subject} (id serial PRIMARY KEY)`,
+      })
+      const options = { folder: "/migrations", reader }
+
+      const first = await runMigrations(new PostgresMigrationDriver({ sql, table }), options)
+      assertEquals(first, { applied: ["0001_init"], skipped: [], missing: [] })
+
+      // Reproduces #77 as reported: before the fix, this run's `createHistoryTable` saw
+      // `tableexists: undefined` and reissued `CREATE TABLE`, which Postgres rejects with
+      // `relation "…" already exists` rather than skipping the already-applied migration.
+      const second = await runMigrations(new PostgresMigrationDriver({ sql, table }), options)
+      assertEquals(second, { applied: [], skipped: ["0001_init"], missing: [] })
+    }, { transform: postgres.camel })
+  })
+
+  it("takes over a pre-existing history table in the template's shape", async () => {
+    await withRun(async ({ sql, table, subject }) => {
+      // The shape `template/libs/server/db/migrate.ts:24-30` created, with a row already
+      // in it: no `checksum` column, and no `UNIQUE` on `name` either.
+      await sql`
+        CREATE TABLE ${sql(table)} (
+          id         SERIAL PRIMARY KEY,
+          name       VARCHAR(100) NOT NULL,
+          created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `
+      await sql`INSERT INTO ${sql(table)} (name) VALUES (${"0001_init"})`
+
+      const report = await runMigrations(new PostgresMigrationDriver({ sql, table }), {
+        folder: "/migrations",
+        reader: memoryReader({
+          "0001_init.sql": "SELECT 'this is not what ran'",
+          "0002_add.sql": `CREATE TABLE ${subject} (id integer PRIMARY KEY)`,
+        }),
+      })
+
+      assertEquals(report, { applied: ["0002_add"], skipped: ["0001_init"], missing: [] })
+      const history = await new PostgresMigrationDriver({ sql, table }).appliedMigrations()
+      assertEquals(history.map((row) => row.name), ["0001_init", "0002_add"])
+    }, { transform: postgres.camel })
+  })
+
+  // Round 2 found the fix above incomplete: `sql(name)` — the identifier form every
+  // `CREATE TABLE`/`ALTER TABLE`/`INSERT` in this driver uses — runs the client's own
+  // `transform.column.to` on the name first, but every *other* place the driver names the
+  // table or schema (this probe, `to_regclass`, the lock key) passes it as a bound value,
+  // which that transform never touches. A mixed-case name therefore creates one object and
+  // looks the rest of the driver's statements up against a differently-spelled one.
+  // `PostgresIdentifierTransformError` refuses instead of trying to reconcile the two.
+
+  it("refuses a mixed-case table name the transform would rewrite, before creating anything", async () => {
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    // `fromCamel` turns this into `..._mixed_hist`; the driver would create one and the
+    // probe would keep asking about the other.
+    const table = `${uniqueIdentifier("it")}_MixedHist`
+    const sql = createSql({
+      connection: settings.connection,
+      transform: postgres.camel,
+      applicationName: uniqueIdentifier("it_migrations_camel_refuse"),
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      const error = assertThrows(
+        () => new PostgresMigrationDriver({ sql, table }),
+        PostgresIdentifierTransformError,
+      )
+      assertEquals(error.kind, "table")
+      assertEquals(error.identifier, table)
+
+      const rows = await sql<{ present: boolean }[]>`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables WHERE table_name = ${table}
+        ) AS present
+      `
+      assertStrictEquals(rows[0].present, false)
+    } finally {
+      await sql`DROP TABLE IF EXISTS ${sql(table)}`
+      await sql.end()
+    }
+  })
+
+  it("refuses a camelCase schema name the transform would rewrite, before creating anything", async () => {
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const schema = `${uniqueIdentifier("it")}TenantOne`
+    const sql = createSql({
+      connection: settings.connection,
+      transform: postgres.camel,
+      applicationName: uniqueIdentifier("it_migrations_camel_refuse"),
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      const error = assertThrows(
+        () => new PostgresMigrationDriver({ sql, schema }),
+        PostgresIdentifierTransformError,
+      )
+      assertEquals(error.kind, "schema")
+      assertEquals(error.identifier, schema)
+
+      const rows = await sql<{ present: boolean }[]>`
+        SELECT EXISTS (SELECT FROM information_schema.schemata WHERE schema_name = ${schema}) AS present
+      `
+      assertStrictEquals(rows[0].present, false)
+    } finally {
+      await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
+      await sql.end()
+    }
   })
 })

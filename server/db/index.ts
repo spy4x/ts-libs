@@ -81,6 +81,7 @@ export {
   DEFAULT_MIGRATION_LOCK_RETRY_MS,
   DEFAULT_MIGRATION_LOCK_WAIT_MS,
   type MigrationDelay,
+  PostgresIdentifierTransformError,
   PostgresMigrationDriver,
   type PostgresMigrationDriverOptions,
   PostgresMigrationLockError,

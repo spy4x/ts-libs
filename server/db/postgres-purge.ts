@@ -6,9 +6,13 @@
  * `Deno.exit` inside its own `try` blocks (`:14,28,36,45`), and it read the table
  * list into `row.tableName` — a camelCase field that only exists because the
  * template client sets `transform: postgres.camel` (`template/libs/server/db/+index.ts:13`).
- * This reads `table_name` instead, so the helper works against a client built
- * without a transform, and the transform it no longer depends on is stated rather
- * than assumed.
+ * This aliases the column to `tablename`, a name `postgres.camel` leaves unchanged, so the
+ * helper reads the same field whether or not the client transforms column names.
+ *
+ * **A table or schema name the same transform would rewrite is refused before any `DROP`
+ * runs**, with {@link PostgresIdentifierTransformError}, whether `sql` is the pool client, a
+ * `sql.begin` transaction handle or a `sql.reserve()` connection — see that error, exported
+ * from `postgres-migrate.ts`, for why reconciling the two spellings is not attempted.
  *
  * **The guard is inverted from the source's.** The source refused only when `ENV` was
  * exactly `prod`, which meant it purged for `production`, for `PROD`, for `"prod "`
@@ -19,6 +23,7 @@
  * any query and against the caller's environment record, not `Deno.env`.
  */
 
+import { assertStableIdentifier } from "./postgres-migrate.ts"
 import type { Sql } from "./ports.ts"
 
 /** The environment variable that names the deployment. */
@@ -68,9 +73,19 @@ export interface PurgeOptions {
   schema?: string
 }
 
-/** A row of the table listing. */
+/**
+ * A row of the table listing.
+ *
+ * Aliased to one lower-case word with no underscore, not `table_name`: a caller may
+ * configure `postgres.camel` on its own client (the same transform the template's copy
+ * used), which turns a returned `table_name` into `tableName` and leaves `row.table_name`
+ * `undefined` — the identifier interpolation below then received `undefined` and threw
+ * inside the driver's own array handling. A bare lower-case word has no underscore for
+ * the transform to act on, so it comes back unchanged whether the client transforms or
+ * not.
+ */
 interface TableRow {
-  table_name: string
+  tablename: string
 }
 
 /**
@@ -85,6 +100,17 @@ interface TableRow {
  * identifiers. Dropping the bare name would resolve through `search_path` instead:
  * asked to purge `tenant_a`, the helper listed `tenant_a`'s tables and then dropped
  * whatever `public` happened to have under each of those names.
+ *
+ * **A schema or table name the client's own transform would rewrite is refused, and
+ * nothing is dropped.** `DROP TABLE ${sql(schema)}.${sql(table)}` sends `table` and
+ * `schema` through the client's `transform.column.to`, and the listing above reads them
+ * as bound values, which that transform never touches — a camelCase client given
+ * `"UserProfile"` would list it and then try to drop `_user_profile`, which does not
+ * exist. Every name is checked before the first `DROP` runs, not one at a time as each
+ * is dropped, so a refusal never leaves some tables gone and others not. The check reads
+ * what `sql(name)` would send, so it holds on the pool client, a `sql.begin` transaction
+ * handle and a `sql.reserve()` connection alike; see `PostgresIdentifierTransformError` and
+ * `identifierRewrittenBy` in `postgres-migrate.ts`.
  */
 export async function purgeDatabase(options: PurgeOptions): Promise<PurgeResult> {
   const environment = options.environment ?? {}
@@ -95,16 +121,23 @@ export async function purgeDatabase(options: PurgeOptions): Promise<PurgeResult>
   }
 
   const rows = await options.sql<TableRow[]>`
-    SELECT table_name
+    SELECT table_name AS tablename
     FROM information_schema.tables
     WHERE table_schema = ${schema}
     AND table_type = 'BASE TABLE'
   `
 
+  // Before any DROP: every name is checked first, so a refusal never leaves some
+  // tables dropped and others not.
+  assertStableIdentifier(options.sql, "schema", schema)
+  for (const row of rows) {
+    assertStableIdentifier(options.sql, "table", row.tablename)
+  }
+
   const dropped: string[] = []
   for (const row of rows) {
-    await options.sql`DROP TABLE ${options.sql(schema)}.${options.sql(row.table_name)} CASCADE`
-    dropped.push(row.table_name)
+    await options.sql`DROP TABLE ${options.sql(schema)}.${options.sql(row.tablename)} CASCADE`
+    dropped.push(row.tablename)
   }
   return { dropped, refused: false }
 }
