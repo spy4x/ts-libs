@@ -63,8 +63,21 @@ interface VerifyCall {
 function setup(sql: Sql) {
   const clock = { now: () => NOW }
   const store = createPostgresAuthStore(sql)
+  const sessionStore = createPostgresSessionStore(sql)
+  const sessionCalls: string[] = []
   const sessions = new SessionManager<AuthSessionRecord>({
-    store: createPostgresSessionStore(sql),
+    // The Postgres store with `create` and `signOutUser` recorded; every other key is its own.
+    store: {
+      ...sessionStore,
+      create(session) {
+        sessionCalls.push("create")
+        return sessionStore.create(session)
+      },
+      signOutUser(userId, exceptId) {
+        sessionCalls.push("signOutUser")
+        return sessionStore.signOutUser(userId, exceptId)
+      },
+    },
     pepper: PEPPER,
     durationMinutes: 60,
     clock,
@@ -82,7 +95,7 @@ function setup(sql: Sql) {
     },
   } satisfies PasswordHasher
   const provider = createPasswordSignIn({ store, sessions, clock, hasher })
-  return { store, sessions, provider, verifies }
+  return { store, sessions, sessionCalls, provider, verifies }
 }
 
 async function refusal(promise: Promise<unknown>): Promise<PasswordSignInError> {
@@ -186,6 +199,13 @@ describe("createPasswordSignIn on Postgres", () => {
       expect(verifies[0].stored).toMatch(/^pbkdf2-sha256\$100000\$[0-9a-f]{32}\$[0-9a-f]{64}$/)
       expect(verifies[0].stored).not.toBe(signedUp.key.secret)
 
+      const again = await refusal(
+        provider.signIn({ email: "else@example.com", password: "wrong horse" }),
+      )
+      expect(verifies).toHaveLength(2)
+      expect(verifies[1].stored).toBe(verifies[0].stored)
+      expect(again.message).toBe(missing.message)
+
       expect(missing.reason).toBe("invalid-credentials")
       expect(wrong.reason).toBe(missing.reason)
       expect(wrong.message).toBe(missing.message)
@@ -201,5 +221,22 @@ describe("createPasswordSignIn on Postgres", () => {
       const rows = await passwordKeyRows(sql)
       expect(rows.map((row) => row.subject).sort()).toEqual([ANN, "bob@example.com"])
       for (const row of rows) expect(row.email).toBe(row.subject)
+    }))
+
+  it("changes the password, creating the new session before revoking the others", () =>
+    withDatabase(async (sql) => {
+      const { provider, sessions, sessionCalls } = setup(sql)
+      const first = await provider.signUp({ email: ANN, password: "correct horse" })
+      sessionCalls.length = 0
+      const changed = await provider.changePassword({
+        userId: first.user.id,
+        currentPassword: "correct horse",
+        newPassword: "battery staple",
+      })
+      expect(sessionCalls).toEqual(["create", "signOutUser"])
+      expect(await sessions.validate(first.session.cookieValue)).toBeNull()
+      expect((await sessions.validate(changed.session.cookieValue))?.session.id)
+        .toBe(changed.session.session.id)
+      await provider.signIn({ email: ANN, password: "battery staple" })
     }))
 })
