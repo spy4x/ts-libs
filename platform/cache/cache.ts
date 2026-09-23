@@ -17,7 +17,8 @@
  *    storage. Redis refuses a fractional or zero expiry — `SET … EX 0.2` and `SET … EX 0` are both
  *    errors, and `EXPIRE key 0` deletes the key immediately — so this is done here, once, rather
  *    than in every `ICacheStorage`.
- * 4. `wrap` coalesces concurrent calls for the same key on the same instance into one `fn()` call.
+ * 4. `wrap` lets a caller that finds another caller's `fn()` for the same key still running on
+ *    this instance await that call instead of starting its own; it is not a lock.
  *
  * A fifth change: `schema` is an arktype `Type`, validated through `@ts-libs/validation`'s
  * `validate`, not the source's `ValidationSchema` from its own `@platform/types` — this package
