@@ -103,6 +103,12 @@ describe("dateSchema", () => {
       }
     })
 
+    it("rejects a date written without dashes, which V8 would read as a far-off year", () => {
+      for (const input of ["00000230", "+00010229", "0001366", "00010101"]) {
+        expect(dateSchema(input) instanceof type.errors).toBe(true)
+      }
+    })
+
     it("rejects a calendar date that does not exist when the year carries a sign", () => {
       expect(dateSchema("+2023-02-29") instanceof type.errors).toBe(true)
       expect(dateSchema("+2026-04-31") instanceof type.errors).toBe(true)
