@@ -427,6 +427,38 @@ export function describeAuthStoreContract(
         expect(await store.findUser(bob.user.id + 1)).toBeNull()
       }))
 
+    it("a proven insert does not displace another user's key that carries a different address or none", () =>
+      withStore(async (store) => {
+        const otherAddress = await store.createUserWithKey({
+          method: "password",
+          subject: "ann@example.com",
+          email: "sam@example.com",
+          secret: null,
+          provenAt: null,
+        })
+        const noAddress = await store.createUserWithKey({
+          method: "email-code",
+          subject: "ann@example.com",
+          email: null,
+          secret: null,
+          provenAt: null,
+        })
+
+        await expectConflict(
+          store.createUserWithKey(emailKey("password", "ann@example.com", NOW)),
+          "key-exists",
+        )
+        await expectConflict(
+          store.createUserWithKey(emailKey("email-code", "ann@example.com", NOW)),
+          "key-exists",
+        )
+
+        expect(await store.findKeyById(otherAddress.key.id)).toEqual(otherAddress.key)
+        expect(await store.findKeyById(noAddress.key.id)).toEqual(noAddress.key)
+        expect(await store.findUser(noAddress.user.id + 1)).toBeNull()
+        expect(await store.findUserIdByProvenEmail("ann@example.com")).toBeNull()
+      }))
+
     it("never displaces the same user's own unproven key with the same method and subject", () =>
       withStore(async (store) => {
         const ann = await store.createUserWithKey(emailKey("password", "ann@example.com"))

@@ -415,9 +415,12 @@ owns a proven address. Proving a key makes its user the owner and, in the same t
 every other user's unproven key for that address, so someone who registered an address they do not
 own loses it to the person who proves it. A key created already proven (a code the person typed
 before signing up, or a provider that vouches for the address) claims the address the same way
-before it is written, so another user's unproven key with the same method and subject cannot block
-it. Proving an address another user owns is refused with `AuthConflictError("email-owned")`.
-Deleting a user's last proven key for an address releases the address.
+before it is written, so another user's unproven key with the same method and subject that carries
+the address does not block it. A key that carries a different address or none still answers
+`AuthConflictError("key-exists")`, and so does one committed while the proven insert runs; that last
+case succeeds when retried. Proving an address another user owns is refused with
+`AuthConflictError("email-owned")`. Deleting a user's last proven key for an address releases the
+address.
 
 **Addresses are compared in one form.** `normalizeEmail` trims and lower-cases, and accepts only
 what `@ts-libs/email` will send to. The store refuses a key whose `email` is not already in that form.
@@ -454,6 +457,8 @@ Ids are Postgres `integer`s, so every id fits in a JavaScript number.
   `findUserIdByProvenEmail` first. The owner's next proof or proven insert deletes such a key.
 - **It does not release addresses when a user is soft-deleted.** `deletedAt` stops sign-in; the app
   deletes the user's keys (or the user row) to release the addresses.
+- **It does not delete a user who has no keys left.** A user whose last key was evicted or deleted
+  keeps their user row; the app treats a user with no keys as unable to sign in.
 - **It does not have an anonymous provider.** Guest accounts were not rebuilt.
 
 ## `server/crypto`
