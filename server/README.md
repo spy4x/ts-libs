@@ -413,9 +413,11 @@ OAuth. The store refuses a second key with the same `(method, subject)`.
 mail at `email` (a code they typed, or a provider that vouches for the address). At most one user
 owns a proven address. Proving a key makes its user the owner and, in the same transaction, deletes
 every other user's unproven key for that address, so someone who registered an address they do not
-own loses it to the person who proves it. Proving an address another user owns is refused with
-`AuthConflictError("email-owned")`. Deleting a user's last proven key for an address releases the
-address.
+own loses it to the person who proves it. A key created already proven (a code the person typed
+before signing up, or a provider that vouches for the address) claims the address the same way
+before it is written, so another user's unproven key with the same method and subject cannot block
+it. Proving an address another user owns is refused with `AuthConflictError("email-owned")`.
+Deleting a user's last proven key for an address releases the address.
 
 **Addresses are compared in one form.** `normalizeEmail` trims and lower-cases, and accepts only
 what `@ts-libs/email` will send to. The store refuses a key whose `email` is not already in that form.
@@ -449,7 +451,9 @@ Ids are Postgres `integer`s, so every id fits in a JavaScript number.
   stays locked until it expires, and every new code moves the expiry. Put
   `@ts-libs/platform/rate-limit` in front of the route that sends codes.
 - **It does not stop an unproven key for an owned address.** A provider that signs people up checks
-  `findUserIdByProvenEmail` first.
+  `findUserIdByProvenEmail` first. The owner's next proof or proven insert deletes such a key.
+- **It does not release addresses when a user is soft-deleted.** `deletedAt` stops sign-in; the app
+  deletes the user's keys (or the user row) to release the addresses.
 - **It does not have an anonymous provider.** Guest accounts were not rebuilt.
 
 ## `server/crypto`

@@ -40,7 +40,11 @@ export interface AuthKey {
    * id ("sub") for OAuth. The store refuses a second key with the same (method, subject).
    */
   subject: string
-  /** The normalised address this key carries, or null. */
+  /**
+   * The normalised address this key carries, or null. Set it whenever the subject is an address: a
+   * key whose subject is an address but whose `email` is null is invisible to eviction, so the
+   * person who proves that address cannot displace it.
+   */
   email: string | null
   /** A stored secret such as a password hash. Never a raw secret. */
   secret: string | null
@@ -54,6 +58,10 @@ export interface AuthKey {
 export interface NewAuthKey {
   method: string
   subject: string
+  /**
+   * The normalised address, or null. Set it whenever the subject is an address: a key whose subject
+   * is an address but whose `email` is null is invisible to eviction.
+   */
   email: string | null
   secret: string | null
   provenAt: Date | null

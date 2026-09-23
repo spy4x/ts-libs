@@ -195,10 +195,19 @@ export class MemoryAuthStore implements AuthStore {
     return undefined
   }
 
-  /** Throws the conflict a new key for `userId` (null: a user not created yet) would hit. */
+  /**
+   * Throws the conflict a new key for `userId` (null: a user not created yet) would hit, before
+   * anything changes. A proven key claims its address first, and that claim deletes another user's
+   * unproven key carrying the address, so such a key with the same (method, subject) is no conflict.
+   */
   #assertInsertable(userId: number | null, key: NewAuthKey): void {
-    if (this.#findKey(key.method, key.subject)) throw new AuthConflictError("key-exists")
-    if (key.provenAt !== null && key.email !== null) this.#assertOwnable(userId, key.email)
+    const email = key.provenAt === null ? null : key.email
+    if (email !== null) this.#assertOwnable(userId, email)
+    const existing = this.#findKey(key.method, key.subject)
+    if (!existing) return
+    const evicted = email !== null && existing.userId !== userId && existing.provenAt === null &&
+      existing.email === email
+    if (!evicted) throw new AuthConflictError("key-exists")
   }
 
   #assertOwnable(userId: number | null, email: string): void {
@@ -207,6 +216,7 @@ export class MemoryAuthStore implements AuthStore {
   }
 
   #insertKey(userId: number, input: NewAuthKey): AuthKey {
+    if (input.provenAt !== null && input.email !== null) this.#claimAddress(userId, input.email)
     const now = this.#now()
     const key: AuthKey = {
       id: this.#nextKeyId++,
@@ -219,7 +229,6 @@ export class MemoryAuthStore implements AuthStore {
       createdAt: now,
       updatedAt: new Date(now.getTime()),
     }
-    if (key.provenAt !== null && key.email !== null) this.#claimAddress(userId, key.email)
     this.#keys.set(key.id, key)
     return key
   }

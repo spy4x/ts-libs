@@ -367,6 +367,67 @@ export function describeAuthStoreContract(
         expect(await store.findKeyById(loser.key.id)).toBeNull()
       }))
 
+    it("a key proven at creation displaces another user's unproven key with the same method and subject", () =>
+      withStore(async (store) => {
+        const squatter = await store.createUserWithKey(emailKey("password", "ann@example.com"))
+        const ann = await store.createUserWithKey(emailKey("password", "ann@example.com", NOW))
+
+        expect(ann.key.provenAt?.getTime()).toBe(NOW.getTime())
+        expect(await store.findKey("password", "ann@example.com")).toEqual(ann.key)
+        expect(await store.findKeyById(squatter.key.id)).toBeNull()
+        expect(await store.findUserIdByProvenEmail("ann@example.com")).toBe(ann.user.id)
+      }))
+
+    it("the owner adds a proven key under a method another user holds an unproven claim for", () =>
+      withStore(async (store) => {
+        const ann = await store.createUserWithKey(emailKey("email-code", "ann@example.com", NOW))
+        const squatter = await store.createUserWithKey(emailKey("password", "ann@example.com"))
+
+        const password = await store.addKey(
+          ann.user.id,
+          emailKey("password", "ann@example.com", NOW),
+        )
+
+        expect(password.userId).toBe(ann.user.id)
+        expect(await store.findKey("password", "ann@example.com")).toEqual(password)
+        expect(await store.findKeyById(squatter.key.id)).toBeNull()
+      }))
+
+    it("never displaces a proven key of another user with the same method and subject", () =>
+      withStore(async (store) => {
+        const bob = await store.createUserWithKey({
+          method: "oauth:google",
+          subject: "google-sub-1",
+          email: "bob@example.com",
+          secret: null,
+          provenAt: NOW,
+        })
+        await expectConflict(
+          store.createUserWithKey({
+            method: "oauth:google",
+            subject: "google-sub-1",
+            email: "ann@example.com",
+            secret: null,
+            provenAt: NOW,
+          }),
+          "key-exists",
+        )
+        expect(await store.findKeyById(bob.key.id)).toEqual(bob.key)
+        expect(await store.findUserIdByProvenEmail("ann@example.com")).toBeNull()
+        expect(await store.findUser(bob.user.id + 1)).toBeNull()
+      }))
+
+    it("never displaces the same user's own unproven key with the same method and subject", () =>
+      withStore(async (store) => {
+        const ann = await store.createUserWithKey(emailKey("password", "ann@example.com"))
+        await expectConflict(
+          store.addKey(ann.user.id, emailKey("password", "ann@example.com", NOW)),
+          "key-exists",
+        )
+        expect(await store.findKeyById(ann.key.id)).toEqual(ann.key)
+        expect(await store.findUserIdByProvenEmail("ann@example.com")).toBeNull()
+      }))
+
     it("adds a second proven key for an address the same user owns", () =>
       withStore(async (store) => {
         const ann = await store.createUserWithKey(emailKey("email-code", "ann@example.com", NOW))

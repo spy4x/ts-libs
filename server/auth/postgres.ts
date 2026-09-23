@@ -419,25 +419,21 @@ function isUniqueViolation(error: unknown, constraint: string): boolean {
 }
 
 /**
- * Inserts a key; a proven key also claims its address for `userId`.
- *
- * The key is inserted unproven first, so a (method, subject) conflict is reported before an owned
- * address, as the memory store does; it is marked proven once the owner row exists, which is what
- * the foreign key on `proven_email` requires.
+ * Inserts a key. A proven key first claims its address for `userId`, which deletes every other
+ * user's unproven key carrying the address — including one with this key's (method, subject), so a
+ * pre-registered claim cannot block the person who proved the address. A (method, subject) still
+ * taken after that (a proven key, or a key of the same user) is `key-exists`, and the whole
+ * transaction, the claim included, rolls back.
  */
 async function insertKey(tx: Sql, userId: number, input: NewAuthKey): Promise<AuthKey> {
+  if (input.provenAt !== null && input.email !== null) await claimAddress(tx, userId, input.email)
   const [row] = await tx<KeyRow[]>`
-    INSERT INTO auth_keys (user_id, method, subject, email, secret)
-    VALUES (${userId}, ${input.method}, ${input.subject}, ${input.email}, ${input.secret})
+    INSERT INTO auth_keys (user_id, method, subject, email, secret, proven_at)
+    VALUES (${userId}, ${input.method}, ${input.subject}, ${input.email}, ${input.secret},
+      ${input.provenAt})
     RETURNING ${keyColumns(tx)}
   `
-  if (input.provenAt === null || input.email === null) return toKey(row)
-  await claimAddress(tx, userId, input.email)
-  const [proven] = await tx<KeyRow[]>`
-    UPDATE auth_keys SET proven_at = ${input.provenAt} WHERE id = ${row.id}
-    RETURNING ${keyColumns(tx)}
-  `
-  return toKey(proven)
+  return toKey(row)
 }
 
 /**
