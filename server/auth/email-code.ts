@@ -55,7 +55,8 @@ export const DEFAULT_CODE_MAX_ATTEMPTS = 5
 export type EmailCodeErrorReason =
   /** The address is not one `normalizeEmail` accepts. */
   | "invalid-email"
-  /** The code did not match, or was not a string. A compared guess was counted. */
+  /** The code did not match (a compared guess was counted), or was not a string (nothing was
+   * compared). */
   | "wrong-code"
   /** The code has used up its guesses. Nothing was compared. */
   | "locked-out"
