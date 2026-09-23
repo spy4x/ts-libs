@@ -2813,6 +2813,506 @@ describe("a header block whose line endings are not uniform", () => {
   })
 })
 
+// --- a header value hiding a From behind another line-break byte (#121) ----
+
+/**
+ * Issue #121: CR is not the only byte some reader treats as ending a header
+ * line. A vertical tab, a form feed, the file/group/record separators
+ * (0x1C-0x1E), NEL (0x85) and the Unicode LINE/PARAGRAPH SEPARATOR characters
+ * (U+2028/U+2029) hide a second `From:` the same way `X-Note: a<CR>From: …`
+ * does — this verifier kept the byte inside `X-Note:`'s value and saw one
+ * `From:`, the genuine one, while a reader that breaks the line on that byte
+ * sees two and shows the forged one.
+ *
+ * Each byte is pinned twice: once passed as a `string`, where a non-ASCII one
+ * always arrives already UTF-8 encoded (`TextEncoder` never emits an unpaired
+ * byte), and once passed as raw bytes, where a caller can hand the verifier a
+ * byte no valid UTF-8 sequence would ever start with — the literal form of
+ * the NEL and line/paragraph-separator attacks in the issue's own evidence
+ * table.
+ */
+describe("a From hidden behind a header line-break byte other than CR (issue #121)", () => {
+  const BODY = "This is a test.\r\n"
+  const FORGED = "From: ceo@bank.example"
+
+  function reasonFor(description: string): string {
+    return `header block carries ${description}, which some readers treat as a line break, ` +
+      "so where its header fields end is ambiguous"
+  }
+
+  const singleByteCases: { name: string; byte: number; description: string }[] = [
+    { name: "vertical tab", byte: 0x0b, description: "a vertical tab (0x0B)" },
+    { name: "form feed", byte: 0x0c, description: "a form feed (0x0C)" },
+    { name: "file separator", byte: 0x1c, description: "a file separator (0x1C)" },
+    { name: "group separator", byte: 0x1d, description: "a group separator (0x1D)" },
+    { name: "record separator", byte: 0x1e, description: "a record separator (0x1E)" },
+    { name: "NEL character", byte: 0x85, description: "a NEL character (0x85)" },
+  ]
+
+  for (const { name, byte, description } of singleByteCases) {
+    it(`rejects a From: hidden behind a ${name}, as a string`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      assert((await verifyDkim(raw, publicKey)).valid)
+      const attacked = `X-Note: a${String.fromCharCode(byte)}${FORGED}\r\n${raw}`
+
+      const result = await verifyDkim(attacked, publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, reasonFor(description))
+    })
+
+    it(`rejects a From: hidden behind a ${name}, as bytes`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      assert((await verifyDkim(raw, publicKey)).valid)
+      const attacked = `X-Note: a${String.fromCharCode(byte)}${FORGED}\r\n${raw}`
+
+      const result = await verifyDkim(ascii(attacked), publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, reasonFor(description))
+    })
+  }
+
+  it("rejects a From: hidden behind a Unicode line separator, as a string", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const attacked = `X-Note: a ${FORGED}\r\n${raw}`
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a Unicode line separator (U+2028)"))
+  })
+
+  it("rejects a From: hidden behind a Unicode line separator, as bytes", async () => {
+    // The three raw octets E2 80 A8 — U+2028's own minimal UTF-8 encoding —
+    // handed to the verifier directly, the way a caller who already has the
+    // bytes would.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const attacked = `X-Note: a${String.fromCharCode(0xe2, 0x80, 0xa8)}${FORGED}\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a Unicode line separator (U+2028)"))
+  })
+
+  it("rejects a From: hidden behind an overlong-encoded Unicode line separator, as bytes", async () => {
+    // F0 82 80 A8: U+2028's 21-bit value packed into the 4-byte UTF-8 shape
+    // instead of the minimal 3-byte one — invalid per RFC 3629, but a
+    // decoder that does not enforce the shortest-form rule still reads it as
+    // U+2028. There is no `string` form of this case: `TextEncoder` never
+    // emits an overlong sequence, so only a caller handing over raw bytes
+    // can produce one.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const attacked = `X-Note: a${String.fromCharCode(0xf0, 0x82, 0x80, 0xa8)}${FORGED}\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      reasonFor("an overlong UTF-8 encoding of a Unicode line separator (U+2028)"),
+    )
+  })
+
+  it("rejects a From: hidden behind a Unicode paragraph separator, as a string", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const attacked = `X-Note: a ${FORGED}\r\n${raw}`
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a Unicode paragraph separator (U+2029)"))
+  })
+
+  it("rejects a From: hidden behind a Unicode paragraph separator, as bytes", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const attacked = `X-Note: a${String.fromCharCode(0xe2, 0x80, 0xa9)}${FORGED}\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a Unicode paragraph separator (U+2029)"))
+  })
+
+  it(
+    "rejects a From: hidden behind an overlong-encoded Unicode paragraph separator, as bytes",
+    async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      assert((await verifyDkim(raw, publicKey)).valid)
+      const attacked = `X-Note: a${String.fromCharCode(0xf0, 0x82, 0x80, 0xa9)}${FORGED}\r\n${raw}`
+
+      const result = await verifyDkim(ascii(attacked), publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(
+        result.reason,
+        reasonFor("an overlong UTF-8 encoding of a Unicode paragraph separator (U+2029)"),
+      )
+    },
+  )
+
+  // Round 1 review of #121: an earlier revision exempted 0x85 when it looked
+  // like a UTF-8 continuation byte of a longer character, on the theory that
+  // a reader decoding the block as UTF-8 would never mistake it for NEL. The
+  // exemption reopened the bug — a reader is not obliged to decode as UTF-8
+  // at all, and a reader that falls back to Latin-1 the moment it meets one
+  // invalid byte anywhere in the message reads a bare 0x85 as NEL regardless
+  // of what bytes sit next to it. `refuseHeaderLineEndings` no longer
+  // exempts 0x85 in any context; these two pin that a value whose UTF-8
+  // legitimately contains it is refused, matching `email/README.md`'s stated
+  // cost.
+  it("rejects a From: hidden behind Å (C3 85) — 0x85 as a UTF-8 continuation byte", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const attacked = `X-Note: ${String.fromCharCode(0xc3, 0x85)}${FORGED}\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a NEL character (0x85)"))
+  })
+
+  it("rejects a From: hidden behind 😅 (F0 9F 98 85) — 0x85 as a 4-byte continuation byte", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const attacked = `X-Note: ${String.fromCharCode(0xf0, 0x9f, 0x98, 0x85)}${FORGED}\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a NEL character (0x85)"))
+  })
+
+  // Round 1 review, item 3: confirms 0x85 is caught whatever precedes it,
+  // C1 and E0 81 packing to code points unrelated to NEL (C1 85 alone packs
+  // to 0x45, not a real character; neither is one of FORBIDDEN_LINE_BREAKS'
+  // ten code points), so those two are only ever caught by the flat,
+  // context-free byte scan finding the trailing 0x85 on its own. F0 80 82 is
+  // different, and deliberately kept in this list rather than moved: once
+  // round 2's generated table exists, `F0 80 82 85` *is* one of its entries
+  // — cp=0x85's own overlong 4-byte packing — so this case is now caught
+  // earlier, by the multi-byte match starting at the F0, with a reason that
+  // names the overlong encoding rather than the bare byte. Both are safe
+  // refusals; only which check catches it changed, the same shape as round
+  // 1's VT/FF-in-a-name pins.
+  for (
+    const [label, bytes, reason] of [
+      ["C1 85 (invalid two-byte lead)", [0xc1, 0x85], reasonFor("a NEL character (0x85)")],
+      [
+        "E0 81 85 (invalid three-byte prefix)",
+        [0xe0, 0x81, 0x85],
+        reasonFor(
+          "a NEL character (0x85)",
+        ),
+      ],
+      [
+        "F0 80 82 85 (0x85's own overlong 4-byte packing)",
+        [0xf0, 0x80, 0x82, 0x85],
+        reasonFor("an overlong UTF-8 encoding of a NEL character (0x85)"),
+      ],
+    ] as const
+  ) {
+    it(`rejects a From: hidden behind 0x85 preceded by ${label}`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      assert((await verifyDkim(raw, publicKey)).valid)
+      const attacked = `X-Note: a${String.fromCharCode(...bytes)}${FORGED}\r\n${raw}`
+
+      const result = await verifyDkim(ascii(attacked), publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, reason)
+    })
+  }
+
+  // Round 2 review: refusing only the minimal and one-step-overlong form of
+  // U+2028/U+2029 left every *other* overlong packing open, and — worse —
+  // left LF and CR themselves reachable the same way: an attacker does not
+  // need a raw 0x0A byte to hide a line break from the CR/LF uniformity
+  // check above if an overlong UTF-8 encoding of LF reads as one to whatever
+  // decodes the header afterwards. `FORBIDDEN_MULTIBYTE_SEQUENCES` is now
+  // generated from `FORBIDDEN_LINE_BREAKS` by `utf8Packings`, covering every
+  // 2-to-6-byte packing of all ten code points, not four hand-picked
+  // sequences. These pin the cases round 2 named explicitly.
+  const overlongCases: { name: string; bytes: number[]; description: string }[] = [
+    { name: "LF", bytes: [0xc0, 0x8a], description: "a line feed (LF, U+000A)" },
+    { name: "CR", bytes: [0xc0, 0x8d], description: "a carriage return (CR, U+000D)" },
+    { name: "LF (3-byte)", bytes: [0xe0, 0x80, 0x8a], description: "a line feed (LF, U+000A)" },
+    {
+      name: "U+2028 (5-byte)",
+      bytes: [0xf8, 0x80, 0x82, 0x80, 0xa8],
+      description: "a Unicode line separator (U+2028)",
+    },
+    {
+      name: "U+2029 (6-byte)",
+      bytes: [0xfc, 0x80, 0x80, 0x82, 0x80, 0xa9],
+      description: "a Unicode paragraph separator (U+2029)",
+    },
+  ]
+
+  for (const { name, bytes, description } of overlongCases) {
+    it(`rejects a From: hidden behind an overlong UTF-8 encoding of ${name}, as bytes`, async () => {
+      const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+      assert((await verifyDkim(raw, publicKey)).valid)
+      const attacked = `X-Note: a${String.fromCharCode(...bytes)}${FORGED}\r\n${raw}`
+
+      const result = await verifyDkim(ascii(attacked), publicKey)
+      assertEquals(result.valid, false)
+      assertEquals(result.reason, reasonFor(`an overlong UTF-8 encoding of ${description}`))
+    })
+  }
+
+  it("verifies a legitimate non-ASCII header value whose UTF-8 carries no forbidden byte", async () => {
+    // "é" (U+00E9) is C3 A9 in UTF-8 — a genuine two-byte character with
+    // neither byte in the forbidden set — so this is the control case
+    // showing non-ASCII header values are not refused in general, only ones
+    // whose bytes happen to include a forbidden one.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `X-Note: ${String.fromCharCode(0xc3, 0xa9)}clair\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("verifies an RFC 2047-encoded Å, which carries no raw 0x85 byte at all", async () => {
+    // "=?UTF-8?B?w4U=?=" is RFC 2047's encoded-word form of "Å": every octet
+    // is printable ASCII, so a sender that encodes non-ASCII header text
+    // this way (rather than emitting raw UTF-8 per RFC 6532) is never
+    // touched by this rule.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `X-Note: =?UTF-8?B?w4U=?=\r\n${raw}`
+
+    const result = await verifyDkim(attacked, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("verifies a legitimate 3-byte character sharing its last two bytes with U+2028", async () => {
+    // U+3028 (a CJK stroke character) is E3 80 A8 — the same trailing "80 A8"
+    // as U+2028's own E2 80 A8, but a different lead byte. Confirmed by
+    // mutation: a scan that looks candidates up by lead byte but then only
+    // compares a match's *remaining* bytes leaves this green regardless
+    // (the lookup itself already establishes the lead byte, so skipping it
+    // a second time inside `matchesSequenceAt` changes nothing) — this test
+    // only goes red once the lead byte is dropped from the match entirely,
+    // e.g. a scan that finds candidates by *any* byte at any position and
+    // compares only their tails. `matchesSequenceAt` and the by-lead-byte
+    // index both agree on the sequence's first byte, so neither mistake
+    // reaches this far.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `X-Note: a${String.fromCharCode(0xe3, 0x80, 0xa8)}b\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("verifies a raw Latin-1 ü (0xFC) that starts no forbidden sequence", async () => {
+    // 0xFC is also the lead byte of every 6-byte packing in
+    // FORBIDDEN_MULTIBYTE_SEQUENCES (one per code point in
+    // FORBIDDEN_LINE_BREAKS), so this is the control for the by-lead-byte
+    // index: a lone 0xFC not followed by the exact continuation bytes any of
+    // those packings need must not match, whatever else shares its lead
+    // byte in the table.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `X-Note: a${String.fromCharCode(0xfc)}ber\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("rejects a forbidden sequence that is the last thing in a block with no empty line", () => {
+    // Round 2 review: `matchesSequenceAt` compares `i + sequence.length` to
+    // `end` with `>`, not `>=`, so a sequence that ends *exactly* at the
+    // header block's boundary still matches. With no empty line anywhere in
+    // the message, `end` is `raw.length` (see `locateHeaderEnd`), so this
+    // puts the forbidden sequence's last byte at the very last position in
+    // the string — the one place a `>` vs `>=` mistake would show up.
+    const raw = `X-Note: a${String.fromCharCode(0xc0, 0x8a)}`
+    assertEquals(raw.length, "X-Note: a".length + 2, "the sequence must end the string exactly")
+
+    assertEquals(
+      refuseHeaderLineEndings(raw),
+      reasonFor("an overlong UTF-8 encoding of a line feed (LF, U+000A)"),
+    )
+  })
+
+  it("refuses every 2-to-6-byte UTF-8 packing of all ten code points, and no packing too short to hold one", () => {
+    // An independent copy of the FSS-UTF rule, so a generator that drops a code point's
+    // packings, or emits a form whose payload spills into the lead byte's marker bits,
+    // goes red here: a 2-byte form cannot hold U+2028, and forcing it in yields C0 A8, an
+    // overlong "(" that must stay legitimate.
+    const codePoints: [number, string][] = [
+      [0x0a, "a line feed (LF, U+000A)"],
+      [0x0d, "a carriage return (CR, U+000D)"],
+      [0x0b, "a vertical tab (0x0B)"],
+      [0x0c, "a form feed (0x0C)"],
+      [0x1c, "a file separator (0x1C)"],
+      [0x1d, "a group separator (0x1D)"],
+      [0x1e, "a record separator (0x1E)"],
+      [0x85, "a NEL character (0x85)"],
+      [0x2028, "a Unicode line separator (U+2028)"],
+      [0x2029, "a Unicode paragraph separator (U+2029)"],
+    ]
+    let forms = 0
+    for (const [codePoint, name] of codePoints) {
+      for (let n = 2; n <= 6; n++) {
+        if (codePoint >= 2 ** (5 * n + 1)) continue
+        const bytes = [((0xff << (8 - n)) & 0xff) | (codePoint >> (6 * (n - 1)))]
+        for (let k = n - 2; k >= 0; k--) bytes.push(0x80 | ((codePoint >> (6 * k)) & 0x3f))
+        const hex = bytes.map((b) => b.toString(16).padStart(2, "0")).join(" ")
+        const reason = refuseHeaderLineEndings(`X-Note: a${String.fromCharCode(...bytes)}b\r\n\r\n`)
+        assert(reason !== undefined && reason.includes(name), `${hex} -> ${reason}`)
+        forms++
+      }
+    }
+    assertEquals(forms, 48)
+    assertEquals(
+      refuseHeaderLineEndings(`X-Note: a${String.fromCharCode(0xc0, 0xa8)}b\r\n\r\n`),
+      undefined,
+    )
+  })
+
+  // Round 1 review, item 2: every case above places its forged byte in the
+  // first header line (`X-Note:`, prepended before everything else). Limiting
+  // the scan to the first line ending would have left every one of them
+  // green, so these three place the same byte deeper in the block instead —
+  // inside a signed field's own value that is *not* the first header line
+  // (`Subject:`, the third of `TEST_HEADERS`), inside the `DKIM-Signature`
+  // field itself (the last header line `sign()` emits), and inside a folded
+  // continuation line of an unsigned field appended after the signature. Each
+  // is mutated into the raw message *after* signing, so the header-line-
+  // ending check — which runs before any signature parsing — is what has to
+  // catch it, not a broken signature.
+  it("rejects a form feed inside a signed field's value, as a string", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert(raw.includes("Subject: DKIM port smoke test"))
+    const attacked = raw.replace(
+      "Subject: DKIM port smoke test",
+      "Subject: DKIM po\x0crt smoke test",
+    )
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a form feed (0x0C)"))
+  })
+
+  it("rejects a form feed inside a signed field's value, as bytes", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = raw.replace(
+      "Subject: DKIM port smoke test",
+      "Subject: DKIM po\x0crt smoke test",
+    )
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a form feed (0x0C)"))
+  })
+
+  it("rejects a form feed inside the DKIM-Signature line itself, as a string", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert(raw.includes("DKIM-Signature: v=1;"))
+    const attacked = raw.replace("DKIM-Signature: v=1;", "DKIM-Signature: v=1\x0c;")
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a form feed (0x0C)"))
+  })
+
+  it("rejects a form feed inside the DKIM-Signature line itself, as bytes", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = raw.replace("DKIM-Signature: v=1;", "DKIM-Signature: v=1\x0c;")
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a form feed (0x0C)"))
+  })
+
+  it("rejects a form feed inside a folded continuation line, as a string", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    // The byte sits in the continuation of an unsigned field's folded value,
+    // well past the first line ending in the block.
+    const attacked = `X-Note: a\r\n\tb\x0cc\r\n${raw}`
+
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a form feed (0x0C)"))
+  })
+
+  it("rejects a form feed inside a folded continuation line, as bytes", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `X-Note: a\r\n\tb\x0cc\r\n${raw}`
+
+    const result = await verifyDkim(ascii(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, reasonFor("a form feed (0x0C)"))
+  })
+})
+
+// --- an mbox envelope line above a signed message (issue #120) -------------
+
+/**
+ * Issue #120: a message that still carries its mbox envelope line — the
+ * `From sender@example.com Mon Sep 21 10:00:00 2026` line an mbox file puts
+ * in front of every message it stores — is not RFC 5322 at all: it has no
+ * colon before its first space, so this verifier reads it as a header field
+ * literally named `From sender@example.com Mon Sep 21 10` (the first colon
+ * sits inside the timestamp). Issue #113's loose name match then reads that
+ * name's `From` prefix, at the first space, as a second, unsigned `From:` and
+ * refuses the message.
+ *
+ * That is a change from what `main` did before #119 (no loose match existed,
+ * so this verified), but it is the safe direction, not a bug: nothing here
+ * calls a message with a plausible extra `From` line valid, and every mbox
+ * reader already strips the envelope line before treating what follows as
+ * RFC 5322 mail. `email/README.md`'s field-name paragraph states the rule; a
+ * caller verifying mbox records must strip the envelope line first.
+ */
+describe("an mbox envelope line above a signed message (issue #120)", () => {
+  const BODY = "This is a test.\r\n"
+  const ENVELOPE = "From sender@example.com Mon Sep 21 10:00:00 2026"
+  const REASON = "unsigned additional instances of a signed header: from"
+
+  it("refuses a message that still carries its mbox envelope line, as a string", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const withEnvelope = `${ENVELOPE}\r\n${raw}`
+
+    const result = await verifyDkim(withEnvelope, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, REASON)
+  })
+
+  it("refuses a message that still carries its mbox envelope line, as bytes", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    assert((await verifyDkim(raw, publicKey)).valid)
+    const withEnvelope = `${ENVELOPE}\r\n${raw}`
+
+    const result = await verifyDkim(ascii(withEnvelope), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(result.reason, REASON)
+  })
+
+  // Round 1 review of #120: the refusal above depends on the envelope line's
+  // timestamp carrying a colon — that is where `header.indexOf(":")` finds
+  // the split between the name it reads and the (empty) value. A timestamp
+  // with no `HH:MM:SS`, so no colon anywhere in the line, verifies instead:
+  // `email/README.md` states this precisely rather than claiming the rule
+  // catches every shape of envelope line, and this pins the exact behaviour
+  // it documents.
+  it("verifies a message carrying a colon-less mbox envelope line, as a string", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const colonLess = "From sender@example.com Mon Sep 21 2026"
+    assert(!colonLess.includes(":"), "the whole point: no colon anywhere in this line")
+    const withEnvelope = `${colonLess}\r\n${raw}`
+
+    const result = await verifyDkim(withEnvelope, publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+
+  it("verifies a message carrying a colon-less mbox envelope line, as bytes", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const colonLess = "From sender@example.com Mon Sep 21 2026"
+    const withEnvelope = `${colonLess}\r\n${raw}`
+
+    const result = await verifyDkim(ascii(withEnvelope), publicKey)
+    assert(result.valid, `reason=${result.reason}`)
+  })
+})
+
 // --- trace fields a relay adds after signing (§5.4.2) -----------------------
 
 /**
@@ -2921,10 +3421,27 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
   // real field name, so removing it only ever helps recognise a disguised
   // one. A client that reads the field the same loose way would display the
   // forged address.
+  //
+  // Issue #121 widened `refuseHeaderLineEndings` to refuse a vertical tab or
+  // a form feed anywhere in the header block, and that check runs before
+  // this guard does, so a From: disguised with either byte is now refused
+  // there first, with a reason naming the byte rather than the field name.
+  // The forgery is still refused either way; only which check catches it,
+  // and which reason a caller sees, has changed.
   for (
-    const [label, whitespace] of [
-      ["a vertical tab", "\x0B"],
-      ["a form feed", "\x0C"],
+    const [label, whitespace, reason] of [
+      [
+        "a vertical tab",
+        "\x0B",
+        "header block carries a vertical tab (0x0B), which some readers treat as a line break, " +
+        "so where its header fields end is ambiguous",
+      ],
+      [
+        "a form feed",
+        "\x0C",
+        "header block carries a form feed (0x0C), which some readers treat as a line break, " +
+        "so where its header fields end is ambiguous",
+      ],
     ] as const
   ) {
     it(`still rejects a From: whose name carries ${label} (string)`, async () => {
@@ -2935,7 +3452,7 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
       const attacked = `From${whitespace}: ceo@bank.example\r\n${raw}`
       const result = await verifyDkim(attacked, publicKey)
       assertEquals(result.valid, false)
-      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+      assertEquals(result.reason, reason)
     })
 
     it(`still rejects a From: whose name carries ${label} (bytes)`, async () => {
@@ -2943,7 +3460,7 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
       const attacked = `From${whitespace}: ceo@bank.example\r\n${raw}`
       const result = await verifyDkim(ascii(attacked), publicKey)
       assertEquals(result.valid, false)
-      assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+      assertEquals(result.reason, reason)
     })
   }
 
@@ -3092,12 +3609,17 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
   // here alike, for the same reason as the Unicode-whitespace forgeries
   // above -- none of these six characters was in the old fixed byte set
   // either.
+  //
+  // U+0085 (NEL) is not in this list any more: issue #121 widened
+  // `refuseHeaderLineEndings` to refuse NEL anywhere in the header block, and
+  // that check now runs before this guard does, so a From: disguised with it
+  // is caught there first, with a reason naming NEL rather than the field
+  // name. It has its own pin just below, for that reason.
   const CONTROL_AND_ZERO_WIDTH_CHARACTERS = [
     ["U+0000 (NUL)", String.fromCodePoint(0x0000)],
     ["U+0001", String.fromCodePoint(0x0001)],
     ["U+001F", String.fromCodePoint(0x001f)],
     ["U+007F (DEL)", String.fromCodePoint(0x007f)],
-    ["U+0085 (NEL)", String.fromCodePoint(0x0085)],
     ["U+200B (zero-width space)", String.fromCodePoint(0x200b)],
   ] as const
 
@@ -3118,6 +3640,33 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
       assertEquals(result.reason, "unsigned additional instances of a signed header: from")
     })
   }
+
+  it("still rejects a From: whose name carries U+0085 (NEL), as a string (issue #121)", async () => {
+    // Caught earlier than the #106 forgeries above: `refuseHeaderLineEndings`
+    // refuses NEL anywhere in the header block before this guard ever runs,
+    // so the reason names the byte rather than the field name.
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `From${String.fromCodePoint(0x0085)}: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(attacked, publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      "header block carries a NEL character (0x85), which some readers treat as a line break, " +
+        "so where its header fields end is ambiguous",
+    )
+  })
+
+  it("still rejects a From: whose name carries U+0085 (NEL), as bytes (issue #121)", async () => {
+    const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
+    const attacked = `From${String.fromCodePoint(0x0085)}: ceo@bank.example\r\n${raw}`
+    const result = await verifyDkim(new TextEncoder().encode(attacked), publicKey)
+    assertEquals(result.valid, false)
+    assertEquals(
+      result.reason,
+      "header block carries a NEL character (0x85), which some readers treat as a line break, " +
+        "so where its header fields end is ambiguous",
+    )
+  })
 
   it("still rejects a Subject: whose name carries a zero-width space (issue #106)", async () => {
     // The Done-when box asks that the rule hold for a second Subject too, not
