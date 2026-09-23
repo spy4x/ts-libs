@@ -119,9 +119,10 @@ export class PostgresMigrationRunInProgressError extends Error {
  *
  * `sql(name)` — the identifier form every `CREATE TABLE`/`ALTER TABLE`/`INSERT`/`DROP TABLE`
  * in this driver and in {@link purgeDatabase} uses — runs the client's `transform.column.to`
- * on `name` first (`postgres@3.4.7/src/index.js:114`), the transform `PostgresOutboxRepository`
- * also guards against on the read side. `postgres.camel`'s half of it, `fromCamel`, turns a mixed-case
- * name like `x_MixedHist` into `x__mixed_hist`, and `"UserProfile"` into `_user_profile`.
+ * on `name` first (`postgres@3.4.7/src/index.js:114`), the transform
+ * `PostgresOutboxRepository` also guards against on the read side. `postgres.camel`'s half
+ * of it, `fromCamel`, turns a mixed-case name like `x_MixedHist` into `x__mixed_hist`, and
+ * `"UserProfile"` into `_user_profile`.
  * Every *other* place this driver or the purge helper names a table or schema —
  * `createHistoryTable`'s probe, `to_regclass`, the advisory-lock key, the purge listing —
  * passes the name as a bound *value*, which that transform never touches. A camelCase
@@ -142,7 +143,10 @@ export class PostgresIdentifierTransformError extends Error {
   readonly kind: "table" | "schema"
   /** The name as given to this driver or to {@link purgeDatabase}. */
   readonly identifier: string
-  /** What the client's `transform.column.to` would send to Postgres instead. */
+  /**
+   * What the client's `transform.column.to` would send to Postgres instead, or `"(unknown)"`
+   * when the client does not show it; see {@link identifierRewrittenBy}.
+   */
   readonly rewrittenTo: string
 
   constructor(kind: "table" | "schema", identifier: string, rewrittenTo: string) {
@@ -162,22 +166,27 @@ export class PostgresIdentifierTransformError extends Error {
 }
 
 /**
- * `identifier` as `sql`'s own `transform.column.to` would rewrite it, or `undefined` when
- * the client has no such transform, or this identifier already has the one spelling the
- * transform would give it.
+ * `identifier` as `sql(identifier)` would send it to Postgres, or `undefined` when it would
+ * send it unchanged: the client has no `transform.column.to`, or the transform leaves this
+ * name as it is.
  *
- * `postgres@3.4.7` sets `options` on the pool object alone (`src/index.js:69-81`): the handle
- * `sql.begin` passes to its callback and the one `sql.reserve()` returns have none, although
- * both are typed as `Sql`. On such a handle the transform cannot be read, so the name is not
- * checked and `undefined` is returned; pass the pool client to have it checked.
+ * Read from what `sql(identifier)` builds, not from `sql.options`. `postgres@3.4.7` sets
+ * `options` on the pool object alone (`src/index.js:69-81`), but the handle `sql.begin`
+ * passes to its callback and the one `sql.reserve()` returns run the same transform in
+ * `sql(name)` (`src/index.js:114`). The `Identifier` that call returns holds the quoted text
+ * it will send in `value` (`src/types.js:44-48,216-218`), so comparing it with `identifier`
+ * quoted the same way gives one answer on all three handles.
+ *
+ * When `value` is not a string, the rewrite cannot be read. A name holding an upper-case
+ * letter or a `-` is then treated as rewritten, to `"(unknown)"`: `postgres.camel`,
+ * `postgres.pascal` and `postgres.kebab` leave every other name unchanged.
  */
 export function identifierRewrittenBy(sql: Sql, identifier: string): string | undefined {
-  // Optional: see above. `!to` rather than `=== undefined`, as the driver's own `sql(name)`
-  // tests it (`src/index.js:114`).
-  const to = sql.options?.transform.column.to
-  if (!to) return undefined
-  const rewritten = to(identifier)
-  return rewritten === identifier ? undefined : rewritten
+  const sent: unknown = (sql(identifier) as unknown as { value?: unknown }).value
+  if (typeof sent !== "string") return /[A-Z-]/.test(identifier) ? "(unknown)" : undefined
+  const given = `"${identifier.replaceAll(`"`, `""`).replaceAll(".", `"."`)}"`
+  if (sent === given) return undefined
+  return sent.slice(1, -1).replaceAll(`"."`, ".").replaceAll(`""`, `"`)
 }
 
 /**
@@ -197,7 +206,14 @@ export function assertStableIdentifier(
 
 /** Options for {@link PostgresMigrationDriver}. */
 export interface PostgresMigrationDriverOptions {
-  /** Client to run through. */
+  /**
+   * The pool client that `postgres()` or `createSql` returns.
+   *
+   * A run reserves its own connection from it (see {@link PostgresMigrationDriver.withLock}).
+   * A `sql.begin` transaction handle or a `sql.reserve()` connection has no `reserve`, so a
+   * driver built on one constructs, but `runMigrations` then fails with
+   * `TypeError: this.sql.reserve is not a function` before any statement runs.
+   */
   sql: Sql
   /** History table name. Defaults to `migrations`. */
   table?: string
@@ -269,8 +285,9 @@ interface HistoryProbe {
  * Two concurrent runs are two instances, which is also what two application instances are.
  *
  * **A table or schema name the client's own transform would rewrite is refused at
- * construction**, with {@link PostgresIdentifierTransformError}, before any statement runs —
- * see that error for why this driver cannot reconcile the two spellings on its own.
+ * construction**, with {@link PostgresIdentifierTransformError}, before any statement runs,
+ * on whichever handle `sql` is — see that error for why this driver cannot reconcile the two
+ * spellings on its own.
  */
 export class PostgresMigrationDriver implements MigrationDriver {
   /**

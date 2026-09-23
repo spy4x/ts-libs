@@ -40,8 +40,9 @@ interface FakeSqlOptions {
    */
   lockRefusals?: number
   /**
-   * `sql.options.transform.column.to`, as a real client configured with `postgres.camel`
-   * carries it. Defaults to `undefined` — a plain client, no transform — which is what
+   * The client's `transform.column.to`, which `sql(name)` applies on every handle of a real
+   * client configured with `postgres.camel`: the pool, a reserved connection and a `begin`
+   * callback's. Defaults to `undefined` — a plain client, no transform — which is what
    * every test not about {@link PostgresIdentifierTransformError} needs.
    */
   columnTransformTo?: (identifier: string) => string
@@ -85,7 +86,7 @@ function createFakeSql(options: FakeSqlOptions = {}) {
       const value = values[index]
       const identifier = identifierOf(value)
       if (identifier !== undefined) {
-        text += `"${identifier.replaceAll(`"`, `""`).replaceAll(".", `"."`)}"${tail}`
+        text += `${identifier}${tail}`
       } else {
         bound.push(value)
         boundValues.push(value)
@@ -107,7 +108,10 @@ function createFakeSql(options: FakeSqlOptions = {}) {
   /** One tag function over the shared recorder, bound to the handle it belongs to. */
   const makeTag = (handle: Handle) => {
     const statement = (strings: unknown, ...values: unknown[]): unknown => {
-      if (!Array.isArray(strings)) return { __identifier: String(strings) }
+      if (!Array.isArray(strings)) {
+        const name = options.columnTransformTo?.(String(strings)) ?? String(strings)
+        return new FakeIdentifier(`"${name.replaceAll(`"`, `""`).replaceAll(".", `"."`)}"`)
+      }
       const query = render(strings as unknown as TemplateStringsArray, values)
       record(query, handle)
       // `withLock`'s own three statements answer themselves and do not draw on the
@@ -182,9 +186,6 @@ function createFakeSql(options: FakeSqlOptions = {}) {
       }
     },
     end: () => Promise.resolve(),
-    // Only the one field `assertStableIdentifier` reads. A real client always carries a
-    // full `ParsedOptions`; the cast to `Sql` below is what lets this fake carry only it.
-    options: { transform: { column: { to: options.columnTransformTo } } },
   })
 
   return {
@@ -199,9 +200,12 @@ function createFakeSql(options: FakeSqlOptions = {}) {
 }
 
 function identifierOf(value: unknown): string | undefined {
-  return typeof value === "object" && value !== null && "__identifier" in value
-    ? String((value as { __identifier: unknown }).__identifier)
-    : undefined
+  return value instanceof FakeIdentifier ? value.value : undefined
+}
+
+/** `postgres@3.4.7`'s `Identifier` (`src/types.js:44-48`): the quoted text, in `value`. */
+class FakeIdentifier {
+  constructor(readonly value: string) {}
 }
 
 /** A migration as the runner hands it to a driver. */

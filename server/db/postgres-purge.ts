@@ -10,8 +10,9 @@
  * helper reads the same field whether or not the client transforms column names.
  *
  * **A table or schema name the same transform would rewrite is refused before any `DROP`
- * runs**, with {@link PostgresIdentifierTransformError} — see that error, exported from
- * `postgres-migrate.ts`, for why reconciling the two spellings is not attempted.
+ * runs**, with {@link PostgresIdentifierTransformError}, whether `sql` is the pool client, a
+ * `sql.begin` transaction handle or a `sql.reserve()` connection — see that error, exported
+ * from `postgres-migrate.ts`, for why reconciling the two spellings is not attempted.
  *
  * **The guard is inverted from the source's.** The source refused only when `ENV` was
  * exactly `prod`, which meant it purged for `production`, for `PROD`, for `"prod "`
@@ -106,8 +107,10 @@ interface TableRow {
  * as bound values, which that transform never touches — a camelCase client given
  * `"UserProfile"` would list it and then try to drop `_user_profile`, which does not
  * exist. Every name is checked before the first `DROP` runs, not one at a time as each
- * is dropped, so a refusal never leaves some tables gone and others not; see
- * `PostgresIdentifierTransformError` in `postgres-migrate.ts`.
+ * is dropped, so a refusal never leaves some tables gone and others not. The check reads
+ * what `sql(name)` would send, so it holds on the pool client, a `sql.begin` transaction
+ * handle and a `sql.reserve()` connection alike; see `PostgresIdentifierTransformError` and
+ * `identifierRewrittenBy` in `postgres-migrate.ts`.
  */
 export async function purgeDatabase(options: PurgeOptions): Promise<PurgeResult> {
   const environment = options.environment ?? {}
