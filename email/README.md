@@ -495,22 +495,37 @@ which propagates the resolver's rejection instead of reporting it.
   Issue #121, the same shape as the lone-CR rule above for a different set of
   bytes: `X-Note: a<FF>From: ceo@bank.example` above a signed block hides a
   second `From:` from this verifier the way the CR form does, behind a byte
-  some reader still treats as ending the line. RFC 5322 never allows any of
-  0x0B (VT), 0x0C (FF), 0x1C-0x1E (file/group/record separator), 0x85 (NEL) or
-  U+2028/U+2029 (Unicode LINE/PARAGRAPH SEPARATOR) inside a header field at
-  all, so no conformant sender's message carries one, and the block is refused
-  with a reason naming the byte, anywhere in the block.
-  The tricky one is 0x85: it is also an ordinary _continuation_ byte of dozens
-  of legitimate multi-byte UTF-8 characters (`Å` is C3 85, `ą` is C4 85), so
-  refusing every occurrence of that raw byte would refuse header values that
-  hide nothing. The check decodes the header block as UTF-8 as it scans, one
-  well-formed sequence at a time, and refuses a byte only when it stands for
-  NEL itself — a bare, Latin-1-style 0x85 with no valid lead byte before it,
-  or a properly encoded C2 85 — never when 0x85 is a continuation byte inside
-  a different, legitimate character. A `string` input can only ever produce
-  the well-formed form, because `TextEncoder` never emits an unpaired byte; a
-  `Uint8Array` input can carry the bare form directly, which is the literal
-  shape of the issue's own proof of concept.
+  some reader still treats as ending the line. No conformant _sender_ emits
+  any of 0x0B (VT), 0x0C (FF), 0x1C-0x1E (file/group/record separator), 0x85
+  (NEL) or U+2028/U+2029 (Unicode LINE/PARAGRAPH SEPARATOR): RFC 5322 §4.1
+  puts VT, FF and 0x1C-0x1E only in the _obsolete_ syntax a generator "MUST
+  NOT" produce, and 0x85/U+2028/U+2029 are not ASCII at all — RFC 6532 is
+  what lets a header value carry them, as UTF-8. So refusing all of them,
+  anywhere in the block, is the safe direction rather than a free one.
+  Round 1 review of this rule found a real gap in an earlier draft: it
+  exempted 0x85 whenever it looked like a UTF-8 continuation byte of a longer
+  character (`Å` is C3 85, `ą` is C4 85), on the theory that a reader
+  decoding the block as UTF-8 would never mistake it for NEL. That exemption
+  reopened the bug — a reader is not obliged to decode as UTF-8 at all, and
+  one that decodes header octets as Latin-1, or falls back to it the moment
+  it meets one byte that is not valid UTF-8 (a single stray byte anywhere in
+  the message is enough to trigger that fallback), reads a bare 0x85 as NEL
+  regardless of what bytes sit next to it. `X-Note: a<C3><85>From:
+  ceo@bank.example` hid a second `From:` from such a reader exactly as the
+  bare-byte form did, while this verifier kept calling the message valid.
+  0x85 is now refused unconditionally, with no exemption for context, which
+  has a real cost: a genuine RFC 6532 (SMTPUTF8) header value whose UTF-8
+  encoding happens to contain 0x85 — `Å` (C3 85), `ą` (C4 85), `久` (E4 B9
+  85), `😅` (F0 9F 98 85) — is refused too, and so is a raw windows-1252
+  ellipsis (`…`, byte 0x85) in an 8-bit header nobody encoded as UTF-8 at
+  all. An RFC 2047-encoded value (`=?UTF-8?B?w4U=?=` for `Å`) is untouched,
+  because every one of its octets is printable ASCII.
+  U+2028 and U+2029 have no one-byte form, so the bytes path also refuses
+  their UTF-8 encodings by literal sequence: the minimal 3-byte form (`E2 80
+  A8` / `E2 80 A9`) and the one-step-more-overlong 4-byte form (`F0 82 80
+  A8` / `F0 82 80 A9`) a decoder that does not enforce the shortest-form rule
+  still reads as the same character. A `string` input can only ever produce
+  the minimal form, because `TextEncoder` never emits an overlong sequence.
 - **Trace fields a relay adds are exempt from the §5.4.2 growth check.** The check
   refuses a message that still holds an instance of a name `h=` asked for, which is
   how a prepended second `From:` or `Subject:` is caught — it must not be removed,
