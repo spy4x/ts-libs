@@ -117,7 +117,10 @@ async function members(file: string): Promise<Members> {
   return { names, enums }
 }
 
-/** `Name = value`, with a string value quoted; `Name` alone when the member has no initialiser. */
+/**
+ * `Name = value`, with a string value quoted; `Name` alone when the member has no initialiser, or
+ * one `deno doc` could not statically render.
+ */
 function enumMember(member: EnumMember): string {
   if (member.init === undefined) return member.name
   const value = member.init.value?.kind === "string"
