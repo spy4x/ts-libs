@@ -1305,7 +1305,10 @@ Deno.test("release: reservedAt of 0 is honored, not treated as absent (?? not ||
   assertEquals(await store.read(quotaKey(USER, policy, 0)), 0)
 })
 
-Deno.test("release: reservedAt rejects NaN, Infinity, a negative value and a value later than now", async () => {
+Deno.test("release: reservedAt rejects NaN, Infinity, a negative value and a non-integer", async () => {
+  // A value later than the current clock reading is not on this list — see the clamping
+  // test below. `50.5` and `100.5` both pin `Number.isInteger`: a weakening to
+  // `Number.isFinite` would wrongly accept both.
   const store = inMemoryStore()
   const meter = createQuotaMeter({
     policy: { limit: 5 },
@@ -1314,14 +1317,33 @@ Deno.test("release: reservedAt rejects NaN, Infinity, a negative value and a val
     now: () => 100,
   })
 
-  for (const bad of [NaN, Infinity, -Infinity, -1, 101, 100.5]) {
+  for (const bad of [NaN, Infinity, -Infinity, -1, 50.5, 100.5]) {
     const thrown = await rejectedError(() => meter.release(USER, 1, { reservedAt: bad }))
     assertInstanceOf(thrown, QuotaError)
     assertEquals((thrown as QuotaError).code, QuotaErrorCode.InvalidReservedAt)
   }
-  // 100 — exactly the current clock reading — is not later than now, and is accepted.
+  // 100 — exactly the current clock reading — is a normal, valid reservedAt.
   const state = await meter.release(USER, 1, { reservedAt: 100 })
   assertEquals(state.decision, QuotaDecision.Allowed)
+})
+
+Deno.test("release: a reservedAt later than the current clock reading is clamped, not rejected", async () => {
+  // A wall clock that steps backward between reserve and release (an NTP correction, or the
+  // two calls landing on different hosts) can make a genuine reservedAt look like it names a
+  // moment in the future. Clamping it to the current reading refunds the unit; rejecting it
+  // would leave the unit stuck until a caller notices InvalidReservedAt and retries by hand.
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, windowSeconds: 60 }
+  const meter = createQuotaMeter({ policy, store, meteredResourceAvailable: true, now: () => 0 })
+
+  await meter.reserve(USER)
+  const state = await meter.release(USER, 1, { reservedAt: 999_999 })
+
+  assertEquals(state.decision, QuotaDecision.Allowed)
+  assertEquals(state.used, 0)
+  // The refund landed in the *current* window (w0, at ms 0) — where the reservation actually
+  // is — not wherever 999_999 would otherwise have mapped to.
+  assertEquals(await store.read(quotaKey(USER, policy, 0)), 0)
 })
 
 Deno.test("release: with reservedAt, the returned state is the current window's, not the refunded window's", async () => {
@@ -1358,4 +1380,44 @@ Deno.test("release: with reservedAt, the returned state is the current window's,
   assertEquals(released.limit, 2)
   // w0 was still refunded underneath; only the *returned state* describes w1 instead.
   assertEquals(await store.read(quotaKey(USER, policy, 0)), 0)
+})
+
+Deno.test("release: with reservedAt, a failing current-window read propagates after both refunds land", async () => {
+  // The third store call — reading the current window to answer with, per the test above —
+  // runs after both refunds. If it throws, the refunds already happened: a caller who
+  // retries this exact call would refund the session's own counter and the pool a second
+  // time, which is why the JSDoc says a release called with `reservedAt` must not be
+  // retried, session principal or not.
+  const store = inMemoryStore()
+  const policy: QuotaPolicy = { limit: 5, sessions: { poolLimit: 5 } }
+  let reads = 0
+  const meter = createQuotaMeter({
+    policy,
+    store: {
+      ...store,
+      read: (key) => {
+        reads += 1
+        // The first read is the current-window read `release` makes after both refunds —
+        // neither `reserve` nor the refunds themselves call `store.read` on a fresh store
+        // with room in the pool.
+        if (reads === 1) return Promise.reject(new Error("store unavailable"))
+        return store.read(key)
+      },
+    },
+    meteredResourceAvailable: true,
+    now: () => 0,
+  })
+
+  const reserved = await meter.reserve(SESSION)
+  assertEquals(reserved.decision, QuotaDecision.Allowed)
+
+  const thrown = await rejectedError(() =>
+    meter.release(SESSION, 1, { reservedAt: reserved.reservedAt })
+  )
+  assertEquals(thrown.message, "store unavailable")
+
+  // Both refunds landed before the failing read — contradicting a claim that the pool (or
+  // the own counter) can never be over-credited by a retry when reservedAt is in play.
+  assertEquals(await store.read(quotaKey(SESSION, policy, 0)), 0)
+  assertEquals(await store.read(sessionPoolKey(policy, 0)), 0)
 })

@@ -237,11 +237,11 @@ const STORE_PORT_MESSAGE = "QuotaStore must provide read, increment, reserve and
 const SESSION_PRINCIPAL_MESSAGE = "QuotaPolicy.sessions must be set to meter a session principal"
 /**
  * A `reservedAt` that could not have come from a real `reserve` call — not a non-negative
- * integer, or later than the clock reading `release` itself just took. The offending value is
- * deliberately not echoed, matching every other constant message here.
+ * integer. A `reservedAt` later than the current clock reading is not this: it is clamped
+ * rather than refused, so it does not need a message. The offending value is deliberately not
+ * echoed, matching every other constant message here.
  */
-const INVALID_RESERVED_AT_MESSAGE =
-  "options.reservedAt must be a non-negative integer no later than the current time"
+const INVALID_RESERVED_AT_MESSAGE = "options.reservedAt must be a non-negative integer"
 
 /** What a caller should do with a check: proceed, stop, or turn the feature off. */
 export enum QuotaDecision {
@@ -286,9 +286,11 @@ export enum QuotaErrorCode {
    */
   SessionPrincipalNotAllowed = 4,
   /**
-   * `release`'s `options.reservedAt` was not a non-negative integer, or named a moment
-   * later than the clock reading `release` itself just took — refusing beats keying a
-   * refund by a window that has not happened yet, or by a value corrupted in transit.
+   * `release`'s `options.reservedAt` was not a non-negative integer — refusing beats
+   * keying a refund by a value corrupted in transit. A `reservedAt` later than the
+   * current clock reading does *not* throw this: it is clamped instead, because a wall
+   * clock can step backward between `reserve` and `release` (time sync, a second host)
+   * and a value that only looks like it is from the future is still a real reservation.
    */
   InvalidReservedAt = 5,
 }
@@ -542,21 +544,26 @@ export interface QuotaMeter {
    * Only for units {@link QuotaMeter.reserve} took.
    *
    * **A refund is not idempotent, and a `release` that threw must not be
-   * retried for a session principal.** Releasing the same reservation twice
-   * gives the units back twice; only a counter already at zero absorbs the
-   * second one, because a store never goes below zero. For a session principal
-   * a release is two store calls — the principal's own counter first, then the
-   * shared pool — so after one of them has failed the other has already been
-   * refunded, and a retry gives that refund a second time. The caller cannot
-   * tell which of the two calls failed, so it cannot tell which counter a retry
-   * would double-refund: if the own-counter call failed nothing was refunded
-   * and a retry is exact; if the pool call failed the own counter was already
+   * retried for a session principal, or for any principal when `reservedAt`
+   * is given.** Releasing the same reservation twice gives the units back
+   * twice; only a counter already at zero absorbs the second one, because a
+   * store never goes below zero. For a session principal a release is two
+   * store calls — the principal's own counter first, then the shared pool —
+   * so after one of them has failed the other has already been refunded, and
+   * a retry gives that refund a second time. The caller cannot tell which of
+   * the two calls failed, so it cannot tell which counter a retry would
+   * double-refund: if the own-counter call failed nothing was refunded and a
+   * retry is exact; if the pool call failed the own counter was already
    * refunded and a retry refunds it again, over-crediting the caller's own
-   * counter (absorbed at zero once it gets there). The pool itself is never
-   * over-credited by a retry — it is refunded once, on the call that succeeds.
-   * The own counter is refunded first so that a failure part-way through leaves
-   * the pool holding a unit that nothing holds any more: short rather than
-   * over-credited, and cleared when the window rolls.
+   * counter (absorbed at zero once it gets there). With `reservedAt`,
+   * `release` makes a third store call — a read of the current window's
+   * state — after both refunds have landed; if that read throws, both
+   * counters were already refunded, and a retry refunds both again, the pool
+   * included. The own counter is refunded first so that a failure part-way
+   * through the *refund* pair leaves the pool holding a unit that nothing
+   * holds any more: short rather than over-credited, and cleared when the
+   * window rolls. That ordering says nothing about the third call, which
+   * runs after both refunds regardless of `reservedAt`.
    *
    * `options` mirrors {@link QuotaMeter.reserve}'s, and a caller passes the same
    * value to both: a request that brought its own key reserved nothing, so its
@@ -572,9 +579,15 @@ export interface QuotaMeter {
    * old one keeps the unit until it rolls. The unit moves between windows and
    * the total across the two is unchanged either way; keep a unit of work
    * shorter than the window, use a lifetime window, or pass `reservedAt` to make
-   * this impossible. A `reservedAt` that is not a non-negative integer, or that
-   * names a moment later than `release`'s own clock reading, throws
-   * `InvalidReservedAt` rather than being used.
+   * this impossible. A `reservedAt` that is not a non-negative integer throws
+   * `InvalidReservedAt` rather than being used. A `reservedAt` later than
+   * `release`'s own clock reading is **clamped** to that reading instead of
+   * refused — a wall clock can step backward between the `reserve` call that
+   * produced it and this call (an NTP correction, or the two calls landing on
+   * different hosts), and a value that only looks like it is from the future
+   * is still a real reservation; clamping treats it as the current window,
+   * which is where the refund would have been keyed had `reservedAt` been
+   * omitted.
    *
    * **The returned state is always the *current* window's, not the refunded
    * window's, when `reservedAt` is given.** A refund that landed in an older
@@ -583,11 +596,14 @@ export interface QuotaMeter {
    * so `release` reads it fresh (one extra store call) rather than report the
    * refunded window's `used` under a state the caller would reasonably read as
    * "my situation right now". Without `reservedAt`, the refunded window *is* the
-   * current one, so this costs nothing extra.
+   * current one, so this costs nothing extra. **This third store call is why a
+   * `release` called with `reservedAt` must not be retried after it throws**,
+   * exactly like a session principal's release: both refunds may already have
+   * landed, and a retry would refund them again.
    *
    * @throws {QuotaError} `InvalidCount`, `SessionPrincipalNotAllowed` — as
    * {@link QuotaMeter.reserve} — and `InvalidReservedAt` when `options.reservedAt`
-   * is given and is not a non-negative integer no later than the current time.
+   * is given and is not a non-negative integer.
    */
   release(
     principal: QuotaPrincipal,
@@ -892,17 +908,29 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
 
   /**
    * `reservedAt` must be a value `reserve` could actually have handed out: a non-negative
-   * integer, no later than `actualNow` (the clock reading this `release` call itself just
-   * took). `Number.isInteger` alone excludes `NaN` and `Infinity`/`-Infinity`, so the
-   * remaining checks are "not negative" and "not in the future" — a `reservedAt` later than
-   * now cannot be a real reservation's clock reading, only a caller bug or a corrupted value,
-   * and keying a refund by a window that has not happened yet is worse than refusing it.
+   * integer. `Number.isInteger` alone excludes `NaN` and `Infinity`/`-Infinity`, so the
+   * remaining check is "not negative". Deliberately *not* checked here: whether it is later
+   * than the current clock reading — see {@link clampReservedAt}, which handles that by
+   * clamping rather than throwing.
    */
-  const assertReservedAt = (reservedAt: number, actualNow: number): void => {
-    if (!Number.isInteger(reservedAt) || reservedAt < 0 || reservedAt > actualNow) {
+  const assertReservedAt = (reservedAt: number): void => {
+    if (!Number.isInteger(reservedAt) || reservedAt < 0) {
       throw new QuotaError(QuotaErrorCode.InvalidReservedAt, INVALID_RESERVED_AT_MESSAGE)
     }
   }
+
+  /**
+   * A `reservedAt` later than `actualNow` is clamped to `actualNow`, not refused. A wall
+   * clock can step backward between the `reserve` call that produced `reservedAt` and this
+   * `release` call — an NTP correction, or the two calls landing on different hosts whose
+   * clocks disagree — and a `reservedAt` that only *looks* like it is from the future is
+   * still a real reservation's clock reading. Refusing it would leave the unit refunded
+   * nowhere until a caller notices `InvalidReservedAt` and retries by hand; clamping treats
+   * it as the current window, which is where `release` would have keyed the refund anyway
+   * had the caller omitted `reservedAt`.
+   */
+  const clampReservedAt = (reservedAt: number, actualNow: number): number =>
+    Math.min(reservedAt, actualNow)
 
   const decisionFor = (used: number): QuotaDecision =>
     used < limit ? QuotaDecision.Allowed : QuotaDecision.Exhausted
@@ -1011,18 +1039,19 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
       // pattern refunds a metered unit for a request that never spent one.
       if (releaseOptions?.hasOwnKey && bypassWithOwnKey) return ownKeyState()
 
-      // `actualNow` is the clock reading this call itself takes — used to validate
-      // `reservedAt` (it cannot name a moment later than this one) and, when `reservedAt`
-      // is given, to read the *current* window's state to return (see below).
+      // `actualNow` is the clock reading this call itself takes — used to validate and
+      // clamp `reservedAt` and, when `reservedAt` is given, to read the *current* window's
+      // state to return (see below).
       const actualNow = clock()
       const reservedAt = releaseOptions?.reservedAt
-      if (reservedAt !== undefined) assertReservedAt(reservedAt, actualNow)
+      if (reservedAt !== undefined) assertReservedAt(reservedAt)
       // `reservedAt`, when the caller passes the reading `reserve` used, keys the refund by
       // the window the reservation was taken from instead of whatever window the clock is
-      // in when the refund runs. `??`, not `||`: `0` is a real clock reading (a reservation
-      // taken at the epoch), not an absent one, and `||` would silently substitute
-      // `actualNow` for it.
-      const refundAt = reservedAt ?? actualNow
+      // in when the refund runs — clamped to `actualNow` when it names a later moment (see
+      // `clampReservedAt`). `??`, not `||`: `0` is a real clock reading (a reservation taken
+      // at the epoch), not an absent one, and `||` would silently substitute `actualNow` for
+      // it.
+      const refundAt = reservedAt === undefined ? actualNow : clampReservedAt(reservedAt, actualNow)
       // The reverse of `reserve`, and the order is the whole point: the private
       // counter is refunded first, so a store that fails between the two calls
       // leaves the shared pool holding a unit nothing holds any more. That is
