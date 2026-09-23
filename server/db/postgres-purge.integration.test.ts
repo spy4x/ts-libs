@@ -15,6 +15,7 @@
 
 import { assertEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
+import postgres from "postgres"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { ENV_NAME, purgeDatabase } from "./postgres-purge.ts"
 import { createSql } from "./postgres.ts"
@@ -61,6 +62,46 @@ describe("purgeDatabase against a real server", () => {
       assertEquals(await tableExists(sql, schema, table), false)
       // The one that matters: the purge reported the schema's table and dropped the
       // schema's table. It used to report the schema's table and drop this one.
+      assertEquals(await tableExists(sql, "public", table), true)
+    } finally {
+      await sql`DROP TABLE IF EXISTS public.${sql(table)}`
+      await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
+      await sql.end()
+    }
+  })
+})
+
+describe("purgeDatabase against a camelCase client", () => {
+  it("reports and drops the named schema's table, not a same-named one in public", async () => {
+    // `transform: postgres.camel` is what the template's own client used
+    // (`template/libs/server/db/+index.ts:9`). `TableRow`'s column is aliased to one
+    // lower-case word precisely so this client reads the same `tablename` a plain client
+    // does; before that alias existed, the row's `table_name` came back as `tableName`
+    // under this transform, `row.table_name` was `undefined`, and the identifier splice
+    // below threw inside the driver rather than dropping anything (#77).
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const schema = uniqueIdentifier("it_purge_camel")
+    const table = uniqueIdentifier("note")
+    const sql = createSql({
+      connection: settings.connection,
+      transform: postgres.camel,
+      max: 1,
+      applicationName: schema,
+    })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      await sql`CREATE SCHEMA ${sql(schema)}`
+      await sql`CREATE TABLE ${sql(schema)}.${sql(table)} (id integer PRIMARY KEY)`
+      // The decoy, exactly as in the plain-client test above.
+      await sql`CREATE TABLE public.${sql(table)} (id integer PRIMARY KEY)`
+
+      const purged = await purgeDatabase({ sql, schema, environment: { [ENV_NAME]: "test" } })
+
+      assertEquals(purged, { dropped: [table], refused: false })
+      assertEquals(await tableExists(sql, schema, table), false)
       assertEquals(await tableExists(sql, "public", table), true)
     } finally {
       await sql`DROP TABLE IF EXISTS public.${sql(table)}`

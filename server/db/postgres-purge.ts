@@ -68,9 +68,19 @@ export interface PurgeOptions {
   schema?: string
 }
 
-/** A row of the table listing. */
+/**
+ * A row of the table listing.
+ *
+ * Aliased to one lower-case word with no underscore, not `table_name`: a caller may
+ * configure `postgres.camel` on its own client (the same transform the template's copy
+ * used), which turns a returned `table_name` into `tableName` and leaves `row.table_name`
+ * `undefined` — the identifier interpolation below then received `undefined` and threw
+ * inside the driver's own array handling. A bare lower-case word has no underscore for
+ * the transform to act on, so it comes back unchanged whether the client transforms or
+ * not.
+ */
 interface TableRow {
-  table_name: string
+  tablename: string
 }
 
 /**
@@ -95,7 +105,7 @@ export async function purgeDatabase(options: PurgeOptions): Promise<PurgeResult>
   }
 
   const rows = await options.sql<TableRow[]>`
-    SELECT table_name
+    SELECT table_name AS tablename
     FROM information_schema.tables
     WHERE table_schema = ${schema}
     AND table_type = 'BASE TABLE'
@@ -103,8 +113,8 @@ export async function purgeDatabase(options: PurgeOptions): Promise<PurgeResult>
 
   const dropped: string[] = []
   for (const row of rows) {
-    await options.sql`DROP TABLE ${options.sql(schema)}.${options.sql(row.table_name)} CASCADE`
-    dropped.push(row.table_name)
+    await options.sql`DROP TABLE ${options.sql(schema)}.${options.sql(row.tablename)} CASCADE`
+    dropped.push(row.tablename)
   }
   return { dropped, refused: false }
 }

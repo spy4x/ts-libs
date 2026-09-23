@@ -646,7 +646,7 @@ Deno.test("purgeDatabase refuses every environment it does not recognise", async
     "prod-ci",
   ]
   for (const value of unsafe) {
-    const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+    const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
     const result = await purgeDatabase({ sql: fake.sql, environment: { [ENV_NAME]: value } })
 
     assertEquals(result, { dropped: [], refused: true })
@@ -656,21 +656,21 @@ Deno.test("purgeDatabase refuses every environment it does not recognise", async
 })
 
 Deno.test("purgeDatabase refuses when ENV is unset and when no environment is given", async () => {
-  const unset = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  const unset = createFakeSql({ answers: [[{ tablename: "users" }]] })
   assertEquals(await purgeDatabase({ sql: unset.sql, environment: {} }), {
     dropped: [],
     refused: true,
   })
   assertEquals(unset.topLevel, [])
 
-  const missing = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  const missing = createFakeSql({ answers: [[{ tablename: "users" }]] })
   assertEquals(await purgeDatabase({ sql: missing.sql }), { dropped: [], refused: true })
   assertEquals(missing.topLevel, [])
 })
 
 Deno.test("purgeDatabase runs for each safe environment, spelled loosely", async () => {
   for (const value of [...SAFE_ENV_VALUES, " Dev ", "TEST", "CI"]) {
-    const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+    const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
     const result = await purgeDatabase({ sql: fake.sql, environment: { [ENV_NAME]: value } })
 
     assertEquals(result, { dropped: ["users"], refused: false })
@@ -691,7 +691,7 @@ Deno.test("purgeDatabase is not armed by an argument that is not the flag", asyn
   // a `--dry-run`, a file path, the script's own name — must not count as asking for a
   // production purge.
   for (const args of [["--dry-run"], ["--PROD"], ["--prod=yes"], [" --prod"], ["purge.ts"]]) {
-    const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+    const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
     const result = await purgeDatabase({
       sql: fake.sql,
       environment: { [ENV_NAME]: "production" },
@@ -704,7 +704,7 @@ Deno.test("purgeDatabase is not armed by an argument that is not the flag", asyn
 })
 
 Deno.test("purgeDatabase proceeds in an unsafe environment when --prod is passed", async () => {
-  const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
   const result = await purgeDatabase({
     sql: fake.sql,
     environment: { [ENV_NAME]: "production" },
@@ -716,13 +716,13 @@ Deno.test("purgeDatabase proceeds in an unsafe environment when --prod is passed
 
 Deno.test("purgeDatabase drops every base table, schema-qualified and CASCADE", async () => {
   const fake = createFakeSql({
-    answers: [[{ table_name: "users" }, { table_name: "sessions" }, { table_name: "migrations" }]],
+    answers: [[{ tablename: "users" }, { tablename: "sessions" }, { tablename: "migrations" }]],
   })
   const result = await purgeDatabase({ sql: fake.sql, environment: SAFE_ENVIRONMENT })
 
   assertEquals(result, { dropped: ["users", "sessions", "migrations"], refused: false })
   assertEquals(fake.topLevel, [
-    "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND " +
+    "SELECT table_name AS tablename FROM information_schema.tables WHERE table_schema = $1 AND " +
     "table_type = 'BASE TABLE'",
     `DROP TABLE "public"."users" CASCADE`,
     `DROP TABLE "public"."sessions" CASCADE`,
@@ -738,10 +738,14 @@ Deno.test("purgeDatabase reports an empty database without dropping anything", a
   assertEquals(fake.topLevel.length, 1)
 })
 
-Deno.test("purgeDatabase reads the snake_case column a plain client returns", async () => {
-  // A client without `transform: postgres.camel` returns `table_name`; reading `tableName`
-  // would drop nothing and report success, which is what the source did.
-  const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+Deno.test("purgeDatabase reads the aliased column, not the bare information_schema name", async () => {
+  // The listing is `SELECT table_name AS tablename`, and the code reads `row.tablename`.
+  // A fake answers whatever key it is given either way, so this only pins the reading
+  // side; whether a real `postgres.camel` client still returns `tablename` unchanged is
+  // `postgres-purge.integration.test.ts`'s "against a camelCase client" case — a bare
+  // `table_name` would come back as `tableName` under that transform and `row.tablename`
+  // would be `undefined`, which is the bug this alias fixes (#77).
+  const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
   const result = await purgeDatabase({ sql: fake.sql, environment: SAFE_ENVIRONMENT })
 
   assertEquals(result.dropped, ["users"])
@@ -752,7 +756,7 @@ Deno.test("purgeDatabase drops a custom schema's own tables, not public's", asyn
   // read. The earlier version of this test answered with no rows, so it asserted the
   // listing and never saw that the DROP dropped an unqualified name — which
   // `search_path` resolves to `public`, a different table that happens to share a name.
-  const fake = createFakeSql({ answers: [[{ table_name: "users" }]] })
+  const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
   const result = await purgeDatabase({
     sql: fake.sql,
     schema: "tenant_1",
