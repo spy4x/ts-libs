@@ -26,13 +26,17 @@
  * reaching into `c.env` itself. This module does the same, but as a resolved value instead of a
  * resolver function: `requestInfoFromContext` is called once per request, not built once as
  * middleware, so the caller resolves the address inline and passes the string through
- * {@link RequestInfoOptions.remoteAddr}. Left unset, `clientIp` falls back to its own placeholder
- * (`UNKNOWN_CLIENT_IP`, `"0.0.0.0"`) rather than to `undefined` — unlike the source, `ip` is now
- * always a string, never left unset for lack of a peer address.
+ * {@link RequestInfoOptions.remoteAddr}. `ip` stays unset when no trusted forwarding header and no
+ * `remoteAddr` identify the client, as in the source — `clientIp`'s own placeholder
+ * (`UNKNOWN_CLIENT_IP`, `"0.0.0.0"`) is a made-up address, not a real one, and the source's own
+ * `apps/api/features/groups/errors.ts` writes `request.ip || null` into an audit row, so a
+ * placeholder string would be logged as though it were the client's real address instead of as
+ * "unknown". Same reasoning for `userAgent`: an empty header value is treated the same as a
+ * missing one (`|| undefined`, matching the source), not kept as `""`.
  */
 import type { Context, Env } from "hono"
 
-import { clientIp } from "../rate-limit/client-ip.ts"
+import { clientIp, UNKNOWN_CLIENT_IP } from "../rate-limit/client-ip.ts"
 
 /** Request metadata worth attaching to a log line or an error report. */
 export interface RequestInfo {
@@ -79,9 +83,10 @@ export function requestInfoFromContext<E extends Env = Record<string, never>>(
   options: RequestInfoOptions = {},
 ): RequestInfo {
   const trustedProxy = options.trustedProxy ?? false
+  const ip = clientIp(c.req.raw, options.remoteAddr, trustedProxy)
   return {
     requestId: readRequestId(c),
-    ip: clientIp(c.req.raw, options.remoteAddr, trustedProxy),
-    userAgent: c.req.header("user-agent") ?? undefined,
+    ip: ip === UNKNOWN_CLIENT_IP ? undefined : ip,
+    userAgent: c.req.header("user-agent") || undefined,
   }
 }

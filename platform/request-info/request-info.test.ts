@@ -27,9 +27,24 @@ async function call(app: Hono, headers: Record<string, string> = {}): Promise<Re
 }
 
 describe("requestInfoFromContext — trust boundary", () => {
-  it("ignores X-Forwarded-For by default (untrusted), falling back to clientIp's placeholder", async () => {
+  it("leaves ip unset when nothing identifies the client (no trusted header, no remoteAddr)", async () => {
+    const info = await call(buildApp())
+    expect(info.ip).toBeUndefined()
+  })
+
+  it("ignores X-Forwarded-For by default (untrusted), leaving ip unset rather than logging a made-up address", async () => {
     const info = await call(buildApp(), { "x-forwarded-for": "203.0.113.9" })
-    expect(info.ip).toBe("0.0.0.0")
+    expect(info.ip).toBeUndefined()
+  })
+
+  it("ignores X-Real-IP by default (untrusted) — reading it ahead of clientIp is the break this pins", async () => {
+    const info = await call(buildApp(), { "x-real-ip": "203.0.113.9" })
+    expect(info.ip).toBeUndefined()
+  })
+
+  it("ignores CF-Connecting-IP by default (untrusted) — reading it ahead of clientIp is the break this pins", async () => {
+    const info = await call(buildApp(), { "cf-connecting-ip": "203.0.113.9" })
+    expect(info.ip).toBeUndefined()
   })
 
   it("ignores a forged X-Forwarded-For even when a remoteAddr is also given", async () => {
@@ -70,6 +85,11 @@ describe("requestInfoFromContext — requestId and userAgent", () => {
 
   it("leaves userAgent undefined when the header is absent", async () => {
     const info = await call(buildApp())
+    expect(info.userAgent).toBeUndefined()
+  })
+
+  it("leaves userAgent undefined when the header is present but empty, as the source's || undefined did", async () => {
+    const info = await call(buildApp(), { "user-agent": "" })
     expect(info.userAgent).toBeUndefined()
   })
 })
