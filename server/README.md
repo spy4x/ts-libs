@@ -365,92 +365,101 @@ unvalidated string yields an unvalidated path, by contract.
 
 ## `server/auth`
 
-A pluggable multi-provider authentication system, ported from `roley` (issue #6). Providers:
-email + password (with password reset), magic link, email OTP, OAuth2 (Google and Facebook are one
-implementation with two configurations) and anonymous guest accounts. Persistence is an `Adapter`
-interface, so Postgres, SQLite, KV or an in-memory fake are interchangeable.
+The sign-in account model and its store (#57): a minimal user, the keys a user signs in with, and
+guess-counted challenges. The sign-in providers (password, a one-time code by email, OAuth2 and
+OpenID Connect) are built on it; sessions, the cookie and password hashing come from
+`server/sign-in`.
+
+| Export                              | What it is                                                                   |
+| ----------------------------------- | ---------------------------------------------------------------------------- |
+| `@ts-libs/server/auth`              | `AuthUser`, `AuthKey`, `normalizeEmail`, `ChallengeOutcome`, the `AuthStore` |
+| `@ts-libs/server/auth/postgres`     | `AUTH_POSTGRES_SCHEMA`, `createPostgresAuthStore`, the session store         |
+| `@ts-libs/server/auth/memory-store` | `MemoryAuthStore`: the same rules in memory, for unit tests                  |
 
 ```ts
-import { createAuth, PostgresAdapter } from "@ts-libs/server/auth"
+import { createSqlFromEnv } from "@ts-libs/server/db"
+import { SessionManager } from "@ts-libs/server/sign-in"
+import type { AuthSessionRecord } from "@ts-libs/server/auth"
+import {
+  AUTH_POSTGRES_SCHEMA,
+  createPostgresAuthStore,
+  createPostgresSessionStore,
+} from "@ts-libs/server/auth/postgres"
 
-const auth = createAuth({
-  // Required and non-blank. Throws MissingPepperError otherwise.
-  passwordPepper: Deno.env.get("PASSWORD_PEPPER") ?? "",
-  adapter: new PostgresAdapter(postgres(connectionString)),
-  appUrl: "https://app.example.com",
-  oauth2: {
-    google: {
-      provider: OAuth2Provider.Google,
-      authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
-      tokenUrl: "https://oauth2.googleapis.com/token",
-      userInfoUrl: "https://www.googleapis.com/oauth2/v3/userinfo",
-      scope: "email profile",
-      clientId: Deno.env.get("AUTH_GOOGLE_CLIENT_ID") ?? "",
-      clientSecret: Deno.env.get("AUTH_GOOGLE_CLIENT_SECRET") ?? "",
-      redirectUri: "https://app.example.com/api/keys/google/callback",
-      stateCookieName: "google_auth_state",
-      subjectField: "sub",
-      emailField: "email",
-      firstNameField: "given_name",
-      lastNameField: "family_name",
-      pictureField: "picture",
-    },
-  },
+const sql = createSqlFromEnv(Deno.env.toObject())
+if (!sql) throw new Error("DB_HOST is not set")
+
+// Once, as a migration: await sql.unsafe(AUTH_POSTGRES_SCHEMA)
+const store = createPostgresAuthStore(sql)
+const sessions = new SessionManager<AuthSessionRecord>({
+  store: createPostgresSessionStore(sql),
+  pepper: Deno.env.get("SESSION_PEPPER") ?? "",
+  durationMinutes: 60 * 24 * 30,
 })
 ```
 
-Nothing in the package reads the environment, imports a framework type, performs a session write
-inside a provider or logs a secret. The adapter, the clock, the randomness source, the HTTP client,
-the cookie jar and the session sink are all injected, which is why the suite runs under
-`--allow-read --allow-env` with no network and no database.
+### The model
 
-### Subpaths
+**A user is an id.** `AuthUser` has an id, `createdAt` and `deletedAt`, nothing else. The app keeps
+its profile in its own table keyed by that id, and creates it after sign-up; no transaction spans
+the library's tables and the app's.
 
-| Export                                        | What it is                                                             |
-| --------------------------------------------- | ---------------------------------------------------------------------- |
-| `@ts-libs/server/auth/types`                  | `Adapter`, `KeyKind`, `User`/`Key`/`Session`, the provider interfaces  |
-| `@ts-libs/server/auth/crypto`                 | `CryptoContext`: PBKDF2 with an injected pepper, constant-time compare |
-| `@ts-libs/server/auth/random`                 | Codes and tokens from the platform CSPRNG, rejection-sampled           |
-| `@ts-libs/server/auth/session`                | Session mint, validate, refresh and revoke, with a negative cache      |
-| `@ts-libs/server/auth/cache`                  | TTL cache in milliseconds, with a correct falsy read path              |
-| `@ts-libs/server/auth/account-linking`        | The `MethodConnected` handlers that link sibling methods               |
-| `@ts-libs/server/auth/email-password`         | Password sign-up, sign-in, reset and change                            |
-| `@ts-libs/server/auth/magic-link`             | Single-use emailed links                                               |
-| `@ts-libs/server/auth/otp`                    | Single-use emailed codes                                               |
-| `@ts-libs/server/auth/oauth2`                 | One configurable authorization-code provider                           |
-| `@ts-libs/server/auth/postgres-adapter`       | `PostgresAdapter` over `npm:postgres`                                  |
-| `@ts-libs/server/auth/testing/memory-adapter` | In-memory `Adapter` with database-like constraints                     |
+**A key is one way of signing in.** `method` is a free string (`"password"`, `"email-code"`,
+`"oauth:google"`), so a provider is added by configuration. `subject` identifies the person within
+the method: the normalised address for password and email code, the provider's own user id for
+OAuth. The store refuses a second key with the same `(method, subject)`.
 
-`@ts-libs/server/auth` re-exports all of the above. `./auth` itself is listed in the Subpaths table at
-the top of this file.
+**A key's address is proven or it is not.** `provenAt` is set once the person showed they receive
+mail at `email` (a code they typed, or a provider that vouches for the address). At most one user
+owns a proven address. Proving a key makes its user the owner and, in the same transaction, deletes
+every other user's unproven key for that address, so someone who registered an address they do not
+own loses it to the person who proves it. A key created already proven (a code the person typed
+before signing up, or a provider that vouches for the address) claims the address the same way
+before it is written, so another user's unproven key with the same method and subject that carries
+the address does not block it. A key that carries a different address or none still answers
+`AuthConflictError("key-exists")`, and so does one committed while the proven insert runs; that last
+case succeeds when retried. Proving an address another user owns is refused with
+`AuthConflictError("email-owned")`. Deleting a user's last proven key for an address releases the
+address.
 
-### Security fixes applied at extraction time
+**Addresses are compared in one form.** `normalizeEmail` trims and lower-cases, and accepts only
+what `@ts-libs/email` will send to. The store refuses a key whose `email` is not already in that form.
 
-| Source bug                                                                    | Fix                                                                             |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `helpers.ts:84` OTP drawn from the non-cryptographic generator                | `crypto.getRandomValues` with rejection sampling, so digits are exactly uniform |
-| `magicLink.ts:37,50,63,152,192` token stored plaintext, compared `===`        | stored as a PBKDF2 digest, compared with `timingSafeEqual` over digests         |
-| `otp.ts:97` a consumed code stayed valid forever                              | `expiresAt`, an attempt counter with a lockout, and delete-on-use               |
-| `misc/types.ts:18` `KeyKind.EMAIL_PASSWORD = 0` is falsy                      | kinds numbered from 1                                                           |
-| `cache.ts:23,36,55` `ttl * 1000` → ≈19-year TTL; `if (fromCache)` loses falsy | milliseconds end to end, and `undefined` alone is a miss                        |
-| `helpers.ts:7` + `misc/constants.ts:4` two peppers, one a literal             | one injected pepper that throws at construction when absent                     |
-| `google.ts:195,226,265` providers called `setSession`                         | an injected `SessionSink` and a generic `CookieJar`; no framework type anywhere |
-| `magicLink.ts:133,185` stub methods returning `null`                          | implemented, or removed from the interface                                      |
+**A challenge counts guesses.** `issueChallenge` stores the hash of a code for a
+`(purpose, subject)`. Asking for a new code replaces the hash and the expiry but keeps the guess
+counter while the earlier challenge is live, so a new code never buys more guesses.
+`attemptChallenge` checks one guess and counts it in one statement: parallel guesses queue on the
+row lock, only the first `maxAttempts` are compared, and a match consumes the challenge. Expired
+rows are harmless; delete them whenever convenient.
 
-### Account linking
+### The tables
 
-An account is a bag of `KeyKind`-keyed credentials, each with an `identification` and the `email` it
-was established with. A credential for an address that already exists attaches to that account
-instead of founding a second one, and the `MethodConnected` handlers then attach the sibling methods
-for the same address and drop the anonymous key. This is why one address signing in with Google,
-then Facebook, then a password ends up as one account with four credentials.
+`AUTH_POSTGRES_SCHEMA` creates `auth_users`, `auth_keys`, `auth_email_owners`, `auth_sessions` and
+`auth_challenges`. Run it once, as a migration, in the schema the store's client resolves to (set
+`search_path` to place them in a schema of their own). The database enforces the rules itself:
 
-### Differences from the source, by design
+- `UNIQUE (method, subject)` on `auth_keys`;
+- the address is the primary key of `auth_email_owners`, and a proven key's address and user must
+  match an owner row, so a key is never proven for an address someone else owns;
+- every key references its user, and every session references a key of its own user with
+  `ON DELETE CASCADE`: disconnecting a sign-in method ends the sessions it created.
 
-`managers/session.ts` is the template's, not `roley`'s: PBKDF2-WebCrypto with a negative cache
-instead of bcrypt on every validation. `index.ts` (SvelteKit cookie glue) is not ported — the
-transport supplies a `SessionSink` instead. `KeyKind.OAuth2` replaces the separate `GOOGLE` and
-`FACEBOOK` kinds, so the two OAuth2 providers keep provider-scoped identifications.
+Ids are Postgres `integer`s, so every id fits in a JavaScript number.
+
+### What it does not do
+
+- **It does not sign anyone in.** The providers decide when to create a user, add a key, prove it or
+  issue a challenge. The store only keeps the rules that must hold whichever provider runs.
+- **It does not limit how often a code is asked for.** A challenge that has used up its guesses
+  stays locked until it expires, and every new code moves the expiry. Put
+  `@ts-libs/platform/rate-limit` in front of the route that sends codes.
+- **It does not stop an unproven key for an owned address.** A provider that signs people up checks
+  `findUserIdByProvenEmail` first. The owner's next proof or proven insert deletes such a key.
+- **It does not release addresses when a user is soft-deleted.** `deletedAt` stops sign-in; the app
+  deletes the user's keys (or the user row) to release the addresses.
+- **It does not delete a user who has no keys left.** A user whose last key was evicted or deleted
+  keeps their user row; the app treats a user with no keys as unable to sign in.
+- **It does not have an anonymous provider.** Guest accounts were not rebuilt.
 
 ## `server/crypto`
 
