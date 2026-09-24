@@ -27,6 +27,8 @@
  *   past `maxBufferedBytes` instead of queueing without bound. All three limits are this package's
  *   own — the upgrade handler, rate limiting per IP and anything else the surrounding server does is
  *   outside it, same as the rest of the sync protocol (see README, "Explicitly not implemented").
+ *
+ * @module
  */
 
 import {

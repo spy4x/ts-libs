@@ -17,6 +17,8 @@
  *   notification into a global one. Here a resolver that throws produces
  *   {@link NotifyStatus.Failed}, zero recipients and an `onError` callback. There is no code path in
  *   this module that can reach a broadcast: {@link UserFanout} only offers `sendToUsers`.
+ *
+ * @module
  */
 
 import { createHint, type ServerMessage } from "./codec.ts"

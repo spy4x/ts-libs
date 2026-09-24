@@ -10,6 +10,8 @@
  * This module is the whole of that rule, with no transport, no storage and no framework in the
  * decision. {@link CursorTracker} is the arithmetic; {@link PersistentCursorStore} is the same
  * arithmetic with the cursor and the sync timestamp written through a {@link KeyValueStore}.
+ *
+ * @module
  */
 
 import type { Clock } from "./clock.ts"
