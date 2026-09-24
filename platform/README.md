@@ -26,19 +26,20 @@ Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched ar
 `unref`s the handle where the runtime provides one). No `crypto` calls and no DOM global: the
 browser- and server-only halves are the other two subpaths.
 
-| Module                     | Contents                                                                                                   |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `universal/async`          | `sleep`, `debounce` (cancelable, unref'd)                                                                  |
-| `universal/concurrency`    | `AsyncMutex` (fair FIFO)                                                                                   |
-| `universal/axis`           | `niceStep`, `ticks` — the one home for chart tick maths                                                    |
-| `universal/constants`      | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                               |
-| `universal/errors`         | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `OperationState`, `OperationResult` |
-| `universal/format-number`  | `round`, `formatDecimal`, `formatPct`                                                                      |
-| `universal/result`         | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                             |
-| `universal/schema`         | `InferSchema` — the only arktype type helper this package needs                                            |
-| `universal/text`           | `search`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                 |
-| `universal/time`           | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`          |
-| `universal/time-constants` | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                    |
+| Module                      | Contents                                                                                                                                                                          |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `universal/async`           | `sleep`, `debounce` (cancelable, unref'd)                                                                                                                                         |
+| `universal/concurrency`     | `AsyncMutex` (fair FIFO)                                                                                                                                                          |
+| `universal/axis`            | `niceStep`, `ticks` — the one home for chart tick maths                                                                                                                           |
+| `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                      |
+| `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `OperationState`, `OperationResult`                                                                        |
+| `universal/format-number`   | `round`, `formatDecimal`, `formatPct`                                                                                                                                             |
+| `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71) |
+| `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                    |
+| `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                   |
+| `universal/text`            | `search`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                                                                                        |
+| `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`                                                                                 |
+| `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                           |
 
 `universal/csv` and `mapConcurrent` (formerly in `universal/concurrency`) were removed: `@std/csv`
 and `@std/async`'s `pooledMap` already cover them, and no app in this workspace imported either.
@@ -75,11 +76,11 @@ Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `get
 and `downloadResponseAsFile` all take their DOM surface (`document`, `Storage`, the object-URL
 factory, a timer) as a parameter, defaulting to the real global only when the caller passes none.
 
-| Module             | Contents                                                                                            |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| `browser/cookie`   | `getCookie`                                                                                         |
-| `browser/download` | `downloadResponseAsFile`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter` |
-| `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike`, `TypedStorage`                                       |
+| Module             | Contents                                                                                                                          |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `browser/cookie`   | `getCookie`                                                                                                                       |
+| `browser/download` | `downloadResponseAsFile`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                               |
+| `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
 
 `browser/cookie` fixes two bugs in the `getCookie` copies apps carried before it had a home here: it
 splits `document.cookie` instead of building a `RegExp` from the cookie name (a name containing `.`
@@ -280,6 +281,21 @@ const result: Result<number> = tryParse(text) // returns: malformed input is exp
 
 `ErrType` is the discriminant. `ValidationError` is **re-exported** from `@spy4x/validation`, not
 redeclared: this package does not own a validation model.
+
+## `KeyValueStore` has one home, in `universal/`
+
+`browser/storage.ts`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` were identical
+three-method duplicates (#71). The home is the new `universal/key-value-store.ts`, not either of
+the two packages that used to carry a copy: it has no import of its own, so nothing that only needs
+this shape (a browser store, a realtime cursor, a server-side fallback) pulls in anything else.
+
+The first attempt at this made `@spy4x/platform` depend on `@spy4x/realtime` — a `import type`
+only, but JSR still records a type-only import as a package dependency, and a second, unrelated #71
+PR (`realtime/backoff.ts` importing `@spy4x/platform/universal/async`) turned that into a
+publish-time circular dependency between the two packages. `platform/deno.json` exports the new
+file as `./universal/key-value-store` precisely so `@spy4x/realtime` (and any other consumer) can
+import it without going through the bare `@spy4x/platform` specifier, which would otherwise also
+pull in `@spy4x/validation` through `universal/errors.ts`.
 
 ## Dependency on `@spy4x/validation`
 

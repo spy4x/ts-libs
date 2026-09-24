@@ -17,14 +17,16 @@
 import type { Type } from "arktype"
 
 import type { InferSchema } from "../universal/schema.ts"
+import type { KeyValueStore } from "../universal/key-value-store.ts"
 import { validate } from "@spy4x/validation"
 
-/** The subset of the DOM `Storage` interface this module uses. */
-export interface StorageLike {
-  getItem(key: string): string | null
-  setItem(key: string, value: string): void
-  removeItem(key: string): void
-}
+/**
+ * The subset of the DOM `Storage` interface this module uses.
+ *
+ * @deprecated Use `KeyValueStore` from `@spy4x/platform/universal/key-value-store` — the same
+ * three methods, in a file with no import of its own.
+ */
+export type StorageLike = KeyValueStore
 
 /** Outcome of a write or a read, so a caller can tell "absent" from "present but rejected". */
 export type StorageRead<T> =
