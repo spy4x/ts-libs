@@ -69,16 +69,22 @@ so `axis.test.ts` can assert against it, and a regression tripwire inside the lo
 bound is ever weakened back to plain `steps + 1`, so a future revert of the fix fails a test instead
 of hanging the suite.
 
-### `./browser` → `browser.ts` (2 modules, 266 LOC)
+### `./browser` → `browser.ts` (3 modules, 312 LOC)
 
-Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `makeStorage` and
-`downloadResponseAsFile` both take their DOM surface (`Storage`, `document`, the object-URL
+Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `getCookie`, `makeStorage`
+and `downloadResponseAsFile` all take their DOM surface (`document`, `Storage`, the object-URL
 factory, a timer) as a parameter, defaulting to the real global only when the caller passes none.
 
 | Module             | Contents                                                                                            |
 | ------------------ | --------------------------------------------------------------------------------------------------- |
+| `browser/cookie`   | `getCookie`                                                                                         |
 | `browser/download` | `downloadResponseAsFile`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter` |
 | `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike`, `TypedStorage`                                       |
+
+`browser/cookie` fixes two bugs in the `getCookie` copies apps carried before it had a home here: it
+splits `document.cookie` instead of building a `RegExp` from the cookie name (a name containing `.`
+or `[` no longer over-matches or crashes), and it returns `null` when there is no `document` instead
+of throwing.
 
 `browser/download` moved here from `@spy4x/server/export-client`: it is a browser download
 helper (`document`, an object URL) that has nothing to do with a server, and it pairs with the
