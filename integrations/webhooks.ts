@@ -28,6 +28,7 @@
  * The module verifies; it does not route. It returns the parsed JSON only
  * after the signature has been accepted, because a 200 from an unverified
  * body is how a forged event reaches a handler.
+ * @module
  */
 
 /** Why a delivery was rejected. Every value is a rejection. */
@@ -42,10 +43,12 @@ export type WebhookRejectReason =
   | "malformed_body"
   | "signature_mismatch"
 
+/** Result of {@link verifyWebhookRequest}: the verified body, or why it was rejected. */
 export type WebhookVerifyResult =
   | { ok: true; body: Uint8Array; timestampSeconds: number }
   | { ok: false; reason: WebhookRejectReason; message: string }
 
+/** Shared secret and header names {@link verifyWebhookRequest} needs to check a delivery. */
 export interface WebhookVerifierConfig {
   /**
    * Shared secret. Caller-supplied, never read from the environment here, and

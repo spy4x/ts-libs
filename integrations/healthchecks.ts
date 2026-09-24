@@ -22,6 +22,7 @@
  *  - The source built its message from backup rows (`buildHealthchecksMessage`),
  *    including a padded table. That was backup-specific and was never ported
  *    here; it lived in `ops/`'s backup module, which is not part of ts-libs (#67).
+ * @module
  */
 
 import { DEFAULT_RETRY_POLICY } from "./policy.ts"
@@ -51,6 +52,7 @@ export enum HealthchecksOutcome {
   Start = "start",
 }
 
+/** Where to ping, for {@link HealthchecksClient}. */
 export interface HealthchecksClientConfig {
   /** Check ping URL, e.g. `https://hc-ping.example.com/<uuid>`. */
   pingUrl: string
@@ -67,26 +69,40 @@ export interface HealthchecksClientConfig {
  */
 export type HealthchecksErrorCode = "http_error" | "network_error" | "timeout"
 
+/** A ping that reached healthchecks.io and was accepted. */
 export interface HealthchecksSuccess {
+  /** Always `true` on this variant of {@link HealthchecksResult}. */
   ok: true
+  /** HTTP status healthchecks.io responded with. */
   httpStatus: number
+  /** Attempts it took to get accepted, including the first. */
   attempts: number
   /** Body sent, so a caller can log what was reported without re-deriving it. */
   body: string
+  /** Total time spent waiting between attempts. */
   waitedMs: number
 }
 
+/** A ping that could not be delivered after retrying. */
 export interface HealthchecksFailure {
+  /** Always `false` on this variant of {@link HealthchecksResult}. */
   ok: false
+  /** Machine-readable failure kind. */
   code: HealthchecksErrorCode
+  /** Human-readable failure detail. */
   message: string
+  /** HTTP status of the last attempt, when the failure was an HTTP error. */
   status?: number
+  /** Attempts made before giving up. */
   attempts: number
+  /** Total time spent waiting between attempts. */
   waitedMs: number
 }
 
+/** Outcome of {@link HealthchecksClient.ping}. */
 export type HealthchecksResult = HealthchecksSuccess | HealthchecksFailure
 
+/** One ping to send through {@link HealthchecksClient.ping}. */
 export interface HealthchecksPing {
   /** `"success"` or `"fail"`; `"start"` signals the beginning of a job. */
   outcome: HealthchecksOutcome
@@ -94,19 +110,31 @@ export interface HealthchecksPing {
   body?: string
 }
 
+/** Overrides for the client's default retry policy. All fields are optional. */
 export interface HealthchecksRetryOptions {
+  /** Total attempts, including the first. */
   maxAttempts?: number
+  /** Delay before the second attempt. */
   baseDelayMs?: number
+  /** Ceiling for a single delay. */
   maxDelayMs?: number
+  /** Wall-clock ceiling for the whole ping. */
   totalBudgetMs?: number
+  /** Symmetric jitter fraction applied to a computed backoff, 0 to 1. */
   jitterRatio?: number
 }
 
+/** Construction-time overrides for {@link HealthchecksClient}, all optional and test-injectable. */
 export interface HealthchecksClientOptions {
+  /** Replaces the platform `fetch`. Defaults to the global `fetch`. */
   fetcher?: typeof fetch
+  /** Replaces the waiter used between retries. Defaults to a real sleep. */
   sleep?: Sleeper
+  /** Replaces the elapsed-time source. Defaults to `Date.now`. */
   clock?: Clock
+  /** Replaces the delay computation between retries. */
   backoff?: BackoffFn
+  /** Overrides for the default retry policy. */
   retry?: HealthchecksRetryOptions
   /** Receives every requested delay, in order. */
   onDelay?: (delayMs: number, attempt: number) => void
@@ -151,6 +179,7 @@ export class HealthchecksClient {
   private readonly backoff: BackoffFn
   private readonly requestTimeoutMs: number
 
+  /** Throws when `config.pingUrl` is empty or unparseable. */
   constructor(config: HealthchecksClientConfig, options: HealthchecksClientOptions = {}) {
     const pingUrl = config.pingUrl?.trim() ?? ""
     if (pingUrl === "") {
@@ -236,6 +265,7 @@ export class HealthchecksClient {
     return `${this.pingUrl}/${outcome === HealthchecksOutcome.Fail ? "fail" : "start"}`
   }
 
+  /** Issues one HTTP attempt, bounded by whichever is smaller of the request timeout or budget. */
   private async post(
     url: string,
     body: string,
