@@ -1077,6 +1077,19 @@ connection a run reserved, so the second run used to send its statements on the 
 connection, both held a lock, and the process hung until it was killed. Two concurrent runs are two
 driver objects, which is also what two application instances are.
 
+**A client built with `fetch_types: false` works, not refused** (#156). `withLock` reserves a
+connection with `sql.reserve()`, and on a pool with no idle connection yet — the ordinary case at the
+start of a run — `postgres@3.4.7` has a bug that leaves that call unresolved forever: `ReadyForQuery`
+only hands a freshly opened connection back to a pending `reserve()` through the branch that also
+fetches the driver's array-type OIDs, and `fetch_types: false` skips that branch, so the connection is
+never matched to the reserve call and the run hangs with no error and no log line — reported and fixed
+upstream at https://github.com/porsager/postgres/pull/1220. `withReservedLock` works around it with a
+plain query on the pool before `reserve()`, which always completes and leaves a connection sitting
+idle, so the `reserve()` right after it takes the pool's synchronous already-idle path instead of the
+one that hangs. See that method's doc comment in `postgres-migrate.ts` for the exact lines, and
+`postgres-migrate.integration.test.ts`'s "against a client built with fetch_types: false" test for the
+reproduction.
+
 **A connection lost mid-run is not a catchable error**, and it cannot be made one from here. The
 server releases the advisory lock when the session ends and the run does not continue, so nothing is
 applied twice; what the caller sees is an uncaught `TypeError: Cannot read properties of null

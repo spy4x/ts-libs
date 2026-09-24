@@ -766,3 +766,79 @@ describe("the Postgres migration runner against a client with a custom value tra
     }
   })
 })
+
+describe("the Postgres migration runner against a client built with fetch_types: false", () => {
+  it("runs twice without hanging", async () => {
+    // #156. `createSql` has no `fetch_types` knob, so this client is built from `postgres`
+    // directly, the way a caller who wants a faster cold start or a pooler that does not
+    // support the type lookup would build one.
+    //
+    // On a pool with no idle connection yet, `sql.reserve()` needs to open a fresh one, and
+    // `postgres@3.4.7`'s `ReadyForQuery` only hands a freshly opened connection back to a
+    // pending `reserve()` through its `needsTypes` branch (`connection.js:539-541`, which
+    // clears `initial` and runs `fetchArrayTypes()`; that call's own completion is what
+    // falls through to `onopen()` and matches the pool's queued reserve request).
+    // `fetch_types: false` sets `needsTypes` to `false` (`connection.js:359`), so that
+    // branch never runs; the plain branch below it (`:545-548`) only re-executes a
+    // *non-reserve* `initial` and unconditionally clears `initial` regardless, so the
+    // reserve marker is dropped, `onopen()` is never called, and the new connection is
+    // never moved to `open` or matched to the waiting `reserve()` call. Reported and fixed
+    // upstream: https://github.com/porsager/postgres/pull/1220. `withReservedLock` in
+    // `postgres-migrate.ts` works around it with a plain warm-up query before `reserve()`;
+    // see that method's doc comment for the fix itself.
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const table = uniqueIdentifier("it_migrations_fetch_types_false")
+    const sql = postgres({
+      host: settings.connection.host,
+      port: settings.connection.port,
+      user: settings.connection.user,
+      pass: settings.connection.password,
+      db: settings.connection.database,
+      fetch_types: false,
+      connection: { application_name: table },
+    }) as unknown as Sql
+
+    const reader: MigrationReader = {
+      list: () => Promise.resolve(["0001_init.sql"]),
+      readText: () => Promise.resolve("SELECT 1"),
+    }
+    const options = { folder: "/migrations", reader }
+
+    // A hang here must fail this test in seconds, not stall the suite: race every run
+    // against its own timer and clear that timer in `finally`, whichever side wins.
+    async function withDeadline<T>(label: string, promise: Promise<T>, ms = 5000): Promise<T> {
+      let timer: number
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} did not finish within ${ms}ms — it hung`)),
+          ms,
+        )
+      })
+      try {
+        return await Promise.race([promise, timeout])
+      } finally {
+        clearTimeout(timer!)
+      }
+    }
+
+    try {
+      await sql`SET client_min_messages = warning`
+      const first = await withDeadline(
+        "the first run",
+        runMigrations(new PostgresMigrationDriver({ sql, table }), options),
+      )
+      assertEquals(first, { applied: ["0001_init"], skipped: [], missing: [] })
+
+      const second = await withDeadline(
+        "the second run",
+        runMigrations(new PostgresMigrationDriver({ sql, table }), options),
+      )
+      assertEquals(second, { applied: [], skipped: ["0001_init"], missing: [] })
+    } finally {
+      await sql`DROP TABLE IF EXISTS ${sql(table)}`
+      await sql.end()
+    }
+  })
+})

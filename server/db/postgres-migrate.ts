@@ -409,8 +409,35 @@ export class PostgresMigrationDriver implements MigrationDriver {
     }
   }
 
-  /** {@link withLock} with the one-run-per-object guard already passed. */
+  /**
+   * {@link withLock} with the one-run-per-object guard already passed.
+   *
+   * **The warm-up query before `reserve()` works around a `postgres@3.4.7` bug on a
+   * client built with `fetch_types: false`.** Measured: on a pool with no idle
+   * connection yet, `sql.reserve()` never resolves — confirmed against
+   * `postgres@3.4.7/src/connection.js:532-548`. `ReadyForQuery` only hands a freshly
+   * connected socket back to a pending `reserve()` by way of the `needsTypes` branch
+   * (`:539-541`, which clears `initial` and calls `fetchArrayTypes()`, whose own
+   * completion falls through to `onopen()` and matches the pool's queued reserve
+   * request). `fetch_types: false` sets `needsTypes` to `false`
+   * (`connection.js:359`), so that branch is skipped; the plain branch below it
+   * (`:545-548`) only re-executes a *non-reserve* `initial` and unconditionally clears
+   * `initial`, so the reserve marker is dropped, `onopen()` is never called, and the new
+   * connection is never moved to `open` or matched to the waiting `reserve()` call — it
+   * hangs forever, reproduced in `postgres-migrate.integration.test.ts`. Reported and
+   * fixed upstream: https://github.com/porsager/postgres/pull/1220.
+   *
+   * An ordinary query on the pool does not hit this: a non-reserve `initial` runs on
+   * either branch (`:539-541` calls `fetchArrayTypes()` first but still executes it
+   * once `needsTypes` clears; `:545` executes it directly). So one such query, run here
+   * before `reserve()`, always completes and leaves its connection sitting in the
+   * pool's `open` list — at which point `reserve()` takes `open.length ? open.shift()`
+   * synchronously, the branch above never runs, and the bug never triggers. Removing
+   * this line brings the hang straight back; keep it paired with the integration test
+   * that reproduces the hang without it.
+   */
   private async withReservedLock<T>(run: () => Promise<T>): Promise<T> {
+    await this.sql`SELECT 1`
     const reserved = await this.sql.reserve()
     const pooled = this.sql
     this.sql = reserved as unknown as Sql
