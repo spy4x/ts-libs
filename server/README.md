@@ -1089,8 +1089,9 @@ around it with a plain query on the pool before `reserve()`, which always comple
 connection sitting idle, so the `reserve()` right after it takes the pool's synchronous already-idle
 path instead of the one that hangs. One race is not closed by this: if the warm-up connection's ready
 message arrives late or another caller on the pool takes it first, `reserve()` opens a second
-connection that hits the same bug and stays stuck until the pool ends, costing it that connection slot
-for good. See that method's doc comment in `postgres-migrate.ts` for the exact lines, and
+connection that hits the same bug and stays stuck until its `max_lifetime` ends it (30 to 60 minutes
+by default, or until the pool ends when `max_lifetime` is off), leaving the pool one connection short
+meanwhile. See that method's doc comment in `postgres-migrate.ts` for the exact lines, and
 `postgres-migrate.integration.test.ts`'s "against a client built with fetch_types: false" test for the
 reproduction.
 

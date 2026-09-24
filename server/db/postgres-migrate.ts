@@ -435,16 +435,16 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * synchronously, the branch above never runs, and the bug never triggers. Removing
    * this line brings the hang straight back; keep it paired with the integration test
    * that reproduces the hang without it. Sending it *after* `reserve()` instead does not
-   * work: by then `reserve()` is already the call stuck waiting on the buggy path, so a
-   * later query on the pool cannot rescue it — an integration test proves this the same
-   * way, by moving the line and watching the test go red again.
+   * work: `await this.sql.reserve()` is itself the call that hangs, so a query placed
+   * after it never runs. Moving the line there turns the integration test red again.
    *
    * **One race is not closed by this.** If the warm-up connection's ready message
    * arrives in a later chunk, or another caller on this pool takes the warmed connection
    * before `reserve()` here runs, `reserve()` opens a second connection that stays stuck
-   * on the same bug until the pool ends — the run still finishes, but the pool silently
-   * loses that connection's slot for good; nothing this driver owns can close that
-   * window, only the upstream fix in #1220 does.
+   * on the same bug until its `max_lifetime` ends it (30 to 60 minutes by default, or
+   * until the pool ends when `max_lifetime` is off). The run still finishes, but the pool
+   * is one connection short meanwhile; nothing this driver owns can close that window,
+   * only the upstream fix proposed in #1220 does.
    */
   private async withReservedLock<T>(run: () => Promise<T>): Promise<T> {
     await this.sql`SELECT 1`
