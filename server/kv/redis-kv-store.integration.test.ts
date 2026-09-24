@@ -220,8 +220,9 @@ describe("RedisKvStore against a real server", () => {
       // another worktree's connection to this shared container.
       await admin.sendCommand(["CLIENT", "KILL", "ID", ownId])
 
-      // The call whose own read or write was in flight when the kill landed still
-      // rejects: this store cannot know whether Redis had already applied it, so it
+      // Nothing here watches the connection: the kill is only noticed once a call
+      // next tries to use it. This `get` is that call — its own read fails — and
+      // this store cannot know whether Redis had already applied it, so the failure
       // is thrown, not silently retried on the new connection.
       await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
 
