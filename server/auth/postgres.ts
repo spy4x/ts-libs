@@ -19,7 +19,7 @@
  * @module
  */
 
-import type { Sql } from "../db/index.ts"
+import type { Sql, Transaction } from "../db/index.ts"
 import { SecondFactorStatus, SessionStatus, type SessionStore } from "../sign-in/mod.ts"
 import {
   AuthConflictError,
@@ -44,8 +44,9 @@ import {
  * The tables, constraints and indexes, as SQL text the app runs as a migration.
  *
  * Run it once, in its own migration, on the database or schema the store's `Sql` client resolves
- * to. App tables (a profile, a personal group) reference `auth_users (id)`; they are created by the
- * app after sign-up, not in a transaction with these tables.
+ * to. App tables (a profile, a personal group) reference `auth_users (id)`. An app that writes them
+ * in the same transaction as the sign-up hands the store its transaction handle; see
+ * {@link createPostgresAuthStore}.
  */
 export const AUTH_POSTGRES_SCHEMA = `
 CREATE TABLE auth_users (
@@ -140,7 +141,32 @@ interface UserRow {
 
 type KeyRow = AuthKey
 
-/** Creates an {@link AuthStore} over the `AUTH_POSTGRES_SCHEMA` tables. */
+/**
+ * Creates an {@link AuthStore} over the `AUTH_POSTGRES_SCHEMA` tables.
+ *
+ * `sql` is either a pool or a transaction handle — the `tx` a caller's `sql.begin` passes in, which
+ * `postgres` types as a `Sql` already. The store tells them apart by shape, not by an option:
+ *
+ * - **A pool.** Each write that takes more than one statement (`createUserWithKey`, `addKey`,
+ *   `proveKey`, `deleteKey`) runs in a transaction of its own and commits when it returns.
+ * - **A transaction handle.** Those writes run in a savepoint of the caller's transaction instead,
+ *   because the handle has no `begin`. They commit or roll back with the caller's transaction, so a
+ *   sign-up that also writes app rows (a profile, a personal group) is atomic: an error after the
+ *   store's write rolls the auth rows back too. A write the store refuses —
+ *   `AuthConflictError("key-exists")` or `("email-owned")` — rolls back only its own savepoint, so
+ *   the caller may catch it and still commit or roll back the rest of its transaction.
+ *
+ * Every other method is one statement and runs on the handle as given. Inside a caller's
+ * transaction that means two things. A statement Postgres rejects (a foreign key violation, say)
+ * leaves the caller's transaction aborted, as any statement the caller ran itself would. And the
+ * row locks a method takes — `attemptChallenge` locks the challenge row (`FOR UPDATE`), `addKey`
+ * the user row (`FOR KEY SHARE`), and every write the rows it writes — are held until the caller
+ * commits, not until the method returns, so keep such a transaction short. The store takes no
+ * advisory lock and never calls `reserve`.
+ *
+ * A reserved connection (`sql.reserve()`) has neither `begin` nor `savepoint`; a multi-statement
+ * write through one throws a `TypeError`.
+ */
 export function createPostgresAuthStore(sql: Sql): AuthStore {
   return new PostgresAuthStore(sql)
 }
@@ -337,7 +363,16 @@ class PostgresAuthStore implements AuthStore {
   }
 }
 
-/** Creates a `SessionStore` over the `auth_sessions` table of `AUTH_POSTGRES_SCHEMA`. */
+/**
+ * Creates a `SessionStore` over the `auth_sessions` table of `AUTH_POSTGRES_SCHEMA`.
+ *
+ * `sql` is a pool or a transaction handle (the `tx` a caller's `sql.begin` passes in). Every method
+ * is one statement and opens no transaction of its own, so on a transaction handle a session is
+ * written, and rolled back, with the caller's transaction. A statement Postgres rejects (a session
+ * whose key belongs to another user) leaves the caller's transaction aborted, as any statement the
+ * caller ran itself would; a session the store refuses before asking Postgres (an id no store could
+ * assign) does not.
+ */
 export function createPostgresSessionStore(sql: Sql): SessionStore<AuthSessionRecord> {
   return {
     async create(session: Omit<AuthSessionRecord, "id">): Promise<AuthSessionRecord> {
@@ -408,18 +443,46 @@ export function createPostgresSessionStore(sql: Sql): SessionStore<AuthSessionRe
 }
 
 /**
- * Runs `body` in a transaction and turns a unique violation on `(method, subject)` into
- * `AuthConflictError("key-exists")`. Anything `body` throws rolls the transaction back.
+ * Runs `body` in a transaction of its own and turns a unique violation on `(method, subject)` into
+ * `AuthConflictError("key-exists")`. Anything `body` throws rolls that transaction back.
+ *
+ * Which transaction depends on the handle the store was given, detected from its shape
+ * (`postgres@3.4.7`):
+ *
+ * - A pool (`postgres(...)`, `createSql`) has `begin`: `body` runs in a new transaction on one
+ *   connection, and commits when it returns.
+ * - A transaction handle (the `tx` inside the caller's `sql.begin`, or a savepoint's handle) has
+ *   `savepoint` and no `begin`: `body` runs in a savepoint of the caller's transaction. Its writes
+ *   commit or roll back with the caller's transaction. When `body` throws — a refused write such as
+ *   `AuthConflictError`, or a failed statement — only the savepoint rolls back, so the caller can
+ *   catch the error and keep using its transaction, which Postgres would otherwise refuse.
+ * - A reserved connection (`sql.reserve()`) has neither, and is refused with a `TypeError` rather
+ *   than written through without a transaction.
  */
 async function inTransaction<T>(sql: Sql, body: (tx: Sql) => Promise<T>): Promise<T> {
   try {
-    return (await sql.begin((tx) => body(tx))) as T
+    return await runIsolated(sql, body)
   } catch (error) {
     if (isUniqueViolation(error, "auth_keys_method_subject_key")) {
       throw new AuthConflictError("key-exists")
     }
     throw error
   }
+}
+
+/** The transaction or savepoint half of {@link inTransaction}. */
+async function runIsolated<T>(sql: Sql, body: (tx: Sql) => Promise<T>): Promise<T> {
+  if (typeof (sql as { begin?: unknown }).begin === "function") {
+    return (await sql.begin((tx) => body(tx))) as T
+  }
+  const handle = sql as Partial<Transaction>
+  if (typeof handle.savepoint === "function") {
+    return (await handle.savepoint((tx) => body(tx))) as T
+  }
+  throw new TypeError(
+    "the Postgres auth store needs a pool or a transaction handle; this handle has neither " +
+      "`begin` nor `savepoint` (a `sql.reserve()` connection has neither)",
+  )
 }
 
 function isUniqueViolation(error: unknown, constraint: string): boolean {
