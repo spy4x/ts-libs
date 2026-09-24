@@ -27,6 +27,8 @@
     "./db": "./db/index.ts",
     "./db/migrate": "./db/migrate.ts",
     "./db/postgres": "./db/postgres.ts",
-    "./db/sqlite": "./db/sqlite.ts"
+    "./db/sqlite": "./db/sqlite.ts",
+    "./env-age64": "./env-age64/mod.ts",
+    "./env-age64/cli": "./env-age64/cli.ts"
   }
 }
