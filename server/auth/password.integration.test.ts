@@ -19,7 +19,12 @@ import {
   createPostgresAuthStore,
   createPostgresSessionStore,
 } from "./postgres.ts"
-import { createPasswordSignIn, PASSWORD_METHOD, type PasswordSignInError } from "./password.ts"
+import {
+  createPasswordSignIn,
+  PASSWORD_METHOD,
+  type PasswordSignInError,
+  type PasswordSignInOptions,
+} from "./password.ts"
 
 const PEPPER = "test-pepper-not-a-real-secret-0123456789"
 const ITERATIONS = 100_000
@@ -60,7 +65,7 @@ interface VerifyCall {
   stored: string
 }
 
-function setup(sql: Sql) {
+function setup(sql: Sql, overrides: Partial<PasswordSignInOptions> = {}) {
   const clock = { now: () => NOW }
   const store = createPostgresAuthStore(sql)
   const sessionStore = createPostgresSessionStore(sql)
@@ -94,7 +99,7 @@ function setup(sql: Sql) {
       return inner.verify(password, stored)
     },
   } satisfies PasswordHasher
-  const provider = createPasswordSignIn({ store, sessions, clock, hasher })
+  const provider = createPasswordSignIn({ store, sessions, clock, hasher, ...overrides })
   return { store, sessions, sessionCalls, provider, verifies }
 }
 
@@ -238,5 +243,38 @@ describe("createPasswordSignIn on Postgres", () => {
       expect((await sessions.validate(changed.session.cookieValue))?.session.id)
         .toBe(changed.session.session.id)
       await provider.signIn({ email: ANN, password: "battery staple" })
+    }))
+
+  it("signs up and signs in by username, with the same work for an unknown one", () =>
+    withDatabase(async (sql) => {
+      const normalizeSubject = (raw: unknown) => {
+        if (typeof raw !== "string") return null
+        const username = raw.trim().toLowerCase()
+        const length = [...username].length
+        return length >= 1 && length <= 50 ? username : null
+      }
+      const { provider, store, verifies } = setup(sql, { normalizeSubject })
+      const signedUp = await provider.signUp({ email: " Ann ", password: "correct horse" })
+      expect(await passwordKeyRows(sql)).toEqual([
+        { userId: signedUp.user.id, subject: "ann", email: null },
+      ])
+
+      const signedIn = await provider.signIn({ email: "ANN", password: "correct horse" })
+      expect(signedIn.user.id).toBe(signedUp.user.id)
+      expect(signedIn.key.id).toBe(signedUp.key.id)
+
+      expect((await refusal(provider.signUp({ email: "ann", password: "other horse" }))).reason)
+        .toBe("email-taken")
+
+      verifies.length = 0
+      const wrong = await refusal(provider.signIn({ email: "ann", password: "wrong horse" }))
+      const missing = await refusal(provider.signIn({ email: "nobody", password: "wrong horse" }))
+      expect(verifies).toHaveLength(2)
+      expect(verifies[0].stored).toBe(signedUp.key.secret)
+      expect(verifies[1].stored).toMatch(/^pbkdf2-sha256\$100000\$[0-9a-f]{32}\$[0-9a-f]{64}$/)
+      expect(missing.reason).toBe("invalid-credentials")
+      expect(wrong.message).toBe(missing.message)
+
+      expect(await store.findUserIdByProvenEmail("ann")).toBeNull()
     }))
 })
