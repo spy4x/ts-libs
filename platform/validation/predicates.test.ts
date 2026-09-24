@@ -166,12 +166,21 @@ Deno.test("time zone probe accepts real IANA zone names and rejects unknown, emp
   }
 })
 
-Deno.test("isValidTimeZoneName delegates to @spy4x/time/tz's isValidTimeZone (#71)", () => {
-  // isValidTimeZoneName is now a deprecated call-through, kept only so an existing import still
-  // works. This pins the delegation itself, not just a coincidentally matching return value, over
-  // every case the two functions' own test suites use: real zones, an unknown name, an empty
-  // string, a lowercase zone and a trailing-space zone.
-  const cases = ["UTC", "Europe/Berlin", "america/new_york", "Not/A_Timezone", "", "Europe/Berlin "]
+Deno.test("isValidTimeZoneName agrees with @spy4x/time/tz's isValidTimeZone (#71)", () => {
+  // isValidTimeZoneName is a deprecated call-through to isValidTimeZone. This checks that the two
+  // agree on every case either suite uses, plus a lowercase zone; it cannot tell a call-through
+  // from a copied body, so it guards behaviour, not the delegation.
+  const cases = [
+    "UTC",
+    "Europe/Berlin",
+    "America/New_York",
+    "america/new_york",
+    "Not/A_Timezone",
+    "gibberish",
+    "",
+    "Europe/Berlin ",
+    "EST5EDT ",
+  ]
   for (const zone of cases) {
     assertEquals(
       isValidTimeZoneName(zone),

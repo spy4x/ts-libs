@@ -107,19 +107,8 @@ export function isHoneypotFilled(value: string): boolean {
 /**
  * True when `Intl.DateTimeFormat` accepts `value` as a time zone.
  *
- * `@spy4x/time/tz`'s {@link isValidTimeZone} is the canonical version of this probe — the same
- * `try new Intl.DateTimeFormat("en", { timeZone })` — and this function now delegates to it
- * instead of repeating the body.
- *
- * The repetition used to be deliberate (issue #71 comment, since overtaken by the owner's request
- * to merge): the reasoning was that a sibling *subpath* import (`@spy4x/time/tz`, as opposed to
- * the bare `@spy4x/time` specifier, which fails because that package declares no `"."` export)
- * would still couple `@spy4x/platform` (`#17`) to `#2`/`#10`'s packages for three lines of
- * platform API. Verified again here: `deno task publish:dry` still passes with the import in
- * place (both packages are workspace members, so `deno check` resolves `@spy4x/time` with no
- * `imports` entry), and `time/tz.test.ts` / `platform/validation/predicates.test.ts` exercise the
- * same empty-string, garbage-string, padded-string and real-zone cases with no divergence — so the
- * two probes were never actually different, only duplicated.
+ * The copy of this probe formerly here was merged into `@spy4x/time/tz`'s {@link isValidTimeZone}
+ * (#71); this is now a deprecated call-through.
  *
  * @deprecated Use `isValidTimeZone` from `@spy4x/time/tz`.
  */
@@ -156,7 +145,7 @@ export const honeypotField: Type<""> = type("string").narrow(
 
 /** A time zone name `Intl` accepts. */
 export const timeZoneName: Type<string> = type("string").narrow((value, ctx) =>
-  isValidTimeZoneName(value) || ctx.mustBe("must be a recognised IANA time zone name")
+  isValidTimeZone(value) || ctx.mustBe("must be a recognised IANA time zone name")
 )
 
 export type HeaderSafeString = typeof headerSafeString.infer
