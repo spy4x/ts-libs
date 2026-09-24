@@ -120,7 +120,7 @@ const transport = new ClientTransport({
   pull: (gap) => fetch(`/api/groups/${gap.groupId}/changes?since=${gap.since}`).then(() => {}),
   gate: () => fetch("/api/auth/me").then((r) => ({ allowed: r.ok })),
 })
-transport.onChange((hint) => store.applyHint(hint))
+transport.onChange((hint) => console.log(`${hint.groupId} moved to ${hint.sequence}`))
 transport.connect()
 ```
 
