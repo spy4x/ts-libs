@@ -20,15 +20,23 @@ describe("getCookie", () => {
     expect(getCookie("token", fakeDoc("token=abc=def=="))).toBe("abc=def==")
   })
 
+  it("matches the whole name, not a prefix, suffix or substring of it", () => {
+    expect(getCookie("a", fakeDoc("ab=1; ba=2; bab=3; a=4"))).toBe("4")
+    expect(getCookie("foo", fakeDoc("foobar=1; barfoo=2"))).toBe(null)
+  })
+
+  it("decodes a percent-encoded value", () => {
+    expect(getCookie("a", fakeDoc("a=hello%20world%3B"))).toBe("hello world;")
+  })
+
   it("returns null with no document and doc explicitly undefined", () => {
-    const globalDocument = (globalThis as { document?: unknown }).document
-    // deno-lint-ignore no-explicit-any
-    delete (globalThis as any).document
+    const globalDocument = Reflect.get(globalThis, "document")
+    Reflect.deleteProperty(globalThis, "document")
     try {
       expect(getCookie("a", undefined)).toBe(null)
     } finally {
       if (globalDocument !== undefined) {
-        ;(globalThis as { document?: unknown }).document = globalDocument
+        Reflect.set(globalThis, "document", globalDocument)
       }
     }
   })

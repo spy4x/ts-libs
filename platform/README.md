@@ -82,7 +82,7 @@ factory, a timer) as a parameter, defaulting to the real global only when the ca
 | `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike`, `TypedStorage`                                       |
 
 `browser/cookie` fixes two bugs in the `getCookie` copies apps carried before it had a home here: it
-split `document.cookie` instead of building a `RegExp` from the cookie name (a name containing `.`
+splits `document.cookie` instead of building a `RegExp` from the cookie name (a name containing `.`
 or `[` no longer over-matches or crashes), and it returns `null` when there is no `document` instead
 of throwing.
 

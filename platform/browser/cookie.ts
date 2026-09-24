@@ -29,7 +29,9 @@
  * @param doc Document-like object providing `cookie`. Defaults to the global `document`, read only
  * when this argument is omitted, so calling this with no browser `document` in scope returns `null`
  * instead of throwing.
- * @returns The decoded value, or `null` when there is no `document` or no matching entry.
+ * @returns The decoded value, or `null` when there is no `document` or no matching entry. A
+ * cookie set as `a=` (empty value) returns `""`, not `null` — the old regex-based helper's
+ * capture group required at least one character, so it never matched an empty value at all.
  */
 export function getCookie(name: string, doc?: Pick<Document, "cookie">): string | null {
   const document_ = doc ?? (globalThis as { document?: Pick<Document, "cookie"> }).document
