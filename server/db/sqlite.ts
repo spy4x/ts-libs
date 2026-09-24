@@ -24,6 +24,8 @@
  * `let db` makes a second open silently return the first one. {@link SqliteDb.close}
  * is exported and the caller owns the lifecycle, which is also what lets a test
  * drive the real driver twice in one process.
+ *
+ * @module
  */
 
 import { dirname, isAbsolute, join } from "@std/path"

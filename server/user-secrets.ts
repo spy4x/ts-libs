@@ -47,6 +47,8 @@
  *
  * The mask and the cipher have exactly one implementation in this package (`./crypto.ts`); this
  * module never re-implements AES or masking.
+ *
+ * @module
  */
 
 import { type } from "arktype"

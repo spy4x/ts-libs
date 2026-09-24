@@ -13,6 +13,8 @@
  * Source repos, all read-only design sources:
  * `template/libs/server/db`, `gb/libs/server/db`, `offer-lens/libs/db`,
  * `warthunder-stats/libs/server/db`.
+ *
+ * @module
  */
 
 export {

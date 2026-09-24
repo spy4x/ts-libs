@@ -30,6 +30,8 @@
  * Not ported: the `caldav-mcp` two-stage Dockerfile (`denoland/deno:alpine` →
  * `gcr.io/distroless/cc-debian12` + `deno compile`). Deploy tooling is not part of
  * ts-libs; a project built from the template has its own `infra/scripts/`.
+ *
+ * @module
  */
 
 /** A connected socket, narrowed to what a probe needs: closing it again. */

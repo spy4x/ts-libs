@@ -18,6 +18,8 @@
  * the file for the server's day, not the user's, in either direction. There is no
  * fix for that beyond taking the user's timezone as input; what this module fixes
  * is the silent UTC shift, and it pins the local getters with a test.
+ *
+ * @module
  */
 
 /** Format version of the envelope. Bump when a field changes meaning, not when one is added. */

@@ -17,6 +17,8 @@
  *    and for a factory "refuse" means refusing to build;
  *  - `chrome-extension://` is validated by shape before the WHATWG round-trip, so
  *    a non-origin scheme cannot be smuggled through `URL`.
+ *
+ * @module
  */
 
 /** Options for {@link createCorsOriginResolver} and {@link resolveAllowedOrigin}. */
