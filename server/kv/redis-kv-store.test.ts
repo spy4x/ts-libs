@@ -43,6 +43,12 @@ interface FakeConn {
   reply(line: RespLine): void
   /** Ends the readable side as Redis closing the socket would — the next read fails. */
   breakConnection(): void
+  /**
+   * Makes this connection's next `write()` reject with `error` instead of
+   * succeeding — a write that fails while that same command's read is still
+   * pending, the way a half-dead socket does.
+   */
+  failNextWrite(error: Error): void
   closed: boolean
 }
 
@@ -60,9 +66,16 @@ function createFakeConn(): FakeConn {
     },
   })
   const writes: string[] = []
+  let pendingWriteFailure: Error | undefined
   const writable = new WritableStream<Uint8Array>({
     write(chunk) {
       writes.push(new TextDecoder().decode(chunk))
+      if (pendingWriteFailure) {
+        const error = pendingWriteFailure
+        pendingWriteFailure = undefined
+        return Promise.reject(error)
+      }
+      return Promise.resolve()
     },
   })
   const state: FakeConn = {
@@ -79,6 +92,9 @@ function createFakeConn(): FakeConn {
     },
     breakConnection() {
       readController?.error(new Error("fake connection broke"))
+    },
+    failNextWrite(error) {
+      pendingWriteFailure = error
     },
     closed: false,
   }
@@ -204,5 +220,49 @@ describe("RedisKvStore reconnecting after a dead connection", () => {
 
     // Every call after close() throws the same way, without touching the network.
     await assertRejects(() => store.get("k"), RedisKvStoreClosedError)
+  })
+
+  it("does not blame a late failure from the old connection on the new one", async () => {
+    const { store, conns } = await connectFake()
+
+    // The old connection's write for the upcoming GET "a" will fail, but its read
+    // is left pending — a write failing while that same call's read is still in
+    // flight, not a connection that is already fully dead.
+    conns[0].failNextWrite(new Error("write boom (fake)"))
+    const pendingA = store.get("a")
+    // The write is never awaited by RedisClient itself (see trapWriteErrors' own
+    // doc comment), so its failure lands on the holder asynchronously; a macrotask
+    // tick is enough to let it land before the next call checks for it.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // The second call finds the connection dead (from that write failure) and
+    // reconnects onto a fresh one — a real Deno.connect count, isolated from the
+    // one connectFake() already made for the initial connect.
+    const replacement = createFakeConn()
+    replacement.reply("+PONG")
+    replacement.reply("$-1") // GET "b" -> null
+    replacement.reply("$-1") // GET "c" -> null, read only if a third connect never happens
+    let connectCalls = 0
+    Deno.connect = (() => {
+      connectCalls++
+      return Promise.resolve(replacement.conn)
+    }) as unknown as typeof Deno.connect
+    assertEquals(await store.get("b"), null)
+    assertEquals(connectCalls, 1)
+
+    // Only now, well after the reconnect above already swapped in the new
+    // connection and a fresh error holder, does the old connection's still-pending
+    // read fail late.
+    conns[0].breakConnection()
+    await assertRejects(() => pendingA, RedisKvStoreConnectionError)
+
+    // The late failure must be recorded on the OLD holder, the one the dead "a"
+    // call actually used — not on the store's current one. A third call proceeds
+    // straight on the already-reconnected connection instead of opening a socket
+    // it does not need.
+    assertEquals(await store.get("c"), null)
+    assertEquals(connectCalls, 1)
+
+    store.close()
   })
 })

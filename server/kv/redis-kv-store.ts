@@ -260,6 +260,14 @@ export class RedisKvStore {
    * {@link RedisKvStoreClosedError} instead, unwrapped, when `close()` ran during the
    * attempt — that is reported as what it is, not as a connection failure.
    *
+   * `client` and `connectionError` are captured into locals before the send, and it is
+   * `connectionError` — not `this.#connectionError` — that a failure is recorded on.
+   * Reading `this.#connectionError` again inside the `catch` would name whichever
+   * holder is current *then*: if a concurrent call's reconnect had already swapped
+   * `this.#client`/`this.#connectionError` in by the time this command's own send
+   * fails late, that would wrongly mark the brand new connection dead over a failure
+   * that happened on the old one.
+   *
    * A `RedisError` — an ordinary error reply from Redis itself, such as `WRONGTYPE` or
    * an out-of-memory refusal — is neither recorded nor wrapped. The connection answered
    * fine; only the command was refused, and a store that treated every refused command
@@ -282,13 +290,15 @@ export class RedisKvStore {
         throw new RedisKvStoreConnectionError(error)
       }
     }
+    const client = this.#client
+    const connectionError = this.#connectionError
     try {
-      return await this.#client.sendCommand<T>(command)
+      return await client.sendCommand<T>(command)
     } catch (error) {
       if (error instanceof RedisError) {
         throw error
       }
-      this.#connectionError.current ??= error
+      connectionError.current ??= error
       throw new RedisKvStoreConnectionError(error)
     }
   }
