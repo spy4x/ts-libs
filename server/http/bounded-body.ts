@@ -32,6 +32,8 @@
  * The stall budget is deliberately the canonical per-chunk one, **not** a single
  * overall deadline: it bounds the wait for the *next* chunk, so a slow-but-live
  * upload may take as long as it needs while a hung one fails fast.
+ *
+ * @module
  */
 
 import {

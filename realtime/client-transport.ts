@@ -39,6 +39,8 @@
  *   message must have arrived, *and* the socket must have stayed open for at least `minHealthyMs`
  *   (default: the base backoff delay) — because a single inbound frame is not proof by itself: a
  *   peer that sends one byte and drops satisfies "a message arrived" for free, on every attempt.
+ *
+ * @module
  */
 
 import { type BackoffConfig, DEFAULT_BACKOFF, nextBackoffDelay } from "./backoff.ts"

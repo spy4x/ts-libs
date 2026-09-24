@@ -145,6 +145,8 @@
  *
  * Nothing else is imported: no framework, no logging, no headers. `429`/`503`
  * are values a caller maps onto its own response.
+ *
+ * @module
  */
 
 import { type } from "arktype"

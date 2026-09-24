@@ -5,6 +5,8 @@
  * never a bare `Error` string. `ValidationError` is *re-exported* from `@spy4x/validation`
  * rather than redeclared — this package does not own a validation model, and issue #23 owns the
  * single `{ description, details }` envelope.
+ *
+ * @module
  */
 
 import type { ValidationError as ValidationErrorShape } from "@spy4x/validation"

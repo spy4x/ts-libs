@@ -1,3 +1,10 @@
+/**
+ * Shared numeric defaults used across this package: debounce delay, saver flush interval and
+ * minimum password length.
+ *
+ * @module
+ */
+
 /** Default trailing-edge debounce delay, in milliseconds. */
 export const DEFAULT_DEBOUNCE_DELAY = 300
 

@@ -8,6 +8,8 @@
  *
  * Clock and timers are injected because a real `setTimeout` would make the tests depend on wall
  * time.
+ *
+ * @module
  */
 
 import { atomicWriteJson, type TempPathOptions } from "./atomic-json.ts"

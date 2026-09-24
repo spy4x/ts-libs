@@ -1,3 +1,10 @@
+/**
+ * `@spy4x/server/storage` — a `FileStorage` port with a local-disk and an S3 provider, plus a
+ * bucket-bound wrapper and the env-driven constructors that pick and build one.
+ *
+ * @module
+ */
+
 import { StorageError } from "./errors.ts"
 import { type StorageConfig, StorageEnvName } from "./env.ts"
 import type { FileStorage, PresignOptions, UploadBody } from "./ports.ts"

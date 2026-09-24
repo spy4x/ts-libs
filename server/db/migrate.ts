@@ -45,6 +45,8 @@
  *  - **a renamed migration is refused.** A pending file whose body is exactly what a
  *    missing row recorded is {@link MigrationRenamedError}; it used to be treated as new
  *    and its body ran a second time.
+ *
+ * @module
  */
 
 import { extname, join } from "@std/path"

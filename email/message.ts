@@ -7,6 +7,7 @@
  * application. A library that owns the transport also owns the timezone framing
  * and the ICS attachment plumbing, because those are the parts that go wrong in
  * every hand-rolled reimplementation — the templates built on top of them do not.
+ * @module
  */
 
 import {

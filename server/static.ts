@@ -31,6 +31,8 @@
  * before `serveStatic` returns, without `serveStatic` ever wrapping or reading the
  * stream. (`denoStaticFs.open` still builds that stream eagerly as `file.readable`
  * — it exists, `serveStatic` just never touches it for `HEAD`.)
+ *
+ * @module
  */
 
 /** Result of resolving a request path against the static root. */

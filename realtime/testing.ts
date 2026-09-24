@@ -5,6 +5,8 @@
  * test its own wiring, and because "testable without a network, a browser or a sleep" is a promise
  * this package makes in its README. Everything here is dependency-free: no fake-timer library, no
  * mocking framework.
+ *
+ * @module
  */
 
 import type { Clock, TimerHandle } from "./clock.ts"

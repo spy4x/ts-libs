@@ -7,6 +7,8 @@
  * - {@link clientIp} — proxy-header extraction, with the trust boundary documented there.
  *
  * See `README.md` for the eviction policy and the sliding-vs-fixed decision.
+ *
+ * @module
  */
 
 export {

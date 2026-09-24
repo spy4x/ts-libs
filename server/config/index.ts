@@ -3,6 +3,8 @@
  *
  * Import the barrel for both halves, or a subpath (`./env.ts`, `./config.ts`) directly within the
  * package.
+ *
+ * @module
  */
 export * from "./env.ts"
 export * from "./config.ts"

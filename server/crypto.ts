@@ -41,6 +41,8 @@
  * reusing the same secret as, say, a password pepper is the weak point, not this
  * module. Prefer a dedicated secret and migrate to HKDF with a distinct info
  * label when that reuse cannot be avoided.
+ *
+ * @module
  */
 
 import { decodeBase64, encodeBase64 } from "@std/encoding/base64"

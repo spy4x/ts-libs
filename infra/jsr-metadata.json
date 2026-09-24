@@ -1,0 +1,38 @@
+{
+  "$comment": "Applied by `deno task jsr:metadata` (infra/scripts/jsr-metadata.ts) via JSR's PATCH package API. Each package gets its own description, its GitHub repository link, and the runtime flags this repo can back with evidence: `deno: true` everywhere (every package is type-checked and tested on Deno in CI), plus `browser: true` only for the two packages with zero `Deno.*` usage anywhere in their sources (validation, time). See README 'Maintaining' for how to run this against the real API.",
+  "repository": { "owner": "spy4x", "name": "ts-libs" },
+  "packages": {
+    "email": {
+      "description": "SMTP sending, address parsing, an HTML mail wrapper, and a DKIM signature checker for incoming mail.",
+      "runtimeCompat": { "deno": true }
+    },
+    "integrations": {
+      "description": "Ntfy and healthchecks.io clients, an inbound webhook signature checker, and retry backoff.",
+      "runtimeCompat": { "deno": true }
+    },
+    "net": {
+      "description": "Guards for outbound requests to user-supplied URLs: SSRF checks, a redirect-safe fetch, and size-capped body readers.",
+      "runtimeCompat": { "deno": true }
+    },
+    "platform": {
+      "description": "Shared and per-runtime primitives: a command/query/event bus, a cache, API result types, rate limiting, tokens, and browser storage.",
+      "runtimeCompat": { "deno": true }
+    },
+    "realtime": {
+      "description": "Hint-only WebSocket transport: connection registry, heartbeat, reconnect, and cursor-based sync.",
+      "runtimeCompat": { "deno": true }
+    },
+    "server": {
+      "description": "Deno-server primitives for a small SaaS backend: sign-in, Postgres, S3-compatible storage, Redis, outbox, request logging.",
+      "runtimeCompat": { "deno": true }
+    },
+    "time": {
+      "description": "IANA time-zone arithmetic on Intl, and an iCalendar (.ics) writer.",
+      "runtimeCompat": { "deno": true, "browser": true }
+    },
+    "validation": {
+      "description": "arktype `validate` with one result shape, and the form-validation state model.",
+      "runtimeCompat": { "deno": true, "browser": true }
+    }
+  }
+}

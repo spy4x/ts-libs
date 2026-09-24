@@ -14,6 +14,8 @@
  * one-liner.
  *
  * This module runs in a browser as well as in Deno, so nothing here touches `Deno.*`.
+ *
+ * @module
  */
 
 import type { ManagedSocket, SocketCloseInfo, SocketFactory, Unsubscribe } from "./socket-port.ts"

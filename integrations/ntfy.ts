@@ -23,6 +23,7 @@
  *    `rostok` used a bearer token in `Authorization` directly
  *    (`reporting.ts:193`). The token is a constructor parameter here, never
  *    read at module scope and never logged.
+ * @module
  */
 
 import { createAsciiHeaders } from "./header-safety.ts"
@@ -65,6 +66,7 @@ export enum NtfyPriority {
   Urgent = 5,
 }
 
+/** Where to push and how to authenticate, for {@link NtfyClient}. */
 export interface NtfyClientConfig {
   /** Base ntfy URL, e.g. `https://ntfy.example.invalid`. Trailing slashes are stripped. */
   baseUrl: string
@@ -74,14 +76,19 @@ export interface NtfyClientConfig {
   token?: string
 }
 
+/** One notification to send through {@link NtfyClient.push}. */
 export interface NtfyPush {
   /** Goes into the `Title` header, so it is transliterated to ASCII. */
   title: string
   /** Goes into the body verbatim, so non-ASCII survives. */
   message: string
+  /** How severe the event is; compared against the client's gate. */
   severity: NotificationSeverity
+  /** ntfy priority, 1 (min) to 5 (max). Defaults to ntfy's own default. */
   priority?: NtfyPriority
+  /** ntfy tags/emoji shortcodes attached to the notification. */
   tags?: string[]
+  /** URL opened when the notification is tapped. */
   click?: string
   /** When set, supersedes the client-level gate. */
   gate?: NotificationSeverity
@@ -99,10 +106,15 @@ export interface NtfyPush {
  */
 export type NtfyErrorCode = "http_error" | "network_error" | "timeout"
 
+/** A push that reached ntfy and was accepted. */
 export interface NtfyPushed {
+  /** Always `true` on this variant of {@link NtfyResult}. */
   ok: true
+  /** Discriminant for {@link NtfyResult}. */
   status: "pushed"
+  /** HTTP status ntfy responded with. */
   httpStatus: number
+  /** Attempts it took to get accepted, including the first. */
   attempts: number
   /**
    * The header values a caller may need, already transliterated to ASCII.
@@ -114,39 +126,64 @@ export interface NtfyPushed {
    * part of a result.
    */
   title: string
+  /** Tags sent in the outgoing request, or `null` when the push carried none. */
   tags: string | null
 }
 
+/** A push that was never sent because its severity did not meet the gate. */
 export interface NtfySkipped {
+  /** Always `true` on this variant of {@link NtfyResult}. */
   ok: true
+  /** Discriminant for {@link NtfyResult}. */
   status: "skipped"
+  /** Why it was skipped. Only one reason exists today. */
   reason: "below-gate"
+  /** Always `0`: no attempt was made. */
   attempts: 0
 }
 
+/** A push that could not be delivered after retrying. */
 export interface NtfyFailure {
+  /** Always `false` on this variant of {@link NtfyResult}. */
   ok: false
+  /** Machine-readable failure kind. */
   code: NtfyErrorCode
+  /** Human-readable failure detail. */
   message: string
+  /** HTTP status of the last attempt, when the failure was an HTTP error. */
   status?: number
+  /** Attempts made before giving up. */
   attempts: number
 }
 
+/** Outcome of {@link NtfyClient.push}. */
 export type NtfyResult = NtfyPushed | NtfySkipped | NtfyFailure
 
+/** Overrides for the client's default retry policy. All fields are optional. */
 export interface NtfyRetryOptions {
+  /** Total attempts, including the first. */
   maxAttempts?: number
+  /** Delay before the second attempt. */
   baseDelayMs?: number
+  /** Ceiling for a single delay. */
   maxDelayMs?: number
+  /** Wall-clock ceiling for the whole push. */
   totalBudgetMs?: number
+  /** Symmetric jitter fraction applied to a computed backoff, 0 to 1. */
   jitterRatio?: number
 }
 
+/** Construction-time overrides for {@link NtfyClient}, all optional and test-injectable. */
 export interface NtfyClientOptions {
+  /** Replaces the platform `fetch`. Defaults to the global `fetch`. */
   fetcher?: typeof fetch
+  /** Replaces the waiter used between retries. Defaults to a real sleep. */
   sleep?: Sleeper
+  /** Replaces the elapsed-time source. Defaults to `Date.now`. */
   clock?: Clock
+  /** Replaces the delay computation between retries. */
   backoff?: BackoffFn
+  /** Overrides for the default retry policy. */
   retry?: NtfyRetryOptions
   /** Default gate for every push. Defaults to `NotificationSeverity.Failure`. */
   gate?: NotificationSeverity
@@ -180,15 +217,6 @@ const DEFAULT_RETRY: RetryPolicy = {
 }
 
 /**
- * Reads ntfy settings from an environment reader.
- *
- * All of `NTFY_URL` and `NTFY_TOPIC` are required; `NTFY_TOKEN` is optional
- * because a self-hosted ntfy on a private network may not use auth. `null`
- * when incomplete, so "not configured" stays a caller decision — `mig`
- * collapsed it into a silent no-op, which means a typo'd variable name looks
- * exactly like a deliberate disable.
- */
-/**
  * Describes why a URL string is unusable, without echoing it.
  *
  * A base URL can carry a token in its path, so the rejection names the shape
@@ -212,6 +240,15 @@ const describeUrlShape = (value: string): string => {
     : "no absolute scheme"
 }
 
+/**
+ * Reads ntfy settings from an environment reader.
+ *
+ * All of `NTFY_URL` and `NTFY_TOPIC` are required; `NTFY_TOKEN` is optional
+ * because a self-hosted ntfy on a private network may not use auth. `null`
+ * when incomplete, so "not configured" stays a caller decision — `mig`
+ * collapsed it into a silent no-op, which means a typo'd variable name looks
+ * exactly like a deliberate disable.
+ */
 export const ntfyConfigFromEnv = (
   read: (name: string) => string | undefined = (name) => Deno.env.get(name),
 ): NtfyClientConfig | null => {
@@ -242,6 +279,7 @@ export class NtfyClient {
   private readonly gate: NotificationSeverity
   private readonly requestTimeoutMs: number
 
+  /** Throws when `config.baseUrl` is empty or unparseable, or `config.topic` is empty. */
   constructor(config: NtfyClientConfig, options: NtfyClientOptions = {}) {
     // The trailing slash is dropped **after** the guard, not before it: the
     // guard's rejection text describes the value the caller supplied, and
@@ -369,6 +407,7 @@ export class NtfyClient {
     })
   }
 
+  /** Issues one HTTP attempt, bounded by whichever is smaller of the request timeout or budget. */
   private async post(
     headers: Headers,
     body: string,

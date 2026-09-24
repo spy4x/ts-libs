@@ -50,6 +50,8 @@
  * application's decision, not a library's side effect" — `validation/validate.ts:7-8`). A wire
  * protocol is the opposite case: the library owns the wire, an unrecognised property is a protocol
  * violation, and a host that never sees it cannot act on it.
+ *
+ * @module
  */
 
 import { type Type, type } from "arktype"

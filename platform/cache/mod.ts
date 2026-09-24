@@ -9,6 +9,8 @@
  *
  * No in-memory `ICacheStorage` ships from this package: the source this was ported from kept its
  * fake local to its test file, and the real, published implementation is `server/kv`'s.
+ *
+ * @module
  */
 
 export {

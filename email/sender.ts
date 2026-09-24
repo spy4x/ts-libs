@@ -18,6 +18,7 @@
  *   failure mode this contract exists to prevent.
  * - Constructing a sender throws on a bad configuration, because that is a
  *   deploy-time bug, not a per-message outcome.
+ * @module
  */
 
 import { parseAddresses, type ParsedRecipients } from "./address.ts"

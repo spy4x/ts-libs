@@ -12,6 +12,8 @@
  * All four are seconds, matching the driver's own units. The names are the
  * driver's option names, so a reader can diff this file against `postgres`'s
  * documentation without a translation step.
+ *
+ * @module
  */
 
 import postgres from "postgres"

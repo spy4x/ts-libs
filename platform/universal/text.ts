@@ -1,3 +1,11 @@
+/**
+ * Small, dependency-free text helpers: a list-filter match (`search`), a naive English pluraliser
+ * (`pluralize`), a kebab-case converter (`convertToKebabCase`), edit distance and a normalised
+ * similarity score (`levenshtein`, `similarity`), and a UTF-8 byte-length count (`utf8ByteLength`).
+ *
+ * @module
+ */
+
 /** Substring/equality match used by list filters. */
 export function search(
   value: string | number | null | undefined,

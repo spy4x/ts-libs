@@ -7,6 +7,8 @@
  *
  * This module owns the *decision* (acquire, re-acquire, release order, error text); the port owns
  * the syscall.
+ *
+ * @module
  */
 
 import { dirname } from "@std/path"

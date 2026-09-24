@@ -29,6 +29,7 @@
  * platform `fetch` also took away its header rules, so the caller's
  * `Authorization`, `Cookie` and `Proxy-Authorization` are dropped here the
  * moment a hop changes origin — see `CREDENTIAL_HEADERS`.
+ * @module
  */
 
 import {
@@ -80,6 +81,7 @@ export enum SafeFetchMethod {
  * re-validation this module exists for.
  */
 export interface Fetcher {
+  /** Issues one request. `init.redirect` is always `"manual"`. */
   fetch(
     input: string,
     init: {
@@ -91,6 +93,7 @@ export interface Fetcher {
   ): Promise<Response>
 }
 
+/** {@link Fetcher} backed by the platform `fetch`. */
 export const defaultFetcher: Fetcher = {
   fetch: (input, init) =>
     fetch(input, {
@@ -101,6 +104,7 @@ export const defaultFetcher: Fetcher = {
     }),
 }
 
+/** Per-call overrides for {@link safeFetch}. */
 export interface SafeFetchOptions {
   /** Resolver for DNS lookups; defaults to `defaultResolver`. */
   resolver?: DnsResolver
@@ -136,6 +140,7 @@ export interface SafeFetchOptions {
   method?: SafeFetchMethod | string
 }
 
+/** Successful outcome of {@link safeFetch}. */
 export interface SafeFetchResult {
   /** Final canonical URL after any redirects. */
   url: string

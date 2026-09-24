@@ -8,6 +8,8 @@
  *   isolation (see `event-bus.ts` for what changed from the source this was ported from).
  *
  * None of the three keeps state outside its own instance.
+ *
+ * @module
  */
 
 export { CommandBus } from "./command-bus.ts"

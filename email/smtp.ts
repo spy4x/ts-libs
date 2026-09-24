@@ -27,6 +27,7 @@
  *    AUTH exchange included, to the logger — and every string that leaves this
  *    module through `error` is scrubbed of the password, the `user:pass` pair,
  *    and their base64 AUTH-LOGIN encodings.
+ * @module
  */
 
 import type { SendMailOptions, SMTPTransportOptions } from "nodemailer"

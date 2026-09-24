@@ -12,6 +12,8 @@
  * (`expireIn`) shortens how long the debris survives. Values are timestamp arrays, never counter
  * sums, because only timestamps can answer "when does the window have room again" — see the
  * sliding-window reasoning in `memory.ts`.
+ *
+ * @module
  */
 
 import { type Clock, type RateLimitStore, systemClock } from "./memory.ts"

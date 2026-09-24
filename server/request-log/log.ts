@@ -17,6 +17,8 @@
  * request or response body is read. The original had the same property (it built its path with
  * `getPath(c.req.raw)`, which stops at the first `?`) — nothing was leaking here, and this port
  * keeps that guarantee explicit and tested rather than incidental.
+ *
+ * @module
  */
 import { getColorEnabled } from "hono/utils/color"
 import type { Env, MiddlewareHandler } from "hono/types"

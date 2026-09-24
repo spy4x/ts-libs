@@ -1,13 +1,16 @@
-// RFC 5545 VCALENDAR/VEVENT writer.
-//
-// Framework-agnostic and domain-free: this module knows nothing about bookings,
-// hosts, products or URLs beyond what the caller puts in an {@link IcsEvent}.
-// It depends only on `time/ics-core.ts` — deliberately not on `time/tz.ts` —
-// so the entire timezone contract is "give me the correct UTC instant".
-//
-// Out of scope by design (documented in `time/README.md`): RRULE/EXDATE/
-// RECURRENCE-ID, VTIMEZONE/TZID, VALARM/DURATION, VTODO, multiple VEVENTs, and
-// any parsing of existing calendars.
+/**
+ * RFC 5545 VCALENDAR/VEVENT writer.
+ *
+ * Framework-agnostic and domain-free: this module knows nothing about bookings,
+ * hosts, products or URLs beyond what the caller puts in an {@link IcsEvent}.
+ * It depends only on `time/ics-core.ts` — deliberately not on `time/tz.ts` —
+ * so the entire timezone contract is "give me the correct UTC instant".
+ *
+ * Out of scope by design (documented in `time/README.md`): RRULE/EXDATE/
+ * RECURRENCE-ID, VTIMEZONE/TZID, VALARM/DURATION, VTODO, multiple VEVENTs, and
+ * any parsing of existing calendars.
+ * @module
+ */
 
 import { formatIcsUtc, icsEscape, icsEscapeParameter, joinContentLines } from "./ics-core.ts"
 

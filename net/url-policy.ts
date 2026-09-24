@@ -27,6 +27,7 @@
  * PERMISSIONS: `defaultResolver` calls `Deno.resolveDns`, so a consumer that
  * uses the default resolver needs `--allow-net`. Injecting a resolver removes
  * that need; every test in this package does exactly that.
+ * @module
  */
 
 import {
@@ -72,6 +73,11 @@ export type UrlPolicyErrorCode =
 export class UrlValidationError extends Error {
   /** Stable machine-readable error code. Safe to surface to clients. */
   readonly code: UrlPolicyErrorCode
+  /**
+   * Builds the error for a rejected URL.
+   * @param code Stable machine-readable error code.
+   * @param message Human-readable rejection message.
+   */
   constructor(code: UrlPolicyErrorCode, message: string) {
     super(message)
     this.name = "UrlValidationError"
@@ -86,6 +92,10 @@ export class UrlValidationError extends Error {
  * not resolve" from "this host is not allowed" without matching message text.
  */
 export class DnsResolutionError extends UrlValidationError {
+  /**
+   * Builds the error for a DNS lookup failure.
+   * @param message Human-readable rejection message.
+   */
   constructor(message: string) {
     super("dns_failure", message)
     this.name = "DnsResolutionError"
@@ -140,6 +150,7 @@ export const defaultResolver: DnsResolver = {
   },
 }
 
+/** Per-call overrides for {@link validatePublicUrl}. */
 export interface ValidatePublicUrlOptions {
   /** Resolver for DNS lookups. Defaults to `defaultResolver`. */
   resolver?: DnsResolver

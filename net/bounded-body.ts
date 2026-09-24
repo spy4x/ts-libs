@@ -12,6 +12,7 @@
  * Zero dependencies: `ReadableStream`, `TextDecoder` and `setTimeout` are all
  * platform APIs. Bodies are decoded incrementally so a huge payload never lands
  * in memory as one string, and the reader is always cancelled and unlocked.
+ * @module
  */
 
 /** Finite failure kinds a bounded read can raise. */
@@ -22,7 +23,12 @@ export enum BodyReadErrorCode {
 
 /** Body exceeded the byte cap. */
 export class PayloadTooLargeError extends Error {
+  /** Discriminant matching {@link BodyReadErrorCode.PayloadTooLarge}. */
   readonly code = BodyReadErrorCode.PayloadTooLarge
+  /**
+   * Builds the error for the cap that was exceeded.
+   * @param maxBytes The byte cap that was exceeded.
+   */
   constructor(public readonly maxBytes: number) {
     super(`Payload exceeds ${maxBytes} bytes`)
     this.name = "PayloadTooLargeError"
@@ -37,7 +43,12 @@ export class PayloadTooLargeError extends Error {
  * the body is cancelled instead.
  */
 export class BodyReadTimeoutError extends Error {
+  /** Discriminant matching {@link BodyReadErrorCode.BodyReadTimeout}. */
   readonly code = BodyReadErrorCode.BodyReadTimeout
+  /**
+   * Builds the error for the stall budget that was exceeded.
+   * @param timeoutMs The stall budget that was exceeded.
+   */
   constructor(public readonly timeoutMs: number) {
     super(`Body read stalled for ${timeoutMs}ms`)
     this.name = "BodyReadTimeoutError"
@@ -66,10 +77,13 @@ export const DEFAULT_BODY_TIMEOUT_MS: number = 10_000
  * module's public surface.
  */
 export interface BodySource {
+  /** Header reader, used to pre-check a declared `Content-Length`. */
   readonly headers: { get(name: string): string | null }
+  /** The body stream, or `null` when the source carries none. */
   readonly body: ReadableStream<Uint8Array> | null
 }
 
+/** Per-call overrides for a bounded body read. */
 export interface BodyReadOptions {
   /**
    * Stall budget in ms: the maximum time to wait for the next chunk. Defaults

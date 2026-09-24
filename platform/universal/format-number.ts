@@ -5,6 +5,8 @@
  * value whose decimal digits are not exactly representable in binary: `round(1.005)` returned `1`
  * because `1.005 * 100` is `100.49999999999999` in IEEE 754. Rounding through the number's own
  * decimal representation (the same approach the platform spec takes) removes the class of bug.
+ *
+ * @module
  */
 
 /**

@@ -23,6 +23,8 @@
  * "cf-connecting-ip"` is the narrow equivalent of `true`. With no proxy in front and any header
  * trusted, a caller rotating that header produces a new bucket per request and the limiter is
  * defeated.
+ *
+ * @module
  */
 
 /** Fallback when no header and no peer address is available. */
