@@ -30,12 +30,12 @@ import { systemNow } from "../universal/time.ts"
 /**
  * Monotonic millisecond clock. Inject a fake in tests; never read `Date.now()` behind one.
  *
- * @deprecated Identical shape to `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is
+ * @deprecated The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is
  * now the home for this shape. Use that instead in new code; `platform/rate-limit/kv.ts` already
- * imports this alias from here rather than redeclaring it, which is unaffected by this change.
- * Kept as its own `type Clock = () => number` declaration, not a `= NowFn` reference, because
- * `deno doc`'s text rendering — which `docs/1.0-contract.md` pins verbatim — renders a reference
- * to another named type differently from an inline function-type alias; the two are already
+ * imports this declaration from here rather than redeclaring it, which is unaffected by this
+ * change. Kept as its own `type Clock = () => number` declaration, not a `= NowFn` reference,
+ * because `deno doc`'s text rendering — which `docs/1.0-contract.md` pins verbatim — renders a
+ * reference to another named type differently from an inline function type; the two are already
  * structurally interchangeable, so nothing is lost by keeping this declaration's own text.
  */
 export type Clock = () => number
@@ -43,7 +43,8 @@ export type Clock = () => number
 /**
  * Default: real time. Only the module boundary reads it.
  *
- * @deprecated Use `systemNow` from `@spy4x/platform/universal/time`.
+ * @deprecated Delegates to, and should be replaced by, `systemNow` from
+ * `@spy4x/platform/universal/time`.
  */
 export const systemClock: Clock = () => systemNow()
 

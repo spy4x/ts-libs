@@ -9,9 +9,11 @@ import {
   isValidDate,
   normalizeCalendarDate,
   systemClock,
+  systemNow,
   timeAgo,
   TimeFormatter,
 } from "./time.ts"
+import { systemClock as rateLimitSystemClock } from "../rate-limit/memory.ts"
 
 /** Clock frozen at 2024-03-12T14:30:00Z, so every assertion is host-zone and wall-clock free. */
 function fixedClock(iso: string): Clock {
@@ -211,5 +213,15 @@ describe("systemClock", () => {
     const after = Date.now()
     expect(reading).toBeGreaterThanOrEqual(before)
     expect(reading).toBeLessThanOrEqual(after)
+  })
+})
+
+describe("systemNow", () => {
+  it("reads Date.now(), and so does rate-limit's systemClock", () => {
+    const before = Date.now()
+    for (const reading of [systemNow(), rateLimitSystemClock()]) {
+      expect(reading).toBeGreaterThanOrEqual(before)
+      expect(reading).toBeLessThanOrEqual(Date.now())
+    }
   })
 })
