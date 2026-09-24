@@ -14,7 +14,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import postgres from "postgres"
 import { buildPostgresOptions, type Sql } from "../db/index.ts"
-import { SessionManager } from "../sign-in/mod.ts"
+import { createPasswordHasher, SessionManager } from "../sign-in/mod.ts"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import {
   createEmailCodeSignIn,
@@ -23,7 +23,8 @@ import {
   EmailCodeError,
   type EmailCodeSignIn,
 } from "./email-code.ts"
-import type { AuthSessionRecord } from "./model.ts"
+import { AuthConflictError, type AuthSessionRecord } from "./model.ts"
+import { createPasswordSignIn, PASSWORD_METHOD, type PasswordSignIn } from "./password.ts"
 import type { AuthStore } from "./store.ts"
 import {
   AUTH_POSTGRES_SCHEMA,
@@ -33,12 +34,15 @@ import {
 
 const PEPPER = "test-pepper-not-a-real-secret-0123456789"
 const ADDRESS = "victim@example.com"
+const PASSWORD = "victim-password-1"
 
 interface Harness {
   sql: Sql
   store: AuthStore
   sessions: SessionManager<AuthSessionRecord>
   provider: EmailCodeSignIn
+  /** A password provider over the same store and sessions. */
+  passwords: PasswordSignIn
   codeFor(email?: string): Promise<string>
 }
 
@@ -80,7 +84,12 @@ async function withProvider(body: (harness: Harness) => Promise<void>): Promise<
         await provider.requestCode(email)
         return sent[sent.length - 1]
       }
-      await body({ sql, store, sessions, provider, codeFor })
+      const passwords = createPasswordSignIn({
+        store,
+        sessions,
+        hasher: createPasswordHasher({ pepper: PEPPER, iterations: 100_000 }),
+      })
+      await body({ sql, store, sessions, provider, passwords, codeFor })
     } finally {
       await sql.end()
     }
@@ -202,5 +211,90 @@ describe("createEmailCodeSignIn on Postgres", () => {
         [owner.key.id, "password", ADDRESS],
       ])
       expect(await store.findKey(EMAIL_CODE_METHOD, ADDRESS)).toBeNull()
+    }))
+
+  it("proves a password sign-up's address and keeps one user across both providers", () =>
+    withProvider(async ({ sql, store, provider, passwords, codeFor }) => {
+      const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+
+      const proven = await provider.proveAddress(signedUp.user.id, ADDRESS, await codeFor())
+      const byPassword = await passwords.signIn({ email: ADDRESS, password: PASSWORD })
+      const byCode = await provider.verifyCode(ADDRESS, await codeFor())
+
+      expect(proven.map((key) => [key.id, key.method])).toEqual([
+        [signedUp.key.id, PASSWORD_METHOD],
+      ])
+      expect(proven[0].provenAt).not.toBeNull()
+      expect(byPassword.user.id).toBe(signedUp.user.id)
+      expect(byCode.user.id).toBe(signedUp.user.id)
+      expect(await store.findUserIdByProvenEmail(ADDRESS)).toBe(signedUp.user.id)
+      const [{ users }] = await sql<
+        { users: number }[]
+      >`SELECT count(*)::int AS users FROM auth_users`
+      expect(users).toBe(1)
+    }))
+
+  it("refuses to prove an address another user owns", () =>
+    withProvider(async ({ store, provider, passwords, codeFor }) => {
+      const owner = await provider.verifyCode(ADDRESS, await codeFor())
+      const other = await passwords.signUp({ email: "other@example.com", password: PASSWORD })
+
+      const error = await provider.proveAddress(other.user.id, ADDRESS, await codeFor()).then(
+        () => null,
+        (caught: unknown) => caught,
+      )
+
+      expect(error).toBeInstanceOf(AuthConflictError)
+      expect((error as AuthConflictError).reason).toBe("email-owned")
+      expect(await store.findUserIdByProvenEmail(ADDRESS)).toBe(owner.user.id)
+      expect((await store.listKeys(other.user.id)).length).toBe(1)
+    }))
+
+  it("evicts a squatter's unproven password key when a user proves the address", () =>
+    withProvider(async ({ store, provider, passwords, codeFor }) => {
+      const squatter = await passwords.signUp({ email: ADDRESS, password: "squatter-pw-1" })
+      const victim = await passwords.signUp({ email: "victim@work.example", password: PASSWORD })
+
+      const proven = await provider.proveAddress(victim.user.id, ADDRESS, await codeFor())
+
+      expect(proven.map((key) => [key.userId, key.method])).toEqual([
+        [victim.user.id, EMAIL_CODE_METHOD],
+      ])
+      expect(await store.listKeys(squatter.user.id)).toEqual([])
+      expect(await store.findKey(PASSWORD_METHOD, ADDRESS)).toBeNull()
+      expect(await store.findUserIdByProvenEmail(ADDRESS)).toBe(victim.user.id)
+    }))
+
+  it("refuses a wrong code, counts it, and refuses a code sent to another address", () =>
+    withProvider(async ({ store, provider, passwords, codeFor }) => {
+      const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+      const otherCode = await codeFor("other@example.com")
+      const code = await codeFor()
+
+      expect(await refusalOf(provider.proveAddress(signedUp.user.id, ADDRESS, otherCode))).toBe(
+        "wrong-code",
+      )
+      for (let guess = 0; guess < 4; guess++) {
+        expect(await refusalOf(provider.proveAddress(signedUp.user.id, ADDRESS, "wrong-00")))
+          .toBe("wrong-code")
+      }
+      expect(await refusalOf(provider.proveAddress(signedUp.user.id, ADDRESS, code))).toBe(
+        "locked-out",
+      )
+      expect(await store.findUserIdByProvenEmail(ADDRESS)).toBeNull()
+    }))
+
+  it("refuses a deleted user without spending the code", () =>
+    withProvider(async ({ sql, provider, passwords, codeFor }) => {
+      const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+      await sql`UPDATE auth_users SET deleted_at = now() WHERE id = ${signedUp.user.id}`
+      const code = await codeFor()
+
+      expect(await refusalOf(provider.proveAddress(signedUp.user.id, ADDRESS, code))).toBe(
+        "account-deleted",
+      )
+      const other = await passwords.signUp({ email: "other@example.com", password: PASSWORD })
+      const proven = await provider.proveAddress(other.user.id, ADDRESS, code)
+      expect(proven[0].userId).toBe(other.user.id)
     }))
 })

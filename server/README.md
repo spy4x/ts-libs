@@ -528,7 +528,9 @@ its first successful sign-in, which rehashes it.
 
 **Sign-up does not prove the address.** The key starts unproven, with `email` equal to its subject,
 the normalised address. Sign-up is refused as `email-taken` when another user owns the address or a
-password key for it already exists.
+password key for it already exists. To prove it, send the signed-in user a code with the email-code
+provider's `requestCode` and pass it to its `proveAddress` (see `server/auth/email-code`): the key
+becomes proven and the user keeps their id and password.
 
 **Sign in by a username with `normalizeSubject`.** The option turns the `email` field of
 `signUp` and `signIn` into the key's subject, or refuses it by returning null; it defaults to
@@ -537,7 +539,14 @@ same dummy-hash verification and rehash as an address. A refused subject answers
 sign-up and `invalid-credentials` at sign-in, and a subject in use answers `email-taken`. The key
 is written with `email: null`, so it never owns, proves or evicts an address, even when the
 username looks like one. `requestReset` and `completeReset` throw a plain `Error` in this mode,
-because they mail the subject; `changePassword` works as usual. Use one normaliser per store.
+because they mail the subject; `changePassword` works as usual.
+
+Use one normaliser per store. Username keys and address keys share the `password` method and so one
+subject namespace: a username shaped like an address (`ann@example.com` taken as a username) blocks
+that address's password sign-up (`email-taken`) and reset (`conflict`) for good, because the username
+key carries no `email` and proving the address never evicts it. The normaliser must not throw: a
+throw rejects `signIn` before its one hash verification, so that subject answers faster than a wrong
+password.
 
 ```ts
 const passwords = createPasswordSignIn({
@@ -585,8 +594,8 @@ used by then, so the person asks for a new one.
 - **It does not hide an address in use at sign-up.** `email-taken` tells the caller; a reset is the
   way in for the address's owner.
 - **It cannot tell a squatter from a person who never proved their own sign-up.** Both lose an
-  unproven account to a reset by branch 2 or 3. Prove the key after sign-up (with an email code) to
-  keep it.
+  unproven account to a reset by branch 2 or 3, and to a code sign-in with `verifyCode`. Prove the
+  address after sign-up with the email-code provider's `proveAddress` to keep it.
 
 ## `server/auth/email-code`
 
@@ -596,7 +605,8 @@ used by then, so the person asks for a new one.
 
 Sign-in with a one-time code sent by email (#57). `requestCode(email)` issues a guess-counted
 challenge and hands the raw code to the app's `sendCode`; `verifyCode(email, code)` checks one guess
-and, on a match, signs the person in and creates a session. Refusals are `EmailCodeError`s with a
+and, on a match, signs the person in and creates a session; `proveAddress(userId, email, code)`
+checks one guess and proves the address for a user who is already signed in. Refusals are `EmailCodeError`s with a
 fixed message per `reason`, which never echoes the input.
 
 ```ts
@@ -610,6 +620,9 @@ const codes = createEmailCodeSignIn({
 
 await codes.requestCode(email)
 const { session } = await codes.verifyCode(email, typedCode)
+
+// A signed-in user proves their own address; userId comes from the validated session.
+await codes.proveAddress(userId, email, typedCode)
 ```
 
 ### What it does
@@ -624,6 +637,43 @@ const { session } = await codes.verifyCode(email, typedCode)
 An email-code key whose user does not own the address is an unproven claim made without receiving
 mail there. It is never proven for its user, because that would sign the mailbox owner in to the
 account of whoever registered it; the proven write of path 2 or 3 deletes it instead.
+
+**A signed-in user proves an address without changing accounts.** `proveAddress(userId, email,
+code)` checks the code exactly as `verifyCode` does, then proves every key of that user that carries
+the address with `proveKey`, or adds a proven email-code key when none does. It creates no user and
+no session. This is the step a password sign-up needs: the unproven password key becomes proven, the
+user owns the address, and a later password sign-in, code sign-in or reset lands in the same user.
+Without it, `verifyCode` for that address creates a new user and evicts the unproven key.
+
+- The code is the same one `requestCode` sends, under the same challenge: it is bound to the
+  address, not to a user. The session proves who asks and the code proves the mailbox, and a code
+  works once, so it only ever serves the person who received it. Binding it to a user as well would
+  add nothing: a person who hands their code to someone else has already handed over a sign-in by
+  `verifyCode`.
+- Another user owning the address is refused with the store's `AuthConflictError("email-owned")`,
+  checked only after the code matched, so the answer never tells someone without the code that the
+  address is taken. Every other user's unproven claim to the address is deleted.
+- An address the user already owns is a success that writes nothing.
+- A soft-deleted user answers `account-deleted` and an unknown id throws a `RangeError`, both before
+  a guess is spent.
+- The returned keys carry `secret`, a password hash for a password key. Keep them on the server and
+  never put them in a response body. Several keys are proven with one `proveKey` each, not in one
+  transaction; a retry with a new code finishes a run that failed part-way.
+
+The route that calls `proveAddress` must:
+
+1. **Take `userId` from the validated session, never from the request.** A user id from the body
+   would let anyone prove an address onto any account.
+2. **Be a state-changing `POST` protected against cross-site submission.** The session cookie of
+   `@spy4x/server/sign-in` is `SameSite=Lax`, which keeps it off a cross-site `POST`, so a
+   POST-only route is covered. An app that authenticates with a bearer token instead needs its own
+   check.
+3. **Show which account is signed in before asking for the code.** Someone can sign a victim in to
+   the attacker's own account (login CSRF); a victim who then types a code would prove their
+   address onto the attacker's account.
+4. **Pass the address it means to verify.** An `email` taken from the form lets a signed-in user
+   attach any address they receive mail at as a new sign-in method. An app that means "verify the
+   address on file" passes the address of the user's key instead.
 
 **Asking again never buys more guesses.** A new code replaces a live one and keeps its guess counter.
 A code is 6 random bytes (8 base64url characters, case-sensitive), valid 10 minutes and for 5
@@ -644,7 +694,8 @@ rejects, the rejection reaches the caller and the code is already issued.
   a code is asked for, and every new code moves the expiry of a locked challenge. Put
   `createRateLimitMiddleware` from `@spy4x/platform/rate-limit` in front of the `requestCode` route
   with two limiters, one keyed by the normalised address and one by `clientIp`, and in front of the
-  `verifyCode` route keyed by `clientIp`. No limiter is built in: the client address exists only in
+  `verifyCode` and `proveAddress` routes keyed by `clientIp`. The guess counter is per address and
+  shared by `verifyCode` and `proveAddress`. No limiter is built in: the client address exists only in
   the HTTP layer, and a built-in one would force a choice of store into the provider.
 - **It does not retry a race.** When another sign-in for the same address writes between the lookup
   and the write, `verifyCode` throws the store's `AuthConflictError`; the code is used by then, and a

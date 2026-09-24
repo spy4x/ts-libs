@@ -1,6 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { SecondFactorStatus, SessionManager } from "../sign-in/mod.ts"
+import { createPasswordHasher, SecondFactorStatus, SessionManager } from "../sign-in/mod.ts"
 import {
   createClock,
   createFakeStore,
@@ -18,13 +18,16 @@ import {
   type EmailCodeSignInDeps,
 } from "./email-code.ts"
 import { MemoryAuthStore } from "./memory-store.ts"
-import type { AuthSessionRecord } from "./model.ts"
+import { AuthConflictError, type AuthSessionRecord } from "./model.ts"
+import { createPasswordSignIn, PASSWORD_METHOD, type PasswordSignIn } from "./password.ts"
 
 const MINUTE = 60_000
 const ADDRESS = "ann@example.com"
 
 interface Harness {
   provider: EmailCodeSignIn
+  /** A password provider over the same store and sessions. */
+  passwords: PasswordSignIn
   store: MemoryAuthStore
   clock: ManualClock
   /** Every code sent, in order. */
@@ -53,11 +56,17 @@ function setup(overrides: Partial<EmailCodeSignInDeps> = {}): Harness {
     },
     ...overrides,
   })
+  const passwords = createPasswordSignIn({
+    store,
+    sessions,
+    clock,
+    hasher: createPasswordHasher({ pepper: PEPPER, iterations: 100_000 }),
+  })
   const codeFor = async (email = ADDRESS) => {
     await provider.requestCode(email)
     return sent[sent.length - 1].code
   }
-  return { provider, store, clock, sent, codeFor }
+  return { provider, passwords, store, clock, sent, codeFor }
 }
 
 async function expectRefusal(
@@ -296,6 +305,185 @@ describe("createEmailCodeSignIn: who owns the address", () => {
     expect(result.key.id).toBe(unproven.id)
     expect(result.key.provenAt?.getTime()).toBe(clock.now())
     expect((await store.listKeys(owner.user.id)).length).toBe(2)
+  })
+})
+
+async function expectConflict(promise: Promise<unknown>, reason: string): Promise<void> {
+  const error = await promise.then(() => null, (caught: unknown) => caught)
+  expect(error).toBeInstanceOf(AuthConflictError)
+  expect((error as AuthConflictError).reason).toBe(reason)
+}
+
+const PASSWORD = "ann-password-1"
+
+describe("createEmailCodeSignIn: proveAddress", () => {
+  it("proves a password sign-up's own key and keeps its user and key", async () => {
+    const { provider, passwords, store, clock, codeFor } = setup()
+    const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+    expect(signedUp.key.provenAt).toBeNull()
+
+    const proven = await provider.proveAddress(signedUp.user.id, "Ann@Example.com", await codeFor())
+
+    expect(proven.map((key) => [key.id, key.method, key.provenAt?.getTime()])).toEqual([
+      [signedUp.key.id, PASSWORD_METHOD, clock.now()],
+    ])
+    expect(await store.findUserIdByProvenEmail(ADDRESS)).toBe(signedUp.user.id)
+    expect((await store.listKeys(signedUp.user.id)).map((key) => key.id)).toEqual([
+      signedUp.key.id,
+    ])
+  })
+
+  it("lands a later password sign-in and code sign-in in the same user", async () => {
+    const { provider, passwords, codeFor } = setup()
+    const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+    await provider.proveAddress(signedUp.user.id, ADDRESS, await codeFor())
+
+    const byPassword = await passwords.signIn({ email: ADDRESS, password: PASSWORD })
+    const byCode = await provider.verifyCode(ADDRESS, await codeFor())
+
+    expect(byPassword.user.id).toBe(signedUp.user.id)
+    expect(byPassword.key.id).toBe(signedUp.key.id)
+    expect(byCode.user.id).toBe(signedUp.user.id)
+  })
+
+  it("adds a proven email-code key when the user has no key for the address", async () => {
+    const { provider, store, codeFor } = setup()
+    const user = await store.createUserWithKey({
+      method: "oauth:google",
+      subject: "google-sub-1",
+      email: null,
+      secret: null,
+      provenAt: null,
+    })
+
+    const proven = await provider.proveAddress(user.user.id, ADDRESS, await codeFor())
+
+    expect(proven.map((key) => [key.userId, key.method, key.subject, key.email])).toEqual([
+      [user.user.id, EMAIL_CODE_METHOD, ADDRESS, ADDRESS],
+    ])
+    expect(proven[0].provenAt).not.toBeNull()
+    expect(await store.findUserIdByProvenEmail(ADDRESS)).toBe(user.user.id)
+  })
+
+  it("succeeds again for an address the user already owns and writes nothing", async () => {
+    const { provider, passwords, store, clock, codeFor } = setup()
+    const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+    const first = await provider.proveAddress(signedUp.user.id, ADDRESS, await codeFor())
+    clock.advance(MINUTE)
+
+    const second = await provider.proveAddress(signedUp.user.id, ADDRESS, await codeFor())
+
+    expect(second).toEqual(first)
+    expect((await store.listKeys(signedUp.user.id)).length).toBe(1)
+  })
+
+  it("refuses an address another user owns proven and changes nothing", async () => {
+    const { provider, passwords, store, codeFor } = setup()
+    const owner = await provider.verifyCode(ADDRESS, await codeFor())
+    const other = await passwords.signUp({ email: "bob@example.com", password: PASSWORD })
+
+    await expectConflict(
+      provider.proveAddress(other.user.id, ADDRESS, await codeFor()),
+      "email-owned",
+    )
+
+    expect(await store.findUserIdByProvenEmail(ADDRESS)).toBe(owner.user.id)
+    expect((await store.listKeys(other.user.id)).map((key) => key.subject)).toEqual([
+      "bob@example.com",
+    ])
+  })
+
+  it("answers wrong-code, not email-owned, for a wrong code on an address someone owns", async () => {
+    const { provider, passwords, codeFor } = setup()
+    await provider.verifyCode(ADDRESS, await codeFor())
+    const other = await passwords.signUp({ email: "bob@example.com", password: PASSWORD })
+    await codeFor()
+    await expectRefusal(provider.proveAddress(other.user.id, ADDRESS, "wrong-00"), "wrong-code")
+  })
+
+  it("evicts a squatter's unproven claim to the address", async () => {
+    const { provider, passwords, store, codeFor } = setup()
+    const squatter = await passwords.signUp({ email: ADDRESS, password: "squatter-pw-1" })
+    const ann = await passwords.signUp({ email: "ann@work.example", password: PASSWORD })
+
+    const proven = await provider.proveAddress(ann.user.id, ADDRESS, await codeFor())
+
+    expect(proven.map((key) => [key.userId, key.method])).toEqual([
+      [ann.user.id, EMAIL_CODE_METHOD],
+    ])
+    expect(await store.listKeys(squatter.user.id)).toEqual([])
+    expect(await store.findKey(PASSWORD_METHOD, ADDRESS)).toBeNull()
+    expect(await store.findUserIdByProvenEmail(ADDRESS)).toBe(ann.user.id)
+  })
+
+  it("refuses a wrong code and counts the guess", async () => {
+    const { provider, passwords, store, codeFor } = setup({ maxAttempts: 2 })
+    const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+    const code = await codeFor()
+
+    await expectRefusal(provider.proveAddress(signedUp.user.id, ADDRESS, "wrong-00"), "wrong-code")
+    await expectRefusal(provider.proveAddress(signedUp.user.id, ADDRESS, "wrong-00"), "wrong-code")
+    await expectRefusal(provider.proveAddress(signedUp.user.id, ADDRESS, code), "locked-out")
+    expect(await store.findUserIdByProvenEmail(ADDRESS)).toBeNull()
+  })
+
+  it("shares the guess counter with verifyCode for the same address", async () => {
+    const { provider, passwords, codeFor } = setup({ maxAttempts: 2 })
+    const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+    const code = await codeFor()
+
+    await expectRefusal(provider.verifyCode(ADDRESS, "wrong-00"), "wrong-code")
+    await expectRefusal(provider.proveAddress(signedUp.user.id, ADDRESS, "wrong-00"), "wrong-code")
+    await expectRefusal(provider.proveAddress(signedUp.user.id, ADDRESS, code), "locked-out")
+  })
+
+  it("refuses an expired code", async () => {
+    const { provider, passwords, clock, codeFor } = setup()
+    const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+    const code = await codeFor()
+    clock.advance(DEFAULT_CODE_TTL_MINUTES * MINUTE)
+
+    await expectRefusal(provider.proveAddress(signedUp.user.id, ADDRESS, code), "no-code")
+  })
+
+  it("refuses a code sent to a different address", async () => {
+    const { provider, passwords, store, codeFor } = setup()
+    const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+    const bobsCode = await codeFor("bob@example.com")
+    await codeFor(ADDRESS)
+
+    await expectRefusal(provider.proveAddress(signedUp.user.id, ADDRESS, bobsCode), "wrong-code")
+    expect(await store.findUserIdByProvenEmail(ADDRESS)).toBeNull()
+    expect(await store.findUserIdByProvenEmail("bob@example.com")).toBeNull()
+  })
+
+  it("accepts a code only once, whether it was used to prove or to sign in", async () => {
+    const { provider, passwords, codeFor } = setup()
+    const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+    const proofCode = await codeFor()
+    await provider.proveAddress(signedUp.user.id, ADDRESS, proofCode)
+    await expectRefusal(provider.verifyCode(ADDRESS, proofCode), "no-code")
+
+    const signInCode = await codeFor()
+    await provider.verifyCode(ADDRESS, signInCode)
+    await expectRefusal(provider.proveAddress(signedUp.user.id, ADDRESS, signInCode), "no-code")
+  })
+
+  it("throws a RangeError for an unknown user without spending a guess", async () => {
+    const { provider, codeFor } = setup()
+    const code = await codeFor()
+    await expect(provider.proveAddress(999, ADDRESS, code)).rejects.toThrow(RangeError)
+    expect((await provider.verifyCode(ADDRESS, code)).key.subject).toBe(ADDRESS)
+  })
+
+  it("refuses an address that is not one and a code that is not a string", async () => {
+    const { provider, passwords } = setup()
+    const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+    await expectRefusal(provider.proveAddress(signedUp.user.id, "nobody", "x"), "invalid-email")
+    await expectRefusal(
+      provider.proveAddress(signedUp.user.id, ADDRESS, 42 as unknown as string),
+      "wrong-code",
+    )
   })
 })
 

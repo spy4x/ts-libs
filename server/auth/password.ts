@@ -16,7 +16,8 @@
  *   reset operations, which mail an address, refuse to run.
  * - **Password sign-up does not prove the address.** The key starts unproven. Sign-up is refused
  *   when another user owns the address, and a completed reset proves it, taking it away from
- *   whoever registered it first.
+ *   whoever registered it first. To keep the account, the signed-in user proves the address with
+ *   `proveAddress` of the email-code provider (`@spy4x/server/auth/email-code`).
  * - **Create before revoke.** A password change or reset stores the new secret and creates the new
  *   session before it signs out the user's other sessions, so a failure part-way never leaves the
  *   person signed out with the old password still working.
@@ -132,8 +133,13 @@ export interface PasswordSignInOptions extends ProviderDeps {
    * - `requestReset` and `completeReset` throw a plain `Error` before doing any work: they deliver a
    *   code to the subject as an address, which a username is not. `changePassword` works as before.
    *
-   * Pick one normaliser per store: keys of both kinds share the `password` method, so an address
-   * provider and a username provider over one store would share one subject namespace.
+   * Pick one normaliser per store. Keys of both kinds share the `password` method and so one subject
+   * namespace. A username shaped like an address (`ann@example.com` taken as a username) then
+   * blocks that address's password sign-up (`email-taken`) and reset (`conflict`) for good: the
+   * username key carries no `email`, so proving the address never evicts it.
+   *
+   * The normaliser must not throw. A throw rejects `signIn` before its one hash verification, so a
+   * subject that makes it throw answers faster than a wrong password.
    */
   normalizeSubject?: (raw: unknown) => string | null
 }
@@ -212,8 +218,8 @@ export interface PasswordSignIn {
    * claim loses: the key goes, and the password is set on the owner's account, or on a new account
    * when nobody owns the address yet. The returned `user` can therefore differ from the one that
    * held the key. The provider cannot tell a squatter from a person who signed up and never proved
-   * the address, so both lose the unproven account this way; prove the key after sign-up to keep
-   * it.
+   * the address, so both lose the unproven account this way. To keep it, prove the address after
+   * sign-up with `proveAddress` of the email-code provider (`@spy4x/server/auth/email-code`).
    *
    * @throws {PasswordSignInError} `invalid-email`, `invalid-password`, `invalid-code`, `locked-out`,
    *     `no-account`, `conflict`.

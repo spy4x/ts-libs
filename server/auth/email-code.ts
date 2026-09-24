@@ -18,6 +18,12 @@
  * mailbox owner in to the account of whoever registered it. Cases 2 and 3 write a proven key, which
  * deletes such a claim in the same write.
  *
+ * `proveAddress` is the other way to use a code: a signed-in user proves an address for their own
+ * account, and no user is created. A person who signed up with a password (an unproven key) calls
+ * it to keep that account: the password key becomes proven, the user owns the address, and a later
+ * code sign-in or password reset lands in the same user. Without it, `verifyCode` for that address
+ * creates a new user and evicts the unproven password key.
+ *
  * **Rate-limit the route that calls `requestCode`.** This module limits guesses per code, not how
  * often a code is asked for, and every new code moves the expiry of a locked challenge. Put
  * `createRateLimitMiddleware` from `@spy4x/platform/rate-limit` in front of that route with two
@@ -32,7 +38,13 @@
 import { randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import { systemClock } from "@spy4x/platform/universal/time"
 import { SecondFactorStatus } from "../sign-in/mod.ts"
-import { type AuthKey, type AuthUser, ChallengeOutcome, normalizeEmail } from "./model.ts"
+import {
+  AuthConflictError,
+  type AuthKey,
+  type AuthUser,
+  ChallengeOutcome,
+  normalizeEmail,
+} from "./model.ts"
 import type { ProviderDeps, SignInResult } from "./provider.ts"
 import type { AuthStore } from "./store.ts"
 
@@ -118,6 +130,30 @@ export interface EmailCodeSignIn {
    *     evicted.
    */
   verifyCode(email: string, code: string): Promise<SignInResult>
+  /**
+   * Proves `email` for the signed-in user `userId` with a code from `requestCode`, and creates no
+   * user and no session. On a match, every key of the user that carries the address is proven with
+   * `proveKey`; when none does, a proven email-code key is added to the user. The user keeps their
+   * id and keys and becomes the owner of the address, and every other user's unproven claim to it
+   * is deleted. An address the user already owns is a success that writes nothing.
+   *
+   * The code is the one `requestCode` sends for sign-in: it is bound to the address, not to a user.
+   * The session proves who asks and the code proves the mailbox, so a code only ever works for the
+   * person who received it, once. Take `userId` from a validated session, never from the request.
+   *
+   * Several keys that carry the address are proven with one `proveKey` each, not in one
+   * transaction. A failure part-way leaves some proven; calling again with a new code finishes the
+   * rest.
+   *
+   * @returns The user's keys that carry the address, all proven, sorted by id. They carry `secret`
+   *     (a password hash for a password key): keep them on the server, never in a response body.
+   * @throws {EmailCodeError} `invalid-email`, `wrong-code`, `locked-out`, `no-code`, or
+   *     `account-deleted` when the user is soft-deleted (checked before a guess is spent).
+   * @throws {AuthConflictError} `email-owned` when another user owns the address; the code is used
+   *     by then. `key-exists` when an email-code key for the address carries no `email`.
+   * @throws {RangeError} When no user has the id `userId`. No guess is spent.
+   */
+  proveAddress(userId: number, email: string, code: string): Promise<AuthKey[]>
 }
 
 /**
@@ -169,7 +205,59 @@ export function createEmailCodeSignIn(deps: EmailCodeSignInDeps): EmailCodeSignI
       const session = await sessions.create({ userId: user.id, keyId: key.id, secondFactor })
       return { user, key, session }
     },
+
+    async proveAddress(userId: number, email: string, code: string): Promise<AuthKey[]> {
+      const address = requireEmail(email)
+      if (typeof code !== "string") throw new EmailCodeError("wrong-code")
+      const user = await store.findUser(userId)
+      if (user === null) throw new RangeError(`no auth user with id ${userId}`)
+      if (user.deletedAt !== null) throw new EmailCodeError("account-deleted")
+      const now = new Date(clock.now())
+      const outcome = await store.attemptChallenge({
+        purpose: EMAIL_CODE_PURPOSE,
+        subject: address,
+        secretHash: await hashCode(address, code.trim()),
+        maxAttempts,
+        now,
+      })
+      if (outcome !== ChallengeOutcome.Matched) throw new EmailCodeError(refusalOf(outcome))
+      return await proveFor(store, user.id, address, now)
+    },
   }
+}
+
+/**
+ * Proves `address` for `userId`, who showed a matching code: proves each of the user's own keys
+ * that carry it, or adds a proven email-code key when none does. Never touches another user's key
+ * except through the eviction `proveKey` and a proven `addKey` perform.
+ *
+ * Ownership is checked only after the code matched, so the answer `email-owned` never tells a
+ * caller without the code that somebody owns the address.
+ */
+async function proveFor(
+  store: AuthStore,
+  userId: number,
+  address: string,
+  now: Date,
+): Promise<AuthKey[]> {
+  const owner = await store.findUserIdByProvenEmail(address)
+  if (owner !== null && owner !== userId) throw new AuthConflictError("email-owned")
+  const carrying = (await store.listKeys(userId)).filter((key) => key.email === address)
+  if (carrying.length === 0) {
+    const key = await store.addKey(userId, {
+      method: EMAIL_CODE_METHOD,
+      subject: address,
+      email: address,
+      secret: null,
+      provenAt: now,
+    })
+    return [key]
+  }
+  const proven: AuthKey[] = []
+  for (const key of carrying) {
+    proven.push(key.provenAt === null ? await store.proveKey(key.id, now) : key)
+  }
+  return proven
 }
 
 /**
