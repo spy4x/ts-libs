@@ -67,6 +67,8 @@ const ENTRIES: Entry[] = [
     specifier: "@spy4x/server/db/postgres",
     capability: "Postgres access, transactions, migrations",
   },
+  { specifier: "@spy4x/server/env-age64", capability: "age64 env encryption (#173)" },
+  { specifier: "@spy4x/platform/browser/cookie", capability: "reading a browser cookie (#140)" },
 ]
 
 /**
