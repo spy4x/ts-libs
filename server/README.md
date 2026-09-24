@@ -1421,6 +1421,28 @@ failed read or write marks the connection dead. Pinned by
 primitive should not write to stdout on a caller's behalf. The caller decides whether connecting is
 worth logging.
 
+**Reconnects itself once the connection dies (#158).** Earlier, a dead connection was permanent:
+every method recorded the failure once and threw `RedisKvStoreConnectionError` forever after,
+even once Redis came back — a long-running process kept returning errors on every call until
+someone restarted it by hand. Now a call that finds the connection dead opens a fresh one first
+(the same `Deno.connect` + `PING` steps `connect()` itself runs), swaps it in, and only then sends
+its command. That is one bounded attempt, not a retry loop: if the reconnect itself fails, this
+call throws `RedisKvStoreConnectionError` with the failed reconnect as `cause`, and the *next*
+call tries again — there are no timers, and a caller that already retries requests (an HTTP
+handler, typically) drives the retry naturally. A command whose own write or read failed in flight
+is never resent after a successful reconnect: this store cannot tell whether Redis had already
+applied it, so that one call still throws and only the next call uses the fresh connection.
+Concurrent calls that all find the connection dead share one in-flight reconnect instead of each
+opening its own socket. `close()` racing a reconnect still leaves no socket open: a reconnect that
+finishes after `close()` ran closes the new connection immediately instead of keeping it.
+
+Pinned by `redis-kv-store.test.ts` (fakes, no real Redis — `shares one reconnect attempt between
+concurrent callers`, `throws when a reconnect fails, and lets the next call try again`, `closes the
+new socket and throws RedisKvStoreClosedError when close() races a reconnect`) and by
+`redis-kv-store.integration.test.ts`'s `recovers on the call after its connection is killed,
+instead of staying dead`, which kills the store's own connection with `CLIENT KILL ID` and shows
+`get` throws once, then succeeds again on the very next call.
+
 ## `server/outbox`
 
 `OutboxProcessor`, `OutboxEvent`, `OutboxPublisher`, `OutboxRepository`, `PostgresOutboxRepository`,
