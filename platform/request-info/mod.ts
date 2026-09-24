@@ -13,3 +13,4 @@ export {
   requestInfoFromContext,
   type RequestInfoOptions,
 } from "./request-info.ts"
+export { type TrustedProxyHeader } from "../rate-limit/client-ip.ts"

@@ -18,7 +18,7 @@ import postgres from "postgres"
 import { buildPostgresOptions, type Sql } from "../db/index.ts"
 import { SecondFactorStatus, SessionManager, SessionStatus } from "../sign-in/mod.ts"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
-import type { AuthSessionRecord } from "./model.ts"
+import { AuthConflictError, type AuthSessionRecord } from "./model.ts"
 import {
   AUTH_POSTGRES_SCHEMA,
   createPostgresAuthStore,
@@ -239,6 +239,53 @@ describe("createPostgresSessionStore driven by SessionManager", () => {
       expect(await sessions.validate(cookieValue)).not.toBeNull()
     }))
 
+  it("clears only the user's active pending second factors, in one conditional write", () =>
+    withDatabase(async ({ sql }) => {
+      const { sessions, ann, store, authStore } = await setup(sql)
+      const bob = await authStore.createUserWithKey(emailKey("password", "bob@example.com"))
+      const make = (secondFactor: SecondFactorStatus, user = ann) =>
+        sessions.create({ userId: user.user.id, keyId: user.key.id, secondFactor })
+      const pending = await make(SecondFactorStatus.Pending)
+      const completed = await make(SecondFactorStatus.Completed)
+      const signedOut = await make(SecondFactorStatus.Pending)
+      expect(await sessions.signOut(signedOut.cookieValue)).toBe(true)
+      const expired = await make(SecondFactorStatus.Pending)
+      await sql`
+        UPDATE auth_sessions SET status = ${SessionStatus.Expired} WHERE id = ${expired.session.id}
+      `
+      const bobs = await make(SecondFactorStatus.Pending, bob)
+
+      await sessions.clearPendingSecondFactors(ann.user.id)
+
+      const stateOf = async (id: number) => {
+        const row = await store.findById(id)
+        return { status: row?.status, secondFactor: row?.secondFactor }
+      }
+      expect(await stateOf(pending.session.id)).toEqual({
+        status: SessionStatus.Active,
+        secondFactor: SecondFactorStatus.NotRequired,
+      })
+      expect(await stateOf(completed.session.id)).toEqual({
+        status: SessionStatus.Active,
+        secondFactor: SecondFactorStatus.Completed,
+      })
+      expect(await stateOf(signedOut.session.id)).toEqual({
+        status: SessionStatus.SignedOut,
+        secondFactor: SecondFactorStatus.Pending,
+      })
+      expect(await stateOf(expired.session.id)).toEqual({
+        status: SessionStatus.Expired,
+        secondFactor: SecondFactorStatus.Pending,
+      })
+      expect(await stateOf(bobs.session.id)).toEqual({
+        status: SessionStatus.Active,
+        secondFactor: SecondFactorStatus.Pending,
+      })
+      expect((await sessions.validate(pending.cookieValue))?.session.secondFactor).toBe(
+        SecondFactorStatus.NotRequired,
+      )
+    }))
+
   it("signs out one session, then every session of the user but one", () =>
     withDatabase(async ({ sql }) => {
       const { sessions, ann, store, authStore } = await setup(sql)
@@ -359,5 +406,214 @@ describe("createPostgresSessionStore driven by SessionManager", () => {
         secondFactor: SecondFactorStatus.NotRequired,
       }).then(() => null, (caught: unknown) => caught)
       expect((error as { code?: string } | null)?.code).toBe("23503")
+    }))
+})
+
+describe("the stores inside the caller's transaction (#161)", () => {
+  /** Thrown by a test to roll its transaction back. */
+  class Abort extends Error {}
+
+  /** An app table referencing the auth user, as a profile table would. */
+  async function createProfiles(sql: Sql): Promise<void> {
+    await sql`
+      CREATE TABLE profiles (
+        user_id integer PRIMARY KEY REFERENCES auth_users (id) ON DELETE CASCADE,
+        name text NOT NULL
+      )
+    `
+  }
+
+  async function countRows(sql: Sql) {
+    const [row] = await sql<
+      { users: number; keys: number; owners: number; sessions: number; profiles: number }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM auth_users) AS users,
+        (SELECT count(*)::int FROM auth_keys) AS keys,
+        (SELECT count(*)::int FROM auth_email_owners) AS owners,
+        (SELECT count(*)::int FROM auth_sessions) AS sessions,
+        (SELECT count(*)::int FROM profiles) AS profiles
+    `
+    return row
+  }
+
+  function newSession(userId: number, keyId: number): Omit<AuthSessionRecord, "id"> {
+    return {
+      userId,
+      keyId,
+      tokenHash: "hash",
+      status: SessionStatus.Active,
+      secondFactor: SecondFactorStatus.NotRequired,
+      expiresAt: new Date(NOW.getTime() + MINUTE),
+    }
+  }
+
+  it("leaves no auth, session or app rows when the caller's transaction throws after the writes", () =>
+    withDatabase(async ({ sql }) => {
+      await createProfiles(sql)
+      const error = await sql.begin(async (tx) => {
+        const { user, key } = await createPostgresAuthStore(tx).createUserWithKey(
+          emailKey("email-code", "ann@example.com", NOW),
+        )
+        await createPostgresSessionStore(tx).create(newSession(user.id, key.id))
+        await tx`INSERT INTO profiles (user_id, name) VALUES (${user.id}, 'Ann')`
+        throw new Abort()
+      }).then(() => null, (caught: unknown) => caught)
+
+      expect(error).toBeInstanceOf(Abort)
+      expect(await countRows(sql)).toEqual({
+        users: 0,
+        keys: 0,
+        owners: 0,
+        sessions: 0,
+        profiles: 0,
+      })
+    }))
+
+  it("commits the auth user, its key, its session and the app row together", () =>
+    withDatabase(async ({ sql }) => {
+      await createProfiles(sql)
+      const created = await sql.begin(async (tx) => {
+        const store = createPostgresAuthStore(tx)
+        const { user, key } = await store.createUserWithKey(
+          emailKey("email-code", "ann@example.com", NOW),
+        )
+        const session = await createPostgresSessionStore(tx).create(newSession(user.id, key.id))
+        await tx`INSERT INTO profiles (user_id, name) VALUES (${user.id}, 'Ann')`
+        // The store reads its own uncommitted write through the same handle.
+        expect(await store.findKeyById(key.id)).toEqual(key)
+        return { user, key, session }
+      })
+
+      expect(await countRows(sql)).toEqual({
+        users: 1,
+        keys: 1,
+        owners: 1,
+        sessions: 1,
+        profiles: 1,
+      })
+      const store = createPostgresAuthStore(sql)
+      expect(await store.findKeyById(created.key.id)).toEqual(created.key)
+      expect(await store.findUserIdByProvenEmail("ann@example.com")).toBe(created.user.id)
+      expect(await createPostgresSessionStore(sql).findById(created.session.id)).toEqual(
+        created.session,
+      )
+    }))
+
+  it("lets the caller catch a taken key and still commit its other writes", () =>
+    withDatabase(async ({ sql }) => {
+      await createProfiles(sql)
+      const ann = await createPostgresAuthStore(sql).createUserWithKey(
+        emailKey("password", "ann@example.com"),
+      )
+
+      const caught = await sql.begin(async (tx) => {
+        await tx`INSERT INTO profiles (user_id, name) VALUES (${ann.user.id}, 'Ann')`
+        const error = await createPostgresAuthStore(tx)
+          .createUserWithKey(emailKey("password", "ann@example.com"))
+          .then(() => null, (thrown: unknown) => thrown)
+        // Postgres refuses every statement after a failed one unless it ran in a savepoint.
+        await tx`UPDATE profiles SET name = 'Ann B' WHERE user_id = ${ann.user.id}`
+        return error
+      })
+
+      expect(caught).toBeInstanceOf(AuthConflictError)
+      expect((caught as AuthConflictError).reason).toBe("key-exists")
+      const [profile] = await sql<{ name: string }[]>`SELECT name FROM profiles`
+      expect(profile.name).toBe("Ann B")
+      expect(await countRows(sql)).toMatchObject({ users: 1, keys: 1, profiles: 1 })
+    }))
+
+  it("rolls back only the refused write's own rows when an owned address is refused", () =>
+    withDatabase(async ({ sql }) => {
+      await createProfiles(sql)
+      const ann = await createPostgresAuthStore(sql).createUserWithKey(
+        emailKey("email-code", "ann@example.com", NOW),
+      )
+
+      const caught = await sql.begin(async (tx) => {
+        await tx`INSERT INTO profiles (user_id, name) VALUES (${ann.user.id}, 'Ann')`
+        // The auth user row is inserted before the address is found taken.
+        return await createPostgresAuthStore(tx)
+          .createUserWithKey(emailKey("oauth:google", "ann@example.com", NOW))
+          .then(() => null, (thrown: unknown) => thrown)
+      })
+
+      expect(caught).toBeInstanceOf(AuthConflictError)
+      expect((caught as AuthConflictError).reason).toBe("email-owned")
+      expect(await countRows(sql)).toEqual({
+        users: 1,
+        keys: 1,
+        owners: 1,
+        sessions: 0,
+        profiles: 1,
+      })
+    }))
+
+  it("clears pending second factors with the caller's transaction, and rolls back with it", () =>
+    withDatabase(async ({ sql }) => {
+      const { user, key } = await createPostgresAuthStore(sql).createUserWithKey(
+        emailKey("password", "ann@example.com"),
+      )
+      const { id } = await createPostgresSessionStore(sql).create({
+        ...newSession(user.id, key.id),
+        secondFactor: SecondFactorStatus.Pending,
+      })
+      const secondFactorOf = async () => {
+        const [row] = await sql<{ second_factor: number }[]>`
+          SELECT second_factor FROM auth_sessions WHERE id = ${id}
+        `
+        return row.second_factor
+      }
+
+      const error = await sql.begin(async (tx) => {
+        await createPostgresSessionStore(tx).clearPendingSecondFactors(user.id)
+        const [row] = await tx<{ second_factor: number }[]>`
+          SELECT second_factor FROM auth_sessions WHERE id = ${id}
+        `
+        expect(row.second_factor).toBe(SecondFactorStatus.NotRequired)
+        throw new Abort()
+      }).then(() => null, (caught: unknown) => caught)
+      expect(error).toBeInstanceOf(Abort)
+      expect(await secondFactorOf()).toBe(SecondFactorStatus.Pending)
+
+      await sql.begin(async (tx) => {
+        await createPostgresSessionStore(tx).clearPendingSecondFactors(user.id)
+      })
+      expect(await secondFactorOf()).toBe(SecondFactorStatus.NotRequired)
+    }))
+
+  it("joins a savepoint the caller opened, and rolls back with it", () =>
+    withDatabase(async ({ sql }) => {
+      await sql.begin(async (tx) => {
+        await tx.savepoint(async (inner) => {
+          await createPostgresAuthStore(inner).createUserWithKey(
+            emailKey("password", "ann@example.com"),
+          )
+          throw new Abort()
+        }).catch((error: unknown) => {
+          if (!(error instanceof Abort)) throw error
+        })
+        await createPostgresAuthStore(tx).createUserWithKey(emailKey("password", "bob@example.com"))
+      })
+
+      const keys = await sql<{ subject: string }[]>`SELECT subject FROM auth_keys`
+      expect(keys.map((key) => key.subject)).toEqual(["bob@example.com"])
+    }))
+
+  it("refuses a multi-statement write through a reserved connection with a TypeError", () =>
+    withDatabase(async ({ sql }) => {
+      const reserved = await sql.reserve()
+      try {
+        const error = await createPostgresAuthStore(reserved)
+          .createUserWithKey(emailKey("password", "ann@example.com"))
+          .then(() => null, (caught: unknown) => caught)
+        expect(error).toBeInstanceOf(TypeError)
+        expect(String(error)).toContain("savepoint")
+      } finally {
+        reserved.release()
+      }
+      const [row] = await sql<{ users: number }[]>`SELECT count(*)::int AS users FROM auth_users`
+      expect(row.users).toBe(0)
     }))
 })

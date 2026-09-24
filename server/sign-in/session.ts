@@ -81,6 +81,16 @@ export interface SessionStore<S extends SessionRecord = SessionRecord> {
    * @returns `true` when an active session was updated.
    */
   completeSecondFactor(id: number): Promise<boolean>
+  /**
+   * Sets `secondFactor` to `NotRequired` on every session of the user whose status is `Active` and
+   * whose `secondFactor` is `Pending`, as one conditional write (for SQL, one `UPDATE … WHERE
+   * user_id = … AND status = active AND second_factor = pending`). A `Completed` session and a
+   * session that is not `Active` are left as they are.
+   *
+   * Optional, so a store written before it existed still type-checks; without it,
+   * {@link SessionManager.clearPendingSecondFactors} throws.
+   */
+  clearPendingSecondFactors?(userId: number): Promise<void>
   /** Sets the status of this session to `SignedOut` if it is `Active`. */
   signOut(id: number): Promise<void>
   /** Sets every `Active` session of the user to `SignedOut`, except `exceptId` when given. */
@@ -252,6 +262,29 @@ export class SessionManager<S extends SessionRecord = SessionRecord> {
    */
   async completeSecondFactor(sessionId: number): Promise<boolean> {
     return await this.#store.completeSecondFactor(sessionId)
+  }
+
+  /**
+   * Stops the user's active sessions from waiting for a second factor the user no longer has: each
+   * one that is `Pending` becomes `NotRequired`, so it passes `isAuthenticated2FA` again once
+   * `hasSecondFactor` answers false for the user. `Completed` sessions already pass and are left
+   * alone; signed-out and expired sessions are never touched.
+   *
+   * A cleared session gave only the first factor, so it now grants what a fresh password sign-in
+   * would. If the password was also changed since, sign those sessions out instead.
+   *
+   * Call it right after the app removes the user's TOTP secret, in the same transaction when there
+   * is one (give that transaction's handle to the store, as `createPostgresSessionStore(tx)`), so
+   * the sessions and the secret change together.
+   *
+   * @throws {TypeError} When the store does not implement `clearPendingSecondFactors`. Doing nothing
+   *     instead would leave the user's pending sessions refused with no sign of why.
+   */
+  async clearPendingSecondFactors(userId: number): Promise<void> {
+    if (typeof this.#store.clearPendingSecondFactors !== "function") {
+      throw new TypeError("the session store does not implement clearPendingSecondFactors")
+    }
+    await this.#store.clearPendingSecondFactors(userId)
   }
 
   /** Marks every active session that has run out as `Expired`. For a periodic job. */

@@ -436,6 +436,46 @@ describe("SessionManager sign-out and second factor", () => {
     expect(rows.get(gone.session.id)?.status).toBe(SessionStatus.SignedOut)
   })
 
+  it("clears only the user's active pending second factors", async () => {
+    const { sessions, rows } = setup()
+    const make = (userId: number, secondFactor: SecondFactorStatus) =>
+      sessions.create({ userId, secondFactor })
+    const pending = await make(7, SecondFactorStatus.Pending)
+    const completed = await make(7, SecondFactorStatus.Completed)
+    const signedOut = await make(7, SecondFactorStatus.Pending)
+    await sessions.signOut(signedOut.cookieValue)
+    const expired = await make(7, SecondFactorStatus.Pending)
+    ;(rows.get(expired.session.id) as SessionRecord).status = SessionStatus.Expired
+    const other = await make(8, SecondFactorStatus.Pending)
+
+    await sessions.clearPendingSecondFactors(7)
+
+    expect(rows.get(pending.session.id)?.secondFactor).toBe(SecondFactorStatus.NotRequired)
+    expect(rows.get(pending.session.id)?.status).toBe(SessionStatus.Active)
+    expect(rows.get(completed.session.id)?.secondFactor).toBe(SecondFactorStatus.Completed)
+    expect(rows.get(signedOut.session.id)).toMatchObject({
+      status: SessionStatus.SignedOut,
+      secondFactor: SecondFactorStatus.Pending,
+    })
+    expect(rows.get(expired.session.id)).toMatchObject({
+      status: SessionStatus.Expired,
+      secondFactor: SecondFactorStatus.Pending,
+    })
+    expect(rows.get(other.session.id)?.secondFactor).toBe(SecondFactorStatus.Pending)
+    expect((await sessions.validate(pending.cookieValue))?.session.secondFactor).toBe(
+      SecondFactorStatus.NotRequired,
+    )
+  })
+
+  it("refuses to clear second factors through a store without the method", async () => {
+    const { clearPendingSecondFactors: _omitted, ...rest } = createFakeStore().store
+    const store: SessionStore = rest
+    const sessions = new SessionManager({ store, pepper: PEPPER, durationMinutes: 60 })
+    await expect(sessions.clearPendingSecondFactors(7)).rejects.toThrow(
+      new TypeError("the session store does not implement clearPendingSecondFactors"),
+    )
+  })
+
   it("marks sessions that ran out as expired, by the injected clock", async () => {
     const { sessions, clock, rows } = setup()
     const early = await sessions.create({ userId: 7, secondFactor: SecondFactorStatus.NotRequired })

@@ -115,10 +115,11 @@ function createFakeSql(options: FakeSqlOptions = {}) {
       }
       const query = render(strings as unknown as TemplateStringsArray, values)
       record(query, handle)
-      // `withLock`'s own three statements answer themselves and do not draw on the
-      // queue. A test scripts what its *driver method* reads; padding the queue for
-      // statements the lock sends is a trap that moves every answer along by one the
-      // moment the lock changes shape.
+      // `withLock`'s own statements — the #156 warm-up query included — answer
+      // themselves and do not draw on the queue. A test scripts what its *driver
+      // method* reads; padding the queue for statements the lock sends is a trap that
+      // moves every answer along by one the moment the lock changes shape.
+      if (query === "SELECT 1") return withValues(Promise.resolve([{ "?column?": 1 }]))
       if (query.includes("current_schema()")) {
         return withValues(Promise.resolve([{ schema: options.currentSchema ?? "public" }]))
       }
@@ -449,8 +450,8 @@ Deno.test("the lock, the run and the unlock all go through the reserved connecti
     `ALTER TABLE "migrations" ADD COLUMN IF NOT EXISTS checksum TEXT`,
     "SELECT pg_advisory_unlock($1)",
   ])
-  // Nothing at all went through the pool.
-  assertEquals(fake.topLevel, [])
+  // Only the warm-up query the #156 fix sends before `reserve()` goes through the pool.
+  assertEquals(fake.topLevel, ["SELECT 1"])
 })
 
 Deno.test("withLock unlocks and releases the connection when the run throws", async () => {
@@ -468,7 +469,7 @@ Deno.test("withLock unlocks and releases the connection when the run throws", as
     "SELECT pg_try_advisory_lock($1) AS locked",
     "SELECT pg_advisory_unlock($1)",
   ])
-  assertEquals(fake.topLevel, [])
+  assertEquals(fake.topLevel, ["SELECT 1"])
   assertEquals(fake.connections(), { reserves: 1, releases: 1 })
 })
 
@@ -648,7 +649,7 @@ Deno.test("inside the lock the transaction is sent as statements on the pinned c
   await driver.withLock(() => driver.applyInTransaction(migration()))
 
   assertEquals(fake.inner, [])
-  assertEquals(fake.topLevel, [])
+  assertEquals(fake.topLevel, ["SELECT 1"])
   assertEquals(fake.reserved, [
     RESOLVED_SCHEMA_PROBE,
     "SELECT pg_try_advisory_lock($1) AS locked",
@@ -675,7 +676,7 @@ Deno.test("a migration that fails inside the lock is rolled back and never recor
     "fake sql rejects",
   )
 
-  assertEquals(fake.topLevel, [])
+  assertEquals(fake.topLevel, ["SELECT 1"])
   assertEquals(fake.reserved, [
     RESOLVED_SCHEMA_PROBE,
     "SELECT pg_try_advisory_lock($1) AS locked",

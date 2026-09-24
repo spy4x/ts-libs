@@ -414,8 +414,26 @@ const sessions = new SessionManager<AuthSessionRecord>({
 ### The model
 
 **A user is an id.** `AuthUser` has an id, `createdAt` and `deletedAt`, nothing else. The app keeps
-its profile in its own table keyed by that id, and creates it after sign-up; no transaction spans
-the library's tables and the app's.
+its profile in its own table keyed by that id.
+
+**The stores join the caller's transaction.** Both stores take either the pool or a transaction
+handle — the `tx` inside the app's own `sql.begin`. On a handle, a store write that needs several
+statements runs in a savepoint of the app's transaction instead of a transaction of its own, so the
+auth user, its key, its session and the app's profile row commit or roll back together:
+
+```ts
+await sql.begin(async (tx) => {
+  const { user, key } = await createPostgresAuthStore(tx).createUserWithKey(newKey)
+  await tx`INSERT INTO profiles (user_id, name) VALUES (${user.id}, ${name})`
+  // Throwing here leaves no auth user, no key and no profile.
+})
+```
+
+A write the store refuses (`AuthConflictError`) rolls back only its own savepoint: the app may catch
+it and still commit the rest. A single-statement method runs on the handle as given, so a statement
+Postgres rejects aborts the app's transaction, and the row locks a method takes last until the app
+commits. The store tells a pool from a handle by shape (`begin` or `savepoint`), so no option is
+needed; a `sql.reserve()` connection has neither and is refused with a `TypeError`.
 
 **A key is one way of signing in.** `method` is a free string (`"password"`, `"email-code"`,
 `"oauth:google"`), so a provider is added by configuration. `subject` identifies the person within
@@ -510,7 +528,39 @@ its first successful sign-in, which rehashes it.
 
 **Sign-up does not prove the address.** The key starts unproven, with `email` equal to its subject,
 the normalised address. Sign-up is refused as `email-taken` when another user owns the address or a
-password key for it already exists.
+password key for it already exists. To prove it, send the signed-in user a code with the email-code
+provider's `requestCode` and pass it to its `proveAddress` (see `server/auth/email-code`): the key
+becomes proven and the user keeps their id and password.
+
+**Sign in by a username with `normalizeSubject`.** The option turns the `email` field of
+`signUp` and `signIn` into the key's subject, or refuses it by returning null; it defaults to
+`normalizeEmail`, so an address-based provider behaves exactly as before. A custom subject gets the
+same dummy-hash verification and rehash as an address. A refused subject answers `invalid-email` at
+sign-up and `invalid-credentials` at sign-in, and a subject in use answers `email-taken`. The key
+is written with `email: null`, so it never owns, proves or evicts an address, even when the
+username looks like one. `requestReset` and `completeReset` throw a plain `Error` in this mode,
+because they mail the subject; `changePassword` works as usual.
+
+Use one normaliser per store. Username keys and address keys share the `password` method and so one
+subject namespace: a username shaped like an address (`ann@example.com` taken as a username) blocks
+that address's password sign-up (`email-taken`) and reset (`conflict`) for good, because the username
+key carries no `email` and proving the address never evicts it. The normaliser must not throw: a
+throw rejects `signIn` before its one hash verification, so that subject answers faster than a wrong
+password.
+
+```ts
+const passwords = createPasswordSignIn({
+  store,
+  sessions,
+  hasher,
+  normalizeSubject: (raw) => {
+    if (typeof raw !== "string") return null
+    const username = raw.trim().toLowerCase()
+    return [...username].length >= 1 && [...username].length <= 50 ? username : null
+  },
+})
+await passwords.signIn({ email: username, password })
+```
 
 **Create before revoke.** `changePassword` (which checks the current password) and `completeReset`
 store the new secret, then create the new session, and only then sign out the user's other sessions.
@@ -544,8 +594,8 @@ used by then, so the person asks for a new one.
 - **It does not hide an address in use at sign-up.** `email-taken` tells the caller; a reset is the
   way in for the address's owner.
 - **It cannot tell a squatter from a person who never proved their own sign-up.** Both lose an
-  unproven account to a reset by branch 2 or 3. Prove the key after sign-up (with an email code) to
-  keep it.
+  unproven account to a reset by branch 2 or 3, and to a code sign-in with `verifyCode`. Prove the
+  address after sign-up with the email-code provider's `proveAddress` to keep it.
 
 ## `server/auth/email-code`
 
@@ -555,7 +605,8 @@ used by then, so the person asks for a new one.
 
 Sign-in with a one-time code sent by email (#57). `requestCode(email)` issues a guess-counted
 challenge and hands the raw code to the app's `sendCode`; `verifyCode(email, code)` checks one guess
-and, on a match, signs the person in and creates a session. Refusals are `EmailCodeError`s with a
+and, on a match, signs the person in and creates a session; `proveAddress(userId, email, code)`
+checks one guess and proves the address for a user who is already signed in. Refusals are `EmailCodeError`s with a
 fixed message per `reason`, which never echoes the input.
 
 ```ts
@@ -569,6 +620,9 @@ const codes = createEmailCodeSignIn({
 
 await codes.requestCode(email)
 const { session } = await codes.verifyCode(email, typedCode)
+
+// A signed-in user proves their own address; userId comes from the validated session.
+await codes.proveAddress(userId, email, typedCode)
 ```
 
 ### What it does
@@ -583,6 +637,43 @@ const { session } = await codes.verifyCode(email, typedCode)
 An email-code key whose user does not own the address is an unproven claim made without receiving
 mail there. It is never proven for its user, because that would sign the mailbox owner in to the
 account of whoever registered it; the proven write of path 2 or 3 deletes it instead.
+
+**A signed-in user proves an address without changing accounts.** `proveAddress(userId, email,
+code)` checks the code exactly as `verifyCode` does, then proves every key of that user that carries
+the address with `proveKey`, or adds a proven email-code key when none does. It creates no user and
+no session. This is the step a password sign-up needs: the unproven password key becomes proven, the
+user owns the address, and a later password sign-in, code sign-in or reset lands in the same user.
+Without it, `verifyCode` for that address creates a new user and evicts the unproven key.
+
+- The code is the same one `requestCode` sends, under the same challenge: it is bound to the
+  address, not to a user. The session proves who asks and the code proves the mailbox, and a code
+  works once, so it only ever serves the person who received it. Binding it to a user as well would
+  add nothing: a person who hands their code to someone else has already handed over a sign-in by
+  `verifyCode`.
+- Another user owning the address is refused with the store's `AuthConflictError("email-owned")`,
+  checked only after the code matched, so the answer never tells someone without the code that the
+  address is taken. Every other user's unproven claim to the address is deleted.
+- An address the user already owns is a success that writes nothing.
+- A soft-deleted user answers `account-deleted` and an unknown id throws a `RangeError`, both before
+  a guess is spent.
+- The returned keys carry `secret`, a password hash for a password key. Keep them on the server and
+  never put them in a response body. Several keys are proven with one `proveKey` each, not in one
+  transaction; a retry with a new code finishes a run that failed part-way.
+
+The route that calls `proveAddress` must:
+
+1. **Take `userId` from the validated session, never from the request.** A user id from the body
+   would let anyone prove an address onto any account.
+2. **Be a state-changing `POST` protected against cross-site submission.** The session cookie of
+   `@spy4x/server/sign-in` is `SameSite=Lax`, which keeps it off a cross-site `POST`, so a
+   POST-only route is covered. An app that authenticates with a bearer token instead needs its own
+   check.
+3. **Show which account is signed in before asking for the code.** Someone can sign a victim in to
+   the attacker's own account (login CSRF); a victim who then types a code would prove their
+   address onto the attacker's account.
+4. **Pass the address it means to verify.** An `email` taken from the form lets a signed-in user
+   attach any address they receive mail at as a new sign-in method. An app that means "verify the
+   address on file" passes the address of the user's key instead.
 
 **Asking again never buys more guesses.** A new code replaces a live one and keeps its guess counter.
 A code is 6 random bytes (8 base64url characters, case-sensitive), valid 10 minutes and for 5
@@ -603,7 +694,8 @@ rejects, the rejection reaches the caller and the code is already issued.
   a code is asked for, and every new code moves the expiry of a locked challenge. Put
   `createRateLimitMiddleware` from `@spy4x/platform/rate-limit` in front of the `requestCode` route
   with two limiters, one keyed by the normalised address and one by `clientIp`, and in front of the
-  `verifyCode` route keyed by `clientIp`. No limiter is built in: the client address exists only in
+  `verifyCode` and `proveAddress` routes keyed by `clientIp`. The guess counter is per address and
+  shared by `verifyCode` and `proveAddress`. No limiter is built in: the client address exists only in
   the HTTP layer, and a built-in one would force a choice of store into the provider.
 - **It does not retry a race.** When another sign-in for the same address writes between the lookup
   and the write, `verifyCode` throws the store's `AuthConflictError`; the code is used by then, and a
@@ -1077,6 +1169,24 @@ connection a run reserved, so the second run used to send its statements on the 
 connection, both held a lock, and the process hung until it was killed. Two concurrent runs are two
 driver objects, which is also what two application instances are.
 
+**A client built with `fetch_types: false` works, not refused** (#156). `withLock` reserves a
+connection with `sql.reserve()`, and on a pool with no idle connection yet — the ordinary case at the
+start of a run — `postgres@3.4.7` has a bug that leaves that call unresolved forever: `ReadyForQuery`
+only hands a freshly opened connection back to a pending `reserve()` through the branch that also
+fetches the driver's array-type OIDs, and `fetch_types: false` skips that branch, so the connection is
+never matched to the reserve call and the run hangs with no error and no log line — reported upstream
+as [porsager/postgres#1219](https://github.com/porsager/postgres/issues/1219); a proposed fix is open
+in [#1220](https://github.com/porsager/postgres/pull/1220) and in no release. `withReservedLock` works
+around it with a plain query on the pool before `reserve()`, which always completes and leaves a
+connection sitting idle, so the `reserve()` right after it takes the pool's synchronous already-idle
+path instead of the one that hangs. One race is not closed by this: if the warm-up connection's ready
+message arrives late or another caller on the pool takes it first, `reserve()` opens a second
+connection that hits the same bug and stays stuck until its `max_lifetime` ends it (30 to 60 minutes
+by default, or until the pool ends when `max_lifetime` is off), leaving the pool one connection short
+meanwhile. See that method's doc comment in `postgres-migrate.ts` for the exact lines, and
+`postgres-migrate.integration.test.ts`'s "against a client built with fetch_types: false" test for the
+reproduction.
+
 **A connection lost mid-run is not a catchable error**, and it cannot be made one from here. The
 server releases the advisory lock when the session ends and the run does not continue, so nothing is
 applied twice; what the caller sees is an uncaught `TypeError: Cannot read properties of null
@@ -1161,12 +1271,13 @@ The building blocks a sign-in method stands on, extracted from the template's AP
 
 ### What it does
 
-**Sessions live in the app's database.** The app implements `SessionStore`, seven operations and no
-more. `SessionRecord` holds only what the session logic reads (id, user id, token hash, status,
-second-factor state, expiry); an app's own columns ride along through the type parameter. The
-store's writes (`extend`, `completeSecondFactor`, the sign-outs, `expire`) must only touch a session
-whose status is `Active`, each as a single conditional write, so a concurrent sign-out is never
-undone. The library cannot check that; the interface's comments state it for whoever implements it.
+**Sessions live in the app's database.** The app implements `SessionStore`: seven operations, and
+an optional eighth, `clearPendingSecondFactors`. `SessionRecord` holds only what the session logic
+reads (id, user id, token hash, status, second-factor state, expiry); an app's own columns ride along
+through the type parameter. The store's writes (`extend`, `completeSecondFactor`,
+`clearPendingSecondFactors`, the sign-outs, `expire`) must only touch a session whose status is
+`Active`, each as a single conditional write, so a concurrent sign-out is never undone. The library
+cannot check that; the interface's comments state it for whoever implements it.
 
 **The cookie value is `<id>:<token>`.** The token is 32 random bytes; the store keeps only its
 HMAC-SHA-256 under the pepper, and the comparison is constant-time. The value is parsed by one exact
@@ -1182,7 +1293,13 @@ request. A store that caches must drop or update its entry on every write the in
 
 **Guards fail closed.** `isAuthenticated1FA` needs a valid session. `isAuthenticated2FA` also needs
 the second factor settled: `Completed`, or `NotRequired` for a user whose `hasSecondFactor` is false.
-A `Pending` session is refused even after the user removes their second factor; it signs in again.
+A `Pending` session stays refused after the user removes their second factor until the app calls
+`sessions.clearPendingSecondFactors(userId)`. Call it right after removing the TOTP secret, in the
+same transaction when there is one: `createPostgresSessionStore(tx).clearPendingSecondFactors(userId)`
+inside the caller's `sql.begin` commits or rolls back with the secret's removal. It turns every
+active `Pending` session of that user into `NotRequired` in one write, and leaves `Completed`,
+signed-out and expired sessions as they are. On a store that does not implement it, the manager
+throws a `TypeError` rather than leaving those sessions locked out without a sign.
 `isAuthorized(check)` applies the same two rules and then answers 403 unless `check` returns `true`.
 A route that never passed through `parseAuth` is refused by every guard.
 

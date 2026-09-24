@@ -273,6 +273,30 @@ describe("guards", () => {
     expect((await get(app, "/admin", cookie)).status).toBe(200)
   })
 
+  it("let a pending session through once the user removed TOTP and its sessions were cleared", async () => {
+    const { app, sessions, users } = setup({
+      users: [
+        { id: 8, hasSecondFactor: true, admin: false },
+        { id: 10, hasSecondFactor: true, admin: false },
+      ],
+    })
+    const own = await signIn(app, 8, SecondFactorStatus.Pending)
+    const other = await signIn(app, 10, SecondFactorStatus.Pending)
+    ;(users.get(8) as User).hasSecondFactor = false
+    ;(users.get(10) as User).hasSecondFactor = false
+    expect(await get(app, "/two", own.cookie)).toMatchObject({
+      status: 401,
+      body: { error: SECOND_FACTOR_REQUIRED },
+    })
+
+    await sessions.clearPendingSecondFactors(8)
+    expect(await get(app, "/two", own.cookie)).toMatchObject({ status: 200, body: { userId: 8 } })
+    expect(await get(app, "/two", other.cookie)).toMatchObject({
+      status: 401,
+      body: { error: SECOND_FACTOR_REQUIRED },
+    })
+  })
+
   it("answer 403 when the app's check refuses, and only after the second factor", async () => {
     const { app, reached } = setup()
     const { cookie } = await signIn(app, 7, SecondFactorStatus.NotRequired)
