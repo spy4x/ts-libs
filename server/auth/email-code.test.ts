@@ -393,6 +393,14 @@ describe("createEmailCodeSignIn: proveAddress", () => {
     ])
   })
 
+  it("answers wrong-code, not email-owned, for a wrong code on an address someone owns", async () => {
+    const { provider, passwords, codeFor } = setup()
+    await provider.verifyCode(ADDRESS, await codeFor())
+    const other = await passwords.signUp({ email: "bob@example.com", password: PASSWORD })
+    await codeFor()
+    await expectRefusal(provider.proveAddress(other.user.id, ADDRESS, "wrong-00"), "wrong-code")
+  })
+
   it("evicts a squatter's unproven claim to the address", async () => {
     const { provider, passwords, store, codeFor } = setup()
     const squatter = await passwords.signUp({ email: ADDRESS, password: "squatter-pw-1" })

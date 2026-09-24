@@ -141,7 +141,12 @@ export interface EmailCodeSignIn {
    * The session proves who asks and the code proves the mailbox, so a code only ever works for the
    * person who received it, once. Take `userId` from a validated session, never from the request.
    *
-   * @returns The user's keys that carry the address, all proven, sorted by id.
+   * Several keys that carry the address are proven with one `proveKey` each, not in one
+   * transaction. A failure part-way leaves some proven; calling again with a new code finishes the
+   * rest.
+   *
+   * @returns The user's keys that carry the address, all proven, sorted by id. They carry `secret`
+   *     (a password hash for a password key): keep them on the server, never in a response body.
    * @throws {EmailCodeError} `invalid-email`, `wrong-code`, `locked-out`, `no-code`, or
    *     `account-deleted` when the user is soft-deleted (checked before a guess is spent).
    * @throws {AuthConflictError} `email-owned` when another user owns the address; the code is used
