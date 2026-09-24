@@ -3,6 +3,7 @@
 
 import { assert, assertEquals, assertNotMatch, assertThrows } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
+import { constantTimeEqualsText } from "@spy4x/platform/tokens"
 import {
   bearerTokenFromEnv,
   bearerTokenFromHeaders,
@@ -79,30 +80,29 @@ describe("constantTimeEquals", () => {
     assertEquals(await constantTimeEquals(FAKE_TOKEN, ""), false)
   })
 
-  it("is a thin, deprecated alias of platform/tokens' constantTimeEqualsText (#71)", async () => {
-    // Source-reading rather than behaviour: the tests above already pin every
-    // observable behaviour of this function, and they would stay green whether
-    // it delegates or reimplements. This test is the one thing that catches a
-    // reviewer "helpfully" inlining logic back into the deprecated alias.
-    const source = await Deno.readTextFile(new URL("./bearer-auth.ts", import.meta.url))
-    assert(
-      source.includes('import { constantTimeEqualsText } from "@spy4x/platform/tokens"'),
-      "bearer-auth.ts must import constantTimeEqualsText from its home",
-    )
-    const start = source.indexOf("export async function constantTimeEquals(")
-    assert(start >= 0, "constantTimeEquals is no longer declared")
-    const bodyStart = source.indexOf("{", start)
-    const bodyEnd = source.indexOf("}", bodyStart)
-    const body = source.slice(bodyStart, bodyEnd + 1).replace(/\s+/g, " ").trim()
-    assertEquals(
-      body,
-      "{ return await constantTimeEqualsText(presented, expected) }",
-      "constantTimeEquals must delegate to constantTimeEqualsText and add no logic of its own",
-    )
-    assert(
-      source.includes("@deprecated Use `constantTimeEqualsText`"),
-      "constantTimeEquals must carry a @deprecated JSDoc tag naming its replacement",
-    )
+  it("agrees with platform/tokens' constantTimeEqualsText on every input (#71 alias)", async () => {
+    // Behaviour proof that the deprecated alias and its home give the same answer,
+    // rather than reading the alias's source: a table wide enough to catch a
+    // reintroduced difference (empty, equal, prefix, different lengths, unicode).
+    const cases: Array<[string, string]> = [
+      ["", ""],
+      ["", FAKE_TOKEN],
+      [FAKE_TOKEN, ""],
+      [FAKE_TOKEN, FAKE_TOKEN],
+      [FAKE_TOKEN, FAKE_TOKEN_WRONG],
+      [FAKE_TOKEN.slice(0, 3), FAKE_TOKEN],
+      ["short", FAKE_TOKEN],
+      [FAKE_TOKEN, "x".repeat(200)],
+      ["café-token-é", "café-token-é"],
+      ["café-token-é", "cafe-token-e"],
+    ]
+    for (const [a, b] of cases) {
+      assertEquals(
+        await constantTimeEquals(a, b),
+        await constantTimeEqualsText(a, b),
+        `constantTimeEquals and constantTimeEqualsText disagree on ${JSON.stringify([a, b])}`,
+      )
+    }
   })
 })
 
@@ -142,8 +142,7 @@ describe("createTokenVerifier", () => {
     // comparison — the two are observationally identical from outside
     // `constantTimeEquals`, and timing is not measurable on a shared runner. So the
     // constant-time property rests on `@std/crypto`'s `timingSafeEqual`, named in
-    // `platform/tokens.ts`'s `constantTimeEqualsText` (this file's `constantTimeEquals` is
-    // now a deprecated alias of it), and two things carry the safety this test cannot: that call, and
+    // `bearer-auth.ts:54`, and two things carry the safety this test cannot: that call, and
     // digesting both sides first — a leak from a non-constant-time comparison is then a
     // leak of SHA-256 output, not of token bytes. The counting assertions below pin the
     // second half of that; nothing in this suite pins the first.
