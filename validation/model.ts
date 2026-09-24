@@ -9,6 +9,7 @@
  * The issue map is keyed by field with a per-field record of issue types, so an application's own
  * checks (`NOT_UNIQUE`, `LINKED_ENTITY_IS_DELETED`) sit beside the schema's and neither overwrites
  * the other.
+ * @module
  */
 
 import { Type } from "arktype"

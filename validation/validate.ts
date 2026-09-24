@@ -6,6 +6,7 @@
  *
  * Nothing here touches a framework, imports another package, or mutates arktype's global config.
  * Strictness (`onUndeclaredKey`) is the host application's decision, not a library's side effect.
+ * @module
  */
 
 import { type ArkErrors, Type } from "arktype"
