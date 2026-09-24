@@ -1538,6 +1538,55 @@ failed read or write marks the connection dead. Pinned by
 primitive should not write to stdout on a caller's behalf. The caller decides whether connecting is
 worth logging.
 
+**Reconnects itself once the connection dies (#158).** Earlier, a dead connection was permanent:
+every method recorded the failure once and threw `RedisKvStoreConnectionError` forever after,
+even once Redis came back — a long-running process kept returning errors on every call until
+someone restarted it by hand. Nothing watches the connection on its own; a dropped socket is
+noticed only when a call next tries to use it. So the first call to reach a dead connection fails
+however late it runs, and while Redis stays unreachable every call after it fails the same way too
+— each one making its own bounded reconnect attempt (shared with whichever other calls happen to
+overlap it), not just the first. A call that finds the connection dead opens a fresh one first (the
+same `Deno.connect` + `PING` steps `connect()` itself runs — each step bounded to its own fixed
+5-second timeout, because a host that is unreachable rather than refusing hangs `Deno.connect`
+itself for the OS's own multi-minute timeout, while a host that accepts the connection and then
+never answers at the Redis protocol level, such as a frozen Redis or a proxy whose backend is down,
+would otherwise hang the `PING` that follows forever instead, even though `Deno.connect` already
+succeeded), swaps it in, and only then sends its command. That is one bounded attempt, not a retry
+loop: if the reconnect itself fails, this call throws
+`RedisKvStoreConnectionError` with the failed reconnect as `cause`, and the next call tries its own
+reconnect again — there are no timers past the connect bound, and a caller that already retries
+requests (an HTTP handler, typically) drives the retry naturally. A command whose own write or read
+failed is never resent after a successful reconnect: this store cannot tell whether Redis had
+already applied it, so that one call still throws and only a later call uses the fresh connection.
+Concurrent calls that all find the connection dead share one in-flight reconnect instead of each
+opening its own socket. `close()` racing a reconnect still leaves no socket open: a reconnect that
+finishes after `close()` ran closes the new connection immediately instead of keeping it. Both
+5-second timeouts are fixed internal constants, not options on `connect()` — values nothing has
+needed to tune yet, and not worth parameters on an otherwise frozen interface.
+
+Net effect for a caller: one Redis restart costs at most one failed call per process (the one that
+happened to reach the dead connection first), plus every call made while Redis is actually down —
+never a permanently broken store, and never a hung one either: a server that accepts the TCP
+connection and then never answers at the protocol level (a frozen Redis, a proxy whose backend is
+down) used to be able to make a reconnect, and every caller sharing it, wait forever for a `PING`
+reply that would never come — no OS timeout bounds a stalled read the way one bounds a stalled
+connect. The 5-second `PING` bound turns that into the same ordinary, catchable failure as any
+other dead connection. This is what let `spy4x/template`'s `crashOnConnectionLoss`
+adapter (which used to exit the whole process on `RedisKvStoreConnectionError`, to force a
+Docker restart back to a working connection) be replaced by ordinary per-request error handling:
+losing one request, or the handful made during the outage, is strictly better than losing every
+in-flight request across the whole process.
+
+Pinned by `redis-kv-store.test.ts` (fakes, no real Redis — `shares one reconnect attempt between
+concurrent callers`, `throws when a reconnect fails, and lets the next call try again`, `closes the
+new socket and throws RedisKvStoreClosedError when close() races a reconnect`, `does not blame a
+late failure from the old connection on the new one`, `times out and rejects instead of hanging
+when Deno.connect never settles`, `times out and rejects instead of hanging when PING never
+answers`) and by `redis-kv-store.integration.test.ts`'s `recovers on the
+call after its connection is killed, instead of staying dead`, which kills the store's own
+connection with `CLIENT KILL ID` and shows the next `get` after the kill throws once, and the one
+after that succeeds again.
+
 ## `server/outbox`
 
 `OutboxProcessor`, `OutboxEvent`, `OutboxPublisher`, `OutboxRepository`, `PostgresOutboxRepository`,
