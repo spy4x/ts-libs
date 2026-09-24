@@ -95,6 +95,10 @@ nothing MCP-specific about it. Both sides of the comparison are SHA-256 digested
 timing. `redactor`/`formatLogLine` strip every configured secret from a log line, so a raw
 `Authorization` header cannot reach a log by accident.
 
+`constantTimeEquals` is `@deprecated` (`#71`): it is now a thin alias of
+`constantTimeEqualsText` from `@spy4x/platform/tokens`, the one home for an arbitrary-text
+constant-time compare. Same signature, same behaviour; new code should import the home directly.
+
 ## Fixes applied at extraction time (`server/http/bounded-body`, `server/http/cors`)
 
 | Source                                       | Bug                                                                                                                                 | Pinned by                                                                     |

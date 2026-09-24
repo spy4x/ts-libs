@@ -20,6 +20,7 @@
 import {
   assert,
   assertEquals,
+  assertFalse,
   assertRejects,
   assertStringIncludes,
   assertThrows,
@@ -3948,5 +3949,26 @@ describe("a disguised byte inside a header name (issue #113)", () => {
     const result = await verifyDkim(attacked, publicKey)
     assertEquals(result.valid, false)
     assertEquals(result.reason, "unsigned additional instances of a signed header: from")
+  })
+})
+
+describe("constant-time compare (#71)", () => {
+  it("uses platform/tokens' constantTimeEqualsText instead of a hand-written XOR loop", async () => {
+    // Behaviour is already pinned by every "body hash mismatch" case above; this is the
+    // one test that would catch a reviewer reintroducing the removed hand-written
+    // `constantTimeEqualBase64` (a length check plus a manual XOR loop over char codes).
+    const source = await Deno.readTextFile(new URL("./dkim-verify.ts", import.meta.url))
+    assert(
+      source.includes('import { constantTimeEqualsText } from "@spy4x/platform/tokens"'),
+      "dkim-verify.ts must import constantTimeEqualsText from its home",
+    )
+    assert(
+      source.includes("constantTimeEqualsText(computedBodyHash, parsed.bodyHash)"),
+      "the body-hash compare must go through constantTimeEqualsText",
+    )
+    assertFalse(
+      source.includes("constantTimeEqualBase64"),
+      "the hand-written constantTimeEqualBase64 must be gone, not just unused",
+    )
   })
 })
