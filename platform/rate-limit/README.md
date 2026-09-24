@@ -12,7 +12,7 @@ Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracte
 | `memory.ts`    | `MemoryRateLimiter` (in-process), `StoreRateLimiter`, the `RateLimitStore` port |
 | `kv.ts`        | `createKvStore` over a three-method `RateLimitKv`, plus `denoKvBackend`         |
 | `hono.ts`      | `createRateLimitMiddleware`, draft-6 `RateLimit-*` headers, `userThenIp`        |
-| `client-ip.ts` | `clientIp()` extraction order and `humanRetry()`                                |
+| `client-ip.ts` | `clientIp()` extraction order, `TrustedProxyHeader` and `humanRetry()`          |
 | `mod.ts`       | Barrel for every public symbol above                                            |
 
 ## Usage
@@ -39,6 +39,9 @@ app.use(createRateLimitMiddleware(limiter, {
 
 Leave `trustedProxy` off (the default) unless a proxy in front strips and rewrites the forwarding
 headers; with it on and no proxy, the limiter is trivially defeated — see the trust boundary below.
+`trustedProxy` also accepts a single header name (`"x-real-ip"`, `"x-forwarded-for"` or
+`"cf-connecting-ip"`) instead of `true`, for a proxy — Traefik's default settings, for one — that
+rewrites only some of the three.
 
 Several instances share one store:
 
@@ -146,15 +149,33 @@ was `c.get?.("auth")`, and its optional chaining silently degraded every request
 With `trustedProxy: false` (the default) only the transport peer address is used. With
 `trustedProxy: true` the order is `CF-Connecting-IP` > first `X-Forwarded-For` hop > `X-Real-IP` >
 peer address. `X-Forwarded-For` is read hop by hop, never as a whole string, because a client
-controls the leading part of that list.
+controls the leading part of that list. Passing one `TrustedProxyHeader` string
+(`"cf-connecting-ip" | "x-forwarded-for" | "x-real-ip"`) instead of `true` reads only that header,
+first hop, then falls back to the peer address — the other two headers are never consulted.
 
-**Every one of those headers is client-controlled unless a proxy strips and rewrites it.** A client
-that reaches the origin directly can forge `X-Forwarded-For` and choose its own bucket, so the
-trusted-proxy boundary is the caller's responsibility. The middleware supports both ends of that
-choice:
+**Every one of those headers is client-controlled unless a proxy strips and rewrites it, and which
+headers a given proxy rewrites differs by proxy** — `trustedProxy: true` trusts all three, which is
+wrong for a proxy that only rewrites some of them:
 
-- **Behind a proxy that rewrites the headers:** pass `trustedProxy: true` to `userThenIp`. Nothing
-  else is needed; the headers are trustworthy because the proxy set them last.
+- **Traefik**, with default settings, overwrites `X-Forwarded-For` and `X-Real-IP` for a client
+  outside `forwardedHeaders.trustedIPs`, but passes `CF-Connecting-IP` through untouched. A client
+  behind Traefik can set `CF-Connecting-IP` to anything it likes, so `trustedProxy: true` behind
+  Traefik reads a forged value first. Pass `trustedProxy: "x-real-ip"` (or `"x-forwarded-for"`)
+  instead, so `CF-Connecting-IP` is never read.
+- **Cloudflare** sets `CF-Connecting-IP` itself. `trustedProxy: "cf-connecting-ip"` is the narrow
+  equivalent of `true` behind Cloudflare alone.
+- **nginx** writes only the headers its own config sets with `proxy_set_header` — there is no
+  built-in default to name here; check the site config for which header (typically
+  `X-Real-IP` and/or `X-Forwarded-For`) it actually rewrites before trusting either.
+
+A client that reaches the origin directly, with no proxy at all, can forge any of the three, so the
+trusted-proxy boundary is always the caller's responsibility. The middleware supports every point on
+that spectrum:
+
+- **Behind a proxy that rewrites every header you might read:** pass `trustedProxy: true` to
+  `userThenIp`. Nothing else is needed.
+- **Behind a proxy that rewrites only one header** (Traefik's default, most nginx configs): pass
+  that header's name, e.g. `trustedProxy: "x-real-ip"`.
 - **No such proxy:** leave `trustedProxy` at its default (`false`) and wire `remoteAddr`, which
   `keyResolver` receives as `context.remoteAddr` (see Usage). Keys then follow the connection's own
   peer address, which a client cannot set.
