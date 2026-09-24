@@ -26,6 +26,7 @@
  */
 
 import { Type, type } from "arktype"
+import { isValidTimeZone } from "@spy4x/time/tz"
 
 /** Highest ASCII control code point, inclusive: the C0 block. */
 export const HEADER_MAX_CODE_POINT = 31
@@ -106,29 +107,24 @@ export function isHoneypotFilled(value: string): boolean {
 /**
  * True when `Intl.DateTimeFormat` accepts `value` as a time zone.
  *
- * There is no zone-name API to ask, so the check is a probe: `Intl` throws `RangeError` for a name
- * its tzdata does not know, and that throw *is* the answer. The probe is code-point exact, which is
- * why `"Europe/Berlin"` and `"UTC"` pass while `"EST5EDT "` — one trailing space — fails.
+ * `@spy4x/time/tz`'s {@link isValidTimeZone} is the canonical version of this probe — the same
+ * `try new Intl.DateTimeFormat("en", { timeZone })` — and this function now delegates to it
+ * instead of repeating the body.
  *
- * `time/tz.ts:107` is the canonical plain version of this predicate (`isValidTimeZone`). A sibling
- * *subpath* import (`@spy4x/time/tz`) does resolve and does pass the publish gate; only the bare
- * `@spy4x/time` specifier fails, because that package declares no `"."` export. The probe is
- * still repeated here, as a decision rather than a constraint: it keeps `@spy4x/platform` free of
- * a cross-package dependency edge (`#17` must not couple to `#2`/`#10`'s packages) for three lines
- * of platform API, not an algorithm. The exported name is {@link isValidTimeZoneName} so this one
- * and the canonical one can not be confused or shadow each other.
+ * The repetition used to be deliberate (issue #71 comment, since overtaken by the owner's request
+ * to merge): the reasoning was that a sibling *subpath* import (`@spy4x/time/tz`, as opposed to
+ * the bare `@spy4x/time` specifier, which fails because that package declares no `"."` export)
+ * would still couple `@spy4x/platform` (`#17`) to `#2`/`#10`'s packages for three lines of
+ * platform API. Verified again here: `deno task publish:dry` still passes with the import in
+ * place (both packages are workspace members, so `deno check` resolves `@spy4x/time` with no
+ * `imports` entry), and `time/tz.test.ts` / `platform/validation/predicates.test.ts` exercise the
+ * same empty-string, garbage-string, padded-string and real-zone cases with no divergence — so the
+ * two probes were never actually different, only duplicated.
  *
- * @see `@spy4x/time/tz` (`isValidTimeZone`) — the implementation a caller with a larger time-zone
- * need should use.
+ * @deprecated Use `isValidTimeZone` from `@spy4x/time/tz`.
  */
 export function isValidTimeZoneName(value: string): boolean {
-  try {
-    // Canonical sibling equivalent: `import { isValidTimeZone } from "@spy4x/time/tz"`.
-    new Intl.DateTimeFormat("en", { timeZone: value })
-    return true
-  } catch {
-    return false
-  }
+  return isValidTimeZone(value)
 }
 
 /**

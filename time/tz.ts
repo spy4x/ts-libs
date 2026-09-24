@@ -108,7 +108,12 @@ function requiredPart(
   return part.value
 }
 
-/** True when `tz` is a zone this runtime's tzdata knows. */
+/**
+ * True when `tz` is a zone this runtime's tzdata knows.
+ *
+ * The one home for this probe (#71): `@spy4x/platform/validation/predicates`'s
+ * `isValidTimeZoneName` delegates here and is `@deprecated`.
+ */
 export function isValidTimeZone(tz: string): boolean {
   try {
     new Intl.DateTimeFormat("en", { timeZone: tz })

@@ -9,6 +9,7 @@ import {
   assertStringIncludes,
 } from "@std/assert"
 import { type } from "arktype"
+import { isValidTimeZone } from "@spy4x/time/tz"
 import {
   DEL_CODE_POINT,
   hasHeaderControlCharacters,
@@ -161,6 +162,21 @@ Deno.test("time zone probe accepts real IANA zone names and rejects unknown, emp
       timeZoneName(zone) instanceof type.errors,
       true,
       `${JSON.stringify(zone)} must be rejected by the refinement`,
+    )
+  }
+})
+
+Deno.test("isValidTimeZoneName delegates to @spy4x/time/tz's isValidTimeZone (#71)", () => {
+  // isValidTimeZoneName is now a deprecated call-through, kept only so an existing import still
+  // works. This pins the delegation itself, not just a coincidentally matching return value, over
+  // every case the two functions' own test suites use: real zones, an unknown name, an empty
+  // string, a lowercase zone and a trailing-space zone.
+  const cases = ["UTC", "Europe/Berlin", "america/new_york", "Not/A_Timezone", "", "Europe/Berlin "]
+  for (const zone of cases) {
+    assertEquals(
+      isValidTimeZoneName(zone),
+      isValidTimeZone(zone),
+      `isValidTimeZoneName and isValidTimeZone must agree on ${JSON.stringify(zone)}`,
     )
   }
 })
