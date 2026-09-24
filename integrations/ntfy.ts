@@ -126,7 +126,7 @@ export interface NtfyPushed {
    * part of a result.
    */
   title: string
-  /** Tags echoed back by ntfy, or `null` when the push carried none. */
+  /** Tags sent in the outgoing request, or `null` when the push carried none. */
   tags: string | null
 }
 
@@ -279,7 +279,7 @@ export class NtfyClient {
   private readonly gate: NotificationSeverity
   private readonly requestTimeoutMs: number
 
-  /** Throws when `config.baseUrl` or `config.topic` is empty or unparseable. */
+  /** Throws when `config.baseUrl` is empty or unparseable, or `config.topic` is empty. */
   constructor(config: NtfyClientConfig, options: NtfyClientOptions = {}) {
     // The trailing slash is dropped **after** the guard, not before it: the
     // guard's rejection text describes the value the caller supplied, and
