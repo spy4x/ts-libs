@@ -38,6 +38,7 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@spy4x/server/request-log`       | Hono request-logging middleware, method/path/status/elapsed only, injected writer    |
 | `@spy4x/server/config`            | `EnvReader` + `loadConfig`: one arktype schema validated against the environment     |
 | `@spy4x/server/kv`                | A Redis-backed key-value store, keys scoped under a caller-supplied prefix           |
+| `@spy4x/server/env-age64`         | Per-value `.env` encryption (`KEY=age64:...`), no `age` binary, no `--allow-run`     |
 | `@spy4x/server/outbox`            | Transactional outbox drain: claim, publish, retry, over a generic SQL table          |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
