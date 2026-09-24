@@ -16,6 +16,8 @@
  * randomness.
  */
 
+import { backoffDelay, type RandomSource } from "@spy4x/platform/universal/async"
+
 /**
  * Computes a delay. `attempt` is 1-based; `retryAfterMs` is set when the
  * provider sent a parseable `Retry-After` header, which wins over backoff.
@@ -25,11 +27,9 @@ export type BackoffFn = (attempt: number, retryAfterMs?: number) => number
 /**
  * A source of numbers in `[0, 1)`, the shape `Math.random` has.
  *
- * Injectable so a test can supply a fixed sequence instead of the platform's
- * real generator: the jitter computation stays testable without becoming
- * predictable in production.
+ * @deprecated Use `RandomSource` from "@spy4x/platform/universal/async".
  */
-export type RandomSource = () => number
+export type { RandomSource }
 
 export interface RetryPolicy {
   /** Total attempts, including the first. 1 or fewer disables retrying. */
@@ -143,21 +143,30 @@ export const parseRetryAfterMs = (value: string | null): number | undefined => {
  * callers that started together. `random` follows `Math.random`'s contract
  * (`[0, 1)`), so a test can inject a fixed sequence and still exercise this
  * exact code path deterministically.
+ *
+ * The capping and jittering is `@spy4x/platform/universal/async`'s
+ * `backoffDelay` (`#71`): this function still owns the exponential growth
+ * formula and the `Retry-After` override, and still returns exactly what it
+ * returned before that extraction.
+ *
+ * @deprecated Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`),
+ * kept for this module's existing 1-based-attempt, `Retry-After`-aware call shape. New code
+ * should call `backoffDelay` directly.
  */
 export const createExponentialBackoff = (
   policy: Pick<RetryPolicy, "baseDelayMs" | "maxDelayMs" | "jitterRatio">,
   random: RandomSource = Math.random,
 ): BackoffFn =>
 (attempt, retryAfterMs) => {
-  const raw = retryAfterMs ?? policy.baseDelayMs * 2 ** (attempt - 1)
-  const clamped = Math.min(Math.max(raw, 0), policy.maxDelayMs)
-  if (policy.jitterRatio <= 0) {
-    return clamped
-  }
-  const span = clamped * policy.jitterRatio
-  const jitter = (random() * 2 - 1) * span
-  const floor = policy.baseDelayMs > 0 ? 1 : 0
-  return Math.round(Math.min(Math.max(clamped + jitter, floor), policy.maxDelayMs))
+  const rawMs = retryAfterMs ?? policy.baseDelayMs * 2 ** (attempt - 1)
+  return backoffDelay({
+    rawMs,
+    maxMs: policy.maxDelayMs,
+    jitterRatio: policy.jitterRatio,
+    mode: "symmetric",
+    minFloorMs: policy.baseDelayMs > 0 ? 1 : 0,
+    random,
+  })
 }
 
 /** Statuses worth another attempt: rate limiting and upstream faults. */
