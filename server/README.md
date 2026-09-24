@@ -1179,12 +1179,13 @@ The building blocks a sign-in method stands on, extracted from the template's AP
 
 ### What it does
 
-**Sessions live in the app's database.** The app implements `SessionStore`, seven operations and no
-more. `SessionRecord` holds only what the session logic reads (id, user id, token hash, status,
-second-factor state, expiry); an app's own columns ride along through the type parameter. The
-store's writes (`extend`, `completeSecondFactor`, the sign-outs, `expire`) must only touch a session
-whose status is `Active`, each as a single conditional write, so a concurrent sign-out is never
-undone. The library cannot check that; the interface's comments state it for whoever implements it.
+**Sessions live in the app's database.** The app implements `SessionStore`: seven operations, and
+an optional eighth, `clearPendingSecondFactors`. `SessionRecord` holds only what the session logic
+reads (id, user id, token hash, status, second-factor state, expiry); an app's own columns ride along
+through the type parameter. The store's writes (`extend`, `completeSecondFactor`,
+`clearPendingSecondFactors`, the sign-outs, `expire`) must only touch a session whose status is
+`Active`, each as a single conditional write, so a concurrent sign-out is never undone. The library
+cannot check that; the interface's comments state it for whoever implements it.
 
 **The cookie value is `<id>:<token>`.** The token is 32 random bytes; the store keeps only its
 HMAC-SHA-256 under the pepper, and the comparison is constant-time. The value is parsed by one exact
@@ -1200,7 +1201,13 @@ request. A store that caches must drop or update its entry on every write the in
 
 **Guards fail closed.** `isAuthenticated1FA` needs a valid session. `isAuthenticated2FA` also needs
 the second factor settled: `Completed`, or `NotRequired` for a user whose `hasSecondFactor` is false.
-A `Pending` session is refused even after the user removes their second factor; it signs in again.
+A `Pending` session stays refused after the user removes their second factor until the app calls
+`sessions.clearPendingSecondFactors(userId)`. Call it right after removing the TOTP secret, in the
+same transaction when there is one: `createPostgresSessionStore(tx).clearPendingSecondFactors(userId)`
+inside the caller's `sql.begin` commits or rolls back with the secret's removal. It turns every
+active `Pending` session of that user into `NotRequired` in one write, and leaves `Completed`,
+signed-out and expired sessions as they are. On a store that does not implement it, the manager
+throws a `TypeError` rather than leaving those sessions locked out without a sign.
 `isAuthorized(check)` applies the same two rules and then answers 403 unless `check` returns `true`.
 A route that never passed through `parseAuth` is refused by every guard.
 
