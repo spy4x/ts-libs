@@ -414,8 +414,26 @@ const sessions = new SessionManager<AuthSessionRecord>({
 ### The model
 
 **A user is an id.** `AuthUser` has an id, `createdAt` and `deletedAt`, nothing else. The app keeps
-its profile in its own table keyed by that id, and creates it after sign-up; no transaction spans
-the library's tables and the app's.
+its profile in its own table keyed by that id.
+
+**The stores join the caller's transaction.** Both stores take either the pool or a transaction
+handle — the `tx` inside the app's own `sql.begin`. On a handle, a store write that needs several
+statements runs in a savepoint of the app's transaction instead of a transaction of its own, so the
+auth user, its key, its session and the app's profile row commit or roll back together:
+
+```ts
+await sql.begin(async (tx) => {
+  const { user, key } = await createPostgresAuthStore(tx).createUserWithKey(newKey)
+  await tx`INSERT INTO profiles (user_id, name) VALUES (${user.id}, ${name})`
+  // Throwing here leaves no auth user, no key and no profile.
+})
+```
+
+A write the store refuses (`AuthConflictError`) rolls back only its own savepoint: the app may catch
+it and still commit the rest. A single-statement method runs on the handle as given, so a statement
+Postgres rejects aborts the app's transaction, and the row locks a method takes last until the app
+commits. The store tells a pool from a handle by shape (`begin` or `savepoint`), so no option is
+needed; a `sql.reserve()` connection has neither and is refused with a `TypeError`.
 
 **A key is one way of signing in.** `method` is a free string (`"password"`, `"email-code"`,
 `"oauth:google"`), so a provider is added by configuration. `subject` identifies the person within
