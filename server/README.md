@@ -656,6 +656,24 @@ Without it, `verifyCode` for that address creates a new user and evicts the unpr
 - An address the user already owns is a success that writes nothing.
 - A soft-deleted user answers `account-deleted` and an unknown id throws a `RangeError`, both before
   a guess is spent.
+- The returned keys carry `secret`, a password hash for a password key. Keep them on the server and
+  never put them in a response body. Several keys are proven with one `proveKey` each, not in one
+  transaction; a retry with a new code finishes a run that failed part-way.
+
+The route that calls `proveAddress` must:
+
+1. **Take `userId` from the validated session, never from the request.** A user id from the body
+   would let anyone prove an address onto any account.
+2. **Be a state-changing `POST` protected against cross-site submission.** The session cookie of
+   `@spy4x/server/sign-in` is `SameSite=Lax`, which keeps it off a cross-site `POST`, so a
+   POST-only route is covered. An app that authenticates with a bearer token instead needs its own
+   check.
+3. **Show which account is signed in before asking for the code.** Someone can sign a victim in to
+   the attacker's own account (login CSRF); a victim who then types a code would prove their
+   address onto the attacker's account.
+4. **Pass the address it means to verify.** An `email` taken from the form lets a signed-in user
+   attach any address they receive mail at as a new sign-in method. An app that means "verify the
+   address on file" passes the address of the user's key instead.
 
 **Asking again never buys more guesses.** A new code replaces a live one and keeps its guess counter.
 A code is 6 random bytes (8 base64url characters, case-sensitive), valid 10 minutes and for 5
