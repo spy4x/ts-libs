@@ -46,13 +46,22 @@ export interface EnvEntry {
   assignment?: EnvAssignment
 }
 
-const ASSIGNMENT = /^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=)(.*)$/
-const KEY_FROM_PREFIX = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=$/
+// Split on the FIRST `=`, exactly like rostok's `line.indexOf("=")` — not restricted to a
+// shell-identifier key, so a `.env.age` rostok produced (rostok never validated the key's
+// character set) still parses here. `export ` is recognised and kept in `prefix` verbatim (for a
+// byte-identical re-render) but stripped from the reported `key`.
+const EXPORT_PREFIX = /^\s*export\s+/
 
-/** Thrown by {@link parseEnvFile} on anything it can't safely round-trip. */
+/**
+ * Thrown by {@link parseEnvFile} on anything it can't safely round-trip. Carries only the line
+ * NUMBER, never the line's own text — a rejected line is exactly the shape most likely to be a
+ * secret (a multi-line PEM block's continuation, a stray `STRIPE_KEY=sk_live_...` with odd
+ * spacing), and an error message is a place secrets leak: it reaches stderr, CI logs, and any
+ * error-reporting service a caller has wired up.
+ */
 export class UnsupportedEnvSyntaxError extends Error {
-  constructor(line: number, text: string) {
-    super(`unsupported env syntax at line ${line}: ${JSON.stringify(text)}`)
+  constructor(line: number) {
+    super(`unsupported env syntax at line ${line}: no '=' found`)
     this.name = "UnsupportedEnvSyntaxError"
   }
 }
@@ -71,11 +80,16 @@ export class CrlfNotSupportedError extends Error {
 
 /**
  * Parse an env file's content into entries. Comments and blank lines pass through verbatim
- * (`raw` only); a `KEY=value` or `export KEY=value` line gets `assignment` set. Any other
- * non-blank, non-comment line — most commonly a continuation of a multi-line value, which neither
+ * (`raw` only); any other line is split on its FIRST `=` into a key and a value — exactly like
+ * rostok's `line.indexOf("=")`, so a `.env.age` rostok produced still parses (rostok never
+ * restricted a key to shell-identifier characters; `my-key=value` is a valid line here too). A
+ * line with no `=` at all — most commonly a continuation of a multi-line value, which neither
  * source repo's format supports — throws {@link UnsupportedEnvSyntaxError} rather than silently
  * treating it as a comment (the bug rostok's permissive parser had: `cli/age.ts:240-244` passed
  * such a line through unchanged, so a multi-line value was quietly mangled instead of rejected).
+ *
+ * `export KEY=value` is recognised: the keyword stays in `prefix` (so a re-render keeps it) but is
+ * stripped from the reported `key`.
  *
  * CRLF is rejected outright with {@link CrlfNotSupportedError}: neither source handled it, and
  * silently keeping or stripping `\r` would risk corrupting a value that legitimately ends in one.
@@ -90,11 +104,11 @@ export function parseEnvFile(content: string, path?: string): EnvEntry[] {
       entries.push({ raw: line })
       return
     }
-    const match = line.match(ASSIGNMENT)
-    if (!match) throw new UnsupportedEnvSyntaxError(index + 1, line)
-    const [, prefix, value] = match
-    const key = prefix.match(KEY_FROM_PREFIX)?.[1]
-    if (!key) throw new UnsupportedEnvSyntaxError(index + 1, line)
+    const eqIndex = line.indexOf("=")
+    if (eqIndex === -1) throw new UnsupportedEnvSyntaxError(index + 1)
+    const prefix = line.slice(0, eqIndex + 1)
+    const value = line.slice(eqIndex + 1)
+    const key = prefix.slice(0, -1).replace(EXPORT_PREFIX, "").trim()
     entries.push({ raw: line, assignment: { prefix, key, value } })
   })
   return entries
@@ -111,7 +125,7 @@ export async function encryptValue(value: string, recipient: string): Promise<st
 /** Decrypt an `age64:<base64>` value with `identity` (an `AGE-SECRET-KEY-1...` string). */
 export async function decryptValue(age64Value: string, identity: string): Promise<string> {
   if (!isAge64Value(age64Value)) {
-    throw new Error(`not an age64 value: ${age64Value.slice(0, 20)}`)
+    throw new Error(`not an age64 value — no '${AGE64_PREFIX}' prefix`)
   }
   const ciphertext = decodeBase64(age64Value.slice(AGE64_PREFIX.length))
   const decrypter = new Decrypter()
@@ -281,6 +295,12 @@ export async function renderEncryptedFile(
  * Render a `.env.age`'s content as its decrypted `.env` form. Throws if any assignment's value is
  * not age64 ciphertext — a plaintext value inside a committed `.env.age` is a sign the file was
  * hand-edited or corrupted, and silently passing it through would hide that.
+ *
+ * Also throws if a decrypted value itself contains `\n` or `\r`: written verbatim, either would
+ * inject one or more extra lines into the plaintext `.env` — a line that a later parse could read
+ * back as an unrelated assignment or comment. Neither source repo guarded against this; nothing
+ * stops a ciphertext (however it got there) from decrypting to a value that isn't safe to place on
+ * a single line, so this module never writes one out.
  */
 export async function renderDecryptedFile(
   content: string,
@@ -296,7 +316,11 @@ export async function renderDecryptedFile(
     if (!isAge64Value(value)) {
       throw new Error(`${key}: plaintext value found in an encrypted file, refusing to decrypt`)
     }
-    lines.push(prefix + await decrypt(value))
+    const decrypted = await decrypt(value)
+    if (decrypted.includes("\n") || decrypted.includes("\r")) {
+      throw new Error(`${key}: decrypted value contains a line break, refusing to write it`)
+    }
+    lines.push(prefix + decrypted)
   }
   return lines.join("\n").replace(/\n*$/, "") + "\n"
 }

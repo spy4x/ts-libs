@@ -51,21 +51,42 @@ Deno.test("parseEnvFile: duplicate keys are both kept as separate entries", () =
 
 Deno.test("parseEnvFile: rejects a multi-line value continuation instead of mangling it", () => {
   const error = assertThrows(
-    () => parseEnvFile("TOKEN=first\nplaintext-continuation\n"),
+    () => parseEnvFile("TOKEN=first\nsecret-continuation\n"),
     UnsupportedEnvSyntaxError,
   )
   assertEquals(error.message.includes("line 2"), true)
+})
+
+Deno.test("parseEnvFile: the syntax error never repeats the rejected line's text", () => {
+  // A rejected line is exactly the shape most likely to BE a secret — a PEM continuation, a
+  // stray `STRIPE_KEY=sk_live_...` with odd spacing — and an error message is a place that
+  // leaks: stderr, CI logs, an error-reporting service. The message must name the line NUMBER
+  // only, never quote the line's own text.
+  const error = assertThrows(
+    () => parseEnvFile("TOKEN=first\nsecret-continuation\n"),
+    UnsupportedEnvSyntaxError,
+  )
+  assertEquals(error.message.includes("secret-continuation"), false)
+})
+
+Deno.test("parseEnvFile: accepts a key rostok accepted but a shell identifier would not", () => {
+  // rostok's own parser never restricted a key's character set (`line.slice(0, eqIdx).trim()`,
+  // no pattern check) — a `.env.age` it produced may carry a key like this, and it must still
+  // parse here rather than being rejected as "unsupported syntax".
+  const entries = parseEnvFile("my-key=value\n")
+  assertEquals(entries[0].assignment, { prefix: "my-key=", key: "my-key", value: "value" })
 })
 
 Deno.test("parseEnvFile: rejects CRLF line endings with a clear error", () => {
   assertThrows(() => parseEnvFile("FOO=bar\r\nBAZ=qux\r\n"), CrlfNotSupportedError)
 })
 
-Deno.test("parseEnvFile: an all-LF file with a literal carriage return in a value is untouched", () => {
+Deno.test("parseEnvFile: a lone \\r inside a value (not a CRLF line ending) is preserved, not rejected", () => {
   // Guards against a naive `.includes("\r")` check that would also reject this — only the
-  // \r\n line-ending sequence is rejected, never a lone \r that happens to be part of a value.
-  const entries = parseEnvFile("FOO=bar\n")
-  assertEquals(entries[0].assignment?.value, "bar")
+  // \r\n line-ending SEQUENCE is rejected. A `\r` that isn't followed by `\n` can only occur
+  // inside a value (line-splitting is on `\n` alone), and must survive untouched.
+  const entries = parseEnvFile("FOO=bar\rbaz\n")
+  assertEquals(entries[0].assignment?.value, "bar\rbaz")
 })
 
 // ─── encryptValue / decryptValue ────────────────────────────────────────
@@ -83,6 +104,14 @@ Deno.test("decryptValue: rejects a value with no age64 prefix", async () => {
     Error,
     "not an age64 value",
   )
+})
+
+Deno.test("decryptValue: the no-prefix error never repeats the rejected value", async () => {
+  const error = await assertRejects(
+    () => decryptValue("sk_live_should_never_be_logged", "AGE-SECRET-KEY-1x"),
+    Error,
+  )
+  assertEquals(error.message.includes("sk_live_should_never_be_logged"), false)
 })
 
 Deno.test("decryptValue: a value encrypted for a DIFFERENT identity fails to decrypt", async () => {
@@ -116,11 +145,16 @@ Deno.test("decryptValue: decrypts a value produced by rostok's current cli/encry
 
 // ─── indexEncryptedFile / renderEncryptedFile: byte-identical re-encryption ─────────────────
 
+// Every encrypt call gets its own random UUID baked into the ciphertext — encrypting the SAME
+// plaintext twice produces two DIFFERENT ciphertexts, the way real age encryption does (a fresh
+// ephemeral key per call). A fake that instead derived the ciphertext deterministically from the
+// plaintext (e.g. `btoa(value)` alone) would make every "stays byte-identical" test pass even if
+// renderEncryptedFile's reuse logic were deleted outright — the assertion would still hold because
+// re-encrypting the same value always yields the same bytes anyway, reuse or not.
 function fakeCrypto() {
-  let sequence = 0
   return {
     encrypt(value: string): Promise<string> {
-      return Promise.resolve(`age64:${++sequence}:${btoa(value)}`)
+      return Promise.resolve(`age64:${crypto.randomUUID()}:${btoa(value)}`)
     },
     decrypt(value: string): Promise<string> {
       return Promise.resolve(atob(value.split(":")[2] ?? ""))
@@ -181,6 +215,24 @@ Deno.test("renderDecryptedFile: rejects a plaintext assignment inside an encrypt
   )
 })
 
+Deno.test("renderDecryptedFile: rejects a decrypted value that contains a newline", async () => {
+  const injecting = { decrypt: () => Promise.resolve("innocent\nATTACKER_KEY=age64:evil") }
+  await assertRejects(
+    () => renderDecryptedFile("A=age64:whatever\n", injecting.decrypt),
+    Error,
+    "line break",
+  )
+})
+
+Deno.test("renderDecryptedFile: rejects a decrypted value that contains a carriage return", async () => {
+  const injecting = { decrypt: () => Promise.resolve("bar\rBAZ=qux") }
+  await assertRejects(
+    () => renderDecryptedFile("A=age64:whatever\n", injecting.decrypt),
+    Error,
+    "line break",
+  )
+})
+
 Deno.test("renderDecryptedFile: decrypts every assignment and keeps comments/blanks", async () => {
   const crypto = fakeCrypto()
   const encrypted = await reencrypt("# header\nA=one\n\nB=two\n")
@@ -189,10 +241,14 @@ Deno.test("renderDecryptedFile: decrypts every assignment and keeps comments/bla
 })
 
 // ─── findGitCommonRoot / resolveKeyFile: pure, read-only logic ─────────────
-// (Cases that need to CREATE a git repo or a worktree on disk live in
-// files.integration.test.ts — the unit tier has no write permission.)
+// (Cases that need to CREATE a git repo or a worktree on disk — including a plain, non-worktree
+// checkout's `.git` directory — live in files.integration.test.ts, built by hand, because the
+// unit tier has no write permission. A version of this test used to read THIS repo's own `.git`
+// and silently return without asserting anything when it happened to be a linked worktree
+// (`.git` is a file, not the directory case it wanted) — a test that can silently do nothing is a
+// test that can't be trusted, so it was moved rather than kept conditional.)
 
-Deno.test("resolveKeyFile: a local .age/key.txt wins outright when cwd has no .git at all", () => {
+Deno.test("resolveKeyFile: falls back to <cwd>/.age/key.txt when neither a local key nor a .git exist", () => {
   // Can't create a directory in the unit tier, so this asserts against a path that
   // deterministically doesn't exist and has no .git — the fallback path.
   const cwd = join(FIXTURES, "no-such-directory")
@@ -201,19 +257,4 @@ Deno.test("resolveKeyFile: a local .age/key.txt wins outright when cwd has no .g
 
 Deno.test("findGitCommonRoot: undefined when cwd has no .git", () => {
   assertEquals(findGitCommonRoot(join(FIXTURES, "no-such-directory")), undefined)
-})
-
-Deno.test("findGitCommonRoot: undefined when this repo's OWN .git is a directory (not a worktree)", () => {
-  // This worktree's own root's .git is a FILE (a linked worktree) — walk up to find a directory
-  // .git instead: the repo's main checkout, which every clone of this repo has.
-  const repoRoot = fromFileUrl(new URL("../..", import.meta.url))
-  const gitPath = join(repoRoot, ".git")
-  const info = Deno.lstatSync(gitPath)
-  if (info.isFile) {
-    // We're in a linked worktree ourselves — this is exactly the case
-    // files.integration.test.ts exercises end to end. Nothing to assert here without
-    // write access, so this test only runs its assertion on a plain checkout.
-    return
-  }
-  assertEquals(findGitCommonRoot(repoRoot), undefined)
 })
