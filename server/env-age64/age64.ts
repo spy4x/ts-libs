@@ -68,7 +68,10 @@ const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]*$/
  * reaches stderr, CI logs, and any error-reporting service a caller has wired up.
  */
 export class UnsupportedEnvSyntaxError extends Error {
-  constructor(line: number, reason: "no '=' found" | "unterminated quote" | "invalid key name") {
+  constructor(
+    line: number,
+    reason: "no '=' found" | "unterminated quote" | "invalid key name" | "carriage return",
+  ) {
     super(`unsupported env syntax at line ${line}: ${reason}`)
     this.name = "UnsupportedEnvSyntaxError"
   }
@@ -124,6 +127,7 @@ export function parseEnvFile(content: string, path?: string): EnvEntry[] {
   const lines = content.split("\n")
   const entries: EnvEntry[] = []
   lines.forEach((line, index) => {
+    if (line.includes("\r")) throw new UnsupportedEnvSyntaxError(index + 1, "carriage return")
     const trimmed = line.trim()
     if (trimmed === "" || trimmed.startsWith("#")) {
       entries.push({ raw: line })

@@ -136,12 +136,9 @@ Deno.test("parseEnvFile: rejects CRLF line endings with a clear error", () => {
   assertThrows(() => parseEnvFile("FOO=bar\r\nBAZ=qux\r\n"), CrlfNotSupportedError)
 })
 
-Deno.test("parseEnvFile: a lone \\r inside a value (not a CRLF line ending) is preserved, not rejected", () => {
-  // Guards against a naive `.includes("\r")` check that would also reject this — only the
-  // \r\n line-ending SEQUENCE is rejected. A `\r` that isn't followed by `\n` can only occur
-  // inside a value (line-splitting is on `\n` alone), and must survive untouched.
-  const entries = parseEnvFile("FOO=bar\rbaz\n")
-  assertEquals(entries[0].assignment?.value, "bar\rbaz")
+Deno.test("parseEnvFile: rejects a lone \\r, which decrypt would refuse to write back", () => {
+  const error = assertThrows(() => parseEnvFile("FOO=bar\rbaz\n"), UnsupportedEnvSyntaxError)
+  assertEquals(error.message.includes("baz"), false)
 })
 
 // ─── encryptValue / decryptValue ────────────────────────────────────────

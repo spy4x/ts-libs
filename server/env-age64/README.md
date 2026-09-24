@@ -83,12 +83,19 @@ text — is thrown for any of three shapes:
   a continuation line of an UNQUOTED multi-line value can itself contain `=` (base64 padding),
   and a naive first-`=` split would read the text before that `=` as a "key" and encrypt only the
   text after it — leaving the rest of the secret sitting in `.env.age` as a plaintext "key name".
-  Rejecting `+`/`/` in a key closes that hole for any base64 continuation line, which needs at
-  least one of them within a normal line length. **A continuation line made of only letters and
-  digits (no `+`, `/`, `=`) is not caught by any of these three checks** — that shape was never
-  valid dotenv in either source repo, and detecting it would need multi-line lookahead this parser
-  doesn't do. Quote every multi-line value, as the second check above requires, and this case
-  cannot arise.
+  Rejecting `+`/`/` in a key closes that hole for most base64 continuation lines, but not all:
+  roughly one random 64-character base64 line in eight contains neither. **A continuation line
+  of an unquoted multi-line value made of letters and digits followed by `=` padding is still
+  read as a key, and that key is committed in plaintext.** That shape was never valid dotenv in
+  either source repo, and detecting it would need multi-line lookahead this parser doesn't do.
+  Quote every multi-line value, as the second check above requires, and this case cannot arise.
+- **A carriage return anywhere in a line** (a lone `\r`, or a file with old Mac line endings).
+  CRLF files get their own clearer error first. A lone `\r` would encrypt, but decrypt refuses
+  to write a value containing a line break, so the committed `.env.age` could not be decrypted.
+
+A comment line is copied into `.env.age` as it is, including a commented-out secret such as
+`# OLD_TOKEN=…`. Both source repos did the same, and the format is kept. Delete a secret rather
+than commenting it out.
 
 A rejected line's text never reaches the error message either way: it is exactly the shape most
 likely to be a secret, and an error message is a place that leaks (stderr, CI logs, an
