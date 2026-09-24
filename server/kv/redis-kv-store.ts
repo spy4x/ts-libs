@@ -16,16 +16,22 @@ import { type Command, RedisClient, RedisError, type Reply } from "@iuioiua/redi
 const SCAN_COUNT = 200
 
 /**
- * How long {@link RedisKvStore.#openConnection} waits for `Deno.connect` before giving
- * up, in both {@link RedisKvStore.connect} and a reconnect.
+ * How long {@link RedisKvStore.#openConnection} waits for `Deno.connect`, and then
+ * separately for `PING` to answer, before giving up — in both
+ * {@link RedisKvStore.connect} and a reconnect.
  *
- * Not configurable, and not exported: `Deno.connect` to a host that is unreachable
- * rather than actively refusing (a firewalled address, a host that stopped answering
- * ARP) hangs for as long as the OS's own connect timeout, on the order of minutes, and
- * every caller sharing the reconnect would hang with it. A fixed bound is enough to
- * turn that into an ordinary, catchable {@link RedisKvStoreConnectionError} instead of
- * a hung request; a per-call override would be another parameter on a frozen public
- * interface for a value nothing so far has needed to tune.
+ * Not configurable, and not exported. Two different hosts hang two different ways,
+ * and both needed a bound: `Deno.connect` to a host that is unreachable rather than
+ * actively refusing (a firewalled address, a host that stopped answering ARP) hangs
+ * for as long as the OS's own connect timeout, on the order of minutes; a host that
+ * accepts the TCP connection and then never answers at the Redis protocol level (a
+ * frozen Redis, a proxy whose backend is down) would hang the `PING` that follows
+ * forever instead, even though `Deno.connect` itself already succeeded. Either way,
+ * every caller sharing the reconnect would hang with it. A fixed bound on each step
+ * is enough to turn both into an ordinary, catchable
+ * {@link RedisKvStoreConnectionError} instead of a hung request; a per-call override
+ * would be another parameter on a frozen public interface for a value nothing so far
+ * has needed to tune.
  */
 const CONNECT_TIMEOUT_MS = 5000
 
@@ -139,19 +145,21 @@ interface OpenedConnection {
  * first call to reach a dead connection fails however long after it died that call
  * happens to run, and (while Redis stays unreachable) every call after it fails the
  * same way, not just that first one. A call that finds the connection dead opens a
- * fresh connection the same way {@link connect} does — `Deno.connect`, bounded to
- * {@link CONNECT_TIMEOUT_MS} so an unreachable host fails like a refusing one instead
- * of hanging the caller, then a `PING` that must answer `PONG` — before it sends
- * anything. That one attempt is bounded: it either replaces the dead connection and
- * the call proceeds, or it fails and the call throws
+ * fresh connection the same way {@link connect} does — `Deno.connect`, then a `PING`
+ * that must answer `PONG`, each bounded to {@link CONNECT_TIMEOUT_MS} on its own, so
+ * neither a host that never answers TCP nor one that accepts the connection and then
+ * never answers `PING` (a frozen Redis, a proxy whose backend is down) can hang the
+ * caller — before it sends anything. That one attempt is bounded: it either replaces
+ * the dead connection and the call proceeds, or it fails and the call throws
  * {@link RedisKvStoreConnectionError} with the failed reconnect as its `cause`,
  * leaving the store exactly where the next call tries its own reconnect again. There
- * are no timers past the connect bound and no retry loop — a caller (an HTTP handler,
- * most often) already retries by nature, one request at a time. Concurrent calls that
- * all find the connection dead share one in-flight reconnect instead of racing to open
- * several sockets. A command whose own write or read failed is never resent after a
- * successful reconnect: this store cannot know whether Redis had already applied it,
- * so that one call still throws, and only the next call uses the fresh connection.
+ * are no timers past the connect and `PING` bounds and no retry loop — a caller (an
+ * HTTP handler, most often) already retries by nature, one request at a time.
+ * Concurrent calls that all find the connection dead share one in-flight reconnect
+ * instead of racing to open several sockets. A command whose own write or read failed
+ * is never resent after a successful reconnect: this store cannot know whether Redis
+ * had already applied it, so that one call still throws, and only the next call uses
+ * the fresh connection.
  */
 export class RedisKvStore {
   #closed = false
@@ -179,10 +187,14 @@ export class RedisKvStore {
    * answers fails like one that refuses rather than hanging every caller), wrap the
    * writable half so a failed write is recorded rather than an unhandled rejection
    * (see {@link trapWriteErrors}), and confirm the connection actually speaks Redis
-   * before handing it back. On any failure the socket this function opened is closed
-   * before it throws — the ported original never closed here, so a `PING` that threw
-   * (an error reply such as `NOAUTH`, or a connection that died before it answered)
-   * left a socket open with nothing left holding a reference to it.
+   * before handing it back — `PING` is bounded by the same
+   * {@link CONNECT_TIMEOUT_MS}, because a server that accepts the TCP connection and
+   * then never answers (a frozen Redis, a proxy whose backend is down) would
+   * otherwise hang here forever even though `Deno.connect` itself already
+   * succeeded. On any failure the socket this function opened is closed before it
+   * throws — the ported original never closed here, so a `PING` that threw (an
+   * error reply such as `NOAUTH`, or a connection that died before it answered) left
+   * a socket open with nothing left holding a reference to it.
    */
   static async #openConnection(hostname: string, port: number): Promise<OpenedConnection> {
     const connection = await Deno.connect({
@@ -196,11 +208,21 @@ export class RedisKvStore {
       writable: trapWriteErrors(connection.writable, connectionError),
     })
     let reply: Reply
+    let timedOut = false
+    const deadline = setTimeout(() => {
+      timedOut = true
+      connection.close()
+    }, CONNECT_TIMEOUT_MS)
     try {
       reply = await client.sendCommand(["PING"])
     } catch (error) {
+      if (timedOut) {
+        throw new DOMException("PING got no reply in time", "TimeoutError")
+      }
       connection.close()
       throw error
+    } finally {
+      clearTimeout(deadline)
     }
     if (reply !== "PONG") {
       connection.close()

@@ -23,10 +23,12 @@ import {
 
 const originalConnect = Deno.connect
 const originalAbortTimeout = AbortSignal.timeout
+const originalSetTimeout = globalThis.setTimeout
 
 afterEach(() => {
   Deno.connect = originalConnect
   AbortSignal.timeout = originalAbortTimeout
+  globalThis.setTimeout = originalSetTimeout
 })
 
 /** One line of a RESP reply, as `+OK`, `$-1` (null), `$5\r\nhello`, etc. */
@@ -56,12 +58,17 @@ interface FakeConn {
 
 /**
  * A `Deno.TcpConn`-shaped fake: a controllable `readable`/`writable` pair and a
- * `close()` that only ever flips a flag `RedisKvStore` never inspects here. Every
- * other `Deno.TcpConn` member (`rid`, `localAddr`, ...) is unused by `RedisClient` or
- * by this module, so the cast is the honest way to say "only these three matter".
+ * `close()` that both flips a flag `RedisKvStore` never inspects here and ends the
+ * readable side, the way closing a real socket ends its own read side too — needed
+ * so a `close()` called while a read is pending (the `PING` deadline in
+ * `#openConnection`, in particular) actually unblocks it instead of leaving it
+ * hanging forever. Every other `Deno.TcpConn` member (`rid`, `localAddr`, ...) is
+ * unused by `RedisClient` or by this module, so the cast is the honest way to say
+ * "only these three matter".
  */
 function createFakeConn(): FakeConn {
   let readController: ReadableStreamDefaultController<Uint8Array> | undefined
+  let readableSettled = false
   const readable = new ReadableStream<Uint8Array>({
     start(controller) {
       readController = controller
@@ -85,7 +92,12 @@ function createFakeConn(): FakeConn {
       readable,
       writable,
       close() {
+        if (state.closed) return
         state.closed = true
+        if (!readableSettled) {
+          readableSettled = true
+          readController?.error(new Error("fake connection closed locally"))
+        }
       },
     } as unknown as Deno.TcpConn,
     writes,
@@ -93,6 +105,7 @@ function createFakeConn(): FakeConn {
       readController?.enqueue(encodeReply(line))
     },
     breakConnection() {
+      readableSettled = true
       readController?.error(new Error("fake connection broke"))
     },
     failNextWrite(error) {
@@ -301,6 +314,40 @@ describe("RedisKvStore reconnecting after a dead connection", () => {
 
     const failure = await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
     assertEquals((failure.cause as DOMException).name, "TimeoutError")
+
+    store.close()
+  })
+
+  it("times out and rejects instead of hanging when PING never answers", async () => {
+    const { store, conns } = await connectFake()
+    conns[0].breakConnection()
+    await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+
+    // A connection that accepts the reconnect's Deno.connect just fine but never
+    // answers PING at all — a frozen Redis, or a proxy whose backend is down. No
+    // reply is ever queued on it.
+    const replacement = createFakeConn()
+    Deno.connect = (() => Promise.resolve(replacement.conn)) as unknown as typeof Deno.connect
+
+    // Stubs setTimeout itself instead of waiting out the real 5-second bound: the
+    // deadline timer #openConnection sets for PING fires on the next tick instead
+    // of after CONNECT_TIMEOUT_MS. clearTimeout is untouched, so the normal
+    // (PING-answers-in-time) path this stub does not exercise still cancels its
+    // deadline exactly as it does outside tests.
+    globalThis.setTimeout =
+      ((callback: () => void) => originalSetTimeout(callback, 0)) as typeof setTimeout
+
+    const failure = await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+    assertEquals((failure.cause as DOMException).name, "TimeoutError")
+
+    // The next call makes its own fresh attempt rather than reusing the timed-out
+    // connection.
+    globalThis.setTimeout = originalSetTimeout
+    const secondReplacement = createFakeConn()
+    secondReplacement.reply("+PONG")
+    secondReplacement.reply("$-1") // GET "k" -> null
+    Deno.connect = (() => Promise.resolve(secondReplacement.conn)) as unknown as typeof Deno.connect
+    assertEquals(await store.get("k"), null)
 
     store.close()
   })
