@@ -246,7 +246,7 @@ export function findGitCommonRoot(cwd: string): string | undefined {
 /**
  * Resolve the `.age/key.txt` this `cwd` should use: `<cwd>/.age/key.txt` when it exists, otherwise
  * the main checkout's, found via {@link findGitCommonRoot}, otherwise `<cwd>/.age/key.txt` again
- * (a path that may not exist — callers check with {@link keyFileExists} or by reading it).
+ * (a path that may not exist — callers find out by reading it).
  */
 export function resolveKeyFile(cwd: string): string {
   const local = join(cwd, ".age", "key.txt")
@@ -257,15 +257,6 @@ export function resolveKeyFile(cwd: string): string {
   const mainRoot = findGitCommonRoot(cwd)
   if (mainRoot !== undefined) return join(mainRoot, ".age", "key.txt")
   return local
-}
-
-/** True when `resolveKeyFile(cwd)` names a file that actually exists. */
-export function keyFileExists(cwd: string): boolean {
-  try {
-    return Deno.statSync(resolveKeyFile(cwd)).isFile
-  } catch {
-    return false
-  }
 }
 
 /** One occurrence of a key's value in a previously encrypted file. */

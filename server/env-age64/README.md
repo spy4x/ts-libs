@@ -42,7 +42,7 @@ AGE-SECRET-KEY-1...
 ```
 
 `<root>/.age/key.txt` should be gitignored — it is the one file that must never be committed. In a
-linked git worktree that hasn't copied its own key yet, `resolveKeyFile` falls back to the MAIN
+linked git worktree that hasn't copied its own key yet, the key lookup falls back to the MAIN
 checkout's key: it finds the main checkout by reading the worktree's `.git` file (a `gitdir: ...`
 pointer) and that directory's `commondir` file, never by running `git` or reading a `GIT_*`
 environment variable. That is deliberate: a parent process (a pre-commit hook running its own git
@@ -63,7 +63,8 @@ to poison.
 | `parseEnvFile(content)`              | Parse an env file's lines into `EnvEntry[]`; throws on anything it can't round-trip |
 
 `readAgeKey(root)` is exported too: it returns the key file's path, identity and recipient, which
-a caller of `decryptValue` or `encryptValue` needs. The entry point also exports the types above,
+a caller of `decryptValue` or `encryptValue` needs. The entry point also exports the types
+`AgeKey`, `AgeStatus`, `GenerateAgeKeyResult`, `EnvEntry` and `EnvAssignment`,
 `AGE64_PREFIX`, `isAge64Value`, and the two parse errors. Everything else (key lookup, discovery,
 the atomic write, the renderers) is internal, so it can change without a 2.0.
 
