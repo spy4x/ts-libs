@@ -203,13 +203,14 @@ describe("RedisKvStore against a real server", () => {
     await assertRejects(() => store.reset(), RedisKvStoreClosedError)
   })
 
-  it("rejects instead of crashing once the connection is killed", async () => {
+  it("recovers on the call after its connection is killed, instead of staying dead", async () => {
     const settings = redisSettings()
     await requireReachable(settings.address)
 
     const prefix = uniqueKeyPrefix("it_kv_killed")
     const store = await RedisKvStore.connect(settings.hostname, settings.port, prefix)
     const ownId = await store.clientId()
+    await store.set("k", "before-kill", 60)
 
     const adminConnection = await Deno.connect({ hostname: settings.hostname, port: settings.port })
     const admin = new RedisClient(adminConnection)
@@ -219,14 +220,17 @@ describe("RedisKvStore against a real server", () => {
       // another worktree's connection to this shared container.
       await admin.sendCommand(["CLIENT", "KILL", "ID", ownId])
 
-      // Reaching these assertions at all is most of what this test proves: the ported
-      // original crashed the whole process here instead of rejecting.
-      const first = await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
-      // The failure is remembered rather than the dead connection being tried again:
-      // a second call fails the same way, with the exact same recorded cause.
-      const second = await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
-      assertEquals(second.cause, first.cause)
+      // The call whose own read or write was in flight when the kill landed still
+      // rejects: this store cannot know whether Redis had already applied it, so it
+      // is thrown, not silently retried on the new connection.
+      await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+
+      // Exactly the next call finds the connection dead, opens a fresh one and
+      // succeeds — the one bounded reconnect attempt the design promises, not a
+      // retry loop or a store stuck throwing forever.
+      assertEquals(await store.get("k"), "before-kill")
     } finally {
+      await store.reset()
       adminConnection.close()
       store.close()
     }
