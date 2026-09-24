@@ -69,17 +69,34 @@ financy, antonshubin.com and dotfiles) that wants one piece without the whole fi
 ## Parsing a line
 
 A comment or blank line passes through verbatim. Anything else is split on its FIRST `=` into a
-key and a value — like rostok's own parser, a key isn't restricted to shell-identifier characters,
-so `my-key=value` is a valid line. `export KEY=value` is recognised: the keyword stays in the
-rendered line but is stripped from the reported key. A line with no `=` at all — most commonly a
-continuation of a multi-line value, which this format doesn't support — throws
-`UnsupportedEnvSyntaxError`, naming only the line NUMBER, never its text: a rejected line is
-exactly the shape most likely to be a secret, and an error message is a place that leaks (stderr,
-CI logs, an error-reporting service).
+key and a value. `export KEY=value` is recognised: the keyword stays in the rendered line but is
+stripped from the reported key. `UnsupportedEnvSyntaxError` naming only the line NUMBER — never its
+text — is thrown for any of three shapes:
+
+- **No `=` at all** — most commonly a continuation of a multi-line value, which this format
+  doesn't support.
+- **A value that opens a quote (`"` or `'`) and doesn't close it on the SAME line** — the other
+  shape a multi-line value's first line takes.
+- **A key that doesn't match `^[A-Za-z_][A-Za-z0-9_.-]*$`** (after an `export` prefix is
+  stripped). This still accepts rostok-style `my-key` and `a.b` — a key isn't restricted to shell
+  identifier characters — but excludes `+` and `/`. Both checks above exist because of this one:
+  a continuation line of an UNQUOTED multi-line value can itself contain `=` (base64 padding),
+  and a naive first-`=` split would read the text before that `=` as a "key" and encrypt only the
+  text after it — leaving the rest of the secret sitting in `.env.age` as a plaintext "key name".
+  Rejecting `+`/`/` in a key closes that hole for any base64 continuation line, which needs at
+  least one of them within a normal line length. **A continuation line made of only letters and
+  digits (no `+`, `/`, `=`) is not caught by any of these three checks** — that shape was never
+  valid dotenv in either source repo, and detecting it would need multi-line lookahead this parser
+  doesn't do. Quote every multi-line value, as the second check above requires, and this case
+  cannot arise.
+
+A rejected line's text never reaches the error message either way: it is exactly the shape most
+likely to be a secret, and an error message is a place that leaks (stderr, CI logs, an
+error-reporting service).
 
 ## What it refuses
 
-- A line with no `=` — see above.
+- A line with no `=`, an unterminated quote, or an invalid key name — see "Parsing a line" above.
 - CRLF line endings — `CrlfNotSupportedError`. Convert the file to LF first.
 - A decrypted value containing `\n` or `\r` — writing it verbatim would inject an extra line into
   the plaintext `.env` that a later parse could read back as an unrelated assignment.
