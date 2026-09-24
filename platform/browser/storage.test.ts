@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 import { type } from "arktype"
+import { MemoryKeyValueStore } from "@spy4x/realtime"
 
 import { makeStorage, memoryStorage, type StorageLike } from "./storage.ts"
 
@@ -158,6 +159,17 @@ describe("makeStorage with a schema", () => {
     const store = makeStorage(storage, "theme", { schema: themeSchema })
     store.set("light")
     expect(storage.getItem("theme")).toBe(`"light"`)
+  })
+})
+
+describe("StorageLike", () => {
+  it("is satisfied by @spy4x/realtime's MemoryKeyValueStore, unchanged", () => {
+    // StorageLike is now an alias of @spy4x/realtime's KeyValueStore: the two are literally the
+    // same type, so its own store must work here without any adapter.
+    const backing: StorageLike = new MemoryKeyValueStore()
+    const store = makeStorage(backing, "theme", { schema: themeSchema })
+    expect(store.set("dark").status).toBe("ok")
+    expect(store.get()).toEqual({ status: "ok", value: "dark" })
   })
 })
 

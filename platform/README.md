@@ -75,11 +75,11 @@ Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `get
 and `downloadResponseAsFile` all take their DOM surface (`document`, `Storage`, the object-URL
 factory, a timer) as a parameter, defaulting to the real global only when the caller passes none.
 
-| Module             | Contents                                                                                            |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| `browser/cookie`   | `getCookie`                                                                                         |
-| `browser/download` | `downloadResponseAsFile`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter` |
-| `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike`, `TypedStorage`                                       |
+| Module             | Contents                                                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `browser/cookie`   | `getCookie`                                                                                                             |
+| `browser/download` | `downloadResponseAsFile`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                     |
+| `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `@spy4x/realtime`'s `KeyValueStore`), `TypedStorage` |
 
 `browser/cookie` fixes two bugs in the `getCookie` copies apps carried before it had a home here: it
 splits `document.cookie` instead of building a `RegExp` from the cookie name (a name containing `.`
@@ -280,6 +280,14 @@ const result: Result<number> = tryParse(text) // returns: malformed input is exp
 
 `ErrType` is the discriminant. `ValidationError` is **re-exported** from `@spy4x/validation`, not
 redeclared: this package does not own a validation model.
+
+## Dependency on `@spy4x/realtime` (type-only)
+
+`browser/storage.ts`'s `StorageLike` is a deprecated alias of `@spy4x/realtime`'s `KeyValueStore` —
+the two interfaces were identical duplicates (#71), and `@spy4x/realtime` was picked as the home
+because it has no dependency of its own, while `browser/storage.ts` sits in a module that already
+pulls in `@spy4x/validation`. The import is `import type`, erased at compile time, so it adds
+nothing to what a browser consumer downloads at runtime.
 
 ## Dependency on `@spy4x/validation`
 
