@@ -1,5 +1,7 @@
 /**
- * Small text helpers for UI copy: a list-filter match and a naive English pluraliser.
+ * Small, dependency-free text helpers: a list-filter match (`search`), a naive English pluraliser
+ * (`pluralize`), a kebab-case converter (`convertToKebabCase`), edit distance and a normalised
+ * similarity score (`levenshtein`, `similarity`), and a UTF-8 byte-length count (`utf8ByteLength`).
  *
  * @module
  */
