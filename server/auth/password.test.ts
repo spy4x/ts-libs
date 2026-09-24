@@ -599,6 +599,23 @@ describe("createPasswordSignIn: a custom normalizeSubject (a username)", () => {
     await expect(store.proveKey(early.key.id, new Date(0))).rejects.toThrow(TypeError)
   })
 
+  it("lets an address-shaped username block that address's password sign-up and reset", async () => {
+    const { provider, store, sessions, clock } = usernameSetup()
+    await provider.signUp({ email: ANN, password: "correct horse" })
+    const addresses = createPasswordSignIn({
+      store,
+      sessions,
+      clock,
+      hasher: createPasswordHasher({ pepper: PEPPER, iterations: ITERATIONS }),
+    })
+
+    expect((await refusal(addresses.signUp({ email: ANN, password: "battery staple" }))).reason)
+      .toBe("email-taken")
+    const { code } = await addresses.requestReset({ email: ANN })
+    const reset = addresses.completeReset({ email: ANN, code, newPassword: "battery staple" })
+    expect((await refusal(reset)).reason).toBe("conflict")
+  })
+
   it("refuses both reset operations with a plain Error before any store write", async () => {
     const { provider, store } = usernameSetup()
     await provider.signUp({ email: "ann", password: "correct horse" })
