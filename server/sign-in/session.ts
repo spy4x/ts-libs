@@ -270,6 +270,9 @@ export class SessionManager<S extends SessionRecord = SessionRecord> {
    * `hasSecondFactor` answers false for the user. `Completed` sessions already pass and are left
    * alone; signed-out and expired sessions are never touched.
    *
+   * A cleared session gave only the first factor, so it now grants what a fresh password sign-in
+   * would. If the password was also changed since, sign those sessions out instead.
+   *
    * Call it right after the app removes the user's TOTP secret, in the same transaction when there
    * is one (give that transaction's handle to the store, as `createPostgresSessionStore(tx)`), so
    * the sessions and the secret change together.

@@ -283,6 +283,7 @@ describe("guards", () => {
     const own = await signIn(app, 8, SecondFactorStatus.Pending)
     const other = await signIn(app, 10, SecondFactorStatus.Pending)
     ;(users.get(8) as User).hasSecondFactor = false
+    ;(users.get(10) as User).hasSecondFactor = false
     expect(await get(app, "/two", own.cookie)).toMatchObject({
       status: 401,
       body: { error: SECOND_FACTOR_REQUIRED },
