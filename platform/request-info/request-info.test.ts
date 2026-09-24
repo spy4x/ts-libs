@@ -65,6 +65,22 @@ describe("requestInfoFromContext — trust boundary", () => {
     const info = await call(buildApp({ trustedProxy: true, remoteAddr: "192.0.2.1" }))
     expect(info.ip).toBe("192.0.2.1")
   })
+
+  it("passes a single trusted header name through to clientIp, ignoring the others", async () => {
+    const info = await call(buildApp({ trustedProxy: "x-real-ip", remoteAddr: "192.0.2.1" }), {
+      "cf-connecting-ip": "203.0.113.9",
+      "x-real-ip": "198.51.100.7",
+    })
+    expect(info.ip).toBe("198.51.100.7")
+  })
+
+  it("falls back to remoteAddr, not another header, when the named header is absent", async () => {
+    const info = await call(buildApp({ trustedProxy: "x-real-ip", remoteAddr: "192.0.2.1" }), {
+      "cf-connecting-ip": "203.0.113.9",
+      "x-forwarded-for": "198.51.100.7",
+    })
+    expect(info.ip).toBe("192.0.2.1")
+  })
 })
 
 describe("requestInfoFromContext — requestId and userAgent", () => {
