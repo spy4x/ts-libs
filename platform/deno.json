@@ -32,6 +32,7 @@
     "./universal/errors": "./universal/errors.ts",
     "./universal/format-number": "./universal/format-number.ts",
     "./universal/key-value-store": "./universal/key-value-store.ts",
+    "./universal/money": "./universal/money.ts",
     "./universal/result": "./universal/result.ts",
     "./universal/schema": "./universal/schema.ts",
     "./universal/text": "./universal/text.ts",
