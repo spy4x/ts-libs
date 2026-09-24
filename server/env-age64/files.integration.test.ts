@@ -527,6 +527,33 @@ Deno.test("encryptEnvFiles: rejects CRLF line endings with a clear error, writes
   }
 })
 
+Deno.test(
+  "encryptEnvFiles: an unquoted multi-line value's base64 continuation is refused, not half-encrypted as a fake key",
+  async () => {
+    // The exact review-round repro: an SSH key pasted across two lines with no surrounding
+    // quotes. Line 2's "SECONDHALF+q9x/Zk4Tb8ZzW1vA==" would, without the quote/key-name checks,
+    // parse as its own assignment — key "SECONDHALF+q9x/Zk4Tb8ZzW1vA" (kept in PLAINTEXT, since
+    // only the "value" after ITS `=` gets encrypted), silently splitting the real secret between
+    // a plaintext "key name" and a separately encrypted fragment in .env.age.
+    const root = await createScratchFolder("age64_multiline_leak")
+    try {
+      await generateAgeKey(root)
+      await Deno.writeTextFile(
+        join(root, ".env"),
+        'SSH_KEY="AAAAB3NzaC1yc2EFIRSTHALF\nSECONDHALF+q9x/Zk4Tb8ZzW1vA==\n',
+      )
+
+      const error = await assertRejects(() => encryptEnvFiles(root), Error)
+      assertEquals(error.message.includes("AAAAB3NzaC1yc2E"), false)
+      assertEquals(error.message.includes("SECONDHALF"), false)
+      assertEquals(error.message.includes("q9x/Zk4Tb8ZzW1vA"), false)
+      assertEquals(await Deno.stat(join(root, ".env.age")).then(() => true, () => false), false)
+    } finally {
+      await removeScratchFolder(root)
+    }
+  },
+)
+
 Deno.test("encryptEnvFiles: without a key, fails loudly rather than skipping silently", async () => {
   const root = await createScratchFolder("age64_no_key")
   try {
