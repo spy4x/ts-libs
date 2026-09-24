@@ -12,6 +12,7 @@
  * Deliberately stricter than RFC 5322 in two places, both documented at
  * {@link parseAddress}: control characters are rejected outright, and the domain
  * must carry at least one dot.
+ * @module
  */
 
 /** A parsed mailbox: the addr-spec, plus the display name that preceded it. */

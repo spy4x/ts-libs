@@ -16,6 +16,7 @@
  * `'` is escaped as well as the four characters `mig` handled — an apostrophe is
  * harmless in element text and terminates a single-quoted attribute, and an
  * escaper that is safe only in one of the two positions is a trap.
+ * @module
  */
 
 /**
