@@ -28,7 +28,7 @@ browser- and server-only halves are the other two subpaths.
 
 | Module                      | Contents                                                                                                                                                                          |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `universal/async`           | `sleep`, `debounce` (cancelable, unref'd)                                                                                                                                         |
+| `universal/async`           | `sleep`, `debounce` (cancelable, unref'd), `backoffDelay` (capped, jittered backoff delay)                                                                                        |
 | `universal/concurrency`     | `AsyncMutex` (fair FIFO)                                                                                                                                                          |
 | `universal/axis`            | `niceStep`, `ticks` — the one home for chart tick maths                                                                                                                           |
 | `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                      |

@@ -7,7 +7,14 @@
  * dropped together does not return together.
  *
  * The `random` source is injected, so a test asserts the cap and the jitter band without waiting.
+ *
+ * The capping and jittering delegates to `@spy4x/platform/universal/async`'s `backoffDelay`
+ * (`#71`): this module still owns the growth formula (`baseMs * factor ** attempt`) and the
+ * 0-based attempt numbering, and `nextBackoffDelay` still returns exactly what it returned before
+ * that extraction.
  */
+
+import { backoffDelay } from "@spy4x/platform/universal/async"
 
 /** Shape of the backoff schedule. */
 export interface BackoffConfig {
@@ -47,6 +54,10 @@ export interface BackoffOptions extends Partial<BackoffConfig> {
  *
  * The uncapped value is `baseMs × factor ** attempt`; it is clamped to `maxMs` *before* jitter is
  * applied and clamped again after, so the cap holds for every value the random source can return.
+ *
+ * @deprecated Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`),
+ * kept for this module's existing 0-based-attempt, `factor`-parameterised call shape. New code
+ * should call `backoffDelay` directly.
  */
 export function nextBackoffDelay(options: BackoffOptions): number {
   const { baseMs, factor, maxMs, jitterRatio } = {
@@ -56,9 +67,6 @@ export function nextBackoffDelay(options: BackoffOptions): number {
   const attempt = Math.max(0, Math.floor(options.attempt))
   const random = options.random ?? Math.random
 
-  const capped = Math.min(maxMs, baseMs * factor ** attempt)
-  const floor = capped * (1 - Math.min(Math.max(jitterRatio, 0), 0.999))
-  const value = floor + random() * (capped - floor)
-
-  return Math.min(maxMs, Math.max(0, Math.round(value)))
+  const rawMs = baseMs * factor ** attempt
+  return backoffDelay({ rawMs, maxMs, jitterRatio, mode: "downward", random })
 }

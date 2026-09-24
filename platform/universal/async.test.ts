@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { debounce, sleep } from "./async.ts"
+import { backoffDelay, debounce, sleep } from "./async.ts"
 import { DEFAULT_DEBOUNCE_DELAY } from "./constants.ts"
 
 describe("sleep", () => {
@@ -62,5 +62,151 @@ describe("debounce", () => {
 
   it("exposes the documented default delay", () => {
     expect(DEFAULT_DEBOUNCE_DELAY).toBe(300)
+  })
+})
+
+describe("backoffDelay", () => {
+  it("returns the capped raw delay unchanged when jitterRatio is 0 or less", () => {
+    expect(
+      backoffDelay({ rawMs: 1000, maxMs: 10_000, jitterRatio: 0, mode: "symmetric" }),
+    ).toBe(1000)
+    expect(
+      backoffDelay({ rawMs: 20_000, maxMs: 10_000, jitterRatio: -1, mode: "downward" }),
+    ).toBe(10_000)
+  })
+
+  it("clamps a raw delay below zero up to zero before jittering", () => {
+    expect(
+      backoffDelay({ rawMs: -50, maxMs: 10_000, jitterRatio: 0, mode: "symmetric" }),
+    ).toBe(0)
+  })
+
+  it("never returns more than maxMs when jitterRatio is 0", () => {
+    // A non-integer maxMs below rawMs must come back exactly, unrounded: rounding it (as an
+    // earlier version of this function did on the jitterRatio<=0 path) can push the result past
+    // maxMs, e.g. 100.6 -> 101.
+    expect(backoffDelay({ rawMs: 200, maxMs: 100.6, jitterRatio: 0, mode: "downward" })).toBe(
+      100.6,
+    )
+    expect(backoffDelay({ rawMs: 200, maxMs: 100.6, jitterRatio: 0, mode: "symmetric" })).toBe(
+      100.6,
+    )
+  })
+
+  describe("symmetric mode", () => {
+    it("jitters both above and below the capped delay", () => {
+      const low = backoffDelay({
+        rawMs: 1000,
+        maxMs: 10_000,
+        jitterRatio: 0.2,
+        mode: "symmetric",
+        random: () => 0,
+      })
+      const high = backoffDelay({
+        rawMs: 1000,
+        maxMs: 10_000,
+        jitterRatio: 0.2,
+        mode: "symmetric",
+        random: () => 1,
+      })
+      expect(low).toBe(800)
+      expect(high).toBe(1200)
+    })
+
+    it("re-clamps a jittered delay to maxMs", () => {
+      expect(
+        backoffDelay({
+          rawMs: 9500,
+          maxMs: 10_000,
+          jitterRatio: 0.2,
+          mode: "symmetric",
+          random: () => 1,
+        }),
+      ).toBe(10_000)
+    })
+
+    it("floors a jittered delay at minFloorMs", () => {
+      expect(
+        backoffDelay({
+          rawMs: 1000,
+          maxMs: 10_000,
+          jitterRatio: 1,
+          mode: "symmetric",
+          minFloorMs: 1,
+          random: () => 0,
+        }),
+      ).toBe(1)
+    })
+
+    it("defaults minFloorMs to 0", () => {
+      expect(
+        backoffDelay({
+          rawMs: 1000,
+          maxMs: 10_000,
+          jitterRatio: 1,
+          mode: "symmetric",
+          random: () => 0,
+        }),
+      ).toBe(0)
+    })
+  })
+
+  describe("downward mode", () => {
+    it("only ever removes wait, never adds it", () => {
+      const lowest = backoffDelay({
+        rawMs: 400,
+        maxMs: 10_000,
+        jitterRatio: 0.5,
+        mode: "downward",
+        random: () => 0,
+      })
+      const highest = backoffDelay({
+        rawMs: 400,
+        maxMs: 10_000,
+        jitterRatio: 0.5,
+        mode: "downward",
+        random: () => 0.999,
+      })
+      expect(lowest).toBe(200)
+      expect(highest).toBe(400)
+    })
+
+    it("clamps jitterRatio to 0.999, leaving a floor of about 0.1% of the capped delay", () => {
+      // Without the clamp, jitterRatio: 1 makes floor = capped * (1 - 1) = 0, and this test
+      // would still pass with 0 as the expectation — proving the clamp needs a case where the
+      // clamped and unclamped floors differ. 0.999 leaves floor = capped * 0.001 = 10, not 0.
+      expect(
+        backoffDelay({
+          rawMs: 10_000,
+          maxMs: 10_000,
+          jitterRatio: 1,
+          mode: "downward",
+          random: () => 0,
+        }),
+      ).toBe(10)
+    })
+
+    it("re-clamps to maxMs when the random source breaks its [0, 1) contract", () => {
+      expect(
+        backoffDelay({
+          rawMs: 400,
+          maxMs: 400,
+          jitterRatio: 0.5,
+          mode: "downward",
+          random: () => 1.5,
+        }),
+      ).toBe(400)
+    })
+  })
+
+  it("draws from Math.random by default", () => {
+    const original = Math.random
+    try {
+      Math.random = () => 0
+      expect(backoffDelay({ rawMs: 400, maxMs: 10_000, jitterRatio: 0.5, mode: "downward" }))
+        .toBe(200)
+    } finally {
+      Math.random = original
+    }
   })
 })
