@@ -10,11 +10,16 @@
  * **Trust boundary:** all three headers are client-controlled unless a reverse proxy strips and
  * rewrites them, and *which* headers a given proxy rewrites is proxy-specific — `trustedProxy: true`
  * trusts all three, which is wrong for a proxy that only rewrites some of them. Traefik, with
- * default settings, overwrites `X-Forwarded-For` and `X-Real-IP` but passes `CF-Connecting-IP`
- * through verbatim: a client behind Traefik can set `CF-Connecting-IP` to anything it likes, and
- * `trustedProxy: true` would read that forged value first. Behind Traefik, set
- * `trustedProxy: "x-real-ip"` (or `"x-forwarded-for"`) instead, so `CF-Connecting-IP` is never
- * consulted. Behind Cloudflare, which sets `CF-Connecting-IP` itself, `trustedProxy:
+ * default settings (an empty `forwardedHeaders.trustedIPs`), overwrites `X-Forwarded-For` and
+ * `X-Real-IP` but passes `CF-Connecting-IP` through verbatim: a client behind Traefik can set
+ * `CF-Connecting-IP` to anything it likes, and `trustedProxy: true` would read that forged value
+ * first. Behind Traefik, set `trustedProxy: "x-real-ip"` (or `"x-forwarded-for"`) instead, so
+ * `CF-Connecting-IP` is never consulted — **but only with `trustedIPs` empty.** Configuring
+ * `forwardedHeaders.trustedIPs` (the Cloudflare → Traefik layout) makes Traefik keep that upstream's
+ * `X-Real-IP` instead of overwriting it, so a client-forged value passes through just as
+ * `CF-Connecting-IP` does with no `trustedIPs` set; trust `"cf-connecting-ip"` in that layout
+ * instead. See `rate-limit/README.md`'s trust-boundary section for the full `trustedIPs` caveat.
+ * Behind Cloudflare directly, which sets `CF-Connecting-IP` itself, `trustedProxy:
  * "cf-connecting-ip"` is the narrow equivalent of `true`. With no proxy in front and any header
  * trusted, a caller rotating that header produces a new bucket per request and the limiter is
  * defeated.

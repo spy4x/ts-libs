@@ -303,9 +303,11 @@ export function decisionHeaders(
  * `CF-Connecting-IP` lets a caller rotate the header and mint a fresh bucket per request, which
  * defeats the limiter entirely. Set it to `true` only behind a proxy that strips and rewrites all
  * three headers, or to a single {@link TrustedProxyHeader} behind one that rewrites only that
- * header — for example `"x-real-ip"` behind Traefik's default settings, which pass
- * `CF-Connecting-IP` through unrewritten. See `client-ip.ts`'s module doc for the full trust
- * boundary.
+ * header — for example `"x-real-ip"` behind Traefik's default settings (an empty
+ * `forwardedHeaders.trustedIPs`), which pass `CF-Connecting-IP` through unrewritten. With
+ * `trustedIPs` configured (e.g. Cloudflare in front of Traefik), Traefik keeps the trusted
+ * upstream's `X-Real-IP` instead, so a forged value can pass through — trust `"cf-connecting-ip"`
+ * in that layout instead. See `client-ip.ts`'s module doc for the full trust boundary.
  */
 export function userThenIp<E extends Env = Record<string, never>>(
   userId: (req: Request, context: RateLimitContext<E>) =>

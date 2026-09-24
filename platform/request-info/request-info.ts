@@ -53,7 +53,10 @@ export interface RequestInfoOptions {
    * to `true` only behind a proxy that strips and rewrites all three headers itself, or to a single
    * {@link TrustedProxyHeader} behind one that rewrites only that header — for example
    * `"x-real-ip"` behind Traefik's default settings, which pass `CF-Connecting-IP` through
-   * unrewritten. See `rate-limit/client-ip.ts`'s module doc for the full trust boundary.
+   * unrewritten. That default-settings case only: with `forwardedHeaders.trustedIPs` configured
+   * (e.g. Cloudflare in front of Traefik), Traefik keeps the trusted upstream's `X-Real-IP` instead
+   * of overwriting it, so a client-forged value can pass through — trust `"cf-connecting-ip"` in
+   * that layout instead. See `rate-limit/client-ip.ts`'s module doc for the full trust boundary.
    */
   trustedProxy?: boolean | TrustedProxyHeader
   /**

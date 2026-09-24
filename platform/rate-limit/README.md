@@ -157,11 +157,23 @@ first hop, then falls back to the peer address — the other two headers are nev
 headers a given proxy rewrites differs by proxy** — `trustedProxy: true` trusts all three, which is
 wrong for a proxy that only rewrites some of them:
 
-- **Traefik**, with default settings, overwrites `X-Forwarded-For` and `X-Real-IP` for a client
-  outside `forwardedHeaders.trustedIPs`, but passes `CF-Connecting-IP` through untouched. A client
-  behind Traefik can set `CF-Connecting-IP` to anything it likes, so `trustedProxy: true` behind
-  Traefik reads a forged value first. Pass `trustedProxy: "x-real-ip"` (or `"x-forwarded-for"`)
-  instead, so `CF-Connecting-IP` is never read.
+- **Traefik**, with default settings (an empty `forwardedHeaders.trustedIPs`), overwrites
+  `X-Forwarded-For` and `X-Real-IP` for every client, but passes `CF-Connecting-IP` through
+  untouched. A client behind Traefik can set `CF-Connecting-IP` to anything it likes, so
+  `trustedProxy: true` behind Traefik reads a forged value first. Pass `trustedProxy: "x-real-ip"`
+  (or `"x-forwarded-for"`) instead, so `CF-Connecting-IP` is never read — **but only when
+  `trustedIPs` is empty.** Set `forwardedHeaders.trustedIPs` to trust an upstream proxy in front of
+  Traefik (the Cloudflare → Traefik layout, listing Cloudflare's ranges) and Traefik stops rewriting
+  from scratch: it keeps that upstream's `X-Real-IP` as it arrived and appends its own hop to
+  `X-Forwarded-For` instead of replacing it. `X-Real-IP` and every hop but the last of
+  `X-Forwarded-For` are then only as trustworthy as the upstream was — a client can still forge
+  `X-Real-IP` and have Cloudflare (or whatever sits in `trustedIPs`) pass it straight through, and a
+  reviewer probe against Traefik 3.5.6 confirmed it: with `trustedIPs: ["127.0.0.1/32"]`, a
+  client-forged `X-Real-IP: 192.0.2.1` reached the backend unchanged. Behind Cloudflare → Traefik
+  with Cloudflare's ranges in `trustedIPs`, trust `"cf-connecting-ip"` instead — Cloudflare sets that
+  header itself and Traefik never rewrites it either way, so `trustedIPs` does not weaken it.
+  `"x-real-ip"` is the right choice only when nothing reachable by a client is listed in
+  `trustedIPs`.
 - **Cloudflare** sets `CF-Connecting-IP` itself. `trustedProxy: "cf-connecting-ip"` is the narrow
   equivalent of `true` behind Cloudflare alone.
 - **nginx** writes only the headers its own config sets with `proxy_set_header` — there is no
