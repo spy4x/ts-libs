@@ -66,16 +66,45 @@ to poison.
 `atomicWrite` are exported too, for a caller (or the follow-up issues in rostok, the template,
 financy, antonshubin.com and dotfiles) that wants one piece without the whole file-level flow.
 
+## Parsing a line
+
+A comment or blank line passes through verbatim. Anything else is split on its FIRST `=` into a
+key and a value — like rostok's own parser, a key isn't restricted to shell-identifier characters,
+so `my-key=value` is a valid line. `export KEY=value` is recognised: the keyword stays in the
+rendered line but is stripped from the reported key. A line with no `=` at all — most commonly a
+continuation of a multi-line value, which this format doesn't support — throws
+`UnsupportedEnvSyntaxError`, naming only the line NUMBER, never its text: a rejected line is
+exactly the shape most likely to be a secret, and an error message is a place that leaks (stderr,
+CI logs, an error-reporting service).
+
 ## What it refuses
 
-- A multi-line value continuation, or any other line that isn't a comment, a blank line, or a
-  `KEY=value`/`export KEY=value` assignment — `UnsupportedEnvSyntaxError`, naming the line.
+- A line with no `=` — see above.
 - CRLF line endings — `CrlfNotSupportedError`. Convert the file to LF first.
+- A decrypted value containing `\n` or `\r` — writing it verbatim would inject an extra line into
+  the plaintext `.env` that a later parse could read back as an unrelated assignment.
 - Writing through a symlink, or over any non-regular file — the write is refused before it
-  happens; nothing the symlink points to is ever touched.
+  happens; nothing the symlink points to is ever touched. A named pipe, socket or device node
+  found while scanning for `.env*` files is silently skipped rather than opened (opening a FIFO
+  with nothing writing to it blocks forever).
 - A plaintext value found inside a `.env.age` during decrypt — a sign the file was hand-edited or
   corrupted, surfaced instead of silently passed through.
-- Overwriting an existing `.age/key.txt` with a freshly generated one.
+- Overwriting an existing `.age/key.txt` with a freshly generated one — race-free: the check can't
+  be fooled by two concurrent `keygen` runs.
+- Generating a key in a worktree that already resolves (via the main checkout) to a working key —
+  that would shadow it instead of replacing anything.
+- A file named `*.sops-backup` or `*.sops-backup.age`, matching rostok's own exclusion, so a
+  leftover from the SOPS-to-age64 migration in a project's history is never treated as live.
+
+A decrypted value is never trimmed — unlike rostok, which ran every decrypted value through
+`.trim()`, silently discarding real leading/trailing whitespace a value might have had on purpose.
+The newline/carriage-return rejection above catches the corruption trimming used to paper over
+(an errant line break coming out of a decrypt), without ever discarding whitespace that belongs.
+
+The recipient this module encrypts for is always DERIVED from the identity
+(`identityToRecipient`), never read from the key file's `# public key:` comment — that comment is
+just text, and trusting a stale or hand-edited one would mean encrypting for a recipient the real
+identity can't decrypt.
 
 ## Origin (#173)
 

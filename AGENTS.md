@@ -305,6 +305,7 @@ postgres                         3.4.7
 otpauth                          9.5.2
 qrcode                           3.1.0
 @iuioiua/redis                   1.1.10
+@age/age-encryption               0.3.1
 ```
 
 Adding an import-map entry is a root-file change: it needs the issue number that needs the
