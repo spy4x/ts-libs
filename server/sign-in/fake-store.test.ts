@@ -20,6 +20,7 @@ export interface FakeStore<S extends SessionRecord> {
 
 /** The method names of `SessionStore`, sorted. */
 export const STORE_METHODS = [
+  "clearPendingSecondFactors",
   "completeSecondFactor",
   "create",
   "expire",
@@ -64,6 +65,18 @@ export function createFakeStore<S extends SessionRecord = SessionRecord>(): Fake
       if (!row || row.status !== SessionStatus.Active) return Promise.resolve(false)
       row.secondFactor = SecondFactorStatus.Completed
       return Promise.resolve(true)
+    },
+    clearPendingSecondFactors(userId: number): Promise<void> {
+      calls.push("clearPendingSecondFactors")
+      for (const row of rows.values()) {
+        if (
+          row.userId === userId && row.status === SessionStatus.Active &&
+          row.secondFactor === SecondFactorStatus.Pending
+        ) {
+          row.secondFactor = SecondFactorStatus.NotRequired
+        }
+      }
+      return Promise.resolve()
     },
     signOut(id: number): Promise<void> {
       calls.push("signOut")
