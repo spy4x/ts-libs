@@ -168,7 +168,7 @@ wrong for a proxy that only rewrites some of them:
   `X-Forwarded-For` instead of replacing it. `X-Real-IP` and every hop but the last of
   `X-Forwarded-For` are then only as trustworthy as the upstream was — a client can still forge
   `X-Real-IP` and have Cloudflare (or whatever sits in `trustedIPs`) pass it straight through, and a
-  reviewer probe against Traefik 3.5.6 confirmed it: with `trustedIPs: ["127.0.0.1/32"]`, a
+  test against Traefik 3.5.6 confirmed it: with `trustedIPs: ["127.0.0.1/32"]`, a
   client-forged `X-Real-IP: 192.0.2.1` reached the backend unchanged. Behind Cloudflare → Traefik
   with Cloudflare's ranges in `trustedIPs`, trust `"cf-connecting-ip"` instead — Cloudflare sets that
   header itself and Traefik never rewrites it either way, so `trustedIPs` does not weaken it.
