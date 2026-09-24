@@ -77,6 +77,61 @@ Deno.test("parseEnvFile: accepts a key rostok accepted but a shell identifier wo
   assertEquals(entries[0].assignment, { prefix: "my-key=", key: "my-key", value: "value" })
 })
 
+Deno.test("parseEnvFile: accepts a dotted key, another shape rostok allowed", () => {
+  const entries = parseEnvFile("a.b=value\n")
+  assertEquals(entries[0].assignment?.key, "a.b")
+})
+
+// The key-charset relaxation above (accepting `my-key`, matching rostok) turned out to open a
+// real hole: a naive first-`=` split reads whatever precedes the FIRST `=` on a line as the
+// "key" — including a continuation line of an unquoted multi-line value, which can itself
+// contain `=` (base64 padding). Two checks close it: an unterminated quote is rejected outright
+// (catching the multi-line value's OPENING line), and a key containing `+` or `/` is rejected
+// (catching what a base64 CONTINUATION line becomes if it slips past the first check some other
+// way). See parseEnvFile's own doc comment for the one shape neither check catches.
+
+Deno.test("parseEnvFile: rejects a quoted value that is not closed on its own line", () => {
+  // The exact repro from the review round: a `"`-opened multi-line SSH key. Without this check,
+  // line 1 alone parses as SSH_KEY="AAAAB3NzaC1yc2E (an assignment with a dangling quote), and
+  // line 2 becomes its own bogus assignment — the actual hole this whole set of checks closes.
+  assertThrows(
+    () => parseEnvFile(`SSH_KEY="AAAAB3NzaC1yc2E\nSECONDHALF+q9x/Zk4Tb8==\n`),
+    UnsupportedEnvSyntaxError,
+  )
+})
+
+Deno.test("parseEnvFile: rejects a single stray quote character as a value", () => {
+  // Length-1 edge case for the check above: opens a quote, and there is no second character
+  // (the quote itself) left to close it with.
+  assertThrows(() => parseEnvFile(`FOO="\n`), UnsupportedEnvSyntaxError)
+})
+
+Deno.test("parseEnvFile: a properly closed quoted value is still accepted", () => {
+  assertEquals(parseEnvFile(`FOO="value"\n`)[0].assignment?.value, `"value"`)
+  assertEquals(parseEnvFile(`FOO='value'\n`)[0].assignment?.value, `'value'`)
+})
+
+Deno.test("parseEnvFile: rejects a key containing '+' — a base64 continuation line's shape", () => {
+  assertThrows(() => parseEnvFile("SECONDHALF+rest=value\n"), UnsupportedEnvSyntaxError)
+})
+
+Deno.test("parseEnvFile: rejects a key containing '/' — a base64 continuation line's shape", () => {
+  assertThrows(() => parseEnvFile("SECONDHALF/rest=value\n"), UnsupportedEnvSyntaxError)
+})
+
+Deno.test("parseEnvFile: rejects a key containing a space", () => {
+  assertThrows(() => parseEnvFile("NOT A KEY=value\n"), UnsupportedEnvSyntaxError)
+})
+
+Deno.test("parseEnvFile: the invalid-key-name error never repeats the rejected line's text", () => {
+  const error = assertThrows(
+    () => parseEnvFile("SECONDHALF+q9x/Zk4Tb8ZzW1vA==value\n"),
+    UnsupportedEnvSyntaxError,
+  )
+  assertEquals(error.message.includes("q9x"), false)
+  assertEquals(error.message.includes("Zk4Tb8ZzW1vA"), false)
+})
+
 Deno.test("parseEnvFile: rejects CRLF line endings with a clear error", () => {
   assertThrows(() => parseEnvFile("FOO=bar\r\nBAZ=qux\r\n"), CrlfNotSupportedError)
 })

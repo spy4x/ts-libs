@@ -52,16 +52,24 @@ export interface EnvEntry {
 // byte-identical re-render) but stripped from the reported `key`.
 const EXPORT_PREFIX = /^\s*export\s+/
 
+// A key must look like this AFTER `export ` is stripped and the result trimmed: rostok-style
+// `my-key` and `a.b` still match, but a base64 continuation line of an unquoted multi-line value
+// (which can contain `+`, `/`, digits and letters) does not, because `+` and `/` aren't in this
+// set — see the review round that found #173's key-name relaxation could otherwise turn such a
+// continuation line into a "key" whose "value" is then encrypted while the key itself, plaintext,
+// is exactly the ciphertext fragment that used to be part of a secret.
+const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]*$/
+
 /**
- * Thrown by {@link parseEnvFile} on anything it can't safely round-trip. Carries only the line
- * NUMBER, never the line's own text — a rejected line is exactly the shape most likely to be a
- * secret (a multi-line PEM block's continuation, a stray `STRIPE_KEY=sk_live_...` with odd
- * spacing), and an error message is a place secrets leak: it reaches stderr, CI logs, and any
- * error-reporting service a caller has wired up.
+ * Thrown by {@link parseEnvFile} on anything it can't safely round-trip. `reason` is always one
+ * of a FIXED set of phrases below, never the line's own text — a rejected line is exactly the
+ * shape most likely to be a secret (a multi-line PEM block's continuation, a stray
+ * `STRIPE_KEY=sk_live_...` with odd spacing), and an error message is a place secrets leak: it
+ * reaches stderr, CI logs, and any error-reporting service a caller has wired up.
  */
 export class UnsupportedEnvSyntaxError extends Error {
-  constructor(line: number) {
-    super(`unsupported env syntax at line ${line}: no '=' found`)
+  constructor(line: number, reason: "no '=' found" | "unterminated quote" | "invalid key name") {
+    super(`unsupported env syntax at line ${line}: ${reason}`)
     this.name = "UnsupportedEnvSyntaxError"
   }
 }
@@ -80,16 +88,33 @@ export class CrlfNotSupportedError extends Error {
 
 /**
  * Parse an env file's content into entries. Comments and blank lines pass through verbatim
- * (`raw` only); any other line is split on its FIRST `=` into a key and a value — exactly like
- * rostok's `line.indexOf("=")`, so a `.env.age` rostok produced still parses (rostok never
- * restricted a key to shell-identifier characters; `my-key=value` is a valid line here too). A
- * line with no `=` at all — most commonly a continuation of a multi-line value, which neither
- * source repo's format supports — throws {@link UnsupportedEnvSyntaxError} rather than silently
- * treating it as a comment (the bug rostok's permissive parser had: `cli/age.ts:240-244` passed
- * such a line through unchanged, so a multi-line value was quietly mangled instead of rejected).
+ * (`raw` only); any other line is split on its FIRST `=` into a key and a value — like rostok's
+ * `line.indexOf("=")`, so a `.env.age` rostok produced still parses (rostok never restricted a
+ * key's character set; `my-key=value` and `a.b=value` are valid lines here too, matched by
+ * {@link KEY_PATTERN}). Three shapes are rejected, each with {@link UnsupportedEnvSyntaxError}:
+ *
+ * - **No `=` at all** — most commonly a continuation of a multi-line value, which neither source
+ *   repo's format supports. Rejecting it is a deliberate change from rostok's permissive parser,
+ *   which passed such a line through unchanged (`cli/age.ts:240-244`), quietly mangling the value
+ *   instead of rejecting it.
+ * - **A value that opens a quote (`"` or `'`) and doesn't close it on the SAME line** — an
+ *   unterminated quote is the other shape a multi-line value's first line takes, and a naive
+ *   first-`=`-split parser would otherwise treat the SECOND line of that same value as an
+ *   unrelated new assignment (see the next point for why that's dangerous, not just wrong).
+ * - **A key that doesn't match `^[A-Za-z_][A-Za-z0-9_.-]*$`** (after stripping an `export `
+ *   prefix) — this is what closes the actual security hole the key-charset relaxation above
+ *   opened: a continuation line of an UNQUOTED multi-line value can itself contain `=` (base64
+ *   padding, most commonly), and without this check the first-`=` split would read the text
+ *   before that `=` as a "key" and encrypt only the text after it — leaving the REST of the secret
+ *   sitting in `.env.age` in PLAINTEXT, as what looks like an ordinary key name. The character set
+ *   still accepts every rostok-produced key (hyphens, dots) but excludes `+` and `/`, which is
+ *   what a base64 fragment needs to slip through. A continuation line that happens to be made of
+ *   ONLY letters and digits (no `+`, `/`, `=`) still isn't caught by this check — that shape was
+ *   never valid dotenv in either source repo and remains the caller's problem; see the module
+ *   README.
  *
  * `export KEY=value` is recognised: the keyword stays in `prefix` (so a re-render keeps it) but is
- * stripped from the reported `key`.
+ * stripped from the reported `key` before the character-set check above runs against it.
  *
  * CRLF is rejected outright with {@link CrlfNotSupportedError}: neither source handled it, and
  * silently keeping or stripping `\r` would risk corrupting a value that legitimately ends in one.
@@ -105,10 +130,19 @@ export function parseEnvFile(content: string, path?: string): EnvEntry[] {
       return
     }
     const eqIndex = line.indexOf("=")
-    if (eqIndex === -1) throw new UnsupportedEnvSyntaxError(index + 1)
+    if (eqIndex === -1) throw new UnsupportedEnvSyntaxError(index + 1, "no '=' found")
     const prefix = line.slice(0, eqIndex + 1)
     const value = line.slice(eqIndex + 1)
+
+    const quoted = value.trim()
+    const quote = quoted[0]
+    if ((quote === `"` || quote === "'") && (quoted.length < 2 || !quoted.endsWith(quote))) {
+      throw new UnsupportedEnvSyntaxError(index + 1, "unterminated quote")
+    }
+
     const key = prefix.slice(0, -1).replace(EXPORT_PREFIX, "").trim()
+    if (!KEY_PATTERN.test(key)) throw new UnsupportedEnvSyntaxError(index + 1, "invalid key name")
+
     entries.push({ raw: line, assignment: { prefix, key, value } })
   })
   return entries
