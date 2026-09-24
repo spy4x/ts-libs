@@ -256,6 +256,30 @@ describe("createRateLimitMiddleware", () => {
     assertEquals((await from("198.51.100.7")).status, 200)
   })
 
+  it("passes a single trusted header name through to clientIp, ignoring the others", async () => {
+    const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 1, clock: () => T0 })
+    const app = new Hono()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => "127.0.0.1",
+        keyResolver: userThenIp(() => undefined, { trustedProxy: "x-real-ip" }),
+      }),
+    )
+    app.get("/", (c) => c.text("ok"))
+
+    // Same forged CF-Connecting-IP, two different X-Real-IP values: two buckets, because
+    // "x-real-ip" is the only header read.
+    const send = (realIp: string) =>
+      app.request(
+        new Request("http://localhost/", {
+          headers: { "cf-connecting-ip": "203.0.113.9", "x-real-ip": realIp },
+        }),
+      )
+    assertEquals((await send("198.51.100.1")).status, 200)
+    assertEquals((await send("198.51.100.1")).status, 429)
+    assertEquals((await send("198.51.100.2")).status, 200)
+  })
+
   it("keys on the authenticated user when the resolver finds one", async () => {
     const seen: string[] = []
     const app = new Hono()

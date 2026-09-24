@@ -54,4 +54,4 @@ export {
   userThenIp,
 } from "./hono.ts"
 
-export { clientIp, humanRetry, UNKNOWN_CLIENT_IP } from "./client-ip.ts"
+export { clientIp, humanRetry, type TrustedProxyHeader, UNKNOWN_CLIENT_IP } from "./client-ip.ts"
