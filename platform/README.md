@@ -207,7 +207,11 @@ already are — by where the code can run:
   unconditionally, so any client could set its own value and have it logged as its IP. Fixed by
   routing it through `rate-limit/client-ip.ts`'s `clientIp`, which already carries this exact trust
   boundary for the rate limiter — untrusted by default, and a `trustedProxy` option the caller opts
-  into behind a proxy that actually rewrites the header. The helper also no longer imports the
+  into behind a proxy that actually rewrites the header. `trustedProxy` also accepts a single
+  `TrustedProxyHeader` name (`"cf-connecting-ip" | "x-forwarded-for" | "x-real-ip"`, re-exported from
+  this module) instead of `true`, for a proxy that rewrites only one of the three — see
+  `rate-limit/README.md`'s trust-boundary section for which header Traefik, Cloudflare and nginx
+  each write. The helper also no longer imports the
   template's `APIContext`; it takes a plain, `Env`-generic Hono `Context` and reads `requestId` off
   the context variables defensively, matching how `rate-limit/hono.ts` stays app-agnostic. `ip`
   (and `userAgent`) stay unset when nothing identifies the client, exactly as the source left them

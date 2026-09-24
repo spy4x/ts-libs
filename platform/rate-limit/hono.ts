@@ -22,7 +22,7 @@
 import { type as arkType } from "arktype"
 import type { Context, Env, MiddlewareHandler } from "hono"
 
-import { clientIp } from "./client-ip.ts"
+import { clientIp, type TrustedProxyHeader } from "./client-ip.ts"
 import type { RateLimitDecision, RateLimiter } from "./memory.ts"
 
 /** JSON-safe response body for a rejected request. */
@@ -301,7 +301,13 @@ export function decisionHeaders(
  *
  * `trustedProxy` defaults to **false** here: with no proxy in front, trusting `X-Forwarded-For` or
  * `CF-Connecting-IP` lets a caller rotate the header and mint a fresh bucket per request, which
- * defeats the limiter entirely. Set it to true only behind a proxy that strips and rewrites them.
+ * defeats the limiter entirely. Set it to `true` only behind a proxy that strips and rewrites all
+ * three headers, or to a single {@link TrustedProxyHeader} behind one that rewrites only that
+ * header — for example `"x-real-ip"` behind Traefik's default settings (an empty
+ * `forwardedHeaders.trustedIPs`), which pass `CF-Connecting-IP` through unrewritten. With
+ * `trustedIPs` configured (e.g. Cloudflare in front of Traefik), Traefik keeps the trusted
+ * upstream's `X-Real-IP` instead, so a forged value can pass through — trust `"cf-connecting-ip"`
+ * in that layout instead. See `client-ip.ts`'s module doc for the full trust boundary.
  */
 export function userThenIp<E extends Env = Record<string, never>>(
   userId: (req: Request, context: RateLimitContext<E>) =>
@@ -310,7 +316,7 @@ export function userThenIp<E extends Env = Record<string, never>>(
     | Promise<
       string | undefined
     >,
-  options: { trustedProxy?: boolean } = {},
+  options: { trustedProxy?: boolean | TrustedProxyHeader } = {},
 ): KeyResolver<E> {
   const trustedProxy = options.trustedProxy ?? false
   return async (req, context) => {

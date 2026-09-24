@@ -36,7 +36,7 @@
  */
 import type { Context, Env } from "hono"
 
-import { clientIp, UNKNOWN_CLIENT_IP } from "../rate-limit/client-ip.ts"
+import { clientIp, type TrustedProxyHeader, UNKNOWN_CLIENT_IP } from "../rate-limit/client-ip.ts"
 
 /** Request metadata worth attaching to a log line or an error report. */
 export interface RequestInfo {
@@ -50,9 +50,15 @@ export interface RequestInfoOptions {
   /**
    * Trust `CF-Connecting-IP` / `X-Forwarded-For` / `X-Real-IP`. Defaults to **false**: with no
    * proxy in front, trusting a forwarding header lets a client claim any address it likes. Set it
-   * to true only behind a proxy that strips and rewrites those headers itself.
+   * to `true` only behind a proxy that strips and rewrites all three headers itself, or to a single
+   * {@link TrustedProxyHeader} behind one that rewrites only that header — for example
+   * `"x-real-ip"` behind Traefik's default settings, which pass `CF-Connecting-IP` through
+   * unrewritten. That default-settings case only: with `forwardedHeaders.trustedIPs` configured
+   * (e.g. Cloudflare in front of Traefik), Traefik keeps the trusted upstream's `X-Real-IP` instead
+   * of overwriting it, so a client-forged value can pass through — trust `"cf-connecting-ip"` in
+   * that layout instead. See `rate-limit/client-ip.ts`'s module doc for the full trust boundary.
    */
-  trustedProxy?: boolean
+  trustedProxy?: boolean | TrustedProxyHeader
   /**
    * The connection's peer address, resolved by the caller from whatever its own runtime exposes
    * (see the module doc for why this module does not read it from `c` itself). Used by

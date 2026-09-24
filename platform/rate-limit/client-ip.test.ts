@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 
-import { clientIp, humanRetry, UNKNOWN_CLIENT_IP } from "./client-ip.ts"
+import { clientIp, humanRetry, type TrustedProxyHeader, UNKNOWN_CLIENT_IP } from "./client-ip.ts"
 
 /** Request with the given headers and no body. */
 function request(headers: Record<string, string> = {}): Request {
@@ -101,6 +101,60 @@ describe("clientIp", () => {
   it("returns the placeholder when there is no header and no peer address", () => {
     assertEquals(clientIp(request()), UNKNOWN_CLIENT_IP)
     assertEquals(clientIp(request(), "  "), UNKNOWN_CLIENT_IP)
+  })
+
+  describe("a single trusted header name", () => {
+    /** All three headers present with distinct values, so a wrong pick is caught. */
+    const allThree = {
+      "cf-connecting-ip": "203.0.113.9",
+      "x-forwarded-for": "198.51.100.7",
+      "x-real-ip": "192.0.2.1",
+    }
+    const expected: Record<TrustedProxyHeader, string> = {
+      "cf-connecting-ip": "203.0.113.9",
+      "x-forwarded-for": "198.51.100.7",
+      "x-real-ip": "192.0.2.1",
+    }
+
+    for (const header of Object.keys(expected) as TrustedProxyHeader[]) {
+      it(`reads only ${header} and ignores the other two when it is named as trusted`, () => {
+        assertEquals(clientIp(request(allThree), "127.0.0.1", header), expected[header])
+      })
+    }
+
+    it(
+      "a caller behind Traefik can get the address Traefik wrote, whatever CF-Connecting-IP the " +
+        "client sent",
+      () => {
+        // Traefik with default settings overwrites X-Forwarded-For and X-Real-IP with the real
+        // chain, but passes a client-supplied CF-Connecting-IP straight through — trustedProxy:
+        // true would read the forged value first; naming "x-real-ip" does not.
+        const req = request({
+          "cf-connecting-ip": "203.0.113.9", // forged by the client
+          "x-forwarded-for": "127.0.0.1", // rewritten by Traefik
+          "x-real-ip": "127.0.0.1", // rewritten by Traefik
+        })
+        assertEquals(clientIp(req, undefined, "x-real-ip"), "127.0.0.1")
+      },
+    )
+
+    it("falls back to remoteAddr, not to another header, when the named header is absent", () => {
+      const req = request({ "cf-connecting-ip": "203.0.113.9", "x-forwarded-for": "198.51.100.7" })
+      assertEquals(clientIp(req, "127.0.0.1", "x-real-ip"), "127.0.0.1")
+    })
+
+    it("falls back to remoteAddr, not to another header, when the named header is empty", () => {
+      const req = request({
+        "x-real-ip": "   ",
+        "cf-connecting-ip": "203.0.113.9",
+        "x-forwarded-for": "198.51.100.7",
+      })
+      assertEquals(clientIp(req, "127.0.0.1", "x-real-ip"), "127.0.0.1")
+    })
+
+    it("falls back to the placeholder when the named header and remoteAddr are both absent", () => {
+      assertEquals(clientIp(request(), undefined, "x-real-ip"), UNKNOWN_CLIENT_IP)
+    })
   })
 })
 
