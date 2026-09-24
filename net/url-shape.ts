@@ -4,6 +4,7 @@
  * Pure and dependency-free: it parses with the platform `URL`, and it does no
  * DNS, no allow-listing beyond `http`/`https`, and no fetching. Anything that
  * needs to decide whether a host is safe to call is `net/url-policy`.
+ * @module
  */
 
 /** Machine-readable rejection reason. */
@@ -15,17 +16,23 @@ export type UrlShapeErrorCode =
 
 /** Rejected input, with the reason a caller can branch on. */
 export interface UrlShapeError {
+  /** Always `false` on this variant of {@link NormalizeUrlShapeResult}. */
   ok: false
+  /** Machine-readable rejection reason. */
   code: UrlShapeErrorCode
+  /** Human-readable rejection message, safe to show a user. */
   message: string
 }
 
+/** Accepted input, normalised. */
 export interface UrlShapeOk {
+  /** Always `true` on this variant of {@link NormalizeUrlShapeResult}. */
   ok: true
   /** Normalised URL: lowercased scheme and host, default port stripped. */
   url: string
 }
 
+/** Outcome of {@link normalizeUrlShape}. */
 export type NormalizeUrlShapeResult = UrlShapeOk | UrlShapeError
 
 /**
@@ -38,6 +45,7 @@ export function isUrlShapeOk(result: NormalizeUrlShapeResult): result is UrlShap
   return result.ok
 }
 
+/** Protocols `normalizeUrlShape` accepts; anything else is rejected. */
 export const ALLOWED_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"])
 
 /**
@@ -52,13 +60,18 @@ export const EXPLICIT_SCHEME: RegExp = /^([a-z][a-z0-9+.-]*):/i
 /** A hostname that is a plain DNS label run: no `:`, no brackets, no dots. */
 export const PLAIN_HOSTNAME: RegExp = /^[a-z0-9_-]+$/i
 
+/** Whitespace and control characters that make a URL input invalid. */
 // The control-character range is the point of this pattern.
 // deno-lint-ignore no-control-regex
 export const INVALID_CHARACTERS: RegExp = /[\s\u0000-\u001f\u007f]/
 
+/** Message for {@link UrlShapeErrorCode} `"empty"`. */
 export const EMPTY_MESSAGE: string = "Enter a URL"
+/** Message for {@link UrlShapeErrorCode} `"unsupported_protocol"`. */
 export const UNSUPPORTED_PROTOCOL_MESSAGE: string = "URL must start with http:// or https://"
+/** Message for {@link UrlShapeErrorCode} `"invalid_format"`. */
 export const INVALID_FORMAT_MESSAGE: string = "Invalid URL format"
+/** Message for the control-character case of {@link UrlShapeErrorCode} `"invalid_format"`. */
 export const INVALID_CHARACTERS_MESSAGE: string = "URL contains invalid characters"
 
 /**
