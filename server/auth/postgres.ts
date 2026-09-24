@@ -372,8 +372,12 @@ class PostgresAuthStore implements AuthStore {
  * whose key belongs to another user) leaves the caller's transaction aborted, as any statement the
  * caller ran itself would; a session the store refuses before asking Postgres (an id no store could
  * assign) does not.
+ *
+ * It implements every optional `SessionStore` method, including `clearPendingSecondFactors`, and
+ * its return type says so, so a caller can clear pending second factors through the store it built
+ * on its own transaction handle.
  */
-export function createPostgresSessionStore(sql: Sql): SessionStore<AuthSessionRecord> {
+export function createPostgresSessionStore(sql: Sql): Required<SessionStore<AuthSessionRecord>> {
   return {
     async create(session: Omit<AuthSessionRecord, "id">): Promise<AuthSessionRecord> {
       if (!isStoreId(session.userId) || !isStoreId(session.keyId)) {
@@ -415,6 +419,14 @@ export function createPostgresSessionStore(sql: Sql): SessionStore<AuthSessionRe
         RETURNING id
       `
       return rows.length === 1
+    },
+    async clearPendingSecondFactors(userId: number): Promise<void> {
+      if (!isStoreId(userId)) return
+      await sql`
+        UPDATE auth_sessions SET second_factor = ${SecondFactorStatus.NotRequired}
+        WHERE user_id = ${userId} AND status = ${SessionStatus.Active}
+          AND second_factor = ${SecondFactorStatus.Pending}
+      `
     },
     async signOut(id: number): Promise<void> {
       if (!isStoreId(id)) return

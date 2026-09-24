@@ -239,6 +239,53 @@ describe("createPostgresSessionStore driven by SessionManager", () => {
       expect(await sessions.validate(cookieValue)).not.toBeNull()
     }))
 
+  it("clears only the user's active pending second factors, in one conditional write", () =>
+    withDatabase(async ({ sql }) => {
+      const { sessions, ann, store, authStore } = await setup(sql)
+      const bob = await authStore.createUserWithKey(emailKey("password", "bob@example.com"))
+      const make = (secondFactor: SecondFactorStatus, user = ann) =>
+        sessions.create({ userId: user.user.id, keyId: user.key.id, secondFactor })
+      const pending = await make(SecondFactorStatus.Pending)
+      const completed = await make(SecondFactorStatus.Completed)
+      const signedOut = await make(SecondFactorStatus.Pending)
+      expect(await sessions.signOut(signedOut.cookieValue)).toBe(true)
+      const expired = await make(SecondFactorStatus.Pending)
+      await sql`
+        UPDATE auth_sessions SET status = ${SessionStatus.Expired} WHERE id = ${expired.session.id}
+      `
+      const bobs = await make(SecondFactorStatus.Pending, bob)
+
+      await sessions.clearPendingSecondFactors(ann.user.id)
+
+      const stateOf = async (id: number) => {
+        const row = await store.findById(id)
+        return { status: row?.status, secondFactor: row?.secondFactor }
+      }
+      expect(await stateOf(pending.session.id)).toEqual({
+        status: SessionStatus.Active,
+        secondFactor: SecondFactorStatus.NotRequired,
+      })
+      expect(await stateOf(completed.session.id)).toEqual({
+        status: SessionStatus.Active,
+        secondFactor: SecondFactorStatus.Completed,
+      })
+      expect(await stateOf(signedOut.session.id)).toEqual({
+        status: SessionStatus.SignedOut,
+        secondFactor: SecondFactorStatus.Pending,
+      })
+      expect(await stateOf(expired.session.id)).toEqual({
+        status: SessionStatus.Expired,
+        secondFactor: SecondFactorStatus.Pending,
+      })
+      expect(await stateOf(bobs.session.id)).toEqual({
+        status: SessionStatus.Active,
+        secondFactor: SecondFactorStatus.Pending,
+      })
+      expect((await sessions.validate(pending.cookieValue))?.session.secondFactor).toBe(
+        SecondFactorStatus.NotRequired,
+      )
+    }))
+
   it("signs out one session, then every session of the user but one", () =>
     withDatabase(async ({ sql }) => {
       const { sessions, ann, store, authStore } = await setup(sql)
@@ -501,6 +548,39 @@ describe("the stores inside the caller's transaction (#161)", () => {
         sessions: 0,
         profiles: 1,
       })
+    }))
+
+  it("clears pending second factors with the caller's transaction, and rolls back with it", () =>
+    withDatabase(async ({ sql }) => {
+      const { user, key } = await createPostgresAuthStore(sql).createUserWithKey(
+        emailKey("password", "ann@example.com"),
+      )
+      const { id } = await createPostgresSessionStore(sql).create({
+        ...newSession(user.id, key.id),
+        secondFactor: SecondFactorStatus.Pending,
+      })
+      const secondFactorOf = async () => {
+        const [row] = await sql<{ second_factor: number }[]>`
+          SELECT second_factor FROM auth_sessions WHERE id = ${id}
+        `
+        return row.second_factor
+      }
+
+      const error = await sql.begin(async (tx) => {
+        await createPostgresSessionStore(tx).clearPendingSecondFactors(user.id)
+        const [row] = await tx<{ second_factor: number }[]>`
+          SELECT second_factor FROM auth_sessions WHERE id = ${id}
+        `
+        expect(row.second_factor).toBe(SecondFactorStatus.NotRequired)
+        throw new Abort()
+      }).then(() => null, (caught: unknown) => caught)
+      expect(error).toBeInstanceOf(Abort)
+      expect(await secondFactorOf()).toBe(SecondFactorStatus.Pending)
+
+      await sql.begin(async (tx) => {
+        await createPostgresSessionStore(tx).clearPendingSecondFactors(user.id)
+      })
+      expect(await secondFactorOf()).toBe(SecondFactorStatus.NotRequired)
     }))
 
   it("joins a savepoint the caller opened, and rolls back with it", () =>
