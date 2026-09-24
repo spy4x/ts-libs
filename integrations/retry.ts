@@ -52,7 +52,17 @@ export interface RetryPolicy {
 /** Waits a duration. Injected so a test can record instead of sleeping. */
 export type Sleeper = (ms: number) => Promise<void>
 
-/** Millisecond time source. */
+/**
+ * Millisecond time source.
+ *
+ * @deprecated The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is
+ * now the home for this shape. Use that instead in new code. Kept as its own
+ * `type Clock = () => number` declaration, not a `= NowFn` reference, for the same
+ * contract-rendering reason documented on `platform/rate-limit/memory.ts`'s `Clock`: `deno doc`'s
+ * text — which `docs/1.0-contract.md` pins verbatim — renders a reference to another named type
+ * differently from an inline function type, even though the two are already structurally
+ * interchangeable.
+ */
 export type Clock = () => number
 
 /**
