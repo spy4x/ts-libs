@@ -27,15 +27,15 @@ export interface WalkEntry {
 /**
  * Clock injection point, so throttling is testable without sleeping.
  *
- * @deprecated Identical shape to `../universal/time.ts`'s `Clock` (`#71`), which is now the one
- * home for this shape. Use that instead in new code.
+ * @deprecated Identical shape to `Clock` from `@spy4x/platform/universal/time` (`#71`), which is
+ * now the one home for this shape. Use that instead in new code.
  */
 export type ClockPort = Clock
 
 /**
  * The host clock.
  *
- * @deprecated Use `../universal/time.ts`'s `systemClock`.
+ * @deprecated Use `systemClock` from `@spy4x/platform/universal/time`.
  */
 export const systemClockPort: ClockPort = systemClock
 

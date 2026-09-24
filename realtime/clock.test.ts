@@ -16,9 +16,9 @@ describe("createSystemClock", () => {
   it("runs a callback after a real timeout and lets it be cleared", async () => {
     const clock = createSystemClock()
     let calls = 0
-    const handle = clock.setTimeout(() => calls++, 1_000)
+    const handle = clock.setTimeout(() => calls++, 5)
     clock.clearTimeout(handle)
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 20))
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 30))
     expect(calls).toBe(0)
   })
 

@@ -88,10 +88,11 @@ export interface FormatTimeOptions {
  *
  * The one home for the object-shaped clock (`#71`): `platform/server/ports.ts`'s `ClockPort` is
  * now an alias of this type, and `realtime/clock.ts`'s `Clock` extends it with timer methods.
- * `platform/rate-limit/memory.ts` also exports a `Clock`, but function-shaped (`() => number`)
- * rather than object-shaped — a different shape under the same name that this extraction cannot
- * merge without breaking either package's 1.x callers, so it stays a second, separate home for
- * that shape; see that module's own docs.
+ * `platform/rate-limit/memory.ts` also used to export its own function-shaped clock
+ * (`() => number`) under the same names, `Clock`/`systemClock` — a different shape that this
+ * extraction cannot merge into the interface above without breaking a 1.x caller of one shape or
+ * the other. {@link NowFn}/{@link systemNow} below are that shape's home instead; that module's
+ * `Clock`/`systemClock` are now aliases of them.
  */
 export interface Clock {
   /** Current instant in epoch milliseconds. */
@@ -100,6 +101,20 @@ export interface Clock {
 
 /** The host clock. The only place `Date.now()` is read in this package. */
 export const systemClock: Clock = { now: () => Date.now() }
+
+/**
+ * Monotonic millisecond clock, function-shaped rather than object-shaped — the home for the
+ * `() => number` clock shape (`#71`), which cannot be merged into {@link Clock} without breaking
+ * a 1.x caller of one shape or the other. `platform/rate-limit/memory.ts`'s `Clock` is now an
+ * alias of this type.
+ */
+export type NowFn = () => number
+
+/**
+ * The host clock, function-shaped. `platform/rate-limit/memory.ts`'s `systemClock` is now an
+ * alias of this constant.
+ */
+export const systemNow: NowFn = () => Date.now()
 
 /** Locale and zone applied by {@link formatTime} and {@link timeAgo}. */
 export interface TimeFormatOptions {
