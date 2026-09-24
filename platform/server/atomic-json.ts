@@ -8,6 +8,8 @@
  *
  * Everything goes through a {@link FileSystemPort}, so all of this is testable with an in-memory
  * fake under the root test task's `--allow-read --allow-env` grant.
+ *
+ * @module
  */
 
 import { dirname } from "@std/path"

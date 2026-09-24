@@ -6,6 +6,8 @@
  * trust boundary rather than trusting `X-Forwarded-For` unconditionally — see `request-info.ts`
  * for the bug this fixes and the two decisions behind its `Env`-generic, `APIContext`-free
  * signature.
+ *
+ * @module
  */
 
 export {

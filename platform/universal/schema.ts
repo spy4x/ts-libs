@@ -5,6 +5,8 @@
  * this package must not declare a second one. What it does need is the ability to name "the value
  * a schema produces" without depending on the shape of `Type`'s type parameters — which is what
  * {@link InferSchema} provides.
+ *
+ * @module
  */
 
 import type { Type } from "arktype"

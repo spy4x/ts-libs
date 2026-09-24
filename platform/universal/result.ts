@@ -12,6 +12,8 @@
  *
  * {@link OperationResult} in `errors.ts` is the third and last: an operation result where the
  * error is a *typed* {@link AnyError} rather than a string.
+ *
+ * @module
  */
 
 /** A value or an error, as a discriminated union on `ok`. */

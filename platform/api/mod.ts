@@ -3,6 +3,8 @@
  *
  * {@link apiFetch} wraps `fetch` for a JSON API and reports the outcome as an {@link ApiResult}
  * instead of throwing. See `api.ts` for the header-merge bug fixed at extraction time.
+ *
+ * @module
  */
 
 export { type ApiError, apiFetch, type ApiResult } from "./api.ts"

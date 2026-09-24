@@ -1,3 +1,9 @@
+/**
+ * {@link denoFileSystem}, the `Deno`-backed implementation of `FileSystemPort`.
+ *
+ * @module
+ */
+
 import { join } from "@std/path"
 
 import type { ByteReader, FileSystemPort, LockHandle, WalkEntry } from "./ports.ts"

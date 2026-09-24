@@ -10,6 +10,8 @@
  *   and the subscribe/unsubscribe requests a server accepts for it.
  *
  * See `base-model.ts` and `push.ts` for which of these declare `"+": "reject"` and why.
+ *
+ * @module
  */
 
 export { DateNullableSchema, dateSchema, type DateType } from "./date.ts"

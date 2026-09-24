@@ -10,6 +10,8 @@
  * name makes — a crash corrupts at most the final line — actually holds: the previous revision
  * read the whole file and wrote it back with one more line, so a crash mid-write could lose the
  * entire log, and the cost of each append grew with the size of the log already on disk.
+ *
+ * @module
  */
 
 import { dirname } from "@std/path"

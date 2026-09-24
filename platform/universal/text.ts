@@ -1,3 +1,9 @@
+/**
+ * Small text helpers for UI copy: a list-filter match and a naive English pluraliser.
+ *
+ * @module
+ */
+
 /** Substring/equality match used by list filters. */
 export function search(
   value: string | number | null | undefined,

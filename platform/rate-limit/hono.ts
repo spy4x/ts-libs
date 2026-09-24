@@ -17,6 +17,8 @@
  * accessor wired and no trusted proxy header, every anonymous request buckets on the same
  * placeholder address, and a config that can do that silently is exactly the kind this factory
  * refuses to build. See {@link RateLimitMiddlewareOptions.remoteAddr}.
+ *
+ * @module
  */
 
 import { type as arkType } from "arktype"

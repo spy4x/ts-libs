@@ -6,6 +6,8 @@
  * `--allow-write`). {@link denoFileSystem} is the only Deno-bound object, and it is a thin adapter.
  *
  * This entry point imports `Deno` types transitively — keep it out of a browser bundle.
+ *
+ * @module
  */
 
 export * from "./server/atomic-json.ts"

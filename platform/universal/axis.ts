@@ -3,6 +3,8 @@
  * cover a range.
  *
  * Pure arithmetic, no DOM and no SVG — the caller decides how to draw the result.
+ *
+ * @module
  */
 
 /**

@@ -6,6 +6,8 @@
  * second-based counterpart: the source repo computed {@link ONE_MONTH_IN_MILLISECONDS} from
  * `ONE_YEAR_IN_SECONDS` (`gb/libs/shared/constants.ts:17`), which silently made the month twelve
  * times too long — i.e. byte-identical to a year.
+ *
+ * @module
  */
 
 /** Days in one nominal month. */

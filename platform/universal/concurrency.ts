@@ -1,4 +1,8 @@
-/** A fair async mutex. */
+/**
+ * {@link AsyncMutex} — a fair async mutex for serialising async critical sections.
+ *
+ * @module
+ */
 
 interface Waiter {
   resolve: (release: () => void) => void
