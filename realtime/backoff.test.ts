@@ -88,12 +88,25 @@ describe("nextBackoffDelay", () => {
   })
 
   it("never returns more than a non-integer maxMs when the jitter ratio is zero", () => {
-    // #71: an earlier extraction of this function's arithmetic rounded the delay before
-    // re-clamping it to maxMs, which happened to still land inside maxMs here — pinned anyway
-    // as the direct case the reviewer asked for.
+    // #71: an earlier extraction of this function's arithmetic rounded the capped delay, which
+    // returned 101 here, above maxMs.
     expect(
       nextBackoffDelay({ attempt: 10, baseMs: 100, maxMs: 100.6, jitterRatio: 0 }),
     ).toBe(100.6)
+  })
+
+  it("still draws once and rounds when the jitter ratio is zero", () => {
+    let calls = 0
+    const delay = nextBackoffDelay({
+      attempt: 1,
+      baseMs: 101,
+      factor: 1.5,
+      maxMs: 10_000,
+      jitterRatio: 0,
+      random: () => (calls++, 0.5),
+    })
+    expect(delay).toBe(152)
+    expect(calls).toBe(1)
   })
 
   it("is deterministic for a fixed random source", () => {
