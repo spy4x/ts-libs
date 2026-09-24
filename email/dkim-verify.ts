@@ -9,12 +9,8 @@
 // Anything this file "needs" from `@std/*` is a smell, not a dependency to
 // add. The one import below, of `./dkim-body-hash.ts`, is a sibling module of
 // this same package rather than a dependency — see that file's module note.
-// `@spy4x/platform/tokens` is the same kind of exception: a sibling workspace
-// package, not an external dependency, and the constant-time compare it
-// supplies (issue #71) replaces this file's own hand-written one.
 
 import { type BodyHashCache, createBodyHashCache } from "./dkim-body-hash.ts"
-import { constantTimeEqualsText } from "@spy4x/platform/tokens"
 
 /** Which canonicalization RFC 6376 §3.4 applies to a header or a body. */
 export type Canonicalization = "simple" | "relaxed"
@@ -1775,14 +1771,12 @@ async function verifyOneSignature(
   }
 
   // Neither side of this comparison is a secret — `computedBodyHash` is derived
-  // from the message body, and `parsed.bodyHash` is copied straight out of the
-  // `bh=` tag the sender put on the wire, so timing a length mismatch here
-  // (the source's original hand-written compare did exactly that) could not
-  // have told an attacker anything they could not already read off the
-  // message. `constantTimeEqualsText` is used anyway, for one compare
-  // function instead of a hand-written XOR loop, not because this call site
-  // needed the constant-time property.
-  if (!(await constantTimeEqualsText(computedBodyHash, parsed.bodyHash))) {
+  // from the public message body, and `parsed.bodyHash` is copied straight out
+  // of the `bh=` tag the sender put on the wire — so a plain compare needs no
+  // constant-time treatment: there is nothing here a timing channel could leak
+  // that the message itself does not already show. #71's constant-time copy
+  // that used to sit here is removed, not moved to a shared home.
+  if (computedBodyHash !== parsed.bodyHash) {
     return {
       valid: false,
       parsed,
