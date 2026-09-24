@@ -83,7 +83,16 @@ export interface FormatTimeOptions {
   timeZone?: string
 }
 
-/** Injectable time source, so formatting and relative times are testable without a frozen host. */
+/**
+ * Injectable time source, so formatting and relative times are testable without a frozen host.
+ *
+ * The one home for the object-shaped clock (`#71`): `platform/server/ports.ts`'s `ClockPort` is
+ * now an alias of this type, and `realtime/clock.ts`'s `Clock` extends it with timer methods.
+ * `platform/rate-limit/memory.ts` also exports a `Clock`, but function-shaped (`() => number`)
+ * rather than object-shaped — a different shape under the same name that this extraction cannot
+ * merge without breaking either package's 1.x callers, so it stays a second, separate home for
+ * that shape; see that module's own docs.
+ */
 export interface Clock {
   /** Current instant in epoch milliseconds. */
   now(): number

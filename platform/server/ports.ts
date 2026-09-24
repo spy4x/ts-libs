@@ -12,6 +12,8 @@
  * monkey-patching a global.
  */
 
+import { type Clock, systemClock } from "../universal/time.ts"
+
 /** A single directory entry, as returned by a directory listing. */
 export interface WalkEntry {
   /** Base name, not a path. */
@@ -22,13 +24,20 @@ export interface WalkEntry {
   size?: number
 }
 
-/** Clock injection point, so throttling is testable without sleeping. */
-export interface ClockPort {
-  now(): number
-}
+/**
+ * Clock injection point, so throttling is testable without sleeping.
+ *
+ * @deprecated Identical shape to `../universal/time.ts`'s `Clock` (`#71`), which is now the one
+ * home for this shape. Use that instead in new code.
+ */
+export type ClockPort = Clock
 
-/** The host clock. */
-export const systemClockPort: ClockPort = { now: () => Date.now() }
+/**
+ * The host clock.
+ *
+ * @deprecated Use `../universal/time.ts`'s `systemClock`.
+ */
+export const systemClockPort: ClockPort = systemClock
 
 /** Storage primitives a server helper needs. No method here reads `Deno.*` by itself. */
 export interface FileSystemPort {

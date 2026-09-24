@@ -8,6 +8,7 @@ import {
   getDaysOfWeek,
   isValidDate,
   normalizeCalendarDate,
+  systemClock,
   timeAgo,
   TimeFormatter,
 } from "./time.ts"
@@ -200,5 +201,15 @@ describe("timeAgo", () => {
   it("accepts a number and a Date as well as a string", () => {
     expect(ago("2024-03-11T14:30:00Z")).toBe(formatter.ago(new Date("2024-03-11T14:30:00Z")))
     expect(formatter.ago(new Date("2024-03-11T14:30:00Z").getTime())).toBe("1 day ago")
+  })
+})
+
+describe("systemClock", () => {
+  it("reads Date.now()", () => {
+    const before = Date.now()
+    const reading = systemClock.now()
+    const after = Date.now()
+    expect(reading).toBeGreaterThanOrEqual(before)
+    expect(reading).toBeLessThanOrEqual(after)
   })
 })

@@ -25,7 +25,15 @@
  * keys; the counter only decays by waiting.
  */
 
-/** Monotonic millisecond clock. Inject a fake in tests; never read `Date.now()` behind one. */
+/**
+ * Monotonic millisecond clock. Inject a fake in tests; never read `Date.now()` behind one.
+ *
+ * Function-shaped, unlike `platform/universal/time.ts`'s object-shaped `Clock`
+ * (`{ now(): number }`) — the two cannot be merged into one type without breaking a 1.x caller of
+ * one shape or the other, so both stay exported under the same name from different subpaths
+ * (`#71`). This is the one home for the function-shaped variant; `platform/rate-limit/kv.ts`
+ * already imports it from here rather than redeclaring it.
+ */
 export type Clock = () => number
 
 /** Default: real time. Only the module boundary reads it. */
