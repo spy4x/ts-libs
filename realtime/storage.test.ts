@@ -1,5 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
+import { type } from "arktype"
+import { makeStorage, type StorageLike } from "@spy4x/platform/browser/storage"
 
 import { MemoryKeyValueStore } from "./storage.ts"
 
@@ -41,5 +43,18 @@ describe("MemoryKeyValueStore", () => {
     first.setItem("cursor", "1")
     const second = new MemoryKeyValueStore()
     expect(second.getItem("cursor")).toBeNull()
+  })
+})
+
+describe("interop with @spy4x/platform/browser/storage (deprecated StorageLike)", () => {
+  // This is an interop check, not proof the two homes were merged correctly: both
+  // KeyValueStore (here) and StorageLike (platform) are aliases of the same
+  // platform/universal/key-value-store.ts interface, so this only shows a MemoryKeyValueStore
+  // still plugs into makeStorage, the way it always could.
+  it("plugs a MemoryKeyValueStore into makeStorage through the deprecated StorageLike alias", () => {
+    const backing: StorageLike = new MemoryKeyValueStore()
+    const store = makeStorage(backing, "theme", { schema: type("'light'|'dark'") })
+    expect(store.set("dark").status).toBe("ok")
+    expect(store.get()).toEqual({ status: "ok", value: "dark" })
   })
 })

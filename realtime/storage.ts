@@ -7,12 +7,17 @@
  * library never grabs a global at import time and never assumes a browser.
  */
 
-/** Minimal synchronous key/value store. `Storage` satisfies it structurally. */
-export interface KeyValueStore {
-  getItem(key: string): string | null
-  setItem(key: string, value: string): void
-  removeItem(key: string): void
-}
+import type { KeyValueStore as PlatformKeyValueStore } from "@spy4x/platform/universal/key-value-store"
+
+/**
+ * Minimal synchronous key/value store. `Storage` satisfies it structurally.
+ *
+ * @deprecated Use `KeyValueStore` from `@spy4x/platform/universal/key-value-store` — the same
+ * three methods, homed there (#71) since this package has no dependency of its own to protect
+ * either way and `@spy4x/platform` cannot depend on `@spy4x/realtime` without a publish-time
+ * dependency cycle (see #181's `realtime/backoff.ts` importing `@spy4x/platform/universal/async`).
+ */
+export type KeyValueStore = PlatformKeyValueStore
 
 /**
  * In-memory {@link KeyValueStore}.

@@ -133,16 +133,16 @@ Nothing here imports a WebSocket library, a framework or Preact. A host adapts
 its own objects once — except the browser `WebSocket` itself, which this
 package now adapts (see below).
 
-| Port                | Shape                                                                                                                                         | File                  |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| `ManagedSocket`     | `state`, `send`, `close`, `onOpen`, `onMessage`, `onClose`, optional `bufferedAmount`                                                         | `socket-port.ts`      |
-| `SocketFactory`     | `(url) => ManagedSocket`                                                                                                                      | `socket-port.ts`      |
-| `Clock`             | `now`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`                                                                             | `clock.ts`            |
-| `KeyValueStore`     | `getItem`, `setItem`, `removeItem` — satisfied by Web Storage `Storage`; also the home for `@spy4x/platform`'s deprecated `StorageLike` (#71) | `storage.ts`          |
-| `MessageCodec`      | `encode`, `decode`                                                                                                                            | `codec.ts`            |
-| `CursorPort`        | `syncRequest`, `cursorFor`, `apply`, optional `markSynced`                                                                                    | `client-transport.ts` |
-| `UserFanout`        | `sendToUsers(userIds, message)`                                                                                                               | `notify.ts`           |
-| `RecipientResolver` | `(change) => userIds`                                                                                                                         | `notify.ts`           |
+| Port                | Shape                                                                                                                                                                               | File                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| `ManagedSocket`     | `state`, `send`, `close`, `onOpen`, `onMessage`, `onClose`, optional `bufferedAmount`                                                                                               | `socket-port.ts`      |
+| `SocketFactory`     | `(url) => ManagedSocket`                                                                                                                                                            | `socket-port.ts`      |
+| `Clock`             | `now`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`                                                                                                                   | `clock.ts`            |
+| `KeyValueStore`     | `getItem`, `setItem`, `removeItem` — satisfied by Web Storage `Storage`; a deprecated alias of `@spy4x/platform/universal/key-value-store`'s `KeyValueStore`, the actual home (#71) | `storage.ts`          |
+| `MessageCodec`      | `encode`, `decode`                                                                                                                                                                  | `codec.ts`            |
+| `CursorPort`        | `syncRequest`, `cursorFor`, `apply`, optional `markSynced`                                                                                                                          | `client-transport.ts` |
+| `UserFanout`        | `sendToUsers(userIds, message)`                                                                                                                                                     | `notify.ts`           |
+| `RecipientResolver` | `(change) => userIds`                                                                                                                                                               | `notify.ts`           |
 
 Adapters a host writes — `localStorage` to `KeyValueStore`, `fetch` to the two
 sync calls — are each a handful of lines and are the only place a platform

@@ -15,17 +15,16 @@
  */
 
 import type { Type } from "arktype"
-import type { KeyValueStore } from "@spy4x/realtime"
 
 import type { InferSchema } from "../universal/schema.ts"
+import type { KeyValueStore } from "../universal/key-value-store.ts"
 import { validate } from "@spy4x/validation"
 
 /**
  * The subset of the DOM `Storage` interface this module uses.
  *
- * @deprecated Use `KeyValueStore` from "@spy4x/realtime" — the same three methods, with no other
- * home-package dependency. This is a type-only alias (erased at compile time), so pointing this
- * module at it adds nothing to what a browser consumer already downloads.
+ * @deprecated Use `KeyValueStore` from `@spy4x/platform/universal/key-value-store` — the same
+ * three methods, in a file with no import of its own.
  */
 export type StorageLike = KeyValueStore
 
