@@ -1082,11 +1082,15 @@ connection with `sql.reserve()`, and on a pool with no idle connection yet — t
 start of a run — `postgres@3.4.7` has a bug that leaves that call unresolved forever: `ReadyForQuery`
 only hands a freshly opened connection back to a pending `reserve()` through the branch that also
 fetches the driver's array-type OIDs, and `fetch_types: false` skips that branch, so the connection is
-never matched to the reserve call and the run hangs with no error and no log line — reported and fixed
-upstream at https://github.com/porsager/postgres/pull/1220. `withReservedLock` works around it with a
-plain query on the pool before `reserve()`, which always completes and leaves a connection sitting
-idle, so the `reserve()` right after it takes the pool's synchronous already-idle path instead of the
-one that hangs. See that method's doc comment in `postgres-migrate.ts` for the exact lines, and
+never matched to the reserve call and the run hangs with no error and no log line — reported upstream
+as [porsager/postgres#1219](https://github.com/porsager/postgres/issues/1219); a proposed fix is open
+in [#1220](https://github.com/porsager/postgres/pull/1220) and in no release. `withReservedLock` works
+around it with a plain query on the pool before `reserve()`, which always completes and leaves a
+connection sitting idle, so the `reserve()` right after it takes the pool's synchronous already-idle
+path instead of the one that hangs. One race is not closed by this: if the warm-up connection's ready
+message arrives late or another caller on the pool takes it first, `reserve()` opens a second
+connection that hits the same bug and stays stuck until the pool ends, costing it that connection slot
+for good. See that method's doc comment in `postgres-migrate.ts` for the exact lines, and
 `postgres-migrate.integration.test.ts`'s "against a client built with fetch_types: false" test for the
 reproduction.
 

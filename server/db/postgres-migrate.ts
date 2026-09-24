@@ -424,8 +424,8 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * (`:545-548`) only re-executes a *non-reserve* `initial` and unconditionally clears
    * `initial`, so the reserve marker is dropped, `onopen()` is never called, and the new
    * connection is never moved to `open` or matched to the waiting `reserve()` call — it
-   * hangs forever, reproduced in `postgres-migrate.integration.test.ts`. Reported and
-   * fixed upstream: https://github.com/porsager/postgres/pull/1220.
+   * hangs forever, reproduced in `postgres-migrate.integration.test.ts`. Reported upstream
+   * as porsager/postgres#1219; a proposed fix is open in #1220 and in no release.
    *
    * An ordinary query on the pool does not hit this: a non-reserve `initial` runs on
    * either branch (`:539-541` calls `fetchArrayTypes()` first but still executes it
@@ -434,7 +434,17 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * pool's `open` list — at which point `reserve()` takes `open.length ? open.shift()`
    * synchronously, the branch above never runs, and the bug never triggers. Removing
    * this line brings the hang straight back; keep it paired with the integration test
-   * that reproduces the hang without it.
+   * that reproduces the hang without it. Sending it *after* `reserve()` instead does not
+   * work: by then `reserve()` is already the call stuck waiting on the buggy path, so a
+   * later query on the pool cannot rescue it — an integration test proves this the same
+   * way, by moving the line and watching the test go red again.
+   *
+   * **One race is not closed by this.** If the warm-up connection's ready message
+   * arrives in a later chunk, or another caller on this pool takes the warmed connection
+   * before `reserve()` here runs, `reserve()` opens a second connection that stays stuck
+   * on the same bug until the pool ends — the run still finishes, but the pool silently
+   * loses that connection's slot for good; nothing this driver owns can close that
+   * window, only the upstream fix in #1220 does.
    */
   private async withReservedLock<T>(run: () => Promise<T>): Promise<T> {
     await this.sql`SELECT 1`

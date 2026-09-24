@@ -782,10 +782,18 @@ describe("the Postgres migration runner against a client built with fetch_types:
     // branch never runs; the plain branch below it (`:545-548`) only re-executes a
     // *non-reserve* `initial` and unconditionally clears `initial` regardless, so the
     // reserve marker is dropped, `onopen()` is never called, and the new connection is
-    // never moved to `open` or matched to the waiting `reserve()` call. Reported and fixed
-    // upstream: https://github.com/porsager/postgres/pull/1220. `withReservedLock` in
-    // `postgres-migrate.ts` works around it with a plain warm-up query before `reserve()`;
-    // see that method's doc comment for the fix itself.
+    // never moved to `open` or matched to the waiting `reserve()` call. Reported upstream
+    // as porsager/postgres#1219; a proposed fix is open in #1220 and in no release.
+    // `withReservedLock` in `postgres-migrate.ts` works around it with a plain warm-up
+    // query before `reserve()`; see that method's doc comment for the fix itself.
+    //
+    // **No query runs on `sql` before `runMigrations`.** `SET client_min_messages` used to
+    // be sent here as a plain query, which — like the fix's own warm-up query — opens a
+    // pooled connection and leaves it idle, so `reserve()` right after took the harmless
+    // synchronous path and the hang never had a chance to reproduce (measured: the test
+    // still passed at 79ms with the fix's `SELECT 1` removed). `client_min_messages` is
+    // set through the connection options instead, which the driver applies during startup
+    // rather than as a query this test would send.
     const settings = postgresSettings()
     await requireReachable(settings.address)
 
@@ -797,7 +805,7 @@ describe("the Postgres migration runner against a client built with fetch_types:
       pass: settings.connection.password,
       db: settings.connection.database,
       fetch_types: false,
-      connection: { application_name: table },
+      connection: { application_name: table, client_min_messages: "warning" },
     }) as unknown as Sql
 
     const reader: MigrationReader = {
@@ -824,7 +832,6 @@ describe("the Postgres migration runner against a client built with fetch_types:
     }
 
     try {
-      await sql`SET client_min_messages = warning`
       const first = await withDeadline(
         "the first run",
         runMigrations(new PostgresMigrationDriver({ sql, table }), options),
@@ -837,8 +844,15 @@ describe("the Postgres migration runner against a client built with fetch_types:
       )
       assertEquals(second, { applied: [], skipped: ["0001_init"], missing: [] })
     } finally {
-      await sql`DROP TABLE IF EXISTS ${sql(table)}`
-      await sql.end()
+      // Force-close first: a graceful end waits for the hung reserve, and a query on this
+      // pool would hand the hung run a connection and let it recreate the table.
+      await sql.end({ timeout: 0 })
+      const admin = createSql({ connection: settings.connection, max: 1 })
+      try {
+        await admin`DROP TABLE IF EXISTS ${admin(table)}`
+      } finally {
+        await admin.end()
+      }
     }
   })
 })
