@@ -530,6 +530,29 @@ its first successful sign-in, which rehashes it.
 the normalised address. Sign-up is refused as `email-taken` when another user owns the address or a
 password key for it already exists.
 
+**Sign in by a username with `normalizeSubject`.** The option turns the `email` field of
+`signUp` and `signIn` into the key's subject, or refuses it by returning null; it defaults to
+`normalizeEmail`, so an address-based provider behaves exactly as before. A custom subject gets the
+same dummy-hash verification and rehash as an address. A refused subject answers `invalid-email` at
+sign-up and `invalid-credentials` at sign-in, and a subject in use answers `email-taken`. The key
+is written with `email: null`, so it never owns, proves or evicts an address, even when the
+username looks like one. `requestReset` and `completeReset` throw a plain `Error` in this mode,
+because they mail the subject; `changePassword` works as usual. Use one normaliser per store.
+
+```ts
+const passwords = createPasswordSignIn({
+  store,
+  sessions,
+  hasher,
+  normalizeSubject: (raw) => {
+    if (typeof raw !== "string") return null
+    const username = raw.trim().toLowerCase()
+    return [...username].length >= 1 && [...username].length <= 50 ? username : null
+  },
+})
+await passwords.signIn({ email: username, password })
+```
+
 **Create before revoke.** `changePassword` (which checks the current password) and `completeReset`
 store the new secret, then create the new session, and only then sign out the user's other sessions.
 A failure part-way never leaves the person signed out while the old password still works. The

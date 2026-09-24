@@ -11,6 +11,9 @@
  *   hash still verifies faster than the dummy until its first successful sign-in rehashes it.
  * - **Addresses are compared in one form.** Every address goes through `normalizeEmail`, and a key's
  *   `email` is always set to its subject, so eviction can find it.
+ * - **A custom subject is never an address.** With `normalizeSubject` set (a username, say), a key
+ *   carries its subject with `email: null`, so it never owns, proves or evicts an address, and the
+ *   reset operations, which mail an address, refuse to run.
  * - **Password sign-up does not prove the address.** The key starts unproven. Sign-up is refused
  *   when another user owns the address, and a completed reset proves it, taking it away from
  *   whoever registered it first.
@@ -34,6 +37,7 @@ import {
   type NewAuthKey,
   normalizeEmail,
 } from "./model.ts"
+import { isStoreText, MAX_SUBJECT_LENGTH } from "./input.ts"
 import type { ProviderDeps, SignInResult } from "./provider.ts"
 
 /** The `AuthKey.method` of every key this provider writes. */
@@ -86,7 +90,11 @@ export type PasswordSignInFailure =
   /** Reset: another write for this address committed at the same moment. Ask for a new code. */
   | "conflict"
 
-/** Thrown by every method of {@link PasswordSignIn} on a refusal. `reason` names which. */
+/**
+ * Thrown by every method of {@link PasswordSignIn} on a refusal. `reason` names which. With a custom
+ * {@link PasswordSignInOptions.normalizeSubject}, `invalid-email` means the normaliser refused the
+ * subject and `email-taken` means the subject is in use.
+ */
 export class PasswordSignInError extends Error {
   readonly reason: PasswordSignInFailure
 
@@ -107,10 +115,35 @@ export interface PasswordSignInOptions extends ProviderDeps {
   resetTtlMinutes?: number
   /** Guesses per reset code, a positive integer. Defaults to {@link DEFAULT_MAX_RESET_ATTEMPTS}. */
   maxResetAttempts?: number
+  /**
+   * Turns the raw `email` field of {@link PasswordCredentials} into the key's subject, or returns
+   * null to refuse it. Defaults to `normalizeEmail`, and leaving it unset keeps every behaviour of
+   * an address-based provider.
+   *
+   * Set it to sign in by something other than an address, such as a username. Then:
+   *
+   * - `signUp` and `signIn` use it, with the same dummy-hash verification for an unknown subject and
+   *   the same rehash. A null answer, or a value the store cannot hold (empty, over 255 characters,
+   *   a NUL or a lone surrogate), is refused as `invalid-email` at sign-up and as
+   *   `invalid-credentials` at sign-in. A duplicate subject is `email-taken`.
+   * - The key is written with `email: null` and stays unproven, even when the subject looks like an
+   *   address. It never owns an address, `findUserIdByProvenEmail` never finds it, and proving an
+   *   address elsewhere never evicts it.
+   * - `requestReset` and `completeReset` throw a plain `Error` before doing any work: they deliver a
+   *   code to the subject as an address, which a username is not. `changePassword` works as before.
+   *
+   * Pick one normaliser per store: keys of both kinds share the `password` method, so an address
+   * provider and a username provider over one store would share one subject namespace.
+   */
+  normalizeSubject?: (raw: unknown) => string | null
 }
 
 /** Input of {@link PasswordSignIn.signUp} and {@link PasswordSignIn.signIn}. */
 export interface PasswordCredentials {
+  /**
+   * The address, or the subject {@link PasswordSignInOptions.normalizeSubject} accepts (a username)
+   * when it is set.
+   */
   email: string
   password: string
 }
@@ -168,6 +201,7 @@ export interface PasswordSignIn {
    * nothing about existence. The app delivers the code and should rate-limit this call.
    *
    * @throws {PasswordSignInError} `invalid-email`.
+   * @throws {Error} When {@link PasswordSignInOptions.normalizeSubject} is set.
    */
   requestReset(input: { email: string }): Promise<IssuedReset>
   /**
@@ -183,6 +217,7 @@ export interface PasswordSignIn {
    *
    * @throws {PasswordSignInError} `invalid-email`, `invalid-password`, `invalid-code`, `locked-out`,
    *     `no-account`, `conflict`.
+   * @throws {Error} When {@link PasswordSignInOptions.normalizeSubject} is set.
    */
   completeReset(input: CompleteResetInput): Promise<SignInResult>
 }
@@ -214,6 +249,8 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     "maxResetAttempts",
     1000,
   )
+
+  const customSubject = options.normalizeSubject
 
   // Made once, never per call. The catch only keeps an early failure from being reported as an
   // unhandled rejection; awaiting `dummyHash` still rethrows it.
@@ -247,6 +284,31 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     return email
   }
 
+  /**
+   * The key subject for sign-up and sign-in, or null. The default is `normalizeEmail`, untouched; a
+   * custom normaliser's answer must also be text the store accepts as a subject.
+   */
+  function toSubject(raw: unknown): string | null {
+    if (!customSubject) return normalizeEmail(raw)
+    const subject = customSubject(raw)
+    if (
+      typeof subject !== "string" || subject.length === 0 || subject.length > MAX_SUBJECT_LENGTH ||
+      !isStoreText(subject)
+    ) {
+      return null
+    }
+    return subject
+  }
+
+  /** Reset delivers a code to the subject as an address, so a custom subject cannot use it. */
+  function requireAddressSubjects(operation: string): void {
+    if (customSubject) {
+      throw new Error(
+        `${operation} is not available when normalizeSubject is set: it mails the subject`,
+      )
+    }
+  }
+
   /** Creates a session for `key`. The second-factor status is the app's, or NotRequired. */
   async function signInWith(user: AuthUser, key: AuthKey): Promise<SignInResult> {
     const secondFactor = await options.secondFactorFor?.(user) ?? SecondFactorStatus.NotRequired
@@ -277,16 +339,24 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     return { method: PASSWORD_METHOD, subject: email, email, secret, provenAt }
   }
 
+  /** A new, unproven sign-up key: an address key by default, an address-free one otherwise. */
+  function signUpKey(subject: string, secret: string): NewAuthKey {
+    if (!customSubject) return passwordKey(subject, secret, null)
+    return { method: PASSWORD_METHOD, subject, email: null, secret, provenAt: null }
+  }
+
   return {
     async signUp({ email: rawEmail, password }) {
-      const email = requireEmail(rawEmail)
+      const subject = toSubject(rawEmail)
+      if (subject === null) throw new PasswordSignInError("invalid-email")
       const secret = await hashNewPassword(password)
-      if (await store.findUserIdByProvenEmail(email) !== null) {
+      // Only an address can be owned; a custom subject is never one.
+      if (!customSubject && await store.findUserIdByProvenEmail(subject) !== null) {
         throw new PasswordSignInError("email-taken")
       }
       let created: { user: AuthUser; key: AuthKey }
       try {
-        created = await store.createUserWithKey(passwordKey(email, secret, null))
+        created = await store.createUserWithKey(signUpKey(subject, secret))
       } catch (error) {
         if (error instanceof AuthConflictError) throw new PasswordSignInError("email-taken")
         throw error
@@ -295,8 +365,8 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     },
 
     async signIn({ email: rawEmail, password }) {
-      const email = normalizeEmail(rawEmail)
-      const key = email === null ? null : await store.findKey(PASSWORD_METHOD, email)
+      const subject = toSubject(rawEmail)
+      const key = subject === null ? null : await store.findKey(PASSWORD_METHOD, subject)
       // Exactly one verification on every path: the key's own hash, or the dummy one.
       const stored = key?.secret ?? await dummyHash
       const check = await hasher.verify(password, stored)
@@ -329,6 +399,7 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     },
 
     async requestReset({ email: rawEmail }) {
+      requireAddressSubjects("requestReset")
       const email = requireEmail(rawEmail)
       const code = randomBase64Url(RESET_CODE_BYTES)
       const issuedAt = now()
@@ -344,6 +415,7 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     },
 
     async completeReset({ email: rawEmail, code, newPassword }) {
+      requireAddressSubjects("completeReset")
       const email = requireEmail(rawEmail)
       // Checked before the guess is spent, so a refused password does not consume a matching code.
       const secret = await hashNewPassword(newPassword)
