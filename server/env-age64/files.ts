@@ -8,6 +8,7 @@
  * refusing to write through a symlink or over a non-regular file.
  */
 
+import { identityToRecipient } from "@age/age-encryption"
 import { dirname, join } from "@std/path"
 import {
   decryptValue,
@@ -15,7 +16,6 @@ import {
   generateIdentityKeyFile,
   indexEncryptedFile,
   parseIdentity,
-  parsePublicKey,
   renderDecryptedFile,
   renderEncryptedFile,
   resolveKeyFile,
@@ -31,33 +31,64 @@ async function isNestedCheckout(dir: string): Promise<boolean> {
   }
 }
 
+/**
+ * What to do with one non-directory `Deno.readDir` entry that matched the caller's name filter:
+ * `"collect"` it, `"skip"` it silently, or the name is a symlink and must be refused outright.
+ *
+ * Pulled out of {@link walk} as a pure function so it can be unit-tested against a fake entry —
+ * a real named pipe (`mkfifo`) can't be created without `--allow-run`, which neither test tier
+ * grants, but the classification itself needs no filesystem access at all.
+ */
+export function classifyFileEntry(
+  entry: Pick<Deno.DirEntry, "name" | "isFile" | "isSymlink">,
+  matches: (name: string) => boolean,
+): "collect" | "skip" {
+  if (!matches(entry.name)) return "skip"
+  if (entry.isSymlink) {
+    throw new Error(`refusing to read an env file through a symlink: ${entry.name}`)
+  }
+  // Not a symlink and not a regular file: a named pipe, a socket, a device node, ... Opening one
+  // of these can hang forever (a FIFO with nothing writing to it) or simply isn't a file this
+  // module has any business reading. Never collected, never an error — same as a directory this
+  // walk already skips one branch up.
+  if (!entry.isFile) return "skip"
+  return "collect"
+}
+
 async function walk(
   dir: string,
   results: string[],
   matches: (name: string) => boolean,
 ): Promise<void> {
   for await (const entry of Deno.readDir(dir)) {
-    const path = join(dir, entry.name)
     if (entry.isDirectory) {
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue
+      const path = join(dir, entry.name)
       if (await isNestedCheckout(path)) continue
       await walk(path, results, matches)
       continue
     }
-    if (!matches(entry.name)) continue
-    if (entry.isSymlink) throw new Error(`refusing to read an env file through a symlink: ${path}`)
-    results.push(path)
+    if (classifyFileEntry(entry, matches) === "collect") results.push(join(dir, entry.name))
   }
 }
 
+// The temp-file prefix atomicWrite uses. Deliberately outside the `.env*` shape that
+// isPlaintextEnvName/isEncryptedEnvName match: a leftover from a crash between makeTempFile and
+// remove must never be picked up as a real env file and encrypted or decrypted on the next run.
+// Exported so a test can build a realistic leftover name from the actual constant rather than a
+// hardcoded string that would keep passing even if this value regressed.
+export const TEMP_FILE_PREFIX = ".age64-tmp-"
+
 /** True for a plaintext env file name: starts with `.env`, isn't an example, isn't `.age`. */
 function isPlaintextEnvName(name: string): boolean {
-  return name.startsWith(".env") && !name.includes(".example") && !name.endsWith(".age")
+  return name.startsWith(".env") && !name.includes(".example") && !name.endsWith(".age") &&
+    !name.includes(".sops-backup")
 }
 
 /** True for an encrypted env file name: starts with `.env`, isn't an example, ends in `.age`. */
 function isEncryptedEnvName(name: string): boolean {
-  return name.startsWith(".env") && !name.includes(".example") && name.endsWith(".age")
+  return name.startsWith(".env") && !name.includes(".example") && name.endsWith(".age") &&
+    !name.endsWith(".sops-backup.age")
 }
 
 /** Every plaintext `.env*` file under `root`, sorted, skipping hidden dirs and nested checkouts. */
@@ -94,7 +125,7 @@ async function assertRegularOrMissing(path: string): Promise<void> {
  */
 export async function atomicWrite(path: string, content: string, mode: number): Promise<void> {
   await assertRegularOrMissing(path)
-  const tempPath = await Deno.makeTempFile({ dir: dirname(path), prefix: ".env-age64.tmp-" })
+  const tempPath = await Deno.makeTempFile({ dir: dirname(path), prefix: TEMP_FILE_PREFIX })
   try {
     await Deno.writeTextFile(tempPath, content)
     await Deno.chmod(tempPath, mode)
@@ -111,7 +142,14 @@ export interface AgeKey {
   recipient: string
 }
 
-/** Read and parse the `.age/key.txt` that applies to `root` (see {@link resolveKeyFile}). */
+/**
+ * Read and parse the `.age/key.txt` that applies to `root` (see {@link resolveKeyFile}). The
+ * recipient is DERIVED from the identity with `identityToRecipient`, never read from the file's
+ * `# public key:` comment: that comment is just text, and if it were ever out of sync with the
+ * identity line below it (hand-edited, corrupted, merge-mangled), trusting it would mean
+ * encrypting for a recipient the real identity can't decrypt — wrong in a way nothing would catch
+ * until the person who needs the value can't read it.
+ */
 export async function readAgeKey(root: string): Promise<AgeKey> {
   const path = resolveKeyFile(root)
   let content: string
@@ -123,7 +161,8 @@ export async function readAgeKey(root: string): Promise<AgeKey> {
     }
     throw error
   }
-  return { path, identity: parseIdentity(content), recipient: parsePublicKey(content) }
+  const identity = parseIdentity(content)
+  return { path, identity, recipient: await identityToRecipient(identity) }
 }
 
 /** Result of {@link generateAgeKey}: where the key landed, and its recipient (safe to share). */
@@ -133,18 +172,46 @@ export interface GenerateAgeKeyResult {
 }
 
 /**
- * Generate a fresh identity and write it to `<root>/.age/key.txt`, mode `0600`. Refuses to
- * overwrite an existing key file — losing the only copy of an identity is unrecoverable.
+ * Generate a fresh identity and write it to `<root>/.age/key.txt`, mode `0600`.
+ *
+ * Refuses to overwrite an existing key — losing the only copy of an identity is unrecoverable —
+ * and the check is race-free: the temp file is linked (not renamed) into place, and
+ * `Deno.link` fails atomically with `AlreadyExists` if anything is there already, so two
+ * concurrent `keygen` runs can't both "see no key" and then both write one, each silently
+ * discarding the other's identity.
+ *
+ * Also refuses when `root` is a worktree whose OWN `.age/key.txt` doesn't exist yet but
+ * {@link resolveKeyFile} already finds the main checkout's: generating a local key here wouldn't
+ * replace anything, it would silently shadow the key every other worktree (and the main checkout
+ * itself) already uses, splitting one project into two incompatible identities.
  */
 export async function generateAgeKey(root: string): Promise<GenerateAgeKeyResult> {
   const dir = join(root, ".age")
   const path = join(dir, "key.txt")
-  if (await Deno.stat(path).then(() => true, () => false)) {
-    throw new Error(`age key already exists, refusing to overwrite it: ${path}`)
+  const resolved = resolveKeyFile(root)
+  if (resolved !== path && await Deno.stat(resolved).then(() => true, () => false)) {
+    throw new Error(
+      `refusing to generate a key at ${path}: this worktree already uses the main checkout's ` +
+        `key at ${resolved} — remove that key first if you really want a separate one`,
+    )
   }
   await Deno.mkdir(dir, { recursive: true })
   const { recipient, keyFileContent } = await generateIdentityKeyFile()
-  await atomicWrite(path, keyFileContent, 0o600)
+  const tempPath = await Deno.makeTempFile({ dir, prefix: TEMP_FILE_PREFIX })
+  try {
+    await Deno.writeTextFile(tempPath, keyFileContent)
+    await Deno.chmod(tempPath, 0o600)
+    try {
+      await Deno.link(tempPath, path)
+    } catch (error) {
+      if (error instanceof Deno.errors.AlreadyExists) {
+        throw new Error(`age key already exists, refusing to overwrite it: ${path}`)
+      }
+      throw error
+    }
+  } finally {
+    await Deno.remove(tempPath).catch(() => {})
+  }
   return { path, recipient }
 }
 
