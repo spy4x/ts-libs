@@ -130,7 +130,11 @@
     // `ioredis` (the house dependency-keep list's suggestion) because `ioredis` is
     // `npm:` and pulls in Node compatibility the house rules call "only when
     // unavoidable", and it is not unavoidable here.
-    "@iuioiua/redis": "jsr:@iuioiua/redis@1.1.10"
+    "@iuioiua/redis": "jsr:@iuioiua/redis@1.1.10",
+
+    // The official TypeScript age implementation (#173, `server/env-age64`): does the age
+    // encryption in-process, so the module needs no `age` binary and no `--allow-run`.
+    "@age/age-encryption": "jsr:@age/age-encryption@0.3.1"
   },
   "compilerOptions": {
     // An explicit "lib" replaces Deno's default lib set, so "deno.ns" has to be
@@ -167,6 +171,7 @@
       "**/*.test.ts",
       "email/fixtures",
       "server/__fixtures__",
+      "server/env-age64/__fixtures__",
       "platform/server/_fake-fs.ts",
       "server/db/testing"
     ]

@@ -9,17 +9,17 @@ exactly one top-level directory.
 
 ## Package layout
 
-| Directory       | Contents                                                                                                                                                                                                                |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `platform/`     | types (arktype), helpers, rate-limit, fs, cqrs (command, query and event bus), cache, shared API and model types (api, request-info, model)                                                                             |
-| `server/`       | auth, sign-in (session, cookie, TOTP, password hashing, guards), storage, crypto, db, kv (Redis), outbox, http (bounded-body, cors, bearer-auth), request-log, config, static, healthcheck, user-secrets, quota, export |
-| `net/`          | url-shape, url-policy (SSRF guard), safe-fetch, bounded-body                                                                                                                                                            |
-| `integrations/` | healthchecks, ntfy, webhooks                                                                                                                                                                                            |
-| `time/`         | tz, ics                                                                                                                                                                                                                 |
-| `ai/`           | chatCompletion, chatJson, JSON-from-fence recovery — planned, not built (#11, #76)                                                                                                                                      |
-| `email/`        | address, html, message, sender, smtp transport, dkim-verify                                                                                                                                                             |
-| `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync                                                                                                                                                         |
-| `validation/`   | arktype validate helpers, validation model                                                                                                                                                                              |
+| Directory       | Contents                                                                                                                                                                                                                                                         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform/`     | types (arktype), helpers, rate-limit, fs, cqrs (command, query and event bus), cache, shared API and model types (api, request-info, model)                                                                                                                      |
+| `server/`       | auth, sign-in (session, cookie, TOTP, password hashing, guards), storage, crypto, db, kv (Redis), outbox, http (bounded-body, cors, bearer-auth), request-log, config, static, healthcheck, user-secrets, quota, export, env-age64 (per-value `.env` encryption) |
+| `net/`          | url-shape, url-policy (SSRF guard), safe-fetch, bounded-body                                                                                                                                                                                                     |
+| `integrations/` | healthchecks, ntfy, webhooks                                                                                                                                                                                                                                     |
+| `time/`         | tz, ics                                                                                                                                                                                                                                                          |
+| `ai/`           | chatCompletion, chatJson, JSON-from-fence recovery — planned, not built (#11, #76)                                                                                                                                                                               |
+| `email/`        | address, html, message, sender, smtp transport, dkim-verify                                                                                                                                                                                                      |
+| `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync                                                                                                                                                                                                  |
+| `validation/`   | arktype validate helpers, validation model                                                                                                                                                                                                                       |
 
 ## Adding a package
 
@@ -305,6 +305,7 @@ postgres                         3.4.7
 otpauth                          9.5.2
 qrcode                           3.1.0
 @iuioiua/redis                   1.1.10
+@age/age-encryption               0.3.1
 ```
 
 Adding an import-map entry is a root-file change: it needs the issue number that needs the
