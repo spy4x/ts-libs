@@ -9,6 +9,7 @@ import {
   assertStringIncludes,
 } from "@std/assert"
 import { type } from "arktype"
+import { isValidTimeZone } from "@spy4x/time/tz"
 import {
   DEL_CODE_POINT,
   hasHeaderControlCharacters,
@@ -161,6 +162,30 @@ Deno.test("time zone probe accepts real IANA zone names and rejects unknown, emp
       timeZoneName(zone) instanceof type.errors,
       true,
       `${JSON.stringify(zone)} must be rejected by the refinement`,
+    )
+  }
+})
+
+Deno.test("isValidTimeZoneName agrees with @spy4x/time/tz's isValidTimeZone (#71)", () => {
+  // isValidTimeZoneName is a deprecated call-through to isValidTimeZone. This checks that the two
+  // agree on every case either suite uses, plus a lowercase zone; it cannot tell a call-through
+  // from a copied body, so it guards behaviour, not the delegation.
+  const cases = [
+    "UTC",
+    "Europe/Berlin",
+    "America/New_York",
+    "america/new_york",
+    "Not/A_Timezone",
+    "gibberish",
+    "",
+    "Europe/Berlin ",
+    "EST5EDT ",
+  ]
+  for (const zone of cases) {
+    assertEquals(
+      isValidTimeZoneName(zone),
+      isValidTimeZone(zone),
+      `isValidTimeZoneName and isValidTimeZone must agree on ${JSON.stringify(zone)}`,
     )
   }
 })
