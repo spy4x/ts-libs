@@ -22,9 +22,11 @@ import {
 } from "./redis-kv-store.ts"
 
 const originalConnect = Deno.connect
+const originalAbortTimeout = AbortSignal.timeout
 
 afterEach(() => {
   Deno.connect = originalConnect
+  AbortSignal.timeout = originalAbortTimeout
 })
 
 /** One line of a RESP reply, as `+OK`, `$-1` (null), `$5\r\nhello`, etc. */
@@ -166,6 +168,8 @@ describe("RedisKvStore reconnecting after a dead connection", () => {
     // a socket — the other rode that same in-flight reconnect instead of racing to
     // open a second one.
     assertEquals(reconnectCalls, 1)
+    // And the dead socket itself is not just abandoned: the reconnect closed it.
+    assertEquals(conns[0].closed, true)
 
     store.close()
   })
@@ -262,6 +266,41 @@ describe("RedisKvStore reconnecting after a dead connection", () => {
     // it does not need.
     assertEquals(await store.get("c"), null)
     assertEquals(connectCalls, 1)
+
+    store.close()
+  })
+
+  it("times out and rejects instead of hanging when Deno.connect never settles", async () => {
+    const { store, conns } = await connectFake()
+    conns[0].breakConnection()
+    await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+
+    // Stubs AbortSignal.timeout itself instead of waiting out the real 5-second
+    // bound: it hands back an already-aborted signal, the same way the real one
+    // would once its timer fired, so the reconnect's Deno.connect call below is
+    // aborted the instant it is made. FakeTime is not used here: it would pull in
+    // @std/testing/time's own dependencies, which this worktree's deno.lock does
+    // not have and is not allowed to change.
+    AbortSignal.timeout = ((_ms: number) =>
+      AbortSignal.abort(
+        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      )) as typeof AbortSignal.timeout
+
+    // A Deno.connect that never resolves on its own — exactly what connecting to
+    // an unreachable, rather than a refusing, host looks like — but honours the
+    // signal it was given, the same contract the real Deno.connect makes.
+    Deno.connect =
+      ((options: { signal?: AbortSignal }) =>
+        new Promise<Deno.TcpConn>((_resolve, reject) => {
+          if (options.signal?.aborted) {
+            reject(options.signal.reason)
+            return
+          }
+          options.signal?.addEventListener("abort", () => reject(options.signal!.reason))
+        })) as unknown as typeof Deno.connect
+
+    const failure = await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+    assertEquals((failure.cause as DOMException).name, "TimeoutError")
 
     store.close()
   })
