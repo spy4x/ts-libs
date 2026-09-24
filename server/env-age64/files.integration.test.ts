@@ -10,7 +10,7 @@
  * files, so building them directly tests exactly what the function reads.
  */
 
-import { assertEquals, assertRejects } from "@std/assert"
+import { assertEquals, assertNotEquals, assertRejects } from "@std/assert"
 import { join } from "@std/path"
 import { createScratchFolder, removeScratchFolder } from "@integration-testing"
 import {
@@ -20,8 +20,9 @@ import {
   findEnvFiles,
   generateAgeKey,
   readAgeKey,
+  TEMP_FILE_PREFIX,
 } from "./files.ts"
-import { resolveKeyFile } from "./age64.ts"
+import { findGitCommonRoot, resolveKeyFile } from "./age64.ts"
 
 /** Write a linked-worktree-shaped `.git` file + `commondir`, pointing `worktree` at `main`. */
 async function linkWorktree(main: string, worktree: string, name = "wt"): Promise<void> {
@@ -119,6 +120,37 @@ Deno.test(
   },
 )
 
+Deno.test("findGitCommonRoot: a relative gitdir: pointer resolves relative to the worktree", async () => {
+  const root = await createScratchFolder("age64_relative_gitdir")
+  try {
+    const main = join(root, "main")
+    const worktree = join(root, "worktree")
+    await Deno.mkdir(join(main, ".git", "worktrees", "wt"), { recursive: true })
+    await Deno.writeTextFile(join(main, ".git", "worktrees", "wt", "commondir"), "../..\n")
+    await Deno.mkdir(worktree, { recursive: true })
+    // Relative to `worktree` itself (real git sometimes writes a relative gitdir: line too) —
+    // not absolute, unlike every other test's `linkWorktree` helper.
+    await Deno.writeTextFile(join(worktree, ".git"), `gitdir: ../main/.git/worktrees/wt\n`)
+
+    assertEquals(findGitCommonRoot(worktree), main)
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
+Deno.test("findGitCommonRoot: undefined for a plain checkout, whose own .git is a directory", async () => {
+  // A version of this test used to read THIS repo's own .git and silently skip its assertion
+  // when the repo turned out to be a linked worktree (a common case for anyone doing this
+  // extraction work) — moved here, built by hand, so it always actually asserts something.
+  const root = await createScratchFolder("age64_plain_checkout")
+  try {
+    await Deno.mkdir(join(root, ".git"), { recursive: true })
+    assertEquals(findGitCommonRoot(root), undefined)
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
 // ─── discovery: hidden dirs, examples, nested checkouts ────────────────────────────────────
 
 Deno.test("findEnvFiles: skips hidden directories, .example files, and nested checkouts", async () => {
@@ -156,6 +188,46 @@ Deno.test("findEnvAgeFiles: only matches .env*.age files, not the plaintext sibl
   }
 })
 
+Deno.test("findEnvFiles: skips a .sops-backup file, matching rostok's own exclusion", async () => {
+  const root = await createScratchFolder("age64_sops_backup")
+  try {
+    await Deno.writeTextFile(join(root, ".env"), "A=1\n")
+    await Deno.writeTextFile(join(root, ".env.sops-backup"), "A=1\n")
+    assertEquals(await findEnvFiles(root), [join(root, ".env")])
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
+Deno.test("findEnvAgeFiles: skips a .sops-backup.age file, matching rostok's own exclusion", async () => {
+  const root = await createScratchFolder("age64_sops_backup_age")
+  try {
+    await Deno.writeTextFile(join(root, ".env.age"), "A=age64:x\n")
+    await Deno.writeTextFile(join(root, ".env.sops-backup.age"), "A=age64:x\n")
+    assertEquals(await findEnvAgeFiles(root), [join(root, ".env.age")])
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
+Deno.test("findEnvFiles: a leftover atomicWrite temp file is never picked up as a real env file", async () => {
+  // The old temp prefix (`.env-age64.tmp-`) itself started with `.env`, so a crash between
+  // makeTempFile and remove left a file the NEXT run's findEnvFiles would happily encrypt or
+  // decrypt as if it were real. The prefix is `.age64-tmp-` now, deliberately outside the
+  // `.env*` shape both discovery functions match.
+  const root = await createScratchFolder("age64_temp_leftover")
+  try {
+    await Deno.writeTextFile(
+      join(root, `${TEMP_FILE_PREFIX}leftover-from-a-crash`),
+      "FOO=leftover\n",
+    )
+    assertEquals(await findEnvFiles(root), [])
+    assertEquals(await findEnvAgeFiles(root), [])
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
 // `Deno.symlink` itself needs UNSCOPED read/write permission ("path-scoped grants are not
 // supported because a symlink's target is only resolved when the link is traversed") — the
 // integration tier's own task grants only `--allow-write=.volumes`, so a symlink can't be
@@ -165,8 +237,15 @@ Deno.test("findEnvAgeFiles: only matches .env*.age files, not the plaintext sibl
 const FIXTURES_URL = new URL("./__fixtures__", import.meta.url)
 
 Deno.test("findEnvFiles: refuses an env file reached through a symlink", async () => {
+  // The exact phrase, not just "symlink" — the fixture folder is itself named
+  // "symlink-discovery", so a looser substring check would pass even against an unrelated
+  // error (or no check at all) that happened to echo the folder's own path back.
   const root = join(FIXTURES_URL.pathname, "symlink-discovery")
-  await assertRejects(() => findEnvFiles(root), Error, "symlink")
+  await assertRejects(
+    () => findEnvFiles(root),
+    Error,
+    "refusing to read an env file through a symlink",
+  )
 })
 
 // ─── atomic write: modes, symlink and non-regular refusal ──────────────────────────────────
@@ -187,6 +266,49 @@ Deno.test("generateAgeKey: refuses to overwrite an existing key", async () => {
   try {
     await generateAgeKey(root)
     await assertRejects(() => generateAgeKey(root), Error, "already exists")
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
+Deno.test("generateAgeKey: two concurrent calls never both succeed and silently overwrite each other", async () => {
+  // The old check-then-write ("does the file exist? no -> write it") had a race: two concurrent
+  // callers can both see "no key" before either has written one, and both then "succeed",
+  // the second silently discarding the first identity. generateAgeKey now links a temp file into
+  // place with Deno.link, which fails atomically with AlreadyExists when it loses the race — so
+  // of two concurrent calls, exactly one must succeed and the other must throw.
+  const root = await createScratchFolder("age64_keygen_race")
+  try {
+    const results = await Promise.allSettled([generateAgeKey(root), generateAgeKey(root)])
+    const fulfilled = results.filter((r) => r.status === "fulfilled")
+    const rejected = results.filter((r) => r.status === "rejected")
+    assertEquals(fulfilled.length, 1)
+    assertEquals(rejected.length, 1)
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
+Deno.test("generateAgeKey: refuses in a worktree that already resolves to the main checkout's key", async () => {
+  const root = await createScratchFolder("age64_keygen_worktree_shadow")
+  try {
+    const main = join(root, "main")
+    const worktree = join(root, "worktree")
+    await Deno.mkdir(join(main, ".git"), { recursive: true })
+    await generateAgeKey(main)
+    await linkWorktree(main, worktree)
+
+    // The worktree has no .age/key.txt of its own, but resolveKeyFile already finds the main
+    // checkout's — generating a local one here would shadow it instead of ever being used.
+    await assertRejects(
+      () => generateAgeKey(worktree),
+      Error,
+      "already uses the main checkout's",
+    )
+    assertEquals(
+      await Deno.stat(join(worktree, ".age", "key.txt")).then(() => true, () => false),
+      false,
+    )
   } finally {
     await removeScratchFolder(root)
   }
@@ -224,11 +346,15 @@ Deno.test("decryptEnvFiles: writes .env with mode 0600", async () => {
 })
 
 Deno.test("encryptEnvFiles: refuses to write .env.age through a symlink", async () => {
+  // Same reasoning as the discovery test above: the fixture folder is named "symlink-encrypt",
+  // so asserting on the bare word "symlink" would pass even if the guard were removed and some
+  // OTHER error surfaced instead (a permission error naming this same path, say). The exact
+  // refusal phrase is the only thing that actually proves the guard fired.
   const root = join(FIXTURES_URL.pathname, "symlink-encrypt")
   const protectedPath = join(root, "protected-target.txt")
   const before = await Deno.readTextFile(protectedPath)
 
-  await assertRejects(() => encryptEnvFiles(root), Error, "symlink")
+  await assertRejects(() => encryptEnvFiles(root), Error, "refusing to write through a symlink")
   assertEquals(await Deno.readTextFile(protectedPath), before)
 })
 
@@ -255,9 +381,38 @@ Deno.test("atomicWrite via encryptEnvFiles: a failed write never leaves a temp f
 
     const leftovers = []
     for await (const entry of Deno.readDir(root)) {
-      if (entry.name.startsWith(".env-age64.tmp-")) leftovers.push(entry.name)
+      if (entry.name.startsWith(".age64-tmp-")) leftovers.push(entry.name)
     }
     assertEquals(leftovers, [])
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
+Deno.test("encryptEnvFiles: writes .env.age through rename, never mutates an existing hardlink in place", async () => {
+  // Proves atomicWrite is actually atomic (a rename onto a fresh inode), not a plain
+  // Deno.writeTextFile(path, ...) that would truncate and rewrite the SAME inode. A hardlink to
+  // the pre-existing .env.age is the witness: a rename leaves the old inode (and everything
+  // linked to it) exactly as it was; an in-place write would change what the hardlink reads too.
+  const root = await createScratchFolder("age64_atomic_hardlink")
+  try {
+    await generateAgeKey(root)
+    await Deno.writeTextFile(join(root, ".env"), "A=one\n")
+    await encryptEnvFiles(root)
+    const before = await Deno.readTextFile(join(root, ".env.age"))
+
+    const pinned = join(root, "pinned-inode")
+    await Deno.link(join(root, ".env.age"), pinned)
+
+    await Deno.writeTextFile(join(root, ".env"), "A=changed\n")
+    await encryptEnvFiles(root)
+
+    assertEquals(await Deno.readTextFile(pinned), before)
+    assertNotEquals(await Deno.readTextFile(join(root, ".env.age")), before)
+    assertNotEquals(
+      await Deno.readTextFile(pinned),
+      await Deno.readTextFile(join(root, ".env.age")),
+    )
   } finally {
     await removeScratchFolder(root)
   }
@@ -388,6 +543,33 @@ Deno.test("readAgeKey: the public key parsed back matches the one generateAgeKey
     const generated = await generateAgeKey(root)
     const key = await readAgeKey(root)
     assertEquals(key.recipient, generated.recipient)
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
+Deno.test("readAgeKey: derives the recipient from the identity, ignoring a stale '# public key:' comment", async () => {
+  // If the comment were trusted instead of derived, a hand-edited or merge-mangled comment that
+  // no longer matches the identity below it would make encryptEnvFiles encrypt for a recipient
+  // the real identity can't decrypt — wrong in a way nothing catches until someone can't read a
+  // value back.
+  const root = await createScratchFolder("age64_stale_comment")
+  try {
+    const generated = await generateAgeKey(root)
+    const keyPath = join(root, ".age", "key.txt")
+    const content = await Deno.readTextFile(keyPath)
+    const tampered = content.replace(
+      /^# public key: .+$/m,
+      "# public key: age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0zsg2v",
+    )
+    await Deno.writeTextFile(keyPath, tampered)
+
+    const key = await readAgeKey(root)
+    assertEquals(key.recipient, generated.recipient)
+    assertNotEquals(
+      key.recipient,
+      "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0zsg2v",
+    )
   } finally {
     await removeScratchFolder(root)
   }
