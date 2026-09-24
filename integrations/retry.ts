@@ -16,7 +16,10 @@
  * randomness.
  */
 
-import { backoffDelay, type RandomSource } from "@spy4x/platform/universal/async"
+import {
+  backoffDelay,
+  type RandomSource as PlatformRandomSource,
+} from "@spy4x/platform/universal/async"
 
 /**
  * Computes a delay. `attempt` is 1-based; `retryAfterMs` is set when the
@@ -29,7 +32,7 @@ export type BackoffFn = (attempt: number, retryAfterMs?: number) => number
  *
  * @deprecated Use `RandomSource` from "@spy4x/platform/universal/async".
  */
-export type { RandomSource }
+export type RandomSource = PlatformRandomSource
 
 export interface RetryPolicy {
   /** Total attempts, including the first. 1 or fewer disables retrying. */

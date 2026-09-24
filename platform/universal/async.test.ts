@@ -81,6 +81,18 @@ describe("backoffDelay", () => {
     ).toBe(0)
   })
 
+  it("never returns more than maxMs when jitterRatio is 0", () => {
+    // A non-integer maxMs below rawMs must come back exactly, unrounded: rounding it (as an
+    // earlier version of this function did on the jitterRatio<=0 path) can push the result past
+    // maxMs, e.g. 100.6 -> 101.
+    expect(backoffDelay({ rawMs: 200, maxMs: 100.6, jitterRatio: 0, mode: "downward" })).toBe(
+      100.6,
+    )
+    expect(backoffDelay({ rawMs: 200, maxMs: 100.6, jitterRatio: 0, mode: "symmetric" })).toBe(
+      100.6,
+    )
+  })
+
   describe("symmetric mode", () => {
     it("jitters both above and below the capped delay", () => {
       const low = backoffDelay({
@@ -159,16 +171,19 @@ describe("backoffDelay", () => {
       expect(highest).toBe(400)
     })
 
-    it("clamps jitterRatio to 0.999 so the band never collapses to zero", () => {
+    it("clamps jitterRatio to 0.999, leaving a floor of about 0.1% of the capped delay", () => {
+      // Without the clamp, jitterRatio: 1 makes floor = capped * (1 - 1) = 0, and this test
+      // would still pass with 0 as the expectation — proving the clamp needs a case where the
+      // clamped and unclamped floors differ. 0.999 leaves floor = capped * 0.001 = 10, not 0.
       expect(
         backoffDelay({
-          rawMs: 400,
+          rawMs: 10_000,
           maxMs: 10_000,
           jitterRatio: 1,
           mode: "downward",
           random: () => 0,
         }),
-      ).toBe(0)
+      ).toBe(10)
     })
 
     it("re-clamps to maxMs when the random source breaks its [0, 1) contract", () => {

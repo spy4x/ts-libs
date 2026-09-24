@@ -73,7 +73,10 @@ export interface BackoffDelayOptions {
   rawMs: number
   /** Ceiling no returned delay ever exceeds. */
   maxMs: number
-  /** Jitter fraction. `0` or less returns the capped delay unchanged. */
+  /**
+   * Jitter fraction. `0` or less: `"symmetric"` returns the capped delay unrounded and
+   * unchanged; `"downward"` still rounds and still calls `random()`. See {@linkcode backoffDelay}.
+   */
   jitterRatio: number
   /** Which side of the capped delay jitter is drawn from. */
   mode: BackoffJitterMode
@@ -95,23 +98,32 @@ export interface BackoffDelayOptions {
  * what it returned before this function existed — see the two wrappers' own tests.
  *
  * `"symmetric"` jitters in both directions: `capped + (random() * 2 - 1) * capped * jitterRatio`,
- * clamped to `[minFloorMs, maxMs]`. `"downward"` only ever removes wait: a value drawn uniformly
- * from `[capped * (1 - jitterRatio), capped]`. Both exist because they answer different questions
- * — "de-synchronise callers without ever waiting longer than the plain schedule" versus "still
- * center on the plain schedule, so `jitterRatio` reads as a symmetric error band" — and changing
- * either now would change either caller's already-shipped delays, so neither replaces the other.
+ * clamped to `[minFloorMs, maxMs]`. It rounds only when `jitterRatio > 0`; at `0` or below it
+ * returns the capped value exactly as given — a caller that passes a non-integer `maxMs`
+ * (`raw > maxMs`, `jitterRatio: 0`) gets that exact non-integer back, not a rounded one, matching
+ * `createExponentialBackoff`'s original, unrounded early return.
+ *
+ * `"downward"` only ever removes wait: a value drawn uniformly from
+ * `[capped * (1 - jitterRatio), capped]`, and unlike `"symmetric"` it always rounds, and always
+ * calls `random()`, even when `jitterRatio` is `0` or less — that always-call, always-round shape
+ * matches `nextBackoffDelay`'s original, which never special-cased a zero ratio.
+ *
+ * The two modes exist because they answer different questions — "de-synchronise callers without
+ * ever waiting longer than the plain schedule" versus "still center on the plain schedule, so
+ * `jitterRatio` reads as a symmetric error band" — and changing either now would change either
+ * caller's already-shipped delays, so neither replaces the other.
  */
 export function backoffDelay(options: BackoffDelayOptions): number {
   const { rawMs, maxMs, jitterRatio, mode, minFloorMs = 0, random = Math.random } = options
-  const capped = Math.min(Math.max(rawMs, 0), maxMs)
-  if (jitterRatio <= 0) {
-    return Math.round(capped)
-  }
   if (mode === "downward") {
-    const ratio = Math.min(Math.max(jitterRatio, 0), 0.999)
-    const floor = capped * (1 - ratio)
+    const capped = Math.min(maxMs, rawMs)
+    const floor = capped * (1 - Math.min(Math.max(jitterRatio, 0), 0.999))
     const value = floor + random() * (capped - floor)
     return Math.min(maxMs, Math.max(0, Math.round(value)))
+  }
+  const capped = Math.min(Math.max(rawMs, 0), maxMs)
+  if (jitterRatio <= 0) {
+    return capped
   }
   const span = capped * jitterRatio
   const jitter = (random() * 2 - 1) * span

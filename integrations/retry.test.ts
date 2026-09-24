@@ -114,6 +114,17 @@ describe("createExponentialBackoff", () => {
     expect(backoff(1, 60_000)).toBe(10_000)
     expect(backoff(1, 0)).toBe(0)
   })
+
+  it("returns a non-integer Retry-After exactly, unrounded, when jitterRatio is 0", () => {
+    // #71: an earlier extraction of this function's arithmetic rounded even when jitterRatio
+    // was 0, which no version of this function ever did.
+    const noJitter = createExponentialBackoff({
+      baseDelayMs: 100,
+      maxDelayMs: 10_000,
+      jitterRatio: 0,
+    })
+    expect(noJitter(1, 1500.5)).toBe(1500.5)
+  })
 })
 
 describe("createExponentialBackoff jitter", () => {
