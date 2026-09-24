@@ -126,6 +126,38 @@ async function sha256Bytes(input: Uint8Array): Promise<Uint8Array> {
 }
 
 /**
+ * Compares two arbitrary strings in constant time.
+ *
+ * Both sides are SHA-256 digested first, so the comparison always runs over
+ * two 32-byte digests regardless of input length — neither the length nor a
+ * shared prefix of either argument can be probed by timing. An empty string
+ * never verifies, even against another empty string, so a caller that forgot
+ * to configure a secret cannot succeed by presenting nothing.
+ *
+ * This is the text-comparison counterpart to {@link constantTimeEquals} above,
+ * which decodes both sides as hex digests first and rejects anything that is
+ * not valid hex. Use this function for unstructured text — a bearer token, a
+ * password-reset code, anything that is not already a digest.
+ *
+ * @param a Any string.
+ * @param b Any string.
+ * @returns `true` when both strings are non-empty and encode to the same UTF-8 bytes. Unpaired
+ *     surrogates all encode as U+FFFD, so `"\uD800"` and `"\uDBFF"` compare equal.
+ * @throws {TypeError} As a rejected promise, when an argument is `null` or `undefined`.
+ */
+export async function constantTimeEqualsText(a: string, b: string): Promise<boolean> {
+  if (a.length === 0 || b.length === 0) return false
+  const [digestA, digestB] = await Promise.all([
+    sha256Bytes(new TextEncoder().encode(a)),
+    sha256Bytes(new TextEncoder().encode(b)),
+  ])
+  // Digests are fixed width by construction, but keep the guard so a future
+  // change cannot turn `timingSafeEqual` into a silent `false`.
+  if (digestA.byteLength !== digestB.byteLength) return false
+  return timingSafeEqual(digestA, digestB)
+}
+
+/**
  * Concatenated digest `sha256hex(raw + secret)`, lower-case, 64 characters.
  *
  * A caller-supplied hash is compared as-is, so an upper-case stored hash is a

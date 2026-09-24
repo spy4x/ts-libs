@@ -1770,7 +1770,13 @@ async function verifyOneSignature(
     return { valid: false, parsed, reason: errorMessage(err) }
   }
 
-  if (!constantTimeEqualBase64(computedBodyHash, parsed.bodyHash)) {
+  // Neither side of this comparison is a secret — `computedBodyHash` is derived
+  // from the public message body, and `parsed.bodyHash` is copied straight out
+  // of the `bh=` tag the sender put on the wire — so a plain compare needs no
+  // constant-time treatment: there is nothing here a timing channel could leak
+  // that the message itself does not already show. #71's constant-time copy
+  // that used to sit here is removed, not moved to a shared home.
+  if (computedBodyHash !== parsed.bodyHash) {
     return {
       valid: false,
       parsed,
@@ -1976,13 +1982,6 @@ function isSameOrParentDomain(domain: string, candidate: string): boolean {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
-}
-
-function constantTimeEqualBase64(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let diff = 0
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return diff === 0
 }
 
 /**

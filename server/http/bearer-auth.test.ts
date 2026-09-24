@@ -3,6 +3,7 @@
 
 import { assert, assertEquals, assertNotMatch, assertThrows } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
+import { constantTimeEqualsText } from "@spy4x/platform/tokens"
 import {
   bearerTokenFromEnv,
   bearerTokenFromHeaders,
@@ -77,6 +78,31 @@ describe("constantTimeEquals", () => {
   it("rejects an empty presented token and an empty configured token", async () => {
     assertEquals(await constantTimeEquals("", FAKE_TOKEN), false)
     assertEquals(await constantTimeEquals(FAKE_TOKEN, ""), false)
+  })
+
+  it("agrees with platform/tokens' constantTimeEqualsText on every input (#71 alias)", async () => {
+    // Behaviour proof that the deprecated alias and its home give the same answer,
+    // rather than reading the alias's source: a table wide enough to catch a
+    // reintroduced difference (empty, equal, prefix, different lengths, unicode).
+    const cases: Array<[string, string]> = [
+      ["", ""],
+      ["", FAKE_TOKEN],
+      [FAKE_TOKEN, ""],
+      [FAKE_TOKEN, FAKE_TOKEN],
+      [FAKE_TOKEN, FAKE_TOKEN_WRONG],
+      [FAKE_TOKEN.slice(0, 3), FAKE_TOKEN],
+      ["short", FAKE_TOKEN],
+      [FAKE_TOKEN, "x".repeat(200)],
+      ["café-token-é", "café-token-é"],
+      ["café-token-é", "cafe-token-e"],
+    ]
+    for (const [a, b] of cases) {
+      assertEquals(
+        await constantTimeEquals(a, b),
+        await constantTimeEqualsText(a, b),
+        `constantTimeEquals and constantTimeEqualsText disagree on ${JSON.stringify([a, b])}`,
+      )
+    }
   })
 })
 

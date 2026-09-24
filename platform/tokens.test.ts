@@ -8,6 +8,7 @@
 import { assert, assertEquals, assertFalse, assertRejects, assertThrows } from "@std/assert"
 import {
   constantTimeEquals,
+  constantTimeEqualsText,
   DEFAULT_TOKEN_BYTES,
   MIN_SECRET_LENGTH,
   monotonicUlid,
@@ -732,4 +733,101 @@ Deno.test("verifyOpaqueToken — the production call site goes through the const
   )
   assertFalse(body.includes("computed === hash"), "verifyOpaqueToken must not compare with ===")
   assertFalse(body.includes("computed !== hash"), "verifyOpaqueToken must not compare with !==")
+})
+
+// ---------------------------------------------------------------------------
+// constantTimeEqualsText — the arbitrary-text counterpart to constantTimeEquals.
+//
+// Ported from `server/http/bearer-auth.ts`'s own `constantTimeEquals` (issue
+// #71): that function is now a deprecated alias of this one. Unlike the
+// hex-digest `constantTimeEquals` above, this function makes no claim about
+// its inputs' shape — it digests whatever string it is given.
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `action` with `crypto.subtle.digest` instrumented, and report which algorithms and
+ * input lengths went through it. Restores the real implementation afterwards.
+ */
+async function recordDigests(
+  action: () => Array<Promise<unknown>>,
+): Promise<{ algorithms: string[]; inputs: number[] }> {
+  const realDigest = crypto.subtle.digest.bind(crypto.subtle)
+  const algorithms: string[] = []
+  const inputs: number[] = []
+  crypto.subtle.digest = ((algorithm: AlgorithmIdentifier, data: BufferSource) => {
+    algorithms.push(String(algorithm))
+    inputs.push(new Uint8Array(data as ArrayBuffer).byteLength)
+    return realDigest(algorithm, data)
+  }) as typeof crypto.subtle.digest
+
+  try {
+    await Promise.all(action())
+  } finally {
+    crypto.subtle.digest = realDigest as typeof crypto.subtle.digest
+  }
+  return { algorithms, inputs }
+}
+
+Deno.test("constantTimeEqualsText — true for equal strings, false for one differing character", async () => {
+  const text = "correct horse battery staple"
+  assertEquals(await constantTimeEqualsText(text, text), true)
+  assertEquals(await constantTimeEqualsText(text, "correct horse battery staplf"), false)
+})
+
+Deno.test("constantTimeEqualsText — false for an empty presented or expected value", async () => {
+  assertEquals(await constantTimeEqualsText("", "anything"), false)
+  assertEquals(await constantTimeEqualsText("anything", ""), false)
+  // Two empty strings are not "equal" here: a digest is never empty, and a caller with
+  // an unset expected value must not verify against an unset presented value.
+  assertEquals(await constantTimeEqualsText("", ""), false)
+})
+
+Deno.test("constantTimeEqualsText — rejects a null or undefined argument as a TypeError", async () => {
+  await assertRejects(
+    () => constantTimeEqualsText(undefined as unknown as string, "x"),
+    TypeError,
+  )
+  await assertRejects(
+    () => constantTimeEqualsText("x", null as unknown as string),
+    TypeError,
+  )
+})
+
+Deno.test("constantTimeEqualsText — rejects tokens of different lengths without throwing", async () => {
+  assertEquals(await constantTimeEqualsText("short", "a-much-longer-value"), false)
+  assertEquals(await constantTimeEqualsText("a-much-longer-value", "short"), false)
+})
+
+Deno.test("constantTimeEqualsText — rejects a shared prefix of any length", async () => {
+  const text = "not-a-real-token"
+  for (let length = 1; length < text.length; length += 1) {
+    assertEquals(await constantTimeEqualsText(text.slice(0, length), text), false)
+  }
+})
+
+Deno.test("constantTimeEqualsText — digests both sides on every call, whatever the input length", async () => {
+  const { algorithms, inputs } = await recordDigests(() => [
+    constantTimeEqualsText("short", "not-a-real-token"),
+    constantTimeEqualsText("not-a-real-token", "x".repeat(200)),
+  ])
+
+  assertEquals(algorithms, Array(4).fill("SHA-256"))
+  assertEquals(inputs, [5, "not-a-real-token".length, "not-a-real-token".length, 200])
+})
+
+Deno.test("constantTimeEqualsText — delegates the comparison to timingSafeEqual and hand-rolls nothing", async () => {
+  const module = await readModuleSourceWithoutComments()
+  const body = sliceFunctionBody(module, "export async function constantTimeEqualsText(")
+
+  assert(body.includes("timingSafeEqual("), "must call timingSafeEqual")
+  for (const forbidden of ["charCodeAt", "codePointAt", "^=", "|="]) {
+    assertFalse(body.includes(forbidden), `hand-rolled comparison: ${forbidden}`)
+  }
+  // Only two strict-comparison lines are allowed: the input-emptiness check and the
+  // digest byteLength guard. Anything else comparing the digests themselves is what
+  // the delegation to `timingSafeEqual` exists to own instead.
+  const comparisons = strictComparisons(body)
+  assertEquals(comparisons.length, 2, `unexpected strict comparisons: ${comparisons.join(" | ")}`)
+  assert(comparisons.some((line) => line.includes("a.length === 0")))
+  assert(comparisons.some((line) => line.includes("digestA.byteLength !== digestB.byteLength")))
 })

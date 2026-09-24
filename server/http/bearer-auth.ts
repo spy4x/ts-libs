@@ -3,7 +3,7 @@
 // module scope, never read from a query parameter, and the comparison is constant
 // time: a byte-by-byte `===` on a bearer token is a timing oracle.
 
-import { timingSafeEqual } from "@std/crypto/timing-safe-equal"
+import { constantTimeEqualsText } from "@spy4x/platform/tokens"
 
 /** The canonical redaction marker. Used by every log path that could see a credential. */
 export const REDACTED_TOKEN = "<REDACTED:TOKEN>"
@@ -40,18 +40,12 @@ export function bearerTokenFromHeaders(headers: Headers): string | undefined {
  * comparison runs over two equal-length 32-byte digests regardless of input length —
  * neither the length nor a shared prefix of `presented` can be probed by timing.
  * A missing configured token never verifies.
+ *
+ * @deprecated Use `constantTimeEqualsText` from `@spy4x/platform/tokens` instead. Same
+ *     behaviour, same signature — this is now a thin alias kept for existing callers.
  */
 export async function constantTimeEquals(presented: string, expected: string): Promise<boolean> {
-  if (presented.length === 0 || expected.length === 0) return false
-
-  const [presentedDigest, expectedDigest] = await Promise.all([
-    digest(presented),
-    digest(expected),
-  ])
-  // Digests are fixed width by construction, but keep the guard so a future change
-  // cannot turn `timingSafeEqual` into a silent `false`.
-  if (presentedDigest.byteLength !== expectedDigest.byteLength) return false
-  return timingSafeEqual(presentedDigest, expectedDigest)
+  return await constantTimeEqualsText(presented, expected)
 }
 
 /**
@@ -125,9 +119,4 @@ export function formatLogLine(
 ): string {
   const redact = redactor(secrets)
   return `[${level.toUpperCase()}] ${redact(message)}`
-}
-
-async function digest(value: string): Promise<Uint8Array> {
-  const bytes = new TextEncoder().encode(value)
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))
 }
