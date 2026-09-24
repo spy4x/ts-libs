@@ -5,6 +5,7 @@
     ".": "./universal.ts",
     "./api": "./api/mod.ts",
     "./browser": "./browser.ts",
+    "./browser/cookie": "./browser/cookie.ts",
     "./browser/download": "./browser/download.ts",
     "./browser/storage": "./browser/storage.ts",
     "./cache": "./cache/mod.ts",

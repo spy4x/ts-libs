@@ -7,5 +7,6 @@
  * SSR and testable with fakes.
  */
 
+export * from "./browser/cookie.ts"
 export * from "./browser/download.ts"
 export * from "./browser/storage.ts"
