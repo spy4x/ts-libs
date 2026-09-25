@@ -433,6 +433,7 @@ Deno.test("signed payload — sign refuses a lifetime when the clock is not an i
     await assertRejects(
       () => cursorCodec({ now: () => broken }).sign(PAGE, { ttlMs: 1 }),
       RangeError,
+      "clock",
     )
   }
 })
@@ -455,7 +456,7 @@ Deno.test("signed payload — sign refuses a lifetime whose expiry would overflo
     () => codec.sign(PAGE, { ttlMs: Number.MAX_SAFE_INTEGER }),
     RangeError,
   )
-  assert(error.message.includes("ttlMs"), error.message)
+  assert(error.message.includes("MAX_SAFE_INTEGER"), error.message)
 })
 
 Deno.test("signed payload — a token with no lifetime never reads the clock", async () => {
@@ -486,7 +487,10 @@ Deno.test("signed payload — the context length is counted in UTF-8 bytes", asy
     version: 1,
     schema: type({ "+": "reject" }),
   })
-  assertEquals(await codec.sign({}, { context: "anna@müller.example" }), expected)
+  // Escaped, so an editor that normalises to NFD cannot change the bytes being signed.
+  const context = "anna@m\u00fcller.example"
+  assertEquals(await codec.sign({}, { context }), expected)
+  assert((await codec.verify(expected, { context })).ok)
 })
 
 Deno.test("signed payload — a payload JSON cannot serialise keeps the original error as its cause", async () => {
