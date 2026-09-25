@@ -2,10 +2,12 @@
 
 Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 
-- **HTTP** — bounded request bodies, CORS origin allow-listing, bearer-token verification, export
-  envelopes, static-file serving and a distroless healthcheck. Zero runtime dependencies: `hono` is
-  pinned in the root import map, but `cors.ts` imports nothing — only `cors.test.ts` imports the
-  `hono/cors` resolver type, for its own assertions.
+- **HTTP** — bounded request bodies, CORS origin allow-listing, a same-origin guard against
+  cross-site request forgery, bearer-token verification, export envelopes, static-file serving and a
+  distroless healthcheck. `hono` is the one runtime dependency, pinned in the root import map:
+  `http/same-origin.ts` is Hono middleware and parses the cookie header with `hono/cookie`.
+  `cors.ts` imports nothing — only `cors.test.ts` imports the `hono/cors` resolver type, for its own
+  assertions.
 - **Storage** — the `FileStorage` port with a local-filesystem provider, an S3-compatible provider
   and a bucket-binding wrapper. Zero dependencies.
 
@@ -16,6 +18,7 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 | `@spy4x/server/http/bounded-body` | Byte-capped, stall-budgeted request body reading; canonical `PayloadTooLargeError`   |
 | `@spy4x/server/http/cors`         | Exact-match origin allowlist and the `hono/cors` origin resolver                     |
 | `@spy4x/server/http/bearer-auth`  | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)    |
+| `@spy4x/server/http/same-origin`  | Hono middleware that refuses cross-site mutations on cookie-authenticated routes     |
 | `@spy4x/server/export`            | Versioned export envelope and `Content-Disposition` download response                |
 | `@spy4x/server/static`            | Static-file serving with a MIME table and path-traversal protection                  |
 | `@spy4x/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
