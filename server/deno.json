@@ -5,6 +5,7 @@
     "./http/bounded-body": "./http/bounded-body.ts",
     "./http/cors": "./http/cors.ts",
     "./http/bearer-auth": "./http/bearer-auth.ts",
+    "./http/same-origin": "./http/same-origin.ts",
     "./export": "./export.ts",
     "./static": "./static.ts",
     "./healthcheck": "./healthcheck.ts",
