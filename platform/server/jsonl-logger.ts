@@ -16,7 +16,8 @@
 
 import { dirname } from "@std/path"
 
-import type { ClockPort, FileSystemPort } from "./ports.ts"
+import type { FileSystemPort } from "./ports.ts"
+import type { Clock } from "../universal/time.ts"
 
 /** One log record: the caller's event plus a timestamp. */
 export type LogRecord = Record<string, unknown>
@@ -70,10 +71,10 @@ export function parseLogLines(text: string): {
 export class JsonlLogger {
   readonly #fs: FileSystemPort
   readonly #path: string
-  readonly #clock: ClockPort
+  readonly #clock: Clock
   #tail: Promise<void> = Promise.resolve()
 
-  constructor(fs: FileSystemPort, path: string, clock: ClockPort) {
+  constructor(fs: FileSystemPort, path: string, clock: Clock) {
     this.#fs = fs
     this.#path = path
     this.#clock = clock

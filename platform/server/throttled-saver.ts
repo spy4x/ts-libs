@@ -14,7 +14,8 @@
 
 import { atomicWriteJson, type TempPathOptions } from "./atomic-json.ts"
 import { DEFAULT_FLUSH_INTERVAL_MS } from "../universal/constants.ts"
-import type { ClockPort, FileSystemPort } from "./ports.ts"
+import type { FileSystemPort } from "./ports.ts"
+import type { Clock } from "../universal/time.ts"
 
 /** Scheduling primitives a {@link ThrottledJsonSaver} needs. */
 export interface TimerPort {
@@ -40,7 +41,7 @@ export interface ThrottledJsonSaverOptions {
   nextSequence?: () => number
   /** Process id for temp paths. Defaults to `Deno.pid`. */
   pid?: number
-  clock?: ClockPort
+  clock?: Clock
   timers?: TimerPort
   /** Minimum milliseconds between writes. Defaults to 2000. */
   flushIntervalMs?: number
@@ -63,7 +64,7 @@ export class ThrottledJsonSaver {
   readonly #fs: FileSystemPort
   readonly #path: string
   readonly #serialize: () => unknown
-  readonly #clock: ClockPort
+  readonly #clock: Clock
   readonly #timers: TimerPort
   readonly #onFlushError: (error: unknown) => void
   readonly #pid: number

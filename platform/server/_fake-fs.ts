@@ -9,8 +9,9 @@
  * rather than only what the final state looks like.
  */
 
-import type { ByteReader, ClockPort, FileSystemPort, LockHandle, WalkEntry } from "./ports.ts"
+import type { ByteReader, FileSystemPort, LockHandle, WalkEntry } from "./ports.ts"
 import type { TimerPort } from "./throttled-saver.ts"
+import type { Clock } from "../universal/time.ts"
 
 /** One recorded call on the fake filesystem. */
 export type FsCall = { op: string; path: string; extra?: string }
@@ -137,7 +138,7 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
 }
 
 /** A clock that advances only when a test says so. */
-export interface FakeClock extends ClockPort {
+export interface FakeClock extends Clock {
   set(ms: number): void
   advance(ms: number): void
 }
