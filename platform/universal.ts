@@ -2,10 +2,10 @@
  * `@spy4x/platform` — universal helpers only.
  *
  * Everything re-exported here runs in Deno, a browser, a worker and an SSR pass, and calls no
- * host API beyond `Date`, `Intl`, `crypto` and `TextEncoder`. Browser-only and server-only code
+ * host API beyond `Date`, `Intl`, `crypto`, `TextEncoder` and `Response`. Browser-only and server-only code
  * lives behind `./browser` and `./server` so an SSR bundle cannot reach it by accident.
  *
- * This package ships **no** validator: `validate` and the `{ description, details }` error
+ * This package ships **no** validator: `validate` and the validation error
  * envelope belong to `@spy4x/validation`, which is a peer dependency. {@link ValidationError}
  * and friends below are re-exports, not second implementations.
  */

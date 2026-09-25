@@ -1,7 +1,7 @@
 /**
  * The one arktype type-level helper this package needs, plus the validation types it re-exports.
  *
- * `@spy4x/validation` owns the runtime parser and the `{ description, details }` error envelope;
+ * `@spy4x/validation` owns the runtime parser and the validation error envelope;
  * this package must not declare a second one. What it does need is the ability to name "the value
  * a schema produces" without depending on the shape of `Type`'s type parameters — which is what
  * {@link InferSchema} provides.
