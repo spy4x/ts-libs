@@ -197,7 +197,12 @@ pins an exact version.
   and `@spy4x/validation` at 1.3.0.
 - `spy4x/template` — the SaaS app template. Imports `@spy4x/platform`, `@spy4x/server` and
   `@spy4x/validation` at 1.2.0, and runs the `@spy4x/server` env-age64 CLI for its `env:*` tasks.
-- `spy4x/antonshubin.com` — runs the `@spy4x/server` 1.2.0 env-age64 CLI for its `env:*` tasks.
+- `spy4x/rostok` — imports `@spy4x/server` at 1.2.0 in its CLI, and runs its env-age64 CLI for its
+  encrypt and decrypt tasks.
+- `spy4x/financy` — imports `@spy4x/platform` and `@spy4x/server` at 1.3.0, and runs the
+  `@spy4x/server` 1.2.0 env-age64 CLI for its `env:*` tasks.
+- `spy4x/antonshubin.com` and `spy4x/dotfiles` — run the `@spy4x/server` 1.2.0 env-age64 CLI for
+  their `env:*` tasks.
 
 ## Naming policy
 
