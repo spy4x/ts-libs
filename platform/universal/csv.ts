@@ -52,11 +52,11 @@ export interface CsvColumn<T> {
  * ASCII set alone misses a full-width form, because at least one spreadsheet reader folds it to
  * its ASCII equivalent before evaluating the cell.
  *
- * Known gap: OWASP's guidance also names a handful of characters this module does not guard,
- * because they were not found to open a formula in LibreOffice 26.2 (measured; LibreOffice reads
- * them as plain text) and Excel's behavior with them is unverified here: zero-width space
- * (U+200B), Mongolian vowel separator (U+180E), next line (U+0085), the full-width equals sign
- * variant `﹦` (U+FE66), and the minus sign `−` (U+2212).
+ * Known gap: this module does not guard a handful of Unicode characters that resemble a formula
+ * character or a space, because they were not found to open a formula in LibreOffice 26.2
+ * (measured; LibreOffice reads them as plain text) and Excel's behavior with them is unverified
+ * here: zero-width space (U+200B), Mongolian vowel separator (U+180E), next line (U+0085), the
+ * small equals sign `﹦` (U+FE66), and the minus sign `−` (U+2212).
  */
 const FORMULA_LEAD_CHARS = new Set(["=", "+", "-", "@", "＝", "＋", "－", "＠"])
 
