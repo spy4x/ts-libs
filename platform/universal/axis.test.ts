@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { MAX_TICKS, niceStep, ticks } from "./axis.ts"
+import { MAX_TICKS, niceStep, stepAxis, ticks } from "./axis.ts"
 
 describe("niceStep", () => {
   it("snaps the significand to 1, 2 or 5 times a power of ten", () => {
@@ -75,6 +75,31 @@ describe("niceStep", () => {
   it("floors a fractional target instead of producing a fractional step count", () => {
     expect(niceStep(10, 4.9)).toBe(niceStep(10, 4))
   })
+
+  it("returns a finite step above zero for a subnormal span", () => {
+    // `10 ** exponent` underflows to 0 for these spans, so the grid computation alone yields a
+    // zero step, and a zero step makes tick generation divide by zero. Ported from
+    // preact-components' `charts/scales.test.ts` before spy4x/preact-components#287.
+    for (const span of [Number.MIN_VALUE, 1e-320, 1e-310]) {
+      const step = niceStep(span)
+      expect({ span, positive: step > 0, finite: Number.isFinite(step) }).toEqual({
+        span,
+        positive: true,
+        finite: true,
+      })
+    }
+  })
+
+  it("lands on five to eight ticks for every span from 1e-12 to 1e12", () => {
+    // Ported from preact-components' `charts/scales.test.ts` before spy4x/preact-components#287.
+    for (let exponent = -12; exponent <= 12; exponent++) {
+      for (const multiplier of [1, 2.5, 7.5]) {
+        const span = multiplier * 10 ** exponent
+        const count = ticks(0, span, 5).length
+        expect({ span, inRange: count >= 5 && count <= 8 }).toEqual({ span, inRange: true })
+      }
+    }
+  })
 })
 
 describe("ticks", () => {
@@ -144,11 +169,30 @@ describe("ticks", () => {
     expect(ticks(1e18, 1e18 + 100)).toEqual([1e18, 1e18 + 100])
   })
 
+  it("keeps a zero tick and whole steps across a span of 1e36", () => {
+    // Ported from preact-components' `charts/scales.test.ts` before spy4x/preact-components#287.
+    const values = ticks(-1e18, 1e18)
+    expect(values.length).toBeGreaterThanOrEqual(5)
+    expect(values.length).toBeLessThanOrEqual(8)
+    expect(values).toContain(0)
+    for (let i = 0; i < values.length; i++) {
+      const quotient = values[i] / 4e17
+      expect(Math.abs(quotient - Math.round(quotient))).toBeLessThan(1e-6)
+      if (i > 0) expect(values[i]).toBeGreaterThan(values[i - 1])
+    }
+  })
+
   it("keeps six distinct ticks for a span far below one unit, instead of collapsing to a single 0", () => {
     // Before the fix, `niceStep` floored its result at 1e-9 — coarser than the whole 1e-12 span —
     // so every tick but the first rounded away and `ticks(0, 1e-12)` returned `[0]`. Expected
     // values taken from `preact-components/charts/scales.ts`.
     expect(ticks(0, 1e-12)).toEqual([0, 2e-13, 4e-13, 6e-13, 8e-13, 1e-12])
+  })
+
+  it("keeps both decimals of a two-digit step instead of rounding ticks off the step", () => {
+    // Target 4 on a span of 10 gives a step of 2.5. Rounding to the step's magnitude alone kept no
+    // decimals and returned [0, 3, 5, 8, 10].
+    expect(ticks(0, 10, 4)).toEqual([0, 2.5, 5, 7.5, 10])
   })
 
   it("returns at once for an absurd tick target instead of looping without bound", () => {
@@ -196,5 +240,71 @@ describe("ticks", () => {
         expect(values[i]).toBeGreaterThan(values[i - 1])
       }
     }
+  })
+})
+
+describe("stepAxis", () => {
+  it("rounds the bounds outward to the step and starts and ends the ticks on them", () => {
+    // 3 * 0.1 is 0.30000000000000004 in floats; the lower bound must be the same rounded 0.3 the
+    // first tick is, or the axis line and its end label disagree.
+    expect(stepAxis(0.35, 1.25, 0.1)).toEqual({
+      min: 0.3,
+      max: 1.3,
+      ticks: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3],
+    })
+    expect(stepAxis(3, 97, 20)).toEqual({ min: 0, max: 100, ticks: [0, 20, 40, 60, 80, 100] })
+  })
+
+  it("keeps every decimal of a step with two or three significant digits", () => {
+    expect(stepAxis(0, 1, 0.25).ticks).toEqual([0, 0.25, 0.5, 0.75, 1])
+    expect(stepAxis(0, 10, 2.5).ticks).toEqual([0, 2.5, 5, 7.5, 10])
+    expect(stepAxis(0.1, 9.9, 2.5)).toEqual({ min: 0, max: 10, ticks: [0, 2.5, 5, 7.5, 10] })
+    expect(stepAxis(0, 1, 0.125).ticks).toEqual([
+      0,
+      0.125,
+      0.25,
+      0.375,
+      0.5,
+      0.625,
+      0.75,
+      0.875,
+      1,
+    ])
+  })
+
+  it("stops at MAX_TICKS ticks when the step is far finer than the range", () => {
+    const { ticks: values } = stepAxis(0, 1e6, 1)
+    expect(values.length).toBe(MAX_TICKS)
+    expect(values[values.length - 1]).toBe(MAX_TICKS - 1)
+  })
+
+  it("returns no ticks for a bound that is not a finite number, instead of throwing", () => {
+    expect(stepAxis(Number.NaN, 1, 0.2).ticks).toEqual([])
+    expect(stepAxis(0, Number.POSITIVE_INFINITY, 0.2).ticks).toEqual([])
+  })
+
+  it("swaps reversed bounds", () => {
+    expect(stepAxis(10, 0, 5)).toEqual({ min: 0, max: 10, ticks: [0, 5, 10] })
+  })
+
+  it("returns the bounds unchanged for a step that is not a finite number above zero", () => {
+    expect(stepAxis(10, 100, -60)).toEqual({ min: 10, max: 100, ticks: [10, 100] })
+    expect(stepAxis(10, 100, 0)).toEqual({ min: 10, max: 100, ticks: [10, 100] })
+    expect(stepAxis(10, 100, Number.NaN)).toEqual({ min: 10, max: 100, ticks: [10, 100] })
+    expect(stepAxis(100, 10, Number.POSITIVE_INFINITY)).toEqual({
+      min: 10,
+      max: 100,
+      ticks: [10, 100],
+    })
+  })
+
+  it("returns the bounds unchanged when rounding them to the step overflows", () => {
+    // 1e308 / 1e-10 is Infinity, so the rounded upper bound would be Infinity.
+    expect(stepAxis(0, 1e308, 1e-10)).toEqual({ min: 0, max: 1e308, ticks: [0, 1e308] })
+  })
+
+  it("never returns an Infinity tick for bounds near the largest double", () => {
+    expect(stepAxis(0, 1.7e308, 1.7e308).ticks).toEqual([0, 1.7e308])
+    expect(ticks(0, 1.7e308, 1)).not.toContain(Infinity)
   })
 })
