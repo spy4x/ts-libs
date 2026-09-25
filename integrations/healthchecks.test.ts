@@ -5,7 +5,8 @@ import {
   healthchecksConfigFromEnv,
   HealthchecksOutcome,
 } from "./healthchecks.ts"
-import type { Clock, Sleeper } from "./retry.ts"
+import type { Sleeper } from "./retry.ts"
+import type { NowFn } from "@spy4x/platform/universal/time"
 
 const PING_URL = "https://hc-ping.example.invalid/00000000-0000-0000-0000-000000000000"
 
@@ -39,7 +40,7 @@ const fakeTransport = (responses: FakeResponse[]) => {
 const recordingTimer = () => {
   const delays: number[] = []
   let now = 0
-  const clock: Clock = () => now
+  const clock: NowFn = () => now
   const sleep: Sleeper = (ms) => {
     delays.push(ms)
     now += ms

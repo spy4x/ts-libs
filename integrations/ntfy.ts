@@ -29,19 +29,19 @@
 import { createAsciiHeaders } from "./header-safety.ts"
 import {
   type BackoffFn,
-  type Clock,
   createExponentialBackoff,
   DEFAULT_REQUEST_TIMEOUT_MS,
   describeTransportError,
   isRequestTimeout,
   isTransientStatus,
   parseRetryAfterMs,
-  type RandomSource,
   releaseResponseBody,
   type RetryPolicy,
   runWithRetry,
   type Sleeper,
 } from "./retry.ts"
+import type { RandomSource } from "@spy4x/platform/universal/async"
+import type { NowFn } from "@spy4x/platform/universal/time"
 
 /**
  * Severity gate.
@@ -180,7 +180,7 @@ export interface NtfyClientOptions {
   /** Replaces the waiter used between retries. Defaults to a real sleep. */
   sleep?: Sleeper
   /** Replaces the elapsed-time source. Defaults to `Date.now`. */
-  clock?: Clock
+  clock?: NowFn
   /** Replaces the delay computation between retries. */
   backoff?: BackoffFn
   /** Overrides for the default retry policy. */
@@ -273,7 +273,7 @@ export class NtfyClient {
   private readonly config: NtfyClientConfig
   private readonly fetcher: typeof fetch
   private readonly sleep: Sleeper
-  private readonly clock: Clock
+  private readonly clock: NowFn
   private readonly policy: RetryPolicy
   private readonly backoff: BackoffFn
   private readonly gate: NotificationSeverity
