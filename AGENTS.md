@@ -163,7 +163,7 @@ that can silently skip when its dependency is missing must fail loudly instead.
 | `deno task services:up`      | start the four integration services, wait until healthy    |
 | `deno task services:down`    | stop them and drop their volumes                           |
 | `deno task services:logs`    | logs of the four containers                                |
-| `deno task publish:dry`      | `deno publish --dry-run` over the workspace; not run in CI |
+| `deno task publish:dry`      | `deno publish --dry-run` over the workspace; CI runs it    |
 | `deno task contract`         | regenerate `docs/1.0-contract.md` from `deno doc` (#77)    |
 | `deno task fix`              | `lint --fix` then format                                   |
 
