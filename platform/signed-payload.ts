@@ -73,14 +73,16 @@ export enum SignedPayloadErrorCode {
 }
 
 /**
- * Thrown by {@link SignedPayloadCodec.sign} when the payload does not survive a JSON round trip
- * through the schema. Verification never throws it; it returns the code instead.
+ * Thrown by {@link SignedPayloadCodec.sign} when it would mint a token that `verify` refuses:
+ * `InvalidPayload` for a payload that is not JSON or does not survive a JSON round trip through the
+ * schema, `Malformed` for a token longer than {@link MAX_SIGNED_PAYLOAD_LENGTH}. Verification never
+ * throws it; it returns the code instead.
  */
 export class SignedPayloadError extends Error {
   readonly code: SignedPayloadErrorCode
 
-  constructor(code: SignedPayloadErrorCode, message: string) {
-    super(message)
+  constructor(code: SignedPayloadErrorCode, message: string, options?: { cause?: unknown }) {
+    super(message, options)
     this.name = "SignedPayloadError"
     this.code = code
   }
@@ -102,13 +104,21 @@ export interface SignedPayloadCodecOptions<S extends Type> {
    * extra keys by default; add `"+": "reject"` to demand an exact key set.
    */
   schema: S
-  /** Clock in Unix milliseconds, for expiry. Defaults to `Date.now`; inject one in tests. */
+  /**
+   * Clock in Unix milliseconds, for expiry. Defaults to `Date.now`; inject one in tests. Read once
+   * per call, and only when a lifetime is involved. A value that is not a safe integer makes `sign`
+   * throw a `RangeError` and `verify` refuse an expiring token as `Expired`.
+   */
   now?: () => number
 }
 
 /** Per-token settings for {@link SignedPayloadCodec.sign}. */
 export interface SignOptions {
-  /** Value the MAC covers but the token does not carry. Absent and `""` are the same context. */
+  /**
+   * Value the MAC covers but the token does not carry. Absent and `""` are the same context. A
+   * string with a lone surrogate is refused: it has no exact UTF-8 form, so it would share a
+   * signature with other strings.
+   */
   context?: string
   /** Lifetime in milliseconds from the codec's clock, a positive safe integer. Absent: never. */
   ttlMs?: number
@@ -116,7 +126,10 @@ export interface SignOptions {
 
 /** Per-token settings for {@link SignedPayloadCodec.verify}. */
 export interface VerifyOptions {
-  /** The context the token was signed with. A different one fails as `BadSignature`. */
+  /**
+   * The context the token was signed with. A different one, or one with a lone surrogate, fails as
+   * `BadSignature`.
+   */
   context?: string
 }
 
@@ -125,9 +138,13 @@ export interface SignedPayloadCodec<S extends Type> {
   /**
    * Signs `payload` into a token.
    *
-   * @throws {SignedPayloadError} `InvalidPayload` when the payload, after a JSON round trip, does
-   *     not satisfy the schema — the token would never verify.
-   * @throws {RangeError} When `ttlMs` is not a positive safe integer.
+   * @throws {SignedPayloadError} `InvalidPayload` when the payload is not JSON-serialisable (a
+   *     `BigInt`, a cycle, `undefined`) or, after a JSON round trip, does not satisfy the schema;
+   *     `Malformed` when the token would exceed {@link MAX_SIGNED_PAYLOAD_LENGTH}. Either token
+   *     would never verify.
+   * @throws {RangeError} When `ttlMs` is not a positive safe integer, or the clock does not return
+   *     a safe integer.
+   * @throws {TypeError} When `context` is not a string or holds a lone surrogate.
    */
   sign(payload: S["inferIn"], options?: SignOptions): Promise<string>
   /**
@@ -145,7 +162,10 @@ export interface SignedPayloadCodec<S extends Type> {
 /** Domain tag at the front of every MAC input, so this MAC never equals another scheme's. */
 const MAC_DOMAIN = "spy4x.signed-payload.v1"
 const SIGNATURE_BYTES = 32
+/** Unpadded base64url length of a {@link SIGNATURE_BYTES}-byte signature. */
+const SIGNATURE_LENGTH = 43
 const BASE64URL_SEGMENT = /^[A-Za-z0-9_-]+$/
+const LONE_SURROGATE = /\p{Cs}/u
 const encoder = new TextEncoder()
 const decoder = new TextDecoder("utf-8", { fatal: true })
 
@@ -186,25 +206,49 @@ export function createSignedPayloadCodec<S extends Type>(
 
   return {
     async sign(payload, signOptions = {}) {
-      const { ttlMs } = signOptions
+      const { ttlMs, context } = signOptions
       if (ttlMs !== undefined && (!Number.isSafeInteger(ttlMs) || ttlMs < 1)) {
         throw new RangeError("ttlMs must be a positive integer")
       }
-      const json = JSON.stringify(payload)
+      if (!isUsableContext(context)) {
+        throw new TypeError("context must be a string without lone surrogates")
+      }
+      let json: string | undefined
+      try {
+        json = JSON.stringify(payload)
+      } catch (cause) {
+        throw new SignedPayloadError(
+          SignedPayloadErrorCode.InvalidPayload,
+          "payload is not JSON-serialisable",
+          { cause },
+        )
+      }
       if (json === undefined || schema(JSON.parse(json)) instanceof type.errors) {
         throw new SignedPayloadError(
           SignedPayloadErrorCode.InvalidPayload,
           "payload does not satisfy the schema after a JSON round trip",
         )
       }
-      const envelope = ttlMs === undefined
-        ? { purpose, version, payload: JSON.parse(json) }
-        : { purpose, version, expiresAt: now() + ttlMs, payload: JSON.parse(json) }
+      let envelope: typeof envelopeSchema.infer = { purpose, version, payload: JSON.parse(json) }
+      if (ttlMs !== undefined) {
+        const clock = now()
+        const expiresAt = clock + ttlMs
+        if (!Number.isSafeInteger(clock) || !Number.isSafeInteger(expiresAt)) {
+          throw new RangeError("the clock must return an integer number of milliseconds")
+        }
+        envelope = { purpose, version, expiresAt, payload: envelope.payload }
+      }
       const encoded = encodeBase64Url(encoder.encode(JSON.stringify(envelope)))
+      if (encoded.length + 1 + SIGNATURE_LENGTH > MAX_SIGNED_PAYLOAD_LENGTH) {
+        throw new SignedPayloadError(
+          SignedPayloadErrorCode.Malformed,
+          "token would exceed MAX_SIGNED_PAYLOAD_LENGTH",
+        )
+      }
       const signature = await crypto.subtle.sign(
         "HMAC",
         await key,
-        macInput(signOptions.context, encoded),
+        macInput(context, encoded),
       )
       return `${encoded}.${encodeBase64Url(new Uint8Array(signature))}`
     },
@@ -221,6 +265,9 @@ export function createSignedPayloadCodec<S extends Type>(
       if (decodeCanonical(encoded) === null || signature?.length !== SIGNATURE_BYTES) {
         return refuse(SignedPayloadErrorCode.Malformed)
       }
+      if (!isUsableContext(verifyOptions.context)) {
+        return refuse(SignedPayloadErrorCode.BadSignature)
+      }
       const valid = await crypto.subtle.verify(
         "HMAC",
         await key,
@@ -232,8 +279,11 @@ export function createSignedPayloadCodec<S extends Type>(
       const envelope = parseEnvelope(encoded)
       if (envelope === null) return refuse(SignedPayloadErrorCode.Malformed)
       if (envelope.purpose !== purpose) return refuse(SignedPayloadErrorCode.WrongPurpose)
-      if (envelope.expiresAt !== undefined && envelope.expiresAt <= now()) {
-        return refuse(SignedPayloadErrorCode.Expired)
+      if (envelope.expiresAt !== undefined) {
+        const clock = now()
+        if (!Number.isSafeInteger(clock) || envelope.expiresAt <= clock) {
+          return refuse(SignedPayloadErrorCode.Expired)
+        }
       }
       if (envelope.version !== version) return refuse(SignedPayloadErrorCode.InvalidPayload)
       const output = schema(envelope.payload)
@@ -241,6 +291,14 @@ export function createSignedPayloadCodec<S extends Type>(
       return { ok: true as const, value: output as S["infer"] }
     },
   }
+}
+
+/**
+ * True for an absent context or a string with an exact UTF-8 form. A lone surrogate encodes as
+ * U+FFFD, so `"a\uD800"` and `"a\uFFFD"` would otherwise share one signature.
+ */
+function isUsableContext(context: unknown): boolean {
+  return context === undefined || (typeof context === "string" && !LONE_SURROGATE.test(context))
 }
 
 /**

@@ -129,19 +129,71 @@ Deno.test("signed payload — a non-canonical base64url spelling of the signatur
   })
 })
 
-Deno.test("signed payload — a token longer than the cap is refused before decoding", async () => {
-  const codec = createSignedPayloadCodec({
+/** A notes codec whose envelope JSON is 53 bytes plus the text's length. */
+function notesCodec() {
+  return createSignedPayloadCodec({
     secret: SECRET,
     purpose: "notes",
     version: 1,
     schema: type({ text: "string" }),
   })
-  const fits = await codec.sign({ text: "x".repeat(2900) })
-  assert(fits.length <= MAX_SIGNED_PAYLOAD_LENGTH)
-  assert((await codec.verify(fits)).ok)
-  const tooLong = await codec.sign({ text: "x".repeat(3100) })
-  assert(tooLong.length > MAX_SIGNED_PAYLOAD_LENGTH)
-  assertEquals(await codec.verify(tooLong), { ok: false, error: SignedPayloadErrorCode.Malformed })
+}
+
+/** The envelope bytes `notesCodec` signs for `text`. */
+function notesEnvelope(text: string): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify({ purpose: "notes", version: 1, payload: { text } }),
+  )
+}
+
+Deno.test("signed payload — a token of exactly the cap signs and verifies", async () => {
+  // 3,039 envelope bytes encode to 4,052 characters; with "." and the 43-character signature, 4,096.
+  const token = await notesCodec().sign({ text: "x".repeat(3039 - 53) })
+  assertEquals(token.length, MAX_SIGNED_PAYLOAD_LENGTH)
+  assert((await notesCodec().verify(token)).ok)
+})
+
+Deno.test("signed payload — a validly signed token over the cap is refused as malformed", async () => {
+  // One more envelope byte gives 4,098 characters: unpadded base64url has no length of 4,053, so no
+  // well-formed token is 4,097 characters long.
+  const token = await signRawEnvelope(notesEnvelope("x".repeat(3040 - 53)))
+  assertEquals(token.length, MAX_SIGNED_PAYLOAD_LENGTH + 2)
+  assertEquals(await notesCodec().verify(token), {
+    ok: false,
+    error: SignedPayloadErrorCode.Malformed,
+  })
+})
+
+Deno.test("signed payload — sign refuses a payload whose token would exceed the cap", async () => {
+  const error = await assertRejects(
+    () => notesCodec().sign({ text: "x".repeat(3040 - 53) }),
+    SignedPayloadError,
+  )
+  assertEquals(error.code, SignedPayloadErrorCode.Malformed)
+})
+
+Deno.test("signed payload — a token that is not a string is refused as malformed", async () => {
+  for (const token of [123, null, undefined, { length: 1 }]) {
+    assertEquals(
+      await cursorCodec().verify(token as unknown as string),
+      { ok: false, error: SignedPayloadErrorCode.Malformed },
+      String(token),
+    )
+  }
+})
+
+Deno.test("signed payload — a validly signed envelope that is not UTF-8 is malformed", async () => {
+  // Valid JSON once a lenient decoder turns the 0xFF byte into U+FFFD, so only strict decoding
+  // refuses it.
+  const prefix = new TextEncoder().encode(
+    `{"purpose":"groups.list","version":1,"payload":{"updatedAt":"`,
+  )
+  const suffix = new TextEncoder().encode(`","id":"x"}}`)
+  const envelope = new Uint8Array([...prefix, 0xff, ...suffix])
+  assertEquals(await cursorCodec().verify(await signRawEnvelope(envelope)), {
+    ok: false,
+    error: SignedPayloadErrorCode.Malformed,
+  })
 })
 
 Deno.test("signed payload — a validly signed envelope that is not JSON is malformed, not a SyntaxError", async () => {
@@ -295,4 +347,104 @@ Deno.test("signed payload — an empty purpose or a non-positive version is refu
       TypeError,
     )
   }
+})
+
+Deno.test("signed payload — context bytes cannot be shifted into the envelope", async () => {
+  // "ICAg" is base64url for three spaces, which JSON.parse skips. Without the context's length in
+  // the MAC input, the bytes signed for context "abcICAg" + envelope equal "abc" + "ICAg" + envelope.
+  const codec = cursorCodec()
+  const [encoded, signature] = (await codec.sign(PAGE, { context: "abcICAg" })).split(".")
+  assertEquals(await codec.verify(`ICAg${encoded}.${signature}`, { context: "abc" }), {
+    ok: false,
+    error: SignedPayloadErrorCode.BadSignature,
+  })
+})
+
+Deno.test("signed payload — the signed-bytes layout for a bound context is fixed", async () => {
+  // Changing the layout would invalidate every token already sent, such as unsubscribe links.
+  const expected = "eyJwdXJwb3NlIjoidW5zdWJzY3JpYmUiLCJ2ZXJzaW9uIjoxLCJwYXlsb2FkIjp7fX0." +
+    "BR64ZVCbUkj8VrsJfrXzG47D9zLnsQAaRMuyuvVIoQI"
+  const codec = createSignedPayloadCodec({
+    secret: SECRET,
+    purpose: "unsubscribe",
+    version: 1,
+    schema: type({ "+": "reject" }),
+  })
+  assertEquals(await codec.sign({}, { context: "reader@example.com" }), expected)
+  const envelope = new TextEncoder().encode(`{"purpose":"unsubscribe","version":1,"payload":{}}`)
+  assertEquals(await signRawEnvelope(envelope, "reader@example.com"), expected)
+})
+
+Deno.test("signed payload — sign refuses a value that JSON turns into another type", async () => {
+  const codec = createSignedPayloadCodec({
+    secret: SECRET,
+    purpose: "dated",
+    version: 1,
+    schema: type({ at: "Date" }),
+  })
+  const error = await assertRejects(() => codec.sign({ at: new Date(0) }), SignedPayloadError)
+  assertEquals(error.code, SignedPayloadErrorCode.InvalidPayload)
+})
+
+Deno.test("signed payload — sign refuses a payload JSON cannot serialise", async () => {
+  const codec = createSignedPayloadCodec({
+    secret: SECRET,
+    purpose: "any",
+    version: 1,
+    schema: type("unknown"),
+  })
+  const circular: Record<string, unknown> = {}
+  circular.self = circular
+  for (const payload of [{ big: 1n }, circular, undefined, () => 1]) {
+    const error = await assertRejects(() => codec.sign(payload), SignedPayloadError)
+    assertEquals(error.code, SignedPayloadErrorCode.InvalidPayload)
+  }
+})
+
+Deno.test("signed payload — a context with a lone surrogate is refused", async () => {
+  const codec = cursorCodec()
+  for (const context of ["user-\uD800", "user-\uDBFF"]) {
+    await assertRejects(() => codec.sign(PAGE, { context }), TypeError)
+  }
+  // Both lone surrogates encode to the same UTF-8 bytes as U+FFFD.
+  const token = await codec.sign(PAGE, { context: "user-\uFFFD" })
+  assertEquals(await codec.verify(token, { context: "user-\uD800" }), {
+    ok: false,
+    error: SignedPayloadErrorCode.BadSignature,
+  })
+})
+
+Deno.test("signed payload — an expiring token is refused when the clock is not an integer", async () => {
+  let clock = 1_000_000
+  const codec = cursorCodec({ now: () => clock })
+  const token = await codec.sign(PAGE, { ttlMs: 60_000 })
+  for (const broken of [Number.NaN, 1_000_000.5, Number.POSITIVE_INFINITY]) {
+    clock = broken
+    assertEquals(
+      await codec.verify(token),
+      { ok: false, error: SignedPayloadErrorCode.Expired },
+      String(broken),
+    )
+  }
+})
+
+Deno.test("signed payload — sign refuses a lifetime when the clock is not an integer", async () => {
+  for (const broken of [1000.5, Number.NaN]) {
+    await assertRejects(
+      () => cursorCodec({ now: () => broken }).sign(PAGE, { ttlMs: 1 }),
+      RangeError,
+    )
+  }
+})
+
+Deno.test("signed payload — a wrong purpose is reported before an expiry", async () => {
+  let clock = 0
+  const token = await cursorCodec({ purpose: "groups.list", now: () => clock }).sign(PAGE, {
+    ttlMs: 1,
+  })
+  clock = 10
+  assertEquals(await cursorCodec({ purpose: "users.list", now: () => clock }).verify(token), {
+    ok: false,
+    error: SignedPayloadErrorCode.WrongPurpose,
+  })
 })
