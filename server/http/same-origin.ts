@@ -1,0 +1,143 @@
+/**
+ * Cross-site request forgery guard for cookie-authenticated APIs.
+ *
+ * A browser attaches the session cookie to a request that another site starts, so a cookie alone
+ * does not prove that the app's own page sent a mutation. This guard lets safe methods through and
+ * refuses every other request unless all three hold:
+ *
+ *  1. the session cookie is present (unless {@link SameOriginGuardOptions.requireSessionCookie} is
+ *     `false`);
+ *  2. `Origin` equals the expected origin exactly;
+ *  3. `Sec-Fetch-Site` is `same-origin`.
+ *
+ * A browser sets both headers itself and a page cannot forge them. A client outside a browser can
+ * forge them, but it has no victim's cookie to ride on, so this guard is not authentication: mount
+ * the session guard as well.
+ *
+ * Ported from `template/apps/api/middlewares/same-origin.ts`. What changed and why:
+ *
+ *  - The source found the cookie with `startsWith("<name>=")` on each `;`-separated part. The header
+ *    is now parsed by Hono's cookie parser, and an empty value counts as absent.
+ *  - The source checked every method. GET, HEAD and OPTIONS now pass, so the guard can be mounted
+ *    on a whole router with `app.use`.
+ *  - The expected origin can be configured. Behind a proxy that terminates TLS, the request URL the
+ *    server sees is `http://`, while the browser sends `Origin: https://…`.
+ *
+ * @module
+ */
+
+import { getCookie } from "hono/cookie"
+import type { Context, Env, MiddlewareHandler } from "hono"
+import { SESSION_COOKIE_NAME } from "../sign-in/cookie.ts"
+
+/** Body `error` of the default 403 response. */
+export const SAME_ORIGIN_REFUSED = "Cross-origin request refused"
+
+/** Methods that must not change state, and so pass the guard unchecked. */
+export const SAFE_METHODS: readonly string[] = ["GET", "HEAD", "OPTIONS"]
+
+/**
+ * Why the guard refused a request, passed to {@link SameOriginGuardOptions.onReject}:
+ *
+ *  - `no-session-cookie`: the session cookie is absent or empty.
+ *  - `origin-mismatch`: `Origin` is absent, `null`, or not an expected origin.
+ *  - `not-same-origin-fetch`: `Sec-Fetch-Site` is absent or anything but `same-origin`.
+ *
+ * When several apply, the first in this order is reported.
+ */
+export type SameOriginRefusal = "no-session-cookie" | "origin-mismatch" | "not-same-origin-fetch"
+
+/** Options for {@link createSameOriginMutationGuard}. */
+export interface SameOriginGuardOptions<E extends Env = Env> {
+  /** Name of the session cookie. Defaults to {@link SESSION_COOKIE_NAME}. */
+  cookieName?: string
+  /**
+   * Refuse a mutating request that carries no session cookie. Defaults to `true`.
+   *
+   * Pass `false` on sign-in and sign-up routes, which have no cookie yet: the `Origin` and
+   * `Sec-Fetch-Site` checks still run, which stops another site from signing the browser in to an
+   * attacker's account.
+   */
+  requireSessionCookie?: boolean
+  /**
+   * The origins a browser may send, such as `https://app.example.com`. Defaults to the origin of
+   * the request URL the server sees.
+   *
+   * Set it whenever that URL differs from what the browser uses, most often behind a proxy that
+   * terminates TLS: the server sees `http://app.example.com` and would refuse every request. Take
+   * the value from configuration, never from `X-Forwarded-*` headers, which a client can set.
+   * Each value must be a bare origin (scheme, host and port only).
+   */
+  expectedOrigin?: string | readonly string[]
+  /**
+   * Builds the response for a refused request. Defaults to `403 { error: SAME_ORIGIN_REFUSED }`.
+   * The reason is for logs; do not tell the client which check failed.
+   */
+  onReject?: (c: Context<E>, reason: SameOriginRefusal) => Response | Promise<Response>
+}
+
+/**
+ * Build a Hono middleware that refuses cross-site mutations. See the module documentation for the
+ * three checks. A request without `Sec-Fetch-Site` is refused: every current browser sends it, and
+ * one that does not cannot prove it came from the app's own page.
+ *
+ * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin.
+ */
+export function createSameOriginMutationGuard<E extends Env = Env>(
+  options: SameOriginGuardOptions<E> = {},
+): MiddlewareHandler<E> {
+  const cookieName = options.cookieName ?? SESSION_COOKIE_NAME
+  const requireCookie = options.requireSessionCookie !== false
+  const expected = options.expectedOrigin === undefined
+    ? undefined
+    : validateOrigins(options.expectedOrigin)
+  const onReject = options.onReject ??
+    ((c: Context<E>) => c.json({ error: SAME_ORIGIN_REFUSED }, 403))
+
+  return async (c, next) => {
+    if (SAFE_METHODS.includes(c.req.method)) return await next()
+
+    const reason = refusal(c, cookieName, requireCookie, expected)
+    if (reason !== undefined) return await onReject(c, reason)
+    return await next()
+  }
+}
+
+function refusal(
+  c: Context,
+  cookieName: string,
+  requireCookie: boolean,
+  expected: readonly string[] | undefined,
+): SameOriginRefusal | undefined {
+  if (requireCookie) {
+    const value = getCookie(c, cookieName)
+    if (value === undefined || value === "") return "no-session-cookie"
+  }
+  const origin = c.req.header("origin")
+  const allowed = expected ?? [new URL(c.req.url).origin]
+  if (origin === undefined || !allowed.includes(origin)) return "origin-mismatch"
+  if (c.req.header("sec-fetch-site") !== "same-origin") return "not-same-origin-fetch"
+  return undefined
+}
+
+/** Check each configured origin once, at startup, so a typo fails loudly instead of refusing all. */
+function validateOrigins(value: string | readonly string[]): readonly string[] {
+  const origins = typeof value === "string" ? [value] : [...value]
+  if (origins.length === 0) {
+    throw new TypeError("expectedOrigin is empty: no request could pass the guard")
+  }
+  for (const origin of origins) {
+    let parsed: string
+    try {
+      parsed = new URL(origin).origin
+    } catch {
+      throw new TypeError(`expectedOrigin ${JSON.stringify(origin)} is not a URL`)
+    }
+    if (parsed === "null" || parsed !== origin) {
+      throw new TypeError(
+        `expectedOrigin ${JSON.stringify(origin)} is not a bare origin such as https://example.com`,
+      )
+    }
+  }
+  return origins
+}
