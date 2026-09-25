@@ -448,3 +448,12 @@ Deno.test("signed payload — a wrong purpose is reported before an expiry", asy
     error: SignedPayloadErrorCode.WrongPurpose,
   })
 })
+
+Deno.test("signed payload — sign refuses a lifetime whose expiry would overflow", async () => {
+  const codec = cursorCodec({ now: () => 1_000_000 })
+  const error = await assertRejects(
+    () => codec.sign(PAGE, { ttlMs: Number.MAX_SAFE_INTEGER }),
+    RangeError,
+  )
+  assert(error.message.includes("ttlMs"), error.message)
+})
