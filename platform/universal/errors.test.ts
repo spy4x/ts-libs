@@ -5,11 +5,14 @@ import { ErrType as ValidationErrType, validate } from "@spy4x/validation"
 
 import {
   ConnectionError,
+  connectionError,
   ERR_MESSAGE,
   ErrType,
   idleOperationState,
+  isSilentError,
   OperationResult,
   OperationState,
+  responseError,
   ServerError,
   ValidationError,
 } from "./errors.ts"
@@ -98,5 +101,79 @@ describe("OperationResult", () => {
       result: null,
     }
     if (result.error !== null) expect(result.error.status).toBe(500)
+  })
+})
+
+describe("connectionError", () => {
+  it("wraps a message in a connection error", () => {
+    expect(connectionError("offline")).toEqual({ type: ErrType.Connection, message: "offline" })
+  })
+})
+
+describe("responseError", () => {
+  it("treats status 0 as a connection error with the canonical message", async () => {
+    const error = await responseError(Response.error())
+    expect(error).toEqual({ type: ErrType.Connection, message: ERR_MESSAGE.connection })
+  })
+
+  it("carries the status and the server's message from an error key", async () => {
+    const error = await responseError(Response.json({ error: "Email taken" }, { status: 409 }))
+    expect(error).toEqual({ type: ErrType.Server, status: 409, message: "Email taken" })
+  })
+
+  it("reads the server's message from a message key", async () => {
+    const error = await responseError(Response.json({ message: "nope" }, { status: 422 }))
+    expect(error.message).toBe("nope")
+  })
+
+  it("reads the server's message from a detail key", async () => {
+    const error = await responseError(Response.json({ detail: "gone" }, { status: 410 }))
+    expect(error.message).toBe("gone")
+  })
+
+  it("reads the server's message from a bare JSON string", async () => {
+    const error = await responseError(Response.json("quota exceeded", { status: 429 }))
+    expect(error.message).toBe("quota exceeded")
+  })
+
+  it("falls back to the status text when the body is not JSON", async () => {
+    const error = await responseError(
+      new Response("<html>oops</html>", { status: 502, statusText: "Bad Gateway" }),
+    )
+    expect(error).toEqual({ type: ErrType.Server, status: 502, message: "Bad Gateway" })
+  })
+
+  it("falls back to the status text when the JSON body has no message", async () => {
+    const error = await responseError(
+      Response.json({ error: "" }, { status: 400, statusText: "Bad Request" }),
+    )
+    expect(error.message).toBe("Bad Request")
+  })
+
+  it("falls back to the status code when there is no body and no status text", async () => {
+    const error = await responseError(new Response(null, { status: 503 }))
+    expect(error).toEqual({ type: ErrType.Server, status: 503, message: "HTTP 503" })
+  })
+})
+
+describe("isSilentError", () => {
+  it("is true for a connection error", () => {
+    expect(isSilentError(connectionError("offline"))).toBe(true)
+  })
+
+  it("is true for a server error with status 500", () => {
+    expect(isSilentError({ type: ErrType.Server, status: 500, message: "boom" })).toBe(true)
+  })
+
+  it("is false for a server error with any other status", () => {
+    expect(isSilentError({ type: ErrType.Server, status: 409, message: "taken" })).toBe(false)
+    expect(isSilentError({ type: ErrType.Server, status: 503, message: "busy" })).toBe(false)
+  })
+
+  it("is false for a payload error and a validation error", () => {
+    expect(isSilentError({ type: ErrType.Payload, message: "malformed" })).toBe(false)
+    const { error } = validate(type({ name: "string" }), {})
+    if (error === null) throw new Error("expected a validation error")
+    expect(isSilentError(error)).toBe(false)
   })
 })
