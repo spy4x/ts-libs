@@ -2,6 +2,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import {
   CSV_BYTE_ORDER_MARK,
+  type CsvCellValue,
   type CsvColumn,
   csvField,
   csvHeaderRow,
@@ -48,13 +49,52 @@ describe("csvField", () => {
     expect(csvField("\rcmd")).toBe('"\'\rcmd"')
   })
 
+  it("prefixes and quotes a cell starting with a line feed", () => {
+    // Bug fixed at extraction time: the source's CELL_START_GUARD_CHARS guarded a leading tab
+    // and carriage return but not a leading line feed, even though the same OWASP guidance and
+    // the same reasoning (a bare control character opening a cell) covers it too. Named here
+    // because preact-components' own ui/csv.ts carries the same gap.
+    expect(csvField("\ncmd")).toBe('"\'\ncmd"')
+  })
+
+  it("guards a cell starting with the full-width equivalent of =, + or @", () => {
+    // Bug fixed at extraction time: the source only checked the four ASCII formula-lead
+    // characters. A spreadsheet reader that folds full-width Unicode forms to their ASCII
+    // equivalent before evaluating a cell still opens ＝1+1 as a formula, so a guard that only
+    // recognizes = misses it. preact-components' ui/csv.ts has the same gap.
+    expect(csvField("＝1+1")).toBe("'＝1+1")
+    expect(csvField("＋1")).toBe("'＋1")
+    expect(csvField("－1")).toBe("'－1")
+    expect(csvField("＠mention")).toBe("'＠mention")
+  })
+
+  it("guards a full-width formula-lead char after a separator, like its ASCII form", () => {
+    expect(csvField("x;＝1+1")).toBe("x;'＝1+1")
+  })
+
+  it("looks past a leading space before checking for a formula character at cell start", () => {
+    // Bug fixed at extraction time: Excel and LibreOffice both skip leading whitespace before
+    // deciding whether a cell opens with a formula, so " =1+1" still opens as one even though
+    // the first character is a space, not "=". The source guarded only the exact first
+    // character. preact-components' ui/csv.ts has the same gap.
+    expect(csvField(" =1+1")).toBe("' =1+1")
+  })
+
+  it("looks past a leading no-break space before checking for a formula character", () => {
+    expect(csvField(" =1+1")).toBe("' =1+1")
+  })
+
+  it("looks past leading whitespace after a separator too, not only at cell start", () => {
+    expect(csvField("x; =1+1")).toBe("x;' =1+1")
+  })
+
   it("guards a formula-shaped payload that starts like a negative number", () => {
     // No comma, double quote or line break in this payload, so only the guard applies — RFC 4180
     // quoting is a separate rule and does not trigger just because the cell is dangerous.
     expect(csvField("-2+3+cmd|' /C calc'!A1")).toBe("'-2+3+cmd|' /C calc'!A1")
   })
 
-  it("guards a plain negative number given as a string, trading numeric formatting for safety", () => {
+  it("guards a plain negative number given as a string, trading formatting for safety", () => {
     // Decision recorded in csv.ts's guardFormulaInjection: there is no way to tell "-5" (a
     // caller-formatted amount) from the start of a formula payload by content alone, so a string
     // is always guarded. A caller who wants -5 to stay a live number hands back the number itself
@@ -89,7 +129,7 @@ describe("csvField", () => {
     expect(csvField("x;=cmd|' /C calc'!A0")).toBe("x;'=cmd|' /C calc'!A0")
   })
 
-  it("pays the documented cost: a plain negative number after a separator still gets the mark", () => {
+  it("pays the cost: a plain negative number after a separator still gets the mark", () => {
     expect(csvField("a;-5")).toBe("a;'-5")
   })
 
@@ -195,6 +235,30 @@ describe("toCsvText", () => {
     const columns: CsvColumn<{ note: string }>[] = [{ key: "note", header: "=1+1" }]
     expect(csvHeaderRow(columns)).toBe("'=1+1")
     expect(toCsvText(columns, [])).toBe("'=1+1\r\n")
+  })
+
+  it("guards and quotes an array a format callback returns, not leaking an extra column", () => {
+    // Bug fixed at extraction time: `format`'s declared return type is `CsvCellValue`
+    // (`string | number | bigint`), but nothing stops a caller from returning an array or an
+    // object at runtime. The source's csvField only guarded `string`, so a value like
+    // ["=1+1", "x"] skipped both the guard and the quoting: `String()`-ed unguarded, it becomes
+    // the unquoted text "=1+1,x", which a reader splits into a live formula in one cell and a
+    // bare "x" leaking into the next. preact-components' ui/csv.ts has the same gap.
+    const risky: CsvColumn<{ link: string }>[] = [
+      { key: "link", header: "Link", format: () => ["=1+1", "x"] as unknown as CsvCellValue },
+    ]
+    expect(toCsvText(risky, [{ link: "" }])).toBe(`Link\r\n"'=1+1,x"\r\n`)
+  })
+
+  it("guards a plain object a format callback returns, using its string conversion", () => {
+    const risky: CsvColumn<{ note: string }>[] = [
+      {
+        key: "note",
+        header: "Note",
+        format: () => ({ toString: () => "=cmd" }) as unknown as CsvCellValue,
+      },
+    ]
+    expect(toCsvText(risky, [{ note: "" }])).toBe("Note\r\n'=cmd\r\n")
   })
 })
 
