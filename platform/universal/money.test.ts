@@ -52,6 +52,21 @@ describe("currencyDecimals", () => {
   })
 })
 
+describe("moneyDecimalString", () => {
+  it("gives a zero amount the currency's own decimals, not a bare '0'", () => {
+    expect(moneyDecimalString(0, 2)).toBe("0.00")
+    expect(moneyDecimalString(0, 3)).toBe("0.000")
+  })
+
+  it("gives a zero-decimal currency's zero amount a bare '0', with no trailing point", () => {
+    expect(moneyDecimalString(0, 0)).toBe("0")
+  })
+
+  it("never puts a minus sign on a zero amount, including -0", () => {
+    expect(moneyDecimalString(-0, 2)).toBe("0.00")
+  })
+})
+
 describe("formatMoney", () => {
   it("shows 12345 as €123.45 in euros, ¥12,345 in yen, three decimals in Kuwaiti dinar", () => {
     expect(formatMoney(12345, "EUR")).toBe("€123.45")
@@ -238,7 +253,7 @@ describe("parseMoney", () => {
     // de-CH/en-IN exercise this module's own group and decimal marks; en and ja are the plain
     // baseline.
     for (const locale of ROUND_TRIP_LOCALES) {
-      for (const value of [12345, -12345, 0, 1]) {
+      for (const value of [12345, -12345, 0, 1, 9007199254740991]) {
         const text = editableText(value, "USD", locale)
         const result = parseMoney(text, "USD", locale)
         expect({ locale, value, text, result }).toEqual({

@@ -61,17 +61,19 @@ export function currencyDecimals(currency: string, locale = "en"): number {
 
 /**
  * `amount`, in `currency`'s smallest unit, as the exact base-ten string `Intl.NumberFormat` should
- * format — `moneyDecimalString(12345, 2)` is `"123.45"`, `moneyDecimalString(-500, 0)` is `"-500"`.
- * Built with `BigInt` digit slicing rather than `amount / 10 ** decimals`, which is not exact for
- * every safe integer — see the module doc. `-0` (and any amount whose magnitude is exactly `0`)
- * normalises to `"0"`, never `"-0"`: a `double` cannot carry a meaningful negative zero here, and a
- * displayed `"-€0.00"` for an amount that is actually zero is a bug, not a sign a caller asked for.
+ * format — `moneyDecimalString(12345, 2)` is `"123.45"`, `moneyDecimalString(-500, 0)` is `"-500"`,
+ * `moneyDecimalString(0, 2)` is `"0.00"`, `moneyDecimalString(0, 0)` is `"0"` — a zero amount gets
+ * `decimals` zero digits after the point, same as any other amount, never a bare `"0"` for a
+ * currency that has decimals. Built with `BigInt` digit slicing rather than `amount / 10 ** decimals`,
+ * which is not exact for every safe integer — see the module doc. `-0` (and any amount whose
+ * magnitude is exactly `0`) normalises to a positive zero string, never a leading `"-"`: a `double`
+ * cannot carry a meaningful negative zero here, and a displayed `"-€0.00"` for an amount that is
+ * actually zero is a bug, not a sign a caller asked for.
  *
  * `amount` must already be a safe integer — throws otherwise, the same as {@link formatMoney}.
  */
 export function moneyDecimalString(amount: number, decimals: number): string {
   const safe = safeAmount(amount)
-  if (safe === 0) return "0"
   const negative = safe < 0
   const digits = BigInt(Math.abs(safe)).toString().padStart(decimals + 1, "0")
   const cut = digits.length - decimals
