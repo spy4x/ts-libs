@@ -1,7 +1,48 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { currencyDecimals, formatMoney, formatMoneyParts, parseMoney } from "./money.ts"
+import {
+  currencyDecimals,
+  formatMoney,
+  formatMoneyParts,
+  moneyDecimalString,
+  parseMoney,
+} from "./money.ts"
+
+/** Locales exercised by the round-trip test below — see its own doc for what each one covers. */
+const ROUND_TRIP_LOCALES = [
+  "sv",
+  "fi",
+  "nb",
+  "lt",
+  "sl",
+  "he",
+  "ur",
+  "ar-EG",
+  "fa",
+  "bn",
+  "mr",
+  "de",
+  "fr",
+  "de-CH",
+  "en-IN",
+  "en",
+  "ja",
+]
+
+/**
+ * The plain, ungrouped decimal text a caller would show for editing — the same shape
+ * `money-input.tsx`'s own `editableText` builds, reimplemented here rather than imported so this
+ * test does not depend on `ui/`'s own file layout.
+ */
+function editableText(value: number, currency: string, locale: string): string {
+  const decimals = currencyDecimals(currency, locale)
+  return new Intl.NumberFormat(locale, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+    useGrouping: false,
+  }).format(moneyDecimalString(value, decimals) as unknown as number)
+}
 
 describe("currencyDecimals", () => {
   it("never assumes two decimals", () => {
@@ -34,6 +75,16 @@ describe("formatMoney", () => {
 
   it("throws for an amount beyond Number.MAX_SAFE_INTEGER", () => {
     expect(() => formatMoney(Number.MAX_SAFE_INTEGER + 2, "USD")).toThrow()
+  })
+
+  it("is exact for an amount right at Number.MAX_SAFE_INTEGER, where a float division rounds the last digit", () => {
+    // amount / 10 ** decimals as a double rounds this to a value that prints ".90"; the exact
+    // decimal value's last digit is ".91". Built from the digit string, not the division.
+    expect(formatMoney(9_007_199_254_740_991, "USD")).toBe("$90,071,992,547,409.91")
+  })
+
+  it("shows a zero amount as a plain zero, never -0", () => {
+    expect(formatMoney(-0, "EUR")).toBe("€0.00")
   })
 })
 
@@ -122,5 +173,76 @@ describe("parseMoney", () => {
 
   it("parses a leading-decimal amount as a fraction of the major unit", () => {
     expect(parseMoney(".5", "USD")).toEqual({ ok: true, value: 50 })
+  })
+
+  it("refuses a grouping mark typed where Intl would not place one, instead of stripping it", () => {
+    // "12.50" in German reads "." as the grouping mark, not a decimal point — stripping it
+    // unconditionally used to turn this into €1,250.00 with no error.
+    expect(parseMoney("12.50", "EUR", "de")).toEqual({
+      ok: false,
+      error: { type: "invalid-characters" },
+    })
+    expect(parseMoney("12,50", "EUR", "en")).toEqual({
+      ok: false,
+      error: { type: "invalid-characters" },
+    })
+    expect(parseMoney("1,5", "EUR", "en")).toEqual({
+      ok: false,
+      error: { type: "invalid-characters" },
+    })
+    expect(parseMoney(",5", "EUR", "en")).toEqual({
+      ok: false,
+      error: { type: "invalid-characters" },
+    })
+    expect(parseMoney("5,", "EUR", "en")).toEqual({
+      ok: false,
+      error: { type: "invalid-characters" },
+    })
+  })
+
+  it("accepts Indian lakh grouping and refuses western grouping for the same locale", () => {
+    expect(parseMoney("1,23,456.00", "EUR", "en-IN")).toEqual({ ok: true, value: 12345600 })
+    expect(parseMoney("123,456.00", "EUR", "en-IN")).toEqual({
+      ok: false,
+      error: { type: "invalid-characters" },
+    })
+  })
+
+  it("refuses a second decimal mark instead of silently dropping everything after it", () => {
+    // Without this check, destructuring the split result reads only its first two parts and
+    // silently discards the rest — "1.2.3" in English would parse as "1.2", i.e. 120 cents,
+    // dropping the ".3" a visitor typed with no error at all.
+    expect(parseMoney("1.2.3", "USD")).toEqual({ ok: false, error: { type: "invalid-characters" } })
+  })
+
+  it("accepts a plain space or an ASCII apostrophe as the locale's own look-alike grouping mark", () => {
+    // fr's own grouping mark is U+202F NARROW NO-BREAK SPACE; de-CH's is U+2019 RIGHT SINGLE
+    // QUOTATION MARK. A visitor's own keyboard types a plain space or a plain apostrophe instead.
+    expect(parseMoney("1 234,56", "EUR", "fr")).toEqual({ ok: true, value: 123456 })
+    expect(parseMoney("1'234.56", "CHF", "de-CH")).toEqual({ ok: true, value: 123456 })
+  })
+
+  it("normalises a parsed negative zero to a plain zero", () => {
+    expect(parseMoney("-0.00", "EUR")).toEqual({ ok: true, value: 0 })
+  })
+
+  it("round-trips value, the locale's own edited text, and parseMoney for every listed locale", () => {
+    // Each of these locales prints something ASCII-digit-and-hyphen parsing cannot read back:
+    // sv/fi/nb/lt/sl print U+2212 MINUS SIGN for a negative amount; he/ur are right-to-left and may
+    // wrap the sign in a bidi mark; ar-EG/fa/bn/mr print their own digit glyphs, not 0-9; de/fr/
+    // de-CH/en-IN exercise this module's own group and decimal marks; en and ja are the plain
+    // baseline.
+    for (const locale of ROUND_TRIP_LOCALES) {
+      for (const value of [12345, -12345, 0, 1]) {
+        const text = editableText(value, "USD", locale)
+        const result = parseMoney(text, "USD", locale)
+        expect({ locale, value, text, result }).toEqual({
+          locale,
+          value,
+          text,
+          result: { ok: true, value },
+        })
+      }
+    }
   })
 })

@@ -35,6 +35,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `OperationState`, `OperationResult`                                                                        |
 | `universal/format-number`   | `round`, `formatDecimal`, `formatPct`                                                                                                                                             |
 | `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71) |
+| `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney` — money as a smallest-unit integer, parsed and formatted without a float step           |
 | `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                    |
 | `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                   |
 | `universal/text`            | `search`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                                                                                        |
