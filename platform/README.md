@@ -38,7 +38,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney` — money as a smallest-unit integer, parsed and formatted without a float step           |
 | `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                    |
 | `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                   |
-| `universal/text`            | `search`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                                                                                        |
+| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                                                           |
 | `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`                                                                                 |
 | `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                           |
 

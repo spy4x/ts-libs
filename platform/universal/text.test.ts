@@ -3,12 +3,29 @@ import { expect } from "@std/expect"
 
 import {
   convertToKebabCase,
+  filterRows,
   levenshtein,
   pluralize,
   search,
+  searchWords,
   similarity,
   utf8ByteLength,
 } from "./text.ts"
+
+describe("searchWords", () => {
+  it("splits on whitespace and drops the empties", () => {
+    expect(searchWords("  north   gate ")).toEqual(["north", "gate"])
+  })
+
+  it("reads an empty box as no filter", () => {
+    expect(searchWords("   ")).toEqual([])
+  })
+
+  it("keeps only the first 16 words", () => {
+    const words = Array.from({ length: 20 }, (_, i) => `w${i}`)
+    expect(searchWords(words.join(" "))).toEqual(words.slice(0, 16))
+  })
+})
 
 describe("search", () => {
   it("matches a substring case-insensitively", () => {
@@ -25,11 +42,35 @@ describe("search", () => {
     expect(search(null, "a")).toBe(false)
     expect(search(undefined, "a")).toBe(false)
     expect(search("", "a")).toBe(false)
+    expect(search("", "")).toBe(false)
     expect(search("a", "", false)).toBe(false)
   })
 
   it("treats zero as a matcher, not as an absent value", () => {
     expect(search(0, "0")).toBe(true)
+  })
+
+  it("matches nothing for a value that is neither a string nor a number", () => {
+    expect(search({ id: 1 }, "1")).toBe(false)
+    expect(search(true, "1")).toBe(false)
+    expect(search(1n, "1")).toBe(false)
+  })
+})
+
+describe("filterRows", () => {
+  const rows = [{ name: "North Gate" }, { name: "South Gate" }, { name: "River" }]
+  const match = (row: { name: string }, word: string) => search(row.name, word)
+
+  it("returns the input array itself for an empty query", () => {
+    expect(filterRows(rows, "  ", match)).toBe(rows)
+  })
+
+  it("keeps the rows every word matches", () => {
+    expect(filterRows(rows, "north gate", match).map((row) => row.name)).toEqual(["North Gate"])
+  })
+
+  it("drops the rows a later word excludes", () => {
+    expect(filterRows(rows, "gate river", match)).toEqual([])
   })
 })
 

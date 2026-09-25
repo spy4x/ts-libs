@@ -1,20 +1,59 @@
 /**
- * Small, dependency-free text helpers: a list-filter match (`search`), a naive English pluraliser
- * (`pluralize`), a kebab-case converter (`convertToKebabCase`), edit distance and a normalised
- * similarity score (`levenshtein`, `similarity`), and a UTF-8 byte-length count (`utf8ByteLength`).
+ * Small, dependency-free text helpers: a list filter (`searchWords`, `search`, `filterRows`), a
+ * naive English pluraliser (`pluralize`), a kebab-case converter (`convertToKebabCase`), edit
+ * distance and a normalised similarity score (`levenshtein`, `similarity`), and a UTF-8
+ * byte-length count (`utf8ByteLength`).
  *
  * @module
  */
 
-/** Substring/equality match used by list filters. */
-export function search(
-  value: string | number | null | undefined,
-  word: string,
-  condition = true,
-): boolean {
-  if (!condition || value === null || value === undefined || value === "") return false
+/** Maximum number of words a query is split into; the rest are ignored. */
+const MAX_SEARCH_WORDS = 16
+
+/**
+ * Split a search box's value into words.
+ *
+ * Runs of whitespace collapse, so `"  north  gate "` is `["north", "gate"]`, and an empty box is an
+ * empty list, which {@link filterRows} reads as "no filter". Only the first 16 words count.
+ */
+export function searchWords(query: string): string[] {
+  return query.trim().split(/\s+/).filter(Boolean).slice(0, MAX_SEARCH_WORDS)
+}
+
+/**
+ * Whether one search word occurs in one value.
+ *
+ * A string matches on a case-insensitive substring. A number matches by equality, so
+ * `search(12, "12")` is true and `search(120, "12")` is false. Anything else, including `null`,
+ * `undefined`, an empty string and an object, matches nothing, so a field a row does not have
+ * cannot make every word match. `condition: false` makes the match fail outright.
+ */
+export function search(value: unknown, word: string, condition = true): boolean {
+  if (!condition || value === "") return false
   if (typeof value === "string") return value.toLowerCase().includes(word.toLowerCase())
-  return value === Number(word)
+  if (typeof value === "number") return value === Number(word)
+  return false
+}
+
+/**
+ * Keep the rows that every word of the query matches.
+ *
+ * Words are ANDed, so `"north gate"` keeps only the rows that match both. An empty query keeps
+ * every row and returns the input array itself, which keeps a signal's identity stable.
+ *
+ * @example
+ * ```ts
+ * const visible = filterRows(rows, query, (row, word) => search(row.name, word))
+ * ```
+ */
+export function filterRows<M>(
+  rows: M[],
+  query: string,
+  match: (row: M, word: string) => boolean,
+): M[] {
+  const words = searchWords(query)
+  if (words.length === 0) return rows
+  return rows.filter((row) => words.every((word) => match(row, word)))
 }
 
 /**
