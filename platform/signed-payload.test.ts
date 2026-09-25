@@ -457,3 +457,45 @@ Deno.test("signed payload — sign refuses a lifetime whose expiry would overflo
   )
   assert(error.message.includes("ttlMs"), error.message)
 })
+
+Deno.test("signed payload — a token with no lifetime never reads the clock", async () => {
+  const codec = createSignedPayloadCodec({
+    secret: SECRET,
+    purpose: "unsubscribe",
+    version: 1,
+    schema: type({ "+": "reject" }),
+    now: () => {
+      throw new Error("the clock must not be read")
+    },
+  })
+  const token = await codec.sign({}, { context: "reader@example.com" })
+  assertEquals(await codec.verify(token, { context: "reader@example.com" }), {
+    ok: true,
+    value: {},
+  })
+})
+
+Deno.test("signed payload — the context length is counted in UTF-8 bytes", async () => {
+  // "anna@müller.example" is 20 UTF-8 bytes but 19 UTF-16 units. The expected token was computed
+  // independently of this module, in Python.
+  const expected = "eyJwdXJwb3NlIjoidW5zdWJzY3JpYmUiLCJ2ZXJzaW9uIjoxLCJwYXlsb2FkIjp7fX0." +
+    "11zHdr5QDmmQQXgKKP8OYsHoiivmQvVQie01hnoahwU"
+  const codec = createSignedPayloadCodec({
+    secret: SECRET,
+    purpose: "unsubscribe",
+    version: 1,
+    schema: type({ "+": "reject" }),
+  })
+  assertEquals(await codec.sign({}, { context: "anna@müller.example" }), expected)
+})
+
+Deno.test("signed payload — a payload JSON cannot serialise keeps the original error as its cause", async () => {
+  const codec = createSignedPayloadCodec({
+    secret: SECRET,
+    purpose: "any",
+    version: 1,
+    schema: type("unknown"),
+  })
+  const error = await assertRejects(() => codec.sign({ big: 1n }), SignedPayloadError)
+  assert(error.cause instanceof TypeError, String(error.cause))
+})
