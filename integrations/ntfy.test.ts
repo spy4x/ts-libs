@@ -2,7 +2,8 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { NotificationSeverity, NtfyClient, ntfyConfigFromEnv, NtfyPriority } from "./ntfy.ts"
 import { createAsciiHeaders } from "./header-safety.ts"
-import type { Clock, Sleeper } from "./retry.ts"
+import type { Sleeper } from "./retry.ts"
+import type { NowFn } from "@spy4x/platform/universal/time"
 
 const BASE_URL = "https://ntfy.example.invalid"
 const TOPIC = "test-topic-not-real"
@@ -43,7 +44,7 @@ const fakeTransport = (responses: FakeResponse[]) => {
 const recordingTimer = () => {
   const delays: number[] = []
   let now = 0
-  const clock: Clock = () => now
+  const clock: NowFn = () => now
   const sleep: Sleeper = (ms) => {
     delays.push(ms)
     now += ms

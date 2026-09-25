@@ -16,7 +16,8 @@
  * @module
  */
 
-import { type Clock, type RateLimitStore, systemClock } from "./memory.ts"
+import { type NowFn, systemNow } from "../universal/time.ts"
+import type { RateLimitStore } from "./memory.ts"
 
 /** One key's recorded window, with the moment it stops mattering. */
 export interface RateLimitKvEntry {
@@ -42,8 +43,8 @@ export interface KvStoreOptions {
   backend: RateLimitKv
   /** Key namespace, so one backend can host several limiters. Defaults to `"ratelimit"`. */
   keyPrefix?: string
-  /** Clock used for expiry decisions. Defaults to {@link systemClock}. */
-  clock?: Clock
+  /** Clock used for expiry decisions. Defaults to {@link systemNow}. */
+  clock?: NowFn
 }
 
 /** A stored entry is usable while it is an object with a numeric `expiresAt` and an `events` array. */
@@ -69,12 +70,12 @@ export function createKvStore(options: KvStoreOptions): RateLimitStore {
 export class RateLimitStoreOverKv implements RateLimitStore {
   private readonly backend: RateLimitKv
   private readonly keyPrefix: string
-  private readonly clock: Clock
+  private readonly clock: NowFn
 
   constructor(options: KvStoreOptions) {
     this.backend = options.backend
     this.keyPrefix = options.keyPrefix ?? "ratelimit"
-    this.clock = options.clock ?? systemClock
+    this.clock = options.clock ?? systemNow
   }
 
   /** Key as it is stored, exposed so tests and operators can inspect the namespace. */

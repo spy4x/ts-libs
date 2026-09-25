@@ -9,7 +9,7 @@
  * Consumers use them to decide that something changed and to pull the authoritative
  * state, which keeps the outbox out of the correctness path.
  */
-import { createExponentialBackoff } from "@spy4x/integrations"
+import { backoffDelay } from "@spy4x/platform/universal/async"
 
 /**
  * One outbox row.
@@ -82,20 +82,25 @@ const DEFAULTS = {
  *
  * Issue #71 lists this doubling-and-capping formula as one of the retry helpers
  * duplicated across the codebase, so the final clamp to `[0, maxMs]` delegates to
- * `@spy4x/integrations`'s `createExponentialBackoff` (with `jitterRatio: 0`, since
- * only one worker holds a claimed row at a time via its lease, so there is nothing to
- * de-synchronise). The uncapped delay is still computed exactly as the ported
- * original computed it, because a first review round found that a direct call —
- * `createExponentialBackoff(...)  (attemptCount)` — quietly changed the source's own
- * numbers: `attemptCount` fed straight into `createExponentialBackoff`'s `2 **
- * (attempt - 1)` gives half the source's delay at `attemptCount === 0` (`baseMs / 2`
- * instead of `baseMs`), a shorter delay for a negative or fractional `attemptCount`,
- * and — with `baseMs === 0` — `0` instead of `maxMs` for a large attempt count, or
- * `NaN` once the exponent overflowed to `Infinity` (`0 * Infinity`). `Math.max(1,
+ * `@spy4x/platform/universal/async`'s `backoffDelay` directly (`mode: "symmetric"`,
+ * `jitterRatio: 0`, since only one worker holds a claimed row at a time via its
+ * lease, so there is nothing to de-synchronise — at `jitterRatio <= 0`,
+ * `"symmetric"` mode returns the capped delay unrounded and unchanged, exactly what
+ * this call needs). `integrations/retry.ts`'s `createExponentialBackoff` — a thin,
+ * now-`@deprecated` wrapper over the same `backoffDelay` — was used here until a
+ * review found it introduces exactly the wrapper it exists to spare new code from
+ * having to reimplement; calling `backoffDelay` directly needs no more code and
+ * carries no deprecated name. The uncapped delay is still computed exactly as the
+ * ported original computed it, because a first review round found that a direct
+ * call — `createExponentialBackoff(...)  (attemptCount)` — quietly changed the
+ * source's own numbers: `attemptCount` fed straight into `2 ** (attempt - 1)` gives
+ * half the source's delay at `attemptCount === 0` (`baseMs / 2` instead of
+ * `baseMs`), a shorter delay for a negative or fractional `attemptCount`, and — with
+ * `baseMs === 0` — `0` instead of `maxMs` for a large attempt count, or `NaN` once
+ * the exponent overflowed to `Infinity` (`0 * Infinity`). `Math.max(1,
  * attemptCount)` and the ported original's own `exponent >= 32 ? Infinity : …` guard
- * (needed for exactly that `0 * Infinity` case) reproduce its numbers instead;
- * `createExponentialBackoff`'s `retryAfterMs` parameter — meant for a provider's
- * `Retry-After` header — is repurposed to hand it that already-computed delay, so the
+ * (needed for exactly that `0 * Infinity` case) reproduce its numbers instead; the
+ * already-computed delay is handed to `backoffDelay` as `rawMs` directly, so the
  * clamp is the only part still borrowed rather than copied.
  */
 export function retryDelayMs(
@@ -106,10 +111,13 @@ export function retryDelayMs(
   const attempt = Math.max(1, attemptCount)
   const exponent = attempt - 1
   const uncapped = exponent >= 32 ? Infinity : baseMs * 2 ** exponent
-  return createExponentialBackoff({ baseDelayMs: baseMs, maxDelayMs: maxMs, jitterRatio: 0 })(
-    attempt,
-    uncapped,
-  )
+  return backoffDelay({
+    rawMs: uncapped,
+    maxMs,
+    jitterRatio: 0,
+    mode: "symmetric",
+    minFloorMs: baseMs > 0 ? 1 : 0,
+  })
 }
 
 /**

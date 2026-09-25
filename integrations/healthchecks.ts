@@ -28,19 +28,19 @@
 import { DEFAULT_RETRY_POLICY } from "./policy.ts"
 import {
   type BackoffFn,
-  type Clock,
   createExponentialBackoff,
   DEFAULT_REQUEST_TIMEOUT_MS,
   describeTransportError,
   isRequestTimeout,
   isTransientStatus,
   parseRetryAfterMs,
-  type RandomSource,
   releaseResponseBody,
   type RetryPolicy,
   runWithRetry,
   type Sleeper,
 } from "./retry.ts"
+import type { RandomSource } from "@spy4x/platform/universal/async"
+import type { NowFn } from "@spy4x/platform/universal/time"
 
 /** Which endpoint a ping targets. */
 export enum HealthchecksOutcome {
@@ -131,7 +131,7 @@ export interface HealthchecksClientOptions {
   /** Replaces the waiter used between retries. Defaults to a real sleep. */
   sleep?: Sleeper
   /** Replaces the elapsed-time source. Defaults to `Date.now`. */
-  clock?: Clock
+  clock?: NowFn
   /** Replaces the delay computation between retries. */
   backoff?: BackoffFn
   /** Overrides for the default retry policy. */
@@ -174,7 +174,7 @@ export class HealthchecksClient {
   private readonly pingUrl: string
   private readonly fetcher: typeof fetch
   private readonly sleep: Sleeper
-  private readonly clock: Clock
+  private readonly clock: NowFn
   private readonly policy: RetryPolicy
   private readonly backoff: BackoffFn
   private readonly requestTimeoutMs: number
