@@ -223,7 +223,12 @@ describe("parseMoney", () => {
   })
 
   it("normalises a parsed negative zero to a plain zero", () => {
-    expect(parseMoney("-0.00", "EUR")).toEqual({ ok: true, value: 0 })
+    const result = parseMoney("-0.00", "EUR")
+    expect(result).toEqual({ ok: true, value: 0 })
+    // toEqual alone does not distinguish 0 from -0 (both satisfy ===); Object.is does, and this is
+    // exactly the value a caller could hand straight to formatMoney and print "-€0.00" for what is
+    // actually a zero amount.
+    expect(result.ok && Object.is(result.value, -0)).toBe(false)
   })
 
   it("round-trips value, the locale's own edited text, and parseMoney for every listed locale", () => {
