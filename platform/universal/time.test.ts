@@ -195,6 +195,13 @@ describe("timeAgo", () => {
     expect(ago("2023-05-12T14:30:00Z")).toBe("10 months ago")
   })
 
+  it("says twelve months, never zero years, between 360 and 364 days", () => {
+    expect(ago("2023-03-18T14:30:00Z")).toBe("12 months ago")
+    expect(ago("2023-03-14T14:30:00Z")).toBe("12 months ago")
+    expect(ago("2023-03-13T14:30:00Z")).toBe("1 year ago")
+    expect(ago("2023-03-12T14:30:00Z")).toBe("1 year ago")
+  })
+
   it("switches to years at twelve months", () => {
     expect(ago("2023-03-12T14:30:00Z")).toBe("1 year ago")
     expect(ago("2020-03-12T14:30:00Z")).toBe("4 years ago")
