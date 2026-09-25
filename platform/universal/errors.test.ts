@@ -1,5 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
+import { type } from "arktype"
+import { ErrType as ValidationErrType, validate } from "@spy4x/validation"
 
 import {
   ConnectionError,
@@ -18,13 +20,18 @@ describe("ErrType", () => {
     expect(ErrType.Connection).toBe(2)
     expect(ErrType.Server).toBe(3)
     expect(ErrType.Other).toBe(4)
+    expect(ErrType.Payload).toBe(5)
   })
 
-  it("exposes exactly the four categories as forward mappings", () => {
+  it("exposes exactly the five categories as forward mappings", () => {
     // A TypeScript enum is reverse-mapped too, so `Object.values` is twice the member count.
     const forward = new Set(Object.values(ErrType).filter((v) => typeof v === "number"))
-    expect(forward).toEqual(new Set([1, 2, 3, 4]))
-    expect(Object.values(ErrType).length).toBe(8)
+    expect(forward).toEqual(new Set([1, 2, 3, 4, 5]))
+    expect(Object.values(ErrType).length).toBe(10)
+  })
+
+  it("is the same enum @spy4x/validation tags its error with", () => {
+    expect(ErrType).toBe(ValidationErrType)
   })
 })
 
@@ -55,13 +62,15 @@ describe("error shapes", () => {
   })
 
   it("accepts a ValidationError from @spy4x/validation without adaptation", () => {
-    // The envelope is owned by @spy4x/validation: `{ description, details }`. If this package
-    // ever grows its own `errors` map again, this assignment stops compiling.
-    const error: ValidationError = {
-      description: "name must be a string",
-      details: { summary: "name must be a string" } as ValidationError["details"],
-    }
-    expect(error.description).toBe("name must be a string")
+    // The envelope is owned by @spy4x/validation. If this package ever declares its own
+    // validation error again, assigning the one `validate` returns stops compiling.
+    const { error: rejected } = validate(type({ name: "string" }), { name: 5 })
+    if (rejected === null) throw new Error("expected a validation error")
+    const error: ValidationError = rejected
+
+    expect(error.type).toBe(ErrType.Validation)
+    expect(error.message).toBe(ERR_MESSAGE.validation)
+    expect(error.errors.name?.[0]?.message).toBe("must be a string (was a number)")
   })
 })
 

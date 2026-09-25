@@ -1,27 +1,27 @@
 /**
- * The error vocabulary the inventory batch agreed on, and the `Result` used to return one.
+ * The error vocabulary a store or a form reports with, the helpers that build it, and the
+ * `Result` used to return one.
  *
  * `ErrType` is the discriminant: a caller switches on `error.type` and gets a narrowed interface,
- * never a bare `Error` string. `ValidationError` is *re-exported* from `@spy4x/validation`
- * rather than redeclared — this package does not own a validation model, and issue #23 owns the
- * single `{ description, details }` envelope.
+ * never a bare `Error` string. `ErrType` and `ValidationError` are *re-exported* from
+ * `@spy4x/validation` rather than redeclared: that package tags its own error, and it cannot import
+ * this one, because this package already imports it and a cycle between the two fails
+ * `deno publish`.
  *
  * @module
  */
 
-import type { ValidationError as ValidationErrorShape } from "@spy4x/validation"
+import {
+  ErrType,
+  VALIDATION_MESSAGE,
+  type ValidationError as ValidationErrorShape,
+} from "@spy4x/validation"
 
-/** Category of a failed operation. Numeric so it is cheap to switch on and serialise. */
-export enum ErrType {
-  Validation = 1,
-  Connection = 2,
-  Server = 3,
-  Other = 4,
-}
+export { ErrType }
 
 /** Canonical copy for each category, so the same failure reads the same in every product. */
 export const ERR_MESSAGE = {
-  validation: "Provided data doesn't seem valid. Check the form validation error messages.",
+  validation: VALIDATION_MESSAGE,
   connection:
     "There seems to be a problem with connection to the server. Check your internet connection.",
 } as const
@@ -34,7 +34,8 @@ export interface Err {
 }
 
 /**
- * A rejected input, carrying arktype's own errors.
+ * A rejected input: its kind, one sentence for the user, the issues per field path, and arktype's
+ * own errors.
  *
  * Alias of `@spy4x/validation`'s `ValidationError` — kept under this name because
  * {@link ServerError} / {@link ConnectionError} live here and a caller should be able to import
