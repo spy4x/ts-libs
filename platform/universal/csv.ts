@@ -49,8 +49,8 @@ export interface CsvColumn<T> {
  * (`=`, `+`, `-`, `@`) and their full-width Unicode equivalents (`＝`, `＋`, `－`, `＠`) — OWASP's
  * CSV-injection guidance names both the ASCII characters and, separately, the full-width forms
  * (as well as line feed; see {@link CELL_START_GUARD_CHARS}). A bare first-character check on the
- * ASCII set alone misses a full-width form, because at least one spreadsheet reader folds it to
- * its ASCII equivalent before evaluating the cell.
+ * ASCII set alone misses a full-width form, which OWASP says "may be interpreted as formulas in
+ * some locales (e.g., Japanese environments)". LibreOffice 26.2 reads them as text (measured).
  *
  * Known gap: this module does not guard a handful of Unicode characters that resemble a formula
  * character or a space, because they were not found to open a formula in LibreOffice 26.2
