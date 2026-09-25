@@ -75,6 +75,31 @@ describe("niceStep", () => {
   it("floors a fractional target instead of producing a fractional step count", () => {
     expect(niceStep(10, 4.9)).toBe(niceStep(10, 4))
   })
+
+  it("returns a finite step above zero for a subnormal span", () => {
+    // `10 ** exponent` underflows to 0 for these spans, so the grid computation alone yields a
+    // zero step, and a zero step makes tick generation divide by zero. Ported from
+    // preact-components' `charts/scales.test.ts` before spy4x/preact-components#287.
+    for (const span of [Number.MIN_VALUE, 1e-320, 1e-310]) {
+      const step = niceStep(span)
+      expect({ span, positive: step > 0, finite: Number.isFinite(step) }).toEqual({
+        span,
+        positive: true,
+        finite: true,
+      })
+    }
+  })
+
+  it("lands on five to eight ticks for every span from 1e-12 to 1e12", () => {
+    // Ported from preact-components' `charts/scales.test.ts` before spy4x/preact-components#287.
+    for (let exponent = -12; exponent <= 12; exponent++) {
+      for (const multiplier of [1, 2.5, 7.5]) {
+        const span = multiplier * 10 ** exponent
+        const count = ticks(0, span, 5).length
+        expect({ span, inRange: count >= 5 && count <= 8 }).toEqual({ span, inRange: true })
+      }
+    }
+  })
 })
 
 describe("ticks", () => {
@@ -142,6 +167,19 @@ describe("ticks", () => {
     // returned. Expected values taken from `preact-components/charts/scales.ts`, the reference
     // this package is now the single home for (see `platform/universal/axis.ts`'s JSDoc).
     expect(ticks(1e18, 1e18 + 100)).toEqual([1e18, 1e18 + 100])
+  })
+
+  it("keeps a zero tick and whole steps across a span of 1e36", () => {
+    // Ported from preact-components' `charts/scales.test.ts` before spy4x/preact-components#287.
+    const values = ticks(-1e18, 1e18)
+    expect(values.length).toBeGreaterThanOrEqual(5)
+    expect(values.length).toBeLessThanOrEqual(8)
+    expect(values).toContain(0)
+    for (let i = 0; i < values.length; i++) {
+      const quotient = values[i] / 4e17
+      expect(Math.abs(quotient - Math.round(quotient))).toBeLessThan(1e-6)
+      if (i > 0) expect(values[i]).toBeGreaterThan(values[i - 1])
+    }
   })
 
   it("keeps six distinct ticks for a span far below one unit, instead of collapsing to a single 0", () => {
