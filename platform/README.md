@@ -30,7 +30,7 @@ browser- and server-only halves are the other two subpaths.
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `universal/async`           | `sleep`, `debounce` (cancelable, unref'd), `backoffDelay` (capped, jittered backoff delay)                                                                                                                                     |
 | `universal/concurrency`     | `AsyncMutex` (fair FIFO)                                                                                                                                                                                                       |
-| `universal/axis`            | `niceStep`, `ticks` — the one home for chart tick maths                                                                                                                                                                        |
+| `universal/axis`            | `niceStep`, `ticks`, `stepAxis`, `StepAxis`, `MAX_TICKS` — the one home for chart tick maths                                                                                                                                   |
 | `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                                                                   |
 | `universal/csv`             | `CsvCellValue`, `CsvColumn`, `csvField`, `csvRow`, `csvHeaderRow`, `toCsvText`, `CSV_BYTE_ORDER_MARK`, `toCsvBytes` — RFC 4180 writer with a formula-injection guard                                                           |
 | `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `PayloadError`, `StoreError`, `RequestError`, `ResponseError`, `connectionError`, `responseError`, `isSilentError`, `OperationState`, `OperationResult` |
@@ -72,6 +72,13 @@ within `MAX_TICKS` iterations — as few as one — rather than freeze the page.
 so `axis.test.ts` can assert against it, and a regression tripwire inside the loop throws fast if the
 bound is ever weakened back to plain `steps + 1`, so a future revert of the fix fails a test instead
 of hanging the suite.
+
+`stepAxis(min, max, step)` (1.4.0) is for a caller that has already chosen its step: it rounds the
+bounds outward to multiples of the step and returns them with the ticks between them, rounded by the
+same rule, so the first and last tick are exactly the bounds. It exists so `preact-components`'
+`niceScale` can drop its own copy of the tick loop (#201). The same release fixed tick rounding for
+a step with more than one significant digit: `ticks(0, 10, 4)` returned `[0, 3, 5, 8, 10]` and now
+returns `[0, 2.5, 5, 7.5, 10]`.
 
 ### `./browser` → `browser.ts` (3 modules, 312 LOC)
 
