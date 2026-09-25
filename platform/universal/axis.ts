@@ -8,7 +8,7 @@
  */
 
 /**
- * Hard ceiling on generated ticks, and on the iterations {@link ticksForStep}'s loop may spend
+ * Hard ceiling on generated ticks, and on the iterations the tick loop may spend
  * producing them — see that function's doc for why the loop needs its own bound, not just the
  * output's. Exported so `axis.test.ts` can assert against it instead of a repeated literal.
  */
@@ -100,49 +100,73 @@ export function ticks(min: number, max: number, maxTicks = 5): number[] {
   return ticksForStep(low, high, niceStep(high - low, maxTicks))
 }
 
+/** Bounds rounded outward to multiples of a step, and the ticks between them. */
+export interface StepAxis {
+  /** Lower bound, rounded down to a multiple of the step. */
+  min: number
+  /** Upper bound, rounded up to a multiple of the step. */
+  max: number
+  /** Tick values from `min` to `max` at the step, both ends included. */
+  ticks: number[]
+}
+
 /**
- * Tick values for `[low, high]` at a given step, limited to the bounds ± half a step.
+ * Round `[min, max]` outward to multiples of `step` and return the new bounds with the ticks between
+ * them.
  *
- * {@link ticks} picks its step with {@link niceStep} and then calls this. Call it directly when the
- * step is already fixed — preact-components' `niceScale` rounds its domain outward to multiples of
- * the step first (with {@link roundToStep}, so the bounds and the ticks round identically) and then
- * asks for the ticks between them. Each tick is `roundToStep(start + index * step, step)`, where
- * `start` is `low` floored to a multiple of `step`.
+ * Use it when the step is already chosen (by {@link niceStep}, say) and the axis must start and end
+ * on a tick. The bounds and the ticks are rounded by the same rule, so `ticks[0]` is exactly `min`
+ * and the last tick is exactly `max`: `stepAxis(0.35, 1.25, 0.1)` is
+ * `{ min: 0.3, max: 1.3, ticks: [0.3, 0.4, …, 1.3] }`, not a lower bound of `0.30000000000000004`.
+ * At most {@link MAX_TICKS} ticks are returned.
  *
- * Bad input degrades instead of throwing, like {@link ticks}: a non-finite bound returns `[]`,
- * reversed bounds are swapped, and a step that is not a finite number above zero returns the two
- * bounds as they are.
+ * Bad input degrades instead of throwing, like {@link ticks}:
  *
- * Ported from `preact-components/charts/scales.ts`, which diagnosed the failure this replaces: a
- * cursor walked by `value += step` never advances once `step` is finer than the float precision of
- * `low`/`high` — one ulp at `1e18` is `128`, so a nice step of `20` makes `value += step` a no-op and
- * the loop that read `value <= end + step / 2` ran forever. Walking by index
+ * - a bound that is not a finite number returns the bounds as given with no ticks;
+ * - reversed bounds are swapped;
+ * - a step that is not a finite number above zero, or one so fine that rounding the bounds to it
+ *   overflows, returns the bounds unchanged with `ticks: [min, max]`.
+ */
+export function stepAxis(min: number, max: number, step: number): StepAxis {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return { min, max, ticks: [] }
+  const [low, high] = min <= max ? [min, max] : [max, min]
+  if (!Number.isFinite(step) || step <= 0) return { min: low, max: high, ticks: [low, high] }
+  const roundedLow = roundToStep(Math.floor(low / step) * step, step)
+  const roundedHigh = roundToStep(Math.ceil(high / step) * step, step)
+  if (!Number.isFinite(roundedLow) || !Number.isFinite(roundedHigh)) {
+    return { min: low, max: high, ticks: [low, high] }
+  }
+  return { min: roundedLow, max: roundedHigh, ticks: ticksForStep(roundedLow, roundedHigh, step) }
+}
+
+/**
+ * Tick values for `[low, high]` at a given step, limited to the bounds ± half a step. The callers
+ * pass finite bounds with `low <= high` and a finite step above zero.
+ *
+ * A cursor walked by `value += step` never advances once `step` is finer than the float precision
+ * of `low`/`high` — one ulp at `1e18` is `128`, so a nice step of `20` makes `value += step` a no-op
+ * and a loop that read `value <= end + step / 2` ran forever. Walking by index
  * (`start + index * step`) always terminates: `index` is an ordinary incrementing integer, never a
  * float that can stop moving.
  *
- * Values are rounded relative to the step rather than to a fixed number of decimals: rounding to a
- * fixed 8 decimals collapsed every tick of a sub-nanosecond span to `0` (`ticks(0, 1e-12)` returned a
- * single `[0]`), and a fixed-decimal form cannot represent a step like `2e-13` at all.
+ * Values are rounded relative to the step (see {@link roundToStep}) rather than to a fixed number of
+ * decimals: rounding to a fixed 8 decimals collapsed every tick of a sub-nanosecond span to `0`
+ * (`ticks(0, 1e-12)` returned a single `[0]`), and a fixed-decimal form cannot represent a step like
+ * `2e-13` at all.
  *
  * **Bounded by `MAX_TICKS`, not just its output.** `steps` is `(end - start) / step`, and an absurd
  * tick target (`ticks(1_000_000, 2_000_000, 1e25)`, say) makes `step` many orders of magnitude
- * smaller than the float precision at `low`/`high`'s magnitude. Every `roundToStep` result then
- * collapses onto the same handful of doubles, so `out.length` almost stops growing while `index`
- * keeps climbing toward a `steps` that can itself be `1e25` — relying on `out.length < MAX_TICKS`
- * alone never terminates. Capping the loop itself at `Math.min(steps + 1, MAX_TICKS)` is the fix:
- * the reference this module is ported from has the exact same defect (it does not return either;
- * `origin/main` before this module threw after ~12s on the same call instead of hanging), so there
- * is no reference behaviour to copy here. The choice is a chart's: return whichever ticks
- * distinguish themselves within `MAX_TICKS` iterations — as few as one, if the target is absurd
- * enough that nothing else is representable — rather than freeze the page. The `index > MAX_TICKS`
- * check below is a regression tripwire, not the fix itself: the ceiling already makes it
- * unreachable, so it exists purely so that weakening the ceiling back to plain `steps + 1` fails
- * `axis.test.ts` with a fast thrown error instead of hanging the whole suite.
+ * smaller than the float precision at `low`/`high`'s magnitude. Every rounded value then collapses
+ * onto the same handful of doubles, so `out.length` almost stops growing while `index` keeps
+ * climbing toward a `steps` that can itself be `1e25` — relying on `out.length < MAX_TICKS` alone
+ * never terminates. Capping the loop itself at `Math.min(steps + 1, MAX_TICKS)` is the fix: return
+ * whichever ticks distinguish themselves within `MAX_TICKS` iterations — as few as one, if the
+ * target is absurd enough that nothing else is representable — rather than freeze the page. The
+ * `index > MAX_TICKS` check below is a regression tripwire, not the fix itself: the ceiling already
+ * makes it unreachable, so it exists purely so that weakening the ceiling back to plain `steps + 1`
+ * fails `axis.test.ts` with a fast thrown error instead of hanging the whole suite.
  */
-export function ticksForStep(low: number, high: number, step: number): number[] {
-  if (!Number.isFinite(low) || !Number.isFinite(high)) return []
-  if (low > high) [low, high] = [high, low]
-  if (!Number.isFinite(step) || step <= 0) return [low, high]
+function ticksForStep(low: number, high: number, step: number): number[] {
   const start = Math.floor(low / step) * step
   const end = Math.ceil(high / step) * step
   const steps = Math.round((end - start) / step)
@@ -172,8 +196,7 @@ export function ticksForStep(low: number, high: number, step: number): number[] 
  * returned `[0, 3, 5, 8, 10]` instead of `[0, 2.5, 5, 7.5, 10]`. A precision too fine to represent
  * leaves `value` as it is.
  */
-export function roundToStep(value: number, step: number): number {
-  if (!Number.isFinite(step) || step <= 0) return value
+function roundToStep(value: number, step: number): number {
   const decimals = stepDecimals(step)
   const factor = decimals > 0 ? 10 ** decimals : 1
   if (!Number.isFinite(factor)) return value
