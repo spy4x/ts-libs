@@ -1,25 +1,31 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { Type, type } from "arktype"
+import { type ArkErrors, Type, type } from "arktype"
 import {
+  ErrType,
   firstIssueMessage,
   isArkErrors,
   toValidationError,
   validate,
+  VALIDATION_MESSAGE,
   type ValidationError,
 } from "./validate.ts"
+import { FORM_FIELD } from "./model.ts"
 
 /**
- * An object with arktype's public rejection shape — an array of issues with a `summary` string
- * and a `throw` method — built without arktype's own `ArkErrors` class.
+ * An object with arktype's public rejection shape — an array of issues with a `summary` string, a
+ * `throw` method and `flatByPath` — built without arktype's own `ArkErrors` class. The one issue
+ * has no path, like a cross-field rule's.
  *
  * Stands in for a rejection built by a second, differently-loaded copy of arktype: same shape,
  * different class identity, so `instanceof` against this module's `type.errors` fails on it even
  * though it is exactly what a real rejection looks like.
  */
 function foreignArkErrors(message: string) {
-  return Object.assign([{ path: [], message }], {
+  const issue = { code: "predicate", path: [], problem: message, message }
+  return Object.assign([issue], {
     summary: message,
+    flatByPath: { "": [issue] },
     throw: () => {
       throw new Error(message)
     },
@@ -158,6 +164,72 @@ describe("validate — a rejection from a differently-loaded arktype copy", () =
 
     expect(data).toBeNull()
     expect(error?.description).toBe("must be a equal to b")
+    expect(error?.errors[FORM_FIELD]?.[0]?.message).toBe("must be a equal to b")
+  })
+})
+
+describe("validate — the error envelope", () => {
+  it("tags the error as a validation error with the user-facing sentence", () => {
+    const { error } = validate(userSchema, { name: "", joinedAt: "nope", address: {} })
+
+    if (error === null) throw new Error("expected a validation error")
+    expect(error.type).toBe(ErrType.Validation)
+    expect(error.message).toBe(VALIDATION_MESSAGE)
+  })
+
+  it("files each issue under its dotted path with code, path and a path-free message", () => {
+    const { error } = validate(userSchema, { name: "", joinedAt: new Date(), address: {} })
+
+    if (error === null) throw new Error("expected a validation error")
+    expect(Object.keys(error.errors).sort()).toEqual(["address.city", "name"])
+    expect(error.errors["address.city"]).toEqual([
+      { code: "required", path: "address.city", message: "must be a string (was missing)" },
+    ])
+    expect(error.errors.name?.[0]).toEqual({
+      code: "minLength",
+      path: "name",
+      message: "must be non-empty",
+    })
+  })
+
+  it("keeps every issue on one field, not just the first", () => {
+    const { error } = validate(type({ n: "number > 5 & number % 2" }), { n: 3 })
+
+    if (error === null) throw new Error("expected a validation error")
+    expect(error.errors.n?.map((issue) => issue.code)).toEqual(["divisor", "min"])
+  })
+
+  it("files a cross-field rule under FORM_FIELD instead of dropping it", () => {
+    const schema = type({ a: "string", b: "string" }).narrow((v, ctx) =>
+      v.a === v.b || ctx.mustBe("a equal to b")
+    )
+    const { error } = validate(schema, { a: "x", b: "y" })
+
+    if (error === null) throw new Error("expected a validation error")
+    expect(Object.keys(error.errors)).toEqual([FORM_FIELD])
+    expect(error.errors[FORM_FIELD]?.[0]?.code).toBe("predicate")
+    expect(error.errors[FORM_FIELD]?.[0]?.path).toBe("")
+    expect(error.errors[FORM_FIELD]?.[0]?.message).toContain("must be a equal to b")
+  })
+
+  it("keeps a ctx.reject({ message }) issue, whose problem text arktype cannot build", () => {
+    const schema = type({ env: "string" }).narrow((_, ctx) =>
+      ctx.reject({ message: "url is required outside dev" })
+    )
+    const { error } = validate(schema, { env: "prod" })
+
+    if (error === null) throw new Error("expected a validation error")
+    expect(error.errors[FORM_FIELD]).toEqual([
+      { code: "predicate", path: "", message: "url is required outside dev" },
+    ])
+  })
+
+  it("files a non-object value under FORM_FIELD instead of dropping it", () => {
+    const { error } = validate(type({ a: "string" }), "oops")
+
+    if (error === null) throw new Error("expected a validation error")
+    expect(Object.keys(error.errors)).toEqual([FORM_FIELD])
+    expect(error.errors[FORM_FIELD]?.[0]?.message).toContain("must be an object")
   })
 })
 
@@ -169,6 +241,15 @@ describe("toValidationError", () => {
     const error = toValidationError(result)
     expect(error.description).toBe(result.summary)
     expect(error.details).toBe(result)
+  })
+
+  it("builds the same per-path issues arktype groups in flatByPath", () => {
+    const result = userSchema({ name: 5, joinedAt: "nope", address: { city: 1 } })
+    if (!(result instanceof type.errors)) throw new Error("expected errors")
+
+    const error = toValidationError(result)
+    expect(Object.keys(error.errors).sort()).toEqual(Object.keys(result.flatByPath).sort())
+    expect(error.errors.name?.[0]?.message).toBe(result.flatByPath.name?.[0]?.problem)
   })
 })
 
@@ -187,5 +268,18 @@ describe("firstIssueMessage", () => {
     // branch is reached with the shape the function actually reads: an empty issue list.
     const bare = { description: "", details: [] } as unknown as ValidationError
     expect(firstIssueMessage(bare)).toBeNull()
+  })
+
+  it("still accepts an error with only description and details, as 1.2.0 built it", () => {
+    const result = userSchema({ name: "", joinedAt: new Date(), address: { city: "x" } })
+    if (!isArkErrors(result)) throw new Error("expected errors")
+
+    // The 1.2.0 shape, written out: no `type`, `message` or `errors`. If the parameter narrowed
+    // back to the full `ValidationError`, this call would stop type-checking.
+    const legacy: { description: string; details: ArkErrors } = {
+      description: result.summary,
+      details: result,
+    }
+    expect(firstIssueMessage(legacy)).toBe("name must be non-empty")
   })
 })
