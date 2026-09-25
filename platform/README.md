@@ -195,6 +195,16 @@ An earlier draft of this section said `gb` re-verifies `redis.expiretime` on rea
 in this checkout (see the `cqrs` section above) — so whoever next extracts from `gb`, if it turns
 out to have one, should check for that re-verification and decide whether `server/kv` needs it too.
 
+### `./signed-payload` → `signed-payload.ts` (1 module)
+
+`createSignedPayloadCodec` signs and verifies a purpose-bound, versioned JSON payload with
+HMAC-SHA-256: a pagination cursor, an unsubscribe link. The purpose, the version and an optional
+expiry are signed with the payload, and an optional bound context (a user id, an email address) is
+covered by the signature without being carried in the token. `verify` checks the signature before it
+parses anything, validates the payload with an arktype schema, and returns a `Result` whose error is
+a `SignedPayloadErrorCode`; it never throws for any token string. `sign` refuses what `verify` would
+refuse. A separate subpath from `./tokens` because it needs arktype at runtime (#202).
+
 ### `./model`, `./api`, `./request-info` — the shared API, model and push types
 
 Moved from `template/libs/platform/types/+index.ts` and its two request helpers, part of the

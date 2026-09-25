@@ -20,6 +20,7 @@ const ENTRIES: Entry[] = [
   { specifier: "@spy4x/platform/cqrs", capability: "command, query and event bus" },
   { specifier: "@spy4x/platform/cache", capability: "cache with `wrap()`" },
   { specifier: "@spy4x/platform/tokens", capability: "random tokens" },
+  { specifier: "@spy4x/platform/signed-payload", capability: "signed payloads (#202)" },
   { specifier: "@spy4x/platform/rate-limit", capability: "rate limiting" },
   { specifier: "@spy4x/platform/rate-limit/hono", capability: "rate limiting" },
   { specifier: "@spy4x/platform/api", capability: "shared API and model types" },
@@ -69,6 +70,10 @@ const ENTRIES: Entry[] = [
   },
   { specifier: "@spy4x/server/env-age64", capability: "age64 env encryption (#173)" },
   { specifier: "@spy4x/platform/browser/cookie", capability: "reading a browser cookie (#140)" },
+  {
+    specifier: "@spy4x/server/http/same-origin",
+    capability: "same-origin guard for cookie-authenticated mutations (#186)",
+  },
 ]
 
 /**
