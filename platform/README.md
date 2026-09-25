@@ -37,7 +37,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71) |
 | `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                    |
 | `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                   |
-| `universal/text`            | `search`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                                                                                        |
+| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                                                           |
 | `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`                                                                                 |
 | `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                           |
 

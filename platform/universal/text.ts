@@ -1,8 +1,8 @@
 /**
  * Small, dependency-free text helpers: a list filter (`searchWords`, `search`, `filterRows`), a
- * naive English pluraliser
- * (`pluralize`), a kebab-case converter (`convertToKebabCase`), edit distance and a normalised
- * similarity score (`levenshtein`, `similarity`), and a UTF-8 byte-length count (`utf8ByteLength`).
+ * naive English pluraliser (`pluralize`), a kebab-case converter (`convertToKebabCase`), edit
+ * distance and a normalised similarity score (`levenshtein`, `similarity`), and a UTF-8
+ * byte-length count (`utf8ByteLength`).
  *
  * @module
  */

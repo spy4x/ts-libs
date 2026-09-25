@@ -42,6 +42,7 @@ describe("search", () => {
     expect(search(null, "a")).toBe(false)
     expect(search(undefined, "a")).toBe(false)
     expect(search("", "a")).toBe(false)
+    expect(search("", "")).toBe(false)
     expect(search("a", "", false)).toBe(false)
   })
 
