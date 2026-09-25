@@ -26,25 +26,26 @@ Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched ar
 `unref`s the handle where the runtime provides one). No `crypto` calls and no DOM global: the
 browser- and server-only halves are the other two subpaths.
 
-| Module                      | Contents                                                                                                                                                                          |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `universal/async`           | `sleep`, `debounce` (cancelable, unref'd), `backoffDelay` (capped, jittered backoff delay)                                                                                        |
-| `universal/concurrency`     | `AsyncMutex` (fair FIFO)                                                                                                                                                          |
-| `universal/axis`            | `niceStep`, `ticks` — the one home for chart tick maths                                                                                                                           |
-| `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                      |
-| `universal/csv`             | `CsvCellValue`, `CsvColumn`, `csvField`, `csvRow`, `csvHeaderRow`, `toCsvText`, `CSV_BYTE_ORDER_MARK`, `toCsvBytes` — RFC 4180 writer with a formula-injection guard              |
-| `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `OperationState`, `OperationResult`                                                                        |
-| `universal/format-number`   | `round`, `formatDecimal`, `formatPct`                                                                                                                                             |
-| `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71) |
-| `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney` — money as a smallest-unit integer, parsed and formatted without a float step           |
-| `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                    |
-| `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                   |
-| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                                                           |
-| `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`                                                                                 |
-| `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                           |
+| Module                      | Contents                                                                                                                                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `universal/async`           | `sleep`, `debounce` (cancelable, unref'd), `backoffDelay` (capped, jittered backoff delay)                                                                                                                                     |
+| `universal/concurrency`     | `AsyncMutex` (fair FIFO)                                                                                                                                                                                                       |
+| `universal/axis`            | `niceStep`, `ticks` — the one home for chart tick maths                                                                                                                                                                        |
+| `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                                                                   |
+| `universal/csv`             | `CsvCellValue`, `CsvColumn`, `csvField`, `csvRow`, `csvHeaderRow`, `toCsvText`, `CSV_BYTE_ORDER_MARK`, `toCsvBytes` — RFC 4180 writer with a formula-injection guard                                                           |
+| `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `PayloadError`, `StoreError`, `RequestError`, `ResponseError`, `connectionError`, `responseError`, `isSilentError`, `OperationState`, `OperationResult` |
+| `universal/format-number`   | `round`, `formatDecimal`, `formatPct`                                                                                                                                                                                          |
+| `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                              |
+| `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney` — money as a smallest-unit integer, parsed and formatted without a float step                                                        |
+| `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                 |
+| `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                                                                |
+| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                                                                                                        |
+| `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`                                                                                                                              |
+| `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                                                                        |
 
-`universal/csv` and `mapConcurrent` (formerly in `universal/concurrency`) were removed: `@std/csv`
-and `@std/async`'s `pooledMap` already cover them, and no app in this workspace imported either.
+The old one-line CSV splitter and `mapConcurrent` (formerly in `universal/concurrency`) were
+removed in 1.0: `@std/csv` and `@std/async`'s `pooledMap` already cover them. `universal/csv` is now
+a different module, a writer (1.3.0), because `@std/csv` has no formula-injection guard.
 
 **`universal/axis` is the single home for the chart tick maths**, ported from and matched against
 `preact-components/charts/scales.ts`. `preact-components` does not import it yet — that is a
@@ -303,8 +304,10 @@ pull in `@spy4x/validation` through `universal/errors.ts`.
 
 `@spy4x/platform` depends on `@spy4x/validation` for exactly two things: the `ValidationError`
 type (`universal/errors`) and the `validate(schema, value)` call behind
-`makeStorage(..., { schema })`. There is **one** `validate` and **one**
-`{ description, details }` envelope in the ecosystem, and it lives there.
+`makeStorage(..., { schema })`. There is **one** `validate` and **one** validation error envelope
+(`type`, `message`, per-field `errors`, `description` and `details`) in the ecosystem, and it lives
+there. `ErrType` is declared there too and re-exported from `universal/errors`, because
+`@spy4x/validation` cannot import this package without a package cycle.
 
 Consequences a consumer should know:
 
