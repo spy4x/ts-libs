@@ -32,6 +32,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/concurrency`     | `AsyncMutex` (fair FIFO)                                                                                                                                                          |
 | `universal/axis`            | `niceStep`, `ticks` — the one home for chart tick maths                                                                                                                           |
 | `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                      |
+| `universal/csv`             | `CsvCellValue`, `CsvColumn`, `csvField`, `csvRow`, `csvHeaderRow`, `toCsvText`, `CSV_BYTE_ORDER_MARK`, `toCsvBytes` — RFC 4180 writer with a formula-injection guard              |
 | `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `OperationState`, `OperationResult`                                                                        |
 | `universal/format-number`   | `round`, `formatDecimal`, `formatPct`                                                                                                                                             |
 | `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71) |

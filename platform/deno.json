@@ -29,6 +29,7 @@
     "./universal/axis": "./universal/axis.ts",
     "./universal/concurrency": "./universal/concurrency.ts",
     "./universal/constants": "./universal/constants.ts",
+    "./universal/csv": "./universal/csv.ts",
     "./universal/errors": "./universal/errors.ts",
     "./universal/format-number": "./universal/format-number.ts",
     "./universal/key-value-store": "./universal/key-value-store.ts",
