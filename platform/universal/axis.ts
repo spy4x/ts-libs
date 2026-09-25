@@ -163,18 +163,27 @@ export function ticksForStep(low: number, high: number, step: number): number[] 
 }
 
 /**
- * Round `value` to the decimal precision implied by `step`: `roundToStep(0.30000000000000004, 0.1)`
- * is `0.3`. A step of `1` or more rounds to a whole number. A step that is not a finite number
- * above zero, or a precision too fine to represent, leaves `value` as it is.
+ * Round `value` to as many decimals as `step` itself has: `0.1` keeps one, `2.5` keeps one, `0.25`
+ * and `0.125` keep two and three, and a whole step such as `20` rounds to a whole number.
  *
- * Exported so a caller that rounds its own axis bounds (preact-components' `niceScale`) rounds them
- * exactly as {@link ticksForStep} rounds each tick, and the first and last tick equal the bounds.
+ * The decimals come from `step`'s digits, read to 13 significant digits so float noise in the step
+ * (`0.30000000000000004`) does not count. Taking them from the step's magnitude alone
+ * (`-floor(log10(step))`) kept one decimal for `0.25` and none for `2.5`, so `ticks(0, 10, 4)`
+ * returned `[0, 3, 5, 8, 10]` instead of `[0, 2.5, 5, 7.5, 10]`. A precision too fine to represent
+ * leaves `value` as it is.
  */
 export function roundToStep(value: number, step: number): number {
   if (!Number.isFinite(step) || step <= 0) return value
-  const decimals = -Math.floor(Math.log10(step))
+  const decimals = stepDecimals(step)
   const factor = decimals > 0 ? 10 ** decimals : 1
-  if (!Number.isFinite(factor) || factor === 0) return value
+  if (!Number.isFinite(factor)) return value
   const rounded = Math.round(value * factor) / factor
   return Number.isFinite(rounded) ? rounded : value
+}
+
+/** Decimal places `step` has, read to 13 significant digits; negative for a multiple of ten. */
+function stepDecimals(step: number): number {
+  const [significand, exponent] = step.toExponential(12).split("e")
+  const fraction = (significand.split(".")[1] ?? "").replace(/0+$/, "")
+  return fraction.length - Number(exponent)
 }

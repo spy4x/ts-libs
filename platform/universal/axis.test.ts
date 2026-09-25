@@ -189,6 +189,12 @@ describe("ticks", () => {
     expect(ticks(0, 1e-12)).toEqual([0, 2e-13, 4e-13, 6e-13, 8e-13, 1e-12])
   })
 
+  it("keeps both decimals of a two-digit step instead of rounding ticks off the step", () => {
+    // Target 4 on a span of 10 gives a step of 2.5. Rounding to the step's magnitude alone kept no
+    // decimals and returned [0, 3, 5, 8, 10].
+    expect(ticks(0, 10, 4)).toEqual([0, 2.5, 5, 7.5, 10])
+  })
+
   it("returns at once for an absurd tick target instead of looping without bound", () => {
     // Before the fix, `ticksForStep`'s loop ran `steps + 1` times (here `steps` is `1e25`) and
     // relied on `out.length < MAX_TICKS` alone to stop it; a step this many orders of magnitude
@@ -288,6 +294,13 @@ describe("roundToStep", () => {
   it("removes float noise at the precision the step implies", () => {
     expect(roundToStep(0.1 + 0.2, 0.1)).toBe(0.3)
     expect(roundToStep(3 * 2e-13, 2e-13)).toBe(6e-13)
+  })
+
+  it("keeps every decimal of a step with two or three significant digits", () => {
+    expect(ticksForStep(0, 1, 0.25)).toEqual([0, 0.25, 0.5, 0.75, 1])
+    expect(ticksForStep(0, 10, 2.5)).toEqual([0, 2.5, 5, 7.5, 10])
+    expect(roundToStep(2.5, 2.5)).toBe(2.5)
+    expect(roundToStep(0.3755, 0.125)).toBe(0.376)
   })
 
   it("rounds to a whole number for a step of one or more", () => {
