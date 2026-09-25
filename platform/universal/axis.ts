@@ -120,8 +120,9 @@ export interface StepAxis {
  *
  * Use it when the step is already chosen (by {@link niceStep}, say) and the axis must start and end
  * on a tick. The bounds and the ticks are rounded by the same rule, so `ticks[0]` is exactly `min`
- * and, unless the {@link MAX_TICKS} cap cuts the list short, the last tick is exactly `max`: `stepAxis(0.35, 1.25, 0.1)` is
- * `{ min: 0.3, max: 1.3, ticks: [0.3, 0.4, …, 1.3] }`, not a lower bound of `0.30000000000000004`.
+ * and, unless the {@link MAX_TICKS} cap cuts the list short, the last tick is exactly `max`:
+ * `stepAxis(0.35, 1.25, 0.1)` is `{ min: 0.3, max: 1.3, ticks: [0.3, 0.4, …, 1.3] }`, not a lower
+ * bound of `0.30000000000000004`.
  * At most {@link MAX_TICKS} ticks are returned.
  *
  * Bad input degrades instead of throwing, like {@link ticks}:
