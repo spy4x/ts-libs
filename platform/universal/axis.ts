@@ -9,7 +9,8 @@
 
 /**
  * Hard ceiling on generated ticks, and on the iterations the tick loop may spend
- * producing them — see that function's doc for why the loop needs its own bound, not just the
+ * producing them — see the doc of `ticksForStep` (the private loop behind {@link ticks} and
+ * {@link stepAxis}) for why the loop needs its own bound, not just the
  * output's. Exported so `axis.test.ts` can assert against it instead of a repeated literal.
  */
 export const MAX_TICKS = 1_000
@@ -106,7 +107,10 @@ export interface StepAxis {
   min: number
   /** Upper bound, rounded up to a multiple of the step. */
   max: number
-  /** Tick values from `min` to `max` at the step, both ends included. */
+  /**
+   * Tick values from `min` at the step, at most {@link MAX_TICKS} of them. The last one is `max`
+   * unless that cap cut the list short.
+   */
   ticks: number[]
 }
 
@@ -116,7 +120,7 @@ export interface StepAxis {
  *
  * Use it when the step is already chosen (by {@link niceStep}, say) and the axis must start and end
  * on a tick. The bounds and the ticks are rounded by the same rule, so `ticks[0]` is exactly `min`
- * and the last tick is exactly `max`: `stepAxis(0.35, 1.25, 0.1)` is
+ * and, unless the {@link MAX_TICKS} cap cuts the list short, the last tick is exactly `max`: `stepAxis(0.35, 1.25, 0.1)` is
  * `{ min: 0.3, max: 1.3, ticks: [0.3, 0.4, …, 1.3] }`, not a lower bound of `0.30000000000000004`.
  * At most {@link MAX_TICKS} ticks are returned.
  *
@@ -179,6 +183,8 @@ function ticksForStep(low: number, high: number, step: number): number[] {
       throw new RangeError(`ticksForStep: exceeded MAX_TICKS (${MAX_TICKS}) iterations`)
     }
     const value = roundToStep(start + index * step, step)
+    // Near the largest double, `start + index * step` overflows; Infinity is never a tick.
+    if (!Number.isFinite(value)) break
     if (value < low - step / 2 || value > high + step / 2) continue
     if (out.length > 0 && out[out.length - 1] === value) continue
     out.push(value)

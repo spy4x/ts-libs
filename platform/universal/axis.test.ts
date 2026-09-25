@@ -302,4 +302,9 @@ describe("stepAxis", () => {
     // 1e308 / 1e-10 is Infinity, so the rounded upper bound would be Infinity.
     expect(stepAxis(0, 1e308, 1e-10)).toEqual({ min: 0, max: 1e308, ticks: [0, 1e308] })
   })
+
+  it("never returns an Infinity tick for bounds near the largest double", () => {
+    expect(stepAxis(0, 1.7e308, 1.7e308).ticks).toEqual([0, 1.7e308])
+    expect(ticks(0, 1.7e308, 1)).not.toContain(Infinity)
+  })
 })
