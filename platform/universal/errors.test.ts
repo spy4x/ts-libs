@@ -117,8 +117,16 @@ describe("responseError", () => {
   })
 
   it("carries the status and the server's message from an error key", async () => {
-    const error = await responseError(Response.json({ error: "Email taken" }, { status: 409 }))
+    // A status text is present too: the server's own message must win over it.
+    const error = await responseError(
+      Response.json({ error: "Email taken" }, { status: 409, statusText: "Conflict" }),
+    )
     expect(error).toEqual({ type: ErrType.Server, status: 409, message: "Email taken" })
+  })
+
+  it("prefers the error key over the message key when the body has both", async () => {
+    const error = await responseError(Response.json({ message: "m", error: "e" }, { status: 400 }))
+    expect(error.message).toBe("e")
   })
 
   it("reads the server's message from a message key", async () => {
