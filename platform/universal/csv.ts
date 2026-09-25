@@ -90,8 +90,8 @@ const CELL_BOUNDARY_CHARS = new Set([",", ";", "\t", "\r", "\n"])
  * character the `\s` character class covers — that a spreadsheet may skip over before deciding
  * whether a cell (or, after a separator, the cell a different reader would split out of it) opens
  * with a formula. Guarding only a formula character sitting in position zero misses `" =1+1"`:
- * measured in LibreOffice 26.2, it runs that cell as a formula when "Trim spaces" (its default-on
- * CSV import option) is enabled, and reads it as plain text when that option is off. Excel's
+ * measured in LibreOffice 26.2, it runs that cell as a formula when the CSV import option "Trim
+ * spaces" is turned on, and reads it as plain text with the default import options. Excel's
  * behavior with a leading space has not been verified here.
  *
  * Matched with a sticky (`y`) regex rather than `slice`-ing the tail of `field` at every boundary,
