@@ -219,7 +219,7 @@ export class TimeFormatter {
 
   /**
    * Coarse relative time. Buckets: `"a moment ago"` under 10s, then seconds, minutes, hours,
-   * days (up to 30), months (30-day months, up to 12) and years.
+   * days (up to 30), months (30-day months, up to 365 days) and years.
    *
    * Buckets are approximate by design — a "month" is 30 days and a "year" is 365 days.
    */
@@ -237,8 +237,10 @@ export class TimeFormatter {
     if (hoursPast < 24) return `${hoursPast} ${plural(hoursPast, "hour")}`
     const daysPast = Math.floor(hoursPast / 24)
     if (daysPast < 30) return `${daysPast} ${plural(daysPast, "day")}`
+    // Days 360–364 are twelve 30-day months but not yet a 365-day year, so the month bucket runs
+    // to 365 days; otherwise they would read "0 years ago".
     const monthsPast = Math.floor(daysPast / 30)
-    if (monthsPast < 12) return `${monthsPast} ${plural(monthsPast, "month")}`
+    if (daysPast < 365) return `${monthsPast} ${plural(monthsPast, "month")}`
     const yearsPast = Math.floor(daysPast / 365)
     return `${yearsPast} ${plural(yearsPast, "year")}`
   }
