@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd"
 import { Hono } from "hono"
 import {
   createSameOriginMutationGuard,
+  SAFE_METHODS,
   SAME_ORIGIN_REFUSED,
   type SameOriginGuardOptions,
   type SameOriginRefusal,
@@ -64,6 +65,25 @@ describe("same-origin mutation guard", () => {
     })
   }
 
+  for (const method of ["patch", "PROPFIND"]) {
+    it(`refuses a cross-site ${method}, a method outside the safe list`, async () => {
+      const response = await send({ ...ACCEPTED, "sec-fetch-site": "cross-site" }, { method })
+      expect(response.status).toBe(403)
+    })
+  }
+
+  it("does not let a caller add a method to SAFE_METHODS", async () => {
+    const methods = SAFE_METHODS as string[]
+    try {
+      expect(() => methods.push("POST")).toThrow(TypeError)
+      const response = await send({ ...ACCEPTED, "sec-fetch-site": "cross-site" })
+      expect(response.status).toBe(403)
+    } finally {
+      // Only reached with a push when the list is not frozen; keeps the other tests unaffected.
+      if (!Object.isFrozen(methods) && methods.includes("POST")) methods.pop()
+    }
+  })
+
   it("refuses a mutation with no session cookie with 403 and the default body", async () => {
     const response = await send({ ...ACCEPTED, cookie: undefined })
     expect(response.status).toBe(403)
@@ -99,10 +119,17 @@ describe("same-origin mutation guard", () => {
     expect(response.status).toBe(403)
   })
 
-  it("refuses the opaque origin null", async () => {
+  it("accepts Origin null with Sec-Fetch-Site same-origin, as a no-referrer form post sends", async () => {
     const response = await send({ ...ACCEPTED, origin: "null" })
-    expect(response.status).toBe(403)
+    expect(response.status).toBe(200)
   })
+
+  for (const site of ["same-site", "cross-site", "none", undefined]) {
+    it(`refuses Origin null with Sec-Fetch-Site ${site ?? "absent"}`, async () => {
+      const response = await send({ ...ACCEPTED, origin: "null", "sec-fetch-site": site })
+      expect(response.status).toBe(403)
+    })
+  }
 
   it("refuses an Origin from another site", async () => {
     const response = await send({ ...ACCEPTED, origin: "https://evil.example.com" })
