@@ -190,9 +190,19 @@ the details.
 
 ## Relationship to other repos
 
-- `spy4x/preact-components` — Preact + Tailwind layer. Independent package; no workspace coupling.
-- `spy4x/template` — the SaaS app template; it will import both once #78 publishes them. No other
-  repository imports `@spy4x/*` yet.
+These public repositories import `@spy4x/*` from JSR. None shares a workspace with this repo; each
+pins an exact version.
+
+- `spy4x/preact-components` — Preact + Tailwind layer. Imports `@spy4x/platform`, `@spy4x/time`
+  and `@spy4x/validation` at 1.3.0.
+- `spy4x/template` — the SaaS app template. Imports `@spy4x/platform`, `@spy4x/server` and
+  `@spy4x/validation` at 1.2.0, and runs the `@spy4x/server` env-age64 CLI for its `env:*` tasks.
+- `spy4x/rostok` — imports `@spy4x/server` at 1.2.0 in its CLI, and runs its env-age64 CLI for its
+  encrypt and decrypt tasks.
+- `spy4x/financy` — imports `@spy4x/platform` and `@spy4x/server` at 1.3.0, and runs the
+  `@spy4x/server` 1.2.0 env-age64 CLI for its `env:*` tasks.
+- `spy4x/antonshubin.com` and `spy4x/dotfiles` — run the `@spy4x/server` 1.2.0 env-age64 CLI for
+  their `env:*` tasks.
 
 ## Naming policy
 
