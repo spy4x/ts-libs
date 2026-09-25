@@ -46,18 +46,26 @@ export interface CsvColumn<T> {
 
 /**
  * Leading characters a spreadsheet reads as the start of a formula: the four ASCII characters
- * OWASP's CSV-injection guidance names (`=`, `+`, `-`, `@`), plus their full-width Unicode
- * equivalents (`＝`, `＋`, `－`, `＠`) — a bare first-character check misses these, but at least
- * one spreadsheet reader folds them to their ASCII form before evaluating the cell, which OWASP's
- * own list does not cover.
+ * (`=`, `+`, `-`, `@`) and their full-width Unicode equivalents (`＝`, `＋`, `－`, `＠`) — OWASP's
+ * CSV-injection guidance names both the ASCII characters and, separately, the full-width forms
+ * (as well as line feed; see {@link CELL_START_GUARD_CHARS}). A bare first-character check on the
+ * ASCII set alone misses a full-width form, because at least one spreadsheet reader folds it to
+ * its ASCII equivalent before evaluating the cell.
+ *
+ * Known gap: OWASP's guidance also names a handful of characters this module does not guard,
+ * because they were not found to open a formula in LibreOffice 26.2 (measured; LibreOffice reads
+ * them as plain text) and Excel's behavior with them is unverified here: zero-width space
+ * (U+200B), Mongolian vowel separator (U+180E), next line (U+0085), the full-width equals sign
+ * variant `﹦` (U+FE66), and the minus sign `−` (U+2212).
  */
 const FORMULA_LEAD_CHARS = new Set(["=", "+", "-", "@", "＝", "＋", "－", "＠"])
 
 /**
  * Leading characters guarded only when they open the whole cell, not after an inner separator: the
- * formula-lead characters above, plus a bare leading tab, carriage return or line feed, which the
- * same guidance lists as dangerous on their own rather than as something that can itself start a
- * formula.
+ * formula-lead characters above, plus a bare leading tab, carriage return or line feed. OWASP's
+ * CSV-injection guidance lists a leading tab, carriage return and line feed as dangerous on their
+ * own, separately from the formula-lead characters that can also start a formula further into the
+ * guidance.
  */
 const CELL_START_GUARD_CHARS = new Set([...FORMULA_LEAD_CHARS, "\t", "\r", "\n"])
 
@@ -79,25 +87,50 @@ const CELL_BOUNDARY_CHARS = new Set([",", ";", "\t", "\r", "\n"])
 
 /**
  * A run of leading Unicode whitespace — a plain space, a tab, a no-break space, or any other
- * character the `\s` character class covers — that a spreadsheet skips over before deciding
+ * character the `\s` character class covers — that a spreadsheet may skip over before deciding
  * whether a cell (or, after a separator, the cell a different reader would split out of it) opens
- * with a formula. Guarding only a formula character sitting in position zero misses `" =1+1"`,
- * which Excel still opens as a formula.
+ * with a formula. Guarding only a formula character sitting in position zero misses `" =1+1"`:
+ * measured in LibreOffice 26.2, it runs that cell as a formula when "Trim spaces" (its default-on
+ * CSV import option) is enabled, and reads it as plain text when that option is off. Excel's
+ * behavior with a leading space has not been verified here.
+ *
+ * Matched with a sticky (`y`) regex rather than `slice`-ing the tail of `field` at every boundary,
+ * because a tab, carriage return or line feed is both a {@link CELL_BOUNDARY_CHARS} separator and
+ * `\s` whitespace: a cell made only of one of those repeated (a real input, not a contrived one —
+ * a copy-pasted block of blank lines lands in exactly one CSV cell) is a boundary at every
+ * position, and a `slice` from every one of those positions is quadratic in the cell's length. A
+ * sticky regex, resumed from `lastIndex`, still visits every character once in total across a
+ * whole {@link guardFormulaInjection} call, but each position it starts a match from is scanned
+ * once, not once per boundary before it.
  */
-const LEADING_WHITESPACE = /^\s+/
+const WHITESPACE_RUN = /\s+/y
 
-/** Index of the first non-whitespace character at or after `from`, or `field.length` if none. */
-function skipLeadingWhitespace(field: string, from: number): number {
-  const match = LEADING_WHITESPACE.exec(field.slice(from))
-  return match ? from + match[0].length : from
+/**
+ * Index of the first non-whitespace character at or after `from`, or `field.length` if none.
+ * `cache` remembers the last run this function scanned — `[start, end)` — so a query landing
+ * inside that same run of whitespace (guaranteed contiguous, since a run is bounded by its first
+ * non-whitespace character on either side) returns `cache.end` without a new scan; see
+ * {@link WHITESPACE_RUN}'s own doc for why that reuse is what keeps this linear.
+ */
+function whitespaceRunEnd(
+  field: string,
+  from: number,
+  cache: { start: number; end: number },
+): number {
+  if (from >= cache.start && from < cache.end) return cache.end
+  WHITESPACE_RUN.lastIndex = from
+  const match = WHITESPACE_RUN.exec(field)
+  cache.start = from
+  cache.end = match ? from + match[0].length : from
+  return cache.end
 }
 
 /**
  * Prefix `'` in front of every cell, or every reader-visible split of a cell, that opens with a
  * formula character — see {@link FORMULA_LEAD_CHARS}, {@link CELL_START_GUARD_CHARS} and
  * {@link CELL_BOUNDARY_CHARS} for exactly which characters and positions this covers, and
- * {@link LEADING_WHITESPACE} for why leading whitespace before that character is skipped, not
- * treated as safe.
+ * {@link WHITESPACE_RUN} for why leading whitespace before that character is skipped, not treated
+ * as safe.
  *
  * Every position in the string is checked, not only the first: `x;=1+1` guards the `=` right
  * after the `;`, becoming `x;'=1+1`, so a semicolon-separated read of it never reaches a bare
@@ -113,9 +146,14 @@ function skipLeadingWhitespace(field: string, from: number): number {
  * than hiding it, so a cell such as `a;-5` — a string whose only fault is a `-` right after a
  * separator — reads as `a;'-5` in the opened file. This repository has not verified whether Excel
  * shows the mark too.
+ *
+ * Runs in linear time in `field`'s length: the loop itself is a single pass, and
+ * {@link whitespaceRunEnd}'s cache keeps the whitespace lookahead from rescanning the same run of
+ * characters once per boundary that precedes it — see that function's own doc.
  */
 function guardFormulaInjection(field: string): string {
   let guarded = ""
+  const whitespaceCache = { start: -1, end: -1 }
   for (let index = 0; index < field.length; index++) {
     const char = field[index]
     const atStart = index === 0
@@ -124,7 +162,7 @@ function guardFormulaInjection(field: string): string {
     if (atStart && CELL_START_GUARD_CHARS.has(char)) {
       opensCell = true
     } else if (atStart || afterBoundary) {
-      const leadIndex = skipLeadingWhitespace(field, index)
+      const leadIndex = whitespaceRunEnd(field, index, whitespaceCache)
       const leadChar = field[leadIndex]
       opensCell = leadChar !== undefined && FORMULA_LEAD_CHARS.has(leadChar)
     }

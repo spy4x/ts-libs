@@ -286,3 +286,37 @@ describe("toCsvBytes", () => {
     expect(text).toBe(`${CSV_BYTE_ORDER_MARK}Note\r\n'=cmd\r\n`)
   })
 })
+
+describe("csvField performance", () => {
+  // Regression test for a bug fixed at review time: the whitespace lookahead re-scanned the tail
+  // of the cell from every position that followed a separator, and a tab, carriage return or line
+  // feed is both a separator and whitespace — so a cell made of nothing else was quadratic in its
+  // length. 200,000 characters finished in about 7ms before the bug was introduced and about
+  // 5.3s with it; 1 second is a bound loose enough not to flake under load but tight enough that
+  // quadratic behavior at this size still fails it by several seconds.
+  const TIME_BUDGET_MS = 1000
+
+  it("guards and quotes 200,000 line feeds well under a generous time budget", () => {
+    const field = "\n".repeat(200_000)
+    const start = performance.now()
+    const result = csvField(field)
+    expect(performance.now() - start).toBeLessThan(TIME_BUDGET_MS)
+    expect(result).toBe(`"'${field}"`)
+  })
+
+  it("guards 200,000 tabs well under a generous time budget", () => {
+    const field = "\t".repeat(200_000)
+    const start = performance.now()
+    const result = csvField(field)
+    expect(performance.now() - start).toBeLessThan(TIME_BUDGET_MS)
+    expect(result).toBe(`'${field}`)
+  })
+
+  it("guards and quotes 100,000 CRLF pairs well under a generous time budget", () => {
+    const field = "\r\n".repeat(100_000)
+    const start = performance.now()
+    const result = csvField(field)
+    expect(performance.now() - start).toBeLessThan(TIME_BUDGET_MS)
+    expect(result).toBe(`"'${field}"`)
+  })
+})
