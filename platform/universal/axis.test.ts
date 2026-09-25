@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { MAX_TICKS, niceStep, ticks } from "./axis.ts"
+import { MAX_TICKS, niceStep, roundToStep, ticks, ticksForStep } from "./axis.ts"
 
 describe("niceStep", () => {
   it("snaps the significand to 1, 2 or 5 times a power of ten", () => {
@@ -234,5 +234,69 @@ describe("ticks", () => {
         expect(values[i]).toBeGreaterThan(values[i - 1])
       }
     }
+  })
+})
+
+describe("ticksForStep", () => {
+  it("returns the ticks between two bounds at a fixed step", () => {
+    expect(ticksForStep(0, 100, 20)).toEqual([0, 20, 40, 60, 80, 100])
+    expect(ticksForStep(0, 100, 25)).toEqual([0, 25, 50, 75, 100])
+  })
+
+  it("matches ticks when given the step niceStep picks", () => {
+    for (const [min, max] of [[0, 100], [-5, 5], [0.1, 0.9], [0, 1e-12], [-1e18, 1e18]]) {
+      expect(ticksForStep(min, max, niceStep(max - min))).toEqual(ticks(min, max))
+    }
+  })
+
+  it("starts and ends on bounds rounded with roundToStep, as niceScale rounds them", () => {
+    // niceScale rounds its padded domain outward to multiples of the step, then asks for the ticks
+    // between them. 3 * 0.1 is 0.30000000000000004 in floats, and the first tick is rounded, so
+    // an unrounded bound would disagree with its own end label.
+    const step = 0.1
+    const low = roundToStep(Math.floor(0.35 / step) * step, step)
+    const high = roundToStep(Math.ceil(1.25 / step) * step, step)
+    expect([low, high]).toEqual([0.3, 1.3])
+    const values = ticksForStep(low, high, step)
+    expect(values).toEqual([0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3])
+  })
+
+  it("stops at MAX_TICKS ticks when the step is far finer than the range", () => {
+    const values = ticksForStep(0, 1e6, 1)
+    expect(values.length).toBe(MAX_TICKS)
+    expect(values[values.length - 1]).toBe(MAX_TICKS - 1)
+  })
+
+  it("returns an empty axis for a non-finite bound instead of throwing", () => {
+    expect(ticksForStep(Number.NaN, 1, 0.2)).toEqual([])
+    expect(ticksForStep(0, Number.POSITIVE_INFINITY, 0.2)).toEqual([])
+  })
+
+  it("swaps reversed bounds", () => {
+    expect(ticksForStep(10, 0, 5)).toEqual([0, 5, 10])
+  })
+
+  it("returns the bounds as they are for a step that is not a finite number above zero", () => {
+    expect(ticksForStep(0, 10, 0)).toEqual([0, 10])
+    expect(ticksForStep(0, 10, -2)).toEqual([0, 10])
+    expect(ticksForStep(0, 10, Number.NaN)).toEqual([0, 10])
+    expect(ticksForStep(10, 0, Number.POSITIVE_INFINITY)).toEqual([0, 10])
+  })
+})
+
+describe("roundToStep", () => {
+  it("removes float noise at the precision the step implies", () => {
+    expect(roundToStep(0.1 + 0.2, 0.1)).toBe(0.3)
+    expect(roundToStep(3 * 2e-13, 2e-13)).toBe(6e-13)
+  })
+
+  it("rounds to a whole number for a step of one or more", () => {
+    expect(roundToStep(41.6, 20)).toBe(42)
+  })
+
+  it("leaves the value as it is for a step that is not a finite number above zero", () => {
+    expect(roundToStep(0.35, -0.1)).toBe(0.35)
+    expect(roundToStep(0.35, 0)).toBe(0.35)
+    expect(roundToStep(0.35, Number.NaN)).toBe(0.35)
   })
 })

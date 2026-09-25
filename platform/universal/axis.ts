@@ -97,13 +97,21 @@ export function ticks(min: number, max: number, maxTicks = 5): number[] {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return []
   const [low, high] = min <= max ? [min, max] : [max, min]
   if (low === high) return [low]
-  const step = niceStep(high - low, maxTicks)
-  if (!Number.isFinite(step) || step <= 0) return [low, high]
-  return ticksForStep(low, high, step)
+  return ticksForStep(low, high, niceStep(high - low, maxTicks))
 }
 
 /**
  * Tick values for `[low, high]` at a given step, limited to the bounds ± half a step.
+ *
+ * {@link ticks} picks its step with {@link niceStep} and then calls this. Call it directly when the
+ * step is already fixed — preact-components' `niceScale` rounds its domain outward to multiples of
+ * the step first (with {@link roundToStep}, so the bounds and the ticks round identically) and then
+ * asks for the ticks between them. Each tick is `roundToStep(start + index * step, step)`, where
+ * `start` is `low` floored to a multiple of `step`.
+ *
+ * Bad input degrades instead of throwing, like {@link ticks}: a non-finite bound returns `[]`,
+ * reversed bounds are swapped, and a step that is not a finite number above zero returns the two
+ * bounds as they are.
  *
  * Ported from `preact-components/charts/scales.ts`, which diagnosed the failure this replaces: a
  * cursor walked by `value += step` never advances once `step` is finer than the float precision of
@@ -131,7 +139,10 @@ export function ticks(min: number, max: number, maxTicks = 5): number[] {
  * unreachable, so it exists purely so that weakening the ceiling back to plain `steps + 1` fails
  * `axis.test.ts` with a fast thrown error instead of hanging the whole suite.
  */
-function ticksForStep(low: number, high: number, step: number): number[] {
+export function ticksForStep(low: number, high: number, step: number): number[] {
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return []
+  if (low > high) [low, high] = [high, low]
+  if (!Number.isFinite(step) || step <= 0) return [low, high]
   const start = Math.floor(low / step) * step
   const end = Math.ceil(high / step) * step
   const steps = Math.round((end - start) / step)
@@ -151,8 +162,16 @@ function ticksForStep(low: number, high: number, step: number): number[] {
   return out.length > 0 ? out : [low, high]
 }
 
-/** Round to the precision implied by `step`, keeping only exactly representable magnitudes. */
-function roundToStep(value: number, step: number): number {
+/**
+ * Round `value` to the decimal precision implied by `step`: `roundToStep(0.30000000000000004, 0.1)`
+ * is `0.3`. A step of `1` or more rounds to a whole number. A step that is not a finite number
+ * above zero, or a precision too fine to represent, leaves `value` as it is.
+ *
+ * Exported so a caller that rounds its own axis bounds (preact-components' `niceScale`) rounds them
+ * exactly as {@link ticksForStep} rounds each tick, and the first and last tick equal the bounds.
+ */
+export function roundToStep(value: number, step: number): number {
+  if (!Number.isFinite(step) || step <= 0) return value
   const decimals = -Math.floor(Math.log10(step))
   const factor = decimals > 0 ? 10 ** decimals : 1
   if (!Number.isFinite(factor) || factor === 0) return value
