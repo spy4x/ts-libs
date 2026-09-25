@@ -15,7 +15,7 @@
  */
 
 import type { Clock } from "./clock.ts"
-import type { KeyValueStore } from "./storage.ts"
+import type { KeyValueStore } from "@spy4x/platform/universal/key-value-store"
 
 /**
  * The empty cursor, and the "from the beginning" floor.
