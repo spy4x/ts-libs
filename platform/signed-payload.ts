@@ -142,8 +142,8 @@ export interface SignedPayloadCodec<S extends Type> {
    *     `BigInt`, a cycle, `undefined`) or, after a JSON round trip, does not satisfy the schema;
    *     `Malformed` when the token would exceed {@link MAX_SIGNED_PAYLOAD_LENGTH}. Either token
    *     would never verify.
-   * @throws {RangeError} When `ttlMs` is not a positive safe integer, or the clock does not return
-   *     a safe integer.
+   * @throws {RangeError} When `ttlMs` is not a positive safe integer, the clock does not return a
+   *     safe integer, or the clock plus `ttlMs` passes `Number.MAX_SAFE_INTEGER`.
    * @throws {TypeError} When `context` is not a string or holds a lone surrogate.
    */
   sign(payload: S["inferIn"], options?: SignOptions): Promise<string>
@@ -233,8 +233,11 @@ export function createSignedPayloadCodec<S extends Type>(
       if (ttlMs !== undefined) {
         const clock = now()
         const expiresAt = clock + ttlMs
-        if (!Number.isSafeInteger(clock) || !Number.isSafeInteger(expiresAt)) {
+        if (!Number.isSafeInteger(clock)) {
           throw new RangeError("the clock must return an integer number of milliseconds")
+        }
+        if (!Number.isSafeInteger(expiresAt)) {
+          throw new RangeError("ttlMs is too long: the expiry would pass Number.MAX_SAFE_INTEGER")
         }
         envelope = { purpose, version, expiresAt, payload: envelope.payload }
       }
