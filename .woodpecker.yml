@@ -56,7 +56,9 @@ steps:
       # `check:cold` (#112), not `check`: `CI=true` alone does not freeze `deno.lock` — a task
       # that resolves an import missing from the lockfile rewrites it and still exits 0. The
       # cold script compares the lockfile before and after and fails the run when it changed.
-      - deno task check:cold
+      # `publish:dry` (#190) runs in the same cold cache on every PR: a failure only publishing
+      # catches, such as two packages importing each other, then fails the PR instead of the tag.
+      - deno task check:cold check publish:dry
 
   integration:
     image: denoland/deno:2.9.7
