@@ -24,6 +24,7 @@
     "./server/jsonl-logger": "./server/jsonl-logger.ts",
     "./server/ports": "./server/ports.ts",
     "./server/throttled-saver": "./server/throttled-saver.ts",
+    "./signed-payload": "./signed-payload.ts",
     "./tokens": "./tokens.ts",
     "./universal/async": "./universal/async.ts",
     "./universal/axis": "./universal/axis.ts",
