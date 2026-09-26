@@ -442,4 +442,38 @@ describe("ThrottledJsonSaver", () => {
     await drain()
     expect(h.saved()).toEqual({ items: 2 })
   })
+
+  it("drops a pending follow-up write on dispose", async () => {
+    const h = gatedHarness()
+    h.mark(1)
+    h.mark(2)
+    h.saver.dispose()
+    await waitForCount(h.gates, 1)
+    h.gates.shift()?.()
+    await drain()
+    expect(h.gates.length).toBe(0)
+    expect(h.saved()).toEqual({ items: 1 })
+    expect(h.saver.dirty).toBe(true)
+  })
+
+  it("keeps the marks made during a failed write in the batch count", async () => {
+    const h = gatedHarness({ elapsed: false, flushBatchSize: 5 })
+    h.fs.failWrites.add("/s.json.1.0.tmp")
+    h.mark(1)
+    h.mark(2)
+    const flushed = h.saver.flush()
+    await waitForCount(h.gates, 1)
+    // Two marks while the write runs: inside the window and under the batch size, so no write yet.
+    h.mark(3)
+    h.mark(4)
+    h.gates.shift()?.()
+    await expect(flushed).rejects.toThrow("write refused")
+    // Two marks from before the failed write plus two during it, plus this one, reach the batch.
+    h.mark(5)
+    await drain()
+    expect(h.gates.length).toBe(1)
+    h.gates.shift()?.()
+    await drain()
+    expect(h.saved()).toEqual({ items: 5 })
+  })
 })
