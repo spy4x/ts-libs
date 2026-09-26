@@ -78,6 +78,7 @@ const ENTRIES: Entry[] = [
     specifier: "@spy4x/platform/server/shutdown-signal",
     capability: "SIGINT and SIGTERM as an AbortSignal for a worker (#187)",
   },
+  { specifier: "@spy4x/net/ip", capability: "IP address parsing and CIDR ranges (#221)" },
 ]
 
 /**

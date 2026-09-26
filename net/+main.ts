@@ -15,6 +15,9 @@
  * `bounded-body.ts` is re-exported alongside: reading a response under a hard
  * byte cap and a stall budget is the other half of fetching safely.
  *
+ * `ip.ts` parses one IP address into a canonical spelling and checks it against
+ * CIDR ranges, for example to trust a header only from a known proxy.
+ *
  * Zero runtime dependencies — `URL`, `Deno.resolveDns`, `ReadableStream`,
  * `TextDecoder` and `AbortController` only.
  */
@@ -72,3 +75,6 @@ export {
   readContentLength,
 } from "./bounded-body.ts"
 export type { BodyReadOptions, BodySource } from "./bounded-body.ts"
+
+export { ipInRanges, normalizeIp, parseIp } from "./ip.ts"
+export type { ParsedIp } from "./ip.ts"
