@@ -95,6 +95,20 @@ describe("copyToClipboard", () => {
     expect(log.at(-1)).toBe("remove")
   })
 
+  it("resolves false and removes the textarea when execCommand throws", async () => {
+    const log: string[] = []
+    const doc = fakeDocument([], log)
+    doc.execCommand = () => {
+      log.push("execCommand")
+      throw new DOMException("blocked", "SecurityError")
+    }
+
+    const result = copyToClipboard("x", { clipboard: null, document: doc })
+
+    await expect(result).resolves.toBe(false)
+    expect(log.at(-1)).toBe("remove")
+  })
+
   it("reports failure instead of throwing with neither a clipboard nor a document", async () => {
     expect(await copyToClipboard("x", { clipboard: null, document: null })).toBe(false)
   })
