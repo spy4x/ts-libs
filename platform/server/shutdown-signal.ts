@@ -65,8 +65,9 @@ export function shutdownSignal(options: ShutdownSignalOptions = {}): AbortSignal
   }
 
   const handlers = new Map<Deno.Signal, () => void>()
+  // Removing every listener before aborting is what makes a later signal a no-op; `abort` itself
+  // ignores a second call, so no separate guard is needed.
   const stop = (reason: unknown) => {
-    if (controller.signal.aborted) return
     for (const [signal, handler] of handlers) remove(signal, handler)
     handlers.clear()
     parent?.removeEventListener("abort", onParentAbort)
