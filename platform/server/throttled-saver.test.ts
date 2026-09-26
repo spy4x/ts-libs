@@ -53,6 +53,45 @@ function harness(options: { flushIntervalMs?: number; flushBatchSize?: number } 
   }
 }
 
+/**
+ * Build a saver whose every file write waits for a gate the test releases by hand, so the test
+ * controls which writes are in flight and in which order they land. The window has already elapsed
+ * when it returns, so the next mark writes inline.
+ */
+function gatedHarness() {
+  const fs = fakeFs()
+  const clock = fakeClock()
+  const gates: (() => void)[] = []
+  let items = 0
+  const saver = new ThrottledJsonSaver({
+    fs: {
+      ...fs,
+      writeText: (path: string, content: string) => {
+        const gate = new Promise<void>((resolve) => gates.push(resolve))
+        return gate.then(() => fs.writeText(path, content))
+      },
+    },
+    path: "/s.json",
+    serialize: () => ({ items }),
+    clock,
+    timers: fakeTimers(),
+    pid: 1,
+    flushIntervalMs: 1000,
+    flushBatchSize: 1000,
+  })
+  clock.advance(1000)
+  return {
+    saver,
+    clock,
+    gates,
+    saved: () => JSON.parse(fs.files.get("/s.json") ?? "null"),
+    mark(n: number) {
+      items = n
+      saver.markDirty()
+    },
+  }
+}
+
 describe("ThrottledJsonSaver", () => {
   it("writes nothing until a mark arrives", async () => {
     const h = harness()
@@ -276,5 +315,94 @@ describe("ThrottledJsonSaver", () => {
     expect(JSON.parse(fs.files.get("/s.json") as string)).toEqual({ items: 2 })
     expect(saver.writes).toBeGreaterThan(before)
     expect(saver.dirty).toBe(false)
+  })
+  it("runs one write at a time when marks keep arriving after the window", async () => {
+    const h = gatedHarness()
+    h.mark(1)
+    h.mark(2)
+    await drain()
+    expect(h.gates.length).toBe(1)
+    h.gates.shift()?.()
+    // The second mark becomes one follow-up write, started only after the first one landed.
+    await waitForCount(h.gates, 1)
+    expect(h.saved()).toEqual({ items: 1 })
+    h.gates.shift()?.()
+    await drain()
+    expect(h.saved()).toEqual({ items: 2 })
+    expect(h.saver.writes).toBe(2)
+    expect(h.gates.length).toBe(0)
+  })
+
+  it("ends with the newest snapshot on disk when later writes are released first", async () => {
+    const h = gatedHarness()
+    h.mark(1)
+    h.mark(2)
+    h.mark(3)
+    // Release the newest pending write first, every round, until nothing is left in flight.
+    for (let round = 0; round < 10; round++) {
+      await drain()
+      if (h.gates.length === 0) break
+      h.gates.pop()?.()
+    }
+    expect(h.gates.length).toBe(0)
+    expect(h.saved()).toEqual({ items: 3 })
+    expect(h.saver.dirty).toBe(false)
+  })
+
+  it("stays dirty until the newest snapshot has landed", async () => {
+    const h = gatedHarness()
+    h.mark(1)
+    await drain()
+    expect(h.gates.length).toBe(1)
+    // The write has started but not landed, so the change is not on disk yet.
+    expect(h.saver.dirty).toBe(true)
+    h.gates.shift()?.()
+    await drain()
+    expect(h.saver.dirty).toBe(false)
+  })
+
+  it("resolves flush only after the follow-up write of the newest mark has landed", async () => {
+    const h = gatedHarness()
+    h.mark(1)
+    h.mark(2)
+    let done = false
+    const flushed = h.saver.flush().then((wrote) => {
+      done = true
+      return wrote
+    })
+    await drain()
+    h.gates.shift()?.()
+    await waitForCount(h.gates, 1)
+    expect(done).toBe(false)
+    h.gates.shift()?.()
+    // The follow-up already wrote the newest state, so flush itself has nothing left to write.
+    expect(await flushed).toBe(false)
+    expect(h.saved()).toEqual({ items: 2 })
+    expect(h.saver.dirty).toBe(false)
+    expect(h.saver.writes).toBe(2)
+  })
+
+  it("does not start a second write while an explicit flush is writing", async () => {
+    const h = gatedHarness()
+    h.mark(1)
+    await waitForCount(h.gates, 1)
+    h.gates.shift()?.()
+    await drain()
+    // Inside the new window, so this mark only arms the timer and `flush` does the write.
+    h.mark(2)
+    const flushed = h.saver.flush()
+    await waitForCount(h.gates, 1)
+    // The window elapses while the flush's write is in flight, so this mark is due at once.
+    h.clock.advance(1000)
+    h.mark(3)
+    await drain()
+    expect(h.gates.length).toBe(1)
+    h.gates.shift()?.()
+    expect(await flushed).toBe(true)
+    await waitForCount(h.gates, 1)
+    h.gates.shift()?.()
+    await drain()
+    expect(h.saved()).toEqual({ items: 3 })
+    expect(h.saver.dirty).toBe(false)
   })
 })
