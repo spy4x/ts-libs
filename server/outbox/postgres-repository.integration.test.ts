@@ -6,7 +6,8 @@
  * actually keeps a claimed-but-unpublished row invisible until the lease expires and
  * never lets two concurrent connections claim the same row, whether the returned rows
  * really carry the field names `OutboxEvent` promises, and whether `attempt_count <
- * maxAttempts` really excludes an exhausted row.
+ * maxAttempts` really excludes an exhausted row, and whether `release` undoes only its
+ * own claim.
  *
  * Isolation: every run creates its own schema and table, points one or two
  * single-connection `Sql` clients at it with `search_path`, and drops the schema in a
@@ -17,6 +18,7 @@ import { describe, it } from "@std/testing/bdd"
 import { createSql, type Sql } from "../db/index.ts"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { PostgresOutboxRepository } from "./postgres-repository.ts"
+import { OutboxProcessor } from "./processor.ts"
 
 const OUTBOX_EVENTS_TABLE = `
   CREATE TABLE outbox_events (
@@ -232,6 +234,73 @@ describe("PostgresOutboxRepository against a real server", () => {
       } finally {
         await sqlB.end()
       }
+    })
+  })
+
+  it("release undoes the claim's attempt and makes the row claimable again at once", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertRow(sql, ROW_A, "group.created", ROW_A)
+      const repository = new PostgresOutboxRepository(sql)
+
+      const first = await repository.claimBatch(10, 5, 60)
+      await repository.release(first)
+
+      const second = await repository.claimBatch(10, 5, 60)
+      assertEquals(second.map((row) => [row.id, row.attemptCount]), [[ROW_A, 1]])
+    })
+  })
+
+  it("release leaves a row alone once another claim has taken it", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertRow(sql, ROW_A, "group.created", ROW_A)
+      const repository = new PostgresOutboxRepository(sql)
+
+      const stale = await repository.claimBatch(10, 5, 60)
+      // The lease expires and another worker claims the row.
+      await sql`UPDATE outbox_events SET available_at = now() - INTERVAL '1 second'`
+      assertEquals((await repository.claimBatch(10, 5, 60)).length, 1)
+
+      await repository.release(stale)
+
+      const rows = await sql<{ attemptCount: number; leased: boolean }[]>`
+        SELECT attempt_count AS "attemptCount", available_at > now() AS "leased"
+        FROM outbox_events WHERE id = ${ROW_A}
+      `
+      assertEquals([...rows], [{ attemptCount: 2, leased: true }])
+      assertEquals((await repository.claimBatch(10, 5, 60)).length, 0)
+    })
+  })
+
+  it("a drain that outlasts its lease publishes only the head and hands the tail back", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertRow(sql, ROW_A, "group.created", ROW_A)
+      await sql`SELECT pg_sleep(0.01)`
+      await insertRow(sql, ROW_B, "group.renamed", ROW_A)
+      const repository = new PostgresOutboxRepository(sql)
+      const clock = { now: 0 }
+      const published: string[] = []
+      const processor = new OutboxProcessor(repository, {
+        publish: (event) => {
+          published.push(event.id)
+          // One publish uses 40 of the 60 lease seconds; a second would overrun it.
+          clock.now += 40_000
+          return Promise.resolve()
+        },
+      }, { now: () => clock.now })
+
+      assertEquals(await processor.drainOnce(), { claimed: 2, published: 1, failed: 0 })
+      assertEquals(published, [ROW_A])
+
+      const rows = await sql<{ id: string; attemptCount: number; processed: boolean }[]>`
+        SELECT id, attempt_count AS "attemptCount", processed_at IS NOT NULL AS "processed"
+        FROM outbox_events ORDER BY created_at
+      `
+      assertEquals([...rows], [
+        { id: ROW_A, attemptCount: 1, processed: true },
+        { id: ROW_B, attemptCount: 0, processed: false },
+      ])
+      const next = await repository.claimBatch(10, 5, 60)
+      assertEquals(next.map((row) => [row.id, row.attemptCount]), [[ROW_B, 1]])
     })
   })
 })
