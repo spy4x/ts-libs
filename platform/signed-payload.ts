@@ -50,6 +50,7 @@
 
 import { type Type, type } from "arktype"
 import { decodeBase64Url, encodeBase64Url } from "@std/encoding/base64url"
+import { isArkErrors } from "@spy4x/validation"
 import type { Result } from "./universal/result.ts"
 import { assertUsableSecret } from "./token-secret.ts"
 
@@ -101,7 +102,9 @@ export interface SignedPayloadCodecOptions<S extends Type> {
   version: number
   /**
    * Validates the payload after a JSON round trip, on sign and on verify. arktype objects accept
-   * extra keys by default; add `"+": "reject"` to demand an exact key set.
+   * extra keys by default; add `"+": "reject"` to demand an exact key set. A rejection is
+   * recognised by arktype's public shape, not `instanceof`, so a schema built by another loaded
+   * copy of arktype is honoured too.
    */
   schema: S
   /**
@@ -223,7 +226,7 @@ export function createSignedPayloadCodec<S extends Type>(
           { cause },
         )
       }
-      if (json === undefined || schema(JSON.parse(json)) instanceof type.errors) {
+      if (json === undefined || isArkErrors(schema(JSON.parse(json)))) {
         throw new SignedPayloadError(
           SignedPayloadErrorCode.InvalidPayload,
           "payload does not satisfy the schema after a JSON round trip",
@@ -290,7 +293,7 @@ export function createSignedPayloadCodec<S extends Type>(
       }
       if (envelope.version !== version) return refuse(SignedPayloadErrorCode.InvalidPayload)
       const output = schema(envelope.payload)
-      if (output instanceof type.errors) return refuse(SignedPayloadErrorCode.InvalidPayload)
+      if (isArkErrors(output)) return refuse(SignedPayloadErrorCode.InvalidPayload)
       return { ok: true as const, value: output as S["infer"] }
     },
   }
@@ -323,7 +326,7 @@ function decodeCanonical(segment: string): Uint8Array<ArrayBuffer> | null {
 function parseEnvelope(encoded: string): typeof envelopeSchema.infer | null {
   try {
     const envelope = envelopeSchema(JSON.parse(decoder.decode(decodeBase64Url(encoded))))
-    return envelope instanceof type.errors ? null : envelope
+    return isArkErrors(envelope) ? null : envelope
   } catch {
     return null
   }
