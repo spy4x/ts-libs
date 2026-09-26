@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
 import {
+  downloadCsv,
   type DownloadDocument,
   downloadResponseAsFile,
   type ObjectUrlAdapter,
@@ -261,5 +262,36 @@ describe("downloadResponseAsFile", () => {
         objectUrl: fakeObjectUrl(callLog()),
       }),
     ).rejects.toThrow("needs a document")
+  })
+})
+
+describe("downloadCsv", () => {
+  it("saves the rows as a UTF-8 CSV file under the given name", async () => {
+    const log = callLog()
+    const anchor = fakeAnchor(log)
+    const blobs: Blob[] = []
+    const objectUrl = {
+      create: (blob: Blob) => {
+        blobs.push(blob)
+        return "blob:csv"
+      },
+      revoke: () => {},
+    }
+
+    await downloadCsv(
+      [{ key: "name" as const, header: "Name" }],
+      [{ name: "Ada" }, { name: "=SUM(A1)" }],
+      "people.csv",
+      { document: fakeDocument(anchor, log), objectUrl, timer: fakeTimer(log) },
+    )
+
+    expect(anchor.download).toBe("people.csv")
+    expect(anchor.href).toBe("blob:csv")
+    expect(log).toContain("click")
+    expect(blobs).toHaveLength(1)
+    expect(blobs[0].type).toBe("text/csv;charset=utf-8")
+    const bytes = new Uint8Array(await blobs[0].arrayBuffer())
+    expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+    expect(new TextDecoder().decode(bytes)).toBe("Name\r\nAda\r\n'=SUM(A1)\r\n")
   })
 })
