@@ -321,6 +321,13 @@ Deno.test("fails the whole send on one invalid recipient, before touching the tr
   assertEquals(recorded.messages.length, 0)
 })
 
+Deno.test("names the to field in the error for an invalid recipient", async () => {
+  const { sender } = makeSender()
+  const failed = failure(await sender.send({ ...MESSAGE, to: "not an address" }))
+
+  assert(failed.error.startsWith("to: Invalid email address"), failed.error)
+})
+
 Deno.test("fails an empty recipient list rather than sending to nobody", async () => {
   const { sender, recorded } = makeSender()
   const failed = failure(await sender.send({ ...MESSAGE, to: [] }))
@@ -365,13 +372,13 @@ Deno.test("refuses a CRLF in replyTo before touching the transport", async () =>
   assertEquals(recorded.messages.length, 0)
 })
 
-Deno.test("fails the whole send on one invalid replyTo entry", async () => {
+Deno.test("fails the whole send on one invalid replyTo entry, naming the field", async () => {
   const { sender, recorded } = makeSender()
   const failed = failure(
     await sender.send({ ...MESSAGE, replyTo: ["support@example.com", "not an address"] }),
   )
 
-  assertStringIncludes(failed.error, "Invalid email address")
+  assert(failed.error.startsWith("replyTo: Invalid email address"), failed.error)
   assertEquals(recorded.messages.length, 0)
 })
 
@@ -796,6 +803,25 @@ Deno.test("never needs --allow-net to assemble a message", async () => {
 
   assert(result.ok)
   assert(sink.mime.length > 0)
+})
+
+Deno.test("still sends a subject and a filename containing U+2028", async () => {
+  const sink = { mime: "" }
+  const sender = createSmtpSender(BASE_OPTIONS, mimeFactory(sink))
+
+  const result = await sender.send({
+    ...MESSAGE,
+    subject: "Line one\u2028line two",
+    attachments: [{
+      filename: "notes\u2028draft.txt",
+      content: "notes",
+      contentType: "text/plain; charset=utf-8",
+    }],
+  })
+
+  assert(result.ok, JSON.stringify(result))
+  assert(/^Subject: =\?UTF-8\?/m.test(sink.mime), sink.mime)
+  assertFalse(sink.mime.includes("\u2028"))
 })
 
 Deno.test("renders a Reply-To header for a single address", async () => {

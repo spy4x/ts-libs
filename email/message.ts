@@ -38,7 +38,12 @@ export interface EmailMessage {
    * Where replies should go, when that is not the `from` mailbox — a sending-only
    * `noreply@` address above all. Validated exactly like `to`: the same parser, so a
    * display name is accepted, a control character is refused, and one bad entry fails
-   * the whole message. Omitted, the message carries no `Reply-To` header.
+   * the whole message, with an error that starts `replyTo:`. Omitted, the message
+   * carries no `Reply-To` header.
+   *
+   * A value a visitor typed (a contact form's "your email") should be checked with
+   * `parseAddress` first and left out when that throws: otherwise one bad entry costs
+   * the whole mail, not just the reply route.
    */
   replyTo?: string | readonly string[]
   /** Subject line. A CR or LF here is rejected, not folded. */

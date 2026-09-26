@@ -21,7 +21,7 @@
  * @module
  */
 
-import { parseAddresses, type ParsedRecipients } from "./address.ts"
+import { type MessageAddresses, parseMessageAddresses } from "./message-addresses.ts"
 import { assertSendableMessage, type EmailMessage } from "./message.ts"
 
 /** Every recipient the transport saw was accepted by the server. */
@@ -90,12 +90,10 @@ export function createConsoleSender(options: ConsoleSenderOptions = {}): EmailSe
 
   return {
     send(message: EmailMessage): Promise<SendResult> {
-      let recipients: ParsedRecipients
-      let replyTo: ParsedRecipients | undefined
+      let parsed: MessageAddresses
       try {
         assertSendableMessage(message)
-        recipients = parseAddresses(message.to)
-        replyTo = message.replyTo === undefined ? undefined : parseAddresses(message.replyTo)
+        parsed = parseMessageAddresses(message)
       } catch (error) {
         return Promise.resolve({
           ok: false,
@@ -106,6 +104,7 @@ export function createConsoleSender(options: ConsoleSenderOptions = {}): EmailSe
         })
       }
 
+      const { recipients, replyTo } = parsed
       const addresses = recipients.addresses.map((address) => address.address)
       const body = message.text ?? stripTags(message.html ?? "")
 

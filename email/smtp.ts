@@ -32,12 +32,8 @@
 
 import type { SendMailOptions, SMTPTransportOptions } from "nodemailer"
 import { decodeBase64, encodeBase64 } from "@std/encoding"
-import {
-  type EmailAddress,
-  parseAddress,
-  parseAddresses,
-  type ParsedRecipients,
-} from "./address.ts"
+import { type EmailAddress, parseAddress } from "./address.ts"
+import { type MessageAddresses, parseMessageAddresses } from "./message-addresses.ts"
 import { assertSendableMessage, type EmailMessage, hasBody } from "./message.ts"
 import type { EmailSender, SendResult } from "./sender.ts"
 
@@ -144,12 +140,10 @@ export function createSmtpSender(
 
   return {
     async send(message: EmailMessage): Promise<SendResult> {
-      let recipients: ParsedRecipients
-      let replyTo: ParsedRecipients | undefined
+      let parsed: MessageAddresses
       try {
         assertSendableMessage(message)
-        recipients = parseAddresses(message.to)
-        replyTo = message.replyTo === undefined ? undefined : parseAddresses(message.replyTo)
+        parsed = parseMessageAddresses(message)
       } catch (error) {
         // Nothing was sent and nothing will be: a bad recipient list fails the
         // whole message rather than quietly dropping the entry that did not parse.
@@ -162,6 +156,7 @@ export function createSmtpSender(
         }
       }
 
+      const { recipients, replyTo } = parsed
       const envelope = recipients.addresses.map((address) => address.address)
 
       try {
@@ -266,7 +261,7 @@ function transportConfig(options: SmtpOptions): SMTPTransportOptions {
  * any `<` in the body was parsed as markup, and every text-only message carried a
  * redundant second part.
  *
- * `replyTo` arrives already parsed by the same `parseAddresses` call as `to`, and
+ * `replyTo` arrives already parsed by the same function as `to`, and
  * the key is set only when the caller gave one, so an omitted `replyTo` leaves the
  * options object exactly as it was before the field existed.
  */

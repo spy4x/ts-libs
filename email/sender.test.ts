@@ -65,7 +65,7 @@ Deno.test("logs the replyTo addresses when the message has them", async () => {
   )
 })
 
-Deno.test("returns a failure for a CRLF in replyTo instead of logging it", async () => {
+Deno.test("returns a failure naming replyTo for a CRLF in it instead of logging", async () => {
   const sink = makeSink()
   const result = await createConsoleSender({ log: sink.log }).send({
     to: "a@example.com",
@@ -74,7 +74,9 @@ Deno.test("returns a failure for a CRLF in replyTo instead of logging it", async
     text: "Body",
   })
 
-  assertStringIncludes(failure(result).error, "control character")
+  const failed = failure(result)
+  assertStringIncludes(failed.error, "replyTo: ")
+  assertStringIncludes(failed.error, "control character")
   assertEquals(sink.lines, [])
 })
 
