@@ -288,6 +288,135 @@ describe("CacheService", () => {
       expect(result).toBe("computed")
       expect(calls).toBe(2)
     })
+
+    describe("invalidation while fn is in flight", () => {
+      /**
+       * A `fn` for `wrap` that stays pending until the test calls `release`, counting its calls.
+       * `started` resolves once `wrap` has actually called it.
+       */
+      function gatedFn(value: string) {
+        const gate = Promise.withResolvers<string>()
+        const started = Promise.withResolvers<void>()
+        const counter = { calls: 0 }
+        const fn = () => {
+          counter.calls += 1
+          started.resolve()
+          return gate.promise
+        }
+        return { fn, counter, started: started.promise, release: () => gate.resolve(value) }
+      }
+
+      it("returns the loaded value but does not cache it when the key is deleted mid-load", async () => {
+        const cache = new CacheService(new MemoryCacheStorage())
+        const load = gatedFn("before-update")
+
+        const wrapped = cache.wrap("key", load.fn, 60)
+        await load.started
+        await cache.delete("key")
+        load.release()
+
+        expect(await wrapped).toBe("before-update")
+        expect(await cache.get("key")).toBeNull()
+      })
+
+      it("starts its own fn for a wrap that begins after delete instead of joining", async () => {
+        const cache = new CacheService(new MemoryCacheStorage())
+        const stale = gatedFn("before-update")
+        const fresh = gatedFn("after-update")
+
+        const first = cache.wrap("key", stale.fn, 60)
+        await stale.started
+        await cache.delete("key")
+        const second = cache.wrap("key", fresh.fn, 60)
+        stale.release()
+        fresh.release()
+
+        expect(await first).toBe("before-update")
+        expect(await second).toBe("after-update")
+        expect(fresh.counter.calls).toBe(1)
+        expect(await cache.get("key")).toBe("after-update")
+      })
+
+      it("keeps a value set mid-load instead of overwriting it with the loaded one", async () => {
+        const cache = new CacheService(new MemoryCacheStorage())
+        const load = gatedFn("before-update")
+
+        const wrapped = cache.wrap("key", load.fn, 60)
+        await load.started
+        await cache.set("key", "written", 60)
+        load.release()
+
+        expect(await wrapped).toBe("before-update")
+        expect(await cache.get("key")).toBe("written")
+      })
+
+      it("does not cache a load that was in flight during reset, and starts a new one after", async () => {
+        const cache = new CacheService(new MemoryCacheStorage())
+        const stale = gatedFn("before-reset")
+        const fresh = gatedFn("after-reset")
+
+        const first = cache.wrap("key", stale.fn, 60)
+        await stale.started
+        await cache.reset()
+        const second = cache.wrap("key", fresh.fn, 60)
+        stale.release()
+
+        expect(await first).toBe("before-reset")
+        expect(await cache.get("key")).toBeNull()
+        fresh.release()
+        expect(await second).toBe("after-reset")
+        expect(fresh.counter.calls).toBe(1)
+      })
+
+      it("does not cache a load when the key is deleted before fn is even called", async () => {
+        const cache = new CacheService(new MemoryCacheStorage())
+        const stale = gatedFn("before-update")
+        const fresh = gatedFn("after-update")
+
+        // `wrap` is still awaiting its storage read here: `delete` lands before `fn` runs.
+        const first = cache.wrap("key", stale.fn, 60)
+        await cache.delete("key")
+        const second = cache.wrap("key", fresh.fn, 60)
+        stale.release()
+        fresh.release()
+
+        expect(await first).toBe("before-update")
+        expect(await second).toBe("after-update")
+        expect(fresh.counter.calls).toBe(1)
+        expect(await cache.get("key")).toBe("after-update")
+      })
+
+      it("drops a key's generation record once its last wrap finishes, however it ends", async () => {
+        const storage = new MemoryCacheStorage()
+        const cache = new CacheService(storage)
+        // The record map is private; reading it through a cast here keeps it off the public API.
+        const records = () =>
+          (cache as unknown as { generations: Map<string, unknown> }).generations
+
+        await cache.wrap("resolved", () => Promise.resolve("value"), 60)
+        expect(records().size).toBe(0)
+
+        await expect(cache.wrap("rejected", () => Promise.reject(new Error("boom")), 60)).rejects
+          .toThrow("boom")
+        expect(records().size).toBe(0)
+
+        const workingGet = storage.get
+        storage.get = () => Promise.reject(new Error("storage down"))
+        await expect(cache.wrap("unreadable", () => Promise.resolve("value"), 60)).rejects
+          .toThrow("storage down")
+        storage.get = workingGet
+        expect(records().size).toBe(0)
+
+        const load = gatedFn("joined")
+        const first = cache.wrap("joined", load.fn, 60)
+        const second = cache.wrap("joined", load.fn, 60)
+        await load.started
+        load.release()
+        expect(await Promise.all([first, second])).toEqual(["joined", "joined"])
+        expect(load.counter.calls).toBe(1)
+        expect(records().size).toBe(0)
+      })
+    })
   })
 })
 
