@@ -74,9 +74,10 @@ export interface NtfyClientConfig {
   topic: string
   /**
    * Bearer token. Optional: a self-hosted ntfy without auth needs none.
-   * Must be visible ASCII only (`!` to `~`); the constructor refuses a token
-   * with a space, tab, line break or non-ASCII character rather than send an
-   * altered credential.
+   * Whitespace around it is trimmed, and a token that is empty after trimming
+   * counts as none. The rest must be visible ASCII only (`!` to `~`): the
+   * constructor refuses a token with a space, tab, line break or non-ASCII
+   * character inside it rather than send an altered credential.
    */
   token?: string
 }
@@ -320,13 +321,16 @@ export class NtfyClient {
     // right for a title but would silently alter a credential: `abc\ndef`
     // would go out as `abc def` and come back as a 401 that looks like a
     // revoked token. Refuse it here instead. The message never echoes the token.
-    if (config.token && !/^[\x21-\x7E]+$/.test(config.token)) {
+    // Whitespace around the token is trimmed first, as the platform trims a
+    // header value, so a token read from a file ending in a newline still works.
+    const token = config.token?.trim() ?? ""
+    if (token !== "" && !/^[\x21-\x7E]+$/.test(token)) {
       throw new Error(
         "NtfyClient: token contains a character outside visible ASCII " +
           "(a space, tab, line break or non-ASCII character)",
       )
     }
-    this.config = { ...config, baseUrl, topic }
+    this.config = { ...config, baseUrl, topic, token: token === "" ? undefined : token }
     this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init))
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
     this.clock = options.clock ?? (() => Date.now())

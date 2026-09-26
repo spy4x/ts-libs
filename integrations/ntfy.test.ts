@@ -207,6 +207,26 @@ describe("NtfyClient construction", () => {
       .not.toThrow()
   })
 
+  it("trims whitespace around a token, as the platform does for a header value", async () => {
+    for (const token of ["tk_abc\n", "tk_abc\r\n", " tk_abc "]) {
+      const transport = fakeTransport([{ status: 200 }])
+      const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC, token }, {
+        fetcher: transport.fetcher,
+      })
+      await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
+      expect(transport.requests[0].headers.get("Authorization")).toBe("Bearer tk_abc")
+    }
+  })
+
+  it("treats a token that is only whitespace as no token", async () => {
+    const transport = fakeTransport([{ status: 200 }])
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC, token: " \n" }, {
+      fetcher: transport.fetcher,
+    })
+    await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
+    expect(transport.requests[0].headers.get("Authorization")).toBeNull()
+  })
+
   it("normalises the endpoint and encodes the topic", () => {
     const client = new NtfyClient({ baseUrl: `${BASE_URL}/`, topic: "my topic" })
     expect(client.endpoint).toBe(`${BASE_URL}/my%20topic`)
