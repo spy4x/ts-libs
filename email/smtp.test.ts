@@ -386,7 +386,7 @@ Deno.test("refuses an empty replyTo list rather than dropping the header", async
   const { sender, recorded } = makeSender()
   const failed = failure(await sender.send({ ...MESSAGE, replyTo: [] }))
 
-  assertStringIncludes(failed.error, "replyTo")
+  assertStringIncludes(failed.error, "replyTo is an empty list")
   assertEquals(recorded.messages.length, 0)
 })
 
