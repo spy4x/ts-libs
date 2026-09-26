@@ -476,4 +476,29 @@ describe("ThrottledJsonSaver", () => {
     await drain()
     expect(h.saved()).toEqual({ items: 5 })
   })
+
+  it("rethrows an error that onFlushError throws instead of swallowing it", async () => {
+    const uncaught: unknown[] = []
+    const listener = (event: ErrorEvent) => {
+      event.preventDefault()
+      uncaught.push(event.error)
+    }
+    globalThis.addEventListener("error", listener)
+    try {
+      const h = gatedHarness({
+        onFlushError: () => {
+          throw new Error("handler broke")
+        },
+      })
+      h.fs.failWrites.add("/s.json.1.0.tmp")
+      h.mark(1)
+      await waitForCount(h.gates, 1)
+      h.gates.shift()?.()
+      await drain()
+      expect(uncaught.length).toBe(1)
+      expect((uncaught[0] as Error).message).toBe("handler broke")
+    } finally {
+      globalThis.removeEventListener("error", listener)
+    }
+  })
 })

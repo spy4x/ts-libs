@@ -49,7 +49,10 @@ export interface ThrottledJsonSaverOptions {
   flushBatchSize?: number
   /** Indentation for `JSON.stringify`. */
   space?: number
-  /** Called when a timer-driven flush rejects, so it cannot become an unhandled rejection. */
+  /**
+   * Called when a timer-driven flush rejects, so it cannot become an unhandled rejection. An error
+   * this handler throws is rethrown as an uncaught error.
+   */
   onFlushError?: (error: unknown) => void
 }
 
@@ -188,7 +191,21 @@ export class ThrottledJsonSaver {
       this.#followUp = true
       return
     }
-    this.#track(this.#write().catch((error) => this.#onFlushError(error)))
+    this.#track(this.#write().catch((error) => this.#reportFlushError(error)))
+  }
+
+  /**
+   * Hand a detached write's failure to `onFlushError`. A handler that throws is rethrown outside the
+   * write chain, so it surfaces as an uncaught error instead of disappearing into it.
+   */
+  #reportFlushError(error: unknown): void {
+    try {
+      this.#onFlushError(error)
+    } catch (handlerError) {
+      queueMicrotask(() => {
+        throw handlerError
+      })
+    }
   }
 
   /** Record `write` as the one in flight, and start the follow-up a mark asked for once it ends. */
