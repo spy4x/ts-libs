@@ -118,9 +118,56 @@ function normalizeTtlSeconds(ttlSec: number): number {
   return Math.ceil(ttlSec)
 }
 
+/** One key's invalidation count, and how many `wrap` calls for it are running. */
+interface WrapGeneration {
+  generation: number
+  active: number
+}
+
 export class CacheService implements ICacheService {
-  /** `fn()` calls in flight, keyed by cache key — what makes concurrent `wrap` calls coalesce. */
+  /**
+   * `fn()` calls in flight, keyed by cache key — what makes concurrent `wrap` calls coalesce. Only
+   * ever holds a call started under its key's current generation: `delete`, `set` and `reset`
+   * remove the entry, and a `wrap` whose generation is already stale never adds one.
+   */
   private pending = new Map<string, Promise<unknown>>()
+
+  /**
+   * Each key's generation, bumped by `delete`, `set` and `reset`, for keys with at least one `wrap`
+   * running. A `wrap` writes its result only if the generation it started under is still current.
+   * An entry is removed when its last `wrap` finishes, so the map does not grow with every key the
+   * cache has ever seen.
+   */
+  private generations = new Map<string, WrapGeneration>()
+
+  /** Register a running `wrap` for `key` and return the key's generation record. */
+  private acquire(key: string): WrapGeneration {
+    const state = this.generations.get(key) ?? { generation: 0, active: 0 }
+    state.active += 1
+    this.generations.set(key, state)
+    return state
+  }
+
+  /** Unregister a running `wrap` for `key`; the last one out drops the record. */
+  private release(key: string, state: WrapGeneration): void {
+    state.active -= 1
+    if (state.active === 0) {
+      this.generations.delete(key)
+    }
+  }
+
+  /**
+   * Make every `wrap` running for `key` stale: its result is not written to storage, and the next
+   * `wrap` starts its own `fn()` instead of joining it. Runs synchronously, before any storage call
+   * is awaited, so a `wrap` that begins after `delete`/`set` was called never joins the older call.
+   */
+  private invalidate(key: string): void {
+    const state = this.generations.get(key)
+    if (state) {
+      state.generation += 1
+    }
+    this.pending.delete(key)
+  }
 
   constructor(private storage: ICacheStorage, private options: CacheServiceOptions = {}) {}
 
@@ -141,10 +188,12 @@ export class CacheService implements ICacheService {
    * surprising for a caller that reasonably chains `.catch()` on every `ICacheService` call.
    */
   async set<T>(key: string, value: T, ttlSec: number): Promise<void> {
+    this.invalidate(key)
     await this.storage.set(key, JSON.stringify(value), normalizeTtlSeconds(ttlSec))
   }
 
   async delete(key: string): Promise<void> {
+    this.invalidate(key)
     await this.storage.del(key)
   }
 
@@ -162,6 +211,13 @@ export class CacheService implements ICacheService {
    * cached at all, and for how long, is decided by the first caller's values, not the joining
    * caller's.
    *
+   * A `delete`, `set` or `reset` that runs while `fn()` is in flight wins: the in-flight call still
+   * returns its value to every caller already waiting on it, but does not write that value to
+   * storage, and a `wrap` that starts after the invalidation calls its own `fn()` instead of joining
+   * the older one. Without this, the cache-aside pattern — write the row, then `delete` the key —
+   * would lose to a slow read already in flight, which would cache the value it loaded before the
+   * write and serve it for the whole TTL.
+   *
    * A cache *hit* is storage holding a value at all, not the decoded value being truthy: a key
    * explicitly cached as `null` (or `0`, `""`, `false`) is a hit and is returned as-is, without
    * calling `fn()` again.
@@ -171,6 +227,28 @@ export class CacheService implements ICacheService {
     fn: () => Promise<T>,
     ttlSec: number,
     options: CacheWrapOptions = {},
+  ): Promise<T> {
+    const state = this.acquire(key)
+    const generation = state.generation
+    try {
+      return await this.wrapUnderGeneration(key, fn, ttlSec, options, state, generation)
+    } finally {
+      this.release(key, state)
+    }
+  }
+
+  /**
+   * The body of {@link CacheService.wrap}, run while `state` is registered for `key`. `generation`
+   * is the key's generation when the `wrap` began — before its first `await`, so an invalidation
+   * during the initial storage read already counts.
+   */
+  private async wrapUnderGeneration<T>(
+    key: string,
+    fn: () => Promise<T>,
+    ttlSec: number,
+    options: CacheWrapOptions,
+    state: WrapGeneration,
+    generation: number,
   ): Promise<T> {
     const raw = await this.storage.get(key)
     if (raw !== null) {
@@ -193,13 +271,20 @@ export class CacheService implements ICacheService {
     // cleaning it up in a `.finally()` chained onto the already-created promise, avoids the race:
     // a promise reaction always runs as a later microtask, never synchronously, so `pending.set`
     // below is guaranteed to run before this cleanup does, however `fn` fails.
-    const call = (async () => {
+    const load = async (): Promise<T> => {
       const value = await fn()
-      if (value || options.shouldSaveFalsy) {
-        await this.set(key, value, ttlSec)
+      // Writes storage directly, not through `this.set`, which would invalidate this very call.
+      const current = state.generation === generation
+      if (current && (value || options.shouldSaveFalsy)) {
+        await this.storage.set(key, JSON.stringify(value), normalizeTtlSeconds(ttlSec))
       }
       return value
-    })()
+    }
+    const call = load()
+    if (state.generation !== generation) {
+      // Invalidated during the storage read above: run `fn()` for this caller alone, uncached.
+      return call
+    }
     this.pending.set(key, call)
     call.finally(() => {
       // Only ever this call's own entry: nothing else may have replaced it by the time this runs.
@@ -212,6 +297,10 @@ export class CacheService implements ICacheService {
   }
 
   async reset(): Promise<void> {
+    for (const state of this.generations.values()) {
+      state.generation += 1
+    }
+    this.pending.clear()
     await this.storage.reset()
   }
 }
