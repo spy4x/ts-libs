@@ -322,6 +322,37 @@ describe("PersistentCursorStore", () => {
     expect(storage.keys()).toEqual([])
   })
 
+  it("hands out a tracker that already knows the stored cursor", () => {
+    const storage = new MemoryKeyValueStore()
+    new PersistentCursorStore({ storage }).advanceTo("group-1", 42)
+
+    const tracker = new PersistentCursorStore({ storage }).tracker
+
+    expect(tracker.cursorFor("group-1")).toBe(42)
+  })
+
+  it("decides through a fresh store's tracker as the store itself would", () => {
+    const storage = new MemoryKeyValueStore()
+    new PersistentCursorStore({ storage }).advanceTo("group-1", 42)
+    const change = { groupId: "group-1", sequence: 43 }
+
+    const viaTracker = new PersistentCursorStore({ storage }).tracker.apply(change)
+    const viaStore = new PersistentCursorStore({ storage }).apply(change)
+
+    expect(viaTracker.status).toBe(ApplyStatus.Applied)
+    expect(viaTracker).toEqual(viaStore)
+  })
+
+  it("keeps what a caller recorded on the tracker when a store member runs next", () => {
+    const storage = new MemoryKeyValueStore()
+    new PersistentCursorStore({ storage }).advanceTo("group-1", 5)
+    const store = new PersistentCursorStore({ storage })
+
+    store.tracker.advanceTo("group-1", 10)
+
+    expect(store.cursorFor("group-1")).toBe(10)
+  })
+
   it("separates two clients by namespace in one origin", () => {
     const storage = new MemoryKeyValueStore()
     const first = new PersistentCursorStore({ storage, namespace: "client-a" })

@@ -224,8 +224,15 @@ export class PersistentCursorStore {
     this.#clock = options.clock
   }
 
-  /** The arithmetic, for callers that only need the decision and not the write. */
+  /**
+   * The arithmetic, for callers that only need the decision and not the write.
+   *
+   * Reads durable state first, like every other member: a tracker handed out before the load would
+   * answer {@link SEQUENCE_START} for a stored cursor, and the late load would then overwrite what
+   * the caller recorded on it meanwhile. A decision made here is not persisted.
+   */
   get tracker(): CursorTracker {
+    this.#ensureLoaded()
     return this.#tracker
   }
 
