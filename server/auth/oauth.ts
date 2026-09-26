@@ -15,8 +15,9 @@
  *   every exit, including a token or profile request that throws.
  * - `disconnect` deletes one key by id, and only when it is this provider's key of this user.
  *
- * Pending flows live in memory inside the object {@link createOAuthSignIn} returns, so a callback
- * must reach the same process that built the authorization URL.
+ * Pending flows live in an {@link OAuthFlowStore}. The default keeps them in memory inside the
+ * object {@link createOAuthSignIn} returns, so a callback must reach the same process that built
+ * the authorization URL; pass {@link OAuthSignInOptions.flows} to share them between processes.
  *
  * @module
  */
@@ -30,7 +31,25 @@ import { validate } from "@spy4x/validation"
 
 import { isStoreText, MAX_SUBJECT_LENGTH } from "./input.ts"
 import { AuthConflictError, type AuthKey, type AuthUser, normalizeEmail } from "./model.ts"
+import {
+  createMemoryOAuthFlowStore,
+  type OAuthFlowStore,
+  type OAuthTakenFlow,
+} from "./oauth-flows.ts"
 import type { ProviderDeps, SignInResult } from "./provider.ts"
+
+export {
+  createKvOAuthFlowStore,
+  createMemoryOAuthFlowStore,
+  DEFAULT_OAUTH_FLOW_KEY_PREFIX,
+  type KvOAuthFlowStoreOptions,
+  MAX_PENDING_OAUTH_FLOWS,
+  type MemoryOAuthFlowStoreOptions,
+  type OAuthFlowKv,
+  type OAuthFlowStore,
+  type OAuthPendingFlow,
+  type OAuthTakenFlow,
+} from "./oauth-flows.ts"
 
 /** What a provider says about the person who signed in, read from its user-info response. */
 export interface OAuthProfile {
@@ -85,6 +104,14 @@ export interface OAuthSignInOptions extends ProviderDeps {
   timeoutMs?: number
   /** Sends the requests to the provider. Defaults to the global `fetch`. */
   fetch?: (request: Request) => Promise<Response>
+  /**
+   * Where started flows wait for their callback (#150). Defaults to
+   * `createMemoryOAuthFlowStore({ clock })`: in this process, at most
+   * {@link MAX_PENDING_OAUTH_FLOWS}. Pass `createKvOAuthFlowStore` on a shared Redis when more than
+   * one process serves the callback, or when a flood of started flows must not push out others.
+   * Instances that share a store must share the provider config too.
+   */
+  flows?: OAuthFlowStore
 }
 
 /** A started flow: send the browser to `url`, and keep `state` in an HttpOnly cookie until the callback. */
@@ -167,9 +194,6 @@ export interface OAuthSignIn {
   disconnect(userId: number, keyId: number): Promise<boolean>
 }
 
-/** Most flows kept pending at once; the oldest is dropped beyond this. */
-export const MAX_PENDING_OAUTH_FLOWS = 10_000
-
 const DEFAULT_FLOW_TTL_SECONDS = 600
 const DEFAULT_TIMEOUT_MS = 10_000
 /** 256 bits each; base64url renders them as 43 characters, the PKCE verifier's minimum length. */
@@ -183,11 +207,6 @@ const tokenResponse = type({
   access_token: "0 < string <= 4096",
   "token_type?": "string",
 })
-
-interface PendingFlow {
-  verifier: string
-  expiresAt: number
-}
 
 /**
  * Creates sign-in with one provider. Validates the configuration once, here.
@@ -213,23 +232,13 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
   const send = options.fetch ?? ((request: Request) => fetch(request))
   const clock = options.clock ?? systemClock
   const method = `oauth:${provider.id}`
-  /** state → flow, oldest first. */
-  const flows = new Map<string, PendingFlow>()
-
-  function dropStaleFlows(now: number): void {
-    for (const [state, flow] of flows) {
-      if (flow.expiresAt > now && flows.size < MAX_PENDING_OAUTH_FLOWS) break
-      flows.delete(state)
-    }
-  }
+  const flows = options.flows ?? createMemoryOAuthFlowStore({ clock })
 
   async function authorizationUrl(): Promise<OAuthAuthorization> {
-    const now = clock.now()
-    dropStaleFlows(now)
     const state = randomBase64Url(STATE_BYTES)
     const verifier = randomBase64Url(VERIFIER_BYTES)
-    const expiresAt = now + ttlMs
-    flows.set(state, { verifier, expiresAt })
+    const expiresAt = clock.now() + ttlMs
+    await flows.put(state, { verifier }, new Date(expiresAt))
 
     const url = new URL(authorizationEndpoint)
     for (const [name, value] of Object.entries(provider.authorizationParams ?? {})) {
@@ -245,13 +254,17 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
     return { url, state, expiresAt: new Date(expiresAt) }
   }
 
-  /** Removes the flow for `state` and returns it when it is live and the browser holds the same state. */
-  async function takeFlow(state: string, browserState: unknown): Promise<PendingFlow> {
-    const flow = flows.get(state)
-    flows.delete(state)
+  /**
+   * Removes the flow for `state` and returns it when it is live and the browser holds the same state.
+   * The store's `take` deletes it first, so it is gone on every exit.
+   */
+  async function takeFlow(state: string, browserState: unknown): Promise<OAuthTakenFlow> {
+    const flow = await flows.take(state)
     if (!flow || typeof browserState !== "string") throw new OAuthSignInError("invalid-state")
     const same = await constantTimeEquals(await sha256Hex(state), await sha256Hex(browserState))
-    if (!same || flow.expiresAt <= clock.now()) throw new OAuthSignInError("invalid-state")
+    // Checked here too, so a store that ignores `expiresAt` still cannot complete a stale flow.
+    const live = flow.expiresAt instanceof Date && flow.expiresAt.getTime() > clock.now()
+    if (!same || !live) throw new OAuthSignInError("invalid-state")
     return flow
   }
 

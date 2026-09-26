@@ -11,9 +11,11 @@ import { createFakeStore } from "../sign-in/fake-store.test.ts"
 import { MemoryAuthStore } from "./memory-store.ts"
 import type { AuthSessionRecord, AuthUser } from "./model.ts"
 import {
+  createMemoryOAuthFlowStore,
   createOAuthSignIn,
   MAX_PENDING_OAUTH_FLOWS,
   type OAuthFailure,
+  type OAuthFlowStore,
   OAuthOutcome,
   type OAuthSignIn,
   OAuthSignInError,
@@ -164,6 +166,11 @@ describe("createOAuthSignIn: state", () => {
     for (const browserState of [undefined, null]) {
       expect(await failure(oauth.handleCallback({ query, browserState }))).toBe("invalid-state")
     }
+    // The refused callback consumed the flow: the right state no longer completes it.
+    expect(await failure(oauth.handleCallback({ query, browserState: started.state }))).toBe(
+      "invalid-state",
+    )
+    expect(provider.tokenStatuses).toEqual([])
   })
 
   it("refuses a state it never issued", async () => {
@@ -232,6 +239,62 @@ describe("createOAuthSignIn: state", () => {
     ).toBe("invalid-state")
     const result = await oauth.handleCallback({ query: secondQuery, browserState: second.state })
     expect(result.key.subject).toBe("sub-ann")
+  })
+})
+
+describe("createOAuthSignIn: a shared flow store", () => {
+  it("completes a callback on a second instance that shares the flow store, once", async () => {
+    const clock = fixedClock()
+    const flows = createMemoryOAuthFlowStore({ clock })
+    const fixture = memoryFixture()
+    const provider = createFakeProvider()
+    const first = createOAuthSignIn({ ...fakeOptions(fixture, provider), clock, flows })
+    const second = createOAuthSignIn({ ...fakeOptions(fixture, provider), clock, flows })
+
+    const started = await first.authorizationUrl()
+    const query = await provider.approve(started.url, ANN)
+    const result = await second.handleCallback({ query, browserState: started.state })
+    expect(result.key.subject).toBe("sub-ann")
+    expect(await failure(first.handleCallback({ query, browserState: started.state }))).toBe(
+      "invalid-state",
+    )
+  })
+
+  it("refuses a flow past its expiry even when the store still returns it", async () => {
+    // A third-party store that never expires anything: take returns whatever was put.
+    const kept = new Map<string, { verifier: string; expiresAt: Date }>()
+    const flows: OAuthFlowStore = {
+      put(state, flow, expiresAt) {
+        kept.set(state, { verifier: flow.verifier, expiresAt })
+        return Promise.resolve()
+      },
+      take(state) {
+        const flow = kept.get(state) ?? null
+        kept.delete(state)
+        return Promise.resolve(flow)
+      },
+    }
+    const { oauth, provider, clock } = setup({ flows })
+    const stale = await oauth.authorizationUrl()
+    const staleQuery = await provider.approve(stale.url, ANN)
+    const fresh = await oauth.authorizationUrl()
+    const freshQuery = await provider.approve(fresh.url, ANN)
+    clock.advance(600_000 - 1)
+    await oauth.handleCallback({ query: freshQuery, browserState: fresh.state })
+    clock.advance(1)
+    expect(await failure(oauth.handleCallback({ query: staleQuery, browserState: stale.state })))
+      .toBe("invalid-state")
+    expect(provider.tokenStatuses).toEqual([200])
+  })
+
+  it("does not share flows between instances that each keep their own", async () => {
+    const { oauth: first, provider, fixture, clock } = setup()
+    const second = createOAuthSignIn({ ...fakeOptions(fixture, provider), clock })
+    const started = await first.authorizationUrl()
+    const query = await provider.approve(started.url, ANN)
+    expect(await failure(second.handleCallback({ query, browserState: started.state }))).toBe(
+      "invalid-state",
+    )
   })
 })
 
