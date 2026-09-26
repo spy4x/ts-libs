@@ -425,6 +425,59 @@ describe("MemoryRateLimiter", () => {
     })
   })
 
+  it("admits a new key one window after the limiter was emptied and filled again", () => {
+    const { clock, advance } = fakeClock()
+    const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 5, maxBuckets: 2, clock })
+    limiter.check("a")
+    limiter.check("b")
+    advance(2000)
+    // Both buckets are idle: the first new key's pass empties the limiter, and it fills again.
+    assertEquals(limiter.check("c").allowed, true)
+    assertEquals(limiter.check("d").allowed, true)
+    assertEquals(limiter.size, 2)
+    advance(1000)
+    assertEquals(limiter.check("e").allowed, true)
+    // "c" and "d" were exactly one window old, so the pass dropped both.
+    assertEquals(limiter.size, 1)
+  })
+
+  it("reports the finite wait until a held bucket falls idle when it refuses after a refill", () => {
+    const { clock, advance } = fakeClock()
+    const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 5, maxBuckets: 2, clock })
+    limiter.check("a")
+    limiter.check("b")
+    advance(2000)
+    limiter.check("c")
+    limiter.check("d")
+    advance(300)
+    assertEquals(limiter.check("e"), {
+      allowed: false,
+      remaining: 0,
+      retryAfterMs: 700,
+      resetAfterMs: 700,
+      limit: 5,
+    })
+  })
+
+  it("walks the buckets once per idle-time bound, not once per refused new key", () => {
+    const { clock, advance } = fakeClock()
+    const limiter = new MemoryRateLimiter({ windowMs: 60_000, limit: 5, maxBuckets: 10, clock })
+    for (let i = 0; i < 10; i++) limiter.check(`held-${i}`)
+    // Count every walk of the private bucket map: `for...of` calls its iterator.
+    const buckets = (limiter as unknown as { buckets: Map<string, unknown> }).buckets
+    let walks = 0
+    const entries = buckets[Symbol.iterator].bind(buckets)
+    buckets[Symbol.iterator] = () => {
+      walks += 1
+      return entries()
+    }
+    for (let i = 0; i < 100; i++) {
+      assertEquals(limiter.check(`new-${i}`).allowed, false)
+      advance(10)
+    }
+    assertEquals(walks, 1)
+  })
+
   it("refuses a maxBuckets that is not a whole number of at least one", () => {
     for (const maxBuckets of [0, -1, 1.5, Number.NaN, Number.NEGATIVE_INFINITY]) {
       let message = ""

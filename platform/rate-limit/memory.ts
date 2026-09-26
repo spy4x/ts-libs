@@ -171,7 +171,11 @@ export class MemoryRateLimiter {
   private readonly idleMs: number
   private readonly onSweep: ((removed: number) => void) | undefined
   private readonly maxBuckets: number
-  /** While the limiter is full, the earliest time a held bucket can fall idle. */
+  /**
+   * Set only while the limiter is full after a clean-up pass: the earliest time one of the buckets
+   * it kept can fall idle. `-Infinity` whenever the last pass made room, so the next new key at the
+   * cap runs a fresh pass.
+   */
   private fullUntil = Number.NEGATIVE_INFINITY
   private lastSweepAt: number
   private checksSinceSweep = 0
@@ -255,6 +259,7 @@ export class MemoryRateLimiter {
   /** Drop every bucket. */
   clear(): void {
     this.buckets.clear()
+    this.fullUntil = Number.NEGATIVE_INFINITY
     this.checksSinceSweep = 0
     this.lastSweepAt = this.clock()
   }
@@ -299,10 +304,18 @@ export class MemoryRateLimiter {
         if (newest === undefined || newest <= cutoff) this.buckets.delete(key)
         else freeAt = Math.min(freeAt, newest + this.windowMs)
       }
+      if (this.buckets.size < this.maxBuckets) {
+        // Room was made. Whatever `freeAt` says about the survivors (it is `Infinity` when none
+        // survived) stops being a bound once new buckets fill the space, so it is not kept.
+        this.fullUntil = Number.NEGATIVE_INFINITY
+        return undefined
+      }
+      // Still full, so at least one bucket survived and `freeAt` is finite.
       this.fullUntil = freeAt
-      if (this.buckets.size < this.maxBuckets) return undefined
     }
-    const retryAfterMs = Math.max(0, this.fullUntil - now)
+    // The guard is belt and braces: a non-finite wait would reach `Retry-After` as "Infinity".
+    const wait = this.fullUntil - now
+    const retryAfterMs = Number.isFinite(wait) ? Math.max(0, wait) : this.windowMs
     return {
       allowed: false,
       remaining: 0,
