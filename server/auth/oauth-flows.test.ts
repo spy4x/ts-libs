@@ -68,6 +68,7 @@ describe("createMemoryOAuthFlowStore", () => {
 
   it("keeps MAX_PENDING_OAUTH_FLOWS flows by default", async () => {
     const clock = fixedClock()
+    expect(MAX_PENDING_OAUTH_FLOWS).toBe(10_000)
     const store = createMemoryOAuthFlowStore({ clock })
     const expiresAt = new Date(clock.now() + 10 * MINUTE)
     for (let i = 0; i < MAX_PENDING_OAUTH_FLOWS; i++) {
@@ -86,6 +87,9 @@ describe("createMemoryOAuthFlowStore", () => {
     }
   })
 })
+
+/** 2100-01-01T00:00:00Z: a value with this expiry is refused for its shape, not for its age. */
+const FAR_FUTURE = Date.UTC(2100, 0, 1)
 
 describe("createKvOAuthFlowStore", () => {
   it("writes under the prefix with the lifetime rounded up to a whole second", async () => {
@@ -113,7 +117,7 @@ describe("createKvOAuthFlowStore", () => {
       "not json",
       "null",
       `"text"`,
-      `{"verifier":1,"expiresAt":1}`,
+      `{"verifier":1,"expiresAt":${FAR_FUTURE}}`,
       `{"verifier":"v"}`,
     ]
     for (const [i, value] of foreign.entries()) {
