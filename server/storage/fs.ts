@@ -50,6 +50,12 @@ export async function ensureFileDirectory(filePath: string): Promise<void> {
  * The whole write path past the filesystem call is one function used by both
  * `ObjectFs` branches, so the byte count, the `write` flags and the
  * closer-on-error path are exercised without needing `--allow-write`.
+ *
+ * Every buffer and every streamed chunk is written in full: a handle may write
+ * only part of what it is given (a nearly full disk, or a buffer over the
+ * kernel's per-call cap), so `writeFully` keeps writing the remainder. A write
+ * that makes no progress rejects with `Deno.errors.WriteZero` instead of
+ * looping forever or reporting bytes that never landed.
  */
 export async function writeToFile(
   path: string,
@@ -63,7 +69,7 @@ export async function writeToFile(
     // same tolerance path as the streamed branch, and it is pinned by
     // `closes the handle and rethrows when a whole-buffer write fails`.
     try {
-      await file.write(data)
+      await writeFully(file, data)
     } catch (error) {
       closeQuietly(file)
       throw error
@@ -76,8 +82,8 @@ export async function writeToFile(
     await data.pipeTo(
       new WritableStream<Uint8Array>({
         async write(chunk) {
+          await writeFully(file, chunk)
           total += chunk.byteLength
-          await file.write(chunk)
         },
       }),
     )
@@ -87,6 +93,24 @@ export async function writeToFile(
   }
   closeQuietly(file)
   return total
+}
+
+/**
+ * Write every byte of `data`, advancing by the count each `write` returns.
+ * `@std/io`'s `writeAll` is not in the import map, so this is the small loop;
+ * unlike a bare loop it also rejects a `write` that returns 0.
+ */
+async function writeFully(file: WritableFileHandle, data: Uint8Array): Promise<void> {
+  let offset = 0
+  while (offset < data.byteLength) {
+    const written = await file.write(data.subarray(offset))
+    if (written <= 0) {
+      throw new Deno.errors.WriteZero(
+        `write made no progress after ${offset} of ${data.byteLength} bytes`,
+      )
+    }
+    offset += written
+  }
 }
 
 /** Minimal file handle `writeToFile` needs. A `Deno.FsFile` satisfies it. */
