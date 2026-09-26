@@ -30,7 +30,7 @@ describe("honeypotFilled", () => {
 })
 
 describe("HONEYPOT_FIELD_NAME", () => {
-  it("is not a name browser autofill fills in", () => {
+  it("stays hp-field, a name browser autofill does not reach for", () => {
     expect(HONEYPOT_FIELD_NAME).toBe("hp-field")
   })
 })
