@@ -17,7 +17,9 @@
  * - **Password sign-up does not prove the address.** The key starts unproven. Sign-up is refused
  *   when another user owns the address, and a completed reset proves it, taking it away from
  *   whoever registered it first. To keep the account, the signed-in user proves the address with
- *   `proveAddress` of the email-code provider (`@spy4x/server/auth/email-code`).
+ *   `requestVerification` and `completeVerification` (#149), or with `proveAddress` of the
+ *   email-code provider (`@spy4x/server/auth/email-code`). Either makes the user the address's
+ *   owner, so a later reset keeps the same user.
  * - **Create before revoke.** A password change or reset stores the new secret and creates the new
  *   session before it signs out the user's other sessions, so a failure part-way never leaves the
  *   person signed out with the old password still working.
@@ -46,6 +48,9 @@ export const PASSWORD_METHOD = "password"
 
 /** The challenge purpose of a password-reset code. */
 export const PASSWORD_RESET_PURPOSE = "password-reset"
+
+/** The challenge purpose of an address-verification code (#149). */
+export const PASSWORD_VERIFY_PURPOSE = "password-verify"
 
 /** Shortest new password accepted by default, in characters (code points). */
 export const DEFAULT_MIN_PASSWORD_LENGTH = 8
@@ -79,16 +84,20 @@ export type PasswordSignInFailure =
   | "email-taken"
   /** Sign-in and password change: wrong password, no such account, or a deleted user. */
   | "invalid-credentials"
-  /** Reset: the code is wrong, expired, already used, or was never issued. */
+  /** Reset and verification: the code is wrong, expired, already used, or was never issued. */
   | "invalid-code"
-  /** Reset: this code has used up its guesses. Ask for a new one after it expires. */
+  /** Reset and verification: this code has used up its guesses. Ask for a new one after it expires. */
   | "locked-out"
   /**
    * Reset: the code matched, but no password account uses this address. Only the person who
-   * received the code learns this.
+   * received the code learns this. Verification: the user is missing or deleted, or has no password
+   * key with an address; checked before a guess is spent.
    */
   | "no-account"
-  /** Reset: another write for this address committed at the same moment. Ask for a new code. */
+  /**
+   * Reset: another write for this address committed at the same moment. Ask for a new code.
+   * Verification: the key went, or another user took the address, between the check and the proof.
+   */
   | "conflict"
 
 /**
@@ -179,6 +188,29 @@ export interface IssuedReset {
   expiresAt: Date
 }
 
+/** Input of {@link PasswordSignIn.requestVerification}. */
+export interface RequestVerificationInput {
+  /** The signed-in user, from a validated session. Never from the request body. */
+  userId: number
+}
+
+/** Input of {@link PasswordSignIn.completeVerification}. */
+export interface CompleteVerificationInput {
+  /** The signed-in user, from a validated session. Never from the request body. */
+  userId: number
+  /** The code {@link PasswordSignIn.requestVerification} returned, as the person entered it. */
+  code: string
+}
+
+/** A verification code for the app to deliver to `email`. */
+export interface IssuedVerification {
+  /** The address of the user's password key, which the code proves. Send the code here. */
+  email: string
+  /** The raw code. Only its hash is stored; send it and forget it. */
+  code: string
+  expiresAt: Date
+}
+
 /** The password provider. Every refusal is a {@link PasswordSignInError}. */
 export interface PasswordSignIn {
   /**
@@ -219,13 +251,50 @@ export interface PasswordSignIn {
    * when nobody owns the address yet. The returned `user` can therefore differ from the one that
    * held the key. The provider cannot tell a squatter from a person who signed up and never proved
    * the address, so both lose the unproven account this way. To keep it, prove the address after
-   * sign-up with `proveAddress` of the email-code provider (`@spy4x/server/auth/email-code`).
+   * sign-up with {@link PasswordSignIn.requestVerification} and
+   * {@link PasswordSignIn.completeVerification}, or with `proveAddress` of the email-code provider
+   * (`@spy4x/server/auth/email-code`).
    *
    * @throws {PasswordSignInError} `invalid-email`, `invalid-password`, `invalid-code`, `locked-out`,
    *     `no-account`, `conflict`.
    * @throws {Error} When {@link PasswordSignInOptions.normalizeSubject} is set.
    */
   completeReset(input: CompleteResetInput): Promise<SignInResult>
+  /**
+   * Issues a code that proves the address of the signed-in user's password key, for the app to
+   * deliver to the returned `email`. Proving it makes the user the address's owner, so a later
+   * reset keeps the same user instead of moving the password to a new one.
+   *
+   * The code is bound to this user and this address: it works only in
+   * {@link PasswordSignIn.completeVerification} for the same `userId`, never as a reset code. It
+   * uses the reset settings: {@link PasswordSignInOptions.resetTtlMinutes} and
+   * {@link PasswordSignInOptions.maxResetAttempts}. Asking again replaces the code and keeps its
+   * guess counter, so asking never buys more guesses. Rate-limit the route that calls this: every
+   * call sends mail.
+   *
+   * Takes the user's unproven password key with the lowest id. Returns null, and issues nothing,
+   * when every password key of the user is already proven.
+   *
+   * @throws {PasswordSignInError} `no-account` when the user is missing or deleted, or has no
+   *     password key with an address.
+   * @throws {Error} When {@link PasswordSignInOptions.normalizeSubject} is set.
+   */
+  requestVerification(input: RequestVerificationInput): Promise<IssuedVerification | null>
+  /**
+   * Checks the code (guess-counted by the store) and, on a match, proves the password key's address
+   * with `AuthStore.proveKey`: the key is marked proven, the user becomes the address's owner, and
+   * every other user's unproven claim to it is deleted. The user keeps their id, keys, password and
+   * sessions. A key that is already proven stays as it is, and the code is still spent.
+   *
+   * The user and key are checked before a guess is spent.
+   *
+   * @returns The proven password key. It carries `secret` (the password hash): keep it on the
+   *     server, never in a response body.
+   * @throws {PasswordSignInError} `no-account` (checked first), `invalid-code`, `locked-out`,
+   *     `conflict`.
+   * @throws {Error} When {@link PasswordSignInOptions.normalizeSubject} is set.
+   */
+  completeVerification(input: CompleteVerificationInput): Promise<AuthKey>
 }
 
 /**
@@ -343,6 +412,29 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
   function passwordKey(email: string, secret: string, provenAt: Date | null): NewAuthKey {
     // The subject is an address, so `email` carries it too: eviction matches on `email`.
     return { method: PASSWORD_METHOD, subject: email, email, secret, provenAt }
+  }
+
+  /**
+   * The password key a verification is for: the user's unproven address key with the lowest id, or,
+   * when all are proven, the lowest-id proven one. Null when the user is missing or deleted or has
+   * no password key with an address.
+   */
+  async function verificationKey(userId: unknown): Promise<AuthKey | null> {
+    if (typeof userId !== "number") return null
+    const user = await liveUser(userId)
+    if (!user) return null
+    const keys = (await store.listKeys(user.id))
+      .filter((key) => key.method === PASSWORD_METHOD && key.email !== null)
+      .sort((a, b) => a.id - b.id)
+    return keys.find((key) => key.provenAt === null) ?? keys[0] ?? null
+  }
+
+  /**
+   * The stored form of a verification code. Binding the user id and the address means a code
+   * issued for one user never proves an address for another, and never matches a reset.
+   */
+  function verificationHash(userId: number, email: string, code: string): Promise<string> {
+    return sha256Hex(`${PASSWORD_VERIFY_PURPOSE}\n${userId}\n${email}\n${code}`)
   }
 
   /** A new, unproven sign-up key: an address key by default, an address-free one otherwise. */
@@ -465,6 +557,52 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
         return await replaceSessions(created.user, created.key)
       } catch (error) {
         if (error instanceof AuthConflictError) throw new PasswordSignInError("conflict")
+        throw error
+      }
+    },
+
+    async requestVerification({ userId }) {
+      requireAddressSubjects("requestVerification")
+      const key = await verificationKey(userId)
+      if (!key || key.email === null) throw new PasswordSignInError("no-account")
+      if (key.provenAt !== null) return null
+      const code = randomBase64Url(RESET_CODE_BYTES)
+      const issuedAt = now()
+      const expiresAt = new Date(issuedAt.getTime() + ttlMs)
+      await store.issueChallenge({
+        purpose: PASSWORD_VERIFY_PURPOSE,
+        subject: key.email,
+        secretHash: await verificationHash(key.userId, key.email, code),
+        expiresAt,
+        now: issuedAt,
+      })
+      return { email: key.email, code, expiresAt }
+    },
+
+    async completeVerification({ userId, code }) {
+      requireAddressSubjects("completeVerification")
+      const key = await verificationKey(userId)
+      if (!key || key.email === null) throw new PasswordSignInError("no-account")
+      if (typeof code !== "string" || code.length === 0) {
+        throw new PasswordSignInError("invalid-code")
+      }
+      const at = now()
+      const outcome = await store.attemptChallenge({
+        purpose: PASSWORD_VERIFY_PURPOSE,
+        subject: key.email,
+        secretHash: await verificationHash(key.userId, key.email, code),
+        maxAttempts,
+        now: at,
+      })
+      if (outcome === ChallengeOutcome.LockedOut) throw new PasswordSignInError("locked-out")
+      if (outcome !== ChallengeOutcome.Matched) throw new PasswordSignInError("invalid-code")
+      try {
+        return await store.proveKey(key.id, at)
+      } catch (error) {
+        // Another user proved the address, or the key was deleted, since it was looked up.
+        if (error instanceof AuthConflictError || error instanceof RangeError) {
+          throw new PasswordSignInError("conflict")
+        }
         throw error
       }
     },
