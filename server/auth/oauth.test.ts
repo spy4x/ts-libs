@@ -11,6 +11,7 @@ import { createFakeStore } from "../sign-in/fake-store.test.ts"
 import { MemoryAuthStore } from "./memory-store.ts"
 import type { AuthSessionRecord, AuthUser } from "./model.ts"
 import {
+  createMemoryOAuthFlowStore,
   createOAuthSignIn,
   MAX_PENDING_OAUTH_FLOWS,
   type OAuthFailure,
@@ -232,6 +233,35 @@ describe("createOAuthSignIn: state", () => {
     ).toBe("invalid-state")
     const result = await oauth.handleCallback({ query: secondQuery, browserState: second.state })
     expect(result.key.subject).toBe("sub-ann")
+  })
+})
+
+describe("createOAuthSignIn: a shared flow store", () => {
+  it("completes a callback on a second instance that shares the flow store, once", async () => {
+    const clock = fixedClock()
+    const flows = createMemoryOAuthFlowStore({ clock })
+    const fixture = memoryFixture()
+    const provider = createFakeProvider()
+    const first = createOAuthSignIn({ ...fakeOptions(fixture, provider), clock, flows })
+    const second = createOAuthSignIn({ ...fakeOptions(fixture, provider), clock, flows })
+
+    const started = await first.authorizationUrl()
+    const query = await provider.approve(started.url, ANN)
+    const result = await second.handleCallback({ query, browserState: started.state })
+    expect(result.key.subject).toBe("sub-ann")
+    expect(await failure(first.handleCallback({ query, browserState: started.state }))).toBe(
+      "invalid-state",
+    )
+  })
+
+  it("does not share flows between instances that each keep their own", async () => {
+    const { oauth: first, provider, fixture, clock } = setup()
+    const second = createOAuthSignIn({ ...fakeOptions(fixture, provider), clock })
+    const started = await first.authorizationUrl()
+    const query = await provider.approve(started.url, ANN)
+    expect(await failure(second.handleCallback({ query, browserState: started.state }))).toBe(
+      "invalid-state",
+    )
   })
 })
 
