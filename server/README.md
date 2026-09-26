@@ -735,7 +735,7 @@ rejects, the rejection reaches the caller and the code is already issued.
 `createOAuthSignIn`, `OAuthSignInError`, `OAuthFailure`, `OAuthOutcome`, `OAuthProviderConfig`,
 `OAuthProfile`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, the flow stores
 (`createMemoryOAuthFlowStore`, `createKvOAuthFlowStore`, `OAuthFlowStore`, `OAuthFlowKv`,
-`DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
+`OAuthTakenFlow`, `DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
 `createGoogleOAuthProvider`, `readGoogleProfile` and Google's endpoint and default-scope constants.
 
 OAuth2 sign-in with any provider that has a user-info endpoint (#57). The provider is configuration,
@@ -791,7 +791,9 @@ retried with the same `state`.
 
 **Pending flows live in a flow store, memory by default (#150).** A started flow (its `state` and
 PKCE verifier) waits in the `flows` option's store until its callback. The store's `take` reads and
-deletes it in one atomic step, so of parallel callbacks with one `state` only one proceeds.
+deletes it in one atomic step, so of parallel callbacks with one `state` only one proceeds. `take`
+also returns the flow's `expiresAt`, and `handleCallback` checks it again, so a third-party store
+that ignores the expiry still cannot complete a stale flow.
 
 - Leave `flows` unset for one process. The default, `createMemoryOAuthFlowStore`, keeps at most
   `MAX_PENDING_OAUTH_FLOWS` (10 000) flows in the process; expired flows are dropped first, then the
