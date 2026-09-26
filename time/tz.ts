@@ -270,6 +270,25 @@ export function hhmmInTz(instant: Date, tz: string): string {
  * at all rather than up to a minute wrong.
  */
 export function zonedDateTime(date: string, time: string, tz: string): Date {
+  return new Date(screenCandidates(date, time, tz).chosenMs)
+}
+
+/** What {@link screenCandidates} found for one requested wall clock. */
+interface ScreenedCandidates {
+  /** The instant `zonedDateTime` returns, as epoch milliseconds. */
+  chosenMs: number
+  /** Every candidate that reads back as exactly the requested wall clock, ascending. */
+  exactMs: number[]
+}
+
+/**
+ * The candidate screening behind both {@link zonedDateTime} and
+ * {@link resolveWallClock}, so the two agree by construction. Validates the
+ * input, builds `naive - offset` for every offset the zone uses near `naive`,
+ * and returns the chosen instant plus every candidate that reproduces the
+ * requested wall clock exactly. Throws every error `zonedDateTime` documents.
+ */
+function screenCandidates(date: string, time: string, tz: string): ScreenedCandidates {
   // Checked before any parsing so a shape mistake is never mistaken for one
   // of the other two failure modes below: `"2026-6-15"` (not zero-padded),
   // `"12:00:30"` (seconds) and `"12:00 "` (trailing space) all reach
@@ -354,7 +373,61 @@ export function zonedDateTime(date: string, time: string, tz: string): Date {
     )
   }
 
-  return new Date(earliestMs)
+  const exactMs = candidates
+    .filter((instant) => wallClock(instant) === requested)
+    .map((instant) => instant.getTime())
+    .sort((a, b) => a - b)
+
+  return { chosenMs: earliestMs, exactMs }
+}
+
+/** How often a wall clock occurs in a zone on its date. */
+export enum WallClockKind {
+  /** The wall clock occurs exactly once. */
+  Unique = 1,
+  /** The wall clock is skipped by a spring-forward change and never occurs. */
+  Gap = 2,
+  /** The wall clock occurs twice after a fall-back change. */
+  Overlap = 3,
+}
+
+/** The answer of {@link resolveWallClock}. */
+export interface WallClockResolution {
+  /** Whether the wall clock occurs once, never or twice. */
+  kind: WallClockKind
+  /**
+   * The instant `zonedDateTime` returns for the same input: the only
+   * occurrence, the earlier of two, or for a gap the shifted-forward instant.
+   */
+  instant: Date
+  /** Overlap only: the later of the two occurrences. Absent otherwise. */
+  later?: Date
+}
+
+/**
+ * Tells whether `tz`'s wall clock reads `date` + `time` once, never or twice,
+ * and gives the instants.
+ *
+ * Built on the same candidate screening as {@link zonedDateTime}, so
+ * `instant` always equals `zonedDateTime(date, time, tz)`, and input rules and
+ * errors are exactly the same `RangeError`s.
+ *
+ * - `Unique` — one candidate reads back as the requested wall clock.
+ * - `Overlap` — two do, after a fall-back change; `instant` is the earlier and
+ *   `later` the later one: Berlin's `2026-10-25 02:30` gives 00:30Z and 01:30Z.
+ * - `Gap` — none does, because a spring-forward change skips it; `instant` is
+ *   the shifted-forward one: Berlin's `2026-03-29 02:30` gives 01:30Z, which
+ *   reads `03:30`. There is no field for the reading before the change; a
+ *   caller who wants it subtracts the gap.
+ */
+export function resolveWallClock(date: string, time: string, tz: string): WallClockResolution {
+  const { chosenMs, exactMs } = screenCandidates(date, time, tz)
+  const instant = new Date(chosenMs)
+
+  if (exactMs.length === 0) return { kind: WallClockKind.Gap, instant }
+  if (exactMs.length === 1) return { kind: WallClockKind.Unique, instant }
+
+  return { kind: WallClockKind.Overlap, instant, later: new Date(exactMs[exactMs.length - 1]) }
 }
 
 /**

@@ -13,9 +13,11 @@ import {
   isoDateInTz,
   isValidTimeZone,
   minToHHMM,
+  resolveWallClock,
   todayInTz,
   tzOffsetMinutes,
   validTimeZoneOr,
+  WallClockKind,
   zonedDateTime,
 } from "./tz.ts"
 
@@ -294,6 +296,156 @@ describe("zonedDateTime", () => {
       )
     } finally {
       Intl.DateTimeFormat = RealDateTimeFormat
+    }
+  })
+})
+
+describe("resolveWallClock", () => {
+  const HOUR_MS = 3_600_000
+  const LORD_HOWE = "Australia/Lord_Howe"
+  const SYDNEY = "Australia/Sydney"
+
+  it("reports a Berlin wall clock skipped by spring-forward as a gap, shifted forward", () => {
+    const resolution = resolveWallClock("2026-03-29", "02:30", BERLIN)
+    expect(resolution.kind).toBe(WallClockKind.Gap)
+    expect(resolution.instant.toISOString()).toBe("2026-03-29T01:30:00.000Z")
+    expect(hhmmInTz(resolution.instant, BERLIN)).toBe("03:30")
+    expect(resolution.later).toBeUndefined()
+  })
+
+  it("reports a Berlin wall clock repeated by fall-back as an overlap one hour apart", () => {
+    const resolution = resolveWallClock("2026-10-25", "02:30", BERLIN)
+    expect(resolution.kind).toBe(WallClockKind.Overlap)
+    expect(resolution.instant.toISOString()).toBe("2026-10-25T00:30:00.000Z")
+    expect(resolution.later?.getTime()).toBe(resolution.instant.getTime() + HOUR_MS)
+  })
+
+  it("reports an ordinary Berlin wall clock as unique", () => {
+    const resolution = resolveWallClock("2026-06-15", "12:00", BERLIN)
+    expect(resolution.kind).toBe(WallClockKind.Unique)
+    expect(resolution.instant.toISOString()).toBe("2026-06-15T10:00:00.000Z")
+    expect(resolution.later).toBeUndefined()
+  })
+
+  it("reports Lord Howe's half-hour spring-forward gap", () => {
+    // 4 October 2026: 02:00 jumps to 02:30, +10:30 to +11:00.
+    const resolution = resolveWallClock("2026-10-04", "02:15", LORD_HOWE)
+    expect(resolution.kind).toBe(WallClockKind.Gap)
+    expect(hhmmInTz(resolution.instant, LORD_HOWE)).toBe("02:45")
+    expect(resolution.later).toBeUndefined()
+  })
+
+  it("reports Lord Howe's half-hour fall-back overlap thirty minutes apart", () => {
+    // 5 April 2026: 02:00 falls back to 01:30, +11:00 to +10:30.
+    const resolution = resolveWallClock("2026-04-05", "01:45", LORD_HOWE)
+    expect(resolution.kind).toBe(WallClockKind.Overlap)
+    expect(resolution.instant.toISOString()).toBe("2026-04-04T14:45:00.000Z")
+    expect(resolution.later?.getTime()).toBe(resolution.instant.getTime() + HOUR_MS / 2)
+  })
+
+  it("reports Sydney's October gap and April overlap in the southern hemisphere", () => {
+    const gap = resolveWallClock("2026-10-04", "02:30", SYDNEY)
+    expect(gap.kind).toBe(WallClockKind.Gap)
+    expect(gap.instant.toISOString()).toBe("2026-10-03T16:30:00.000Z")
+    expect(hhmmInTz(gap.instant, SYDNEY)).toBe("03:30")
+    expect(gap.later).toBeUndefined()
+
+    const overlap = resolveWallClock("2026-04-05", "02:30", SYDNEY)
+    expect(overlap.kind).toBe(WallClockKind.Overlap)
+    expect(overlap.instant.toISOString()).toBe("2026-04-04T15:30:00.000Z")
+    expect(overlap.later?.toISOString()).toBe("2026-04-04T16:30:00.000Z")
+  })
+
+  it("returns zonedDateTime's instant and a kind consistent with the read-back, everywhere", () => {
+    const zones = [
+      BERLIN,
+      NEW_YORK,
+      LOS_ANGELES,
+      UTC_ZONE,
+      LORD_HOWE,
+      SYDNEY,
+      "America/Santiago",
+      "Pacific/Auckland",
+      "Asia/Kolkata",
+      "Europe/London",
+    ]
+    // The 1st and 15th of every month, plus each zone's 2026 transition days.
+    const dates = [
+      ...Array.from({ length: 12 }, (_, i) => `2026-${String(i + 1).padStart(2, "0")}`)
+        .flatMap((month) => [`${month}-01`, `${month}-15`]),
+      "2026-03-08",
+      "2026-03-29",
+      "2026-04-04",
+      "2026-04-05",
+      "2026-09-06",
+      "2026-09-27",
+      "2026-10-04",
+      "2026-10-25",
+      "2026-11-01",
+    ]
+    const times = Array.from({ length: 96 }, (_, i) => minToHHMM(i * 15))
+    const seen = new Map<WallClockKind, number>()
+
+    for (const tz of zones) {
+      for (const date of dates) {
+        for (const time of times) {
+          const resolution = resolveWallClock(date, time, tz)
+          const label = `${date} ${time} ${tz}`
+          expect(resolution.instant.getTime(), label).toBe(zonedDateTime(date, time, tz).getTime())
+          seen.set(resolution.kind, (seen.get(resolution.kind) ?? 0) + 1)
+
+          const readsBack = (instant: Date) =>
+            isoDateInTz(instant, tz) === date && hhmmInTz(instant, tz) === time
+          if (resolution.kind === WallClockKind.Gap) {
+            expect(readsBack(resolution.instant), label).toBe(false)
+            expect(resolution.later, label).toBeUndefined()
+          } else if (resolution.kind === WallClockKind.Unique) {
+            expect(readsBack(resolution.instant), label).toBe(true)
+            expect(resolution.later, label).toBeUndefined()
+          } else {
+            expect(readsBack(resolution.instant), label).toBe(true)
+            expect(readsBack(resolution.later!), label).toBe(true)
+            expect(resolution.later!.getTime(), label).toBeGreaterThan(resolution.instant.getTime())
+          }
+        }
+      }
+    }
+
+    // Not vacuous: the grid crosses real gaps and overlaps, not only ordinary hours.
+    expect(seen.get(WallClockKind.Gap) ?? 0).toBeGreaterThan(0)
+    expect(seen.get(WallClockKind.Overlap) ?? 0).toBeGreaterThan(0)
+  })
+
+  it("throws exactly the RangeError zonedDateTime throws for the same bad input", () => {
+    const bad: [string, string, string][] = [
+      ["not-a-date", "10:00", BERLIN],
+      ["2026-08-28", "not-a-time", BERLIN],
+      ["", "", BERLIN],
+      ["2026-6-15", "12:00", BERLIN],
+      ["2026-06-15", "12:00:30", BERLIN],
+      ["2026-06-15", "12:00 ", BERLIN],
+      ["2026-02-30", "12:00", BERLIN],
+      ["2026-13-01", "12:00", BERLIN],
+      ["2026-06-15", "25:00", BERLIN],
+      ["0099-06-15", "12:00", BERLIN],
+      ["1971-06-15", "12:00", "Africa/Monrovia"],
+      ["2026-06-15", "12:00", "Not/AZone"],
+    ]
+    const thrown = (run: () => unknown): Error => {
+      try {
+        run()
+      } catch (error) {
+        return error as Error
+      }
+      throw new Error("expected a throw")
+    }
+
+    for (const [date, time, tz] of bad) {
+      const expected = thrown(() => zonedDateTime(date, time, tz))
+      const actual = thrown(() => resolveWallClock(date, time, tz))
+      expect(actual, `${date} ${time} ${tz}`).toBeInstanceOf(RangeError)
+      expect(actual.constructor, `${date} ${time} ${tz}`).toBe(expected.constructor)
+      expect(actual.message, `${date} ${time} ${tz}`).toBe(expected.message)
     }
   })
 })
