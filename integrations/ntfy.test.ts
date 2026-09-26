@@ -16,6 +16,7 @@ interface RecordedRequest {
   body: string | undefined
   contentType: string | null
   headers: Headers
+  redirect: RequestRedirect | undefined
 }
 
 interface FakeResponse {
@@ -33,6 +34,7 @@ const fakeTransport = (responses: FakeResponse[]) => {
       body: typeof init?.body === "string" ? init.body : undefined,
       contentType: new Headers(init?.headers).get("Content-Type"),
       headers: new Headers(init?.headers),
+      redirect: init?.redirect,
     })
     const response = responses[Math.min(index, responses.length - 1)]
     index++
@@ -558,5 +560,44 @@ describe("NtfyClient non-ASCII handling", () => {
     const title = headers.get("Title") ?? ""
     // deno-lint-ignore no-control-regex
     expect(/^[\x09\x0A\x0D\x20-\x7E]*$/.test(title)).toBe(true)
+  })
+})
+
+describe("NtfyClient redirects", () => {
+  it("asks the platform not to follow redirects", async () => {
+    const { client, transport } = clientFor([{ status: 200 }])
+    await client.notifyFailure("backup failed", "disk full")
+    expect(transport.requests[0].redirect).toBe("manual")
+  })
+
+  for (const status of [301, 302, 303, 307, 308]) {
+    it(`reports a ${status} as redirected, once, without the Location, URL or token`, async () => {
+      const location = "https://elsewhere.example.invalid/moved-secret-path"
+      const { client, transport } = clientFor([{ status, headers: { Location: location } }])
+      const result = await client.notifyFailure("backup failed", "disk full")
+      expect(result.ok === false && result.code).toBe("redirected")
+      expect(result.ok === false && result.status).toBe(status)
+      expect(transport.requests.length).toBe(1)
+      const message = result.ok ? "" : result.message
+      expect(message).not.toContain("moved-secret-path")
+      expect(message).not.toContain(BASE_URL)
+      expect(message).not.toContain(TOPIC)
+      expect(message).not.toContain(TOKEN)
+    })
+  }
+
+  it("reports a browser's opaque redirect as redirected", async () => {
+    const opaque = new Response(null, { status: 200 })
+    Object.defineProperty(opaque, "type", { value: "opaqueredirect" })
+    const timer = recordingTimer()
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: () => Promise.resolve(opaque),
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 3 },
+    })
+    const result = await client.notifyFailure("backup failed", "disk full")
+    expect(result.ok === false && result.code).toBe("redirected")
+    expect(result.ok === false && result.attempts).toBe(1)
   })
 })

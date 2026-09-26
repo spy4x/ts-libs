@@ -104,7 +104,7 @@ export interface NtfyPush {
  * is one a caller branches on forever and never sees — the same defect as an
  * unreachable validator.
  */
-export type NtfyErrorCode = "http_error" | "network_error" | "timeout"
+export type NtfyErrorCode = "http_error" | "network_error" | "timeout" | "redirected"
 
 /** A push that reached ntfy and was accepted. */
 export interface NtfyPushed {
@@ -424,8 +424,27 @@ export class NtfyClient {
         method: "POST",
         headers,
         body,
+        // Following a 301/302/303 re-sends the POST as a bodiless GET, which
+        // ntfy answers with its web app and a 200: a lost push reported as
+        // pushed. Following it with the method kept would carry the token to
+        // wherever `Location` points. So a redirect is a failure.
+        redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
       })
+      if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+        await releaseResponseBody(response)
+        // Neither `Location` nor the base URL goes into the message: the base
+        // URL can carry a token in its path.
+        return {
+          ok: false,
+          code: "redirected",
+          message: `ntfy answered with a redirect (${response.status}); ` +
+            "set the base URL to its final address",
+          status: response.status,
+          attempts: attempt,
+          retryable: false,
+        }
+      }
       if (response.ok) {
         await releaseResponseBody(response)
         return { ok: true, httpStatus: response.status, attempts: attempt }
@@ -475,7 +494,7 @@ interface PostSuccess {
 
 interface PostFailure {
   ok: false
-  code: "http_error" | "network_error" | "timeout"
+  code: NtfyErrorCode
   message: string
   attempts: number
   retryable: boolean
