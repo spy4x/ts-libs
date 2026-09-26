@@ -1540,3 +1540,23 @@ for (const [form, build] of HELPER_FORMS) {
     assertEquals(fake.topLevel, ["BEGIN", "COMMIT", "cache set:2"])
   })
 }
+
+Deno.test("helpers another service built stay on that service inside begin", async () => {
+  const fake = createFakeSql()
+  const otherFake = createFakeSql({ answers: [[{ id: 5, name: "elsewhere" }]] })
+  const other = new DbServiceBase({ sql: otherFake.sql })
+  const cache = createLoggingCache(otherFake.topLevel)
+  class BorrowingService extends DbServiceBase {
+    notes = other.buildMethods<Note, { name: string }, { name: string }>("notes", cache)
+  }
+  const service = new BorrowingService({ sql: fake.sql })
+
+  await service.begin(async (tx) => {
+    await tx.notes.createOne({ data: { name: "elsewhere" } })
+  })
+
+  // The set closes over `other`, whose client is not the one `begin` opened, so it is
+  // not rebuilt on the clone: rebuilding it would move a write onto another database.
+  assertEquals(otherFake.topLevel, [`INSERT INTO "notes" "name" = $1 RETURNING *`, "cache set:5"])
+  assertEquals(fake.inner, [])
+})

@@ -850,7 +850,8 @@ export class DbServiceBase {
   }
 
   /**
-   * Give `clone` its own copy of every helper set this instance holds in a property.
+   * Give `clone` its own copy of every helper set this instance — the clone's prototype —
+   * holds in a property.
    *
    * A helper set closes over the instance that built it, so one built in a class field
    * (`notes = this.buildMethods(...)`) closes over the root. The clone reads that field
@@ -858,10 +859,10 @@ export class DbServiceBase {
    * client, outside the transaction, and wrote the cache before the commit (#230).
    *
    * The walk covers own and inherited properties, symbols included, and reads only data
-   * properties, so no getter runs. A set is replaced only when it was built by this
-   * instance or by one it inherits from; a set another service built stays that service's.
-   * The replacement keeps the property's attributes and is itself recorded, so a nested
-   * `begin` rebinds it again onto the savepoint's clone.
+   * properties, so no getter runs. A set is replaced only when this instance built it; a
+   * set another service built stays that service's. The replacement keeps the property's
+   * attributes and is itself recorded with the clone as its owner, so a nested `begin`
+   * finds it as the outer clone's own and rebinds it again onto the savepoint's clone.
    */
   private rebindRowMethods(clone: DbServiceBase): void {
     const seen = new Set<string | symbol>()
@@ -879,9 +880,7 @@ export class DbServiceBase {
         if (typeof value !== "object" || value === null) continue
         const origin = rowMethodsOrigins.get(value)
         if (origin === undefined) continue
-        if (origin.owner !== this && !Object.prototype.isPrototypeOf.call(origin.owner, this)) {
-          continue
-        }
+        if (origin.owner !== this) continue
         Object.defineProperty(clone, key, {
           ...descriptor,
           value: clone.buildRowMethods(origin.table, origin.cache),
