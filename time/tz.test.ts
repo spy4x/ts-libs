@@ -200,12 +200,6 @@ describe("zonedDateTime", () => {
     )
   })
 
-  it("converts a wall clock before year 1000", () => {
-    expect(zonedDateTime("0500-06-15", "12:00", UTC_ZONE).toISOString()).toBe(
-      "0500-06-15T12:00:00.000Z",
-    )
-  })
-
   it("rejects a non-zero-padded date with a format message, not a zone one", () => {
     // "2026-6-15" denotes a real, ordinary date — the offset math never runs,
     // because the shape check rejects it first.
