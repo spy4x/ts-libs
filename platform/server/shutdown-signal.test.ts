@@ -4,7 +4,7 @@ import { expect } from "@std/expect"
 import { shutdownSignal, ShutdownSignalError } from "./shutdown-signal.ts"
 
 /** An in-memory stand-in for `Deno.addSignalListener`/`Deno.removeSignalListener`. */
-function fakeSignals(options: { refuse?: Deno.Signal } = {}) {
+function fakeSignals(options: { refuse?: Deno.Signal; stuck?: Deno.Signal } = {}) {
   const listeners = new Map<Deno.Signal, Set<() => void>>()
   return {
     addSignalListener(signal: Deno.Signal, handler: () => void) {
@@ -14,11 +14,16 @@ function fakeSignals(options: { refuse?: Deno.Signal } = {}) {
       listeners.set(signal, set)
     },
     removeSignalListener(signal: Deno.Signal, handler: () => void) {
+      if (signal === options.stuck) throw new Error(`cannot remove ${signal}`)
       listeners.get(signal)?.delete(handler)
     },
     /** Deliver `signal` to every listener registered for it now. */
     fire(signal: Deno.Signal) {
       for (const handler of [...(listeners.get(signal) ?? [])]) handler()
+    },
+    /** How many listeners are registered for `signal`. */
+    countFor(signal: Deno.Signal): number {
+      return listeners.get(signal)?.size ?? 0
     },
     /** How many listeners are registered across every signal. */
     count(): number {
@@ -113,5 +118,44 @@ describe("shutdownSignal", () => {
     const fake = fakeSignals({ refuse: "SIGTERM" })
     expect(() => shutdownSignal(fake)).toThrow(TypeError)
     expect(fake.count()).toBe(0)
+  })
+
+  it("registers a signal listed twice only once", () => {
+    const fake = fakeSignals()
+    shutdownSignal({ ...fake, signals: ["SIGINT", "SIGINT"] })
+    expect(fake.countFor("SIGINT")).toBe(1)
+  })
+
+  it("stops following the parent once a signal has fired", () => {
+    const fake = fakeSignals()
+    let parentListeners = 0
+    const tracked = {
+      aborted: false,
+      reason: undefined,
+      addEventListener: () => parentListeners++,
+      removeEventListener: () => parentListeners--,
+    } as unknown as AbortSignal
+    shutdownSignal({ ...fake, signal: tracked })
+    expect(parentListeners).toBe(1)
+    fake.fire("SIGINT")
+    expect(parentListeners).toBe(0)
+  })
+
+  it("still aborts and removes the other listeners when one removal throws", () => {
+    const fake = fakeSignals({ stuck: "SIGINT" })
+    const signal = shutdownSignal({ ...fake, signals: ["SIGINT", "SIGTERM", "SIGHUP"] })
+    expect(() => fake.fire("SIGTERM")).toThrow("cannot remove SIGINT")
+    expect(signal.aborted).toBe(true)
+    expect(signal.reason.signal).toBe("SIGTERM")
+    expect(fake.countFor("SIGTERM")).toBe(0)
+    expect(fake.countFor("SIGHUP")).toBe(0)
+  })
+
+  it("rethrows the registration error when a rollback removal also throws", () => {
+    const fake = fakeSignals({ stuck: "SIGINT", refuse: "SIGHUP" })
+    expect(() => shutdownSignal({ ...fake, signals: ["SIGINT", "SIGTERM", "SIGHUP"] })).toThrow(
+      "SIGHUP is not supported",
+    )
+    expect(fake.countFor("SIGTERM")).toBe(0)
   })
 })

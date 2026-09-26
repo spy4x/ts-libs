@@ -2,9 +2,8 @@
  * Turn operating-system signals (`SIGINT`, `SIGTERM`) into one `AbortSignal`, so a worker loop
  * that already takes a signal stops cleanly on Ctrl+C or a container stop.
  *
- * Windows: Deno supports only `SIGINT` and `SIGBREAK` there, and `Deno.addSignalListener` throws
- * for `SIGTERM`. The default list therefore throws on Windows; pass
- * `signals: ["SIGINT", "SIGBREAK"]` instead.
+ * Windows: the default list works with Deno 2.7.6 or later, where `SIGTERM` fires on logoff and
+ * system shutdown.
  *
  * @module
  */
@@ -43,8 +42,9 @@ export interface ShutdownSignalOptions {
  * on that first signal removes every listener it added, so a second Ctrl+C falls back to Deno's
  * default behaviour and ends the process.
  *
- * If registering one of the signals throws (for example `SIGTERM` on Windows), the listeners
- * already added are removed before the error is rethrown.
+ * If registering one of the signals throws, the listeners already added are removed before that
+ * error is rethrown. If removing a listener throws, every other listener is still removed and the
+ * signal still aborts; the first removal error is rethrown afterwards.
  *
  * @example
  * ```ts
@@ -65,13 +65,28 @@ export function shutdownSignal(options: ShutdownSignalOptions = {}): AbortSignal
   }
 
   const handlers = new Map<Deno.Signal, () => void>()
+
+  /** Remove every listener, trying each one; returns the first removal error, if any. */
+  const detach = (): { error: unknown } | undefined => {
+    let failure: { error: unknown } | undefined
+    for (const [signal, handler] of handlers) {
+      try {
+        remove(signal, handler)
+      } catch (error) {
+        failure ??= { error }
+      }
+    }
+    handlers.clear()
+    parent?.removeEventListener("abort", onParentAbort)
+    return failure
+  }
+
   // Removing every listener before aborting is what makes a later signal a no-op; `abort` itself
   // ignores a second call, so no separate guard is needed.
   const stop = (reason: unknown) => {
-    for (const [signal, handler] of handlers) remove(signal, handler)
-    handlers.clear()
-    parent?.removeEventListener("abort", onParentAbort)
+    const failure = detach()
     controller.abort(reason)
+    if (failure) throw failure.error
   }
   const onParentAbort = () => stop(parent?.reason)
 
@@ -82,7 +97,8 @@ export function shutdownSignal(options: ShutdownSignalOptions = {}): AbortSignal
       handlers.set(signal, handler)
     }
   } catch (error) {
-    for (const [signal, handler] of handlers) remove(signal, handler)
+    // A removal error here is dropped on purpose: the registration error is the one to report.
+    detach()
     throw error
   }
 
