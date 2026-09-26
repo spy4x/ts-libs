@@ -19,10 +19,10 @@ Three subpaths, split by _where the code can run_ — the split the source repo 
 762-LOC `helpers.ts` mixed `globalThis.atob`, `self.location` and PBKDF2 and was imported by both
 the browser and the API.
 
-### `.` → `universal.ts` (11 modules, 906 LOC)
+### `.` → `universal.ts`
 
 Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched are `Date`, `Intl`,
-`Math`, `TextEncoder`, and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
+`Math`, `TextEncoder`, `URL`, `FormData`, and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
 `unref`s the handle where the runtime provides one). No `crypto` calls and no DOM global: the
 browser- and server-only halves are the other two subpaths.
 
@@ -34,12 +34,15 @@ browser- and server-only halves are the other two subpaths.
 | `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                                                                   |
 | `universal/csv`             | `CsvCellValue`, `CsvColumn`, `csvField`, `csvRow`, `csvHeaderRow`, `toCsvText`, `CSV_BYTE_ORDER_MARK`, `toCsvBytes` — RFC 4180 writer with a formula-injection guard                                                           |
 | `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `PayloadError`, `StoreError`, `RequestError`, `ResponseError`, `connectionError`, `responseError`, `isSilentError`, `OperationState`, `OperationResult` |
-| `universal/format-number`   | `round`, `formatDecimal`, `formatPct`                                                                                                                                                                                          |
+| `universal/format-number`   | `round`, `formatDecimal`, `formatPct`, `formatBytes`                                                                                                                                                                           |
+| `universal/honeypot`        | `HONEYPOT_FIELD_NAME`, `honeypotFilled` — the server half of a honeypot form field                                                                                                                                             |
 | `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                              |
 | `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney` — money as a smallest-unit integer, parsed and formatted without a float step                                                        |
 | `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                 |
 | `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                                                                |
-| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`                                                                                                        |
+| `universal/seo`             | `canonicalUrl`, `normalizeCanonical`, `breadcrumbItems`, `breadcrumbListJsonLd`, `jsonLdText`, `Crumb`, `BreadcrumbListItem`, `BreadcrumbListJsonLd` — the canonical address and JSON-LD a server-rendered page publishes      |
+| `universal/sort`            | `SortDirection`, `SortRule`, `toggleSort`, `removeSortRule`, `sortRows`, `parseSort`, `serializeSort` — multi-column sort rules and the `?sort=` parameter a page writes and an API reads                                      |
+| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`, `initials`                                                                                            |
 | `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`                                                                                                                              |
 | `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                                                                        |
 
@@ -86,17 +89,20 @@ same rule, so the first and last tick are exactly the bounds. It exists so `prea
 a step with more than one significant digit: `ticks(0, 10, 4)` returned `[0, 3, 5, 8, 10]` and now
 returns `[0, 2.5, 5, 7.5, 10]`.
 
-### `./browser` → `browser.ts` (3 modules, 312 LOC)
+### `./browser` → `browser.ts`
 
-Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `getCookie`, `makeStorage`
-and `downloadResponseAsFile` all take their DOM surface (`document`, `Storage`, the object-URL
-factory, a timer) as a parameter, defaulting to the real global only when the caller passes none.
+Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `getCookie`, `makeStorage`,
+`downloadResponseAsFile`, `downloadCsv`, `copyToClipboard` and `requestGeolocation` all take their DOM surface (`document`, `Storage`, the object-URL
+factory, a timer, a clipboard, a `Geolocation`) as a parameter, defaulting to the real global only
+when the caller passes none.
 
-| Module             | Contents                                                                                                                          |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `browser/cookie`   | `getCookie`                                                                                                                       |
-| `browser/download` | `downloadResponseAsFile`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                               |
-| `browser/storage`  | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
+| Module                | Contents                                                                                                                          |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `browser/clipboard`   | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                               |
+| `browser/cookie`      | `getCookie`                                                                                                                       |
+| `browser/download`    | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                |
+| `browser/geolocation` | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                           |
+| `browser/storage`     | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
 
 `browser/cookie` fixes two bugs in the `getCookie` copies apps carried before it had a home here: it
 splits `document.cookie` instead of building a `RegExp` from the cookie name (a name containing `.`
