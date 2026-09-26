@@ -9,8 +9,9 @@
  * including a stall that outlives the budget.
  *
  * **Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This
- * module is a named re-export of that implementation plus the one genuinely
- * server-specific entry point, `parseBoundedFormData`. Until this collapse the
+ * module is a named re-export of that implementation, `parseBoundedFormData`
+ * included: it lived here until #222 moved it to `net` so a caller that only caps
+ * a form body does not depend on the whole server package. Until this collapse the
  * module carried a byte-identical copy of the reader, which meant two distinct
  * classes named `PayloadTooLargeError`: `instanceof` against one was false for
  * an error thrown by the other, so a caller that caught the error from this
@@ -38,13 +39,20 @@
 
 import {
   type BodyReadOptions,
+  parseBoundedFormData,
   PayloadTooLargeError,
   readBoundedBody,
   readBoundedText,
   readContentLength,
 } from "@spy4x/net/bounded-body"
 
-export { PayloadTooLargeError, readBoundedBody, readBoundedText, readContentLength }
+export {
+  parseBoundedFormData,
+  PayloadTooLargeError,
+  readBoundedBody,
+  readBoundedText,
+  readContentLength,
+}
 
 /**
  * The options this package accepts, which is the canonical shape verbatim:
@@ -71,41 +79,3 @@ export type BoundedBodyTimeout = Pick<BodyReadOptions, "timeoutMs">
  * `Request` and `Response` both satisfy it.
  */
 export type { BodySource } from "@spy4x/net/bounded-body"
-
-/**
- * Parse a `multipart/form-data` (or url-encoded) body under the same cap.
- *
- * Unlike `request.formData()`, the bounded read happens first, so a large
- * upload is rejected at `maxBytes` instead of being buffered in full.
- *
- * The bytes go to `Response` as a view, never as `body.buffer`: `Response` reads
- * `byteOffset..byteLength` of what it is handed, so the whole backing buffer
- * would have appended unrelated bytes had the reader ever returned a window onto
- * a larger allocation.
- *
- * One narrow cast is required, and only on the view: the canonical reader
- * declares `Uint8Array<ArrayBufferLike>` while `BodyInit` demands
- * `Uint8Array<ArrayBuffer>`. Casting `body.buffer` instead would be smaller and
- * wrong for the reason above, and `slice()` would drop the cast at the cost of a
- * copy bounded by `maxBytes`. Annotating the canonical readers' return type as
- * `Uint8Array<ArrayBuffer>` removes the cast entirely, but that is a change to
- * `net/`.
- *
- * @throws `PayloadTooLargeError` Under the same conditions as `readBoundedBody`.
- * @throws `TypeError` When the request carries no `content-type`; without it the
- * multipart boundary is unknown and the parse could only return an empty body.
- */
-export async function parseBoundedFormData(
-  request: Request,
-  options: BodyReadOptions = {},
-): Promise<FormData> {
-  const contentType = request.headers.get("content-type")
-  if (!contentType) {
-    throw new TypeError("parseBoundedFormData requires a content-type header")
-  }
-  const body = await readBoundedBody(request, options)
-
-  return await new Response(body as Uint8Array<ArrayBuffer>, {
-    headers: { "content-type": contentType },
-  }).formData()
-}

@@ -66,8 +66,9 @@ re-export of it: `PayloadTooLargeError`, `readBoundedBody`, `readBoundedText` an
 `readContentLength` are the canonical symbols, so `PayloadTooLargeError` is one class object behind
 both specifiers and a single `catch` covers either import. The re-export is named rather than
 `export *`, so `BodyReadErrorCode`, `BodyReadTimeoutError`, `readBoundedJson` and the default
-constants are not republished as if this package had promised them. `parseBoundedFormData` stays
-here — it is the only server-specific entry point, and it is built on the canonical reader. The
+constants are not republished as if this package had promised them. `parseBoundedFormData` lived
+here until #222 moved it to `@spy4x/net/bounded-body`; this module re-exports that same function, so
+a caller that only caps a form body can depend on `@spy4x/net` alone. The
 cap is enforced on the stream, a declared `content-length` over the cap is rejected without
 reading the body, and the reader is cancelled on any failure. `maxBytes` is optional and defaults
 to 5 MiB; `timeoutMs` is a **per-chunk stall budget, not a single overall deadline** — a
@@ -105,15 +106,15 @@ constant-time compare. Same signature, same behaviour; new code should import th
 
 ## Fixes applied at extraction time (`server/http/bounded-body`, `server/http/cors`)
 
-| Source                                       | Bug                                                                                                                                 | Pinned by                                                                     |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `warthunder-stats/.../body.ts:49-51`         | `body.buffer` ignored the view's `byteOffset`/`byteLength` — the `as ArrayBuffer` cast hid it                                       | `parseBoundedFormData respects a non-zero byteOffset on the read buffer`      |
-| `warthunder-stats/.../body.ts:11-13`         | an over-cap `content-length` was rejected without cancelling the request body, and the check did not pin the position of the read   | `readBoundedBody leaves an unread rejected body to the server to drain`       |
-| `warthunder-stats/.../body.ts:23-24`         | the cap was enforced by a `NaN`-comparing `Number(...)` check instead of an explicit header reader                                  | `readContentLength reads a bare decimal length and ignores anything else`     |
-| `warthunder-stats/.../body.ts:28`            | `await reader.cancel()` in the `catch` was relied on not to reject, while the sibling call was wrapped                              | `readBoundedBody reports the read error even when cancel rejects`             |
-| `offer-lens/libs/scraper/mod.ts:184-186`     | when the deadline won the `Promise.race` the reader was only cancelled "best effort", leaving a pending `read()` that never settles | `readBoundedBody rejects a stalled body once the stall budget expires`        |
-| `offer-lens/libs/scraper/mod.ts:206`         | the oversized `content-length` early-out was absent, so a body declaring 4 GiB was streamed before being rejected                   | `readBoundedBody rejects an oversized declared content-length before reading` |
-| `offer-lens/apps/api/services/cors.ts:53-60` | an `https://` host missing from the allowlist fell through to the dev-host check                                                    | `cors: https dev origins are refused`                                         |
+| Source                                       | Bug                                                                                                                                 | Pinned by                                                                      |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `warthunder-stats/.../body.ts:49-51`         | `body.buffer` ignored the view's `byteOffset`/`byteLength` — the `as ArrayBuffer` cast hid it                                       | `parseBoundedFormData respects a non-zero byteOffset on the read buffer` (net) |
+| `warthunder-stats/.../body.ts:11-13`         | an over-cap `content-length` was rejected without cancelling the request body, and the check did not pin the position of the read   | `readBoundedBody leaves an unread rejected body to the server to drain`        |
+| `warthunder-stats/.../body.ts:23-24`         | the cap was enforced by a `NaN`-comparing `Number(...)` check instead of an explicit header reader                                  | `readContentLength reads a bare decimal length and ignores anything else`      |
+| `warthunder-stats/.../body.ts:28`            | `await reader.cancel()` in the `catch` was relied on not to reject, while the sibling call was wrapped                              | `readBoundedBody reports the read error even when cancel rejects`              |
+| `offer-lens/libs/scraper/mod.ts:184-186`     | when the deadline won the `Promise.race` the reader was only cancelled "best effort", leaving a pending `read()` that never settles | `readBoundedBody rejects a stalled body once the stall budget expires`         |
+| `offer-lens/libs/scraper/mod.ts:206`         | the oversized `content-length` early-out was absent, so a body declaring 4 GiB was streamed before being rejected                   | `readBoundedBody rejects an oversized declared content-length before reading`  |
+| `offer-lens/apps/api/services/cors.ts:53-60` | an `https://` host missing from the allowlist fell through to the dev-host check                                                    | `cors: https dev origins are refused`                                          |
 
 Two rows changed meaning when `server/http/bounded-body.ts` collapsed into the canonical
 reader (`net/bounded-body.ts`): the canonical one rejects an over-cap `content-length` before

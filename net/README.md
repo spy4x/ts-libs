@@ -13,7 +13,7 @@ net/+main.ts          barrel: everything below
 net/url-shape.ts      normalizeUrlShape()   — shape only
 net/url-policy.ts     validatePublicUrl()   — the SSRF guard
 net/safe-fetch.ts     safeFetch()           — guard + redirect re-validation
-net/bounded-body.ts   readBoundedText/Json/Body, readContentLength
+net/bounded-body.ts   readBoundedText/Json/Body, readContentLength, parseBoundedFormData
 net/ip.ts             parseIp(), normalizeIp(), ipInRanges()
 ```
 
@@ -232,6 +232,13 @@ always the canonical URL that actually answered.
 Failures are typed: `PayloadTooLargeError`, `BodyReadTimeoutError`, and the
 platform `SyntaxError` for malformed JSON. The reader is cancelled and unlocked
 on every exit path.
+
+`parseBoundedFormData(request, options)` reads a `multipart/form-data` or
+url-encoded request under the same two limits, then parses it, so an over-cap
+upload is rejected at `maxBytes` rather than buffered in full the way
+`request.formData()` would. It needs a `content-type` header (the multipart
+boundary lives there) and throws a `TypeError` without one.
+`@spy4x/server/http/bounded-body` re-exports this same function.
 
 ## IP addresses and ranges
 
