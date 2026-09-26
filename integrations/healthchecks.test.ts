@@ -14,11 +14,13 @@ interface RecordedRequest {
   url: string
   method: string | undefined
   body: string | undefined
+  redirect: RequestRedirect | undefined
 }
 
 interface FakeResponse {
   status: number
   headers?: Record<string, string>
+  body?: string
 }
 
 const fakeTransport = (responses: FakeResponse[]) => {
@@ -29,10 +31,13 @@ const fakeTransport = (responses: FakeResponse[]) => {
       url: String(input),
       method: init?.method,
       body: typeof init?.body === "string" ? init.body : undefined,
+      redirect: init?.redirect,
     })
     const response = responses[Math.min(index, responses.length - 1)]
     index++
-    return Promise.resolve(new Response("", { status: response.status, headers: response.headers }))
+    return Promise.resolve(
+      new Response(response.body ?? "", { status: response.status, headers: response.headers }),
+    )
   }
   return { fetcher, requests }
 }
@@ -520,5 +525,115 @@ describe("HealthchecksClient.ping", () => {
       console.log = originalLog
     }
     expect(messages).toEqual([])
+  })
+})
+
+describe("HealthchecksClient.ping answer bodies", () => {
+  // https://healthchecks.io/docs/http_api/ documents `200 OK (not found)` and
+  // `200 OK (rate limited)` for the UUID success, /start and /fail endpoints.
+  it('reports a 200 "OK (not found)" as check_not_found without retrying', async () => {
+    const { client, transport } = clientFor([{ status: 200, body: "OK (not found)" }])
+    const result = await client.ping({ outcome: HealthchecksOutcome.Fail, body: "disk full" })
+    expect(result.ok === false && result.code).toBe("check_not_found")
+    expect(result.ok === false && result.status).toBe(200)
+    expect(result.attempts).toBe(1)
+    expect(transport.requests.length).toBe(1)
+  })
+
+  it("reads the not-found body even with a trailing newline", async () => {
+    const { client } = clientFor([{ status: 200, body: "OK (not found)\n" }])
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result.ok === false && result.code).toBe("check_not_found")
+  })
+
+  it('retries a 200 "OK (rate limited)" and reports success once a ping lands', async () => {
+    const { client, transport } = clientFor([
+      { status: 200, body: "OK (rate limited)" },
+      { status: 200, body: "OK" },
+    ])
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result.ok).toBe(true)
+    expect(result.attempts).toBe(2)
+    expect(transport.requests.length).toBe(2)
+  })
+
+  it("reports rate_limited when every attempt is rate limited", async () => {
+    const transport = fakeTransport([{ status: 200, body: "OK (rate limited)" }])
+    const timer = recordingTimer()
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: transport.fetcher,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 2 },
+      random: () => 0.5,
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result.ok === false && result.code).toBe("rate_limited")
+    expect(result.attempts).toBe(2)
+  })
+
+  for (const [status, body] of [[200, "OK"], [201, "Created"]] as const) {
+    it(`still reports success for ${status} "${body}"`, async () => {
+      const { client } = clientFor([{ status, body }])
+      const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+      expect(result.ok && result.httpStatus).toBe(status)
+    })
+  }
+
+  it("stops reading a large 200 body after a few bytes", async () => {
+    let pulled = 0
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled++
+        if (pulled > 10_000) {
+          controller.close()
+          return
+        }
+        controller.enqueue(new Uint8Array(1024).fill(0x4f))
+      },
+    }, { highWaterMark: 0 })
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: () => Promise.resolve(new Response(endless, { status: 200 })),
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result.ok).toBe(true)
+    expect(pulled).toBeLessThanOrEqual(2)
+  })
+})
+
+describe("HealthchecksClient.ping redirects", () => {
+  it("asks the platform not to follow redirects", async () => {
+    const { client, transport } = clientFor([{ status: 200 }])
+    await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(transport.requests[0].redirect).toBe("manual")
+  })
+
+  for (const status of [301, 302, 303, 307, 308]) {
+    it(`reports a ${status} as redirected, once, without the Location or the ping URL`, async () => {
+      const location = "https://elsewhere.example.invalid/moved-secret-path"
+      const { client, transport } = clientFor([{ status, headers: { Location: location } }])
+      const result = await client.ping({ outcome: HealthchecksOutcome.Fail, body: "disk full" })
+      expect(result.ok === false && result.code).toBe("redirected")
+      expect(result.ok === false && result.status).toBe(status)
+      expect(transport.requests.length).toBe(1)
+      const message = result.ok ? "" : result.message
+      expect(message).not.toContain("moved-secret-path")
+      expect(message).not.toContain("00000000-0000")
+    })
+  }
+
+  it("reports a browser's opaque redirect as redirected", async () => {
+    const opaque = new Response(null, { status: 200 })
+    Object.defineProperty(opaque, "type", { value: "opaqueredirect" })
+    const timer = recordingTimer()
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: () => Promise.resolve(opaque),
+      sleep: timer.sleep,
+      clock: timer.clock,
+      retry: { maxAttempts: 3 },
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result.ok === false && result.code).toBe("redirected")
+    expect(result.attempts).toBe(1)
   })
 })

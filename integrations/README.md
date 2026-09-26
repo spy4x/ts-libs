@@ -34,8 +34,19 @@ The constructor throws on an empty URL. Nothing is read at module scope.
 
 **Result.** `{ ok: true, httpStatus, attempts, body, waitedMs }` or
 `{ ok: false, code, message, status?, attempts, waitedMs }`, `code` being `"http_error"`,
-`"network_error"` or `"timeout"`. The source resolved `void` and logged its failures, so a caller
-could not tell a delivered ping from a dead endpoint.
+`"network_error"`, `"timeout"`, `"check_not_found"`, `"rate_limited"` or `"redirected"`. The source
+resolved `void` and logged its failures, so a caller could not tell a delivered ping from a dead
+endpoint.
+
+**A 200 is not always a delivered ping.** healthchecks.io answers `200 OK (not found)` for a check
+UUID it does not know and `200 OK (rate limited)` for a ping it ignored
+([pinging API](https://healthchecks.io/docs/http_api/)). The client reads the first 64 bytes of a
+2xx body, never more, and reports these as `check_not_found` (not retried: the URL is wrong) and
+`rate_limited` (retried under the policy). Any other 2xx, including `OK` and `201 Created`, is a
+success.
+
+**The ping URL must be the final address.** Redirects are not followed: a 301, 302 or 303 would turn
+the POST into a GET and drop the body. Any 3xx answer is `redirected` and is not retried.
 
 **Retry policy.** 10 attempts, 60s doubling, capped at 5 minutes per wait, plus +/-20% jitter so
 that many hosts pinging the same check after a shared outage do not retry in lockstep. Measured
@@ -67,8 +78,14 @@ is assertable. Callers that genuinely want success pushes pass `severity: Info`.
 
 **Result.** `{ ok: true, status: "pushed", httpStatus, attempts, title, tags }`,
 `{ ok: true, status: "skipped", … }`, or `{ ok: false, code, message, status?, attempts }`, `code`
-being `"http_error"`, `"network_error"` or `"timeout"`. The source returned `void` and logged
-failures, so a dropped push looked like a delivered one.
+being `"http_error"`, `"network_error"`, `"timeout"` or `"redirected"`. The source returned `void`
+and logged failures, so a dropped push looked like a delivered one.
+
+**The base URL must be the final address.** Redirects are not followed. Following a 301, 302 or 303
+re-sends the push as a bodiless GET, which ntfy answers with its web app and a 200, so a lost push
+would read as delivered; following it with the method kept would send the token to wherever
+`Location` points. Any 3xx answer is `redirected`, is not retried, and its message names neither
+the `Location` nor the base URL.
 
 **Config.** `NTFY_URL` and `NTFY_TOPIC` are required; `NTFY_TOKEN` is optional because a
 self-hosted ntfy on a private network may not use auth. Read through `ntfyConfigFromEnv(read?)`,
