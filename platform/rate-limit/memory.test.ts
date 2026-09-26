@@ -441,6 +441,21 @@ describe("MemoryRateLimiter", () => {
     assertEquals(limiter.size, 1)
   })
 
+  it("reports the full wait for a refused new key after clear()", () => {
+    const { clock, advance } = fakeClock()
+    const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 5, maxBuckets: 1, clock })
+    limiter.check("a")
+    advance(100)
+    assertEquals(limiter.check("b").allowed, false)
+    advance(100)
+    limiter.clear()
+    advance(300)
+    assertEquals(limiter.check("c").allowed, true)
+    advance(100)
+    // "c" falls idle at 1500; a wait remembered from before clear() would say 400.
+    assertEquals(limiter.check("d").retryAfterMs, 900)
+  })
+
   it("reports the finite wait until a held bucket falls idle when it refuses after a refill", () => {
     const { clock, advance } = fakeClock()
     const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 5, maxBuckets: 2, clock })
