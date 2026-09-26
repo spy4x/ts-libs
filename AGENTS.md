@@ -1,8 +1,9 @@
 # AGENTS.md — ts-libs
 
 Framework-agnostic TypeScript primitives and adapters for Deno, published to JSR. Read `README.md`
-for scope and `LICENSE` for terms (MIT, © 2026 Anton Shubin). Global rules live in
-`~/.dsh/AGENTS.md`; this file adds constraints and overrides them where they conflict.
+for scope and `LICENSE` for terms (MIT, © 2026 Anton Shubin). The global agent instructions own
+Git Flow, worktrees, review and cleanup; this file adds constraints and overrides them where they
+conflict.
 
 This repo is a Deno workspace. Every package is built by a different agent in its own PR, owning
 exactly one top-level directory.
@@ -82,18 +83,14 @@ exported name, parameter or return type changes only additively, or it waits for
 2. After it merges, tag `main` with `v<version>` and push the tag. Woodpecker's `publish` step runs
    `deno publish` with the `JSR_TOKEN` secret, after the unit and integration steps pass.
 
-A publish cannot be undone: JSR never deletes a version. The owner gives the go-ahead for every
-tag. A version that is already on JSR is skipped, so re-running a tag build that failed part-way
+A publish cannot be undone: JSR never deletes a version, so tag only the merged bump commit on
+`main`. Once that PR merges with a green gate, push the tag without asking. A version that is already on JSR is skipped, so re-running a tag build that failed part-way
 publishes only what is missing.
 
-## Branch-first workflow
+## Branches
 
-Create the branch before any edit. Never commit to `main`.
-
-```bash
-git fetch origin
-git checkout -b <type>/<short-kebab-slug> origin/main
-```
+Work in a worktree under the sibling `worktrees/ts-libs/`, on a branch cut from the latest
+`origin/main` (the global Git Flow command creates both). Never commit to `main`.
 
 Types: `feat/`, `fix/`, `refactor/`, `chore/`, `docs/`, `style/`, `perf/`, `ci/`.
 
@@ -262,7 +259,7 @@ string this repository commits.
 ## Code style
 
 - No semicolons. 2-space indent. Double quotes by default, backticks for interpolated or multi-line
-  strings. 100 column limit. Trailing commas where legal. `deno fmt` is the arbiter.
+  strings (this overrides the global "backticks for strings" rule). 100 column limit. Trailing commas where legal. `deno fmt` is the arbiter.
 - Files: kebab-case `.ts`, `+main.ts` / `+lib.ts` for entry points, colocated `*.test.ts`.
 - Imports: relative local first, then `jsr:` stdlib, then `npm:` only when unavoidable.
 - `interface` for extensible object shapes, `enum` for finite constants (start at 1), `type` only for
@@ -287,26 +284,8 @@ export type RetryOptions = typeof retryOptions.infer
 ## Dependencies
 
 **Pin exactly. Never `^`, never `~`, never a floating tag.** The lockfile is committed. A version bump
-is its own commit with scope `deps`, and it states the reason.
-
-Current pins (root `deno.jsonc`, the single source of truth):
-
-```
-arktype                          2.2.3
-@std/assert                     1.0.19
-@std/expect                     1.0.20
-@std/testing/bdd                1.0.20
-@std/path                        1.1.6
-@std/encoding                   1.0.11
-@std/crypto                      1.1.0
-@std/ulid                        1.0.0
-hono                            4.13.8
-postgres                         3.4.7
-otpauth                          9.5.2
-qrcode                           3.1.0
-@iuioiua/redis                   1.1.10
-@age/age-encryption               0.3.1
-```
+is its own commit with scope `deps`, and it states the reason. The root `deno.jsonc` import map is
+the only list of pins; read it there.
 
 Adding an import-map entry is a root-file change: it needs the issue number that needs the
 dependency in the PR body. No speculative entries.
