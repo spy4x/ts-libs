@@ -34,7 +34,7 @@ import { AuthConflictError, type AuthKey, type AuthUser, normalizeEmail } from "
 import {
   createMemoryOAuthFlowStore,
   type OAuthFlowStore,
-  type OAuthPendingFlow,
+  type OAuthTakenFlow,
 } from "./oauth-flows.ts"
 import type { ProviderDeps, SignInResult } from "./provider.ts"
 
@@ -48,6 +48,7 @@ export {
   type OAuthFlowKv,
   type OAuthFlowStore,
   type OAuthPendingFlow,
+  type OAuthTakenFlow,
 } from "./oauth-flows.ts"
 
 /** What a provider says about the person who signed in, read from its user-info response. */
@@ -257,11 +258,13 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
    * Removes the flow for `state` and returns it when it is live and the browser holds the same state.
    * The store's `take` deletes it first, so it is gone on every exit.
    */
-  async function takeFlow(state: string, browserState: unknown): Promise<OAuthPendingFlow> {
+  async function takeFlow(state: string, browserState: unknown): Promise<OAuthTakenFlow> {
     const flow = await flows.take(state)
     if (!flow || typeof browserState !== "string") throw new OAuthSignInError("invalid-state")
     const same = await constantTimeEquals(await sha256Hex(state), await sha256Hex(browserState))
-    if (!same) throw new OAuthSignInError("invalid-state")
+    // Checked here too, so a store that ignores `expiresAt` still cannot complete a stale flow.
+    const live = flow.expiresAt instanceof Date && flow.expiresAt.getTime() > clock.now()
+    if (!same || !live) throw new OAuthSignInError("invalid-state")
     return flow
   }
 

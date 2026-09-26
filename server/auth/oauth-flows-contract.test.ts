@@ -44,8 +44,9 @@ export function describeOAuthFlowStoreContract(
   describe(`OAuthFlowStore contract: ${label}`, () => {
     it("returns the flow put under a state, and only once", () =>
       withStore(async ({ store, now }) => {
-        await store.put("state-a", { verifier: "verifier-a" }, new Date(now() + TEN_MINUTES))
-        expect(await store.take("state-a")).toEqual({ verifier: "verifier-a" })
+        const expiresAt = new Date(now() + TEN_MINUTES)
+        await store.put("state-a", { verifier: "verifier-a" }, expiresAt)
+        expect(await store.take("state-a")).toEqual({ verifier: "verifier-a", expiresAt })
         expect(await store.take("state-a")).toBeNull()
       }))
 
@@ -56,9 +57,13 @@ export function describeOAuthFlowStoreContract(
 
     it("gives the flow to exactly one of many parallel takes", () =>
       withStore(async ({ store, now }) => {
-        await store.put("state-a", { verifier: "verifier-a" }, new Date(now() + TEN_MINUTES))
+        const expiresAt = new Date(now() + TEN_MINUTES)
+        await store.put("state-a", { verifier: "verifier-a" }, expiresAt)
         const taken = await Promise.all(Array.from({ length: 10 }, () => store.take("state-a")))
-        expect(taken.filter((flow) => flow !== null)).toEqual([{ verifier: "verifier-a" }])
+        expect(taken.filter((flow) => flow !== null)).toEqual([{
+          verifier: "verifier-a",
+          expiresAt,
+        }])
       }))
 
     it("returns the flow a millisecond before its expiry and null at it", () =>
@@ -67,7 +72,7 @@ export function describeOAuthFlowStoreContract(
         await store.put("early", { verifier: "verifier-early" }, expiresAt)
         await store.put("late", { verifier: "verifier-late" }, expiresAt)
         advance(TEN_MINUTES - 1)
-        expect(await store.take("early")).toEqual({ verifier: "verifier-early" })
+        expect(await store.take("early")).toEqual({ verifier: "verifier-early", expiresAt })
         advance(1)
         expect(await store.take("late")).toBeNull()
       }))
@@ -77,8 +82,8 @@ export function describeOAuthFlowStoreContract(
         const expiresAt = new Date(now() + TEN_MINUTES)
         await store.put("state-a", { verifier: "verifier-a" }, expiresAt)
         await store.put("state-b", { verifier: "verifier-b" }, expiresAt)
-        expect(await store.take("state-b")).toEqual({ verifier: "verifier-b" })
-        expect(await store.take("state-a")).toEqual({ verifier: "verifier-a" })
+        expect(await store.take("state-b")).toEqual({ verifier: "verifier-b", expiresAt })
+        expect(await store.take("state-a")).toEqual({ verifier: "verifier-a", expiresAt })
       }))
   })
 }

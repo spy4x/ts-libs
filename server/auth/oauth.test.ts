@@ -15,6 +15,7 @@ import {
   createOAuthSignIn,
   MAX_PENDING_OAUTH_FLOWS,
   type OAuthFailure,
+  type OAuthFlowStore,
   OAuthOutcome,
   type OAuthSignIn,
   OAuthSignInError,
@@ -252,6 +253,33 @@ describe("createOAuthSignIn: a shared flow store", () => {
     expect(await failure(first.handleCallback({ query, browserState: started.state }))).toBe(
       "invalid-state",
     )
+  })
+
+  it("refuses a flow past its expiry even when the store still returns it", async () => {
+    // A third-party store that never expires anything: take returns whatever was put.
+    const kept = new Map<string, { verifier: string; expiresAt: Date }>()
+    const flows: OAuthFlowStore = {
+      put(state, flow, expiresAt) {
+        kept.set(state, { verifier: flow.verifier, expiresAt })
+        return Promise.resolve()
+      },
+      take(state) {
+        const flow = kept.get(state) ?? null
+        kept.delete(state)
+        return Promise.resolve(flow)
+      },
+    }
+    const { oauth, provider, clock } = setup({ flows })
+    const stale = await oauth.authorizationUrl()
+    const staleQuery = await provider.approve(stale.url, ANN)
+    const fresh = await oauth.authorizationUrl()
+    const freshQuery = await provider.approve(fresh.url, ANN)
+    clock.advance(600_000 - 1)
+    await oauth.handleCallback({ query: freshQuery, browserState: fresh.state })
+    clock.advance(1)
+    expect(await failure(oauth.handleCallback({ query: staleQuery, browserState: stale.state })))
+      .toBe("invalid-state")
+    expect(provider.tokenStatuses).toEqual([200])
   })
 
   it("does not share flows between instances that each keep their own", async () => {

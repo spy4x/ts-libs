@@ -62,8 +62,8 @@ describe("createMemoryOAuthFlowStore", () => {
     const expiresAt = new Date(clock.now() + 10 * MINUTE)
     for (const state of ["a", "b", "c", "d"]) await store.put(state, { verifier: state }, expiresAt)
     expect(await store.take("a")).toBeNull()
-    expect(await store.take("b")).toEqual({ verifier: "b" })
-    expect(await store.take("d")).toEqual({ verifier: "d" })
+    expect(await store.take("b")).toEqual({ verifier: "b", expiresAt })
+    expect(await store.take("d")).toEqual({ verifier: "d", expiresAt })
   })
 
   it("keeps MAX_PENDING_OAUTH_FLOWS flows by default", async () => {
@@ -74,11 +74,11 @@ describe("createMemoryOAuthFlowStore", () => {
     for (let i = 0; i < MAX_PENDING_OAUTH_FLOWS; i++) {
       await store.put(`s${i}`, { verifier: `${i}` }, expiresAt)
     }
-    expect(await store.take("s0")).toEqual({ verifier: "0" })
+    expect(await store.take("s0")).toEqual({ verifier: "0", expiresAt })
     await store.put("s-extra-1", { verifier: "x" }, expiresAt)
     await store.put("s-extra-2", { verifier: "y" }, expiresAt)
     expect(await store.take("s1")).toBeNull()
-    expect(await store.take("s2")).toEqual({ verifier: "2" })
+    expect(await store.take("s2")).toEqual({ verifier: "2", expiresAt })
   })
 
   it("throws a TypeError for a maxFlows that is not a positive integer", () => {

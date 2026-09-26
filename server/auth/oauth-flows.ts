@@ -27,16 +27,22 @@ export interface OAuthPendingFlow {
   verifier: string
 }
 
+/** A flow {@link OAuthFlowStore.take} returns: the flow as it was put, and its expiry. */
+export interface OAuthTakenFlow extends OAuthPendingFlow {
+  /** The `expiresAt` the flow was put with. `createOAuthSignIn` checks it again after `take`. */
+  expiresAt: Date
+}
+
 /** Keeps started flows until their callback. Every method may reject; the caller's call fails. */
 export interface OAuthFlowStore {
   /** Keeps `flow` under `state` until `expiresAt`. A `state` is never reused. */
   put(state: string, flow: OAuthPendingFlow, expiresAt: Date): Promise<void>
   /**
-   * Returns the flow kept under `state` and deletes it in one atomic step. Null when there is none,
-   * when it was already taken, or when its `expiresAt` has passed. Of several parallel calls for one
-   * `state`, at most one receives the flow.
+   * Returns the flow kept under `state`, with the `expiresAt` it was put with, and deletes it in one
+   * atomic step. Null when there is none, when it was already taken, or when its `expiresAt` has
+   * passed. Of several parallel calls for one `state`, at most one receives the flow.
    */
-  take(state: string): Promise<OAuthPendingFlow | null>
+  take(state: string): Promise<OAuthTakenFlow | null>
 }
 
 /** Options of {@link createMemoryOAuthFlowStore}. */
@@ -80,7 +86,7 @@ export function createMemoryOAuthFlowStore(
       const entry = flows.get(state)
       flows.delete(state)
       if (!entry || entry.expiresAt <= clock.now()) return Promise.resolve(null)
-      return Promise.resolve({ verifier: entry.verifier })
+      return Promise.resolve({ verifier: entry.verifier, expiresAt: new Date(entry.expiresAt) })
     },
   }
 }
@@ -133,7 +139,7 @@ export function createKvOAuthFlowStore(
       const value = await kv.take(`${prefix}${state}`)
       const entry = value === null ? null : parseEntry(value)
       if (!entry || entry.expiresAt <= clock.now()) return null
-      return { verifier: entry.verifier }
+      return { verifier: entry.verifier, expiresAt: new Date(entry.expiresAt) }
     },
   }
 }
