@@ -84,6 +84,11 @@
     // sending them and needs no token; without it, `JSR_API_TOKEN` must be set. See
     // CONTRIBUTING.md "Maintaining".
     "jsr:metadata": "deno run --allow-read --allow-env --allow-net=api.jsr.io infra/scripts/jsr-metadata.ts",
+    // Regenerates `docs/social-preview.png`, the card GitHub shows for a shared link (#235). `-A`
+    // because Playwright spawns Chromium and writes its profile to a temp folder; the script is
+    // local tooling, never run by CI. `--node-modules-dir=none --no-lock` keeps Playwright out
+    // of `node_modules` and `deno.lock`. See `infra/scripts/social-preview.ts`.
+    "social-preview": "deno run -A --node-modules-dir=none --no-lock infra/scripts/social-preview.ts",
     "fix": {
       "command": "echo 'Fixes applied!'",
       "description": "Run all fixes",
