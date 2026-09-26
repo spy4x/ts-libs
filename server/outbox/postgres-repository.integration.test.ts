@@ -250,6 +250,40 @@ describe("PostgresOutboxRepository against a real server", () => {
     })
   })
 
+  it("release puts a row back at its claim time, ahead of rows that became available later", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertRow(sql, ROW_A, "group.created", ROW_A)
+      const repository = new PostgresOutboxRepository(sql)
+
+      const claimed = await repository.claimBatch(10, 5, 60)
+      await sql`SELECT pg_sleep(0.01)`
+      // Becomes available after ROW_A was claimed, but before ROW_A is released.
+      await insertRow(sql, ROW_B, "group.renamed", ROW_A)
+      await sql`SELECT pg_sleep(0.01)`
+      await repository.release(claimed)
+
+      const next = await repository.claimBatch(1, 5, 60)
+      assertEquals(next.map((row) => row.id), [ROW_A])
+    })
+  })
+
+  it("release leaves a processed row alone even when its attempt count matches", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertRow(sql, ROW_A, "group.created", ROW_A)
+      const repository = new PostgresOutboxRepository(sql)
+
+      const claimed = await repository.claimBatch(10, 5, 60)
+      await repository.markProcessed(ROW_A)
+      await repository.release(claimed)
+
+      const rows = await sql<{ attemptCount: number; processed: boolean }[]>`
+        SELECT attempt_count AS "attemptCount", processed_at IS NOT NULL AS "processed"
+        FROM outbox_events WHERE id = ${ROW_A}
+      `
+      assertEquals([...rows], [{ attemptCount: 1, processed: true }])
+    })
+  })
+
   it("release leaves a row alone once another claim has taken it", async () => {
     await withOutboxSchema(async (sql) => {
       await insertRow(sql, ROW_A, "group.created", ROW_A)

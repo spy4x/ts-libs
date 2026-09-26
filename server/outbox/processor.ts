@@ -76,6 +76,13 @@ export interface OutboxProcessorOptions {
    * slowest publish seen so far in this batch would reach the lease, it stops and
    * hands the untried events back through `OutboxRepository.release`. The first event
    * of a batch is always tried, so a batch always makes progress.
+   *
+   * That check predicts the next publish from the slowest one so far in the batch, so
+   * it is a heuristic, not a guarantee. A publish slower than every earlier one in the
+   * batch, started close to the end of the lease, can still run past it and be
+   * delivered twice, even when it is much shorter than the lease. Size the lease with
+   * room for that: at least the slowest expected publish on top of the slowest typical
+   * one.
    */
   leaseSeconds?: number
   /**
@@ -196,7 +203,9 @@ export class OutboxProcessor {
    * the lease and let another worker claim the tail. Before each event after the first,
    * this stops once the time since the claim began plus the slowest publish seen so far
    * would reach the lease, and hands the untried events back (see `leaseSeconds`).
-   * Timing starts before the claim, so it overestimates the lease already used.
+   * Timing starts before the claim, so it overestimates the lease already used. The
+   * next publish is predicted from the slowest one so far, so an unusually slow publish
+   * started near the end of the lease can still be delivered twice.
    */
   async drainOnce(): Promise<DrainResult> {
     const startedAt = this.#now()

@@ -134,7 +134,10 @@ export class PostgresOutboxRepository implements OutboxRepository {
    *
    * The `attempt_count` match is the ownership check: a later claim by another worker
    * raises it, so a release that arrives after the lease expired and the row was
-   * reclaimed changes nothing. One statement per event keeps the `id` comparison typed
+   * reclaimed changes nothing. `processed_at IS NULL` is defence in depth: through
+   * this library a processed row never carries the attempt count of a claim that did
+   * not try it, but a row marked processed by other code is still left alone. One
+   * statement per event keeps the `id` comparison typed
    * by the column itself, whatever type the caller's table uses for it.
    */
   async release(events: OutboxEvent[]): Promise<void> {
