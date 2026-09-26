@@ -135,10 +135,15 @@ export function daysInMonth(date: string): number {
  * nearest day that exists is the 28th or the 29th.
  *
  * @param date Any date in the target month.
- * @param dayNumber The day wanted, 1-based. Below 1 clips to the 1st.
+ * @param dayNumber The day wanted, 1-based, a whole number. Below 1 clips to the 1st.
  * @returns That day in the target month, clipped to the month's first and last day.
+ * @throws When `dayNumber` is not a whole number (`NaN`, `15.5`, `Infinity`), which names no day,
+ *   and when `date` is not a `YYYY-MM-DD` date.
  */
 export function dayInMonth(date: string, dayNumber: number): string {
+  if (!Number.isInteger(dayNumber)) {
+    throw new Error(`expected a whole day number, received: ${dayNumber}`)
+  }
   const clipped = Math.min(Math.max(dayNumber, 1), daysInMonth(date))
   return `${startOfMonth(date).slice(0, 8)}${pad2(clipped)}`
 }

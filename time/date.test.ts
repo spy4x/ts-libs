@@ -267,6 +267,28 @@ describe("dayInMonth", () => {
   it("clips a day number below the first", () => {
     expect(dayInMonth("2026-08-15", 0)).toBe("2026-08-01")
   })
+
+  it("clips 0, -3 and 31 in February to the month's first and last day", () => {
+    expect(dayInMonth("2026-02-10", 0)).toBe("2026-02-01")
+    expect(dayInMonth("2026-02-10", -3)).toBe("2026-02-01")
+    expect(dayInMonth("2026-02-10", 31)).toBe("2026-02-28")
+  })
+
+  it("throws on a day number that is not a whole number", () => {
+    for (const dayNumber of [Number.parseInt("abc", 10), 15.5, -0.5, Infinity]) {
+      expect(() => dayInMonth("2026-01-10", dayNumber))
+        .toThrow(`expected a whole day number, received: ${dayNumber}`)
+    }
+  })
+
+  it("answers only dates that parseIsoDate accepts", () => {
+    for (const dayNumber of [-3, 0, 1, 15, 28, 29, 31, 32, 1000]) {
+      for (const month of ["2026-01-10", "2026-02-10", "2028-02-10", "2026-04-10"]) {
+        const answer = dayInMonth(month, dayNumber)
+        expect(parseIsoDate(answer)).toBe(Date.parse(`${answer}T00:00:00Z`))
+      }
+    }
+  })
 })
 
 describe("shiftMonth before year 1000", () => {
