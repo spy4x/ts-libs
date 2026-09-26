@@ -375,6 +375,9 @@ describe("ThrottledJsonSaver", () => {
     await waitForCount(h.gates, 1)
     expect(done).toBe(false)
     h.gates.shift()?.()
+    await drain()
+    // Flush waited for the follow-up instead of starting a write of its own next to it.
+    expect(h.gates.length).toBe(0)
     // The follow-up already wrote the newest state, so flush itself has nothing left to write.
     expect(await flushed).toBe(false)
     expect(h.saved()).toEqual({ items: 2 })
