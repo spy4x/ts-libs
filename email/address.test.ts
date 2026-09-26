@@ -4,7 +4,7 @@
 // name must be rejected rather than emitted, and a list with one broken entry
 // must fail whole rather than quietly mailing the rest.
 
-import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert"
+import { assertEquals, assertFalse, assertStringIncludes, assertThrows } from "@std/assert"
 import {
   assertNoControlCharacters,
   formatAddress,
@@ -192,6 +192,51 @@ Deno.test("refuses NEL and the Unicode line separators in a mailbox", () => {
       "control character",
     )
   }
+})
+
+Deno.test("refuses U+0080 and U+009F, the edges of the C1 range, in a mailbox", () => {
+  for (const character of ["\u0080", "\u009f"]) {
+    assertThrows(
+      () => parseAddress(`Jane${character}Doe <jane@example.com>`),
+      TypeError,
+      "C1 control character",
+    )
+  }
+})
+
+Deno.test("accepts a no-break space, just past the C1 range, in a display name", () => {
+  assertEquals(parseAddress("Jane\u00a0Doe <jane@example.com>"), {
+    name: "Jane\u00a0Doe",
+    address: "jane@example.com",
+  })
+})
+
+Deno.test("escapes a refused line separator in the error instead of quoting it raw", () => {
+  const error = assertThrows(
+    () => parseAddress("Jane\u2028Bcc: victim@example.com <jane@example.com>"),
+    TypeError,
+  )
+
+  assertStringIncludes(error.message, "Jane\\u2028Bcc")
+  assertFalse(error.message.includes("\u2028"))
+  assertFalse(error.message.includes("inject a header"))
+})
+
+Deno.test("assertNoControlCharacters keeps the 1.4.0 rule for U+2028 and C1", () => {
+  assertNoControlCharacters("Line one\u2028line two \u0085 \u0080 \u009f", "Subject")
+})
+
+Deno.test("accepts a 254-character addr-spec and refuses a 255-character one", () => {
+  const local = (length: number) => "a".repeat(length - "@example.com".length)
+  const longest = `${local(254)}@example.com`
+  assertEquals(longest.length, 254)
+  assertEquals(parseAddress(longest), { address: longest })
+
+  assertThrows(
+    () => parseAddress(`Jane <${local(255)}@example.com>`),
+    TypeError,
+    "255 characters, over the 254 limit",
+  )
 })
 
 Deno.test("assertNoControlCharacters allows a plain value", () => {
