@@ -39,6 +39,17 @@ describe("round", () => {
     expect(round(0.1 + 0.2, 2)).toBe(0.3)
   })
 
+  it("rounds a value small enough that JavaScript prints it in exponent form", () => {
+    expect(round(0.0000001234, 2)).toBe(0)
+    expect(round(1.2345e-7, 9)).toBe(1.23e-7)
+    expect(round(-1.2345e-7, 9)).toBe(-1.23e-7)
+  })
+
+  it("keeps a value whose shifted form JavaScript prints in exponent form", () => {
+    // 123456.789 * 10^20 prints as "1.23456789e+25"; unshifting must not append a second exponent.
+    expect(round(123456.789, 20)).toBe(123456.789)
+  })
+
   it("passes non-finite values through instead of producing NaN", () => {
     expect(round(Number.POSITIVE_INFINITY)).toBe(Number.POSITIVE_INFINITY)
     expect(Number.isNaN(round(Number.NaN))).toBe(true)

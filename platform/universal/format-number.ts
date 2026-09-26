@@ -26,11 +26,22 @@
  */
 export function round(value: number, decimals = 0): number {
   if (!Number.isFinite(value) || Number.isInteger(value)) return value
-  const shifted = Number(`${value}e${decimals}`)
+  const shifted = shiftDecimal(value, decimals)
   if (!Number.isFinite(shifted)) return value
   // A literal `Math.round(x * factor) / factor` re-introduces the representation error for a
   // negative exponent, so the division is done on the decimal string too.
-  return Number(`${Math.round(shifted)}e${-decimals}`)
+  return shiftDecimal(Math.round(shifted), -decimals)
+}
+
+/**
+ * `value * 10^places`, computed on the decimal string so no binary multiplication error creeps in.
+ *
+ * JavaScript prints a number below 1e-6 or from 1e21 up in exponent form (`1.234e-7`), so the
+ * places are added to that exponent rather than appended as a second one: `"1.234e-7e2"` is `NaN`.
+ */
+function shiftDecimal(value: number, places: number): number {
+  const [mantissa, exponent = "0"] = String(value).split(/e/i)
+  return Number(`${mantissa}e${Number(exponent) + places}`)
 }
 
 /**
