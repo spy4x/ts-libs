@@ -54,6 +54,14 @@ export {
   type RejectionStatus,
   type RemoteAddrResolver,
   userThenIp,
+  type UserThenIpOptions,
 } from "./hono.ts"
 
-export { clientIp, humanRetry, type TrustedProxyHeader, UNKNOWN_CLIENT_IP } from "./client-ip.ts"
+export {
+  clientIp,
+  clientIpBucket,
+  type ClientIpOptions,
+  humanRetry,
+  type TrustedProxyHeader,
+  UNKNOWN_CLIENT_IP,
+} from "./client-ip.ts"

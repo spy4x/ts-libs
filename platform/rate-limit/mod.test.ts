@@ -10,6 +10,7 @@ describe("public surface", () => {
   it("exports every documented symbol", () => {
     const expected = [
       "clientIp",
+      "clientIpBucket",
       "createKvStore",
       "createMemoryRateLimiter",
       "createRateLimitMiddleware",
