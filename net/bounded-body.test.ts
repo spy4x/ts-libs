@@ -524,7 +524,25 @@ describe("parseBoundedFormData", () => {
   })
 
   it("refuses a request without a content-type", async () => {
-    const request = new Request(FORM_ORIGIN, { method: "POST", body: "email=user%40example.com" })
-    await assertRejects(() => parseBoundedFormData(request, { maxBytes: 1024 }), TypeError)
+    // A string body would get a default `text/plain` content-type from `Request`,
+    // and the parse would then fail for that reason instead; a stream body gets none.
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("email=user%40example.com"))
+        controller.close()
+      },
+    })
+    const request = new Request(FORM_ORIGIN, {
+      method: "POST",
+      body,
+      duplex: "half",
+    } as RequestInit)
+    assertEquals(request.headers.get("content-type"), null)
+
+    await assertRejects(
+      () => parseBoundedFormData(request, { maxBytes: 1024 }),
+      TypeError,
+      "requires a content-type header",
+    )
   })
 })
