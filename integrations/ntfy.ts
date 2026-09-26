@@ -72,7 +72,13 @@ export interface NtfyClientConfig {
   baseUrl: string
   /** Topic name. Percent-encoded into the path. */
   topic: string
-  /** Bearer token. Optional: a self-hosted ntfy without auth needs none. */
+  /**
+   * Bearer token. Optional: a self-hosted ntfy without auth needs none.
+   * Whitespace around it is trimmed, and a token that is empty after trimming
+   * counts as none. The rest must be visible ASCII only (`!` to `~`): the
+   * constructor refuses a token with a space, tab, line break or non-ASCII
+   * character inside it rather than send an altered credential.
+   */
   token?: string
 }
 
@@ -279,7 +285,10 @@ export class NtfyClient {
   private readonly gate: NotificationSeverity
   private readonly requestTimeoutMs: number
 
-  /** Throws when `config.baseUrl` is empty or unparseable, or `config.topic` is empty. */
+  /**
+   * Throws when `config.baseUrl` is empty or unparseable, `config.topic` is
+   * empty, or `config.token` holds a character outside visible ASCII.
+   */
   constructor(config: NtfyClientConfig, options: NtfyClientOptions = {}) {
     // The trailing slash is dropped **after** the guard, not before it: the
     // guard's rejection text describes the value the caller supplied, and
@@ -308,7 +317,20 @@ export class NtfyClient {
         `NtfyClient: baseUrl is not a valid absolute URL: ${describeUrlShape(rawBaseUrl)}`,
       )
     }
-    this.config = { ...config, baseUrl, topic }
+    // Header values are folded and transliterated before sending, which is
+    // right for a title but would silently alter a credential: `abc\ndef`
+    // would go out as `abc def` and come back as a 401 that looks like a
+    // revoked token. Refuse it here instead. The message never echoes the token.
+    // Whitespace around the token is trimmed first, as the platform trims a
+    // header value, so a token read from a file ending in a newline still works.
+    const token = config.token?.trim() ?? ""
+    if (token !== "" && !/^[\x21-\x7E]+$/.test(token)) {
+      throw new Error(
+        "NtfyClient: token contains a character outside visible ASCII " +
+          "(a space, tab, line break or non-ASCII character)",
+      )
+    }
+    this.config = { ...config, baseUrl, topic, token: token === "" ? undefined : token }
     this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init))
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
     this.clock = options.clock ?? (() => Date.now())

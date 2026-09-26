@@ -117,8 +117,8 @@ different needs follow, and `mig`'s source conflated them:
 
 - A **header value** must be transliterated to printable ASCII. `toAsciiHeaderValue` maps the
   characters that matter for readability (`—` → `-`, `"` → `"`, `…` → `...`, non-breaking space →
-  space) and replaces everything else — Latin-1 accents, Cyrillic, CJK, emoji — with `?`. Allowed
-  header whitespace (HT, LF, CR, space) is preserved.
+  space) and replaces everything else — Latin-1 accents, Cyrillic, CJK, emoji — with `?`. Each run
+  of HT, LF and CR becomes one space, because `Headers.set` throws on a line break inside a value.
 - A **message body** must be left alone. `mig` passed the body through the same sanitiser, so
   `Café ☕` reached ntfy as `Caf? ?` and every accented, Cyrillic, CJK and emoji payload was
   destroyed. Only headers are transliterated here.

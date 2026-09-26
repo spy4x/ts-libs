@@ -25,8 +25,15 @@ describe("toAsciiHeaderValue", () => {
     expect(toAsciiHeaderValue("\uD83D\uDCBE total")).toBe("? total")
   })
 
-  it("keeps the whitespace a header value may contain", () => {
-    expect(toAsciiHeaderValue("line one\nline two\tend")).toBe("line one\nline two\tend")
+  it("folds a LF, a CR, a CRLF and a tab each into one space", () => {
+    expect(toAsciiHeaderValue("a\nb")).toBe("a b")
+    expect(toAsciiHeaderValue("a\rb")).toBe("a b")
+    expect(toAsciiHeaderValue("a\r\nb")).toBe("a b")
+    expect(toAsciiHeaderValue("a\tb")).toBe("a b")
+  })
+
+  it("folds a run of mixed line breaks and tabs into a single space", () => {
+    expect(toAsciiHeaderValue("a\r\n\t\n\rb")).toBe("a b")
   })
 
   it("collapses a non-breaking space to a plain space", () => {
@@ -35,11 +42,10 @@ describe("toAsciiHeaderValue", () => {
 
   it("outputs only header-safe characters for every input", () => {
     const hostile =
-      "Caf\u00e9 \u0411\u0430\u043a\u0430\u043f \u30d0 \u2705 \u2014 \u2026 \uD83D\uDCBE"
+      "line\r\none\tCaf\u00e9 \u0411\u0430\u043a\u0430\u043f \u30d0 \u2705 \u2014 \u2026 \uD83D\uDCBE"
     const safe = toAsciiHeaderValue(hostile)
-    // The permitted set is HT, LF, CR, space and printable ASCII.
-    // deno-lint-ignore no-control-regex
-    expect(/^[\x09\x0A\x0D\x20-\x7E]*$/.test(safe)).toBe(true)
+    // The permitted set is space and printable ASCII.
+    expect(/^[\x20-\x7E]*$/.test(safe)).toBe(true)
   })
 })
 
