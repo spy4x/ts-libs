@@ -385,6 +385,37 @@ describe("CacheService", () => {
         expect(fresh.counter.calls).toBe(1)
         expect(await cache.get("key")).toBe("after-update")
       })
+
+      it("drops a key's generation record once its last wrap finishes, however it ends", async () => {
+        const storage = new MemoryCacheStorage()
+        const cache = new CacheService(storage)
+        // The record map is private; reading it through a cast here keeps it off the public API.
+        const records = () =>
+          (cache as unknown as { generations: Map<string, unknown> }).generations
+
+        await cache.wrap("resolved", () => Promise.resolve("value"), 60)
+        expect(records().size).toBe(0)
+
+        await expect(cache.wrap("rejected", () => Promise.reject(new Error("boom")), 60)).rejects
+          .toThrow("boom")
+        expect(records().size).toBe(0)
+
+        const workingGet = storage.get
+        storage.get = () => Promise.reject(new Error("storage down"))
+        await expect(cache.wrap("unreadable", () => Promise.resolve("value"), 60)).rejects
+          .toThrow("storage down")
+        storage.get = workingGet
+        expect(records().size).toBe(0)
+
+        const load = gatedFn("joined")
+        const first = cache.wrap("joined", load.fn, 60)
+        const second = cache.wrap("joined", load.fn, 60)
+        await load.started
+        load.release()
+        expect(await Promise.all([first, second])).toEqual(["joined", "joined"])
+        expect(load.counter.calls).toBe(1)
+        expect(records().size).toBe(0)
+      })
     })
   })
 })
