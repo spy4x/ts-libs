@@ -733,8 +733,9 @@ rejects, the rejection reaches the caller and the code is already issued.
 ## `server/auth/oauth`
 
 `createOAuthSignIn`, `OAuthSignInError`, `OAuthFailure`, `OAuthOutcome`, `OAuthProviderConfig`,
-`OAuthProfile`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, and the option, input and result
-interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
+`OAuthProfile`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, the flow stores
+(`createMemoryOAuthFlowStore`, `createKvOAuthFlowStore`, `OAuthFlowStore`, `OAuthFlowKv`,
+`DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
 `createGoogleOAuthProvider`, `readGoogleProfile` and Google's endpoint and default-scope constants.
 
 OAuth2 sign-in with any provider that has a user-info endpoint (#57). The provider is configuration,
@@ -788,6 +789,31 @@ completed in another browser. As soon as the callback names a `state`, its flow 
 the browser check, the expiry check and both provider requests, so a failed callback cannot be
 retried with the same `state`.
 
+**Pending flows live in a flow store, memory by default (#150).** A started flow (its `state` and
+PKCE verifier) waits in the `flows` option's store until its callback. The store's `take` reads and
+deletes it in one atomic step, so of parallel callbacks with one `state` only one proceeds.
+
+- Leave `flows` unset for one process. The default, `createMemoryOAuthFlowStore`, keeps at most
+  `MAX_PENDING_OAUTH_FLOWS` (10 000) flows in the process; expired flows are dropped first, then the
+  oldest. A callback must reach the process that built its authorization URL.
+- Pass `createKvOAuthFlowStore(kv)` when more than one process serves the callback (several
+  replicas behind a load balancer, or a restart during a deploy), or when a flood of started flows
+  must not push out other people's. `kv` is any client with `set(key, value, ttlSec)` and an atomic
+  `take(key)`, such as a Redis client sending `SET … EX` and `GETDEL` (Redis 6.2 or later). Keys go
+  under `oauth-flow:` unless `keyPrefix` says otherwise. The flow's expiry is stored with it and
+  checked on `take`; the key's time to live only clears flows nobody completed. Every instance that
+  shares a store must use the same provider configuration.
+
+```ts
+const google = createOAuthSignIn({
+  store,
+  sessions,
+  redirectUri,
+  provider,
+  flows: createKvOAuthFlowStore(kv),
+})
+```
+
 **`disconnect(userId, keyId)` deletes one key.** Only when the key exists, belongs to `userId`, and
 has this provider's method; any other id returns `false` and deletes nothing. On the Postgres store
 the key's sessions end with it, through the cascade.
@@ -799,11 +825,8 @@ as given, because providers compare it character by character.
 
 ### What it does not do
 
-- **It does not share pending flows between processes.** They live in memory inside the object
-  `createOAuthSignIn` returns, at most `MAX_PENDING_OAUTH_FLOWS` (10 000; expired flows are dropped
-  first, then the oldest). A callback must reach the process that built its authorization URL, so an
-  app with more than one process needs sticky routing for the callback. A pluggable flow store is
-  tracked in #150, after 1.0.
+- **It does not share pending flows between processes by default.** Without the `flows` option,
+  a callback must reach the process that built its authorization URL; see the flow store above.
 - **It does not verify an ID token or send a `nonce`.** The profile comes from the user-info
   endpoint, called with the access token the token endpoint returned over TLS.
 - **It does not update a key's address** when the provider later reports a different one.
