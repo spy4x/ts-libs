@@ -86,6 +86,11 @@ interface EmailSender {
   message; the valid subset is never mailed quietly.
 - **Duplicates are deduplicated** case-insensitively before sending and reported
   in `duplicates`.
+- **`replyTo` is optional and validated exactly like `to`.** It goes through the
+  same `parseAddresses` call, so a display name is accepted and sent as a structured
+  mailbox, a control character is refused, and one bad entry fails the whole
+  message. A string or a list renders as one `Reply-To` header; an empty list is
+  refused (omit the field instead), and an omitted `replyTo` renders no header.
 - **Credentials are redacted.** Every string that leaves through `error` has the
   password, the `user:pass` pair and every base64 SASL blob they can form replaced
   with `<REDACTED:CREDENTIAL>`. That is not a fixed list of encodings: after the
