@@ -11,7 +11,7 @@
  *   instant in a foreign `tz` (a guest's timezone, an email footer) is what the
  *   `*InTz` and `formatInstant*` functions do.
  *
- * Every function takes an explicit IANA zone. Nothing here reads the host `TZ`,
+ * Every zone-aware function takes an explicit IANA zone. Nothing here reads the host `TZ`,
  * so results are identical on every machine and in every CI container.
  *
  * Locale comes for free for display text: the formatters are `Intl`-based, so
@@ -23,9 +23,14 @@
  * data, not on displaying it, and only a formatter no caller can reach stays
  * safe to parse. See {@link CANONICAL_LOCALE}.
  *
+ * Zone-free calendar arithmetic on a plain `YYYY-MM-DD` date lives in `./date.ts`. {@link addDays}
+ * is the one function here whose zone is optional: without one it is that module's day step.
+ *
  * Out of scope: date parsing, durations, recurring rules, `Date` arithmetic in
  * the host zone, and anything that needs sub-minute offset precision.
  */
+
+import { formatIsoDate, parseIsoDate } from "./date.ts"
 
 /**
  * The `Intl` option sets this module uses, without the zone. Frozen so a caller
@@ -562,7 +567,17 @@ export function dayOfWeek(date: string, tz: string): string {
 }
 
 /**
- * Add `n` days to a `YYYY-MM-DD` date in `tz`. `n` may be negative.
+ * Add `n` days to a `YYYY-MM-DD` date, in `tz` when one is given. `n` may be negative.
+ *
+ * **Without `tz`** this is plain calendar arithmetic: fixed UTC day steps on the date, with no zone
+ * consulted. It rejects a date the calendar does not have (`2026-02-31`) and throws past
+ * `9999-12-31` rather than answering a six-digit year — see `./date.ts`, which it shares
+ * `parseIsoDate` and `formatIsoDate` with. It is the step for code that holds a calendar date and
+ * no zone: a month grid, a date-range preset, a server reading `?from=`.
+ *
+ * **With `tz`** it moves the date as that zone's calendar does, which differs from the zone-free
+ * answer only where the zone skipped a whole calendar day: `Pacific/Apia` has no `2011-12-30`, so
+ * one day after `2011-12-29` there is `2011-12-31`, where the zone-free step answers `2011-12-30`.
  *
  * The noon anchor is the DST fix, not a detail. Calendar days are not 86,400
  * seconds: on a transition day a day is 23 or 25 hours long, so
@@ -577,7 +592,8 @@ export function dayOfWeek(date: string, tz: string): string {
  * Note the intent: this moves the *date*, not a duration. Adding a day to
  * `2026-03-28` yields `2026-03-29`, whose local length is 23 hours.
  */
-export function addDays(date: string, n: number, tz: string): string {
+export function addDays(date: string, n: number, tz?: string): string {
+  if (tz === undefined) return formatIsoDate(parseIsoDate(date) + n * 86_400_000)
   const noon = zonedDateTime(date, "12:00", tz)
   noon.setUTCDate(noon.getUTCDate() + n)
   return isoDateInTz(noon, tz)

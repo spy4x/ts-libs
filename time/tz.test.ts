@@ -722,3 +722,45 @@ describe("invalid timezone fallback", () => {
     expect(formatInstantShort(instant, guestTz)).toBe("Fri 28 Aug 10:00")
   })
 })
+
+describe("addDays without a zone", () => {
+  it("adds days within a month and across month and year boundaries", () => {
+    expect(addDays("2026-08-10", 5)).toBe("2026-08-15")
+    expect(addDays("2026-08-31", 1)).toBe("2026-09-01")
+    expect(addDays("2026-09-01", -1)).toBe("2026-08-31")
+    expect(addDays("2026-12-31", 1)).toBe("2027-01-01")
+    expect(addDays("2027-01-01", -1)).toBe("2026-12-31")
+    expect(addDays("2026-08-10", 0)).toBe("2026-08-10")
+  })
+
+  it("handles a leap day", () => {
+    expect(addDays("2028-02-28", 1)).toBe("2028-02-29")
+    expect(addDays("2028-02-29", 1)).toBe("2028-03-01")
+    expect(addDays("2026-02-28", 1)).toBe("2026-03-01")
+  })
+
+  it("does not drift across the days a zone changes its clocks", () => {
+    expect(addDays("2026-03-28", 1)).toBe("2026-03-29")
+    expect(addDays("2026-03-29", 1)).toBe("2026-03-30")
+    expect(addDays("2026-10-24", 1)).toBe("2026-10-25")
+    expect(addDays("2026-10-25", 1)).toBe("2026-10-26")
+  })
+
+  it("rejects a day the calendar does not have instead of rolling it over", () => {
+    expect(() => addDays("2026-02-30", 1)).toThrow("expected a YYYY-MM-DD date")
+    expect(() => addDays("2026-13-01", 1)).toThrow("expected a YYYY-MM-DD date")
+    expect(() => addDays("10/08/2026", 1)).toThrow("expected a YYYY-MM-DD date")
+  })
+
+  it("throws past 9999-12-31 instead of clamping or answering a six-digit year", () => {
+    expect(() => addDays("9999-12-31", 5))
+      .toThrow("expected a date in the 0001-9999 window, received: +010000-01")
+    expect(addDays("9999-12-30", 1)).toBe("9999-12-31")
+  })
+
+  it("steps a calendar day where the zone-aware call follows a zone that skipped one", () => {
+    // Samoa moved across the date line and has no 2011-12-30.
+    expect(addDays("2011-12-29", 1)).toBe("2011-12-30")
+    expect(addDays("2011-12-29", 1, "Pacific/Apia")).toBe("2011-12-31")
+  })
+})
