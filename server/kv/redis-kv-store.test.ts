@@ -13,7 +13,8 @@
  * concurrent callers, `close()` racing a reconnect, and a failed reconnect leaving the
  * next call free to try again.
  */
-import { assertEquals, assertRejects } from "@std/assert"
+import { assertEquals, assertInstanceOf, assertRejects } from "@std/assert"
+import { RedisError } from "@iuioiua/redis"
 import { afterEach, describe, it } from "@std/testing/bdd"
 import {
   RedisKvStore,
@@ -30,6 +31,15 @@ afterEach(() => {
   AbortSignal.timeout = originalAbortTimeout
   globalThis.setTimeout = originalSetTimeout
 })
+
+/** Polls `condition` on macrotask ticks until it holds; fails after 100 ticks. */
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let tick = 0; tick < 100; tick++) {
+    if (condition()) return
+    await new Promise((resolve) => originalSetTimeout(resolve, 0))
+  }
+  throw new Error("waitFor: condition never held")
+}
 
 /** One line of a RESP reply, as `+OK`, `$-1` (null), `$5\r\nhello`, etc. */
 type RespLine = string
@@ -133,6 +143,19 @@ function stubConnect(conns: FakeConn[]): { calls: number } {
   return state
 }
 
+/**
+ * Installs a fake `Deno.connect` that hands out `replacement` and counts its calls. The
+ * caller queues every reply up front, `+PONG` first, so their order is fixed.
+ */
+function stubReplacement(replacement: FakeConn): { calls: number } {
+  const state = { calls: 0 }
+  Deno.connect = (() => {
+    state.calls++
+    return Promise.resolve(replacement.conn)
+  }) as unknown as typeof Deno.connect
+  return state
+}
+
 /** Connects a store against a fresh fake connection, consuming the queued PONG. */
 async function connectFake(): Promise<
   { store: RedisKvStore; conns: FakeConn[]; calls: { calls: number } }
@@ -153,8 +176,9 @@ describe("RedisKvStore reconnecting after a dead connection", () => {
   it("shares one reconnect attempt between concurrent callers", async () => {
     const { store, conns } = await connectFake()
 
-    // Kills the first call outright — its own read fails in flight — which is what
-    // records the connection error every later call finds.
+    // Kills the first call outright — its own read fails in flight, and its one
+    // reconnect fails too, because stubConnect has no second fake queued — which is
+    // what records the connection error every later call finds.
     conns[0].breakConnection()
     await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
 
@@ -258,6 +282,7 @@ describe("RedisKvStore reconnecting after a dead connection", () => {
     const replacement = createFakeConn()
     replacement.reply("+PONG")
     replacement.reply("$-1") // GET "b" -> null
+    replacement.reply("$-1") // GET "a", resent on the fresh connection -> null
     replacement.reply("$-1") // GET "c" -> null, read only if a third connect never happens
     let connectCalls = 0
     Deno.connect = (() => {
@@ -269,9 +294,11 @@ describe("RedisKvStore reconnecting after a dead connection", () => {
 
     // Only now, well after the reconnect above already swapped in the new
     // connection and a fresh error holder, does the old connection's still-pending
-    // read fail late.
+    // read fail late. The "a" call resends its GET on the connection the other call
+    // already opened, without opening one of its own.
     conns[0].breakConnection()
-    await assertRejects(() => pendingA, RedisKvStoreConnectionError)
+    assertEquals(await pendingA, null)
+    assertEquals(connectCalls, 1)
 
     // The late failure must be recorded on the OLD holder, the one the dead "a"
     // call actually used — not on the store's current one. A third call proceeds
@@ -348,6 +375,115 @@ describe("RedisKvStore reconnecting after a dead connection", () => {
     secondReplacement.reply("$-1") // GET "k" -> null
     Deno.connect = (() => Promise.resolve(secondReplacement.conn)) as unknown as typeof Deno.connect
     assertEquals(await store.get("k"), null)
+
+    store.close()
+  })
+})
+
+describe("RedisKvStore resending a command once after reconnecting", () => {
+  it("returns the value on a fresh connection when the first send hit a dead connection", async () => {
+    const { store, conns } = await connectFake()
+    const replacement = createFakeConn()
+    replacement.reply("+PONG")
+    replacement.reply("$5\r\nhello") // GET "k", resent -> "hello"
+    const calls = stubReplacement(replacement)
+
+    // Redis went away before this call; nothing noticed until the GET's read failed.
+    conns[0].breakConnection()
+    assertEquals(await store.get("k"), "hello")
+
+    // One reconnect, and the GET went out once on each connection.
+    assertEquals(calls.calls, 1)
+    assertEquals(conns[0].writes.filter((write) => write.includes("GET")).length, 1)
+    assertEquals(replacement.writes.filter((write) => write.includes("GET")).length, 1)
+
+    store.close()
+  })
+
+  it("does not resend a command Redis refused with an error reply", async () => {
+    const { store, conns, calls } = await connectFake()
+    conns[0].reply("-WRONGTYPE Operation against a key holding the wrong kind of value")
+
+    const failure = await assertRejects(() => store.get("list"))
+    assertInstanceOf(failure, RedisError)
+    assertEquals(calls.calls, 1)
+    assertEquals(conns[0].writes.filter((write) => write.includes("GET")).length, 1)
+
+    store.close()
+  })
+
+  it("fails after one reconnect attempt while Redis stays down, with no loop", async () => {
+    const { store, conns } = await connectFake()
+    conns[0].breakConnection()
+    let connectCalls = 0
+    Deno.connect = (() => {
+      connectCalls++
+      return Promise.reject(new Error("ECONNREFUSED (fake)"))
+    }) as unknown as typeof Deno.connect
+
+    const first = await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+    assertEquals((first.cause as Error).message, "ECONNREFUSED (fake)")
+    assertEquals(connectCalls, 1)
+
+    // The next call makes exactly one attempt of its own as well.
+    await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+    assertEquals(connectCalls, 2)
+
+    store.close()
+  })
+
+  it("does not resend when the call already reconnected before its first send", async () => {
+    const { store, conns } = await connectFake()
+    conns[0].breakConnection()
+    Deno.connect =
+      (() => Promise.reject(new Error("ECONNREFUSED (fake)"))) as unknown as typeof Deno.connect
+    await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+
+    // The fresh connection answers PING, then dies before the GET's reply arrives.
+    const replacement = createFakeConn()
+    replacement.reply("+PONG")
+    let connectCalls = 0
+    Deno.connect = (() => {
+      connectCalls++
+      return Promise.resolve(replacement.conn)
+    }) as unknown as typeof Deno.connect
+    const pending = store.get("k")
+    const settled = assertRejects(() => pending, RedisKvStoreConnectionError)
+    await waitFor(() => replacement.writes.some((write) => write.includes("GET")))
+    replacement.breakConnection()
+    await settled
+    assertEquals(connectCalls, 1)
+
+    store.close()
+  })
+})
+
+describe("RedisKvStore bounding a command on an open connection", () => {
+  it("rejects a GET that never gets a reply after the bound, and the next call reconnects", async () => {
+    const { store, conns, calls } = await connectFake()
+
+    // The fake never answers the GET. The command deadline fires on the next tick
+    // instead of after the real bound, and the delay it asked for is recorded.
+    const delays: number[] = []
+    globalThis.setTimeout = ((callback: () => void, ms?: number) => {
+      delays.push(ms ?? 0)
+      return originalSetTimeout(callback, 0)
+    }) as typeof setTimeout
+
+    const failure = await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
+    globalThis.setTimeout = originalSetTimeout
+    assertEquals((failure.cause as DOMException).name, "TimeoutError")
+    assertEquals(delays, [5000])
+    // The frozen connection is closed, and the timed-out GET was not resent.
+    assertEquals(conns[0].closed, true)
+    assertEquals(calls.calls, 1)
+
+    const replacement = createFakeConn()
+    replacement.reply("+PONG")
+    replacement.reply("$5\r\nhello") // GET "k" -> "hello"
+    const reconnects = stubReplacement(replacement)
+    assertEquals(await store.get("k"), "hello")
+    assertEquals(reconnects.calls, 1)
 
     store.close()
   })
