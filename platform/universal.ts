@@ -2,8 +2,9 @@
  * `@spy4x/platform` — universal helpers only.
  *
  * Everything re-exported here runs in Deno, a browser, a worker and an SSR pass, and calls no
- * host API beyond `Date`, `Intl`, `crypto`, `TextEncoder` and `Response`. Browser-only and server-only code
- * lives behind `./browser` and `./server` so an SSR bundle cannot reach it by accident.
+ * host API beyond `Date`, `Intl`, `crypto`, `TextEncoder`, `URL`, `FormData` and `Response`.
+ * Browser-only and server-only code lives behind `./browser` and `./server` so an SSR bundle
+ * cannot reach it by accident.
  *
  * This package ships **no** validator: `validate` and the validation error
  * envelope belong to `@spy4x/validation`, which is a peer dependency. {@link ValidationError}
@@ -16,9 +17,12 @@ export * from "./universal/concurrency.ts"
 export * from "./universal/constants.ts"
 export * from "./universal/errors.ts"
 export * from "./universal/format-number.ts"
+export * from "./universal/honeypot.ts"
 export * from "./universal/key-value-store.ts"
 export * from "./universal/result.ts"
 export * from "./universal/schema.ts"
+export * from "./universal/seo.ts"
+export * from "./universal/sort.ts"
 export * from "./universal/text.ts"
 export * from "./universal/time.ts"
 export * from "./universal/time-constants.ts"
