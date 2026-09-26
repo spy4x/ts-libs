@@ -488,3 +488,16 @@ describe("RedisKvStore bounding a command on an open connection", () => {
     store.close()
   })
 })
+
+describe("RedisKvStore.take", () => {
+  it("sends GETDEL for the prefixed key and returns its value", async () => {
+    const { store, conns } = await connectFake()
+    conns[0].reply("$4\r\nflow")
+
+    assertEquals(await store.take("state"), "flow")
+    assertEquals(conns[0].writes.at(-1)?.includes("GETDEL"), true)
+    assertEquals(conns[0].writes.at(-1)?.includes("unit_kv:state"), true)
+
+    store.close()
+  })
+})

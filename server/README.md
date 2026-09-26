@@ -1501,9 +1501,9 @@ export const config = loadConfig(configSchema)
 ## `server/kv`
 
 `RedisKvStore`. A small wrapper over `@iuioiua/redis`'s `RedisClient`: `get`, `set` with a TTL,
-`del`, `reset`, `close`. Extracted from `template/libs/server/kv/+index.ts` (#75); `financy`'s copy
-differs from the template's by one import line (its own module alias for the cache interface) and
-was not otherwise consulted.
+`take`, `del`, `reset`, `close`. Extracted from `template/libs/server/kv/+index.ts` (#75);
+`financy`'s copy differs from the template's by one import line (its own module alias for the cache
+interface) and was not otherwise consulted.
 
 **Structurally compatible with `ICacheStorage`.** `@spy4x/platform/cache`'s `ICacheStorage` (#125)
 names `server/kv` in its own doc as the interface's Redis implementation, briefed against these exact
@@ -1559,8 +1559,9 @@ still leaves no socket open.
 
 **Resends a command once after reconnecting (#169).** The call whose own write or read fails on a
 dead connection (not an error reply from Redis) reconnects and sends its command once more on the
-fresh connection. Every command the store sends (`GET`, `SET … EX`, `DEL`, `SCAN`, `CLIENT ID`)
-gives the same result when Redis receives it twice, so a first send that did reach
+fresh connection. Every command the store sends is safe to send twice: `GET`, `SET … EX`, `DEL`,
+`SCAN` and `CLIENT ID` give the same result when Redis receives them twice, and a repeated `GETDEL`
+at worst returns `null` for a value the first send already consumed, so a first send that did reach
 Redis is harmless to repeat. A Redis restart therefore no longer costs the first call after it.
 Each call reconnects at most once: a call that already reconnected before its first send, a call
 whose one reconnect fails, and a resend that fails again all throw `RedisKvStoreConnectionError`,
@@ -1574,6 +1575,10 @@ queued behind it on that connection fails the same way, and the next call reconn
 command is not resent, since a frozen Redis would hold the caller for another full bound. Before
 this, a frozen Redis turned into request latency equal to the freeze. All three 5-second bounds are
 fixed internal constants, not options on `connect()`.
+
+**`take(key)`** reads a value and deletes its key in one atomic `GETDEL` (Redis 6.2 or later), for
+one-time values such as a pending sign-in flow: two concurrent calls never both receive the value,
+and a resend after a dead connection returns `null` rather than the value a second time.
 
 Net effect for a caller: a Redis restart costs no call at all when Redis is back by the time the
 resend reconnects, and otherwise only the calls made while Redis is actually down; a frozen Redis

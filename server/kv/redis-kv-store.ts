@@ -1,5 +1,5 @@
 /**
- * A Redis-backed key-value store: `GET`/`SET … EX`/`DEL`, plus a scoped `reset`.
+ * A Redis-backed key-value store: `GET`/`SET … EX`/`DEL`/`GETDEL`, plus a scoped `reset`.
  *
  * Ported from `template/libs/server/kv/+index.ts`. That file `implements ICacheStorage`
  * from the template's own cache module; `@spy4x/platform/cache` is the extraction of
@@ -176,8 +176,9 @@ interface OpenedConnection {
  * call whose command fails on a dead connection (a failed write or read, not an error
  * reply from Redis) reconnects and sends that command once more on the fresh
  * connection (#169): every command this store sends — `GET`, `SET … EX`, `DEL`,
- * `SCAN`, `CLIENT ID` — is safe to send twice, so a Redis restart no longer
- * costs the first call after it. Each call reconnects at most once: a call that
+ * `GETDEL`, `SCAN`, `CLIENT ID` — is safe to send twice (a repeated `GETDEL` at worst
+ * returns `null`), so a Redis restart no longer costs the first call after it. Each
+ * call reconnects at most once: a call that
  * already reconnected before its first send, or whose one reconnect fails, throws
  * {@link RedisKvStoreConnectionError}, so while Redis stays unreachable every call
  * fails after one bounded attempt, never a loop. A command that got no reply within
@@ -418,7 +419,7 @@ export class RedisKvStore {
    * {@link COMMAND_TIMEOUT_MS} timeout — and this call has not reconnected yet, it
    * reconnects (or joins a reconnect already in flight, or finds a concurrent call
    * already swapped a fresh connection in) and sends the command once more (#169).
-   * Every command this store sends gives the same result when Redis receives it twice,
+   * Every command this store sends is safe to send twice (see {@link RedisKvStore}),
    * so a first send that did reach Redis before the socket died is harmless to repeat.
    *
    * No loop: a call reconnects at most once. A call that reconnected before its first
@@ -485,6 +486,19 @@ export class RedisKvStore {
   /** Deletes a key. Deleting a key that does not exist is not an error. */
   public async del(key: string): Promise<void> {
     await this.#send(["DEL", this.#prefixed(key)])
+  }
+
+  /**
+   * Gets a value and deletes its key in one atomic step (`GETDEL`), or returns `null`
+   * when the key does not exist. Needs Redis 6.2 or later.
+   *
+   * For one-time values such as a pending sign-in flow: two concurrent calls for the
+   * same key never both receive the value. A resend after a dead connection (see
+   * {@link RedisKvStore}) keeps that promise — if the first send already consumed the
+   * key, the resend returns `null` rather than the value a second time.
+   */
+  public async take(key: string): Promise<string | null> {
+    return await this.#send<string | null>(["GETDEL", this.#prefixed(key)])
   }
 
   /**

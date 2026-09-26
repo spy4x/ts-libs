@@ -295,4 +295,21 @@ describe("RedisKvStore against a real server", () => {
       store.close()
     }
   })
+
+  it("take() returns a value once and deletes it", async () => {
+    const settings = redisSettings()
+    await requireReachable(settings.address)
+
+    const prefix = uniqueKeyPrefix("it_kv_take")
+    const store = await RedisKvStore.connect(settings.hostname, settings.port, prefix)
+    try {
+      await store.set("flow", "pending", 60)
+      assertEquals(await store.take("flow"), "pending")
+      assertEquals(await store.take("flow"), null)
+      assertEquals(await store.get("flow"), null)
+    } finally {
+      await store.reset()
+      store.close()
+    }
+  })
 })
