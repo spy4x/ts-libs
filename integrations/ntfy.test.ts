@@ -187,6 +187,26 @@ describe("NtfyClient construction", () => {
     expect(() => new NtfyClient({ baseUrl: "http://127.0.0.1:2586", topic: TOPIC })).not.toThrow()
   })
 
+  it("refuses a token with a line break, tab or non-ASCII character without echoing it", () => {
+    for (const token of ["abc\ndef", "abc\r\ndef", "abc\tdef", "abc def", "abc\u00e9def"]) {
+      let message = ""
+      try {
+        new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC, token })
+      } catch (error) {
+        message = (error as Error).message
+      }
+      expect(message).toContain("token contains a character outside visible ASCII")
+      expect(message).not.toContain("abc")
+      expect(message).not.toContain("def")
+    }
+  })
+
+  it("accepts a visible-ASCII token, so the token guard is not unconditional", () => {
+    expect(() => new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC, token: TOKEN })).not.toThrow()
+    expect(() => new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC, token: "tk_A1!~" }))
+      .not.toThrow()
+  })
+
   it("normalises the endpoint and encodes the topic", () => {
     const client = new NtfyClient({ baseUrl: `${BASE_URL}/`, topic: "my topic" })
     expect(client.endpoint).toBe(`${BASE_URL}/my%20topic`)

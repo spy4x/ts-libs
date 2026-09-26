@@ -72,7 +72,12 @@ export interface NtfyClientConfig {
   baseUrl: string
   /** Topic name. Percent-encoded into the path. */
   topic: string
-  /** Bearer token. Optional: a self-hosted ntfy without auth needs none. */
+  /**
+   * Bearer token. Optional: a self-hosted ntfy without auth needs none.
+   * Must be visible ASCII only (`!` to `~`); the constructor refuses a token
+   * with a space, tab, line break or non-ASCII character rather than send an
+   * altered credential.
+   */
   token?: string
 }
 
@@ -279,7 +284,10 @@ export class NtfyClient {
   private readonly gate: NotificationSeverity
   private readonly requestTimeoutMs: number
 
-  /** Throws when `config.baseUrl` is empty or unparseable, or `config.topic` is empty. */
+  /**
+   * Throws when `config.baseUrl` is empty or unparseable, `config.topic` is
+   * empty, or `config.token` holds a character outside visible ASCII.
+   */
   constructor(config: NtfyClientConfig, options: NtfyClientOptions = {}) {
     // The trailing slash is dropped **after** the guard, not before it: the
     // guard's rejection text describes the value the caller supplied, and
@@ -306,6 +314,16 @@ export class NtfyClient {
     if (!URL.canParse(baseUrl)) {
       throw new Error(
         `NtfyClient: baseUrl is not a valid absolute URL: ${describeUrlShape(rawBaseUrl)}`,
+      )
+    }
+    // Header values are folded and transliterated before sending, which is
+    // right for a title but would silently alter a credential: `abc\ndef`
+    // would go out as `abc def` and come back as a 401 that looks like a
+    // revoked token. Refuse it here instead. The message never echoes the token.
+    if (config.token && !/^[\x21-\x7E]+$/.test(config.token)) {
+      throw new Error(
+        "NtfyClient: token contains a character outside visible ASCII " +
+          "(a space, tab, line break or non-ASCII character)",
       )
     }
     this.config = { ...config, baseUrl, topic }
