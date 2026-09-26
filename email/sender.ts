@@ -91,9 +91,11 @@ export function createConsoleSender(options: ConsoleSenderOptions = {}): EmailSe
   return {
     send(message: EmailMessage): Promise<SendResult> {
       let recipients: ParsedRecipients
+      let replyTo: ParsedRecipients | undefined
       try {
         assertSendableMessage(message)
         recipients = parseAddresses(message.to)
+        replyTo = message.replyTo === undefined ? undefined : parseAddresses(message.replyTo)
       } catch (error) {
         return Promise.resolve({
           ok: false,
@@ -107,8 +109,13 @@ export function createConsoleSender(options: ConsoleSenderOptions = {}): EmailSe
       const addresses = recipients.addresses.map((address) => address.address)
       const body = message.text ?? stripTags(message.html ?? "")
 
+      const replyToPart = replyTo === undefined
+        ? ""
+        : ` replyTo=${replyTo.addresses.map((address) => address.address).join(",")}`
+
       log(
-        `[email:console] to=${addresses.join(",")} subject=${JSON.stringify(message.subject)} ` +
+        `[email:console] to=${addresses.join(",")}${replyToPart} ` +
+          `subject=${JSON.stringify(message.subject)} ` +
           `text=${body.length}B attachments=${message.attachments?.length ?? 0}`,
       )
       log(preview(body, previewChars))

@@ -329,6 +329,60 @@ Deno.test("fails an empty recipient list rather than sending to nobody", async (
   assertEquals(recorded.messages.length, 0)
 })
 
+// ---------- Reply-To ----------
+
+Deno.test("omits the replyTo key when the message has no replyTo", async () => {
+  const { sender, recorded } = makeSender()
+  await sender.send(MESSAGE)
+
+  assertFalse("replyTo" in recorded.messages[0])
+})
+
+Deno.test("assembles a replyTo display name the same way as a to display name", async () => {
+  const { sender, recorded } = makeSender()
+  await sender.send({
+    ...MESSAGE,
+    to: "Doe, Jane <jane@example.com>",
+    replyTo: "Doe, Jane <jane@example.com>",
+  })
+
+  const expected = [{ name: "Doe, Jane", address: "jane@example.com" }]
+  assertEquals(recorded.messages[0].to, expected)
+  assertEquals(recorded.messages[0].replyTo, expected)
+})
+
+Deno.test("refuses a CRLF in replyTo before touching the transport", async () => {
+  const { sender, recorded } = makeSender()
+  const failed = failure(
+    await sender.send({
+      ...MESSAGE,
+      replyTo: "Support\r\nBcc: victim@example.com <support@example.com>",
+    }),
+  )
+
+  assertStringIncludes(failed.error, "control character")
+  assertEquals(recorded.configs.length, 0)
+  assertEquals(recorded.messages.length, 0)
+})
+
+Deno.test("fails the whole send on one invalid replyTo entry", async () => {
+  const { sender, recorded } = makeSender()
+  const failed = failure(
+    await sender.send({ ...MESSAGE, replyTo: ["support@example.com", "not an address"] }),
+  )
+
+  assertStringIncludes(failed.error, "Invalid email address")
+  assertEquals(recorded.messages.length, 0)
+})
+
+Deno.test("refuses an empty replyTo list rather than dropping the header", async () => {
+  const { sender, recorded } = makeSender()
+  const failed = failure(await sender.send({ ...MESSAGE, replyTo: [] }))
+
+  assertStringIncludes(failed.error, "replyTo")
+  assertEquals(recorded.messages.length, 0)
+})
+
 Deno.test("fails a message with no body rather than sending an empty mail", async () => {
   const { sender, recorded } = makeSender()
   const failed = failure(
@@ -742,6 +796,40 @@ Deno.test("never needs --allow-net to assemble a message", async () => {
 
   assert(result.ok)
   assert(sink.mime.length > 0)
+})
+
+Deno.test("renders a Reply-To header for a single address", async () => {
+  const sink = { mime: "" }
+  const sender = createSmtpSender(BASE_OPTIONS, mimeFactory(sink))
+
+  const result = await sender.send({ ...MESSAGE, replyTo: "hello@example.com" })
+
+  assert(result.ok)
+  assert(/^Reply-To: hello@example\.com\r$/m.test(sink.mime), sink.mime)
+})
+
+Deno.test("renders a Reply-To header for a list, display names included", async () => {
+  const sink = { mime: "" }
+  const sender = createSmtpSender(BASE_OPTIONS, mimeFactory(sink))
+
+  const result = await sender.send({
+    ...MESSAGE,
+    replyTo: ["Anton <hello@example.com>", "owner@example.com"],
+  })
+
+  assert(result.ok)
+  assert(/^Reply-To: Anton <hello@example\.com>, owner@example\.com\r$/m.test(sink.mime), sink.mime)
+})
+
+Deno.test("renders no Reply-To header when replyTo is omitted", async () => {
+  const sink = { mime: "" }
+  const sender = createSmtpSender(BASE_OPTIONS, mimeFactory(sink))
+
+  const result = await sender.send(MESSAGE)
+
+  assert(result.ok)
+  assert(sink.mime.length > 0)
+  assertFalse(/^Reply-To:/im.test(sink.mime))
 })
 
 /** Present so the ICS assertion above fails loudly if the enum import drifts. */

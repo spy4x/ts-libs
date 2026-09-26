@@ -145,9 +145,11 @@ export function createSmtpSender(
   return {
     async send(message: EmailMessage): Promise<SendResult> {
       let recipients: ParsedRecipients
+      let replyTo: ParsedRecipients | undefined
       try {
         assertSendableMessage(message)
         recipients = parseAddresses(message.to)
+        replyTo = message.replyTo === undefined ? undefined : parseAddresses(message.replyTo)
       } catch (error) {
         // Nothing was sent and nothing will be: a bad recipient list fails the
         // whole message rather than quietly dropping the entry that did not parse.
@@ -164,7 +166,7 @@ export function createSmtpSender(
 
       try {
         const info = await (await resolveTransport()).sendMail(
-          mailOptions(message, from, recipients.addresses),
+          mailOptions(message, from, recipients.addresses, replyTo?.addresses),
         )
         const accepted = info.accepted === undefined ? envelope : [...info.accepted]
         const rejected = info.rejected === undefined ? [] : [...info.rejected]
@@ -263,11 +265,16 @@ function transportConfig(options: SmtpOptions): SMTPTransportOptions {
  * `multipart/alternative` whose HTML half was the plain text verbatim — meaning
  * any `<` in the body was parsed as markup, and every text-only message carried a
  * redundant second part.
+ *
+ * `replyTo` arrives already parsed by the same `parseAddresses` call as `to`, and
+ * the key is set only when the caller gave one, so an omitted `replyTo` leaves the
+ * options object exactly as it was before the field existed.
  */
 function mailOptions(
   message: EmailMessage,
   from: EmailAddress,
   recipients: readonly EmailAddress[],
+  replyTo: readonly EmailAddress[] | undefined,
 ): SendMailOptions {
   const options: SendMailOptions = {
     from: mailbox(from),
@@ -275,6 +282,7 @@ function mailOptions(
     subject: message.subject,
   }
 
+  if (replyTo !== undefined) options.replyTo = replyTo.map(mailbox)
   if (hasBody(message.text)) options.text = message.text
   if (hasBody(message.html)) options.html = message.html
   if (message.attachments !== undefined && message.attachments.length > 0) {

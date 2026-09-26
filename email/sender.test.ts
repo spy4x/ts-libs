@@ -49,6 +49,35 @@ Deno.test("logs a summary line and a body preview", () => {
     })
 })
 
+Deno.test("logs the replyTo addresses when the message has them", async () => {
+  const sink = makeSink()
+  await createConsoleSender({ log: sink.log }).send({
+    to: "a@example.com",
+    replyTo: ["Anton <hello@example.com>", "owner@example.com"],
+    subject: "Hi",
+    text: "Body text",
+  })
+
+  assertEquals(
+    sink.lines[0],
+    `[email:console] to=a@example.com replyTo=hello@example.com,owner@example.com ` +
+      `subject="Hi" text=9B attachments=0`,
+  )
+})
+
+Deno.test("returns a failure for a CRLF in replyTo instead of logging it", async () => {
+  const sink = makeSink()
+  const result = await createConsoleSender({ log: sink.log }).send({
+    to: "a@example.com",
+    replyTo: "Support\r\nBcc: victim@example.com <support@example.com>",
+    subject: "Hi",
+    text: "Body",
+  })
+
+  assertStringIncludes(failure(result).error, "control character")
+  assertEquals(sink.lines, [])
+})
+
 Deno.test("truncates a long body and says how much was cut", async () => {
   const sink = makeSink()
   await createConsoleSender({ log: sink.log, previewChars: 4 }).send({
