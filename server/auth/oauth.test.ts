@@ -166,6 +166,11 @@ describe("createOAuthSignIn: state", () => {
     for (const browserState of [undefined, null]) {
       expect(await failure(oauth.handleCallback({ query, browserState }))).toBe("invalid-state")
     }
+    // The refused callback consumed the flow: the right state no longer completes it.
+    expect(await failure(oauth.handleCallback({ query, browserState: started.state }))).toBe(
+      "invalid-state",
+    )
+    expect(provider.tokenStatuses).toEqual([])
   })
 
   it("refuses a state it never issued", async () => {
