@@ -505,6 +505,49 @@ describe("NtfyClient.notifyFailure", () => {
     expect(transport.requests[0].headers.get("Title")).toBe("backup failed")
     expect(transport.requests[0].body).toBe("detail")
   })
+
+  it("returns a result for a multi-line title and sends it on one line", async () => {
+    const { client, transport } = clientFor([{ status: 200 }])
+    const result = await client.notifyFailure("a\nb", "detail")
+    expect(result.ok).toBe(true)
+    expect(transport.requests.length).toBe(1)
+    expect(transport.requests[0].headers.get("Title")).toBe("a b")
+  })
+})
+
+describe("NtfyClient line breaks in headers", () => {
+  it("folds a CR, a CRLF and a tab in the title, tags and click URL to a space", async () => {
+    for (const whitespace of ["\r", "\r\n", "\t"]) {
+      const { client, transport } = clientFor([{ status: 200 }])
+      const result = await client.push({
+        title: `backup${whitespace}failed`,
+        message: "body",
+        severity: NotificationSeverity.Failure,
+        tags: [`disk${whitespace}full`],
+        click: `https://example.invalid/runs${whitespace}42`,
+      })
+      expect(result.ok).toBe(true)
+      const headers = transport.requests[0].headers
+      expect(headers.get("Title")).toBe("backup failed")
+      expect(headers.get("Tags")).toBe("disk full")
+      expect(headers.get("Click")).toBe("https://example.invalid/runs 42")
+    }
+  })
+
+  it("sends the message body byte for byte, line breaks and tabs included", async () => {
+    const { client, transport } = clientFor([{ status: 200 }])
+    const message = "first line\r\nsecond\tline\nCaf\u00e9 \u2705\r"
+    await client.push({ title: "a\nb", message, severity: NotificationSeverity.Failure })
+    expect(transport.requests[0].body).toBe(message)
+  })
+
+  it("still sends a title that is only line breaks", async () => {
+    const { client, transport } = clientFor([{ status: 200 }])
+    const result = await client.notifyFailure("\r\n\n", "detail")
+    expect(result.ok).toBe(true)
+    expect(transport.requests.length).toBe(1)
+    expect(transport.requests[0].headers.get("Title")).toBe("")
+  })
 })
 
 describe("NtfyClient non-ASCII handling", () => {
@@ -530,8 +573,7 @@ describe("NtfyClient non-ASCII handling", () => {
       severity: NotificationSeverity.Failure,
     })
     const title = transport.requests[0].headers.get("Title") ?? ""
-    // deno-lint-ignore no-control-regex
-    expect(/^[\x09\x0A\x0D\x20-\x7E]*$/.test(title)).toBe(true)
+    expect(/^[\x20-\x7E]*$/.test(title)).toBe(true)
     expect(title).toBe("Backup Caf? ????? ?????? ? - done...")
   })
 
@@ -558,8 +600,7 @@ describe("NtfyClient non-ASCII handling", () => {
   it("leaves no header above U+007F, which is what the platform rejects", () => {
     const headers = createAsciiHeaders({ Title: "Caf\u00e9 \u2705 \u0411\u0430\u043A\u0430\u043F" })
     const title = headers.get("Title") ?? ""
-    // deno-lint-ignore no-control-regex
-    expect(/^[\x09\x0A\x0D\x20-\x7E]*$/.test(title)).toBe(true)
+    expect(/^[\x20-\x7E]*$/.test(title)).toBe(true)
   })
 })
 

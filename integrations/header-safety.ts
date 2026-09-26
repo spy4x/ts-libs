@@ -10,7 +10,9 @@
  *   `toAsciiHeaderValue` maps the characters that matter for readability
  *   (`—` to `-`, `“` to `"`, `…` to `...`, non-breaking space to space) and
  *   replaces everything else — Latin-1 accents, Cyrillic, CJK, emoji — with
- *   `?`. Whitespace a header value may contain (HT, LF, CR, space) is kept.
+ *   `?`. Each run of HT, LF and CR becomes one space: `Headers.set` refuses LF
+ *   and CR inside a value, so a multi-line title would otherwise throw before
+ *   the request is sent.
  * - A **message body** must be left alone. `mig` passed the body through this
  *   same sanitiser (`notify.ts:119`), so `Café ☕` reached ntfy as `Caf? ?` and
  *   every accented, Cyrillic, CJK and emoji payload was destroyed. Only headers
@@ -20,15 +22,17 @@
 /**
  * Replaces every code point a header value cannot carry.
  *
+ * Each run of HT, LF and CR is folded into one space first, so `"a\r\nb"`
+ * becomes `"a b"`. What remains outside printable ASCII is transliterated.
+ *
  * One `?` per **code point**. The `u` flag is what makes that true: without it
  * the pattern iterates UTF-16 units, so an emoji (one code point, two units)
  * would produce two `?`. The emitted header is still ASCII-safe either way, but
  * the difference is visible in the output, so a test pins it.
  */
 export const toAsciiHeaderValue = (value: string): string =>
-  // HT, LF, CR, space and printable ASCII are the permitted header characters.
-  // deno-lint-ignore no-control-regex
-  value.replace(/[^\x09\x0A\x0D\x20-\x7E]/gu, (character) => {
+  // Space and printable ASCII are the only characters left in the output.
+  value.replace(/[\t\r\n]+/g, " ").replace(/[^\x20-\x7E]/gu, (character) => {
     switch (character) {
       case "\u2014":
       case "\u2013":
