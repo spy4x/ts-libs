@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { formatDecimal, formatPct, round } from "./format-number.ts"
+import { formatBytes, formatDecimal, formatPct, round } from "./format-number.ts"
 
 describe("round", () => {
   it("rounds a positive halfway value up, where the naive form rounds down", () => {
@@ -87,5 +87,32 @@ describe("formatPct", () => {
   it("renders a non-finite value as zero instead of NaN", () => {
     expect(formatPct(Number.NaN)).toBe("0.00%")
     expect(formatPct(Number.POSITIVE_INFINITY)).toBe("0.00%")
+  })
+})
+
+describe("formatBytes", () => {
+  it("renders a byte count under 1024 as whole bytes", () => {
+    expect(formatBytes(0)).toBe("0 B")
+    expect(formatBytes(512)).toBe("512 B")
+    expect(formatBytes(1023)).toBe("1023 B")
+  })
+
+  it("renders a whole unit with no decimal", () => {
+    expect(formatBytes(1024)).toBe("1 KB")
+    expect(formatBytes(2 * 1024 * 1024)).toBe("2 MB")
+  })
+
+  it("renders a fractional unit to one decimal place", () => {
+    expect(formatBytes(1.5 * 1024)).toBe("1.5 KB")
+    expect(formatBytes(1.25 * 1024 * 1024 * 1024)).toBe("1.3 GB")
+  })
+
+  it("moves to the next unit when rounding reaches 1024 of the current one", () => {
+    expect(formatBytes(1024 * 1024 - 1)).toBe("1 MB")
+    expect(formatBytes(1024 * 1024 * 1024 - 1)).toBe("1 GB")
+  })
+
+  it("stops at terabytes", () => {
+    expect(formatBytes(2048 * 1024 ** 4)).toBe("2048 TB")
   })
 })
