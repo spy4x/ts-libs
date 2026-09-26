@@ -5,7 +5,7 @@
 
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert"
 import { decodeBase64Url, encodeBase64Url } from "@std/encoding/base64url"
-import { type } from "arktype"
+import { type Type, type } from "arktype"
 import {
   createSignedPayloadCodec,
   MAX_SIGNED_PAYLOAD_LENGTH,
@@ -319,6 +319,52 @@ Deno.test("signed payload — sign refuses a payload that would not verify", asy
     SignedPayloadError,
   )
   assertEquals(error.code, SignedPayloadErrorCode.InvalidPayload)
+})
+
+/**
+ * An object with arktype's public rejection shape — an array of issues with a `summary` string, a
+ * `throw` method and `flatByPath` — built without arktype's own `ArkErrors` class.
+ *
+ * Stands in for a rejection built by a second, differently-loaded copy of arktype: same shape,
+ * different class identity, so `instanceof` against this module's `type.errors` fails on it.
+ */
+function foreignArkErrors(message: string) {
+  const issue = { code: "predicate", path: [], problem: message, message }
+  return Object.assign([issue], {
+    summary: message,
+    flatByPath: { "": [issue] },
+    throw: () => {
+      throw new Error(message)
+    },
+  })
+}
+
+/** A cursor codec whose schema rejects every payload the way a foreign arktype copy would. */
+function foreignRejectingCodec() {
+  const rejectsEverything =
+    ((_value: unknown) => foreignArkErrors("id must be a uuid")) as unknown as Type<typeof PAGE>
+  return createSignedPayloadCodec({
+    secret: SECRET,
+    purpose: "groups.list",
+    version: 1,
+    schema: rejectsEverything,
+  })
+}
+
+Deno.test("signed payload — sign refuses a payload a foreign arktype copy's schema rejects", async () => {
+  const error = await assertRejects(
+    () => foreignRejectingCodec().sign(PAGE),
+    SignedPayloadError,
+  )
+  assertEquals(error.code, SignedPayloadErrorCode.InvalidPayload)
+})
+
+Deno.test("signed payload — verify refuses a payload a foreign arktype copy's schema rejects", async () => {
+  const token = await cursorCodec().sign(PAGE)
+  assertEquals(await foreignRejectingCodec().verify(token), {
+    ok: false,
+    error: SignedPayloadErrorCode.InvalidPayload,
+  })
 })
 
 Deno.test("signed payload — sign refuses a lifetime that is not a positive integer", async () => {
