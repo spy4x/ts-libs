@@ -80,9 +80,11 @@ export interface OutboxProcessorOptions {
    * That check predicts the next publish from the slowest one so far in the batch, so
    * it is a heuristic, not a guarantee. A publish slower than every earlier one in the
    * batch, started close to the end of the lease, can still run past it and be
-   * delivered twice, even when it is much shorter than the lease. Size the lease with
-   * room for that: at least the slowest expected publish on top of the slowest typical
-   * one.
+   * delivered twice, even when it is much shorter than the lease. A longer lease alone
+   * does not close this window, because the check stops at the same margin before the
+   * end of any lease. It is closed only when the whole batch fits in the lease, that is
+   * when `leaseSeconds` exceeds `batchSize` times the slowest expected publish, or by
+   * the floor proposed in #269.
    */
   leaseSeconds?: number
   /**
