@@ -67,7 +67,13 @@ export interface HealthchecksClientConfig {
  * configured" reaches the caller, as an explicit decision. A member that no
  * code path produces is a member a caller will branch on forever and never see.
  */
-export type HealthchecksErrorCode = "http_error" | "network_error" | "timeout"
+export type HealthchecksErrorCode =
+  | "http_error"
+  | "network_error"
+  | "timeout"
+  | "check_not_found"
+  | "rate_limited"
+  | "redirected"
 
 /** A ping that reached healthchecks.io and was accepted. */
 export interface HealthchecksSuccess {
@@ -216,6 +222,13 @@ export class HealthchecksClient {
    * Never throws. A non-2xx answer is a failure, not a log line: the source
    * logged `healthchecks ping failed: ...` and returned, so a permanently
    * broken switch looked like a healthy process.
+   *
+   * A 2xx is not enough either. healthchecks.io answers `200 OK (not found)`
+   * for a UUID it does not know and `200 OK (rate limited)` for a ping it
+   * ignored (https://healthchecks.io/docs/http_api/), so the first bytes of
+   * the body decide: `check_not_found` is final, `rate_limited` is retried.
+   * A redirect is refused as `redirected` rather than followed, because
+   * following a 301/302/303 turns the POST into a GET and drops the body.
    */
   async ping(ping: HealthchecksPing): Promise<HealthchecksResult> {
     const url = this.urlFor(ping.outcome)
@@ -279,10 +292,45 @@ export class HealthchecksClient {
       const response = await this.fetcher(url, {
         method: "POST",
         body,
+        redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
       })
-      if (response.ok) {
+      if (isRedirect(response)) {
         await releaseResponseBody(response)
+        // The `Location` value and the ping URL both stay out of the message:
+        // the URL carries the check's capability key.
+        return {
+          ok: false,
+          code: "redirected",
+          message: `healthchecks answered with a redirect (${response.status}); ` +
+            "set the ping URL to its final address",
+          status: response.status,
+          attempts: attempt,
+          retryable: false,
+        }
+      }
+      if (response.ok) {
+        const answer = (await readBodyPrefix(response, BODY_PREFIX_BYTES)).trim()
+        if (answer === NOT_FOUND_BODY) {
+          return {
+            ok: false,
+            code: "check_not_found",
+            message: `healthchecks has no check for this ping URL (${NOT_FOUND_BODY})`,
+            status: response.status,
+            attempts: attempt,
+            retryable: false,
+          }
+        }
+        if (answer === RATE_LIMITED_BODY) {
+          return {
+            ok: false,
+            code: "rate_limited",
+            message: `healthchecks ignored the ping (${RATE_LIMITED_BODY})`,
+            status: response.status,
+            attempts: attempt,
+            retryable: true,
+          }
+        }
         return { ok: true, httpStatus: response.status, attempts: attempt }
       }
       const outcome: PostFailure = {
@@ -317,6 +365,50 @@ export class HealthchecksClient {
   }
 }
 
+/** Body healthchecks.io sends with a 200 when the check UUID does not exist. */
+const NOT_FOUND_BODY = "OK (not found)"
+/** Body healthchecks.io sends with a 200 when it ignored a ping over the rate limit. */
+const RATE_LIMITED_BODY = "OK (rate limited)"
+/** Enough bytes to tell the documented bodies apart; the rest is never buffered. */
+const BODY_PREFIX_BYTES = 64
+
+/**
+ * A 3xx answer to a `redirect: "manual"` request. Deno hands back the real
+ * status; a browser hands back an `opaqueredirect` response with status 0.
+ */
+const isRedirect = (response: Response): boolean =>
+  response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)
+
+/**
+ * Reads at most `maxBytes` of a response body as text, then cancels the
+ * rest, so a hostile endpoint cannot make the client buffer a large answer.
+ * The request's own `AbortSignal.timeout` bounds a body that stalls.
+ */
+const readBodyPrefix = async (response: Response, maxBytes: number): Promise<string> => {
+  if (response.body === null) {
+    return ""
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ""
+  let total = 0
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read()
+      if (done) {
+        return text + decoder.decode()
+      }
+      const kept = value.subarray(0, maxBytes - total)
+      total += kept.byteLength
+      text += decoder.decode(kept, { stream: true })
+    }
+    await reader.cancel()
+    return text + decoder.decode()
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 type PostOutcome = PostSuccess | PostFailure
 
 interface PostSuccess {
@@ -327,7 +419,7 @@ interface PostSuccess {
 
 interface PostFailure {
   ok: false
-  code: "http_error" | "network_error" | "timeout"
+  code: HealthchecksErrorCode
   message: string
   attempts: number
   retryable: boolean
