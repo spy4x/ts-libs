@@ -582,7 +582,11 @@ describe("HealthchecksClient.ping answer bodies", () => {
 
   it("stops reading a large 200 body after a few bytes", async () => {
     let pulled = 0
+    let cancelled = false
     const endless = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true
+      },
       pull(controller) {
         pulled++
         if (pulled > 10_000) {
@@ -598,6 +602,7 @@ describe("HealthchecksClient.ping answer bodies", () => {
     const result = await client.ping({ outcome: HealthchecksOutcome.Success })
     expect(result.ok).toBe(true)
     expect(pulled).toBeLessThanOrEqual(2)
+    expect(cancelled).toBe(true)
   })
 })
 
