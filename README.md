@@ -201,6 +201,7 @@ pins an exact version.
   `@spy4x/server` 1.2.0 env-age64 CLI for its `env:*` tasks.
 - `spy4x/financy` — imports `@spy4x/platform` and `@spy4x/server` at 1.3.0, and runs the
   `@spy4x/server` 1.2.0 env-age64 CLI for its `env:*` tasks.
+- `spy4x/mig` — the meeting scheduler. Imports `@spy4x/platform` and `@spy4x/time` at 1.3.0.
 - `spy4x/rostok` — imports `@spy4x/server` at 1.2.0 in its CLI, and runs its env-age64 CLI for its
   encrypt and decrypt tasks.
 - `spy4x/dotfiles` — runs the `@spy4x/server` 1.2.0 env-age64 CLI for its `env:*` tasks.
