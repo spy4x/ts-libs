@@ -22,8 +22,9 @@ import {
   assertStrictEquals,
   assertThrows,
 } from "@std/assert"
+import type postgres from "postgres"
 import type { RowCache, Sql, Transaction } from "./ports.ts"
-import { DbServiceBase, PostgresScopeEndedError } from "./services.ts"
+import { DbServiceBase, PostgresScopeEndedError, type RowMethods } from "./services.ts"
 import { ownedBy, reachableFrom } from "./testing/reachable.ts"
 
 /** Options for {@link createFakeSql}. */
@@ -1389,4 +1390,232 @@ Deno.test("findOne reports a miss as null whether or not a transaction is open",
   // declared return type said `null | T` on both paths.
   assertStrictEquals(outside, null)
   assertStrictEquals(inside, null)
+})
+
+/** The row the helper-set tests write. */
+interface Note {
+  id: number
+  name: string
+}
+
+/**
+ * A `RowCache` that writes its calls into `log`, the same list the fake client writes
+ * `BEGIN` and `COMMIT` into, so a test can read whether a cache write came before or
+ * after the commit.
+ */
+function createLoggingCache(log: string[]): RowCache<Note> {
+  return {
+    wrap: (key, compute) => {
+      log.push(`cache wrap:${key}`)
+      return compute()
+    },
+    set: (key) => {
+      log.push(`cache set:${key}`)
+      return Promise.resolve()
+    },
+    delete: (key) => {
+      log.push(`cache delete:${key}`)
+      return Promise.resolve()
+    },
+  }
+}
+
+/**
+ * The client, with every call made on it written into `log`.
+ *
+ * The fake sends a statement to `inner` whenever a transaction is open, whichever handle
+ * it came through, so `inner` cannot tell a helper that ran on the transaction from one
+ * that ran on the root client. This can: the transaction handle is a different function,
+ * so a call through it never reaches this `Proxy`.
+ */
+function watchClientCalls(sql: Sql, log: string[]): Sql {
+  return new Proxy(sql, {
+    apply(target, thisArg, parameters) {
+      log.push("statement on the client")
+      return Reflect.apply(target, thisArg, parameters)
+    },
+  })
+}
+
+/** The helper set a notes service exposes, with the method some forms add to it. */
+interface NotesService extends DbServiceBase {
+  notes: RowMethods<Note, { name: string }, { name: string }> & {
+    byName?: (name: string) => Promise<string>
+  }
+}
+
+/** The method the extending forms add. It touches nothing, so only its presence is tested. */
+const byName = (name: string): Promise<string> => Promise.resolve(`byName:${name}`)
+
+/** The ways a service keeps its helper set that do not add a method. */
+const PLAIN_FORMS: Array<[string, (sql: Sql, cache: RowCache<Note>) => NotesService]> = [
+  ["a class field", (sql, cache) => {
+    class FieldService extends DbServiceBase {
+      notes = this.buildMethods<Note, { name: string }, { name: string }>("notes", cache)
+    }
+    return new FieldService({ sql })
+  }],
+  ["a getter", (sql, cache) => {
+    class GetterService extends DbServiceBase {
+      get notes(): RowMethods<Note, { name: string }, { name: string }> {
+        return this.buildMethods<Note, { name: string }, { name: string }>("notes", cache)
+      }
+    }
+    return new GetterService({ sql })
+  }],
+]
+
+/** The ways a service keeps its helper set that add `byName` to it. */
+const EXTENDING_FORMS: Array<[string, (sql: Sql, cache: RowCache<Note>) => NotesService]> = [
+  // financy's shape: every table there is written this way.
+  ["a spread class field", (sql, cache) => {
+    class SpreadService extends DbServiceBase {
+      notes = {
+        ...this.buildMethods<Note, { name: string }, { name: string }>("notes", cache),
+        byName,
+      }
+    }
+    return new SpreadService({ sql })
+  }],
+  ["an Object.assign class field", (sql, cache) => {
+    class AssignService extends DbServiceBase {
+      notes = Object.assign(
+        this.buildMethods<Note, { name: string }, { name: string }>("notes", cache),
+        { byName },
+      )
+    }
+    return new AssignService({ sql })
+  }],
+  ["a class field built by an overriding buildMethods", (sql, cache) => {
+    class OverrideService extends DbServiceBase {
+      override buildMethods<
+        M extends postgres.Row,
+        C extends Partial<unknown>,
+        U extends Partial<unknown>,
+      >(table: string, rowCache: RowCache<M>): RowMethods<M, C, U> {
+        return Object.assign(super.buildMethods<M, C, U>(table, rowCache), { byName })
+      }
+      notes = this.buildMethods<Note, { name: string }, { name: string }>("notes", cache)
+    }
+    return new OverrideService({ sql }) as unknown as NotesService
+  }],
+]
+
+/** Every form a service keeps its helper set in. */
+const HELPER_FORMS = [...PLAIN_FORMS, ...EXTENDING_FORMS]
+
+for (const [form, build] of EXTENDING_FORMS) {
+  Deno.test(`the method added in ${form} is still there inside begin`, async () => {
+    const fake = createFakeSql({ answers: structuredClone(NOTE_ANSWERS) })
+    const service = build(
+      watchClientCalls(fake.sql, fake.topLevel),
+      createLoggingCache(fake.topLevel),
+    )
+
+    const answer = await service.begin((tx) => tx.notes.byName!("ada"))
+
+    assertStrictEquals(answer, "byName:ada")
+  })
+}
+
+/** Answers for createOne, updateOne, deleteOne and findOne, in that order. */
+const NOTE_ANSWERS = [
+  [{ id: 1, name: "created" }],
+  [{ id: 1, name: "updated" }],
+  [{ id: 1, name: "updated" }],
+  [{ id: 1, name: "updated" }],
+]
+
+for (const [form, build] of HELPER_FORMS) {
+  Deno.test(`helpers kept in ${form} run on the transaction and leave nothing on rollback`, async () => {
+    const fake = createFakeSql({ answers: structuredClone(NOTE_ANSWERS) })
+    const service = build(
+      watchClientCalls(fake.sql, fake.topLevel),
+      createLoggingCache(fake.topLevel),
+    )
+
+    let message = ""
+    try {
+      await service.begin(async (tx) => {
+        await tx.notes.createOne({ data: { name: "created" } })
+        await tx.notes.updateOne({ id: 1, data: { name: "updated" } })
+        await tx.notes.deleteOne({ id: 1 })
+        await tx.notes.findOne({ id: 1 })
+        throw new Error("the transaction fails")
+      })
+    } catch (error) {
+      message = (error as Error).message
+    }
+
+    assertStrictEquals(message, "the transaction fails")
+    // No statement on the client and no cache call: all four went through the
+    // transaction, and the rollback discarded the writes they queued.
+    assertEquals(fake.topLevel, ["BEGIN", "ROLLBACK"])
+    assertEquals(fake.inner.length, 4)
+  })
+
+  Deno.test(`helpers kept in ${form} write the cache only after the commit`, async () => {
+    const fake = createFakeSql({ answers: structuredClone(NOTE_ANSWERS) })
+    const service = build(
+      watchClientCalls(fake.sql, fake.topLevel),
+      createLoggingCache(fake.topLevel),
+    )
+
+    await service.begin(async (tx) => {
+      await tx.notes.createOne({ data: { name: "created" } })
+      await tx.notes.updateOne({ id: 1, data: { name: "updated" } })
+      await tx.notes.deleteOne({ id: 1 })
+      await tx.notes.findOne({ id: 1 })
+    })
+
+    assertEquals(fake.topLevel, [
+      "BEGIN",
+      "COMMIT",
+      "cache set:1",
+      "cache set:1",
+      "cache delete:1",
+    ])
+  })
+
+  Deno.test(`helpers kept in ${form} follow a savepoint and leave nothing when it fails`, async () => {
+    const fake = createFakeSql({ answers: [[{ id: 2, name: "kept" }], [{ id: 3, name: "lost" }]] })
+    const service = build(
+      watchClientCalls(fake.sql, fake.topLevel),
+      createLoggingCache(fake.topLevel),
+    )
+
+    await service.begin(async (tx) => {
+      await tx.notes.createOne({ data: { name: "kept" } })
+      try {
+        await tx.begin(async (innerTx) => {
+          await innerTx.notes.createOne({ data: { name: "lost" } })
+          throw new Error("the savepoint fails")
+        })
+      } catch {
+        // The outer transaction carries on and commits.
+      }
+    })
+
+    assertEquals(fake.topLevel, ["BEGIN", "COMMIT", "cache set:2"])
+  })
+}
+
+Deno.test("helpers another service built stay on that service inside begin", async () => {
+  const fake = createFakeSql()
+  const otherFake = createFakeSql({ answers: [[{ id: 5, name: "elsewhere" }]] })
+  const other = new DbServiceBase({ sql: otherFake.sql })
+  const cache = createLoggingCache(otherFake.topLevel)
+  class BorrowingService extends DbServiceBase {
+    notes = other.buildMethods<Note, { name: string }, { name: string }>("notes", cache)
+  }
+  const service = new BorrowingService({ sql: fake.sql })
+
+  await service.begin(async (tx) => {
+    await tx.notes.createOne({ data: { name: "elsewhere" } })
+  })
+
+  // The set closes over `other`, whose client is not the one `begin` opened, so it is
+  // not rebuilt on the clone: rebuilding it would move a write onto another database.
+  assertEquals(otherFake.topLevel, [`INSERT INTO "notes" "name" = $1 RETURNING *`, "cache set:5"])
+  assertEquals(fake.inner, [])
 })
