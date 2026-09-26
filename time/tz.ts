@@ -191,7 +191,9 @@ export function todayInTz(tz: string): string {
 export function isoDateInTz(instant: Date, tz: string): string {
   const parts = zonedFormatter("isoDate", tz).formatToParts(instant)
 
-  const year = requiredPart(parts, "year")
+  // Padded because `Intl` prints a year below 1000 without leading zeros
+  // (`"500"`), which is not `YYYY-MM-DD` and which `zonedDateTime` rejects.
+  const year = requiredPart(parts, "year").padStart(4, "0")
   const month = requiredPart(parts, "month")
   const day = requiredPart(parts, "day")
   return `${year}-${month}-${day}`
@@ -254,7 +256,9 @@ export function hhmmInTz(instant: Date, tz: string): string {
  *
  * Both rules compare local date-times as `YYYY-MM-DD` + `HH:MM` strings, which
  * order identically to the values they denote precisely because the format is
- * fixed-width and zero-padded — so `time` is padded before use.
+ * fixed-width and zero-padded — so `time` is padded before use, and the year a
+ * candidate reads back is padded to four digits, which keeps the order true
+ * for every accepted year, 100 to 9999.
  *
  * `date` must be exactly `"YYYY-MM-DD"` and `time` exactly `"HH:MM"` —
  * zero-padded, no seconds, no surrounding whitespace — or the call throws
@@ -270,6 +274,25 @@ export function hhmmInTz(instant: Date, tz: string): string {
  * at all rather than up to a minute wrong.
  */
 export function zonedDateTime(date: string, time: string, tz: string): Date {
+  return new Date(screenCandidates(date, time, tz).chosenMs)
+}
+
+/** What {@link screenCandidates} found for one requested wall clock. */
+interface ScreenedCandidates {
+  /** The instant `zonedDateTime` returns, as epoch milliseconds. */
+  chosenMs: number
+  /** Every candidate that reads back as exactly the requested wall clock, ascending. */
+  exactMs: number[]
+}
+
+/**
+ * The candidate screening behind both {@link zonedDateTime} and
+ * {@link resolveWallClock}, so the two agree by construction. Validates the
+ * input, builds `naive - offset` for every offset the zone uses near `naive`,
+ * and returns the chosen instant plus every candidate that reproduces the
+ * requested wall clock exactly. Throws every error `zonedDateTime` documents.
+ */
+function screenCandidates(date: string, time: string, tz: string): ScreenedCandidates {
   // Checked before any parsing so a shape mistake is never mistaken for one
   // of the other two failure modes below: `"2026-6-15"` (not zero-padded),
   // `"12:00:30"` (seconds) and `"12:00 "` (trailing space) all reach
@@ -335,12 +358,19 @@ export function zonedDateTime(date: string, time: string, tz: string): Date {
 
   const requested = `${date} ${time.padStart(5, "0")}`
 
-  // Reduce over epoch milliseconds, not `Date` objects: `new Date(Infinity)` is
+  // Each candidate's wall clock is read once and both results come from that
+  // one pass. Epoch milliseconds, not `Date` objects: `new Date(Infinity)` is
   // an invalid date that compares false against everything, so a `Date`
   // sentinel would swallow the candidates it was meant to seed.
-  const earliestMs = candidates
-    .filter((instant) => wallClock(instant) >= requested)
-    .reduce((earliest, candidate) => Math.min(earliest, candidate.getTime()), Infinity)
+  let earliestMs = Infinity
+  const exactMs: number[] = []
+  for (const candidate of candidates) {
+    const reading = wallClock(candidate)
+    if (reading < requested) continue
+
+    earliestMs = Math.min(earliestMs, candidate.getTime())
+    if (reading === requested) exactMs.push(candidate.getTime())
+  }
 
   if (earliestMs === Infinity) {
     // Reachable, not a bug on its own: a handful of zones carry a historical
@@ -354,7 +384,61 @@ export function zonedDateTime(date: string, time: string, tz: string): Date {
     )
   }
 
-  return new Date(earliestMs)
+  if (exactMs.length > 1) exactMs.sort((a, b) => a - b)
+
+  return { chosenMs: earliestMs, exactMs }
+}
+
+/** How often a wall clock occurs in a zone on its date. */
+export enum WallClockKind {
+  /** The wall clock occurs exactly once. */
+  Unique = 1,
+  /** The wall clock is skipped by a forward clock change and never occurs. */
+  Gap = 2,
+  /** The wall clock occurs twice because a backward clock change repeats it. */
+  Overlap = 3,
+}
+
+/** The answer of {@link resolveWallClock}. */
+export interface WallClockResolution {
+  /** Whether the wall clock occurs once, never or twice. */
+  kind: WallClockKind
+  /**
+   * The instant `zonedDateTime` returns for the same input: the only
+   * occurrence, the earlier of two, or for a gap the shifted-forward instant.
+   */
+  instant: Date
+  /** Overlap only: the later of the two occurrences. Absent otherwise. */
+  later?: Date
+}
+
+/**
+ * Tells whether `tz`'s wall clock reads `date` + `time` once, never or twice,
+ * and gives the instants. The clock changes behind a gap or an overlap need
+ * not be daylight-saving ones: Apia skipped 2011-12-30 and Kwajalein skipped
+ * 1993-08-21 by changing their standard offset.
+ *
+ * Built on the same candidate screening as {@link zonedDateTime}, so
+ * `instant` always equals `zonedDateTime(date, time, tz)`, and input rules and
+ * errors are exactly the same `RangeError`s.
+ *
+ * - `Unique` — one candidate reads back as the requested wall clock.
+ * - `Overlap` — two do, because a backward clock change repeats it; `instant`
+ *   is the earlier and `later` the later one: Berlin's `2026-10-25 02:30`
+ *   gives 00:30Z and 01:30Z.
+ * - `Gap` — none does, because a forward clock change skips it; `instant` is
+ *   the shifted-forward one: Berlin's `2026-03-29 02:30` gives 01:30Z, which
+ *   reads `03:30`. There is no field for the reading before the change; a
+ *   caller who wants it subtracts the gap.
+ */
+export function resolveWallClock(date: string, time: string, tz: string): WallClockResolution {
+  const { chosenMs, exactMs } = screenCandidates(date, time, tz)
+  const instant = new Date(chosenMs)
+
+  if (exactMs.length === 0) return { kind: WallClockKind.Gap, instant }
+  if (exactMs.length === 1) return { kind: WallClockKind.Unique, instant }
+
+  return { kind: WallClockKind.Overlap, instant, later: new Date(exactMs[exactMs.length - 1]) }
 }
 
 /**
@@ -458,7 +542,10 @@ function canonicalWallClockFormatter(tz: string): Intl.DateTimeFormat {
 function canonicalWallClock(instant: Date, tz: string): string {
   const parts = canonicalWallClockFormatter(tz).formatToParts(instant)
 
-  const year = requiredPart(parts, "year")
+  // Padded because `Intl` prints a year below 1000 without leading zeros
+  // (`"500"`), which never equals a requested `"0500"` and sorts after every
+  // four-digit year, so the comparisons in `zonedDateTime` would go wrong.
+  const year = requiredPart(parts, "year").padStart(4, "0")
   const month = requiredPart(parts, "month")
   const day = requiredPart(parts, "day")
   const hour = requiredPart(parts, "hour")
