@@ -8,15 +8,11 @@
  * store's own `clientId()` reports, never a filter broad enough to reach another
  * worktree's connection.
  */
-import { assertEquals, assertInstanceOf, assertRejects } from "@std/assert"
+import { assertEquals, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import { RedisClient, RedisError } from "@iuioiua/redis"
 import { redisSettings, requireReachable, uniqueKeyPrefix } from "@integration-testing"
-import {
-  RedisKvStore,
-  RedisKvStoreClosedError,
-  RedisKvStoreConnectionError,
-} from "./redis-kv-store.ts"
+import { RedisKvStore, RedisKvStoreClosedError } from "./redis-kv-store.ts"
 
 describe("RedisKvStore against a real server", () => {
   it("sets, gets, deletes and resets within its own prefix only", async () => {
@@ -203,7 +199,7 @@ describe("RedisKvStore against a real server", () => {
     await assertRejects(() => store.reset(), RedisKvStoreClosedError)
   })
 
-  it("recovers on the call after its connection is killed, instead of staying dead", async () => {
+  it("answers the first call after its connection is killed, by reconnecting and resending", async () => {
     const settings = redisSettings()
     await requireReachable(settings.address)
 
@@ -221,15 +217,12 @@ describe("RedisKvStore against a real server", () => {
       await admin.sendCommand(["CLIENT", "KILL", "ID", ownId])
 
       // Nothing here watches the connection: the kill is only noticed once a call
-      // next tries to use it. This `get` is that call — its own read fails — and
-      // this store cannot know whether Redis had already applied it, so the failure
-      // is thrown, not silently retried on the new connection.
-      await assertRejects(() => store.get("k"), RedisKvStoreConnectionError)
-
-      // Exactly the next call finds the connection dead, opens a fresh one and
-      // succeeds — the one bounded reconnect attempt the design promises, not a
-      // retry loop or a store stuck throwing forever.
+      // next tries to use it. This `get` is that call — its own read fails — and it
+      // reconnects and sends the GET once more instead of throwing (#169).
       assertEquals(await store.get("k"), "before-kill")
+
+      // It really is a new connection, not the killed one answering after all.
+      assertEquals((await store.clientId()) !== ownId, true)
     } finally {
       await store.reset()
       adminConnection.close()
@@ -237,7 +230,7 @@ describe("RedisKvStore against a real server", () => {
     }
   })
 
-  it("rejects every call still queued at the moment the connection is killed", async () => {
+  it("answers every call still queued at the moment the connection is killed", async () => {
     const settings = redisSettings()
     await requireReachable(settings.address)
 
@@ -262,14 +255,12 @@ describe("RedisKvStore against a real server", () => {
       const settledPromise = Promise.allSettled(queued)
       await admin.sendCommand(["CLIENT", "KILL", "ID", ownId])
 
+      // Every call still in flight when the kill landed, not just the first to
+      // notice, is resent on the one shared fresh connection and answered; none
+      // crashes the process or rejects.
       const settled = await settledPromise
-      const rejected = settled.filter((result) => result.status === "rejected")
-      // At least one call was still in flight when the kill landed; every one of
-      // those, not just the first to notice, rejects catchably.
-      assertEquals(rejected.length > 0, true)
-      for (const result of rejected) {
-        assertInstanceOf(result.reason, RedisKvStoreConnectionError)
-      }
+      assertEquals(settled, queued.map(() => ({ status: "fulfilled", value: null })))
+      assertEquals((await store.clientId()) !== ownId, true)
     } finally {
       adminConnection.close()
       store.close()
@@ -289,7 +280,10 @@ describe("RedisKvStore against a real server", () => {
       // to be refused with WRONGTYPE — an ordinary error reply, not a dead connection.
       await side.sendCommand(["LPUSH", `${prefix}:list`, "x"])
 
+      const idBefore = await store.clientId()
       await assertRejects(() => store.get("list"), RedisError)
+      // Not resent, and no reconnect: the same connection is still in use.
+      assertEquals(await store.clientId(), idBefore)
 
       // The connection is still good: a command after the error reply succeeds.
       await store.set("fine", "v", 60)
@@ -298,6 +292,23 @@ describe("RedisKvStore against a real server", () => {
       await side.sendCommand(["DEL", `${prefix}:list`])
       await store.del("fine")
       sideConnection.close()
+      store.close()
+    }
+  })
+
+  it("take() returns a value once and deletes it", async () => {
+    const settings = redisSettings()
+    await requireReachable(settings.address)
+
+    const prefix = uniqueKeyPrefix("it_kv_take")
+    const store = await RedisKvStore.connect(settings.hostname, settings.port, prefix)
+    try {
+      await store.set("flow", "pending", 60)
+      assertEquals(await store.take("flow"), "pending")
+      assertEquals(await store.take("flow"), null)
+      assertEquals(await store.get("flow"), null)
+    } finally {
+      await store.reset()
       store.close()
     }
   })

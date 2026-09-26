@@ -1,5 +1,5 @@
 /**
- * A Redis-backed key-value store: `GET`/`SET … EX`/`DEL`, plus a scoped `reset`.
+ * A Redis-backed key-value store: `GET`/`SET … EX`/`DEL`/`GETDEL`, plus a scoped `reset`.
  *
  * Ported from `template/libs/server/kv/+index.ts`. That file `implements ICacheStorage`
  * from the template's own cache module; `@spy4x/platform/cache` is the extraction of
@@ -35,6 +35,17 @@ const SCAN_COUNT = 200
  */
 const CONNECT_TIMEOUT_MS = 5000
 
+/**
+ * How long {@link RedisKvStore.#sendOnce} waits for one command's reply on an open
+ * connection before it gives the connection up.
+ *
+ * A Redis that freezes after the connection is open (`docker pause`, a stuck host) never
+ * answers, and no OS timeout bounds a stalled read, so without this bound every call
+ * waited for as long as the freeze lasted (#172). The same fixed value as
+ * {@link CONNECT_TIMEOUT_MS}, for the same reason: not configurable, not exported.
+ */
+const COMMAND_TIMEOUT_MS = CONNECT_TIMEOUT_MS
+
 /** Redis's `SCAN MATCH` glob metacharacters: escaped so a prefix is matched literally. */
 const GLOB_METACHARACTERS = /[\\*?[\]]/g
 
@@ -55,8 +66,10 @@ export class RedisKvStoreClosedError extends Error {
 }
 
 /**
- * Thrown when a call finds this store's connection dead and a fresh one could not be
- * opened in its place — Redis is still unreachable, or still refuses `PING`.
+ * Thrown when a call cannot get its command answered over a live connection: a fresh
+ * connection could not be opened in place of a dead one (Redis is still unreachable,
+ * or still refuses `PING`), the one resend after a reconnect failed too, or Redis did
+ * not answer within the store's fixed command bound.
  *
  * Never thrown for an ordinary error reply from Redis itself (`WRONGTYPE`, an
  * out-of-memory refusal, `READONLY`, `BUSY`): that is a `RedisError` from
@@ -73,6 +86,24 @@ export class RedisKvStoreConnectionError extends Error {
 /** Mutable box a trapped writable and its store share, so either side can record a failure. */
 interface ConnectionErrorHolder {
   current: unknown
+}
+
+/**
+ * A command that failed on its connection rather than with an error reply from Redis.
+ * Internal: {@link RedisKvStore.#send} turns it into {@link RedisKvStoreConnectionError}
+ * once it decides not to resend.
+ */
+class SendFailure {
+  constructor(
+    readonly cause: unknown,
+    /** False when the connection died of a command timeout, which a resend would repeat. */
+    readonly resendable: boolean,
+  ) {}
+}
+
+/** Whether `error` is the `TimeoutError` a {@link COMMAND_TIMEOUT_MS} deadline recorded. */
+function isCommandTimeout(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "TimeoutError"
 }
 
 /**
@@ -141,25 +172,29 @@ interface OpenedConnection {
  * are the same Redis key, `app:sub:k`.
  *
  * **Reconnects itself once its connection dies.** Nothing watches the connection on
- * its own — a dropped socket is noticed only when a call next tries to use it, so the
- * first call to reach a dead connection fails however long after it died that call
- * happens to run, and (while Redis stays unreachable) every call after it fails the
- * same way, not just that first one. A call that finds the connection dead opens a
- * fresh connection the same way {@link connect} does — `Deno.connect`, then a `PING`
- * that must answer `PONG`, each bounded to {@link CONNECT_TIMEOUT_MS} on its own, so
- * neither a host that never answers TCP nor one that accepts the connection and then
- * never answers `PING` (a frozen Redis, a proxy whose backend is down) can hang the
- * caller — before it sends anything. That one attempt is bounded: it either replaces
- * the dead connection and the call proceeds, or it fails and the call throws
+ * its own — a dropped socket is noticed only when a call next tries to use it. The
+ * call whose command fails on a dead connection (a failed write or read, not an error
+ * reply from Redis) reconnects and sends that command once more on the fresh
+ * connection (#169), so a Redis restart no longer costs the first call after it. A
+ * resend is not free when the first send did reach Redis: `GET`, `SCAN` and
+ * `CLIENT ID` only read, but a resent `SET … EX` or `DEL` can overwrite a write
+ * another client made in between, and a resent `GETDEL` finds the key already gone,
+ * so the caller gets `null` and the value is lost. Each call reconnects at most once:
+ * a call that already reconnected before its first send, or whose one reconnect fails, throws
+ * {@link RedisKvStoreConnectionError}, so while Redis stays unreachable every call
+ * fails after one bounded attempt, never a loop. A command that got no reply within
+ * {@link COMMAND_TIMEOUT_MS} (#172) closes the connection and throws without a resend:
+ * a frozen Redis would only freeze the resend too. A call that finds the connection
+ * dead before it sends anything opens a fresh connection the same way {@link connect}
+ * does — `Deno.connect`, then a `PING` that must answer `PONG`, each bounded to
+ * {@link CONNECT_TIMEOUT_MS} on its own, so neither a host that never answers TCP nor
+ * one that accepts the connection and then never answers `PING` (a frozen Redis, a
+ * proxy whose backend is down) can hang the caller. That attempt either replaces the
+ * dead connection and the call proceeds, or it fails and the call throws
  * {@link RedisKvStoreConnectionError} with the failed reconnect as its `cause`,
- * leaving the store exactly where the next call tries its own reconnect again. There
- * are no timers past the connect and `PING` bounds and no retry loop — a caller (an
- * HTTP handler, most often) already retries by nature, one request at a time.
+ * leaving the store exactly where the next call tries its own reconnect again.
  * Concurrent calls that all find the connection dead share one in-flight reconnect
- * instead of racing to open several sockets. A command whose own write or read failed
- * is never resent after a successful reconnect: this store cannot know whether Redis
- * had already applied it, so that one call still throws, and only the next call uses
- * the fresh connection.
+ * instead of racing to open several sockets.
  */
 export class RedisKvStore {
   #closed = false
@@ -294,63 +329,129 @@ export class RedisKvStore {
   }
 
   /**
-   * Sends one command, after checking this store is still usable.
+   * Opens a fresh connection when the current one is recorded dead; returns whether it
+   * did.
    *
-   * `#closed` is checked first, so a call after `close()` never touches the client at
-   * all. A dead connection is never noticed on its own — only the next call to use it
-   * finds out, whether that call's own write or read is what fails, or it merely
-   * checks the error an earlier call already trapped. A recorded connection error
-   * (from an earlier write failure trapped by {@link trapWriteErrors}, or an earlier
-   * read failure caught below) sends this call through {@link #reconnect} first: on
-   * success it proceeds with the fresh connection; on failure it throws
+   * A recorded connection error (an earlier write failure trapped by
+   * {@link trapWriteErrors}, or an earlier failed or timed-out read recorded by
+   * {@link #sendOnce}) sends this call through {@link #reconnect}. On failure it throws
    * {@link RedisKvStoreConnectionError} with the reconnect's own error as `cause`, and
    * `#connectionError.current` is still set afterwards, so the next call tries its own
-   * reconnect too — while Redis stays unreachable, every call fails this way, one
-   * connect attempt each (shared by whichever calls happen to overlap), not just the
-   * first. `#doReconnect` throws {@link RedisKvStoreClosedError} instead, unwrapped,
-   * when `close()` ran during the attempt — that is reported as what it is, not as a
-   * connection failure.
+   * reconnect too. `#doReconnect` throws {@link RedisKvStoreClosedError} instead,
+   * unwrapped, when `close()` ran during the attempt — that is reported as what it is,
+   * not as a connection failure.
+   */
+  async #reconnectIfDead(): Promise<boolean> {
+    if (this.#connectionError.current === undefined) {
+      return false
+    }
+    try {
+      await this.#reconnect()
+    } catch (error) {
+      if (error instanceof RedisKvStoreClosedError) {
+        throw error
+      }
+      throw new RedisKvStoreConnectionError(error)
+    }
+    return true
+  }
+
+  /**
+   * Sends one command on the current connection, bounded by {@link COMMAND_TIMEOUT_MS}.
    *
-   * `client` and `connectionError` are captured into locals before the send, and it is
-   * `connectionError` — not `this.#connectionError` — that a failure is recorded on.
-   * Reading `this.#connectionError` again inside the `catch` would name whichever
-   * holder is current *then*: if a concurrent call's reconnect had already swapped
-   * `this.#client`/`this.#connectionError` in by the time this command's own send
-   * fails late, that would wrongly mark the brand new connection dead over a failure
-   * that happened on the old one.
+   * `connection`, `client` and `connectionError` are captured into locals before the
+   * send, and it is `connectionError` — not `this.#connectionError` — that a failure is
+   * recorded on. Reading `this.#connectionError` again inside the `catch` would name
+   * whichever holder is current *then*: if a concurrent call's reconnect had already
+   * swapped in a new connection by the time this command's own send fails late, that
+   * would wrongly mark the brand new connection dead over a failure that happened on
+   * the old one.
+   *
+   * When the reply does not arrive in time, the timer records a `TimeoutError` on the
+   * holder and closes the connection, so the pending read — and every command queued
+   * behind it on the same connection — fails instead of waiting for a Redis that may
+   * never answer. The next call finds the recorded error and reconnects.
    *
    * A `RedisError` — an ordinary error reply from Redis itself, such as `WRONGTYPE` or
-   * an out-of-memory refusal — is neither recorded nor wrapped. The connection answered
-   * fine; only the command was refused, and a store that treated every refused command
-   * as a dead connection would disable itself for good the first time a caller sent
-   * one bad command, or Redis briefly refused writes. A command whose own write or
-   * read fails here is not resent: this store cannot know whether Redis already
-   * applied it, so this call still throws, and only the next call reconnects.
+   * an out-of-memory refusal — is rethrown unchanged and not recorded: the connection
+   * answered fine, only the command was refused. Any other failure is recorded and
+   * thrown as a {@link SendFailure}, which says whether the command may be resent.
    */
-  async #send<T extends Reply = Reply>(command: Command): Promise<T> {
-    if (this.#closed) {
-      throw new RedisKvStoreClosedError()
-    }
-    if (this.#connectionError.current !== undefined) {
-      try {
-        await this.#reconnect()
-      } catch (error) {
-        if (error instanceof RedisKvStoreClosedError) {
-          throw error
-        }
-        throw new RedisKvStoreConnectionError(error)
-      }
-    }
+  async #sendOnce<T extends Reply>(command: Command): Promise<T> {
+    const connection = this.#connection
     const client = this.#client
     const connectionError = this.#connectionError
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => {
+        const error = new DOMException(
+          `Redis did not answer ${command[0]} within ${COMMAND_TIMEOUT_MS} ms`,
+          "TimeoutError",
+        )
+        connectionError.current ??= error
+        try {
+          connection.close()
+        } catch {
+          // Already closed from the far end; the recorded error is what matters.
+        }
+        reject(error)
+      }, COMMAND_TIMEOUT_MS)
+    })
     try {
-      return await client.sendCommand<T>(command)
+      return await Promise.race([client.sendCommand<T>(command), timeout])
     } catch (error) {
       if (error instanceof RedisError) {
         throw error
       }
       connectionError.current ??= error
-      throw new RedisKvStoreConnectionError(error)
+      throw new SendFailure(error, !isCommandTimeout(connectionError.current))
+    } finally {
+      clearTimeout(deadline)
+    }
+  }
+
+  /**
+   * Sends one command, reconnecting and resending it at most once when the connection
+   * turns out to be dead.
+   *
+   * `#closed` is checked first, so a call after `close()` never touches the client at
+   * all. A connection already recorded dead is replaced before the first send. When the
+   * first send then fails on the connection itself — not an error reply, and not a
+   * {@link COMMAND_TIMEOUT_MS} timeout — and this call has not reconnected yet, it
+   * reconnects (or joins a reconnect already in flight, or finds a concurrent call
+   * already swapped a fresh connection in) and sends the command once more (#169).
+   * A first send that did reach Redis before the socket died is repeated; what that
+   * costs per command is described on {@link RedisKvStore}.
+   *
+   * No loop: a call reconnects at most once. A call that reconnected before its first
+   * send, a call whose one reconnect fails, and a resend that fails again all throw
+   * {@link RedisKvStoreConnectionError}. A timeout is not resent, because a frozen
+   * Redis would only hold the caller for another full bound; and a call on a store that
+   * `close()` closed mid-send is not resent either.
+   */
+  async #send<T extends Reply = Reply>(command: Command): Promise<T> {
+    if (this.#closed) {
+      throw new RedisKvStoreClosedError()
+    }
+    const reconnected = await this.#reconnectIfDead()
+    try {
+      return await this.#sendOnce<T>(command)
+    } catch (error) {
+      if (!(error instanceof SendFailure)) {
+        throw error
+      }
+      if (reconnected || !error.resendable || this.#closed) {
+        throw new RedisKvStoreConnectionError(error.cause)
+      }
+    }
+    await this.#reconnectIfDead()
+    try {
+      return await this.#sendOnce<T>(command)
+    } catch (error) {
+      if (error instanceof SendFailure) {
+        throw new RedisKvStoreConnectionError(error.cause)
+      }
+      throw error
     }
   }
 
@@ -386,6 +487,19 @@ export class RedisKvStore {
   /** Deletes a key. Deleting a key that does not exist is not an error. */
   public async del(key: string): Promise<void> {
     await this.#send(["DEL", this.#prefixed(key)])
+  }
+
+  /**
+   * Gets a value and deletes its key in one atomic step (`GETDEL`), or returns `null`
+   * when the key does not exist. Needs Redis 6.2 or later.
+   *
+   * For one-time values such as a pending sign-in flow: two concurrent calls for the
+   * same key never both receive the value. A resend after a dead connection (see
+   * {@link RedisKvStore}) keeps that promise, at a cost: if the lost first send already
+   * deleted the key, the resend returns `null` and the value is gone.
+   */
+  public async take(key: string): Promise<string | null> {
+    return await this.#send<string | null>(["GETDEL", this.#prefixed(key)])
   }
 
   /**
