@@ -38,8 +38,9 @@ export class LockUnavailableError extends Error {
  * Raised when a {@link FileLock.runExclusive} call waited {@link FileLockOptions.waitMs} for an
  * earlier `runExclusive` on the same instance and gave up.
  *
- * The usual cause is a nested call: a body that calls `runExclusive` on its own lock waits for
- * itself, which would otherwise hang forever.
+ * Either the earlier call is still running and is slower than the bound, or this is a nested
+ * call: a body that calls `runExclusive` on its own lock waits for itself, which would otherwise
+ * hang forever.
  */
 export class FileLockWaitError extends Error {
   override readonly name = "FileLockWaitError"
@@ -49,7 +50,8 @@ export class FileLockWaitError extends Error {
   constructor(path: string, waitMs: number) {
     super(
       `runExclusive on ${path} waited ${waitMs} ms for an earlier runExclusive on the same ` +
-        `FileLock; a nested runExclusive from inside the body waits for itself`,
+        `FileLock: either that call is still running and is slower than the bound, or this is ` +
+        `a nested runExclusive from inside its body, which waits for itself`,
     )
     this.path = path
   }
@@ -63,6 +65,9 @@ export class FileLockWaitError extends Error {
  */
 export const DEFAULT_FILE_LOCK_WAIT_MS = 30_000
 
+/** The longest delay `setTimeout` holds; a longer one is cut to 1 ms. */
+const MAX_TIMER_MS = 2_147_483_647
+
 /** Options for {@link FileLock}. */
 export interface FileLockOptions {
   fs: FileSystemPort
@@ -70,8 +75,11 @@ export interface FileLockOptions {
   path: string
   /**
    * Milliseconds a {@link FileLock.runExclusive} call waits for an earlier one on the same instance
-   * before it throws {@link FileLockWaitError}. Defaults to {@link DEFAULT_FILE_LOCK_WAIT_MS};
-   * `Infinity` waits without a bound.
+   * before it throws {@link FileLockWaitError}. Defaults to {@link DEFAULT_FILE_LOCK_WAIT_MS}.
+   *
+   * `Infinity`, and any value above 2 147 483 647 (about 24.8 days, the longest delay a timer can
+   * hold), waits without a bound. `0` gives up as soon as a call has to queue. `NaN` and negative
+   * values are rejected with a `RangeError` by the constructor.
    */
   waitMs?: number
 }
@@ -90,7 +98,11 @@ export class FileLock {
   constructor(options: FileLockOptions) {
     this.#fs = options.fs
     this.#path = options.path
-    this.#waitMs = options.waitMs ?? DEFAULT_FILE_LOCK_WAIT_MS
+    const waitMs = options.waitMs ?? DEFAULT_FILE_LOCK_WAIT_MS
+    if (Number.isNaN(waitMs) || waitMs < 0) {
+      throw new RangeError(`FileLock waitMs must be a number of 0 or more, got ${waitMs}`)
+    }
+    this.#waitMs = waitMs
   }
 
   get path(): string {
@@ -166,7 +178,7 @@ export class FileLock {
   /** Wait for the in-process queue, bounded by `waitMs`. Resolves to the function that leaves it. */
   async #enter(): Promise<() => void> {
     const entered = this.#queue.acquire()
-    if (!Number.isFinite(this.#waitMs)) return await entered
+    if (this.#waitMs > MAX_TIMER_MS) return await entered
     let timer: ReturnType<typeof setTimeout> | undefined
     const expired = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), this.#waitMs)

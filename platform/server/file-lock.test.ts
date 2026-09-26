@@ -120,6 +120,7 @@ describe("FileLock", () => {
     ).rejects.toThrow(LockUnavailableError)
     expect(ran).toBe(false)
   })
+
   it("keeps a lock taken before runExclusive held after the body finishes", async () => {
     const fs = fakeFs()
     const lock = new FileLock({ fs, path: "/data/.job.lock" })
@@ -197,8 +198,38 @@ describe("FileLock", () => {
     expect(error).toBeInstanceOf(FileLockWaitError)
     expect((error as FileLockWaitError).path).toBe("/l")
     expect((error as Error).message).toContain("nested")
+    expect((error as Error).message).toContain("still running")
     // The outer call still cleans up, and the timed-out waiter does not keep the lock afterwards.
     expect(lock.state).toBe(LockState.Free)
     expect(await lock.runExclusive(() => "after")).toBe("after")
   })
+
+  it("waits without a bound when waitMs is longer than a timer can hold", async () => {
+    const lock = new FileLock({ fs: fakeFs(), path: "/l", waitMs: Number.MAX_SAFE_INTEGER })
+    const first = lock.runExclusive(() => new Promise((resolve) => setTimeout(resolve, 20)))
+    await expect(lock.runExclusive(() => "second")).resolves.toBe("second")
+    await first
+  })
+
+  it("rejects a NaN or negative waitMs when constructed", () => {
+    expect(() => new FileLock({ fs: fakeFs(), path: "/l", waitMs: NaN })).toThrow(RangeError)
+    expect(() => new FileLock({ fs: fakeFs(), path: "/l", waitMs: -1 })).toThrow(
+      "FileLock waitMs must be a number of 0 or more, got -1",
+    )
+    expect(() => new FileLock({ fs: fakeFs(), path: "/l", waitMs: 0 })).not.toThrow()
+  })
+})
+
+// Top level on purpose: a `describe` step does not enforce `sanitizeOps`, so a leaked timer would
+// pass unnoticed there.
+Deno.test({
+  name: "FileLock leaves no wait timer behind after an uncontended call and a queued call",
+  sanitizeOps: true,
+  fn: async () => {
+    const lock = new FileLock({ fs: fakeFs(), path: "/l", waitMs: 60_000 })
+    expect(await lock.runExclusive(() => "alone")).toBe("alone")
+    const first = lock.runExclusive(() => Promise.resolve("first"))
+    const queued = lock.runExclusive(() => "queued")
+    expect(await Promise.all([first, queued])).toEqual(["first", "queued"])
+  },
 })
