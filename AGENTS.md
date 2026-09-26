@@ -69,9 +69,11 @@ model, or a renamed copy of something generic that already exists. Before adding
 both libraries for one that does the same job under another name, and extend it rather than adding
 a second one.
 
-The flow runs one way: an existing app feeds this library and `spy4x/preact-components`, and
-future projects import from them. An existing app is never refactored to call into this library,
-and "remove" means delete from this library only — the app that had the copy keeps its own.
+Code flows both ways. An app feeds this library and `spy4x/preact-components` with anything a
+future project could reuse, and every app, old or new, imports from them instead of keeping its own
+copy. Each app tracks that switch in an issue of its own. Because apps import from here, removing an
+export breaks them: move every app that imports it onto a replacement, or back onto its own copy,
+before the export goes.
 
 ## Extraction rules
 
