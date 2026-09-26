@@ -126,4 +126,30 @@ export class PostgresOutboxRepository implements OutboxRepository {
       WHERE id = ${id}
     `
   }
+
+  /**
+   * Undoes the claim on events the processor never tried. `attempt_count` goes back
+   * down by one and `available_at` goes back to the claim time, so the event keeps its
+   * place in the queue and is claimable at once.
+   *
+   * The `attempt_count` match is the ownership check: a later claim by another worker
+   * raises it, so a release that arrives after the lease expired and the row was
+   * reclaimed changes nothing. `processed_at IS NULL` is defence in depth: through
+   * this library a processed row never carries the attempt count of a claim that did
+   * not try it, but a row marked processed by other code is still left alone. One
+   * statement per event keeps the `id` comparison typed
+   * by the column itself, whatever type the caller's table uses for it.
+   */
+  async release(events: OutboxEvent[]): Promise<void> {
+    for (const event of events) {
+      await this.sql`
+        UPDATE outbox_events
+        SET attempt_count = attempt_count - 1,
+            available_at = COALESCE(claimed_at, now())
+        WHERE id = ${event.id}
+          AND attempt_count = ${event.attemptCount}
+          AND processed_at IS NULL
+      `
+    }
+  }
 }

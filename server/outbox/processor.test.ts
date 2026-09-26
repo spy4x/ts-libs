@@ -235,3 +235,179 @@ describe("OutboxProcessor.run", () => {
     expect(repository.claims).toEqual([])
   })
 })
+
+interface LeasedRow {
+  id: string
+  availableAt: number
+  attempts: number
+  processed: boolean
+}
+
+/**
+ * A fake repository that applies the Postgres repository's lease rule on a fake
+ * clock: a claim bumps the attempt count and hides the row for `leaseSeconds`, and a
+ * release undoes a claim only while the attempt count still matches it.
+ */
+class LeasedRepository implements OutboxRepository {
+  readonly rows: LeasedRow[]
+  release?: (events: OutboxEvent[]) => Promise<void>
+
+  constructor(private readonly clock: { now: number }, count: number, withRelease: boolean) {
+    this.rows = Array.from({ length: count }, (_, i) => ({
+      id: String(i + 1),
+      availableAt: 0,
+      attempts: 0,
+      processed: false,
+    }))
+    if (withRelease) {
+      this.release = (events) => {
+        for (const released of events) {
+          const row = this.#row(released.id)
+          if (row.processed || row.attempts !== released.attemptCount) continue
+          row.attempts--
+          row.availableAt = this.clock.now
+        }
+        return Promise.resolve()
+      }
+    }
+  }
+
+  #row(id: string): LeasedRow {
+    const row = this.rows.find((candidate) => candidate.id === id)
+    if (!row) throw new Error(`no row ${id}`)
+    return row
+  }
+
+  claimBatch(limit: number, maxAttempts: number, leaseSeconds: number): Promise<OutboxEvent[]> {
+    const claimed = this.rows
+      .filter((r) => !r.processed && r.availableAt <= this.clock.now && r.attempts < maxAttempts)
+      .slice(0, limit)
+    for (const row of claimed) {
+      row.attempts++
+      row.availableAt = this.clock.now + leaseSeconds * 1000
+    }
+    return Promise.resolve(
+      claimed.map((row) => event({ id: row.id, aggregateId: row.id, attemptCount: row.attempts })),
+    )
+  }
+  markProcessed(id: string): Promise<void> {
+    this.#row(id).processed = true
+    return Promise.resolve()
+  }
+  scheduleRetry(): Promise<void> {
+    return Promise.resolve()
+  }
+}
+
+describe("OutboxProcessor.drainOnce against one lease for the whole batch", () => {
+  // Every publish takes 2 seconds on the fake clock, well under the 60-second default
+  // lease, but 50 of them (the default batch) take 100 seconds.
+  const PUBLISH_MS = 2_000
+
+  it("does not deliver an event twice when two workers share a batch slower than the lease", async () => {
+    const clock = { now: 0 }
+    const repository = new LeasedRepository(clock, 50, true)
+    const deliveries = new Map<string, number>()
+    let secondRan = false
+    const publisher = {
+      async publish(e: OutboxEvent) {
+        deliveries.set(e.id, (deliveries.get(e.id) ?? 0) + 1)
+        clock.now += PUBLISH_MS
+        // A second worker polls once, 70 seconds in: past the first worker's lease.
+        if (clock.now >= 70_000 && !secondRan) {
+          secondRan = true
+          await second.drainOnce()
+        }
+      },
+    }
+    const now = () => clock.now
+    const first = new OutboxProcessor(repository, publisher, { now })
+    const second = new OutboxProcessor(repository, publisher, { now })
+
+    await first.drainOnce()
+    await second.drainOnce()
+
+    expect([...deliveries].filter(([, n]) => n > 1)).toEqual([])
+    expect(deliveries.size).toBe(50)
+    expect(repository.rows.every((row) => row.processed)).toBe(true)
+  })
+
+  it("stops before the lease runs out and hands the untried events back", async () => {
+    const clock = { now: 0 }
+    const repository = new LeasedRepository(clock, 50, true)
+    const processor = new OutboxProcessor(repository, {
+      publish: () => {
+        clock.now += PUBLISH_MS
+        return Promise.resolve()
+      },
+    }, { now: () => clock.now })
+
+    const result = await processor.drainOnce()
+
+    // After 29 publishes, 58 s have passed; a 30th 2-second publish would reach 60 s.
+    expect(result).toEqual({ claimed: 50, published: 29, failed: 0 })
+    expect(clock.now).toBeLessThan(60_000)
+    const untried = repository.rows.filter((row) => !row.processed)
+    expect(untried.length).toBe(21)
+    expect(untried.every((row) => row.availableAt <= clock.now)).toBe(true)
+  })
+
+  it("counts an attempt only for events that were actually tried", async () => {
+    const clock = { now: 0 }
+    const repository = new LeasedRepository(clock, 50, true)
+    const tried = new Map<string, number>()
+    const processor = new OutboxProcessor(repository, {
+      publish: (e) => {
+        tried.set(e.id, (tried.get(e.id) ?? 0) + 1)
+        clock.now += PUBLISH_MS
+        return Promise.resolve()
+      },
+    }, { now: () => clock.now })
+
+    // Drain until the queue is empty, as `run` would.
+    while ((await processor.drainOnce()).claimed > 0) {
+      clock.now += 1
+    }
+
+    expect(tried.size).toBe(50)
+    for (const row of repository.rows) {
+      expect({ id: row.id, attempts: row.attempts }).toEqual({
+        id: row.id,
+        attempts: tried.get(row.id),
+      })
+    }
+  })
+
+  it("still stops at the lease when the repository cannot release, leaving the rest leased", async () => {
+    const clock = { now: 0 }
+    const repository = new LeasedRepository(clock, 50, false)
+    const deliveries: string[] = []
+    const processor = new OutboxProcessor(repository, {
+      publish: (e) => {
+        deliveries.push(e.id)
+        clock.now += PUBLISH_MS
+        return Promise.resolve()
+      },
+    }, { now: () => clock.now })
+
+    const result = await processor.drainOnce()
+
+    expect(result.published).toBe(29)
+    expect(deliveries.length).toBe(29)
+    // The untried rows stay hidden until the lease they were claimed under expires.
+    expect(await repository.claimBatch(50, 10, 60)).toEqual([])
+  })
+
+  it("always tries the first event of a batch, so even a zero lease still makes progress", async () => {
+    const clock = { now: 0 }
+    const repository = new LeasedRepository(clock, 3, true)
+    const processor = new OutboxProcessor(repository, {
+      publish: () => {
+        clock.now += PUBLISH_MS
+        return Promise.resolve()
+      },
+    }, { leaseSeconds: 0, now: () => clock.now })
+
+    expect(await processor.drainOnce()).toEqual({ claimed: 3, published: 1, failed: 0 })
+  })
+})
