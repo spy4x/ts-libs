@@ -254,7 +254,9 @@ export function hhmmInTz(instant: Date, tz: string): string {
  *
  * Both rules compare local date-times as `YYYY-MM-DD` + `HH:MM` strings, which
  * order identically to the values they denote precisely because the format is
- * fixed-width and zero-padded — so `time` is padded before use.
+ * fixed-width and zero-padded — so `time` is padded before use, and the year a
+ * candidate reads back is padded to four digits, which keeps the order true
+ * for every accepted year, 100 to 9999.
  *
  * `date` must be exactly `"YYYY-MM-DD"` and `time` exactly `"HH:MM"` —
  * zero-padded, no seconds, no surrounding whitespace — or the call throws
@@ -531,7 +533,10 @@ function canonicalWallClockFormatter(tz: string): Intl.DateTimeFormat {
 function canonicalWallClock(instant: Date, tz: string): string {
   const parts = canonicalWallClockFormatter(tz).formatToParts(instant)
 
-  const year = requiredPart(parts, "year")
+  // Padded because `Intl` prints a year below 1000 without leading zeros
+  // (`"500"`), which never equals a requested `"0500"` and sorts after every
+  // four-digit year, so the comparisons in `zonedDateTime` would go wrong.
+  const year = requiredPart(parts, "year").padStart(4, "0")
   const month = requiredPart(parts, "month")
   const day = requiredPart(parts, "day")
   const hour = requiredPart(parts, "hour")

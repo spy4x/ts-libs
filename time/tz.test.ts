@@ -192,6 +192,20 @@ describe("zonedDateTime", () => {
     )
   })
 
+  it("rejects a non-minute-aligned wall clock before year 1000 too", () => {
+    // A year below 1000 used to read back unpadded ("500"), which sorted after
+    // "0500" and let a candidate a minute off through.
+    expect(() => zonedDateTime("0500-06-15", "12:00", "Africa/Monrovia")).toThrow(
+      /minute resolution/,
+    )
+  })
+
+  it("converts a wall clock before year 1000", () => {
+    expect(zonedDateTime("0500-06-15", "12:00", UTC_ZONE).toISOString()).toBe(
+      "0500-06-15T12:00:00.000Z",
+    )
+  })
+
   it("rejects a non-zero-padded date with a format message, not a zone one", () => {
     // "2026-6-15" denotes a real, ordinary date — the offset math never runs,
     // because the shape check rejects it first.
@@ -354,6 +368,12 @@ describe("resolveWallClock", () => {
     expect(overlap.kind).toBe(WallClockKind.Overlap)
     expect(overlap.instant.toISOString()).toBe("2026-04-04T15:30:00.000Z")
     expect(overlap.later?.toISOString()).toBe("2026-04-04T16:30:00.000Z")
+  })
+
+  it("reports a wall clock before year 1000 as unique, not as a gap", () => {
+    const resolution = resolveWallClock("0500-06-15", "12:00", UTC_ZONE)
+    expect(resolution.kind).toBe(WallClockKind.Unique)
+    expect(resolution.instant.toISOString()).toBe("0500-06-15T12:00:00.000Z")
   })
 
   it("returns zonedDateTime's instant and a kind consistent with the read-back, everywhere", () => {
