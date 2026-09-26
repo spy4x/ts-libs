@@ -191,7 +191,9 @@ export function todayInTz(tz: string): string {
 export function isoDateInTz(instant: Date, tz: string): string {
   const parts = zonedFormatter("isoDate", tz).formatToParts(instant)
 
-  const year = requiredPart(parts, "year")
+  // Padded because `Intl` prints a year below 1000 without leading zeros
+  // (`"500"`), which is not `YYYY-MM-DD` and which `zonedDateTime` rejects.
+  const year = requiredPart(parts, "year").padStart(4, "0")
   const month = requiredPart(parts, "month")
   const day = requiredPart(parts, "day")
   return `${year}-${month}-${day}`

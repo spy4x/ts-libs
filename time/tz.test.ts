@@ -497,6 +497,17 @@ describe("isoDateInTz", () => {
     expect(isoDateInTz(utc("2026-01-05T12:00:00Z"), BERLIN)).toBe("2026-01-05")
   })
 
+  it("zero-pads a year below 1000 to four digits", () => {
+    expect(isoDateInTz(utc("0500-06-15T12:00:00Z"), UTC_ZONE)).toBe("0500-06-15")
+  })
+
+  it("keeps addDays working before year 1000", () => {
+    // addDays reads its result through isoDateInTz, so an unpadded year would
+    // return a date that zonedDateTime then rejects.
+    expect(addDays("0500-06-15", 1, UTC_ZONE)).toBe("0500-06-16")
+    expect(addDays(addDays("0500-06-15", 1, UTC_ZONE), 1, UTC_ZONE)).toBe("0500-06-17")
+  })
+
   it("is reversible with zonedDateTime", () => {
     const instant = zonedDateTime("2026-12-31", "23:59", BERLIN)
     expect(isoDateInTz(instant, BERLIN)).toBe("2026-12-31")
