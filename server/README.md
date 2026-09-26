@@ -735,7 +735,8 @@ rejects, the rejection reaches the caller and the code is already issued.
 `createOAuthSignIn`, `OAuthSignInError`, `OAuthFailure`, `OAuthOutcome`, `OAuthProviderConfig`,
 `OAuthProfile`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, the flow stores
 (`createMemoryOAuthFlowStore`, `createKvOAuthFlowStore`, `OAuthFlowStore`, `OAuthFlowKv`,
-`OAuthTakenFlow`, `DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
+`OAuthPendingFlow`, `OAuthTakenFlow`, `DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and
+result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
 `createGoogleOAuthProvider`, `readGoogleProfile` and Google's endpoint and default-scope constants.
 
 OAuth2 sign-in with any provider that has a user-info endpoint (#57). The provider is configuration,
@@ -800,11 +801,12 @@ that ignores the expiry still cannot complete a stale flow.
   oldest. A callback must reach the process that built its authorization URL.
 - Pass `createKvOAuthFlowStore(kv)` when more than one process serves the callback (several
   replicas behind a load balancer, or a restart during a deploy), or when a flood of started flows
-  must not push out other people's. `kv` is any client with `set(key, value, ttlSec)` and an atomic
-  `take(key)`, such as a Redis client sending `SET … EX` and `GETDEL` (Redis 6.2 or later). Keys go
-  under `oauth-flow:` unless `keyPrefix` says otherwise. The flow's expiry is stored with it and
-  checked on `take`; the key's time to live only clears flows nobody completed. Every instance that
-  shares a store must use the same provider configuration.
+  must not push out other people's. `kv` is a `RedisKvStore` from `server/kv` (Redis 6.2 or later,
+  for `GETDEL`), or any client with `set(key, value, ttlSec)` and an atomic `take(key)`. Keys
+  go under `oauth-flow:` unless `keyPrefix` names another, non-empty prefix. The flow's expiry is
+  stored with it and checked on `take`; the key's time to live only clears flows nobody completed. A
+  stored value that is not a flow (not JSON, or no valid PKCE verifier and finite expiry) reads as
+  no flow. Every instance that shares a store must use the same provider configuration.
 
 ```ts
 const google = createOAuthSignIn({
