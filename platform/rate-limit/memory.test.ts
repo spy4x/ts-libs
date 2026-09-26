@@ -350,6 +350,85 @@ describe("MemoryRateLimiter", () => {
     assertEquals(limiter.check("a").allowed, true)
   })
 
+  it("never holds more buckets than maxBuckets, however many keys arrive", () => {
+    const { clock, advance } = fakeClock()
+    const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 5, maxBuckets: 100, clock })
+    for (let i = 0; i < 5000; i++) {
+      limiter.check(`ip:198.18.${i >> 8}.${i & 255}`)
+      if (i % 10 === 0) advance(1)
+      assertEquals(limiter.size <= 100, true, `size ${limiter.size} after key ${i}`)
+    }
+    assertEquals(limiter.size, 100)
+  })
+
+  it("makes room for a new key by dropping buckets with nothing inside the window", () => {
+    const { clock, advance } = fakeClock()
+    const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 1, maxBuckets: 2, clock })
+    limiter.check("old")
+    advance(500)
+    limiter.check("recent")
+    advance(500) // "old" is now exactly one window old: no longer inside it
+    assertEquals(limiter.check("new").allowed, true)
+    assertEquals(limiter.size, 2)
+    // "recent" was kept: it is still limited.
+    assertEquals(limiter.check("recent").allowed, false)
+  })
+
+  it("refuses a new key when every held bucket is active, until the first falls idle", () => {
+    const { clock, advance } = fakeClock()
+    const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 3, maxBuckets: 2, clock })
+    limiter.check("a")
+    advance(200)
+    limiter.check("b")
+    advance(100)
+
+    const refused = limiter.check("c")
+    assertEquals(refused, {
+      allowed: false,
+      remaining: 0,
+      retryAfterMs: 700,
+      resetAfterMs: 700,
+      limit: 3,
+    })
+    assertEquals(limiter.size, 2)
+    // A key already held is still served while the limiter is full.
+    assertEquals(limiter.check("a").allowed, true)
+
+    advance(699)
+    assertEquals(limiter.check("c").allowed, false)
+    // "a" was checked again at +300, so the first bucket to fall idle is "b", at +1200.
+    advance(1)
+    assertEquals(limiter.check("c").allowed, false)
+    advance(200)
+    assertEquals(limiter.check("c").allowed, true)
+    assertEquals(limiter.size, 2)
+  })
+
+  it("never evicts a limited bucket to make room, so a flood of new keys cannot reset it", () => {
+    const { clock, advance } = fakeClock()
+    const limiter = new MemoryRateLimiter({ windowMs: 60_000, limit: 2, maxBuckets: 10, clock })
+    limiter.check("user:alice")
+    limiter.check("user:alice")
+    assertEquals(limiter.check("user:alice").allowed, false)
+    for (let i = 0; i < 1000; i++) {
+      limiter.check(`user:flood-${i}`)
+      advance(1)
+    }
+    assertEquals(limiter.check("user:alice").allowed, false)
+  })
+
+  it("refuses a maxBuckets that is not a whole number of at least one", () => {
+    for (const maxBuckets of [0, -1, 1.5, Number.NaN, Number.NEGATIVE_INFINITY]) {
+      let message = ""
+      try {
+        new MemoryRateLimiter({ windowMs: 1000, limit: 1, maxBuckets })
+      } catch (error) {
+        message = (error as Error).message
+      }
+      assertEquals(message, "maxBuckets must be an integer >= 1", `maxBuckets=${maxBuckets}`)
+    }
+  })
+
   it("refuses a window that would deny everything", () => {
     let message = ""
     try {
