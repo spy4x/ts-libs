@@ -9,7 +9,7 @@ import {
 } from "../sign-in/mod.ts"
 import { createClock, createFakeStore, PEPPER } from "../sign-in/fake-store.test.ts"
 import { MemoryAuthStore } from "./memory-store.ts"
-import type { AuthSessionRecord } from "./model.ts"
+import { AuthConflictError, type AuthSessionRecord } from "./model.ts"
 import {
   createPasswordSignIn,
   PASSWORD_METHOD,
@@ -603,6 +603,16 @@ describe("createPasswordSignIn: requestVerification and completeVerification", (
     const late = provider.completeVerification({ userId: mallory.user.id, code: issued!.code })
     expect((await refusal(late)).reason).toBe("conflict")
     expect(await store.findUserIdByProvenEmail(ANN)).toBe(owner)
+  })
+
+  it("answers conflict when the store finds the address owned by another user", async () => {
+    const { provider, store } = setup()
+    const mallory = await provider.signUp({ email: ANN, password: MALLORY_PASSWORD })
+    const issued = await provider.requestVerification({ userId: mallory.user.id })
+    // Postgres reads the key without a lock, so a racing proof surfaces as a conflict error.
+    store.proveKey = () => Promise.reject(new AuthConflictError("email-owned"))
+    const late = provider.completeVerification({ userId: mallory.user.id, code: issued!.code })
+    expect((await refusal(late)).reason).toBe("conflict")
   })
 })
 
