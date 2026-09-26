@@ -520,6 +520,16 @@ Sign-up, sign-in, password change and password reset with an address and a passw
 rules, not moved from the earlier `email-password.ts`. Every refusal is thrown as a
 `PasswordSignInError` whose `reason` names it.
 
+The hasher also works on its own:
+
+```ts
+import { createPasswordHasher } from "@spy4x/server/sign-in"
+
+const hasher = createPasswordHasher({ pepper: Deno.env.get("PASSWORD_PEPPER") ?? "" })
+const hash = await hasher.hash("correct horse battery staple")
+const check = await hasher.verify("correct horse battery staple", hash)
+```
+
 ```ts
 import { createPasswordHasher } from "@spy4x/server/sign-in"
 import { createPasswordSignIn } from "@spy4x/server/auth/password"

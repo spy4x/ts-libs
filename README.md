@@ -72,7 +72,7 @@ way in.
   `@spy4x/validation` use no `Deno.*` API, so they also run in a browser, untested there.
 - **Expected failures are data.** `validate` returns `{ error, data }`, `send` resolves with
   `ok: false` instead of throwing, and `@spy4x/platform` has `Result`, `ok` and `err` for your code.
-- **Few dependencies.** `@spy4x/net`, `@spy4x/time` and `@spy4x/integrations` have none. Shared
+- **Few dependencies.** `@spy4x/net` and `@spy4x/time` have none. Shared
   ones (arktype, Hono, Postgres) are pinned to exact versions.
 - **Tested against the real thing.** Unit tests use fakes; an integration tier runs against a real
   Postgres, S3-compatible store, mail server and Redis, and fails instead of skipping.
@@ -105,7 +105,7 @@ How the repository is built, tested and released: [CONTRIBUTING.md](CONTRIBUTING
 
 I'm [Anton Shubin](https://antonshubin.com), a senior full-stack engineer and tech lead. These
 libraries are the building blocks of the products I build and run on my own servers: my meeting
-scheduler [mig](https://github.com/spy4x/mig) imports `@spy4x/time` and `@spy4x/platform`. Need
+scheduler [mig](https://github.com/spy4x/mig) imports five of them. Need
 something like it built for your product? [That's my day job →](https://antonshubin.com)
 
 Licensed under [MIT](LICENSE). Copyright (c) 2026 Anton Shubin.
