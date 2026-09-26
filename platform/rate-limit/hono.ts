@@ -24,7 +24,7 @@
 import { type as arkType } from "arktype"
 import type { Context, Env, MiddlewareHandler } from "hono"
 
-import { clientIp, type TrustedProxyHeader } from "./client-ip.ts"
+import { clientIp, clientIpBucket, type TrustedProxyHeader } from "./client-ip.ts"
 import type { RateLimitDecision, RateLimiter } from "./memory.ts"
 
 /** JSON-safe response body for a rejected request. */
@@ -294,6 +294,16 @@ export function decisionHeaders(
   return out
 }
 
+/** Options for {@link userThenIp}. */
+export interface UserThenIpOptions {
+  /** Which forwarding header to trust, as `clientIp`'s `trustedProxy`. Defaults to `false`. */
+  trustedProxy?: boolean | TrustedProxyHeader
+  /** Read the header only from a peer inside these CIDR ranges, as `clientIp`'s option. */
+  trustedProxies?: readonly string[]
+  /** Key each IPv6 address on its own instead of on its /64. Defaults to `false`. */
+  ipv6PerAddress?: boolean
+}
+
 /**
  * Key a request on the authenticated user when the caller can find one, else on the client IP.
  *
@@ -310,6 +320,13 @@ export function decisionHeaders(
  * `trustedIPs` configured (e.g. Cloudflare in front of Traefik), Traefik keeps the trusted
  * upstream's `X-Real-IP` instead, so a forged value can pass through — trust `"cf-connecting-ip"`
  * in that layout instead. See `client-ip.ts`'s module doc for the full trust boundary.
+ *
+ * `trustedProxies` narrows the trust to connections from those CIDR ranges (see `clientIp`).
+ *
+ * An IPv6 client is keyed on its /64 network (`ip:2001:db8:1:2::/64`, see `clientIpBucket`), so a
+ * client cannot escape the limit by rotating through the 2^64 addresses one allocation gives it.
+ * IPv4 keys are unchanged. `ipv6PerAddress: true` keys every IPv6 address separately, as before
+ * #219, for a deployment where one /64 is really shared by unrelated clients.
  */
 export function userThenIp<E extends Env = Record<string, never>>(
   userId: (req: Request, context: RateLimitContext<E>) =>
@@ -318,13 +335,15 @@ export function userThenIp<E extends Env = Record<string, never>>(
     | Promise<
       string | undefined
     >,
-  options: { trustedProxy?: boolean | TrustedProxyHeader } = {},
+  options: UserThenIpOptions = {},
 ): KeyResolver<E> {
   const trustedProxy = options.trustedProxy ?? false
+  const clientIpOptions = { trustedProxies: options.trustedProxies }
   return async (req, context) => {
     const id = await userId(req, context)
     if (id !== undefined && id !== "") return `user:${id}`
     const remoteAddr = (context as { remoteAddr?: string }).remoteAddr
-    return `ip:${clientIp(req, remoteAddr, trustedProxy)}`
+    const ip = clientIp(req, remoteAddr, trustedProxy, clientIpOptions)
+    return `ip:${options.ipv6PerAddress === true ? ip : clientIpBucket(ip)}`
   }
 }

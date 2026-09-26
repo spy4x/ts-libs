@@ -101,6 +101,18 @@ export interface RateLimitOptions {
 export interface MemoryRateLimiterOptions extends RateLimitOptions {
   /** Notified with the number of buckets removed each time a sweep runs. */
   onSweep?: (removed: number) => void
+  /**
+   * The most buckets the limiter may hold (#220). Left out, the idle sweep is the only bound.
+   *
+   * When a request arrives for a new key and the limiter is full, it first drops every bucket with
+   * no accepted request inside the window — those count nothing, so dropping one resets no one's
+   * limit. If it is still full, the new key is **refused**: the request gets `allowed: false`, no
+   * bucket is created, and `retryAfterMs` is the time until the first held bucket falls idle. A
+   * bucket with a request inside its window is never evicted to make room, so a flood of new keys
+   * cannot push out, and so reset, the bucket of a client that is being limited. The cost is that
+   * during such a flood, first-time clients are refused until space frees up.
+   */
+  maxBuckets?: number
 }
 
 /** Accepted-request timestamps for one key, oldest first. */
@@ -158,6 +170,13 @@ export class MemoryRateLimiter {
   private readonly clock: Clock
   private readonly idleMs: number
   private readonly onSweep: ((removed: number) => void) | undefined
+  private readonly maxBuckets: number
+  /**
+   * Set only while the limiter is full after a clean-up pass: the earliest time one of the buckets
+   * it kept can fall idle. `-Infinity` whenever the last pass made room, so the next new key at the
+   * cap runs a fresh pass.
+   */
+  private fullUntil = Number.NEGATIVE_INFINITY
   private lastSweepAt: number
   private checksSinceSweep = 0
 
@@ -176,6 +195,14 @@ export class MemoryRateLimiter {
     this.clock = options.clock ?? systemClock
     this.idleMs = idleMs
     this.onSweep = options.onSweep
+    const maxBuckets = options.maxBuckets ?? Number.POSITIVE_INFINITY
+    if (
+      !(maxBuckets === Number.POSITIVE_INFINITY ||
+        (Number.isInteger(maxBuckets) && maxBuckets >= 1))
+    ) {
+      throw new Error("maxBuckets must be an integer >= 1")
+    }
+    this.maxBuckets = maxBuckets
     this.lastSweepAt = this.clock()
   }
 
@@ -189,6 +216,10 @@ export class MemoryRateLimiter {
     this.maybeSweep(now)
 
     const cutoff = now - this.windowMs
+    if (!this.buckets.has(key) && this.buckets.size >= this.maxBuckets) {
+      const refusal = this.makeRoom(now)
+      if (refusal !== undefined) return refusal
+    }
     const bucket = this.buckets.get(key) ?? { events: [], seenAt: now }
     bucket.seenAt = now
 
@@ -228,6 +259,7 @@ export class MemoryRateLimiter {
   /** Drop every bucket. */
   clear(): void {
     this.buckets.clear()
+    this.fullUntil = Number.NEGATIVE_INFINITY
     this.checksSinceSweep = 0
     this.lastSweepAt = this.clock()
   }
@@ -252,6 +284,45 @@ export class MemoryRateLimiter {
     }
     this.onSweep?.(removed)
     return removed
+  }
+
+  /**
+   * Called for a new key while the limiter is full. Drops every bucket with no accepted request
+   * inside the window and returns `undefined` when that freed a slot, or the refusal for the new
+   * key when it did not.
+   *
+   * The drop pass walks every bucket, so it runs at most once until the first held bucket can fall
+   * idle (`fullUntil`): a flood of new keys against a full limiter is refused in constant time
+   * instead of paying a full walk per request.
+   */
+  private makeRoom(now: number): RateLimitDecision | undefined {
+    if (now >= this.fullUntil) {
+      const cutoff = now - this.windowMs
+      let freeAt = Number.POSITIVE_INFINITY
+      for (const [key, bucket] of this.buckets) {
+        const newest = bucket.events[bucket.events.length - 1]
+        if (newest === undefined || newest <= cutoff) this.buckets.delete(key)
+        else freeAt = Math.min(freeAt, newest + this.windowMs)
+      }
+      if (this.buckets.size < this.maxBuckets) {
+        // Room was made. Whatever `freeAt` says about the survivors (it is `Infinity` when none
+        // survived) stops being a bound once new buckets fill the space, so it is not kept.
+        this.fullUntil = Number.NEGATIVE_INFINITY
+        return undefined
+      }
+      // Still full, so at least one bucket survived and `freeAt` is finite.
+      this.fullUntil = freeAt
+    }
+    // The guard is belt and braces: a non-finite wait would reach `Retry-After` as "Infinity".
+    const wait = this.fullUntil - now
+    const retryAfterMs = Number.isFinite(wait) ? Math.max(0, wait) : this.windowMs
+    return {
+      allowed: false,
+      remaining: 0,
+      retryAfterMs,
+      resetAfterMs: retryAfterMs,
+      limit: this.limit,
+    }
   }
 
   /**

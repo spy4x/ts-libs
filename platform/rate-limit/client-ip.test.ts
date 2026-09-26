@@ -1,7 +1,13 @@
 import { assertEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 
-import { clientIp, humanRetry, type TrustedProxyHeader, UNKNOWN_CLIENT_IP } from "./client-ip.ts"
+import {
+  clientIp,
+  clientIpBucket,
+  humanRetry,
+  type TrustedProxyHeader,
+  UNKNOWN_CLIENT_IP,
+} from "./client-ip.ts"
 
 /** Request with the given headers and no body. */
 function request(headers: Record<string, string> = {}): Request {
@@ -94,8 +100,47 @@ describe("clientIp", () => {
     )
   })
 
-  it("returns a garbage header verbatim rather than inventing a bucket", () => {
-    assertEquals(clientIp(request({ "x-real-ip": "not-an-ip" }), undefined, true), "not-an-ip")
+  it("falls back to the peer address when the trusted header holds anything but one IP", () => {
+    const forged = [
+      "not-an-ip",
+      "NOT-AN-IP",
+      "192.0.2.1:8080",
+      "[2001:db8::1]",
+      "[2001:db8::1]:443",
+      "fe80::1%eth0",
+      "a".repeat(64_000),
+    ]
+    for (const value of forged) {
+      assertEquals(
+        clientIp(request({ "x-real-ip": value }), "192.0.2.50", "x-real-ip"),
+        "192.0.2.50",
+        value.slice(0, 40),
+      )
+    }
+  })
+
+  it("falls through a header that is not an IP to the next header when all three are trusted", () => {
+    const req = request({ "cf-connecting-ip": "unknown", "x-forwarded-for": "203.0.113.9:1234" })
+    assertEquals(clientIp(req, "192.0.2.50", true), "192.0.2.50")
+    const next = request({ "cf-connecting-ip": "unknown", "x-real-ip": "198.51.100.7" })
+    assertEquals(clientIp(next, "192.0.2.50", true), "198.51.100.7")
+  })
+
+  it("gives an IPv4-mapped IPv6 address and its IPv4 address the same result", () => {
+    const header = (value: string) => clientIp(request({ "x-real-ip": value }), undefined, true)
+    assertEquals(header("::ffff:192.0.2.1"), "192.0.2.1")
+    assertEquals(header("192.0.2.1"), "192.0.2.1")
+    assertEquals(clientIp(request(), "::ffff:192.0.2.1"), "192.0.2.1")
+  })
+
+  it("writes an IPv6 address from a header or the peer in its canonical spelling", () => {
+    const req = request({ "cf-connecting-ip": "2001:0DB8:0:0::0001" })
+    assertEquals(clientIp(req, undefined, "cf-connecting-ip"), "2001:db8::1")
+    assertEquals(clientIp(request(), " 2001:DB8::1 "), "2001:db8::1")
+  })
+
+  it("keeps a peer address that is not an IP as the transport wrote it", () => {
+    assertEquals(clientIp(request(), "/run/app.sock"), "/run/app.sock")
   })
 
   it("returns the placeholder when there is no header and no peer address", () => {
@@ -155,6 +200,91 @@ describe("clientIp", () => {
     it("falls back to the placeholder when the named header and remoteAddr are both absent", () => {
       assertEquals(clientIp(request(), undefined, "x-real-ip"), UNKNOWN_CLIENT_IP)
     })
+  })
+})
+
+describe("clientIp with trustedProxies", () => {
+  const cloudflare = ["104.16.0.0/13", "2400:cb00::/32"]
+
+  it("reads the header when the peer is inside a listed range", () => {
+    const req = request({ "cf-connecting-ip": "198.51.100.7" })
+    const options = { trustedProxies: cloudflare }
+    assertEquals(clientIp(req, "104.16.0.1", "cf-connecting-ip", options), "198.51.100.7")
+    assertEquals(clientIp(req, "2400:cb00::1", "cf-connecting-ip", options), "198.51.100.7")
+    assertEquals(clientIp(req, "::ffff:104.16.0.1", true, options), "198.51.100.7")
+  })
+
+  it("ignores the header and returns the peer when the peer is outside every range", () => {
+    const req = request({ "cf-connecting-ip": "198.51.100.7", "x-real-ip": "203.0.113.9" })
+    const options = { trustedProxies: cloudflare }
+    assertEquals(clientIp(req, "192.0.2.1", "cf-connecting-ip", options), "192.0.2.1")
+    assertEquals(clientIp(req, "104.24.0.0", true, options), "104.24.0.0")
+  })
+
+  it("ignores the header when there is no peer address to check", () => {
+    const req = request({ "cf-connecting-ip": "198.51.100.7" })
+    assertEquals(
+      clientIp(req, undefined, "cf-connecting-ip", { trustedProxies: cloudflare }),
+      UNKNOWN_CLIENT_IP,
+    )
+  })
+
+  it("trusts no one with an empty list", () => {
+    const req = request({ "cf-connecting-ip": "198.51.100.7" })
+    assertEquals(clientIp(req, "104.16.0.1", true, { trustedProxies: [] }), "104.16.0.1")
+  })
+
+  it("throws on a malformed range, even when no header would be read", () => {
+    for (const trustedProxy of [true, false] as const) {
+      let error: unknown
+      try {
+        clientIp(request(), "192.0.2.1", trustedProxy, { trustedProxies: ["104.16.0.0/33"] })
+      } catch (caught) {
+        error = caught
+      }
+      assertEquals(error instanceof RangeError, true, `trustedProxy=${trustedProxy}`)
+    }
+  })
+
+  it("trusts CF-Connecting-IP only when the X-Real-IP Traefik wrote is a Cloudflare edge", () => {
+    // antonshubin.com's layout: Traefik writes X-Real-IP; Cloudflare, when it is the one that
+    // connected, names the visitor in CF-Connecting-IP.
+    const visitor = (headers: Record<string, string>) => {
+      const req = request(headers)
+      const peer = clientIp(req, "10.0.0.5", "x-real-ip")
+      return clientIp(req, peer, "cf-connecting-ip", { trustedProxies: cloudflare })
+    }
+    assertEquals(
+      visitor({ "x-real-ip": "104.16.0.1", "cf-connecting-ip": "198.51.100.7" }),
+      "198.51.100.7",
+    )
+    assertEquals(
+      visitor({ "x-real-ip": "192.0.2.1", "cf-connecting-ip": "198.51.100.7" }),
+      "192.0.2.1",
+    )
+  })
+})
+
+describe("clientIpBucket", () => {
+  it("gives two addresses in one IPv6 /64 one bucket and two /64s two", () => {
+    assertEquals(clientIpBucket("2001:db8:1:2:aaaa::1"), "2001:db8:1:2::/64")
+    assertEquals(clientIpBucket("2001:db8:1:2:ffff:ffff:ffff:ffff"), "2001:db8:1:2::/64")
+    assertEquals(clientIpBucket("2001:db8:1:3::1"), "2001:db8:1:3::/64")
+  })
+
+  it("writes the /64 in its canonical spelling", () => {
+    assertEquals(clientIpBucket("2001:0DB8:0000:0000:1::1"), "2001:db8::/64")
+    assertEquals(clientIpBucket("::1"), "::/64")
+  })
+
+  it("leaves an IPv4 address unchanged and reduces a mapped address to its IPv4", () => {
+    assertEquals(clientIpBucket("192.0.2.1"), "192.0.2.1")
+    assertEquals(clientIpBucket("::ffff:192.0.2.1"), "192.0.2.1")
+  })
+
+  it("leaves a value that is not an address unchanged", () => {
+    assertEquals(clientIpBucket(UNKNOWN_CLIENT_IP), UNKNOWN_CLIENT_IP)
+    assertEquals(clientIpBucket("/run/app.sock"), "/run/app.sock")
   })
 })
 
