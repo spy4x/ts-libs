@@ -136,15 +136,15 @@ coverable under this grant:** `writeText`, `appendText`, `rename`, `mkdirp`, `lo
 `create: true, write: true`), and the successful branch of `remove` — the calls that actually need
 `--allow-write`.
 
-| Module                   | Contents                                               |
-| ------------------------ | ------------------------------------------------------ |
-| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`       |
-| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters) |
-| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`        |
-| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`        |
-| `server/ports`           | the port interfaces, `systemClockPort`                 |
-| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                |
-| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`   |
+| Module                   | Contents                                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------- |
+| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                                                  |
+| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                                            |
+| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS` |
+| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                   |
+| `server/ports`           | the port interfaces, `systemClockPort`                                                            |
+| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                           |
+| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                              |
 
 `server/shutdown-signal` turns `SIGINT` and `SIGTERM` into one `AbortSignal` for a worker loop
 (#187). It aborts once, on the first signal, with a `ShutdownSignalError` whose `signal` names it,
