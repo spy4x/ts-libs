@@ -7,13 +7,13 @@ Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracte
 
 ## Modules
 
-| File           | Contents                                                                        |
-| -------------- | ------------------------------------------------------------------------------- |
-| `memory.ts`    | `MemoryRateLimiter` (in-process), `StoreRateLimiter`, the `RateLimitStore` port |
-| `kv.ts`        | `createKvStore` over a three-method `RateLimitKv`, plus `denoKvBackend`         |
-| `hono.ts`      | `createRateLimitMiddleware`, draft-6 `RateLimit-*` headers, `userThenIp`        |
-| `client-ip.ts` | `clientIp()` extraction order, `TrustedProxyHeader` and `humanRetry()`          |
-| `mod.ts`       | Barrel for every public symbol above                                            |
+| File           | Contents                                                                                |
+| -------------- | --------------------------------------------------------------------------------------- |
+| `memory.ts`    | `MemoryRateLimiter` (in-process), `StoreRateLimiter`, the `RateLimitStore` port         |
+| `kv.ts`        | `createKvStore` over a three-method `RateLimitKv`, plus `denoKvBackend`                 |
+| `hono.ts`      | `createRateLimitMiddleware`, draft-6 `RateLimit-*` headers, `userThenIp`                |
+| `client-ip.ts` | `clientIp()` extraction order, `TrustedProxyHeader`, `clientIpBucket()`, `humanRetry()` |
+| `mod.ts`       | Barrel for every public symbol above                                                    |
 
 ## Usage
 
@@ -130,6 +130,24 @@ Two consequences worth stating, because both are security properties:
   `lastSweepAt` from `Date.now()` fails `schedules its automatic sweep from the injected clock, never
   the wall clock`, and restoring the loop fails the array-operation guard.
 
+**A hard cap: `maxBuckets`.** The sweep bounds memory by time, which is not enough when a client can
+send keys faster than they expire. Set `maxBuckets` to bound the count as well (#220):
+
+```ts
+const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 10, maxBuckets: 100_000 })
+```
+
+When a request arrives for a **new** key and the limiter is full, it first drops every bucket with no
+accepted request inside the window. Such a bucket counts nothing, so dropping it early resets no one's
+limit. If the limiter is still full, the new key is **refused**: the decision is `allowed: false`,
+`remaining: 0`, and `retryAfterMs` is the time until the first held bucket falls idle; no bucket is
+created for it. A key the limiter already holds is served as usual. A bucket with a request inside its
+window is never evicted to make room, so the promise above holds with the cap too: a flood of new keys
+cannot push out the bucket of a client that is being limited, and so cannot reset it. The price is
+that during such a flood, first-time clients are turned away until a bucket falls idle. The drop pass
+walks every bucket, so it runs at most once until the earliest held bucket can fall idle; refusals in
+between cost no walk.
+
 Per-bucket memory is bounded by `limit` — nothing is stored for a rejected request — so a client
 hammering one key grows nothing. Across keys, the sweep is the bound. `caldav-mcp`'s map had none,
 which is a memory-exhaustion vector rather than untidiness.
@@ -145,6 +163,45 @@ was `c.get?.("auth")`, and its optional chaining silently degraded every request
 `user:<id>` / `ip:<addr>` shape; anything else is the caller's own resolver.
 
 ## `clientIp` trust boundary
+
+**Only an address is accepted.** A trusted header's first hop counts only when it is exactly one IPv4
+or IPv6 address; anything else (a port, brackets, a zone id, a hostname, a 64 KB string) is treated as
+if the header were absent, so the next source is used and in the end the peer address. Every address
+`clientIp` returns is in one canonical spelling from `normalizeIp` in `@spy4x/net/ip`: `2001:DB8::1`
+and `2001:db8::1` are one client, and an IPv4-mapped `::ffff:192.0.2.1` is returned as `192.0.2.1`
+(#220). Earlier versions returned a forged header verbatim, so every distinct string became its own
+bucket.
+
+**Trusting a header only from known proxies.** The fourth parameter's `trustedProxies` lists CIDR
+ranges (#221). The header is then read only when the peer address lies inside one of them; any other
+peer, and a request with no peer address, is keyed on its own address. An empty list trusts no one,
+and a malformed range throws a `RangeError` on every call, so a typo shows up on the first request.
+This is what makes `CF-Connecting-IP` safe on a server that is also reachable around Cloudflare:
+
+```ts
+import { clientIp } from "@spy4x/platform/rate-limit"
+
+const CLOUDFLARE = ["173.245.48.0/20", "104.16.0.0/13", "2400:cb00::/32" /* … the full list */]
+
+// Traefik writes X-Real-IP (the address that connected to it); believe CF-Connecting-IP only when
+// that address is a Cloudflare edge.
+const peer = clientIp(req, socketAddress, "x-real-ip")
+const ip = clientIp(req, peer, "cf-connecting-ip", { trustedProxies: CLOUDFLARE })
+```
+
+No provider's range list ships with this package: those lists change, so the caller keeps its own.
+`userThenIp` takes the same `trustedProxies` option.
+
+**IPv6 clients are keyed on their /64.** One ordinary IPv6 allocation is a whole /64, 2^64 addresses
+its holder can pick from, so a per-address key never limits it (#219). `userThenIp` therefore keys an
+IPv6 client as `ip:2001:db8:1:2::/64`; IPv4 keys are unchanged. `ipv6PerAddress: true` restores one
+key per IPv6 address. Outside the middleware, `clientIpBucket(ip)` does the same reduction:
+
+```ts
+import { clientIp, clientIpBucket, rateLimitKey, RateLimitKind } from "@spy4x/platform/rate-limit"
+
+const key = rateLimitKey(RateLimitKind.Ip, clientIpBucket(clientIp(req, socketAddress)))
+```
 
 With `trustedProxy: false` (the default) only the transport peer address is used. With
 `trustedProxy: true` the order is `CF-Connecting-IP` > first `X-Forwarded-For` hop > `X-Real-IP` >
