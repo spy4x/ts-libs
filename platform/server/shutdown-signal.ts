@@ -34,6 +34,12 @@ export interface ShutdownSignalOptions {
   addSignalListener?: (signal: Deno.Signal, handler: () => void) => void
   /** Removes a listener. Defaults to `Deno.removeSignalListener`; injected by tests. */
   removeSignalListener?: (signal: Deno.Signal, handler: () => void) => void
+  /**
+   * Receives an error thrown while removing a listener. Removal runs inside a signal or abort
+   * callback, where a thrown error would end the process before the caller's cleanup finishes,
+   * so it is reported here instead. Defaults to `console.error`.
+   */
+  onError?: (error: unknown) => void
 }
 
 /**
@@ -43,8 +49,9 @@ export interface ShutdownSignalOptions {
  * default behaviour and ends the process.
  *
  * If registering one of the signals throws, the listeners already added are removed before that
- * error is rethrown. If removing a listener throws, every other listener is still removed and the
- * signal still aborts; the first removal error is rethrown afterwards.
+ * error is rethrown. If removing a listener throws, every other listener is still removed, the
+ * signal still aborts, and the error goes to `options.onError` (default `console.error`) instead of
+ * being thrown out of a callback nobody can catch.
  *
  * @example
  * ```ts
@@ -57,6 +64,7 @@ export function shutdownSignal(options: ShutdownSignalOptions = {}): AbortSignal
   const add = options.addSignalListener ?? Deno.addSignalListener
   const remove = options.removeSignalListener ?? Deno.removeSignalListener
   const parent = options.signal
+  const onError = options.onError ?? console.error
   const controller = new AbortController()
 
   if (parent?.aborted) {
@@ -66,27 +74,24 @@ export function shutdownSignal(options: ShutdownSignalOptions = {}): AbortSignal
 
   const handlers = new Map<Deno.Signal, () => void>()
 
-  /** Remove every listener, trying each one; returns the first removal error, if any. */
-  const detach = (): { error: unknown } | undefined => {
-    let failure: { error: unknown } | undefined
+  /** Remove every listener, trying each one and reporting every removal error to `onError`. */
+  const detach = () => {
     for (const [signal, handler] of handlers) {
       try {
         remove(signal, handler)
       } catch (error) {
-        failure ??= { error }
+        onError(error)
       }
     }
     handlers.clear()
     parent?.removeEventListener("abort", onParentAbort)
-    return failure
   }
 
   // Removing every listener before aborting is what makes a later signal a no-op; `abort` itself
   // ignores a second call, so no separate guard is needed.
   const stop = (reason: unknown) => {
-    const failure = detach()
+    detach()
     controller.abort(reason)
-    if (failure) throw failure.error
   }
   const onParentAbort = () => stop(parent?.reason)
 
@@ -97,7 +102,7 @@ export function shutdownSignal(options: ShutdownSignalOptions = {}): AbortSignal
       handlers.set(signal, handler)
     }
   } catch (error) {
-    // A removal error here is dropped on purpose: the registration error is the one to report.
+    // Removal errors go to `onError`; the registration error is the one thrown.
     detach()
     throw error
   }

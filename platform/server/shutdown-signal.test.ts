@@ -143,19 +143,27 @@ describe("shutdownSignal", () => {
 
   it("still aborts and removes the other listeners when one removal throws", () => {
     const fake = fakeSignals({ stuck: "SIGINT" })
-    const signal = shutdownSignal({ ...fake, signals: ["SIGINT", "SIGTERM", "SIGHUP"] })
-    expect(() => fake.fire("SIGTERM")).toThrow("cannot remove SIGINT")
+    const reported: unknown[] = []
+    const signal = shutdownSignal({
+      ...fake,
+      signals: ["SIGINT", "SIGTERM", "SIGHUP"],
+      onError: (error) => reported.push(error),
+    })
+    expect(() => fake.fire("SIGTERM")).not.toThrow()
+    expect(reported.map((error) => (error as Error).message)).toEqual(["cannot remove SIGINT"])
     expect(signal.aborted).toBe(true)
     expect(signal.reason.signal).toBe("SIGTERM")
     expect(fake.countFor("SIGTERM")).toBe(0)
     expect(fake.countFor("SIGHUP")).toBe(0)
   })
 
-  it("rethrows the registration error when a rollback removal also throws", () => {
+  it("throws the registration error and reports a rollback removal that also throws", () => {
     const fake = fakeSignals({ stuck: "SIGINT", refuse: "SIGHUP" })
-    expect(() => shutdownSignal({ ...fake, signals: ["SIGINT", "SIGTERM", "SIGHUP"] })).toThrow(
-      "SIGHUP is not supported",
-    )
+    const reported: unknown[] = []
+    const onError = (error: unknown) => reported.push(error)
+    expect(() => shutdownSignal({ ...fake, signals: ["SIGINT", "SIGTERM", "SIGHUP"], onError }))
+      .toThrow("SIGHUP is not supported")
     expect(fake.countFor("SIGTERM")).toBe(0)
+    expect(reported.map((error) => (error as Error).message)).toEqual(["cannot remove SIGINT"])
   })
 })
