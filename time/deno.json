@@ -3,6 +3,7 @@
   "version": "1.6.0",
   "exports": {
     "./date": "./date.ts",
+    "./locale": "./locale.ts",
     "./tz": "./tz.ts",
     "./ics": "./ics.ts",
     "./ics-core": "./ics-core.ts"
