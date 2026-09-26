@@ -60,3 +60,29 @@ export function formatPct(value: number): string {
   if (!Number.isFinite(value)) return "0.00%"
   return `${formatDecimal(value * 100)}%`
 }
+
+const BYTE_UNITS = ["KB", "MB", "GB", "TB"] as const
+
+/**
+ * A byte count for display, in binary (1024) steps: `"512 B"`, `"1.5 KB"`, `"2 MB"`.
+ *
+ * Below 1024 the count is shown as whole bytes. Above it the value is rounded to one decimal with
+ * {@link round}, and a whole result drops its decimal. The unit is chosen *after* rounding, so a
+ * value that rounds up to 1024 of one unit is shown as 1 of the next: `1024 * 1024 - 1` is `"1 MB"`,
+ * not `"1024 KB"`. `TB` is the largest unit; anything bigger is shown as that many terabytes.
+ *
+ * @param bytes A non-negative byte count, e.g. a `File`'s `size`.
+ */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  let value = bytes / 1024
+  let unitIndex = 0
+  while (round(value, 1) >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  const rounded = round(value, 1)
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)} ${
+    BYTE_UNITS[unitIndex]
+  }`
+}
