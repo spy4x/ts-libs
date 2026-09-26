@@ -59,6 +59,20 @@ Rules for a package config:
 Type-checking, formatting, linting and tests are discovered by walking the tree, so a new package is
 covered without touching root config or `infra/scripts/type-check.ts`.
 
+## What belongs in this library
+
+Code belongs here when it has no UI, a server or a page could use it, and a future project can
+reuse it, even if only one app uses it today: date and time, formatting, parsing, validation,
+security, networking, integrations. A Preact component, icon, design token or signals helper goes
+to `spy4x/preact-components` instead. What disqualifies code: business wording, one app's data
+model, or a renamed copy of something generic that already exists. Before adding a function, search
+both libraries for one that does the same job under another name, and extend it rather than adding
+a second one.
+
+The flow runs one way: an existing app feeds this library and `spy4x/preact-components`, and
+future projects import from them. An existing app is never refactored to call into this library,
+and "remove" means delete from this library only — the app that had the copy keeps its own.
+
 ## Extraction rules
 
 - **Source repos are read-only.** Never edit `offer-lens`, `roley`, `rostok`, `mig`, `caldav-mcp`,
