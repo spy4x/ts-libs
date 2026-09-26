@@ -83,7 +83,12 @@ export function niceStep(span: number, target = 5): number {
 }
 
 /**
- * Tick values covering `[min, max]`, expanded outward to the next nice step.
+ * Tick values at multiples of a nice step, kept within half a step of `[min, max]`.
+ *
+ * The ticks do not always reach the bounds: a multiple of the step more than half a step outside
+ * `[min, max]` is dropped, so `ticks(1.1, 10)` is `[2, 4, 6, 8, 10]` and `ticks(-1, 6, 4)` is
+ * `[0, 2.5, 5]`. For an axis whose first and last ticks cover the data, round the bounds outward
+ * with {@link stepAxis} instead: `stepAxis(min, max, niceStep(max - min, maxTicks))`.
  *
  * Reversed bounds are swapped rather than rejected — `ticks(10, 0)` equals `ticks(0, 10)` — so a
  * caller does not have to sort its own domain first; ported from
