@@ -84,7 +84,8 @@ exported name, parameter or return type changes only additively, or it waits for
    `deno publish` with the `JSR_TOKEN` secret, after the unit and integration steps pass.
 
 A publish cannot be undone: JSR never deletes a version, so tag only the merged bump commit on
-`main`. Once that PR merges with a green gate, push the tag without asking. A version that is already on JSR is skipped, so re-running a tag build that failed part-way
+`main`. Once that PR merges with a green gate, push the tag without asking. A version that is
+already on JSR is skipped, so re-running a tag build that failed part-way
 publishes only what is missing.
 
 ## Branches
@@ -259,7 +260,8 @@ string this repository commits.
 ## Code style
 
 - No semicolons. 2-space indent. Double quotes by default, backticks for interpolated or multi-line
-  strings (this overrides the global "backticks for strings" rule). 100 column limit. Trailing commas where legal. `deno fmt` is the arbiter.
+  strings (this overrides the global "backticks for strings" rule). 100 column limit. Trailing
+  commas where legal. `deno fmt` is the arbiter.
 - Files: kebab-case `.ts`, `+main.ts` / `+lib.ts` for entry points, colocated `*.test.ts`.
 - Imports: relative local first, then `jsr:` stdlib, then `npm:` only when unavoidable.
 - `interface` for extensible object shapes, `enum` for finite constants (start at 1), `type` only for
