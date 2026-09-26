@@ -44,12 +44,29 @@ const ADDRESS_PATTERN =
 
 /**
  * Characters that can terminate a header line, a header block, or the message
- * body. Matching the C0 range is the point, so `no-control-regex` is suppressed
- * rather than worked around with a `\p{Cc}` property escape — the explicit range
- * is what a reader needs to see here.
+ * body: the C0 range and DEL. Matching the C0 range is the point, so
+ * `no-control-regex` is suppressed rather than worked around with a `\p{Cc}`
+ * property escape — the explicit range is what a reader needs to see here.
  */
 // deno-lint-ignore no-control-regex
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
+
+/**
+ * Characters refused in a mailbox on top of {@link CONTROL_CHARACTER_PATTERN}:
+ * the C1 range (NEL, U+0085, among them) and the Unicode line and paragraph
+ * separators U+2028 and U+2029.
+ *
+ * nodemailer encodes them inside a header, so they inject nothing there. They are
+ * refused in a mailbox because no real address or display name carries one, and a
+ * log line or a JSON consumer may read any of them as a line break. A subject or an
+ * attachment filename keeps the C0-only rule: a U+2028 from a word processor or a
+ * C1 character from mis-decoded Windows-1252 text is common there, and refusing it
+ * would fail a send that has always worked.
+ */
+const MAILBOX_LINE_BREAK_PATTERN = /[\u0080-\u009f\u2028\u2029]/
+
+/** Longest addr-spec that fits a `RCPT TO` path (RFC 5321 §4.5.3.1.3, 256 with the brackets). */
+const MAX_ADDR_SPEC_LENGTH = 254
 
 /**
  * Characters that force a display name to be emitted as a quoted-string.
@@ -71,14 +88,30 @@ const QUOTING_TRIGGER_PATTERN = /[()<>@,;:\\"[\]]/
  * either, and the check is on the parsed value rather than on the interpolated
  * header so it cannot be bypassed by a later refactor of the header layout.
  *
- * @throws {TypeError} when `value` contains a control character.
+ * Only the C0 range and DEL are checked here; a mailbox is held to the stricter
+ * rule in {@link parseAddress}.
+ *
+ * @throws {TypeError} when `value` contains a C0 control character or DEL.
  */
 export function assertNoControlCharacters(value: string, what: string): void {
   if (CONTROL_CHARACTER_PATTERN.test(value)) {
     throw new TypeError(
-      `${what} contains a control character, which would inject a header: ${JSON.stringify(value)}`,
+      `${what} contains a control character, which would inject a header: ${quoteForError(value)}`,
     )
   }
+}
+
+/**
+ * `JSON.stringify` with every C1 character and U+2028/U+2029 escaped as `\uXXXX`.
+ *
+ * `JSON.stringify` escapes the C0 range but leaves those raw, so an error message
+ * quoting a refused value would carry the very line break it refused.
+ */
+function quoteForError(value: string): string {
+  return JSON.stringify(value).replace(
+    /[\u007f-\u009f\u2028\u2029]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  )
 }
 
 /**
@@ -91,15 +124,22 @@ export function assertNoControlCharacters(value: string, what: string): void {
  * quoted by {@link formatAddress}, because a bare comma splits the header into
  * two mailboxes at the first server that parses it strictly.
  *
- * @throws {TypeError} on a control character, an unbalanced `<`/`>`, a quote
- * that does not wrap the whole name, trailing text after `>`, or an addr-spec
- * that {@link ADDRESS_PATTERN} rejects.
+ * @throws {TypeError} on a C0 or C1 control character, DEL, U+2028 or U+2029, an
+ * unbalanced `<`/`>`, a quote that does not wrap the whole name, trailing text
+ * after `>`, an addr-spec longer than 254 characters, or an addr-spec that
+ * {@link ADDRESS_PATTERN} rejects.
  */
 export function parseAddress(value: string): EmailAddress {
   if (typeof value !== "string" || value.trim() === "") {
     throw new TypeError(`Expected a non-empty mailbox, got ${JSON.stringify(value)}`)
   }
   assertNoControlCharacters(value, "Mailbox")
+  if (MAILBOX_LINE_BREAK_PATTERN.test(value)) {
+    throw new TypeError(
+      `Mailbox contains a C1 control character or a line separator, which no address or ` +
+        `display name carries: ${quoteForError(value)}`,
+    )
+  }
 
   const trimmed = value.trim()
   const open = trimmed.indexOf("<")
@@ -194,6 +234,11 @@ export function isAddress(value: string): boolean {
  * which of five entries it was.
  */
 function assertAddrSpec(address: string, original: string): string {
+  if (address.length > MAX_ADDR_SPEC_LENGTH) {
+    throw new TypeError(
+      `Email address is ${address.length} characters, over the ${MAX_ADDR_SPEC_LENGTH} limit`,
+    )
+  }
   if (!isAddress(address)) {
     throw new TypeError(`Invalid email address in ${JSON.stringify(original)}: ${address}`)
   }

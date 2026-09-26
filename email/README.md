@@ -86,6 +86,14 @@ interface EmailSender {
   message; the valid subset is never mailed quietly.
 - **Duplicates are deduplicated** case-insensitively before sending and reported
   in `duplicates`.
+- **`replyTo` is optional and validated exactly like `to`.** Both are parsed by the
+  same function, so a display name is accepted and sent as a structured mailbox, a
+  control character is refused, and one bad entry fails the whole message. The
+  error names the field (`replyTo: …` or `to: …`). A string or a list renders as one
+  `Reply-To` header; an empty list is refused (omit the field instead), and an
+  omitted `replyTo` renders no header. Check a visitor-supplied address with
+  `parseAddress` first and leave it out when that throws, so a typo in a contact
+  form costs the reply route rather than the whole mail.
 - **Credentials are redacted.** Every string that leaves through `error` has the
   password, the `user:pass` pair and every base64 SASL blob they can form replaced
   with `<REDACTED:CREDENTIAL>`. That is not a fixed list of encodings: after the
@@ -113,6 +121,13 @@ fails the whole message rather than dropping that entry:
 - A control character is rejected outright, anywhere in a mailbox, subject or
   attachment filename/content type. `Name\r\nBcc: victim@example.com` is a
   plausible-looking display name and a forged header, so it never reaches a header.
+  A mailbox is held to a stricter rule: the C1 range (NEL, U+0085, among them) and
+  the Unicode line and paragraph separators U+2028 and U+2029 are refused there
+  too. A subject, filename or content type keeps the C0-and-DEL rule, because a
+  U+2028 from a word processor or a C1 character from mis-decoded Windows-1252 is
+  common in a subject and nodemailer encodes it safely.
+- An addr-spec longer than 254 characters is refused: it does not fit an SMTP
+  path, and it would render a header line over the 998-character limit.
 - A display name containing a comma is accepted unquoted (`Doe, Jane <jane@example.com>`)
   and re-emitted quoted. Non-ASCII names travel to the transport as structured
   fields, so nodemailer encodes them per RFC 2047 instead of emitting mojibake.

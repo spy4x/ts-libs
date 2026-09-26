@@ -34,6 +34,18 @@ export interface EmailAttachment {
 export interface EmailMessage {
   /** One or more recipients; a string may carry a display name (`"Jane <jane@example.com>"`). */
   to: string | readonly string[]
+  /**
+   * Where replies should go, when that is not the `from` mailbox — a sending-only
+   * `noreply@` address above all. Validated exactly like `to`: the same parser, so a
+   * display name is accepted, a control character is refused, and one bad entry fails
+   * the whole message, with an error that starts `replyTo:`. Omitted, the message
+   * carries no `Reply-To` header.
+   *
+   * A value a visitor typed (a contact form's "your email") should be checked with
+   * `parseAddress` first and left out when that throws: otherwise one bad entry costs
+   * the whole mail, not just the reply route.
+   */
+  replyTo?: string | readonly string[]
   /** Subject line. A CR or LF here is rejected, not folded. */
   subject: string
   /**
@@ -71,14 +83,22 @@ export interface IcalAttachmentOptions {
  * in a subject — mail clients encode it, and rejecting them would reject ordinary
  * text like `Meeting <draft>`.
  *
+ * Mailbox syntax — `to` and `replyTo` alike — is checked by the sender with
+ * `parseAddresses`, not here.
+ *
  * @throws {TypeError} on a control character in `subject`, a filename or a
- * content type, on no recipients, on no usable body, or on an attachment missing
- * its type.
+ * content type, on no recipients, on an empty `replyTo` list, on no usable body,
+ * or on an attachment missing its type.
  */
 export function assertSendableMessage(message: EmailMessage): void {
   const recipients = typeof message.to === "string" ? [message.to] : message.to
   if (recipients.length === 0 || recipients.every((value) => value.trim() === "")) {
     throw new TypeError("At least one recipient is required")
+  }
+  // An empty list is refused rather than read as "no Reply-To": omitting the field
+  // says that, and an empty list is more often a lookup that found nothing.
+  if (Array.isArray(message.replyTo) && message.replyTo.length === 0) {
+    throw new TypeError("replyTo is an empty list; omit it instead")
   }
 
   assertNoControlCharacters(message.subject, "Subject")

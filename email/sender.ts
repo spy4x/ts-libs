@@ -21,7 +21,7 @@
  * @module
  */
 
-import { parseAddresses, type ParsedRecipients } from "./address.ts"
+import { type MessageAddresses, parseMessageAddresses } from "./message-addresses.ts"
 import { assertSendableMessage, type EmailMessage } from "./message.ts"
 
 /** Every recipient the transport saw was accepted by the server. */
@@ -90,10 +90,10 @@ export function createConsoleSender(options: ConsoleSenderOptions = {}): EmailSe
 
   return {
     send(message: EmailMessage): Promise<SendResult> {
-      let recipients: ParsedRecipients
+      let parsed: MessageAddresses
       try {
         assertSendableMessage(message)
-        recipients = parseAddresses(message.to)
+        parsed = parseMessageAddresses(message)
       } catch (error) {
         return Promise.resolve({
           ok: false,
@@ -104,11 +104,17 @@ export function createConsoleSender(options: ConsoleSenderOptions = {}): EmailSe
         })
       }
 
+      const { recipients, replyTo } = parsed
       const addresses = recipients.addresses.map((address) => address.address)
       const body = message.text ?? stripTags(message.html ?? "")
 
+      const replyToPart = replyTo === undefined
+        ? ""
+        : ` replyTo=${replyTo.addresses.map((address) => address.address).join(",")}`
+
       log(
-        `[email:console] to=${addresses.join(",")} subject=${JSON.stringify(message.subject)} ` +
+        `[email:console] to=${addresses.join(",")}${replyToPart} ` +
+          `subject=${JSON.stringify(message.subject)} ` +
           `text=${body.length}B attachments=${message.attachments?.length ?? 0}`,
       )
       log(preview(body, previewChars))
