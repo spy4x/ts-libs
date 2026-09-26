@@ -74,6 +74,10 @@ const ENTRIES: Entry[] = [
     specifier: "@spy4x/server/http/same-origin",
     capability: "same-origin guard for cookie-authenticated mutations (#186)",
   },
+  {
+    specifier: "@spy4x/platform/server/shutdown-signal",
+    capability: "SIGINT and SIGTERM as an AbortSignal for a worker (#187)",
+  },
 ]
 
 /**
