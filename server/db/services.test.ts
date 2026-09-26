@@ -22,6 +22,7 @@ import {
   assertStrictEquals,
   assertThrows,
 } from "@std/assert"
+import type postgres from "postgres"
 import type { RowCache, Sql, Transaction } from "./ports.ts"
 import { DbServiceBase, PostgresScopeEndedError, type RowMethods } from "./services.ts"
 import { ownedBy, reachableFrom } from "./testing/reachable.ts"
@@ -1436,13 +1437,18 @@ function watchClientCalls(sql: Sql, log: string[]): Sql {
   })
 }
 
-/** The helper set a notes service exposes. */
+/** The helper set a notes service exposes, with the method some forms add to it. */
 interface NotesService extends DbServiceBase {
-  notes: RowMethods<Note, { name: string }, { name: string }>
+  notes: RowMethods<Note, { name: string }, { name: string }> & {
+    byName?: (name: string) => Promise<string>
+  }
 }
 
-/** The two ways a service keeps its helper set, as consumers write them. */
-const HELPER_FORMS: Array<[string, (sql: Sql, cache: RowCache<Note>) => NotesService]> = [
+/** The method the extending forms add. It touches nothing, so only its presence is tested. */
+const byName = (name: string): Promise<string> => Promise.resolve(`byName:${name}`)
+
+/** The ways a service keeps its helper set that do not add a method. */
+const PLAIN_FORMS: Array<[string, (sql: Sql, cache: RowCache<Note>) => NotesService]> = [
   ["a class field", (sql, cache) => {
     class FieldService extends DbServiceBase {
       notes = this.buildMethods<Note, { name: string }, { name: string }>("notes", cache)
@@ -1458,6 +1464,59 @@ const HELPER_FORMS: Array<[string, (sql: Sql, cache: RowCache<Note>) => NotesSer
     return new GetterService({ sql })
   }],
 ]
+
+/** The ways a service keeps its helper set that add `byName` to it. */
+const EXTENDING_FORMS: Array<[string, (sql: Sql, cache: RowCache<Note>) => NotesService]> = [
+  // financy's shape: every table there is written this way.
+  ["a spread class field", (sql, cache) => {
+    class SpreadService extends DbServiceBase {
+      notes = {
+        ...this.buildMethods<Note, { name: string }, { name: string }>("notes", cache),
+        byName,
+      }
+    }
+    return new SpreadService({ sql })
+  }],
+  ["an Object.assign class field", (sql, cache) => {
+    class AssignService extends DbServiceBase {
+      notes = Object.assign(
+        this.buildMethods<Note, { name: string }, { name: string }>("notes", cache),
+        { byName },
+      )
+    }
+    return new AssignService({ sql })
+  }],
+  ["a class field built by an overriding buildMethods", (sql, cache) => {
+    class OverrideService extends DbServiceBase {
+      override buildMethods<
+        M extends postgres.Row,
+        C extends Partial<unknown>,
+        U extends Partial<unknown>,
+      >(table: string, rowCache: RowCache<M>): RowMethods<M, C, U> {
+        return Object.assign(super.buildMethods<M, C, U>(table, rowCache), { byName })
+      }
+      notes = this.buildMethods<Note, { name: string }, { name: string }>("notes", cache)
+    }
+    return new OverrideService({ sql }) as unknown as NotesService
+  }],
+]
+
+/** Every form a service keeps its helper set in. */
+const HELPER_FORMS = [...PLAIN_FORMS, ...EXTENDING_FORMS]
+
+for (const [form, build] of EXTENDING_FORMS) {
+  Deno.test(`the method added in ${form} is still there inside begin`, async () => {
+    const fake = createFakeSql({ answers: structuredClone(NOTE_ANSWERS) })
+    const service = build(
+      watchClientCalls(fake.sql, fake.topLevel),
+      createLoggingCache(fake.topLevel),
+    )
+
+    const answer = await service.begin((tx) => tx.notes.byName!("ada"))
+
+    assertStrictEquals(answer, "byName:ada")
+  })
+}
 
 /** Answers for createOne, updateOne, deleteOne and findOne, in that order. */
 const NOTE_ANSWERS = [

@@ -42,17 +42,29 @@
  * **Which helper sets follow a transaction.** A helper set closes over the instance that
  * built it, so what matters is where it is kept:
  *
- *  - a class field or any other property of the service (`notes = this.buildMethods(...)`)
- *    follows: `begin` gives the clone its own set, built on the clone, in the same
- *    property, so `tx.notes.createOne(...)` runs on the transaction and queues its cache
- *    write until the commit. This held only for the getter form until #230;
+ *  - a class field or any other property of the service follows, whether it holds the set
+ *    as returned (`notes = this.buildMethods(...)`), the set extended in place
+ *    (`Object.assign(this.buildMethods(...), { byName })`, or a subclass `buildMethods`
+ *    override that adds to `super.buildMethods(...)`), or a spread copy
+ *    (`notes = { ...this.buildMethods(...), findMany }`). `begin` gives the clone its own
+ *    copy of that property, with the built-in methods built on the clone, so
+ *    `tx.notes.createOne(...)` runs on the transaction and queues its cache write until the
+ *    commit. This held only for the getter form until #230;
  *  - a getter that builds on every access (`get notes() { return this.buildMethods(...) }`)
  *    follows, because the getter runs with the clone as `this`;
  *  - a set built inside the callback through the clone (`tx.buildMethods(...)`) follows;
  *  - a set kept anywhere else does not: in a local variable or a module constant, nested
- *    inside another object (`tables = { notes: this.buildMethods(...) }`), copied or
- *    spread into a new object, in a `#private` field, or built by another service. Those
- *    still run on the instance that built them, outside the transaction.
+ *    deeper inside another object (`tables = { notes: this.buildMethods(...) }`), in a
+ *    `#private` field, or built by another service. Those still run on the instance that
+ *    built them, outside the transaction.
+ *
+ * **A method a consumer adds to a set does not follow.** In
+ * `` notes = { ...this.buildMethods(...), findMany: () => this.sql`…` } `` the arrow closes
+ * over the service it was written on, so `tx.notes.findMany()` is still there but runs on
+ * the root client, outside the transaction. Write such a method so that it reads `this` at
+ * call time — a prototype method (`` findManyNotes() { return this.sql`…` } ``, called as
+ * `tx.findManyNotes()`), or a getter that builds the whole object on every access
+ * (`` get notes() { return { ...this.buildMethods(...), findMany: () => this.sql`…` } } ``).
  *
  * **What the transaction clone's guard promises**, and it is worth stating once here
  * because several comments below depend on it. A clone kept past `begin()` or past a
@@ -440,8 +452,19 @@ interface RowMethodsOrigin {
   cache: RowCache<postgres.Row>
 }
 
-/** Every helper set {@link DbServiceBase.buildMethods} made, keyed by the set itself. */
-const rowMethodsOrigins = new WeakMap<object, RowMethodsOrigin>()
+/** One built-in helper method: the set it was built in, and its name in that set. */
+interface RowMethodRecord {
+  origin: RowMethodsOrigin
+  name: keyof RowMethods<postgres.Row, never, never>
+}
+
+/**
+ * Every method {@link DbServiceBase.buildMethods} made, keyed by the function itself.
+ *
+ * Keyed by function rather than by set, because the set is often not what a service keeps:
+ * `{ ...this.buildMethods(...), findMany }` keeps a new object holding the same functions.
+ */
+const rowMethodRecords = new WeakMap<object, RowMethodRecord>()
 
 /** Configuration for {@link DbServiceBase}. */
 export interface DbServiceBaseOptions {
@@ -740,8 +763,10 @@ export class DbServiceBase {
    * workspace.
    *
    * The set closes over this instance. Kept in a property of the service — a class field
-   * is the usual place — it is rebuilt on each transaction clone, so `tx.<table>` runs
-   * inside the transaction; the module doc lists which other forms follow a transaction.
+   * is the usual place — as returned, extended in place or spread into a new object, its
+   * methods are rebuilt on each transaction clone, so `tx.<table>` runs inside the
+   * transaction. A method the consumer adds is kept but not rebuilt; the module doc lists
+   * which forms follow a transaction and how to write an added method that does.
    */
   buildMethods<M extends postgres.Row, C extends Partial<unknown>, U extends Partial<unknown>>(
     table: string,
@@ -841,11 +866,14 @@ export class DbServiceBase {
           `,
         ),
     }
-    rowMethodsOrigins.set(methods, {
+    const origin: RowMethodsOrigin = {
       owner: this,
       table,
       cache: cache as unknown as RowCache<postgres.Row>,
-    })
+    }
+    for (const name of Object.keys(methods) as Array<RowMethodRecord["name"]>) {
+      rowMethodRecords.set(methods[name], { origin, name })
+    }
     return methods
   }
 
@@ -859,10 +887,16 @@ export class DbServiceBase {
    * client, outside the transaction, and wrote the cache before the commit (#230).
    *
    * The walk covers own and inherited properties, symbols included, and reads only data
-   * properties, so no getter runs. A set is replaced only when this instance built it; a
-   * set another service built stays that service's. The replacement keeps the property's
-   * attributes and is itself recorded with the clone as its owner, so a nested `begin`
-   * finds it as the outer clone's own and rebinds it again onto the savepoint's clone.
+   * properties, so no getter runs. A property is rebuilt when its value is an object with at
+   * least one own method that this instance's `buildMethods` made; that covers the set as
+   * returned, a set extended in place (`Object.assign(this.buildMethods(...), { byName })`,
+   * or a subclass override that adds to `super.buildMethods(...)`), and a spread copy
+   * (`{ ...this.buildMethods(...), findMany }`). The copy keeps the object's prototype and
+   * every own property, and swaps only the recorded methods for ones built on the clone, so
+   * a method the consumer added is still there and still closes over the instance it was
+   * written on. A method another service built stays that service's. The new methods are
+   * recorded with the clone as their owner, so a nested `begin` finds them on the outer
+   * clone's own property and rebuilds them again for the savepoint.
    */
   private rebindRowMethods(clone: DbServiceBase): void {
     const seen = new Set<string | symbol>()
@@ -876,17 +910,45 @@ export class DbServiceBase {
         seen.add(key)
         const descriptor = Reflect.getOwnPropertyDescriptor(holder, key)
         if (descriptor === undefined || !("value" in descriptor)) continue
-        const value: unknown = descriptor.value
-        if (typeof value !== "object" || value === null) continue
-        const origin = rowMethodsOrigins.get(value)
-        if (origin === undefined) continue
-        if (origin.owner !== this) continue
-        Object.defineProperty(clone, key, {
-          ...descriptor,
-          value: clone.buildRowMethods(origin.table, origin.cache),
-        })
+        const rebuilt = this.rebuildRowMethods(descriptor.value, clone)
+        if (rebuilt === undefined) continue
+        Object.defineProperty(clone, key, { ...descriptor, value: rebuilt })
       }
     }
+  }
+
+  /**
+   * A copy of `value` whose methods from this instance's `buildMethods` are built on
+   * `clone` instead, or `undefined` when it holds none.
+   *
+   * One level deep, and only own data properties, so no getter runs. Arrays are skipped:
+   * no helper set is one, and `pendingCacheOperations` is.
+   */
+  private rebuildRowMethods(value: unknown, clone: DbServiceBase): object | undefined {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+    const descriptors = Object.getOwnPropertyDescriptors(value) as Record<
+      string | symbol,
+      PropertyDescriptor
+    >
+    // One rebuilt set per origin, so a spread of two tables' sets gets both, each once.
+    const rebuiltSets = new Map<RowMethodsOrigin, Record<string, unknown>>()
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptors[key]
+      if (!("value" in descriptor)) continue
+      const record = rowMethodRecords.get(descriptor.value)
+      if (record === undefined || record.origin.owner !== this) continue
+      let rebuilt = rebuiltSets.get(record.origin)
+      if (rebuilt === undefined) {
+        rebuilt = clone.buildRowMethods(
+          record.origin.table,
+          record.origin.cache,
+        ) as unknown as Record<string, unknown>
+        rebuiltSets.set(record.origin, rebuilt)
+      }
+      descriptors[key] = { ...descriptor, value: rebuilt[record.name] }
+    }
+    if (rebuiltSets.size === 0) return undefined
+    return Object.create(Object.getPrototypeOf(value), descriptors)
   }
 
   protected setCache<T extends postgres.Row>(

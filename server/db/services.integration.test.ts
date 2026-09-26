@@ -121,13 +121,18 @@ function passthroughCache(): RowCache<Note> {
   }
 }
 
-/** The helper set a notes service exposes. */
+/** The helper set a notes service exposes, with the method some forms add to it. */
 interface NotesService extends DbServiceBase {
-  notes: RowMethods<Note, { id: number; body: string }, { body?: string }>
+  notes: RowMethods<Note, { id: number; body: string }, { body?: string }> & {
+    findMany?: () => Promise<Note[]>
+  }
 }
 
-/** The two ways a service keeps its helper set, as consumers write them. */
-const HELPER_FORMS: Array<[string, (sql: Sql, cache: RowCache<Note>) => NotesService]> = [
+/** Build a notes service over `sql`, with `cache` behind its helper set. */
+type NotesServiceFactory = (sql: Sql, cache: RowCache<Note>) => NotesService
+
+/** The ways a service keeps its helper set that do not add a method. */
+const PLAIN_FORMS: Array<[string, NotesServiceFactory]> = [
   ["a class field", (sql, cache) => {
     class FieldService extends DbServiceBase {
       notes = this.buildMethods<Note, { id: number; body: string }, { body?: string }>(
@@ -149,6 +154,62 @@ const HELPER_FORMS: Array<[string, (sql: Sql, cache: RowCache<Note>) => NotesSer
     return new GetterService({ sql })
   }],
 ]
+
+/**
+ * The ways a service keeps its helper set that add `findMany` to it.
+ *
+ * `findMany` is an arrow written on the root, as a consumer writes it, so it reads through
+ * the root client: it sees committed rows only, and it is not expected to follow.
+ */
+const EXTENDING_FORMS: Array<[string, NotesServiceFactory]> = [
+  // financy's shape: every table there is written this way.
+  ["a spread class field", (sql, cache) => {
+    class SpreadService extends DbServiceBase {
+      notes = {
+        ...this.buildMethods<Note, { id: number; body: string }, { body?: string }>(
+          "note",
+          cache,
+        ),
+        findMany: async (): Promise<Note[]> => [...await this.sql<Note[]>`SELECT * FROM note`],
+      }
+    }
+    return new SpreadService({ sql })
+  }],
+  ["an Object.assign class field", (sql, cache) => {
+    class AssignService extends DbServiceBase {
+      notes = Object.assign(
+        this.buildMethods<Note, { id: number; body: string }, { body?: string }>("note", cache),
+        {
+          findMany: async (): Promise<Note[]> => [
+            ...await this.sql<Note[]>`SELECT * FROM note`,
+          ],
+        },
+      )
+    }
+    return new AssignService({ sql })
+  }],
+  ["a class field built by an overriding buildMethods", (sql, cache) => {
+    class OverrideService extends DbServiceBase {
+      override buildMethods<
+        M extends postgres.Row,
+        C extends Partial<unknown>,
+        U extends Partial<unknown>,
+      >(table: string, rowCache: RowCache<M>): RowMethods<M, C, U> {
+        return Object.assign(super.buildMethods<M, C, U>(table, rowCache), {
+          findMany: async (): Promise<M[]> => [...await this.sql<M[]>`SELECT * FROM note`],
+        })
+      }
+      notes = this.buildMethods<Note, { id: number; body: string }, { body?: string }>(
+        "note",
+        cache,
+      )
+    }
+    return new OverrideService({ sql }) as unknown as NotesService
+  }],
+]
+
+/** Every form a service keeps its helper set in. */
+const HELPER_FORMS = [...PLAIN_FORMS, ...EXTENDING_FORMS]
 
 /**
  * A cache that writes each call into `log`, with how many rows of the table a *separate*
@@ -753,6 +814,38 @@ describe("DbServiceBase against a real server", () => {
       assertStrictEquals(revived?.body, "live")
     })
   })
+
+  for (const [form, build] of EXTENDING_FORMS) {
+    it(`keeps the method added in ${form} and rolls back the built-in writes`, async () => {
+      await withSchema({}, async (sql, schema) => {
+        const pool = searchPathPool(schema)
+        const log: string[] = []
+        try {
+          const service = build(pool, observingCache(log, sql, schema))
+          await assertRejects(
+            () =>
+              service.begin(async (tx) => {
+                await tx.notes.createOne({ data: { id: 1, body: "created" } })
+                // The added method reads through the root, so the uncommitted row is not
+                // there for it; what matters is that it is still a method.
+                assertEquals(await tx.notes.findMany!(), [])
+                throw new Error("the transaction fails")
+              }),
+            Error,
+            "the transaction fails",
+          )
+        } finally {
+          await pool.end()
+        }
+
+        const [row] = await sql<{ count: number }[]>`
+          SELECT count(*)::int AS count FROM ${sql(schema)}.note
+        `
+        assertStrictEquals(row.count, 0)
+        assertEquals(log, [])
+      })
+    })
+  }
 
   for (const [form, build] of HELPER_FORMS) {
     it(`rolls back every write made through helpers kept in ${form}`, async () => {
