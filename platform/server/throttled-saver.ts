@@ -149,8 +149,8 @@ export class ThrottledJsonSaver {
    *
    * A detached write, and the follow-up it schedules, may already be in flight; `flush` waits for
    * them only until the marks made before the call are on disk, so its postcondition is "whatever
-   * was marked before this call is on disk" rather than "a write was started". A caller finishing a run can therefore `await saver.flush()`
-   * exactly once.
+   * was marked before this call is on disk" rather than "a write was started". A caller finishing
+   * a run can therefore `await saver.flush()` exactly once.
    *
    * A timer-driven failure is reported through `onFlushError` — there is no caller to reject. An
    * explicit `flush()` rejects, because the caller is waiting and must know the state was not
@@ -160,8 +160,8 @@ export class ThrottledJsonSaver {
    */
   async flush(): Promise<boolean> {
     this.#cancelTimer()
-    // Only the marks made before this call count. Waiting for later ones too would never end while a
-    // producer keeps marking during slow writes.
+    // Only the marks made before this call count. Waiting for later ones too would never end while
+    // a producer keeps marking during slow writes.
     const target = this.#marked
     // Loop: a finished write may have started a follow-up, and another `flush` may have started its
     // own write while this one waited. A failure of an earlier write has already been reported;
@@ -195,8 +195,8 @@ export class ThrottledJsonSaver {
   }
 
   /**
-   * Hand a detached write's failure to `onFlushError`. A handler that throws is rethrown outside the
-   * write chain, so it surfaces as an uncaught error instead of disappearing into it.
+   * Hand a detached write's failure to `onFlushError`. A handler that throws is rethrown outside
+   * the write chain, so it surfaces as an uncaught error instead of disappearing into it.
    */
   #reportFlushError(error: unknown): void {
     try {
@@ -225,8 +225,8 @@ export class ThrottledJsonSaver {
       pid: this.#pid,
       sequence: this.#nextSequence ? this.#nextSequence() : this.#sequence++,
     }
-    // Capture the mark count with the snapshot: a mark landing while the write is in flight is newer
-    // than this snapshot, so it keeps the saver dirty after the write lands.
+    // Capture the mark count with the snapshot: a mark landing while the write is in flight is
+    // newer than this snapshot, so it keeps the saver dirty after the write lands.
     const snapshot = this.#serialize()
     const covers = this.#marked
     const markedDuringWindow = this.#batchCount

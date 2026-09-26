@@ -257,8 +257,8 @@ describe("ThrottledJsonSaver", () => {
   it("rejects an explicit flush that is already satisfied by an in-flight write", async () => {
     const h = harness()
     h.saver.markDirty()
-    // `flush` waits for the detached write and then finds nothing left to do, rather than starting a
-    // second write of the same state.
+    // `flush` waits for the detached write and then finds nothing left to do, rather than starting
+    // a second write of the same state.
     expect(await h.saver.flush()).toBe(true)
     expect(await h.saver.flush()).toBe(false)
     expect(h.saver.writes).toBe(1)
