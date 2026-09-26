@@ -408,13 +408,21 @@ describe("MemoryRateLimiter", () => {
     const { clock, advance } = fakeClock()
     const limiter = new MemoryRateLimiter({ windowMs: 60_000, limit: 2, maxBuckets: 10, clock })
     limiter.check("user:alice")
+    advance(30_000)
     limiter.check("user:alice")
-    assertEquals(limiter.check("user:alice").allowed, false)
     for (let i = 0; i < 1000; i++) {
       limiter.check(`user:flood-${i}`)
       advance(1)
     }
-    assertEquals(limiter.check("user:alice").allowed, false)
+    // Still her own bucket: blocked until her first request, 60 s ago at T0, leaves the window.
+    // Had the flood evicted her, she would be a refused new key waiting on the flood's buckets.
+    assertEquals(limiter.check("user:alice"), {
+      allowed: false,
+      remaining: 0,
+      retryAfterMs: 29_000,
+      resetAfterMs: 29_000,
+      limit: 2,
+    })
   })
 
   it("refuses a maxBuckets that is not a whole number of at least one", () => {
