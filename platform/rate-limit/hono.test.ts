@@ -280,6 +280,58 @@ describe("createRateLimitMiddleware", () => {
     assertEquals((await send("198.51.100.2")).status, 200)
   })
 
+  it("keys IPv6 clients on their /64 and IPv4 clients on their address", async () => {
+    const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 1, clock: () => T0 })
+    const app = new Hono()
+    let peer = ""
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => peer,
+        keyResolver: userThenIp(() => undefined),
+      }),
+    )
+    app.get("/", (c) => c.text("ok"))
+
+    const from = async (address: string) => {
+      peer = address
+      return (await app.request(new Request("http://localhost/"))).status
+    }
+    assertEquals(await from("2001:db8:1:2::1"), 200)
+    assertEquals(await from("2001:db8:1:2::2"), 429)
+    assertEquals(await from("2001:db8:1:3::1"), 200)
+    assertEquals(await from("192.0.2.1"), 200)
+    assertEquals(await from("192.0.2.2"), 200)
+  })
+
+  it("keys each IPv6 address separately with ipv6PerAddress", async () => {
+    const seen: string[] = []
+    const resolver = userThenIp(() => undefined, { ipv6PerAddress: true })
+    for (const address of ["2001:db8:1:2::1", "2001:db8:1:2::2", "192.0.2.1"]) {
+      seen.push(
+        await resolver(new Request("http://localhost/"), {
+          req: new Request("http://localhost/"),
+          remoteAddr: address,
+        } as never),
+      )
+    }
+    assertEquals(seen, ["ip:2001:db8:1:2::1", "ip:2001:db8:1:2::2", "ip:192.0.2.1"])
+  })
+
+  it("passes trustedProxies through to clientIp", async () => {
+    const resolver = userThenIp(() => undefined, {
+      trustedProxy: "cf-connecting-ip",
+      trustedProxies: ["104.16.0.0/13"],
+    })
+    const key = (remoteAddr: string) => {
+      const req = new Request("http://localhost/", {
+        headers: { "cf-connecting-ip": "198.51.100.7" },
+      })
+      return resolver(req, { req, remoteAddr } as never)
+    }
+    assertEquals(await key("104.16.0.1"), "ip:198.51.100.7")
+    assertEquals(await key("192.0.2.1"), "ip:192.0.2.1")
+  })
+
   it("keys on the authenticated user when the resolver finds one", async () => {
     const seen: string[] = []
     const app = new Hono()
