@@ -175,11 +175,12 @@ interface OpenedConnection {
  * its own — a dropped socket is noticed only when a call next tries to use it. The
  * call whose command fails on a dead connection (a failed write or read, not an error
  * reply from Redis) reconnects and sends that command once more on the fresh
- * connection (#169): every command this store sends — `GET`, `SET … EX`, `DEL`,
- * `GETDEL`, `SCAN`, `CLIENT ID` — is safe to send twice (a repeated `GETDEL` at worst
- * returns `null`), so a Redis restart no longer costs the first call after it. Each
- * call reconnects at most once: a call that
- * already reconnected before its first send, or whose one reconnect fails, throws
+ * connection (#169), so a Redis restart no longer costs the first call after it. A
+ * resend is not free when the first send did reach Redis: `GET`, `SCAN` and
+ * `CLIENT ID` only read, but a resent `SET … EX` or `DEL` can overwrite a write
+ * another client made in between, and a resent `GETDEL` finds the key already gone,
+ * so the caller gets `null` and the value is lost. Each call reconnects at most once:
+ * a call that already reconnected before its first send, or whose one reconnect fails, throws
  * {@link RedisKvStoreConnectionError}, so while Redis stays unreachable every call
  * fails after one bounded attempt, never a loop. A command that got no reply within
  * {@link COMMAND_TIMEOUT_MS} (#172) closes the connection and throws without a resend:
@@ -419,8 +420,8 @@ export class RedisKvStore {
    * {@link COMMAND_TIMEOUT_MS} timeout — and this call has not reconnected yet, it
    * reconnects (or joins a reconnect already in flight, or finds a concurrent call
    * already swapped a fresh connection in) and sends the command once more (#169).
-   * Every command this store sends is safe to send twice (see {@link RedisKvStore}),
-   * so a first send that did reach Redis before the socket died is harmless to repeat.
+   * A first send that did reach Redis before the socket died is repeated; what that
+   * costs per command is described on {@link RedisKvStore}.
    *
    * No loop: a call reconnects at most once. A call that reconnected before its first
    * send, a call whose one reconnect fails, and a resend that fails again all throw
@@ -494,8 +495,8 @@ export class RedisKvStore {
    *
    * For one-time values such as a pending sign-in flow: two concurrent calls for the
    * same key never both receive the value. A resend after a dead connection (see
-   * {@link RedisKvStore}) keeps that promise — if the first send already consumed the
-   * key, the resend returns `null` rather than the value a second time.
+   * {@link RedisKvStore}) keeps that promise, at a cost: if the lost first send already
+   * deleted the key, the resend returns `null` and the value is gone.
    */
   public async take(key: string): Promise<string | null> {
     return await this.#send<string | null>(["GETDEL", this.#prefixed(key)])

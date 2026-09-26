@@ -1559,10 +1559,10 @@ still leaves no socket open.
 
 **Resends a command once after reconnecting (#169).** The call whose own write or read fails on a
 dead connection (not an error reply from Redis) reconnects and sends its command once more on the
-fresh connection. Every command the store sends is safe to send twice: `GET`, `SET … EX`, `DEL`,
-`SCAN` and `CLIENT ID` give the same result when Redis receives them twice, and a repeated `GETDEL`
-at worst returns `null` for a value the first send already consumed, so a first send that did reach
-Redis is harmless to repeat. A Redis restart therefore no longer costs the first call after it.
+fresh connection, so a Redis restart no longer costs the first call after it. A resend is not free
+when the first send did reach Redis before the socket died: `GET`, `SCAN` and `CLIENT ID` only read,
+but a resent `SET … EX` or `DEL` can overwrite a write another client made in between, and a resent
+`GETDEL` finds the key already gone, so `take` returns `null` and the value is lost.
 Each call reconnects at most once: a call that already reconnected before its first send, a call
 whose one reconnect fails, and a resend that fails again all throw `RedisKvStoreConnectionError`,
 with the failure as `cause`. While Redis is down, every call fails after one bounded attempt, with
@@ -1570,15 +1570,17 @@ no retry loop. An error reply such as `WRONGTYPE` is never resent.
 
 **Bounds every command (#172).** A command on an open connection waits at most 5 seconds for its
 reply. When Redis freezes (`docker pause`, a stuck host), the store closes the connection, records
-the failure and throws `RedisKvStoreConnectionError` with a `TimeoutError` as `cause`; every command
-queued behind it on that connection fails the same way, and the next call reconnects. A timed-out
-command is not resent, since a frozen Redis would hold the caller for another full bound. Before
+the failure and throws `RedisKvStoreConnectionError` with a `TimeoutError` as `cause`. Every command
+queued behind it on that connection also throws `RedisKvStoreConnectionError`, with its own failed
+read as `cause`. The next call reconnects. Neither the timed-out command nor those queued behind it
+is resent, since a frozen Redis would hold each caller for another full bound. Before
 this, a frozen Redis turned into request latency equal to the freeze. All three 5-second bounds are
 fixed internal constants, not options on `connect()`.
 
 **`take(key)`** reads a value and deletes its key in one atomic `GETDEL` (Redis 6.2 or later), for
-one-time values such as a pending sign-in flow: two concurrent calls never both receive the value,
-and a resend after a dead connection returns `null` rather than the value a second time.
+one-time values such as a pending sign-in flow: two concurrent calls never both receive the value.
+A resend after a dead connection never returns it a second time either, but it can return `null` for
+a value the lost first send already deleted.
 
 Net effect for a caller: a Redis restart costs no call at all when Redis is back by the time the
 resend reconnects, and otherwise only the calls made while Redis is actually down; a frozen Redis

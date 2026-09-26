@@ -25,11 +25,13 @@ import {
 const originalConnect = Deno.connect
 const originalAbortTimeout = AbortSignal.timeout
 const originalSetTimeout = globalThis.setTimeout
+const originalClearTimeout = globalThis.clearTimeout
 
 afterEach(() => {
   Deno.connect = originalConnect
   AbortSignal.timeout = originalAbortTimeout
   globalThis.setTimeout = originalSetTimeout
+  globalThis.clearTimeout = originalClearTimeout
 })
 
 /** Polls `condition` on macrotask ticks until it holds; fails after 100 ticks. */
@@ -486,6 +488,67 @@ describe("RedisKvStore bounding a command on an open connection", () => {
     assertEquals(reconnects.calls, 1)
 
     store.close()
+  })
+})
+
+describe("RedisKvStore bounding commands, continued", () => {
+  it("clears a command's timer once the reply arrives", async () => {
+    const { store, conns } = await connectFake()
+    const set: number[] = []
+    const cleared: number[] = []
+    globalThis.setTimeout = ((callback: () => void, ms?: number) => {
+      const id = originalSetTimeout(callback, ms)
+      set.push(id)
+      return id
+    }) as typeof setTimeout
+    globalThis.clearTimeout = ((id?: number) => {
+      if (id !== undefined) cleared.push(id)
+      originalClearTimeout(id)
+    }) as typeof clearTimeout
+
+    conns[0].reply("$5\r\nhello")
+    assertEquals(await store.get("k"), "hello")
+
+    // The one timer the GET set is cleared, so it can never fire later and close a
+    // connection that answered in time.
+    assertEquals(set.length, 1)
+    assertEquals(cleared, set)
+    assertEquals(conns[0].closed, false)
+
+    store.close()
+  })
+
+  it("does not resend a command queued behind one that timed out", async () => {
+    const { store, conns, calls } = await connectFake()
+    // Neither GET is ever answered; the first deadline fires on the next tick.
+    globalThis.setTimeout =
+      ((callback: () => void) => originalSetTimeout(callback, 0)) as typeof setTimeout
+
+    const results = await Promise.allSettled([store.get("a"), store.get("b")])
+    globalThis.setTimeout = originalSetTimeout
+
+    for (const result of results) {
+      assertEquals(result.status, "rejected")
+      assertInstanceOf((result as PromiseRejectedResult).reason, RedisKvStoreConnectionError)
+    }
+    // The first call's cause is its timeout; the queued one failed on its own read.
+    const [first, second] = results as PromiseRejectedResult[]
+    assertEquals((first.reason.cause as DOMException).name, "TimeoutError")
+    assertEquals(second.reason.cause instanceof DOMException, false)
+    // Neither call opened a new connection: the queued one was not resent.
+    assertEquals(calls.calls, 1)
+    assertEquals(conns[0].closed, true)
+  })
+
+  it("does not resend a command whose store was closed mid-send", async () => {
+    const { store, calls } = await connectFake()
+
+    const pending = store.get("k")
+    const settled = assertRejects(() => pending, RedisKvStoreConnectionError)
+    store.close()
+    await settled
+
+    assertEquals(calls.calls, 1)
   })
 })
 
