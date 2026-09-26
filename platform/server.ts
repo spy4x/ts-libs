@@ -1,12 +1,12 @@
 /**
- * `@spy4x/platform/server` — helpers that touch a filesystem.
+ * `@spy4x/platform/server` — Deno-only helpers: filesystem writes, and a shutdown signal.
  *
- * Every module here takes a `FileSystemPort` instead of calling `Deno.*` directly, so the decision
- * logic is testable under the root test task's `--allow-read --allow-env` grant (there is no
- * `--allow-write`). {@link denoFileSystem} is the only Deno-bound object, and it is a thin adapter.
+ * Every filesystem module here takes a `FileSystemPort` instead of calling `Deno.*` directly, so
+ * the decision logic is testable under the root test task's `--allow-read --allow-env` grant (there
+ * is no `--allow-write`). {@link denoFileSystem} is the Deno-bound filesystem adapter.
  *
- * `shutdownSignal` is the exception to the port rule in the other direction: it defaults to
- * `Deno.addSignalListener`, and takes an injectable listener pair instead of a port object.
+ * {@link shutdownSignal} calls `Deno.addSignalListener` and `Deno.removeSignalListener` by default.
+ * Both are options, so its tests pass fakes and fire no real signal.
  *
  * This entry point imports `Deno` types transitively — keep it out of a browser bundle.
  *

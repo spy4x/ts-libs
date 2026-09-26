@@ -107,14 +107,15 @@ business, in `preact-components`) were removed.
 
 ### `./server` → `server.ts` (7 modules)
 
-Needs a filesystem. Every module takes a port (`FileSystemPort`, `ClockPort`, `TimerPort`) instead
-of calling `Deno.*` directly, because the root `test` task grants `--allow-read --allow-env` and
+Deno-only helpers. Every filesystem module takes a port (`FileSystemPort`, `ClockPort`,
+`TimerPort`) instead of calling `Deno.*` directly, because the root `test` task grants `--allow-read --allow-env` and
 **no `--allow-write`**. The decision logic — what to write, when to flush, which entry to skip — is
 tested against an in-memory fake.
 
-Only two objects in this subpath touch `Deno` anyway: `denoFileSystem`, `denoByteReader`
-(`server/deno-fs.ts`), and `Deno.pid` as the temp-file uniquifier default in
-`server/throttled-saver.ts`. Of `denoFileSystem`'s **9 methods**, three are covered by
+Only these touch `Deno` anyway: `denoFileSystem` and `denoByteReader` (`server/deno-fs.ts`),
+`Deno.pid` as the temp-file uniquifier default in `server/throttled-saver.ts`, and the
+`Deno.addSignalListener`/`Deno.removeSignalListener` defaults of `shutdownSignal`
+(`server/shutdown-signal.ts`), which its tests replace with fakes. Of `denoFileSystem`'s **9 methods**, three are covered by
 `server/deno-fs.test.ts` under the read-only grant — `exists`, `readText`, `readDir` (including its
 `isNotFound` mapping and the `NotADirectory` rethrow) — and the `exists`/`readText`/`readDir`
 rethrow branches are reached via `ENOTDIR`. `denoByteReader` is covered separately (chunk-size
@@ -136,8 +137,10 @@ the successful branch of `remove` — the calls that actually need `--allow-writ
 (#187). It aborts once, on the first signal, with a `ShutdownSignalError` whose `signal` names it,
 and removes every listener it added, so a second Ctrl+C ends the process the default way. A parent
 `signal` option lets a caller that stops for another reason remove the listeners too. The listener
-pair is injectable, so the tests fire fake signals. On Windows Deno supports only `SIGINT` and
-`SIGBREAK`; pass `signals: ["SIGINT", "SIGBREAK"]` there, because the default throws on `SIGTERM`.
+pair is injectable, so the tests fire fake signals. A listener whose removal throws does not stop
+the others from being removed or the signal from aborting; the first removal error is rethrown
+afterwards. The default list works on Windows with Deno 2.7.6 or later, where `SIGTERM` fires on
+logoff and system shutdown.
 
 `server/walk` (`@std/fs`'s `walk` covers it) and `server/hash-file` (`@std/crypto` already hashes a
 stream, and nothing in this workspace called `sha256OfStream`) were removed, along with the
