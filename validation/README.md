@@ -14,6 +14,14 @@ if (error) return error.description
 await save(data) // `data` is parsed, so `joinedAt` is a `Date`
 ```
 
+## Install
+
+```bash
+deno add jsr:@spy4x/validation
+```
+
+Runs on: shared — both the server and a browser bundle. Its sources use no `Deno.*` API.
+
 ## One outcome shape
 
 ```ts

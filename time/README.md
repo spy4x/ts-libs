@@ -47,6 +47,14 @@ const range = { from: startOfQuarter(today), to: endOfQuarter(today) }
 addDays(today, -6) // the first day of "the last 7 days", no zone needed
 ```
 
+## Install
+
+```bash
+deno add jsr:@spy4x/time
+```
+
+Runs on: shared — both the server and a browser bundle. Its sources use no `Deno.*` API.
+
 ## Plain dates and zones
 
 `time/date` does arithmetic on a calendar date and never asks which zone it is in: a `YYYY-MM-DD`

@@ -11,6 +11,14 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 - **Storage** — the `FileStorage` port with a local-filesystem provider, an S3-compatible provider
   and a bucket-binding wrapper. Zero dependencies.
 
+## Install
+
+```bash
+deno add jsr:@spy4x/server
+```
+
+Runs on: server (Deno).
+
 ## Subpaths
 
 | Export                            | What it is                                                                           |
