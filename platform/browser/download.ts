@@ -8,6 +8,8 @@
  * DOM type.
  */
 
+import { type CsvColumn, toCsvBytes } from "../universal/csv.ts"
+
 /** Minimal document surface this helper needs, so the caller passes its own `document`. */
 export interface DownloadDocument {
   createElement: (tagName: "a") => HTMLAnchorElement
@@ -112,4 +114,29 @@ export async function downloadResponseAsFile(
       objectUrl.revoke(url)
     }, REVOKE_DELAY_MS)
   }
+}
+
+/**
+ * Write rows as a CSV file and save it: {@link toCsvBytes} handed to {@link downloadResponseAsFile}.
+ *
+ * The file is UTF-8 with a byte-order mark, so Excel reads it as UTF-8, and every cell goes through
+ * `universal/csv`'s formula-injection guard. Rows are written as given; a caller that has to fetch
+ * them first awaits that before calling this, so a failed fetch downloads nothing.
+ *
+ * @param columns Header and cell reader for each column, in order.
+ * @param rows The rows to write.
+ * @param filename Name the browser saves the file under, e.g. `"orders.csv"`.
+ * @param options Injected `document`, object-URL adapter and timer, as for
+ * {@link downloadResponseAsFile}.
+ */
+export async function downloadCsv<T>(
+  columns: readonly CsvColumn<T>[],
+  rows: readonly T[],
+  filename: string,
+  options: DownloadOptions = {},
+): Promise<void> {
+  const response = new Response(toCsvBytes(columns, rows), {
+    headers: { "content-type": "text/csv;charset=utf-8" },
+  })
+  await downloadResponseAsFile(response, filename, options)
 }
