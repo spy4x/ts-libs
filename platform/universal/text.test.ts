@@ -225,7 +225,7 @@ describe("initials", () => {
     expect(initials("john smith")).toBe("JS")
   })
 
-  it("takes one code point, not one UTF-16 unit, of a combined Latin name", () => {
+  it("keeps a precomposed accented letter whole as the initial", () => {
     expect(initials("Émile Zola")).toBe("ÉZ")
   })
 
@@ -281,7 +281,7 @@ describe("initials for CJK names", () => {
 })
 
 describe("initials with decomposed Unicode", () => {
-  it("normalises the name before splitting it into words", () => {
+  it("has a decomposed fixture that composes to the precomposed name", () => {
     expect(NFD_JAMO_NAME.normalize("NFC")).toBe(NFC_JAMO_NAME)
   })
 
