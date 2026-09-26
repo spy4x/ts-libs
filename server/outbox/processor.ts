@@ -45,6 +45,18 @@ export interface OutboxRepository {
     delaySeconds: number,
     errorCode: string,
   ): Promise<void>
+  /**
+   * Hands back claimed events the processor never tried, because the batch ran too
+   * close to the end of its lease. Undoes the attempt the claim counted and makes each
+   * event available again at once. An event another worker has claimed since, or one
+   * already processed, is left alone: the event's `attemptCount` is the claim it
+   * belongs to.
+   *
+   * Optional, so a repository written before this method existed still works. Without
+   * it, the untried events stay invisible until the lease expires, and their next claim
+   * counts one attempt more than was ever made.
+   */
+  release?(events: OutboxEvent[]): Promise<void>
 }
 
 export interface OutboxProcessorOptions {
@@ -55,13 +67,28 @@ export interface OutboxProcessorOptions {
   baseRetryDelayMs?: number
   maxRetryDelayMs?: number
   /**
-   * How long a claimed row stays invisible to other workers. Must comfortably
-   * exceed the slowest expected publish, since a lease that expires mid-publish
-   * lets a second worker deliver the same event.
+   * How long a claimed batch stays invisible to other workers. It must comfortably
+   * exceed the slowest single publish, since a lease that expires mid-publish lets a
+   * second worker deliver the same event.
+   *
+   * It need not cover the whole batch. Before each event after the first,
+   * `drainOnce` checks the time since it started the claim; when that time plus the
+   * slowest publish seen so far in this batch would reach the lease, it stops and
+   * hands the untried events back through `OutboxRepository.release`. The first event
+   * of a batch is always tried, so a batch always makes progress.
    */
   leaseSeconds?: number
+  /**
+   * Milliseconds clock used to measure a batch against its lease. Defaults to
+   * `Date.now`; tests pass a fake one.
+   */
+  now?: () => number
 }
 
+/**
+ * What one `drainOnce` did. `claimed - published - failed` events were handed back
+ * untried because the batch ran too close to the end of its lease.
+ */
 export interface DrainResult {
   claimed: number
   published: number
@@ -146,6 +173,7 @@ export class OutboxProcessor {
   readonly #baseRetryDelayMs: number
   readonly #maxRetryDelayMs: number
   readonly #leaseSeconds: number
+  readonly #now: () => number
 
   constructor(
     private readonly repository: OutboxRepository,
@@ -157,13 +185,22 @@ export class OutboxProcessor {
     this.#baseRetryDelayMs = options.baseRetryDelayMs ?? DEFAULTS.baseRetryDelayMs
     this.#maxRetryDelayMs = options.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs
     this.#leaseSeconds = options.leaseSeconds ?? DEFAULTS.leaseSeconds
+    this.#now = options.now ?? Date.now
   }
 
   /**
    * Claims one batch and publishes it. A failing row is rescheduled and never blocks
    * the rest of the batch, so one poisonous event cannot stall the queue.
+   *
+   * The whole batch shares one lease, so publishing it one event at a time can outlast
+   * the lease and let another worker claim the tail. Before each event after the first,
+   * this stops once the time since the claim began plus the slowest publish seen so far
+   * would reach the lease, and hands the untried events back (see `leaseSeconds`).
+   * Timing starts before the claim, so it overestimates the lease already used.
    */
   async drainOnce(): Promise<DrainResult> {
+    const startedAt = this.#now()
+    const leaseMs = this.#leaseSeconds * 1000
     const events = await this.repository.claimBatch(
       this.#batchSize,
       this.#maxAttempts,
@@ -171,8 +208,14 @@ export class OutboxProcessor {
     )
     let published = 0
     let failed = 0
+    let slowestMs = 0
 
-    for (const event of events) {
+    for (const [index, event] of events.entries()) {
+      const eventStartedAt = this.#now()
+      if (index > 0 && eventStartedAt - startedAt + slowestMs >= leaseMs) {
+        await this.repository.release?.(events.slice(index))
+        break
+      }
       try {
         await this.publisher.publish(event)
         await this.repository.markProcessed(event.id)
@@ -190,6 +233,7 @@ export class OutboxProcessor {
           errorCodeOf(error),
         )
       }
+      slowestMs = Math.max(slowestMs, this.#now() - eventStartedAt)
     }
 
     return { claimed: events.length, published, failed }
@@ -199,7 +243,7 @@ export class OutboxProcessor {
    * Drains until aborted, waiting `idleDelayMs` only when a drain came back empty so a
    * backlog is worked through without pausing between batches.
    *
-   * A failure in `repository.claimBatch` or `scheduleRetry` rejects this call and ends
+   * A failure in `repository.claimBatch`, `scheduleRetry` or `release` rejects this call and ends
    * the loop, unchanged from the ported original; the caller must restart `run()` —
    * it does not retry itself. A failing `markProcessed` is different: it sits inside
    * `drainOnce`'s own `try`, so it is handled like a failing `publisher.publish` — the
