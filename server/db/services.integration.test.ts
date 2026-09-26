@@ -2,7 +2,7 @@
  * `DbServiceBase` against a real Postgres server.
  *
  * `services.test.ts` runs against a fake that renders the driver's tagged template into
- * text. Three of the claims in this module cannot be checked that way, because they are
+ * text. Several of the claims in this module cannot be checked that way, because they are
  * claims about what the server does with the text:
  *
  *  - a nested `begin` must roll back with the transaction it sits inside. Against a fake
@@ -12,7 +12,10 @@
  *  - the soft-delete filter has to match a real `deleted_at` column;
  *  - a clone kept past `begin` has to be refused. Against a fake that is a flag; against
  *    a server it is whether the write reaches the transaction that connection is running
- *    next and vanishes with that transaction's rollback.
+ *    next and vanishes with that transaction's rollback;
+ *  - helpers kept in a class field must run inside `begin` (#230). Against a fake that
+ *    is which handle a statement went through; against a server it is whether the row
+ *    survives the rollback.
  *
  * The kept-clone tests use `max: 1`, so the clone and the later transaction are certain
  * to share the one connection and the collision is deterministic rather than a matter of
@@ -49,7 +52,7 @@ import postgres from "postgres"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import type { RowCache, Sql } from "./ports.ts"
 import { createSql } from "./postgres.ts"
-import { DbServiceBase, PostgresScopeEndedError } from "./services.ts"
+import { DbServiceBase, PostgresScopeEndedError, type RowMethods } from "./services.ts"
 import { ownedBy, reachableFrom } from "./testing/reachable.ts"
 
 /** A note row, as the table below stores it. */
@@ -116,6 +119,82 @@ function passthroughCache(): RowCache<Note> {
     set: () => Promise.resolve(),
     delete: () => Promise.resolve(),
   }
+}
+
+/** The helper set a notes service exposes. */
+interface NotesService extends DbServiceBase {
+  notes: RowMethods<Note, { id: number; body: string }, { body?: string }>
+}
+
+/** The two ways a service keeps its helper set, as consumers write them. */
+const HELPER_FORMS: Array<[string, (sql: Sql, cache: RowCache<Note>) => NotesService]> = [
+  ["a class field", (sql, cache) => {
+    class FieldService extends DbServiceBase {
+      notes = this.buildMethods<Note, { id: number; body: string }, { body?: string }>(
+        "note",
+        cache,
+      )
+    }
+    return new FieldService({ sql })
+  }],
+  ["a getter", (sql, cache) => {
+    class GetterService extends DbServiceBase {
+      get notes(): RowMethods<Note, { id: number; body: string }, { body?: string }> {
+        return this.buildMethods<Note, { id: number; body: string }, { body?: string }>(
+          "note",
+          cache,
+        )
+      }
+    }
+    return new GetterService({ sql })
+  }],
+]
+
+/**
+ * A cache that writes each call into `log`, with how many rows of the table a *separate*
+ * connection can see at that moment.
+ *
+ * The count comes from `observer`, which is not the connection the transaction runs on,
+ * so it shows only committed rows: a cache write that came after the commit sees the row.
+ */
+function observingCache(log: string[], observer: Sql, schema: string): RowCache<Note> {
+  const record = async (call: string): Promise<void> => {
+    const [row] = await observer<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM ${observer(schema)}.note
+    `
+    log.push(`${call} (committed rows: ${row.count})`)
+  }
+  return {
+    wrap: async (key, compute) => {
+      await record(`wrap:${key}`)
+      return await compute()
+    },
+    set: (key) => record(`set:${key}`),
+    delete: (key) => record(`delete:${key}`),
+  }
+}
+
+/**
+ * A pool of several connections whose `search_path` is `schema` on every one of them.
+ *
+ * `buildMethods` takes a bare table name, so the schema has to be on the search path, and
+ * `withSchema`'s `searchPath` sets it on one session only, which needs `max: 1`. A helper
+ * that escaped its transaction would then wait for the one connection the transaction
+ * holds, and a Deno test has no timeout of its own, so the tier would hang instead of
+ * failing. A startup parameter reaches every connection, so the pool can be larger and the
+ * escaped write lands, commits and is counted.
+ */
+function searchPathPool(schema: string): Sql {
+  const settings = postgresSettings()
+  return postgres({
+    host: settings.connection.host,
+    port: settings.connection.port,
+    user: settings.connection.user,
+    pass: settings.connection.password,
+    db: settings.connection.database,
+    connection: { application_name: schema, search_path: schema },
+    max: 4,
+  }) as unknown as Sql
 }
 
 /** Options for {@link withSchema}. */
@@ -674,4 +753,62 @@ describe("DbServiceBase against a real server", () => {
       assertStrictEquals(revived?.body, "live")
     })
   })
+
+  for (const [form, build] of HELPER_FORMS) {
+    it(`rolls back every write made through helpers kept in ${form}`, async () => {
+      await withSchema({}, async (sql, schema) => {
+        const pool = searchPathPool(schema)
+        const log: string[] = []
+        try {
+          const service = build(pool, observingCache(log, sql, schema))
+          await assertRejects(
+            () =>
+              service.begin(async (tx) => {
+                await tx.notes.createOne({ data: { id: 1, body: "created" } })
+                await tx.notes.updateOne({ id: 1, data: { body: "updated" } })
+                assertStrictEquals((await tx.notes.findOne({ id: 1 }))?.body, "updated")
+                await tx.notes.deleteOne({ id: 1 })
+                throw new Error("the transaction fails")
+              }),
+            Error,
+            "the transaction fails",
+          )
+        } finally {
+          await pool.end()
+        }
+
+        const [row] = await sql<{ count: number }[]>`
+          SELECT count(*)::int AS count FROM ${sql(schema)}.note
+        `
+        assertStrictEquals(row.count, 0)
+        assertEquals(log, [])
+      })
+    })
+
+    it(`writes the cache after the commit through helpers kept in ${form}`, async () => {
+      await withSchema({}, async (sql, schema) => {
+        const pool = searchPathPool(schema)
+        const log: string[] = []
+        try {
+          const service = build(pool, observingCache(log, sql, schema))
+          await service.begin(async (tx) => {
+            await tx.notes.createOne({ data: { id: 1, body: "created" } })
+            await tx.notes.updateOne({ id: 1, data: { body: "updated" } })
+            await tx.notes.findOne({ id: 1 })
+            await tx.notes.deleteOne({ id: 1 })
+            log.push("callback returned")
+          })
+        } finally {
+          await pool.end()
+        }
+
+        assertEquals(log, [
+          "callback returned",
+          "set:1 (committed rows: 1)",
+          "set:1 (committed rows: 1)",
+          "delete:1 (committed rows: 1)",
+        ])
+      })
+    })
+  }
 })

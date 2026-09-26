@@ -39,6 +39,21 @@
  * write is logged, never thrown, because a cache that rejected a write must not
  * fail a query that already committed.
  *
+ * **Which helper sets follow a transaction.** A helper set closes over the instance that
+ * built it, so what matters is where it is kept:
+ *
+ *  - a class field or any other property of the service (`notes = this.buildMethods(...)`)
+ *    follows: `begin` gives the clone its own set, built on the clone, in the same
+ *    property, so `tx.notes.createOne(...)` runs on the transaction and queues its cache
+ *    write until the commit. This held only for the getter form until #230;
+ *  - a getter that builds on every access (`get notes() { return this.buildMethods(...) }`)
+ *    follows, because the getter runs with the clone as `this`;
+ *  - a set built inside the callback through the clone (`tx.buildMethods(...)`) follows;
+ *  - a set kept anywhere else does not: in a local variable or a module constant, nested
+ *    inside another object (`tables = { notes: this.buildMethods(...) }`), copied or
+ *    spread into a new object, in a `#private` field, or built by another service. Those
+ *    still run on the instance that built them, outside the transaction.
+ *
  * **What the transaction clone's guard promises**, and it is worth stating once here
  * because several comments below depend on it. A clone kept past `begin()` or past a
  * nested `begin()` refuses, with {@link PostgresScopeEndedError}, every call form a person
@@ -418,6 +433,16 @@ interface TransactionClone<S> {
   endScope: () => void
 }
 
+/** Where a helper set came from: the instance it closes over, and what it was built with. */
+interface RowMethodsOrigin {
+  owner: DbServiceBase
+  table: string
+  cache: RowCache<postgres.Row>
+}
+
+/** Every helper set {@link DbServiceBase.buildMethods} made, keyed by the set itself. */
+const rowMethodsOrigins = new WeakMap<object, RowMethodsOrigin>()
+
 /** Configuration for {@link DbServiceBase}. */
 export interface DbServiceBaseOptions {
   /** The client every method runs against. */
@@ -611,6 +636,7 @@ export class DbServiceBase {
     const service = Object.create(this) as this
     service.setSql(scope.executor as unknown as Sql)
     service.pendingCacheOperations = queue
+    this.rebindRowMethods(service)
     return { service, endScope: scope.end }
   }
 
@@ -712,12 +738,31 @@ export class DbServiceBase {
    * problem for a caller, but it is for publishing: `deno publish` requires an explicit
    * type on an exported method, and this one method failed that check for the whole
    * workspace.
+   *
+   * The set closes over this instance. Kept in a property of the service — a class field
+   * is the usual place — it is rebuilt on each transaction clone, so `tx.<table>` runs
+   * inside the transaction; the module doc lists which other forms follow a transaction.
    */
   buildMethods<M extends postgres.Row, C extends Partial<unknown>, U extends Partial<unknown>>(
     table: string,
     cache: RowCache<M>,
   ): RowMethods<M, C, U> {
-    return {
+    return this.buildRowMethods<M, C, U>(table, cache)
+  }
+
+  /**
+   * The body of {@link buildMethods}, and the one place a helper set is made.
+   *
+   * Private so that a transaction clone rebuilds a helper set with exactly this shape even
+   * when a subclass overrides `buildMethods`. Every set it makes is recorded, with the
+   * instance it closes over, so that {@link rebindRowMethods} can find it.
+   */
+  private buildRowMethods<
+    M extends postgres.Row,
+    C extends Partial<unknown>,
+    U extends Partial<unknown>,
+  >(table: string, cache: RowCache<M>): RowMethods<M, C, U> {
+    const methods: RowMethods<M, C, U> = {
       findOne: ({ id, includeDeleted = false }: FindOneParams): Promise<null | M> => {
         if (includeDeleted) {
           // The opt-out goes around the cache in both directions, and it has to. The
@@ -795,6 +840,53 @@ export class DbServiceBase {
             RETURNING *
           `,
         ),
+    }
+    rowMethodsOrigins.set(methods, {
+      owner: this,
+      table,
+      cache: cache as unknown as RowCache<postgres.Row>,
+    })
+    return methods
+  }
+
+  /**
+   * Give `clone` its own copy of every helper set this instance holds in a property.
+   *
+   * A helper set closes over the instance that built it, so one built in a class field
+   * (`notes = this.buildMethods(...)`) closes over the root. The clone reads that field
+   * through its prototype, and without this step `tx.notes.createOne(...)` ran on the root
+   * client, outside the transaction, and wrote the cache before the commit (#230).
+   *
+   * The walk covers own and inherited properties, symbols included, and reads only data
+   * properties, so no getter runs. A set is replaced only when it was built by this
+   * instance or by one it inherits from; a set another service built stays that service's.
+   * The replacement keeps the property's attributes and is itself recorded, so a nested
+   * `begin` rebinds it again onto the savepoint's clone.
+   */
+  private rebindRowMethods(clone: DbServiceBase): void {
+    const seen = new Set<string | symbol>()
+    for (
+      let holder: object | null = Object.getPrototypeOf(clone);
+      holder !== null && holder !== Object.prototype;
+      holder = Object.getPrototypeOf(holder)
+    ) {
+      for (const key of Reflect.ownKeys(holder)) {
+        if (seen.has(key)) continue
+        seen.add(key)
+        const descriptor = Reflect.getOwnPropertyDescriptor(holder, key)
+        if (descriptor === undefined || !("value" in descriptor)) continue
+        const value: unknown = descriptor.value
+        if (typeof value !== "object" || value === null) continue
+        const origin = rowMethodsOrigins.get(value)
+        if (origin === undefined) continue
+        if (origin.owner !== this && !Object.prototype.isPrototypeOf.call(origin.owner, this)) {
+          continue
+        }
+        Object.defineProperty(clone, key, {
+          ...descriptor,
+          value: clone.buildRowMethods(origin.table, origin.cache),
+        })
+      }
     }
   }
 
