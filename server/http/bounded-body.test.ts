@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert"
 import {
   BodyReadTimeoutError as NetBodyReadTimeoutError,
+  parseBoundedFormData as netParseBoundedFormData,
   PayloadTooLargeError as NetPayloadTooLargeError,
 } from "@spy4x/net/bounded-body"
 import {
@@ -25,27 +26,6 @@ const ORIGIN = "http://example.test"
 /** A `RequestInit` for a stream body: Deno requires the half-duplex flag. */
 function streamInit(body: ReadableStream<Uint8Array>, headers?: HeadersInit): RequestInit {
   return { method: "POST", body, headers, duplex: "half" } as RequestInit
-}
-
-/**
- * A body whose bytes are a `Uint8Array` view at a non-zero `byteOffset`.
- *
- * A contract guard rather than a discriminator: both the pre-collapse reader and
- * the canonical one return an exactly-sized offset-0 array, so it passes either
- * way. It fails the day a reader hands `Response` a window onto a larger buffer,
- * which is the `body.buffer` hazard this path documents.
- */
-function offsetViewInit(bytes: Uint8Array, contentType: string): RequestInit {
-  const buffer = new ArrayBuffer(bytes.byteLength + 4)
-  const view = new Uint8Array(buffer, 2, bytes.byteLength)
-  view.set(bytes)
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(view)
-      controller.close()
-    },
-  })
-  return streamInit(stream, { "content-type": contentType })
 }
 
 /** A body that never produces a chunk, so only the stall budget can settle it. */
@@ -330,80 +310,20 @@ Deno.test("readContentLength reads a bare decimal length and ignores anything el
   }
 })
 
-Deno.test("parseBoundedFormData reads a url-encoded body within the cap", async () => {
-  const request = new Request(ORIGIN, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: "email=user%40example.com",
-  })
-  const form = await parseBoundedFormData(request, { maxBytes: 1024 })
-  assertEquals(form.get("email"), "user@example.com")
-})
-
-Deno.test("parseBoundedFormData respects a non-zero byteOffset on the read buffer", async () => {
-  const payload = new TextEncoder().encode("email=user%40example.com")
-  const request = new Request(ORIGIN, offsetViewInit(payload, "application/x-www-form-urlencoded"))
-
-  const form = await parseBoundedFormData(request, { maxBytes: 1024 })
-  assertEquals(form.get("email"), "user@example.com")
-})
-
-Deno.test("parseBoundedFormData keeps the multipart boundary", async () => {
-  const boundary = "----tslibsboundary"
-  const payload = [
-    `--${boundary}`,
-    `Content-Disposition: form-data; name="email"`,
-    "",
-    "user@example.com",
-    `--${boundary}--`,
-    "",
-  ].join("\r\n")
-  const request = new Request(ORIGIN, {
-    method: "POST",
-    headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
-    body: payload,
-  })
-
-  const form = await parseBoundedFormData(request, { maxBytes: 1024 })
-  assertEquals(form.get("email"), "user@example.com")
-})
-
-Deno.test("parseBoundedFormData rejects a multipart body over the cap", async () => {
-  const boundary = "----tslibsboundary"
-  const payload = [
-    `--${boundary}`,
-    `Content-Disposition: form-data; name="file"; filename="big.txt"`,
-    "Content-Type: text/plain",
-    "",
-    "x".repeat(64),
-    `--${boundary}--`,
-    "",
-  ].join("\r\n")
-  const request = new Request(ORIGIN, {
-    method: "POST",
-    headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
-    body: payload,
-  })
-
-  await assertRejects(
-    () => parseBoundedFormData(request, { maxBytes: 32 }),
-    PayloadTooLargeError,
-  )
-})
-
-Deno.test("parseBoundedFormData refuses a request without a content-type", async () => {
-  const request = new Request(ORIGIN, { method: "POST", body: "email=user%40example.com" })
-  await assertRejects(() => parseBoundedFormData(request, { maxBytes: 1024 }), TypeError)
-})
-
 // The tests below pin class identity and the public surface after the collapse
 // into `net/bounded-body.ts`. They are not the only tests a local
-// `class PayloadTooLargeError` breaks: it also reddens the seven
-// `assertRejects(..., PayloadTooLargeError)` call sites above, which report the
-// bug as "Expected error to be instance of X, but was X" — ten failures in all.
+// `class PayloadTooLargeError` breaks: it also reddens every
+// `assertRejects(..., PayloadTooLargeError)` call site above, which report the
+// bug as "Expected error to be instance of X, but was X".
 
 Deno.test("PayloadTooLargeError is the same class object as the canonical one", () => {
   assertStrictEquals(PayloadTooLargeError, NetPayloadTooLargeError)
+})
+
+Deno.test("parseBoundedFormData is the same function as the one in net", () => {
+  // Its behaviour is tested in `net/bounded-body.test.ts`, where it lives since
+  // #222; this entry point only has to keep handing out that one function.
+  assertStrictEquals(parseBoundedFormData, netParseBoundedFormData)
 })
 
 Deno.test("a streamed over-cap body throws the canonical class through the entry point", async () => {

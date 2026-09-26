@@ -262,6 +262,43 @@ export async function readBoundedJson<T = unknown>(
   return JSON.parse(await readBoundedText(source, options)) as T
 }
 
+/**
+ * Parse a `multipart/form-data` (or url-encoded) request body under the same cap
+ * and stall budget as `readBoundedBody`.
+ *
+ * Unlike `request.formData()`, the bounded read happens first, so a large upload
+ * is rejected at `maxBytes` instead of being buffered in full.
+ *
+ * The bytes go to `Response` as a view, never as `body.buffer`: `Response` reads
+ * `byteOffset..byteLength` of what it is handed, so the whole backing buffer
+ * would append unrelated bytes if the reader ever returned a window onto a larger
+ * allocation. The one cast is on the view only: `readBoundedBody` declares
+ * `Uint8Array<ArrayBufferLike>` while `BodyInit` demands `Uint8Array<ArrayBuffer>`.
+ *
+ * Moved here from `@spy4x/server/http/bounded-body` (#222), which still
+ * re-exports this same function, so a caller that only needs a form cap does not
+ * depend on the whole server package.
+ *
+ * @throws `PayloadTooLargeError` under the same conditions as `readBoundedBody`.
+ * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
+ * @throws `TypeError` when the request carries no `content-type`; without it the
+ * multipart boundary is unknown and the parse could only return an empty body.
+ */
+export async function parseBoundedFormData(
+  request: Request,
+  options: BodyReadOptions = {},
+): Promise<FormData> {
+  const contentType = request.headers.get("content-type")
+  if (!contentType) {
+    throw new TypeError("parseBoundedFormData requires a content-type header")
+  }
+  const body = await readBoundedBody(request, options)
+
+  return await new Response(body as Uint8Array<ArrayBuffer>, {
+    headers: { "content-type": contentType },
+  }).formData()
+}
+
 async function cancelQuietly(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): Promise<void> {

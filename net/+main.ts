@@ -68,6 +68,7 @@ export {
   BodyReadTimeoutError,
   DEFAULT_BODY_TIMEOUT_MS,
   DEFAULT_MAX_BYTES,
+  parseBoundedFormData,
   PayloadTooLargeError,
   readBoundedBody,
   readBoundedJson,

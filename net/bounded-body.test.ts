@@ -4,6 +4,7 @@ import {
   BodyReadTimeoutError,
   DEFAULT_BODY_TIMEOUT_MS,
   DEFAULT_MAX_BYTES,
+  parseBoundedFormData,
   PayloadTooLargeError,
   readBoundedBody,
   readBoundedJson,
@@ -426,5 +427,104 @@ describe("defaults", () => {
       Object.defineProperty(globalThis, "setTimeout", setDescriptor!)
       Object.defineProperty(globalThis, "clearTimeout", clearDescriptor!)
     }
+  })
+})
+
+const FORM_ORIGIN = "http://example.test"
+
+/**
+ * A request whose body bytes are a `Uint8Array` view at a non-zero `byteOffset`.
+ *
+ * A contract guard rather than a discriminator: `readBoundedBody` returns an
+ * exactly-sized offset-0 array, so it passes either way. It fails the day the
+ * reader hands `Response` a window onto a larger buffer, which is the
+ * `body.buffer` hazard `parseBoundedFormData` documents.
+ */
+function offsetViewInit(bytes: Uint8Array, contentType: string): RequestInit {
+  const buffer = new ArrayBuffer(bytes.byteLength + 4)
+  const view = new Uint8Array(buffer, 2, bytes.byteLength)
+  view.set(bytes)
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(view)
+      controller.close()
+    },
+  })
+  return {
+    method: "POST",
+    body: stream,
+    headers: { "content-type": contentType },
+    duplex: "half",
+  } as RequestInit
+}
+
+describe("parseBoundedFormData", () => {
+  it("reads a url-encoded body within the cap", async () => {
+    const request = new Request(FORM_ORIGIN, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "email=user%40example.com",
+    })
+    const form = await parseBoundedFormData(request, { maxBytes: 1024 })
+    assertEquals(form.get("email"), "user@example.com")
+  })
+
+  it("respects a non-zero byteOffset on the read buffer", async () => {
+    const payload = new TextEncoder().encode("email=user%40example.com")
+    const request = new Request(
+      FORM_ORIGIN,
+      offsetViewInit(payload, "application/x-www-form-urlencoded"),
+    )
+
+    const form = await parseBoundedFormData(request, { maxBytes: 1024 })
+    assertEquals(form.get("email"), "user@example.com")
+  })
+
+  it("keeps the multipart boundary", async () => {
+    const boundary = "----tslibsboundary"
+    const payload = [
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="email"`,
+      "",
+      "user@example.com",
+      `--${boundary}--`,
+      "",
+    ].join("\r\n")
+    const request = new Request(FORM_ORIGIN, {
+      method: "POST",
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      body: payload,
+    })
+
+    const form = await parseBoundedFormData(request, { maxBytes: 1024 })
+    assertEquals(form.get("email"), "user@example.com")
+  })
+
+  it("rejects a multipart body over the cap", async () => {
+    const boundary = "----tslibsboundary"
+    const payload = [
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="file"; filename="big.txt"`,
+      "Content-Type: text/plain",
+      "",
+      "x".repeat(64),
+      `--${boundary}--`,
+      "",
+    ].join("\r\n")
+    const request = new Request(FORM_ORIGIN, {
+      method: "POST",
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      body: payload,
+    })
+
+    await assertRejects(
+      () => parseBoundedFormData(request, { maxBytes: 32 }),
+      PayloadTooLargeError,
+    )
+  })
+
+  it("refuses a request without a content-type", async () => {
+    const request = new Request(FORM_ORIGIN, { method: "POST", body: "email=user%40example.com" })
+    await assertRejects(() => parseBoundedFormData(request, { maxBytes: 1024 }), TypeError)
   })
 })
