@@ -356,12 +356,19 @@ function screenCandidates(date: string, time: string, tz: string): ScreenedCandi
 
   const requested = `${date} ${time.padStart(5, "0")}`
 
-  // Reduce over epoch milliseconds, not `Date` objects: `new Date(Infinity)` is
+  // Each candidate's wall clock is read once and both results come from that
+  // one pass. Epoch milliseconds, not `Date` objects: `new Date(Infinity)` is
   // an invalid date that compares false against everything, so a `Date`
   // sentinel would swallow the candidates it was meant to seed.
-  const earliestMs = candidates
-    .filter((instant) => wallClock(instant) >= requested)
-    .reduce((earliest, candidate) => Math.min(earliest, candidate.getTime()), Infinity)
+  let earliestMs = Infinity
+  const exactMs: number[] = []
+  for (const candidate of candidates) {
+    const reading = wallClock(candidate)
+    if (reading < requested) continue
+
+    earliestMs = Math.min(earliestMs, candidate.getTime())
+    if (reading === requested) exactMs.push(candidate.getTime())
+  }
 
   if (earliestMs === Infinity) {
     // Reachable, not a bug on its own: a handful of zones carry a historical
@@ -375,10 +382,7 @@ function screenCandidates(date: string, time: string, tz: string): ScreenedCandi
     )
   }
 
-  const exactMs = candidates
-    .filter((instant) => wallClock(instant) === requested)
-    .map((instant) => instant.getTime())
-    .sort((a, b) => a - b)
+  if (exactMs.length > 1) exactMs.sort((a, b) => a - b)
 
   return { chosenMs: earliestMs, exactMs }
 }
