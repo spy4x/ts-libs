@@ -1,7 +1,8 @@
 # `@spy4x/net`
 
 Outbound-request primitives for Deno: a URL shape normaliser, an SSRF guard, a
-redirect-safe `fetch`, and bounded body readers.
+redirect-safe `fetch`, and bounded body readers. Plus an IP address parser and a
+CIDR range check, for deciding which proxy to believe about a client's address.
 
 Zero runtime dependencies. Platform APIs only — `URL`, `Deno.resolveDns`,
 `AbortController`, `ReadableStream`, `TextDecoder`. Nothing here imports `@std/*`
@@ -13,6 +14,7 @@ net/url-shape.ts      normalizeUrlShape()   — shape only
 net/url-policy.ts     validatePublicUrl()   — the SSRF guard
 net/safe-fetch.ts     safeFetch()           — guard + redirect re-validation
 net/bounded-body.ts   readBoundedText/Json/Body, readContentLength
+net/ip.ts             parseIp(), normalizeIp(), ipInRanges()
 ```
 
 ## Two-tier API: which one do you want?
@@ -230,6 +232,34 @@ always the canonical URL that actually answered.
 Failures are typed: `PayloadTooLargeError`, `BodyReadTimeoutError`, and the
 platform `SyntaxError` for malformed JSON. The reader is cancelled and unlocked
 on every exit path.
+
+## IP addresses and ranges
+
+```ts
+import { ipInRanges, normalizeIp } from "@spy4x/net/ip"
+
+normalizeIp("::FFFF:192.0.2.1") // "192.0.2.1"
+normalizeIp("2001:0DB8::0001") // "2001:db8::1"
+normalizeIp("192.0.2.1:8080") // null
+
+const proxies = ["173.245.48.0/20", "2400:cb00::/32"] // the caller's own list
+ipInRanges("173.245.63.255", proxies) // true
+```
+
+`parseIp` takes exactly one bare address. It refuses a port, brackets, a zone id
+(`fe80::1%eth0`), surrounding whitespace, an IPv4 octet with a leading zero, and
+anything longer than 45 characters, and returns `null` for each. What it accepts
+comes back in one canonical spelling — dotted decimal, or RFC 5952 for IPv6 — so
+two spellings of one address are one string. An IPv4-mapped IPv6 address
+(`::ffff:192.0.2.1`) comes back as the IPv4 address it carries.
+
+`ipInRanges(ip, cidrs)` is `false` for anything `parseIp` refuses. An address is
+compared only with ranges of its own family, and a mapped address counts as
+IPv4, so write IPv4 ranges in IPv4 notation. A bare address in the list means
+that one address. A malformed range throws a `RangeError` on every call, whether
+or not an earlier range matched: a typo in a trusted-proxy list should break
+loudly, not quietly trust nobody. No provider's range list ships here; those
+change, so the caller passes its own.
 
 ## Explicitly out of scope
 
