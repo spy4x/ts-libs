@@ -105,7 +105,7 @@ download response `@spy4x/server/export` builds without either package importing
 `platform/tokens.ts`) and `browser/dropdown` (an 11-line rule that is the dropdown component's own
 business, in `preact-components`) were removed.
 
-### `./server` → `server.ts` (6 modules, 723 LOC)
+### `./server` → `server.ts` (7 modules)
 
 Needs a filesystem. Every module takes a port (`FileSystemPort`, `ClockPort`, `TimerPort`) instead
 of calling `Deno.*` directly, because the root `test` task grants `--allow-read --allow-env` and
@@ -129,7 +129,15 @@ the successful branch of `remove` — the calls that actually need `--allow-writ
 | `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`        |
 | `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`        |
 | `server/ports`           | the port interfaces, `systemClockPort`                 |
+| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                |
 | `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`   |
+
+`server/shutdown-signal` turns `SIGINT` and `SIGTERM` into one `AbortSignal` for a worker loop
+(#187). It aborts once, on the first signal, with a `ShutdownSignalError` whose `signal` names it,
+and removes every listener it added, so a second Ctrl+C ends the process the default way. A parent
+`signal` option lets a caller that stops for another reason remove the listeners too. The listener
+pair is injectable, so the tests fire fake signals. On Windows Deno supports only `SIGINT` and
+`SIGBREAK`; pass `signals: ["SIGINT", "SIGBREAK"]` there, because the default throws on `SIGTERM`.
 
 `server/walk` (`@std/fs`'s `walk` covers it) and `server/hash-file` (`@std/crypto` already hashes a
 stream, and nothing in this workspace called `sha256OfStream`) were removed, along with the
