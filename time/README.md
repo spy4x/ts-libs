@@ -3,11 +3,13 @@
 Time and calendar primitives with no application domain attached. IANA timezone math on `Intl`,
 plus an RFC 5545 iCalendar writer. Zero runtime dependencies.
 
-| Module          | Exports                                                                                   |
-| --------------- | ----------------------------------------------------------------------------------------- |
-| `time/tz`       | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays`, … |
-| `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                          |
-| `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                       |
+| Module          | Exports                                                                                                                                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `time/date`     | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
+| `time/locale`   | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `weekdayLabels`, `WeekdayLabel`                                                                                                                               |
+| `time/tz`       | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), …                                                                                                                                  |
+| `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                           |
+| `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                        |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
@@ -34,6 +36,34 @@ const ics = generateIcs(
   { prodid: "-//example.com//booking//EN", dtstamp: new Date() },
 )
 ```
+
+```ts
+import { endOfQuarter, startOfQuarter } from "@spy4x/time/date"
+import { addDays, isoDateInTz } from "@spy4x/time/tz"
+
+// "This quarter" for a user in Tokyo, the same on a server as in their browser.
+const today = isoDateInTz(new Date(), "Asia/Tokyo")
+const range = { from: startOfQuarter(today), to: endOfQuarter(today) }
+addDays(today, -6) // the first day of "the last 7 days", no zone needed
+```
+
+## Plain dates and zones
+
+`time/date` does arithmetic on a calendar date and never asks which zone it is in: a `YYYY-MM-DD`
+string has none, so adding a day or finding the end of a quarter is fixed-step UTC maths that no DST
+change can move. The only zone-aware step is deciding which date "today" is, and that is
+`isoDateInTz` in `time/tz`. Every function rejects a date the calendar does not have
+(`2026-02-31`) instead of rolling it into March, and throws past `9999-12-31` instead of answering a
+six-digit year.
+
+`addDays` is one function with an optional zone rather than two functions. Without a zone it is the
+`time/date` day step. With a zone it moves the date as that zone's calendar does, which differs only
+where a zone skipped a whole day: `Pacific/Apia` has no `2011-12-30`, so `addDays("2011-12-29", 1,
+"Pacific/Apia")` is `2011-12-31`, and `addDays("2011-12-29", 1)` is `2011-12-30`.
+
+`@spy4x/platform`'s `normalizeCalendarDate` is not a second copy of `parseIsoDate`: it also accepts
+`YYYY.MM.DD` and returns the normalised string or `null`, where `parseIsoDate` accepts only
+`YYYY-MM-DD`, returns midnight UTC in milliseconds and throws.
 
 ## Why `Intl` and not a date library
 
