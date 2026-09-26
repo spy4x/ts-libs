@@ -142,6 +142,34 @@ describe("createPasswordSignIn on Postgres", () => {
       ])
     }))
 
+  it("keeps the same user id through sign-up, verification, then a reset", () =>
+    withDatabase(async (sql) => {
+      const { provider, store } = setup(sql)
+      const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+      const issued = await provider.requestVerification({ userId: signedUp.user.id })
+      const wrong = provider.completeVerification({ userId: signedUp.user.id, code: "guess" })
+      expect((await refusal(wrong)).reason).toBe("invalid-code")
+      const proven = await provider.completeVerification({
+        userId: signedUp.user.id,
+        code: issued!.code,
+      })
+      expect(proven.id).toBe(signedUp.key.id)
+      expect(proven.provenAt).not.toBeNull()
+      expect(await store.findUserIdByProvenEmail(ANN)).toBe(signedUp.user.id)
+      const again = provider.completeVerification({ userId: signedUp.user.id, code: issued!.code })
+      expect((await refusal(again)).reason).toBe("invalid-code")
+
+      const { code } = await provider.requestReset({ email: ANN })
+      const reset = await provider.completeReset({ email: ANN, code, newPassword: "ann-password" })
+      expect(reset.user.id).toBe(signedUp.user.id)
+      expect(reset.key.id).toBe(signedUp.key.id)
+      expect(await passwordKeyRows(sql)).toEqual([
+        { userId: signedUp.user.id, subject: ANN, email: ANN },
+      ])
+      expect((await provider.signIn({ email: ANN, password: "ann-password" })).user.id)
+        .toBe(signedUp.user.id)
+    }))
+
   it("refuses a password sign-up for an address another user owns proven", () =>
     withDatabase(async (sql) => {
       const { provider, store } = setup(sql)

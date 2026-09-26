@@ -9,7 +9,7 @@ import {
 } from "../sign-in/mod.ts"
 import { createClock, createFakeStore, PEPPER } from "../sign-in/fake-store.test.ts"
 import { MemoryAuthStore } from "./memory-store.ts"
-import type { AuthSessionRecord } from "./model.ts"
+import { AuthConflictError, type AuthSessionRecord } from "./model.ts"
 import {
   createPasswordSignIn,
   PASSWORD_METHOD,
@@ -433,6 +433,189 @@ describe("createPasswordSignIn: an address registered by someone else", () => {
   })
 })
 
+describe("createPasswordSignIn: requestVerification and completeVerification", () => {
+  it("keeps the same user id through sign-up, verification, then a reset", async () => {
+    const { provider, store } = setup()
+    const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+    const issued = await provider.requestVerification({ userId: signedUp.user.id })
+    const proven = await provider.completeVerification({
+      userId: signedUp.user.id,
+      code: issued!.code,
+    })
+    expect(proven.id).toBe(signedUp.key.id)
+    expect(proven.provenAt).not.toBeNull()
+    expect(await store.findUserIdByProvenEmail(ANN)).toBe(signedUp.user.id)
+
+    const { code } = await provider.requestReset({ email: ANN })
+    const reset = await provider.completeReset({ email: ANN, code, newPassword: "battery staple" })
+    expect(reset.user.id).toBe(signedUp.user.id)
+    expect(reset.key.id).toBe(signedUp.key.id)
+    await provider.signIn({ email: ANN, password: "battery staple" })
+  })
+
+  it("issues a 43-character code for the key's address that expires after the reset TTL", async () => {
+    const { provider, clock } = setup({ resetTtlMinutes: 15 })
+    const signedUp = await provider.signUp({ email: " Ann@Example.com", password: "correct horse" })
+    const issued = await provider.requestVerification({ userId: signedUp.user.id })
+    expect(issued?.email).toBe(ANN)
+    expect(issued?.code).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(issued?.expiresAt.getTime()).toBe(clock.now() + 15 * MINUTE)
+  })
+
+  it("keeps the user's sessions and password when it proves the address", async () => {
+    const { provider, sessions, sessionStore } = setup()
+    const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+    const issued = await provider.requestVerification({ userId: signedUp.user.id })
+    sessionStore.calls.length = 0
+    await provider.completeVerification({ userId: signedUp.user.id, code: issued!.code })
+    expect(sessionStore.calls).toEqual([])
+    expect(await sessions.validate(signedUp.session.cookieValue)).not.toBeNull()
+    await provider.signIn({ email: ANN, password: "correct horse" })
+  })
+
+  it("returns null and issues nothing when the password key is already proven", async () => {
+    const { provider, store } = setup()
+    const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+    await store.proveKey(signedUp.key.id, new Date(0))
+    let issued = 0
+    const issueChallenge = store.issueChallenge.bind(store)
+    store.issueChallenge = (input) => {
+      issued++
+      return issueChallenge(input)
+    }
+    expect(await provider.requestVerification({ userId: signedUp.user.id })).toBeNull()
+    expect(issued).toBe(0)
+  })
+
+  it("accepts a code once", async () => {
+    const { provider } = setup()
+    const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+    const issued = await provider.requestVerification({ userId: signedUp.user.id })
+    await provider.completeVerification({ userId: signedUp.user.id, code: issued!.code })
+    const again = provider.completeVerification({ userId: signedUp.user.id, code: issued!.code })
+    expect((await refusal(again)).reason).toBe("invalid-code")
+  })
+
+  it("refuses the right code after the configured number of wrong guesses", async () => {
+    const { provider, store } = setup({ maxResetAttempts: 3 })
+    const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+    const issued = await provider.requestVerification({ userId: signedUp.user.id })
+    for (let i = 0; i < 3; i++) {
+      const wrong = provider.completeVerification({ userId: signedUp.user.id, code: "guess" })
+      expect((await refusal(wrong)).reason).toBe("invalid-code")
+    }
+    const locked = provider.completeVerification({ userId: signedUp.user.id, code: issued!.code })
+    expect((await refusal(locked)).reason).toBe("locked-out")
+    expect(await store.findUserIdByProvenEmail(ANN)).toBeNull()
+  })
+
+  it("refuses an expired code", async () => {
+    const { provider, clock } = setup()
+    const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+    const issued = await provider.requestVerification({ userId: signedUp.user.id })
+    clock.advance(30 * MINUTE)
+    const late = provider.completeVerification({ userId: signedUp.user.id, code: issued!.code })
+    expect((await refusal(late)).reason).toBe("invalid-code")
+  })
+
+  it("refuses a code issued to another user for the same address", async () => {
+    const { provider, store } = setup()
+    const mallory = await provider.signUp({ email: ANN, password: MALLORY_PASSWORD })
+    const issued = await provider.requestVerification({ userId: mallory.user.id })
+    await store.deleteKey(mallory.user.id, mallory.key.id)
+    const bob = await provider.signUp({ email: ANN, password: "bob-password" })
+    const stolen = provider.completeVerification({ userId: bob.user.id, code: issued!.code })
+    expect((await refusal(stolen)).reason).toBe("invalid-code")
+    expect(await store.findUserIdByProvenEmail(ANN)).toBeNull()
+  })
+
+  it("keeps verification and reset codes apart", async () => {
+    const { provider, store } = setup()
+    const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+    const reset = await provider.requestReset({ email: ANN })
+    const asVerification = provider.completeVerification({
+      userId: signedUp.user.id,
+      code: reset.code,
+    })
+    expect((await refusal(asVerification)).reason).toBe("invalid-code")
+
+    const verification = await provider.requestVerification({ userId: signedUp.user.id })
+    const asReset = provider.completeReset({
+      email: ANN,
+      code: verification!.code,
+      newPassword: "battery staple",
+    })
+    expect((await refusal(asReset)).reason).toBe("invalid-code")
+    expect(await store.findUserIdByProvenEmail(ANN)).toBeNull()
+  })
+
+  it("refuses a missing or deleted user, or one with no password key, before a guess is spent", async () => {
+    const { provider, store } = setup()
+    const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+    const issued = await provider.requestVerification({ userId: signedUp.user.id })
+    const codeOnly = await store.createUserWithKey({
+      method: "email-code",
+      subject: "bob@example.com",
+      email: "bob@example.com",
+      secret: null,
+      provenAt: new Date(0),
+    })
+    let attempts = 0
+    const attemptChallenge = store.attemptChallenge.bind(store)
+    store.attemptChallenge = (input) => {
+      attempts++
+      return attemptChallenge(input)
+    }
+    for (const userId of [9999, codeOnly.user.id]) {
+      expect((await refusal(provider.requestVerification({ userId }))).reason).toBe("no-account")
+      const complete = provider.completeVerification({ userId, code: issued!.code })
+      expect((await refusal(complete)).reason).toBe("no-account")
+    }
+    const findUser = store.findUser.bind(store)
+    store.findUser = async (id) => {
+      const user = await findUser(id)
+      return user && { ...user, deletedAt: new Date(0) }
+    }
+    const deleted = provider.completeVerification({ userId: signedUp.user.id, code: issued!.code })
+    expect((await refusal(deleted)).reason).toBe("no-account")
+    expect(attempts).toBe(0)
+  })
+
+  it("answers conflict when the address is proven by another user after the code matched", async () => {
+    const { provider, store } = setup()
+    const mallory = await provider.signUp({ email: ANN, password: MALLORY_PASSWORD })
+    const issued = await provider.requestVerification({ userId: mallory.user.id })
+    const attemptChallenge = store.attemptChallenge.bind(store)
+    let owner = 0
+    store.attemptChallenge = async (input) => {
+      const outcome = await attemptChallenge(input)
+      // Ann proves the address in between; that evicts Mallory's unproven key.
+      const ann = await store.createUserWithKey({
+        method: "email-code",
+        subject: ANN,
+        email: ANN,
+        secret: null,
+        provenAt: new Date(0),
+      })
+      owner = ann.user.id
+      return outcome
+    }
+    const late = provider.completeVerification({ userId: mallory.user.id, code: issued!.code })
+    expect((await refusal(late)).reason).toBe("conflict")
+    expect(await store.findUserIdByProvenEmail(ANN)).toBe(owner)
+  })
+
+  it("answers conflict when the store finds the address owned by another user", async () => {
+    const { provider, store } = setup()
+    const mallory = await provider.signUp({ email: ANN, password: MALLORY_PASSWORD })
+    const issued = await provider.requestVerification({ userId: mallory.user.id })
+    // Postgres reads the key without a lock, so a racing proof surfaces as a conflict error.
+    store.proveKey = () => Promise.reject(new AuthConflictError("email-owned"))
+    const late = provider.completeVerification({ userId: mallory.user.id, code: issued!.code })
+    expect((await refusal(late)).reason).toBe("conflict")
+  })
+})
+
 describe("createPasswordSignIn: options", () => {
   it("refuses limits that are not positive integers", () => {
     for (
@@ -632,6 +815,32 @@ describe("createPasswordSignIn: a custom normalizeSubject (a username)", () => {
       const call of [
         () => provider.requestReset({ email: "ann" }),
         () => provider.completeReset({ email: "ann", code: "x", newPassword: "battery staple" }),
+      ]
+    ) {
+      const error = await call().then(() => null, (caught: unknown) => caught)
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).name).toBe("Error")
+      expect((error as Error).message).toMatch(/not available when normalizeSubject is set/)
+    }
+    expect(challenges).toBe(0)
+  })
+
+  it("refuses both verification operations with a plain Error before any store write", async () => {
+    const { provider, store } = usernameSetup()
+    const signedUp = await provider.signUp({ email: "ann", password: "correct horse" })
+    let challenges = 0
+    store.issueChallenge = () => {
+      challenges++
+      return Promise.resolve()
+    }
+    store.attemptChallenge = () => {
+      challenges++
+      throw new Error("unreachable")
+    }
+    for (
+      const call of [
+        () => provider.requestVerification({ userId: signedUp.user.id }),
+        () => provider.completeVerification({ userId: signedUp.user.id, code: "x" }),
       ]
     ) {
       const error = await call().then(() => null, (caught: unknown) => caught)

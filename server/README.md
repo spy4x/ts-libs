@@ -503,7 +503,7 @@ Ids are Postgres `integer`s, so every id fits in a JavaScript number.
 ## `server/auth/password`
 
 `createPasswordSignIn`, `PasswordSignInError`, `PasswordSignInFailure`, `PASSWORD_METHOD`,
-`PASSWORD_RESET_PURPOSE`, `DEFAULT_MIN_PASSWORD_LENGTH`, `DEFAULT_RESET_TTL_MINUTES`,
+`PASSWORD_RESET_PURPOSE`, `PASSWORD_VERIFY_PURPOSE`, `DEFAULT_MIN_PASSWORD_LENGTH`, `DEFAULT_RESET_TTL_MINUTES`,
 `DEFAULT_MAX_RESET_ATTEMPTS`, and the input and option interfaces.
 
 Sign-up, sign-in, password change and password reset with an address and a password, on the
@@ -521,6 +521,11 @@ const passwords = createPasswordSignIn({
   hasher: createPasswordHasher({ pepper: Deno.env.get("PASSWORD_PEPPER") ?? "" }),
 })
 
+const { user } = await passwords.signUp({ email, password })
+const verification = await passwords.requestVerification({ userId: user.id })
+// The app mails verification.code to verification.email; the signed-in user sends it back:
+await passwords.completeVerification({ userId: sessionUserId, code: typedCode })
+
 const { session } = await passwords.signIn({ email, password })
 const reset = await passwords.requestReset({ email }) // the app mails reset.code to reset.email
 ```
@@ -534,11 +539,20 @@ password, a missing account, a malformed address and a deleted user all answer
 `invalid-credentials`. A legacy or lower-iteration hash still verifies faster than the dummy until
 its first successful sign-in, which rehashes it.
 
-**Sign-up does not prove the address.** The key starts unproven, with `email` equal to its subject,
-the normalised address. Sign-up is refused as `email-taken` when another user owns the address or a
-password key for it already exists. To prove it, send the signed-in user a code with the email-code
-provider's `requestCode` and pass it to its `proveAddress` (see `server/auth/email-code`): the key
-becomes proven and the user keeps their id and password.
+**Sign-up does not prove the address; the verification step does.** The key starts unproven, with
+`email` equal to its subject, the normalised address. Sign-up is refused as `email-taken` when
+another user owns the address or a password key for it already exists. Follow every sign-up with the
+verification step (#149): `requestVerification({ userId })` returns a code for the app to mail to the
+key's address, and `completeVerification({ userId, code })` checks it and proves the key with
+`AuthStore.proveKey`. The user keeps their id, password and sessions, and becomes the address's
+owner. Take `userId` from a validated session. The code is bound to that user and that address, is
+never a reset code, and uses the reset code's lifetime and guess limit. `requestVerification`
+returns null when the key is already proven. The email-code provider's `requestCode` and
+`proveAddress` (see `server/auth/email-code`) prove the address the same way.
+
+**Without the verification step, a reset moves the person to a new, empty account.** A reset proves
+the address, and an unproven key loses to that proof (branch 3 below): the password lands on a new
+user, the old user keeps its id but no keys, and every app row keyed by that id is out of reach.
 
 **Sign in by a username with `normalizeSubject`.** The option turns the `email` field of
 `signUp` and `signIn` into the key's subject, or refuses it by returning null; it defaults to
@@ -603,7 +617,10 @@ used by then, so the person asks for a new one.
   way in for the address's owner.
 - **It cannot tell a squatter from a person who never proved their own sign-up.** Both lose an
   unproven account to a reset by branch 2 or 3, and to a code sign-in with `verifyCode`. Prove the
-  address after sign-up with the email-code provider's `proveAddress` to keep it.
+  address after sign-up with `requestVerification` and `completeVerification`, or with the
+  email-code provider's `proveAddress`, to keep it.
+- **It does not limit how often a verification code is asked for.** Every `requestVerification`
+  call is a mail; rate-limit its route like the reset route.
 
 ## `server/auth/email-code`
 
