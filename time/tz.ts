@@ -391,9 +391,9 @@ function screenCandidates(date: string, time: string, tz: string): ScreenedCandi
 export enum WallClockKind {
   /** The wall clock occurs exactly once. */
   Unique = 1,
-  /** The wall clock is skipped by a spring-forward change and never occurs. */
+  /** The wall clock is skipped by a forward clock change and never occurs. */
   Gap = 2,
-  /** The wall clock occurs twice after a fall-back change. */
+  /** The wall clock occurs twice because a backward clock change repeats it. */
   Overlap = 3,
 }
 
@@ -412,16 +412,19 @@ export interface WallClockResolution {
 
 /**
  * Tells whether `tz`'s wall clock reads `date` + `time` once, never or twice,
- * and gives the instants.
+ * and gives the instants. The clock changes behind a gap or an overlap need
+ * not be daylight-saving ones: Apia skipped 2011-12-30 and Kwajalein skipped
+ * 1993-08-21 by changing their standard offset.
  *
  * Built on the same candidate screening as {@link zonedDateTime}, so
  * `instant` always equals `zonedDateTime(date, time, tz)`, and input rules and
  * errors are exactly the same `RangeError`s.
  *
  * - `Unique` — one candidate reads back as the requested wall clock.
- * - `Overlap` — two do, after a fall-back change; `instant` is the earlier and
- *   `later` the later one: Berlin's `2026-10-25 02:30` gives 00:30Z and 01:30Z.
- * - `Gap` — none does, because a spring-forward change skips it; `instant` is
+ * - `Overlap` — two do, because a backward clock change repeats it; `instant`
+ *   is the earlier and `later` the later one: Berlin's `2026-10-25 02:30`
+ *   gives 00:30Z and 01:30Z.
+ * - `Gap` — none does, because a forward clock change skips it; `instant` is
  *   the shifted-forward one: Berlin's `2026-03-29 02:30` gives 01:30Z, which
  *   reads `03:30`. There is no field for the reading before the change; a
  *   caller who wants it subtracts the gap.

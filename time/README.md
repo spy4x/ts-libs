@@ -169,6 +169,9 @@ resolveWallClock("2026-03-29", "02:30", "Europe/Berlin")
 // { kind: WallClockKind.Gap, instant: 01:30Z } — the shifted-forward instant only
 ```
 
+`Gap` means a forward clock change skipped the wall clock, and `Overlap` means a
+backward clock change repeats it. The change need not be daylight saving: Apia
+skipped 2011-12-30 and Kwajalein 1993-08-21 by changing their standard offset.
 A gap carries only the shifted-forward instant; a caller who wants the reading
 before the change subtracts the gap itself.
 
