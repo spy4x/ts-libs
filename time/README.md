@@ -3,11 +3,11 @@
 Time and calendar primitives with no application domain attached. IANA timezone math on `Intl`,
 plus an RFC 5545 iCalendar writer. Zero runtime dependencies.
 
-| Module          | Exports                                                                                  |
-| --------------- | ---------------------------------------------------------------------------------------- |
-| `time/tz`       | IANA zone helpers: `zonedDateTime`, `formatInstantLong`, `validTimeZoneOr`, `addDays`, … |
-| `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                         |
-| `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                      |
+| Module          | Exports                                                                                   |
+| --------------- | ----------------------------------------------------------------------------------------- |
+| `time/tz`       | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays`, … |
+| `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                          |
+| `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                       |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
@@ -152,6 +152,25 @@ also the fix for the source's single-pass conversion, which read the zone offset
 at the wall clock treated as UTC — an instant one whole offset away from the
 answer — and was an hour late or early for the weeks around a transition. See
 the PR body for the file and line of each such defect.
+
+**`resolveWallClock` says which case applies.** A caller that must know whether
+a wall clock is skipped or repeated — a booking page hiding slots in the gap, a
+range picker offering both occurrences of a repeated hour — asks
+`resolveWallClock(date, time, tz)`. It shares `zonedDateTime`'s candidate
+screening, so its `instant` is always `zonedDateTime`'s answer and its errors
+are the same `RangeError`s:
+
+```ts
+import { resolveWallClock, WallClockKind } from "@spy4x/time/tz"
+
+resolveWallClock("2026-10-25", "02:30", "Europe/Berlin")
+// { kind: WallClockKind.Overlap, instant: 00:30Z, later: 01:30Z }
+resolveWallClock("2026-03-29", "02:30", "Europe/Berlin")
+// { kind: WallClockKind.Gap, instant: 01:30Z } — the shifted-forward instant only
+```
+
+A gap carries only the shifted-forward instant; a caller who wants the reading
+before the change subtracts the gap itself.
 
 `zonedDateTime` also rejects a `date` + `time` that does not exist on the
 Gregorian calendar — `"2026-02-30"`, `"2026-13-01"`, `"25:00"`, and a year
