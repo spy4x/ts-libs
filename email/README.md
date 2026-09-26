@@ -113,6 +113,8 @@ fails the whole message rather than dropping that entry:
 - A control character is rejected outright, anywhere in a mailbox, subject or
   attachment filename/content type. `Name\r\nBcc: victim@example.com` is a
   plausible-looking display name and a forged header, so it never reaches a header.
+  The C1 range (NEL, U+0085, among them) and the Unicode line and paragraph
+  separators U+2028 and U+2029 count as control characters too.
 - A display name containing a comma is accepted unquoted (`Doe, Jane <jane@example.com>`)
   and re-emitted quoted. Non-ASCII names travel to the transport as structured
   fields, so nodemailer encodes them per RFC 2047 instead of emitting mojibake.

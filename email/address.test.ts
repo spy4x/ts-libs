@@ -184,6 +184,16 @@ Deno.test("assertNoControlCharacters names the offending value", () => {
   )
 })
 
+Deno.test("refuses NEL and the Unicode line separators in a mailbox", () => {
+  for (const separator of ["\u0085", "\u2028", "\u2029"]) {
+    assertThrows(
+      () => parseAddress(`Jane${separator}Bcc: victim@example.com <jane@example.com>`),
+      TypeError,
+      "control character",
+    )
+  }
+})
+
 Deno.test("assertNoControlCharacters allows a plain value", () => {
   assertNoControlCharacters("Meeting <draft> — 10:00", "Subject")
 })

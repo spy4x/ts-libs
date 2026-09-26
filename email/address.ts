@@ -47,9 +47,14 @@ const ADDRESS_PATTERN =
  * body. Matching the C0 range is the point, so `no-control-regex` is suppressed
  * rather than worked around with a `\p{Cc}` property escape — the explicit range
  * is what a reader needs to see here.
+ *
+ * The C1 range (with NEL, U+0085) and the Unicode line and paragraph separators
+ * (U+2028, U+2029) are refused with it: nodemailer encodes them inside a header,
+ * but a log line, a JSON consumer or a second transport may treat any of them as
+ * a line break, and none belongs in a mailbox, a subject or a filename.
  */
 // deno-lint-ignore no-control-regex
-const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
 
 /**
  * Characters that force a display name to be emitted as a quoted-string.
