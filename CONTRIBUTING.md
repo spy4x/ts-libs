@@ -56,8 +56,8 @@ Three repos, not a monorepo. Publish pins exactly and commits lockfiles.
 **CI.** The CI badge at the top of [README.md](README.md) links the Woodpecker pipeline at
 `ci.antonshubin.com` (repo id `10`). Its pipeline and publish logs are public and were checked for
 secret values before the badge was added (no token, password or connection string with embedded
-credentials appears in the most recent push build or the most recent tag/publish build — see the PR that added this section for the exact
-commands run).
+credentials appears in the most recent push build or the most recent tag/publish build — see the
+PR that added this section for the exact commands run).
 
 **JSR package metadata** (description, linked GitHub repository, runtime-compatibility flags) is
 config, not something clicked in the JSR UI: it lives in `infra/jsr-metadata.json` and is applied by
