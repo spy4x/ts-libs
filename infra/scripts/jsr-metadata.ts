@@ -9,8 +9,8 @@
  * Run with `deno task jsr:metadata -- --dry-run` to print the requests without sending them (no
  * token needed), or `deno task jsr:metadata` to apply them for real, which requires the
  * `JSR_API_TOKEN` environment variable (a JSR personal access token with `package:update` scope
- * for the `spy4x` scope — see README "Maintaining" for where to create one). The token is read
- * once, used only in the `Authorization` header, and never logged or printed.
+ * for the `spy4x` scope — see CONTRIBUTING.md "Maintaining" for where to create one). The token
+ * is read once, used only in the `Authorization` header, and never logged or printed.
  */
 
 interface RepositoryConfig {
@@ -85,7 +85,7 @@ export function requireApiToken(): string {
   if (!token) {
     throw new Error(
       "JSR_API_TOKEN is not set. Create a JSR personal access token for the spy4x scope " +
-        "(see README 'Maintaining') and export it before running this task.",
+        "(see CONTRIBUTING.md 'Maintaining') and export it before running this task.",
     )
   }
   return token
