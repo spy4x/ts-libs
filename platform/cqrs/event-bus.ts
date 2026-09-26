@@ -15,6 +15,11 @@ const defaultErrorHandler: EventBusErrorHandler = (eventClass, error) => {
   console.error(`[event-bus] listener for ${eventClass.name} failed`, error)
 }
 
+/** One `on` call's registration; its object identity is what its unsubscribe removes. */
+interface Subscription {
+  callback: (event: Event<unknown>) => void | Promise<void>
+}
+
 /**
  * In-process publish/subscribe bus for one event class per subscription.
  *
@@ -41,14 +46,19 @@ const defaultErrorHandler: EventBusErrorHandler = (eventClass, error) => {
  * ```
  */
 export class EventBus {
-  private listeners: Map<
-    EventConstructor<Event<unknown>>,
-    Array<(event: Event<unknown>) => void | Promise<void>>
-  > = new Map()
+  /**
+   * Each subscription is its own entry object, so an unsubscribe removes exactly the entry it
+   * created — never another subscription that happens to share the same callback function.
+   */
+  private listeners: Map<EventConstructor<Event<unknown>>, Array<Subscription>> = new Map()
 
   constructor(private onListenerError: EventBusErrorHandler = defaultErrorHandler) {}
 
-  /** Subscribe `callback` to every `eventClass` emitted from now on. Returns an unsubscribe. */
+  /**
+   * Subscribe `callback` to every `eventClass` emitted from now on. Returns an unsubscribe that
+   * removes this subscription only: another subscription of the same function stays in place, and
+   * a second call is a no-op.
+   */
   on<T extends Event<unknown>>(
     eventClass: EventConstructor<T>,
     callback: (event: T) => void | Promise<void>,
@@ -56,12 +66,13 @@ export class EventBus {
     if (!this.listeners.get(eventClass)) {
       this.listeners.set(eventClass, [])
     }
-    this.listeners.get(eventClass)!.push(
-      callback as (event: Event<unknown>) => void | Promise<void>,
-    )
+    const subscription: Subscription = {
+      callback: callback as (event: Event<unknown>) => void | Promise<void>,
+    }
+    this.listeners.get(eventClass)!.push(subscription)
     return () => {
-      const callbacks = this.listeners.get(eventClass) || []
-      this.listeners.set(eventClass, callbacks.filter((cb) => cb !== callback))
+      const subscriptions = this.listeners.get(eventClass) || []
+      this.listeners.set(eventClass, subscriptions.filter((entry) => entry !== subscription))
     }
   }
 
@@ -96,11 +107,11 @@ export class EventBus {
   emit<T extends Event<unknown>>(event: T): void {
     queueMicrotask(() => {
       const eventClass = event.constructor as EventConstructor<T>
-      const callbacks = this.listeners.get(eventClass)
-      if (!callbacks) {
+      const subscriptions = this.listeners.get(eventClass)
+      if (!subscriptions) {
         return
       }
-      for (const callback of [...callbacks]) {
+      for (const { callback } of [...subscriptions]) {
         try {
           const result = callback(event as Event<unknown>)
           if (result instanceof Promise) {

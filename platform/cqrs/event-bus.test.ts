@@ -40,6 +40,40 @@ describe("EventBus", () => {
     expect(hits).toBe(0)
   })
 
+  it("keeps another subscription of the same function when one unsubscribes", async () => {
+    const bus = new EventBus()
+    const seen: string[] = []
+    const refresh = (event: PingEvent) => {
+      seen.push(event.data.value)
+    }
+    bus.on(PingEvent, refresh)
+    const off = bus.on(PingEvent, refresh)
+
+    off()
+    bus.emit(new PingEvent({ value: "ok" }))
+    await flush()
+
+    expect(seen).toEqual(["ok"])
+  })
+
+  it("removes only one registration when the same unsubscribe is called twice", async () => {
+    const bus = new EventBus()
+    const seen: string[] = []
+    const refresh = (event: PingEvent) => {
+      seen.push(event.data.value)
+    }
+    bus.on(PingEvent, refresh)
+    bus.on(PingEvent, refresh)
+    const off = bus.on(PingEvent, refresh)
+
+    off()
+    off()
+    bus.emit(new PingEvent({ value: "ok" }))
+    await flush()
+
+    expect(seen).toEqual(["ok", "ok"])
+  })
+
   it("once fires once", async () => {
     const bus = new EventBus()
     let hits = 0
