@@ -76,7 +76,7 @@ of hanging the suite.
 **Which function draws an axis that covers the data.** `ticks(min, max)` keeps only the step
 multiples within half a step of the bounds, so its ticks need not reach them: `ticks(1.1, 10)` is
 `[2, 4, 6, 8, 10]`, and nothing marks 1.1. When the first and last tick must cover the data, use
-`stepAxis(min, max, niceStep(max - min, target))`, which rounds the bounds outward:
+`stepAxis(min, max, niceStep(Math.abs(max - min), target))`, which rounds the bounds outward:
 `stepAxis(1.1, 10, niceStep(8.9))` is `{ min: 0, max: 10, ticks: [0, 2, 4, 6, 8, 10] }`.
 
 `stepAxis(min, max, step)` (1.4.0) is for a caller that has already chosen its step: it rounds the

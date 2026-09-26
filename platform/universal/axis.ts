@@ -1,6 +1,6 @@
 /**
- * "Nice" axis scales for charts: a round step near a target tick count, and the tick values that
- * cover a range.
+ * "Nice" axis scales for charts: a round step near a target tick count, and tick values on that
+ * step for a range.
  *
  * Pure arithmetic, no DOM and no SVG — the caller decides how to draw the result.
  *
@@ -88,7 +88,7 @@ export function niceStep(span: number, target = 5): number {
  * The ticks do not always reach the bounds: a multiple of the step more than half a step outside
  * `[min, max]` is dropped, so `ticks(1.1, 10)` is `[2, 4, 6, 8, 10]` and `ticks(-1, 6, 4)` is
  * `[0, 2.5, 5]`. For an axis whose first and last ticks cover the data, round the bounds outward
- * with {@link stepAxis} instead: `stepAxis(min, max, niceStep(max - min, maxTicks))`.
+ * with {@link stepAxis} instead: `stepAxis(min, max, niceStep(Math.abs(max - min), maxTicks))`.
  *
  * Reversed bounds are swapped rather than rejected — `ticks(10, 0)` equals `ticks(0, 10)` — so a
  * caller does not have to sort its own domain first; ported from
