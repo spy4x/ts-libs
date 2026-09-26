@@ -4,6 +4,7 @@ import { expect } from "@std/expect"
 import {
   convertToKebabCase,
   filterRows,
+  initials,
   levenshtein,
   pluralize,
   search,
@@ -169,5 +170,201 @@ describe("utf8ByteLength", () => {
   it("counts four bytes for an astral character that a .length would call two", () => {
     expect("😀".length).toBe(2)
     expect(utf8ByteLength("😀")).toBe(4)
+  })
+})
+
+/**
+ * A decomposed Hangul name — `"깁 철수"` written as jamo, one syllable per two or three code points.
+ *
+ * Built from explicit escapes with no literal jamo in the source, so no editor, formatter or
+ * file-encoding round-trip can quietly normalise the input and make {@link initials} look correct
+ * for the wrong reason. Every syllable is an LVT run of three jamo — `깁` is U+1100 U+1175 U+11B8,
+ * `철` is U+110E U+1165 U+11AF, `수` is U+1109 U+116E — so the name is 9 code points (8 jamo and a
+ * space) against 4 precomposed, and NFC composes each run in place without touching the space.
+ * `NFC_FOLDED_INITIALS` is the two composed syllables the correct answer is made of.
+ */
+const NFD_JAMO_NAME = "\u1100\u1175\u11B8 \u110E\u1165\u11AF\u1109\u116E"
+const NFC_JAMO_NAME = "\uAE41 \uCCA0\uC218"
+const NFC_FOLDED_INITIALS = "\uAE41\uCCA0"
+
+/** `"E"` + U+0301 COMBINING ACUTE ACCENT + `"mile Zola"` — decomposed Latin, never precomposed. */
+const NFD_ACCENT_NAME = "E\u0301mile Zola"
+
+/** The same name precomposed: U+00C9 LATIN CAPITAL LETTER E WITH ACUTE + `"mile Zola"`. */
+const NFC_ACCENT_NAME = "\u00C9mile Zola"
+
+describe("initials", () => {
+  it("takes the first letter of the first two words", () => {
+    expect(initials("John Smith")).toBe("JS")
+  })
+
+  it("stops at two letters for a three-word name", () => {
+    expect(initials("John Paul Smith")).toBe("JP")
+  })
+
+  it("takes the first letter of a single-word name", () => {
+    expect(initials("Cher")).toBe("C")
+  })
+
+  it("ignores leading, trailing and repeated whitespace", () => {
+    expect(initials("  John   Smith  ")).toBe("JS")
+    expect(initials("\tJohn\nSmith ")).toBe("JS")
+  })
+
+  it("keeps a hyphenated word as one word", () => {
+    expect(initials("Anne-Marie Dupont")).toBe("AD")
+    expect(initials("Mary-Jane")).toBe("M")
+  })
+
+  it("keeps an apostrophe inside the word", () => {
+    expect(initials("O'Brien")).toBe("O")
+    expect(initials("D'Angelo Smith")).toBe("DS")
+  })
+
+  it("uppercases a lower-case name", () => {
+    expect(initials("john smith")).toBe("JS")
+  })
+
+  it("takes one code point, not one UTF-16 unit, of a combined Latin name", () => {
+    expect(initials("Émile Zola")).toBe("ÉZ")
+  })
+
+  it("reads a decomposed accent as the letter, not as an accent after it", () => {
+    expect(initials(NFD_ACCENT_NAME)).toBe("ÉZ")
+    expect(initials(NFD_ACCENT_NAME)).toBe(initials(NFC_ACCENT_NAME))
+  })
+
+  it("composes every decomposed letter of a name, not just the first", () => {
+    expect(initials("A\u030Angela O\u0308ztu\u0308rk")).toBe("\u00C5\u00D6")
+    expect(initials("A\u030Angela O\u0308ztu\u0308rk")).toBe(
+      initials("\u00C5ngela \u00D6zt\u00FCrk"),
+    )
+  })
+
+  it("takes a digit as an initial", () => {
+    expect(initials("7 of 9")).toBe("7O")
+  })
+})
+
+describe("initials for CJK names", () => {
+  it("treats every CJK character as its own word", () => {
+    // The bug this guards: with a space-only word split, "王小明" is one word and the avatar shows
+    // "王" — one letter of a three-letter name.
+    expect(initials("王小明")).toBe("王小")
+    expect(initials("欧阳修文")).toBe("欧阳")
+  })
+
+  it("returns two characters, not the whole name", () => {
+    expect(initials("王小明").length).toBe(2)
+    expect(initials("王小明")).not.toBe("王小明")
+  })
+
+  it("returns the single character of a one-character name", () => {
+    expect(initials("李")).toBe("李")
+  })
+
+  it("reads a spaced CJK name as the same two characters", () => {
+    expect(initials("李 明")).toBe("李明")
+  })
+
+  it("handles kana and hangul as well as ideographs", () => {
+    expect(initials("山田太郎")).toBe("山田")
+    expect(initials("김철수")).toBe("김철")
+  })
+
+  it("mixes scripts by the same rule", () => {
+    // Two Han words fill both initials, so the Latin word after them is not reached; one Han word
+    // is followed by the Latin one.
+    expect(initials("李明 John")).toBe("李明")
+    expect(initials("李 John")).toBe("李J")
+  })
+})
+
+describe("initials with decomposed Unicode", () => {
+  it("normalises the name before splitting it into words", () => {
+    expect(NFD_JAMO_NAME.normalize("NFC")).toBe(NFC_JAMO_NAME)
+  })
+
+  it("keeps the decomposed jamo in the fixture, so the input is really NFD", () => {
+    // 9 code points (3 + 3 + 2 jamo and a space) against 4 composed. A source encoding that quietly
+    // normalised the literal, or a jamo dropped from a syllable, would leave the input partly
+    // composed and make the next tests pass for the wrong reason, so both are pinned here first.
+    expect([...NFD_JAMO_NAME].length).toBe(9)
+    expect([...NFC_JAMO_NAME].length).toBe(4)
+    expect(NFD_JAMO_NAME).not.toBe(NFC_JAMO_NAME)
+    expect([...NFD_JAMO_NAME].every((c) => !/[\uAC00-\uD7A3]/.test(c))).toBe(true)
+    expect([...NFD_JAMO_NAME].some((c) => /[\u1100-\u11FF]/.test(c))).toBe(true)
+  })
+
+  it("counts a decomposed syllable as one word, not as two or three", () => {
+    // The bug: each jamo is Script=Hangul, so without normalisation every jamo is its own word and
+    // the answer is the first jamo pair — U+1100 U+1175 — rather than the first two syllables.
+    expect(initials(NFD_JAMO_NAME)).toBe(NFC_FOLDED_INITIALS)
+    expect(initials(NFD_JAMO_NAME)).not.toBe("\u1100\u1175")
+  })
+
+  it("reads a decomposed syllable the same as the precomposed one", () => {
+    expect(initials(NFD_JAMO_NAME)).toBe(initials(NFC_JAMO_NAME))
+    expect([...initials(NFD_JAMO_NAME)].length).toBe(2)
+    expect([...initials("\u1100\u1175\u11B8")].length).toBe(1)
+    expect(initials("\u1100\u1175\u11B8")).toBe(NFC_FOLDED_INITIALS.slice(0, 1))
+    expect(initials("\u110E\u1165\u11AF\u1109\u116E")).toBe("\uCCA0\uC218")
+  })
+
+  it("reads a mixed NFC/NFD name as its composed form", () => {
+    // U+AE41 (NFC) first, then the same syllable written as decomposed jamo: two words either way,
+    // and both characters in the result are Hangul Syllables rather than jamo.
+    const mixed = initials("\uAE41 \u1100\u1175\u11B8")
+
+    expect(mixed).toBe(`${NFC_FOLDED_INITIALS.slice(0, 1)}${NFC_FOLDED_INITIALS.slice(0, 1)}`)
+    expect(mixed).toBe(initials(initials(NFD_JAMO_NAME).slice(0, 1) + " \u1100\u1175\u11B8"))
+    expect(/^[\uAC00-\uD7A3]{2}$/.test(mixed)).toBe(true)
+    // A decomposed Latin word beside a decomposed Hangul one: two words, one initial each.
+    expect(initials("\u1100\u1175\u11B8 E\u0301mile")).toBe(
+      `${NFC_FOLDED_INITIALS.slice(0, 1)}\u00C9`,
+    )
+  })
+
+  it("keeps a Hangul syllable whole rather than half of a jamo pair", () => {
+    expect([...initials(NFD_JAMO_NAME)[0]].length).toBe(1)
+    expect(initials(NFD_JAMO_NAME)).not.toContain("\u1100")
+    expect(initials("\u1100\u1175\u11B8 \u11AF")).toBe("\uAE41\u11AF")
+  })
+})
+
+describe("initials with nothing usable", () => {
+  it("returns an empty string for an empty name", () => {
+    expect(initials("")).toBe("")
+  })
+
+  it("returns an empty string for a whitespace-only name", () => {
+    expect(initials("   ")).toBe("")
+    expect(initials("\n\t")).toBe("")
+  })
+
+  it("returns an empty string for null and undefined", () => {
+    expect(initials(null)).toBe("")
+    expect(initials(undefined)).toBe("")
+    expect(initials()).toBe("")
+  })
+
+  it("returns an empty string for a name of punctuation only", () => {
+    expect(initials("!!!")).toBe("")
+    expect(initials("--")).toBe("")
+  })
+
+  it("returns an empty string for an emoji-only name", () => {
+    expect(initials("😀")).toBe("")
+    expect(initials("👩💻")).toBe("")
+  })
+
+  it("skips an emoji word rather than half of it", () => {
+    expect(initials("Ada 😀 Lovelace")).toBe("AL")
+    expect(initials("😀 Ada")).toBe("A")
+  })
+
+  it("skips leading punctuation instead of using it", () => {
+    expect(initials("-John Smith")).toBe("JS")
+    expect(initials("(Ada) Lovelace")).toBe("AL")
   })
 })
