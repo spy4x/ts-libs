@@ -14,6 +14,7 @@ import {
   type FlowStoreFixture,
 } from "./oauth-flows-contract.test.ts"
 import { fixedClock } from "./oauth-scenarios.test.ts"
+import type { RedisKvStore } from "../kv/mod.ts"
 
 /** A key-value client in memory whose `take` is atomic, as `GETDEL` is. Records every `set`. */
 function fakeKv(): OAuthFlowKv & { values: Map<string, string>; sets: [string, number][] } {
@@ -90,6 +91,8 @@ describe("createMemoryOAuthFlowStore", () => {
 
 /** 2100-01-01T00:00:00Z: a value with this expiry is refused for its shape, not for its age. */
 const FAR_FUTURE = Date.UTC(2100, 0, 1)
+/** A PKCE verifier of the shape `authorizationUrl()` makes: 43 base64url characters. */
+const VERIFIER = "A1_-".repeat(10) + "xyz"
 
 describe("createKvOAuthFlowStore", () => {
   it("writes under the prefix with the lifetime rounded up to a whole second", async () => {
@@ -100,6 +103,16 @@ describe("createKvOAuthFlowStore", () => {
     const custom = createKvOAuthFlowStore(kv, { clock, keyPrefix: "app:" })
     await custom.put("s2", { verifier: "v" }, new Date(clock.now() + 600_000))
     expect(kv.sets).toEqual([["oauth-flow:s1", 2], ["app:s2", 600]])
+  })
+
+  it("throws a TypeError for an empty key prefix", () => {
+    expect(() => createKvOAuthFlowStore(fakeKv(), { keyPrefix: "" })).toThrow(TypeError)
+  })
+
+  it("accepts a RedisKvStore as its client", () => {
+    // Compile-time: this file does not type-check when RedisKvStore stops fitting OAuthFlowKv.
+    const asClient = (store: RedisKvStore): OAuthFlowKv => store
+    expect(typeof asClient).toBe("function")
   })
 
   it("writes nothing for a flow that has already expired", async () => {
@@ -118,8 +131,20 @@ describe("createKvOAuthFlowStore", () => {
       "null",
       `"text"`,
       `{"verifier":1,"expiresAt":${FAR_FUTURE}}`,
-      `{"verifier":"v"}`,
+      `{"verifier":"${VERIFIER}"}`,
+      `{"verifier":"${VERIFIER}","expiresAt":"${FAR_FUTURE}"}`,
+      `{"verifier":"${VERIFIER}","expiresAt":1e999}`,
+      `{"verifier":"${"a".repeat(42)}","expiresAt":${FAR_FUTURE}}`,
+      `{"verifier":"${"a".repeat(129)}","expiresAt":${FAR_FUTURE}}`,
+      `{"verifier":"${"a".repeat(42)}+","expiresAt":${FAR_FUTURE}}`,
     ]
+    // The same shape with a valid verifier and expiry is a flow, so the list above is refused for
+    // what it varies, not for something they all share.
+    kv.values.set("oauth-flow:valid", `{"verifier":"${VERIFIER}","expiresAt":${FAR_FUTURE}}`)
+    expect(await store.take("valid")).toEqual({
+      verifier: VERIFIER,
+      expiresAt: new Date(FAR_FUTURE),
+    })
     for (const [i, value] of foreign.entries()) {
       kv.values.set(`oauth-flow:s${i}`, value)
       expect(await store.take(`s${i}`)).toBeNull()

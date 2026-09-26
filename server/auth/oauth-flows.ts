@@ -7,12 +7,13 @@
  *
  * - {@link createMemoryOAuthFlowStore}, the default: a map inside the process, capped at
  *   {@link MAX_PENDING_OAUTH_FLOWS}. The callback must reach the process that started the flow.
- * - {@link createKvOAuthFlowStore}: any key-value client with `set` and an atomic `take`, such as
- *   Redis. Every process that shares it can complete any flow, and there is no cap.
+ * - {@link createKvOAuthFlowStore}: a `RedisKvStore`, or any key-value client with `set` and an
+ *   atomic `take`. Every process that shares it can complete any flow, and there is no cap.
  *
  * @module
  */
 
+import { type } from "arktype"
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 
 /** Most flows the memory store keeps pending at once; the oldest is dropped beyond this. */
@@ -92,8 +93,8 @@ export function createMemoryOAuthFlowStore(
 }
 
 /**
- * The key-value client {@link createKvOAuthFlowStore} needs. `RedisKvStore` from
- * `@spy4x/server/kv` has this shape once it has `take` (`GETDEL`).
+ * The key-value client {@link createKvOAuthFlowStore} needs. A `RedisKvStore` from
+ * `@spy4x/server/kv` is one: pass it as it is.
  */
 export interface OAuthFlowKv {
   /** Stores `value` under `key`, removed after `ttlSec` whole seconds. */
@@ -109,7 +110,11 @@ export interface OAuthFlowKv {
 export interface KvOAuthFlowStoreOptions {
   /** Reads the time a flow expires against. Defaults to the system clock. */
   clock?: Clock
-  /** Put before every `state` in a key. Defaults to {@link DEFAULT_OAUTH_FLOW_KEY_PREFIX}. */
+  /**
+   * Put before every `state` in a key. Defaults to {@link DEFAULT_OAUTH_FLOW_KEY_PREFIX}. Must not be
+   * empty: the `state` comes from the callback's query, so without a prefix a crafted `state` would
+   * name, and `take` would delete, any other key the client can reach.
+   */
   keyPrefix?: string
 }
 
@@ -119,7 +124,9 @@ export interface KvOAuthFlowStoreOptions {
  * `take` is the client's own atomic `take`, so single use holds across processes. The flow's expiry
  * is stored with it and checked against `clock` on `take`; the key's time to live, rounded up to a
  * whole second, only removes flows nobody completed. A value that is not a flow this store wrote
- * reads as no flow.
+ * reads as no flow, and is deleted all the same.
+ *
+ * @throws {TypeError} When `keyPrefix` is empty or not a string.
  */
 export function createKvOAuthFlowStore(
   kv: OAuthFlowKv,
@@ -127,6 +134,9 @@ export function createKvOAuthFlowStore(
 ): OAuthFlowStore {
   const clock = options.clock ?? systemClock
   const prefix = options.keyPrefix ?? DEFAULT_OAUTH_FLOW_KEY_PREFIX
+  if (typeof prefix !== "string" || prefix.length === 0) {
+    throw new TypeError("keyPrefix must be a non-empty string")
+  }
 
   return {
     async put(state, flow, expiresAt) {
@@ -144,16 +154,17 @@ export function createKvOAuthFlowStore(
   }
 }
 
+/**
+ * A value {@link createKvOAuthFlowStore} wrote, as JSON: a PKCE verifier (RFC 7636: 43 to 128
+ * unreserved characters; this module writes 43 base64url ones) and the expiry in milliseconds.
+ */
+const storedFlow = type("string.json.parse").to({
+  verifier: /^[A-Za-z0-9._~-]{43,128}$/,
+  expiresAt: type("number").narrow((value) => Number.isFinite(value)),
+})
+
 function parseEntry(value: string): { verifier: string; expiresAt: number } | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(value)
-  } catch {
-    return null
-  }
-  if (typeof parsed !== "object" || parsed === null) return null
-  const { verifier, expiresAt } = parsed as Record<string, unknown>
-  if (typeof verifier !== "string" || typeof expiresAt !== "number") return null
-  if (!Number.isFinite(expiresAt)) return null
-  return { verifier, expiresAt }
+  const entry = storedFlow(value)
+  if (entry instanceof type.errors) return null
+  return { verifier: entry.verifier, expiresAt: entry.expiresAt }
 }

@@ -22,6 +22,12 @@ export interface FlowStoreFixture {
 
 const TEN_MINUTES = 600_000
 
+/** PKCE verifiers of the shape `authorizationUrl()` makes: 43 base64url characters. */
+const VERIFIER_A = "a".repeat(43)
+const VERIFIER_B = "b".repeat(43)
+const VERIFIER_EARLY = "early-".padEnd(43, "e")
+const VERIFIER_LATE = "late-".padEnd(43, "l")
+
 /**
  * Registers the contract suite for one store.
  *
@@ -45,8 +51,8 @@ export function describeOAuthFlowStoreContract(
     it("returns the flow put under a state, and only once", () =>
       withStore(async ({ store, now }) => {
         const expiresAt = new Date(now() + TEN_MINUTES)
-        await store.put("state-a", { verifier: "verifier-a" }, expiresAt)
-        expect(await store.take("state-a")).toEqual({ verifier: "verifier-a", expiresAt })
+        await store.put("state-a", { verifier: VERIFIER_A }, expiresAt)
+        expect(await store.take("state-a")).toEqual({ verifier: VERIFIER_A, expiresAt })
         expect(await store.take("state-a")).toBeNull()
       }))
 
@@ -58,10 +64,10 @@ export function describeOAuthFlowStoreContract(
     it("gives the flow to exactly one of many parallel takes", () =>
       withStore(async ({ store, now }) => {
         const expiresAt = new Date(now() + TEN_MINUTES)
-        await store.put("state-a", { verifier: "verifier-a" }, expiresAt)
+        await store.put("state-a", { verifier: VERIFIER_A }, expiresAt)
         const taken = await Promise.all(Array.from({ length: 10 }, () => store.take("state-a")))
         expect(taken.filter((flow) => flow !== null)).toEqual([{
-          verifier: "verifier-a",
+          verifier: VERIFIER_A,
           expiresAt,
         }])
       }))
@@ -69,10 +75,10 @@ export function describeOAuthFlowStoreContract(
     it("returns the flow a millisecond before its expiry and null at it", () =>
       withStore(async ({ store, now, advance }) => {
         const expiresAt = new Date(now() + TEN_MINUTES)
-        await store.put("early", { verifier: "verifier-early" }, expiresAt)
-        await store.put("late", { verifier: "verifier-late" }, expiresAt)
+        await store.put("early", { verifier: VERIFIER_EARLY }, expiresAt)
+        await store.put("late", { verifier: VERIFIER_LATE }, expiresAt)
         advance(TEN_MINUTES - 1)
-        expect(await store.take("early")).toEqual({ verifier: "verifier-early", expiresAt })
+        expect(await store.take("early")).toEqual({ verifier: VERIFIER_EARLY, expiresAt })
         advance(1)
         expect(await store.take("late")).toBeNull()
       }))
@@ -80,10 +86,10 @@ export function describeOAuthFlowStoreContract(
     it("keeps the flows of different states apart", () =>
       withStore(async ({ store, now }) => {
         const expiresAt = new Date(now() + TEN_MINUTES)
-        await store.put("state-a", { verifier: "verifier-a" }, expiresAt)
-        await store.put("state-b", { verifier: "verifier-b" }, expiresAt)
-        expect(await store.take("state-b")).toEqual({ verifier: "verifier-b", expiresAt })
-        expect(await store.take("state-a")).toEqual({ verifier: "verifier-a", expiresAt })
+        await store.put("state-a", { verifier: VERIFIER_A }, expiresAt)
+        await store.put("state-b", { verifier: VERIFIER_B }, expiresAt)
+        expect(await store.take("state-b")).toEqual({ verifier: VERIFIER_B, expiresAt })
+        expect(await store.take("state-a")).toEqual({ verifier: VERIFIER_A, expiresAt })
       }))
   })
 }
