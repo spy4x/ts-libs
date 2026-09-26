@@ -11,6 +11,14 @@ Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 - **Storage** — the `FileStorage` port with a local-filesystem provider, an S3-compatible provider
   and a bucket-binding wrapper. Zero dependencies.
 
+## Install
+
+```bash
+deno add jsr:@spy4x/server
+```
+
+Runs on: server (Deno).
+
 ## Subpaths
 
 | Export                            | What it is                                                                           |
@@ -511,6 +519,16 @@ Sign-up, sign-in, password change and password reset with an address and a passw
 `server/auth` store and the `server/sign-in` session manager and hasher (#57). Written from #57's
 rules, not moved from the earlier `email-password.ts`. Every refusal is thrown as a
 `PasswordSignInError` whose `reason` names it.
+
+The hasher also works on its own:
+
+```ts
+import { createPasswordHasher } from "@spy4x/server/sign-in"
+
+const hasher = createPasswordHasher({ pepper: Deno.env.get("PASSWORD_PEPPER") ?? "" })
+const hash = await hasher.hash("correct horse battery staple")
+const check = await hasher.verify("correct horse battery staple", hash)
+```
 
 ```ts
 import { createPasswordHasher } from "@spy4x/server/sign-in"

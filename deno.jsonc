@@ -5,8 +5,9 @@
   // its own `<dir>/deno.json` lands. That is what keeps this file untouched by
   // every package PR — no shared-file conflicts between parallel agents.
   //
-  // The list mirrors the `Scope` block of README.md. `infra/` is deliberately
-  // not a member: `infra/scripts/type-check.ts` is repo tooling, not a package.
+  // The list mirrors the package table of README.md, plus the planned `ai/`.
+  // `infra/` is deliberately not a member: `infra/scripts/type-check.ts` is repo
+  // tooling, not a package.
   "workspace": [
     "./ai",
     "./email",
@@ -80,8 +81,8 @@
     "contract": "deno run --allow-read --allow-write=docs/1.0-contract.md --allow-run=deno infra/scripts/contract.ts",
     // Applies `infra/jsr-metadata.json` (description, linked GitHub repo, runtime flags) to every
     // `@spy4x/*` package via JSR's package API (#174). `-- --dry-run` prints the requests without
-    // sending them and needs no token; without it, `JSR_API_TOKEN` must be set. See README
-    // "Maintaining".
+    // sending them and needs no token; without it, `JSR_API_TOKEN` must be set. See
+    // CONTRIBUTING.md "Maintaining".
     "jsr:metadata": "deno run --allow-read --allow-env --allow-net=api.jsr.io infra/scripts/jsr-metadata.ts",
     "fix": {
       "command": "echo 'Fixes applied!'",

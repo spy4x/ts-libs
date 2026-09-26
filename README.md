@@ -1,246 +1,115 @@
+<div align="center">
+
 # ts-libs
 
-[![status](https://ci.antonshubin.com/api/badges/10/status.svg)](https://ci.antonshubin.com/repos/spy4x/ts-libs)
+**Small TypeScript libraries on web standards, for the server and the browser.**
 
-Modern TypeScript built on web standards — `fetch`, Web Crypto, `ReadableStream`, ES modules —
-published to [JSR](https://jsr.io/@spy4x) as eight framework-agnostic packages. Every package is
-tested on Deno; a package with no `Deno.*` dependency in its sources (`@spy4x/time`,
-`@spy4x/validation`) also runs in a browser or any other modern JS runtime, untested there.
+[![CI](https://ci.antonshubin.com/api/badges/10/status.svg)](https://ci.antonshubin.com/repos/spy4x/ts-libs)
+[![JSR](https://jsr.io/badges/@spy4x)](https://jsr.io/@spy4x)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-No Preact, no app shells, no product domain. Everything here is a technical primitive or adapter
-that is useful to more than one product. Each package below has its own one-line install and a short
-usage example.
+[Packages on JSR](https://jsr.io/@spy4x) · [Contributing](CONTRIBUTING.md) ·
+[1.0 contract](docs/1.0-contract.md)
 
-## Packages
-
-"Runs on" says where a package's code can run: **server** means Deno on the back end, **browser**
-means a front-end bundle, **shared** means both.
-
-| Package               | Runs on                                                                           | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@spy4x/validation`   | shared                                                                            | arktype `validate` with one result shape, and the form-validation state model                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `@spy4x/platform`     | shared, with `./browser/*` for the browser and `./server/*` for Deno              | helpers (`.`), command, query and event bus (`./cqrs`), cache with `wrap()` (`./cache`), API result and `apiFetch` (`./api`), model schemas (`./model`), tokens and ULIDs (`./tokens`), signed payloads (`./signed-payload`), rate limiting and its Hono middleware (`./rate-limit`), request metadata (`./request-info`), table sort rules, canonical URL and JSON-LD helpers, browser storage, download, clipboard and geolocation, atomic JSON files, a file lock and a shutdown signal |
-| `@spy4x/server`       | server                                                                            | sign-in (session, cookie, TOTP, password hashing, guards), accounts with password, email-code and OAuth providers, Postgres access and migrations, Redis key-value store, outbox, field encryption, typed config, request logging, file storage (local and S3), CORS, a same-origin guard for cookie-authenticated mutations, bearer auth, static files, health check, quota, age64 env-file encryption                                                                                    |
-| `@spy4x/net`          | server                                                                            | outbound requests to URLs a user supplied: URL shape check, SSRF guard, redirect-safe `fetch`, size-capped body readers, IP parsing and CIDR range checks                                                                                                                                                                                                                                                                                                                                  |
-| `@spy4x/integrations` | server                                                                            | ntfy and healthchecks.io clients, inbound webhook signature check, retry backoff                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `@spy4x/time`         | shared                                                                            | IANA time-zone arithmetic on `Intl`, zone-free `YYYY-MM-DD` date arithmetic, `Intl` calendar labels, iCalendar (`.ics`) writer                                                                                                                                                                                                                                                                                                                                                             |
-| `@spy4x/email`        | server                                                                            | SMTP sender, address parsing, HTML mail wrapper, DKIM signature checker for incoming mail                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `@spy4x/realtime`     | both halves: `./registry` and `./notify` on the server, `./client` in the browser | hint-only WebSocket transport: connection registry, heartbeat, reconnect, cursor-based sync                                                                                                                                                                                                                                                                                                                                                                                                |
-
-`ai/` (chat completion, JSON recovery) is planned, not built (#11, #76).
-
-Each package's own `README.md` lists its entry points. `docs/1.0-contract.md` lists the entry points
-the template imports, whose names and signatures are frozen at 1.0.
-
-### `@spy4x/email`
-
-```bash
-deno add jsr:@spy4x/email
-```
-
-```ts
-import { createSmtpSender } from "@spy4x/email/smtp"
-
-const sender = createSmtpSender({
-  host: "smtp.example.com",
-  port: 587,
-  user: "user@example.com",
-  pass: Deno.env.get("SMTP_PASSWORD") ?? "",
-  from: "Booking <booking@example.com>",
-})
-const result = await sender.send({
-  to: ["guest@example.com"],
-  subject: "Booking confirmed",
-  text: "Your meeting is booked.",
-})
-if (!result.ok) console.error(result.error)
-```
-
-### `@spy4x/integrations`
-
-```bash
-deno add jsr:@spy4x/integrations
-```
-
-```ts
-import { NtfyClient } from "@spy4x/integrations/ntfy"
-
-const client = new NtfyClient({ baseUrl: "https://ntfy.example.com", topic: "deploys" })
-await client.notifyFailure("deploy failed", "3 of 5 services failed to restart")
-```
-
-### `@spy4x/net`
-
-```bash
-deno add jsr:@spy4x/net
-```
-
-```ts
-import { validatePublicUrl } from "@spy4x/net/url-policy"
-
-async function fetchUserSuppliedUrl(userInput: string) {
-  const safeUrl = await validatePublicUrl(userInput) // throws on a private/loopback/link-local target
-  return fetch(safeUrl)
-}
-```
-
-### `@spy4x/platform`
-
-```bash
-deno add jsr:@spy4x/platform
-```
-
-```ts
-import { CommandBus } from "@spy4x/platform/cqrs"
-import { apiFetch } from "@spy4x/platform/api"
-
-const bus = new CommandBus()
-```
-
-### `@spy4x/realtime`
-
-```bash
-deno add jsr:@spy4x/realtime
-```
-
-```ts
-import {
-  ClientTransport,
-  createSystemClock,
-  createWebSocketFactory,
-  PersistentCursorStore,
-} from "@spy4x/realtime"
-
-const cursors = new PersistentCursorStore({ storage: localStorage, clock: createSystemClock() })
-const transport = new ClientTransport({
-  url: `wss://${location.host}/api/ws`,
-  socketFactory: createWebSocketFactory(),
-  clock: createSystemClock(),
-  cursors,
-  pull: (gap) => fetch(`/api/groups/${gap.groupId}/changes?since=${gap.since}`).then(() => {}),
-  gate: () => fetch("/api/auth/me").then((r) => ({ allowed: r.ok })),
-})
-transport.onChange((hint) => console.log(`${hint.groupId} moved to ${hint.sequence}`))
-transport.connect()
-```
-
-### `@spy4x/server`
-
-```bash
-deno add jsr:@spy4x/server
-```
-
-```ts
-import { createPasswordHasher } from "@spy4x/server/sign-in"
-
-const hasher = createPasswordHasher({ pepper: Deno.env.get("PASSWORD_PEPPER") ?? "" })
-const hash = await hasher.hash("correct horse battery staple")
-const check = await hasher.verify("correct horse battery staple", hash)
-```
-
-### `@spy4x/time`
-
-```bash
-deno add jsr:@spy4x/time
-```
-
-```ts
-import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
-
-const instant = zonedDateTime("2026-08-28", "10:00", "Europe/Berlin")
-formatDateTimeLong("2026-08-28", "10:00", "Europe/Berlin") // "Friday, 28 August 2026 at 10:00"
-```
-
-### `@spy4x/validation`
-
-```bash
-deno add jsr:@spy4x/validation
-```
+</div>
 
 ```ts
 import { type } from "arktype"
 import { validate } from "@spy4x/validation"
+import { formatDateTimeLong } from "@spy4x/time/tz"
+import { createSmtpSender } from "@spy4x/email/smtp"
 
-const userSchema = type({ name: "1 <= string <= 10" })
-const { error, data } = validate(userSchema, { name: "Ann" })
-if (error) console.error(error.description)
-else console.log(data.name)
+const Booking = type({ email: "string.email", date: /^\d{4}-\d\d-\d\d$/, time: /^\d\d:\d\d$/ })
+const mail = createSmtpSender({
+  host: "smtp.example.com",
+  port: 587,
+  user: "jane@example.com",
+  pass: Deno.env.get("SMTP_PASSWORD")!,
+  from: "Jane Doe <jane@example.com>",
+})
+
+Deno.serve(async (request) => {
+  const { error, data } = validate(Booking, await request.json())
+  if (error) return Response.json(error.errors, { status: 400 })
+
+  const when = formatDateTimeLong(data.date, data.time, "Europe/Berlin")
+  const sent = await mail.send({ to: [data.email], subject: "Booked", text: `See you ${when}.` })
+  return sent.ok ? new Response("Booked") : new Response(sent.error, { status: 502 })
+})
 ```
 
-## Rules
+## Packages
 
-- **arktype only.** No zod. Sources that carry zod are ported, not copied — schemas are rewritten
-  at extraction time. No `{parse, safeParse}` adapter: that would institutionalise a second
-  validator.
-- **Deno is the only runtime for building and testing this repo.** No Node.js, npm, pnpm, Yarn or
-  Bun commands. `npm:` specifiers run through Deno where unavoidable. What a published package
-  itself runs on at the consumer's end is the "Runs on" column above.
-- **Source repos are read-only.** Bugs in the repos this code is extracted from are fixed _here_,
-  at extraction time. No module is published while it still carries a known bug.
-- **MIT.**
+**server** means Deno on the back end, **browser** a front-end bundle, **shared** both.
 
-## Tests
+| Package                                                     | What it holds                                                              | Runs on                |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------- |
+| [`@spy4x/validation`](https://jsr.io/@spy4x/validation)     | arktype `validate` with one result shape, and form-validation state        | shared                 |
+| [`@spy4x/platform`](https://jsr.io/@spy4x/platform)         | helpers, command and event bus, cache, API result, tokens, rate limiting   | shared, split by entry |
+| [`@spy4x/server`](https://jsr.io/@spy4x/server)             | sign-in, accounts, Postgres, Redis, outbox, file storage, env encryption   | server                 |
+| [`@spy4x/net`](https://jsr.io/@spy4x/net)                   | SSRF guard, redirect-safe `fetch`, size-capped body readers, CIDR checks   | server                 |
+| [`@spy4x/integrations`](https://jsr.io/@spy4x/integrations) | ntfy and healthchecks.io clients, webhook signature check, retry backoff   | server                 |
+| [`@spy4x/time`](https://jsr.io/@spy4x/time)                 | IANA time-zone arithmetic on `Intl`, plain-date math, `.ics` writer        | shared                 |
+| [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker              | server                 |
+| [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync | both halves            |
 
-Two tiers. `deno task test` is the unit tier: fakes only, no network, no Docker, and it is part of
-`deno task check`. `deno task test:integration` is the integration tier: files named
-`*.integration.test.ts`, run against a real Postgres, a real S3-compatible store, a real mail
-server and a real Redis, all started by `deno task services:up`. An integration test whose service
-is missing fails with the address and the command that starts it — it never skips. `AGENTS.md` has
-the details.
+Each package's README, shown on its JSR page, has the install line, entry points and examples.
+`ai/` (chat completion, JSON recovery) is planned, not built (#11, #76).
 
-## Relationship to other repos
+The example above validates a booking request, formats its time in Berlin and sends a confirmation
+by SMTP: three packages, no framework. `Deno.serve` hands in a standard `Request`, and each package
+returns a plain value you check.
 
-These public repositories import `@spy4x/*` from JSR. None shares a workspace with this repo; each
-pins an exact version.
+No Preact, no app shells, no product domain. Everything here is a technical primitive or adapter
+that is useful to more than one product, extracted from my own apps, with their bugs fixed on the
+way in.
 
-- `spy4x/preact-components` — Preact + Tailwind layer. Imports `@spy4x/platform`, `@spy4x/time`
-  and `@spy4x/validation` at 1.4.0.
-- `spy4x/template` — the SaaS app template. Imports `@spy4x/platform`, `@spy4x/server` and
-  `@spy4x/validation` at 1.4.0, and runs the `@spy4x/server` env-age64 CLI for its `env:*` tasks.
-- `spy4x/antonshubin.com` — imports `@spy4x/email` and `@spy4x/platform` at 1.4.0, and runs the
-  `@spy4x/server` 1.2.0 env-age64 CLI for its `env:*` tasks.
-- `spy4x/financy` — imports `@spy4x/platform` and `@spy4x/server` at 1.3.0, and runs the
-  `@spy4x/server` 1.2.0 env-age64 CLI for its `env:*` tasks.
-- `spy4x/mig` — the meeting scheduler. Imports `@spy4x/platform` and `@spy4x/time` at 1.3.0.
-- `spy4x/rostok` — imports `@spy4x/server` at 1.2.0 in its CLI, and runs its env-age64 CLI for its
-  encrypt and decrypt tasks.
-- `spy4x/dotfiles` — runs the `@spy4x/server` 1.2.0 env-age64 CLI for its `env:*` tasks.
+## Why ts-libs
 
-## Naming policy
+- **Web standards first.** `fetch`, Web Crypto, `ReadableStream`, `Intl` and ES modules, with Deno
+  as the runtime.
+- **Runs where the code allows.** Every package is tested on Deno. `@spy4x/time` and
+  `@spy4x/validation` use no `Deno.*` API, so they also run in a browser, untested there.
+- **Expected failures are data.** `validate` returns `{ error, data }`, `send` resolves with
+  `ok: false` instead of throwing, and `@spy4x/platform` has `Result`, `ok` and `err` for your code.
+- **Few dependencies.** `@spy4x/net` and `@spy4x/time` have none. Shared
+  ones (arktype, Hono, Postgres) are pinned to exact versions.
+- **Tested against the real thing.** Unit tests use fakes; an integration tier runs against a real
+  Postgres, S3-compatible store, mail server and Redis, and fails instead of skipping.
 
-Three repos, not a monorepo. Publish pins exactly and commits lockfiles.
+**Use it if** you build on Deno or ship a browser bundle and want small, typed primitives without a
+framework. **Skip it if** you need tested Node.js support or UI components (those live in
+[spy4x/preact-components](https://github.com/spy4x/preact-components)).
 
-## Maintaining
+## Quick start
 
-**CI.** The badge above links the Woodpecker pipeline at `ci.antonshubin.com` (repo id `10`). Its
-pipeline and publish logs are public and were checked for secret values before the badge was added
-(no token, password or connection string with embedded credentials appears in the most recent push
-build or the most recent tag/publish build — see the PR that added this section for the exact
-commands run).
+```bash
+# arktype at the exact version @spy4x/validation pins, so both see one copy of its types
+deno add jsr:@spy4x/validation jsr:@spy4x/time jsr:@spy4x/email npm:arktype@2.2.3
+# save the example above as main.ts, then:
+SMTP_PASSWORD=not-real deno run --allow-net --allow-env main.ts
+curl -d '{"email":"nope","date":"2026-08-28","time":"10:00"}' localhost:8000
+# {"email":[{"code":"pattern","path":"email","message":"must be an email address (was \"nope\")"}]}
+```
 
-**JSR package metadata** (description, linked GitHub repository, runtime-compatibility flags) is
-config, not something clicked in the JSR UI: it lives in `infra/jsr-metadata.json` and is applied by
-`deno task jsr:metadata`, which calls JSR's package API (`PATCH
-https://api.jsr.io/scopes/spy4x/packages/<package>`). To apply it for real:
+## Development
 
-1. Sign in at [jsr.io](https://jsr.io), go to your user settings, and create a personal access
-   token scoped to the `spy4x` scope with permission to update packages.
-2. Export it and run the task: `JSR_API_TOKEN=<token> deno task jsr:metadata`.
-3. `deno task jsr:metadata -- --dry-run` prints the exact requests without sending them and needs
-   no token — use it to review a change to `infra/jsr-metadata.json` before applying it.
+```bash
+deno task check                                          # fmt, lint, type check, unit tests
+deno task services:up && deno task test:integration      # the integration tier
+```
 
-**Provenance** (JSR's cryptographically signed proof that a version was built from this repo's
-source, via Sigstore) is not something this repo's Woodpecker pipeline can produce: JSR only issues
-a provenance statement for a publish that runs through GitHub Actions' native OIDC integration
-(`jsr publish`/`deno publish` from a GitHub Actions workflow), not from a self-hosted CI system.
-Adding it would mean running the release publish from GitHub Actions instead of Woodpecker, which
-is a bigger change than this task's scope — the exact shape, for whenever that trade-off is made:
+How the repository is built, tested and released: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-1. A workflow at `.github/workflows/publish.yml`, triggered on the same `v*` tag Woodpecker's
-   `publish` step reacts to today, running `deno publish` (no `--no-provenance` flag) with
-   `permissions: { id-token: write }` and no `JSR_TOKEN` secret — OIDC replaces the token.
-2. Each package's page on JSR needs its "Link repository" setting pointed at `spy4x/ts-libs`
-   (the `githubRepository` field `jsr:metadata` already sets) — JSR checks the workflow's identity
-   against that link before it will attach a provenance statement.
+## Built by
 
-Made by Anton Shubin · [antonshubin.com/tools](https://antonshubin.com/tools/ts-libs)
+I'm [Anton Shubin](https://antonshubin.com), a senior full-stack engineer and tech lead. These
+libraries are the building blocks of the products I build and run on my own servers: my meeting
+scheduler [mig](https://github.com/spy4x/mig) imports five of them. Need
+something like it built for your product? [That's my day job →](https://antonshubin.com)
+
+Licensed under [MIT](LICENSE). Copyright (c) 2026 Anton Shubin.
+
+---
+
+Made by Anton Shubin · [antonshubin.com/tools/ts-libs](https://antonshubin.com/tools/ts-libs)

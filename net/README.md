@@ -17,6 +17,23 @@ net/bounded-body.ts   readBoundedText/Json/Body, readContentLength, parseBounded
 net/ip.ts             parseIp(), normalizeIp(), ipInRanges()
 ```
 
+## Install
+
+```bash
+deno add jsr:@spy4x/net
+```
+
+Runs on: server (Deno).
+
+```ts
+import { validatePublicUrl } from "@spy4x/net/url-policy"
+
+async function fetchUserSuppliedUrl(userInput: string) {
+  const safeUrl = await validatePublicUrl(userInput) // throws on a private/loopback/link-local target
+  return fetch(safeUrl)
+}
+```
+
 ## Two-tier API: which one do you want?
 
 | You have                        | You need                                     | Call                           |

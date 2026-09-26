@@ -9,6 +9,14 @@ Generated projects today ship a 55-line `wsHub` and an 87-line SPA client with
 no acks, no heartbeat and no sync handshake. This package is that gap closed, as
 a redesign rather than a port.
 
+## Install
+
+```bash
+deno add jsr:@spy4x/realtime
+```
+
+Runs on: both halves: `./registry` and `./notify` on the server, `./client` in the browser.
+
 ## The contract
 
 The governing record is ADR 002 in `spy4x/template`

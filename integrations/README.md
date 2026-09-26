@@ -8,6 +8,14 @@ client is a thin `fetch` wrapper with an injectable transport.
 `rostok/scripts/backup/src/reporting.ts` and `mig/lib/notify.ts`. Slack and Mailchimp clients were
 removed (`#68`): neither service is used, and the preference is open-source, self-hosted services.
 
+## Install
+
+```bash
+deno add jsr:@spy4x/integrations
+```
+
+Runs on: server (Deno).
+
 ## Entry points
 
 | Export           | What it is                                                                |

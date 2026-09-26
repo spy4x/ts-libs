@@ -9,9 +9,13 @@ deno add jsr:@spy4x/platform
 
 ```ts
 import { formatDecimal, ok } from "@spy4x/platform"
+import { apiFetch } from "@spy4x/platform/api"
+import { CommandBus } from "@spy4x/platform/cqrs"
 import { makeStorage } from "@spy4x/platform/browser"
 import { atomicWriteJson, denoFileSystem } from "@spy4x/platform/server"
 ```
+
+Runs on: shared, with `./browser/*` for the browser and `./server/*` for Deno.
 
 ## Module map
 

@@ -1,9 +1,9 @@
 # AGENTS.md — ts-libs
 
 Framework-agnostic TypeScript primitives and adapters for Deno, published to JSR. Read `README.md`
-for scope and `LICENSE` for terms (MIT, © 2026 Anton Shubin). The global agent instructions own
-Git Flow, worktrees, review and cleanup; this file adds constraints and overrides them where they
-conflict.
+for scope, `CONTRIBUTING.md` for the repository rules and maintenance, and `LICENSE` for terms
+(MIT, © 2026 Anton Shubin). The global agent instructions own Git Flow, worktrees, review and
+cleanup; this file adds constraints and overrides them where they conflict.
 
 This repo is a Deno workspace. Every package is built by a different agent in its own PR, owning
 exactly one top-level directory.

@@ -33,6 +33,14 @@ const result = await sender.send({
 if (!result.ok) console.error(result.error, result.rejected)
 ```
 
+## Install
+
+```bash
+deno add jsr:@spy4x/email
+```
+
+Runs on: server (Deno).
+
 ## Why nodemailer, behind a port
 
 The repo dependency policy is _own the small, keep the huge_ — and it names an
