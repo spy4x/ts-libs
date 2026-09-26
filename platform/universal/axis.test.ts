@@ -103,7 +103,13 @@ describe("niceStep", () => {
 })
 
 describe("ticks", () => {
-  it("expands outward to the next step, so the ends are covered", () => {
+  it("keeps ticks within half a step of the bounds, so they need not reach them", () => {
+    // Documented behaviour: 1.1 is more than half a step (1) above 0, so 0 is dropped.
+    expect(ticks(1.1, 10)).toEqual([2, 4, 6, 8, 10])
+    expect(ticks(-1, 6, 4)).toEqual([0, 2.5, 5])
+  })
+
+  it("reaches the bounds when they sit on multiples of the step", () => {
     const values = ticks(0, 100)
     expect(values[0]).toBeLessThanOrEqual(0)
     expect(values[values.length - 1]).toBeGreaterThanOrEqual(100)
@@ -244,6 +250,14 @@ describe("ticks", () => {
 })
 
 describe("stepAxis", () => {
+  it("covers bounds that ticks does not reach, with the step niceStep picks", () => {
+    expect(stepAxis(1.1, 10, niceStep(10 - 1.1))).toEqual({
+      min: 0,
+      max: 10,
+      ticks: [0, 2, 4, 6, 8, 10],
+    })
+  })
+
   it("rounds the bounds outward to the step and starts and ends the ticks on them", () => {
     // 3 * 0.1 is 0.30000000000000004 in floats; the lower bound must be the same rounded 0.3 the
     // first tick is, or the axis line and its end label disagree.
