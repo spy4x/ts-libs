@@ -145,8 +145,8 @@ export class ThrottledJsonSaver {
    * Write now when anything is pending, and cancel any timer.
    *
    * A detached write, and the follow-up it schedules, may already be in flight; `flush` waits for
-   * them before deciding, so its postcondition is "whatever was marked before this call is on disk"
-   * rather than "a write was started". A caller finishing a run can therefore `await saver.flush()`
+   * them only until the marks made before the call are on disk, so its postcondition is "whatever
+   * was marked before this call is on disk" rather than "a write was started". A caller finishing a run can therefore `await saver.flush()`
    * exactly once.
    *
    * A timer-driven failure is reported through `onFlushError` — there is no caller to reject. An
@@ -157,11 +157,14 @@ export class ThrottledJsonSaver {
    */
   async flush(): Promise<boolean> {
     this.#cancelTimer()
+    // Only the marks made before this call count. Waiting for later ones too would never end while a
+    // producer keeps marking during slow writes.
+    const target = this.#marked
     // Loop: a finished write may have started a follow-up, and another `flush` may have started its
     // own write while this one waited. A failure of an earlier write has already been reported;
     // this call reports on its own work.
-    while (this.#inFlight) await this.#inFlight
-    if (!this.dirty) return false
+    while (this.#inFlight && this.#saved < target) await this.#inFlight
+    if (this.#saved >= target) return false
     const write = this.#write()
     this.#track(write)
     return await write

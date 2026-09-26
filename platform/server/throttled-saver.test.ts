@@ -55,10 +55,16 @@ function harness(options: { flushIntervalMs?: number; flushBatchSize?: number } 
 
 /**
  * Build a saver whose every file write waits for a gate the test releases by hand, so the test
- * controls which writes are in flight and in which order they land. The window has already elapsed
- * when it returns, so the next mark writes inline.
+ * controls which writes are in flight and in which order they land. Unless `elapsed` is false, the
+ * window has already elapsed when it returns, so the next mark writes inline.
  */
-function gatedHarness() {
+function gatedHarness(
+  options: {
+    elapsed?: boolean
+    flushBatchSize?: number
+    onFlushError?: (error: unknown) => void
+  } = {},
+) {
   const fs = fakeFs()
   const clock = fakeClock()
   const gates: (() => void)[] = []
@@ -77,10 +83,12 @@ function gatedHarness() {
     timers: fakeTimers(),
     pid: 1,
     flushIntervalMs: 1000,
-    flushBatchSize: 1000,
+    flushBatchSize: options.flushBatchSize ?? 1000,
+    onFlushError: options.onFlushError,
   })
-  clock.advance(1000)
+  if (options.elapsed ?? true) clock.advance(1000)
   return {
+    fs,
     saver,
     clock,
     gates,
@@ -407,5 +415,31 @@ describe("ThrottledJsonSaver", () => {
     await drain()
     expect(h.saved()).toEqual({ items: 3 })
     expect(h.saver.dirty).toBe(false)
+  })
+  it("resolves flush once its own marks landed while a producer keeps marking", async () => {
+    const h = gatedHarness()
+    h.mark(1)
+    let done = false
+    const flushed = h.saver.flush().then((wrote) => {
+      done = true
+      return wrote
+    })
+    // Every write takes as long as the window, and a new mark arrives during each one.
+    for (let round = 2; round <= 5; round++) {
+      await waitForCount(h.gates, 1)
+      h.clock.advance(1000)
+      h.mark(round)
+      h.gates.shift()?.()
+      await drain()
+      if (done) break
+    }
+    expect(done).toBe(true)
+    expect(await flushed).toBe(false)
+    expect(h.saver.writes).toBe(1)
+    // The producer's newer mark is still carried by the follow-up write.
+    await waitForCount(h.gates, 1)
+    h.gates.shift()?.()
+    await drain()
+    expect(h.saved()).toEqual({ items: 2 })
   })
 })
