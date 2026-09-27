@@ -36,6 +36,11 @@ export interface HotkeyEvent {
   metaKey: boolean
   altKey: boolean
   shiftKey: boolean
+  /**
+   * Whether a modifier is held, as `KeyboardEvent.getModifierState` answers. The matcher asks it
+   * about `"AltGraph"`. Without it, Control and Alt held together are read as AltGr.
+   */
+  getModifierState?(key: string): boolean
 }
 
 /** Names a combination may use for each modifier, lowercased. */
@@ -165,9 +170,12 @@ export function parseHotkey(combo: string): Hotkey {
  * `"/"`, `"+"`): such a character already says which Shift state produced it, and keyboard layouts
  * disagree about which symbols need Shift.
  *
- * A symbol typed with AltGr, such as `@` on a German keyboard, reports Control and Alt held
- * together. So for a symbol combination that names none of Control, Alt, Meta and `mod`, Control
- * and Alt held together are read as AltGr and ignored, and `"@"` fires there too.
+ * A symbol typed with AltGr, such as `@` on a German keyboard, still fires a symbol combination
+ * that names none of Control, Alt, Meta and `mod`: while AltGr is held, Control and Alt are ignored
+ * for it. When the event has `getModifierState`, its `"AltGraph"` answer says whether AltGr is
+ * held, so a real Control+Alt chord on a keyboard without AltGr fires `"ctrl+alt+/"` and never
+ * `"/"`. An event without that method has Control and Alt held together read as AltGr. On Apple
+ * platforms there is no AltGr: Control and Option held together are always a chord there.
  *
  * A letter or a digit also matches by its physical key (`event.code`), but only when the key press
  * typed no Latin letter or digit: `"mod+k"` still fires with a Cyrillic layout, and `"alt+k"` on a
@@ -188,7 +196,7 @@ export function matchesHotkey(hotkey: Hotkey, event: HotkeyEvent, apple: boolean
   const ctrl = hotkey.ctrl || (hotkey.mod && !apple)
   const meta = hotkey.meta || (hotkey.mod && apple)
   const symbol = isSymbol(hotkey.key)
-  const altGr = symbol && !ctrl && !meta && !hotkey.alt && event.ctrlKey && event.altKey
+  const altGr = symbol && !apple && !ctrl && !meta && !hotkey.alt && isAltGraphHeld(event)
   if (!altGr && (event.ctrlKey !== ctrl || event.altKey !== hotkey.alt)) return false
   if (event.metaKey !== meta) return false
   if (!symbol && event.shiftKey !== hotkey.shift) return false
@@ -197,6 +205,15 @@ export function matchesHotkey(hotkey: Hotkey, event: HotkeyEvent, apple: boolean
   if (typed === hotkey.key) return true
   if (/^[a-z0-9]$/.test(typed)) return false
   return physicalCode(hotkey.key) !== undefined && event.code === physicalCode(hotkey.key)
+}
+
+/**
+ * Whether AltGr is held: the event's own answer when it has `getModifierState`, and otherwise
+ * Control and Alt held together, the pair Windows also accepts for AltGr.
+ */
+function isAltGraphHeld(event: HotkeyEvent): boolean {
+  if (typeof event.getModifierState === "function") return event.getModifierState("AltGraph")
+  return event.ctrlKey && event.altKey
 }
 
 /** `event.code` of a letter or digit key (`"KeyK"`, `"Digit1"`), or `undefined` for any other. */

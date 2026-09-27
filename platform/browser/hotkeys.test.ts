@@ -14,6 +14,11 @@ function press(key: string, fields: Partial<HotkeyEvent> = {}): HotkeyEvent {
   return { key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...fields }
 }
 
+/** A `getModifierState` that reports AltGraph as `held` and every other modifier as released. */
+function altGraph(held: boolean): (key: string) => boolean {
+  return (key) => held && key === "AltGraph"
+}
+
 /** Whether `combo` matches `event`, on Apple (`true`) or elsewhere. */
 function fires(combo: string, event: HotkeyEvent, apple = false): boolean {
   return matchesHotkey(parseHotkey(combo), event, apple)
@@ -98,11 +103,34 @@ describe("matchesHotkey", () => {
     expect(fires("?", press("/", { shiftKey: true }))).toBe(false)
   })
 
-  it("reads Control and Alt together as AltGr for a symbol that names neither", () => {
+  it("falls back to reading Control and Alt together as AltGr, for a symbol naming neither", () => {
     expect(fires("@", press("@", { ctrlKey: true, altKey: true, code: "KeyQ" }))).toBe(true)
     expect(fires("@", press("@", { ctrlKey: true }))).toBe(false)
     expect(fires("q", press("q", { ctrlKey: true, altKey: true }))).toBe(false)
     expect(fires("mod+/", press("/", { ctrlKey: true, altKey: true }))).toBe(false)
+  })
+
+  it("never reads AltGr for a combination that names Alt or Meta", () => {
+    expect(fires("alt+/", press("/", { ctrlKey: true, altKey: true }))).toBe(false)
+    expect(fires("meta+/", press("/", { ctrlKey: true, altKey: true, metaKey: true }))).toBe(false)
+  })
+
+  it("never reads AltGr on Apple platforms, where Control and Option are a real chord", () => {
+    const controlOption = press("/", { ctrlKey: true, altKey: true })
+    expect(fires("/", controlOption, true)).toBe(false)
+    expect(fires("/", { ...controlOption, getModifierState: altGraph(true) }, true)).toBe(false)
+    expect(fires("ctrl+alt+/", controlOption, true)).toBe(true)
+  })
+
+  it("asks the event whether AltGr is held when the event can say", () => {
+    // US Windows: Control+Alt+/ is a real chord, and the browser reports no AltGraph.
+    const chord = press("/", { ctrlKey: true, altKey: true, getModifierState: altGraph(false) })
+    expect(fires("/", chord)).toBe(false)
+    expect(fires("ctrl+alt+/", chord)).toBe(true)
+    // German Windows: AltGr+Q types "@", with or without Control and Alt reported beside it.
+    const altGr = { code: "KeyQ", getModifierState: altGraph(true) }
+    expect(fires("@", press("@", { ...altGr, ctrlKey: true, altKey: true }))).toBe(true)
+    expect(fires("@", press("@", altGr))).toBe(true)
   })
 
   it("matches a letter or a digit by its physical key when the character differs", () => {
