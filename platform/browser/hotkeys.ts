@@ -194,7 +194,9 @@ export function parseHotkey(combo: string): Hotkey {
  * AZERTY the key that types `a` fires `"a"` and never `"q"`, and on Dvorak the key that types `t`
  * fires `"t"` and never `"k"`. A modifier that turns the key into something other than a Latin
  * letter or digit, as Option on a Mac usually does, makes the combination follow the key's QWERTY
- * position instead: on a French Mac keyboard, `"alt+a"` fires on the key printed Q.
+ * position instead: on a French Mac keyboard, `"alt+a"` fires on the key printed Q. A press made
+ * with AltGr never matches by its physical key, because AltGr picks another character on purpose:
+ * on a German keyboard, AltGr+Q types `@` and does not fire `"q"`.
  *
  * An event with no `key`, such as the plain `Event` some browsers send when they autofill a
  * field, matches nothing.
@@ -217,6 +219,7 @@ export function matchesHotkey(hotkey: Hotkey, event: HotkeyEvent, apple: boolean
   const typed = event.key.toLowerCase()
   if (typed === hotkey.key) return true
   if (/^[a-z0-9]$/.test(typed)) return false
+  if (!apple && isAltGraphHeld(event)) return false
   return physicalCode(hotkey.key) !== undefined && event.code === physicalCode(hotkey.key)
 }
 

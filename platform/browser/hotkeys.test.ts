@@ -149,6 +149,17 @@ describe("matchesHotkey", () => {
     expect(fires("mod+w", press("z", { ctrlKey: true, code: "KeyW" }))).toBe(false)
   })
 
+  it("never matches by physical key while AltGr is held, except on Apple platforms", () => {
+    // German: AltGr+Q types "@". Polish: AltGr+A types "ą".
+    expect(fires("q", press("@", { code: "KeyQ", getModifierState: altGraph(true) }))).toBe(false)
+    expect(fires("a", press("ą", { code: "KeyA", getModifierState: altGraph(true) }))).toBe(false)
+    const cyrillic = press("л", { ctrlKey: true, code: "KeyK", getModifierState: altGraph(false) })
+    expect(fires("mod+k", cyrillic)).toBe(true)
+    // A Mac has no AltGr, so Option keeps its physical-key match whatever the browser reports.
+    const option = press("˚", { altKey: true, code: "KeyK", getModifierState: altGraph(true) })
+    expect(fires("alt+k", option, true)).toBe(true)
+  })
+
   it("matches nothing for an event with no key", () => {
     const keyless = { ...press("k"), key: undefined } as unknown as HotkeyEvent
     expect(fires("k", keyless)).toBe(false)
