@@ -9,6 +9,7 @@
     "./browser/cookie": "./browser/cookie.ts",
     "./browser/download": "./browser/download.ts",
     "./browser/geolocation": "./browser/geolocation.ts",
+    "./browser/hotkeys": "./browser/hotkeys.ts",
     "./browser/storage": "./browser/storage.ts",
     "./cache": "./cache/mod.ts",
     "./cqrs": "./cqrs/mod.ts",
