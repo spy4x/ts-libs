@@ -90,7 +90,9 @@ const NAMED_KEYS = new Set([
   "contextmenu",
 ])
 
-/** Whether a lowercased key is a symbol: one character that is not a Latin letter, digit or space. */
+/**
+ * Whether a lowercased key is a symbol: one character that is not a Latin letter, digit or space.
+ */
 function isSymbol(key: string): boolean {
   return key.length === 1 && !/[a-z0-9 ]/.test(key)
 }
@@ -99,10 +101,19 @@ function isSymbol(key: string): boolean {
  * Parse a combination such as `"mod+k"`, `"shift+n"`, `"?"` or `"ctrl+alt+delete"`.
  *
  * Tokens are joined by `+` and are case-insensitive; the last one is the key and the others are
- * modifiers (`mod`, `ctrl`, `meta`/`cmd`, `alt`/`option`, `shift`). `mod` means Command on Apple
- * platforms and Control elsewhere. The `+` key itself is written `"plus"`, or as the last token
- * (`"mod++"`). Key names follow `KeyboardEvent.key` (`"escape"`, `"arrowup"`, `"f1"`), with the
- * short forms `esc`, `space`, `up`, `down`, `left`, `right`, `del` and `return`.
+ * modifiers: `mod`, `ctrl` or `control`, `meta`, `cmd` or `command`, `alt`, `option` or `opt`, and
+ * `shift`. `mod` means Command on Apple platforms and Control elsewhere.
+ *
+ * The key is one of these, and nothing else:
+ *
+ * - one character that is not whitespace, such as `k`, `1`, `?` or `/`; the `+` key is written
+ *   `plus`, or as the last token (`"mod++"`);
+ * - a function key, `f1` to `f24`;
+ * - one of these `KeyboardEvent.key` names: `escape`, `enter`, `tab`, `backspace`, `delete`,
+ *   `insert`, `home`, `end`, `pageup`, `pagedown`, `arrowup`, `arrowdown`, `arrowleft`,
+ *   `arrowright` and `contextmenu`;
+ * - a short form: `esc`, `space` or `spacebar` (the space bar), `up`, `down`, `left`, `right`,
+ *   `del` and `return`.
  *
  * Only one key press per combination: a sequence such as `"g i"` is refused. So is a combination
  * that could never fire: an unknown key name (`"mod+escpe"`), and `shift` with a symbol
@@ -181,7 +192,9 @@ export function parseHotkey(combo: string): Hotkey {
  * typed no Latin letter or digit: `"mod+k"` still fires with a Cyrillic layout, and `"alt+k"` on a
  * Mac, where Option turns `k` into `˚`. A key that types another Latin letter is that letter, so on
  * AZERTY the key that types `a` fires `"a"` and never `"q"`, and on Dvorak the key that types `t`
- * fires `"t"` and never `"k"`.
+ * fires `"t"` and never `"k"`. A modifier that turns the key into something other than a Latin
+ * letter or digit, as Option on a Mac usually does, makes the combination follow the key's QWERTY
+ * position instead: on a French Mac keyboard, `"alt+a"` fires on the key printed Q.
  *
  * An event with no `key`, such as the plain `Event` some browsers send when they autofill a
  * field, matches nothing.
