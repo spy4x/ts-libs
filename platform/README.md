@@ -106,6 +106,7 @@ when the caller passes none.
 | `browser/cookie`      | `getCookie`                                                                                                                       |
 | `browser/download`    | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                |
 | `browser/geolocation` | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                           |
+| `browser/hotkeys`     | `parseHotkey`, `matchesHotkey`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyEvent`, `PlatformNavigator`, `TypingTarget` |
 | `browser/storage`     | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
 
 `browser/cookie` fixes two bugs in the `getCookie` copies apps carried before it had a home here: it
