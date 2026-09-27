@@ -5,7 +5,8 @@
  * takes its storage object, `downloadResponseAsFile` and `downloadCsv` take their `document`,
  * object-URL factory and timer, `copyToClipboard` its clipboard and `document`,
  * `requestGeolocation` its `Geolocation`, and `isApplePlatform` its `navigator`, all as parameters,
- * defaulting to the real globals only when the caller passes none. All of them are safe under SSR and testable with fakes.
+ * defaulting to the real globals only when the caller passes none. All of them are safe under SSR
+ * and testable with fakes.
  */
 
 export * from "./browser/clipboard.ts"

@@ -57,6 +57,18 @@ describe("parseHotkey", () => {
     expect(() => parseHotkey("hyper+k")).toThrow('unknown modifier "hyper"')
     expect(() => parseHotkey("g i")).toThrow("sequence")
   })
+
+  it("refuses an unknown key name and accepts function keys and KeyboardEvent.key names", () => {
+    expect(() => parseHotkey("mod+escpe")).toThrow('unknown key "escpe"')
+    expect(() => parseHotkey("f25")).toThrow('unknown key "f25"')
+    expect(["f1", "F24", "PageDown", "home"].map((key) => parseHotkey(key).key))
+      .toEqual(["f1", "f24", "pagedown", "home"])
+  })
+
+  it("refuses shift with a symbol, which no key press can report", () => {
+    expect(() => parseHotkey("shift+/")).toThrow("can never fire")
+    expect(parseHotkey("shift+n").shift).toBe(true)
+  })
 })
 
 describe("matchesHotkey", () => {
@@ -84,7 +96,13 @@ describe("matchesHotkey", () => {
     expect(fires("?", press("?", { shiftKey: true }))).toBe(true)
     expect(fires("/", press("/"))).toBe(true)
     expect(fires("?", press("/", { shiftKey: true }))).toBe(false)
-    expect(fires("shift+/", press("/"))).toBe(false)
+  })
+
+  it("reads Control and Alt together as AltGr for a symbol that names neither", () => {
+    expect(fires("@", press("@", { ctrlKey: true, altKey: true, code: "KeyQ" }))).toBe(true)
+    expect(fires("@", press("@", { ctrlKey: true }))).toBe(false)
+    expect(fires("q", press("q", { ctrlKey: true, altKey: true }))).toBe(false)
+    expect(fires("mod+/", press("/", { ctrlKey: true, altKey: true }))).toBe(false)
   })
 
   it("matches a letter or a digit by its physical key when the character differs", () => {
@@ -92,6 +110,20 @@ describe("matchesHotkey", () => {
     expect(fires("mod+k", press("л", { ctrlKey: true, code: "KeyK" }))).toBe(true)
     expect(fires("mod+1", press("!", { ctrlKey: true, code: "Digit1" }))).toBe(true)
     expect(fires("mod+k", press("л", { ctrlKey: true, code: "KeyL" }))).toBe(false)
+  })
+
+  it("never matches by physical key when the press typed another Latin letter or digit", () => {
+    // AZERTY: the key where QWERTY has Q types "a".
+    expect(fires("q", press("a", { code: "KeyQ" }))).toBe(false)
+    expect(fires("a", press("a", { code: "KeyQ" }))).toBe(true)
+    // Dvorak: the key where QWERTY has K types "t".
+    expect(fires("k", press("t", { code: "KeyK" }))).toBe(false)
+    expect(fires("mod+w", press("z", { ctrlKey: true, code: "KeyW" }))).toBe(false)
+  })
+
+  it("matches nothing for an event with no key", () => {
+    const keyless = { ...press("k"), key: undefined } as unknown as HotkeyEvent
+    expect(fires("k", keyless)).toBe(false)
   })
 
   it("matches named keys whatever their case", () => {

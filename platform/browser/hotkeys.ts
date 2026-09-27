@@ -66,6 +66,30 @@ const KEY_ALIASES: Readonly<Record<string, string>> = {
   return: "enter",
 }
 
+/** `KeyboardEvent.key` names, lowercased, that a combination may name besides a character. */
+const NAMED_KEYS = new Set([
+  "escape",
+  "enter",
+  "tab",
+  "backspace",
+  "delete",
+  "insert",
+  "home",
+  "end",
+  "pageup",
+  "pagedown",
+  "arrowup",
+  "arrowdown",
+  "arrowleft",
+  "arrowright",
+  "contextmenu",
+])
+
+/** Whether a lowercased key is a symbol: one character that is not a Latin letter, digit or space. */
+function isSymbol(key: string): boolean {
+  return key.length === 1 && !/[a-z0-9 ]/.test(key)
+}
+
 /**
  * Parse a combination such as `"mod+k"`, `"shift+n"`, `"?"` or `"ctrl+alt+delete"`.
  *
@@ -75,12 +99,15 @@ const KEY_ALIASES: Readonly<Record<string, string>> = {
  * (`"mod++"`). Key names follow `KeyboardEvent.key` (`"escape"`, `"arrowup"`, `"f1"`), with the
  * short forms `esc`, `space`, `up`, `down`, `left`, `right`, `del` and `return`.
  *
- * Only one key press per combination: a sequence such as `"g i"` is refused.
+ * Only one key press per combination: a sequence such as `"g i"` is refused. So is a combination
+ * that could never fire: an unknown key name (`"mod+escpe"`), and `shift` with a symbol
+ * (`"shift+/"`), because a key press reports the character Shift produced (`"?"`), not the key
+ * under it. Write the symbol itself instead.
  *
  * @param combo The combination as written in code.
  * @returns The key and its modifiers.
- * @throws {Error} When the combination is empty, names no key, names an unknown modifier or holds
- *   whitespace between keys.
+ * @throws {Error} When the combination is empty, names no key, names an unknown modifier or an
+ *   unknown key, holds whitespace between keys, or pairs `shift` with a symbol.
  */
 export function parseHotkey(combo: string): Hotkey {
   const text = combo.trim()
@@ -115,8 +142,18 @@ export function parseHotkey(combo: string): Hotkey {
       return
     }
     if (token in MODIFIERS) throw new Error(`The hotkey "${combo}" names no key`)
-    hotkey.key = KEY_ALIASES[token] ?? token
+    const key = KEY_ALIASES[token] ?? token
+    if (key.length > 1 && !NAMED_KEYS.has(key) && !/^f([1-9]|1[0-9]|2[0-4])$/.test(key)) {
+      throw new Error(`The hotkey "${combo}" names an unknown key "${raw.trim()}"`)
+    }
+    hotkey.key = key
   })
+  if (hotkey.shift && isSymbol(hotkey.key)) {
+    throw new Error(
+      `The hotkey "${combo}" can never fire: a key press reports the character Shift produces, ` +
+        `so write that character instead of shift`,
+    )
+  }
   return hotkey
 }
 
@@ -125,11 +162,21 @@ export function parseHotkey(combo: string): Hotkey {
  *
  * Control, Meta and Alt must be held exactly as the combination says, after `mod` is resolved for
  * the platform. Shift must match too, except for a combination whose key is a symbol (`"?"`,
- * `"/"`, `"+"`) and that does not name `shift`: such a character already says which Shift state
- * produced it, and keyboard layouts disagree about which symbols need Shift.
+ * `"/"`, `"+"`): such a character already says which Shift state produced it, and keyboard layouts
+ * disagree about which symbols need Shift.
  *
- * A letter or a digit also matches by its physical key (`event.code`), so `"mod+k"` still fires
- * with a non-Latin layout, and `"alt+k"` still fires on a Mac, where Option turns `k` into `˚`.
+ * A symbol typed with AltGr, such as `@` on a German keyboard, reports Control and Alt held
+ * together. So for a symbol combination that names none of Control, Alt, Meta and `mod`, Control
+ * and Alt held together are read as AltGr and ignored, and `"@"` fires there too.
+ *
+ * A letter or a digit also matches by its physical key (`event.code`), but only when the key press
+ * typed no Latin letter or digit: `"mod+k"` still fires with a Cyrillic layout, and `"alt+k"` on a
+ * Mac, where Option turns `k` into `˚`. A key that types another Latin letter is that letter, so on
+ * AZERTY the key that types `a` fires `"a"` and never `"q"`, and on Dvorak the key that types `t`
+ * fires `"t"` and never `"k"`.
+ *
+ * An event with no `key`, such as the plain `Event` some browsers send when they autofill a
+ * field, matches nothing.
  *
  * @param hotkey A combination from {@link parseHotkey}.
  * @param event The key press, or anything with the same fields.
@@ -137,14 +184,18 @@ export function parseHotkey(combo: string): Hotkey {
  *   {@link isApplePlatform}.
  */
 export function matchesHotkey(hotkey: Hotkey, event: HotkeyEvent, apple: boolean): boolean {
+  if (typeof event.key !== "string") return false
   const ctrl = hotkey.ctrl || (hotkey.mod && !apple)
   const meta = hotkey.meta || (hotkey.mod && apple)
-  if (event.ctrlKey !== ctrl || event.metaKey !== meta || event.altKey !== hotkey.alt) return false
+  const symbol = isSymbol(hotkey.key)
+  const altGr = symbol && !ctrl && !meta && !hotkey.alt && event.ctrlKey && event.altKey
+  if (!altGr && (event.ctrlKey !== ctrl || event.altKey !== hotkey.alt)) return false
+  if (event.metaKey !== meta) return false
+  if (!symbol && event.shiftKey !== hotkey.shift) return false
 
-  const symbol = hotkey.key.length === 1 && !/[a-z0-9 ]/.test(hotkey.key)
-  if (!(symbol && !hotkey.shift) && event.shiftKey !== hotkey.shift) return false
-
-  if (event.key.toLowerCase() === hotkey.key) return true
+  const typed = event.key.toLowerCase()
+  if (typed === hotkey.key) return true
+  if (/^[a-z0-9]$/.test(typed)) return false
   return physicalCode(hotkey.key) !== undefined && event.code === physicalCode(hotkey.key)
 }
 
