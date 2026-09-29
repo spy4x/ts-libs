@@ -373,12 +373,9 @@ describe("PersistentCursorStore", () => {
 
     // The saved state moves on before the retry; a stale half-load must not survive it.
     storage.removeItem("realtime:syncedAt")
-    storage.setItem("realtime:cursor:group-1", "12")
+    storage.setItem("realtime:groups", JSON.stringify(["group-2"]))
 
-    expect(store.cursors()).toEqual([
-      { groupId: "group-1", sequence: 12 },
-      { groupId: "group-2", sequence: 4 },
-    ])
+    expect(store.cursors()).toEqual([{ groupId: "group-2", sequence: 4 }])
     expect(store.syncedAt()).toBeNull()
   })
 
