@@ -8,6 +8,7 @@
     "./browser/clipboard": "./browser/clipboard.ts",
     "./browser/cookie": "./browser/cookie.ts",
     "./browser/download": "./browser/download.ts",
+    "./browser/embed": "./browser/embed.ts",
     "./browser/geolocation": "./browser/geolocation.ts",
     "./browser/hotkeys": "./browser/hotkeys.ts",
     "./browser/storage": "./browser/storage.ts",
