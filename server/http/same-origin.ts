@@ -44,6 +44,23 @@
  *    server sees is `http://`, while the browser sends `Origin: https://…`.
  *  - The source refused `Origin: null`, so a same-origin form post under `no-referrer` failed.
  *
+ * ## WebSocket upgrades
+ *
+ * The mutation guard lets GET through, and a WebSocket handshake is a GET, so it cannot guard an
+ * upgrade. A browser attaches the session cookie to a WebSocket that another site opens, and the
+ * same-origin policy does not stop that page from reading the socket's messages. That is
+ * cross-site WebSocket hijacking. {@link createSameOriginUpgradeGuard} closes it: mount it on the
+ * upgrade route, before the upgrade handler. It takes the same options and validates
+ * `expectedOrigin` the same way, but checks every request, whatever its method, and only two
+ * things:
+ *
+ *  1. the session cookie is present (unless `requireSessionCookie` is `false`);
+ *  2. `Origin` equals an expected origin exactly.
+ *
+ * A browser always sends `Origin` on a WebSocket handshake, so no fallback is needed. `Origin: null`
+ * is refused, because it comes from a sandboxed frame or an opaque origin, never from the app's own
+ * page. `Sec-Fetch-Site` is not checked: older browsers do not send it on a handshake.
+ *
  * @module
  */
 
@@ -66,13 +83,14 @@ export const SAFE_METHODS: readonly string[] = Object.freeze(["GET", "HEAD", "OP
  *  - `no-session-cookie`: the session cookie is absent or empty.
  *  - `origin-mismatch`: `Origin` is absent, not an expected origin, or `null` without
  *    `Sec-Fetch-Site: same-origin`.
- *  - `not-same-origin-fetch`: `Sec-Fetch-Site` is absent or anything but `same-origin`.
+ *  - `not-same-origin-fetch`: `Sec-Fetch-Site` is absent or anything but `same-origin`. Never
+ *    reported by {@link createSameOriginUpgradeGuard}, which does not check that header.
  *
  * When several apply, the first in this order is reported.
  */
 export type SameOriginRefusal = "no-session-cookie" | "origin-mismatch" | "not-same-origin-fetch"
 
-/** Options for {@link createSameOriginMutationGuard}. */
+/** Options for {@link createSameOriginMutationGuard} and {@link createSameOriginUpgradeGuard}. */
 export interface SameOriginGuardOptions<E extends Env = Env> {
   /** Name of the session cookie. Defaults to {@link SESSION_COOKIE_NAME}. */
   cookieName?: string
@@ -130,6 +148,56 @@ export function createSameOriginMutationGuard<E extends Env = Env>(
 }
 
 /**
+ * Build a Hono middleware that refuses a WebSocket upgrade from another site. See "WebSocket
+ * upgrades" in the module documentation. Mount it on the upgrade route only: it checks every
+ * request it sees, so a plain page load, which carries no `Origin`, is refused too.
+ *
+ * Refusal reasons are `no-session-cookie` and `origin-mismatch`, in that order.
+ *
+ * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin.
+ */
+export function createSameOriginUpgradeGuard<E extends Env = Env>(
+  options: SameOriginGuardOptions<E> = {},
+): MiddlewareHandler<E> {
+  const cookieName = options.cookieName ?? SESSION_COOKIE_NAME
+  const requireCookie = options.requireSessionCookie !== false
+  const expected = options.expectedOrigin === undefined
+    ? undefined
+    : validateOrigins(options.expectedOrigin)
+  const onReject = options.onReject ??
+    ((c: Context<E>) => c.json({ error: SAME_ORIGIN_REFUSED }, 403))
+
+  return async (c, next) => {
+    const reason = upgradeRefusal(c, cookieName, requireCookie, expected)
+    if (reason !== undefined) return await onReject(c, reason)
+    return await next()
+  }
+}
+
+/**
+ * The first check a WebSocket upgrade fails, or `undefined` when it passes both. `expected` is
+ * `undefined` when no origin was configured, and the request URL's own origin is used instead.
+ */
+function upgradeRefusal(
+  c: Context,
+  cookieName: string,
+  requireCookie: boolean,
+  expected: readonly string[] | undefined,
+): SameOriginRefusal | undefined {
+  if (requireCookie && !hasCookie(c, cookieName)) return "no-session-cookie"
+  const origin = c.req.header("origin")
+  const allowed = expected ?? [new URL(c.req.url).origin]
+  if (origin === undefined || !allowed.includes(origin)) return "origin-mismatch"
+  return undefined
+}
+
+/** Whether the named cookie is present and not empty. */
+function hasCookie(c: Context, cookieName: string): boolean {
+  const value = getCookie(c, cookieName)
+  return value !== undefined && value !== ""
+}
+
+/**
  * The first check a mutating request fails, in the order {@link SameOriginRefusal} lists them, or
  * `undefined` when it passes all three. `expected` is `undefined` when no origin was configured,
  * and the request URL's own origin is used instead.
@@ -140,10 +208,7 @@ function refusal(
   requireCookie: boolean,
   expected: readonly string[] | undefined,
 ): SameOriginRefusal | undefined {
-  if (requireCookie) {
-    const value = getCookie(c, cookieName)
-    if (value === undefined || value === "") return "no-session-cookie"
-  }
+  if (requireCookie && !hasCookie(c, cookieName)) return "no-session-cookie"
   const origin = c.req.header("origin")
   const sameOriginFetch = c.req.header("sec-fetch-site") === "same-origin"
   const allowed = expected ?? [new URL(c.req.url).origin]
