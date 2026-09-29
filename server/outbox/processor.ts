@@ -82,11 +82,33 @@ export interface OutboxProcessorOptions {
    * batch, started close to the end of the lease, can still run past it and be
    * delivered twice, even when it is much shorter than the lease. A longer lease alone
    * does not close this window, because the check stops at the same margin before the
-   * end of any lease. It is closed only when the whole batch fits in the lease, that is
-   * when `leaseSeconds` exceeds `batchSize` times the slowest expected publish, or by
-   * the floor proposed in #269.
+   * end of any lease. Two things close it: the whole batch fitting in the lease (that
+   * is, `leaseSeconds` exceeding `batchSize` times the slowest expected publish), or
+   * `slowestPublishMs`.
+   *
+   * The rule, with `slowestPublishMs` set: a publish no slower than `slowestPublishMs`
+   * is never delivered twice because of the lease. Two things fall outside it: a
+   * worker that crashes mid-publish (its lease still expires and the event is
+   * delivered again), and a publish that takes longer than `slowestPublishMs`.
    */
   leaseSeconds?: number
+  /**
+   * The slowest single publish the caller expects, in milliseconds. Optional; without
+   * it the drain's behaviour is unchanged.
+   *
+   * It is a floor for the prediction in `leaseSeconds`: `drainOnce` stops before an
+   * event when the time used so far plus the larger of this value and the slowest
+   * publish observed in the batch would reach the lease. The first event of a batch is
+   * still always tried. So a publish no slower than this value is never delivered
+   * twice because of the lease, whatever order the publish times come in. The rule does
+   * not cover a worker that crashes mid-publish, or a publish slower than this value.
+   * A higher value stops batches earlier, so it needs a lease long enough to fit
+   * several publishes of that length or a batch makes little progress.
+   *
+   * Must be a finite number of at least 0; anything else throws a `RangeError` at
+   * construction.
+   */
+  slowestPublishMs?: number
   /**
    * Milliseconds clock used to measure a batch against its lease. Defaults to
    * `Date.now`; tests pass a fake one.
@@ -183,6 +205,7 @@ export class OutboxProcessor {
   readonly #maxRetryDelayMs: number
   readonly #leaseSeconds: number
   readonly #now: () => number
+  readonly #slowestPublishMs: number
 
   constructor(
     private readonly repository: OutboxRepository,
@@ -195,6 +218,13 @@ export class OutboxProcessor {
     this.#maxRetryDelayMs = options.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs
     this.#leaseSeconds = options.leaseSeconds ?? DEFAULTS.leaseSeconds
     this.#now = options.now ?? Date.now
+    const floor = options.slowestPublishMs ?? 0
+    if (!Number.isFinite(floor) || floor < 0) {
+      throw new RangeError(
+        `slowestPublishMs must be a finite number of at least 0, got ${floor}`,
+      )
+    }
+    this.#slowestPublishMs = floor
   }
 
   /**
@@ -204,7 +234,7 @@ export class OutboxProcessor {
    * The whole batch shares one lease, so publishing it one event at a time can outlast
    * the lease and let another worker claim the tail. Before each event after the first,
    * this stops once the time since the claim began plus the slowest publish seen so far
-   * would reach the lease, and hands the untried events back (see `leaseSeconds`).
+   * (or `slowestPublishMs`, when larger) would reach the lease, and hands the untried events back (see `leaseSeconds`).
    * Timing starts before the claim, so it overestimates the lease already used. The
    * next publish is predicted from the slowest one so far, so an unusually slow publish
    * started near the end of the lease can still be delivered twice.
@@ -219,7 +249,7 @@ export class OutboxProcessor {
     )
     let published = 0
     let failed = 0
-    let slowestMs = 0
+    let slowestMs = this.#slowestPublishMs
 
     for (const [index, event] of events.entries()) {
       const eventStartedAt = this.#now()

@@ -411,3 +411,103 @@ describe("OutboxProcessor.drainOnce against one lease for the whole batch", () =
     expect(await processor.drainOnce()).toEqual({ claimed: 3, published: 1, failed: 0 })
   })
 })
+
+describe("OutboxProcessor slowestPublishMs floor", () => {
+  // The issue's case: a 30-second lease, 1-second publishes, and event 29 takes 5
+  // seconds and starts at 28 seconds, where 28 + 1 < 30 lets the unfloored drain go on.
+  const LEASE_SECONDS = 30
+
+  async function runTwoWorkers(slowestPublishMs: number | undefined) {
+    const clock = { now: 0 }
+    const repository = new LeasedRepository(clock, 50, true)
+    const deliveries = new Map<string, number>()
+    let secondRan = false
+    const publisher = {
+      async publish(e: OutboxEvent) {
+        deliveries.set(e.id, (deliveries.get(e.id) ?? 0) + 1)
+        clock.now += e.id === "29" ? 5_000 : 1_000
+        // A second worker polls once the first worker's lease is over.
+        if (clock.now >= LEASE_SECONDS * 1000 && !secondRan) {
+          secondRan = true
+          await second.drainOnce()
+        }
+      },
+    }
+    const options = { leaseSeconds: LEASE_SECONDS, now: () => clock.now, slowestPublishMs }
+    const first = new OutboxProcessor(repository, publisher, options)
+    const second = new OutboxProcessor(repository, publisher, options)
+    const firstResult = await first.drainOnce()
+    // Then a worker keeps draining until the queue is empty, as `run` would.
+    while ((await second.drainOnce()).claimed > 0) clock.now += 1
+    return {
+      firstResult,
+      duplicated: [...deliveries].filter(([, n]) => n > 1).map(([id]) => id),
+      delivered: deliveries.size,
+    }
+  }
+
+  it("never delivers a publish no slower than the floor twice, even when it is the slowest so far", async () => {
+    const { duplicated, delivered } = await runTwoWorkers(5_000)
+
+    expect(duplicated).toEqual([])
+    expect(delivered).toBe(50)
+  })
+
+  it("keeps today's prediction when the floor is left out, so the same case delivers event 29 twice", async () => {
+    const { firstResult, duplicated } = await runTwoWorkers(undefined)
+
+    expect(firstResult).toEqual({ claimed: 50, published: 29, failed: 0 })
+    expect(duplicated).toEqual(["29"])
+  })
+
+  it("stops earlier than the observed slowest publish would when the floor is larger", async () => {
+    const clock = { now: 0 }
+    const repository = new LeasedRepository(clock, 50, true)
+    const processor = new OutboxProcessor(repository, {
+      publish: () => {
+        clock.now += 1_000
+        return Promise.resolve()
+      },
+    }, { leaseSeconds: LEASE_SECONDS, now: () => clock.now, slowestPublishMs: 5_000 })
+
+    // After 25 publishes, 25 s + 5 s reaches the 30 s lease.
+    expect(await processor.drainOnce()).toEqual({ claimed: 50, published: 25, failed: 0 })
+  })
+
+  it("lets an observed publish slower than the floor raise the prediction", async () => {
+    const clock = { now: 0 }
+    const repository = new LeasedRepository(clock, 50, true)
+    const processor = new OutboxProcessor(repository, {
+      publish: () => {
+        clock.now += 10_000
+        return Promise.resolve()
+      },
+    }, { leaseSeconds: LEASE_SECONDS, now: () => clock.now, slowestPublishMs: 1_000 })
+
+    // After the first 10 s publish the prediction is 10 s, not the 1 s floor: the second
+    // runs (10 + 10 < 30), the third would reach 20 + 10 = 30 s.
+    expect(await processor.drainOnce()).toEqual({ claimed: 50, published: 2, failed: 0 })
+  })
+
+  it("still tries the first event of a batch whatever the floor is", async () => {
+    const clock = { now: 0 }
+    const repository = new LeasedRepository(clock, 3, true)
+    const processor = new OutboxProcessor(repository, {
+      publish: () => Promise.resolve(),
+    }, { leaseSeconds: 1, now: () => clock.now, slowestPublishMs: 60_000 })
+
+    expect(await processor.drainOnce()).toEqual({ claimed: 3, published: 1, failed: 0 })
+  })
+
+  it("refuses a negative, infinite or NaN floor at construction", () => {
+    const repository = new LeasedRepository({ now: 0 }, 0, true)
+    const publisher = { publish: () => Promise.resolve() }
+
+    for (const bad of [-1, Infinity, -Infinity, NaN]) {
+      expect(() => new OutboxProcessor(repository, publisher, { slowestPublishMs: bad }))
+        .toThrow(RangeError)
+    }
+    expect(() => new OutboxProcessor(repository, publisher, { slowestPublishMs: 0 }))
+      .not.toThrow()
+  })
+})

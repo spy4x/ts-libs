@@ -1708,7 +1708,12 @@ does not depend on how a caller configured their pool.
 invisible is pushing `available_at` forward by the lease. A worker that dies mid-publish releases its
 rows once the lease elapses rather than stranding them, but if the first worker's publish was still
 in flight when the lease ran out, a second worker can deliver the same event. A publisher that cannot
-tolerate a duplicate needs its own idempotency key; nothing on the SQL side removes this trade. What
+tolerate a duplicate needs its own idempotency key; nothing on the SQL side removes this trade. The
+drain narrows the window: it stops a batch before an event it predicts would outlast the lease, using
+the slowest publish seen so far. Passing `slowestPublishMs` (the slowest publish you expect) sets a
+floor for that prediction, so a publish no slower than it is never delivered twice because of the
+lease. A worker that crashes mid-publish, and a publish slower than `slowestPublishMs`, stay outside
+that rule. What
 `FOR UPDATE SKIP LOCKED` does guarantee — that two connections claiming at the same time never both
 receive the same row — is pinned by `never claims the same row from two connections at once`, which
 opens an explicit transaction on one connection and claims from a second one while the first is still
