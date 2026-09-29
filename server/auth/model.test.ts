@@ -3,6 +3,10 @@ import { describe, it } from "@std/testing/bdd"
 import { AuthConflictError, ChallengeOutcome, MAX_EMAIL_LENGTH, normalizeEmail } from "./model.ts"
 
 describe("normalizeEmail", () => {
+  it("caps an address at 254 characters, the limit the postgres CHECK repeats", () => {
+    expect(MAX_EMAIL_LENGTH).toBe(254)
+  })
+
   it("normalises case variants of one address to the same value", () => {
     expect(normalizeEmail("A@X.com")).toBe("a@x.com")
     expect(normalizeEmail("a@x.com")).toBe("a@x.com")
