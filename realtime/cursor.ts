@@ -208,7 +208,8 @@ export interface PersistentCursorStoreOptions {
  * floor, so every connect re-downloaded everything: a checkpoint that does not survive a reload is
  * not a checkpoint. Here the cursors and the last successful sync timestamp are written through an
  * injected {@link KeyValueStore}, the store is read lazily on first use rather than at import time,
- * and a corrupt or unreadable entry is treated as absent (fail closed to a full pull).
+ * and an entry that does not parse is treated as absent (fail closed to a full pull). A read that
+ * throws reaches the caller, and the next call loads again.
  */
 export class PersistentCursorStore {
   readonly #tracker = new CursorTracker()
@@ -326,7 +327,7 @@ export class PersistentCursorStore {
   }
 
   /**
-   * Read durable state once, on first use.
+   * Read durable state on first use, and again on every call until a read succeeds.
    *
    * The group index is written alongside the cursors because a key/value store cannot enumerate its
    * keys. An entry that does not parse is skipped rather than guessed at: resuming from a wrong
