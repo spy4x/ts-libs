@@ -177,8 +177,9 @@ keeps the process's own shape rather than the house `{ success, output, error }`
 has two streams and an exit code callers branch on. An optional `signal` bounds a command:
 `runCommand(cmd, { signal: AbortSignal.timeout(30_000) })` kills the child with `SIGTERM` on abort
 and resolves with `success: false` and `signal: "SIGTERM"`, and an already-aborted signal never
-starts it. `stdin` stays `"inherit"` by default, as it was before the option existed; `"null"`
-gives the child end-of-file instead of the caller's terminal. The spawner is injectable, because
+starts it. `stdin` defaults to `"null"`, so a child that reads input gets end-of-file at once, which
+is what it already got before the option existed; `"inherit"` hands it the caller's own standard
+input. The spawner is injectable, because
 the unit tier has no `--allow-run`; there is no real-process test for the same reason (the
 integration tier has none either).
 
@@ -439,8 +440,9 @@ Consequences a consumer should know:
 
 Arktype predicates for untrusted text: `headerSafeString`, `textSafeString`, `honeypotField`,
 `timeZoneName`, and `emailAddress` with its plain check `isEmailAddress`. The email check is
-`isAddress` from `@spy4x/email/address` plus its exported 254-character `MAX_ADDR_SPEC_LENGTH`, not a second pattern, so a form
-and the sender agree on what an address is; `platform` imports `email` and never the other way round.
+`isAddress` from `@spy4x/email/address` plus that module's exported 254-character limit,
+`MAX_ADDR_SPEC_LENGTH`, not a second pattern or a second number, so a form and the sender agree on
+what an address is; `platform` imports `email` and never the other way round.
 
 ## Servers, clocks and timers are injected
 

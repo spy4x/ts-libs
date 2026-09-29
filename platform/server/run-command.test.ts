@@ -80,6 +80,7 @@ describe("runCommand", () => {
         args: ["log", "a b; rm"],
         cwd: "/repo",
         env: { A: "1" },
+        stdin: "null",
         stdout: "piped",
         stderr: "piped",
       },
@@ -131,6 +132,16 @@ describe("runCommand", () => {
     expect("signal" in result).toBe(false)
   })
 
+  it("gives the child no standard input when stdin is not set", async () => {
+    const seen: SpawnOptions[] = []
+    const spawn: CommandSpawner = (_command, options) => {
+      seen.push(options)
+      return { output: () => Promise.resolve({ success: true, code: 0, ...bytes("", "") }) }
+    }
+    await runCommand(["cat"], { spawn })
+    expect(seen[0].stdin).toBe("null")
+  })
+
   it("passes stdin and the abort signal to the spawner when given", async () => {
     const seen: SpawnOptions[] = []
     const spawn: CommandSpawner = (_command, options) => {
@@ -138,8 +149,8 @@ describe("runCommand", () => {
       return { output: () => Promise.resolve({ success: true, code: 0, ...bytes("", "") }) }
     }
     const signal = new AbortController().signal
-    await runCommand(["cat"], { spawn, stdin: "null", signal })
-    expect(seen[0].stdin).toBe("null")
+    await runCommand(["cat"], { spawn, stdin: "inherit", signal })
+    expect(seen[0].stdin).toBe("inherit")
     expect(seen[0].signal).toBe(signal)
   })
 })

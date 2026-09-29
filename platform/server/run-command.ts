@@ -14,9 +14,11 @@
  *
  * A caller that must not wait forever passes `signal`: aborting it kills the child (`SIGTERM`), and
  * the result comes back with `success: false` and `signal: "SIGTERM"` rather than a throw. A signal
- * that is already aborted never starts the process. `stdin` defaults to `"inherit"`, as before
- * these options existed; pass `"null"` so a child that reads standard input sees end-of-file
- * instead of waiting on the caller's terminal.
+ * that is already aborted never starts the process. `stdin` defaults to `"null"`, so a child that
+ * reads standard input sees end-of-file at once. That is what `Deno.Command(...).output()` already
+ * gave the child before the option existed (despite Deno's docs saying `"inherit"`); it is passed
+ * explicitly so a Deno release cannot change it. Pass `"inherit"` to hand the child the caller's
+ * own standard input, such as data piped into `restic backup --stdin`.
  *
  * The spawner is injected. The root `test` task grants no `--allow-run`, so the tests pass a fake
  * shaped like `Deno.Command`; the default spawner is `new Deno.Command(...)`.
@@ -41,9 +43,9 @@ export interface SpawnOptions {
   env?: Record<string, string>
   stdout: "piped"
   stderr: "piped"
-  /** Standard input of the child; passed only when the caller set {@link RunCommandOptions.stdin}. */
+  /** Standard input of the child: always passed, `"null"` unless the caller set another. */
   stdin?: RunCommandStdin
-  /** Kills the child when aborted; passed only when the caller set {@link RunCommandOptions.signal}. */
+  /** Kills the child when aborted; passed only when the caller set one. */
   signal?: AbortSignal
 }
 
@@ -66,14 +68,16 @@ export interface RunCommandOptions {
   /** Extra environment variables, added to the inherited ones. */
   env?: Record<string, string>
   /**
-   * Standard input of the child. Defaults to `"inherit"`, the behaviour before this option existed;
-   * `"null"` keeps a child that reads input from waiting on the caller's terminal.
+   * Standard input of the child. Defaults to `"null"`: a read gets end-of-file at once, which is
+   * what the child got before this option existed. `"inherit"` hands it the caller's own input.
    */
   stdin?: RunCommandStdin
   /**
    * Aborting it kills the child with `SIGTERM`; the result then has `success: false` and `signal`
    * set. Already aborted: the process never starts, and the result has `code: -1` and `error`.
-   * `AbortSignal.timeout(ms)` bounds a command in time.
+   * `AbortSignal.timeout(ms)` bounds a command in time. The kill is the spawner's job: the
+   * default `Deno.Command` does it, but a custom `spawn` that ignores the signal makes the call
+   * wait for the child to exit by itself.
    */
   signal?: AbortSignal
   /** Spawner override, for tests. Defaults to `new Deno.Command(...)`. */
@@ -92,7 +96,7 @@ export interface RunCommandResult {
   stderr: string
   /** Set only when the process could not be started: why. Absent when it ran, even if it failed. */
   error?: string
-  /** The signal that killed the process (`"SIGTERM"` after an abort). Absent when it exited itself. */
+  /** The signal that killed the process (`"SIGTERM"` after an abort); absent if it exited. */
   signal?: Deno.Signal
 }
 
@@ -121,7 +125,7 @@ export async function runCommand(
       args,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
-      ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
+      stdin: options.stdin ?? "null",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       stdout: "piped",
       stderr: "piped",
