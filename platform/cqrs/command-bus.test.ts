@@ -160,6 +160,20 @@ describe("CommandBus middleware", () => {
     expect(await bus.execute(new PingCommand({ value: "direct" }))).toEqual({ value: "direct" })
   })
 
+  it("throws for a missing handler before any middleware runs", async () => {
+    let middlewareRan = false
+    const bus = new CommandBus()
+    bus.use((_message, next) => {
+      middlewareRan = true
+      return next()
+    })
+
+    await expect(bus.execute(new PingCommand({ value: "x" }))).rejects.toThrow(
+      "No handler registered for command: PingCommand",
+    )
+    expect(middlewareRan).toBe(false)
+  })
+
   it("keeps a middleware added during a dispatch out of that dispatch", async () => {
     let lateRuns = 0
     const bus = new CommandBus()

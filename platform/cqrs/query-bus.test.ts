@@ -106,4 +106,21 @@ describe("QueryBus middleware", () => {
 
     expect(await bus.execute(new PingQuery({ value: "direct" }))).toEqual({ value: "direct" })
   })
+
+  it("keeps a middleware added during a dispatch out of that dispatch", async () => {
+    let lateRuns = 0
+    const bus = new QueryBus()
+    bus.use((_message, next) => {
+      bus.use((_m, innerNext) => {
+        lateRuns++
+        return innerNext()
+      })
+      return next()
+    })
+    bus.register(PingQuery, (query) => Promise.resolve({ value: query.data.value }))
+
+    await bus.execute(new PingQuery({ value: "x" }))
+
+    expect(lateRuns).toBe(0)
+  })
 })
