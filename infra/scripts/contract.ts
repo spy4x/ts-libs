@@ -1,6 +1,7 @@
 // Writes `docs/1.0-contract.md`: for each entry point the template will import, its exported names
 // and their signatures, taken from `deno doc`. Run with `deno task contract`. The list of entry
-// points below is the only hand-written part; every name and signature comes from the code.
+// points come from the `exports` map of every workspace member's `deno.json`, grouped under one heading per
+// package and sorted; every name and signature comes from the code.
 //
 // A signature is the declaration line `deno doc` prints and, for a class or an interface, the lines
 // of its public members; an enum's members and their values come from `deno doc --json`. JSDoc prose is left out: the contract is names, parameters and return
@@ -11,79 +12,52 @@ const OUTPUT = "docs/1.0-contract.md"
 interface Entry {
   /** The import specifier the template will write. */
   specifier: string
-  /** The capability row in #77's 1.0 table this entry serves. */
-  capability: string
+  /** The package the entry belongs to, as its directory name; the document groups by it. */
+  pkg: string
 }
 
-const ENTRIES: Entry[] = [
-  { specifier: "@spy4x/validation", capability: "schema validation" },
-  { specifier: "@spy4x/platform/cqrs", capability: "command, query and event bus" },
-  { specifier: "@spy4x/platform/cache", capability: "cache with `wrap()`" },
-  { specifier: "@spy4x/platform/tokens", capability: "random tokens" },
-  { specifier: "@spy4x/platform/signed-payload", capability: "signed payloads (#202)" },
-  { specifier: "@spy4x/platform/rate-limit", capability: "rate limiting" },
-  { specifier: "@spy4x/platform/rate-limit/hono", capability: "rate limiting" },
-  { specifier: "@spy4x/platform/api", capability: "shared API and model types" },
-  { specifier: "@spy4x/platform/request-info", capability: "shared API and model types" },
-  { specifier: "@spy4x/platform/model", capability: "shared API and model types" },
-  { specifier: "@spy4x/server/kv", capability: "Redis key-value store" },
-  { specifier: "@spy4x/server/outbox", capability: "transactional outbox" },
-  {
-    specifier: "@spy4x/server/sign-in",
-    capability: "session, cookie, TOTP, password hash, auth guards",
-  },
-  {
-    specifier: "@spy4x/server/auth",
-    capability: "password sign-up and sign-in, mail codes, OAuth (the account model and store)",
-  },
-  {
-    specifier: "@spy4x/server/auth/postgres",
-    capability: "password sign-up and sign-in, mail codes, OAuth (the account model and store)",
-  },
-  {
-    specifier: "@spy4x/server/auth/password",
-    capability: "password sign-up and sign-in, mail codes, OAuth (password)",
-  },
-  {
-    specifier: "@spy4x/server/auth/email-code",
-    capability: "password sign-up and sign-in, mail codes, OAuth (mail codes)",
-  },
-  {
-    specifier: "@spy4x/server/auth/oauth",
-    capability: "password sign-up and sign-in, mail codes, OAuth (OAuth)",
-  },
-  {
-    specifier: "@spy4x/server/auth/oauth-google",
-    capability: "password sign-up and sign-in, mail codes, OAuth (Google)",
-  },
-  { specifier: "@spy4x/server/request-log", capability: "request logging" },
-  { specifier: "@spy4x/server/config", capability: "typed config from the environment" },
-  { specifier: "@spy4x/server/crypto", capability: "field encryption" },
-  { specifier: "@spy4x/server/db", capability: "Postgres access, transactions, migrations" },
-  {
-    specifier: "@spy4x/server/db/migrate",
-    capability: "Postgres access, transactions, migrations",
-  },
-  {
-    specifier: "@spy4x/server/db/postgres",
-    capability: "Postgres access, transactions, migrations",
-  },
-  { specifier: "@spy4x/server/env-age64", capability: "age64 env encryption (#173)" },
-  { specifier: "@spy4x/platform/browser/cookie", capability: "reading a browser cookie (#140)" },
-  {
-    specifier: "@spy4x/server/http/bounded-body",
-    capability: "size-capped request bodies, and JSON bodies for Hono routes",
-  },
-  {
-    specifier: "@spy4x/server/http/same-origin",
-    capability: "same-origin guard for cookie-authenticated mutations (#186)",
-  },
-  {
-    specifier: "@spy4x/platform/server/shutdown-signal",
-    capability: "SIGINT and SIGTERM as an AbortSignal for a worker (#187)",
-  },
-  { specifier: "@spy4x/net/ip", capability: "IP address parsing and CIDR ranges (#221)" },
-]
+/** The `workspace` member directories named in the root `deno.jsonc` text, without `./`. */
+export function workspaceDirs(rootConfigText: string): string[] {
+  const list = rootConfigText.match(/"workspace"\s*:\s*\[([^\]]*)\]/)
+  if (list === null) throw new Error(`the root deno.jsonc has no "workspace" list`)
+  return [...list[1].matchAll(/"\.?\/?([^"]+)"/g)].map((match) => match[1])
+}
+
+/**
+ * Every published entry point: one per `exports` key of each workspace member, so a key added to a
+ * member's `deno.json` joins the contract without a script edit. `readConfig` returns a member's
+ * parsed `deno.json`, or `undefined` when its directory does not exist (Deno skips such a member
+ * too). The result is sorted by specifier, so the output does not depend on member or key order.
+ * `"."` becomes the bare package name; `"./tz"` becomes `@spy4x/<dir>/tz`.
+ */
+export function entriesFrom(
+  dirs: string[],
+  readConfig: (dir: string) => { exports?: Record<string, string> | string } | undefined,
+): Entry[] {
+  const entries: Entry[] = []
+  for (const dir of dirs) {
+    const config = readConfig(dir)
+    if (config === undefined) continue
+    const exports = typeof config.exports === "string" ? { ".": config.exports } : config.exports
+    for (const key of Object.keys(exports ?? {})) {
+      entries.push({ specifier: `@spy4x/${dir}${key.replace(/^\./, "")}`, pkg: dir })
+    }
+  }
+  return entries.sort((a, b) => a.specifier.localeCompare(b.specifier))
+}
+
+async function loadEntries(): Promise<Entry[]> {
+  const dirs = workspaceDirs(await Deno.readTextFile("deno.jsonc"))
+  const configs = new Map<string, { exports?: Record<string, string> }>()
+  for (const dir of dirs) {
+    try {
+      configs.set(dir, JSON.parse(await Deno.readTextFile(`${dir}/deno.json`)))
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error
+    }
+  }
+  return entriesFrom(dirs, (dir) => configs.get(dir))
+}
 
 /**
  * Capabilities in #77's table that have no entry point ready yet, each with the issue that holds it.
@@ -219,9 +193,9 @@ async function entrySection(entry: Entry): Promise<string> {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map((lines) => lines.join("\n"))
   return [
-    `## \`${entry.specifier}\``,
+    `### \`${entry.specifier}\``,
     "",
-    `Capability: ${entry.capability}. Source: \`${file}\`.`,
+    `Source: \`${file}\`.`,
     "",
     "```text",
     rendered.join("\n\n"),
@@ -230,36 +204,46 @@ async function entrySection(entry: Entry): Promise<string> {
   ].join("\n")
 }
 
-const sections = []
-for (const entry of ENTRIES) sections.push(await entrySection(entry))
+async function main() {
+  const ENTRIES = await loadEntries()
+  const sections = []
+  let previous = ""
+  for (const entry of ENTRIES) {
+    if (entry.pkg !== previous) sections.push(`## Package \`@spy4x/${entry.pkg}\`\n`)
+    previous = entry.pkg
+    sections.push(await entrySection(entry))
+  }
 
-const document = [
-  "# 1.0 contract — first draft",
-  "",
-  "Generated by `deno task contract` from the code on the branch it runs on. Do not edit by hand;",
-  "change the code or the entry list in `infra/scripts/contract.ts`, then run the task again.",
-  "",
-  'This is the frame for condition 2 in #77 ("The interfaces are frozen at 1.0"): for each entry',
-  "point the template will import, its exported names and their signatures. After 1.0, a change to",
-  "anything listed here is additive or waits for 2.0. JSDoc is left out; the code holds it.",
-  "",
-  "Each signature is `deno doc`'s own text rendering. That rendering leaves out a method's own type",
-  "parameters (`register<T extends Command<unknown, unknown>>(…)` prints as `register(…)`) and",
-  "prints a mapped type without its braces. It also leaves out a parameter's default value, so a",
-  "parameter with a default (`init: RequestInit = {}`) reads as required here although a caller may",
-  "omit it. Where a line here and the source file named under its heading differ, the source file",
-  "is the contract.",
-  "",
-  ...(NOT_READY.length === 0 ? [] : [
-    "Not in this draft, because no entry point is ready yet:",
+  const document = [
+    "# 1.0 contract — first draft",
     "",
-    ...NOT_READY.map((line) => `- ${line}`),
+    "Generated by `deno task contract` from the code on the branch it runs on. Do not edit by hand;",
+    "change the code or an `exports` map, then run the task again.",
     "",
-  ]),
-  ...sections,
-].join("\n")
+    'This is the frame for condition 2 in #77 ("The interfaces are frozen at 1.0"): for each entry',
+    "point the template will import, its exported names and their signatures. After 1.0, a change to",
+    "anything listed here is additive or waits for 2.0. JSDoc is left out; the code holds it.",
+    "",
+    "Each signature is `deno doc`'s own text rendering. That rendering leaves out a method's own type",
+    "parameters (`register<T extends Command<unknown, unknown>>(…)` prints as `register(…)`) and",
+    "prints a mapped type without its braces. It also leaves out a parameter's default value, so a",
+    "parameter with a default (`init: RequestInit = {}`) reads as required here although a caller may",
+    "omit it. Where a line here and the source file named under its heading differ, the source file",
+    "is the contract.",
+    "",
+    ...(NOT_READY.length === 0 ? [] : [
+      "Not in this draft, because no entry point is ready yet:",
+      "",
+      ...NOT_READY.map((line) => `- ${line}`),
+      "",
+    ]),
+    ...sections,
+  ].join("\n")
 
-await Deno.writeTextFile(OUTPUT, document)
-const fmt = await new Deno.Command("deno", { args: ["fmt", "--quiet", OUTPUT] }).output()
-if (fmt.code !== 0) throw new Error(`deno fmt ${OUTPUT} failed`)
-console.log(`wrote ${OUTPUT}: ${ENTRIES.length} entry points`)
+  await Deno.writeTextFile(OUTPUT, document)
+  const fmt = await new Deno.Command("deno", { args: ["fmt", "--quiet", OUTPUT] }).output()
+  if (fmt.code !== 0) throw new Error(`deno fmt ${OUTPUT} failed`)
+  console.log(`wrote ${OUTPUT}: ${ENTRIES.length} entry points`)
+}
+
+if (import.meta.main) await main()
