@@ -334,32 +334,42 @@ export class PersistentCursorStore {
    */
   #ensureLoaded(): void {
     if (this.#loaded) return
-    this.#loaded = true
+
+    // Read everything into locals and commit at the end: a read that throws part-way leaves the
+    // store untouched and still unloaded, so the error reaches the caller and the next call retries
+    // from scratch instead of writing back a half-filled group index.
+    let syncedAt: number | null = null
+    const restored: Array<[string, number]> = []
 
     const storedSyncedAt = this.#storage.getItem(this.#key("syncedAt"))
     if (storedSyncedAt !== null) {
       const parsed = Number(storedSyncedAt)
-      if (Number.isFinite(parsed)) this.#syncedAt = parsed
+      if (Number.isFinite(parsed)) syncedAt = parsed
     }
 
     const index = this.#storage.getItem(this.#key("groups"))
-    if (index === null) return
-    let groupIds: unknown
-    try {
-      groupIds = JSON.parse(index)
-    } catch {
-      return
+    if (index !== null) {
+      let groupIds: unknown
+      try {
+        groupIds = JSON.parse(index)
+      } catch {
+        groupIds = null
+      }
+      if (Array.isArray(groupIds)) {
+        for (const groupId of groupIds) {
+          if (typeof groupId !== "string") continue
+          const raw = this.#storage.getItem(this.#cursorKey(groupId))
+          if (raw === null) continue
+          const sequence = Number(raw)
+          if (!Number.isFinite(sequence) || sequence < SEQUENCE_START) continue
+          restored.push([groupId, sequence])
+        }
+      }
     }
-    if (!Array.isArray(groupIds)) return
 
-    for (const groupId of groupIds) {
-      if (typeof groupId !== "string") continue
-      const raw = this.#storage.getItem(this.#cursorKey(groupId))
-      if (raw === null) continue
-      const sequence = Number(raw)
-      if (!Number.isFinite(sequence) || sequence < SEQUENCE_START) continue
-      this.#tracker.restore(groupId, sequence)
-    }
+    this.#syncedAt = syncedAt
+    for (const [groupId, sequence] of restored) this.#tracker.restore(groupId, sequence)
+    this.#loaded = true
   }
 
   #writeCursor(groupId: string, sequence: number): void {
