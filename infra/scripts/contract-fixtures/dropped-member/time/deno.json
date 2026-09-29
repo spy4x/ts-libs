@@ -1,0 +1,1 @@
+{ "name": "@spy4x/time", "exports": { ".": "./mod.ts" } }
