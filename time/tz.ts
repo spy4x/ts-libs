@@ -616,7 +616,7 @@ export function minToHHMM(minutes: number): string {
 }
 
 /**
- * `tz` in the spelling this runtime's zone list uses, without ever renaming a zone.
+ * `tz` with its spelling normalised where that is safe, never renamed to another zone name.
  *
  * Fixes only what is safe to fix, in this order:
  *
@@ -657,7 +657,9 @@ export function canonicalValidTimeZoneOrNull(value: string | undefined | null): 
 
 /**
  * {@link canonicalTimeZone} of `value` when it is a real zone, `fallback` otherwise. Unlike
- * {@link validTimeZoneOr}, the answer is canonical, so it is stable for a redirect or a cache key.
+ * {@link validTimeZoneOr}, the answer is normalised: passing it back in returns the same string, so
+ * a redirect settles after one hop. It is not a key for the zone: `Asia/Kolkata` and
+ * `Asia/Calcutta` stay distinct.
  */
 export function canonicalTimeZoneOr(value: string | undefined, fallback: string): string {
   return canonicalValidTimeZoneOrNull(value) ?? fallback

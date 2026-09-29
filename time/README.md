@@ -308,7 +308,9 @@ zoneOffsetLabel("America/New_York", new Date("2026-07-15T12:00:00Z")) // "UTC-4"
 ```
 
 `canonicalTimeZone` never renames a zone. It returns a name the runtime lists as it is, resolves
-slash-less aliases (`Japan`), and fixes letter case. For any other spelling it asks `Intl` and keeps
+slash-less aliases (`Japan`), and fixes letter case when `Intl` spells the same name
+(`america/new_york`); a miscased name that `Intl` would rename (`asia/kolkata`) comes back unchanged.
+For any other spelling it asks `Intl` and keeps
 the answer only if it is the same name in other casing; otherwise it returns the input unchanged.
 ICU decides which name is canonical, and Deno's answers `Asia/Calcutta` for `Asia/Kolkata`, so
 following it would turn modern names into legacy ones. The consequence: `US/Eastern` and
