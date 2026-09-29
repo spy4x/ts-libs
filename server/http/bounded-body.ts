@@ -34,14 +34,22 @@
  * overall deadline: it bounds the wait for the *next* chunk, so a slow-but-live
  * upload may take as long as it needs while a hung one fails fast.
  *
+ * `readJsonBody` is this module's own addition for Hono apps: it reads a request's JSON body
+ * through the canonical `readBoundedJson` and turns its failures into `HTTPException`s (413, 408
+ * and 400), so every route does not repeat that mapping.
+ *
  * @module
  */
 
+import type { Context } from "hono"
+import { HTTPException } from "hono/http-exception"
 import {
   type BodyReadOptions,
+  BodyReadTimeoutError,
   parseBoundedFormData,
   PayloadTooLargeError,
   readBoundedBody,
+  readBoundedJson,
   readBoundedText,
   readContentLength,
 } from "@spy4x/net/bounded-body"
@@ -79,3 +87,54 @@ export type BoundedBodyTimeout = Pick<BodyReadOptions, "timeoutMs">
  * `Request` and `Response` both satisfy it.
  */
 export type { BodySource } from "@spy4x/net/bounded-body"
+
+/** Message of the 413 {@link readJsonBody} throws when the body is over the cap. */
+export const JSON_BODY_TOO_LARGE = "Request body too large"
+
+/** Message of the 408 {@link readJsonBody} throws when the body stalls. */
+export const JSON_BODY_TIMEOUT = "Request body timed out"
+
+/** Message of the 400 {@link readJsonBody} throws when the body is not JSON. */
+export const JSON_BODY_INVALID = "Request body is not valid JSON"
+
+/**
+ * Read a Hono request's body as JSON under the byte cap and stall budget, and turn each way it can
+ * fail into the HTTP status a client should see. Use it in place of `c.req.json()`, which buffers a
+ * body of any size and throws a plain `SyntaxError` that Hono answers with 500.
+ *
+ * It throws Hono's `HTTPException`, so a route with no `onError` answers with the right status on
+ * its own, and a route with its own error shape catches it and reads `status`. The original error
+ * is kept as `cause`. An empty body is not JSON and gets 400.
+ *
+ * The result is `unknown` by default: validate it (arktype) before using it.
+ *
+ * @param c The Hono context. Its raw request body is read once, so do not read it elsewhere.
+ * @param options `maxBytes` (default 5 MiB) and `timeoutMs`, the per-chunk stall budget (default
+ * 10 s).
+ * @throws {HTTPException} 413 ({@link JSON_BODY_TOO_LARGE}) when the body, or its declared
+ * `content-length`, is over `maxBytes`.
+ * @throws {HTTPException} 408 ({@link JSON_BODY_TIMEOUT}) when no chunk arrives within
+ * `timeoutMs`.
+ * @throws {HTTPException} 400 ({@link JSON_BODY_INVALID}) when the body is not valid JSON.
+ * @throws Any other error unchanged, such as the `RangeError` for a `maxBytes` that is not finite,
+ * or a `TypeError` for a body that was already read.
+ */
+export async function readJsonBody<T = unknown>(
+  c: Context,
+  options: BodyReadOptions = {},
+): Promise<T> {
+  try {
+    return await readBoundedJson<T>(c.req.raw, options)
+  } catch (error) {
+    if (error instanceof PayloadTooLargeError) {
+      throw new HTTPException(413, { message: JSON_BODY_TOO_LARGE, cause: error })
+    }
+    if (error instanceof BodyReadTimeoutError) {
+      throw new HTTPException(408, { message: JSON_BODY_TIMEOUT, cause: error })
+    }
+    if (error instanceof SyntaxError) {
+      throw new HTTPException(400, { message: JSON_BODY_INVALID, cause: error })
+    }
+    throw error
+  }
+}

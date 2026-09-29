@@ -2,10 +2,11 @@
 
 Server-side primitives and adapters for Hono and Fresh apps. Two groups today:
 
-- **HTTP** — bounded request bodies, CORS origin allow-listing, a same-origin guard against
-  cross-site request forgery, bearer-token verification, export envelopes, static-file serving and a
-  distroless healthcheck. `hono` is the one runtime dependency, pinned in the root import map:
-  `http/same-origin.ts` is Hono middleware and parses the cookie header with `hono/cookie`.
+- **HTTP** — bounded request bodies, CORS origin allow-listing, same-origin guards against
+  cross-site request forgery and WebSocket hijacking, bearer-token verification, export envelopes,
+  static-file serving and a distroless healthcheck. `hono` is the one runtime dependency, pinned in
+  the root import map: `http/same-origin.ts` is Hono middleware and parses the cookie header with
+  `hono/cookie`, and `readJsonBody` in `http/bounded-body.ts` throws Hono's `HTTPException`.
   `cors.ts` imports nothing — only `cors.test.ts` imports the `hono/cors` resolver type, for its own
   assertions.
 - **Storage** — the `FileStorage` port with a local-filesystem provider, an S3-compatible provider
@@ -23,10 +24,10 @@ Runs on: server (Deno).
 
 | Export                            | What it is                                                                           |
 | --------------------------------- | ------------------------------------------------------------------------------------ |
-| `@spy4x/server/http/bounded-body` | Byte-capped, stall-budgeted request body reading; canonical `PayloadTooLargeError`   |
+| `@spy4x/server/http/bounded-body` | Byte-capped, stall-budgeted request body reading; `readJsonBody` for Hono routes     |
 | `@spy4x/server/http/cors`         | Exact-match origin allowlist and the `hono/cors` origin resolver                     |
 | `@spy4x/server/http/bearer-auth`  | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)    |
-| `@spy4x/server/http/same-origin`  | Hono middleware that refuses cross-site mutations on cookie-authenticated routes     |
+| `@spy4x/server/http/same-origin`  | Hono middleware that refuses cross-site mutations and cross-site WebSocket upgrades  |
 | `@spy4x/server/export`            | Versioned export envelope and `Content-Disposition` download response                |
 | `@spy4x/server/static`            | Static-file serving with a MIME table and path-traversal protection                  |
 | `@spy4x/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
@@ -67,7 +68,8 @@ the sibling `time/` package. Every entry in this package's `exports` must resolv
 ## `server/http/bounded-body`
 
 `readBoundedBody`, `readBoundedText`, `parseBoundedFormData`, `readContentLength`,
-`PayloadTooLargeError`, and the types `ReadBoundedBodyOptions` and `BodySource`.
+`PayloadTooLargeError`, `readJsonBody` with its messages `JSON_BODY_TOO_LARGE`, `JSON_BODY_TIMEOUT`
+and `JSON_BODY_INVALID`, and the types `ReadBoundedBodyOptions` and `BodySource`.
 
 **Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This module is a named
 re-export of it: `PayloadTooLargeError`, `readBoundedBody`, `readBoundedText` and
@@ -83,6 +85,26 @@ to 5 MiB; `timeoutMs` is a **per-chunk stall budget, not a single overall deadli
 slow-but-live upload is never cut off by its own total duration, only by a gap between chunks. A
 stall rejects with the canonical `BodyReadTimeoutError`, importable from
 `@spy4x/net/bounded-body`, rather than the bare `Error` this module threw before the collapse.
+
+`readJsonBody(c, options?)` is this module's own addition for Hono routes, in place of
+`c.req.json()`, which buffers a body of any size and answers malformed JSON with 500. It reads
+`c.req.raw` through the canonical `readBoundedJson` and throws Hono's `HTTPException`: 413 for a
+body over the cap, 408 for a stalled body and 400 for a body that is not JSON, the empty body
+included. A route without `onError` answers with that status on its own; a route with its own error
+shape catches the exception and reads `status`, and the reader's error is kept as `cause`. Any other
+error is rethrown unchanged.
+
+## `server/http/same-origin`
+
+`createSameOriginMutationGuard`, `createSameOriginUpgradeGuard`, `SAFE_METHODS`,
+`SAME_ORIGIN_REFUSED`, and the types `SameOriginGuardOptions` and `SameOriginRefusal`.
+
+The mutation guard lets GET, HEAD and OPTIONS through and refuses any other request unless the
+session cookie is present, `Origin` is an expected origin and `Sec-Fetch-Site` is `same-origin`.
+A WebSocket handshake is a GET, so it passes that guard. The upgrade guard takes the same options
+and refuses every request it sees unless the session cookie is present and `Origin` is exactly an
+expected origin; `Origin: null` is refused and `Sec-Fetch-Site` is not required. Mount it on the
+upgrade route only, before the upgrade handler.
 
 ## `server/http/cors`
 

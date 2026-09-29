@@ -71,6 +71,10 @@ const ENTRIES: Entry[] = [
   { specifier: "@spy4x/server/env-age64", capability: "age64 env encryption (#173)" },
   { specifier: "@spy4x/platform/browser/cookie", capability: "reading a browser cookie (#140)" },
   {
+    specifier: "@spy4x/server/http/bounded-body",
+    capability: "size-capped request bodies, and JSON bodies for Hono routes",
+  },
+  {
     specifier: "@spy4x/server/http/same-origin",
     capability: "same-origin guard for cookie-authenticated mutations (#186)",
   },

@@ -4,6 +4,8 @@ import {
   parseBoundedFormData as netParseBoundedFormData,
   PayloadTooLargeError as NetPayloadTooLargeError,
 } from "@spy4x/net/bounded-body"
+import { Hono } from "hono"
+import { HTTPException } from "hono/http-exception"
 import {
   // `BodySource` and `ReadBoundedBodyOptions` are imported for the compile-time
   // pin only. A type has no runtime presence, so the `in surface` test below can
@@ -13,12 +15,16 @@ import {
   // guard: unexported, they fail here as TS2305.
   type BodySource,
   type BoundedBodyTimeout,
+  JSON_BODY_INVALID,
+  JSON_BODY_TIMEOUT,
+  JSON_BODY_TOO_LARGE,
   parseBoundedFormData,
   PayloadTooLargeError,
   readBoundedBody,
   type ReadBoundedBodyOptions,
   readBoundedText,
   readContentLength,
+  readJsonBody,
 } from "./bounded-body.ts"
 
 const ORIGIN = "http://example.test"
@@ -397,6 +403,10 @@ Deno.test("the entry point republishes the promised surface and nothing else", a
       "readBoundedText",
       "readContentLength",
       "parseBoundedFormData",
+      "readJsonBody",
+      "JSON_BODY_TOO_LARGE",
+      "JSON_BODY_TIMEOUT",
+      "JSON_BODY_INVALID",
     ]
   ) {
     assertStrictEquals(name in surface, true, `${name} disappeared from the surface`)
@@ -434,4 +444,101 @@ Deno.test("BoundedBodyTimeout still types the stall budget", async () => {
   const request = new Request(ORIGIN, { method: "POST", body: "abc" })
 
   assertEquals((await readBoundedBody(request, { ...timeout, maxBytes: 5 })).byteLength, 3)
+})
+
+/**
+ * A real Hono app with one route that reads its body with `readJsonBody` and echoes it. No
+ * `onError`, so Hono's default handler turns the thrown `HTTPException` into the response.
+ */
+function jsonApp(options?: ReadBoundedBodyOptions): Hono {
+  const app = new Hono()
+  app.post("/echo", async (c) => c.json({ body: await readJsonBody(c, options) }))
+  return app
+}
+
+Deno.test("readJsonBody returns the parsed JSON body", async () => {
+  const response = await jsonApp().request(`${ORIGIN}/echo`, {
+    method: "POST",
+    body: JSON.stringify({ name: "Ada", tags: ["a", "b"] }),
+  })
+
+  assertEquals(response.status, 200)
+  assertEquals(await response.json(), { body: { name: "Ada", tags: ["a", "b"] } })
+})
+
+Deno.test("readJsonBody answers 413 when the body is over the cap", async () => {
+  const response = await jsonApp({ maxBytes: 8 }).request(
+    `${ORIGIN}/echo`,
+    streamInit(new Blob(['{"name":"too long"}']).stream()),
+  )
+
+  assertEquals(response.status, 413)
+  assertEquals(await response.text(), JSON_BODY_TOO_LARGE)
+})
+
+Deno.test("readJsonBody answers 413 on a declared content-length over the cap", async () => {
+  const response = await jsonApp({ maxBytes: 8 }).request(`${ORIGIN}/echo`, {
+    method: "POST",
+    body: '{"name":"too long"}',
+  })
+
+  assertEquals(response.status, 413)
+})
+
+Deno.test("readJsonBody answers 408 when the body stalls", async () => {
+  let cancelled = false
+  const response = await jsonApp({ timeoutMs: 20 }).request(
+    `${ORIGIN}/echo`,
+    streamInit(stalledStream(() => cancelled = true)),
+  )
+
+  assertEquals(response.status, 408)
+  assertEquals(await response.text(), JSON_BODY_TIMEOUT)
+  assertEquals(cancelled, true)
+})
+
+Deno.test("readJsonBody answers 400 when the body is not valid JSON", async () => {
+  const response = await jsonApp().request(`${ORIGIN}/echo`, { method: "POST", body: "{name:" })
+
+  assertEquals(response.status, 400)
+  assertEquals(await response.text(), JSON_BODY_INVALID)
+})
+
+Deno.test("readJsonBody answers 400 when the body is empty", async () => {
+  const response = await jsonApp().request(`${ORIGIN}/echo`, { method: "POST" })
+
+  assertEquals(response.status, 400)
+})
+
+Deno.test("readJsonBody keeps the reader's error as the exception's cause", async () => {
+  const causes: unknown[] = []
+  const app = jsonApp({ maxBytes: 4 })
+  app.onError((error, c) => {
+    if (!(error instanceof HTTPException)) throw error
+    causes.push(error.cause)
+    return c.json({ error: "INVALID_REQUEST" }, error.status)
+  })
+
+  const tooLarge = await app.request(`${ORIGIN}/echo`, { method: "POST", body: "[1,2,3]" })
+  const invalid = await app.request(`${ORIGIN}/echo`, { method: "POST", body: "{" })
+
+  assertEquals(tooLarge.status, 413)
+  assertEquals(invalid.status, 400)
+  assertEquals(await invalid.json(), { error: "INVALID_REQUEST" })
+  assertStrictEquals(causes[0] instanceof NetPayloadTooLargeError, true)
+  assertStrictEquals(causes[1] instanceof SyntaxError, true)
+})
+
+Deno.test("readJsonBody rethrows an error that is not about the body", async () => {
+  const errors: unknown[] = []
+  const app = jsonApp({ maxBytes: Number.NaN })
+  app.onError((error, c) => {
+    errors.push(error)
+    return c.text("failed", 500)
+  })
+
+  const response = await app.request(`${ORIGIN}/echo`, { method: "POST", body: "{}" })
+
+  assertEquals(response.status, 500)
+  assertStrictEquals(errors[0] instanceof RangeError, true)
 })
