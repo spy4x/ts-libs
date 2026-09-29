@@ -38,12 +38,39 @@
 import { err, ok, type Result } from "./result.ts"
 
 /**
+ * Optional, additive overrides for {@link formatMoney}, {@link formatMoneyParts},
+ * {@link parseMoney} and {@link currencyDecimals}.
+ *
+ * `Intl` only knows ISO 4217: it rejects a code such as `USDT` and gives `BTC` two decimals. A
+ * caller that holds such an asset states its decimals here instead.
+ */
+export interface MoneyOptions {
+  /**
+   * How many fraction digits the smallest unit has — `6` for `USDT`, `8` for `BTC`. A whole number
+   * from 0 to 20. When omitted, `Intl` decides, exactly as before this option existed.
+   */
+  decimals?: number
+}
+
+function checkedDecimals(decimals: number): number {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 20) {
+    throw new Error(`money decimals must be a whole number from 0 to 20, got ${decimals}`)
+  }
+  return decimals
+}
+
+/**
  * How many fraction digits `currency` uses, in `locale`'s own currency display rules.
  *
  * Never assume two: the yen (`JPY`) has none, the Kuwaiti dinar (`KWD`) has three. This asks
  * `Intl` rather than hard-coding a table, so a currency this module has never seen still works.
  */
-export function currencyDecimals(currency: string, locale = "en"): number {
+export function currencyDecimals(
+  currency: string,
+  locale = "en",
+  options: MoneyOptions = {},
+): number {
+  if (options.decimals !== undefined) return checkedDecimals(options.decimals)
   const { maximumFractionDigits } = new Intl.NumberFormat(locale, {
     style: "currency",
     currency,
@@ -89,12 +116,19 @@ export function moneyDecimalString(amount: number, decimals: number): string {
  *
  * `amount` must be a safe integer — a non-integer or unsafe `amount` is a programming error, not a
  * display choice, so it throws rather than silently formatting the wrong number.
+ *
+ * `options.decimals` gives the decimals of an asset `Intl` does not know: `formatMoney(1500000,
+ * "USDT", "en", { decimals: 6 })` is `"USDT 1.500000"`, and `formatMoney(1, "BTC", "en", {
+ * decimals: 8 })` is `"BTC 0.00000001"`. A code `Intl` rejects is printed as given, in the
+ * position the locale gives a currency symbol.
  */
-export function formatMoney(amount: number, currency: string, locale = "en"): string {
-  const decimals = currencyDecimals(currency, locale)
-  return moneyFormatter(currency, locale).format(
-    moneyDecimalString(amount, decimals) as unknown as number,
-  )
+export function formatMoney(
+  amount: number,
+  currency: string,
+  locale = "en",
+  options: MoneyOptions = {},
+): string {
+  return formatMoneyParts(amount, currency, locale, options).map((part) => part.value).join("")
 }
 
 /**
@@ -105,21 +139,42 @@ export function formatMoneyParts(
   amount: number,
   currency: string,
   locale = "en",
+  options: MoneyOptions = {},
 ): Intl.NumberFormatPart[] {
-  const decimals = currencyDecimals(currency, locale)
-  return moneyFormatter(currency, locale).formatToParts(
-    moneyDecimalString(amount, decimals) as unknown as number,
-  )
-}
-
-function moneyFormatter(currency: string, locale: string): Intl.NumberFormat {
-  const decimals = currencyDecimals(currency, locale)
-  return new Intl.NumberFormat(locale, {
+  const decimals = currencyDecimals(currency, locale, options)
+  const digits = moneyDecimalString(amount, decimals) as unknown as number
+  const formatter = moneyFormatter(currency, locale, decimals)
+  if (formatter) return formatter.formatToParts(digits)
+  // `Intl` rejects the code (`USDT`). Format with the placeholder code `XXX`, so the locale still
+  // decides where the currency goes, then print the caller's code in its place.
+  // `XXX` is always a valid code, so a throw here is the locale's own error: let it reach the caller.
+  const placeholder = new Intl.NumberFormat(locale, {
     style: "currency",
-    currency,
+    currency: "XXX",
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   })
+  return placeholder.formatToParts(digits).map((part) =>
+    part.type === "currency" ? { type: part.type, value: currency } : part
+  )
+}
+
+/** The formatter, or `undefined` when `Intl` refuses `currency` as a code. */
+function moneyFormatter(
+  currency: string,
+  locale: string,
+  decimals: number,
+): Intl.NumberFormat | undefined {
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency,
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })
+  } catch {
+    return undefined
+  }
 }
 
 function safeAmount(amount: number): number {
@@ -223,6 +278,7 @@ export function parseMoney(
   text: string,
   currency: string,
   locale = "en",
+  options: MoneyOptions = {},
 ): Result<number, ParseMoneyError> {
   const cleaned = text.replace(DIRECTION_MARKS, "").trim()
   if (cleaned === "") return err({ type: "empty" })
@@ -231,7 +287,7 @@ export function parseMoney(
   const normalized = toAsciiDigits(cleaned, digits)
 
   const { group, decimal, minus } = localeMarks(locale)
-  const decimals = currencyDecimals(currency, locale)
+  const decimals = currencyDecimals(currency, locale, options)
 
   let negative = false
   let rest = normalized

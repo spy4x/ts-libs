@@ -30,25 +30,25 @@ Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched ar
 `unref`s the handle where the runtime provides one). No `crypto` calls and no DOM global: the
 browser- and server-only halves are the other two subpaths.
 
-| Module                      | Contents                                                                                                                                                                                                                       |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `universal/async`           | `sleep`, `debounce` (cancelable, unref'd), `backoffDelay` (capped, jittered backoff delay)                                                                                                                                     |
-| `universal/concurrency`     | `AsyncMutex` (fair FIFO)                                                                                                                                                                                                       |
-| `universal/axis`            | `niceStep`, `ticks`, `stepAxis`, `StepAxis`, `MAX_TICKS` — the one home for chart tick maths                                                                                                                                   |
-| `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                                                                   |
-| `universal/csv`             | `CsvCellValue`, `CsvColumn`, `csvField`, `csvRow`, `csvHeaderRow`, `toCsvText`, `CSV_BYTE_ORDER_MARK`, `toCsvBytes` — RFC 4180 writer with a formula-injection guard                                                           |
-| `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `PayloadError`, `StoreError`, `RequestError`, `ResponseError`, `connectionError`, `responseError`, `isSilentError`, `OperationState`, `OperationResult` |
-| `universal/format-number`   | `round`, `formatDecimal`, `formatPct`, `formatBytes`                                                                                                                                                                           |
-| `universal/honeypot`        | `HONEYPOT_FIELD_NAME`, `honeypotFilled` — the server half of a honeypot form field                                                                                                                                             |
-| `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                              |
-| `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney` — money as a smallest-unit integer, parsed and formatted without a float step                                                        |
-| `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                 |
-| `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                                                                |
-| `universal/seo`             | `canonicalUrl`, `normalizeCanonical`, `breadcrumbItems`, `breadcrumbListJsonLd`, `jsonLdText`, `Crumb`, `BreadcrumbListItem`, `BreadcrumbListJsonLd` — the canonical address and JSON-LD a server-rendered page publishes      |
-| `universal/sort`            | `SortDirection`, `SortRule`, `toggleSort`, `removeSortRule`, `sortRows`, `parseSort`, `serializeSort` — multi-column sort rules and the `?sort=` parameter a page writes and an API reads                                      |
-| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`, `initials`                                                                                            |
-| `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`                                                                                                                              |
-| `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                                                                        |
+| Module                      | Contents                                                                                                                                                                                                                                                                                              |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `universal/async`           | `sleep`, `debounce` (cancelable, unref'd), `backoffDelay` (capped, jittered backoff delay)                                                                                                                                                                                                            |
+| `universal/concurrency`     | `AsyncMutex` (fair FIFO)                                                                                                                                                                                                                                                                              |
+| `universal/axis`            | `niceStep`, `ticks`, `stepAxis`, `StepAxis`, `MAX_TICKS` — the one home for chart tick maths                                                                                                                                                                                                          |
+| `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                                                                                                                                          |
+| `universal/csv`             | `CsvCellValue`, `CsvColumn`, `csvField`, `csvRow`, `csvHeaderRow`, `toCsvText`, `CSV_BYTE_ORDER_MARK`, `toCsvBytes` — RFC 4180 writer with a formula-injection guard                                                                                                                                  |
+| `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `PayloadError`, `StoreError`, `RequestError`, `ResponseError`, `connectionError`, `responseError`, `isSilentError`, `OperationState`, `OperationResult`                                                                        |
+| `universal/format-number`   | `round`, `formatDecimal`, `formatPct`, `formatBytes`                                                                                                                                                                                                                                                  |
+| `universal/honeypot`        | `HONEYPOT_FIELD_NAME`, `honeypotFilled` — the server half of a honeypot form field                                                                                                                                                                                                                    |
+| `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                                                                                                     |
+| `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney`, `MoneyOptions` — money as a smallest-unit integer, parsed and formatted without a float step; an optional `{ decimals }` gives the decimals of `USDT` (6) or `BTC` (8), which `Intl` rejects or gets wrong |
+| `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                                                                                        |
+| `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                                                                                                                                       |
+| `universal/seo`             | `canonicalUrl`, `normalizeCanonical`, `breadcrumbItems`, `breadcrumbListJsonLd`, `jsonLdText`, `Crumb`, `BreadcrumbListItem`, `BreadcrumbListJsonLd` — the canonical address and JSON-LD a server-rendered page publishes                                                                             |
+| `universal/sort`            | `SortDirection`, `SortRule`, `toggleSort`, `removeSortRule`, `sortRows`, `parseSort`, `serializeSort` — multi-column sort rules and the `?sort=` parameter a page writes and an API reads                                                                                                             |
+| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`, `initials`                                                                                                                                                                   |
+| `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`                                                                                                                                                                                                     |
+| `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                                                                                                                                               |
 
 The old one-line CSV splitter and `mapConcurrent` (formerly in `universal/concurrency`) were
 removed in 1.0: `@std/csv` and `@std/async`'s `pooledMap` already cover them. `universal/csv` is now
@@ -105,9 +105,17 @@ when the caller passes none.
 | `browser/clipboard`   | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                               |
 | `browser/cookie`      | `getCookie`                                                                                                                       |
 | `browser/download`    | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                |
+| `browser/embed`       | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                           |
 | `browser/geolocation` | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                           |
 | `browser/hotkeys`     | `parseHotkey`, `matchesHotkey`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyEvent`, `PlatformNavigator`, `TypingTarget` |
 | `browser/storage`     | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
+
+`browser/embed` (from `mig`'s height-report and time-zone scripts) is for a page inside another
+site's frame. `reportHeight` posts `{ type, height }` for one element's own box to the parent, on
+load and on every resize, to a `targetOrigin` the caller must give (there is no `"*"` default);
+`captureTimeZone` and `fillEmptyTimeZoneField` read the visitor's zone from `Intl` and fill a form
+field only while it is still empty. They are functions, not inline `<script>` text: an app that
+needs pre-hydration script text wraps them itself.
 
 `browser/cookie` fixes two bugs in the `getCookie` copies apps carried before it had a home here: it
 splits `document.cookie` instead of building a `RegExp` from the cookie name (a name containing `.`
@@ -122,7 +130,7 @@ download response `@spy4x/server/export` builds without either package importing
 `platform/tokens.ts`) and `browser/dropdown` (an 11-line rule that is the dropdown component's own
 business, in `preact-components`) were removed.
 
-### `./server` → `server.ts` (7 modules)
+### `./server` → `server.ts` (8 modules)
 
 Deno-only helpers. Every filesystem module takes a port (`FileSystemPort`, `ClockPort`, `TimerPort`)
 instead of calling `Deno.*` directly, because the root `test` task grants `--allow-read --allow-env`
@@ -148,6 +156,7 @@ coverable under this grant:** `writeText`, `appendText`, `rename`, `mkdirp`, `lo
 | `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS` |
 | `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                   |
 | `server/ports`           | the port interfaces, `systemClockPort`                                                            |
+| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `CommandSpawner`                           |
 | `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                           |
 | `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                              |
 
@@ -160,6 +169,14 @@ the others from being removed or the signal from aborting; the error goes to an 
 (default `console.error`), because a throw from inside a signal callback would end the process
 before the worker's cleanup finishes. The default list works on Windows with Deno 2.7.6 or later,
 where `SIGTERM` fires on logoff and system shutdown.
+
+`server/run-command` runs a child process and never throws: `runCommand(["git", "status"])` resolves
+with `{ success, code, stdout, stderr }`, and a missing binary or bad `cwd` gives `success: false`,
+`code: -1` and the reason in `stderr` and `error` (set only when the process never started). It
+keeps the process's own shape rather than the house `{ success, output, error }` because a command
+has two streams and an exit code callers branch on. The spawner is injectable, because the unit tier
+has no `--allow-run`; there is no real-process test for the same reason (the integration tier has
+none either).
 
 `server/walk` (`@std/fs`'s `walk` covers it) and `server/hash-file` (`@std/crypto` already hashes a
 stream, and nothing in this workspace called `sha256OfStream`) were removed, along with the
@@ -375,6 +392,13 @@ Consequences a consumer should know:
   arktype defaults; a caller that wants unknown keys rejected writes
   `schema.onUndeclaredKey("reject")` on its own schema. Both halves are pinned by tests in
   `browser/storage.test.ts`.
+
+## `./validation/predicates`
+
+Arktype predicates for untrusted text: `headerSafeString`, `textSafeString`, `honeypotField`,
+`timeZoneName`, and `emailAddress` with its plain check `isEmailAddress`. The email check is
+`isAddress` from `@spy4x/email/address` plus a 254-character limit, not a second pattern, so a form
+and the sender agree on what an address is; `platform` imports `email` and never the other way round.
 
 ## Servers, clocks and timers are injected
 
