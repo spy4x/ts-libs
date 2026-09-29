@@ -1,12 +1,33 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { entriesFrom, workspaceDirs } from "./contract.ts"
+import { fromFileUrl } from "@std/path"
+
+import { assertWorkspaceComplete, entriesFrom, loadEntries, workspaceDirs } from "./contract.ts"
 
 describe("workspaceDirs", () => {
   it("reads the member directories from the root config's workspace list", () => {
     const text = `{ // comment\n  "workspace": [\n    "./net",\n    "./time"\n  ],\n  "tasks": {} }`
     expect(workspaceDirs(text)).toEqual(["net", "time"])
+  })
+
+  it("throws when the root config has no workspace list", () => {
+    expect(() => workspaceDirs(`{ "tasks": {} }`)).toThrow(`no "workspace" list`)
+  })
+})
+
+describe("assertWorkspaceComplete", () => {
+  it("throws naming a directory with a deno.json that the list dropped", () => {
+    expect(() => assertWorkspaceComplete(["net"], ["net", "time"])).toThrow("time")
+  })
+
+  it("accepts a listed directory that does not exist, as Deno does", () => {
+    expect(() => assertWorkspaceComplete(["ai", "net"], ["net"])).not.toThrow()
+  })
+
+  it("catches the silent drop a comment with a bracket causes in the workspace read", () => {
+    const listed = workspaceDirs(`{ "workspace": [ "./net", // see [#22]\n "./time" ] }`)
+    expect(() => assertWorkspaceComplete(listed, ["net", "time"])).toThrow("time")
   })
 })
 
@@ -36,8 +57,24 @@ describe("entriesFrom", () => {
     expect(after).toContain("@spy4x/time/ics")
   })
 
+  it("accepts the string form of exports as the `.` entry", () => {
+    const entries = entriesFrom(["net"], () => ({ exports: "./mod.ts" }))
+    expect(entries.map((entry) => entry.specifier)).toEqual(["@spy4x/net"])
+  })
+
   it("skips a member whose directory does not exist", () => {
     const entries = entriesFrom(["ghost", "net"], (dir) => configs[dir])
     expect(entries.map((entry) => entry.specifier)).toEqual(["@spy4x/net/ip"])
+  })
+})
+
+describe("docs/1.0-contract.md", () => {
+  it("has one heading per entry point the workspace's exports maps publish", async () => {
+    const root = fromFileUrl(import.meta.resolve("../../"))
+    const document = await Deno.readTextFile(`${root}/docs/1.0-contract.md`)
+    const headings = [...document.matchAll(/^### `([^`]+)`$/gm)].map((match) => match[1])
+    const entries = await loadEntries(root)
+    expect(entries.length).toBeGreaterThan(100)
+    expect(headings).toEqual(entries.map((entry) => entry.specifier))
   })
 })
