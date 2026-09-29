@@ -68,6 +68,13 @@ describe("entriesFrom", () => {
   })
 })
 
+describe("loadEntries", () => {
+  it("throws when a comment with a bracket in the workspace list hides a member", async () => {
+    const root = fromFileUrl(import.meta.resolve("./contract-fixtures/dropped-member"))
+    await expect(loadEntries(root)).rejects.toThrow("time")
+  })
+})
+
 describe("docs/1.0-contract.md", () => {
   it("has one heading per entry point the workspace's exports maps publish", async () => {
     const root = fromFileUrl(import.meta.resolve("../../"))

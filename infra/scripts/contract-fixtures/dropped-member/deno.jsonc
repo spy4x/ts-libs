@@ -1,0 +1,6 @@
+{
+  "workspace": [
+    "./net", // see [#22]
+    "./time"
+  ]
+}
