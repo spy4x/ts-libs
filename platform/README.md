@@ -435,7 +435,7 @@ Consequences a consumer should know:
 
 Arktype predicates for untrusted text: `headerSafeString`, `textSafeString`, `honeypotField`,
 `timeZoneName`, and `emailAddress` with its plain check `isEmailAddress`. The email check is
-`isAddress` from `@spy4x/email/address` plus a 254-character limit, not a second pattern, so a form
+`isAddress` from `@spy4x/email/address` plus its exported 254-character `MAX_ADDR_SPEC_LENGTH`, not a second pattern, so a form
 and the sender agree on what an address is; `platform` imports `email` and never the other way round.
 
 ## Servers, clocks and timers are injected
