@@ -62,9 +62,9 @@ export interface ConfigIssue {
   /** The variable's name, or the cross-field label for a root-level check. */
   readonly name: string
   /**
-   * A short phrase: `is missing`, `must be <what the schema asks for>`, or the fixed `has an invalid
-   * value` (used for a failure inside a parsed value and for every custom check). Never contains
-   * the variable's value.
+   * A short phrase: `is missing`, `must be <what the schema asks for>`, or the fixed
+   * `has an invalid value` (used for a failure inside a parsed value and for every custom check).
+   * Never contains the variable's value.
    */
   readonly reason: string
 }
@@ -153,23 +153,24 @@ function crossFieldLabel(issue: { expected: string }): string {
 /** The reason used whenever arktype's own text might carry the rejected value. */
 const GENERIC_REASON = "has an invalid value"
 
-/**
- * A value-free reason for one failing issue on a declared variable. What the code guarantees: the
- * reason is one of a fixed phrase (`is missing`, `has an invalid value`) or `must be ` plus text
- * arktype builds from the schema alone. A failure inside a parsed value, and every `predicate`
- * issue (also one inside a union branch) (a `.narrow()` or `ctx.mustBe` text, or `string.url`), gets the fixed `has an invalid
- * value`, since that text is written by the schema's author and may quote the value. A `union`
- * issue's `expected` is the whole message, value included (`ENV must be "dev" or "prod" (was
- * "...")`), so only the text between `<name> must be ` and the first ` (was ` is kept. As a second
- * line of defence, text that still contains the raw value falls back to the fixed phrase.
- */
-/** Whether the issue is a custom check, or a union with one in any branch, however deeply nested. */
+/** Whether the issue is a custom check, or a union with one in any branch, at any depth. */
 function hasPredicate(issue: { code: string }): boolean {
   if (issue.code === "predicate") return true
   const branches = (issue as { errors?: readonly { code: string }[] }).errors
   return Array.isArray(branches) && branches.some(hasPredicate)
 }
 
+/**
+ * A value-free reason for one failing issue on a declared variable. What the code guarantees: the
+ * reason is one of a fixed phrase (`is missing`, `has an invalid value`) or `must be ` plus text
+ * arktype builds from the schema alone. A failure inside a parsed value, and every `predicate`
+ * issue, also one inside a union branch (a `.narrow()` or `ctx.mustBe` text, or `string.url`),
+ * gets the fixed `has an invalid value`, since that text is written by the schema's author and may
+ * quote the value. A `union` issue's `expected` is the whole message, value included (`ENV must be
+ * "dev" or "prod" (was "...")`), so only the text between `<name> must be ` and the first ` (was `
+ * is kept. As a second line of defence, text that still contains the raw value falls back to the
+ * fixed phrase.
+ */
 function issueReason(
   name: string,
   issue: { code: string; path: readonly PropertyKey[]; expected: string },
