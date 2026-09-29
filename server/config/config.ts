@@ -54,7 +54,10 @@ import { type EnvReader, systemEnv } from "./env.ts"
 /** A root-level failure (a `.narrow()` rejection with no single field) reads as this label. */
 const CROSS_FIELD_LABEL = "(cross-field check)"
 
-/** Why one environment variable was rejected. The `reason` never contains the variable's value. */
+/**
+ * Why one environment variable was rejected. The `reason` is a fixed phrase or text arktype builds
+ * from the schema; text a schema's own check writes is never used, since it may quote the value.
+ */
 export interface ConfigIssue {
   /** The variable's name, or the cross-field label for a root-level check. */
   readonly name: string
@@ -154,12 +157,19 @@ const GENERIC_REASON = "has an invalid value"
  * A value-free reason for one failing issue on a declared variable. What the code guarantees: the
  * reason is one of a fixed phrase (`is missing`, `has an invalid value`) or `must be ` plus text
  * arktype builds from the schema alone. A failure inside a parsed value, and every `predicate`
- * issue (a `.narrow()` or `ctx.mustBe` text, or `string.url`), gets the fixed `has an invalid
+ * issue (also one inside a union branch) (a `.narrow()` or `ctx.mustBe` text, or `string.url`), gets the fixed `has an invalid
  * value`, since that text is written by the schema's author and may quote the value. A `union`
  * issue's `expected` is the whole message, value included (`ENV must be "dev" or "prod" (was
  * "...")`), so only the text between `<name> must be ` and the first ` (was ` is kept. As a second
  * line of defence, text that still contains the raw value falls back to the fixed phrase.
  */
+/** Whether the issue is a custom check, or a union with one in any branch, however deeply nested. */
+function hasPredicate(issue: { code: string }): boolean {
+  if (issue.code === "predicate") return true
+  const branches = (issue as { errors?: readonly { code: string }[] }).errors
+  return Array.isArray(branches) && branches.some(hasPredicate)
+}
+
 function issueReason(
   name: string,
   issue: { code: string; path: readonly PropertyKey[]; expected: string },
@@ -167,7 +177,7 @@ function issueReason(
 ): string {
   if (issue.path.length > 1) return GENERIC_REASON
   if (issue.code === "required") return "is missing"
-  if (issue.code === "predicate") return GENERIC_REASON
+  if (hasPredicate(issue)) return GENERIC_REASON
   let expected: unknown
   try {
     expected = issue.expected

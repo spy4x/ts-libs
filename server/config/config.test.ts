@@ -307,6 +307,24 @@ describe("ConfigError.issues", () => {
     throw new Error("expected loadConfig to throw")
   }
 
+  it("says has an invalid value when a union branch is a custom check", () => {
+    const schema = type({
+      A: type("'auto'").or(type("string").narrow((v, ctx) => ctx.mustBe(`not ${v.slice(0, 6)}`))),
+    })
+    expect(issuesFor(schema, { A: "sk-live-SECRET" })).toEqual([
+      { name: "A", reason: "has an invalid value" },
+    ])
+  })
+
+  it("says has an invalid value when a union fails at keys inside a parsed value", () => {
+    const schema = type({
+      A: type("string.json.parse").to(type({ k: "number" }).or({ j: "string" })),
+    })
+    expect(issuesFor(schema, { A: `{"k":"x","j":5}` })).toEqual([
+      { name: "A", reason: "has an invalid value" },
+    ])
+  })
+
   it("says a missing variable is missing", () => {
     const issues = issuesOf({
       ENV: "dev",
