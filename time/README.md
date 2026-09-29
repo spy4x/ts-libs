@@ -7,7 +7,7 @@ plus an RFC 5545 iCalendar writer. Zero runtime dependencies.
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `time/date`     | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
 | `time/locale`   | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `weekdayLabels`, `WeekdayLabel`                                                                                                                               |
-| `time/tz`       | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), …                                                                                                                                  |
+| `time/tz`       | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, …                                                                              |
 | `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                           |
 | `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                        |
 
@@ -295,6 +295,26 @@ a non-negative integer and an empty mail address. There is no silent conversion 
   [Why `Intl` and not a date library](#why-intl-and-not-a-date-library).
 - **`Date` objects as the public currency for wall clocks.** They cannot represent one, which is the
   whole point.
+
+## Naming a zone
+
+```ts
+import { canonicalTimeZoneOr, zoneCity, zoneOffsetLabel } from "@spy4x/time/tz"
+
+canonicalTimeZoneOr("japan", "UTC") // "Asia/Tokyo"
+zoneCity("America/New_York") // "New York"
+zoneOffsetLabel("Asia/Kolkata", new Date("2026-01-15T12:00:00Z")) // "UTC+5:30"
+zoneOffsetLabel("America/New_York", new Date("2026-07-15T12:00:00Z")) // "UTC-4"
+```
+
+`canonicalTimeZone` never renames a zone. It returns a name the runtime lists as it is, resolves
+slash-less aliases (`Japan`), and fixes letter case. For any other spelling it asks `Intl` and keeps
+the answer only if it is the same name in other casing; otherwise it returns the input unchanged.
+ICU decides which name is canonical, and Deno's answers `Asia/Calcutta` for `Asia/Kolkata`, so
+following it would turn modern names into legacy ones. The consequence: `US/Eastern` and
+`Asia/Calcutta` stay as written. To ask whether two names mean the same rules, compare their
+offsets. `zoneOffsetLabel` needs an instant because daylight saving time moves the offset; pass a
+fixed `Date` in tests.
 
 ## Design notes
 
