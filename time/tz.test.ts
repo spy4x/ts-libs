@@ -2,6 +2,9 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import {
   addDays,
+  canonicalTimeZone,
+  canonicalTimeZoneOr,
+  canonicalValidTimeZoneOrNull,
   dayOfWeek,
   formatDateLong,
   formatDateTimeLong,
@@ -18,7 +21,9 @@ import {
   tzOffsetMinutes,
   validTimeZoneOr,
   WallClockKind,
+  zoneCity,
   zonedDateTime,
+  zoneOffsetLabel,
 } from "./tz.ts"
 
 const BERLIN = "Europe/Berlin"
@@ -762,5 +767,86 @@ describe("addDays without a zone", () => {
     // Samoa moved across the date line and has no 2011-12-30.
     expect(addDays("2011-12-29", 1)).toBe("2011-12-30")
     expect(addDays("2011-12-29", 1, "Pacific/Apia")).toBe("2011-12-31")
+  })
+})
+
+describe("canonicalTimeZone", () => {
+  it("fixes casing and resolves slash-less aliases", () => {
+    expect(canonicalTimeZone("japan")).toBe("Asia/Tokyo")
+    expect(canonicalTimeZone("Japan")).toBe("Asia/Tokyo")
+    expect(canonicalTimeZone("EST5EDT")).toBe("America/New_York")
+    expect(canonicalTimeZone("america/new_york")).toBe("America/New_York")
+  })
+
+  it("never renames a valid modern zone to its legacy link", () => {
+    // `resolvedOptions()` would answer Asia/Calcutta, Europe/Kiev and Asia/Saigon for these.
+    expect(canonicalTimeZone("Asia/Kolkata")).toBe("Asia/Kolkata")
+    expect(canonicalTimeZone("Europe/Kyiv")).toBe("Europe/Kyiv")
+    expect(canonicalTimeZone("Asia/Ho_Chi_Minh")).toBe("Asia/Ho_Chi_Minh")
+    expect(canonicalTimeZone("Asia/Kathmandu")).toBe("Asia/Kathmandu")
+  })
+
+  it("leaves a name with a slash that the curated list lacks in any casing as given", () => {
+    expect(canonicalTimeZone("US/Eastern")).toBe("US/Eastern")
+  })
+
+  it("fixes the casing of an Etc name through a same-name resolvedOptions answer", () => {
+    expect(canonicalTimeZone("etc/gmt+5")).toBe("Etc/GMT+5")
+    expect(canonicalTimeZone("ETC/GMT+5")).toBe("Etc/GMT+5")
+    expect(canonicalTimeZone("Etc/gmt+5")).toBe("Etc/GMT+5")
+  })
+
+  it("keeps a wrongly-cased name as sent when resolvedOptions would rename it", () => {
+    expect(canonicalTimeZone("asia/ho_chi_minh")).toBe("asia/ho_chi_minh")
+  })
+})
+
+describe("canonicalValidTimeZoneOrNull", () => {
+  it("is null for a missing, empty or unknown zone and canonical otherwise", () => {
+    expect(canonicalValidTimeZoneOrNull(undefined)).toBeNull()
+    expect(canonicalValidTimeZoneOrNull(null)).toBeNull()
+    expect(canonicalValidTimeZoneOrNull("")).toBeNull()
+    expect(canonicalValidTimeZoneOrNull("Not/A_Timezone")).toBeNull()
+    expect(canonicalValidTimeZoneOrNull("Japan")).toBe("Asia/Tokyo")
+  })
+})
+
+describe("canonicalTimeZoneOr", () => {
+  it("canonicalizes a valid zone and falls back for an invalid or missing one", () => {
+    expect(canonicalTimeZoneOr("japan", "Europe/Berlin")).toBe("Asia/Tokyo")
+    expect(canonicalTimeZoneOr("Not/A_Timezone", "Europe/Berlin")).toBe("Europe/Berlin")
+    expect(canonicalTimeZoneOr(undefined, "Europe/Berlin")).toBe("Europe/Berlin")
+  })
+})
+
+describe("zoneCity", () => {
+  it("is the last path segment with underscores as spaces", () => {
+    expect(zoneCity("America/New_York")).toBe("New York")
+    expect(zoneCity("Asia/Ho_Chi_Minh")).toBe("Ho Chi Minh")
+    expect(zoneCity("Asia/Kolkata")).toBe("Kolkata")
+    expect(zoneCity("America/Argentina/Buenos_Aires")).toBe("Buenos Aires")
+  })
+
+  it("uses the whole name when there is no slash", () => {
+    expect(zoneCity("UTC")).toBe("UTC")
+  })
+})
+
+describe("zoneOffsetLabel", () => {
+  it("labels whole hours, half hours and zero, always signed", () => {
+    const october = new Date("2026-10-06T02:00:00Z")
+    expect(zoneOffsetLabel("Asia/Ho_Chi_Minh", october)).toBe("UTC+7")
+    expect(zoneOffsetLabel("America/New_York", october)).toBe("UTC-4")
+    expect(zoneOffsetLabel("Asia/Kolkata", october)).toBe("UTC+5:30")
+    expect(zoneOffsetLabel("Europe/London", new Date("2026-01-15T09:00:00Z"))).toBe("UTC+0")
+  })
+
+  it("labels a negative half-hour offset", () => {
+    expect(zoneOffsetLabel("America/St_Johns", new Date("2026-01-15T12:00:00Z"))).toBe("UTC-3:30")
+  })
+
+  it("follows daylight saving time at the given instant", () => {
+    expect(zoneOffsetLabel("America/New_York", new Date("2026-01-15T12:00:00Z"))).toBe("UTC-5")
+    expect(zoneOffsetLabel("America/New_York", new Date("2026-07-15T12:00:00Z"))).toBe("UTC-4")
   })
 })

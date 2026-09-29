@@ -140,6 +140,90 @@ export function validTimeZoneOr(tz: string | undefined, fallback: string): strin
 }
 
 /**
+ * The canonical spelling of a zone name a caller has already validated.
+ *
+ * Fixes only *casing* and resolves slash-less aliases, and never renames a valid modern zone:
+ * `"america/new_york"` is `"America/New_York"`, `"Japan"` is `"Asia/Tokyo"`, but `"Asia/Kolkata"`,
+ * `"Europe/Kyiv"` and `"Asia/Ho_Chi_Minh"` stay as given. `Intl`'s `resolvedOptions()` would
+ * rewrite those to their legacy links (`Asia/Calcutta`, `Europe/Kiev`, `Asia/Saigon`) under some
+ * ICU builds, so it is trusted only where nothing else can answer:
+ *
+ * 1. A name in `Intl.supportedValuesOf("timeZone")` is returned unchanged.
+ * 2. A slash-less alias (`"Japan"`, `"EST5EDT"`, `"GMT"`) has no modern name to preserve, so
+ *    `resolvedOptions()` resolves it.
+ * 3. A name that matches the curated list in another casing gets the curated casing.
+ * 4. A name the curated list lacks in any casing (`"etc/gmt+5"`, `"asia/ho_chi_minh"`) takes the
+ *    `resolvedOptions()` answer only when it is the same name in different case
+ *    (`"Etc/GMT+5"`); a genuinely different name is discarded and `tz` is returned as given.
+ *
+ * Throws a `RangeError` on an invalid zone, like the `Intl` constructor it wraps: validate first,
+ * or use {@link canonicalValidTimeZoneOrNull}.
+ */
+export function canonicalTimeZone(tz: string): string {
+  const supported = Intl.supportedValuesOf("timeZone")
+  if (supported.includes(tz)) return tz
+  if (!tz.includes("/")) {
+    return new Intl.DateTimeFormat("en", { timeZone: tz }).resolvedOptions().timeZone
+  }
+  const lower = tz.toLowerCase()
+  const curated = supported.find((name) => name.toLowerCase() === lower)
+  if (curated) return curated
+  const resolved = new Intl.DateTimeFormat("en", { timeZone: tz }).resolvedOptions().timeZone
+  return resolved.toLowerCase() === lower ? resolved : tz
+}
+
+/**
+ * Validates and canonicalizes an untrusted zone string in one step.
+ *
+ * Returns the {@link canonicalTimeZone} name, or `null` when `value` is missing, empty or not a
+ * zone. Never throws.
+ */
+export function canonicalValidTimeZoneOrNull(value: string | undefined | null): string | null {
+  if (!value || !isValidTimeZone(value)) return null
+  return canonicalTimeZone(value)
+}
+
+/**
+ * Like {@link validTimeZoneOr}, but the zone it returns is canonicalized too.
+ *
+ * Use it where the result is compared or redirected to, so two spellings of one zone cannot make
+ * a URL bounce between them.
+ */
+export function canonicalTimeZoneOr(value: string | undefined, fallback: string): string {
+  return canonicalValidTimeZoneOrNull(value) ?? fallback
+}
+
+/**
+ * The last path segment of an IANA zone name with underscores as spaces.
+ *
+ * `"America/New_York"` is `"New York"`, `"Asia/Ho_Chi_Minh"` is `"Ho Chi Minh"`, and `"UTC"` is
+ * `"UTC"` (no `/`, so the whole name). There is no lookup table: this is IANA's own naming
+ * convention, not a geocode, so it needs no data file and never goes stale. An `Etc/*` name has a
+ * segment that is not a city (`"GMT+5"`); callers show {@link zoneOffsetLabel} alone for those.
+ */
+export function zoneCity(tz: string): string {
+  const idx = tz.lastIndexOf("/")
+  const segment = idx === -1 ? tz : tz.slice(idx + 1)
+  return segment.replaceAll("_", " ")
+}
+
+/**
+ * The offset of `tz` at instant `at` as `"UTC+7"`, `"UTC-4"` or `"UTC+5:30"`.
+ *
+ * Always signed, zero included (`"UTC+0"`, never a bare `"UTC"`), so every label has the same
+ * shape and a missing sign never has to mean "zero" or "not shown". The offset is the one in force
+ * at `at`, so a DST zone reads differently in summer and winter.
+ */
+export function zoneOffsetLabel(tz: string, at: Date): string {
+  const minutes = tzOffsetMinutes(at, tz)
+  const sign = minutes < 0 ? "-" : "+"
+  const abs = Math.abs(minutes)
+  const hours = Math.floor(abs / 60)
+  const rest = abs % 60
+  return rest === 0 ? `UTC${sign}${hours}` : `UTC${sign}${hours}:${String(rest).padStart(2, "0")}`
+}
+
+/**
  * Format the wall clock `date` + `time` in `tz` as a long human string.
  *
  * Example: `formatDateTimeLong("2026-08-28", "10:00", "Europe/Berlin")` is
