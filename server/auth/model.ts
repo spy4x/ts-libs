@@ -15,7 +15,7 @@
  * @module
  */
 
-import { isAddress } from "@spy4x/email/address"
+import { isAddress, MAX_ADDR_SPEC_LENGTH } from "@spy4x/email/address"
 import type { SessionRecord } from "../sign-in/mod.ts"
 
 /** A signed-in person. Minimal on purpose: the app keeps its profile in its own table keyed by `id`. */
@@ -73,7 +73,7 @@ export interface AuthSessionRecord extends SessionRecord {
 }
 
 /** Longest address {@link normalizeEmail} accepts: the limit of an SMTP forward path (RFC 5321). */
-export const MAX_EMAIL_LENGTH = 254
+export const MAX_EMAIL_LENGTH = MAX_ADDR_SPEC_LENGTH
 
 /**
  * Lower-cases and trims an address and checks its shape; null when it is not an address.
