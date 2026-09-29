@@ -133,8 +133,8 @@ through a new call site. Both halves are pinned by tests, including the body rou
 a Cloudflare zone and returns `{ success, output, error }`. It never throws.
 
 - **Zone.** Give exactly one of `zoneName` (looked up with `GET /zones?name=`; no match fails and
-  names the zone; more than one match fails as ambiguous, so pass `zoneId` then) or `zoneId` (no lookup call). The token needs Zone Read only for the lookup, and
-  Cache Purge.
+  names the zone; more than one match fails as ambiguous, so pass `zoneId` then) or `zoneId` (no
+  lookup call). The token needs Zone Read only for the lookup, and Cache Purge.
 - **Batches.** 30 URLs per `purge_cache` call, the API's limit. It stops at the first failed call and
   reports how many URLs were purged before it.
 - **Timeout.** Each request runs under `AbortSignal.timeout(requestTimeoutMs)`, 10 s by default.

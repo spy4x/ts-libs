@@ -307,3 +307,11 @@ Deno.test("fails as ambiguous when the name lookup returns more than one zone", 
   assertStringIncludes(result.error, "ambiguous")
   assertEquals(calls.length, 1)
 })
+
+Deno.test("redacts a token that straddles the message length cap", async () => {
+  const message = `${"x".repeat(190)}${TOKEN}`
+  const { fetcher } = stub(() => json({ success: false, errors: [{ code: 1, message }] }, 400))
+  const result = await purgeUrls({ token: TOKEN, zoneId: "z", urls: urlsOf(1), fetch: fetcher })
+  assertEquals(result.success, false)
+  assertEquals(result.error.includes(TOKEN.slice(0, 10)), false, result.error)
+})
