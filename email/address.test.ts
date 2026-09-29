@@ -9,6 +9,7 @@ import {
   assertNoControlCharacters,
   formatAddress,
   isAddress,
+  MAX_ADDR_SPEC_LENGTH,
   parseAddress,
   parseAddresses,
 } from "./address.ts"
@@ -237,6 +238,13 @@ Deno.test("accepts a 254-character addr-spec and refuses a 255-character one", (
     TypeError,
     "255 characters, over the 254 limit",
   )
+})
+
+Deno.test("exports the addr-spec limit parseAddress enforces, 254 characters", () => {
+  assertEquals(MAX_ADDR_SPEC_LENGTH, 254)
+  const local = (length: number) => "a".repeat(length - "@example.com".length)
+  assertEquals(parseAddress(`${local(MAX_ADDR_SPEC_LENGTH)}@example.com`).address.length, 254)
+  assertThrows(() => parseAddress(`${local(MAX_ADDR_SPEC_LENGTH + 1)}@example.com`), TypeError)
 })
 
 Deno.test("assertNoControlCharacters allows a plain value", () => {

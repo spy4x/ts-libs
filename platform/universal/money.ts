@@ -60,16 +60,32 @@ function checkedDecimals(decimals: number): number {
 }
 
 /**
+ * Refuse a blank currency code with the same `RangeError` `Intl.NumberFormat` throws for it. Without
+ * this, a caller-given `decimals` skips `Intl`'s own check, and `formatMoney(1, "", "en", {
+ * decimals: 2 })` printed `" 0.01"` — a number with a stray space where the currency should be.
+ */
+function checkedCurrency(currency: string): string {
+  if (currency.trim() === "") {
+    throw new RangeError(`money currency code must not be empty, got ${JSON.stringify(currency)}`)
+  }
+  return currency
+}
+
+/**
  * How many fraction digits `currency` uses, in `locale`'s own currency display rules.
  *
  * Never assume two: the yen (`JPY`) has none, the Kuwaiti dinar (`KWD`) has three. This asks
  * `Intl` rather than hard-coding a table, so a currency this module has never seen still works.
+ *
+ * An empty or whitespace-only `currency` throws a `RangeError`, with or without `options.decimals`,
+ * and so does every other helper here that takes a code.
  */
 export function currencyDecimals(
   currency: string,
   locale = "en",
   options: MoneyOptions = {},
 ): number {
+  checkedCurrency(currency)
   if (options.decimals !== undefined) return checkedDecimals(options.decimals)
   const { maximumFractionDigits } = new Intl.NumberFormat(locale, {
     style: "currency",
@@ -280,6 +296,8 @@ export function parseMoney(
   locale = "en",
   options: MoneyOptions = {},
 ): Result<number, ParseMoneyError> {
+  // Checked before the text, so a blank code is a programming error even for blank text.
+  checkedCurrency(currency)
   const cleaned = text.replace(DIRECTION_MARKS, "").trim()
   if (cleaned === "") return err({ type: "empty" })
 

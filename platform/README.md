@@ -156,7 +156,7 @@ coverable under this grant:** `writeText`, `appendText`, `rename`, `mkdirp`, `lo
 | `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS` |
 | `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                   |
 | `server/ports`           | the port interfaces, `systemClockPort`                                                            |
-| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `CommandSpawner`                           |
+| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`        |
 | `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                           |
 | `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                              |
 
@@ -174,9 +174,14 @@ where `SIGTERM` fires on logoff and system shutdown.
 with `{ success, code, stdout, stderr }`, and a missing binary or bad `cwd` gives `success: false`,
 `code: -1` and the reason in `stderr` and `error` (set only when the process never started). It
 keeps the process's own shape rather than the house `{ success, output, error }` because a command
-has two streams and an exit code callers branch on. The spawner is injectable, because the unit tier
-has no `--allow-run`; there is no real-process test for the same reason (the integration tier has
-none either).
+has two streams and an exit code callers branch on. An optional `signal` bounds a command:
+`runCommand(cmd, { signal: AbortSignal.timeout(30_000) })` kills the child with `SIGTERM` on abort
+and resolves with `success: false` and `signal: "SIGTERM"`, and an already-aborted signal never
+starts it. `stdin` defaults to `"null"`, so a child that reads input gets end-of-file at once, which
+is what it already got before the option existed; `"inherit"` hands it the caller's own standard
+input. The spawner is injectable, because
+the unit tier has no `--allow-run`; there is no real-process test for the same reason (the
+integration tier has none either).
 
 `server/walk` (`@std/fs`'s `walk` covers it) and `server/hash-file` (`@std/crypto` already hashes a
 stream, and nothing in this workspace called `sha256OfStream`) were removed, along with the
@@ -435,8 +440,9 @@ Consequences a consumer should know:
 
 Arktype predicates for untrusted text: `headerSafeString`, `textSafeString`, `honeypotField`,
 `timeZoneName`, and `emailAddress` with its plain check `isEmailAddress`. The email check is
-`isAddress` from `@spy4x/email/address` plus a 254-character limit, not a second pattern, so a form
-and the sender agree on what an address is; `platform` imports `email` and never the other way round.
+`isAddress` from `@spy4x/email/address` plus that module's exported 254-character limit,
+`MAX_ADDR_SPEC_LENGTH`, not a second pattern or a second number, so a form and the sender agree on
+what an address is; `platform` imports `email` and never the other way round.
 
 ## Servers, clocks and timers are injected
 

@@ -65,8 +65,13 @@ const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
  */
 const MAILBOX_LINE_BREAK_PATTERN = /[\u0080-\u009f\u2028\u2029]/
 
-/** Longest addr-spec that fits a `RCPT TO` path (RFC 5321 §4.5.3.1.3, 256 with the brackets). */
-const MAX_ADDR_SPEC_LENGTH = 254
+/**
+ * Longest addr-spec, in characters, that fits a `RCPT TO` path (RFC 5321 §4.5.3.1.3: 256 with the
+ * angle brackets). {@link parseAddress} and {@link parseAddresses} refuse a longer one;
+ * {@link isAddress} checks only the pattern, so a caller that pairs it with a length check reads
+ * this rather than repeating 254.
+ */
+export const MAX_ADDR_SPEC_LENGTH = 254
 
 /**
  * Characters that force a display name to be emitted as a quoted-string.

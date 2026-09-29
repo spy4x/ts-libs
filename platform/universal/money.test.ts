@@ -327,3 +327,37 @@ describe("money with caller-given decimals", () => {
     expect(() => currencyDecimals("USDT")).toThrow(RangeError)
   })
 })
+
+describe("money with a blank currency code", () => {
+  const blanks = ["", " ", "\t"]
+
+  it("formatMoney throws a RangeError for a blank code, with or without decimals", () => {
+    expect(() => formatMoney(1, "", "en", { decimals: 2 })).toThrow(RangeError)
+    for (const code of blanks) {
+      expect(() => formatMoney(1, code, "en", { decimals: 2 })).toThrow(RangeError)
+      expect(() => formatMoney(1, code)).toThrow(RangeError)
+    }
+  })
+
+  it("formatMoneyParts throws a RangeError for a blank code, with or without decimals", () => {
+    for (const code of blanks) {
+      expect(() => formatMoneyParts(1, code, "en", { decimals: 2 })).toThrow(RangeError)
+      expect(() => formatMoneyParts(1, code)).toThrow(RangeError)
+    }
+  })
+
+  it("currencyDecimals throws a RangeError for a blank code, with or without decimals", () => {
+    for (const code of blanks) {
+      expect(() => currencyDecimals(code, "en", { decimals: 2 })).toThrow(RangeError)
+      expect(() => currencyDecimals(code)).toThrow(RangeError)
+    }
+  })
+
+  it("parseMoney throws a RangeError for a blank code, even for blank text", () => {
+    for (const code of blanks) {
+      expect(() => parseMoney("1.00", code, "en", { decimals: 2 })).toThrow(RangeError)
+      expect(() => parseMoney("1.00", code)).toThrow(RangeError)
+      expect(() => parseMoney("", code, "en", { decimals: 2 })).toThrow(RangeError)
+    }
+  })
+})

@@ -135,7 +135,9 @@ fails the whole message rather than dropping that entry:
   U+2028 from a word processor or a C1 character from mis-decoded Windows-1252 is
   common in a subject and nodemailer encodes it safely.
 - An addr-spec longer than 254 characters is refused: it does not fit an SMTP
-  path, and it would render a header line over the 998-character limit.
+  path, and it would render a header line over the 998-character limit. The limit
+  is exported as `MAX_ADDR_SPEC_LENGTH` from `@spy4x/email/address`; `isAddress`
+  checks only the pattern, so a caller pairing it with a length check reads it there.
 - A display name containing a comma is accepted unquoted (`Doe, Jane <jane@example.com>`)
   and re-emitted quoted. Non-ASCII names travel to the transport as structured
   fields, so nodemailer encodes them per RFC 2047 instead of emitting mojibake.

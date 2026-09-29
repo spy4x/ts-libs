@@ -27,7 +27,7 @@
 
 import { Type, type } from "arktype"
 import { isValidTimeZone } from "@spy4x/time/tz"
-import { isAddress } from "@spy4x/email/address"
+import { isAddress, MAX_ADDR_SPEC_LENGTH } from "@spy4x/email/address"
 
 /** Highest ASCII control code point, inclusive: the C0 block. */
 export const HEADER_MAX_CODE_POINT = 31
@@ -117,13 +117,11 @@ export function isValidTimeZoneName(value: string): boolean {
   return isValidTimeZone(value)
 }
 
-/** The longest addr-spec SMTP allows (RFC 5321 path limit, minus the angle brackets). */
-const MAX_EMAIL_LENGTH = 254
-
 /**
  * True when `value` is a bare email address (`jane@example.com`, no display name) that
  * `@spy4x/email` would send to: a dot-atom local part and a dotted domain of at least two labels
- * (`user@localhost` is refused), at most 254 characters.
+ * (`user@localhost` is refused), at most `MAX_ADDR_SPEC_LENGTH` (254) characters, the limit
+ * `@spy4x/email/address` exports.
  *
  * One rule, not two: the pattern is `isAddress` from `@spy4x/email/address`, so a form that accepts
  * an address here never meets a different verdict when the address reaches the sender. The
@@ -133,7 +131,7 @@ const MAX_EMAIL_LENGTH = 254
  * trim and lowercase it first, as a form would.
  */
 export function isEmailAddress(value: string): boolean {
-  return value.length <= MAX_EMAIL_LENGTH && isAddress(value)
+  return value.length <= MAX_ADDR_SPEC_LENGTH && isAddress(value)
 }
 
 /**

@@ -80,9 +80,77 @@ describe("runCommand", () => {
         args: ["log", "a b; rm"],
         cwd: "/repo",
         env: { A: "1" },
+        stdin: "null",
         stdout: "piped",
         stderr: "piped",
       },
     }])
+  })
+
+  it("returns success false and the killing signal, never a throw, when the signal aborts", async () => {
+    // Like `Deno.Command`, this fake runs until its signal aborts, then reports a SIGTERM death.
+    const spawn: CommandSpawner = (_command, options) => ({
+      output: () =>
+        new Promise((resolve) => {
+          options.signal?.addEventListener("abort", () =>
+            resolve({ success: false, code: 143, signal: "SIGTERM", ...bytes("partial", "") }))
+        }),
+    })
+    const controller = new AbortController()
+    const pending = runCommand(["sleep", "60"], { spawn, signal: controller.signal })
+    controller.abort()
+    expect(await pending).toEqual({
+      success: false,
+      code: 143,
+      stdout: "partial",
+      stderr: "",
+      signal: "SIGTERM",
+    })
+  })
+
+  it("never starts the process when the signal is already aborted", async () => {
+    let called = false
+    const spawn: CommandSpawner = () => {
+      called = true
+      throw new Error("must not run")
+    }
+    const result = await runCommand(["rm", "-rf", "cache"], {
+      spawn,
+      signal: AbortSignal.abort(new Error("shutting down")),
+    })
+    expect(called).toBe(false)
+    expect(result.success).toBe(false)
+    expect(result.code).toBe(-1)
+    expect(result.error).toBe("aborted before start: shutting down")
+  })
+
+  it("leaves signal out of the result of a process that exited on its own", async () => {
+    const spawn: CommandSpawner = () => ({
+      output: () => Promise.resolve({ success: false, code: 1, signal: null, ...bytes("", "") }),
+    })
+    const result = await runCommand(["false"], { spawn })
+    expect("signal" in result).toBe(false)
+  })
+
+  it("gives the child no standard input when stdin is not set", async () => {
+    const seen: SpawnOptions[] = []
+    const spawn: CommandSpawner = (_command, options) => {
+      seen.push(options)
+      return { output: () => Promise.resolve({ success: true, code: 0, ...bytes("", "") }) }
+    }
+    await runCommand(["cat"], { spawn })
+    expect(seen[0].stdin).toBe("null")
+  })
+
+  it("passes stdin and the abort signal to the spawner when given", async () => {
+    const seen: SpawnOptions[] = []
+    const spawn: CommandSpawner = (_command, options) => {
+      seen.push(options)
+      return { output: () => Promise.resolve({ success: true, code: 0, ...bytes("", "") }) }
+    }
+    const signal = new AbortController().signal
+    await runCommand(["cat"], { spawn, stdin: "inherit", signal })
+    expect(seen[0].stdin).toBe("inherit")
+    expect(seen[0].signal).toBe(signal)
   })
 })
