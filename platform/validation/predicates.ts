@@ -2,8 +2,8 @@
  * Reusable arktype predicates for untrusted text, ported from `mig/routes/api/_validators.ts`.
  *
  * `BookingSchema` itself is product domain — a booking form — so it is not ported. What is ported
- * are the four reusable checks it was built from: the two control-character refinements, the
- * honeypot field, and the time-zone probe.
+ * are the five reusable checks it was built from: the two control-character refinements, the
+ * honeypot field, the time-zone probe and the email address pattern.
  *
  * Control characters are what make CRLF/header injection possible: a value carrying LF can end the
  * header it is written into and start an attacker-authored one. Two different sets are needed
@@ -148,7 +148,31 @@ export const timeZoneName: Type<string> = type("string").narrow((value, ctx) =>
   isValidTimeZone(value) || ctx.mustBe("must be a recognised IANA time zone name")
 )
 
+/**
+ * Zod 3.25.76's email regex (`v3/types.js:384`, `emailRegex`, case-insensitive), copied byte for
+ * byte, including its redundant `\-`/`\.` escapes, so this text stays diffable against its source.
+ *
+ * It is not arktype's built-in `string.email`, which follows RFC more closely and disagrees on
+ * real input. Zod rejected `a..b@example.com`, `.a@example.com`, `a.@example.com`,
+ * `a%b@example.com`, `a@-example.com` and `a@example..com`, and accepted `o'brien@example.com`;
+ * arktype's keyword flips every one of those. An app that moved from Zod to arktype keeps
+ * accepting and rejecting exactly what it did before.
+ */
+export const EMAIL_PATTERN =
+  /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$/i
+
+/** True when `value` matches {@link EMAIL_PATTERN}. */
+export function isEmailAddress(value: string): boolean {
+  return EMAIL_PATTERN.test(value)
+}
+
+/** An email address by {@link EMAIL_PATTERN}; the error message is "a valid email address". */
+export const emailAddress: Type<string> = type("string").narrow((value, ctx) =>
+  isEmailAddress(value) || ctx.mustBe("a valid email address")
+)
+
 export type HeaderSafeString = typeof headerSafeString.infer
 export type TextSafeString = typeof textSafeString.infer
 export type HoneypotField = typeof honeypotField.infer
 export type TimeZoneName = typeof timeZoneName.infer
+export type EmailAddress = typeof emailAddress.infer

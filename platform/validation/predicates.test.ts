@@ -12,11 +12,14 @@ import { type } from "arktype"
 import { isValidTimeZone } from "@spy4x/time/tz"
 import {
   DEL_CODE_POINT,
+  EMAIL_PATTERN,
+  emailAddress,
   hasHeaderControlCharacters,
   hasTextControlCharacters,
   HEADER_MAX_CODE_POINT,
   headerSafeString,
   honeypotField,
+  isEmailAddress,
   isHoneypotFilled,
   isValidTimeZoneName,
   TEXT_ALLOWED_CODE_POINTS,
@@ -224,4 +227,47 @@ Deno.test("the predicates compose inside a larger object schema", () => {
     bookingForm({ ...validBooking, guestTz: "Not/A_Timezone" }) instanceof type.errors,
     true,
   )
+})
+
+// zod 3.25.76's `v3/types.js:384` `emailRegex` source text, verbatim, including its redundant
+// escapes. Not the shortest regex that matches the same strings: the text zod shipped.
+const ZOD_3_25_76_EMAIL_REGEX_SOURCE =
+  "^(?!\\.)(?!.*\\.\\.)([A-Z0-9_'+\\-\\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\\-]*\\.)+[A-Z]{2,}$"
+
+Deno.test("EMAIL_PATTERN's source is byte-for-byte zod 3.25.76's emailRegex", () => {
+  assertEquals(EMAIL_PATTERN.source, ZOD_3_25_76_EMAIL_REGEX_SOURCE)
+  assertEquals(EMAIL_PATTERN.flags, "i")
+})
+
+Deno.test("email address accepts what zod 3's email() accepted and rejects what it rejected", () => {
+  const accepted = ["a@example.com", "o'brien@example.com", "A.B+tag@Sub.Example.COM", "a_b@x1.io"]
+  const rejected = [
+    "a..b@example.com",
+    ".a@example.com",
+    "a.@example.com",
+    "a%b@example.com",
+    "a@-example.com",
+    "a@example..com",
+    "a@example",
+    "a b@example.com",
+    "",
+  ]
+  for (const value of accepted) {
+    assert(isEmailAddress(value), `${JSON.stringify(value)} must be accepted`)
+    assertEquals(emailAddress(value), value)
+  }
+  for (const value of rejected) {
+    assertFalse(isEmailAddress(value), `${JSON.stringify(value)} must be rejected`)
+    assertEquals(
+      emailAddress(value) instanceof type.errors,
+      true,
+      `${JSON.stringify(value)} must be rejected by the refinement`,
+    )
+  }
+})
+
+Deno.test("email address refinement reports 'a valid email address'", () => {
+  const result = emailAddress("nope")
+  assertInstanceOf(result, type.errors)
+  assertStringIncludes(result.summary, "a valid email address")
 })
