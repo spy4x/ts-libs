@@ -614,3 +614,80 @@ export function minToHHMM(minutes: number): string {
   const mins = minutes % 60
   return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`
 }
+
+/**
+ * `tz` with its spelling normalised where that is safe, never renamed to another zone name.
+ *
+ * Fixes only what is safe to fix, in this order:
+ *
+ * 1. A name the runtime lists (`Intl.supportedValuesOf("timeZone")`) is returned as given.
+ * 2. A name with no `/` (`Japan`, `EST5EDT`, `GMT`) is an alias with no spelling worth
+ *    preserving, so `Intl` resolves it (`Japan` becomes `Asia/Tokyo`).
+ * 3. Any other name (`america/new_york`, `Etc/GMT+5`, `US/Eastern`, `Asia/Ho_Chi_Minh`) is asked
+ *    of `Intl`, and the answer is used only when it is the same name in other casing. That fixes
+ *    letter case (`america/new_york` becomes `America/New_York`). A genuinely different answer is
+ *    discarded and `tz` comes back exactly as given.
+ *
+ * Step 3 is deliberate. Which name ICU calls canonical is the runtime's choice, not the IANA
+ * database's: Deno's ICU answers `Asia/Saigon` for `Asia/Ho_Chi_Minh` and `Asia/Calcutta` for
+ * `Asia/Kolkata`. Following it would turn a modern name into a legacy one, so a spelling the
+ * runtime does not list stays as the caller wrote it, and a legacy alias such as `US/Eastern` or
+ * `Asia/Calcutta` is never rewritten to a "modern" name either: there is no such table here.
+ * Callers that must compare two zone names for the same rules should compare offsets, not names.
+ *
+ * Throws a `RangeError` on an invalid zone, like the `Intl` constructor it wraps; validate first
+ * with {@link isValidTimeZone} or use {@link canonicalValidTimeZoneOrNull}.
+ */
+export function canonicalTimeZone(tz: string): string {
+  const supported = Intl.supportedValuesOf("timeZone")
+  if (supported.includes(tz)) return tz
+  const resolved = new Intl.DateTimeFormat("en", { timeZone: tz }).resolvedOptions().timeZone
+  if (!tz.includes("/")) return resolved
+  return resolved.toLowerCase() === tz.toLowerCase() ? resolved : tz
+}
+
+/**
+ * {@link canonicalTimeZone} of `value`, or `null` when it is missing or not a zone this runtime
+ * knows. Never throws.
+ */
+export function canonicalValidTimeZoneOrNull(value: string | undefined | null): string | null {
+  if (!value || !isValidTimeZone(value)) return null
+  return canonicalTimeZone(value)
+}
+
+/**
+ * {@link canonicalTimeZone} of `value` when it is a real zone, `fallback` otherwise. Unlike
+ * {@link validTimeZoneOr}, the answer is normalised: passing it back in returns the same string, so
+ * a redirect settles after one hop. It is not a key for the zone: `Asia/Kolkata` and
+ * `Asia/Calcutta` stay distinct.
+ */
+export function canonicalTimeZoneOr(value: string | undefined, fallback: string): string {
+  return canonicalValidTimeZoneOrNull(value) ?? fallback
+}
+
+/**
+ * The last path segment of an IANA zone name with underscores as spaces: `America/New_York` is
+ * `New York`, `Asia/Ho_Chi_Minh` is `Ho Chi Minh`, `UTC` is `UTC`.
+ *
+ * It follows IANA's naming convention and needs no data, so it never goes stale. It does not
+ * validate `tz`.
+ */
+export function zoneCity(tz: string): string {
+  return tz.slice(tz.lastIndexOf("/") + 1).replaceAll("_", " ")
+}
+
+/**
+ * The offset of `tz` at `at` as `UTC+7`, `UTC-4`, `UTC+5:30` or `UTC+0`.
+ *
+ * Always signed, zero included, so every label has one shape. `at` is required because a zone's
+ * offset changes with daylight saving time: `America/New_York` is `UTC-5` in January and `UTC-4`
+ * in July. Minute resolution, like {@link tzOffsetMinutes}, which it reads.
+ */
+export function zoneOffsetLabel(tz: string, at: Date): string {
+  const minutes = tzOffsetMinutes(at, tz)
+  const sign = minutes < 0 ? "-" : "+"
+  const abs = Math.abs(minutes)
+  const hours = Math.floor(abs / 60)
+  const rest = abs % 60
+  return rest === 0 ? `UTC${sign}${hours}` : `UTC${sign}${hours}:${String(rest).padStart(2, "0")}`
+}

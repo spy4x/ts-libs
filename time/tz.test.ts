@@ -2,6 +2,9 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import {
   addDays,
+  canonicalTimeZone,
+  canonicalTimeZoneOr,
+  canonicalValidTimeZoneOrNull,
   dayOfWeek,
   formatDateLong,
   formatDateTimeLong,
@@ -18,7 +21,9 @@ import {
   tzOffsetMinutes,
   validTimeZoneOr,
   WallClockKind,
+  zoneCity,
   zonedDateTime,
+  zoneOffsetLabel,
 } from "./tz.ts"
 
 const BERLIN = "Europe/Berlin"
@@ -762,5 +767,96 @@ describe("addDays without a zone", () => {
     // Samoa moved across the date line and has no 2011-12-30.
     expect(addDays("2011-12-29", 1)).toBe("2011-12-30")
     expect(addDays("2011-12-29", 1, "Pacific/Apia")).toBe("2011-12-31")
+  })
+})
+
+describe("canonicalTimeZone", () => {
+  it("returns a zone the runtime lists exactly as given", () => {
+    expect(canonicalTimeZone("America/New_York")).toBe("America/New_York")
+  })
+
+  it("never renames a listed legacy spelling to a modern one", () => {
+    // Deno's ICU lists Asia/Calcutta and not Asia/Kolkata; neither is rewritten to the other.
+    expect(canonicalTimeZone("Asia/Calcutta")).toBe("Asia/Calcutta")
+    expect(canonicalTimeZone("Asia/Kolkata")).toBe("Asia/Kolkata")
+  })
+
+  it("resolves a slash-less alias through Intl", () => {
+    expect(canonicalTimeZone("Japan")).toBe("Asia/Tokyo")
+  })
+
+  it("fixes only the casing of a listed name", () => {
+    expect(canonicalTimeZone("america/new_york")).toBe("America/New_York")
+  })
+
+  it("fixes the casing of an unlisted name Intl resolves to itself", () => {
+    expect(canonicalTimeZone("etc/gmt+5")).toBe("Etc/GMT+5")
+  })
+
+  it("keeps a slashed alias as given when Intl would rename it", () => {
+    // US/Eastern resolves to America/New_York; the answer is discarded, not applied.
+    expect(canonicalTimeZone("US/Eastern")).toBe("US/Eastern")
+  })
+
+  it("throws on an invalid zone", () => {
+    expect(() => canonicalTimeZone("Not/A_Zone")).toThrow(RangeError)
+  })
+})
+
+describe("canonicalValidTimeZoneOrNull", () => {
+  it("canonicalises a valid zone", () => {
+    expect(canonicalValidTimeZoneOrNull("japan")).toBe("Asia/Tokyo")
+  })
+
+  it("returns null for an invalid, empty or missing zone", () => {
+    expect(canonicalValidTimeZoneOrNull("Not/A_Zone")).toBeNull()
+    expect(canonicalValidTimeZoneOrNull("")).toBeNull()
+    expect(canonicalValidTimeZoneOrNull(undefined)).toBeNull()
+    expect(canonicalValidTimeZoneOrNull(null)).toBeNull()
+  })
+})
+
+describe("canonicalTimeZoneOr", () => {
+  it("returns the canonical zone when valid and the fallback otherwise", () => {
+    expect(canonicalTimeZoneOr("Japan", "UTC")).toBe("Asia/Tokyo")
+    expect(canonicalTimeZoneOr("Not/A_Zone", "Europe/Berlin")).toBe("Europe/Berlin")
+    expect(canonicalTimeZoneOr(undefined, "Europe/Berlin")).toBe("Europe/Berlin")
+  })
+})
+
+describe("zoneCity", () => {
+  it("takes the last segment and turns underscores into spaces", () => {
+    expect(zoneCity("America/New_York")).toBe("New York")
+    expect(zoneCity("America/Argentina/Buenos_Aires")).toBe("Buenos Aires")
+    expect(zoneCity("Asia/Kolkata")).toBe("Kolkata")
+  })
+
+  it("returns a slash-less name whole", () => {
+    expect(zoneCity("UTC")).toBe("UTC")
+  })
+})
+
+describe("zoneOffsetLabel", () => {
+  const winter = new Date("2026-01-15T12:00:00Z")
+  const summer = new Date("2026-07-15T12:00:00Z")
+
+  it("writes a half-hour zone with minutes", () => {
+    expect(zoneOffsetLabel("Asia/Kolkata", winter)).toBe("UTC+5:30")
+  })
+
+  it("follows daylight saving time on both sides of a change", () => {
+    expect(zoneOffsetLabel("America/New_York", winter)).toBe("UTC-5")
+    expect(zoneOffsetLabel("America/New_York", summer)).toBe("UTC-4")
+    // The exact instants of the 2026 spring-forward: 07:00Z is 02:00 EST, the gap's start.
+    expect(zoneOffsetLabel("America/New_York", new Date("2026-03-08T06:59:00Z"))).toBe("UTC-5")
+    expect(zoneOffsetLabel("America/New_York", new Date("2026-03-08T07:00:00Z"))).toBe("UTC-4")
+  })
+
+  it("writes UTC as a signed zero", () => {
+    expect(zoneOffsetLabel("UTC", winter)).toBe("UTC+0")
+  })
+
+  it("writes a negative half-hour offset with its sign once", () => {
+    expect(zoneOffsetLabel("America/St_Johns", winter)).toBe("UTC-3:30")
   })
 })
