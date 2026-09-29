@@ -166,9 +166,8 @@ function moneyFormatter(
       minimumFractionDigits: decimals,
       maximumFractionDigits: decimals,
     })
-  } catch (error) {
-    if (error instanceof RangeError) return undefined
-    throw error
+  } catch {
+    return undefined
   }
 }
 
