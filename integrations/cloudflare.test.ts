@@ -213,6 +213,7 @@ Deno.test("rejects an empty token, missing or both zone fields, and blank urls",
     { ...base, zoneName: "example.com", zoneId: "z" },
     { ...base, zoneName: " " },
     { ...base, zoneId: "z", urls: [""] },
+    { ...base, zoneId: "z", urls: [" "] },
     { ...base, zoneId: "z", requestTimeoutMs: 0 },
   ]
   for (const options of cases) {
@@ -221,4 +222,88 @@ Deno.test("rejects an empty token, missing or both zone fields, and blank urls",
     assertStringIncludes(result.error, "invalid options")
   }
   assertEquals(calls.length, 0)
+})
+
+Deno.test("redacts the token and control characters from a Cloudflare error message", async () => {
+  const message = `Invalid header\nBearer ${TOKEN}\u001b[31m fake line`
+  const { fetcher } = stub((call) =>
+    call.url.includes("/zones?name=")
+      ? zoneThenOk(call)
+      : json({ success: false, errors: [{ code: 6111, message }] }, 400)
+  )
+  const result = await purgeUrls({
+    token: TOKEN,
+    zoneName: "example.com",
+    urls: urlsOf(1),
+    fetch: fetcher,
+  })
+  assertEquals(result.success, false)
+  assertEquals(result.error.includes(TOKEN), false, result.error)
+  assertStringIncludes(result.error, "Bearer <REDACTED:TOKEN>")
+  assertEquals(/\p{Cc}/u.test(result.error), false, result.error)
+})
+
+Deno.test("redacts the token from a zone lookup error too", async () => {
+  const { fetcher } = stub(() =>
+    json({ success: false, errors: [{ code: 1, message: `echo ${TOKEN}` }] }, 403)
+  )
+  const result = await purgeUrls({
+    token: TOKEN,
+    zoneName: "example.com",
+    urls: urlsOf(1),
+    fetch: fetcher,
+  })
+  assertEquals(result.error.includes(TOKEN), false, result.error)
+  assertStringIncludes(result.error, "<REDACTED:TOKEN>")
+})
+
+Deno.test("caps each Cloudflare message and the number of messages", async () => {
+  const errors = Array.from({ length: 9 }, (_, i) => ({ code: i, message: "x".repeat(5000) }))
+  const { fetcher } = stub(() => json({ success: false, errors }, 400))
+  const result = await purgeUrls({ token: TOKEN, zoneId: "z", urls: urlsOf(1), fetch: fetcher })
+  assertEquals(result.success, false)
+  assert(result.error.length < 1500, `error is ${result.error.length} characters`)
+  assertEquals(result.error.includes("8 x"), false)
+})
+
+Deno.test("reports only the status when the answer body is over the size cap", async () => {
+  const huge = JSON.stringify({ errors: [{ code: 1, message: "y".repeat(200_000) }] })
+  const { fetcher } = stub(() => new Response(huge, { status: 500 }))
+  const result = await purgeUrls({ token: TOKEN, zoneId: "z", urls: urlsOf(1), fetch: fetcher })
+  assertEquals(result.success, false)
+  assertStringIncludes(result.error, "HTTP 500")
+  assert(result.error.length < 120, `error is ${result.error.length} characters`)
+})
+
+Deno.test("returns a failure instead of throwing for options that are not an object", async () => {
+  for (const options of [null, undefined, "x", 5]) {
+    const result = await purgeUrls(options as unknown as Parameters<typeof purgeUrls>[0])
+    assertEquals(result.success, false)
+    assertStringIncludes(result.error, "invalid options")
+  }
+})
+
+Deno.test("encodes the zone name in the lookup url", async () => {
+  const { calls, fetcher } = stub(zoneThenOk)
+  await purgeUrls({ token: TOKEN, zoneName: "a&b=c.example", urls: urlsOf(1), fetch: fetcher })
+  assertEquals(
+    calls[0].url,
+    "https://api.cloudflare.com/client/v4/zones?name=a%26b%3Dc.example",
+  )
+})
+
+Deno.test("fails as ambiguous when the name lookup returns more than one zone", async () => {
+  const { calls, fetcher } = stub(() =>
+    json({ success: true, result: [{ id: "one" }, { id: "two" }] })
+  )
+  const result = await purgeUrls({
+    token: TOKEN,
+    zoneName: "example.com",
+    urls: urlsOf(1),
+    fetch: fetcher,
+  })
+  assertEquals(result.success, false)
+  assertStringIncludes(result.error, "example.com")
+  assertStringIncludes(result.error, "ambiguous")
+  assertEquals(calls.length, 1)
 })
