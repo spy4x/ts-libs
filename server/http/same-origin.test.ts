@@ -283,6 +283,12 @@ describe("same-origin upgrade guard", () => {
     expect(response.status).toBe(403)
   })
 
+  it("checks a request whatever its Upgrade header says", async () => {
+    const crossSite = { ...HANDSHAKE, origin: "https://evil.example.com" }
+    expect((await sendHandshake({ ...crossSite, upgrade: undefined })).status).toBe(403)
+    expect((await sendHandshake({ ...crossSite, upgrade: "WebSocket" })).status).toBe(403)
+  })
+
   it("refuses a handshake with no Origin header", async () => {
     const response = await sendHandshake({ ...HANDSHAKE, origin: undefined })
     expect(response.status).toBe(403)
