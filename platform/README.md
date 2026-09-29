@@ -170,7 +170,7 @@ Not in this package, deliberately: `types`, `config`, `uuid`, `rate-limit` (owne
 template modules or issue #4), money/currency helpers (their own issue), and anything Preact- or
 DOM-component-shaped.
 
-### `./cqrs` → `cqrs/mod.ts` (4 modules)
+### `./cqrs` → `cqrs/mod.ts` (5 modules)
 
 An in-process command bus, query bus and event bus, ported from `template/libs/platform/cqrs`
 (cross-checked against `financy/libs/shared/cqrs`, which differs only in comments — the two are the
@@ -183,6 +183,7 @@ same code). `~/sync/code/gb` was not present in this checkout, so it could not b
 | `cqrs/query-bus`   | `QueryBus` — same shape, kept a distinct type from the command bus |
 | `cqrs/event-bus`   | `EventBus` — publish/subscribe, delivered on a microtask           |
 | `cqrs/types`       | `Command`, `Query`, `Event` and their constructor/handler types    |
+| `cqrs/middleware`  | internal: the runner behind `CommandBus.use` and `QueryBus.use`    |
 
 `EventBus.emit` isolates listeners from each other: the source's `for` loop let the first listener
 that threw abort every listener after it, and the throw surfaced as an uncaught exception inside
@@ -190,6 +191,43 @@ the microtask `emit` schedules it on. Here a listener failure — a synchronous 
 returned promise — is reported through a constructor-supplied `onListenerError` (`console.error` by
 default) instead. `once` also used to leak a subscription when its listener threw, because the
 source unsubscribed _after_ calling the listener; here the unsubscribe runs first.
+
+#### Middleware
+
+`CommandBus.use(middleware)` and `QueryBus.use(middleware)` add a `CqrsMiddleware`: a step that runs
+around every `execute`, whatever transport produced the message. Put checks there that are neither
+transport mechanics nor business rules, such as session strength, auditing or tracing; one
+registration covers every handler on that bus.
+
+```ts
+import { CommandBus, type CqrsMiddleware, QueryBus } from "@spy4x/platform/cqrs"
+
+const anonymous = new Set<unknown>([SignInCommand])
+const requireActor: CqrsMiddleware = (message, next) => {
+  if (anonymous.has(message.constructor)) return next()
+  const data = message.data as { actor?: unknown }
+  if (!data.actor) throw new Error(`${message.constructor.name} carries no actor`)
+  return next()
+}
+commandBus.use(requireActor)
+queryBus.use(requireActor)
+```
+
+- Middlewares run in registration order, the first registered outermost; the handler runs last.
+  With none registered, `execute` calls the handler directly.
+- A middleware receives the message instance itself, so `message.constructor` tells it the class
+  and `message.data` the payload.
+- It stops the dispatch by throwing, or by returning its own value without calling `next()`. A
+  synchronous throw reaches the middleware around it as a rejected `next()`.
+- Calling `next()` twice rejects with "called next() more than once" instead of running the rest of
+  the chain and the handler again.
+- A missing handler still throws before any middleware runs, and a middleware added during a
+  dispatch applies from the next `execute`.
+
+`EventBus` has no `use`. `emit` returns nothing, delivers on a microtask to any number of listeners,
+and isolates their failures, so a middleware there could not stop anything from the caller's point
+of view and has no single result to wrap. A cross-cutting check on events belongs in the listener,
+or before the `emit`.
 
 ### `./cache` → `cache/mod.ts` (1 module)
 
