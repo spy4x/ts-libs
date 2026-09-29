@@ -208,7 +208,8 @@ export interface PersistentCursorStoreOptions {
  * floor, so every connect re-downloaded everything: a checkpoint that does not survive a reload is
  * not a checkpoint. Here the cursors and the last successful sync timestamp are written through an
  * injected {@link KeyValueStore}, the store is read lazily on first use rather than at import time,
- * and a corrupt or unreadable entry is treated as absent (fail closed to a full pull).
+ * and an entry that does not parse is treated as absent (fail closed to a full pull). A read that
+ * throws reaches the caller, and the next call loads again.
  */
 export class PersistentCursorStore {
   readonly #tracker = new CursorTracker()
@@ -326,7 +327,7 @@ export class PersistentCursorStore {
   }
 
   /**
-   * Read durable state once, on first use.
+   * Read durable state on first use, and again on every call until a read succeeds.
    *
    * The group index is written alongside the cursors because a key/value store cannot enumerate its
    * keys. An entry that does not parse is skipped rather than guessed at: resuming from a wrong
@@ -334,32 +335,42 @@ export class PersistentCursorStore {
    */
   #ensureLoaded(): void {
     if (this.#loaded) return
-    this.#loaded = true
+
+    // Read everything into locals and commit at the end: a read that throws part-way leaves the
+    // store untouched and still unloaded, so the error reaches the caller and the next call retries
+    // from scratch instead of writing back a half-filled group index.
+    let syncedAt: number | null = null
+    const restored: Array<[string, number]> = []
 
     const storedSyncedAt = this.#storage.getItem(this.#key("syncedAt"))
     if (storedSyncedAt !== null) {
       const parsed = Number(storedSyncedAt)
-      if (Number.isFinite(parsed)) this.#syncedAt = parsed
+      if (Number.isFinite(parsed)) syncedAt = parsed
     }
 
     const index = this.#storage.getItem(this.#key("groups"))
-    if (index === null) return
-    let groupIds: unknown
-    try {
-      groupIds = JSON.parse(index)
-    } catch {
-      return
+    if (index !== null) {
+      let groupIds: unknown
+      try {
+        groupIds = JSON.parse(index)
+      } catch {
+        groupIds = null
+      }
+      if (Array.isArray(groupIds)) {
+        for (const groupId of groupIds) {
+          if (typeof groupId !== "string") continue
+          const raw = this.#storage.getItem(this.#cursorKey(groupId))
+          if (raw === null) continue
+          const sequence = Number(raw)
+          if (!Number.isFinite(sequence) || sequence < SEQUENCE_START) continue
+          restored.push([groupId, sequence])
+        }
+      }
     }
-    if (!Array.isArray(groupIds)) return
 
-    for (const groupId of groupIds) {
-      if (typeof groupId !== "string") continue
-      const raw = this.#storage.getItem(this.#cursorKey(groupId))
-      if (raw === null) continue
-      const sequence = Number(raw)
-      if (!Number.isFinite(sequence) || sequence < SEQUENCE_START) continue
-      this.#tracker.restore(groupId, sequence)
-    }
+    this.#syncedAt = syncedAt
+    for (const [groupId, sequence] of restored) this.#tracker.restore(groupId, sequence)
+    this.#loaded = true
   }
 
   #writeCursor(groupId: string, sequence: number): void {

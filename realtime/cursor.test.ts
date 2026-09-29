@@ -10,7 +10,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 
 import { ApplyStatus, CursorTracker, PersistentCursorStore, SEQUENCE_START } from "./cursor.ts"
-import { MemoryKeyValueStore } from "./testing.ts"
+import { type KeyValueStore, MemoryKeyValueStore } from "./testing.ts"
 
 describe("CursorTracker", () => {
   it("applies a sequence contiguous with the cursor and advances it", () => {
@@ -152,6 +152,22 @@ describe("CursorTracker", () => {
     ])
   })
 })
+
+/** A view of `storage` whose first read of `key` throws, and later reads succeed. */
+function failOnce(storage: MemoryKeyValueStore, key: string): KeyValueStore {
+  let failed = false
+  return {
+    getItem(k) {
+      if (k === key && !failed) {
+        failed = true
+        throw new Error("storage unavailable")
+      }
+      return storage.getItem(k)
+    },
+    setItem: (k, v) => storage.setItem(k, v),
+    removeItem: (k) => storage.removeItem(k),
+  }
+}
 
 describe("PersistentCursorStore", () => {
   it("sends the stored cursor on the handshake rather than zero", () => {
@@ -307,6 +323,60 @@ describe("PersistentCursorStore", () => {
     const store = new PersistentCursorStore({ storage })
 
     expect(store.cursors()).toEqual([])
+  })
+
+  it("rethrows a failed load and loads the saved cursors on the next call", () => {
+    const storage = new MemoryKeyValueStore()
+    const writer = new PersistentCursorStore({ storage })
+    writer.advanceTo("group-1", 9)
+    writer.markSynced(1_000)
+    const flaky = failOnce(storage, "realtime:groups")
+    const store = new PersistentCursorStore({ storage: flaky })
+
+    expect(() => store.cursors()).toThrow("storage unavailable")
+
+    expect(store.cursors()).toEqual([{ groupId: "group-1", sequence: 9 }])
+    expect(store.syncRequest().fromStart).toBe(false)
+  })
+
+  it("keeps every saved group in the index when a write follows a failed load", () => {
+    const storage = new MemoryKeyValueStore()
+    const writer = new PersistentCursorStore({ storage })
+    writer.advanceTo("group-1", 9)
+    writer.advanceTo("group-2", 4)
+    const store = new PersistentCursorStore({
+      storage: failOnce(storage, "realtime:cursor:group-2"),
+    })
+
+    expect(() => store.advanceTo("group-3", 1)).toThrow("storage unavailable")
+    expect(storage.getItem("realtime:cursor:group-3")).toBeNull()
+    store.advanceTo("group-3", 1)
+
+    expect(JSON.parse(storage.getItem("realtime:groups")!)).toEqual([
+      "group-1",
+      "group-2",
+      "group-3",
+    ])
+    expect(store.cursors().map((c) => c.sequence)).toEqual([9, 4, 1])
+  })
+
+  it("leaves no half-loaded state behind after a load that failed part-way", () => {
+    const storage = new MemoryKeyValueStore()
+    const writer = new PersistentCursorStore({ storage })
+    writer.advanceTo("group-1", 9)
+    writer.advanceTo("group-2", 4)
+    writer.markSynced(1_000)
+    const store = new PersistentCursorStore({
+      storage: failOnce(storage, "realtime:cursor:group-2"),
+    })
+    expect(() => store.cursors()).toThrow("storage unavailable")
+
+    // The saved state moves on before the retry; a stale half-load must not survive it.
+    storage.removeItem("realtime:syncedAt")
+    storage.setItem("realtime:groups", JSON.stringify(["group-2"]))
+
+    expect(store.cursors()).toEqual([{ groupId: "group-2", sequence: 4 }])
+    expect(store.syncedAt()).toBeNull()
   })
 
   it("drops every cursor and the timestamp on clear", () => {
