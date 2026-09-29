@@ -68,6 +68,25 @@ function harness(
 let height = 100.2
 const measurable: EmbedMeasurable = { getBoundingClientRect: () => ({ height }) }
 
+Deno.test("reportHeight stop removes every listener it added", () => {
+  for (const resizeObserver of [true, false]) {
+    for (const loadFirst of [true, false]) {
+      const h = harness({ readyState: "loading", resizeObserver })
+      const stop = reportHeight({
+        element: measurable,
+        targetOrigin: "https://host.example",
+        window: h.win,
+      })
+      if (loadFirst) h.emit("load")
+      stop()
+      assertEquals(
+        [...h.listeners.values()].map((set) => set.size),
+        [...h.listeners.keys()].map(() => 0),
+      )
+    }
+  }
+})
+
 Deno.test("reportHeight posts the rounded-up height to the given origin as soon as the page is loaded", () => {
   height = 100.2
   const h = harness()

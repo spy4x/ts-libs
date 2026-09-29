@@ -273,6 +273,10 @@ describe("money with caller-given decimals", () => {
     expect(formatMoney(-1, "USDT", "en", { decimals: 6 })).toBe("-USDT\u00a00.000001")
   })
 
+  it("rejects an invalid locale with a RangeError when the code is one Intl rejects", () => {
+    expect(() => formatMoney(1, "USDT", "!!bad", { decimals: 6 })).toThrow(RangeError)
+  })
+
   it("places the currency code the way the locale places a currency symbol", () => {
     expect(formatMoney(1500000, "USDT", "de", { decimals: 6 })).toBe("1,500000\u00a0USDT")
   })

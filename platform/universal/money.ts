@@ -147,7 +147,13 @@ export function formatMoneyParts(
   if (formatter) return formatter.formatToParts(digits)
   // `Intl` rejects the code (`USDT`). Format with the placeholder code `XXX`, so the locale still
   // decides where the currency goes, then print the caller's code in its place.
-  const placeholder = moneyFormatter("XXX", locale, decimals)!
+  // `XXX` is always a valid code, so a throw here is the locale's own error: let it reach the caller.
+  const placeholder = new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "XXX",
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })
   return placeholder.formatToParts(digits).map((part) =>
     part.type === "currency" ? { type: part.type, value: currency } : part
   )
