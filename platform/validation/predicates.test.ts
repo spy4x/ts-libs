@@ -12,11 +12,13 @@ import { type } from "arktype"
 import { isValidTimeZone } from "@spy4x/time/tz"
 import {
   DEL_CODE_POINT,
+  emailAddress,
   hasHeaderControlCharacters,
   hasTextControlCharacters,
   HEADER_MAX_CODE_POINT,
   headerSafeString,
   honeypotField,
+  isEmailAddress,
   isHoneypotFilled,
   isValidTimeZoneName,
   TEXT_ALLOWED_CODE_POINTS,
@@ -224,4 +226,52 @@ Deno.test("the predicates compose inside a larger object schema", () => {
     bookingForm({ ...validBooking, guestTz: "Not/A_Timezone" }) instanceof type.errors,
     true,
   )
+})
+
+const goodEmails = [
+  "jane@example.com",
+  "o'brien@example.com",
+  "a+tag@sub.example.co.uk",
+  "a.b@example.com",
+]
+const badEmails = [
+  "",
+  "plain",
+  "a@localhost",
+  "a..b@example.com",
+  ".a@example.com",
+  "a.@example.com",
+  "a@-example.com",
+  "a@example..com",
+  "a b@example.com",
+  "Jane <jane@example.com>",
+  "jane@example.com\r\nBcc: x@example.com",
+  `${"a".repeat(250)}@example.com`,
+]
+
+Deno.test("email predicate accepts ordinary addresses", () => {
+  for (const value of goodEmails) {
+    assert(isEmailAddress(value), value)
+    assertEquals(emailAddress(value), value)
+  }
+})
+
+Deno.test("email predicate rejects malformed addresses, a display name, an injected header and an over-long address", () => {
+  for (const value of badEmails) {
+    assertFalse(isEmailAddress(value), value)
+    assertInstanceOf(emailAddress(value), type.errors)
+  }
+})
+
+Deno.test("email type names the rule in its arktype message", () => {
+  const result = emailAddress("nope")
+  assertInstanceOf(result, type.errors)
+  assertStringIncludes(result.summary, "a valid email address")
+})
+
+Deno.test("email predicate accepts a 254-character address and refuses 255", () => {
+  const domain = `@${"b".repeat(60)}.${"c".repeat(60)}.com`
+  const local = (total: number) => "a".repeat(total - domain.length)
+  assert(isEmailAddress(local(254) + domain))
+  assertFalse(isEmailAddress(local(255) + domain))
 })

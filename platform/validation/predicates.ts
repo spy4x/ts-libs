@@ -27,6 +27,7 @@
 
 import { Type, type } from "arktype"
 import { isValidTimeZone } from "@spy4x/time/tz"
+import { isAddress } from "@spy4x/email/address"
 
 /** Highest ASCII control code point, inclusive: the C0 block. */
 export const HEADER_MAX_CODE_POINT = 31
@@ -116,6 +117,25 @@ export function isValidTimeZoneName(value: string): boolean {
   return isValidTimeZone(value)
 }
 
+/** The longest addr-spec SMTP allows (RFC 5321 path limit, minus the angle brackets). */
+const MAX_EMAIL_LENGTH = 254
+
+/**
+ * True when `value` is a bare email address (`jane@example.com`, no display name) that
+ * `@spy4x/email` would send to: a dot-atom local part and a dotted domain of at least two labels
+ * (`user@localhost` is refused), at most 254 characters.
+ *
+ * One rule, not two: the pattern is `isAddress` from `@spy4x/email/address`, so a form that accepts
+ * an address here never meets a different verdict when the address reaches the sender. The
+ * dependency runs `platform` to `email`, and `email` imports nothing from `platform`, so there is
+ * no cycle. `mig`'s own pattern (a copy of Zod 3's `.email()`) differs only at the edges: it
+ * refuses `%` in the local part, which this accepts, as RFC 5322 does. `value` is checked as given;
+ * trim and lowercase it first, as a form would.
+ */
+export function isEmailAddress(value: string): boolean {
+  return value.length <= MAX_EMAIL_LENGTH && isAddress(value)
+}
+
 /**
  * `string` that is safe to place in a header value (no control characters at all).
  *
@@ -148,7 +168,13 @@ export const timeZoneName: Type<string> = type("string").narrow((value, ctx) =>
   isValidTimeZone(value) || ctx.mustBe("must be a recognised IANA time zone name")
 )
 
+/** A bare email address {@link isEmailAddress} accepts. */
+export const emailAddress: Type<string> = type("string").narrow((value, ctx) =>
+  isEmailAddress(value) || ctx.mustBe("a valid email address")
+)
+
 export type HeaderSafeString = typeof headerSafeString.infer
 export type TextSafeString = typeof textSafeString.infer
 export type HoneypotField = typeof honeypotField.infer
 export type TimeZoneName = typeof timeZoneName.infer
+export type ValidEmailAddress = typeof emailAddress.infer
