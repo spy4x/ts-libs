@@ -252,7 +252,7 @@ class LeasedRepository implements OutboxRepository {
   readonly rows: LeasedRow[]
   release?: (events: OutboxEvent[]) => Promise<void>
 
-  constructor(private readonly clock: { now: number }, count: number, withRelease: boolean) {
+  constructor(protected readonly clock: { now: number }, count: number, withRelease: boolean) {
     this.rows = Array.from({ length: count }, (_, i) => ({
       id: String(i + 1),
       availableAt: 0,
@@ -489,14 +489,52 @@ describe("OutboxProcessor slowestPublishMs floor", () => {
     expect(await processor.drainOnce()).toEqual({ claimed: 50, published: 2, failed: 0 })
   })
 
-  it("still tries the first event of a batch whatever the floor is", async () => {
+  it("does not stop a batch on the default floor: a zero-length publish still fits the last millisecond", async () => {
+    class SlowClaim extends LeasedRepository {
+      override claimBatch(limit: number, maxAttempts: number, leaseSeconds: number) {
+        this.clock.now += 999
+        return super.claimBatch(limit, maxAttempts, leaseSeconds)
+      }
+    }
     const clock = { now: 0 }
-    const repository = new LeasedRepository(clock, 3, true)
+    const repository = new SlowClaim(clock, 3, true)
     const processor = new OutboxProcessor(repository, {
       publish: () => Promise.resolve(),
-    }, { leaseSeconds: 1, now: () => clock.now, slowestPublishMs: 60_000 })
+    }, { leaseSeconds: 1, now: () => clock.now })
 
-    expect(await processor.drainOnce()).toEqual({ claimed: 3, published: 1, failed: 0 })
+    // 999 ms used by the claim; instant publishes, so 999 + 0 < 1000 for every event.
+    expect(await processor.drainOnce()).toEqual({ claimed: 3, published: 3, failed: 0 })
+  })
+
+  it("keeps the slowest publish of the batch, not the latest one, as the prediction", async () => {
+    const clock = { now: 0 }
+    const repository = new LeasedRepository(clock, 50, true)
+    let calls = 0
+    const processor = new OutboxProcessor(repository, {
+      publish: () => {
+        clock.now += calls++ === 0 ? 10_000 : 1_000
+        return Promise.resolve()
+      },
+    }, { leaseSeconds: LEASE_SECONDS, now: () => clock.now })
+
+    // The 10 s publish stays the prediction: stops once 10 s + elapsed reaches 30 s,
+    // that is after 10 s + 10 x 1 s = 20 s, so 11 publishes.
+    expect(await processor.drainOnce()).toEqual({ claimed: 50, published: 11, failed: 0 })
+  })
+
+  it("refuses a floor that reaches the lease", () => {
+    const repository = new LeasedRepository({ now: 0 }, 0, true)
+    const publisher = { publish: () => Promise.resolve() }
+
+    expect(() =>
+      new OutboxProcessor(repository, publisher, { leaseSeconds: 30, slowestPublishMs: 40_000 })
+    ).toThrow(RangeError)
+    expect(() =>
+      new OutboxProcessor(repository, publisher, { leaseSeconds: 30, slowestPublishMs: 30_000 })
+    ).toThrow(RangeError)
+    expect(() =>
+      new OutboxProcessor(repository, publisher, { leaseSeconds: 30, slowestPublishMs: 29_999 })
+    ).not.toThrow()
   })
 
   it("refuses a negative, infinite or NaN floor at construction", () => {

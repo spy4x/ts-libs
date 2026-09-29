@@ -1712,8 +1712,10 @@ tolerate a duplicate needs its own idempotency key; nothing on the SQL side remo
 drain narrows the window: it stops a batch before an event it predicts would outlast the lease, using
 the slowest publish seen so far. Passing `slowestPublishMs` (the slowest publish you expect) sets a
 floor for that prediction, so a publish no slower than it is never delivered twice because of the
-lease. A worker that crashes mid-publish, and a publish slower than `slowestPublishMs`, stay outside
-that rule. What
+lease. A worker that crashes mid-publish, a publish slower than `slowestPublishMs`, and the first
+event of a batch (always tried, so the rule also assumes the claim returns within the lease minus
+`slowestPublishMs`) stay outside that rule. The value must cover the publish plus marking the row
+processed, and must be below the lease. What
 `FOR UPDATE SKIP LOCKED` does guarantee — that two connections claiming at the same time never both
 receive the same row — is pinned by `never claims the same row from two connections at once`, which
 opens an explicit transaction on one connection and claims from a second one while the first is still

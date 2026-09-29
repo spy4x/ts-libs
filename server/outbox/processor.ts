@@ -87,9 +87,11 @@ export interface OutboxProcessorOptions {
    * `slowestPublishMs`.
    *
    * The rule, with `slowestPublishMs` set: a publish no slower than `slowestPublishMs`
-   * is never delivered twice because of the lease. Two things fall outside it: a
+   * is never delivered twice because of the lease. Three things fall outside it: a
    * worker that crashes mid-publish (its lease still expires and the event is
-   * delivered again), and a publish that takes longer than `slowestPublishMs`.
+   * delivered again), a publish that takes longer than `slowestPublishMs`, and the
+   * first event of a batch. That event is always tried, so the rule also assumes the
+   * claim returns within the lease minus `slowestPublishMs`.
    */
   leaseSeconds?: number
   /**
@@ -98,15 +100,20 @@ export interface OutboxProcessorOptions {
    *
    * It is a floor for the prediction in `leaseSeconds`: `drainOnce` stops before an
    * event when the time used so far plus the larger of this value and the slowest
-   * publish observed in the batch would reach the lease. The first event of a batch is
-   * still always tried. So a publish no slower than this value is never delivered
-   * twice because of the lease, whatever order the publish times come in. The rule does
-   * not cover a worker that crashes mid-publish, or a publish slower than this value.
+   * publish observed in the batch would reach the lease. So a publish no slower than
+   * this value is never delivered twice because of the lease, whatever order the
+   * publish times come in. The rule does not cover a worker that crashes mid-publish, a
+   * publish slower than this value, or the first event of a batch: that event is always
+   * tried, so the rule also assumes the claim returns within the lease minus this value.
    * A higher value stops batches earlier, so it needs a lease long enough to fit
    * several publishes of that length or a batch makes little progress.
    *
-   * Must be a finite number of at least 0; anything else throws a `RangeError` at
-   * construction.
+   * The value must cover the publish plus marking the row processed: the row stays
+   * claimable until that commits, and the observed slowest time already includes
+   * `markProcessed`.
+   *
+   * Must be a finite number of at least 0 and, when given, below `leaseSeconds * 1000`;
+   * anything else throws a `RangeError` at construction.
    */
   slowestPublishMs?: number
   /**
@@ -224,6 +231,11 @@ export class OutboxProcessor {
         `slowestPublishMs must be a finite number of at least 0, got ${floor}`,
       )
     }
+    if (options.slowestPublishMs !== undefined && floor >= this.#leaseSeconds * 1000) {
+      throw new RangeError(
+        `slowestPublishMs (${floor}) must be below the lease of ${this.#leaseSeconds * 1000} ms`,
+      )
+    }
     this.#slowestPublishMs = floor
   }
 
@@ -234,10 +246,12 @@ export class OutboxProcessor {
    * The whole batch shares one lease, so publishing it one event at a time can outlast
    * the lease and let another worker claim the tail. Before each event after the first,
    * this stops once the time since the claim began plus the slowest publish seen so far
-   * (or `slowestPublishMs`, when larger) would reach the lease, and hands the untried events back (see `leaseSeconds`).
+   * (or `slowestPublishMs`, when larger) would reach the lease, and hands the untried
+   * events back (see `leaseSeconds`).
    * Timing starts before the claim, so it overestimates the lease already used. The
    * next publish is predicted from the slowest one so far, so an unusually slow publish
-   * started near the end of the lease can still be delivered twice.
+   * started near the end of the lease can still be delivered twice, without
+   * `slowestPublishMs` or when it is slower than that value.
    */
   async drainOnce(): Promise<DrainResult> {
     const startedAt = this.#now()
