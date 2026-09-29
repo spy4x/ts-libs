@@ -53,3 +53,24 @@ export interface Event<TPayload> {
 /** A class implementing {@link Event}, matched by `EventBus.on`/`once`/`emit`. */
 // deno-lint-ignore no-explicit-any
 export type EventConstructor<T extends Event<unknown>> = new (...args: any[]) => T
+
+/**
+ * A step that runs around every `execute` of a {@link CommandBus} or {@link QueryBus}, before the
+ * handler and whatever transport produced the message.
+ *
+ * It receives the message instance itself, so it can read the message's class through
+ * `message.constructor` (to exempt or route some classes) and anything the payload carries, such as
+ * who sent it. It calls `next()` to continue to the next middleware and, after the last one, the
+ * handler; it returns what `next()` resolved to, or its own value. It short-circuits by throwing, or
+ * by returning without calling `next()`, and then the handler does not run.
+ *
+ * Checks that are neither transport mechanics nor business rules belong here: session strength,
+ * auditing, tracing. In a transport, a second transport would skip them; in handlers, they would be
+ * repeated once per handler, and a forgotten one goes unnoticed.
+ *
+ * The same middleware can be registered on both buses: a command and a query have the same shape.
+ */
+export type CqrsMiddleware = (
+  message: Command<unknown, unknown> | Query<unknown, unknown>,
+  next: () => Promise<unknown>,
+) => Promise<unknown>

@@ -7,6 +7,9 @@
  * - {@link EventBus} — publish/subscribe, delivered on a microtask, with per-listener error
  *   isolation (see `event-bus.ts` for what changed from the source this was ported from).
  *
+ * `CommandBus.use` and `QueryBus.use` add a {@link CqrsMiddleware}: a step that runs around every
+ * dispatch, before the handler, and may stop it.
+ *
  * None of the three keeps state outside its own instance.
  *
  * @module
@@ -20,6 +23,7 @@ export type {
   CommandConstructor,
   CommandHandler,
   CommandResult,
+  CqrsMiddleware,
   Event,
   EventConstructor,
   Query,
