@@ -5,6 +5,7 @@
     ".": "./mod.ts",
     "./webhooks": "./webhooks.ts",
     "./ntfy": "./ntfy.ts",
-    "./healthchecks": "./healthchecks.ts"
+    "./healthchecks": "./healthchecks.ts",
+    "./cloudflare": "./cloudflare.ts"
   }
 }

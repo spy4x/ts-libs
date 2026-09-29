@@ -23,6 +23,9 @@ export type {
   HealthchecksSuccess,
 } from "./healthchecks.ts"
 
+export { PURGE_BATCH_SIZE, purgeUrls } from "./cloudflare.ts"
+export type { CloudflarePurgeOptions, CloudflarePurgeResult } from "./cloudflare.ts"
+
 export { NotificationSeverity, NtfyClient, ntfyConfigFromEnv, NtfyPriority } from "./ntfy.ts"
 export type {
   NtfyClientConfig,

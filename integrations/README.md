@@ -23,6 +23,7 @@ Runs on: server (Deno).
 | `.` (`mod.ts`)   | Barrel.                                                                   |
 | `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority` |
 | `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`  |
+| `./cloudflare`   | `purgeUrls` — Cloudflare cache purge by URL                               |
 | `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification                 |
 
 ## Contracts
@@ -125,6 +126,24 @@ different needs follow, and `mig`'s source conflated them:
 
 `createAsciiHeaders` applies the transliteration to every value, so the failure cannot come back
 through a new call site. Both halves are pinned by tests, including the body round-trip.
+
+### `purgeUrls` — Cloudflare cache purge
+
+`purgeUrls({ token, zoneName | zoneId, urls, fetch?, requestTimeoutMs? })` purges absolute URLs from
+a Cloudflare zone and returns `{ success, output, error }`. It never throws.
+
+- **Zone.** Give exactly one of `zoneName` (looked up with `GET /zones?name=`; no match fails and
+  names the zone) or `zoneId` (no lookup call). The token needs Zone Read only for the lookup, and
+  Cache Purge.
+- **Batches.** 30 URLs per `purge_cache` call, the API's limit. It stops at the first failed call and
+  reports how many URLs were purged before it.
+- **Timeout.** Each request runs under `AbortSignal.timeout(requestTimeoutMs)`, 10 s by default.
+- **Failures.** An HTTP error, a `200` with `success: false`, a timeout and a transport error all
+  fail. API failures carry Cloudflare's error codes and messages; transport failures carry only the
+  error class. The token and headers never appear in `error` or `output`.
+- **Empty list.** An empty `urls` succeeds with `output: "nothing to purge"` and sends no request.
+- **Fail open.** The caller decides what a failure means; a deploy script would normally log
+  `error` and carry on.
 
 ### `verifyWebhookRequest`
 
