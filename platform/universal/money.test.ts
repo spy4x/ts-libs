@@ -266,3 +266,60 @@ describe("parseMoney", () => {
     }
   })
 })
+
+describe("money with caller-given decimals", () => {
+  it("formats USDT, a code Intl rejects, with the six decimals the caller gives", () => {
+    expect(formatMoney(1500000, "USDT", "en", { decimals: 6 })).toBe("USDT\u00a01.500000")
+    expect(formatMoney(-1, "USDT", "en", { decimals: 6 })).toBe("-USDT\u00a00.000001")
+  })
+
+  it("places the currency code the way the locale places a currency symbol", () => {
+    expect(formatMoney(1500000, "USDT", "de", { decimals: 6 })).toBe("1,500000\u00a0USDT")
+  })
+
+  it("formats BTC with eight decimals instead of the two Intl gives it", () => {
+    expect(formatMoney(1, "BTC", "en", { decimals: 8 })).toBe("BTC\u00a00.00000001")
+    expect(formatMoney(123456789, "BTC", "en", { decimals: 8 })).toBe("BTC\u00a01.23456789")
+    expect(formatMoney(123456789, "BTC")).toBe("BTC\u00a01,234,567.89")
+  })
+
+  it("lets a caller override the decimals of a currency Intl knows", () => {
+    expect(formatMoney(12345, "EUR", "en", { decimals: 3 })).toBe("€12.345")
+  })
+
+  it("keeps existing calls exactly as they were when no decimals are given", () => {
+    expect(formatMoney(12345, "EUR")).toBe("€123.45")
+    expect(formatMoney(12345, "JPY")).toBe("¥12,345")
+    expect(formatMoney(12345, "KWD")).toBe("KWD\u00a012.345")
+    expect(formatMoney(12345, "EUR", "en", {})).toBe("€123.45")
+  })
+
+  it("returns the code as a currency part from formatMoneyParts", () => {
+    const parts = formatMoneyParts(1500000, "USDT", "en", { decimals: 6 })
+    expect(parts.find((part) => part.type === "currency")?.value).toBe("USDT")
+  })
+
+  it("parses typed text into an integer count of the smallest unit", () => {
+    expect(parseMoney("1.5", "USDT", "en", { decimals: 6 })).toEqual({ ok: true, value: 1500000 })
+    expect(parseMoney("0.00000001", "BTC", "en", { decimals: 8 })).toEqual({ ok: true, value: 1 })
+    expect(parseMoney("0.0000001", "USDT", "en", { decimals: 6 })).toEqual({
+      ok: false,
+      error: { type: "too-many-decimals", maxDecimals: 6 },
+    })
+  })
+
+  it("reports the given decimals from currencyDecimals", () => {
+    expect(currencyDecimals("USDT", "en", { decimals: 6 })).toBe(6)
+    expect(currencyDecimals("BTC", "en", { decimals: 0 })).toBe(0)
+  })
+
+  it("refuses decimals that are not a whole number from 0 to 20", () => {
+    for (const decimals of [-1, 1.5, 21, NaN]) {
+      expect(() => currencyDecimals("BTC", "en", { decimals })).toThrow(/whole number from 0 to 20/)
+    }
+  })
+
+  it("still rejects an unknown code when no decimals are given", () => {
+    expect(() => currencyDecimals("USDT")).toThrow(RangeError)
+  })
+})
