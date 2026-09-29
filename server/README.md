@@ -1458,7 +1458,7 @@ turns it off for a non-TTY or `NO_COLOR` environment, so nothing new needs decid
 ## `server/config`
 
 `EnvReader`, `MissingEnvError`, `systemEnv`, `createEnvReader`, `readEnvVar`, `loadConfig`,
-`ConfigError`, `stringBoolean`.
+`ConfigError`, `ConfigIssue`, `stringBoolean`.
 
 Six apps carry their own version of "read the environment into a config object" today — a class
 whose fields are one `getEnvVar("NAME")` call apiece (`template/apps/api/services/config.ts`;
@@ -1524,6 +1524,18 @@ whose entries are checked one by one, say — puts the value's own keys deeper i
 of the schema's own declared keys. A hand-set `ctx.reject({ path: [...] })` inside a `.narrow()`
 could otherwise put anything at all in that first segment; the same restriction closes that route
 too.
+
+**`ConfigError.issues` says why each variable failed.** Beside `variables` (unchanged), `issues` is
+a list of `{ name, reason }`, one per variable, in the same sorted order as `variables`. A reason is
+one of three things: `is missing`, `has an invalid value`, or `must be <text arktype builds from the
+schema>`, for example `must be at least length 9` or `must be "dev" or "prod"`. The fixed `has an
+invalid value` is used for a failure inside a parsed value (a JSON map) and for every `predicate`
+issue: a `.narrow()` or `ctx.mustBe` text, or `string.url`, because that text is written by the
+schema's author and may quote the value. A union's text is cut to what sits between `<name> must be`
+and the first `(was`, or falls back to the fixed phrase. As a last guard, any reason that still
+contains the raw value falls back too. `actual` and arktype's own `message` are never read.
+`message` is unchanged, so a start-up log line that wants reasons formats `issues` itself. A morph
+that threw gives an empty `issues`.
 
 **A root-level check is reported by its own `expected` text, printed verbatim.** A cross-field rule
 written with `.narrow()` (financy's "`TELEGRAM_WEBHOOK_URL` is required outside dev", checked across

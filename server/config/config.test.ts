@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
-import { type } from "arktype"
+import { type Type, type } from "arktype"
 import { createEnvReader } from "./env.ts"
 import { ConfigError, loadConfig, stringBoolean } from "./config.ts"
 
@@ -283,5 +283,171 @@ describe("stringBoolean", () => {
 
   it("parses the literal string false to the boolean false", () => {
     expect(stringBoolean("false")).toBe(false)
+  })
+})
+
+describe("ConfigError.issues", () => {
+  const secretSchema = type({
+    ENV: "'dev' | 'prod'",
+    AUTH_PEPPER: "string > 8",
+    PORT: "string.integer.parse",
+    API_TOKENS: type("string.json.parse").to({ "[string]": "'admin' | 'reader'" }),
+  })
+
+  function issuesOf(env: Record<string, string>) {
+    return issuesFor(secretSchema, env)
+  }
+
+  function issuesFor(schema: Type, env: Record<string, string>) {
+    try {
+      loadConfig(schema, createEnvReader(env))
+    } catch (error) {
+      return (error as ConfigError).issues
+    }
+    throw new Error("expected loadConfig to throw")
+  }
+
+  it("says a missing variable is missing", () => {
+    const issues = issuesOf({
+      ENV: "dev",
+      PORT: "1",
+      API_TOKENS: "{}",
+    })
+
+    expect(issues).toEqual([{ name: "AUTH_PEPPER", reason: "is missing" }])
+  })
+
+  it("says what a variable of the wrong type must be", () => {
+    const issues = issuesOf({
+      ENV: "dev",
+      AUTH_PEPPER: "long-enough-pepper",
+      PORT: "eighty",
+      API_TOKENS: "{}",
+    })
+
+    expect(issues).toEqual([{ name: "PORT", reason: "must be a well-formed integer string" }])
+  })
+
+  it("gives one reason per variable when two are bad at once", () => {
+    const issues = issuesOf({ ENV: "dev", AUTH_PEPPER: "short", PORT: "x", API_TOKENS: "{}" })
+
+    expect(issues).toEqual([
+      { name: "AUTH_PEPPER", reason: "must be at least length 9" },
+      { name: "PORT", reason: "must be a well-formed integer string" },
+    ])
+  })
+
+  it("keeps the accepted values of a union but not the rejected value", () => {
+    const issues = issuesOf({
+      ENV: "sk-live-SECRET-1",
+      AUTH_PEPPER: "long-enough-pepper",
+      PORT: "1",
+      API_TOKENS: "{}",
+    })
+
+    expect(issues).toEqual([{ name: "ENV", reason: `must be "dev" or "prod"` }])
+  })
+
+  it("never puts a secret-looking value in any reason or in the message", () => {
+    const secret = "sk-live-SECRET-9f8e7d"
+    let thrown: ConfigError | undefined
+    try {
+      loadConfig(
+        secretSchema,
+        createEnvReader({
+          ENV: secret,
+          AUTH_PEPPER: secret.slice(0, 5),
+          PORT: secret,
+          API_TOKENS: JSON.stringify({ [secret]: secret }),
+        }),
+      )
+    } catch (error) {
+      thrown = error as ConfigError
+    }
+
+    expect(thrown?.issues.length).toBe(4)
+    const everything = JSON.stringify(thrown?.issues) + thrown?.message
+    expect(everything).not.toContain("SECRET")
+    expect(everything).not.toContain("sk-l")
+    expect(thrown?.issues.find((i) => i.name === "API_TOKENS")?.reason).toBe(
+      "has an invalid value",
+    )
+  })
+
+  it("falls back to a fixed reason when a custom rejection quotes the value", () => {
+    const schema = type({
+      TOKEN: type("string").narrow((value, ctx) => ctx.reject({ expected: `not ${value}` })),
+    })
+
+    try {
+      loadConfig(schema, createEnvReader({ TOKEN: "sk-live-SECRET" }))
+      throw new Error("expected loadConfig to throw")
+    } catch (error) {
+      expect((error as ConfigError).issues).toEqual([
+        { name: "TOKEN", reason: "has an invalid value" },
+      ])
+    }
+  })
+
+  it("says has an invalid value, not is missing, for a missing key inside a parsed value", () => {
+    const schema = type({ A: type("string.json.parse").to({ k: "string", j: "number" }) })
+
+    const issues = issuesFor(schema, { A: JSON.stringify({ k: "sk-live-SECRET" }) })
+
+    expect(issues).toEqual([{ name: "A", reason: "has an invalid value" }])
+  })
+
+  it("says has an invalid value for a failing union inside a parsed value", () => {
+    const schema = type({ A: type("string.json.parse").to({ k: "string", j: "'a' | 'b'" }) })
+
+    const issues = issuesFor(schema, { A: JSON.stringify({ k: "x", j: "sk-live-SECRET" }) })
+
+    expect(issues).toEqual([{ name: "A", reason: "has an invalid value" }])
+  })
+
+  it("says has an invalid value when a custom check quotes the value with quotes in it", () => {
+    const schema = type({
+      TOKEN: type("string").narrow((value, ctx) =>
+        ctx.reject({ expected: `not ${JSON.stringify(value)}` })
+      ),
+    })
+    const secret = `sk-live-"SECRET"-9`
+
+    const issues = issuesFor(schema, { TOKEN: secret })
+
+    expect(issues).toEqual([{ name: "TOKEN", reason: "has an invalid value" }])
+  })
+
+  it("lists issues in the sorted order of variables when the schema order differs", () => {
+    const schema = type({ ZED: "string > 8", "ALPHA?": "string.integer.parse", MID: "string > 8" })
+
+    const issues = issuesFor(schema, { ZED: "a", ALPHA: "x", MID: "b" })
+
+    expect(issues.map((i) => i.name)).toEqual(["ALPHA", "MID", "ZED"])
+  })
+
+  it("keeps the issues in step with variables", () => {
+    try {
+      loadConfig(secretSchema, createEnvReader({}))
+      throw new Error("expected loadConfig to throw")
+    } catch (error) {
+      const configError = error as ConfigError
+      expect(configError.issues.map((i) => i.name)).toEqual([...configError.variables])
+    }
+  })
+
+  it("has no issues when a morph threw", () => {
+    const schema = type({
+      X: type("string").pipe(() => {
+        throw new Error("bad sk-live-SECRET")
+      }),
+    })
+
+    try {
+      loadConfig(schema, createEnvReader({ X: "sk-live-SECRET" }))
+      throw new Error("expected loadConfig to throw")
+    } catch (error) {
+      expect((error as ConfigError).issues).toEqual([])
+    }
   })
 })

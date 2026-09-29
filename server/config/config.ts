@@ -54,13 +54,28 @@ import { type EnvReader, systemEnv } from "./env.ts"
 /** A root-level failure (a `.narrow()` rejection with no single field) reads as this label. */
 const CROSS_FIELD_LABEL = "(cross-field check)"
 
+/** Why one environment variable was rejected. The `reason` never contains the variable's value. */
+export interface ConfigIssue {
+  /** The variable's name, or the cross-field label for a root-level check. */
+  readonly name: string
+  /**
+   * A short phrase: `is missing`, `must be <what the schema asks for>`, or the fixed `has an invalid
+   * value` (used for a failure inside a parsed value and for every custom check). Never contains
+   * the variable's value.
+   */
+  readonly reason: string
+}
+
 /**
  * Raised by {@link loadConfig} when one or more environment variables are missing, blank, or fail
- * the schema. `variables` names every one of them; none of their values, valid or not, appear
- * anywhere on this error.
+ * the schema. `variables` names every one of them and `issues` says why, one entry per variable in
+ * the same order; none of their values, valid or not, appear anywhere on this error.
  */
 export class ConfigError extends Error {
-  constructor(public readonly variables: readonly string[]) {
+  constructor(
+    public readonly variables: readonly string[],
+    public readonly issues: readonly ConfigIssue[] = [],
+  ) {
     super(
       variables.length > 0
         ? `invalid or missing environment variable(s): ${variables.join(", ")}`
@@ -132,6 +147,49 @@ function crossFieldLabel(issue: { expected: string }): string {
   }
 }
 
+/** The reason used whenever arktype's own text might carry the rejected value. */
+const GENERIC_REASON = "has an invalid value"
+
+/**
+ * A value-free reason for one failing issue on a declared variable. What the code guarantees: the
+ * reason is one of a fixed phrase (`is missing`, `has an invalid value`) or `must be ` plus text
+ * arktype builds from the schema alone. A failure inside a parsed value, and every `predicate`
+ * issue (a `.narrow()` or `ctx.mustBe` text, or `string.url`), gets the fixed `has an invalid
+ * value`, since that text is written by the schema's author and may quote the value. A `union`
+ * issue's `expected` is the whole message, value included (`ENV must be "dev" or "prod" (was
+ * "...")`), so only the text between `<name> must be ` and the first ` (was ` is kept. As a second
+ * line of defence, text that still contains the raw value falls back to the fixed phrase.
+ */
+function issueReason(
+  name: string,
+  issue: { code: string; path: readonly PropertyKey[]; expected: string },
+  raw: string | undefined,
+): string {
+  if (issue.path.length > 1) return GENERIC_REASON
+  if (issue.code === "required") return "is missing"
+  if (issue.code === "predicate") return GENERIC_REASON
+  let expected: unknown
+  try {
+    expected = issue.expected
+  } catch {
+    return GENERIC_REASON
+  }
+  if (typeof expected !== "string" || expected.length === 0) return GENERIC_REASON
+  if (issue.code === "union") {
+    const prefix = `${name} must be `
+    const end = expected.indexOf(" (was ")
+    if (!expected.startsWith(prefix) || end <= prefix.length) return GENERIC_REASON
+    expected = expected.slice(prefix.length, end)
+  }
+  const text = (expected as string).split("\n")
+    .map((line) => line.replace(/^\s*◦\s*/, "").trim())
+    .filter((line) => line.length > 0)
+    .join(" and ")
+  if (text.length === 0) return GENERIC_REASON
+  if (raw !== undefined && raw !== "" && text.includes(raw)) return GENERIC_REASON
+  return `must be ${text}`
+}
+
 /**
  * Read every environment variable `schema` declares and validate them together, once.
  *
@@ -171,18 +229,26 @@ export function loadConfig<T extends Type>(schema: T, env: EnvReader = systemEnv
   }
   const { data, error } = result
   if (error) {
-    const variables = new Set<string>()
+    const reasons = new Map<string, string>()
     for (const issue of error.details) {
       // Only the first path segment, and only when it is one of the schema's own keys: a failure
       // inside a parsed value (a JSON map, say) puts the value's own keys deeper in the path, and
       // a hand-set `ctx.reject({ path: [...] })` can put anything at all in the first segment. A
       // path this schema never declared goes through the value-free cross-field label instead.
       const first = issue.path[0]
-      variables.add(
-        typeof first === "string" && declaredKeys.has(first) ? first : crossFieldLabel(issue),
+      const declared = typeof first === "string" && declaredKeys.has(first)
+      const name = declared ? first : crossFieldLabel(issue)
+      if (reasons.has(name)) continue
+      reasons.set(
+        name,
+        declared ? issueReason(first, issue, raw[first]) : "failed a cross-field check",
       )
     }
-    throw new ConfigError([...variables].sort())
+    const variables = [...reasons.keys()].sort()
+    throw new ConfigError(
+      variables,
+      variables.map((name) => ({ name, reason: reasons.get(name)! })),
+    )
   }
   return data
 }
