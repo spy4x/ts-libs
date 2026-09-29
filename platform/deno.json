@@ -26,6 +26,7 @@
     "./server/file-lock": "./server/file-lock.ts",
     "./server/jsonl-logger": "./server/jsonl-logger.ts",
     "./server/ports": "./server/ports.ts",
+    "./server/run-command": "./server/run-command.ts",
     "./server/shutdown-signal": "./server/shutdown-signal.ts",
     "./server/throttled-saver": "./server/throttled-saver.ts",
     "./signed-payload": "./signed-payload.ts",
