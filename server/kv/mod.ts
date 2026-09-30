@@ -12,3 +12,8 @@ export {
   type RedisKvStoreOptions,
 } from "./redis-kv-store.ts"
 export { type RateLimitRedisStore, redisRateLimitKv } from "./rate-limit-kv.ts"
+export {
+  createRedisRateLimitStore,
+  type RateLimitRedisScriptStore,
+  type RedisRateLimitStoreOptions,
+} from "./redis-rate-limit-store.ts"

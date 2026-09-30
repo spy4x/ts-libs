@@ -31,13 +31,15 @@ export interface RateLimitRedisStore {
  *   limiter treats that as "no history" and overwrites it on the next request; throwing
  *   would turn one foreign key into an error on every request for that client.
  *
- * Not atomic across instances: the platform store reads a window, adds an event and writes
- * it back with plain `GET` and `SET`. When two instances read the same window at once, both
- * accept the request and the later write overwrites the earlier one, so an accepted request
- * can be missing from the record. That repeats for as long as requests overlap: for a client
- * whose requests reach every instance in lockstep bursts, the effective limit approaches
- * `limit x instances`. The limit is shared but not exact; an exact one needs an atomic store
- * (tracked in https://github.com/spy4x/ts-libs/issues/303).
+ * Not atomic across instances: the platform store reads a window, adds an event and writes it
+ * back with plain `GET` and `SET`. When two instances read the same window at once, both accept
+ * the request and the later write overwrites the earlier one, so an accepted request can be
+ * missing from the record. That repeats for as long as requests overlap: for a client whose
+ * requests reach every instance in lockstep bursts, the effective limit approaches
+ * `limit x instances` (32 of 32 simultaneous requests accepted at a limit of 10 in the
+ * integration tier). Use it for a single instance. For several instances that must hold the
+ * limit, use `createRedisRateLimitStore` from `redis-rate-limit-store.ts`, which counts and
+ * records in one Lua script.
  *
  * @param store An open `RedisKvStore` (the caller keeps ownership and closes it).
  */

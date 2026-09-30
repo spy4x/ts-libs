@@ -711,3 +711,25 @@ describe("RedisKvStore.take", () => {
     store.close()
   })
 })
+
+describe("RedisKvStore.eval", () => {
+  it("sends EVAL with the key count, prefixed keys and then the arguments", async () => {
+    const { store, conns } = await connectFake()
+    conns[0].reply(":1")
+
+    assertEquals(await store.eval("return 1", ["a", "b"], ["x", 7]), 1)
+    // RESP: `*<count>`, then a `$<length>` line and the value for each argument.
+    const parts = (conns[0].writes.at(-1) as string).split("\r\n").filter((_, i) =>
+      i > 0 && i % 2 === 0
+    )
+    assertEquals(parts, ["EVAL", "return 1", "2", "unit_kv:a", "unit_kv:b", "x", "7"])
+
+    store.close()
+  })
+
+  it("throws RedisKvStoreClosedError on a closed store", async () => {
+    const { store } = await connectFake()
+    store.close()
+    await assertRejects(() => store.eval("return 1", ["a"]), RedisKvStoreClosedError)
+  })
+})

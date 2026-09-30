@@ -689,6 +689,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `MemoryRateLimiterOptions` (interface), `jsr:@spy4x/platform/rate-limit`: Constructor options for MemoryRateLimiter.
 - `RATE_LIMIT_HEADERS` (constant), `jsr:@spy4x/platform/rate-limit`: Default draft-6 header names.
 - `REJECTION_STATUSES` (constant), `jsr:@spy4x/platform/rate-limit`: The same set at runtime, so a bad status is refused at startup rather than at first rejection.
+- `RateLimitConsumeResult` (interface), `jsr:@spy4x/platform/rate-limit`: Outcome of RateLimitStore.consume.
 - `RateLimitContext` (interface), `jsr:@spy4x/platform/rate-limit`: The framework context handed to a key resolver and to a RemoteAddrResolver.
 - `RateLimitDecision` (interface), `jsr:@spy4x/platform/rate-limit`: Outcome of one `check`.
 - `RateLimitErrorBody` (interface), `jsr:@spy4x/platform/rate-limit`: JSON-safe response body for a rejected request.
@@ -766,6 +767,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `DEFAULT_IDLE_MS` (constant), `jsr:@spy4x/platform/rate-limit/memory`: How long a bucket survives after it stops being active.
 - `MemoryRateLimiter` (class), `jsr:@spy4x/platform/rate-limit/memory`: In-process sliding-window limiter.
 - `MemoryRateLimiterOptions` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Constructor options for MemoryRateLimiter.
+- `RateLimitConsumeResult` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Outcome of RateLimitStore.consume.
 - `RateLimitDecision` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Outcome of one `check`.
 - `RateLimitKind` (enum), `jsr:@spy4x/platform/rate-limit/memory`: Which identity a limiter buckets on.
 - `RateLimitOptions` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Configuration shared by every limiter implementation.
@@ -1636,12 +1638,15 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/server/kv`
 
+- `RateLimitRedisScriptStore` (interface), `jsr:@spy4x/server/kv`: The part of RedisKvStore the store needs.
 - `RateLimitRedisStore` (interface), `jsr:@spy4x/server/kv`: The part of RedisKvStore the adapter needs.
 - `RedisKvStore` (class), `jsr:@spy4x/server/kv`: A key-value store scoped to one Redis connection and one key prefix.
 - `RedisKvStoreAuthError` (class), `jsr:@spy4x/server/kv`: Thrown by RedisKvStore.connect when the server refuses the credentials or demands ones that were not given.
 - `RedisKvStoreClosedError` (class), `jsr:@spy4x/server/kv`: Thrown by every method once RedisKvStore.close has been called.
 - `RedisKvStoreConnectionError` (class), `jsr:@spy4x/server/kv`: Thrown when a call cannot get its command answered over a live connection: a fresh connection could not be opened in place of a dead one (Redis is still unreachable, or still refuses `PING`), the one resend after a reconnect failed too, or Redis did not answer within the store's fixed command bound.
 - `RedisKvStoreOptions` (interface), `jsr:@spy4x/server/kv`: Credentials for RedisKvStore.connect, for a server with `requirepass` or ACL users.
+- `RedisRateLimitStoreOptions` (interface), `jsr:@spy4x/server/kv`: Options for createRedisRateLimitStore.
+- `createRedisRateLimitStore` (function), `jsr:@spy4x/server/kv`: Build an atomic `RateLimitStore` over a `RedisKvStore` (the caller keeps ownership and closes it).
 - `redisRateLimitKv` (function), `jsr:@spy4x/server/kv`: Turn a Redis store into the `RateLimitKv` port that `createKvStore` from `@spy4x/platform/rate-limit/kv` takes.
 
 ### `jsr:@spy4x/server/outbox`
@@ -1942,4 +1947,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 c294c44b3e459706617c573695d28af38d2df7289b3abb184706dbeb5bc210b3 -->
+<!-- export surface: sha256 57605f996f020641c9c646afaa47089a0825c1e9a95002cfccdf0a077b4d5e79 -->

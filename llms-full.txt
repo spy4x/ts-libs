@@ -1987,7 +1987,8 @@ const limiter = createStoreLimiter(store, { windowMs: 60_000, limit: 10 })
 ```
 
 Redis or Postgres reach the same limiter by implementing `RateLimitStore` (`read`, `write`,
-`delete`) — `createStoreLimiter` is the only thing the core needs.
+`delete`, and optionally the atomic `consume`) — `createStoreLimiter` is the only thing the core
+needs. For several instances use an atomic store (see below).
 
 **Same semantics as the in-process limiter**, asserted by a parity test that drives both with one
 multi-event sequence and compares `allowed` and `remaining` decision for decision. An earlier revision
@@ -1998,13 +1999,18 @@ accepted **5** requests inside one window where the memory path accepted 3. The 
 **newest** event (`newest + windowMs − now`) on both branches of `StoreRateLimiter`, so early expiry
 cannot happen.
 
-**Read-modify-write is not atomic across instances.** Two isolates can read the same value and both
-accept, so the effective limit under concurrency is `limit + (concurrent isolates - 1)`. The
-3-method port is what forecloses a Deno KV `atomic().check()` compare-and-swap: that is a deliberate
-design choice, not a backend limitation — a cross-instance lock per request would serialise the API
-on the limiter, and a limiter that errs one request generous is better than one that is down. If you
-need an exact count, put the counter behind a store that has an atomic increment and accept the
-round-trip.
+**Read-modify-write is not atomic across instances, and it loses writes.** Two instances can read the
+same window and both accept; the later `write` then overwrites the earlier one, so an accepted request
+is never recorded. That repeats while requests overlap, so when a client's requests reach every
+instance in lockstep bursts the effective limit approaches `limit × instances` (4 instances at limit
+10 accepted 40 in a measured burst), not `limit + instances - 1`. The 3-method port forecloses a Deno
+KV `atomic().check()` compare-and-swap on purpose. **Several instances that must hold the limit need
+an atomic store:** a store may implement the optional `RateLimitStore.consume(key, now, windowMs,
+limit)`, which trims, counts and records in one backend step, and `StoreRateLimiter.check` then uses
+it instead of `read` plus `write`. `createRedisRateLimitStore` in `@spy4x/server/kv` does this with
+one Lua script, and implements the optional `RateLimitStore.release` for an atomic `refund` as well.
+Over a store without `release`, `refund` is read-modify-write and a refund that overlaps other
+instances' checks can erase their events.
 
 ## Sliding window, not fixed
 
@@ -4286,7 +4292,7 @@ export const config = loadConfig(configSchema)
 ## `server/kv`
 
 `RedisKvStore`. A small wrapper over `@iuioiua/redis`'s `RedisClient`: `get`, `set` with a TTL,
-`take`, `del`, `reset`, `close`. Extracted from `template/libs/server/kv/+index.ts` (#75);
+`take`, `del`, `eval`, `reset`, `close`. Extracted from `template/libs/server/kv/+index.ts` (#75);
 `financy`'s copy differs from the template's by one import line (its own module alias for the cache
 interface) and was not otherwise consulted.
 
@@ -4320,9 +4326,40 @@ client; the limiter overwrites it on its next write. **Not atomic across instanc
 store reads, adds an event and writes back with plain `GET`/`SET`. When two instances read the same
 window at once, both accept and the later write overwrites the earlier one, so an accepted request
 can go unrecorded. This repeats while requests overlap: under lockstep bursts the effective limit
-approaches `limit x instances`. The limit is shared, not exact; an exact one needs an atomic store
-([#303](https://github.com/spy4x/ts-libs/issues/303)). `RedisKvStore.setWithoutExpiry`
+approaches `limit x instances` (measured: 32 of 32 simultaneous requests accepted at a limit of 10,
+four connections). Fine for one instance; for several, use the atomic store below.
+`RedisKvStore.setWithoutExpiry`
 was added for the no-expiry case.
+
+**Atomic rate-limit storage: `createRedisRateLimitStore(store, options?)`.** A `RateLimitStore` for
+`createStoreLimiter` from `@spy4x/platform/rate-limit` that holds the exact limit across any number
+of API instances: `createStoreLimiter(createRedisRateLimitStore(kv), { windowMs, limit })`. It keeps
+each window in a Redis sorted set and implements the optional `RateLimitStore.consume`, one Lua
+script (`EVAL`) that drops events older than the window, counts, records the request only when
+there is room, and sets the key's expiry, all in one step that Redis runs before it serves anyone
+else. In the integration tier, four connections firing 32 simultaneous requests at a limit of 10 per
+round, for five rounds, accept exactly 10 each round; the same burst through `redisRateLimitKv` plus
+`createKvStore` accepts all 32.
+
+- **The clock is the limiter's, not Redis `TIME`.** "Now" is what the limiter passes in, so behaviour
+  matches the other stores and tests stay deterministic; the key's real expiry is a Redis TTL of
+  `windowMs`. Instances with skewed clocks disagree on the window's start, so keep them on NTP.
+- **Plain `EVAL`, no `EVALSHA`.** The script travels with each call (a few hundred bytes), so a Redis
+  restart or failover never answers `NOSCRIPT` and there is no fallback path to get wrong.
+- **Own key namespace.** Default `ratelimit-atomic` under the `RedisKvStore` prefix (option
+  `keyPrefix`). Keys are sorted sets; pointing it at keys `redisRateLimitKv` wrote makes Redis answer
+  `WRONGTYPE`.
+- **`refund` is atomic too**, through the optional `RateLimitStore.release`: one Lua script removes
+  the single event recorded at `at` (or the newest), so a refund cannot erase requests other
+  instances recorded meanwhile. A store without `release` refunds by `read` then `write`, and there
+  a refund overlapping other instances' checks can erase their events and let more than `limit`
+  through.
+- **A resend after a dead connection** reuses the same event id, so `consume` records no extra event;
+  it may answer "rejected" for a request that was in fact recorded (the first run took the last
+  slot). A resent `release` with `at` removes a second event only when another one shares that
+  millisecond; without `at` it also removes the next-newest event.
+- To run scripts, `RedisKvStore.eval(script, keys, args)` was added: keys are prefixed like every
+  other method's, `args` arrive as `ARGV`.
 
 **Every key lives under a mandatory prefix, and `reset()` only touches that prefix.** The ported
 original's `reset()` sent `FLUSHDB`, which deletes every key in the whole Redis database — another

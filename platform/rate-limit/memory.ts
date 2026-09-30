@@ -376,17 +376,52 @@ export interface RateLimitStore {
   write(key: string, events: number[], now: number, ttlMs: number): Promise<void>
   /** Drop `key`. */
   delete(key: string): Promise<void>
+  /**
+   * Optional atomic check-and-record. When present, {@link StoreRateLimiter.check} calls it instead
+   * of `read` followed by `write`, so concurrent instances cannot both accept the last free slot.
+   *
+   * Drops events at or before `now - windowMs`, and if fewer than `limit` remain, records `now`;
+   * otherwise records nothing. All of that happens as one step in the backend. Returns whether
+   * `now` was recorded and the window afterwards, oldest first.
+   */
+  consume?(
+    key: string,
+    now: number,
+    windowMs: number,
+    limit: number,
+  ): Promise<RateLimitConsumeResult>
+  /**
+   * Optional atomic refund. When present, {@link StoreRateLimiter.refund} calls it instead of
+   * `read` followed by `write`, so a refund that overlaps other instances' checks cannot erase
+   * their recorded events.
+   *
+   * Removes one event: the one recorded at exactly `at`, or the newest without `at`. A no-op when
+   * no such event is held.
+   */
+  release?(key: string, at?: number): Promise<void>
+}
+
+/** Outcome of {@link RateLimitStore.consume}. */
+export interface RateLimitConsumeResult {
+  /** True when `now` was recorded, false when the window was already full. */
+  allowed: boolean
+  /** Events inside the window after the call (including `now` when allowed), oldest first. */
+  events: number[]
 }
 
 /**
  * Store-backed sliding window over any {@link RateLimitStore}.
  *
  * Same window semantics as {@link MemoryRateLimiter}, so a single instance can start in-process and
- * move to Deno KV or a custom store without changing behaviour. Read-modify-write is not atomic
- * across instances: two requests that land in different isolates within the same millisecond can
- * both be accepted, so the effective limit is `limit + (concurrent isolates - 1)` in the worst
- * case. Erring towards allowing is the deliberate trade — a synchronous cross-instance lock per
- * request would serialise the whole API on the limiter.
+ * move to Deno KV or a custom store without changing behaviour.
+ *
+ * Over a store without {@link RateLimitStore.consume} the check is read, filter, write, and that
+ * loses writes across instances: two requests that read the same window both pass and the later
+ * write overwrites the earlier, so under lockstep bursts the effective limit approaches
+ * `limit × instances`. A store that implements `consume` (the Redis one in `@spy4x/server/kv`)
+ * makes the check one atomic step and holds the limit exactly. Likewise `refund` is atomic only
+ * over a store that implements {@link RateLimitStore.release}; otherwise it is read-modify-write,
+ * and a refund that overlaps other instances' checks can erase their recorded events.
  */
 export class StoreRateLimiter {
   private readonly store: RateLimitStore
@@ -405,47 +440,64 @@ export class StoreRateLimiter {
 
   /** Record a request for `key` and decide whether it is allowed. */
   async check(key: string, now: number = this.clock()): Promise<RateLimitDecision> {
+    if (this.store.consume !== undefined) {
+      // One atomic step in the backend: trim, count, and record only when there is room.
+      const outcome = await this.store.consume(key, now, this.windowMs, this.limit)
+      // Same cut as the fallback path: only the newest `limit` events decide `retryAfterMs`.
+      return this.decision(outcome.allowed, outcome.events.slice(-this.limit), now)
+    }
     const cutoff = now - this.windowMs
     const recorded = await this.store.read(key, now)
     const events = (recorded ?? []).filter((event) => event > cutoff).slice(-this.limit)
 
     if (events.length >= this.limit) {
-      const oldest = events[0] as number
-      const retryAfterMs = Math.max(0, oldest + this.windowMs - now)
       // No write here: a rejected request adds no event, so the entry the last accepted request
       // wrote is already correct, and re-writing it would cost the shared store one round trip per
       // rejected request — 100 requests at `limit: 2` measured 100 writes before this fix. The
       // in-process `MemoryRateLimiter` above stores nothing for a rejected request either; this
       // keeps the two limiters' write behaviour the same, not just their decisions.
-      return {
-        allowed: false,
-        remaining: 0,
-        retryAfterMs,
-        resetAfterMs: retryAfterMs,
-        limit: this.limit,
-      }
+      return this.decision(false, events, now)
     }
 
     events.push(now)
-    const oldest = events[0] as number
-    const resetAfterMs = Math.max(0, oldest + this.windowMs - now)
     await this.store.write(key, events, now, storeTtlMs(events, this.windowMs, now))
+    return this.decision(true, events, now)
+  }
+
+  /** Build the decision from the window a check ended with (`events` includes `now` if allowed). */
+  private decision(allowed: boolean, events: number[], now: number): RateLimitDecision {
+    const oldest = events[0] ?? now
+    const untilOldestLeaves = Math.max(0, oldest + this.windowMs - now)
+    if (!allowed) {
+      return {
+        allowed: false,
+        remaining: 0,
+        retryAfterMs: untilOldestLeaves,
+        resetAfterMs: untilOldestLeaves,
+        limit: this.limit,
+      }
+    }
     return {
       allowed: true,
       at: now,
       remaining: Math.max(0, this.limit - events.length),
       retryAfterMs: 0,
-      resetAfterMs,
+      resetAfterMs: untilOldestLeaves,
       limit: this.limit,
     }
   }
 
   /**
    * Give back the slot an allowed `check` for `key` took, as {@link MemoryRateLimiter.refund}:
-   * drops the event recorded at `at`, or the newest one without `at`. Read-modify-write like
-   * `check`, so it is as (non-)atomic across instances as `check` is.
+   * drops the event recorded at `at`, or the newest one without `at`. Atomic when the store
+   * implements {@link RateLimitStore.release}; otherwise read-modify-write like the fallback
+   * `check`, and as (non-)atomic across instances.
    */
   async refund(key: string, at?: number): Promise<void> {
+    if (this.store.release !== undefined) {
+      await this.store.release(key, at)
+      return
+    }
     const now = this.clock()
     const cutoff = now - this.windowMs
     const recorded = await this.store.read(key, now)
