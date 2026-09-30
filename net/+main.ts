@@ -77,5 +77,5 @@ export {
 } from "./bounded-body.ts"
 export type { BodyReadOptions, BodySource } from "./bounded-body.ts"
 
-export { ipInRanges, normalizeIp, parseIp } from "./ip.ts"
+export { CLOUDFLARE_IP_RANGES, ipInRanges, normalizeIp, parseIp } from "./ip.ts"
 export type { ParsedIp } from "./ip.ts"

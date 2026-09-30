@@ -1,6 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { ipInRanges, normalizeIp, parseIp } from "./ip.ts"
+import { CLOUDFLARE_IP_RANGES, ipInRanges, normalizeIp, parseIp } from "./ip.ts"
 
 describe("parseIp", () => {
   it("accepts a dotted-decimal IPv4 address with its bytes", () => {
@@ -192,5 +192,38 @@ describe("ipInRanges", () => {
       expect(() => ipInRanges("10.0.0.1", ["10.0.0.0/8", cidr]), cidr).toThrow(RangeError)
       expect(() => ipInRanges("not-an-ip", [cidr]), cidr).toThrow(RangeError)
     }
+  })
+})
+
+describe("CLOUDFLARE_IP_RANGES", () => {
+  it("covers Cloudflare's edge addresses and nothing next to them", () => {
+    for (
+      const edge of [
+        "104.16.0.1",
+        "172.71.255.255",
+        "173.245.63.255",
+        "2606:4700::1",
+        "2a06:98c7:ffff::1",
+      ]
+    ) {
+      expect(ipInRanges(edge, CLOUDFLARE_IP_RANGES)).toBe(true)
+    }
+    for (
+      const other of [
+        "104.15.255.255",
+        "172.72.0.0",
+        "173.245.64.0",
+        "192.0.2.1",
+        "2606:4701::1",
+        "2a06:98c8::1",
+        "38.6.71.0",
+      ]
+    ) {
+      expect(ipInRanges(other, CLOUDFLARE_IP_RANGES)).toBe(false)
+    }
+  })
+
+  it("cannot be changed at run time", () => {
+    expect(Object.isFrozen(CLOUDFLARE_IP_RANGES)).toBe(true)
   })
 })
