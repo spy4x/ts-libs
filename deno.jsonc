@@ -79,6 +79,10 @@
     // Regenerates `docs/1.0-contract.md` (#77): the exported names and signatures of every entry
     // point the workspace publishes, from `deno doc`. See `infra/scripts/contract.ts`.
     "contract": "deno run --allow-read --allow-write=docs/1.0-contract.md --allow-run=deno infra/scripts/contract.ts",
+    // Regenerates `llms.txt` and `llms-full.txt` (#297): every export of every entry point with its
+    // kind, one-sentence JSDoc summary and import specifier, and every README. See
+    // `infra/scripts/llms.ts`.
+    "llms": "deno run --allow-read --allow-write=llms.txt,llms-full.txt --allow-run=deno infra/scripts/llms.ts",
     // Applies `infra/jsr-metadata.json` (description, linked GitHub repo, runtime flags) to every
     // `@spy4x/*` package via JSR's package API (#174). `-- --dry-run` prints the requests without
     // sending them and needs no token; without it, `JSR_API_TOKEN` must be set. See

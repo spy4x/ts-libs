@@ -1,0 +1,1922 @@
+# ts-libs
+
+> Small TypeScript libraries on web standards, for the server and the browser, published to JSR
+> as `@spy4x/*`. 8 packages cover validation, time zones, email, networking, server
+> primitives, realtime and more. Each one is a Deno workspace member with no UI.
+
+## When to use
+
+Before writing a helper of your own, look for it below: it may already exist under another name.
+Import it, and if it falls short, extend it in the library rather than keeping a copy.
+
+## How to install
+
+`deno add jsr:@spy4x/<package>`, then import a name from the entry point listed with it, for
+example `import { parseIp } from "@spy4x/net/ip"`. Every package carries the same version.
+The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/ts-libs/main/llms-full.txt).
+
+## @spy4x/email
+
+### `jsr:@spy4x/email`
+
+- `Canonicalization` (type), `jsr:@spy4x/email`: Which canonicalization RFC 6376 §3.4 applies to a header or a body.
+- `ConsoleSenderOptions` (interface), `jsr:@spy4x/email`: Where the dev adapter writes and how much of the body it keeps.
+- `DARK_HTML_SHELL_THEME` (constant), `jsr:@spy4x/email`: The look `htmlWrap` had before HtmlShellOptions.theme existed: a dark navy body with light text and an orange brand link, ported as-is from `mig`.
+- `DEFAULT_HTML_SHELL_THEME` (constant), `jsr:@spy4x/email`: `htmlWrap`'s default look: a neutral light shell with no product association, so a caller gets a plain, readable letter unless it asks for something else.
+- `DEFAULT_MAX_HEADER_FIELDS` (constant), `jsr:@spy4x/email`: Default DkimVerifyOptions.maxHeaderFields.
+- `DEFAULT_MAX_MESSAGE_LENGTH` (constant), `jsr:@spy4x/email`: Default DkimVerifyOptions.maxMessageLength: 10 MiB of octets, which is above the message size limit relays usually impose and far below anything that takes a noticeable time to canonicalize.
+- `DEFAULT_MAX_SIGNATURES` (constant), `jsr:@spy4x/email`: Default DkimVerifyOptions.maxSignatures.
+- `DEFAULT_MAX_SIGNED_HEADER_NAMES` (constant), `jsr:@spy4x/email`: Default DkimVerifyOptions.maxSignedHeaderNames.
+- `DkimAlgorithm` (type), `jsr:@spy4x/email`: Signature algorithms this verifier implements (RFC 6376 §3.3, RFC 8463).
+- `DkimBodyCoverage` (interface), `jsr:@spy4x/email`: How much of the canonicalized body a signature's `bh=` tag actually covers.
+- `DkimKeyAlgorithm` (type), `jsr:@spy4x/email`: Key algorithms a DNS TXT record's `k=` tag may name.
+- `DkimParseError` (class), `jsr:@spy4x/email`: Thrown for a malformed DKIM-Signature header or DNS key record.
+- `DkimPublicKey` (interface), `jsr:@spy4x/email`: A DKIM public key extracted from a DNS TXT record.
+- `DkimSignatureHeader` (interface), `jsr:@spy4x/email`: Parsed `DKIM-Signature` header value.
+- `DkimVerificationResult` (interface), `jsr:@spy4x/email`: Outcome of verifyDkim.
+- `DkimVerifyOptions` (interface), `jsr:@spy4x/email`: Options for verifyDkim and fetchDkimPublicKey.
+- `DnsTxtResolver` (interface), `jsr:@spy4x/email`: DNS TXT lookup contract, defaulting to `Deno.resolveDns(name, "TXT")`, which needs `--allow-net`.
+- `EmailAddress` (interface), `jsr:@spy4x/email`: A parsed mailbox: the addr-spec, plus the display name that preceded it.
+- `EmailAttachment` (interface), `jsr:@spy4x/email`: One attachment: text content plus the metadata the MIME part needs.
+- `EmailMessage` (interface), `jsr:@spy4x/email`: Everything one send needs.
+- `EmailSender` (interface), `jsr:@spy4x/email`: The port every transport implements, and the only thing callers depend on.
+- `HtmlShellOptions` (interface), `jsr:@spy4x/email`: Everything the shell interpolates around a body.
+- `HtmlShellTheme` (interface), `jsr:@spy4x/email`: The four colours htmlWrap draws the shell in.
+- `IcalAttachmentOptions` (interface), `jsr:@spy4x/email`: The fields of an ICS attachment the caller must supply.
+- `MIN_RSA_KEY_BITS` (constant), `jsr:@spy4x/email`: RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less than 1024 bits as valid."
+- `ParsedRecipients` (interface), `jsr:@spy4x/email`: The recipient list after parsing: deduplicated, with what was dropped recorded.
+- `REDACTED_CREDENTIAL` (constant), `jsr:@spy4x/email`: Placeholder that replaces a credential in any string this module reports.
+- `SendFailure` (interface), `jsr:@spy4x/email`: No mail was sent, or some recipient was refused.
+- `SendResult` (type), `jsr:@spy4x/email`: Outcome of one send attempt.
+- `SendSuccess` (interface), `jsr:@spy4x/email`: Every recipient the transport saw was accepted by the server.
+- `SmtpOptions` (interface), `jsr:@spy4x/email`: Connection settings.
+- `SmtpSendInfo` (interface), `jsr:@spy4x/email`: The slice of a nodemailer send result this adapter reads.
+- `SmtpTransport` (interface), `jsr:@spy4x/email`: The slice of a nodemailer transport this adapter calls.
+- `SmtpTransportFactory` (interface), `jsr:@spy4x/email`: Builds a transport from a connection configuration.
+- `TRANSIT_ADDED_HEADER_NAMES` (constant), `jsr:@spy4x/email`: Header field names a relay is expected to add to a message in transit.
+- `assertNoControlCharacters` (function), `jsr:@spy4x/email`: Reject a value that carries a control character — CR and LF above all.
+- `assertSendableMessage` (function), `jsr:@spy4x/email`: Validate a message before any transport sees it.
+- `canonicalizeBody` (function), `jsr:@spy4x/email`: Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
+- `canonicalizeHeader` (function), `jsr:@spy4x/email`: Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
+- `createConsoleSender` (function), `jsr:@spy4x/email`: A sender that logs instead of sending, for local runs and for tests that need a port implementation without a mail server.
+- `createSmtpSender` (function), `jsr:@spy4x/email`: Create a sender for one SMTP configuration.
+- `escapeHtml` (function), `jsr:@spy4x/email`: Escape a value for interpolation into HTML element text or a double-quoted attribute.
+- `fetchDkimPublicKey` (function), `jsr:@spy4x/email`: Fetch and parse a DKIM public key from DNS, from `<selector>._domainkey.<domain>`.
+- `formatAddress` (function), `jsr:@spy4x/email`: Render a mailbox for a log line or a plain-text body.
+- `frameInstantLong` (function), `jsr:@spy4x/email`: Render an instant as the recipient's own clock reads it, with the zone spelled out: `"Friday, 28 August 2026 at 04:00 (America/New_York)"`.
+- `frameInstantShort` (function), `jsr:@spy4x/email`: frameInstantLong without the zone name, for a subject line: `"Fri 28 Aug 04:00"`.
+- `frameWallClockLong` (function), `jsr:@spy4x/email`: Frame a `YYYY-MM-DD` + `HH:MM` wall clock written in `sourceTz` for a recipient in `recipientTz`, falling back to the zone the wall clock was written in.
+- `frameWallClockShort` (function), `jsr:@spy4x/email`: frameWallClockLong without the zone name, for a subject line.
+- `hasBody` (function), `jsr:@spy4x/email`: True when a body field carries something worth sending.
+- `htmlWrap` (function), `jsr:@spy4x/email`: Wrap a body in the shared letter-shaped shell.
+- `icalAttachment` (function), `jsr:@spy4x/email`: Build the ICS attachment for an event.
+- `isAddress` (function), `jsr:@spy4x/email`: True when `value` is an addr-spec this module will send to.
+- `parseAddress` (function), `jsr:@spy4x/email`: Parse `Name <addr>` or a bare addr-spec into its parts.
+- `parseAddresses` (function), `jsr:@spy4x/email`: Parse a recipient list, deduplicating case-insensitively.
+- `parseDkimPublicKey` (function), `jsr:@spy4x/email`: Parse a DKIM TXT record's `p=` field into a public key.
+- `parseDkimSignature` (function), `jsr:@spy4x/email`: Parse a `DKIM-Signature` header value (without the leading `DKIM-Signature:`) into structured form.
+- `refuseHeaderLineEndings` (function), `jsr:@spy4x/email`: Refuse a header block whose line endings are not uniform, and say why.
+- `sha256Base64` (function), `jsr:@spy4x/email`: Compute the base64 SHA-256 digest of a string or of raw octets.
+- `splitMessage` (function), `jsr:@spy4x/email`: Split a raw RFC 5322 message into raw header lines and a raw body.
+- `verifyDkim` (function), `jsr:@spy4x/email`: Verify a message's DKIM signatures and report one verdict.
+- `verifyDkimSignatures` (function), `jsr:@spy4x/email`: Verify every `DKIM-Signature` field in the message and return one result each, in the order the fields appear.
+
+### `jsr:@spy4x/email/address`
+
+- `EmailAddress` (interface), `jsr:@spy4x/email/address`: A parsed mailbox: the addr-spec, plus the display name that preceded it.
+- `MAX_ADDR_SPEC_LENGTH` (constant), `jsr:@spy4x/email/address`: Longest addr-spec, in characters, that fits a `RCPT TO` path (RFC 5321 §4.5.3.1.3: 256 with the angle brackets).
+- `ParsedRecipients` (interface), `jsr:@spy4x/email/address`: The recipient list after parsing: deduplicated, with what was dropped recorded.
+- `assertNoControlCharacters` (function), `jsr:@spy4x/email/address`: Reject a value that carries a control character — CR and LF above all.
+- `formatAddress` (function), `jsr:@spy4x/email/address`: Render a mailbox for a log line or a plain-text body.
+- `isAddress` (function), `jsr:@spy4x/email/address`: True when `value` is an addr-spec this module will send to.
+- `parseAddress` (function), `jsr:@spy4x/email/address`: Parse `Name <addr>` or a bare addr-spec into its parts.
+- `parseAddresses` (function), `jsr:@spy4x/email/address`: Parse a recipient list, deduplicating case-insensitively.
+
+### `jsr:@spy4x/email/dkim-verify`
+
+- `Canonicalization` (type), `jsr:@spy4x/email/dkim-verify`: Which canonicalization RFC 6376 §3.4 applies to a header or a body.
+- `DEFAULT_MAX_HEADER_FIELDS` (constant), `jsr:@spy4x/email/dkim-verify`: Default DkimVerifyOptions.maxHeaderFields.
+- `DEFAULT_MAX_MESSAGE_LENGTH` (constant), `jsr:@spy4x/email/dkim-verify`: Default DkimVerifyOptions.maxMessageLength: 10 MiB of octets, which is above the message size limit relays usually impose and far below anything that takes a noticeable time to canonicalize.
+- `DEFAULT_MAX_SIGNATURES` (constant), `jsr:@spy4x/email/dkim-verify`: Default DkimVerifyOptions.maxSignatures.
+- `DEFAULT_MAX_SIGNED_HEADER_NAMES` (constant), `jsr:@spy4x/email/dkim-verify`: Default DkimVerifyOptions.maxSignedHeaderNames.
+- `DkimAlgorithm` (type), `jsr:@spy4x/email/dkim-verify`: Signature algorithms this verifier implements (RFC 6376 §3.3, RFC 8463).
+- `DkimBodyCoverage` (interface), `jsr:@spy4x/email/dkim-verify`: How much of the canonicalized body a signature's `bh=` tag actually covers.
+- `DkimKeyAlgorithm` (type), `jsr:@spy4x/email/dkim-verify`: Key algorithms a DNS TXT record's `k=` tag may name.
+- `DkimParseError` (class), `jsr:@spy4x/email/dkim-verify`: Thrown for a malformed DKIM-Signature header or DNS key record.
+- `DkimPublicKey` (interface), `jsr:@spy4x/email/dkim-verify`: A DKIM public key extracted from a DNS TXT record.
+- `DkimSignatureHeader` (interface), `jsr:@spy4x/email/dkim-verify`: Parsed `DKIM-Signature` header value.
+- `DkimVerificationResult` (interface), `jsr:@spy4x/email/dkim-verify`: Outcome of verifyDkim.
+- `DkimVerifyOptions` (interface), `jsr:@spy4x/email/dkim-verify`: Options for verifyDkim and fetchDkimPublicKey.
+- `DnsTxtResolver` (interface), `jsr:@spy4x/email/dkim-verify`: DNS TXT lookup contract, defaulting to `Deno.resolveDns(name, "TXT")`, which needs `--allow-net`.
+- `MIN_RSA_KEY_BITS` (constant), `jsr:@spy4x/email/dkim-verify`: RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less than 1024 bits as valid."
+- `TRANSIT_ADDED_HEADER_NAMES` (constant), `jsr:@spy4x/email/dkim-verify`: Header field names a relay is expected to add to a message in transit.
+- `canonicalizeBody` (function), `jsr:@spy4x/email/dkim-verify`: Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
+- `canonicalizeHeader` (function), `jsr:@spy4x/email/dkim-verify`: Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
+- `fetchDkimPublicKey` (function), `jsr:@spy4x/email/dkim-verify`: Fetch and parse a DKIM public key from DNS, from `<selector>._domainkey.<domain>`.
+- `parseDkimPublicKey` (function), `jsr:@spy4x/email/dkim-verify`: Parse a DKIM TXT record's `p=` field into a public key.
+- `parseDkimSignature` (function), `jsr:@spy4x/email/dkim-verify`: Parse a `DKIM-Signature` header value (without the leading `DKIM-Signature:`) into structured form.
+- `refuseHeaderLineEndings` (function), `jsr:@spy4x/email/dkim-verify`: Refuse a header block whose line endings are not uniform, and say why.
+- `sha256Base64` (function), `jsr:@spy4x/email/dkim-verify`: Compute the base64 SHA-256 digest of a string or of raw octets.
+- `splitMessage` (function), `jsr:@spy4x/email/dkim-verify`: Split a raw RFC 5322 message into raw header lines and a raw body.
+- `verifyDkim` (function), `jsr:@spy4x/email/dkim-verify`: Verify a message's DKIM signatures and report one verdict.
+- `verifyDkimSignatures` (function), `jsr:@spy4x/email/dkim-verify`: Verify every `DKIM-Signature` field in the message and return one result each, in the order the fields appear.
+
+### `jsr:@spy4x/email/html`
+
+- `DARK_HTML_SHELL_THEME` (constant), `jsr:@spy4x/email/html`: The look `htmlWrap` had before HtmlShellOptions.theme existed: a dark navy body with light text and an orange brand link, ported as-is from `mig`.
+- `DEFAULT_HTML_SHELL_THEME` (constant), `jsr:@spy4x/email/html`: `htmlWrap`'s default look: a neutral light shell with no product association, so a caller gets a plain, readable letter unless it asks for something else.
+- `HtmlShellOptions` (interface), `jsr:@spy4x/email/html`: Everything the shell interpolates around a body.
+- `HtmlShellTheme` (interface), `jsr:@spy4x/email/html`: The four colours htmlWrap draws the shell in.
+- `escapeHtml` (function), `jsr:@spy4x/email/html`: Escape a value for interpolation into HTML element text or a double-quoted attribute.
+- `htmlWrap` (function), `jsr:@spy4x/email/html`: Wrap a body in the shared letter-shaped shell.
+
+### `jsr:@spy4x/email/message`
+
+- `EmailAttachment` (interface), `jsr:@spy4x/email/message`: One attachment: text content plus the metadata the MIME part needs.
+- `EmailMessage` (interface), `jsr:@spy4x/email/message`: Everything one send needs.
+- `IcalAttachmentOptions` (interface), `jsr:@spy4x/email/message`: The fields of an ICS attachment the caller must supply.
+- `assertSendableMessage` (function), `jsr:@spy4x/email/message`: Validate a message before any transport sees it.
+- `frameInstantLong` (function), `jsr:@spy4x/email/message`: Render an instant as the recipient's own clock reads it, with the zone spelled out: `"Friday, 28 August 2026 at 04:00 (America/New_York)"`.
+- `frameInstantShort` (function), `jsr:@spy4x/email/message`: frameInstantLong without the zone name, for a subject line: `"Fri 28 Aug 04:00"`.
+- `frameWallClockLong` (function), `jsr:@spy4x/email/message`: Frame a `YYYY-MM-DD` + `HH:MM` wall clock written in `sourceTz` for a recipient in `recipientTz`, falling back to the zone the wall clock was written in.
+- `frameWallClockShort` (function), `jsr:@spy4x/email/message`: frameWallClockLong without the zone name, for a subject line.
+- `hasBody` (function), `jsr:@spy4x/email/message`: True when a body field carries something worth sending.
+- `icalAttachment` (function), `jsr:@spy4x/email/message`: Build the ICS attachment for an event.
+
+### `jsr:@spy4x/email/sender`
+
+- `ConsoleSenderOptions` (interface), `jsr:@spy4x/email/sender`: Where the dev adapter writes and how much of the body it keeps.
+- `EmailSender` (interface), `jsr:@spy4x/email/sender`: The port every transport implements, and the only thing callers depend on.
+- `SendFailure` (interface), `jsr:@spy4x/email/sender`: No mail was sent, or some recipient was refused.
+- `SendResult` (type), `jsr:@spy4x/email/sender`: Outcome of one send attempt.
+- `SendSuccess` (interface), `jsr:@spy4x/email/sender`: Every recipient the transport saw was accepted by the server.
+- `createConsoleSender` (function), `jsr:@spy4x/email/sender`: A sender that logs instead of sending, for local runs and for tests that need a port implementation without a mail server.
+
+### `jsr:@spy4x/email/smtp`
+
+- `EmailSender` (interface), `jsr:@spy4x/email/smtp`: The port every transport implements, and the only thing callers depend on.
+- `REDACTED_CREDENTIAL` (constant), `jsr:@spy4x/email/smtp`: Placeholder that replaces a credential in any string this module reports.
+- `SendFailure` (interface), `jsr:@spy4x/email/smtp`: No mail was sent, or some recipient was refused.
+- `SendResult` (type), `jsr:@spy4x/email/smtp`: Outcome of one send attempt.
+- `SendSuccess` (interface), `jsr:@spy4x/email/smtp`: Every recipient the transport saw was accepted by the server.
+- `SmtpOptions` (interface), `jsr:@spy4x/email/smtp`: Connection settings.
+- `SmtpSendInfo` (interface), `jsr:@spy4x/email/smtp`: The slice of a nodemailer send result this adapter reads.
+- `SmtpTransport` (interface), `jsr:@spy4x/email/smtp`: The slice of a nodemailer transport this adapter calls.
+- `SmtpTransportFactory` (interface), `jsr:@spy4x/email/smtp`: Builds a transport from a connection configuration.
+- `createSmtpSender` (function), `jsr:@spy4x/email/smtp`: Create a sender for one SMTP configuration.
+
+## @spy4x/integrations
+
+### `jsr:@spy4x/integrations`
+
+- `BackoffFn` (type), `jsr:@spy4x/integrations`: Computes a delay.
+- `Clock` (type), `jsr:@spy4x/integrations`: Millisecond time source.
+- `CloudflarePurgeOptions` (interface), `jsr:@spy4x/integrations`: Options for purgeUrls.
+- `CloudflarePurgeResult` (interface), `jsr:@spy4x/integrations`: Outcome of a purge: `output` describes what happened on success, `error` on failure.
+- `DEFAULT_REQUEST_TIMEOUT_MS` (constant), `jsr:@spy4x/integrations`: Bounds a single outgoing request, used by every client in this package unless a caller overrides it.
+- `HealthchecksClient` (class), `jsr:@spy4x/integrations`: healthchecks.io client.
+- `HealthchecksClientConfig` (interface), `jsr:@spy4x/integrations`: Where to ping, for HealthchecksClient.
+- `HealthchecksClientOptions` (interface), `jsr:@spy4x/integrations`: Construction-time overrides for HealthchecksClient, all optional and test-injectable.
+- `HealthchecksErrorCode` (type), `jsr:@spy4x/integrations`: Failure reasons `ping` can report.
+- `HealthchecksFailure` (interface), `jsr:@spy4x/integrations`: A ping that could not be delivered after retrying.
+- `HealthchecksOutcome` (enum), `jsr:@spy4x/integrations`: Which endpoint a ping targets.
+- `HealthchecksPing` (interface), `jsr:@spy4x/integrations`: One ping to send through HealthchecksClient.ping.
+- `HealthchecksResult` (type), `jsr:@spy4x/integrations`: Outcome of HealthchecksClient.ping.
+- `HealthchecksRetryOptions` (interface), `jsr:@spy4x/integrations`: Overrides for the client's default retry policy.
+- `HealthchecksSuccess` (interface), `jsr:@spy4x/integrations`: A ping that reached healthchecks.io and was accepted.
+- `NotificationSeverity` (enum), `jsr:@spy4x/integrations`: Severity gate.
+- `NtfyClient` (class), `jsr:@spy4x/integrations`: ntfy client.
+- `NtfyClientConfig` (interface), `jsr:@spy4x/integrations`: Where to push and how to authenticate, for NtfyClient.
+- `NtfyClientOptions` (interface), `jsr:@spy4x/integrations`: Construction-time overrides for NtfyClient, all optional and test-injectable.
+- `NtfyErrorCode` (type), `jsr:@spy4x/integrations`: Failure reasons `push` can report.
+- `NtfyFailure` (interface), `jsr:@spy4x/integrations`: A push that could not be delivered after retrying.
+- `NtfyPriority` (enum), `jsr:@spy4x/integrations`: ntfy priority, 1 (min) to 5 (max).
+- `NtfyPush` (interface), `jsr:@spy4x/integrations`: One notification to send through NtfyClient.push.
+- `NtfyPushed` (interface), `jsr:@spy4x/integrations`: A push that reached ntfy and was accepted.
+- `NtfyResult` (type), `jsr:@spy4x/integrations`: Outcome of NtfyClient.push.
+- `NtfyRetryOptions` (interface), `jsr:@spy4x/integrations`: Overrides for the client's default retry policy.
+- `NtfySkipped` (interface), `jsr:@spy4x/integrations`: A push that was never sent because its severity did not meet the gate.
+- `PURGE_BATCH_SIZE` (constant), `jsr:@spy4x/integrations`: Cloudflare's purge-by-URL endpoint accepts at most this many files per call.
+- `RandomSource` (type), `jsr:@spy4x/integrations`: A source of numbers in `[0, 1)`, the shape `Math.random` has.
+- `RetryPolicy` (interface), `jsr:@spy4x/integrations`
+- `RetryRunOptions` (interface), `jsr:@spy4x/integrations`
+- `RetryRunResult` (interface), `jsr:@spy4x/integrations`
+- `Sleeper` (type), `jsr:@spy4x/integrations`: Waits a duration.
+- `WebhookRejectReason` (type), `jsr:@spy4x/integrations`: Why a delivery was rejected.
+- `WebhookVerifierConfig` (interface), `jsr:@spy4x/integrations`: Shared secret and header names verifyWebhookRequest needs to check a delivery.
+- `WebhookVerifyResult` (type), `jsr:@spy4x/integrations`: Result of verifyWebhookRequest: the verified body, or why it was rejected.
+- `createExponentialBackoff` (function), `jsr:@spy4x/integrations`: Exponential backoff, clamped and optionally jittered.
+- `describeTransportError` (function), `jsr:@spy4x/integrations`: Describes a transport failure **without** the request URL.
+- `healthchecksConfigFromEnv` (function), `jsr:@spy4x/integrations`: Reads a ping URL from an environment reader.
+- `isPermanentStatus` (function), `jsr:@spy4x/integrations`: Statuses that will never succeed on a retry: the request itself is wrong.
+- `isRequestTimeout` (function), `jsr:@spy4x/integrations`: True when `cause` is the `TimeoutError` an `AbortSignal.timeout()` firing produces.
+- `isTransientStatus` (function), `jsr:@spy4x/integrations`: Statuses worth another attempt: rate limiting and upstream faults.
+- `ntfyConfigFromEnv` (function), `jsr:@spy4x/integrations`: Reads ntfy settings from an environment reader.
+- `parseRetryAfterMs` (function), `jsr:@spy4x/integrations`: Parses a `Retry-After` header.
+- `purgeUrls` (function), `jsr:@spy4x/integrations`: Purges `urls` from a Cloudflare zone, 30 per call, and reports the outcome.
+- `releaseResponseBody` (function), `jsr:@spy4x/integrations`: Releases a response's body without reading it.
+- `runWithRetry` (function), `jsr:@spy4x/integrations`: Runs `attempt` under `policy`.
+- `settle` (function), `jsr:@spy4x/integrations`: Consumes whatever a `Sleeper` returned.
+- `verifyWebhookRequest` (function), `jsr:@spy4x/integrations`: Verifies one inbound delivery.
+
+### `jsr:@spy4x/integrations/cloudflare`
+
+- `CloudflarePurgeOptions` (interface), `jsr:@spy4x/integrations/cloudflare`: Options for purgeUrls.
+- `CloudflarePurgeResult` (interface), `jsr:@spy4x/integrations/cloudflare`: Outcome of a purge: `output` describes what happened on success, `error` on failure.
+- `PURGE_BATCH_SIZE` (constant), `jsr:@spy4x/integrations/cloudflare`: Cloudflare's purge-by-URL endpoint accepts at most this many files per call.
+- `purgeUrls` (function), `jsr:@spy4x/integrations/cloudflare`: Purges `urls` from a Cloudflare zone, 30 per call, and reports the outcome.
+
+### `jsr:@spy4x/integrations/healthchecks`
+
+- `HealthchecksClient` (class), `jsr:@spy4x/integrations/healthchecks`: healthchecks.io client.
+- `HealthchecksClientConfig` (interface), `jsr:@spy4x/integrations/healthchecks`: Where to ping, for HealthchecksClient.
+- `HealthchecksClientOptions` (interface), `jsr:@spy4x/integrations/healthchecks`: Construction-time overrides for HealthchecksClient, all optional and test-injectable.
+- `HealthchecksErrorCode` (type), `jsr:@spy4x/integrations/healthchecks`: Failure reasons `ping` can report.
+- `HealthchecksFailure` (interface), `jsr:@spy4x/integrations/healthchecks`: A ping that could not be delivered after retrying.
+- `HealthchecksOutcome` (enum), `jsr:@spy4x/integrations/healthchecks`: Which endpoint a ping targets.
+- `HealthchecksPing` (interface), `jsr:@spy4x/integrations/healthchecks`: One ping to send through HealthchecksClient.ping.
+- `HealthchecksResult` (type), `jsr:@spy4x/integrations/healthchecks`: Outcome of HealthchecksClient.ping.
+- `HealthchecksRetryOptions` (interface), `jsr:@spy4x/integrations/healthchecks`: Overrides for the client's default retry policy.
+- `HealthchecksSuccess` (interface), `jsr:@spy4x/integrations/healthchecks`: A ping that reached healthchecks.io and was accepted.
+- `healthchecksConfigFromEnv` (function), `jsr:@spy4x/integrations/healthchecks`: Reads a ping URL from an environment reader.
+
+### `jsr:@spy4x/integrations/ntfy`
+
+- `NotificationSeverity` (enum), `jsr:@spy4x/integrations/ntfy`: Severity gate.
+- `NtfyClient` (class), `jsr:@spy4x/integrations/ntfy`: ntfy client.
+- `NtfyClientConfig` (interface), `jsr:@spy4x/integrations/ntfy`: Where to push and how to authenticate, for NtfyClient.
+- `NtfyClientOptions` (interface), `jsr:@spy4x/integrations/ntfy`: Construction-time overrides for NtfyClient, all optional and test-injectable.
+- `NtfyErrorCode` (type), `jsr:@spy4x/integrations/ntfy`: Failure reasons `push` can report.
+- `NtfyFailure` (interface), `jsr:@spy4x/integrations/ntfy`: A push that could not be delivered after retrying.
+- `NtfyPriority` (enum), `jsr:@spy4x/integrations/ntfy`: ntfy priority, 1 (min) to 5 (max).
+- `NtfyPush` (interface), `jsr:@spy4x/integrations/ntfy`: One notification to send through NtfyClient.push.
+- `NtfyPushed` (interface), `jsr:@spy4x/integrations/ntfy`: A push that reached ntfy and was accepted.
+- `NtfyResult` (type), `jsr:@spy4x/integrations/ntfy`: Outcome of NtfyClient.push.
+- `NtfyRetryOptions` (interface), `jsr:@spy4x/integrations/ntfy`: Overrides for the client's default retry policy.
+- `NtfySkipped` (interface), `jsr:@spy4x/integrations/ntfy`: A push that was never sent because its severity did not meet the gate.
+- `ntfyConfigFromEnv` (function), `jsr:@spy4x/integrations/ntfy`: Reads ntfy settings from an environment reader.
+
+### `jsr:@spy4x/integrations/webhooks`
+
+- `WebhookRejectReason` (type), `jsr:@spy4x/integrations/webhooks`: Why a delivery was rejected.
+- `WebhookVerifierConfig` (interface), `jsr:@spy4x/integrations/webhooks`: Shared secret and header names verifyWebhookRequest needs to check a delivery.
+- `WebhookVerifyResult` (type), `jsr:@spy4x/integrations/webhooks`: Result of verifyWebhookRequest: the verified body, or why it was rejected.
+- `verifyWebhookRequest` (function), `jsr:@spy4x/integrations/webhooks`: Verifies one inbound delivery.
+
+## @spy4x/net
+
+### `jsr:@spy4x/net`
+
+- `ALLOWED_PROTOCOLS` (constant), `jsr:@spy4x/net`: Protocols `normalizeUrlShape` accepts; anything else is rejected.
+- `BodyReadErrorCode` (enum), `jsr:@spy4x/net`: Finite failure kinds a bounded read can raise.
+- `BodyReadOptions` (interface), `jsr:@spy4x/net`: Per-call overrides for a bounded body read.
+- `BodyReadTimeoutError` (class), `jsr:@spy4x/net`: No chunk arrived within the stall budget.
+- `BodySource` (interface), `jsr:@spy4x/net`: The read surface shared by `Request` and `Response`.
+- `CREDENTIAL_HEADERS` (constant), `jsr:@spy4x/net`: Request headers that must not follow a redirect to another origin.
+- `DEFAULT_BODY_TIMEOUT_MS` (constant), `jsr:@spy4x/net`: Default stall budget: 10s without a chunk.
+- `DEFAULT_MAX_BYTES` (constant), `jsr:@spy4x/net`: Default ceiling for a body read: 5 MiB.
+- `DEFAULT_MAX_REDIRECTS` (constant), `jsr:@spy4x/net`: Redirects followed before the chain is refused.
+- `DEFAULT_TIMEOUT_MS` (constant), `jsr:@spy4x/net`: Total budget for the whole redirect chain.
+- `DENY_NET_ADDRESSES` (constant), `jsr:@spy4x/net`: Addresses to refuse at connection time, in the spelling `--deny-net` takes.
+- `DnsResolutionError` (class), `jsr:@spy4x/net`: DNS lookup failure — either the resolver threw or it returned no records.
+- `DnsResolver` (interface), `jsr:@spy4x/net`: Resolves a hostname to all A/AAAA addresses.
+- `EXPLICIT_SCHEME` (constant), `jsr:@spy4x/net`: Any `scheme:` prefix, with or without `//`, so `javascript:` is caught too.
+- `Fetcher` (interface), `jsr:@spy4x/net`: The seam that keeps this module off the network in tests.
+- `INVALID_CHARACTERS` (constant), `jsr:@spy4x/net`: Whitespace and control characters that make a URL input invalid.
+- `NormalizeUrlShapeResult` (type), `jsr:@spy4x/net`: Outcome of normalizeUrlShape.
+- `PLAIN_HOSTNAME` (constant), `jsr:@spy4x/net`: A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
+- `ParsedIp` (interface), `jsr:@spy4x/net`: An address that parseIp accepted.
+- `PayloadTooLargeError` (class), `jsr:@spy4x/net`: Body exceeded the byte cap.
+- `SafeFetchMethod` (enum), `jsr:@spy4x/net`: Request methods a redirect is allowed to carry unchanged.
+- `SafeFetchOptions` (interface), `jsr:@spy4x/net`: Per-call overrides for safeFetch.
+- `SafeFetchResult` (interface), `jsr:@spy4x/net`: Successful outcome of safeFetch.
+- `UrlPolicyErrorCode` (type), `jsr:@spy4x/net`: Machine-readable rejection reason.
+- `UrlShapeError` (interface), `jsr:@spy4x/net`: Rejected input, with the reason a caller can branch on.
+- `UrlShapeErrorCode` (type), `jsr:@spy4x/net`: Machine-readable rejection reason.
+- `UrlShapeOk` (interface), `jsr:@spy4x/net`: Accepted input, normalised.
+- `UrlValidationError` (class), `jsr:@spy4x/net`: A URL rejected by the policy, with a stable code a caller can branch on.
+- `ValidatePublicUrlOptions` (interface), `jsr:@spy4x/net`: Per-call overrides for validatePublicUrl.
+- `defaultFetcher` (constant), `jsr:@spy4x/net`: Fetcher backed by the platform `fetch`.
+- `defaultResolver` (constant), `jsr:@spy4x/net`: The production resolver: system A **and** AAAA lookups, both required.
+- `denyNetFlag` (function), `jsr:@spy4x/net`: `DENY_NET_ADDRESSES` as the command-line flag that applies them.
+- `detectScheme` (function), `jsr:@spy4x/net`: Split an explicit `scheme:` prefix off the raw input.
+- `ipInRanges` (function), `jsr:@spy4x/net`: True when `ip` lies inside at least one of `cidrs`.
+- `isLocalHostname` (function), `jsr:@spy4x/net`: True if the hostname is a special-use name that resolves locally.
+- `isPublicAddress` (function), `jsr:@spy4x/net`: True if `addr` (with or without surrounding brackets) is a globally routable IPv6.
+- `isPublicIpv4` (function), `jsr:@spy4x/net`: True if `addr` is a globally routable IPv4 address.
+- `isPublicIpv6` (function), `jsr:@spy4x/net`: True if the IPv6 address (with optional embedded IPv4) is globally routable.
+- `isUrlShapeOk` (function), `jsr:@spy4x/net`: Narrow a `normalizeUrlShape` result to its success branch.
+- `normalizeIp` (function), `jsr:@spy4x/net`: The canonical spelling of `input` (parseIp), or `null` when it is not an address.
+- `normalizeUrlShape` (function), `jsr:@spy4x/net`: Normalise the shape of a user-entered URL.
+- `parseBoundedFormData` (function), `jsr:@spy4x/net`: Parse a `multipart/form-data` (or url-encoded) request body under the same cap and stall budget as `readBoundedBody`.
+- `parseIp` (function), `jsr:@spy4x/net`: Parse one IPv4 or IPv6 address.
+- `parseIpv6Groups` (function), `jsr:@spy4x/net`: Parse an IPv6 address into 8 groups of 16-bit unsigned ints.
+- `readBoundedBody` (function), `jsr:@spy4x/net`: Read a body into bytes under the hard cap and stall budget.
+- `readBoundedJson` (function), `jsr:@spy4x/net`: Read a body as JSON under the same cap and stall budget as `readBoundedText`.
+- `readBoundedText` (function), `jsr:@spy4x/net`: Read a body as text, decoding incrementally so the cap is enforced before the whole payload is materialised as one string.
+- `readContentLength` (function), `jsr:@spy4x/net`: Read the declared `Content-Length`, if the sender provided a usable one.
+- `safeFetch` (function), `jsr:@spy4x/net`: Fetch a URL following redirects manually, validating each `Location` through the public-URL policy.
+- `validatePublicUrl` (function), `jsr:@spy4x/net`: Validate a URL and return the canonical form.
+
+### `jsr:@spy4x/net/bounded-body`
+
+- `BodyReadErrorCode` (enum), `jsr:@spy4x/net/bounded-body`: Finite failure kinds a bounded read can raise.
+- `BodyReadOptions` (interface), `jsr:@spy4x/net/bounded-body`: Per-call overrides for a bounded body read.
+- `BodyReadTimeoutError` (class), `jsr:@spy4x/net/bounded-body`: No chunk arrived within the stall budget.
+- `BodySource` (interface), `jsr:@spy4x/net/bounded-body`: The read surface shared by `Request` and `Response`.
+- `DEFAULT_BODY_TIMEOUT_MS` (constant), `jsr:@spy4x/net/bounded-body`: Default stall budget: 10s without a chunk.
+- `DEFAULT_MAX_BYTES` (constant), `jsr:@spy4x/net/bounded-body`: Default ceiling for a body read: 5 MiB.
+- `PayloadTooLargeError` (class), `jsr:@spy4x/net/bounded-body`: Body exceeded the byte cap.
+- `parseBoundedFormData` (function), `jsr:@spy4x/net/bounded-body`: Parse a `multipart/form-data` (or url-encoded) request body under the same cap and stall budget as `readBoundedBody`.
+- `readBoundedBody` (function), `jsr:@spy4x/net/bounded-body`: Read a body into bytes under the hard cap and stall budget.
+- `readBoundedJson` (function), `jsr:@spy4x/net/bounded-body`: Read a body as JSON under the same cap and stall budget as `readBoundedText`.
+- `readBoundedText` (function), `jsr:@spy4x/net/bounded-body`: Read a body as text, decoding incrementally so the cap is enforced before the whole payload is materialised as one string.
+- `readContentLength` (function), `jsr:@spy4x/net/bounded-body`: Read the declared `Content-Length`, if the sender provided a usable one.
+
+### `jsr:@spy4x/net/ip`
+
+- `ParsedIp` (interface), `jsr:@spy4x/net/ip`: An address that parseIp accepted.
+- `ipInRanges` (function), `jsr:@spy4x/net/ip`: True when `ip` lies inside at least one of `cidrs`.
+- `normalizeIp` (function), `jsr:@spy4x/net/ip`: The canonical spelling of `input` (parseIp), or `null` when it is not an address.
+- `parseIp` (function), `jsr:@spy4x/net/ip`: Parse one IPv4 or IPv6 address.
+
+### `jsr:@spy4x/net/safe-fetch`
+
+- `CREDENTIAL_HEADERS` (constant), `jsr:@spy4x/net/safe-fetch`: Request headers that must not follow a redirect to another origin.
+- `DEFAULT_MAX_REDIRECTS` (constant), `jsr:@spy4x/net/safe-fetch`: Redirects followed before the chain is refused.
+- `DEFAULT_TIMEOUT_MS` (constant), `jsr:@spy4x/net/safe-fetch`: Total budget for the whole redirect chain.
+- `Fetcher` (interface), `jsr:@spy4x/net/safe-fetch`: The seam that keeps this module off the network in tests.
+- `SafeFetchMethod` (enum), `jsr:@spy4x/net/safe-fetch`: Request methods a redirect is allowed to carry unchanged.
+- `SafeFetchOptions` (interface), `jsr:@spy4x/net/safe-fetch`: Per-call overrides for safeFetch.
+- `SafeFetchResult` (interface), `jsr:@spy4x/net/safe-fetch`: Successful outcome of safeFetch.
+- `defaultFetcher` (constant), `jsr:@spy4x/net/safe-fetch`: Fetcher backed by the platform `fetch`.
+- `safeFetch` (function), `jsr:@spy4x/net/safe-fetch`: Fetch a URL following redirects manually, validating each `Location` through the public-URL policy.
+
+### `jsr:@spy4x/net/url-policy`
+
+- `DENY_NET_ADDRESSES` (constant), `jsr:@spy4x/net/url-policy`: Addresses to refuse at connection time, in the spelling `--deny-net` takes.
+- `DnsResolutionError` (class), `jsr:@spy4x/net/url-policy`: DNS lookup failure — either the resolver threw or it returned no records.
+- `DnsResolver` (interface), `jsr:@spy4x/net/url-policy`: Resolves a hostname to all A/AAAA addresses.
+- `HTTP_OPTION_MESSAGE` (constant), `jsr:@spy4x/net/url-policy`: Message used when `allowHttp: false` rejects an `http:` URL.
+- `NormalizeUrlShapeResult` (type), `jsr:@spy4x/net/url-policy`: Outcome of normalizeUrlShape.
+- `UrlPolicyErrorCode` (type), `jsr:@spy4x/net/url-policy`: Machine-readable rejection reason.
+- `UrlShapeError` (interface), `jsr:@spy4x/net/url-policy`: Rejected input, with the reason a caller can branch on.
+- `UrlShapeOk` (interface), `jsr:@spy4x/net/url-policy`: Accepted input, normalised.
+- `UrlValidationError` (class), `jsr:@spy4x/net/url-policy`: A URL rejected by the policy, with a stable code a caller can branch on.
+- `ValidatePublicUrlOptions` (interface), `jsr:@spy4x/net/url-policy`: Per-call overrides for validatePublicUrl.
+- `defaultResolver` (constant), `jsr:@spy4x/net/url-policy`: The production resolver: system A **and** AAAA lookups, both required.
+- `denyNetFlag` (function), `jsr:@spy4x/net/url-policy`: `DENY_NET_ADDRESSES` as the command-line flag that applies them.
+- `isLocalHostname` (function), `jsr:@spy4x/net/url-policy`: True if the hostname is a special-use name that resolves locally.
+- `isPublicAddress` (function), `jsr:@spy4x/net/url-policy`: True if `addr` (with or without surrounding brackets) is a globally routable IPv6.
+- `isPublicIpv4` (function), `jsr:@spy4x/net/url-policy`: True if `addr` is a globally routable IPv4 address.
+- `isPublicIpv6` (function), `jsr:@spy4x/net/url-policy`: True if the IPv6 address (with optional embedded IPv4) is globally routable.
+- `normalizeUrlShape` (function), `jsr:@spy4x/net/url-policy`: Normalise the shape of a user-entered URL.
+- `parseIpv6Groups` (function), `jsr:@spy4x/net/url-policy`: Parse an IPv6 address into 8 groups of 16-bit unsigned ints.
+- `validatePublicUrl` (function), `jsr:@spy4x/net/url-policy`: Validate a URL and return the canonical form.
+
+### `jsr:@spy4x/net/url-shape`
+
+- `ALLOWED_PROTOCOLS` (constant), `jsr:@spy4x/net/url-shape`: Protocols `normalizeUrlShape` accepts; anything else is rejected.
+- `EMPTY_MESSAGE` (constant), `jsr:@spy4x/net/url-shape`: Message for UrlShapeErrorCode `"empty"`.
+- `EXPLICIT_SCHEME` (constant), `jsr:@spy4x/net/url-shape`: Any `scheme:` prefix, with or without `//`, so `javascript:` is caught too.
+- `INVALID_CHARACTERS` (constant), `jsr:@spy4x/net/url-shape`: Whitespace and control characters that make a URL input invalid.
+- `INVALID_CHARACTERS_MESSAGE` (constant), `jsr:@spy4x/net/url-shape`: Message for the control-character case of UrlShapeErrorCode `"invalid_format"`.
+- `INVALID_FORMAT_MESSAGE` (constant), `jsr:@spy4x/net/url-shape`: Message for UrlShapeErrorCode `"invalid_format"`.
+- `NormalizeUrlShapeResult` (type), `jsr:@spy4x/net/url-shape`: Outcome of normalizeUrlShape.
+- `PLAIN_HOSTNAME` (constant), `jsr:@spy4x/net/url-shape`: A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
+- `UNSUPPORTED_PROTOCOL_MESSAGE` (constant), `jsr:@spy4x/net/url-shape`: Message for UrlShapeErrorCode `"unsupported_protocol"`.
+- `UrlShapeError` (interface), `jsr:@spy4x/net/url-shape`: Rejected input, with the reason a caller can branch on.
+- `UrlShapeErrorCode` (type), `jsr:@spy4x/net/url-shape`: Machine-readable rejection reason.
+- `UrlShapeOk` (interface), `jsr:@spy4x/net/url-shape`: Accepted input, normalised.
+- `detectScheme` (function), `jsr:@spy4x/net/url-shape`: Split an explicit `scheme:` prefix off the raw input.
+- `isUrlShapeOk` (function), `jsr:@spy4x/net/url-shape`: Narrow a `normalizeUrlShape` result to its success branch.
+- `normalizeUrlShape` (function), `jsr:@spy4x/net/url-shape`: Normalise the shape of a user-entered URL.
+
+## @spy4x/platform
+
+### `jsr:@spy4x/platform`
+
+- `AnyError` (type), `jsr:@spy4x/platform`: Every error Result can carry.
+- `AsyncMutex` (class), `jsr:@spy4x/platform`: A fair mutual-exclusion lock for async critical sections.
+- `BackoffDelayOptions` (interface), `jsr:@spy4x/platform`
+- `BackoffJitterMode` (type), `jsr:@spy4x/platform`: How backoffDelay spreads a capped delay.
+- `BreadcrumbListItem` (interface), `jsr:@spy4x/platform`: A schema.org `ListItem` as it appears inside a `BreadcrumbList`.
+- `BreadcrumbListJsonLd` (interface), `jsr:@spy4x/platform`: A schema.org `BreadcrumbList` node.
+- `Clock` (interface), `jsr:@spy4x/platform`: Injectable time source, so formatting and relative times are testable without a frozen host.
+- `CommandEnvelope` (interface), `jsr:@spy4x/platform`: Outcome of a command: what it produced, or why it failed.
+- `ConnectionError` (interface), `jsr:@spy4x/platform`: The request never reached the server.
+- `Crumb` (interface), `jsr:@spy4x/platform`: One entry in the breadcrumb trail a page declares.
+- `DAYS_IN_MONTH` (constant), `jsr:@spy4x/platform`: Days in one nominal month.
+- `DAYS_IN_WEEK` (constant), `jsr:@spy4x/platform`: Days in one week.
+- `DAYS_OF_WEEK` (constant), `jsr:@spy4x/platform`: Weekday names indexed Monday-first, matching getDaysOfWeek's bitmask order.
+- `DEFAULT_DEBOUNCE_DELAY` (constant), `jsr:@spy4x/platform`: Default trailing-edge debounce delay, in milliseconds.
+- `DEFAULT_FLUSH_INTERVAL_MS` (constant), `jsr:@spy4x/platform`: Default window for the throttled JSON saver, in milliseconds.
+- `DayOfWeek` (type), `jsr:@spy4x/platform`: Weekday identifier, Monday-first.
+- `Debounced` (interface), `jsr:@spy4x/platform`: Trailing-edge debounce.
+- `ERR_MESSAGE` (constant), `jsr:@spy4x/platform`: Canonical copy for each category, so the same failure reads the same in every product.
+- `Err` (interface), `jsr:@spy4x/platform`: Base shape every error shares: a category and human-readable copy.
+- `ErrType` (enum), `jsr:@spy4x/platform`: Kind of a failed operation.
+- `FormatTimeOptions` (interface), `jsr:@spy4x/platform`: Options for formatTime.
+- `HONEYPOT_FIELD_NAME` (constant), `jsr:@spy4x/platform`: Default `name` of the honeypot field.
+- `HOURS_IN_DAY` (constant), `jsr:@spy4x/platform`: Hours in one day.
+- `InferSchema` (type), `jsr:@spy4x/platform`: Value a schema accepts and produces.
+- `KeyValueStore` (interface), `jsr:@spy4x/platform`: Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias (#71).
+- `MAX_TICKS` (constant), `jsr:@spy4x/platform`: Hard ceiling on generated ticks, and on the iterations the tick loop may spend producing them — see the doc of `ticksForStep` (the private loop behind ticks and stepAxis) for why the loop needs its own bound, not just the output's.
+- `MILLISECONDS_IN_SECOND` (constant), `jsr:@spy4x/platform`: Milliseconds in one second.
+- `MINUTES_IN_HOUR` (constant), `jsr:@spy4x/platform`: Minutes in one hour.
+- `MIN_PASSWORD_LENGTH` (constant), `jsr:@spy4x/platform`: Minimum accepted password length.
+- `MONTHS_IN_YEAR` (constant), `jsr:@spy4x/platform`: Months in one year.
+- `NowFn` (type), `jsr:@spy4x/platform`: Monotonic millisecond clock, function-shaped rather than object-shaped — the home for the `() => number` clock shape (`#71`), which cannot be merged into Clock without breaking a 1.x caller of one shape or the other.
+- `ONE_DAY_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform`: One day, in milliseconds.
+- `ONE_DAY_IN_SECONDS` (constant), `jsr:@spy4x/platform`: One day, in seconds.
+- `ONE_HOUR_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform`: One hour, in milliseconds.
+- `ONE_HOUR_IN_SECONDS` (constant), `jsr:@spy4x/platform`: One hour, in seconds.
+- `ONE_MINUTE_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform`: One minute, in milliseconds.
+- `ONE_MONTH_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform`: One month (30 days), in milliseconds.
+- `ONE_MONTH_IN_SECONDS` (constant), `jsr:@spy4x/platform`: One month (30 days), in seconds.
+- `ONE_WEEK_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform`: One week, in milliseconds.
+- `ONE_WEEK_IN_SECONDS` (constant), `jsr:@spy4x/platform`: One week, in seconds.
+- `ONE_YEAR_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform`: One year (12 nominal months), in milliseconds.
+- `ONE_YEAR_IN_SECONDS` (constant), `jsr:@spy4x/platform`: One year (12 nominal months), in seconds.
+- `OperationResult` (type), `jsr:@spy4x/platform`: Result of an operation that can fail: exactly one of `result` / `error` is non-null.
+- `OperationState` (interface), `jsr:@spy4x/platform`: In-flight state of an operation, for a store or a form to render.
+- `OtherError` (interface), `jsr:@spy4x/platform`: An error this package has no category for.
+- `PayloadError` (interface), `jsr:@spy4x/platform`: A payload a schema rejected: a response body, or a remote feed item.
+- `RandomSource` (type), `jsr:@spy4x/platform`: A source of numbers in `[0, 1)`, the shape `Math.random` has.
+- `RequestError` (type), `jsr:@spy4x/platform`: Errors a request itself can produce.
+- `ResponseError` (type), `jsr:@spy4x/platform`: Errors from a response that never reached a usable body.
+- `Result` (type), `jsr:@spy4x/platform`: A value or an error, as a discriminated union on `ok`.
+- `SECONDS_IN_MINUTE` (constant), `jsr:@spy4x/platform`: Seconds in one minute.
+- `ServerError` (interface), `jsr:@spy4x/platform`: The server answered with a failure status.
+- `SortDirection` (type), `jsr:@spy4x/platform`: Sort direction of one rule.
+- `SortRule` (interface), `jsr:@spy4x/platform`: One column in the sort order.
+- `StepAxis` (interface), `jsr:@spy4x/platform`: Bounds rounded outward to multiples of a step, and the ticks between them.
+- `StoreError` (type), `jsr:@spy4x/platform`: Every error a store operation can settle with.
+- `TimeFormatOptions` (interface), `jsr:@spy4x/platform`: Locale and zone applied by formatTime and timeAgo.
+- `TimeFormatter` (class), `jsr:@spy4x/platform`: Format an instant for display.
+- `ValidationError` (type), `jsr:@spy4x/platform`: A rejected input: its kind, one sentence for the user, the issues per field path, and arktype's own errors.
+- `backoffDelay` (function), `jsr:@spy4x/platform`: Caps a raw delay and jitters it — the exponential-backoff arithmetic that used to be implemented twice: once with symmetric jitter around the capped delay (`integrations/retry.ts`'s `createExponentialBackoff`) and once with jitter that only ever shortens the wait (`realtime/backoff.ts`'s `nextBackoffDelay`).
+- `breadcrumbItems` (function), `jsr:@spy4x/platform`: `itemListElement` for a schema.org `BreadcrumbList`, built from the crumbs the caller stated.
+- `breadcrumbListJsonLd` (function), `jsr:@spy4x/platform`: The complete `BreadcrumbList` node, `@id`-anchored to the page it describes.
+- `canonicalUrl` (function), `jsr:@spy4x/platform`: Parse a canonical address into the normalised `URL` that will be published.
+- `commandErr` (function), `jsr:@spy4x/platform`: Build the failure arm of a CommandEnvelope.
+- `commandFromError` (function), `jsr:@spy4x/platform`: Build a CommandEnvelope from a thrown error, keeping the stack out of the payload.
+- `commandOk` (function), `jsr:@spy4x/platform`: Build the success arm of a CommandEnvelope.
+- `connectionError` (function), `jsr:@spy4x/platform`: Wrap a message the caller already has into a ConnectionError.
+- `convertToKebabCase` (function), `jsr:@spy4x/platform`: Convert a free-form identifier to kebab-case.
+- `debounce` (function), `jsr:@spy4x/platform`: Wrap `fn` in a trailing-edge debounce.
+- `err` (function), `jsr:@spy4x/platform`: Wrap a failure.
+- `filterRows` (function), `jsr:@spy4x/platform`: Keep the rows that every word of the query matches.
+- `formatBytes` (function), `jsr:@spy4x/platform`: A byte count for display, in binary (1024) steps: `"512 B"`, `"1.5 KB"`, `"2 MB"`.
+- `formatDecimal` (function), `jsr:@spy4x/platform`: Format a decimal number to exactly two decimal places.
+- `formatPct` (function), `jsr:@spy4x/platform`: Format a fraction in `0..1` as a percentage string with two decimals.
+- `formatTime` (function), `jsr:@spy4x/platform`: One-off TimeFormatter#format on the host clock.
+- `getDaysOfWeek` (function), `jsr:@spy4x/platform`: Read a weekday bitmask into day names.
+- `honeypotFilled` (function), `jsr:@spy4x/platform`: Whether a submitted honeypot field carries a value — a person never types into a field they cannot see, so any value here means whatever posted the form was not one.
+- `idleOperationState` (function), `jsr:@spy4x/platform`: Idle state of an operation.
+- `initials` (function), `jsr:@spy4x/platform`: Reduce a name to one or two initials, e.g.
+- `isSilentError` (function), `jsr:@spy4x/platform`: Whether an error should stay quiet.
+- `isValidDate` (function), `jsr:@spy4x/platform`: Whether the input is a usable date: a `Date` or an ISO `YYYY-MM-DD`-prefixed string that `Date` can parse.
+- `jsonLdText` (function), `jsr:@spy4x/platform`: Serialise JSON-LD for a `<script>` body.
+- `levenshtein` (function), `jsr:@spy4x/platform`: Levenshtein edit distance between two strings, computed over code points.
+- `niceStep` (function), `jsr:@spy4x/platform`: Round a span up to a sensible tick step at roughly `target` ticks.
+- `normalizeCalendarDate` (function), `jsr:@spy4x/platform`: Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
+- `normalizeCanonical` (function), `jsr:@spy4x/platform`: The canonical address as it should be published: one clean `http`/`https` address.
+- `ok` (function), `jsr:@spy4x/platform`: Wrap a success.
+- `parseSort` (function), `jsr:@spy4x/platform`: Read sort rules out of a URL parameter.
+- `pluralize` (function), `jsr:@spy4x/platform`: Naive English pluraliser for UI copy.
+- `removeSortRule` (function), `jsr:@spy4x/platform`: Removes one sort priority while preserving all remaining priorities.
+- `responseError` (function), `jsr:@spy4x/platform`: Turn a failed response into a structured error.
+- `round` (function), `jsr:@spy4x/platform`: Round to the nearest 10^-`decimals`.
+- `search` (function), `jsr:@spy4x/platform`: Whether one search word occurs in one value.
+- `searchWords` (function), `jsr:@spy4x/platform`: Split a search box's value into words.
+- `serializeSort` (function), `jsr:@spy4x/platform`: Write sort rules into a URL parameter.
+- `similarity` (function), `jsr:@spy4x/platform`: Similarity of two strings in `[0, 1]`, derived from levenshtein.
+- `sleep` (function), `jsr:@spy4x/platform`: Wait `ms` milliseconds.
+- `sortRows` (function), `jsr:@spy4x/platform`: Sort rows by every rule in order.
+- `stepAxis` (function), `jsr:@spy4x/platform`: Round `[min, max]` outward to multiples of `step` and return the new bounds with the ticks between them.
+- `systemClock` (constant), `jsr:@spy4x/platform`: The host clock.
+- `systemNow` (function), `jsr:@spy4x/platform`: The host clock, function-shaped.
+- `ticks` (function), `jsr:@spy4x/platform`: Tick values at multiples of a nice step, kept within half a step of `[min, max]`.
+- `timeAgo` (function), `jsr:@spy4x/platform`: One-off TimeFormatter#ago on the host clock.
+- `toggleSort` (function), `jsr:@spy4x/platform`: Advance one column through `asc` → `desc` → `off`.
+- `unwrap` (function), `jsr:@spy4x/platform`: Narrow a Result to its value, or raise.
+- `unwrapOr` (function), `jsr:@spy4x/platform`: Narrow a Result to its value, or fall back.
+- `utf8ByteLength` (function), `jsr:@spy4x/platform`: UTF-8 byte length, i.e.
+
+### `jsr:@spy4x/platform/api`
+
+- `ApiError` (interface), `jsr:@spy4x/platform/api`: One failure `apiFetch` can report: an HTTP status and a message meant to be shown as-is.
+- `ApiResult` (type), `jsr:@spy4x/platform/api`: Outcome of apiFetch: the parsed body on success, or a typed error on failure.
+- `apiFetch` (function), `jsr:@spy4x/platform/api`: `fetch` a JSON API and report the outcome as an ApiResult instead of throwing.
+
+### `jsr:@spy4x/platform/browser`
+
+- `ClipboardDocument` (interface), `jsr:@spy4x/platform/browser`: The document surface the legacy `execCommand("copy")` path needs.
+- `ClipboardWriter` (interface), `jsr:@spy4x/platform/browser`: The one clipboard method this helper calls.
+- `CopyToClipboardOptions` (interface), `jsr:@spy4x/platform/browser`: Where copyToClipboard writes.
+- `DownloadDocument` (interface), `jsr:@spy4x/platform/browser`: Minimal document surface this helper needs, so the caller passes its own `document`.
+- `DownloadOptions` (interface), `jsr:@spy4x/platform/browser`: Everything downloadResponseAsFile needs; all of it injectable.
+- `EMBED_HEIGHT_MESSAGE_TYPE` (constant), `jsr:@spy4x/platform/browser`: Default `type` of the message reportHeight posts: `{ type, height }`.
+- `EmbedMeasurable` (interface), `jsr:@spy4x/platform/browser`: The measured element: anything with a `getBoundingClientRect`.
+- `EmbedParent` (interface), `jsr:@spy4x/platform/browser`: The parent frame: all reportHeight needs from it is `postMessage`.
+- `EmbedResizeObserver` (interface), `jsr:@spy4x/platform/browser`: The observer reportHeight uses; a `ResizeObserver` fits.
+- `EmbedWindow` (interface), `jsr:@spy4x/platform/browser`: The subset of `Window` reportHeight reads.
+- `GEOLOCATION_FAILED` (constant), `jsr:@spy4x/platform/browser`: Message requestGeolocation reports when the browser refused or failed to answer.
+- `GEOLOCATION_UNSUPPORTED` (constant), `jsr:@spy4x/platform/browser`: Message requestGeolocation reports when the runtime has no `Geolocation` at all.
+- `GeoCoordinates` (interface), `jsr:@spy4x/platform/browser`: A resolved position, reduced to the two numbers a caller stores.
+- `Hotkey` (interface), `jsr:@spy4x/platform/browser`: A parsed keyboard combination: one key and the modifiers held with it.
+- `HotkeyEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that matchesHotkey reads.
+- `MakeStorageOptions` (interface), `jsr:@spy4x/platform/browser`: Options for makeStorage.
+- `ObjectUrlAdapter` (interface), `jsr:@spy4x/platform/browser`: Object-URL surface, injected so a test never allocates a real blob URL.
+- `PlatformNavigator` (interface), `jsr:@spy4x/platform/browser`: The part of `navigator` that isApplePlatform reads.
+- `ReportHeightOptions` (interface), `jsr:@spy4x/platform/browser`: Options for reportHeight.
+- `StorageLike` (type), `jsr:@spy4x/platform/browser`: The subset of the DOM `Storage` interface this module uses.
+- `StorageRead` (type), `jsr:@spy4x/platform/browser`: Outcome of a write or a read, so a caller can tell "absent" from "present but rejected".
+- `TimerAdapter` (interface), `jsr:@spy4x/platform/browser`: Timer surface, injected so a test never waits on a real delay.
+- `TypedStorage` (interface), `jsr:@spy4x/platform/browser`: A namespaced handle over one key.
+- `TypingTarget` (interface), `jsr:@spy4x/platform/browser`: The part of an element that isTypingTarget reads.
+- `captureTimeZone` (function), `jsr:@spy4x/platform/browser`: The visitor's IANA time zone (`Europe/Berlin`), or `undefined` when the runtime reports none.
+- `copyToClipboard` (function), `jsr:@spy4x/platform/browser`: Write `text` to the clipboard, and say whether it got there.
+- `downloadCsv` (function), `jsr:@spy4x/platform/browser`: Write rows as a CSV file and save it: toCsvBytes handed to downloadResponseAsFile.
+- `downloadResponseAsFile` (function), `jsr:@spy4x/platform/browser`: Save a response body to disk under `filename`.
+- `fillEmptyTimeZoneField` (function), `jsr:@spy4x/platform/browser`: Put the visitor's time zone into a form field, only when the field is still empty — a zone the page already filled in (from a link's `tz` parameter, say) is what the visitor saw on screen, and overwriting it would submit a different one.
+- `getCookie` (function), `jsr:@spy4x/platform/browser`: Look up `name` in `doc.cookie`, decoding its value.
+- `isApplePlatform` (function), `jsr:@spy4x/platform/browser`: Whether the browser runs on macOS, iOS or iPadOS, where `mod` means Command.
+- `isTypingTarget` (function), `jsr:@spy4x/platform/browser`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
+- `makeStorage` (function), `jsr:@spy4x/platform/browser`: Bind a StorageLike to one key.
+- `matchesHotkey` (function), `jsr:@spy4x/platform/browser`: Whether a key press is the combination.
+- `memoryStorage` (function), `jsr:@spy4x/platform/browser`: A `Map`-backed StorageLike.
+- `parseHotkey` (function), `jsr:@spy4x/platform/browser`: Parse a combination such as `"mod+k"`, `"shift+n"`, `"?"` or `"ctrl+alt+delete"`.
+- `reportHeight` (function), `jsr:@spy4x/platform/browser`: Post the element's height, in whole CSS pixels, to the parent frame — once the page has loaded, and again each time the element's size changes.
+- `requestGeolocation` (function), `jsr:@spy4x/platform/browser`: Ask for the current position and report the result.
+
+### `jsr:@spy4x/platform/browser/clipboard`
+
+- `ClipboardDocument` (interface), `jsr:@spy4x/platform/browser/clipboard`: The document surface the legacy `execCommand("copy")` path needs.
+- `ClipboardWriter` (interface), `jsr:@spy4x/platform/browser/clipboard`: The one clipboard method this helper calls.
+- `CopyToClipboardOptions` (interface), `jsr:@spy4x/platform/browser/clipboard`: Where copyToClipboard writes.
+- `copyToClipboard` (function), `jsr:@spy4x/platform/browser/clipboard`: Write `text` to the clipboard, and say whether it got there.
+
+### `jsr:@spy4x/platform/browser/cookie`
+
+- `getCookie` (function), `jsr:@spy4x/platform/browser/cookie`: Look up `name` in `doc.cookie`, decoding its value.
+
+### `jsr:@spy4x/platform/browser/download`
+
+- `DownloadDocument` (interface), `jsr:@spy4x/platform/browser/download`: Minimal document surface this helper needs, so the caller passes its own `document`.
+- `DownloadOptions` (interface), `jsr:@spy4x/platform/browser/download`: Everything downloadResponseAsFile needs; all of it injectable.
+- `ObjectUrlAdapter` (interface), `jsr:@spy4x/platform/browser/download`: Object-URL surface, injected so a test never allocates a real blob URL.
+- `TimerAdapter` (interface), `jsr:@spy4x/platform/browser/download`: Timer surface, injected so a test never waits on a real delay.
+- `downloadCsv` (function), `jsr:@spy4x/platform/browser/download`: Write rows as a CSV file and save it: toCsvBytes handed to downloadResponseAsFile.
+- `downloadResponseAsFile` (function), `jsr:@spy4x/platform/browser/download`: Save a response body to disk under `filename`.
+
+### `jsr:@spy4x/platform/browser/embed`
+
+- `EMBED_HEIGHT_MESSAGE_TYPE` (constant), `jsr:@spy4x/platform/browser/embed`: Default `type` of the message reportHeight posts: `{ type, height }`.
+- `EmbedMeasurable` (interface), `jsr:@spy4x/platform/browser/embed`: The measured element: anything with a `getBoundingClientRect`.
+- `EmbedParent` (interface), `jsr:@spy4x/platform/browser/embed`: The parent frame: all reportHeight needs from it is `postMessage`.
+- `EmbedResizeObserver` (interface), `jsr:@spy4x/platform/browser/embed`: The observer reportHeight uses; a `ResizeObserver` fits.
+- `EmbedWindow` (interface), `jsr:@spy4x/platform/browser/embed`: The subset of `Window` reportHeight reads.
+- `ReportHeightOptions` (interface), `jsr:@spy4x/platform/browser/embed`: Options for reportHeight.
+- `captureTimeZone` (function), `jsr:@spy4x/platform/browser/embed`: The visitor's IANA time zone (`Europe/Berlin`), or `undefined` when the runtime reports none.
+- `fillEmptyTimeZoneField` (function), `jsr:@spy4x/platform/browser/embed`: Put the visitor's time zone into a form field, only when the field is still empty — a zone the page already filled in (from a link's `tz` parameter, say) is what the visitor saw on screen, and overwriting it would submit a different one.
+- `reportHeight` (function), `jsr:@spy4x/platform/browser/embed`: Post the element's height, in whole CSS pixels, to the parent frame — once the page has loaded, and again each time the element's size changes.
+
+### `jsr:@spy4x/platform/browser/geolocation`
+
+- `GEOLOCATION_FAILED` (constant), `jsr:@spy4x/platform/browser/geolocation`: Message requestGeolocation reports when the browser refused or failed to answer.
+- `GEOLOCATION_UNSUPPORTED` (constant), `jsr:@spy4x/platform/browser/geolocation`: Message requestGeolocation reports when the runtime has no `Geolocation` at all.
+- `GeoCoordinates` (interface), `jsr:@spy4x/platform/browser/geolocation`: A resolved position, reduced to the two numbers a caller stores.
+- `requestGeolocation` (function), `jsr:@spy4x/platform/browser/geolocation`: Ask for the current position and report the result.
+
+### `jsr:@spy4x/platform/browser/hotkeys`
+
+- `Hotkey` (interface), `jsr:@spy4x/platform/browser/hotkeys`: A parsed keyboard combination: one key and the modifiers held with it.
+- `HotkeyEvent` (interface), `jsr:@spy4x/platform/browser/hotkeys`: The part of a `KeyboardEvent` that matchesHotkey reads.
+- `PlatformNavigator` (interface), `jsr:@spy4x/platform/browser/hotkeys`: The part of `navigator` that isApplePlatform reads.
+- `TypingTarget` (interface), `jsr:@spy4x/platform/browser/hotkeys`: The part of an element that isTypingTarget reads.
+- `isApplePlatform` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether the browser runs on macOS, iOS or iPadOS, where `mod` means Command.
+- `isTypingTarget` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
+- `matchesHotkey` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether a key press is the combination.
+- `parseHotkey` (function), `jsr:@spy4x/platform/browser/hotkeys`: Parse a combination such as `"mod+k"`, `"shift+n"`, `"?"` or `"ctrl+alt+delete"`.
+
+### `jsr:@spy4x/platform/browser/storage`
+
+- `MakeStorageOptions` (interface), `jsr:@spy4x/platform/browser/storage`: Options for makeStorage.
+- `StorageLike` (type), `jsr:@spy4x/platform/browser/storage`: The subset of the DOM `Storage` interface this module uses.
+- `StorageRead` (type), `jsr:@spy4x/platform/browser/storage`: Outcome of a write or a read, so a caller can tell "absent" from "present but rejected".
+- `TypedStorage` (interface), `jsr:@spy4x/platform/browser/storage`: A namespaced handle over one key.
+- `makeStorage` (function), `jsr:@spy4x/platform/browser/storage`: Bind a StorageLike to one key.
+- `memoryStorage` (function), `jsr:@spy4x/platform/browser/storage`: A `Map`-backed StorageLike.
+
+### `jsr:@spy4x/platform/cache`
+
+- `CacheService` (class), `jsr:@spy4x/platform/cache`
+- `CacheServiceOptions` (interface), `jsr:@spy4x/platform/cache`: CacheService constructor options.
+- `CacheWrapOptions` (interface), `jsr:@spy4x/platform/cache`: Options accepted by CacheService.wrap.
+- `ICacheService` (interface), `jsr:@spy4x/platform/cache`: A JSON cache in front of an ICacheStorage.
+- `ICacheStorage` (interface), `jsr:@spy4x/platform/cache`: Storage backing a CacheService.
+- `PublicAPICacheModel` (interface), `jsr:@spy4x/platform/cache`: A namespaced, optionally schema-validated view over one `CacheService`, keyed by `id`.
+- `buildMethods` (function), `jsr:@spy4x/platform/cache`: Build a `${prefix}_${id}`-keyed view over `cacheService`, with a fixed TTL and an optional arktype schema that `get` and `wrap` validate a cache hit against before returning it — so a value another version of this code wrote, in a shape the current schema no longer accepts, surfaces as a thrown validation error instead of a silently wrong read.
+- `reviveIsoDatesEndingInAt` (function), `jsr:@spy4x/platform/cache`: `JSON.parse` reviver that turns a string property whose key ends in `At` into a `Date`, when the string looks like an ISO-8601 UTC timestamp.
+
+### `jsr:@spy4x/platform/cqrs`
+
+- `Command` (interface), `jsr:@spy4x/platform/cqrs`: A write intent: `TPayload` in, `TResult` out.
+- `CommandBus` (class), `jsr:@spy4x/platform/cqrs`: Routes a command instance to the one handler registered for its class, and infers the returned value's type from the command class alone — no cast at the call site.
+- `CommandConstructor` (type), `jsr:@spy4x/platform/cqrs`: A class implementing Command, matched by `CommandBus.register`/`execute`.
+- `CommandHandler` (type), `jsr:@spy4x/platform/cqrs`: Handler a CommandBus runs for one command class.
+- `CommandResult` (type), `jsr:@spy4x/platform/cqrs`: The result type a Command class carries, extracted from its phantom `__resultType`.
+- `CqrsMiddleware` (type), `jsr:@spy4x/platform/cqrs`: A step that runs around every `execute` of a CommandBus or QueryBus, before the handler and whatever transport produced the message.
+- `Event` (interface), `jsr:@spy4x/platform/cqrs`: A fact an EventBus distributes to its subscribers.
+- `EventBus` (class), `jsr:@spy4x/platform/cqrs`: In-process publish/subscribe bus for one event class per subscription.
+- `EventBusErrorHandler` (type), `jsr:@spy4x/platform/cqrs`: Called when a listener fails — throws synchronously or returns a rejected promise — instead of letting the failure propagate.
+- `EventConstructor` (type), `jsr:@spy4x/platform/cqrs`: A class implementing Event, matched by `EventBus.on`/`once`/`emit`.
+- `Query` (interface), `jsr:@spy4x/platform/cqrs`: A read intent: `TPayload` in, `TResult` out.
+- `QueryBus` (class), `jsr:@spy4x/platform/cqrs`: Routes a query instance to the one handler registered for its class, and infers the returned value's type from the query class alone — no cast at the call site.
+- `QueryConstructor` (type), `jsr:@spy4x/platform/cqrs`: A class implementing Query, matched by `QueryBus.register`/`execute`.
+- `QueryHandler` (type), `jsr:@spy4x/platform/cqrs`: Handler a QueryBus runs for one query class.
+- `QueryResult` (type), `jsr:@spy4x/platform/cqrs`: The result type a Query class carries, extracted from its phantom `__resultType`.
+
+### `jsr:@spy4x/platform/model`
+
+- `BaseModel` (type), `jsr:@spy4x/platform/model`: Value BaseModelSchema produces.
+- `BaseModelSchema` (constant), `jsr:@spy4x/platform/model`: UndeletableBaseModelSchema plus a nullable `deletedAt`, for a soft-deletable record.
+- `DateNullableSchema` (constant), `jsr:@spy4x/platform/model`: dateSchema, also accepting `null` and defaulting to it when the field is absent.
+- `DateType` (type), `jsr:@spy4x/platform/model`: Value dateSchema produces: always a `Date`, regardless of which input form it parsed.
+- `ImmutableBaseModelSchema` (constant), `jsr:@spy4x/platform/model`: The two fields present on every record: its id and when it was created.
+- `PushNotificationMessage` (type), `jsr:@spy4x/platform/model`: Value pushNotificationMessageSchema produces.
+- `PushSubscribeRequest` (type), `jsr:@spy4x/platform/model`: Value pushSubscribeRequestSchema produces.
+- `PushSubscriptionData` (type), `jsr:@spy4x/platform/model`: Alias for PushSubscriptionJson used where the wire origin is not the point.
+- `PushSubscriptionJson` (type), `jsr:@spy4x/platform/model`: Value pushSubscriptionSchema produces.
+- `PushSubscriptionKeys` (type), `jsr:@spy4x/platform/model`: Value pushSubscriptionKeysSchema produces.
+- `PushUnsubscribeRequest` (type), `jsr:@spy4x/platform/model`: Value pushUnsubscribeRequestSchema produces.
+- `UndeletableBaseModelSchema` (constant), `jsr:@spy4x/platform/model`: ImmutableBaseModelSchema plus `updatedAt`, for a record that can be edited.
+- `dateSchema` (constant), `jsr:@spy4x/platform/model`: `Date`, or an ISO 8601 date string naming a real calendar date, parsed to a `Date`.
+- `pushNotificationMessageSchema` (constant), `jsr:@spy4x/platform/model`: A notification the server sends through a push subscription.
+- `pushSubscribeRequestSchema` (constant), `jsr:@spy4x/platform/model`: Request body to register a device's push subscription.
+- `pushSubscriptionKeysSchema` (constant), `jsr:@spy4x/platform/model`: The two keys a `PushSubscription`'s `getKey` calls produce, base64url-encoded.
+- `pushSubscriptionSchema` (constant), `jsr:@spy4x/platform/model`: A browser's `PushSubscription`, as `JSON.stringify`d by `PushSubscription.toJSON()`.
+- `pushUnsubscribeRequestSchema` (constant), `jsr:@spy4x/platform/model`: Request body to drop a device's push subscription.
+
+### `jsr:@spy4x/platform/rate-limit`
+
+- `ClientIpOptions` (interface), `jsr:@spy4x/platform/rate-limit`: Options for clientIp.
+- `Clock` (type), `jsr:@spy4x/platform/rate-limit`: Monotonic millisecond clock.
+- `DEFAULT_IDLE_MS` (constant), `jsr:@spy4x/platform/rate-limit`: How long a bucket survives after it stops being active.
+- `DenoKvLike` (interface), `jsr:@spy4x/platform/rate-limit`: The three `Deno.Kv` operations this adapter needs.
+- `KeyResolver` (type), `jsr:@spy4x/platform/rate-limit`: Key the current request.
+- `KvStoreOptions` (interface), `jsr:@spy4x/platform/rate-limit`: Options for createKvStore.
+- `MemoryRateLimiter` (class), `jsr:@spy4x/platform/rate-limit`: In-process sliding-window limiter.
+- `MemoryRateLimiterOptions` (interface), `jsr:@spy4x/platform/rate-limit`: Constructor options for MemoryRateLimiter.
+- `RATE_LIMIT_HEADERS` (constant), `jsr:@spy4x/platform/rate-limit`: Default draft-6 header names.
+- `REJECTION_STATUSES` (constant), `jsr:@spy4x/platform/rate-limit`: The same set at runtime, so a bad status is refused at startup rather than at first rejection.
+- `RateLimitContext` (interface), `jsr:@spy4x/platform/rate-limit`: The framework context handed to a key resolver and to a RemoteAddrResolver.
+- `RateLimitDecision` (interface), `jsr:@spy4x/platform/rate-limit`: Outcome of one `check`.
+- `RateLimitErrorBody` (interface), `jsr:@spy4x/platform/rate-limit`: JSON-safe response body for a rejected request.
+- `RateLimitHeaderNames` (interface), `jsr:@spy4x/platform/rate-limit`: Header names, overridable for callers that need a prefixed variant.
+- `RateLimitHonoContext` (type), `jsr:@spy4x/platform/rate-limit`: Hono's `Context` for whichever environment the caller uses.
+- `RateLimitKind` (enum), `jsr:@spy4x/platform/rate-limit`: Which identity a limiter buckets on.
+- `RateLimitKv` (interface), `jsr:@spy4x/platform/rate-limit`: Minimal key/value port.
+- `RateLimitKvEntry` (interface), `jsr:@spy4x/platform/rate-limit`: One key's recorded window, with the moment it stops mattering.
+- `RateLimitMiddleware` (type), `jsr:@spy4x/platform/rate-limit`: Middleware shape as Hono types it, exported so a caller can store one in an object literal.
+- `RateLimitMiddlewareOptions` (interface), `jsr:@spy4x/platform/rate-limit`: Options for createRateLimitMiddleware.
+- `RateLimitOptions` (interface), `jsr:@spy4x/platform/rate-limit`: Configuration shared by every limiter implementation.
+- `RateLimitStore` (interface), `jsr:@spy4x/platform/rate-limit`: The `RateLimitStore` port: the only surface a limiter needs from a shared backend.
+- `RateLimitStoreOverKv` (class), `jsr:@spy4x/platform/rate-limit`: `RateLimitStore` implementation backed by a RateLimitKv.
+- `RateLimiter` (interface), `jsr:@spy4x/platform/rate-limit`: Limiter shape the middleware accepts, sync or async.
+- `RejectionStatus` (type), `jsr:@spy4x/platform/rate-limit`: Statuses a rejection may use.
+- `RemoteAddrResolver` (type), `jsr:@spy4x/platform/rate-limit`: Resolve a client's peer address from a runtime handle, for RateLimitMiddlewareOptions.
+- `SWEEP_EVERY_CHECKS` (constant), `jsr:@spy4x/platform/rate-limit`: How many requests may arrive between two sweeps before one is forced.
+- `StoreRateLimiter` (class), `jsr:@spy4x/platform/rate-limit`: Store-backed sliding window over any RateLimitStore.
+- `TrustedProxyHeader` (type), `jsr:@spy4x/platform/rate-limit`: A single proxy header clientIp may be told to trust, in place of the default all-three-headers order.
+- `UNKNOWN_CLIENT_IP` (constant), `jsr:@spy4x/platform/rate-limit`: Fallback when no header and no peer address is available.
+- `UserThenIpOptions` (interface), `jsr:@spy4x/platform/rate-limit`: Options for userThenIp.
+- `clientIp` (function), `jsr:@spy4x/platform/rate-limit`: Resolve the client IP for a request.
+- `clientIpBucket` (function), `jsr:@spy4x/platform/rate-limit`: The rate-limit identity of a client address: an IPv6 address reduced to its /64 network (`2001:db8:1:2::/64`), anything else unchanged.
+- `createKvStore` (function), `jsr:@spy4x/platform/rate-limit`: Build a `RateLimitStore` over any RateLimitKv.
+- `createMemoryRateLimiter` (function), `jsr:@spy4x/platform/rate-limit`: Build an in-process limiter.
+- `createRateLimitMiddleware` (function), `jsr:@spy4x/platform/rate-limit`: Build the middleware for a limiter.
+- `createStoreLimiter` (function), `jsr:@spy4x/platform/rate-limit`: Build a limiter over a shared store.
+- `decisionHeaders` (function), `jsr:@spy4x/platform/rate-limit`: Draft-6 headers for one decision.
+- `denoKvBackend` (function), `jsr:@spy4x/platform/rate-limit`: Deno KV adapter.
+- `humanRetry` (function), `jsr:@spy4x/platform/rate-limit`: Milliseconds as a human retry hint: `"1 second"`, `"45 seconds"`, `"2 minutes"`.
+- `rateLimitKey` (function), `jsr:@spy4x/platform/rate-limit`: Build a limiter key from an identity.
+- `systemClock` (function), `jsr:@spy4x/platform/rate-limit`: Default: real time.
+- `userThenIp` (function), `jsr:@spy4x/platform/rate-limit`: Key a request on the authenticated user when the caller can find one, else on the client IP.
+
+### `jsr:@spy4x/platform/rate-limit/client-ip`
+
+- `ClientIpOptions` (interface), `jsr:@spy4x/platform/rate-limit/client-ip`: Options for clientIp.
+- `TrustedProxyHeader` (type), `jsr:@spy4x/platform/rate-limit/client-ip`: A single proxy header clientIp may be told to trust, in place of the default all-three-headers order.
+- `UNKNOWN_CLIENT_IP` (constant), `jsr:@spy4x/platform/rate-limit/client-ip`: Fallback when no header and no peer address is available.
+- `clientIp` (function), `jsr:@spy4x/platform/rate-limit/client-ip`: Resolve the client IP for a request.
+- `clientIpBucket` (function), `jsr:@spy4x/platform/rate-limit/client-ip`: The rate-limit identity of a client address: an IPv6 address reduced to its /64 network (`2001:db8:1:2::/64`), anything else unchanged.
+- `humanRetry` (function), `jsr:@spy4x/platform/rate-limit/client-ip`: Milliseconds as a human retry hint: `"1 second"`, `"45 seconds"`, `"2 minutes"`.
+
+### `jsr:@spy4x/platform/rate-limit/hono`
+
+- `KeyResolver` (type), `jsr:@spy4x/platform/rate-limit/hono`: Key the current request.
+- `RATE_LIMIT_HEADERS` (constant), `jsr:@spy4x/platform/rate-limit/hono`: Default draft-6 header names.
+- `REJECTION_STATUSES` (constant), `jsr:@spy4x/platform/rate-limit/hono`: The same set at runtime, so a bad status is refused at startup rather than at first rejection.
+- `RateLimitContext` (interface), `jsr:@spy4x/platform/rate-limit/hono`: The framework context handed to a key resolver and to a RemoteAddrResolver.
+- `RateLimitErrorBody` (interface), `jsr:@spy4x/platform/rate-limit/hono`: JSON-safe response body for a rejected request.
+- `RateLimitHeaderNames` (interface), `jsr:@spy4x/platform/rate-limit/hono`: Header names, overridable for callers that need a prefixed variant.
+- `RateLimitHonoContext` (type), `jsr:@spy4x/platform/rate-limit/hono`: Hono's `Context` for whichever environment the caller uses.
+- `RateLimitMiddleware` (type), `jsr:@spy4x/platform/rate-limit/hono`: Middleware shape as Hono types it, exported so a caller can store one in an object literal.
+- `RateLimitMiddlewareOptions` (interface), `jsr:@spy4x/platform/rate-limit/hono`: Options for createRateLimitMiddleware.
+- `RejectionStatus` (type), `jsr:@spy4x/platform/rate-limit/hono`: Statuses a rejection may use.
+- `RemoteAddrResolver` (type), `jsr:@spy4x/platform/rate-limit/hono`: Resolve a client's peer address from a runtime handle, for RateLimitMiddlewareOptions.
+- `UserThenIpOptions` (interface), `jsr:@spy4x/platform/rate-limit/hono`: Options for userThenIp.
+- `createRateLimitMiddleware` (function), `jsr:@spy4x/platform/rate-limit/hono`: Build the middleware for a limiter.
+- `decisionHeaders` (function), `jsr:@spy4x/platform/rate-limit/hono`: Draft-6 headers for one decision.
+- `userThenIp` (function), `jsr:@spy4x/platform/rate-limit/hono`: Key a request on the authenticated user when the caller can find one, else on the client IP.
+
+### `jsr:@spy4x/platform/rate-limit/kv`
+
+- `DenoKvLike` (interface), `jsr:@spy4x/platform/rate-limit/kv`: The three `Deno.Kv` operations this adapter needs.
+- `KvStoreOptions` (interface), `jsr:@spy4x/platform/rate-limit/kv`: Options for createKvStore.
+- `RateLimitKv` (interface), `jsr:@spy4x/platform/rate-limit/kv`: Minimal key/value port.
+- `RateLimitKvEntry` (interface), `jsr:@spy4x/platform/rate-limit/kv`: One key's recorded window, with the moment it stops mattering.
+- `RateLimitStoreOverKv` (class), `jsr:@spy4x/platform/rate-limit/kv`: `RateLimitStore` implementation backed by a RateLimitKv.
+- `createKvStore` (function), `jsr:@spy4x/platform/rate-limit/kv`: Build a `RateLimitStore` over any RateLimitKv.
+- `denoKvBackend` (function), `jsr:@spy4x/platform/rate-limit/kv`: Deno KV adapter.
+
+### `jsr:@spy4x/platform/rate-limit/memory`
+
+- `Clock` (type), `jsr:@spy4x/platform/rate-limit/memory`: Monotonic millisecond clock.
+- `DEFAULT_IDLE_MS` (constant), `jsr:@spy4x/platform/rate-limit/memory`: How long a bucket survives after it stops being active.
+- `MemoryRateLimiter` (class), `jsr:@spy4x/platform/rate-limit/memory`: In-process sliding-window limiter.
+- `MemoryRateLimiterOptions` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Constructor options for MemoryRateLimiter.
+- `RateLimitDecision` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Outcome of one `check`.
+- `RateLimitKind` (enum), `jsr:@spy4x/platform/rate-limit/memory`: Which identity a limiter buckets on.
+- `RateLimitOptions` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Configuration shared by every limiter implementation.
+- `RateLimitStore` (interface), `jsr:@spy4x/platform/rate-limit/memory`: The `RateLimitStore` port: the only surface a limiter needs from a shared backend.
+- `RateLimiter` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Limiter shape the middleware accepts, sync or async.
+- `SWEEP_EVERY_CHECKS` (constant), `jsr:@spy4x/platform/rate-limit/memory`: How many requests may arrive between two sweeps before one is forced.
+- `StoreRateLimiter` (class), `jsr:@spy4x/platform/rate-limit/memory`: Store-backed sliding window over any RateLimitStore.
+- `createMemoryRateLimiter` (function), `jsr:@spy4x/platform/rate-limit/memory`: Build an in-process limiter.
+- `createStoreLimiter` (function), `jsr:@spy4x/platform/rate-limit/memory`: Build a limiter over a shared store.
+- `rateLimitKey` (function), `jsr:@spy4x/platform/rate-limit/memory`: Build a limiter key from an identity.
+- `systemClock` (function), `jsr:@spy4x/platform/rate-limit/memory`: Default: real time.
+
+### `jsr:@spy4x/platform/request-info`
+
+- `RequestInfo` (interface), `jsr:@spy4x/platform/request-info`: Request metadata worth attaching to a log line or an error report.
+- `RequestInfoOptions` (interface), `jsr:@spy4x/platform/request-info`: Options for requestInfoFromContext.
+- `TrustedProxyHeader` (type), `jsr:@spy4x/platform/request-info`: A single proxy header clientIp may be told to trust, in place of the default all-three-headers order.
+- `requestInfoFromContext` (function), `jsr:@spy4x/platform/request-info`: Build a RequestInfo from a Hono request: its request id (when the app's middleware set one), its client IP (see the module doc for the trust boundary), and its user agent.
+
+### `jsr:@spy4x/platform/server`
+
+- `ByteReader` (interface), `jsr:@spy4x/platform/server`: Chunked byte source for streaming hashing.
+- `ClockPort` (type), `jsr:@spy4x/platform/server`: Clock injection point, so throttling is testable without sleeping.
+- `CommandSpawner` (type), `jsr:@spy4x/platform/server`: A `Deno.Command`-shaped factory: builds a command whose `output()` runs it to completion.
+- `DEFAULT_FILE_LOCK_WAIT_MS` (constant), `jsr:@spy4x/platform/server`: How long a FileLock.runExclusive call waits for an earlier one on the same instance.
+- `FileLock` (class), `jsr:@spy4x/platform/server`: One held lock.
+- `FileLockOptions` (interface), `jsr:@spy4x/platform/server`: Options for FileLock.
+- `FileLockWaitError` (class), `jsr:@spy4x/platform/server`: Raised when a FileLock.runExclusive call waited FileLockOptions.waitMs for an earlier `runExclusive` on the same instance and gave up.
+- `FileSystemPort` (interface), `jsr:@spy4x/platform/server`: Storage primitives a server helper needs.
+- `JsonlLogger` (class), `jsr:@spy4x/platform/server`: Append-only JSONL writer over a FileSystemPort.
+- `LockHandle` (interface), `jsr:@spy4x/platform/server`: A held file lock.
+- `LockState` (enum), `jsr:@spy4x/platform/server`: Lock state, so a check can distinguish "held" from "held by me".
+- `LockUnavailableError` (class), `jsr:@spy4x/platform/server`: Raised when another holder owns the lock.
+- `LogRecord` (type), `jsr:@spy4x/platform/server`: One log record: the caller's event plus a timestamp.
+- `ReadJsonResult` (type), `jsr:@spy4x/platform/server`: Result of reading a JSON document.
+- `RunCommandOptions` (interface), `jsr:@spy4x/platform/server`: Options for runCommand.
+- `RunCommandOutput` (interface), `jsr:@spy4x/platform/server`: What a finished child process reports; the subset of `Deno.CommandOutput` this module reads.
+- `RunCommandResult` (interface), `jsr:@spy4x/platform/server`: The outcome of runCommand.
+- `RunCommandStdin` (type), `jsr:@spy4x/platform/server`: Where the child's standard input comes from: the caller's own (`"inherit"`) or nothing (`"null"`, so a read gets end-of-file at once).
+- `ShutdownSignalError` (class), `jsr:@spy4x/platform/server`: The reason a shutdownSignal carries when an operating-system signal aborted it.
+- `ShutdownSignalOptions` (interface), `jsr:@spy4x/platform/server`: Options for shutdownSignal.
+- `SpawnOptions` (interface), `jsr:@spy4x/platform/server`: The subset of `Deno.CommandOptions` runCommand passes to its spawner.
+- `TempPathOptions` (interface), `jsr:@spy4x/platform/server`: Where a temporary file should live, given the document it will replace.
+- `ThrottledJsonSaver` (class), `jsr:@spy4x/platform/server`: Coalescing writer for one JSON document.
+- `ThrottledJsonSaverOptions` (interface), `jsr:@spy4x/platform/server`: Options for ThrottledJsonSaver.
+- `TimerPort` (interface), `jsr:@spy4x/platform/server`: Scheduling primitives a ThrottledJsonSaver needs.
+- `WalkEntry` (interface), `jsr:@spy4x/platform/server`: A single directory entry, as returned by a directory listing.
+- `atomicWriteJson` (function), `jsr:@spy4x/platform/server`: Serialise `value` and replace `path` with it atomically.
+- `denoByteReader` (function), `jsr:@spy4x/platform/server`: ByteReader over one file, read in chunks so a large file never lands in memory at once.
+- `denoFileSystem` (constant), `jsr:@spy4x/platform/server`: FileSystemPort backed by Deno's filesystem APIs.
+- `formatLogLine` (function), `jsr:@spy4x/platform/server`: Serialise a log record to one line, stamped with the clock at append time.
+- `parseLogLines` (function), `jsr:@spy4x/platform/server`: Parse JSONL text, skipping blank lines and reporting the lines that do not parse.
+- `readJsonFile` (function), `jsr:@spy4x/platform/server`: Read and parse a JSON document.
+- `runCommand` (function), `jsr:@spy4x/platform/server`: Run `command` (the program, then its arguments) and resolve with its outcome.
+- `shutdownSignal` (function), `jsr:@spy4x/platform/server`: Return an `AbortSignal` that aborts on the first of `options.signals` (default `SIGINT` and `SIGTERM`).
+- `systemClockPort` (constant), `jsr:@spy4x/platform/server`: The host clock.
+- `systemTimerPort` (constant), `jsr:@spy4x/platform/server`: Real timers.
+- `tempPathFor` (function), `jsr:@spy4x/platform/server`: Build the temp path for an atomic write: `<path>.<pid>.<sequence>.tmp`.
+
+### `jsr:@spy4x/platform/server/atomic-json`
+
+- `ReadJsonResult` (type), `jsr:@spy4x/platform/server/atomic-json`: Result of reading a JSON document.
+- `TempPathOptions` (interface), `jsr:@spy4x/platform/server/atomic-json`: Where a temporary file should live, given the document it will replace.
+- `atomicWriteJson` (function), `jsr:@spy4x/platform/server/atomic-json`: Serialise `value` and replace `path` with it atomically.
+- `readJsonFile` (function), `jsr:@spy4x/platform/server/atomic-json`: Read and parse a JSON document.
+- `tempPathFor` (function), `jsr:@spy4x/platform/server/atomic-json`: Build the temp path for an atomic write: `<path>.<pid>.<sequence>.tmp`.
+
+### `jsr:@spy4x/platform/server/deno-fs`
+
+- `denoByteReader` (function), `jsr:@spy4x/platform/server/deno-fs`: ByteReader over one file, read in chunks so a large file never lands in memory at once.
+- `denoFileSystem` (constant), `jsr:@spy4x/platform/server/deno-fs`: FileSystemPort backed by Deno's filesystem APIs.
+
+### `jsr:@spy4x/platform/server/file-lock`
+
+- `DEFAULT_FILE_LOCK_WAIT_MS` (constant), `jsr:@spy4x/platform/server/file-lock`: How long a FileLock.runExclusive call waits for an earlier one on the same instance.
+- `FileLock` (class), `jsr:@spy4x/platform/server/file-lock`: One held lock.
+- `FileLockOptions` (interface), `jsr:@spy4x/platform/server/file-lock`: Options for FileLock.
+- `FileLockWaitError` (class), `jsr:@spy4x/platform/server/file-lock`: Raised when a FileLock.runExclusive call waited FileLockOptions.waitMs for an earlier `runExclusive` on the same instance and gave up.
+- `LockState` (enum), `jsr:@spy4x/platform/server/file-lock`: Lock state, so a check can distinguish "held" from "held by me".
+- `LockUnavailableError` (class), `jsr:@spy4x/platform/server/file-lock`: Raised when another holder owns the lock.
+
+### `jsr:@spy4x/platform/server/jsonl-logger`
+
+- `JsonlLogger` (class), `jsr:@spy4x/platform/server/jsonl-logger`: Append-only JSONL writer over a FileSystemPort.
+- `LogRecord` (type), `jsr:@spy4x/platform/server/jsonl-logger`: One log record: the caller's event plus a timestamp.
+- `formatLogLine` (function), `jsr:@spy4x/platform/server/jsonl-logger`: Serialise a log record to one line, stamped with the clock at append time.
+- `parseLogLines` (function), `jsr:@spy4x/platform/server/jsonl-logger`: Parse JSONL text, skipping blank lines and reporting the lines that do not parse.
+
+### `jsr:@spy4x/platform/server/ports`
+
+- `ByteReader` (interface), `jsr:@spy4x/platform/server/ports`: Chunked byte source for streaming hashing.
+- `ClockPort` (type), `jsr:@spy4x/platform/server/ports`: Clock injection point, so throttling is testable without sleeping.
+- `FileSystemPort` (interface), `jsr:@spy4x/platform/server/ports`: Storage primitives a server helper needs.
+- `LockHandle` (interface), `jsr:@spy4x/platform/server/ports`: A held file lock.
+- `WalkEntry` (interface), `jsr:@spy4x/platform/server/ports`: A single directory entry, as returned by a directory listing.
+- `systemClockPort` (constant), `jsr:@spy4x/platform/server/ports`: The host clock.
+
+### `jsr:@spy4x/platform/server/run-command`
+
+- `CommandSpawner` (type), `jsr:@spy4x/platform/server/run-command`: A `Deno.Command`-shaped factory: builds a command whose `output()` runs it to completion.
+- `RunCommandOptions` (interface), `jsr:@spy4x/platform/server/run-command`: Options for runCommand.
+- `RunCommandOutput` (interface), `jsr:@spy4x/platform/server/run-command`: What a finished child process reports; the subset of `Deno.CommandOutput` this module reads.
+- `RunCommandResult` (interface), `jsr:@spy4x/platform/server/run-command`: The outcome of runCommand.
+- `RunCommandStdin` (type), `jsr:@spy4x/platform/server/run-command`: Where the child's standard input comes from: the caller's own (`"inherit"`) or nothing (`"null"`, so a read gets end-of-file at once).
+- `SpawnOptions` (interface), `jsr:@spy4x/platform/server/run-command`: The subset of `Deno.CommandOptions` runCommand passes to its spawner.
+- `runCommand` (function), `jsr:@spy4x/platform/server/run-command`: Run `command` (the program, then its arguments) and resolve with its outcome.
+
+### `jsr:@spy4x/platform/server/shutdown-signal`
+
+- `ShutdownSignalError` (class), `jsr:@spy4x/platform/server/shutdown-signal`: The reason a shutdownSignal carries when an operating-system signal aborted it.
+- `ShutdownSignalOptions` (interface), `jsr:@spy4x/platform/server/shutdown-signal`: Options for shutdownSignal.
+- `shutdownSignal` (function), `jsr:@spy4x/platform/server/shutdown-signal`: Return an `AbortSignal` that aborts on the first of `options.signals` (default `SIGINT` and `SIGTERM`).
+
+### `jsr:@spy4x/platform/server/throttled-saver`
+
+- `ThrottledJsonSaver` (class), `jsr:@spy4x/platform/server/throttled-saver`: Coalescing writer for one JSON document.
+- `ThrottledJsonSaverOptions` (interface), `jsr:@spy4x/platform/server/throttled-saver`: Options for ThrottledJsonSaver.
+- `TimerPort` (interface), `jsr:@spy4x/platform/server/throttled-saver`: Scheduling primitives a ThrottledJsonSaver needs.
+- `systemTimerPort` (constant), `jsr:@spy4x/platform/server/throttled-saver`: Real timers.
+
+### `jsr:@spy4x/platform/signed-payload`
+
+- `MAX_SIGNED_PAYLOAD_LENGTH` (constant), `jsr:@spy4x/platform/signed-payload`: Longest token, in characters, that `verify` will decode.
+- `SignOptions` (interface), `jsr:@spy4x/platform/signed-payload`: Per-token settings for SignedPayloadCodec.sign.
+- `SignedPayloadCodec` (interface), `jsr:@spy4x/platform/signed-payload`: Signs and verifies one purpose's payloads.
+- `SignedPayloadCodecOptions` (interface), `jsr:@spy4x/platform/signed-payload`: Settings fixed for the codec's lifetime.
+- `SignedPayloadError` (class), `jsr:@spy4x/platform/signed-payload`: Thrown by SignedPayloadCodec.sign when it would mint a token that `verify` refuses: `InvalidPayload` for a payload that is not JSON or does not survive a JSON round trip through the schema, `Malformed` for a token longer than MAX_SIGNED_PAYLOAD_LENGTH.
+- `SignedPayloadErrorCode` (enum), `jsr:@spy4x/platform/signed-payload`: Why a token was refused.
+- `VerifyOptions` (interface), `jsr:@spy4x/platform/signed-payload`: Per-token settings for SignedPayloadCodec.verify.
+- `createSignedPayloadCodec` (function), `jsr:@spy4x/platform/signed-payload`: Creates a codec for one purpose, version and schema.
+
+### `jsr:@spy4x/platform/tokens`
+
+- `DEFAULT_TOKEN_BYTES` (constant), `jsr:@spy4x/platform/tokens`: Default raw-token width: 128 bits, which base64url renders as 22 characters.
+- `MIN_SECRET_LENGTH` (constant), `jsr:@spy4x/platform/tokens`: Smallest accepted secret length, in characters, measured on the trimmed value.
+- `TokenError` (class), `jsr:@spy4x/platform/tokens`: Typed error for token primitives.
+- `TokenErrorCode` (enum), `jsr:@spy4x/platform/tokens`: Failure kind of a `TokenError`.
+- `ULID_LENGTH` (constant), `jsr:@spy4x/platform/tokens`: Length of a ULID string: 26 Crockford base32 characters.
+- `constantTimeEquals` (function), `jsr:@spy4x/platform/tokens`: Compares two hex digests in constant time.
+- `constantTimeEqualsText` (function), `jsr:@spy4x/platform/tokens`: Compares two arbitrary strings in constant time.
+- `monotonicUlid` (function), `jsr:@spy4x/platform/tokens`: Generate a ULID that monotonically increases even for the same millisecond, optionally passing the current time.
+- `newOpaqueToken` (function), `jsr:@spy4x/platform/tokens`: Mints an opaque token: `raw` goes to the caller, `hash` is what the server stores.
+- `randomBase64Url` (function), `jsr:@spy4x/platform/tokens`: Cryptographically random bytes, base64url, unpadded.
+- `sha256Hex` (function), `jsr:@spy4x/platform/tokens`: Concatenated digest `sha256hex(raw + secret)`, lower-case, 64 characters.
+- `verifyOpaqueToken` (function), `jsr:@spy4x/platform/tokens`: Recomputes `sha256Hex(raw + secret)` and compares it to the stored hash via `constantTimeEquals` — never `===`, never `!==` (the shape that made `offer-lens/libs/auth/mod.ts:115` timing-unsafe).
+
+### `jsr:@spy4x/platform/universal/async`
+
+- `BackoffDelayOptions` (interface), `jsr:@spy4x/platform/universal/async`
+- `BackoffJitterMode` (type), `jsr:@spy4x/platform/universal/async`: How backoffDelay spreads a capped delay.
+- `Debounced` (interface), `jsr:@spy4x/platform/universal/async`: Trailing-edge debounce.
+- `RandomSource` (type), `jsr:@spy4x/platform/universal/async`: A source of numbers in `[0, 1)`, the shape `Math.random` has.
+- `backoffDelay` (function), `jsr:@spy4x/platform/universal/async`: Caps a raw delay and jitters it — the exponential-backoff arithmetic that used to be implemented twice: once with symmetric jitter around the capped delay (`integrations/retry.ts`'s `createExponentialBackoff`) and once with jitter that only ever shortens the wait (`realtime/backoff.ts`'s `nextBackoffDelay`).
+- `debounce` (function), `jsr:@spy4x/platform/universal/async`: Wrap `fn` in a trailing-edge debounce.
+- `sleep` (function), `jsr:@spy4x/platform/universal/async`: Wait `ms` milliseconds.
+
+### `jsr:@spy4x/platform/universal/axis`
+
+- `MAX_TICKS` (constant), `jsr:@spy4x/platform/universal/axis`: Hard ceiling on generated ticks, and on the iterations the tick loop may spend producing them — see the doc of `ticksForStep` (the private loop behind ticks and stepAxis) for why the loop needs its own bound, not just the output's.
+- `StepAxis` (interface), `jsr:@spy4x/platform/universal/axis`: Bounds rounded outward to multiples of a step, and the ticks between them.
+- `niceStep` (function), `jsr:@spy4x/platform/universal/axis`: Round a span up to a sensible tick step at roughly `target` ticks.
+- `stepAxis` (function), `jsr:@spy4x/platform/universal/axis`: Round `[min, max]` outward to multiples of `step` and return the new bounds with the ticks between them.
+- `ticks` (function), `jsr:@spy4x/platform/universal/axis`: Tick values at multiples of a nice step, kept within half a step of `[min, max]`.
+
+### `jsr:@spy4x/platform/universal/concurrency`
+
+- `AsyncMutex` (class), `jsr:@spy4x/platform/universal/concurrency`: A fair mutual-exclusion lock for async critical sections.
+
+### `jsr:@spy4x/platform/universal/constants`
+
+- `DEFAULT_DEBOUNCE_DELAY` (constant), `jsr:@spy4x/platform/universal/constants`: Default trailing-edge debounce delay, in milliseconds.
+- `DEFAULT_FLUSH_INTERVAL_MS` (constant), `jsr:@spy4x/platform/universal/constants`: Default window for the throttled JSON saver, in milliseconds.
+- `MIN_PASSWORD_LENGTH` (constant), `jsr:@spy4x/platform/universal/constants`: Minimum accepted password length.
+
+### `jsr:@spy4x/platform/universal/csv`
+
+- `CSV_BYTE_ORDER_MARK` (constant), `jsr:@spy4x/platform/universal/csv`: UTF-8 byte-order mark.
+- `CsvCellValue` (type), `jsr:@spy4x/platform/universal/csv`: What a `format` function, or an unformatted field, may hand back for one cell.
+- `CsvColumn` (interface), `jsr:@spy4x/platform/universal/csv`: One column of a CSV export: the row field to read, its header text, and how to render a value.
+- `csvField` (function), `jsr:@spy4x/platform/universal/csv`: Render one value as an RFC 4180 CSV cell.
+- `csvHeaderRow` (function), `jsr:@spy4x/platform/universal/csv`: The header row, escaped the same way a data row is.
+- `csvRow` (function), `jsr:@spy4x/platform/universal/csv`: One data row, rendered and escaped, comma-joined.
+- `toCsvBytes` (function), `jsr:@spy4x/platform/universal/csv`: toCsvText, encoded as UTF-8 bytes with a leading CSV_BYTE_ORDER_MARK.
+- `toCsvText` (function), `jsr:@spy4x/platform/universal/csv`: Render every row as RFC 4180 CSV text: a header row, one line per row of `rows`, each terminated by LINE_ENDING — including the last line, which the RFC leaves optional but which every row here carries for one uniform rule instead of a special case for the final row.
+
+### `jsr:@spy4x/platform/universal/errors`
+
+- `AnyError` (type), `jsr:@spy4x/platform/universal/errors`: Every error Result can carry.
+- `ConnectionError` (interface), `jsr:@spy4x/platform/universal/errors`: The request never reached the server.
+- `ERR_MESSAGE` (constant), `jsr:@spy4x/platform/universal/errors`: Canonical copy for each category, so the same failure reads the same in every product.
+- `Err` (interface), `jsr:@spy4x/platform/universal/errors`: Base shape every error shares: a category and human-readable copy.
+- `ErrType` (enum), `jsr:@spy4x/platform/universal/errors`: Kind of a failed operation.
+- `OperationResult` (type), `jsr:@spy4x/platform/universal/errors`: Result of an operation that can fail: exactly one of `result` / `error` is non-null.
+- `OperationState` (interface), `jsr:@spy4x/platform/universal/errors`: In-flight state of an operation, for a store or a form to render.
+- `OtherError` (interface), `jsr:@spy4x/platform/universal/errors`: An error this package has no category for.
+- `PayloadError` (interface), `jsr:@spy4x/platform/universal/errors`: A payload a schema rejected: a response body, or a remote feed item.
+- `RequestError` (type), `jsr:@spy4x/platform/universal/errors`: Errors a request itself can produce.
+- `ResponseError` (type), `jsr:@spy4x/platform/universal/errors`: Errors from a response that never reached a usable body.
+- `ServerError` (interface), `jsr:@spy4x/platform/universal/errors`: The server answered with a failure status.
+- `StoreError` (type), `jsr:@spy4x/platform/universal/errors`: Every error a store operation can settle with.
+- `ValidationError` (type), `jsr:@spy4x/platform/universal/errors`: A rejected input: its kind, one sentence for the user, the issues per field path, and arktype's own errors.
+- `connectionError` (function), `jsr:@spy4x/platform/universal/errors`: Wrap a message the caller already has into a ConnectionError.
+- `idleOperationState` (function), `jsr:@spy4x/platform/universal/errors`: Idle state of an operation.
+- `isSilentError` (function), `jsr:@spy4x/platform/universal/errors`: Whether an error should stay quiet.
+- `responseError` (function), `jsr:@spy4x/platform/universal/errors`: Turn a failed response into a structured error.
+
+### `jsr:@spy4x/platform/universal/format-number`
+
+- `formatBytes` (function), `jsr:@spy4x/platform/universal/format-number`: A byte count for display, in binary (1024) steps: `"512 B"`, `"1.5 KB"`, `"2 MB"`.
+- `formatDecimal` (function), `jsr:@spy4x/platform/universal/format-number`: Format a decimal number to exactly two decimal places.
+- `formatPct` (function), `jsr:@spy4x/platform/universal/format-number`: Format a fraction in `0..1` as a percentage string with two decimals.
+- `round` (function), `jsr:@spy4x/platform/universal/format-number`: Round to the nearest 10^-`decimals`.
+
+### `jsr:@spy4x/platform/universal/honeypot`
+
+- `HONEYPOT_FIELD_NAME` (constant), `jsr:@spy4x/platform/universal/honeypot`: Default `name` of the honeypot field.
+- `honeypotFilled` (function), `jsr:@spy4x/platform/universal/honeypot`: Whether a submitted honeypot field carries a value — a person never types into a field they cannot see, so any value here means whatever posted the form was not one.
+
+### `jsr:@spy4x/platform/universal/key-value-store`
+
+- `KeyValueStore` (interface), `jsr:@spy4x/platform/universal/key-value-store`: Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias (#71).
+
+### `jsr:@spy4x/platform/universal/money`
+
+- `MoneyOptions` (interface), `jsr:@spy4x/platform/universal/money`: Optional, additive overrides for formatMoney, formatMoneyParts, parseMoney and currencyDecimals.
+- `ParseMoneyError` (type), `jsr:@spy4x/platform/universal/money`: Why parseMoney could not turn the typed text into a smallest-unit amount.
+- `currencyDecimals` (function), `jsr:@spy4x/platform/universal/money`: How many fraction digits `currency` uses, in `locale`'s own currency display rules.
+- `formatMoney` (function), `jsr:@spy4x/platform/universal/money`: Format an amount in `currency`'s smallest unit as display text — `formatMoney(12345, "EUR")` is `"€123.45"`, `formatMoney(12345, "JPY")` is `"¥12,345"`, `formatMoney(12345, "KWD")` is `"KWD 12.345"`.
+- `formatMoneyParts` (function), `jsr:@spy4x/platform/universal/money`: formatMoney's output as `Intl.NumberFormatPart`s, for a caller that renders the currency symbol, the grouped digits and the sign as separate pieces instead of one string.
+- `moneyDecimalString` (function), `jsr:@spy4x/platform/universal/money`: `amount`, in `currency`'s smallest unit, as the exact base-ten string `Intl.NumberFormat` should format — `moneyDecimalString(12345, 2)` is `"123.45"`, `moneyDecimalString(-500, 0)` is `"-500"`, `moneyDecimalString(0, 2)` is `"0.00"`, `moneyDecimalString(0, 0)` is `"0"` — a zero amount gets `decimals` zero digits after the point, same as any other amount, never a bare `"0"` for a currency that has decimals.
+- `parseMoney` (function), `jsr:@spy4x/platform/universal/money`: Parse text typed in `locale` into a whole number of `currency`'s smallest unit — `parseMoney("12,5", "EUR", "de")` is `ok(1250)`, `parseMoney("1.234,56", "EUR", "de")` is `ok(123456)`.
+
+### `jsr:@spy4x/platform/universal/result`
+
+- `CommandEnvelope` (interface), `jsr:@spy4x/platform/universal/result`: Outcome of a command: what it produced, or why it failed.
+- `Result` (type), `jsr:@spy4x/platform/universal/result`: A value or an error, as a discriminated union on `ok`.
+- `commandErr` (function), `jsr:@spy4x/platform/universal/result`: Build the failure arm of a CommandEnvelope.
+- `commandFromError` (function), `jsr:@spy4x/platform/universal/result`: Build a CommandEnvelope from a thrown error, keeping the stack out of the payload.
+- `commandOk` (function), `jsr:@spy4x/platform/universal/result`: Build the success arm of a CommandEnvelope.
+- `err` (function), `jsr:@spy4x/platform/universal/result`: Wrap a failure.
+- `ok` (function), `jsr:@spy4x/platform/universal/result`: Wrap a success.
+- `unwrap` (function), `jsr:@spy4x/platform/universal/result`: Narrow a Result to its value, or raise.
+- `unwrapOr` (function), `jsr:@spy4x/platform/universal/result`: Narrow a Result to its value, or fall back.
+
+### `jsr:@spy4x/platform/universal/schema`
+
+- `InferSchema` (type), `jsr:@spy4x/platform/universal/schema`: Value a schema accepts and produces.
+
+### `jsr:@spy4x/platform/universal/seo`
+
+- `BreadcrumbListItem` (interface), `jsr:@spy4x/platform/universal/seo`: A schema.org `ListItem` as it appears inside a `BreadcrumbList`.
+- `BreadcrumbListJsonLd` (interface), `jsr:@spy4x/platform/universal/seo`: A schema.org `BreadcrumbList` node.
+- `Crumb` (interface), `jsr:@spy4x/platform/universal/seo`: One entry in the breadcrumb trail a page declares.
+- `breadcrumbItems` (function), `jsr:@spy4x/platform/universal/seo`: `itemListElement` for a schema.org `BreadcrumbList`, built from the crumbs the caller stated.
+- `breadcrumbListJsonLd` (function), `jsr:@spy4x/platform/universal/seo`: The complete `BreadcrumbList` node, `@id`-anchored to the page it describes.
+- `canonicalUrl` (function), `jsr:@spy4x/platform/universal/seo`: Parse a canonical address into the normalised `URL` that will be published.
+- `jsonLdText` (function), `jsr:@spy4x/platform/universal/seo`: Serialise JSON-LD for a `<script>` body.
+- `normalizeCanonical` (function), `jsr:@spy4x/platform/universal/seo`: The canonical address as it should be published: one clean `http`/`https` address.
+
+### `jsr:@spy4x/platform/universal/sort`
+
+- `SortDirection` (type), `jsr:@spy4x/platform/universal/sort`: Sort direction of one rule.
+- `SortRule` (interface), `jsr:@spy4x/platform/universal/sort`: One column in the sort order.
+- `parseSort` (function), `jsr:@spy4x/platform/universal/sort`: Read sort rules out of a URL parameter.
+- `removeSortRule` (function), `jsr:@spy4x/platform/universal/sort`: Removes one sort priority while preserving all remaining priorities.
+- `serializeSort` (function), `jsr:@spy4x/platform/universal/sort`: Write sort rules into a URL parameter.
+- `sortRows` (function), `jsr:@spy4x/platform/universal/sort`: Sort rows by every rule in order.
+- `toggleSort` (function), `jsr:@spy4x/platform/universal/sort`: Advance one column through `asc` → `desc` → `off`.
+
+### `jsr:@spy4x/platform/universal/text`
+
+- `convertToKebabCase` (function), `jsr:@spy4x/platform/universal/text`: Convert a free-form identifier to kebab-case.
+- `filterRows` (function), `jsr:@spy4x/platform/universal/text`: Keep the rows that every word of the query matches.
+- `initials` (function), `jsr:@spy4x/platform/universal/text`: Reduce a name to one or two initials, e.g.
+- `levenshtein` (function), `jsr:@spy4x/platform/universal/text`: Levenshtein edit distance between two strings, computed over code points.
+- `pluralize` (function), `jsr:@spy4x/platform/universal/text`: Naive English pluraliser for UI copy.
+- `search` (function), `jsr:@spy4x/platform/universal/text`: Whether one search word occurs in one value.
+- `searchWords` (function), `jsr:@spy4x/platform/universal/text`: Split a search box's value into words.
+- `similarity` (function), `jsr:@spy4x/platform/universal/text`: Similarity of two strings in `[0, 1]`, derived from levenshtein.
+- `utf8ByteLength` (function), `jsr:@spy4x/platform/universal/text`: UTF-8 byte length, i.e.
+
+### `jsr:@spy4x/platform/universal/time`
+
+- `Clock` (interface), `jsr:@spy4x/platform/universal/time`: Injectable time source, so formatting and relative times are testable without a frozen host.
+- `DAYS_OF_WEEK` (constant), `jsr:@spy4x/platform/universal/time`: Weekday names indexed Monday-first, matching getDaysOfWeek's bitmask order.
+- `DayOfWeek` (type), `jsr:@spy4x/platform/universal/time`: Weekday identifier, Monday-first.
+- `FormatTimeOptions` (interface), `jsr:@spy4x/platform/universal/time`: Options for formatTime.
+- `NowFn` (type), `jsr:@spy4x/platform/universal/time`: Monotonic millisecond clock, function-shaped rather than object-shaped — the home for the `() => number` clock shape (`#71`), which cannot be merged into Clock without breaking a 1.x caller of one shape or the other.
+- `TimeFormatOptions` (interface), `jsr:@spy4x/platform/universal/time`: Locale and zone applied by formatTime and timeAgo.
+- `TimeFormatter` (class), `jsr:@spy4x/platform/universal/time`: Format an instant for display.
+- `formatTime` (function), `jsr:@spy4x/platform/universal/time`: One-off TimeFormatter#format on the host clock.
+- `getDaysOfWeek` (function), `jsr:@spy4x/platform/universal/time`: Read a weekday bitmask into day names.
+- `isValidDate` (function), `jsr:@spy4x/platform/universal/time`: Whether the input is a usable date: a `Date` or an ISO `YYYY-MM-DD`-prefixed string that `Date` can parse.
+- `normalizeCalendarDate` (function), `jsr:@spy4x/platform/universal/time`: Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
+- `systemClock` (constant), `jsr:@spy4x/platform/universal/time`: The host clock.
+- `systemNow` (function), `jsr:@spy4x/platform/universal/time`: The host clock, function-shaped.
+- `timeAgo` (function), `jsr:@spy4x/platform/universal/time`: One-off TimeFormatter#ago on the host clock.
+
+### `jsr:@spy4x/platform/universal/time-constants`
+
+- `DAYS_IN_MONTH` (constant), `jsr:@spy4x/platform/universal/time-constants`: Days in one nominal month.
+- `DAYS_IN_WEEK` (constant), `jsr:@spy4x/platform/universal/time-constants`: Days in one week.
+- `HOURS_IN_DAY` (constant), `jsr:@spy4x/platform/universal/time-constants`: Hours in one day.
+- `MILLISECONDS_IN_SECOND` (constant), `jsr:@spy4x/platform/universal/time-constants`: Milliseconds in one second.
+- `MINUTES_IN_HOUR` (constant), `jsr:@spy4x/platform/universal/time-constants`: Minutes in one hour.
+- `MONTHS_IN_YEAR` (constant), `jsr:@spy4x/platform/universal/time-constants`: Months in one year.
+- `ONE_DAY_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One day, in milliseconds.
+- `ONE_DAY_IN_SECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One day, in seconds.
+- `ONE_HOUR_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One hour, in milliseconds.
+- `ONE_HOUR_IN_SECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One hour, in seconds.
+- `ONE_MINUTE_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One minute, in milliseconds.
+- `ONE_MONTH_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One month (30 days), in milliseconds.
+- `ONE_MONTH_IN_SECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One month (30 days), in seconds.
+- `ONE_WEEK_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One week, in milliseconds.
+- `ONE_WEEK_IN_SECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One week, in seconds.
+- `ONE_YEAR_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One year (12 nominal months), in milliseconds.
+- `ONE_YEAR_IN_SECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One year (12 nominal months), in seconds.
+- `SECONDS_IN_MINUTE` (constant), `jsr:@spy4x/platform/universal/time-constants`: Seconds in one minute.
+
+### `jsr:@spy4x/platform/validation/predicates`
+
+- `DEL_CODE_POINT` (constant), `jsr:@spy4x/platform/validation/predicates`: ASCII `DEL`.
+- `HEADER_MAX_CODE_POINT` (constant), `jsr:@spy4x/platform/validation/predicates`: Highest ASCII control code point, inclusive: the C0 block.
+- `HeaderSafeString` (type), `jsr:@spy4x/platform/validation/predicates`
+- `HoneypotField` (type), `jsr:@spy4x/platform/validation/predicates`
+- `TEXT_ALLOWED_CODE_POINTS` (constant), `jsr:@spy4x/platform/validation/predicates`: Control code points free text is allowed to keep: TAB, LF and CR.
+- `TextSafeString` (type), `jsr:@spy4x/platform/validation/predicates`
+- `TimeZoneName` (type), `jsr:@spy4x/platform/validation/predicates`
+- `ValidEmailAddress` (type), `jsr:@spy4x/platform/validation/predicates`
+- `emailAddress` (constant), `jsr:@spy4x/platform/validation/predicates`: A bare email address isEmailAddress accepts.
+- `hasHeaderControlCharacters` (function), `jsr:@spy4x/platform/validation/predicates`: True when `value` contains a code point ≤ 31 or 127 — unsafe in any HTTP header.
+- `hasTextControlCharacters` (function), `jsr:@spy4x/platform/validation/predicates`: True when `value` contains a code point ≤ 31 other than TAB/LF/CR, or 127 — unsafe in stored free text.
+- `headerSafeString` (constant), `jsr:@spy4x/platform/validation/predicates`: `string` that is safe to place in a header value (no control characters at all).
+- `honeypotField` (constant), `jsr:@spy4x/platform/validation/predicates`: The honeypot field: present and an empty string.
+- `isEmailAddress` (function), `jsr:@spy4x/platform/validation/predicates`: True when `value` is a bare email address (`jane@example.com`, no display name) that `@spy4x/email` would send to: a dot-atom local part and a dotted domain of at least two labels (`user@localhost` is refused), at most `MAX_ADDR_SPEC_LENGTH` (254) characters, the limit `@spy4x/email/address` exports.
+- `isHoneypotFilled` (function), `jsr:@spy4x/platform/validation/predicates`: True when a honeypot field was filled in, i.e.
+- `isValidTimeZoneName` (function), `jsr:@spy4x/platform/validation/predicates`: True when `Intl.DateTimeFormat` accepts `value` as a time zone.
+- `textSafeString` (constant), `jsr:@spy4x/platform/validation/predicates`: `string` that is safe as free text: TAB, LF and CR are allowed.
+- `timeZoneName` (constant), `jsr:@spy4x/platform/validation/predicates`: A time zone name `Intl` accepts.
+
+## @spy4x/realtime
+
+### `jsr:@spy4x/realtime`
+
+- `AckTimeoutError` (class), `jsr:@spy4x/realtime`: Timed out waiting for an acknowledgement.
+- `AggregateChange` (interface), `jsr:@spy4x/realtime`: A committed, group-scoped change, reduced to what a hint needs.
+- `AggregateNotifier` (class), `jsr:@spy4x/realtime`: Maps a committed change to a hint, and the hint to the users entitled to see it.
+- `AggregateNotifierOptions` (interface), `jsr:@spy4x/realtime`: Options for AggregateNotifier.
+- `AppliedHint` (interface), `jsr:@spy4x/realtime`: A `change.hint` that was contiguous with the cursor and therefore applied.
+- `ApplyOutcome` (type), `jsr:@spy4x/realtime`: Outcome of applying one pushed sequence.
+- `ApplyStatus` (enum), `jsr:@spy4x/realtime`: What the cursor tracker decided about one pushed sequence.
+- `AuthGateError` (class), `jsr:@spy4x/realtime`: The reconnect gate refused.
+- `BackoffConfig` (interface), `jsr:@spy4x/realtime`: Shape of the backoff schedule.
+- `BackoffOptions` (interface), `jsr:@spy4x/realtime`: One call's inputs.
+- `ChangeHint` (interface), `jsr:@spy4x/realtime`: A hint that a group moved to `sequence`.
+- `ClientMessage` (type), `jsr:@spy4x/realtime`: Frames a client sends.
+- `ClientTransport` (class), `jsr:@spy4x/realtime`: A reconnecting client transport over an injected socket factory.
+- `ClientTransportOptions` (interface), `jsr:@spy4x/realtime`: Options for ClientTransport.
+- `Clock` (interface), `jsr:@spy4x/realtime`: Time source and timer factory.
+- `CloseHandler` (type), `jsr:@spy4x/realtime`
+- `CloseReason` (enum), `jsr:@spy4x/realtime`: Why a connection left the registry.
+- `ConnectTimeoutError` (class), `jsr:@spy4x/realtime`: A socket did not open inside the connect-attempt timeout.
+- `ConnectionHandle` (interface), `jsr:@spy4x/realtime`: Identifies one socket of one user.
+- `ConnectionLostError` (class), `jsr:@spy4x/realtime`: The socket closed while a request was outstanding, or a send was attempted while closed.
+- `ConnectionRegistry` (class), `jsr:@spy4x/realtime`: Every live socket, indexed by user and by socket id.
+- `ConnectionRegistryOptions` (interface), `jsr:@spy4x/realtime`: Options for ConnectionRegistry.
+- `CursorPort` (interface), `jsr:@spy4x/realtime`: Durable cursors: what to advertise on connect, and where a hint lands.
+- `CursorSnapshot` (interface), `jsr:@spy4x/realtime`: One group's applied sequence.
+- `CursorTracker` (class), `jsr:@spy4x/realtime`: In-memory per-group cursor arithmetic.
+- `DEFAULT_BACKOFF` (constant), `jsr:@spy4x/realtime`: Defaults used when a caller does not override them.
+- `DecodeResult` (type), `jsr:@spy4x/realtime`: Outcome of decoding one text frame.
+- `FrameContext` (interface), `jsr:@spy4x/realtime`: A client frame the registry does not own, handed to the application.
+- `FrameHandler` (type), `jsr:@spy4x/realtime`
+- `GapReport` (interface), `jsr:@spy4x/realtime`: A non-contiguous sequence, with the cursor a pull must resume from.
+- `GateResult` (interface), `jsr:@spy4x/realtime`: Outcome of the reconnect gate — typically `GET /api/auth/me`.
+- `KeyValueStore` (type), `jsr:@spy4x/realtime`: Minimal synchronous key/value store.
+- `MalformedFrame` (interface), `jsr:@spy4x/realtime`: A frame that could not be decoded, or arrived in the wrong direction.
+- `MalformedFrameHandler` (type), `jsr:@spy4x/realtime`
+- `ManagedSocket` (type), `jsr:@spy4x/realtime`: What this package requires of a socket.
+- `MemoryKeyValueStore` (class), `jsr:@spy4x/realtime`: In-memory KeyValueStore.
+- `MessageCodec` (interface), `jsr:@spy4x/realtime`: Encodes and decodes frames.
+- `NativeSocketLike` (interface), `jsr:@spy4x/realtime`: The subset of the platform `WebSocket` this adapter needs.
+- `NotifyOutcome` (interface), `jsr:@spy4x/realtime`: Result of one AggregateNotifier.notify call.
+- `NotifyStatus` (enum), `jsr:@spy4x/realtime`: What happened to one notification.
+- `OpenHandler` (type), `jsr:@spy4x/realtime`
+- `PersistentCursorStore` (class), `jsr:@spy4x/realtime`: A CursorTracker whose state survives a reload.
+- `PersistentCursorStoreOptions` (interface), `jsr:@spy4x/realtime`: Options for PersistentCursorStore.
+- `PongTimeoutError` (class), `jsr:@spy4x/realtime`: The peer stopped answering pings.
+- `RecipientResolver` (type), `jsr:@spy4x/realtime`: Resolves the users entitled to see one change.
+- `RegistryCloseInfo` (interface), `jsr:@spy4x/realtime`: What a close handler is told.
+- `RequestOptions` (interface), `jsr:@spy4x/realtime`: Options for one ack-tracked ClientTransport.request.
+- `SEQUENCE_START` (constant), `jsr:@spy4x/realtime`: The empty cursor, and the "from the beginning" floor.
+- `SequenceChange` (interface), `jsr:@spy4x/realtime`: A pushed change, reduced to the only fields correctness depends on.
+- `ServerMessage` (type), `jsr:@spy4x/realtime`: Frames a server sends.
+- `SocketCloseInfo` (interface), `jsr:@spy4x/realtime`: Why and how a socket stopped.
+- `SocketFactory` (type), `jsr:@spy4x/realtime`: Creates a socket for a URL.
+- `SocketObserverPort` (interface), `jsr:@spy4x/realtime`: The inbound half of a socket, as a subscription API rather than `on*` properties.
+- `SocketPort` (interface), `jsr:@spy4x/realtime`: The outbound half of a socket.
+- `SocketState` (enum), `jsr:@spy4x/realtime`: Lifecycle state of a socket, mirroring the platform `WebSocket` constants.
+- `SyncRequest` (interface), `jsr:@spy4x/realtime`: What a client tells the server on connect, and what a pull resumes from.
+- `TimerHandle` (interface), `jsr:@spy4x/realtime`: Opaque handle to a scheduled callback.
+- `TransportStatus` (enum), `jsr:@spy4x/realtime`: Where the transport is in its lifecycle.
+- `TransportStatusSnapshot` (interface), `jsr:@spy4x/realtime`: Snapshot of transport state, delivered to `onStatus` listeners.
+- `Unsubscribe` (type), `jsr:@spy4x/realtime`: Removes a handler registered through one of the `on*` port methods.
+- `UserFanout` (interface), `jsr:@spy4x/realtime`: The only fan-out capability the notify path is given: explicit recipients.
+- `WireMessage` (type), `jsr:@spy4x/realtime`: Any frame in either direction.
+- `adaptWebSocket` (function), `jsr:@spy4x/realtime`: Wraps a platform `WebSocket` (or anything shaped like one) so it satisfies ManagedSocket.
+- `createHint` (function), `jsr:@spy4x/realtime`: Build the hint a committed change is announced with.
+- `createJsonCodec` (function), `jsr:@spy4x/realtime`: JSON codec over the arktype schemas above.
+- `createSystemClock` (function), `jsr:@spy4x/realtime`: Clock backed by the platform timers.
+- `createWebSocketFactory` (function), `jsr:@spy4x/realtime`: SocketFactory over the platform `WebSocket` constructor.
+- `findUndeclaredKey` (function), `jsr:@spy4x/realtime`: First own string key of `value` that `declared` does not list, or `null`.
+- `isChangeHint` (function), `jsr:@spy4x/realtime`: Whether a frame is a change hint, narrowing it for a caller that has already decoded.
+- `mapReadyState` (function), `jsr:@spy4x/realtime`: Maps one native `readyState` value to this package's SocketState.
+- `nextBackoffDelay` (function), `jsr:@spy4x/realtime`: Delay before retry `attempt`, in milliseconds.
+- `toWireCursors` (function), `jsr:@spy4x/realtime`: Snapshot of the cursors a handshake advertises, in wire form.
+
+### `jsr:@spy4x/realtime/client`
+
+- `AckTimeoutError` (class), `jsr:@spy4x/realtime/client`: Timed out waiting for an acknowledgement.
+- `AppliedHint` (interface), `jsr:@spy4x/realtime/client`: A `change.hint` that was contiguous with the cursor and therefore applied.
+- `AuthGateError` (class), `jsr:@spy4x/realtime/client`: The reconnect gate refused.
+- `ClientTransport` (class), `jsr:@spy4x/realtime/client`: A reconnecting client transport over an injected socket factory.
+- `ClientTransportOptions` (interface), `jsr:@spy4x/realtime/client`: Options for ClientTransport.
+- `ConnectTimeoutError` (class), `jsr:@spy4x/realtime/client`: A socket did not open inside the connect-attempt timeout.
+- `ConnectionLostError` (class), `jsr:@spy4x/realtime/client`: The socket closed while a request was outstanding, or a send was attempted while closed.
+- `CursorPort` (interface), `jsr:@spy4x/realtime/client`: Durable cursors: what to advertise on connect, and where a hint lands.
+- `GateResult` (interface), `jsr:@spy4x/realtime/client`: Outcome of the reconnect gate — typically `GET /api/auth/me`.
+- `PongTimeoutError` (class), `jsr:@spy4x/realtime/client`: The peer stopped answering pings.
+- `RequestOptions` (interface), `jsr:@spy4x/realtime/client`: Options for one ack-tracked ClientTransport.request.
+- `TransportStatus` (enum), `jsr:@spy4x/realtime/client`: Where the transport is in its lifecycle.
+- `TransportStatusSnapshot` (interface), `jsr:@spy4x/realtime/client`: Snapshot of transport state, delivered to `onStatus` listeners.
+
+### `jsr:@spy4x/realtime/cursor`
+
+- `ApplyOutcome` (type), `jsr:@spy4x/realtime/cursor`: Outcome of applying one pushed sequence.
+- `ApplyStatus` (enum), `jsr:@spy4x/realtime/cursor`: What the cursor tracker decided about one pushed sequence.
+- `CursorSnapshot` (interface), `jsr:@spy4x/realtime/cursor`: One group's applied sequence.
+- `CursorTracker` (class), `jsr:@spy4x/realtime/cursor`: In-memory per-group cursor arithmetic.
+- `GapReport` (interface), `jsr:@spy4x/realtime/cursor`: A non-contiguous sequence, with the cursor a pull must resume from.
+- `PersistentCursorStore` (class), `jsr:@spy4x/realtime/cursor`: A CursorTracker whose state survives a reload.
+- `PersistentCursorStoreOptions` (interface), `jsr:@spy4x/realtime/cursor`: Options for PersistentCursorStore.
+- `SEQUENCE_START` (constant), `jsr:@spy4x/realtime/cursor`: The empty cursor, and the "from the beginning" floor.
+- `SequenceChange` (interface), `jsr:@spy4x/realtime/cursor`: A pushed change, reduced to the only fields correctness depends on.
+- `SyncRequest` (interface), `jsr:@spy4x/realtime/cursor`: What a client tells the server on connect, and what a pull resumes from.
+
+### `jsr:@spy4x/realtime/notify`
+
+- `AggregateChange` (interface), `jsr:@spy4x/realtime/notify`: A committed, group-scoped change, reduced to what a hint needs.
+- `AggregateNotifier` (class), `jsr:@spy4x/realtime/notify`: Maps a committed change to a hint, and the hint to the users entitled to see it.
+- `AggregateNotifierOptions` (interface), `jsr:@spy4x/realtime/notify`: Options for AggregateNotifier.
+- `NotifyOutcome` (interface), `jsr:@spy4x/realtime/notify`: Result of one AggregateNotifier.notify call.
+- `NotifyStatus` (enum), `jsr:@spy4x/realtime/notify`: What happened to one notification.
+- `RecipientResolver` (type), `jsr:@spy4x/realtime/notify`: Resolves the users entitled to see one change.
+- `UserFanout` (interface), `jsr:@spy4x/realtime/notify`: The only fan-out capability the notify path is given: explicit recipients.
+
+### `jsr:@spy4x/realtime/protocol`
+
+- `ChangeHint` (interface), `jsr:@spy4x/realtime/protocol`: A hint that a group moved to `sequence`.
+- `ClientLivenessMessage` (interface), `jsr:@spy4x/realtime/protocol`: A client liveness frame.
+- `ClientMessage` (type), `jsr:@spy4x/realtime/protocol`: Frames a client sends.
+- `ClientSyncMessage` (interface), `jsr:@spy4x/realtime/protocol`: The sync handshake: the cursors the client holds, or an explicit cold start.
+- `DecodeResult` (type), `jsr:@spy4x/realtime/protocol`: Outcome of decoding one text frame.
+- `MessageCodec` (interface), `jsr:@spy4x/realtime/protocol`: Encodes and decodes frames.
+- `ServerAckMessage` (interface), `jsr:@spy4x/realtime/protocol`: An acknowledgement, correlated to the `id` of the frame being acknowledged.
+- `ServerHintMessage` (type), `jsr:@spy4x/realtime/protocol`: A server frame announcing a committed change.
+- `ServerLivenessMessage` (interface), `jsr:@spy4x/realtime/protocol`: A server liveness frame.
+- `ServerMessage` (type), `jsr:@spy4x/realtime/protocol`: Frames a server sends.
+- `WireMessage` (type), `jsr:@spy4x/realtime/protocol`: Any frame in either direction.
+- `clientMessageSchema` (constant), `jsr:@spy4x/realtime/protocol`: Client half of the protocol.
+- `createHint` (function), `jsr:@spy4x/realtime/protocol`: Build the hint a committed change is announced with.
+- `createJsonCodec` (function), `jsr:@spy4x/realtime/protocol`: JSON codec over the arktype schemas above.
+- `findUndeclaredKey` (function), `jsr:@spy4x/realtime/protocol`: First own string key of `value` that `declared` does not list, or `null`.
+- `isChangeHint` (function), `jsr:@spy4x/realtime/protocol`: Whether a frame is a change hint, narrowing it for a caller that has already decoded.
+- `serverMessageSchema` (constant), `jsr:@spy4x/realtime/protocol`: Server half of the protocol.
+- `toWireCursors` (function), `jsr:@spy4x/realtime/protocol`: Snapshot of the cursors a handshake advertises, in wire form.
+
+### `jsr:@spy4x/realtime/registry`
+
+- `CloseHandler` (type), `jsr:@spy4x/realtime/registry`
+- `CloseReason` (enum), `jsr:@spy4x/realtime/registry`: Why a connection left the registry.
+- `ConnectionHandle` (interface), `jsr:@spy4x/realtime/registry`: Identifies one socket of one user.
+- `ConnectionRegistry` (class), `jsr:@spy4x/realtime/registry`: Every live socket, indexed by user and by socket id.
+- `ConnectionRegistryOptions` (interface), `jsr:@spy4x/realtime/registry`: Options for ConnectionRegistry.
+- `FrameContext` (interface), `jsr:@spy4x/realtime/registry`: A client frame the registry does not own, handed to the application.
+- `FrameHandler` (type), `jsr:@spy4x/realtime/registry`
+- `MalformedFrame` (interface), `jsr:@spy4x/realtime/registry`: A frame that could not be decoded, or arrived in the wrong direction.
+- `MalformedFrameHandler` (type), `jsr:@spy4x/realtime/registry`
+- `OpenHandler` (type), `jsr:@spy4x/realtime/registry`
+- `RegistryCloseInfo` (interface), `jsr:@spy4x/realtime/registry`: What a close handler is told.
+
+### `jsr:@spy4x/realtime/testing`
+
+- `FakeClock` (class), `jsr:@spy4x/realtime/testing`: Clock that only moves when a test moves it.
+- `FakeSocket` (class), `jsr:@spy4x/realtime/testing`: In-memory socket: what a test drives, with no network and no WebSocket global.
+- `FakeSocketFactory` (class), `jsr:@spy4x/realtime/testing`: Creates FakeSockets and keeps them, so a test can act as the server.
+- `FakeSocketFactoryOptions` (interface), `jsr:@spy4x/realtime/testing`: Options for FakeSocketFactory.
+- `KeyValueStore` (type), `jsr:@spy4x/realtime/testing`: Minimal synchronous key/value store.
+- `MemoryKeyValueStore` (class), `jsr:@spy4x/realtime/testing`: In-memory KeyValueStore.
+- `RecordingFanout` (class), `jsr:@spy4x/realtime/testing`: Fan-out that records what it was asked to deliver.
+- `drainMicrotasks` (function), `jsr:@spy4x/realtime/testing`: Let queued microtasks run, so an awaited chain settles inside a test's own tick.
+- `sequenceRandom` (function), `jsr:@spy4x/realtime/testing`: Uniform source in `[0, 1)` that replays fixed values.
+
+### `jsr:@spy4x/realtime/web-socket`
+
+- `NativeSocketLike` (interface), `jsr:@spy4x/realtime/web-socket`: The subset of the platform `WebSocket` this adapter needs.
+- `adaptWebSocket` (function), `jsr:@spy4x/realtime/web-socket`: Wraps a platform `WebSocket` (or anything shaped like one) so it satisfies ManagedSocket.
+- `createWebSocketFactory` (function), `jsr:@spy4x/realtime/web-socket`: SocketFactory over the platform `WebSocket` constructor.
+- `mapReadyState` (function), `jsr:@spy4x/realtime/web-socket`: Maps one native `readyState` value to this package's SocketState.
+
+## @spy4x/server
+
+### `jsr:@spy4x/server/auth`
+
+- `AUTH_STORE_METHODS` (constant), `jsr:@spy4x/server/auth`: The method names of AuthStore, sorted.
+- `AttemptChallengeInput` (interface), `jsr:@spy4x/server/auth`: Input of AuthStore.attemptChallenge.
+- `AuthConflictError` (class), `jsr:@spy4x/server/auth`: Thrown by the store when a write would break a uniqueness rule.
+- `AuthConflictReason` (type), `jsr:@spy4x/server/auth`: Which uniqueness rule a refused write would have broken.
+- `AuthKey` (interface), `jsr:@spy4x/server/auth`: One way of signing in.
+- `AuthSessionRecord` (interface), `jsr:@spy4x/server/auth`: Session row: `SessionRecord` from `@spy4x/server/sign-in` plus the key that created it.
+- `AuthStore` (interface), `jsr:@spy4x/server/auth`: Users, keys and challenges.
+- `AuthUser` (interface), `jsr:@spy4x/server/auth`: A signed-in person.
+- `ChallengeOutcome` (enum), `jsr:@spy4x/server/auth`: What AuthStore.attemptChallenge found.
+- `IssueChallengeInput` (interface), `jsr:@spy4x/server/auth`: Input of AuthStore.issueChallenge.
+- `MAX_EMAIL_LENGTH` (constant), `jsr:@spy4x/server/auth`: Longest address normalizeEmail accepts: the limit of an SMTP forward path (RFC 5321).
+- `NewAuthKey` (interface), `jsr:@spy4x/server/auth`: The fields a caller supplies for a new key.
+- `ProviderDeps` (interface), `jsr:@spy4x/server/auth`: What every provider needs, injected by the app.
+- `SignInResult` (interface), `jsr:@spy4x/server/auth`: What a provider returns after a successful sign-up or sign-in.
+- `normalizeEmail` (function), `jsr:@spy4x/server/auth`: Lower-cases and trims an address and checks its shape; null when it is not an address.
+
+### `jsr:@spy4x/server/auth/email-code`
+
+- `DEFAULT_CODE_MAX_ATTEMPTS` (constant), `jsr:@spy4x/server/auth/email-code`: Default number of guesses one challenge allows.
+- `DEFAULT_CODE_TTL_MINUTES` (constant), `jsr:@spy4x/server/auth/email-code`: Default lifetime of a code.
+- `EMAIL_CODE_BYTES` (constant), `jsr:@spy4x/server/auth/email-code`: Random bytes in a code: 48 bits, rendered as 8 base64url characters.
+- `EMAIL_CODE_METHOD` (constant), `jsr:@spy4x/server/auth/email-code`: The `AuthKey.method` of an email-code key.
+- `EMAIL_CODE_PURPOSE` (constant), `jsr:@spy4x/server/auth/email-code`: The challenge purpose `requestCode` issues and `verifyCode` checks.
+- `EmailCodeError` (class), `jsr:@spy4x/server/auth/email-code`: Thrown by EmailCodeSignIn.
+- `EmailCodeErrorReason` (type), `jsr:@spy4x/server/auth/email-code`: Why EmailCodeSignIn refused a request.
+- `EmailCodeSignIn` (interface), `jsr:@spy4x/server/auth/email-code`: The email-code sign-in provider.
+- `EmailCodeSignInDeps` (interface), `jsr:@spy4x/server/auth/email-code`: What createEmailCodeSignIn needs from the app, on top of ProviderDeps.
+- `createEmailCodeSignIn` (function), `jsr:@spy4x/server/auth/email-code`: Creates the email-code sign-in provider.
+
+### `jsr:@spy4x/server/auth/memory-store`
+
+- `MemoryAuthStore` (class), `jsr:@spy4x/server/auth/memory-store`: An in-memory AuthStore with the same constraints and atomicity as the Postgres store.
+- `MemoryAuthStoreOptions` (interface), `jsr:@spy4x/server/auth/memory-store`: Options for MemoryAuthStore.
+
+### `jsr:@spy4x/server/auth/oauth`
+
+- `DEFAULT_OAUTH_FLOW_KEY_PREFIX` (constant), `jsr:@spy4x/server/auth/oauth`: The key prefix createKvOAuthFlowStore writes under by default.
+- `KvOAuthFlowStoreOptions` (interface), `jsr:@spy4x/server/auth/oauth`: Options of createKvOAuthFlowStore.
+- `MAX_PENDING_OAUTH_FLOWS` (constant), `jsr:@spy4x/server/auth/oauth`: Most flows the memory store keeps pending at once; the oldest is dropped beyond this.
+- `MemoryOAuthFlowStoreOptions` (interface), `jsr:@spy4x/server/auth/oauth`: Options of createMemoryOAuthFlowStore.
+- `OAuthAuthorization` (interface), `jsr:@spy4x/server/auth/oauth`: A started flow: send the browser to `url`, and keep `state` in an HttpOnly cookie until the callback.
+- `OAuthCallbackInput` (interface), `jsr:@spy4x/server/auth/oauth`: What the app passes from the callback request.
+- `OAuthFailure` (type), `jsr:@spy4x/server/auth/oauth`: Why a callback was refused.
+- `OAuthFlowKv` (interface), `jsr:@spy4x/server/auth/oauth`: The key-value client createKvOAuthFlowStore needs.
+- `OAuthFlowStore` (interface), `jsr:@spy4x/server/auth/oauth`: Keeps started flows until their callback.
+- `OAuthOutcome` (enum), `jsr:@spy4x/server/auth/oauth`: How a successful callback resolved the person.
+- `OAuthPendingFlow` (interface), `jsr:@spy4x/server/auth/oauth`: What a started flow needs at its callback.
+- `OAuthProfile` (interface), `jsr:@spy4x/server/auth/oauth`: What a provider says about the person who signed in, read from its user-info response.
+- `OAuthProviderConfig` (interface), `jsr:@spy4x/server/auth/oauth`: One provider, supplied by the app.
+- `OAuthSignIn` (interface), `jsr:@spy4x/server/auth/oauth`: Sign-in with one provider.
+- `OAuthSignInError` (class), `jsr:@spy4x/server/auth/oauth`: Thrown by OAuthSignIn.handleCallback.
+- `OAuthSignInOptions` (interface), `jsr:@spy4x/server/auth/oauth`: Options of createOAuthSignIn.
+- `OAuthSignInResult` (interface), `jsr:@spy4x/server/auth/oauth`: A successful callback: the session, plus how the person was resolved and what the provider said.
+- `OAuthTakenFlow` (interface), `jsr:@spy4x/server/auth/oauth`: A flow OAuthFlowStore.take returns: the flow as it was put, and its expiry.
+- `createKvOAuthFlowStore` (function), `jsr:@spy4x/server/auth/oauth`: A flow store on a shared key-value client, so a callback can land on any process that shares it.
+- `createMemoryOAuthFlowStore` (function), `jsr:@spy4x/server/auth/oauth`: The in-process store `createOAuthSignIn` uses when it is given none.
+- `createOAuthSignIn` (function), `jsr:@spy4x/server/auth/oauth`: Creates sign-in with one provider.
+- `pkceChallenge` (function), `jsr:@spy4x/server/auth/oauth`: The S256 code challenge: base64url (unpadded) of the SHA-256 of the verifier (RFC 7636).
+
+### `jsr:@spy4x/server/auth/oauth-google`
+
+- `GOOGLE_AUTHORIZATION_ENDPOINT` (constant), `jsr:@spy4x/server/auth/oauth-google`: Google's authorization endpoint.
+- `GOOGLE_DEFAULT_SCOPES` (constant), `jsr:@spy4x/server/auth/oauth-google`: The scopes that make Google answer `sub`, `email` and `email_verified`.
+- `GOOGLE_TOKEN_ENDPOINT` (constant), `jsr:@spy4x/server/auth/oauth-google`: Google's token endpoint.
+- `GOOGLE_USERINFO_ENDPOINT` (constant), `jsr:@spy4x/server/auth/oauth-google`: Google's OpenID Connect user-info endpoint.
+- `GoogleOAuthOptions` (interface), `jsr:@spy4x/server/auth/oauth-google`: Options of createGoogleOAuthProvider.
+- `createGoogleOAuthProvider` (function), `jsr:@spy4x/server/auth/oauth-google`: Google as an OAuthProviderConfig, method `oauth:google`.
+- `readGoogleProfile` (function), `jsr:@spy4x/server/auth/oauth-google`: Reads Google's user-info answer.
+
+### `jsr:@spy4x/server/auth/password`
+
+- `ChangePasswordInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.changePassword.
+- `CompleteResetInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.completeReset.
+- `CompleteVerificationInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.completeVerification.
+- `DEFAULT_MAX_RESET_ATTEMPTS` (constant), `jsr:@spy4x/server/auth/password`: Guesses allowed per reset code by default.
+- `DEFAULT_MIN_PASSWORD_LENGTH` (constant), `jsr:@spy4x/server/auth/password`: Shortest new password accepted by default, in characters (code points).
+- `DEFAULT_RESET_TTL_MINUTES` (constant), `jsr:@spy4x/server/auth/password`: How long a reset code lives by default, in minutes.
+- `IssuedReset` (interface), `jsr:@spy4x/server/auth/password`: A reset code for the app to deliver to `email`.
+- `IssuedVerification` (interface), `jsr:@spy4x/server/auth/password`: A verification code for the app to deliver to `email`.
+- `PASSWORD_METHOD` (constant), `jsr:@spy4x/server/auth/password`: The `AuthKey.method` of every key this provider writes.
+- `PASSWORD_RESET_PURPOSE` (constant), `jsr:@spy4x/server/auth/password`: The challenge purpose of a password-reset code.
+- `PASSWORD_VERIFY_PURPOSE` (constant), `jsr:@spy4x/server/auth/password`: The challenge purpose of an address-verification code (#149).
+- `PasswordCredentials` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.signUp and PasswordSignIn.signIn.
+- `PasswordSignIn` (interface), `jsr:@spy4x/server/auth/password`: The password provider.
+- `PasswordSignInError` (class), `jsr:@spy4x/server/auth/password`: Thrown by every method of PasswordSignIn on a refusal.
+- `PasswordSignInFailure` (type), `jsr:@spy4x/server/auth/password`: Why a password operation was refused.
+- `PasswordSignInOptions` (interface), `jsr:@spy4x/server/auth/password`: What createPasswordSignIn needs: the shared provider deps plus a hasher and limits.
+- `RequestVerificationInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.requestVerification.
+- `createPasswordSignIn` (function), `jsr:@spy4x/server/auth/password`: Creates the password provider.
+
+### `jsr:@spy4x/server/auth/postgres`
+
+- `AUTH_POSTGRES_SCHEMA` (constant), `jsr:@spy4x/server/auth/postgres`: The tables, constraints and indexes, as SQL text the app runs as a migration.
+- `createPostgresAuthStore` (function), `jsr:@spy4x/server/auth/postgres`: Creates an AuthStore over the `AUTH_POSTGRES_SCHEMA` tables.
+- `createPostgresSessionStore` (function), `jsr:@spy4x/server/auth/postgres`: Creates a `SessionStore` over the `auth_sessions` table of `AUTH_POSTGRES_SCHEMA`.
+
+### `jsr:@spy4x/server/config`
+
+- `ConfigError` (class), `jsr:@spy4x/server/config`: Raised by loadConfig when one or more environment variables are missing, blank, or fail the schema.
+- `ConfigIssue` (interface), `jsr:@spy4x/server/config`: Why one environment variable was rejected.
+- `EnvReader` (interface), `jsr:@spy4x/server/config`: Reads environment values.
+- `MissingEnvError` (class), `jsr:@spy4x/server/config`: Raised when a required environment variable is missing or blank.
+- `createEnvReader` (function), `jsr:@spy4x/server/config`: An `EnvReader` over a fixed record — what a unit test injects instead of the process environment, so a config or middleware test runs under `--allow-read --allow-env` without any environment variable actually being set.
+- `loadConfig` (function), `jsr:@spy4x/server/config`: Read every environment variable `schema` declares and validate them together, once.
+- `readEnvVar` (function), `jsr:@spy4x/server/config`: Read one required value now, outside a schema — for the one variable a caller needs before the rest of its configuration can even be assembled (`ENV`, deciding which schema to validate against, for example).
+- `stringBoolean` (constant), `jsr:@spy4x/server/config`: `"true"` or `"false"`, exactly — an environment boolean written by a person or a deploy script, not inferred from `"1"`, `"yes"` or an empty string.
+- `systemEnv` (constant), `jsr:@spy4x/server/config`: The process environment.
+
+### `jsr:@spy4x/server/crypto`
+
+- `AES_ALGORITHM` (constant), `jsr:@spy4x/server/crypto`: WebCrypto algorithm name.
+- `AES_KEY_BYTES` (constant), `jsr:@spy4x/server/crypto`: Key size in bytes.
+- `CryptoError` (class), `jsr:@spy4x/server/crypto`: The one error this module throws.
+- `CryptoErrorCode` (enum), `jsr:@spy4x/server/crypto`: Failure classes of this module.
+- `CryptoService` (class), `jsr:@spy4x/server/crypto`: AES-256-GCM cipher with two entry points that produce **different** keys from the same characters:
+- `DEFAULT_MASK_VISIBLE` (constant), `jsr:@spy4x/server/crypto`: Default number of trailing code points maskKey is asked to leave visible.
+- `HEX_KEY_LENGTH` (constant), `jsr:@spy4x/server/crypto`: Length of a hex-encoded AES_KEY_BYTES-byte key.
+- `IV_LENGTH` (constant), `jsr:@spy4x/server/crypto`: IV size in bytes: 96 bits, the size recommended for GCM.
+- `KEY_BITS` (constant), `jsr:@spy4x/server/crypto`: Key size in bits, passed to `crypto.subtle.importKey`.
+- `MASK_LENGTH` (constant), `jsr:@spy4x/server/crypto`: Code points in every non-empty hint maskKey returns, whatever the key is.
+- `MASK_VISIBLE_DIVISOR` (constant), `jsr:@spy4x/server/crypto`: A hint shows at most one trailing code point per this many code points of the key, so a short key reveals proportionally less than a long one.
+- `MAX_MASK_VISIBLE` (constant), `jsr:@spy4x/server/crypto`: Trailing code points maskKey may ever show, whatever a caller asks for.
+- `SecretCipher` (interface), `jsr:@spy4x/server/crypto`: The port `server/user-secrets.ts` depends on: any cipher (this AES-GCM one, a KV-backed one, a KMS or HSM client) satisfies the shape, so the caller never names a concrete implementation.
+- `isHexKey` (function), `jsr:@spy4x/server/crypto`: True when `hex` is exactly HEX_KEY_LENGTH hex characters.
+- `maskKey` (function), `jsr:@spy4x/server/crypto`: Display hint for a key: MASK_LENGTH code points, a run of asterisks followed by a few trailing code points of the key, so a user recognises which key is stored without the hint standing in for the key.
+
+### `jsr:@spy4x/server/db`
+
+- `AppliedMigration` (interface), `jsr:@spy4x/server/db`: One row of the history table, as a driver reads it back.
+- `CreateSqlOptions` (interface), `jsr:@spy4x/server/db`: A connection config plus the pool options and `application_name` to use.
+- `DEFAULT_MIGRATIONS_TABLE` (constant), `jsr:@spy4x/server/db`: Default history table name, matching the Postgres adapter's.
+- `DEFAULT_MIGRATION_LOCK_RETRY_MS` (constant), `jsr:@spy4x/server/db`: How long a runner waits between attempts to take the lock, in milliseconds.
+- `DEFAULT_MIGRATION_LOCK_WAIT_MS` (constant), `jsr:@spy4x/server/db`: How long a runner waits for another runner's lock before giving up, in milliseconds.
+- `DEFAULT_POOL_OPTIONS` (constant), `jsr:@spy4x/server/db`: Pool defaults.
+- `DEFAULT_SQLITE_FILE` (constant), `jsr:@spy4x/server/db`: Default file name, used when no path option and no environment variable are set.
+- `DEFAULT_TRANSACTION_STATEMENTS` (constant), `jsr:@spy4x/server/db`: SQLite's own `BEGIN`/`COMMIT`/`ROLLBACK`, which both drivers accept.
+- `DEFAULT_TRANSACTION_WAIT_MS` (constant), `jsr:@spy4x/server/db`: How long a statement waits for an open transaction before it gives up.
+- `DbServiceBase` (class), `jsr:@spy4x/server/db`
+- `DbServiceBaseOptions` (interface), `jsr:@spy4x/server/db`: Configuration for DbServiceBase.
+- `DiscoverMigrationsOptions` (interface), `jsr:@spy4x/server/db`: Options for discoverMigrations and runMigrations.
+- `ENV_NAME` (constant), `jsr:@spy4x/server/db`: The environment variable that names the deployment.
+- `FindOneParams` (interface), `jsr:@spy4x/server/db`: Arguments to RowMethods.findOne.
+- `MEMORY_PATH` (constant), `jsr:@spy4x/server/db`: The SQLite path that names an in-memory database.
+- `Migration` (interface), `jsr:@spy4x/server/db`: One pending migration, resolved from disk.
+- `MigrationDelay` (type), `jsr:@spy4x/server/db`: A delay, so a test of the bound does not have to sleep through it.
+- `MigrationDriver` (interface), `jsr:@spy4x/server/db`: The per-driver half of the runner.
+- `MigrationEditedError` (class), `jsr:@spy4x/server/db`: Thrown when a migration file changed after it was applied.
+- `MigrationRenamedError` (class), `jsr:@spy4x/server/db`: Thrown when a pending file carries the body of an applied migration whose file is gone.
+- `MigrationReport` (interface), `jsr:@spy4x/server/db`: What one run did.
+- `NO_TRANSACTION_SUFFIX` (constant), `jsr:@spy4x/server/db`: Suffix that marks a migration which must run outside a transaction.
+- `OpenSqliteDbOptions` (interface), `jsr:@spy4x/server/db`: Options for openSqliteDb.
+- `PROD_FLAG` (constant), `jsr:@spy4x/server/db`: The argument that overrides the guard.
+- `PoolOptions` (interface), `jsr:@spy4x/server/db`: The pool options createSql applies when a caller overrides nothing.
+- `PostgresConnectionConfig` (interface), `jsr:@spy4x/server/db`: Connection fields, read from the caller's environment rather than from `Deno.env` here.
+- `PostgresEnvName` (enum), `jsr:@spy4x/server/db`: The environment variable names this module's helpers read.
+- `PostgresIdentifierTransformError` (class), `jsr:@spy4x/server/db`: Thrown when the client's own column-name transform would send a table or schema name to Postgres spelled differently than this driver — or purgeDatabase in `postgres-purge.ts` — was given it, before any statement runs.
+- `PostgresMigrationDriver` (class), `jsr:@spy4x/server/db`: Applies migrations to Postgres, one transaction per migration.
+- `PostgresMigrationDriverOptions` (interface), `jsr:@spy4x/server/db`: Options for PostgresMigrationDriver.
+- `PostgresMigrationLockError` (class), `jsr:@spy4x/server/db`: Thrown when a runner waited out its bound without taking the migration lock.
+- `PostgresMigrationRunInProgressError` (class), `jsr:@spy4x/server/db`: Thrown when a second run is started on a driver object that is already running one.
+- `PostgresScopeEndedError` (class), `jsr:@spy4x/server/db`: Thrown when a transaction clone is used after its transaction has ended.
+- `PostgresUnexpectedRowError` (class), `jsr:@spy4x/server/db`: Thrown when a result row this driver or purgeDatabase (in `postgres-purge.ts`) read back through expectRowShape is not what the query expects.
+- `PurgeOptions` (interface), `jsr:@spy4x/server/db`: Options for purgeDatabase.
+- `PurgeResult` (interface), `jsr:@spy4x/server/db`: What a purge did, or why it refused.
+- `RowCache` (interface), `jsr:@spy4x/server/db`: The cache a DbServiceBase may be given.
+- `RowMethods` (interface), `jsr:@spy4x/server/db`: What DbServiceBase.buildMethods returns.
+- `SAFE_ENV_VALUES` (constant), `jsr:@spy4x/server/db`: The values of ENV_NAME a purge runs for without PROD_FLAG.
+- `Sql` (type), `jsr:@spy4x/server/db`: The tag function `postgres` exposes, narrowed to what this package reads from it.
+- `SqliteDb` (class), `jsr:@spy4x/server/db`: A SQLite connection with the pragmas applied and statements prepared on demand.
+- `SqliteDbOptions` (interface), `jsr:@spy4x/server/db`: Extra options for SqliteDb, all of them about the transaction gate.
+- `SqliteDelay` (type), `jsr:@spy4x/server/db`: A cancellable delay.
+- `SqliteDriver` (interface), `jsr:@spy4x/server/db`: The database handle this adapter drives.
+- `SqliteDriverFactory` (type), `jsr:@spy4x/server/db`: Opens a driver.
+- `SqliteEnvName` (enum), `jsr:@spy4x/server/db`: Environment variable names this module reads.
+- `SqliteMigrationDriver` (class), `jsr:@spy4x/server/db`: The SQLite half of the migration runner.
+- `SqliteOpenOptions` (interface), `jsr:@spy4x/server/db`: Options accepted by a driver factory.
+- `SqliteRunResult` (interface), `jsr:@spy4x/server/db`: What a write reports back: the driver's own counts, unconverted.
+- `SqliteSchema` (interface), `jsr:@spy4x/server/db`: One schema, applied either once or through a caller-supplied upgrade.
+- `SqliteScopeEndedError` (class), `jsr:@spy4x/server/db`: Thrown when a handle is used after the transaction it belongs to has ended.
+- `SqliteStatement` (interface), `jsr:@spy4x/server/db`: One prepared statement.
+- `SqliteTransactionWaitError` (class), `jsr:@spy4x/server/db`: Thrown when a statement waited out SqliteDbOptions.transactionWaitMs.
+- `Transaction` (type), `jsr:@spy4x/server/db`: A transaction handle, as `sql.begin` hands it to its callback.
+- `TransactionStatements` (interface), `jsr:@spy4x/server/db`: How a transaction is opened and closed, per driver dialect.
+- `applySqliteSchema` (function), `jsr:@spy4x/server/db`: Apply `schema` idempotently.
+- `buildPostgresOptions` (function), `jsr:@spy4x/server/db`: The driver options createSql passes, as a plain object.
+- `checksumOf` (function), `jsr:@spy4x/server/db`: SHA-256 of a migration body, as lower-case hex.
+- `createSql` (function), `jsr:@spy4x/server/db`: Build a Postgres client with DEFAULT_POOL_OPTIONS applied.
+- `createSqlFromEnv` (function), `jsr:@spy4x/server/db`: Build a client from an environment record, or `undefined` when `DB_HOST` is unset.
+- `discoverMigrations` (function), `jsr:@spy4x/server/db`: A file that is not a migration is skipped, not reported: `.gitkeep` is common.
+- `openSqliteDb` (function), `jsr:@spy4x/server/db`: Open a connection, create its directory, and apply the two pragmas.
+- `parseMigrationName` (function), `jsr:@spy4x/server/db`: Turn a file name into a Migration: strip the extension, then the `.no_transaction` suffix.
+- `parsePostgresEnv` (function), `jsr:@spy4x/server/db`: Parse the Postgres connection settings from an explicit environment record.
+- `purgeDatabase` (function), `jsr:@spy4x/server/db`: Drop every base table in `options.schema`, `CASCADE`.
+- `removeSqliteFiles` (function), `jsr:@spy4x/server/db`: Delete a database file and its `-wal`/`-shm` sidecars.
+- `resolveSqlitePath` (function), `jsr:@spy4x/server/db`: Resolve the database path.
+- `runMigrations` (function), `jsr:@spy4x/server/db`: Apply every pending migration under `options.folder`, in sorted file-name order.
+
+### `jsr:@spy4x/server/db/migrate`
+
+- `AppliedMigration` (interface), `jsr:@spy4x/server/db/migrate`: One row of the history table, as a driver reads it back.
+- `DiscoverMigrationsOptions` (interface), `jsr:@spy4x/server/db/migrate`: Options for discoverMigrations and runMigrations.
+- `Migration` (interface), `jsr:@spy4x/server/db/migrate`: One pending migration, resolved from disk.
+- `MigrationDriver` (interface), `jsr:@spy4x/server/db/migrate`: The per-driver half of the runner.
+- `MigrationEditedError` (class), `jsr:@spy4x/server/db/migrate`: Thrown when a migration file changed after it was applied.
+- `MigrationReader` (interface), `jsr:@spy4x/server/db/migrate`: Disk access, as a port.
+- `MigrationRenamedError` (class), `jsr:@spy4x/server/db/migrate`: Thrown when a pending file carries the body of an applied migration whose file is gone.
+- `MigrationReport` (interface), `jsr:@spy4x/server/db/migrate`: What one run did.
+- `NO_TRANSACTION_SUFFIX` (constant), `jsr:@spy4x/server/db/migrate`: Suffix that marks a migration which must run outside a transaction.
+- `checksumOf` (function), `jsr:@spy4x/server/db/migrate`: SHA-256 of a migration body, as lower-case hex.
+- `denoMigrationReader` (constant), `jsr:@spy4x/server/db/migrate`: MigrationReader over the real filesystem.
+- `discoverMigrations` (function), `jsr:@spy4x/server/db/migrate`: A file that is not a migration is skipped, not reported: `.gitkeep` is common.
+- `parseMigrationName` (function), `jsr:@spy4x/server/db/migrate`: Turn a file name into a Migration: strip the extension, then the `.no_transaction` suffix.
+- `runMigrations` (function), `jsr:@spy4x/server/db/migrate`: Apply every pending migration under `options.folder`, in sorted file-name order.
+
+### `jsr:@spy4x/server/db/postgres`
+
+- `CreateSqlOptions` (interface), `jsr:@spy4x/server/db/postgres`: A connection config plus the pool options and `application_name` to use.
+- `DEFAULT_POOL_OPTIONS` (constant), `jsr:@spy4x/server/db/postgres`: Pool defaults.
+- `PoolOptions` (interface), `jsr:@spy4x/server/db/postgres`: The pool options createSql applies when a caller overrides nothing.
+- `PostgresConnectionConfig` (interface), `jsr:@spy4x/server/db/postgres`: Connection fields, read from the caller's environment rather than from `Deno.env` here.
+- `PostgresEnvName` (enum), `jsr:@spy4x/server/db/postgres`: The environment variable names this module's helpers read.
+- `buildPostgresOptions` (function), `jsr:@spy4x/server/db/postgres`: The driver options createSql passes, as a plain object.
+- `createSql` (function), `jsr:@spy4x/server/db/postgres`: Build a Postgres client with DEFAULT_POOL_OPTIONS applied.
+- `createSqlFromEnv` (function), `jsr:@spy4x/server/db/postgres`: Build a client from an environment record, or `undefined` when `DB_HOST` is unset.
+- `parsePostgresEnv` (function), `jsr:@spy4x/server/db/postgres`: Parse the Postgres connection settings from an explicit environment record.
+
+### `jsr:@spy4x/server/db/sqlite`
+
+- `DEFAULT_MIGRATIONS_TABLE` (constant), `jsr:@spy4x/server/db/sqlite`: Default history table name, matching the Postgres adapter's.
+- `DEFAULT_SQLITE_FILE` (constant), `jsr:@spy4x/server/db/sqlite`: Default file name, used when no path option and no environment variable are set.
+- `DEFAULT_TRANSACTION_STATEMENTS` (constant), `jsr:@spy4x/server/db/sqlite`: SQLite's own `BEGIN`/`COMMIT`/`ROLLBACK`, which both drivers accept.
+- `DEFAULT_TRANSACTION_WAIT_MS` (constant), `jsr:@spy4x/server/db/sqlite`: How long a statement waits for an open transaction before it gives up.
+- `MEMORY_PATH` (constant), `jsr:@spy4x/server/db/sqlite`: The SQLite path that names an in-memory database.
+- `OpenSqliteDbOptions` (interface), `jsr:@spy4x/server/db/sqlite`: Options for openSqliteDb.
+- `SqliteDb` (class), `jsr:@spy4x/server/db/sqlite`: A SQLite connection with the pragmas applied and statements prepared on demand.
+- `SqliteDbOptions` (interface), `jsr:@spy4x/server/db/sqlite`: Extra options for SqliteDb, all of them about the transaction gate.
+- `SqliteDelay` (type), `jsr:@spy4x/server/db/sqlite`: A cancellable delay.
+- `SqliteDriver` (interface), `jsr:@spy4x/server/db/sqlite`: The database handle this adapter drives.
+- `SqliteDriverFactory` (type), `jsr:@spy4x/server/db/sqlite`: Opens a driver.
+- `SqliteEnvName` (enum), `jsr:@spy4x/server/db/sqlite`: Environment variable names this module reads.
+- `SqliteMigrationDriver` (class), `jsr:@spy4x/server/db/sqlite`: The SQLite half of the migration runner.
+- `SqliteOpenOptions` (interface), `jsr:@spy4x/server/db/sqlite`: Options accepted by a driver factory.
+- `SqliteRunResult` (interface), `jsr:@spy4x/server/db/sqlite`: What a write reports back: the driver's own counts, unconverted.
+- `SqliteSchema` (interface), `jsr:@spy4x/server/db/sqlite`: One schema, applied either once or through a caller-supplied upgrade.
+- `SqliteScopeEndedError` (class), `jsr:@spy4x/server/db/sqlite`: Thrown when a handle is used after the transaction it belongs to has ended.
+- `SqliteStatement` (interface), `jsr:@spy4x/server/db/sqlite`: One prepared statement.
+- `SqliteTransactionWaitError` (class), `jsr:@spy4x/server/db/sqlite`: Thrown when a statement waited out SqliteDbOptions.transactionWaitMs.
+- `TransactionStatements` (interface), `jsr:@spy4x/server/db/sqlite`: How a transaction is opened and closed, per driver dialect.
+- `applySqliteSchema` (function), `jsr:@spy4x/server/db/sqlite`: Apply `schema` idempotently.
+- `openSqliteDb` (function), `jsr:@spy4x/server/db/sqlite`: Open a connection, create its directory, and apply the two pragmas.
+- `removeSqliteFiles` (function), `jsr:@spy4x/server/db/sqlite`: Delete a database file and its `-wal`/`-shm` sidecars.
+- `resolveSqlitePath` (function), `jsr:@spy4x/server/db/sqlite`: Resolve the database path.
+
+### `jsr:@spy4x/server/env-age64`
+
+- `AGE64_PREFIX` (constant), `jsr:@spy4x/server/env-age64`: Prefix every encrypted value carries: `KEY=age64:<base64>`.
+- `AgeKey` (interface), `jsr:@spy4x/server/env-age64`: `.age/key.txt`'s two pieces once resolved for a root: where it is, and what it decrypts with.
+- `AgeStatus` (interface), `jsr:@spy4x/server/env-age64`: A project's env-encryption posture: what files exist and whether a key is available.
+- `CrlfNotSupportedError` (class), `jsr:@spy4x/server/env-age64`: Thrown by parseEnvFile when the content uses CRLF line endings.
+- `EnvAssignment` (interface), `jsr:@spy4x/server/env-age64`: One `KEY=value` (or `export KEY=value`) assignment.
+- `EnvEntry` (interface), `jsr:@spy4x/server/env-age64`: One line of a parsed env file.
+- `GenerateAgeKeyResult` (interface), `jsr:@spy4x/server/env-age64`: Result of generateAgeKey: where the key landed, and its recipient (safe to share).
+- `UnsupportedEnvSyntaxError` (class), `jsr:@spy4x/server/env-age64`: Thrown by parseEnvFile on anything it can't safely round-trip.
+- `ageStatus` (function), `jsr:@spy4x/server/env-age64`: Inspect `root`'s env files and key, without decrypting anything.
+- `decryptEnvFiles` (function), `jsr:@spy4x/server/env-age64`: Decrypt every `.env*.age` file under `root` to its plaintext sibling, mode `0600`.
+- `decryptValue` (function), `jsr:@spy4x/server/env-age64`: Decrypt an `age64:<base64>` value with `identity` (an `AGE-SECRET-KEY-1...` string).
+- `encryptEnvFiles` (function), `jsr:@spy4x/server/env-age64`: Re-encrypt every `.env*` file under `root` to its `.env.age` sibling, mode `0644`, reusing unchanged ciphertext byte-for-byte.
+- `encryptValue` (function), `jsr:@spy4x/server/env-age64`: Encrypt one value for `recipient` (an `age1...` string).
+- `generateAgeKey` (function), `jsr:@spy4x/server/env-age64`: Generate a fresh identity and write it to `<root>/.age/key.txt`, mode `0600`.
+- `isAge64Value` (function), `jsr:@spy4x/server/env-age64`: True when `value` is an `age64:...` ciphertext rather than plaintext.
+- `parseEnvFile` (function), `jsr:@spy4x/server/env-age64`: Parse an env file's content into entries.
+- `readAgeKey` (function), `jsr:@spy4x/server/env-age64`: Read and parse the `.age/key.txt` that applies to `root` (see resolveKeyFile).
+
+### `jsr:@spy4x/server/env-age64/cli`
+
+
+### `jsr:@spy4x/server/export`
+
+- `EXPORT_VERSION` (constant), `jsr:@spy4x/server/export`: Format version of the envelope.
+- `ExportCollection` (interface), `jsr:@spy4x/server/export`: A named collection to include in the envelope.
+- `ExportEnvelope` (interface), `jsr:@spy4x/server/export`: The envelope written to the download.
+- `ExportInput` (interface), `jsr:@spy4x/server/export`: Input for buildExportEnvelope, all of it caller-supplied.
+- `buildExportEnvelope` (function), `jsr:@spy4x/server/export`: Build the versioned export envelope.
+- `exportDownloadHeaders` (function), `jsr:@spy4x/server/export`: Build the response headers that make a browser download the body.
+- `exportDownloadResponse` (function), `jsr:@spy4x/server/export`: Serialise an envelope and build the download response in one step.
+- `exportFileName` (function), `jsr:@spy4x/server/export`: Build `<name>-YYYY-MM-DD.json`, dropping anything that cannot be in a header.
+- `formatLocalDate` (function), `jsr:@spy4x/server/export`: Format the calendar day of a date as `YYYY-MM-DD` from the **local** getters.
+
+### `jsr:@spy4x/server/healthcheck`
+
+- `DEFAULT_PORT` (constant), `jsr:@spy4x/server/healthcheck`: Default service port when neither `PORT` nor `HEALTHCHECK_PORT` is set.
+- `DEFAULT_TIMEOUT_MS` (constant), `jsr:@spy4x/server/healthcheck`: Default per-step deadline: short enough for a container probe, long enough for a busy loop.
+- `ExitAdapter` (interface), `jsr:@spy4x/server/healthcheck`: Process surface used to exit; injected so a test never ends the test runner.
+- `HealthcheckOptions` (interface), `jsr:@spy4x/server/healthcheck`: Everything probeLoopback needs.
+- `HealthcheckTimeoutError` (class), `jsr:@spy4x/server/healthcheck`: Deadline exceeded.
+- `LOOPBACK_HOSTS` (constant), `jsr:@spy4x/server/healthcheck`: The only hosts a probe may target.
+- `ProbeConnection` (interface), `jsr:@spy4x/server/healthcheck`: A connected socket, narrowed to what a probe needs: closing it again.
+- `ProbeConnector` (interface), `jsr:@spy4x/server/healthcheck`: Opens a socket.
+- `ProbeFailure` (type), `jsr:@spy4x/server/healthcheck`: Why a probe failed.
+- `ProbeResult` (interface), `jsr:@spy4x/server/healthcheck`: Probe outcome, kept as data so the caller — not the probe — decides what to do.
+- `ProbeTimer` (interface), `jsr:@spy4x/server/healthcheck`: Timer used for deadlines.
+- `denoConnector` (constant), `jsr:@spy4x/server/healthcheck`: Adapter over `Deno.connect`, used when no connector is injected.
+- `healthcheckExitCode` (function), `jsr:@spy4x/server/healthcheck`: Exit code for the probe: `0` healthy, `1` unhealthy.
+- `probeLoopback` (function), `jsr:@spy4x/server/healthcheck`: Probe a loopback port by connecting and closing again.
+- `resolveHealthcheckPort` (function), `jsr:@spy4x/server/healthcheck`: Port the healthcheck should probe, from the process environment.
+- `runHealthcheck` (function), `jsr:@spy4x/server/healthcheck`: Compute the exit code and terminate the process.
+- `withDeadline` (function), `jsr:@spy4x/server/healthcheck`: Race a step against a deadline, clearing the timer on every path.
+
+### `jsr:@spy4x/server/http/bearer-auth`
+
+- `AUTHORIZATION_HEADER` (constant), `jsr:@spy4x/server/http/bearer-auth`: The header a token is read from.
+- `REDACTED_TOKEN` (constant), `jsr:@spy4x/server/http/bearer-auth`: The canonical redaction marker.
+- `TokenVerifier` (interface), `jsr:@spy4x/server/http/bearer-auth`: Verifies a bearer token presented by a client.
+- `bearerTokenFromEnv` (function), `jsr:@spy4x/server/http/bearer-auth`: Read a bearer token from the environment.
+- `bearerTokenFromHeaders` (function), `jsr:@spy4x/server/http/bearer-auth`: Extract the token from `Authorization`.
+- `constantTimeEquals` (function), `jsr:@spy4x/server/http/bearer-auth`: Compare two tokens in constant time.
+- `createTokenVerifier` (function), `jsr:@spy4x/server/http/bearer-auth`: Build a verifier over one configured token.
+- `formatLogLine` (function), `jsr:@spy4x/server/http/bearer-auth`: Format a log line with every argument redacted.
+- `redactor` (function), `jsr:@spy4x/server/http/bearer-auth`: Redact every occurrence of `secrets` in one log line.
+
+### `jsr:@spy4x/server/http/bounded-body`
+
+- `BodySource` (interface), `jsr:@spy4x/server/http/bounded-body`: The read surface shared by `Request` and `Response`.
+- `BoundedBodyTimeout` (type), `jsr:@spy4x/server/http/bounded-body`: The stall budget, kept under this package's historical name so an existing `import type { BoundedBodyTimeout }` keeps compiling.
+- `JSON_BODY_INVALID` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 400 readJsonBody throws when the body is not JSON.
+- `JSON_BODY_TIMEOUT` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 408 readJsonBody throws when the body stalls.
+- `JSON_BODY_TOO_LARGE` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 413 readJsonBody throws when the body is over the cap.
+- `PayloadTooLargeError` (class), `jsr:@spy4x/server/http/bounded-body`: Body exceeded the byte cap.
+- `ReadBoundedBodyOptions` (interface), `jsr:@spy4x/server/http/bounded-body`: Per-call overrides for a bounded body read.
+- `parseBoundedFormData` (function), `jsr:@spy4x/server/http/bounded-body`: Parse a `multipart/form-data` (or url-encoded) request body under the same cap and stall budget as `readBoundedBody`.
+- `readBoundedBody` (function), `jsr:@spy4x/server/http/bounded-body`: Read a body into bytes under the hard cap and stall budget.
+- `readBoundedText` (function), `jsr:@spy4x/server/http/bounded-body`: Read a body as text, decoding incrementally so the cap is enforced before the whole payload is materialised as one string.
+- `readContentLength` (function), `jsr:@spy4x/server/http/bounded-body`: Read the declared `Content-Length`, if the sender provided a usable one.
+- `readJsonBody` (function), `jsr:@spy4x/server/http/bounded-body`: Read a Hono request's body as JSON under the byte cap and stall budget, and turn each way it can fail into the HTTP status a client should see.
+
+### `jsr:@spy4x/server/http/cors`
+
+- `CORS_ALLOW_HEADERS` (constant), `jsr:@spy4x/server/http/cors`: Request headers allow-listed for browser CORS preflight.
+- `CORS_ALLOW_METHODS` (constant), `jsr:@spy4x/server/http/cors`: Methods allow-listed for browser CORS preflight.
+- `CorsOriginOptions` (interface), `jsr:@spy4x/server/http/cors`: Options for createCorsOriginResolver and resolveAllowedOrigin.
+- `DEV_ORIGIN_HOSTS` (constant), `jsr:@spy4x/server/http/cors`: Loopback and wildcard-bind hosts accepted over plain `http` in development.
+- `createCorsOriginResolver` (function), `jsr:@spy4x/server/http/cors`: Build the origin callback `hono/cors` expects.
+- `resolveAllowedOrigin` (function), `jsr:@spy4x/server/http/cors`: Decide whether an `Origin` header value may call the API.
+
+### `jsr:@spy4x/server/http/same-origin`
+
+- `SAFE_METHODS` (constant), `jsr:@spy4x/server/http/same-origin`: Methods that must not change state, and so pass the guard unchecked.
+- `SAME_ORIGIN_REFUSED` (constant), `jsr:@spy4x/server/http/same-origin`: Body `error` of the default 403 response.
+- `SameOriginGuardOptions` (interface), `jsr:@spy4x/server/http/same-origin`: Options for createSameOriginMutationGuard and createSameOriginUpgradeGuard.
+- `SameOriginRefusal` (type), `jsr:@spy4x/server/http/same-origin`: Why the guard refused a request, passed to SameOriginGuardOptions.onReject:
+- `createSameOriginMutationGuard` (function), `jsr:@spy4x/server/http/same-origin`: Build a Hono middleware that refuses cross-site mutations.
+- `createSameOriginUpgradeGuard` (function), `jsr:@spy4x/server/http/same-origin`: Build a Hono middleware that refuses a WebSocket upgrade from another site.
+
+### `jsr:@spy4x/server/kv`
+
+- `RedisKvStore` (class), `jsr:@spy4x/server/kv`: A key-value store scoped to one Redis connection and one key prefix.
+- `RedisKvStoreClosedError` (class), `jsr:@spy4x/server/kv`: Thrown by every method once RedisKvStore.close has been called.
+- `RedisKvStoreConnectionError` (class), `jsr:@spy4x/server/kv`: Thrown when a call cannot get its command answered over a live connection: a fresh connection could not be opened in place of a dead one (Redis is still unreachable, or still refuses `PING`), the one resend after a reconnect failed too, or Redis did not answer within the store's fixed command bound.
+
+### `jsr:@spy4x/server/outbox`
+
+- `DrainResult` (interface), `jsr:@spy4x/server/outbox`: What one `drainOnce` did.
+- `LoggingOutboxPublisher` (class), `jsr:@spy4x/server/outbox`
+- `OutboxEvent` (interface), `jsr:@spy4x/server/outbox`: One outbox row.
+- `OutboxProcessor` (class), `jsr:@spy4x/server/outbox`
+- `OutboxProcessorOptions` (interface), `jsr:@spy4x/server/outbox`
+- `OutboxPublisher` (interface), `jsr:@spy4x/server/outbox`
+- `OutboxRepository` (interface), `jsr:@spy4x/server/outbox`
+- `PostgresOutboxRepository` (class), `jsr:@spy4x/server/outbox`
+- `errorCodeOf` (function), `jsr:@spy4x/server/outbox`: Short, stable label recorded on the row so failures are greppable.
+- `retryDelayMs` (function), `jsr:@spy4x/server/outbox`: Exponential backoff on the attempt just made, so the first failure waits `baseMs` and each later one doubles up to `maxMs`.
+
+### `jsr:@spy4x/server/quota`
+
+- `QuotaDecision` (enum), `jsr:@spy4x/server/quota`: What a caller should do with a check: proceed, stop, or turn the feature off.
+- `QuotaError` (class), `jsr:@spy4x/server/quota`: The only error a caller has to catch to answer a misconfigured or ill-formed metering call.
+- `QuotaErrorCode` (enum), `jsr:@spy4x/server/quota`: Why a quota operation was refused.
+- `QuotaKey` (interface), `jsr:@spy4x/server/quota`: The identity of a counter: one principal inside one window.
+- `QuotaMeter` (interface), `jsr:@spy4x/server/quota`: The metering surface.
+- `QuotaMeterOptions` (interface), `jsr:@spy4x/server/quota`: Construction options for createQuotaMeter.
+- `QuotaPolicy` (interface), `jsr:@spy4x/server/quota`: The budget a principal is entitled to.
+- `QuotaPrincipal` (interface), `jsr:@spy4x/server/quota`: The identity a counter is billed to.
+- `QuotaPrincipalKind` (enum), `jsr:@spy4x/server/quota`: Who owns a counter.
+- `QuotaReservation` (interface), `jsr:@spy4x/server/quota`: What QuotaStore.reserve answers: whether the units were taken, and the counter after.
+- `QuotaState` (interface), `jsr:@spy4x/server/quota`: The metered budget as the UI needs to render it.
+- `QuotaStore` (interface), `jsr:@spy4x/server/quota`: The injected persistence port — no DB driver, no KV client, no clock.
+- `SESSION_POOL_PRINCIPAL` (constant), `jsr:@spy4x/server/quota`: The principal half of the counter every session principal shares.
+- `createQuotaMeter` (function), `jsr:@spy4x/server/quota`: Build a QuotaMeter over an injected policy, store and clock.
+- `quotaKey` (function), `jsr:@spy4x/server/quota`: Derive the counter identity for a principal inside the window containing `nowMs`.
+- `quotaStatusCode` (function), `jsr:@spy4x/server/quota`: 200 for Allowed, 429 for Exhausted, 503 for Unavailable — the status a caller answers with, as a value.
+- `resolveQuotaPrincipal` (function), `jsr:@spy4x/server/quota`: Resolve the principal a counter is billed to.
+- `sessionPoolKey` (function), `jsr:@spy4x/server/quota`: The key of the shared session pool inside the window containing `nowMs`.
+
+### `jsr:@spy4x/server/request-log`
+
+- `RequestLogOptions` (interface), `jsr:@spy4x/server/request-log`: Options for requestLog.
+- `RequestLogWriter` (type), `jsr:@spy4x/server/request-log`: Called once per logged line.
+- `requestLog` (function), `jsr:@spy4x/server/request-log`: Build the request-log middleware.
+
+### `jsr:@spy4x/server/sign-in`
+
+- `Auth` (interface), `jsr:@spy4x/server/sign-in`: The middleware and request helpers createAuth returns.
+- `AuthEnv` (interface), `jsr:@spy4x/server/sign-in`: The Hono environment the middleware reads and writes.
+- `AuthOptions` (interface), `jsr:@spy4x/server/sign-in`: Options for createAuth.
+- `AuthState` (interface), `jsr:@spy4x/server/sign-in`: What `parseAuth` stores under `c.get("auth")` for a valid session.
+- `CreatedSession` (interface), `jsr:@spy4x/server/sign-in`: A newly created session and the cookie value that proves it.
+- `DEFAULT_PASSWORD_ITERATIONS` (constant), `jsr:@spy4x/server/sign-in`: Default PBKDF2-HMAC-SHA-256 iteration count: 600 000, the figure the OWASP Password Storage Cheat Sheet gives for this function.
+- `MAX_PASSWORD_BYTES` (constant), `jsr:@spy4x/server/sign-in`: Longest password accepted, in UTF-8 bytes.
+- `MAX_SESSION_MINUTES` (constant), `jsr:@spy4x/server/sign-in`: Longest session: 400 days, the most a browser keeps a cookie and the most Hono's cookie helper accepts.
+- `NOT_AUTHENTICATED` (constant), `jsr:@spy4x/server/sign-in`: Body of the 401 response when there is no valid session.
+- `NOT_AUTHORIZED` (constant), `jsr:@spy4x/server/sign-in`: Body of the 403 response when the app's check refuses.
+- `NewSessionFields` (type), `jsr:@spy4x/server/sign-in`: What an app supplies to create a session: its own fields, without what the manager sets.
+- `PasswordCheck` (interface), `jsr:@spy4x/server/sign-in`: Outcome of PasswordHasher.verify.
+- `PasswordHasher` (interface), `jsr:@spy4x/server/sign-in`: Hashes and verifies passwords under one pepper and iteration count.
+- `PasswordHasherOptions` (interface), `jsr:@spy4x/server/sign-in`: Options for createPasswordHasher.
+- `SECOND_FACTOR_REQUIRED` (constant), `jsr:@spy4x/server/sign-in`: Body of the 401 response when the second factor is still owed.
+- `SESSION_COOKIE_NAME` (constant), `jsr:@spy4x/server/sign-in`: Default name of the signed session cookie, as in the template.
+- `SecondFactorStatus` (enum), `jsr:@spy4x/server/sign-in`: Second-factor state of a session.
+- `SessionCookie` (class), `jsr:@spy4x/server/sign-in`: Reads, writes and clears the session cookie on a Hono context.
+- `SessionCookieOptions` (interface), `jsr:@spy4x/server/sign-in`: Options for SessionCookie.
+- `SessionManager` (class), `jsr:@spy4x/server/sign-in`: Creates, validates, extends and ends sessions over an app-supplied SessionStore.
+- `SessionManagerOptions` (interface), `jsr:@spy4x/server/sign-in`: Options for SessionManager.
+- `SessionRecord` (interface), `jsr:@spy4x/server/sign-in`: The fields the session logic reads.
+- `SessionStatus` (enum), `jsr:@spy4x/server/sign-in`: Lifecycle of a stored session.
+- `SessionStore` (interface), `jsr:@spy4x/server/sign-in`: Persistence for sessions, implemented by the app.
+- `TOTP_DIGITS` (constant), `jsr:@spy4x/server/sign-in`: Digits in a code.
+- `TOTP_PERIOD_SECONDS` (constant), `jsr:@spy4x/server/sign-in`: Seconds per time step.
+- `TOTP_WINDOW` (constant), `jsr:@spy4x/server/sign-in`: Steps accepted on either side of the current one, to absorb clock drift.
+- `TotpAccount` (interface), `jsr:@spy4x/server/sign-in`: How the account appears in the authenticator app.
+- `TotpEnrolment` (interface), `jsr:@spy4x/server/sign-in`: What a user needs to add the account to an authenticator app.
+- `TotpVerifyOptions` (interface), `jsr:@spy4x/server/sign-in`: Options for verifyTotp.
+- `USER_ID_COOKIE_NAME` (constant), `jsr:@spy4x/server/sign-in`: Default name of the readable user-id cookie, as in the template.
+- `ValidSession` (interface), `jsr:@spy4x/server/sign-in`: A session that passed SessionManager.validate.
+- `createAuth` (function), `jsr:@spy4x/server/sign-in`: Builds the session middleware and guards over one SessionManager and SessionCookie.
+- `createPasswordHasher` (function), `jsr:@spy4x/server/sign-in`: Creates a PasswordHasher.
+- `generateTotpSecret` (function), `jsr:@spy4x/server/sign-in`: A new random secret: 20 bytes, base32 without padding (32 characters).
+- `totpEnrolment` (function), `jsr:@spy4x/server/sign-in`: The enrolment link and QR code for a secret.
+- `verifyTotp` (function), `jsr:@spy4x/server/sign-in`: Checks a code against a secret at the current time.
+
+### `jsr:@spy4x/server/static`
+
+- `KNOWN_EXTENSIONS` (constant), `jsr:@spy4x/server/static`: Every extension the MIME table knows, for docs and for tests.
+- `ServeStaticOptions` (interface), `jsr:@spy4x/server/static`: Options for serveStatic.
+- `StaticFileHandle` (interface), `jsr:@spy4x/server/static`: A file opened for streaming, returned by StaticFs.open.
+- `StaticFileInfo` (interface), `jsr:@spy4x/server/static`: Statistics the adapter needs from a filesystem entry.
+- `StaticFs` (interface), `jsr:@spy4x/server/static`: Filesystem surface the static handler needs; injected so tests need no files.
+- `StaticPathResolution` (type), `jsr:@spy4x/server/static`: Result of resolving a request path against the static root.
+- `StaticRejection` (type), `jsr:@spy4x/server/static`: Why a request path was refused.
+- `contentTypeFor` (function), `jsr:@spy4x/server/static`: Content type for a path, from its extension, case-insensitively.
+- `denoStaticFs` (constant), `jsr:@spy4x/server/static`: Filesystem implementation backed by `Deno.*`, used when none is injected.
+- `isPathInsideRoot` (function), `jsr:@spy4x/server/static`: True when `candidate` is inside `root`.
+- `resolveStaticPath` (function), `jsr:@spy4x/server/static`: Join a request pathname to a static root, refusing anything that could escape it.
+- `serveStatic` (function), `jsr:@spy4x/server/static`: Serve one request path from the static root.
+
+### `jsr:@spy4x/server/storage`
+
+- `BucketStorage` (interface), `jsr:@spy4x/server/storage`: A `FileStorage` provider bound to one bucket, with the bucket argument removed.
+- `BucketStorageConfig` (interface), `jsr:@spy4x/server/storage`
+- `DEFAULT_EXPIRES_IN_SECONDS` (constant), `jsr:@spy4x/server/storage`: Fallback URL lifetime, and the ceiling S3 itself enforces.
+- `DEFAULT_LOCAL_BASE_PATH` (constant), `jsr:@spy4x/server/storage`: Default base directory, relative to the process working directory.
+- `DEFAULT_S3_REGION` (constant), `jsr:@spy4x/server/storage`: Default AWS region; overridden by configuration, never read from the environment here.
+- `DefaultBucketStorage` (class), `jsr:@spy4x/server/storage`: Bind a provider to one bucket.
+- `FileStorage` (interface), `jsr:@spy4x/server/storage`: Wire-level object storage provider.
+- `LocalStorage` (class), `jsr:@spy4x/server/storage`: Local-filesystem provider for development.
+- `LocalStorageConfig` (interface), `jsr:@spy4x/server/storage`
+- `MAX_PRESIGN_EXPIRES_IN_SECONDS` (constant), `jsr:@spy4x/server/storage`
+- `ObjectFs` (interface), `jsr:@spy4x/server/storage`: Minimal object-store filesystem port.
+- `PresignCredentials` (interface), `jsr:@spy4x/server/storage`: Credentials for one presign.
+- `PresignOptions` (interface), `jsr:@spy4x/server/storage`: Per-call presign overrides.
+- `PresignRequest` (interface), `jsr:@spy4x/server/storage`: Everything SigV4 needs to describe the request being signed.
+- `S3Storage` (class), `jsr:@spy4x/server/storage`: S3-compatible provider.
+- `S3StorageConfig` (interface), `jsr:@spy4x/server/storage`
+- `StorageConfig` (interface), `jsr:@spy4x/server/storage`: Fully-resolved storage configuration.
+- `StorageEnvName` (enum), `jsr:@spy4x/server/storage`: Environment variable names this package reads.
+- `StorageError` (class), `jsr:@spy4x/server/storage`: Storage failure carrying a machine-readable `code`, the operation that failed and any HTTP status the backend returned, so a caller can retry or re-map the failure without parsing the message.
+- `StorageErrorCode` (type), `jsr:@spy4x/server/storage`: Error codes a caller can branch on without matching on a message string.
+- `StorageProviderKey` (type), `jsr:@spy4x/server/storage`: The two selectable backends, as the wire name used in `FILE_STORAGE_PROVIDER`.
+- `UploadBody` (type), `jsr:@spy4x/server/storage`: Object payload accepted by `FileStorage.upload`.
+- `assertBucket` (function), `jsr:@spy4x/server/storage`: Validate a bucket name.
+- `createBucketStorage` (function), `jsr:@spy4x/server/storage`: Build a bucket-bound storage from an already-constructed provider.
+- `createDenoObjectFs` (function), `jsr:@spy4x/server/storage`: `ObjectFs` backed by `Deno`.
+- `createMemoryObjectFs` (function), `jsr:@spy4x/server/storage`: In-memory `ObjectFs`.
+- `createStorage` (function), `jsr:@spy4x/server/storage`: Read the environment, then build the configured storage.
+- `createStorageFrom` (function), `jsr:@spy4x/server/storage`: Build the configured storage from an explicit configuration.
+- `defaultS3Endpoint` (function), `jsr:@spy4x/server/storage`: AWS's regional S3 endpoint, used when `config.endpoint` is not set.
+- `encodeRfc3986` (function), `jsr:@spy4x/server/storage`: Percent-encode per RFC 3986.
+- `encodeS3Path` (function), `jsr:@spy4x/server/storage`: Encode an object key for the canonical URI, keeping `/` as the separator.
+- `ensureFileDirectory` (function), `jsr:@spy4x/server/storage`: Create the directory holding `filePath`.
+- `formatAmzDate` (function), `jsr:@spy4x/server/storage`: `YYYYMMDDTHHMMSSZ`, the only timestamp format SigV4 accepts.
+- `isSafeObjectPath` (function), `jsr:@spy4x/server/storage`: Report whether one path is safe to join onto a bucket: relative, free of a scheme, a backslash or a NUL byte, and free of a `..` segment.
+- `loadStorageProvider` (function), `jsr:@spy4x/server/storage`: Load and construct a provider by dynamic `import()`.
+- `parseExpiresIn` (function), `jsr:@spy4x/server/storage`: Parse an expiry from either a number or an environment string.
+- `parseStorageEnv` (function), `jsr:@spy4x/server/storage`: Parse storage configuration from an explicit environment record.
+- `resolveObjectKey` (function), `jsr:@spy4x/server/storage`: Validate a bucket and an object key and return them joined.
+- `resolveStoragePath` (function), `jsr:@spy4x/server/storage`: Build `${basePath}/${bucket}/${path}` for the local provider.
+- `signS3Request` (function), `jsr:@spy4x/server/storage`: Build a SigV4 query-string presigned URL for one S3 request.
+- `storageEnvNames` (function), `jsr:@spy4x/server/storage`: Every variable this package reads, for a startup configuration check.
+
+### `jsr:@spy4x/server/user-secrets`
+
+- `MAX_API_KEY_LENGTH` (constant), `jsr:@spy4x/server/user-secrets`: Longest accepted api key.
+- `MAX_PROVIDER_LENGTH` (constant), `jsr:@spy4x/server/user-secrets`: Longest accepted provider name — long enough for `azure-openai-eu-west`, short enough to key on.
+- `MIN_API_KEY_LENGTH` (constant), `jsr:@spy4x/server/user-secrets`: Shortest accepted api key, mirroring the `keys.ts:25` rule.
+- `PROVIDER_PATTERN` (constant), `jsr:@spy4x/server/user-secrets`: Shape of a provider name an adapter can actually match.
+- `SaveUserSecretInput` (interface), `jsr:@spy4x/server/user-secrets`
+- `StoredUserSecret` (interface), `jsr:@spy4x/server/user-secrets`: A stored row, as the port sees it.
+- `UserSecretError` (class), `jsr:@spy4x/server/user-secrets`: The only error this module throws — a code, a constant message and a rejection type identity.
+- `UserSecretErrorCode` (enum), `jsr:@spy4x/server/user-secrets`: Failure codes, stable integers so a caller can switch without string matching.
+- `UserSecretPort` (interface), `jsr:@spy4x/server/user-secrets`: The injected persistence port.
+- `UserSecretStore` (interface), `jsr:@spy4x/server/user-secrets`
+- `UserSecretStoreOptions` (interface), `jsr:@spy4x/server/user-secrets`
+- `UserSecretSummary` (interface), `jsr:@spy4x/server/user-secrets`: What a list/UI may see: metadata plus a hint.
+- `createUserSecretStore` (function), `jsr:@spy4x/server/user-secrets`: Builds a store over an injected port and cipher.
+
+## @spy4x/time
+
+### `jsr:@spy4x/time/date`
+
+- `DateRange` (interface), `jsr:@spy4x/time/date`: Inclusive calendar range; both ends are `YYYY-MM-DD`.
+- `dayInMonth` (function), `jsr:@spy4x/time/date`: The same day number in the month `date` falls in, clipped to that month's length.
+- `daysInMonth` (function), `jsr:@spy4x/time/date`: How many days the month `date` falls in has.
+- `endOfMonth` (function), `jsr:@spy4x/time/date`: Last day of the month `date` falls in — 28, 29, 30 or 31, leap year included.
+- `endOfQuarter` (function), `jsr:@spy4x/time/date`: Last day of the calendar quarter `date` falls in.
+- `endOfYear` (function), `jsr:@spy4x/time/date`: Last day of the calendar year `date` falls in.
+- `formatIsoDate` (function), `jsr:@spy4x/time/date`: The `YYYY-MM-DD` calendar date of midnight-UTC milliseconds.
+- `isSameDay` (function), `jsr:@spy4x/time/date`: Whether two values name the same calendar day.
+- `isValidDateRange` (function), `jsr:@spy4x/time/date`: Whether a range is two real dates in order.
+- `monthFirstWeekday` (function), `jsr:@spy4x/time/date`: Weekday of the first of `date`'s month, counted from the week's own first day.
+- `parseIsoDate` (function), `jsr:@spy4x/time/date`: Midnight UTC of a calendar date, in milliseconds.
+- `shiftMonth` (function), `jsr:@spy4x/time/date`: The first day of the month `months` away from `date`.
+- `startOfMonth` (function), `jsr:@spy4x/time/date`: First day of the month `date` falls in.
+- `startOfQuarter` (function), `jsr:@spy4x/time/date`: First day of the calendar quarter `date` falls in.
+- `startOfYear` (function), `jsr:@spy4x/time/date`: First day of the calendar year `date` falls in.
+
+### `jsr:@spy4x/time/ics`
+
+- `IcsAddress` (interface), `jsr:@spy4x/time/ics`: A calendar address: a bare mailbox address, e.g.
+- `IcsAttendee` (interface), `jsr:@spy4x/time/ics`: One `ATTENDEE` property with its optional iTIP parameters.
+- `IcsEvent` (interface), `jsr:@spy4x/time/ics`: The single VEVENT to serialise.
+- `IcsEventStatus` (enum), `jsr:@spy4x/time/ics`: RFC 5545 §3.8.1.11 `STATUS` property for a VEVENT.
+- `IcsMethod` (enum), `jsr:@spy4x/time/ics`: RFC 5545 §3.7.2 iTIP method carried by the `METHOD` property.
+- `IcsOptions` (interface), `jsr:@spy4x/time/ics`: Calendar-level properties and the values this writer cannot infer.
+- `IcsPartStat` (enum), `jsr:@spy4x/time/ics`: RFC 5545 §3.2.12 `PARTSTAT` participation status.
+- `IcsRole` (enum), `jsr:@spy4x/time/ics`: RFC 5545 §3.2.16 `ROLE` parameter values for an attendee.
+- `attendeeLine` (function), `jsr:@spy4x/time/ics`: Build the `ATTENDEE` property for an attendee, including whichever of `CN`, `ROLE`, `PARTSTAT` and `RSVP` the caller supplied.
+- `buildVEventLines` (function), `jsr:@spy4x/time/ics`: Build the VEVENT property lines, in RFC 5545 §3.6.1 order.
+- `generateIcs` (function), `jsr:@spy4x/time/ics`: Serialise one event into a complete iCalendar document.
+- `organizerLine` (function), `jsr:@spy4x/time/ics`: Build the `ORGANIZER` property for an address, quoting `CN` per RFC 5545 §3.2.5 and escaping it per RFC 6868.
+
+### `jsr:@spy4x/time/ics-core`
+
+- `CONTINUATION_LIMIT` (constant), `jsr:@spy4x/time/ics-core`: Octets available to a continuation line: a continuation is prefixed with one SPACE (RFC 5545 §3.1), and that SPACE counts toward the 75-octet limit.
+- `CRLF` (constant), `jsr:@spy4x/time/ics-core`: RFC 5545 §3.1 requires CRLF as the content-line separator.
+- `FOLD_LIMIT` (constant), `jsr:@spy4x/time/ics-core`: Maximum octets of a content line *excluding* its CRLF line break, per RFC 5545 §3.1 ("Lines of text SHOULD NOT be longer than 75 octets, excluding the line break").
+- `LF` (constant), `jsr:@spy4x/time/ics-core`: Bare LF.
+- `assertFoldable` (function), `jsr:@spy4x/time/ics-core`: Assert that a logical line fits one physical content line.
+- `foldLine` (function), `jsr:@spy4x/time/ics-core`: Fold one logical content line to at most FOLD_LIMIT octets per physical line, per RFC 5545 §3.1.
+- `formatIcsUtc` (function), `jsr:@spy4x/time/ics-core`: Format a `Date` as an RFC 5545 UTC DATE-TIME value, `YYYYMMDDTHHMMSSZ`.
+- `icsEscape` (function), `jsr:@spy4x/time/ics-core`: Escape a TEXT property value per RFC 5545 §3.3.11.
+- `icsEscapeParameter` (function), `jsr:@spy4x/time/ics-core`: Escape a quoted parameter value per RFC 6868.
+- `icsUnescape` (function), `jsr:@spy4x/time/ics-core`: Reverse icsEscape.
+- `icsUnescapeParameter` (function), `jsr:@spy4x/time/ics-core`: Reverse icsEscapeParameter per RFC 6868 §3.1: `^n` becomes a newline, `^'` a double quote, `^^` a single caret.
+- `joinContentLines` (function), `jsr:@spy4x/time/ics-core`: Fold each logical line and terminate every one with CRLF, including the last.
+- `stripControlCharacters` (function), `jsr:@spy4x/time/ics-core`: Remove characters RFC 5545 does not allow in content lines: C0 controls except HTAB, LF and CR, plus DEL.
+- `unfoldLines` (function), `jsr:@spy4x/time/ics-core`: Unfold every content line in an iCalendar document: a CRLF (or bare LF) followed by SPACE or HTAB continues the previous line (RFC 5545 §3.1).
+
+### `jsr:@spy4x/time/locale`
+
+- `WeekdayLabel` (interface), `jsr:@spy4x/time/locale`: One weekday header: what its column shows, and what that abbreviation stands for.
+- `dayLabel` (function), `jsr:@spy4x/time/locale`: Localised "23 August 2026", the date as a person reads it.
+- `localeFirstWeekday` (function), `jsr:@spy4x/time/locale`: The day the locale's week starts on, `1` = Monday … `7` = Sunday.
+- `monthLabel` (function), `jsr:@spy4x/time/locale`: Localised "August 2026" for the month `date` falls in.
+- `weekdayLabels` (function), `jsr:@spy4x/time/locale`: Seven localised weekday labels, starting on the locale's own first day.
+
+### `jsr:@spy4x/time/tz`
+
+- `WallClockKind` (enum), `jsr:@spy4x/time/tz`: How often a wall clock occurs in a zone on its date.
+- `WallClockResolution` (interface), `jsr:@spy4x/time/tz`: The answer of resolveWallClock.
+- `addDays` (function), `jsr:@spy4x/time/tz`: Add `n` days to a `YYYY-MM-DD` date, in `tz` when one is given.
+- `canonicalTimeZone` (function), `jsr:@spy4x/time/tz`: `tz` with its spelling normalised where that is safe, never renamed to another zone name.
+- `canonicalTimeZoneOr` (function), `jsr:@spy4x/time/tz`: canonicalTimeZone of `value` when it is a real zone, `fallback` otherwise.
+- `canonicalValidTimeZoneOrNull` (function), `jsr:@spy4x/time/tz`: canonicalTimeZone of `value`, or `null` when it is missing or not a zone this runtime knows.
+- `dayOfWeek` (function), `jsr:@spy4x/time/tz`: Abbreviated weekday name in `tz`, uppercased: `"FRI"`.
+- `formatDateLong` (function), `jsr:@spy4x/time/tz`: Format a date as `"Friday, 28 August 2026"` — the date-only row of a confirmation view.
+- `formatDateTimeLong` (function), `jsr:@spy4x/time/tz`: Format the wall clock `date` + `time` in `tz` as a long human string.
+- `formatDateTimeShort` (function), `jsr:@spy4x/time/tz`: Compact form for email subjects and buttons: `"Fri 28 Aug 04:00"`.
+- `formatInstantLong` (function), `jsr:@spy4x/time/tz`: Format an instant in `tz` as a long human string: `"Friday, 28 August 2026 at 04:00"`.
+- `formatInstantShort` (function), `jsr:@spy4x/time/tz`: Compact form of an instant in `tz`: `"Fri 28 Aug 04:00"`.
+- `formatTimeOfDay` (function), `jsr:@spy4x/time/tz`: Format a wall clock as 24-hour time-of-day, `"11:00"`.
+- `hhmmInTz` (function), `jsr:@spy4x/time/tz`: `HH:MM` as `tz` reads the instant `instant`.
+- `isValidTimeZone` (function), `jsr:@spy4x/time/tz`: True when `tz` is a zone this runtime's tzdata knows.
+- `isoDateInTz` (function), `jsr:@spy4x/time/tz`: `YYYY-MM-DD` as `tz` reads the instant `instant`.
+- `minToHHMM` (function), `jsr:@spy4x/time/tz`: Minutes since midnight to a zero-padded `"HH:MM"`.
+- `resolveWallClock` (function), `jsr:@spy4x/time/tz`: Tells whether `tz`'s wall clock reads `date` + `time` once, never or twice, and gives the instants.
+- `todayInTz` (function), `jsr:@spy4x/time/tz`: `YYYY-MM-DD` for today in `tz`.
+- `tzOffsetMinutes` (function), `jsr:@spy4x/time/tz`: Minutes east of UTC for `tz` at the instant `instant`.
+- `validTimeZoneOr` (function), `jsr:@spy4x/time/tz`: `tz` when it is a real IANA zone, `fallback` otherwise.
+- `zoneCity` (function), `jsr:@spy4x/time/tz`: The last path segment of an IANA zone name with underscores as spaces: `America/New_York` is `New York`, `Asia/Ho_Chi_Minh` is `Ho Chi Minh`, `UTC` is `UTC`.
+- `zoneOffsetLabel` (function), `jsr:@spy4x/time/tz`: The offset of `tz` at `at` as `UTC+7`, `UTC-4`, `UTC+5:30` or `UTC+0`.
+- `zonedDateTime` (function), `jsr:@spy4x/time/tz`: The instant at which `tz`'s wall clock reads `date` + `time`.
+
+## @spy4x/validation
+
+### `jsr:@spy4x/validation`
+
+- `ErrType` (enum), `jsr:@spy4x/validation`: Kind of a failed operation.
+- `FORM_FIELD` (constant), `jsr:@spy4x/validation`: Key an issue with no single field is reported under.
+- `FieldIssue` (interface), `jsr:@spy4x/validation`: One issue on one field.
+- `FieldValidation` (type), `jsr:@spy4x/validation`: Issues of one field, keyed by issue type.
+- `SchemaInput` (type), `jsr:@spy4x/validation`: Value a schema accepts as input, before parsing.
+- `SchemaOutput` (type), `jsr:@spy4x/validation`: Value a schema produces after parsing, morphs applied.
+- `VALIDATION_MESSAGE` (constant), `jsr:@spy4x/validation`: The sentence every ValidationError shows the user, whatever the fields said.
+- `ValidationError` (interface), `jsr:@spy4x/validation`: Submitted data the schema rejected.
+- `ValidationIssue` (interface), `jsr:@spy4x/validation`: One schema issue, flattened for display next to a form field.
+- `ValidationIssues` (type), `jsr:@spy4x/validation`: Issues keyed by field path.
+- `ValidationModel` (type), `jsr:@spy4x/validation`: Issues of a whole model, keyed by field name.
+- `ValidationResult` (type), `jsr:@spy4x/validation`: Outcome of validate: the parsed value, or the error that rejected it.
+- `ValidationType` (enum), `jsr:@spy4x/validation`: Issue kinds the schema itself reports.
+- `firstIssueMessage` (function), `jsr:@spy4x/validation`: First issue message in a validation error, in the order arktype reports them.
+- `isArkErrors` (function), `jsr:@spy4x/validation`: Whether a value is an arktype rejection, without relying on `instanceof`.
+- `isValid` (function), `jsr:@spy4x/validation`: Whether no field carries an issue.
+- `sameValidation` (function), `jsr:@spy4x/validation`: Whether two validation models carry the same issues.
+- `schemaIssues` (function), `jsr:@spy4x/validation`: The issues arktype reported for a value, keyed by the model field they belong to.
+- `setFieldIssue` (function), `jsr:@spy4x/validation`: Set or clear one issue on one field, leaving that field's other issue types alone.
+- `toValidationError` (function), `jsr:@spy4x/validation`: Build a ValidationError from arktype's issues.
+- `validate` (function), `jsr:@spy4x/validation`: Parse `value` with an arktype schema exactly once.
+- `validateSchema` (function), `jsr:@spy4x/validation`: Validate a model against its schema and fold the result into a validation model.
+
+### `jsr:@spy4x/validation/model`
+
+- `FORM_FIELD` (constant), `jsr:@spy4x/validation/model`: Key an issue with no single field is reported under.
+- `FieldIssue` (interface), `jsr:@spy4x/validation/model`: One issue on one field.
+- `FieldValidation` (type), `jsr:@spy4x/validation/model`: Issues of one field, keyed by issue type.
+- `ValidationModel` (type), `jsr:@spy4x/validation/model`: Issues of a whole model, keyed by field name.
+- `ValidationType` (enum), `jsr:@spy4x/validation/model`: Issue kinds the schema itself reports.
+- `isValid` (function), `jsr:@spy4x/validation/model`: Whether no field carries an issue.
+- `sameValidation` (function), `jsr:@spy4x/validation/model`: Whether two validation models carry the same issues.
+- `schemaIssues` (function), `jsr:@spy4x/validation/model`: The issues arktype reported for a value, keyed by the model field they belong to.
+- `setFieldIssue` (function), `jsr:@spy4x/validation/model`: Set or clear one issue on one field, leaving that field's other issue types alone.
+- `validateSchema` (function), `jsr:@spy4x/validation/model`: Validate a model against its schema and fold the result into a validation model.
+
+### `jsr:@spy4x/validation/validate`
+
+- `ErrType` (enum), `jsr:@spy4x/validation/validate`: Kind of a failed operation.
+- `SchemaInput` (type), `jsr:@spy4x/validation/validate`: Value a schema accepts as input, before parsing.
+- `SchemaOutput` (type), `jsr:@spy4x/validation/validate`: Value a schema produces after parsing, morphs applied.
+- `VALIDATION_MESSAGE` (constant), `jsr:@spy4x/validation/validate`: The sentence every ValidationError shows the user, whatever the fields said.
+- `ValidationError` (interface), `jsr:@spy4x/validation/validate`: Submitted data the schema rejected.
+- `ValidationIssue` (interface), `jsr:@spy4x/validation/validate`: One schema issue, flattened for display next to a form field.
+- `ValidationIssues` (type), `jsr:@spy4x/validation/validate`: Issues keyed by field path.
+- `ValidationResult` (type), `jsr:@spy4x/validation/validate`: Outcome of validate: the parsed value, or the error that rejected it.
+- `firstIssueMessage` (function), `jsr:@spy4x/validation/validate`: First issue message in a validation error, in the order arktype reports them.
+- `isArkErrors` (function), `jsr:@spy4x/validation/validate`: Whether a value is an arktype rejection, without relying on `instanceof`.
+- `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
+- `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
+
+<!-- export surface: sha256 e326dbbef67a1f7f676dcaa1da40f6d6ae56d7f07d8a7397af565be02eba1055 -->
