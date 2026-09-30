@@ -127,7 +127,14 @@ describe("web push sender", () => {
     const { sender, deleted } = await build([subscription("a")], () => new Promise(() => {}), {
       requestTimeoutMs: 20,
     })
-    const result = await sender.send(1, { title: `Hi`, body: null, url: null })
+    // Its own deadline, so a missing timeout fails this test instead of hanging the runner.
+    let deadline: number | undefined
+    const result = await Promise.race([
+      sender.send(1, { title: `Hi`, body: null, url: null }),
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(new Error(`send did not return within 2 s`)), 2_000)
+      }),
+    ]).finally(() => clearTimeout(deadline))
     expect(result.error).toBe(`request timed out after 20 ms`)
     expect(deleted).toEqual([])
   })
