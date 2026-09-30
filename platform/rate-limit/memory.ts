@@ -384,7 +384,12 @@ export interface RateLimitStore {
    * otherwise records nothing. All of that happens as one step in the backend. Returns whether
    * `now` was recorded and the window afterwards, oldest first.
    */
-  consume?(key: string, now: number, windowMs: number, limit: number): Promise<RateLimitConsumeResult>
+  consume?(
+    key: string,
+    now: number,
+    windowMs: number,
+    limit: number,
+  ): Promise<RateLimitConsumeResult>
 }
 
 /** Outcome of {@link RateLimitStore.consume}. */

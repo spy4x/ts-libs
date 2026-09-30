@@ -598,6 +598,32 @@ export class RedisKvStore {
   }
 
   /**
+   * Runs a Lua script in one atomic step (`EVAL`) and returns its reply.
+   *
+   * Redis runs a script to completion before it serves any other client, so a script that reads
+   * and writes several keys cannot interleave with another instance's. `keys` are prefixed with
+   * this store's prefix exactly like every other method's key, and reach the script as `KEYS`;
+   * `args` reach it as `ARGV`, as strings. The script text travels with every call (plain
+   * `EVAL`, never `EVALSHA`), so a Redis restart or failover cannot answer `NOSCRIPT`.
+   *
+   * A resend after a dead connection (see {@link RedisKvStore}) runs the script a second time if
+   * the lost first send had already executed it, so use scripts that tolerate that.
+   */
+  public async eval<T extends Reply = Reply>(
+    script: string,
+    keys: string[],
+    args: Array<string | number> = [],
+  ): Promise<T> {
+    return await this.#send<T>([
+      "EVAL",
+      script,
+      keys.length,
+      ...keys.map((key) => this.#prefixed(key)),
+      ...args,
+    ])
+  }
+
+  /**
    * This store's own Redis connection id, as `CLIENT ID` reports it.
    *
    * Not needed by an ordinary caller — it exists for the integration tier, which has
