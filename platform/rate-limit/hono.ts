@@ -109,7 +109,8 @@ const optionsSchema = arkType({
   "status?": "400 <= number.integer <= 599",
   "keyPrefix?": "string",
   "headers?": "object",
-  "skipSuccessful?": "boolean | Function",
+  // Checked by hand below: arktype reads `Function` as "object" and words the error that way.
+  "skipSuccessful?": "unknown",
 })
 
 /**
@@ -189,7 +190,9 @@ export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never
    * step: a correct answer must never lock its owner out, while wrong ones still run out.
    *
    * `true` counts a response as successful when its status is below 400. A function receives the
-   * response and returns true for one that must not spend the budget; it may be async.
+   * response and returns true for one that must not spend the budget; it may be async. It must not
+   * read the body unless it clones the response first (`response.clone()`): the same response is
+   * sent to the client afterwards.
    *
    * The slot is **reserved before the handler runs** and given back afterwards when the response
    * is successful. Reserving first, instead of only reading the budget and counting afterwards,
@@ -259,6 +262,11 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
   const prefix = parsed.keyPrefix ?? ""
   const headers: RateLimitHeaderNames = { ...RATE_LIMIT_HEADERS, ...options.headers }
   const skip = parsed.skipSuccessful
+  if (skip !== undefined && typeof skip !== "boolean" && typeof skip !== "function") {
+    throw new Error(
+      "invalid rate limit middleware options: skipSuccessful must be a boolean or function",
+    )
+  }
   const isSuccessful: ((response: Response) => boolean | Promise<boolean>) | undefined =
     skip === true
       ? (response) => response.status < 400
@@ -294,7 +302,9 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
     if (decision.allowed) {
       await next()
       if (isSuccessful !== undefined && await isSuccessful(c.res)) {
-        await refund?.(key)
+        await refund?.(key, decision.at)
+        // Rebuilt first: a response from `Response.redirect()` or `fetch()` has immutable headers.
+        c.res = new Response(c.res.body, c.res)
         c.res.headers.set(
           headers.remaining,
           String(Math.min(decision.limit, decision.remaining + 1)),

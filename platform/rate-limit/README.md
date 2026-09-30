@@ -309,4 +309,5 @@ combined `RateLimit` field is not emitted.
 its owner out. Pass a function `(response) => boolean` to decide what counts as success. The slot
 is reserved before the handler and given back after a successful response through the limiter's
 `refund`, so a burst of parallel wrong guesses still stops at `limit`. Both limiters in `memory.ts`
-implement `refund`; a custom limiter must too.
+implement `refund`; a custom limiter must too. A predicate must not read the response body unless
+it calls `response.clone()` first, because the same response is sent to the client afterwards.

@@ -618,6 +618,35 @@ describe("skipSuccessful", () => {
     )
   })
 
+  it("keeps a redirect a redirect when the budget is given back", async () => {
+    const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 3, clock: () => T0 })
+    const app = new Hono()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
+        keyResolver: () => "user:1",
+        skipSuccessful: () => true,
+      }),
+    )
+    app.get("/go", () => Response.redirect("http://localhost/there", 302))
+    const res = await app.request(new Request("http://localhost/go"))
+    assertEquals(res.status, 302)
+    assertEquals(res.headers.get("location"), "http://localhost/there")
+    assertEquals(res.headers.get("RateLimit-Remaining"), "3")
+  })
+
+  it("rejects a skipSuccessful that is neither a boolean nor a function", () => {
+    assertThrows(
+      () =>
+        createRateLimitMiddleware(
+          createMemoryRateLimiter({ windowMs: 1000, limit: 1 }),
+          { remoteAddr: () => undefined, keyResolver: () => "k", skipSuccessful: "yes" as never },
+        ),
+      Error,
+      "boolean or function",
+    )
+  })
+
   function decisionFor(): RateLimitDecision {
     return { allowed: true, remaining: 1, retryAfterMs: 0, resetAfterMs: 0, limit: 1 }
   }
