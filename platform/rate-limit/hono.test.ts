@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert"
+import { assertEquals, assertThrows } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import { Hono } from "hono"
 
@@ -515,4 +515,172 @@ describe("decisionHeaders", () => {
     )
     assertEquals(headers["Retry-After"], "1")
   })
+})
+
+describe("skipSuccessful", () => {
+  const limit = 3
+
+  /** POST /check answers 200 for the code `ok` and 401 for anything else. */
+  function buildApp(skipSuccessful: boolean | ((r: Response) => boolean) = true) {
+    const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit, clock: () => T0 })
+    /** Handlers wait here, so a test can keep requests in flight while more arrive. */
+    let gate: Promise<void> = Promise.resolve()
+    const app = new Hono()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
+        keyResolver: () => "user:1",
+        skipSuccessful,
+      }),
+    )
+    app.get("/check", async (c) => {
+      await gate
+      return c.text(
+        c.req.query("code") === "ok" ? "yes" : "no",
+        c.req.query("code") === "ok" ? 200 : 401,
+      )
+    })
+    const send = (code: string) => app.request(new Request(`http://localhost/check?code=${code}`))
+    /** Handlers started after this call wait until the returned function is called. */
+    const hold = (): () => void => {
+      const held = Promise.withResolvers<void>()
+      gate = held.promise
+      return () => held.resolve()
+    }
+    return { send, hold }
+  }
+
+  it("never spends the budget on successful requests", async () => {
+    const { send } = buildApp()
+    for (let i = 0; i < limit * 2; i++) assertEquals((await send("ok")).status, 200)
+  })
+
+  it("rejects once failed requests reach the limit, even for a correct one", async () => {
+    const { send } = buildApp()
+    for (let i = 0; i < limit; i++) assertEquals((await send("bad")).status, 401)
+    assertEquals((await send("ok")).status, 429)
+    assertEquals((await send("bad")).status, 429)
+  })
+
+  it("keeps the failures counted between successes", async () => {
+    const { send } = buildApp()
+    await send("bad")
+    await send("bad")
+    assertEquals((await send("ok")).status, 200)
+    assertEquals((await send("bad")).status, 401)
+    assertEquals((await send("ok")).status, 429)
+  })
+
+  it("stops a burst of wrong guesses at the limit while earlier ones are still in flight", async () => {
+    const { send, hold } = buildApp()
+    const release = hold()
+    const pending: (Response | Promise<Response>)[] = []
+    for (let i = 0; i < 10; i++) {
+      pending.push(send("bad"))
+      // A macrotask between arrivals: earlier handlers are running, none has finished.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    release()
+    const statuses = (await Promise.all(pending)).map((r) => r.status)
+    assertEquals(statuses.filter((s) => s === 401).length, limit)
+    assertEquals(statuses.filter((s) => s === 429).length, 10 - limit)
+  })
+
+  it("reports the budget left after the give-back", async () => {
+    const { send } = buildApp()
+    await send("bad")
+    const res = await send("ok")
+    assertEquals(res.headers.get("RateLimit-Remaining"), String(limit - 1))
+  })
+
+  it("lets a predicate decide what counts as success", async () => {
+    const { send } = buildApp((response) => response.status === 401)
+    for (let i = 0; i < limit * 2; i++) assertEquals((await send("bad")).status, 401)
+    for (let i = 0; i < limit; i++) assertEquals((await send("ok")).status, 200)
+    assertEquals((await send("ok")).status, 429)
+  })
+
+  it("counts every request when the option is off", async () => {
+    const { send } = buildApp(false)
+    for (let i = 0; i < limit; i++) assertEquals((await send("ok")).status, 200)
+    assertEquals((await send("ok")).status, 429)
+  })
+
+  it("refuses to build over a limiter that cannot refund", () => {
+    assertThrows(
+      () =>
+        createRateLimitMiddleware(
+          { check: () => decisionFor(), reset: () => {} },
+          { remoteAddr: () => undefined, keyResolver: () => "k", skipSuccessful: true },
+        ),
+      Error,
+      "refund",
+    )
+  })
+
+  it("gives back the successful request's own slot, not a later failure's", async () => {
+    const { clock, advance } = fakeClock()
+    const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 2, clock })
+    let release = () => {}
+    const app = new Hono()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
+        keyResolver: () => "user:1",
+        skipSuccessful: true,
+      }),
+    )
+    app.get("/check", async (c) => {
+      if (c.req.query("code") === "held") {
+        await new Promise<void>((resolve) => release = resolve)
+        return c.text("yes")
+      }
+      return c.text("no", 401)
+    })
+    const send = (code: string) => app.request(new Request(`http://localhost/check?code=${code}`))
+
+    const held = send("held")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    advance(400)
+    assertEquals((await send("bad")).status, 401)
+    release()
+    assertEquals((await held).status, 200)
+    assertEquals((await send("bad")).status, 401)
+    // Both failures sit at T0+400, so the window is full until T0+1400.
+    advance(600)
+    assertEquals((await send("bad")).status, 429)
+  })
+
+  it("keeps a redirect a redirect when the budget is given back", async () => {
+    const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 3, clock: () => T0 })
+    const app = new Hono()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
+        keyResolver: () => "user:1",
+        skipSuccessful: () => true,
+      }),
+    )
+    app.get("/go", () => Response.redirect("http://localhost/there", 302))
+    const res = await app.request(new Request("http://localhost/go"))
+    assertEquals(res.status, 302)
+    assertEquals(res.headers.get("location"), "http://localhost/there")
+    assertEquals(res.headers.get("RateLimit-Remaining"), "3")
+  })
+
+  it("rejects a skipSuccessful that is neither a boolean nor a function", () => {
+    assertThrows(
+      () =>
+        createRateLimitMiddleware(
+          createMemoryRateLimiter({ windowMs: 1000, limit: 1 }),
+          { remoteAddr: () => undefined, keyResolver: () => "k", skipSuccessful: "yes" as never },
+        ),
+      Error,
+      "boolean or function",
+    )
+  })
+
+  function decisionFor(): RateLimitDecision {
+    return { allowed: true, remaining: 1, retryAfterMs: 0, resetAfterMs: 0, limit: 1 }
+  }
 })

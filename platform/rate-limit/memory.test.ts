@@ -624,3 +624,94 @@ describe("rateLimitKey", () => {
     assertEquals(rateLimitKey(RateLimitKind.User, "42", "chart:"), "chart:user:42")
   })
 })
+
+describe("refund", () => {
+  it("frees the slot of the latest allowed request in memory", () => {
+    const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 2, clock: () => T0 })
+    limiter.check("a")
+    limiter.check("a")
+    assertEquals(limiter.check("a").allowed, false)
+    limiter.refund("a")
+    assertEquals(limiter.check("a").allowed, true)
+    assertEquals(limiter.check("a").allowed, false)
+  })
+
+  it("does nothing in memory for a key with no events", () => {
+    const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 1, clock: () => T0 })
+    limiter.refund("never-seen")
+    assertEquals(limiter.check("never-seen").allowed, true)
+    assertEquals(limiter.check("never-seen").allowed, false)
+  })
+
+  it("frees the slot of the latest allowed request through a store", async () => {
+    const store = fakeStore()
+    const limiter = createStoreLimiter(store, { windowMs: 1000, limit: 2, clock: () => T0 })
+    await limiter.check("a")
+    await limiter.check("a")
+    assertEquals((await limiter.check("a")).allowed, false)
+    await limiter.refund("a")
+    assertEquals((await limiter.check("a")).allowed, true)
+    assertEquals((await limiter.check("a")).allowed, false)
+  })
+
+  it("removes the key from the store when the last event is refunded", async () => {
+    const store = fakeStore()
+    const limiter = createStoreLimiter(store, { windowMs: 1000, limit: 2, clock: () => T0 })
+    await limiter.check("a")
+    await limiter.refund("a")
+    assertEquals(store.entries.has("a"), false)
+  })
+})
+
+describe("refund with a timestamp", () => {
+  it("drops the event recorded at that timestamp, not the newest, in memory", () => {
+    const { clock, advance } = fakeClock()
+    const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 2, clock })
+    const first = limiter.check("a")
+    advance(400)
+    limiter.check("a")
+    limiter.refund("a", first.at)
+    // The older event went, so both slots now sit at T0+400 and stay taken until T0+1400.
+    assertEquals(limiter.check("a").allowed, true)
+    assertEquals(limiter.check("a").allowed, false)
+    advance(600)
+    assertEquals(limiter.check("a").allowed, false)
+    advance(400)
+    assertEquals(limiter.check("a").allowed, true)
+  })
+
+  it("drops the event recorded at that timestamp, not the newest, through a store", async () => {
+    const { clock, advance } = fakeClock()
+    const limiter = createStoreLimiter(fakeStore(), { windowMs: 1000, limit: 2, clock })
+    const first = await limiter.check("a")
+    advance(400)
+    await limiter.check("a")
+    await limiter.refund("a", first.at)
+    assertEquals((await limiter.check("a")).allowed, true)
+    assertEquals((await limiter.check("a")).allowed, false)
+    advance(600)
+    assertEquals((await limiter.check("a")).allowed, false)
+    advance(400)
+    assertEquals((await limiter.check("a")).allowed, true)
+  })
+
+  it("does nothing when the event already left the window", () => {
+    const { clock, advance } = fakeClock()
+    const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 1, clock })
+    const first = limiter.check("a")
+    advance(1000)
+    limiter.check("a")
+    limiter.refund("a", first.at)
+    assertEquals(limiter.check("a").allowed, false)
+  })
+
+  it("does nothing through a store when the event already left the window", async () => {
+    const { clock, advance } = fakeClock()
+    const limiter = createStoreLimiter(fakeStore(), { windowMs: 1000, limit: 1, clock })
+    const first = await limiter.check("a")
+    advance(1000)
+    await limiter.check("a")
+    await limiter.refund("a", first.at)
+    assertEquals((await limiter.check("a")).allowed, false)
+  })
+})
