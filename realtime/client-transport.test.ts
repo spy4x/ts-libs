@@ -25,8 +25,10 @@ import {
   type CursorPort,
   type GateResult,
   PongTimeoutError,
+  RequestTimeoutError,
   TransportStatus,
 } from "./client-transport.ts"
+import { RealtimeRequestError } from "./errors.ts"
 import { PersistentCursorStore } from "./cursor.ts"
 import {
   drainMicrotasks,
@@ -48,6 +50,7 @@ interface HarnessOptions {
   pongTimeoutMs?: number
   connectTimeoutMs?: number
   ackTimeoutMs?: number
+  requestTimeoutMs?: number
   handshakeAckTimeoutMs?: number
   handshakeAttempts?: number
   /** Pre-seeded durable cursors, as a warm client would have. */
@@ -97,6 +100,9 @@ function createHarness(options: HarnessOptions = {}): Harness {
     pongTimeoutMs: options.pongTimeoutMs ?? 500,
     connectTimeoutMs: options.connectTimeoutMs ?? 7_500,
     ackTimeoutMs: options.ackTimeoutMs ?? 500,
+    ...(options.requestTimeoutMs !== undefined
+      ? { requestTimeoutMs: options.requestTimeoutMs }
+      : {}),
     handshakeAckTimeoutMs: options.handshakeAckTimeoutMs ?? 60_000,
     backoff: options.backoff ??
       { baseMs: 100, factor: 2, maxMs: 400, jitterRatio: 0.5 },
@@ -989,6 +995,254 @@ describe("ClientTransport shutdown", () => {
     expect(snapshot.attempt).toBe(1)
     expect(snapshot.lastError).toContain("did not open within 10ms")
     expect(snapshots.length).toBeGreaterThan(0)
+  })
+})
+
+/** The request frames the client sent, oldest first. */
+function requestFrames(harness: Harness): { kind: string; id: string; [key: string]: unknown }[] {
+  return (harness.factory.latest.frames() as { kind: string; id: string }[]).filter((frame) =>
+    frame.kind === "client.command" || frame.kind === "client.query"
+  )
+}
+
+/** Capture how a promise settled, so a test can assert on it without awaiting a hang. */
+function track<T>(promise: Promise<T>): { value?: T; error?: unknown; settled: boolean } {
+  const state: { value?: T; error?: unknown; settled: boolean } = { settled: false }
+  promise.then((value) => {
+    state.value = value
+    state.settled = true
+  }, (error) => {
+    state.error = error
+    state.settled = true
+  })
+  return state
+}
+
+describe("ClientTransport requests", () => {
+  it("resolves a command with the payload of the result that names its request id", async () => {
+    const harness = createHarness()
+    await harness.open()
+
+    const call = track(harness.transport.command("group.rename", { title: "Trip" }))
+    const [frame] = requestFrames(harness)
+    expect(frame).toMatchObject({ kind: "client.command", name: "group.rename" })
+    expect(frame.payload).toEqual({ title: "Trip" })
+    harness.factory.latest.receive(
+      JSON.stringify({ kind: "server.result", requestId: frame.id, payload: { ok: true } }),
+    )
+    await drainMicrotasks()
+
+    expect(call.value).toEqual({ ok: true })
+    expect(harness.transport.pendingCalls).toBe(0)
+  })
+
+  it("sends the idempotency key with a command and none with a query", async () => {
+    const harness = createHarness()
+    await harness.open()
+
+    void harness.transport.command("group.rename", undefined, { idempotencyKey: "key-9" })
+    void harness.transport.query("group.list")
+
+    const [command, query] = requestFrames(harness)
+    expect(command.idempotencyKey).toBe("key-9")
+    expect("payload" in command).toBe(false)
+    expect(query.kind).toBe("client.query")
+    expect("idempotencyKey" in query).toBe(false)
+  })
+
+  it("matches out-of-order answers to the right callers", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const first = track(harness.transport.query("a"))
+    const second = track(harness.transport.query("b"))
+    const [one, two] = requestFrames(harness)
+
+    harness.factory.latest.receive(
+      JSON.stringify({ kind: "server.result", requestId: two.id, payload: "for-b" }),
+    )
+    harness.factory.latest.receive(
+      JSON.stringify({ kind: "server.result", requestId: one.id, payload: "for-a" }),
+    )
+    await drainMicrotasks()
+
+    expect([first.value, second.value]).toEqual(["for-a", "for-b"])
+  })
+
+  it("rejects with the server's typed code, message and details", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const call = track(harness.transport.command("group.rename"))
+    const [frame] = requestFrames(harness)
+
+    harness.factory.latest.receive(JSON.stringify({
+      kind: "server.error",
+      requestId: frame.id,
+      code: "forbidden",
+      message: "not a member",
+      details: { groupId: 4 },
+    }))
+    await drainMicrotasks()
+
+    expect(call.error).toBeInstanceOf(RealtimeRequestError)
+    expect(call.error).toMatchObject({ code: "forbidden", message: "not a member" })
+    expect((call.error as RealtimeRequestError).details).toEqual({ groupId: 4 })
+  })
+
+  it("rejects with RequestTimeoutError when no answer arrives, and ignores the late answer", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const call = track(harness.transport.query("slow", undefined, { timeoutMs: 300 }))
+    const [frame] = requestFrames(harness)
+
+    await harness.clock.advance(299)
+    expect(call.settled).toBe(false)
+    await harness.clock.advance(1)
+
+    expect(call.error).toBeInstanceOf(RequestTimeoutError)
+    expect(call.error).not.toBeInstanceOf(RealtimeRequestError)
+    expect(harness.transport.pendingCalls).toBe(0)
+    harness.factory.latest.receive(
+      JSON.stringify({ kind: "server.result", requestId: frame.id, payload: 1 }),
+    )
+    expect(harness.errors).toEqual([])
+  })
+
+  it("uses the transport's default timeout when a call sets none", async () => {
+    const harness = createHarness({ requestTimeoutMs: 750 })
+    await harness.open()
+    const call = track(harness.transport.query("slow"))
+
+    await harness.clock.advance(750)
+
+    expect(call.error).toBeInstanceOf(RequestTimeoutError)
+  })
+
+  it("waits 15 seconds by default, longer than the server's default, so the server's timeout arrives first", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const call = track(harness.transport.query("slow"))
+
+    await harness.clock.advance(14_999)
+    expect(call.settled).toBe(false)
+    await harness.clock.advance(1)
+
+    expect(call.error).toBeInstanceOf(RequestTimeoutError)
+  })
+
+  it("passes a server answer with code timeout on as a RealtimeRequestError, not a client timeout", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const call = track(harness.transport.query("slow"))
+    const [frame] = requestFrames(harness)
+
+    harness.factory.latest.receive(JSON.stringify({
+      kind: "server.error",
+      requestId: frame.id,
+      code: "timeout",
+      message: "request timed out",
+    }))
+    await drainMicrotasks()
+
+    expect(call.error).toBeInstanceOf(RealtimeRequestError)
+    expect(call.error).toMatchObject({ code: "timeout" })
+  })
+
+  it("refuses to send a request frame through send or request, which have no correlation", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const before = harness.factory.latest.sent.length
+    const frame = { kind: "client.command", id: "x", name: "n" } as const
+
+    expect(harness.transport.send(frame)).toBe(false)
+    await expect(harness.transport.request(frame)).rejects.toMatchObject({ code: "bad_request" })
+    expect(harness.factory.latest.sent.length).toBe(before)
+  })
+
+  it("rejects every pending call with ConnectionLostError when the socket drops", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const first = track(harness.transport.command("a"))
+    const second = track(harness.transport.query("b"))
+
+    harness.factory.latest.dropFromPeer()
+    await drainMicrotasks()
+
+    expect(first.error).toBeInstanceOf(ConnectionLostError)
+    expect(second.error).toBeInstanceOf(ConnectionLostError)
+    expect(harness.transport.pendingCalls).toBe(0)
+  })
+
+  it("does not resolve a call from the previous socket with an answer on the next one", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const call = track(harness.transport.query("a"))
+    const [frame] = requestFrames(harness)
+    harness.factory.latest.dropFromPeer()
+    await harness.clock.advance(1_000)
+    await drainMicrotasks()
+
+    harness.factory.latest.receive(
+      JSON.stringify({ kind: "server.result", requestId: frame.id, payload: "stale" }),
+    )
+    await drainMicrotasks()
+
+    expect(call.error).toBeInstanceOf(ConnectionLostError)
+    expect(call.value).toBeUndefined()
+  })
+
+  it("rejects pending calls when the transport is stopped", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const call = track(harness.transport.query("a"))
+
+    harness.transport.stop()
+    await drainMicrotasks()
+
+    expect(call.error).toBeInstanceOf(ConnectionLostError)
+  })
+
+  it("rejects at once when there is no open socket", async () => {
+    const harness = createHarness()
+
+    await expect(harness.transport.command("a")).rejects.toBeInstanceOf(ConnectionLostError)
+    expect(harness.transport.pendingCalls).toBe(0)
+  })
+
+  it("rejects bad_request without sending when the payload cannot be encoded", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const before = harness.factory.latest.sent.length
+
+    const call = harness.transport.command("a", { big: 10n })
+
+    await expect(call).rejects.toMatchObject({ code: "bad_request" })
+    expect(harness.factory.latest.sent.length).toBe(before)
+    expect(harness.transport.pendingCalls).toBe(0)
+  })
+
+  it("ignores an answer for a request id it never sent", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const call = track(harness.transport.query("a"))
+
+    harness.factory.latest.receive(
+      JSON.stringify({ kind: "server.result", requestId: "nobody", payload: 1 }),
+    )
+    await drainMicrotasks()
+
+    expect(call.settled).toBe(false)
+    expect(harness.transport.pendingCalls).toBe(1)
+  })
+
+  it("keeps heartbeat pongs and the sync handshake working alongside requests", async () => {
+    const harness = createHarness()
+    await harness.open()
+    void harness.transport.query("a")
+
+    harness.factory.latest.receive(JSON.stringify({ kind: "server.ping", id: "p1" }))
+
+    expect(harness.factory.latest.frames()).toContainEqual({ kind: "client.pong", id: "p1" })
+    expect(harness.degraded).toEqual([])
   })
 })
 

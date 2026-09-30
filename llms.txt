@@ -1123,13 +1123,18 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `AuthGateError` (class), `jsr:@spy4x/realtime`: The reconnect gate refused.
 - `BackoffConfig` (interface), `jsr:@spy4x/realtime`: Shape of the backoff schedule.
 - `BackoffOptions` (interface), `jsr:@spy4x/realtime`: One call's inputs.
+- `CallOptions` (interface), `jsr:@spy4x/realtime`: Options for one ClientTransport.query.
 - `ChangeHint` (interface), `jsr:@spy4x/realtime`: A hint that a group moved to `sequence`.
-- `ClientMessage` (type), `jsr:@spy4x/realtime`: Frames a client sends.
+- `ClientCommandMessage` (interface), `jsr:@spy4x/realtime`: A request for the server to do something: change state.
+- `ClientMessage` (type), `jsr:@spy4x/realtime`: Frames a client sends: liveness, the sync handshake, and requests.
+- `ClientQueryMessage` (interface), `jsr:@spy4x/realtime`: A request to read.
+- `ClientRequestMessage` (type), `jsr:@spy4x/realtime`: A request frame, either kind.
 - `ClientTransport` (class), `jsr:@spy4x/realtime`: A reconnecting client transport over an injected socket factory.
 - `ClientTransportOptions` (interface), `jsr:@spy4x/realtime`: Options for ClientTransport.
 - `Clock` (interface), `jsr:@spy4x/realtime`: Time source and timer factory.
 - `CloseHandler` (type), `jsr:@spy4x/realtime`
 - `CloseReason` (enum), `jsr:@spy4x/realtime`: Why a connection left the registry.
+- `CommandOptions` (interface), `jsr:@spy4x/realtime`: Options for one ClientTransport.command.
 - `ConnectTimeoutError` (class), `jsr:@spy4x/realtime`: A socket did not open inside the connect-attempt timeout.
 - `ConnectionHandle` (interface), `jsr:@spy4x/realtime`: Identifies one socket of one user.
 - `ConnectionLostError` (class), `jsr:@spy4x/realtime`: The socket closed while a request was outstanding, or a send was attempted while closed.
@@ -1157,12 +1162,20 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `PersistentCursorStore` (class), `jsr:@spy4x/realtime`: A CursorTracker whose state survives a reload.
 - `PersistentCursorStoreOptions` (interface), `jsr:@spy4x/realtime`: Options for PersistentCursorStore.
 - `PongTimeoutError` (class), `jsr:@spy4x/realtime`: The peer stopped answering pings.
+- `REALTIME_ERROR_CODES` (constant), `jsr:@spy4x/realtime`: Every error code a `server.error` frame may carry.
+- `RealtimeErrorCode` (type), `jsr:@spy4x/realtime`: One of REALTIME_ERROR_CODES.
+- `RealtimeRequestError` (class), `jsr:@spy4x/realtime`: A request that failed with a typed code.
 - `RecipientResolver` (type), `jsr:@spy4x/realtime`: Resolves the users entitled to see one change.
 - `RegistryCloseInfo` (interface), `jsr:@spy4x/realtime`: What a close handler is told.
+- `RequestContext` (interface), `jsr:@spy4x/realtime`: A request handed to the dispatcher.
+- `RequestDispatcher` (type), `jsr:@spy4x/realtime`: Answers one request.
 - `RequestOptions` (interface), `jsr:@spy4x/realtime`: Options for one ack-tracked ClientTransport.request.
+- `RequestTimeoutError` (class), `jsr:@spy4x/realtime`: No answer to a command or query arrived in time.
 - `SEQUENCE_START` (constant), `jsr:@spy4x/realtime`: The empty cursor, and the "from the beginning" floor.
 - `SequenceChange` (interface), `jsr:@spy4x/realtime`: A pushed change, reduced to the only fields correctness depends on.
+- `ServerErrorMessage` (interface), `jsr:@spy4x/realtime`: A failed answer to a request, correlated by `requestId`.
 - `ServerMessage` (type), `jsr:@spy4x/realtime`: Frames a server sends.
+- `ServerResultMessage` (interface), `jsr:@spy4x/realtime`: A successful answer to a request, correlated by `requestId`.
 - `SocketCloseInfo` (interface), `jsr:@spy4x/realtime`: Why and how a socket stopped.
 - `SocketFactory` (type), `jsr:@spy4x/realtime`: Creates a socket for a URL.
 - `SocketObserverPort` (interface), `jsr:@spy4x/realtime`: The inbound half of a socket, as a subscription API rather than `on*` properties.
@@ -1176,12 +1189,15 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `UserFanout` (interface), `jsr:@spy4x/realtime`: The only fan-out capability the notify path is given: explicit recipients.
 - `WireMessage` (type), `jsr:@spy4x/realtime`: Any frame in either direction.
 - `adaptWebSocket` (function), `jsr:@spy4x/realtime`: Wraps a platform `WebSocket` (or anything shaped like one) so it satisfies ManagedSocket.
+- `createError` (function), `jsr:@spy4x/realtime`: Build the failure answer to request `requestId`.
 - `createHint` (function), `jsr:@spy4x/realtime`: Build the hint a committed change is announced with.
 - `createJsonCodec` (function), `jsr:@spy4x/realtime`: JSON codec over the arktype schemas above.
+- `createResult` (function), `jsr:@spy4x/realtime`: Build the success answer to request `requestId`.
 - `createSystemClock` (function), `jsr:@spy4x/realtime`: Clock backed by the platform timers.
 - `createWebSocketFactory` (function), `jsr:@spy4x/realtime`: SocketFactory over the platform `WebSocket` constructor.
 - `findUndeclaredKey` (function), `jsr:@spy4x/realtime`: First own string key of `value` that `declared` does not list, or `null`.
 - `isChangeHint` (function), `jsr:@spy4x/realtime`: Whether a frame is a change hint, narrowing it for a caller that has already decoded.
+- `isRealtimeErrorCode` (function), `jsr:@spy4x/realtime`: Whether an unknown value is one of the closed error codes.
 - `mapReadyState` (function), `jsr:@spy4x/realtime`: Maps one native `readyState` value to this package's SocketState.
 - `nextBackoffDelay` (function), `jsr:@spy4x/realtime`: Delay before retry `attempt`, in milliseconds.
 - `toWireCursors` (function), `jsr:@spy4x/realtime`: Snapshot of the cursors a handshake advertises, in wire form.
@@ -1191,14 +1207,17 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `AckTimeoutError` (class), `jsr:@spy4x/realtime/client`: Timed out waiting for an acknowledgement.
 - `AppliedHint` (interface), `jsr:@spy4x/realtime/client`: A `change.hint` that was contiguous with the cursor and therefore applied.
 - `AuthGateError` (class), `jsr:@spy4x/realtime/client`: The reconnect gate refused.
+- `CallOptions` (interface), `jsr:@spy4x/realtime/client`: Options for one ClientTransport.query.
 - `ClientTransport` (class), `jsr:@spy4x/realtime/client`: A reconnecting client transport over an injected socket factory.
 - `ClientTransportOptions` (interface), `jsr:@spy4x/realtime/client`: Options for ClientTransport.
+- `CommandOptions` (interface), `jsr:@spy4x/realtime/client`: Options for one ClientTransport.command.
 - `ConnectTimeoutError` (class), `jsr:@spy4x/realtime/client`: A socket did not open inside the connect-attempt timeout.
 - `ConnectionLostError` (class), `jsr:@spy4x/realtime/client`: The socket closed while a request was outstanding, or a send was attempted while closed.
 - `CursorPort` (interface), `jsr:@spy4x/realtime/client`: Durable cursors: what to advertise on connect, and where a hint lands.
 - `GateResult` (interface), `jsr:@spy4x/realtime/client`: Outcome of the reconnect gate — typically `GET /api/auth/me`.
 - `PongTimeoutError` (class), `jsr:@spy4x/realtime/client`: The peer stopped answering pings.
 - `RequestOptions` (interface), `jsr:@spy4x/realtime/client`: Options for one ack-tracked ClientTransport.request.
+- `RequestTimeoutError` (class), `jsr:@spy4x/realtime/client`: No answer to a command or query arrived in time.
 - `TransportStatus` (enum), `jsr:@spy4x/realtime/client`: Where the transport is in its lifecycle.
 - `TransportStatusSnapshot` (interface), `jsr:@spy4x/realtime/client`: Snapshot of transport state, delivered to `onStatus` listeners.
 
@@ -1228,19 +1247,26 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/realtime/protocol`
 
 - `ChangeHint` (interface), `jsr:@spy4x/realtime/protocol`: A hint that a group moved to `sequence`.
+- `ClientCommandMessage` (interface), `jsr:@spy4x/realtime/protocol`: A request for the server to do something: change state.
 - `ClientLivenessMessage` (interface), `jsr:@spy4x/realtime/protocol`: A client liveness frame.
-- `ClientMessage` (type), `jsr:@spy4x/realtime/protocol`: Frames a client sends.
+- `ClientMessage` (type), `jsr:@spy4x/realtime/protocol`: Frames a client sends: liveness, the sync handshake, and requests.
+- `ClientQueryMessage` (interface), `jsr:@spy4x/realtime/protocol`: A request to read.
+- `ClientRequestMessage` (type), `jsr:@spy4x/realtime/protocol`: A request frame, either kind.
 - `ClientSyncMessage` (interface), `jsr:@spy4x/realtime/protocol`: The sync handshake: the cursors the client holds, or an explicit cold start.
 - `DecodeResult` (type), `jsr:@spy4x/realtime/protocol`: Outcome of decoding one text frame.
 - `MessageCodec` (interface), `jsr:@spy4x/realtime/protocol`: Encodes and decodes frames.
 - `ServerAckMessage` (interface), `jsr:@spy4x/realtime/protocol`: An acknowledgement, correlated to the `id` of the frame being acknowledged.
+- `ServerErrorMessage` (interface), `jsr:@spy4x/realtime/protocol`: A failed answer to a request, correlated by `requestId`.
 - `ServerHintMessage` (type), `jsr:@spy4x/realtime/protocol`: A server frame announcing a committed change.
 - `ServerLivenessMessage` (interface), `jsr:@spy4x/realtime/protocol`: A server liveness frame.
 - `ServerMessage` (type), `jsr:@spy4x/realtime/protocol`: Frames a server sends.
+- `ServerResultMessage` (interface), `jsr:@spy4x/realtime/protocol`: A successful answer to a request, correlated by `requestId`.
 - `WireMessage` (type), `jsr:@spy4x/realtime/protocol`: Any frame in either direction.
 - `clientMessageSchema` (constant), `jsr:@spy4x/realtime/protocol`: Client half of the protocol.
+- `createError` (function), `jsr:@spy4x/realtime/protocol`: Build the failure answer to request `requestId`.
 - `createHint` (function), `jsr:@spy4x/realtime/protocol`: Build the hint a committed change is announced with.
 - `createJsonCodec` (function), `jsr:@spy4x/realtime/protocol`: JSON codec over the arktype schemas above.
+- `createResult` (function), `jsr:@spy4x/realtime/protocol`: Build the success answer to request `requestId`.
 - `findUndeclaredKey` (function), `jsr:@spy4x/realtime/protocol`: First own string key of `value` that `declared` does not list, or `null`.
 - `isChangeHint` (function), `jsr:@spy4x/realtime/protocol`: Whether a frame is a change hint, narrowing it for a caller that has already decoded.
 - `serverMessageSchema` (constant), `jsr:@spy4x/realtime/protocol`: Server half of the protocol.
@@ -1259,6 +1285,8 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `MalformedFrameHandler` (type), `jsr:@spy4x/realtime/registry`
 - `OpenHandler` (type), `jsr:@spy4x/realtime/registry`
 - `RegistryCloseInfo` (interface), `jsr:@spy4x/realtime/registry`: What a close handler is told.
+- `RequestContext` (interface), `jsr:@spy4x/realtime/registry`: A request handed to the dispatcher.
+- `RequestDispatcher` (type), `jsr:@spy4x/realtime/registry`: Answers one request.
 
 ### `jsr:@spy4x/realtime/testing`
 
@@ -1947,4 +1975,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 57605f996f020641c9c646afaa47089a0825c1e9a95002cfccdf0a077b4d5e79 -->
+<!-- export surface: sha256 e9a939bba2f96ea57735966bc367c8cd9525ecebf86a8113d1a122d25cc36868 -->

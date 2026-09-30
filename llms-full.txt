@@ -2255,10 +2255,10 @@ it calls `response.clone()` first, because the same response is sent to the clie
 
 # `@spy4x/realtime`
 
-Transport mechanics for a hint-only realtime connection: a server-side
-connection registry and an aggregate-keyed notify adapter, and a client
-transport with acknowledgements, heartbeat, jittered reconnect and a
-cursor-based sync handshake.
+Transport mechanics for a realtime connection: a server-side connection
+registry and an aggregate-keyed notify adapter, request and response frames
+with typed errors, and a client transport with acknowledgements, request
+correlation, heartbeat, jittered reconnect and a cursor-based sync handshake.
 
 Generated projects today ship a 55-line `wsHub` and an 87-line SPA client with
 no acks, no heartbeat and no sync handshake. This package is that gap closed, as
@@ -2279,12 +2279,17 @@ The governing record is ADR 002 in `spy4x/template`
 everything below follows from them. Where the ADR's wording is quoted, the file
 and line are given, so a reader can check the citation rather than the summary.
 
-1. **No mutations over the socket.** REST is the external application protocol;
-   the socket carries liveness, a sync handshake and change hints.
-   `ClientMessage` has no mutation frame and `ServerMessage` has none either —
-   there is nothing here to validate, authorize or dispatch. (See _Divergence_
-   below: this is ADR 001's rule, which ADR 002 supersedes for `apps/spa`. It is
-   what issue #19 requires and what the extraction inventory targets.)
+1. **The socket carries request envelopes, and nothing about what they mean.**
+   Besides liveness, the sync handshake and change hints, the socket carries
+   `client.command` and `client.query` frames, answered by `server.result` or
+   `server.error`. This package validates the envelope (arktype), correlates
+   each answer to its request id, bounds how many requests one connection may
+   have in flight, times requests out and rejects them when the socket drops.
+   It never interprets a command or query name or payload, never authorizes and
+   never dispatches: a host registers one dispatcher with `registry.onRequest`
+   and maps names to its own buses. Authorization lives in that host code
+   (ADR 002, Consequences), not in the transport. (ADR 002:50 requires exactly
+   this; earlier versions of this package declined it. See _Divergence_ below.)
 2. **A push carries a sequence.** ADR 002:60-61 — "Servers push committed
    changes over the socket, stamped with the per-group `next_change_sequence`
    they were committed at." A hint names a group and that sequence, and no entity
@@ -2303,40 +2308,57 @@ code and the application must still converge to correct state._
 ### Where this package diverges from ADR 002, and why
 
 ADR 002:50 says "`apps/spa` speaks WebSocket for all mutations, queries and
-realtime updates", and ADR 002:132-134 makes moving authorization into the CQRS
-handlers a prerequisite for that. ADR 002:63-65 also implies a push _carries_ a
-payload, since a gap means discarding "the payload".
+realtime updates". Earlier versions of this package declined that half of the
+ADR: `ClientMessage` had no mutation frame, so it was hint-only by construction.
+`spy4x/template#79` reverses the ruling, and this package now carries request
+and response frames.
 
-This package does neither: there is no mutation frame, and a hint carries no
-data. It is the stricter position — ADR 001:64 ("REST is external application
-protocol"), the extraction inventory's target ("Target is a few hundred lines of
-hint-only transport", `docs/financy-extraction-inventory.md:52`) and the design
-doc's steady state (`sync.hint { groupId, sequence }` … "The hint carries no
-payload", `docs/design/realtime-websockets.md:90-91`) — chosen because issue #19
-schedules it that way and because it is the shape that satisfies ADR 002's own
-governing test trivially.
+What still holds, and is the reason the change is additive rather than a second
+application surface:
 
-The divergence is deliberate and load-bearing, not an oversight: widening this
-protocol to carry mutations means the socket becomes a second application surface
-with its own authorization path, which is a new ADR, not a flag on this one. A
-host cannot do it by accident — `ClientMessage` has no frame kind for it.
+- **Correctness lives in the cursor pull.** A hint still carries a sequence and
+  no entity payload; a gap still discards and pulls over REST (rules 2 and 3).
+  A request's result is not a change feed: the client does not move a cursor on
+  it.
+- **No authorization or business logic here.** The registry hands every request
+  to the host's dispatcher with the authenticated `userId` it was attached
+  with; the ADR's prerequisite (authorization inside the CQRS handlers, not in
+  route middleware) is the host's to meet, and this package gives a host nothing
+  to bypass it with.
+- **Closed, typed failures.** A client switches on `RealtimeRequestError.code`,
+  one of `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`,
+  `rate_limited`, `internal`, `timeout`. A dispatcher exception that is not a
+  `RealtimeRequestError` is answered `internal` with a fixed message; its text
+  goes to `onRequestError`, never to the client.
+- **Bounded.** One connection may have `maxInFlightRequests` (default 16)
+  unanswered requests; the next is answered `rate_limited` and takes no slot. A
+  request id already in flight is answered `bad_request`, and so is a request
+  frame that fails validation but has a readable `id`. A dispatcher that
+  outlives `requestTimeoutMs` (default 10 s) is answered `timeout` and its
+  `AbortSignal` is aborted, as it is when the connection closes. The limit
+  counts _unanswered_ requests: a request answered `timeout` frees its slot
+  while its dispatcher may still be running, so the limit bounds running work
+  only for dispatchers that honour `signal`. An answer that cannot be encoded (a
+  message over 1024 characters, a `BigInt` in the details) is replaced by a
+  generic `internal` answer.
+- **Idempotency is carried, not stored.** A `client.command` may carry an
+  `idempotencyKey`, surfaced to the dispatcher as `context.idempotencyKey`.
+  Remembering keys, replaying the first result and the 7-day sweep are the
+  host's job ("Explicitly not implemented"). A query cannot carry one.
+- **A dropped socket or a timeout has an unknown outcome.** Pending calls
+  reject with `ConnectionLostError` when the socket drops, and with
+  `RequestTimeoutError` when the client's own timeout (default 15 s, longer than
+  the server's so the server's typed `timeout` normally arrives first) expires.
+  Neither is a server answer: the command may have run. Resending with the same
+  idempotency key is the safe retry.
+- **The message unions grew.** `ClientMessage` and `ServerMessage` gained the
+  four request kinds. That is a protocol extension: code that switches
+  exhaustively over `kind` without a `default` needs the new cases. `send` and
+  `request` keep their parameter types but refuse request frames at runtime
+  (`send` returns `false`, `request` rejects): use `command` and `query`.
 
-**Ruling (architecture owner, at review of this change): hint-only stands.** The
-recorded reasoning, so a later reader does not have to re-litigate it:
-
-- Issue #19 and the extraction inventory both ask for hint-only, and the
-  inventory's own target column describes it (`:52-53`).
-- Mutating over a socket that carries no sequence and has no gap detection is
-  precisely the divergence bug this package exists to eliminate — ADR 002:63-66
-  makes the cursor pull the only correctness path, and a mutation frame would
-  put a second, weaker application path beside it.
-- Widening the protocol needs an ADR amendment **plus** the auth-into-CQRS
-  handlers work ADR 002:132-134 calls "a prerequisite, not a follow-up"; both are
-  outside issue #19's scope.
-
-The divergent text is ADR 002:50, quoted above, and it is named here rather than
-quietly ignored: this package implements the sync contract the ADR fixes and
-declines the mutation transport the ADR also describes.
+The test of any future change is still ADR 002:72-74: delete every line of
+WebSocket code and the application must still converge through the cursor pull.
 
 ### What "hint-only" buys
 
@@ -2460,6 +2482,24 @@ fan-out; the host never tracks sockets itself. `registry.onFrame` is where a
 `client.sync` handshake is answered (the sync protocol is not part of this
 package, see below).
 
+### Requests
+
+```ts
+import { RealtimeRequestError } from "@spy4x/realtime"
+
+// One dispatcher per registry. The library does not know what a name means.
+registry.onRequest(async ({ userId, kind, name, payload, idempotencyKey, signal }) => {
+  const bus = kind === "command" ? commandBus : queryBus
+  const handler = handlers.get(name)
+  if (!handler) throw new RealtimeRequestError("not_found", `unknown ${kind}: ${name}`)
+  // Authorize inside the handler with `userId`; validate `payload` with the handler's own schema.
+  return await handler({ userId, payload, idempotencyKey, signal })
+})
+```
+
+The registry options `maxInFlightRequests`, `requestTimeoutMs` and
+`onRequestError` are described in _Divergence_ above.
+
 ## Client wiring
 
 ```ts
@@ -2530,6 +2570,30 @@ Properties a caller should know, each pinned by a test:
   start. For a group that already has a cursor, `advanceTo` is monotonic and a
   lower — or negative — value is refused.
 
+### Commands and queries
+
+```ts
+try {
+  const group = await transport.command("group.rename", { groupId, title }, {
+    idempotencyKey: crypto.randomUUID(), // resend with the same key after a drop
+  })
+  const list = await transport.query("group.list", undefined, { timeoutMs: 5_000 })
+} catch (error) {
+  if (error instanceof RealtimeRequestError) {
+    switch (error.code) { // closed set: bad_request, unauthorized, forbidden, not_found,
+      case "conflict": // conflict, rate_limited, internal, timeout
+        break
+    }
+  } else if (error instanceof RequestTimeoutError || error instanceof ConnectionLostError) {
+    // No answer, or the socket dropped or was never open: the command may have run.
+  }
+}
+```
+
+`transport.pendingCalls` counts calls still waiting. `requestTimeoutMs` (default
+15 s) sets the default timeout; `send` and `request` remain liveness and
+handshake only.
+
 ## Fixed at port time
 
 Each row is a bug in the source this package redesigns, with the test that now
@@ -2578,7 +2642,8 @@ inherited without knowing it.
 
 - **The sync protocol.** Bootstrap, the pull endpoint, `authorization_revision`,
   the change log and the 7-day idempotency-key store are the server's job
-  (`spy4x/template#11`, gaps 4 and 5). This package is the transport: it decides
+  (`spy4x/template#11`, gaps 4 and 5). This package carries an
+  `idempotencyKey` on a command and stores none. This package is the transport: it decides
   _when_ a pull is needed, and hands the cursor to whatever performs it.
 - **A signals binding.** The client transport is deliberately signal-free, so it
   is testable without Preact. A binding over `onStatus`/`onChange` belongs in
