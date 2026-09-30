@@ -31,6 +31,13 @@ describe("firstSentence", () => {
     expect(firstSentence("  ")).toBe("")
   })
 
+  it("does not end a sentence at e.g. or i.e.", () => {
+    expect(firstSentence("Fetch a URL, e.g. a feed, safely. More.")).toBe(
+      "Fetch a URL, e.g. a feed, safely.",
+    )
+    expect(firstSentence("Small, i.e. bounded. More.")).toBe("Small, i.e. bounded.")
+  })
+
   it("does not end a sentence at a dot inside a name", () => {
     expect(firstSentence("Reads `Deno.env` once")).toBe("Reads `Deno.env` once")
   })
@@ -139,5 +146,7 @@ describe("generated files", () => {
     if (actual !== expected) throw new Error(`llms-full.txt is out of date. ${fix}`)
     expect(actual.startsWith("# README.md\n")).toBe(true)
     expect(actual).toContain("# net/README.md\n")
+    expect(actual).toContain("# platform/rate-limit/README.md\n")
+    expect(actual).toContain("# server/env-age64/README.md\n")
   })
 })

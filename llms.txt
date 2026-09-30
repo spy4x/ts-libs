@@ -474,7 +474,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `getDaysOfWeek` (function), `jsr:@spy4x/platform`: Read a weekday bitmask into day names.
 - `honeypotFilled` (function), `jsr:@spy4x/platform`: Whether a submitted honeypot field carries a value — a person never types into a field they cannot see, so any value here means whatever posted the form was not one.
 - `idleOperationState` (function), `jsr:@spy4x/platform`: Idle state of an operation.
-- `initials` (function), `jsr:@spy4x/platform`: Reduce a name to one or two initials, e.g.
+- `initials` (function), `jsr:@spy4x/platform`: Reduce a name to one or two initials, e.g. for an avatar's fallback face.
 - `isSilentError` (function), `jsr:@spy4x/platform`: Whether an error should stay quiet.
 - `isValidDate` (function), `jsr:@spy4x/platform`: Whether the input is a usable date: a `Date` or an ISO `YYYY-MM-DD`-prefixed string that `Date` can parse.
 - `jsonLdText` (function), `jsr:@spy4x/platform`: Serialise JSON-LD for a `<script>` body.
@@ -502,7 +502,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toggleSort` (function), `jsr:@spy4x/platform`: Advance one column through `asc` → `desc` → `off`.
 - `unwrap` (function), `jsr:@spy4x/platform`: Narrow a Result to its value, or raise.
 - `unwrapOr` (function), `jsr:@spy4x/platform`: Narrow a Result to its value, or fall back.
-- `utf8ByteLength` (function), `jsr:@spy4x/platform`: UTF-8 byte length, i.e.
+- `utf8ByteLength` (function), `jsr:@spy4x/platform`: UTF-8 byte length, i.e. what a `Content-Length` or a storage quota counts.
 
 ### `jsr:@spy4x/platform/api`
 
@@ -889,6 +889,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ULID_LENGTH` (constant), `jsr:@spy4x/platform/tokens`: Length of a ULID string: 26 Crockford base32 characters.
 - `constantTimeEquals` (function), `jsr:@spy4x/platform/tokens`: Compares two hex digests in constant time.
 - `constantTimeEqualsText` (function), `jsr:@spy4x/platform/tokens`: Compares two arbitrary strings in constant time.
+- `deriveSecret` (function), `jsr:@spy4x/platform/tokens`: A subordinate secret derived from a master secret: the lower-case hex HMAC-SHA-256 of `label` under `secret`, 64 characters.
 - `monotonicUlid` (function), `jsr:@spy4x/platform/tokens`: Generate a ULID that monotonically increases even for the same millisecond, optionally passing the current time.
 - `newOpaqueToken` (function), `jsr:@spy4x/platform/tokens`: Mints an opaque token: `raw` goes to the caller, `hash` is what the server stores.
 - `randomBase64Url` (function), `jsr:@spy4x/platform/tokens`: Cryptographically random bytes, base64url, unpadded.
@@ -1022,13 +1023,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `convertToKebabCase` (function), `jsr:@spy4x/platform/universal/text`: Convert a free-form identifier to kebab-case.
 - `filterRows` (function), `jsr:@spy4x/platform/universal/text`: Keep the rows that every word of the query matches.
-- `initials` (function), `jsr:@spy4x/platform/universal/text`: Reduce a name to one or two initials, e.g.
+- `initials` (function), `jsr:@spy4x/platform/universal/text`: Reduce a name to one or two initials, e.g. for an avatar's fallback face.
 - `levenshtein` (function), `jsr:@spy4x/platform/universal/text`: Levenshtein edit distance between two strings, computed over code points.
 - `pluralize` (function), `jsr:@spy4x/platform/universal/text`: Naive English pluraliser for UI copy.
 - `search` (function), `jsr:@spy4x/platform/universal/text`: Whether one search word occurs in one value.
 - `searchWords` (function), `jsr:@spy4x/platform/universal/text`: Split a search box's value into words.
 - `similarity` (function), `jsr:@spy4x/platform/universal/text`: Similarity of two strings in `[0, 1]`, derived from levenshtein.
-- `utf8ByteLength` (function), `jsr:@spy4x/platform/universal/text`: UTF-8 byte length, i.e.
+- `utf8ByteLength` (function), `jsr:@spy4x/platform/universal/text`: UTF-8 byte length, i.e. what a `Content-Length` or a storage quota counts.
 
 ### `jsr:@spy4x/platform/universal/time`
 
@@ -1084,7 +1085,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `headerSafeString` (constant), `jsr:@spy4x/platform/validation/predicates`: `string` that is safe to place in a header value (no control characters at all).
 - `honeypotField` (constant), `jsr:@spy4x/platform/validation/predicates`: The honeypot field: present and an empty string.
 - `isEmailAddress` (function), `jsr:@spy4x/platform/validation/predicates`: True when `value` is a bare email address (`jane@example.com`, no display name) that `@spy4x/email` would send to: a dot-atom local part and a dotted domain of at least two labels (`user@localhost` is refused), at most `MAX_ADDR_SPEC_LENGTH` (254) characters, the limit `@spy4x/email/address` exports.
-- `isHoneypotFilled` (function), `jsr:@spy4x/platform/validation/predicates`: True when a honeypot field was filled in, i.e.
+- `isHoneypotFilled` (function), `jsr:@spy4x/platform/validation/predicates`: True when a honeypot field was filled in, i.e. the submission is very likely automated.
 - `isValidTimeZoneName` (function), `jsr:@spy4x/platform/validation/predicates`: True when `Intl.DateTimeFormat` accepts `value` as a time zone.
 - `textSafeString` (constant), `jsr:@spy4x/platform/validation/predicates`: `string` that is safe as free text: TAB, LF and CR are allowed.
 - `timeZoneName` (constant), `jsr:@spy4x/platform/validation/predicates`: A time zone name `Intl` accepts.
@@ -1699,6 +1700,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createAuth` (function), `jsr:@spy4x/server/sign-in`: Builds the session middleware and guards over one SessionManager and SessionCookie.
 - `createPasswordHasher` (function), `jsr:@spy4x/server/sign-in`: Creates a PasswordHasher.
 - `generateTotpSecret` (function), `jsr:@spy4x/server/sign-in`: A new random secret: 20 bytes, base32 without padding (32 characters).
+- `secondFactorSatisfied` (function), `jsr:@spy4x/server/sign-in`: Whether a session's second-factor status lets a request through.
 - `totpEnrolment` (function), `jsr:@spy4x/server/sign-in`: The enrolment link and QR code for a secret.
 - `verifyTotp` (function), `jsr:@spy4x/server/sign-in`: Checks a code against a secret at the current time.
 
@@ -1799,7 +1801,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/time/ics`
 
-- `IcsAddress` (interface), `jsr:@spy4x/time/ics`: A calendar address: a bare mailbox address, e.g.
+- `IcsAddress` (interface), `jsr:@spy4x/time/ics`: A calendar address: a bare mailbox address, e.g. `jane@example.com`.
 - `IcsAttendee` (interface), `jsr:@spy4x/time/ics`: One `ATTENDEE` property with its optional iTIP parameters.
 - `IcsEvent` (interface), `jsr:@spy4x/time/ics`: The single VEVENT to serialise.
 - `IcsEventStatus` (enum), `jsr:@spy4x/time/ics`: RFC 5545 §3.8.1.11 `STATUS` property for a VEVENT.
@@ -1919,4 +1921,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 e326dbbef67a1f7f676dcaa1da40f6d6ae56d7f07d8a7397af565be02eba1055 -->
+<!-- export surface: sha256 86e8734fd794cdeb9b1415d1b11c96bebe60e384d5546d502d97881598dfcc5c -->

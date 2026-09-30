@@ -41,7 +41,13 @@ export function firstSentence(doc: string | undefined): string {
   const paragraph = (doc ?? "").trim().split(/\n\s*\n/)[0]
   const flat = paragraph.replace(/\{@link(?:code|plain)?\s+([^}\s|]+)(?:[\s|][^}]*)?\}/g, "$1")
     .replace(/\s+/g, " ").trim()
-  const end = flat.search(/[.!?](?:\s|$)/)
+  let end = -1
+  for (const match of flat.matchAll(/[.!?](?:\s|$)/g)) {
+    // "e.g." and "i.e." do not end a sentence.
+    if (/(?:^|\s)(?:e\.g|i\.e)$/i.test(flat.slice(0, match.index))) continue
+    end = match.index
+    break
+  }
   return end === -1 ? flat : flat.slice(0, end + 1)
 }
 
@@ -124,22 +130,39 @@ export function renderLlmsFull(readmes: { path: string; text: string }[]): strin
   return readmes.map(({ path, text }) => `# ${path}\n\n${text.trim()}\n`).join("\n")
 }
 
-/** The root README, then the README of every entry's package that has one, in package order. */
+const SKIPPED_DIRS = new Set(["node_modules", "dist", "coverage"])
+
+async function findReadmes(root: string, dir: string): Promise<string[]> {
+  const found: string[] = []
+  for await (const item of Deno.readDir(join(root, dir))) {
+    const path = `${dir}/${item.name}`
+    if (item.isDirectory) {
+      if (SKIPPED_DIRS.has(item.name) || /fixtures?$/i.test(item.name)) continue
+      found.push(...await findReadmes(root, path))
+    } else if (item.name === "README.md") found.push(path)
+  }
+  return found
+}
+
+/**
+ * The root README, then every `README.md` under each entry's package directory (nested ones such
+ * as `platform/rate-limit/README.md` included, fixture folders skipped), sorted by path.
+ */
 export async function loadReadmes(
   root: string,
   entries: Entry[],
 ): Promise<{ path: string; text: string }[]> {
-  const paths = ["README.md"]
-  for (const pkg of [...new Set(entries.map((entry) => entry.pkg))]) paths.push(`${pkg}/README.md`)
-  const readmes = []
-  for (const path of paths) {
-    try {
-      readmes.push({ path, text: await Deno.readTextFile(join(root, path)) })
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error
-    }
+  const paths = new Set<string>()
+  for (const pkg of new Set(entries.map((entry) => entry.pkg))) {
+    for (const path of await findReadmes(root, pkg)) paths.add(path)
   }
-  return readmes
+  const sorted = [...paths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  return await Promise.all(
+    ["README.md", ...sorted].map(async (path) => ({
+      path,
+      text: await Deno.readTextFile(join(root, path)),
+    })),
+  )
 }
 
 const REEXPORT = /^export\b[^"]*?from\s+"(\.{1,2}\/[^"]+)"/gms

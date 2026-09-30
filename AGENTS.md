@@ -149,7 +149,8 @@ gh pr create --fill --base main
 generated. Never edit them by hand. Adding, renaming or re-documenting an export, changing an
 `exports` map or editing a README makes `deno task test` fail until you run the command and commit
 the result. `llms.txt` lists every export for agents in other repositories; `llms-full.txt` joins
-every README.
+every README. Parallel PRs that touch an export conflict on the last line of `llms.txt`; resolve it by
+running `deno task llms` after the rebase.
 
 ## Pre-commit checklist
 

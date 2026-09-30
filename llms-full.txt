@@ -1000,8 +1000,8 @@ a Cloudflare zone and returns `{ success, output, error }`. It never throws.
 - **Zone.** Give exactly one of `zoneName` (looked up with `GET /zones?name=`; no match fails and
   names the zone; more than one match fails as ambiguous, so pass `zoneId` then) or `zoneId` (no
   lookup call). The token needs Zone Read only for the lookup, and Cache Purge.
-- **Batches.** 30 URLs per `purge_cache` call, the API's limit. It stops at the first failed call and
-  reports how many URLs were purged before it.
+- **Batches.** 30 URLs per `purge_cache` call, the API's limit. It stops at the first failed call
+  and reports how many URLs were purged before it.
 - **Timeout.** Each request runs under `AbortSignal.timeout(requestTimeoutMs)`, 10 s by default.
 - **Failures.** An HTTP error, a `200` with `success: false`, a timeout and a transport error all
   fail. API failures carry Cloudflare's error codes and messages (at most 5, each cut to 200
@@ -1901,6 +1901,322 @@ what makes it runnable under the root test task's permission grant. Two conseque
 - `types`, `config`, `uuid` — still template modules; not re-extracted here.
 - `rate-limit` — issue #4.
 - Preact components and anything that renders markup.
+
+# platform/rate-limit/README.md
+
+# `@spy4x/platform/rate-limit`
+
+Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracted from
+`mig/lib/ratelimit.ts`, `gb/apps/api/{services,middlewares}/rateLimiter.ts` and
+`caldav-mcp/main.ts`, and it closes a live gap: `template`'s auth routes ship with both
+`.use(rateLimiter)` calls commented out and no implementation anywhere in that repo.
+
+## Modules
+
+| File           | Contents                                                                                |
+| -------------- | --------------------------------------------------------------------------------------- |
+| `memory.ts`    | `MemoryRateLimiter` (in-process), `StoreRateLimiter`, the `RateLimitStore` port         |
+| `kv.ts`        | `createKvStore` over a three-method `RateLimitKv`, plus `denoKvBackend`                 |
+| `hono.ts`      | `createRateLimitMiddleware`, draft-6 `RateLimit-*` headers, `userThenIp`                |
+| `client-ip.ts` | `clientIp()` extraction order, `TrustedProxyHeader`, `clientIpBucket()`, `humanRetry()` |
+| `mod.ts`       | Barrel for every public symbol above                                                    |
+
+## Usage
+
+```ts
+import { Hono } from "hono"
+import {
+  createMemoryRateLimiter,
+  createRateLimitMiddleware,
+  userThenIp,
+} from "@spy4x/platform/rate-limit"
+
+const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 10 })
+const app = new Hono<{ Bindings: { remoteAddr?: string } }>()
+
+// `remoteAddr` reads the connection's own peer address from whatever the runtime exposes —
+// `Deno.serve`'s `server.requestIP(req)`, `Bun.serve`'s `server.requestIP(req)`, or a value an
+// earlier middleware stored. It reaches the resolver as `context.remoteAddr`.
+app.use(createRateLimitMiddleware(limiter, {
+  remoteAddr: ({ env }) => env?.remoteAddr,
+  keyResolver: userThenIp((req) => userIdFrom(req)),
+}))
+```
+
+Leave `trustedProxy` off (the default) unless a proxy in front strips and rewrites the forwarding
+headers; with it on and no proxy, the limiter is trivially defeated — see the trust boundary below.
+`trustedProxy` also accepts a single header name (`"x-real-ip"`, `"x-forwarded-for"` or
+`"cf-connecting-ip"`) instead of `true`, for a proxy — Traefik's default settings, for one — that
+rewrites only some of the three.
+
+Several instances share one store:
+
+```ts
+import { createKvStore, createStoreLimiter, denoKvBackend } from "@spy4x/platform/rate-limit"
+
+const kv = await Deno.openKv() // caller owns the handle and must close() it
+const store = createKvStore({ backend: denoKvBackend(kv) })
+const limiter = createStoreLimiter(store, { windowMs: 60_000, limit: 10 })
+```
+
+Redis or Postgres reach the same limiter by implementing `RateLimitStore` (`read`, `write`,
+`delete`) — `createStoreLimiter` is the only thing the core needs.
+
+**Same semantics as the in-process limiter**, asserted by a parity test that drives both with one
+multi-event sequence and compares `allowed` and `remaining` decision for decision. An earlier revision
+did **not** hold that invariant: the entry's TTL was derived from the bucket's _oldest_ event, so a
+bucket holding several events expired as soon as the first left the window, the next request read an
+absent key, and the window restarted early. Measured at `limit: 3` / `windowMs: 1000` the store path
+accepted **5** requests inside one window where the memory path accepted 3. The TTL now comes from the
+**newest** event (`newest + windowMs − now`) on both branches of `StoreRateLimiter`, so early expiry
+cannot happen.
+
+**Read-modify-write is not atomic across instances.** Two isolates can read the same value and both
+accept, so the effective limit under concurrency is `limit + (concurrent isolates - 1)`. The
+3-method port is what forecloses a Deno KV `atomic().check()` compare-and-swap: that is a deliberate
+design choice, not a backend limitation — a cross-instance lock per request would serialise the API
+on the limiter, and a limiter that errs one request generous is better than one that is down. If you
+need an exact count, put the counter behind a store that has an atomic increment and accept the
+round-trip.
+
+## Sliding window, not fixed
+
+A bucket holds one timestamp per _accepted_ request; only timestamps newer than `now - windowMs`
+count, so an event expires exactly `windowMs` after it happened. A fixed window would let a caller
+spend the whole budget in the last millisecond of one window and the whole budget again in the next
+— `2 * limit` in a hair over one window, which is precisely the burst this module exists to absorb.
+The boundary is half-open: an event exactly `windowMs` old no longer counts, so a 1000 ms / 1-per
+limiter allows again at exactly `t0 + 1000`, denies at `t0 + 999`, and allows at `t0 + 1001`.
+
+## Eviction policy: idle sweep, never LRU-on-insert
+
+A bucket is dropped only when **both** hold:
+
+- nothing has been checked against the key for `idleMs` (`seenAt <= now - idleMs`), and
+- its newest recorded event is older than `now - windowMs - idleMs`.
+
+So a bucket that ever recorded an event is retained for `windowMs + idleMs`, and the idle grace
+alone only retires a bucket that has no events left (every recorded event already outside its
+window). The sweep runs when `windowMs` has elapsed since the last one, or every
+`SWEEP_EVERY_CHECKS` (512) checks, whichever comes first — so a client that sends one request per key
+cannot outrun it.
+
+**Memory envelope.** At the defaults (`windowMs` 60 s, `idleMs` 600 s) a bucket lives 660 s, so
+steady-state retention is `request_rate × (windowMs + idleMs)` keys — about 660k keys at 1,000 req/s.
+**Measurement**: `MemoryRateLimiter`, one accepted event per rotated key, fixed injected clock, GC
+forced then `Deno.memoryUsage().heapUsed` read against an empty-limiter baseline, two runs.
+
+| keys    | heap delta | per bucket |
+| ------- | ---------- | ---------- |
+| 200,000 | 59.86 MB   | 299.3 B    |
+| 660,000 | 143.2 MB   | 217.0 B    |
+
+So budget **roughly 140 MiB (147 MB) at 1,000 req/s**; per-bucket cost falls as the map grows (299 B
+at 200k keys, 217 B at 660k) because the `Map`'s own overhead is amortised. One caveat the bound does
+not capture: the key is caller-supplied and unbounded, so a resolver returning a long header-derived
+string retains it for 660 s per distinct value.
+
+**Compared with `mig`,** which this replaces: `mig` prunes every `pruneIntervalMs` (600 s, its line 29)
+and deletes only buckets left _empty_ at that prune, so its bound is `request_rate × (windowMs +
+pruneInterval)` — the same 660 s shape as here, not `request_rate × windowMs`. Measured at 1,000 req/s
+that is 1.24M buckets there against 601k here: **≈1.3× overall**, not the 11× an earlier revision of
+this README claimed (that figure divided 660 s by 60 s and ignored `pruneIntervalMs`). `idleMs` is the
+knob either way: lowering it towards `windowMs` trades memory for extra sweep churn.
+
+Two consequences worth stating, because both are security properties:
+
+- **No insertion-time eviction.** Eviction is time-driven, so a request from a brand-new key can
+  never free space by pushing out an active bucket. Rotating keys does not reset an attacker's own
+  counter; only waiting does.
+- **A busy bucket is never swept.** `seenAt` alone would be wrong: a bucket whose most recent check
+  was a _rejection_ stores no event and would look idle. Both conditions are therefore required.
+- **No wall clock, and no per-event shifting.** Every timing decision goes through the injected
+  `Clock`, including the seed for the automatic sweep, and a prune costs one binary search plus one
+  `slice` rather than a `shift()` per stale event. Both regressions are now caught: seeding
+  `lastSweepAt` from `Date.now()` fails `schedules its automatic sweep from the injected clock, never
+  the wall clock`, and restoring the loop fails the array-operation guard.
+
+**A hard cap: `maxBuckets`.** The sweep bounds memory by time, which is not enough when a client can
+send keys faster than they expire. Set `maxBuckets` to bound the count as well (#220):
+
+```ts
+const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 10, maxBuckets: 100_000 })
+```
+
+When a request arrives for a **new** key and the limiter is full, it first drops every bucket with no
+accepted request inside the window. Such a bucket counts nothing, so dropping it early resets no one's
+limit. If the limiter is still full, the new key is **refused**: the decision is `allowed: false`,
+`remaining: 0`, and `retryAfterMs` is the time until the first held bucket falls idle; no bucket is
+created for it. A key the limiter already holds is served as usual. A bucket with a request inside its
+window is never evicted to make room, so the promise above holds with the cap too: a flood of new keys
+cannot push out the bucket of a client that is being limited, and so cannot reset it. The price is
+that during such a flood, first-time clients are turned away until a bucket falls idle. The drop pass
+walks every bucket, so it runs at most once until the earliest held bucket can fall idle; refusals in
+between cost no walk.
+
+Per-bucket memory is bounded by `limit` — nothing is stored for a rejected request — so a client
+hammering one key grows nothing. Across keys, the sweep is the bound. `caldav-mcp`'s map had none,
+which is a memory-exhaustion vector rather than untidiness.
+
+Rejected requests are not recorded, which is what stops a blocked client from extending its own
+window by retrying.
+
+## Key resolution
+
+`keyResolver(req)` is a parameter, never a lookup into framework state. `gb`'s only app-coupled line
+was `c.get?.("auth")`, and its optional chaining silently degraded every request to a shared
+`ip:unknown` bucket when the auth middleware had not run. `userThenIp(userId)` provides the
+`user:<id>` / `ip:<addr>` shape; anything else is the caller's own resolver.
+
+## `clientIp` trust boundary
+
+**Only an address is accepted.** A trusted header's first hop counts only when it is exactly one IPv4
+or IPv6 address; anything else (a port, brackets, a zone id, a hostname, a 64 KB string) is treated as
+if the header were absent, so the next source is used and in the end the peer address. Every address
+`clientIp` returns is in one canonical spelling from `normalizeIp` in `@spy4x/net/ip`: `2001:DB8::1`
+and `2001:db8::1` are one client, and an IPv4-mapped `::ffff:192.0.2.1` is returned as `192.0.2.1`
+(#220). Earlier versions returned a forged header verbatim, so every distinct string became its own
+bucket.
+
+**Trusting a header only from known proxies.** The fourth parameter's `trustedProxies` lists CIDR
+ranges (#221). The header is then read only when the peer address lies inside one of them; any other
+peer, and a request with no peer address, is keyed on its own address. An empty list trusts no one,
+and a malformed range throws a `RangeError` on every call, so a typo shows up on the first request.
+This is what makes `CF-Connecting-IP` safe on a server that is also reachable around Cloudflare:
+
+```ts
+import { clientIp } from "@spy4x/platform/rate-limit"
+
+const CLOUDFLARE = ["173.245.48.0/20", "104.16.0.0/13", "2400:cb00::/32" /* … the full list */]
+
+// Traefik writes X-Real-IP (the address that connected to it); believe CF-Connecting-IP only when
+// that address is a Cloudflare edge.
+const peer = clientIp(req, socketAddress, "x-real-ip")
+const ip = clientIp(req, peer, "cf-connecting-ip", { trustedProxies: CLOUDFLARE })
+```
+
+No provider's range list ships with this package: those lists change, so the caller keeps its own.
+`userThenIp` takes the same `trustedProxies` option.
+
+**IPv6 clients are keyed on their /64.** One ordinary IPv6 allocation is a whole /64, 2^64 addresses
+its holder can pick from, so a per-address key never limits it (#219). `userThenIp` therefore keys an
+IPv6 client as `ip:2001:db8:1:2::/64`; IPv4 keys are unchanged. `ipv6PerAddress: true` restores one
+key per IPv6 address. Outside the middleware, `clientIpBucket(ip)` does the same reduction:
+
+```ts
+import { clientIp, clientIpBucket, rateLimitKey, RateLimitKind } from "@spy4x/platform/rate-limit"
+
+const key = rateLimitKey(RateLimitKind.Ip, clientIpBucket(clientIp(req, socketAddress)))
+```
+
+With `trustedProxy: false` (the default) only the transport peer address is used. With
+`trustedProxy: true` the order is `CF-Connecting-IP` > first `X-Forwarded-For` hop > `X-Real-IP` >
+peer address. `X-Forwarded-For` is read hop by hop, never as a whole string, because a client
+controls the leading part of that list. Passing one `TrustedProxyHeader` string
+(`"cf-connecting-ip" | "x-forwarded-for" | "x-real-ip"`) instead of `true` reads only that header,
+first hop, then falls back to the peer address — the other two headers are never consulted.
+
+**Every one of those headers is client-controlled unless a proxy strips and rewrites it, and which
+headers a given proxy rewrites differs by proxy** — `trustedProxy: true` trusts all three, which is
+wrong for a proxy that only rewrites some of them:
+
+- **Traefik**, with default settings (an empty `forwardedHeaders.trustedIPs`), overwrites
+  `X-Forwarded-For` and `X-Real-IP` for every client, but passes `CF-Connecting-IP` through
+  untouched. A client behind Traefik can set `CF-Connecting-IP` to anything it likes, so
+  `trustedProxy: true` behind Traefik reads a forged value first. Pass `trustedProxy: "x-real-ip"`
+  (or `"x-forwarded-for"`) instead, so `CF-Connecting-IP` is never read — **but only when
+  `trustedIPs` is empty.** Set `forwardedHeaders.trustedIPs` to trust an upstream proxy in front of
+  Traefik (the Cloudflare → Traefik layout, listing Cloudflare's ranges) and Traefik stops rewriting
+  from scratch: it keeps that upstream's `X-Real-IP` as it arrived and appends its own hop to
+  `X-Forwarded-For` instead of replacing it. `X-Real-IP` and every hop but the last of
+  `X-Forwarded-For` are then only as trustworthy as the upstream was — a client can still forge
+  `X-Real-IP` and have Cloudflare (or whatever sits in `trustedIPs`) pass it straight through, and a
+  test against Traefik 3.5.6 confirmed it: with `trustedIPs: ["127.0.0.1/32"]`, a
+  client-forged `X-Real-IP: 192.0.2.1` reached the backend unchanged. Behind Cloudflare → Traefik
+  with Cloudflare's ranges in `trustedIPs`, trust `"cf-connecting-ip"` instead — Cloudflare sets that
+  header itself and Traefik never rewrites it either way, so `trustedIPs` does not weaken it.
+  `"x-real-ip"` is the right choice only when nothing reachable by a client is listed in
+  `trustedIPs`.
+- **Cloudflare** sets `CF-Connecting-IP` itself. `trustedProxy: "cf-connecting-ip"` is the narrow
+  equivalent of `true` behind Cloudflare alone.
+- **nginx** writes only the headers its own config sets with `proxy_set_header` — there is no
+  built-in default to name here; check the site config for which header (typically
+  `X-Real-IP` and/or `X-Forwarded-For`) it actually rewrites before trusting either.
+
+A client that reaches the origin directly, with no proxy at all, can forge any of the three, so the
+trusted-proxy boundary is always the caller's responsibility. The middleware supports every point on
+that spectrum:
+
+- **Behind a proxy that rewrites every header you might read:** pass `trustedProxy: true` to
+  `userThenIp`. Nothing else is needed.
+- **Behind a proxy that rewrites only one header** (Traefik's default, most nginx configs): pass
+  that header's name, e.g. `trustedProxy: "x-real-ip"`.
+- **No such proxy:** leave `trustedProxy` at its default (`false`) and wire `remoteAddr`, which
+  `keyResolver` receives as `context.remoteAddr` (see Usage). Keys then follow the connection's own
+  peer address, which a client cannot set.
+
+Without a `remoteAddr` accessor the resolver has no peer address at all and falls back to the
+placeholder `clientIp` returns, `0.0.0.0` — and **every** header-less client then shares one bucket,
+so one caller exhausting it denies the rest. This used to happen silently; `createRateLimitMiddleware`
+now **requires** a `remoteAddr` resolver and throws at construction time without one, so the shared
+bucket can only happen because a caller wrote `remoteAddr: () => undefined` and meant it, not because
+the option was left out. If you cannot obtain a peer address, pass that no-op explicitly, treat the
+shared bucket as a backstop, and front the service with a proxy.
+
+**Where the trust decision lives.** Exactly three places can consult a forwarding header, and all
+three default to not trusting one: `clientIp`'s `trustedProxy` parameter, `userThenIp`'s
+`trustedProxy` option, and the `keyResolver` you write — which sees a header only if you read one.
+There is deliberately no fourth. This package used to export a `resolveIdentityKey` helper that built
+a key from a `Request` plus a peer address passed as a plain string; its `trustedProxy` default was
+`true`, it duplicated `userThenIp`, and it made the peer-address mitigation unreachable, because a
+`Request` carries no peer address, so that option could only ever be fed by a side channel. A caller
+wiring the two obvious arguments got a limiter that 200 rotating `X-Forwarded-For` values at
+`limit: 3` walked straight through. It is removed rather than kept as a second public entry point with
+a security-relevant default; compose `clientIp` with `rateLimitKey` yourself if you need a key
+outside the middleware, stating explicitly which of the two you want.
+
+## Headers
+
+Draft-6, matching `standardHeaders: "draft-6"` in the `gb` source:
+
+| Header                | Value                                                           |
+| --------------------- | --------------------------------------------------------------- |
+| `RateLimit-Limit`     | requests allowed per window                                     |
+| `RateLimit-Remaining` | requests left in the window, never negative                     |
+| `RateLimit-Reset`     | seconds until the window has room (or until the retry succeeds) |
+| `Retry-After`         | the same countdown, on a 429 only                               |
+
+Every value is a whole number of seconds rendered as a decimal string — no fractions, no negatives,
+rounded up, because rounding down advertises a retry that the limiter still rejects. Draft-7's
+combined `RateLimit` field is not emitted.
+
+## Notes
+
+- **Not ported:** `lyrics-populator/src/sources/rate-limiter.ts`, a 36-LOC min-gap spacer that is not
+  per-key or per-host (MusicBrainz and CoverArtArchive hold separate instances, so their shared
+  1 req/s was never enforced) and has no burst, concurrency cap, 429/503 backoff or jitter. The
+  limiter here supersedes it.
+- **Not here:** quota and usage accounting (`offer-lens/apps/api/services/demo-usage.ts`) — metering
+  is a separate concern with a different lifetime.
+- **Not installed:** `hono-rate-limiter` and `rate-limit-redis`. The first is this middleware; the
+  second would make a Redis client a hard dependency of the limiter core, which is what the
+  `RateLimitStore` port avoids.
+- `Deno.openKv()` is the one call with no test: it needs `--unstable-kv` (plus a writable path), and
+  the repo's `deno test` grants only `--allow-read --allow-env`. Everything around it is covered —
+  `denoKvBackend` consumes a `DenoKvLike` port, so it is tested against a fake handle (namespace key
+  shape, `{ value }` unwrapping, `{ value: null }` treated as absent, `expireIn` pass-through
+  including no-TTL ≠ TTL 0, `delete`, and a limiter driven end to end through it), and the store
+  logic on top is covered too, including cross-store parity.
+
+## Counting failures only
+
+`skipSuccessful: true` on `createRateLimitMiddleware` spends the budget on failed requests only
+(status 400 or above), for a one-time-code or password step where a correct answer must not lock
+its owner out. Pass a function `(response) => boolean` to decide what counts as success. The slot
+is reserved before the handler and given back after a successful response through the limiter's
+`refund`, so a burst of parallel wrong guesses still stops at `limit`. Both limiters in `memory.ts`
+implement `refund`; a custom limiter must too. A predicate must not read the response body unless
+it calls `response.clone()` first, because the same response is sent to the client afterwards.
 
 # realtime/README.md
 
@@ -3729,7 +4045,9 @@ request. A store that caches must drop or update its entry on every write the in
 
 **Guards fail closed.** `isAuthenticated1FA` needs a valid session. `isAuthenticated2FA` also needs
 the second factor settled: `Completed`, or `NotRequired` for a user whose `hasSecondFactor` is false.
-A `Pending` session stays refused after the user removes their second factor until the app calls
+The same rule is exported as `secondFactorSatisfied(status, hasSecondFactor)` for an app that
+checks a session outside the guards. A `Pending` session stays refused after the user removes
+their second factor until the app calls
 `sessions.clearPendingSecondFactors(userId)`. Call it right after removing the TOTP secret, in the
 same transaction when there is one: `createPostgresSessionStore(tx).clearPendingSecondFactors(userId)`
 inside the caller's `sql.begin` commits or rolls back with the secret's removal. It turns every
@@ -4128,6 +4446,151 @@ required: a unique index on `(aggregate_type, aggregate_id, aggregate_version, e
 what makes a retried `INSERT` (after a crash between the state change and the outbox row) idempotent
 instead of writing the event twice — the template had this index; it is not enforced here because
 the repository reads and updates rows but never creates or migrates the table.
+
+# server/env-age64/README.md
+
+# `@spy4x/server/env-age64`
+
+Per-value env-file encryption: `KEY=age64:<base64 of an age ciphertext>`. Every value is encrypted
+on its own, so a re-encrypt of an unchanged `.env` leaves `.env.age` byte-identical — no diff noise
+in git for values that didn't change, and only the changed line moves when one does.
+
+Cryptography runs in-process with [`jsr:@age/age-encryption`](https://jsr.io/@age/age-encryption)
+(typage, the official TypeScript implementation of [age](https://age-encryption.org)). Nothing here
+shells out to the `age` binary, so no caller ever needs `--allow-run`.
+
+## Quick start
+
+```bash
+deno add jsr:@spy4x/server
+```
+
+```jsonc
+// deno.json / deno.jsonc, "tasks"
+{
+  "env:encrypt": "deno run -R -W=. jsr:@spy4x/server/env-age64/cli encrypt",
+  "env:decrypt": "deno run -R -W=. jsr:@spy4x/server/env-age64/cli decrypt"
+}
+```
+
+```bash
+deno task env:encrypt   # every .env* under cwd -> its .env*.age sibling
+deno task env:decrypt   # every .env*.age under cwd -> its plaintext sibling
+```
+
+`cli.ts` also has a `status` command (prints whether a key is present and which files were found)
+and a `keygen` command (writes a fresh `.age/key.txt`, refusing to overwrite an existing one).
+
+## The key
+
+A project's identity lives at `<root>/.age/key.txt`, in the same format `age-keygen -o key.txt`
+writes:
+
+```
+# created: 2026-09-24T12:00:00.000Z
+# public key: age1...
+AGE-SECRET-KEY-1...
+```
+
+`<root>/.age/key.txt` should be gitignored — it is the one file that must never be committed. In a
+linked git worktree that hasn't copied its own key yet, the key lookup falls back to the MAIN
+checkout's key: it finds the main checkout by reading the worktree's `.git` file (a `gitdir: ...`
+pointer) and that directory's `commondir` file, never by running `git` or reading a `GIT_*`
+environment variable. That is deliberate: a parent process (a pre-commit hook running its own git
+command, say) may have exported `GIT_DIR`/`GIT_COMMON_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` to steer
+ITS OWN git invocation, and those variables are simply never read here — there is nothing for them
+to poison.
+
+## API
+
+| Export                               | What it does                                                                        |
+| ------------------------------------ | ----------------------------------------------------------------------------------- |
+| `encryptEnvFiles(root)`              | Re-encrypts every `.env*` under `root` to its `.env*.age` sibling (mode `0644`)     |
+| `decryptEnvFiles(root)`              | Decrypts every `.env*.age` under `root` to its plaintext sibling (mode `0600`)      |
+| `ageStatus(root)`                    | `{ keyPresent, recipient?, envFiles, ageFiles }` — no decryption                    |
+| `generateAgeKey(root)`               | Writes a fresh `.age/key.txt` (mode `0600`); refuses to overwrite an existing one   |
+| `encryptValue(value, recipient)`     | Encrypt one value for an `age1...` recipient — no filesystem involved               |
+| `decryptValue(age64Value, identity)` | Decrypt one `age64:...` value with an `AGE-SECRET-KEY-1...` identity                |
+| `parseEnvFile(content)`              | Parse an env file's lines into `EnvEntry[]`; throws on anything it can't round-trip |
+
+`readAgeKey(root)` is exported too: it returns the key file's path, identity and recipient, which
+a caller of `decryptValue` or `encryptValue` needs. The entry point also exports the types
+`AgeKey`, `AgeStatus`, `GenerateAgeKeyResult`, `EnvEntry` and `EnvAssignment`,
+`AGE64_PREFIX`, `isAge64Value`, and the two parse errors. Everything else (key lookup, discovery,
+the atomic write, the renderers) is internal, so it can change without a 2.0.
+
+## Parsing a line
+
+A comment or blank line passes through verbatim. Anything else is split on its FIRST `=` into a
+key and a value. `export KEY=value` is recognised: the keyword stays in the rendered line but is
+stripped from the reported key. `UnsupportedEnvSyntaxError` naming only the line NUMBER — never its
+text — is thrown for any of three shapes:
+
+- **No `=` at all** — most commonly a continuation of a multi-line value, which this format
+  doesn't support.
+- **A value that opens a quote (`"` or `'`) and doesn't close it on the SAME line** — the other
+  shape a multi-line value's first line takes.
+- **A key that doesn't match `^[A-Za-z_][A-Za-z0-9_.-]*$`** (after an `export` prefix is
+  stripped). This still accepts rostok-style `my-key` and `a.b` — a key isn't restricted to shell
+  identifier characters — but excludes `+` and `/`. Both checks above exist because of this one:
+  a continuation line of an UNQUOTED multi-line value can itself contain `=` (base64 padding),
+  and a naive first-`=` split would read the text before that `=` as a "key" and encrypt only the
+  text after it — leaving the rest of the secret sitting in `.env.age` as a plaintext "key name".
+  Rejecting `+`/`/` in a key closes that hole for most base64 continuation lines, but not all:
+  roughly one random 64-character base64 line in eight contains neither. **A continuation line
+  of an unquoted multi-line value made of letters and digits followed by `=` padding is still
+  read as a key, and that key is committed in plaintext.** That shape was never valid dotenv in
+  either source repo, and detecting it would need multi-line lookahead this parser doesn't do.
+  Quote every multi-line value, as the second check above requires, and this case cannot arise.
+- **A carriage return anywhere in a line** (a lone `\r`, or a file with old Mac line endings).
+  CRLF files get their own clearer error first. A lone `\r` would encrypt, but decrypt refuses
+  to write a value containing a line break, so the committed `.env.age` could not be decrypted.
+
+A comment line is copied into `.env.age` as it is, including a commented-out secret such as
+`# OLD_TOKEN=…`. Both source repos did the same, and the format is kept. Delete a secret rather
+than commenting it out.
+
+A rejected line's text never reaches the error message either way: it is exactly the shape most
+likely to be a secret, and an error message is a place that leaks (stderr, CI logs, an
+error-reporting service).
+
+## What it refuses
+
+- A line with no `=`, an unterminated quote, or an invalid key name — see "Parsing a line" above.
+- CRLF line endings — `CrlfNotSupportedError`. Convert the file to LF first.
+- A decrypted value containing `\n` or `\r` — writing it verbatim would inject an extra line into
+  the plaintext `.env` that a later parse could read back as an unrelated assignment.
+- Writing through a symlink, or over any non-regular file — the write is refused before it
+  happens; nothing the symlink points to is ever touched. A named pipe, socket or device node
+  found while scanning for `.env*` files is silently skipped rather than opened (opening a FIFO
+  with nothing writing to it blocks forever).
+- A plaintext value found inside a `.env.age` during decrypt — a sign the file was hand-edited or
+  corrupted, surfaced instead of silently passed through.
+- Overwriting an existing `.age/key.txt` with a freshly generated one — race-free: the check can't
+  be fooled by two concurrent `keygen` runs.
+- Generating a key in a worktree that already resolves (via the main checkout) to a working key —
+  that would shadow it instead of replacing anything.
+- A file named `*.sops-backup` or `*.sops-backup.age`, matching rostok's own exclusion, so a
+  leftover from the SOPS-to-age64 migration in a project's history is never treated as live.
+
+A decrypted value is never trimmed — unlike rostok, which ran every decrypted value through
+`.trim()`, silently discarding real leading/trailing whitespace a value might have had on purpose.
+The newline/carriage-return rejection above catches the corruption trimming used to paper over
+(an errant line break coming out of a decrypt), without ever discarding whitespace that belongs.
+
+The recipient this module encrypts for is always DERIVED from the identity
+(`identityToRecipient`), never read from the key file's `# public key:` comment — that comment is
+just text, and trusting a stale or hand-edited one would mean encrypting for a recipient the real
+identity can't decrypt.
+
+## Origin (#173)
+
+Ported from two existing copies. rostok's `cli/age.ts`/`cli/encrypt.ts` supplied the worktree-aware
+key lookup and the occurrence-matched renderer that keeps unchanged values' ciphertext byte-for-byte
+stable. The template's `infra/scripts/env/age.ts` supplied the atomic write, the fixed file modes,
+the symlink/non-regular refusal, `export KEY=` support, and rejecting unsupported syntax instead of
+silently mangling it. See the PR that added this module for the full list of what was moved, what
+was rewritten, and every bug fixed over either source.
 
 # time/README.md
 
