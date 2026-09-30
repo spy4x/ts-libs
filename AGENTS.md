@@ -143,6 +143,14 @@ docs: document the workspace member rule
 gh pr create --fill --base main
 ```
 
+## Generated files
+
+`docs/1.0-contract.md` (`deno task contract`), `llms.txt` and `llms-full.txt` (`deno task llms`) are
+generated. Never edit them by hand. Adding, renaming or re-documenting an export, changing an
+`exports` map or editing a README makes `deno task test` fail until you run the command and commit
+the result. `llms.txt` lists every export for agents in other repositories; `llms-full.txt` joins
+every README.
+
 ## Pre-commit checklist
 
 ```bash
@@ -179,6 +187,7 @@ that can silently skip when its dependency is missing must fail loudly instead.
 | `deno task services:logs`    | logs of the four containers                                |
 | `deno task publish:dry`      | `deno publish --dry-run` over the workspace; CI runs it    |
 | `deno task contract`         | regenerate `docs/1.0-contract.md` from `deno doc` (#77)    |
+| `deno task llms`             | regenerate `llms.txt` and `llms-full.txt` (#297)           |
 | `deno task fix`              | `lint --fix` then format                                   |
 
 If `deno task check` fails because the lockfile is stale, run the task that needs the new dependency
