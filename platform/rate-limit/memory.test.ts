@@ -624,3 +624,41 @@ describe("rateLimitKey", () => {
     assertEquals(rateLimitKey(RateLimitKind.User, "42", "chart:"), "chart:user:42")
   })
 })
+
+describe("refund", () => {
+  it("frees the slot of the latest allowed request in memory", () => {
+    const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 2, clock: () => T0 })
+    limiter.check("a")
+    limiter.check("a")
+    assertEquals(limiter.check("a").allowed, false)
+    limiter.refund("a")
+    assertEquals(limiter.check("a").allowed, true)
+    assertEquals(limiter.check("a").allowed, false)
+  })
+
+  it("does nothing in memory for a key with no events", () => {
+    const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 1, clock: () => T0 })
+    limiter.refund("never-seen")
+    assertEquals(limiter.check("never-seen").allowed, true)
+    assertEquals(limiter.check("never-seen").allowed, false)
+  })
+
+  it("frees the slot of the latest allowed request through a store", async () => {
+    const store = fakeStore()
+    const limiter = createStoreLimiter(store, { windowMs: 1000, limit: 2, clock: () => T0 })
+    await limiter.check("a")
+    await limiter.check("a")
+    assertEquals((await limiter.check("a")).allowed, false)
+    await limiter.refund("a")
+    assertEquals((await limiter.check("a")).allowed, true)
+    assertEquals((await limiter.check("a")).allowed, false)
+  })
+
+  it("removes the key from the store when the last event is refunded", async () => {
+    const store = fakeStore()
+    const limiter = createStoreLimiter(store, { windowMs: 1000, limit: 2, clock: () => T0 })
+    await limiter.check("a")
+    await limiter.refund("a")
+    assertEquals(store.entries.has("a"), false)
+  })
+})

@@ -251,6 +251,16 @@ export class MemoryRateLimiter {
     }
   }
 
+  /**
+   * Give back the slot the latest allowed `check` for `key` took: drops the newest recorded event.
+   * A no-op when the key holds none. Used by the middleware's `skipSuccessful` option.
+   */
+  refund(key: string): void {
+    const bucket = this.buckets.get(key)
+    if (bucket === undefined) return
+    bucket.events.pop()
+  }
+
   /** Drop a bucket, so the next request for `key` starts a fresh window. */
   reset(key: string): void {
     this.buckets.delete(key)
@@ -420,6 +430,20 @@ export class StoreRateLimiter {
     }
   }
 
+  /**
+   * Give back the slot the latest allowed `check` for `key` took: drops the newest recorded event.
+   * Read-modify-write like `check`, so it is as (non-)atomic across instances as `check` is.
+   */
+  async refund(key: string, now: number = this.clock()): Promise<void> {
+    const cutoff = now - this.windowMs
+    const recorded = await this.store.read(key, now)
+    const events = (recorded ?? []).filter((event) => event > cutoff)
+    if (events.length === 0) return
+    events.pop()
+    if (events.length === 0) await this.store.delete(key)
+    else await this.store.write(key, events, now, storeTtlMs(events, this.windowMs, now))
+  }
+
   /** Drop the recorded window for `key`. */
   async reset(key: string): Promise<void> {
     await this.store.delete(key)
@@ -430,6 +454,11 @@ export class StoreRateLimiter {
 export interface RateLimiter {
   check(key: string, now?: number): RateLimitDecision | Promise<RateLimitDecision>
   reset(key: string, now?: number): void | Promise<void>
+  /**
+   * Give back the slot the latest allowed `check` for `key` took. Optional; the middleware's
+   * `skipSuccessful` option needs it and refuses to build without it.
+   */
+  refund?(key: string, now?: number): void | Promise<void>
 }
 
 /** Build an in-process limiter. */

@@ -109,6 +109,7 @@ const optionsSchema = arkType({
   "status?": "400 <= number.integer <= 599",
   "keyPrefix?": "string",
   "headers?": "object",
+  "skipSuccessful?": "boolean | Function",
 })
 
 /**
@@ -183,6 +184,24 @@ export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never
   keyPrefix?: string
   /** Header names to write. Defaults to {@link RATE_LIMIT_HEADERS}. */
   headers?: Partial<RateLimitHeaderNames>
+  /**
+   * Spend the budget on failed requests only, for a check such as a one-time-code or password
+   * step: a correct answer must never lock its owner out, while wrong ones still run out.
+   *
+   * `true` counts a response as successful when its status is below 400. A function receives the
+   * response and returns true for one that must not spend the budget; it may be async.
+   *
+   * The slot is **reserved before the handler runs** and given back afterwards when the response
+   * is successful. Reserving first, instead of only reading the budget and counting afterwards,
+   * keeps the limit honest under concurrency: a burst of parallel wrong guesses that all start
+   * before the first one finishes still stops at `limit`. The cost is that a request in flight
+   * holds a slot, so a burst of parallel correct requests can see a 429 until earlier ones finish.
+   * A handler that throws keeps its slot spent.
+   *
+   * The limiter must implement `refund`; both limiters in `memory.ts` do, and the factory throws
+   * for one that does not. `RateLimit-Remaining` on a successful response reflects the give-back.
+   */
+  skipSuccessful?: boolean | ((response: Response) => boolean | Promise<boolean>)
 }
 
 /**
@@ -239,6 +258,19 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
   const status = (parsed.status ?? 429) as RejectionStatus
   const prefix = parsed.keyPrefix ?? ""
   const headers: RateLimitHeaderNames = { ...RATE_LIMIT_HEADERS, ...options.headers }
+  const skip = parsed.skipSuccessful
+  const isSuccessful: ((response: Response) => boolean | Promise<boolean>) | undefined =
+    skip === true
+      ? (response) => response.status < 400
+      : typeof skip === "function"
+      ? skip as (response: Response) => boolean | Promise<boolean>
+      : undefined
+  const refund = rateLimiter.refund?.bind(rateLimiter)
+  if (isSuccessful !== undefined && refund === undefined) {
+    throw new Error(
+      "invalid rate limit middleware options: skipSuccessful needs a limiter with refund()",
+    )
+  }
 
   return async (c, next) => {
     const request = c.req.raw
@@ -261,6 +293,13 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
 
     if (decision.allowed) {
       await next()
+      if (isSuccessful !== undefined && await isSuccessful(c.res)) {
+        await refund?.(key)
+        c.res.headers.set(
+          headers.remaining,
+          String(Math.min(decision.limit, decision.remaining + 1)),
+        )
+      }
       return
     }
     return c.json({ error: message }, status)

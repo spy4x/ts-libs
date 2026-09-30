@@ -301,3 +301,12 @@ combined `RateLimit` field is not emitted.
   shape, `{ value }` unwrapping, `{ value: null }` treated as absent, `expireIn` pass-through
   including no-TTL ≠ TTL 0, `delete`, and a limiter driven end to end through it), and the store
   logic on top is covered too, including cross-store parity.
+
+## Counting failures only
+
+`skipSuccessful: true` on `createRateLimitMiddleware` spends the budget on failed requests only
+(status 400 or above), for a one-time-code or password step where a correct answer must not lock
+its owner out. Pass a function `(response) => boolean` to decide what counts as success. The slot
+is reserved before the handler and given back after a successful response through the limiter's
+`refund`, so a burst of parallel wrong guesses still stops at `limit`. Both limiters in `memory.ts`
+implement `refund`; a custom limiter must too.
