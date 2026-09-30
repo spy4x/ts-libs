@@ -124,6 +124,8 @@ export const vapidPublicKey = async (keys: VapidKeys): Promise<string> =>
 
 const GONE_STATUSES = new Set([404, 410])
 const MAX_PAYLOAD_ERROR_CHARS = 200
+/** 4096-byte push body minus the 86-byte header, 16-byte tag and 1-byte padding delimiter. */
+const MAX_PAYLOAD_BYTES = 3993
 const encoder = new TextEncoder()
 
 /** Sends to every stored subscription of a user. Build one with {@link createWebPushSender}. */
@@ -211,7 +213,7 @@ export const createWebPushSender = async (
         "Content-Encoding": "aes128gcm",
         "Content-Type": "application/octet-stream",
         "Urgency": pushOptions.urgency ?? "normal",
-        "TTL": String(pushOptions.ttl ?? DEFAULT_TTL_SECONDS),
+        "TTL": String(Math.max(0, Math.floor(pushOptions.ttl ?? DEFAULT_TTL_SECONDS))),
         "Authorization": authorization,
       }
       if (pushOptions.topic !== undefined) headers["Topic"] = pushOptions.topic
@@ -269,6 +271,9 @@ export const createWebPushSender = async (
           )
         }
         const bytes = encoder.encode(JSON.stringify(parsed))
+        if (bytes.length > MAX_PAYLOAD_BYTES) {
+          return failure(`push payload is ${bytes.length} bytes; the limit is ${MAX_PAYLOAD_BYTES}`)
+        }
         const subscriptions = await store.listByUser(userId)
         const deliveries = await Promise.all(
           subscriptions.map((subscription) => deliver(userId, subscription, bytes, pushOptions)),

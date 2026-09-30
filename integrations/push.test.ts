@@ -275,6 +275,22 @@ describe("web push sender", () => {
     expect(requests).toEqual([])
   })
 
+  it("sends a TTL header of whole, non-negative seconds", async () => {
+    const { sender, requests } = await build([await subscription("a")], answering(201))
+    await sender.send(USER, MESSAGE, { ttl: 59.7 })
+    await sender.send(USER, MESSAGE, { ttl: -5 })
+    const ttls = requests.map((r) => (r.init.headers as Record<string, string>)["TTL"])
+    expect(ttls).toEqual(["59", "0"])
+  })
+
+  it("refuses a payload over 3993 encoded bytes without sending", async () => {
+    const { sender, requests } = await build([await subscription("a")], answering(201))
+    const result = await sender.send(USER, { title: "t", body: "b", url: "界".repeat(2048) })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("the limit is 3993")
+    expect(requests).toEqual([])
+  })
+
   it("refuses an endpoint that is not public HTTPS and never contacts it", async () => {
     const bad = { ...(await subscription("a")), endpoint: "http://169.254.169.254/x" }
     const { sender, requests, calls } = await build([bad], answering(201))
