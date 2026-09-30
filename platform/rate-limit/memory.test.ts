@@ -704,4 +704,14 @@ describe("refund with a timestamp", () => {
     limiter.refund("a", first.at)
     assertEquals(limiter.check("a").allowed, false)
   })
+
+  it("does nothing through a store when the event already left the window", async () => {
+    const { clock, advance } = fakeClock()
+    const limiter = createStoreLimiter(fakeStore(), { windowMs: 1000, limit: 1, clock })
+    const first = await limiter.check("a")
+    advance(1000)
+    await limiter.check("a")
+    await limiter.refund("a", first.at)
+    assertEquals((await limiter.check("a")).allowed, false)
+  })
 })

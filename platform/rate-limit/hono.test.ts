@@ -618,6 +618,39 @@ describe("skipSuccessful", () => {
     )
   })
 
+  it("gives back the successful request's own slot, not a later failure's", async () => {
+    const { clock, advance } = fakeClock()
+    const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 2, clock })
+    let release = () => {}
+    const app = new Hono()
+    app.use(
+      createRateLimitMiddleware(limiter, {
+        remoteAddr: () => undefined,
+        keyResolver: () => "user:1",
+        skipSuccessful: true,
+      }),
+    )
+    app.get("/check", async (c) => {
+      if (c.req.query("code") === "held") {
+        await new Promise<void>((resolve) => release = resolve)
+        return c.text("yes")
+      }
+      return c.text("no", 401)
+    })
+    const send = (code: string) => app.request(new Request(`http://localhost/check?code=${code}`))
+
+    const held = send("held")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    advance(400)
+    assertEquals((await send("bad")).status, 401)
+    release()
+    assertEquals((await held).status, 200)
+    assertEquals((await send("bad")).status, 401)
+    // Both failures sit at T0+400, so the window is full until T0+1400.
+    advance(600)
+    assertEquals((await send("bad")).status, 429)
+  })
+
   it("keeps a redirect a redirect when the budget is given back", async () => {
     const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 3, clock: () => T0 })
     const app = new Hono()
