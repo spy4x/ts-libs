@@ -1619,9 +1619,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/server/kv`
 
+- `RateLimitRedisStore` (interface), `jsr:@spy4x/server/kv`: The part of RedisKvStore the adapter needs.
 - `RedisKvStore` (class), `jsr:@spy4x/server/kv`: A key-value store scoped to one Redis connection and one key prefix.
 - `RedisKvStoreClosedError` (class), `jsr:@spy4x/server/kv`: Thrown by every method once RedisKvStore.close has been called.
 - `RedisKvStoreConnectionError` (class), `jsr:@spy4x/server/kv`: Thrown when a call cannot get its command answered over a live connection: a fresh connection could not be opened in place of a dead one (Redis is still unreachable, or still refuses `PING`), the one resend after a reconnect failed too, or Redis did not answer within the store's fixed command bound.
+- `redisRateLimitKv` (function), `jsr:@spy4x/server/kv`: Turn a Redis store into the `RateLimitKv` port that `createKvStore` from `@spy4x/platform/rate-limit/kv` takes.
 
 ### `jsr:@spy4x/server/outbox`
 
@@ -1921,4 +1923,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 86e8734fd794cdeb9b1415d1b11c96bebe60e384d5546d502d97881598dfcc5c -->
+<!-- export surface: sha256 a2ca16ce053dbc5a2fa3ea6774506705f14dea5d28b0f0f0b1337d8074d02855 -->
