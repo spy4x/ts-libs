@@ -484,6 +484,15 @@ export class RedisKvStore {
     await this.#send(["SET", this.#prefixed(key), value, "EX", ttlSec])
   }
 
+  /**
+   * Sets a value that never expires (`SET` without `EX`), replacing any earlier value and
+   * dropping its TTL. For callers that manage lifetime themselves; {@link set} is the
+   * default for anything that should go away by itself.
+   */
+  public async setWithoutExpiry(key: string, value: string): Promise<void> {
+    await this.#send(["SET", this.#prefixed(key), value])
+  }
+
   /** Deletes a key. Deleting a key that does not exist is not an error. */
   public async del(key: string): Promise<void> {
     await this.#send(["DEL", this.#prefixed(key)])

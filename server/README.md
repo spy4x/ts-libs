@@ -1612,6 +1612,18 @@ signatures: `get(key): Promise<string | null>`, `set(key, value: string, ttlSec)
 branch — so the match is verified structurally: `deno check` accepts `const _: ICacheStorage = store`
 and rejects a `{ get }`-only object with `TS2739`.
 
+**Rate-limit storage: `redisRateLimitKv(store)`.** Adapts a `RedisKvStore` to the `RateLimitKv` port
+of `@spy4x/platform/rate-limit/kv`, so `createKvStore({ backend: redisRateLimitKv(kv) })` shares one
+limit across API instances. It works against Redis and Valkey (same protocol). Values are JSON;
+`expireIn` (milliseconds) is rounded up to whole seconds, never to 0, and no `expireIn` means no
+expiry; a value JSON cannot represent throws `TypeError`. `get` returns `undefined` for a key that
+holds invalid JSON (another application's key) so one foreign key cannot fail every request for that
+client; the limiter overwrites it on its next write. **Not atomic across instances:** the platform
+store reads, adds an event and writes back with plain `GET`/`SET`, so two instances that read the
+same window at once both accept, and under concurrency a client can exceed the limit by up to
+(concurrent instances - 1) requests. The limit is shared, not exact. `RedisKvStore.setWithoutExpiry`
+was added for the no-expiry case.
+
 **Every key lives under a mandatory prefix, and `reset()` only touches that prefix.** The ported
 original's `reset()` sent `FLUSHDB`, which deletes every key in the whole Redis database — another
 application's keys, another test run's keys, everything. A shared library should not offer that.
