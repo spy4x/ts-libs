@@ -101,6 +101,8 @@ export function ipInRanges(ip: string, cidrs: readonly string[]): boolean {
  * `trustedProxies` to `@spy4x/platform/rate-limit/client-ip`'s `clientIp`, so `CF-Connecting-IP` is
  * read only from a real Cloudflare edge. Cloudflare changes the list rarely; a range missing here
  * makes that edge's visitors look like the edge itself, and never makes a forged header trusted.
+ * To refresh it, replace the entries with the contents of the two URLs above, IPv4 first, each in
+ * the order Cloudflare lists it, then bump the date.
  */
 export const CLOUDFLARE_IP_RANGES: readonly string[] = Object.freeze([
   "173.245.48.0/20",
