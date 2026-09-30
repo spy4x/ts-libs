@@ -135,6 +135,13 @@
     "otpauth": "jsr:@hectorm/otpauth@9.5.2",
     "qrcode": "jsr:@libs/qrcode@3.1.0",
 
+    // Web Push for `integrations/push` (#293): RFC 8291 payload encryption and RFC 8292 VAPID
+    // signing are security-critical and well solved, so the library stays (the template uses it).
+    // The request itself is sent by `push.ts`; the library supplies the keys and the encryption.
+    // `http-ece` is the aes128gcm coding (RFC 8188) `push-crypto.ts` calls directly.
+    "@negrel/webpush": "jsr:@negrel/webpush@0.5.0",
+    "@negrel/http-ece": "jsr:@negrel/http-ece@0.7.0",
+
     // Redis client for `server/kv` (#75): a small Deno-native RESP client on
     // `Deno.Conn`, already run by the template this is ported from. Chosen over
     // `ioredis` (the house dependency-keep list's suggestion) because `ioredis` is

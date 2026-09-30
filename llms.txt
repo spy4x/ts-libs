@@ -256,6 +256,21 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `NtfySkipped` (interface), `jsr:@spy4x/integrations/ntfy`: A push that was never sent because its severity did not meet the gate.
 - `ntfyConfigFromEnv` (function), `jsr:@spy4x/integrations/ntfy`: Reads ntfy settings from an environment reader.
 
+### `jsr:@spy4x/integrations/push`
+
+- `PushDelivery` (interface), `jsr:@spy4x/integrations/push`: Outcome for one subscription.
+- `PushOptions` (interface), `jsr:@spy4x/integrations/push`: Delivery options of one send.
+- `PushSendResult` (interface), `jsr:@spy4x/integrations/push`: Outcome of WebPushSender.send; `success` is false when any delivery `failed`.
+- `PushSubscriptionStore` (interface), `jsr:@spy4x/integrations/push`: What the app implements over its own database.
+- `PushUrgency` (type), `jsr:@spy4x/integrations/push`: How urgently the push service should deliver (RFC 8030).
+- `VapidKeyPair` (interface), `jsr:@spy4x/integrations/push`: A VAPID key pair ready to store and to hand to a browser.
+- `VapidKeys` (interface), `jsr:@spy4x/integrations/push`: A VAPID key pair as two JWKs (ECDSA P-256).
+- `WebPushSender` (interface), `jsr:@spy4x/integrations/push`: Sends to every stored subscription of a user.
+- `WebPushSenderOptions` (interface), `jsr:@spy4x/integrations/push`: Options for createWebPushSender.
+- `createWebPushSender` (function), `jsr:@spy4x/integrations/push`: Builds a sender.
+- `generateVapidKeyPair` (function), `jsr:@spy4x/integrations/push`: Generates a VAPID key pair with WebCrypto (ECDSA P-256).
+- `vapidPublicKey` (function), `jsr:@spy4x/integrations/push`: The public key of stored VAPID keys, base64url, for the endpoint that serves it to browsers.
+
 ### `jsr:@spy4x/integrations/webhooks`
 
 - `WebhookRejectReason` (type), `jsr:@spy4x/integrations/webhooks`: Why a delivery was rejected.
@@ -1923,4 +1938,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 a2ca16ce053dbc5a2fa3ea6774506705f14dea5d28b0f0f0b1337d8074d02855 -->
+<!-- export surface: sha256 5cc9a37e579446b1b6d5581e3974ae5a81fe94ad601a7b158197762ca35b50f5 -->

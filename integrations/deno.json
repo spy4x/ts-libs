@@ -6,6 +6,7 @@
     "./webhooks": "./webhooks.ts",
     "./ntfy": "./ntfy.ts",
     "./healthchecks": "./healthchecks.ts",
-    "./cloudflare": "./cloudflare.ts"
+    "./cloudflare": "./cloudflare.ts",
+    "./push": "./push.ts"
   }
 }
