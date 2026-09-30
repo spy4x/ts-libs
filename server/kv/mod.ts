@@ -9,3 +9,4 @@ export {
   RedisKvStoreClosedError,
   RedisKvStoreConnectionError,
 } from "./redis-kv-store.ts"
+export { type RateLimitRedisStore, redisRateLimitKv } from "./rate-limit-kv.ts"
