@@ -1,0 +1,1 @@
+{ "name": "@spy4x/net", "exports": { ".": "./mod.ts" } }

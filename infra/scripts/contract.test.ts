@@ -73,6 +73,11 @@ describe("loadEntries", () => {
     const root = fromFileUrl(import.meta.resolve("./contract-fixtures/dropped-member"))
     await expect(loadEntries(root)).rejects.toThrow("time")
   })
+
+  it("throws naming the file when a member's deno.json does not parse as JSON", async () => {
+    const root = fromFileUrl(import.meta.resolve("./contract-fixtures/invalid-json"))
+    await expect(loadEntries(root)).rejects.toThrow(`${root}/time/deno.json: `)
+  })
 })
 
 describe("docs/1.0-contract.md", () => {
