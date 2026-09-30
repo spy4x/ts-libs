@@ -33,6 +33,7 @@ export {
   NOT_AUTHENTICATED,
   NOT_AUTHORIZED,
   SECOND_FACTOR_REQUIRED,
+  secondFactorSatisfied,
 } from "./middleware.ts"
 export {
   createPasswordHasher,

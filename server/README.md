@@ -1386,7 +1386,9 @@ request. A store that caches must drop or update its entry on every write the in
 
 **Guards fail closed.** `isAuthenticated1FA` needs a valid session. `isAuthenticated2FA` also needs
 the second factor settled: `Completed`, or `NotRequired` for a user whose `hasSecondFactor` is false.
-A `Pending` session stays refused after the user removes their second factor until the app calls
+The same rule is exported as `secondFactorSatisfied(status, hasSecondFactor)` for an app that
+checks a session outside the guards. A `Pending` session stays refused after the user removes
+their second factor until the app calls
 `sessions.clearPendingSecondFactors(userId)`. Call it right after removing the TOTP secret, in the
 same transaction when there is one: `createPostgresSessionStore(tx).clearPendingSecondFactors(userId)`
 inside the caller's `sql.begin` commits or rolls back with the secret's removal. It turns every

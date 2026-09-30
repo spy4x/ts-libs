@@ -172,6 +172,37 @@ export async function sha256Hex(input: string): Promise<string> {
 }
 
 /**
+ * A subordinate secret derived from a master secret: the lower-case hex HMAC-SHA-256 of `label`
+ * under `secret`, 64 characters.
+ *
+ * Use one label per purpose (`cookie`, `csrf`) so a single configured secret yields independent
+ * keys; leaking one derived value does not reveal the master or the others. The master secret is
+ * held to the same floor as every other secret here.
+ *
+ * @throws {TokenError} `InvalidSecret` when the secret is missing, blank, not printable or shorter
+ *         than {@link MIN_SECRET_LENGTH}.
+ * @throws {TypeError} when `label` is not a non-empty string.
+ */
+export async function deriveSecret(secret: string, label: string): Promise<string> {
+  assertUsableSecret(secret)
+  if (typeof label !== "string" || label === "") {
+    throw new TypeError("label must be a non-empty string")
+  }
+  const encoder = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  )
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(label)))
+  let hex = ""
+  for (const byte of mac) hex += byte.toString(16).padStart(2, "0")
+  return hex
+}
+
+/**
  * Cryptographically random bytes, base64url, unpadded.
  *
  * @param bytes Positive safe integer, at most 65536. Defaults to `DEFAULT_TOKEN_BYTES`.

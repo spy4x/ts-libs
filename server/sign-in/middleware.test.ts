@@ -9,6 +9,7 @@ import {
   NOT_AUTHENTICATED,
   NOT_AUTHORIZED,
   SECOND_FACTOR_REQUIRED,
+  secondFactorSatisfied,
 } from "./middleware.ts"
 import {
   SecondFactorStatus,
@@ -354,5 +355,27 @@ describe("startSession and endSession", () => {
     const response = await app.request("/sign-out", { method: "POST" })
     expect(response.headers.getSetCookie()).toHaveLength(2)
     expect(calls).not.toContain("signOut")
+  })
+})
+
+describe("secondFactorSatisfied", () => {
+  it("passes a completed second factor whether or not the user has one", () => {
+    expect(secondFactorSatisfied(SecondFactorStatus.Completed, true)).toBe(true)
+    expect(secondFactorSatisfied(SecondFactorStatus.Completed, false)).toBe(true)
+  })
+
+  it("passes NotRequired only for a user without a second factor", () => {
+    expect(secondFactorSatisfied(SecondFactorStatus.NotRequired, false)).toBe(true)
+    expect(secondFactorSatisfied(SecondFactorStatus.NotRequired, true)).toBe(false)
+  })
+
+  it("refuses a pending second factor", () => {
+    expect(secondFactorSatisfied(SecondFactorStatus.Pending, false)).toBe(false)
+    expect(secondFactorSatisfied(SecondFactorStatus.Pending, true)).toBe(false)
+  })
+
+  it("refuses a status it does not know", () => {
+    expect(secondFactorSatisfied(99 as SecondFactorStatus, false)).toBe(false)
+    expect(secondFactorSatisfied(0 as SecondFactorStatus, false)).toBe(false)
   })
 })

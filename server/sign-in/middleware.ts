@@ -82,6 +82,22 @@ export interface Auth<S extends SessionRecord, U> {
 }
 
 /**
+ * Whether a session's second-factor status lets a request through.
+ *
+ * `Completed` passes. `NotRequired` passes only when the user has no second factor configured, so
+ * a session created before the user enrolled one does not skip it. `Pending` and any value not in
+ * {@link SecondFactorStatus}, such as one read from a corrupt row, are refused.
+ */
+export function secondFactorSatisfied(
+  status: SecondFactorStatus,
+  hasSecondFactor: boolean,
+): boolean {
+  if (status === SecondFactorStatus.Completed) return true
+  if (status === SecondFactorStatus.NotRequired) return !hasSecondFactor
+  return false
+}
+
+/**
  * Builds the session middleware and guards over one {@link SessionManager} and
  * {@link SessionCookie}.
  *
@@ -91,12 +107,8 @@ export interface Auth<S extends SessionRecord, U> {
 export function createAuth<S extends SessionRecord, U>(options: AuthOptions<S, U>): Auth<S, U> {
   const { sessions, cookie, loadUser, hasSecondFactor } = options
 
-  const secondFactorSatisfied = (auth: AuthState<S, U>): boolean => {
-    const status = auth.session.secondFactor
-    if (status === SecondFactorStatus.Completed) return true
-    if (status === SecondFactorStatus.NotRequired) return !hasSecondFactor(auth.user)
-    return false
-  }
+  const satisfied = (auth: AuthState<S, U>): boolean =>
+    secondFactorSatisfied(auth.session.secondFactor, hasSecondFactor(auth.user))
 
   const parseAuth = createMiddleware<AuthEnv<S, U>>(async (c, next) => {
     c.set("auth", null)
@@ -122,7 +134,7 @@ export function createAuth<S extends SessionRecord, U>(options: AuthOptions<S, U
   const isAuthenticated2FA = createMiddleware<AuthEnv<S, U>>(async (c, next) => {
     const auth = c.get("auth")
     if (!auth) return c.json({ error: NOT_AUTHENTICATED }, 401)
-    if (!secondFactorSatisfied(auth)) return c.json({ error: SECOND_FACTOR_REQUIRED }, 401)
+    if (!satisfied(auth)) return c.json({ error: SECOND_FACTOR_REQUIRED }, 401)
     await next()
   })
 
@@ -130,7 +142,7 @@ export function createAuth<S extends SessionRecord, U>(options: AuthOptions<S, U
     createMiddleware<AuthEnv<S, U>>(async (c, next) => {
       const auth = c.get("auth")
       if (!auth) return c.json({ error: NOT_AUTHENTICATED }, 401)
-      if (!secondFactorSatisfied(auth)) return c.json({ error: SECOND_FACTOR_REQUIRED }, 401)
+      if (!satisfied(auth)) return c.json({ error: SECOND_FACTOR_REQUIRED }, 401)
       if ((await check(auth)) !== true) return c.json({ error: NOT_AUTHORIZED }, 403)
       await next()
     })
