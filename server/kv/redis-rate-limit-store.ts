@@ -66,6 +66,20 @@ end
 return 1
 `
 
+/** Remove one event: ARGV[1] is its timestamp, or absent for the newest. */
+export const RELEASE_SCRIPT = `
+local member
+if ARGV[1] then
+  member = redis.call('ZRANGEBYSCORE', KEYS[1], ARGV[1], ARGV[1], 'LIMIT', 0, 1)[1]
+else
+  member = redis.call('ZRANGE', KEYS[1], -1, -1)[1]
+end
+if member then
+  return redis.call('ZREM', KEYS[1], member)
+end
+return 0
+`
+
 /** Scores from a `ZRANGE ... WITHSCORES` reply whose pairs (member, score) start after index `from`. */
 function scoresOf(reply: unknown[], from: number): number[] {
   const scores: number[] = []
@@ -98,9 +112,14 @@ function finite(name: string, value: number): void {
  *   ahead of `now`), so a fake clock in a test only drives trimming, not expiry.
  * - **`read`** returns the recorded timestamps, or `undefined` when the key is absent. Redis has
  *   expired it by then; the limiter filters events outside its window itself. **`write`**
- *   replaces the window (used by `refund`, which stays read-modify-write). **`delete`** drops it.
- * - A resend after a connection died mid-call can run `consume` twice; the second run records
- *   one extra event, which errs towards rejecting, never towards letting more through.
+ *   replaces the window; the limiter no longer needs it for `refund`. **`delete`** drops it.
+ * - **`release`** is the atomic refund: one script removes the single event recorded at `at`, or
+ *   the newest without `at`, so a refund overlapping other instances' checks cannot erase their
+ *   events. `StoreRateLimiter.refund` uses it automatically.
+ * - A resend after a connection died mid-call sends the same command with the same event id, so
+ *   `consume` records no extra event. What can happen: the first run took the last free slot, so
+ *   the resend reports "rejected" for a request that was in fact recorded. A resent `release`
+ *   with an `at` removes nothing more; without `at` it removes the next-newest event too.
  * - `now`, `windowMs`, `limit` and event timestamps must be finite numbers, else `RangeError`.
  *
  * @param store An open `RedisKvStore`.
@@ -129,6 +148,10 @@ export function createRedisRateLimitStore(
     },
     async delete(key: string): Promise<void> {
       await store.del(keyFor(key))
+    },
+    async release(key: string, at?: number): Promise<void> {
+      if (at !== undefined) finite(`at`, at)
+      await store.eval(RELEASE_SCRIPT, [keyFor(key)], at === undefined ? [] : [at])
     },
     async consume(
       key: string,

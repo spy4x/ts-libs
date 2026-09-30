@@ -5,6 +5,7 @@ import {
   createRedisRateLimitStore,
   type RateLimitRedisScriptStore,
   READ_SCRIPT,
+  RELEASE_SCRIPT,
   WRITE_SCRIPT,
 } from "./redis-rate-limit-store.ts"
 
@@ -127,5 +128,15 @@ describe("createRedisRateLimitStore", () => {
       Error,
       `WRONGTYPE`,
     )
+  })
+
+  it("releases with the timestamp when given and with no argument for the newest", async () => {
+    const { store, evals } = fakeStore(1)
+    const limiter = createRedisRateLimitStore(store)
+    await limiter.release!(`k`, 4200)
+    await limiter.release!(`k`)
+    assertEquals(evals[0], { script: RELEASE_SCRIPT, keys: [`ratelimit-atomic:k`], args: [4200] })
+    assertEquals(evals[1].args, [])
+    await assertRejects(() => limiter.release!(`k`, NaN), RangeError)
   })
 })

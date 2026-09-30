@@ -1657,8 +1657,15 @@ round, for five rounds, accept exactly 10 each round; the same burst through `re
 - **Own key namespace.** Default `ratelimit-atomic` under the `RedisKvStore` prefix (option
   `keyPrefix`). Keys are sorted sets; pointing it at keys `redisRateLimitKv` wrote makes Redis answer
   `WRONGTYPE`.
-- **`refund` stays read-modify-write** (`read` then `write`), as on every store, and a resend after a
-  dead connection can record one extra event: both err towards rejecting, never towards admitting.
+- **`refund` is atomic too**, through the optional `RateLimitStore.release`: one Lua script removes
+  the single event recorded at `at` (or the newest), so a refund cannot erase requests other
+  instances recorded meanwhile. A store without `release` refunds by `read` then `write`, and there
+  a refund overlapping other instances' checks can erase their events and let more than `limit`
+  through.
+- **A resend after a dead connection** reuses the same event id, so `consume` records no extra event;
+  it may answer "rejected" for a request that was in fact recorded (the first run took the last
+  slot). A resent `release` with `at` removes nothing more; without `at` it also removes the
+  next-newest event.
 - To run scripts, `RedisKvStore.eval(script, keys, args)` was added: keys are prefixed like every
   other method's, `args` arrive as `ARGV`.
 

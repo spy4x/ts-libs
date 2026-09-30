@@ -75,7 +75,9 @@ KV `atomic().check()` compare-and-swap on purpose. **Several instances that must
 an atomic store:** a store may implement the optional `RateLimitStore.consume(key, now, windowMs,
 limit)`, which trims, counts and records in one backend step, and `StoreRateLimiter.check` then uses
 it instead of `read` plus `write`. `createRedisRateLimitStore` in `@spy4x/server/kv` does this with
-one Lua script. `refund` stays read-modify-write on every store.
+one Lua script, and implements the optional `RateLimitStore.release` for an atomic `refund` as well.
+Over a store without `release`, `refund` is read-modify-write and a refund that overlaps other
+instances' checks can erase their events.
 
 ## Sliding window, not fixed
 

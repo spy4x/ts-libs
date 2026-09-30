@@ -151,4 +151,56 @@ describe("createRedisRateLimitStore against a real server", () => {
       await closeAll(stores)
     }
   })
+
+  it("keeps the window at or under the limit when refunds run alongside checks on four instances", async () => {
+    await requireReachable(redisSettings().address)
+    const stores = await connectInstances(4, uniqueKeyPrefix("it_rl_refund"))
+    try {
+      const limit = 3
+      const limiters = stores.map((store) =>
+        createStoreLimiter(createRedisRateLimitStore(store), { windowMs: 60_000, limit })
+      )
+      const reader = createRedisRateLimitStore(stores[0])
+      for (let round = 0; round < 20; round++) {
+        const key = `client:${round}`
+        // One recorded request to refund; each racing check has its own timestamp.
+        assertEquals((await limiters[0].check(key, T0)).allowed, true)
+        const racing = [
+          limiters[1].refund(key, T0),
+          ...Array.from({ length: 8 }, (_, i) => limiters[i % 4].check(key, T0 + 1 + i)),
+        ]
+        const settled = await Promise.all(racing)
+        const accepted = settled.slice(1).filter((d) => (d as { allowed: boolean }).allowed).length
+        const held = await reader.read(key)
+        // Every accepted racing request is still recorded, the refunded one is gone, and the
+        // window never holds more than the limit.
+        assertEquals(held?.length, accepted, `round ${round}`)
+        assertEquals((held?.length ?? 0) <= limit, true, `round ${round}`)
+        assertEquals(held?.includes(T0), false, `round ${round}`)
+      }
+    } finally {
+      await closeAll(stores)
+    }
+  })
+
+  it("stretches the key's expiry to cover an event dated ahead of now", async () => {
+    await requireReachable(redisSettings().address)
+    const settings = redisSettings()
+    const prefix = uniqueKeyPrefix("it_rl_future")
+    const stores = await connectInstances(1, prefix)
+    let raw: Deno.Conn | undefined
+    try {
+      raw = await Deno.connect({ hostname: settings.hostname, port: settings.port })
+      const client = new RedisClient(raw)
+      const store = createRedisRateLimitStore(stores[0])
+      // This event is 30 s ahead of the next caller's clock; the key must outlive it by windowMs.
+      await store.consume!(`k`, T0 + 30_000, 60_000, 5)
+      await store.consume!(`k`, T0, 60_000, 5)
+      const pttl = await client.sendCommand(["PTTL", `${prefix}:ratelimit-atomic:k`]) as number
+      assertEquals(pttl > 60_000 && pttl <= 90_000, true, `pttl ${pttl}`)
+    } finally {
+      raw?.close()
+      await closeAll(stores)
+    }
+  })
 })
