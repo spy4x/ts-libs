@@ -1,16 +1,20 @@
 /**
  * Wire protocol for a hint-only socket.
  *
- * ADR 002: REST is the external application protocol and the socket is a hint lane. Nothing in this
- * protocol can mutate anything, which is what keeps the socket from becoming a second, weaker
- * application surface with its own validation and authorization.
+ * Originally (ADR 001) the socket was a hint lane and nothing here could mutate anything. ADR 002
+ * (both ADRs are spy4x/template's, `docs/decisions/001-*.md` and `002-realtime-transport-and-sync.md`)
+ * moves every non-auth call onto the socket, so the protocol now carries request and response
+ * frames. It still does not dispatch, validate a payload or authorize: the envelope is the
+ * library's, the meaning of `name` and `payload` is the host's.
  *
  * Two rules follow, and both are visible in the shapes below:
  *
  * 1. A push is a {@link ServerHintMessage} — group, aggregate and the sequence the change was
  *    committed at. It carries no entity payload, so a dropped or duplicated hint costs at most one
  *    redundant pull.
- * 2. The only client frames are liveness and a sync handshake carrying the client's real cursors.
+ * 2. The client frames are liveness, a sync handshake carrying the client's real cursors, and —
+ *    since request frames were added — request frames (`client.command`, `client.query`) answered by `server.result` or
+ *    `server.error`. The library validates the envelope only; what a request means is the host's.
  *
  * Validation is arktype, the repository's only validator: a hand-rolled shape check would be a
  * second validator, and zod is not used anywhere here. Parsing has no global side effects — it does
@@ -57,6 +61,7 @@
 import { type Type, type } from "arktype"
 
 import type { CursorSnapshot } from "./cursor.ts"
+import { REALTIME_ERROR_CODES, type RealtimeErrorCode } from "./errors.ts"
 
 /** A client liveness frame. */
 export interface ClientLivenessMessage {
@@ -73,8 +78,42 @@ export interface ClientSyncMessage {
   id?: string
 }
 
-/** Frames a client sends. Nothing here mutates anything. */
-export type ClientMessage = ClientLivenessMessage | ClientSyncMessage
+/**
+ * A request for the server to do something: change state. The `id` is required and unique per
+ * connection; the server answers with a `server.result` or `server.error` naming it as `requestId`.
+ *
+ * The library does not interpret `name` or `payload`. A host maps `name` to whatever handles it.
+ */
+export interface ClientCommandMessage {
+  kind: "client.command"
+  id: string
+  name: string
+  payload?: unknown
+  /**
+   * Client-chosen key that makes a retried command safe. The library only carries it; storing keys
+   * and replaying the first result is the host's job.
+   */
+  idempotencyKey?: string
+}
+
+/** A request to read. Same shape as a command minus the idempotency key: a read has no effect. */
+export interface ClientQueryMessage {
+  kind: "client.query"
+  id: string
+  name: string
+  payload?: unknown
+}
+
+/** A request frame, either kind. */
+export type ClientRequestMessage = ClientCommandMessage | ClientQueryMessage
+
+/**
+ * Frames a client sends: liveness, the sync handshake, and requests.
+ *
+ * The union grew when request frames were added. That is a protocol extension: code that switches
+ * exhaustively over `kind` without a `default` needs the new cases.
+ */
+export type ClientMessage = ClientLivenessMessage | ClientSyncMessage | ClientRequestMessage
 
 /** A server liveness frame. */
 export interface ServerLivenessMessage {
@@ -107,8 +146,29 @@ export interface ChangeHint {
 /** A server frame announcing a committed change. */
 export type ServerHintMessage = ChangeHint & { kind: "change.hint" }
 
+/** A successful answer to a request, correlated by `requestId`. */
+export interface ServerResultMessage {
+  kind: "server.result"
+  requestId: string
+  payload?: unknown
+}
+
+/** A failed answer to a request, correlated by `requestId`. */
+export interface ServerErrorMessage {
+  kind: "server.error"
+  requestId: string
+  code: RealtimeErrorCode
+  message: string
+  details?: unknown
+}
+
 /** Frames a server sends. */
-export type ServerMessage = ServerLivenessMessage | ServerAckMessage | ServerHintMessage
+export type ServerMessage =
+  | ServerLivenessMessage
+  | ServerAckMessage
+  | ServerHintMessage
+  | ServerResultMessage
+  | ServerErrorMessage
 
 /** Any frame in either direction. */
 export type WireMessage = ClientMessage | ServerMessage
@@ -118,6 +178,13 @@ export type WireMessage = ClientMessage | ServerMessage
 // than relied on to fall out safely from the cursor arithmetic downstream (#74: a negative sequence
 // reaching `CursorTracker` unrejected was a break the existing suite did not catch).
 const sequenceSchema = "number.integer >= 0"
+
+// Identifiers and names are bounded so a frame cannot smuggle an unbounded string into a log line or
+// a map key; the whole frame is also capped by the registry's `maxMessageBytes`.
+const idSchema = "1 <= string <= 128"
+const nameSchema = "1 <= string <= 128"
+const idempotencyKeySchema = "1 <= string <= 256"
+const errorMessageSchema = "string <= 1024"
 
 const cursorSnapshotSchema = type({
   groupId: "string",
@@ -134,6 +201,21 @@ export const clientMessageSchema: Type<ClientMessage> = type({
     cursors: cursorSnapshotSchema.array(),
     fromStart: "boolean",
     "id?": "string",
+  }),
+).or(
+  type({
+    kind: "'client.command'",
+    id: idSchema,
+    name: nameSchema,
+    "payload?": "unknown",
+    "idempotencyKey?": idempotencyKeySchema,
+  }),
+).or(
+  type({
+    kind: "'client.query'",
+    id: idSchema,
+    name: nameSchema,
+    "payload?": "unknown",
   }),
 )
 
@@ -153,6 +235,20 @@ export const serverMessageSchema: Type<ServerMessage> = type({
     "aggregate?": "string",
     sequence: sequenceSchema,
   }),
+).or(
+  type({
+    kind: "'server.result'",
+    requestId: idSchema,
+    "payload?": "unknown",
+  }),
+).or(
+  type({
+    kind: "'server.error'",
+    requestId: idSchema,
+    code: type.enumerated(...REALTIME_ERROR_CODES),
+    message: errorMessageSchema,
+    "details?": "unknown",
+  }),
 )
 
 const wireMessageSchema = serverMessageSchema.or(clientMessageSchema)
@@ -171,6 +267,10 @@ const DECLARED_FRAME_KEYS: Record<WireMessage["kind"], readonly string[]> = {
   "server.pong": ["kind", "id"],
   "server.ack": ["kind", "ackId"],
   "change.hint": ["kind", "groupId", "aggregate", "sequence"],
+  "client.command": ["kind", "id", "name", "payload", "idempotencyKey"],
+  "client.query": ["kind", "id", "name", "payload"],
+  "server.result": ["kind", "requestId", "payload"],
+  "server.error": ["kind", "requestId", "code", "message", "details"],
 }
 
 /** Keys a handshake cursor snapshot may carry. */
@@ -250,6 +350,31 @@ export interface MessageCodec {
   encode(message: WireMessage): string
   /** Parse a text frame. Returns a result; never throws. */
   decode(raw: string): DecodeResult
+}
+
+/** Build the success answer to request `requestId`. */
+export function createResult(requestId: string, payload?: unknown): ServerResultMessage {
+  return {
+    kind: "server.result",
+    requestId,
+    ...(payload !== undefined ? { payload } : {}),
+  }
+}
+
+/** Build the failure answer to request `requestId`. */
+export function createError(
+  requestId: string,
+  code: RealtimeErrorCode,
+  message: string,
+  details?: unknown,
+): ServerErrorMessage {
+  return {
+    kind: "server.error",
+    requestId,
+    code,
+    message,
+    ...(details !== undefined ? { details } : {}),
+  }
 }
 
 /** Build the hint a committed change is announced with. */

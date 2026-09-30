@@ -27,16 +27,26 @@
  *   past `maxBufferedBytes` instead of queueing without bound. All three limits are this package's
  *   own — the upgrade handler, rate limiting per IP and anything else the surrounding server does is
  *   outside it, same as the rest of the sync protocol (see README, "Explicitly not implemented").
+ * - **Requests are bounded, correlated and never dispatched by the registry.** A `client.command`
+ *   or `client.query` is handed to the one dispatcher registered with {@link ConnectionRegistry.onRequest};
+ *   the registry only enforces `maxInFlightRequests` per connection (a typed `rate_limited` error
+ *   beyond it), rejects a request id already in flight, answers with `server.result` or a typed
+ *   `server.error`, and gives up on a dispatcher that outlives `requestTimeoutMs`. What a request
+ *   name means — a command bus, a query bus, authorization — is the host's.
  *
  * @module
  */
 
 import {
   type ClientMessage,
+  type ClientRequestMessage,
+  createError,
   createJsonCodec,
+  createResult,
   type MessageCodec,
   type ServerMessage,
 } from "./codec.ts"
+import { RealtimeRequestError } from "./errors.ts"
 import type { Clock, TimerHandle } from "./clock.ts"
 import { type ManagedSocket, SocketState, type Unsubscribe } from "./socket-port.ts"
 
@@ -83,6 +93,28 @@ export interface MalformedFrame {
   reason: string
 }
 
+/** A request handed to the dispatcher. `name` and `payload` are unvalidated beyond the envelope. */
+export interface RequestContext {
+  socketId: string
+  userId: string
+  /** The frame's `id`; the answer carries it as `requestId`. */
+  requestId: string
+  kind: "command" | "query"
+  name: string
+  payload: unknown
+  /** Present on commands that carry one. The registry does not store or compare keys. */
+  idempotencyKey?: string
+  /** Aborted when the connection closes or the request times out; stop work that can be stopped. */
+  signal: AbortSignal
+}
+
+/**
+ * Answers one request. Return the result payload, or throw {@link RealtimeRequestError} to answer
+ * with a specific code. Any other thrown value is answered as `internal` with a generic message, so
+ * an exception's text never reaches a client; it goes to `onRequestError` instead.
+ */
+export type RequestDispatcher = (context: RequestContext) => unknown | Promise<unknown>
+
 export type OpenHandler = (handle: ConnectionHandle) => void
 export type CloseHandler = (
   handle: ConnectionHandle,
@@ -106,6 +138,12 @@ export interface ConnectionRegistryOptions {
   maxMessageBytes?: number
   /** Bytes queued on a socket, past which a send to it is skipped instead of queued further. */
   maxBufferedBytes?: number
+  /** Requests one connection may have unanswered at once. Beyond it a request gets `rate_limited`. */
+  maxInFlightRequests?: number
+  /** Milliseconds a dispatcher may take before the client is answered `timeout`. */
+  requestTimeoutMs?: number
+  /** Called with every value a dispatcher threw that was not a {@link RealtimeRequestError}. */
+  onRequestError?: (error: unknown, context: RequestContext) => void
 }
 
 interface Connection {
@@ -115,6 +153,13 @@ interface Connection {
   lastSeenAt: number
   announced: boolean
   readonly unsubscribes: Unsubscribe[]
+  /** Unanswered request ids, each with the timer that will answer `timeout`. */
+  readonly inFlight: Map<string, InFlightRequest>
+}
+
+interface InFlightRequest {
+  readonly timer: TimerHandle
+  readonly abort: AbortController
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000
@@ -125,6 +170,9 @@ const DEFAULT_MAX_CONNECTIONS_PER_USER = 20
 const DEFAULT_MAX_MESSAGE_BYTES = 64 * 1024
 /** Past this, a socket is presumed to have a peer that stopped reading; sends to it are skipped. */
 const DEFAULT_MAX_BUFFERED_BYTES = 1_000_000
+/** Enough for a screen's worth of parallel calls. Counts unanswered requests, see `maxInFlightRequests`. */
+const DEFAULT_MAX_IN_FLIGHT_REQUESTS = 16
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
 
 /**
  * Every live socket, indexed by user and by socket id.
@@ -142,6 +190,10 @@ export class ConnectionRegistry {
   readonly #maxConnectionsPerUser: number
   readonly #maxMessageBytes: number
   readonly #maxBufferedBytes: number
+  readonly #maxInFlightRequests: number
+  readonly #requestTimeoutMs: number
+  readonly #onRequestError: ConnectionRegistryOptions["onRequestError"]
+  #requestDispatcher: RequestDispatcher | null = null
   readonly #connections = new Map<string, Connection>()
   readonly #byUser = new Map<string, Set<string>>()
   readonly #openHandlers = new Set<OpenHandler>()
@@ -162,6 +214,15 @@ export class ConnectionRegistry {
       DEFAULT_MAX_CONNECTIONS_PER_USER
     this.#maxMessageBytes = options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES
     this.#maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES
+    this.#maxInFlightRequests = Math.max(
+      1,
+      options.maxInFlightRequests ?? DEFAULT_MAX_IN_FLIGHT_REQUESTS,
+    )
+    this.#requestTimeoutMs = Math.max(
+      1,
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    )
+    this.#onRequestError = options.onRequestError
   }
 
   /**
@@ -196,6 +257,7 @@ export class ConnectionRegistry {
       lastSeenAt: this.#clock.now(),
       announced: false,
       unsubscribes: [],
+      inFlight: new Map(),
     }
 
     connection.unsubscribes.push(
@@ -220,7 +282,10 @@ export class ConnectionRegistry {
     return { id: connection.id, userId }
   }
 
-  /** Remove a socket without closing it. Rarely needed: the close handler does this. */
+  /**
+   * Remove a socket from the registry and close it. Rarely needed: the socket's own close handler
+   * does this.
+   */
   detach(socketId: string): void {
     const connection = this.#connections.get(socketId)
     if (!connection) return
@@ -306,6 +371,26 @@ export class ConnectionRegistry {
     return () => this.#frameHandlers.delete(handler)
   }
 
+  /**
+   * Register the one function that answers `client.command` and `client.query` frames.
+   *
+   * Only one: a request has exactly one answer, so two dispatchers would race. A second registration
+   * throws instead of silently replacing the first. Without a dispatcher every request is answered
+   * `not_found`.
+   */
+  onRequest(dispatcher: RequestDispatcher): Unsubscribe {
+    if (this.#requestDispatcher) throw new Error("a request dispatcher is already registered")
+    this.#requestDispatcher = dispatcher
+    return () => {
+      if (this.#requestDispatcher === dispatcher) this.#requestDispatcher = null
+    }
+  }
+
+  /** Requests a connection has received and not yet answered. `0` for an unknown socket. */
+  inFlightRequests(socketId: string): number {
+    return this.#connections.get(socketId)?.inFlight.size ?? 0
+  }
+
   /** Called for every frame that could not be decoded or arrived in the wrong direction. */
   onMalformedFrame(handler: MalformedFrameHandler): Unsubscribe {
     this.#malformedHandlers.add(handler)
@@ -355,6 +440,7 @@ export class ConnectionRegistry {
     const result = this.#codec.decode(data)
     if (!result.ok) {
       this.#reportMalformed(connection, result.reason)
+      this.#refuseMalformedRequest(connection, data, result.reason)
       return
     }
 
@@ -376,10 +462,141 @@ export class ConnectionRegistry {
       for (const handler of this.#frameHandlers) handler(context)
       return
     }
+    if (message.kind === "client.command" || message.kind === "client.query") {
+      this.#receiveRequest(connection, message)
+      return
+    }
     this.#reportMalformed(
       connection,
       `frame kind "${message.kind}" is server-to-client`,
     )
+  }
+
+  /**
+   * A request frame that failed validation but carries a readable `id` is answered `bad_request`,
+   * so its caller gets an error instead of waiting for a timeout. Without a usable id there is
+   * nothing to correlate to, and the frame is only reported.
+   */
+  #refuseMalformedRequest(connection: Connection, data: string, reason: string): void {
+    let json: unknown
+    try {
+      json = JSON.parse(data)
+    } catch {
+      return
+    }
+    if (typeof json !== "object" || json === null) return
+    const { kind, id } = json as { kind?: unknown; id?: unknown }
+    if (kind !== "client.command" && kind !== "client.query") return
+    if (typeof id !== "string" || id.length < 1 || id.length > 128) return
+    this.#deliver(connection, createError(id, "bad_request", reason.slice(0, 1024)))
+  }
+
+  /**
+   * Admit one request frame, run it through the dispatcher and answer it exactly once.
+   *
+   * The slot is taken before the dispatcher runs and released when the answer is sent. The limit
+   * counts *unanswered* requests, not running work: a request answered `timeout` frees its slot at
+   * once, and the dispatcher keeps running unless it honours `context.signal`. So the limit bounds
+   * the work a connection can have running only for dispatchers that stop on abort. A refusal itself
+   * takes no slot.
+   */
+  #receiveRequest(connection: Connection, message: ClientRequestMessage): void {
+    const requestId = message.id
+    if (connection.inFlight.has(requestId)) {
+      this.#deliver(
+        connection,
+        createError(requestId, "bad_request", "request id is already in flight"),
+      )
+      return
+    }
+    if (connection.inFlight.size >= this.#maxInFlightRequests) {
+      this.#deliver(
+        connection,
+        createError(
+          requestId,
+          "rate_limited",
+          `too many requests in flight (max ${this.#maxInFlightRequests})`,
+        ),
+      )
+      return
+    }
+    const dispatcher = this.#requestDispatcher
+    if (!dispatcher) {
+      this.#deliver(connection, createError(requestId, "not_found", "no request handler"))
+      return
+    }
+
+    const abort = new AbortController()
+    const timer = this.#clock.setTimeout(
+      () =>
+        this.#answer(connection, requestId, createError(requestId, "timeout", "request timed out")),
+      this.#requestTimeoutMs,
+    )
+    connection.inFlight.set(requestId, { timer, abort })
+
+    const context: RequestContext = {
+      socketId: connection.id,
+      userId: connection.userId,
+      requestId,
+      kind: message.kind === "client.command" ? "command" : "query",
+      name: message.name,
+      payload: message.payload,
+      ...(message.kind === "client.command" && message.idempotencyKey !== undefined
+        ? { idempotencyKey: message.idempotencyKey }
+        : {}),
+      signal: abort.signal,
+    }
+    const fail = (error: unknown) => {
+      if (error instanceof RealtimeRequestError) {
+        this.#answer(
+          connection,
+          requestId,
+          createError(requestId, error.code, error.message, error.details),
+        )
+        return
+      }
+      try {
+        this.#onRequestError?.(error, context)
+      } catch {
+        // A failing error hook must not leave the request unanswered.
+      }
+      this.#answer(connection, requestId, createError(requestId, "internal", "internal error"))
+    }
+    let outcome: unknown
+    try {
+      outcome = dispatcher(context)
+    } catch (error) {
+      fail(error)
+      return
+    }
+    Promise.resolve(outcome).then(
+      (payload) => this.#answer(connection, requestId, createResult(requestId, payload)),
+      fail,
+    )
+  }
+
+  /**
+   * Send the answer for a request, once. A request already answered — by the timeout, or because the
+   * connection went away — is ignored, so a late dispatcher result never reaches the wire.
+   *
+   * A result that cannot be encoded (a `BigInt` in the payload, say) is answered `internal` rather
+   * than left for the client to time out on.
+   */
+  #answer(connection: Connection, requestId: string, message: ServerMessage): void {
+    const request = connection.inFlight.get(requestId)
+    if (request === undefined) return
+    this.#clock.clearTimeout(request.timer)
+    connection.inFlight.delete(requestId)
+    if (message.kind === "server.error" && message.code === "timeout") request.abort.abort()
+    if (this.#deliver(connection, message)) return
+    // The frame could not be encoded (a message over the limit, a BigInt in the payload or the
+    // details). Send the generic answer instead of leaving the client to time out; the generic
+    // answer itself is never retried.
+    const generic = message.kind === "server.error" && message.code === "internal" &&
+      message.message === "internal error"
+    if (!generic && connection.socket.state === SocketState.Open) {
+      this.#deliver(connection, createError(requestId, "internal", "internal error"))
+    }
   }
 
   /**
@@ -427,6 +644,11 @@ export class ConnectionRegistry {
     }
 
     for (const unsubscribe of connection.unsubscribes) unsubscribe()
+    for (const request of connection.inFlight.values()) {
+      this.#clock.clearTimeout(request.timer)
+      request.abort.abort()
+    }
+    connection.inFlight.clear()
     try {
       connection.socket.close(closeCodeFor(reason), reasonText(reason))
     } catch {

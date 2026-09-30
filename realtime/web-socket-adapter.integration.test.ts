@@ -16,11 +16,13 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 
-import { ClientTransport } from "./client-transport.ts"
+import { ClientTransport, ConnectionLostError, TransportStatus } from "./client-transport.ts"
 import { createSystemClock } from "./clock.ts"
 import { createJsonCodec } from "./codec.ts"
 import type { GapReport } from "./cursor.ts"
 import { PersistentCursorStore } from "./cursor.ts"
+import { RealtimeRequestError } from "./errors.ts"
+import { ConnectionRegistry } from "./registry.ts"
 import { MemoryKeyValueStore } from "./storage.ts"
 import { SocketState } from "./socket-port.ts"
 import { adaptWebSocket, createWebSocketFactory } from "./web-socket-adapter.ts"
@@ -292,6 +294,49 @@ describe("the real WebSocket adapter against a real local server", () => {
       expect(server.sockets.length).toBeLessThan(15)
     } finally {
       transport.stop()
+      await server.close()
+    }
+  })
+
+  it("answers commands and queries end to end and rejects a call whose server drops mid-request", async () => {
+    // A real registry behind a real server socket and the real client: the request frames cross an
+    // actual WebSocket, so the wire format, the correlation and the drop rejection are exercised
+    // together rather than each against a fake.
+    const clock = createSystemClock()
+    const registry = new ConnectionRegistry({ clock })
+    registry.onRequest((context) => {
+      if (context.name === "echo") return context.payload
+      if (context.name === "deny") throw new RealtimeRequestError("forbidden", "not yours")
+      return new Promise(() => {}) // "hang": never answers
+    })
+    const server = startServer((socket) => registry.attach("user-1", adaptWebSocket(socket)))
+    const store = new PersistentCursorStore({ storage: new MemoryKeyValueStore(), clock })
+    const transport = new ClientTransport({
+      url: server.url,
+      socketFactory: createWebSocketFactory(),
+      clock,
+      cursors: store,
+      pull: () => {},
+      backoff: { baseMs: 5_000, factor: 2, maxMs: 5_000, jitterRatio: 0 },
+    })
+
+    try {
+      transport.connect()
+      await waitFor(() => transport.status === TransportStatus.Open)
+      await waitFor(() => registry.count() === 1)
+
+      expect(await transport.command("echo", { n: 1 })).toEqual({ n: 1 })
+      expect(await transport.query("echo")).toBeUndefined()
+      await expect(transport.command("deny")).rejects.toMatchObject({ code: "forbidden" })
+
+      const hanging = transport.query("hang")
+      hanging.catch(() => {})
+      await waitFor(() => registry.inFlightRequests("socket-1") === 1)
+      server.sockets[0].close(1001, "going away")
+      await expect(hanging).rejects.toBeInstanceOf(ConnectionLostError)
+    } finally {
+      transport.stop()
+      registry.shutdown()
       await server.close()
     }
   })

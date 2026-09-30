@@ -15,6 +15,8 @@ import {
   type ConnectionRegistryOptions,
   type RegistryCloseInfo,
 } from "./registry.ts"
+import { RealtimeRequestError } from "./errors.ts"
+import { type RequestContext } from "./registry.ts"
 import { SocketState } from "./socket-port.ts"
 import { drainMicrotasks, FakeClock, FakeSocketFactory } from "./testing.ts"
 
@@ -464,6 +466,308 @@ describe("ConnectionRegistry limits", () => {
 
     expect(delivered).toBe(1)
     expect(factory.latest.frames()).toEqual([{ kind: "server.ping" }])
+  })
+})
+
+function commandFrame(id: string, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({ kind: "client.command", id, name: "group.rename", ...extra })
+}
+
+function queryFrame(id: string): string {
+  return JSON.stringify({ kind: "client.query", id, name: "group.list", payload: { page: 1 } })
+}
+
+describe("ConnectionRegistry request frames", () => {
+  it("hands a command to the dispatcher with its name, payload, user and idempotency key", () => {
+    const { registry, factory } = createHarness()
+    const seen: RequestContext[] = []
+    registry.onRequest((context) => {
+      seen.push(context)
+      return null
+    })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(commandFrame("r1", { payload: { title: "Trip" }, idempotencyKey: "k1" }))
+    factory.latest.receive(queryFrame("r2"))
+
+    expect(seen.map((c) => [c.kind, c.requestId, c.name, c.userId, c.idempotencyKey])).toEqual([
+      ["command", "r1", "group.rename", "user-1", "k1"],
+      ["query", "r2", "group.list", "user-1", undefined],
+    ])
+    expect(seen[0].payload).toEqual({ title: "Trip" })
+  })
+
+  it("answers with a result carrying the dispatcher's return value, correlated by request id", async () => {
+    const { registry, factory } = createHarness()
+    registry.onRequest((context) => ({ echoed: context.name }))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(commandFrame("r1"))
+    await drainMicrotasks()
+
+    expect(factory.latest.frames()).toEqual([
+      { kind: "server.result", requestId: "r1", payload: { echoed: "group.rename" } },
+    ])
+  })
+
+  it("answers with the typed code a dispatcher throws", async () => {
+    const { registry, factory } = createHarness()
+    registry.onRequest(() => {
+      throw new RealtimeRequestError("conflict", "stale version", { expected: 3 })
+    })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(commandFrame("r1"))
+    await drainMicrotasks()
+
+    expect(factory.latest.frames()).toEqual([
+      {
+        kind: "server.error",
+        requestId: "r1",
+        code: "conflict",
+        message: "stale version",
+        details: { expected: 3 },
+      },
+    ])
+  })
+
+  it("answers an unexpected exception as internal without leaking its text", async () => {
+    const errors: unknown[] = []
+    const { registry, factory } = createHarness(true, {
+      onRequestError: (error) => errors.push(error),
+    })
+    registry.onRequest(() => Promise.reject(new Error("password=hunter2 in SQL")))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(queryFrame("r1"))
+    await drainMicrotasks()
+
+    expect(factory.latest.sent.join("")).not.toContain("hunter2")
+    expect(factory.latest.frames()).toEqual([
+      { kind: "server.error", requestId: "r1", code: "internal", message: "internal error" },
+    ])
+    expect((errors[0] as Error).message).toContain("hunter2")
+  })
+
+  it("refuses a request beyond the in-flight limit with rate_limited and serves it after one finishes", async () => {
+    const { registry, factory } = createHarness(true, { maxInFlightRequests: 2 })
+    const release: (() => void)[] = []
+    registry.onRequest(() => new Promise<void>((resolve) => release.push(resolve)))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(queryFrame("r1"))
+    factory.latest.receive(queryFrame("r2"))
+    factory.latest.receive(queryFrame("r3"))
+
+    expect(factory.latest.frames()).toEqual([
+      {
+        kind: "server.error",
+        requestId: "r3",
+        code: "rate_limited",
+        message: "too many requests in flight (max 2)",
+      },
+    ])
+    expect(registry.inFlightRequests("socket-1")).toBe(2)
+
+    release[0]()
+    await drainMicrotasks()
+    expect(registry.inFlightRequests("socket-1")).toBe(1)
+
+    factory.latest.receive(queryFrame("r4"))
+    expect(release.length).toBe(3)
+  })
+
+  it("counts the in-flight limit per connection, not per user", () => {
+    const { registry, factory } = createHarness(true, { maxInFlightRequests: 1 })
+    let dispatched = 0
+    registry.onRequest(() => {
+      dispatched++
+      return new Promise(() => {})
+    })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+    const first = factory.latest
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+    const second = factory.latest
+
+    first.receive(queryFrame("r1"))
+    second.receive(queryFrame("r1"))
+
+    expect(dispatched).toBe(2)
+    expect(first.sent).toEqual([])
+    expect(second.sent).toEqual([])
+  })
+
+  it("refuses a request id that is already in flight without running it twice", () => {
+    const { registry, factory } = createHarness()
+    let dispatched = 0
+    registry.onRequest(() => {
+      dispatched++
+      return new Promise(() => {})
+    })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(queryFrame("r1"))
+    factory.latest.receive(queryFrame("r1"))
+
+    expect(dispatched).toBe(1)
+    expect((factory.latest.frames()[0] as { code: string }).code).toBe("bad_request")
+  })
+
+  it("answers timeout and drops the late result when the dispatcher outlives the deadline", async () => {
+    const { registry, factory, clock } = createHarness(true, { requestTimeoutMs: 500 })
+    let finish: (value: string) => void = () => {}
+    let signal: AbortSignal | undefined
+    registry.onRequest((context) => {
+      signal = context.signal
+      return new Promise<string>((resolve) => (finish = resolve))
+    })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(queryFrame("r1"))
+    await clock.advance(500)
+
+    expect((factory.latest.frames()[0] as { code: string }).code).toBe("timeout")
+    expect(signal?.aborted).toBe(true)
+    expect(registry.inFlightRequests("socket-1")).toBe(0)
+
+    finish("late")
+    await drainMicrotasks()
+    expect(factory.latest.frames().length).toBe(1)
+  })
+
+  it("aborts in-flight requests and sends nothing when the connection closes", async () => {
+    const { registry, factory } = createHarness()
+    let signal: AbortSignal | undefined
+    let finish: (value: string) => void = () => {}
+    registry.onRequest((context) => {
+      signal = context.signal
+      return new Promise<string>((resolve) => (finish = resolve))
+    })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+    factory.latest.receive(queryFrame("r1"))
+
+    factory.latest.dropFromPeer()
+    finish("too late")
+    await drainMicrotasks()
+
+    expect(signal?.aborted).toBe(true)
+    expect(factory.latest.sent).toEqual([])
+    expect(registry.inFlightRequests("socket-1")).toBe(0)
+  })
+
+  it("answers internal when a typed error cannot be encoded", async () => {
+    const { registry, factory } = createHarness()
+    registry.onRequest(() => {
+      throw new RealtimeRequestError("conflict", "x".repeat(2_000))
+    })
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(queryFrame("r1"))
+    await drainMicrotasks()
+
+    expect(factory.latest.frames()).toEqual([
+      { kind: "server.error", requestId: "r1", code: "internal", message: "internal error" },
+    ])
+  })
+
+  it("answers a malformed request frame that has a readable id with bad_request", () => {
+    const { registry, factory } = createHarness()
+    registry.onRequest(() => null)
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(JSON.stringify({ kind: "client.query", id: "r9", name: "" }))
+
+    const [frame] = factory.latest.frames() as { requestId: string; code: string }[]
+    expect(factory.latest.frames().length).toBe(1)
+    expect([frame.requestId, frame.code]).toEqual(["r9", "bad_request"])
+  })
+
+  it("only reports, and sends nothing, for a malformed frame without a usable id", () => {
+    const { registry, factory } = createHarness()
+    const reasons: string[] = []
+    registry.onMalformedFrame((frame) => reasons.push(frame.reason))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(JSON.stringify({ kind: "client.query", name: "n" }))
+    factory.latest.receive(JSON.stringify({ kind: "client.query", id: 7, name: "n" }))
+    factory.latest.receive(JSON.stringify({ kind: "client.ping", id: 7 }))
+    factory.latest.receive(JSON.stringify({ kind: "client.ping", id: "p1", extra: 1 }))
+
+    expect(reasons.length).toBe(4)
+    expect(factory.latest.sent).toEqual([])
+  })
+
+  it("times a request out after 10 seconds by default", async () => {
+    const { registry, factory, clock } = createHarness(true, {
+      heartbeatIntervalMs: 100_000,
+      livenessTimeoutMs: 200_000,
+    })
+    registry.onRequest(() => new Promise(() => {}))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+    factory.latest.receive(queryFrame("r1"))
+
+    const errors = () => factory.latest.frames().filter((f) => isKind(f, "server.error"))
+    await clock.advance(9_999)
+    expect(errors()).toEqual([])
+    await clock.advance(1)
+
+    expect((errors()[0] as { code: string }).code).toBe("timeout")
+  })
+
+  it("treats a request timeout below 1 ms as 1 ms instead of answering at once", async () => {
+    const { registry, factory, clock } = createHarness(true, { requestTimeoutMs: -5 })
+    registry.onRequest(() => new Promise(() => {}))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(queryFrame("r1"))
+    const errors = () => factory.latest.frames().filter((f) => isKind(f, "server.error"))
+    await clock.advance(0)
+    expect(errors()).toEqual([])
+    await clock.advance(1)
+
+    expect((errors()[0] as { code: string }).code).toBe("timeout")
+  })
+
+  it("answers not_found when no dispatcher is registered", () => {
+    const { registry, factory } = createHarness()
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(queryFrame("r1"))
+
+    expect((factory.latest.frames()[0] as { code: string }).code).toBe("not_found")
+  })
+
+  it("answers internal instead of staying silent when the result cannot be encoded", async () => {
+    const { registry, factory } = createHarness()
+    registry.onRequest(() => ({ big: 10n }))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(queryFrame("r1"))
+    await drainMicrotasks()
+
+    expect(factory.latest.frames()).toEqual([
+      { kind: "server.error", requestId: "r1", code: "internal", message: "internal error" },
+    ])
+  })
+
+  it("refuses a second dispatcher and lets a new one register after unsubscribe", () => {
+    const { registry } = createHarness()
+    const off = registry.onRequest(() => null)
+
+    expect(() => registry.onRequest(() => null)).toThrow("already registered")
+    off()
+    expect(() => registry.onRequest(() => null)).not.toThrow()
+  })
+
+  it("still treats a server-only frame from a client as malformed", () => {
+    const { registry, factory } = createHarness()
+    const reasons: string[] = []
+    registry.onMalformedFrame((frame) => reasons.push(frame.reason))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(JSON.stringify({ kind: "server.result", requestId: "r1" }))
+
+    expect(reasons.length).toBe(1)
   })
 })
 

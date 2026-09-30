@@ -8,9 +8,10 @@
  *
  * The ADR 002 invariant shows up in three places:
  *
- * - The transport sends no application mutation. Its outbound vocabulary is liveness and a sync
- *   handshake; {@link ClientTransport.send} is typed to {@link ClientMessage}, which has no
- *   mutation frame.
+ * - {@link ClientTransport.send} and {@link ClientTransport.request} carry liveness and the sync
+ *   handshake only. Application calls go through {@link ClientTransport.command} and
+ *   {@link ClientTransport.query}: correlated by request id, timed out, and rejected when the
+ *   socket drops. The transport does not know what a command or query means.
  * - A hint carries no payload — only a sequence — so arrival alone can never mean the client has
  *   the data. Every hint that is not a duplicate, contiguous or not, is pulled from the cursor the
  *   client already holds before anything moves; a gap and a merely-contiguous hint cost exactly
@@ -52,6 +53,7 @@ import {
   type ServerMessage,
   toWireCursors,
 } from "./codec.ts"
+import { RealtimeRequestError } from "./errors.ts"
 import type { ApplyOutcome, GapReport, SequenceChange, SyncRequest } from "./cursor.ts"
 import { ApplyStatus } from "./cursor.ts"
 import {
@@ -106,6 +108,22 @@ export interface RequestOptions {
   timeoutMs?: number
   /** Total send attempts including the first. Defaults to `1`: no retry. */
   maxAttempts?: number
+}
+
+/** Options for one {@link ClientTransport.query}. */
+export interface CallOptions {
+  /** Milliseconds to wait for the answer. Defaults to the transport's `requestTimeoutMs`. */
+  timeoutMs?: number
+}
+
+/** Options for one {@link ClientTransport.command}. */
+export interface CommandOptions extends CallOptions {
+  /**
+   * Lets the server recognise a retry of this command. The transport only sends it; a command
+   * whose socket dropped has an unknown outcome, and resending it with the same key is safe when
+   * the server stores keys.
+   */
+  idempotencyKey?: string
 }
 
 /** Outcome of the reconnect gate — typically `GET /api/auth/me`. */
@@ -163,6 +181,8 @@ export interface ClientTransportOptions {
   connectTimeoutMs?: number
   /** Default ack timeout. */
   ackTimeoutMs?: number
+  /** Default time a command or query may wait for its answer. */
+  requestTimeoutMs?: number
   /** Ack timeout for the sync handshake. */
   handshakeAckTimeoutMs?: number
   /** Send attempts for the sync handshake, including the first. */
@@ -186,6 +206,25 @@ export interface ClientTransportOptions {
   random?: () => number
   /** Called for every error the transport surfaces. Errors are never swallowed. */
   onError?: (error: Error) => void
+}
+
+/**
+ * No answer to a command or query arrived in time.
+ *
+ * Distinct from a server answer with code `timeout` ({@link RealtimeRequestError}), which says the
+ * server gave up. Either way the outcome is unknown: a command may have run. Retry with the same
+ * idempotency key.
+ */
+export class RequestTimeoutError extends Error {
+  readonly requestId: string
+  readonly timeoutMs: number
+
+  constructor(requestId: string, timeoutMs: number) {
+    super(`no answer to request ${requestId} within ${timeoutMs} ms`)
+    this.name = "RequestTimeoutError"
+    this.requestId = requestId
+    this.timeoutMs = timeoutMs
+  }
 }
 
 /** Timed out waiting for an acknowledgement. */
@@ -237,10 +276,19 @@ export class AuthGateError extends Error {
   }
 }
 
+function isRequestFrame(message: ClientMessage): boolean {
+  return message.kind === "client.command" || message.kind === "client.query"
+}
+
 interface Deferred<T> {
   readonly promise: Promise<T>
   resolve(value: T): void
   reject(error: Error): void
+}
+
+interface PendingCall {
+  readonly deferred: Deferred<unknown>
+  readonly timer: TimerHandle
 }
 
 interface PendingRequest {
@@ -257,6 +305,8 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000
 const DEFAULT_PONG_TIMEOUT_MS = 7_500
 const DEFAULT_CONNECT_TIMEOUT_MS = 7_500
 const DEFAULT_ACK_TIMEOUT_MS = 5_000
+/** Longer than the server's default, so the server's typed `timeout` normally arrives first. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const DEFAULT_HANDSHAKE_ATTEMPTS = 2
 
 /**
@@ -281,6 +331,8 @@ export class ClientTransport {
   readonly #minHealthyMs: number
   readonly #random: () => number
   readonly #pending = new Map<string, PendingRequest>()
+  readonly #calls = new Map<string, PendingCall>()
+  readonly #requestTimeoutMs: number
   readonly #frameHandlers = new Set<(message: ServerMessage) => void>()
   readonly #changeHandlers = new Set<
     (hint: AppliedHint, outcome: ApplyOutcome) => void
@@ -320,6 +372,7 @@ export class ClientTransport {
     this.#connectTimeoutMs = options.connectTimeoutMs ??
       DEFAULT_CONNECT_TIMEOUT_MS
     this.#ackTimeoutMs = options.ackTimeoutMs ?? DEFAULT_ACK_TIMEOUT_MS
+    this.#requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     this.#handshakeAckTimeoutMs = options.handshakeAckTimeoutMs ??
       this.#ackTimeoutMs
     this.#handshakeAttempts = Math.max(
@@ -351,6 +404,11 @@ export class ClientTransport {
     return this.#pending.size
   }
 
+  /** Commands and queries still waiting for their answer. Zero means nothing is outstanding. */
+  get pendingCalls(): number {
+    return this.#calls.size
+  }
+
   /** Start connecting. A no-op while connecting or open. */
   connect(): void {
     if (
@@ -380,6 +438,9 @@ export class ClientTransport {
 
   /** Send one frame if the socket is open. Returns whether it was handed to the socket. */
   send(message: ClientMessage): boolean {
+    // A request frame is never fire-and-forget: it needs correlation and a timeout, so it goes
+    // through `command` or `query`.
+    if (isRequestFrame(message)) return false
     return this.#send(message)
   }
 
@@ -394,6 +455,11 @@ export class ClientTransport {
     message: ClientMessage,
     options: RequestOptions = {},
   ): Promise<ServerMessage> {
+    if (isRequestFrame(message)) {
+      return Promise.reject(
+        new RealtimeRequestError("bad_request", "use command() or query() to send a request frame"),
+      )
+    }
     const socket = this.#socket
     if (!socket || socket.state !== SocketState.Open) {
       return Promise.reject(
@@ -423,6 +489,34 @@ export class ClientTransport {
     this.#pending.set(pending.id, pending)
     this.#attemptSend(pending)
     return deferred.promise
+  }
+
+  /**
+   * Ask the server to change something and resolve with its result payload.
+   *
+   * Rejects with {@link RealtimeRequestError} when the server answers with an error (switch on
+   * `code`), with {@link RequestTimeoutError} when nothing arrives within the timeout, and with
+   * {@link ConnectionLostError} when there is no open socket or it drops first. After a drop the
+   * command may or may not have run: pass an `idempotencyKey` to make resending it safe.
+   */
+  command(name: string, payload?: unknown, options: CommandOptions = {}): Promise<unknown> {
+    return this.#call({
+      kind: "client.command",
+      id: this.#nextFrameId(),
+      name,
+      ...(payload !== undefined ? { payload } : {}),
+      ...(options.idempotencyKey !== undefined ? { idempotencyKey: options.idempotencyKey } : {}),
+    }, options)
+  }
+
+  /** Ask the server for data and resolve with its result payload. Failures as {@link command}. */
+  query(name: string, payload?: unknown, options: CallOptions = {}): Promise<unknown> {
+    return this.#call({
+      kind: "client.query",
+      id: this.#nextFrameId(),
+      name,
+      ...(payload !== undefined ? { payload } : {}),
+    }, options)
   }
 
   /** Every decoded server frame except liveness. Returns an unsubscribe. */
@@ -603,6 +697,22 @@ export class ClientTransport {
         this.#settleAck(result.message.ackId, result.message)
         this.#emitFrame(result.message)
         return
+      case "server.result":
+        this.#settleCall(result.message.requestId, (call) =>
+          call.deferred.resolve(
+            result.message.kind === "server.result" ? result.message.payload : undefined,
+          ))
+        this.#emitFrame(result.message)
+        return
+      case "server.error": {
+        const { requestId, code, message, details } = result.message
+        this.#settleCall(
+          requestId,
+          (call) => call.deferred.reject(new RealtimeRequestError(code, message, details)),
+        )
+        this.#emitFrame(result.message)
+        return
+      }
       case "change.hint": {
         const hint: AppliedHint = {
           groupId: result.message.groupId,
@@ -889,6 +999,56 @@ export class ClientTransport {
     for (const pending of [...this.#pending.values()]) {
       this.#settleError(pending, error)
     }
+    // Not reported through `onError`: each caller already holds the rejection.
+    for (const id of [...this.#calls.keys()]) {
+      this.#settleCall(id, (call) => call.deferred.reject(error))
+    }
+  }
+
+  /** Register one command or query, send it, and start its timeout. */
+  #call(frame: ClientMessage & { id: string }, options: CallOptions): Promise<unknown> {
+    const socket = this.#socket
+    if (!socket || socket.state !== SocketState.Open) {
+      return Promise.reject(new ConnectionLostError("no open socket to send on"))
+    }
+    let encoded: string
+    try {
+      encoded = this.#codec.encode(frame)
+    } catch (error) {
+      return Promise.reject(new RealtimeRequestError("bad_request", toError(error).message))
+    }
+    const deferred = createDeferred<unknown>()
+    // The caller's await still receives the rejection; this only stops an ignored one from being
+    // unhandled.
+    void deferred.promise.catch(() => {})
+    const timeoutMs = options.timeoutMs ?? this.#requestTimeoutMs
+    const timer = this.#clock.setTimeout(
+      () =>
+        this.#settleCall(frame.id, (call) =>
+          call.deferred.reject(
+            new RequestTimeoutError(frame.id, timeoutMs),
+          )),
+      timeoutMs,
+    )
+    this.#calls.set(frame.id, { deferred, timer })
+    try {
+      socket.send(encoded)
+    } catch (error) {
+      this.#settleCall(frame.id, (call) =>
+        call.deferred.reject(
+          new ConnectionLostError(`send failed: ${toError(error).message}`),
+        ))
+    }
+    return deferred.promise
+  }
+
+  /** Settle a pending call once. An unknown id — a late answer after a timeout — is ignored. */
+  #settleCall(id: string, settle: (call: PendingCall) => void): void {
+    const call = this.#calls.get(id)
+    if (!call) return
+    this.#calls.delete(id)
+    this.#clock.clearTimeout(call.timer)
+    settle(call)
   }
 
   /** Encode and hand one frame to the socket. Requires an open socket. */

@@ -1,8 +1,8 @@
 /**
  * Wire protocol: what a frame may say, and what it may never say.
  *
- * The cases below are also the wire-level half of the ADR 002 invariant — there is no frame kind in
- * this protocol that mutates anything, so a socket cannot become a second, weaker application path.
+ * The request frames carry an envelope only: the codec validates ids, names, keys and error codes,
+ * never what a payload means.
  */
 
 import { expect } from "@std/expect"
@@ -11,8 +11,10 @@ import { describe, it } from "@std/testing/bdd"
 import { type } from "arktype"
 
 import {
+  createError,
   createHint,
   createJsonCodec,
+  createResult,
   findUndeclaredKey,
   isChangeHint,
   type WireMessage,
@@ -426,5 +428,107 @@ describe("createJsonCodec", () => {
 
     expect(isChangeHint(hint)).toBe(true)
     expect(isChangeHint({ kind: "server.ping" })).toBe(false)
+  })
+})
+
+describe("request and response frames", () => {
+  const command: WireMessage = {
+    kind: "client.command",
+    id: "req-1",
+    name: "group.rename",
+    payload: { groupId: 7, title: "Trip" },
+    idempotencyKey: "key-1",
+  }
+
+  it("round-trips a command with a payload and an idempotency key", () => {
+    expect(codec.decode(codec.encode(command))).toEqual({ ok: true, message: command })
+  })
+
+  it("round-trips a query, a result and an error", () => {
+    const frames: WireMessage[] = [
+      { kind: "client.query", id: "req-2", name: "group.list" },
+      { kind: "server.result", requestId: "req-2", payload: [{ id: 1 }] },
+      { kind: "server.result", requestId: "req-3" },
+      {
+        kind: "server.error",
+        requestId: "req-2",
+        code: "forbidden",
+        message: "not your group",
+        details: { groupId: 1 },
+      },
+    ]
+    for (const frame of frames) {
+      expect(codec.decode(codec.encode(frame))).toEqual({ ok: true, message: frame })
+    }
+  })
+
+  it("refuses a request frame without an id", () => {
+    const raw = JSON.stringify({ kind: "client.command", name: "group.rename" })
+    expect(codec.decode(raw).ok).toBe(false)
+  })
+
+  it("refuses an empty or oversized request name and id", () => {
+    for (
+      const bad of [{ name: "" }, { name: "n".repeat(129) }, { id: "" }, { id: "i".repeat(129) }]
+    ) {
+      const raw = JSON.stringify({ kind: "client.query", id: "r", name: "n", ...bad })
+      expect(codec.decode(raw).ok).toBe(false)
+    }
+  })
+
+  it("refuses an idempotency key on a query because a read has no effect to deduplicate", () => {
+    const raw = JSON.stringify({ kind: "client.query", id: "r", name: "n", idempotencyKey: "k" })
+    const result = codec.decode(raw)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toContain("idempotencyKey")
+  })
+
+  it("refuses an empty or oversized idempotency key", () => {
+    for (const key of ["", "k".repeat(257)]) {
+      const raw = JSON.stringify({ ...command, idempotencyKey: key })
+      expect(codec.decode(raw).ok).toBe(false)
+    }
+  })
+
+  it("refuses an undeclared property on a request or response frame", () => {
+    for (const frame of [command, createResult("r"), createError("r", "internal", "x")]) {
+      const raw = JSON.stringify({ ...frame, extra: 1 })
+      const result = codec.decode(raw)
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.reason).toContain("extra")
+    }
+  })
+
+  it("refuses an error code outside the closed set", () => {
+    const raw = JSON.stringify({
+      kind: "server.error",
+      requestId: "r",
+      code: "teapot",
+      message: "x",
+    })
+    expect(codec.decode(raw).ok).toBe(false)
+  })
+
+  it("refuses to encode an error without a message", () => {
+    const bad = { kind: "server.error", requestId: "r", code: "internal" } as unknown as WireMessage
+    expect(() => codec.encode(bad)).toThrow("Refusing to send a frame that is not protocol")
+  })
+
+  it("builds the answer frames with the fields given and no undefined placeholders", () => {
+    expect(createResult("r", 5)).toEqual({ kind: "server.result", requestId: "r", payload: 5 })
+    expect(createError("r", "conflict", "stale", [1])).toEqual({
+      kind: "server.error",
+      requestId: "r",
+      code: "conflict",
+      message: "stale",
+      details: [1],
+    })
+    expect("payload" in createResult("r")).toBe(false)
+    expect("details" in createError("r", "internal", "x")).toBe(false)
+  })
+
+  it("does not build a payload key into a result that has none", () => {
+    expect("payload" in createResult("r")).toBe(false)
+    expect("details" in createError("r", "internal", "x")).toBe(false)
   })
 })
