@@ -10,6 +10,7 @@ import {
   constantTimeEquals,
   constantTimeEqualsText,
   DEFAULT_TOKEN_BYTES,
+  deriveSecret,
   MIN_SECRET_LENGTH,
   monotonicUlid,
   newOpaqueToken,
@@ -830,4 +831,21 @@ Deno.test("constantTimeEqualsText — delegates the comparison to timingSafeEqua
   assertEquals(comparisons.length, 2, `unexpected strict comparisons: ${comparisons.join(" | ")}`)
   assert(comparisons.some((line) => line.includes("a.length === 0")))
   assert(comparisons.some((line) => line.includes("digestA.byteLength !== digestB.byteLength")))
+})
+
+Deno.test("deriveSecret — matches an HMAC-SHA-256 computed independently with openssl", async () => {
+  // printf 'label' | openssl dgst -sha256 -hmac "<32 x k>"
+  const expected = "49c63fd6abff65aae8b15e4b926b2ffa1e629d9ded54af82b9388746ff3e87cd"
+  assertEquals(await deriveSecret("k".repeat(32), "label"), expected)
+})
+
+Deno.test("deriveSecret — different labels and different secrets give different values", async () => {
+  const a = await deriveSecret(SECRET, "cookie")
+  assertFalse(a === await deriveSecret(SECRET, "csrf"))
+  assertFalse(a === await deriveSecret(OTHER_SECRET, "cookie"))
+})
+
+Deno.test("deriveSecret — refuses an unusable secret and an empty label", async () => {
+  await assertRejects(() => deriveSecret("short", "cookie"), Error)
+  await assertRejects(() => deriveSecret(SECRET, ""), TypeError)
 })
