@@ -54,7 +54,8 @@ const limiter = createStoreLimiter(store, { windowMs: 60_000, limit: 10 })
 ```
 
 Redis or Postgres reach the same limiter by implementing `RateLimitStore` (`read`, `write`,
-`delete`) — `createStoreLimiter` is the only thing the core needs.
+`delete`, and optionally the atomic `consume`) — `createStoreLimiter` is the only thing the core
+needs. For several instances use an atomic store (see below).
 
 **Same semantics as the in-process limiter**, asserted by a parity test that drives both with one
 multi-event sequence and compares `allowed` and `remaining` decision for decision. An earlier revision
@@ -65,13 +66,16 @@ accepted **5** requests inside one window where the memory path accepted 3. The 
 **newest** event (`newest + windowMs − now`) on both branches of `StoreRateLimiter`, so early expiry
 cannot happen.
 
-**Read-modify-write is not atomic across instances.** Two isolates can read the same value and both
-accept, so the effective limit under concurrency is `limit + (concurrent isolates - 1)`. The
-3-method port is what forecloses a Deno KV `atomic().check()` compare-and-swap: that is a deliberate
-design choice, not a backend limitation — a cross-instance lock per request would serialise the API
-on the limiter, and a limiter that errs one request generous is better than one that is down. If you
-need an exact count, put the counter behind a store that has an atomic increment and accept the
-round-trip.
+**Read-modify-write is not atomic across instances, and it loses writes.** Two instances can read the
+same window and both accept; the later `write` then overwrites the earlier one, so an accepted request
+is never recorded. That repeats while requests overlap, so when a client's requests reach every
+instance in lockstep bursts the effective limit approaches `limit × instances` (4 instances at limit
+10 accepted 40 in a measured burst), not `limit + instances - 1`. The 3-method port forecloses a Deno
+KV `atomic().check()` compare-and-swap on purpose. **Several instances that must hold the limit need
+an atomic store:** a store may implement the optional `RateLimitStore.consume(key, now, windowMs,
+limit)`, which trims, counts and records in one backend step, and `StoreRateLimiter.check` then uses
+it instead of `read` plus `write`. `createRedisRateLimitStore` in `@spy4x/server/kv` does this with
+one Lua script. `refund` stays read-modify-write on every store.
 
 ## Sliding window, not fixed
 

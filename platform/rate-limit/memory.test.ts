@@ -715,3 +715,50 @@ describe("refund with a timestamp", () => {
     assertEquals((await limiter.check("a")).allowed, false)
   })
 })
+
+describe("StoreRateLimiter over a store with an atomic consume", () => {
+  /** Store whose `consume` answers from a script and whose read/write fail the test if called. */
+  function consumeOnlyStore(
+    answers: Array<{ allowed: boolean; events: number[] }>,
+  ): { store: RateLimitStore; calls: Array<[string, number, number, number]> } {
+    const calls: Array<[string, number, number, number]> = []
+    const store: RateLimitStore = {
+      read: () => Promise.reject(new Error("read must not be called when consume exists")),
+      write: () => Promise.reject(new Error("write must not be called when consume exists")),
+      delete: () => Promise.resolve(),
+      consume: (key, now, windowMs, limit) => {
+        calls.push([key, now, windowMs, limit])
+        return Promise.resolve(answers.shift() as { allowed: boolean; events: number[] })
+      },
+    }
+    return { store, calls }
+  }
+
+  it("decides from consume alone and hands it the clock, window and limit", async () => {
+    const { store, calls } = consumeOnlyStore([
+      { allowed: true, events: [T0 - 400, T0] },
+      { allowed: false, events: [T0 - 300, T0 + 10, T0 + 20] },
+    ])
+    const limiter = createStoreLimiter(store, { windowMs: 1000, limit: 3, clock: () => T0 })
+
+    const first = await limiter.check("k")
+    assertEquals(first, {
+      allowed: true,
+      at: T0,
+      remaining: 1,
+      retryAfterMs: 0,
+      resetAfterMs: 600,
+      limit: 3,
+    })
+
+    const second = await limiter.check("k", T0 + 50)
+    assertEquals(second, {
+      allowed: false,
+      remaining: 0,
+      retryAfterMs: 650,
+      resetAfterMs: 650,
+      limit: 3,
+    })
+    assertEquals(calls, [["k", T0, 1000, 3], ["k", T0 + 50, 1000, 3]])
+  })
+})

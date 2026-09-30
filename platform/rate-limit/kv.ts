@@ -57,10 +57,13 @@ function isEntry(value: unknown): value is RateLimitKvEntry {
 /**
  * Build a `RateLimitStore` over any {@link RateLimitKv}.
  *
- * Read-modify-write is not atomic: two isolates can read the same pre-write value, so the effective
- * limit under cross-instance concurrency is `limit + (concurrent isolates - 1)`. This is the
- * documented trade — a cross-instance lock per request would serialise the API on the limiter, and
- * a limiter that errs by one request is preferable to one that is down.
+ * Read-modify-write is not atomic, and it loses writes. Two instances can read the same window,
+ * both accept, and the later `write` overwrites the earlier one, so an accepted request is never
+ * recorded. That repeats for as long as requests overlap: when a client's requests reach every
+ * instance in lockstep bursts, the effective limit approaches `limit × instances`, not
+ * `limit + instances - 1`. One instance is exact. For several instances that must hold the limit,
+ * use an atomic store: `createRedisRateLimitStore` from `@spy4x/server/kv` counts and records in
+ * one step inside Redis.
  */
 export function createKvStore(options: KvStoreOptions): RateLimitStore {
   return new RateLimitStoreOverKv(options)

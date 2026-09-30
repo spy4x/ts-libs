@@ -18,6 +18,7 @@ export {
   DEFAULT_IDLE_MS,
   MemoryRateLimiter,
   type MemoryRateLimiterOptions,
+  type RateLimitConsumeResult,
   type RateLimitDecision,
   type RateLimiter,
   rateLimitKey,
