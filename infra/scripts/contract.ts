@@ -10,7 +10,7 @@
 
 const OUTPUT = "docs/1.0-contract.md"
 
-interface Entry {
+export interface Entry {
   /** The import specifier a consumer writes. */
   specifier: string
   /** The package the entry belongs to, as its directory name; the document groups by it. */
@@ -125,16 +125,16 @@ interface DocSymbol {
 }
 
 /** Resolves `@spy4x/<package>/<subpath>` to a file through that package's `deno.json`. */
-async function resolveEntry(specifier: string): Promise<string> {
+export async function resolveEntry(specifier: string, root = "."): Promise<string> {
   const [, pkg, ...rest] = specifier.split("/")
-  const config = JSON.parse(await Deno.readTextFile(`${pkg}/deno.json`))
+  const config = JSON.parse(await Deno.readTextFile(`${root}/${pkg}/deno.json`))
   const key = rest.length === 0 ? "." : `./${rest.join("/")}`
   const target = config.exports?.[key]
   if (typeof target !== "string") throw new Error(`${specifier}: no "${key}" in ${pkg}/deno.json`)
   return `${pkg}/${target.replace(/^\.\//, "")}`
 }
 
-async function denoDoc(args: string[]): Promise<string> {
+export async function denoDoc(args: string[]): Promise<string> {
   const { code, stdout, stderr } = await new Deno.Command("deno", {
     args: ["doc", ...args],
     env: { NO_COLOR: "1" },
