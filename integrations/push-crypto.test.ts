@@ -57,13 +57,16 @@ describe("encryptPayload", () => {
 
   it("changes with the authentication secret", async () => {
     const server = await serverWith(RFC.asPrivate, RFC.asPublic)
-    const body = await encryptPayload(
-      server,
-      { auth: encodeBase64Url(new Uint8Array(16)), p256dh: RFC.uaPublic },
-      new TextEncoder().encode(RFC.plaintext),
-      decodeBase64Url(RFC.salt),
-    )
-    expect(encodeBase64Url(body)).not.toBe(RFC.body)
+    const encrypt = async (auth: string) =>
+      encodeBase64Url(
+        await encryptPayload(
+          server,
+          { auth, p256dh: RFC.uaPublic },
+          new TextEncoder().encode(RFC.plaintext),
+          decodeBase64Url(RFC.salt),
+        ),
+      )
+    expect(await encrypt(encodeBase64Url(new Uint8Array(16)))).not.toBe(await encrypt(RFC.auth))
   })
 
   it("uses a fresh random salt when none is pinned", async () => {
