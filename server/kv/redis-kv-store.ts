@@ -17,7 +17,7 @@ const SCAN_COUNT = 200
 
 /**
  * How long {@link RedisKvStore.#openConnection} waits for `Deno.connect`, and then
- * separately for `PING` to answer, before giving up — in both
+ * for `AUTH` and `PING` together to answer, before giving up — in both
  * {@link RedisKvStore.connect} and a reconnect.
  *
  * Not configurable, and not exported. Two different hosts hang two different ways,
@@ -80,6 +80,29 @@ export class RedisKvStoreConnectionError extends Error {
   constructor(cause: unknown) {
     super("RedisKvStore's connection is no longer usable", { cause })
     this.name = "RedisKvStoreConnectionError"
+  }
+}
+
+/**
+ * Thrown by {@link RedisKvStore.connect} when the server refuses the credentials or demands ones
+ * that were not given. Match on {@link code}, not on the message. The message and the code never
+ * contain the password, and never the server's own text.
+ *
+ * A reconnect that hits the same refusal (the password was changed on the server) surfaces as a
+ * {@link RedisKvStoreConnectionError} whose `cause` is this error.
+ */
+export class RedisKvStoreAuthError extends Error {
+  /**
+   * The first word of the server's error reply: `WRONGPASS` for a wrong password, `NOAUTH` when a
+   * password was needed and none was given, `ERR` when the server has no password set at all.
+   * `UNEXPECTED_REPLY` when `AUTH` answered something other than `OK`.
+   */
+  readonly code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = "RedisKvStoreAuthError"
+    this.code = code
   }
 }
 
@@ -159,7 +182,7 @@ export interface RedisKvStoreOptions {
   password?: string
 }
 
-/** What {@link RedisKvStore.#openConnection} hands back: one live, PING-checked socket. */
+/** What {@link RedisKvStore.#openConnection} hands back: one live, authenticated, PING-checked socket. */
 interface OpenedConnection {
   connection: Deno.Conn
   client: RedisClient
@@ -197,8 +220,8 @@ interface OpenedConnection {
  * {@link COMMAND_TIMEOUT_MS} (#172) closes the connection and throws without a resend:
  * a frozen Redis would only freeze the resend too. A call that finds the connection
  * dead before it sends anything opens a fresh connection the same way {@link connect}
- * does — `Deno.connect`, then a `PING` that must answer `PONG`, each bounded to
- * {@link CONNECT_TIMEOUT_MS} on its own, so neither a host that never answers TCP nor
+ * does — `Deno.connect`, then `AUTH` when a password was given, then a `PING` that must answer
+ * `PONG`; the connect and the AUTH/PING pair are each bounded to {@link CONNECT_TIMEOUT_MS}, so neither a host that never answers TCP nor
  * one that accepts the connection and then never answers `PING` (a frozen Redis, a
  * proxy whose backend is down) can hang the caller. That attempt either replaces the
  * dead connection and the call proceeds, or it fails and the call throws
@@ -230,14 +253,15 @@ export class RedisKvStore {
   }
 
   /**
-   * Opens one Redis connection and confirms it with `PING`.
+   * Opens one Redis connection, authenticates it with `AUTH` when a password was given, and
+   * confirms it with `PING`.
    *
    * Shared by {@link connect} and {@link #doReconnect}, which need the identical
    * steps: connect (bounded by {@link CONNECT_TIMEOUT_MS}, so a host that never
    * answers fails like one that refuses rather than hanging every caller), wrap the
    * writable half so a failed write is recorded rather than an unhandled rejection
    * (see {@link trapWriteErrors}), and confirm the connection actually speaks Redis
-   * before handing it back — `PING` is bounded by the same
+   * before handing it back — `AUTH` and `PING` together are bounded by the same
    * {@link CONNECT_TIMEOUT_MS}, because a server that accepts the TCP connection and
    * then never answers (a frozen Redis, a proxy whose backend is down) would
    * otherwise hang here forever even though `Deno.connect` itself already
@@ -276,7 +300,12 @@ export class RedisKvStore {
             ? ["AUTH", credentials.username, credentials.password]
             : ["AUTH", credentials.password],
         )
-        if (authReply !== "OK") throw new Error("KV server did not accept the credentials")
+        if (authReply !== "OK") {
+          throw new RedisKvStoreAuthError(
+            "UNEXPECTED_REPLY",
+            "KV server did not accept the credentials (UNEXPECTED_REPLY)",
+          )
+        }
         step = "PING"
       }
       reply = await client.sendCommand(["PING"])
@@ -290,10 +319,13 @@ export class RedisKvStore {
       if (error instanceof RedisError) {
         const code = error.message.split(" ")[0]
         if (step === "AUTH") {
-          throw new Error(`KV server refused the credentials (${code})`)
+          throw new RedisKvStoreAuthError(code, `KV server refused the credentials (${code})`)
         }
         if (code === "NOAUTH") {
-          throw new Error("KV server requires a password: pass options.password to connect()")
+          throw new RedisKvStoreAuthError(
+            code,
+            "KV server requires a password: pass options.password to connect()",
+          )
         }
       }
       throw error
@@ -311,7 +343,9 @@ export class RedisKvStore {
    * Connects to Redis and scopes every key this store touches under `keyPrefix`.
    *
    * With `options.password` the store sends `AUTH` first, on every reconnect too. A wrong or
-   * missing password rejects with an error that names the refusal code and never the password.
+   * missing password rejects with a {@link RedisKvStoreAuthError} (its `code` is `WRONGPASS` or
+   * `NOAUTH`) that never contains the password. A `username` without a `password` throws a
+   * `TypeError`.
    *
    * `keyPrefix` must be non-empty: a store with an empty prefix would make
    * {@link reset} equivalent to the `FLUSHDB` this module deliberately does not send.
@@ -324,6 +358,9 @@ export class RedisKvStore {
   ): Promise<RedisKvStore> {
     if (keyPrefix.length === 0) {
       throw new TypeError("keyPrefix must be a non-empty string")
+    }
+    if (options.username && !options.password) {
+      throw new TypeError("options.username needs options.password")
     }
     const credentials = { username: options.username, password: options.password }
     const opened = await RedisKvStore.#openConnection(hostname, port, credentials)

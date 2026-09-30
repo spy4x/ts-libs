@@ -6,6 +6,7 @@
  */
 export {
   RedisKvStore,
+  RedisKvStoreAuthError,
   RedisKvStoreClosedError,
   RedisKvStoreConnectionError,
   type RedisKvStoreOptions,

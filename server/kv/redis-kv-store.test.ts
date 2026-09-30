@@ -18,6 +18,7 @@ import { RedisError } from "@iuioiua/redis"
 import { afterEach, describe, it } from "@std/testing/bdd"
 import {
   RedisKvStore,
+  RedisKvStoreAuthError,
   RedisKvStoreClosedError,
   RedisKvStoreConnectionError,
 } from "./redis-kv-store.ts"
@@ -221,9 +222,11 @@ describe("RedisKvStore.connect authentication", () => {
 
     const error = await assertRejects(
       () => RedisKvStore.connect("fake-host", 6379, "unit_kv", { password: SECRET }),
-      Error,
+      RedisKvStoreAuthError,
     )
 
+    assertInstanceOf(error, RedisKvStoreAuthError)
+    assertEquals(error.code, "WRONGPASS")
     assertEquals(error.message, "KV server refused the credentials (WRONGPASS)")
     assertEquals(String(error).includes(SECRET), false)
     assertEquals(conn.closed, true)
@@ -235,10 +238,65 @@ describe("RedisKvStore.connect authentication", () => {
 
     const error = await assertRejects(
       () => RedisKvStore.connect("fake-host", 6379, "unit_kv"),
-      Error,
+      RedisKvStoreAuthError,
     )
 
+    assertInstanceOf(error, RedisKvStoreAuthError)
+    assertEquals(error.code, "NOAUTH")
     assertEquals(error.message.includes("requires a password"), true)
+    assertEquals(conn.closed, true)
+  })
+
+  it("rejects an AUTH reply other than OK with a RedisKvStoreAuthError and closes the socket", async () => {
+    const conn = createFakeConn()
+    stubConnectWith(conn, ["+NOPE"])
+
+    const error = await assertRejects(
+      () => RedisKvStore.connect("fake-host", 6379, "unit_kv", { password: SECRET }),
+      RedisKvStoreAuthError,
+    )
+
+    assertEquals(error.code, "UNEXPECTED_REPLY")
+    assertEquals(conn.closed, true)
+    assertEquals(conn.writes.length, 1) // no PING after a refused AUTH
+  })
+
+  it("throws a TypeError for a username without a password, before opening a socket", async () => {
+    Deno.connect = (() => {
+      throw new Error("must not connect")
+    }) as unknown as typeof Deno.connect
+
+    await assertRejects(
+      () => RedisKvStore.connect("fake-host", 6379, "unit_kv", { username: "api" }),
+      TypeError,
+    )
+  })
+
+  it("times out and rejects instead of hanging when AUTH never answers", async () => {
+    const conn = createFakeConn()
+    stubConnectWith(conn, []) // accepts the connection, answers nothing
+    // The deadline timer fires on the next tick instead of after 5 seconds.
+    globalThis.setTimeout =
+      ((callback: () => void) => originalSetTimeout(callback, 0)) as typeof setTimeout
+    // A timer that starts only after AUTH would leave this pending forever: fail instead of hang.
+    const guard = new Promise<never>((_, reject) =>
+      originalSetTimeout(
+        () => reject(new Error("connect hung: AUTH is outside the deadline")),
+        2000,
+      )
+    )
+
+    const failure = await Promise.race([
+      RedisKvStore.connect("fake-host", 6379, "unit_kv", { password: SECRET }).then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+      guard,
+    ])
+
+    assertInstanceOf(failure, DOMException)
+    assertEquals(failure.name, "TimeoutError")
+    assertEquals(failure.message, "AUTH got no reply in time")
     assertEquals(conn.closed, true)
   })
 
