@@ -883,15 +883,41 @@ Runs on: server (Deno).
 
 ## Entry points
 
-| Export           | What it is                                                                |
-| ---------------- | ------------------------------------------------------------------------- |
-| `.` (`mod.ts`)   | Barrel.                                                                   |
-| `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority` |
-| `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`  |
-| `./cloudflare`   | `purgeUrls` — Cloudflare cache purge by URL                               |
-| `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification                 |
+| Export           | What it is                                                                   |
+| ---------------- | ---------------------------------------------------------------------------- |
+| `.` (`mod.ts`)   | Barrel.                                                                      |
+| `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`    |
+| `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`     |
+| `./cloudflare`   | `purgeUrls` — Cloudflare cache purge by URL                                  |
+| `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification                    |
+| `./push`         | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices |
 
 ## Contracts
+
+### `createWebPushSender` — Web Push
+
+```ts
+const { publicKey, keys } = await generateVapidKeyPair() // once; store `keys`, serve `publicKey`
+const sender = await createWebPushSender({
+  vapidKeys: keys,
+  subject: "mailto:ops@example.com",
+  store,
+})
+const result = await sender.send(user.id, { title: "Backup done", body: null, url: null })
+```
+
+`store` is the app's port: `listByUser(userId)` and `deleteByEndpoint(userId, endpoint)`, over
+`platform/model`'s `PushSubscriptionJson`. `send` never throws and returns one delivery per
+subscription. A 404 or 410 from the push service deletes that subscription; every other failure
+keeps it, and so does a subscription with malformed keys, which is reported as such.
+
+Keys, encryption (RFC 8291) and VAPID signing come from `@negrel/webpush` and `@negrel/http-ece`;
+the request is sent here, through the injectable `fetch` option, with `redirect: "manual"` and one
+abort signal that also bounds the DNS check. The library's own `pushMessage` is not used: it follows
+redirects and takes no signal. A 3xx answer is a failure and is never followed, so a push service
+cannot send the payload to a private address. `safeFetch` was not used because it cannot carry a
+request body. Endpoints must be public HTTPS addresses; the DNS check and the connection resolve
+separately, so a DNS-rebinding race remains.
 
 ### `HealthchecksClient` — dead-man's switch
 
@@ -1031,7 +1057,8 @@ const payload = JSON.parse(new TextDecoder().decode(result.body))
   `{ ok: false, reason: "invalid_secret" }`. Nothing throws: a zero-length HMAC key raises
   `DataError: Key length is zero`, which is a crash on an untrusted request rather than a 401, and
   the values that did _not_ throw produced a usable key, so a body signed with the same falsy value
-  verified. Pinned by `rejects a forgery signed with the HMAC key \`null\``and`does not throw \`DataError: Key length is zero\` for an empty or absent secret`.
+  verified. Pinned by `` rejects a forgery signed with the HMAC key `null` `` and
+  ``does not throw `DataError: Key length is zero` for an empty or absent secret``.
 - The body must be the raw bytes off the wire. Parsing and re-serialising JSON changes the hash.
 
 Headers default to `X-Signature-256` and `X-Signature-Timestamp`, both overridable, and the
@@ -1058,15 +1085,15 @@ Read the sections below before writing a _unit_ test that touches the network. I
 suite runs under `--allow-read --allow-env` with no `--allow-net`. The integration tier is the one
 exception — see below.
 
-- **`fetcher?: typeof fetch`** — defaults to `globalThis.fetch`. No unit test in this package performs
-  a real request.
-- **`sleep?: (ms: number) => Promise<void>` and `clock?: () => number`** — the retry loop measures its
-  budget through the injected clock and waits through the injected sleeper. Unit tests supply a
+- **`fetcher?: typeof fetch`** — defaults to `globalThis.fetch`. No unit test in this package
+  performs a real request.
+- **`sleep?: (ms: number) => Promise<void>` and `clock?: () => number`** — the retry loop measures
+  its budget through the injected clock and waits through the injected sleeper. Unit tests supply a
   recording timer plus a manual clock, so nothing sleeps and nothing asserts on wall-clock time.
 - **`backoff?: BackoffFn` and `random?: RandomSource`** — the delay computation, and the source its
   jitter draws from (`Math.random` unless a caller injects another, so two processes with jitter
-  enabled do not compute the same "random" delay). `onDelay` observes every requested delay, which is
-  how a test asserts _"asked for exactly 2 seconds"_ without waiting for them.
+  enabled do not compute the same "random" delay). `onDelay` observes every requested delay, which
+  is how a test asserts _"asked for exactly 2 seconds"_ without waiting for them.
 - **`requestTimeoutMs?: number`** — bounds one request via `AbortSignal.timeout()`. Defaults to
   `DEFAULT_REQUEST_TIMEOUT_MS` (10s, `retry.ts`) and is clamped to whatever `totalBudgetMs` has left
   for the attempt about to run, so a generous per-request timeout can never itself outrun the budget
