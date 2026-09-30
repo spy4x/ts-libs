@@ -182,7 +182,10 @@ export interface RedisKvStoreOptions {
   password?: string
 }
 
-/** What {@link RedisKvStore.#openConnection} hands back: one live, authenticated, PING-checked socket. */
+/**
+ * What {@link RedisKvStore.#openConnection} hands back: one live, authenticated, PING-checked
+ * socket.
+ */
 interface OpenedConnection {
   connection: Deno.Conn
   client: RedisClient
@@ -221,9 +224,9 @@ interface OpenedConnection {
  * a frozen Redis would only freeze the resend too. A call that finds the connection
  * dead before it sends anything opens a fresh connection the same way {@link connect}
  * does — `Deno.connect`, then `AUTH` when a password was given, then a `PING` that must answer
- * `PONG`; the connect and the AUTH/PING pair are each bounded to {@link CONNECT_TIMEOUT_MS}, so neither a host that never answers TCP nor
- * one that accepts the connection and then never answers `PING` (a frozen Redis, a
- * proxy whose backend is down) can hang the caller. That attempt either replaces the
+ * `PONG`; the connect and the AUTH/PING pair are each bounded to {@link CONNECT_TIMEOUT_MS}, so
+ * neither a host that never answers TCP nor one that accepts the connection and then never answers
+ * `PING` (a frozen Redis, a proxy whose backend is down) can hang the caller. That attempt either replaces the
  * dead connection and the call proceeds, or it fails and the call throws
  * {@link RedisKvStoreConnectionError} with the failed reconnect as its `cause`,
  * leaving the store exactly where the next call tries its own reconnect again.

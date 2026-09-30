@@ -279,20 +279,26 @@ describe("RedisKvStore.connect authentication", () => {
     globalThis.setTimeout =
       ((callback: () => void) => originalSetTimeout(callback, 0)) as typeof setTimeout
     // A timer that starts only after AUTH would leave this pending forever: fail instead of hang.
-    const guard = new Promise<never>((_, reject) =>
-      originalSetTimeout(
+    let guardTimer: ReturnType<typeof setTimeout> | undefined
+    const guard = new Promise<never>((_, reject) => {
+      guardTimer = originalSetTimeout(
         () => reject(new Error("connect hung: AUTH is outside the deadline")),
         2000,
       )
-    )
+    })
 
-    const failure = await Promise.race([
-      RedisKvStore.connect("fake-host", 6379, "unit_kv", { password: SECRET }).then(
-        () => undefined,
-        (error: unknown) => error,
-      ),
-      guard,
-    ])
+    let failure: unknown
+    try {
+      failure = await Promise.race([
+        RedisKvStore.connect("fake-host", 6379, "unit_kv", { password: SECRET }).then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+        guard,
+      ])
+    } finally {
+      clearTimeout(guardTimer)
+    }
 
     assertInstanceOf(failure, DOMException)
     assertEquals(failure.name, "TimeoutError")
