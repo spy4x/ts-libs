@@ -846,6 +846,7 @@ Deno.test("deriveSecret — different labels and different secrets give differen
 })
 
 Deno.test("deriveSecret — refuses an unusable secret and an empty label", async () => {
-  await assertRejects(() => deriveSecret("short", "cookie"), Error)
+  const error = await assertRejects(() => deriveSecret("short", "cookie"), Error)
+  assertEquals((error as TokenError).code, TokenErrorCode.InvalidSecret)
   await assertRejects(() => deriveSecret(SECRET, ""), TypeError)
 })
