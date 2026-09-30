@@ -1619,9 +1619,11 @@ limit across API instances. It works against Redis and Valkey (same protocol). V
 expiry; a value JSON cannot represent throws `TypeError`. `get` returns `undefined` for a key that
 holds invalid JSON (another application's key) so one foreign key cannot fail every request for that
 client; the limiter overwrites it on its next write. **Not atomic across instances:** the platform
-store reads, adds an event and writes back with plain `GET`/`SET`, so two instances that read the
-same window at once both accept, and under concurrency a client can exceed the limit by up to
-(concurrent instances - 1) requests. The limit is shared, not exact. `RedisKvStore.setWithoutExpiry`
+store reads, adds an event and writes back with plain `GET`/`SET`. When two instances read the same
+window at once, both accept and the later write overwrites the earlier one, so an accepted request
+can go unrecorded. This repeats while requests overlap: under lockstep bursts the effective limit
+approaches `limit x instances`. The limit is shared, not exact; an exact one needs an atomic store
+([#303](https://github.com/spy4x/ts-libs/issues/303)). `RedisKvStore.setWithoutExpiry`
 was added for the no-expiry case.
 
 **Every key lives under a mandatory prefix, and `reset()` only touches that prefix.** The ported

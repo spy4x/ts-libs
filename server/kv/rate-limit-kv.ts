@@ -32,9 +32,12 @@ export interface RateLimitRedisStore {
  *   would turn one foreign key into an error on every request for that client.
  *
  * Not atomic across instances: the platform store reads a window, adds an event and writes
- * it back with plain `GET` and `SET`. Two instances that read the same window at the same
- * moment both accept the request, so under concurrency a client can exceed the limit by up
- * to (concurrent instances - 1) requests. The limit is shared, not exact.
+ * it back with plain `GET` and `SET`. When two instances read the same window at once, both
+ * accept the request and the later write overwrites the earlier one, so an accepted request
+ * can be missing from the record. That repeats for as long as requests overlap: for a client
+ * whose requests reach every instance in lockstep bursts, the effective limit approaches
+ * `limit x instances`. The limit is shared but not exact; an exact one needs an atomic store
+ * (tracked in https://github.com/spy4x/ts-libs/issues/303).
  *
  * @param store An open `RedisKvStore` (the caller keeps ownership and closes it).
  */

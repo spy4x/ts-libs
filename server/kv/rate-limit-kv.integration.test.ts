@@ -16,9 +16,11 @@ describe("redisRateLimitKv against a real server", () => {
     await requireReachable(settings.address)
     const prefix = uniqueKeyPrefix("it_rl")
     const a = await RedisKvStore.connect(settings.hostname, settings.port, prefix)
-    const b = await RedisKvStore.connect(settings.hostname, settings.port, prefix)
-    const raw = await Deno.connect({ hostname: settings.hostname, port: settings.port })
+    let b: RedisKvStore | undefined
+    let raw: Deno.Conn | undefined
     try {
+      b = await RedisKvStore.connect(settings.hostname, settings.port, prefix)
+      raw = await Deno.connect({ hostname: settings.hostname, port: settings.port })
       const first = createKvStore({ backend: redisRateLimitKv(a), keyPrefix: `rl` })
       const second = createKvStore({ backend: redisRateLimitKv(b), keyPrefix: `rl` })
       await first.write(`client`, [1000, 2000], 2000, 30_500)
@@ -34,7 +36,9 @@ describe("redisRateLimitKv against a real server", () => {
 
       // A key without expireIn has no TTL, and a foreign non-JSON key reads as absent.
       const kv = redisRateLimitKv(a)
-      await kv.set(`forever`, { ok: true })
+      await a.set(`forever`, `{"ok":true}`, 3600)
+      assertEquals(await client.sendCommand(["TTL", `${prefix}:forever`]), 3600)
+      await kv.set(`forever`, { ok: true }) // replaces the earlier value and drops its expiry
       assertEquals(await client.sendCommand(["TTL", `${prefix}:forever`]), -1)
       await a.setWithoutExpiry(`foreign`, `not json {`)
       assertEquals(await kv.get(`foreign`), undefined)
@@ -42,9 +46,9 @@ describe("redisRateLimitKv against a real server", () => {
       try {
         await a.reset()
       } finally {
-        raw.close()
+        raw?.close()
         await a.close()
-        await b.close()
+        await b?.close()
       }
     }
   })
