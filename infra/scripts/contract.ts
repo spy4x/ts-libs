@@ -64,23 +64,43 @@ export function entriesFrom(
   return entries.sort((a, b) => a.specifier.localeCompare(b.specifier))
 }
 
+/**
+ * Reads and parses the `deno.json` at `path`. Only a missing file counts as absent (`undefined`);
+ * any other failure, such as invalid JSON or a permission error, throws with the path in the
+ * message, so a broken config stops the run instead of shrinking the contract.
+ */
+async function readConfig(
+  path: string,
+): Promise<{ exports?: Record<string, string> } | undefined> {
+  let text: string
+  try {
+    text = await Deno.readTextFile(path)
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return undefined
+    throw new Error(`${path}: ${error instanceof Error ? error.message : error}`, { cause: error })
+  }
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(`${path}: ${error instanceof Error ? error.message : error}`, { cause: error })
+  }
+}
+
 /** Reads every workspace member's entry points from the repository at `root` (default: cwd). */
 export async function loadEntries(root = "."): Promise<Entry[]> {
   const dirs = workspaceDirs(await Deno.readTextFile(`${root}/deno.jsonc`))
   const withConfig: string[] = []
   for await (const item of Deno.readDir(root)) {
     if (!item.isDirectory) continue
-    const has = await Deno.stat(`${root}/${item.name}/deno.json`).then(() => true, () => false)
-    if (has) withConfig.push(item.name)
+    if ((await readConfig(`${root}/${item.name}/deno.json`)) !== undefined) {
+      withConfig.push(item.name)
+    }
   }
   assertWorkspaceComplete(dirs, withConfig)
   const configs = new Map<string, { exports?: Record<string, string> }>()
   for (const dir of dirs) {
-    try {
-      configs.set(dir, JSON.parse(await Deno.readTextFile(`${root}/${dir}/deno.json`)))
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error
-    }
+    const config = await readConfig(`${root}/${dir}/deno.json`)
+    if (config !== undefined) configs.set(dir, config)
   }
   return entriesFrom(dirs, (dir) => configs.get(dir))
 }

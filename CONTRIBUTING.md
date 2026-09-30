@@ -4,8 +4,8 @@ How this repository is built, tested and released. The pitch and the package lis
 [README.md](README.md); agent-specific rules are in [AGENTS.md](AGENTS.md).
 
 Each package's own `README.md` lists its entry points.
-[`docs/1.0-contract.md`](docs/1.0-contract.md) lists every entry point the workspace publishes; their
-names and signatures are frozen at 1.0.
+[`docs/1.0-contract.md`](docs/1.0-contract.md) lists every entry point the workspace publishes;
+their names and signatures are frozen at 1.0.
 
 ## Rules
 

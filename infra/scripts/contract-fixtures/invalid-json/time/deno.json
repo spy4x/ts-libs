@@ -1,0 +1,3 @@
+// A comment: Deno and `deno fmt` accept it, `JSON.parse` does not. A truly broken file cannot be
+// committed, because `deno fmt --check` fails on it.
+{ "name": "@spy4x/time", "exports": { ".": "./mod.ts" } }

@@ -73,7 +73,7 @@ export interface AuthSessionRecord extends SessionRecord {
 }
 
 /** Longest address {@link normalizeEmail} accepts: the limit of an SMTP forward path (RFC 5321). */
-export const MAX_EMAIL_LENGTH = MAX_ADDR_SPEC_LENGTH
+export const MAX_EMAIL_LENGTH: 254 = MAX_ADDR_SPEC_LENGTH
 
 /**
  * Lower-cases and trims an address and checks its shape; null when it is not an address.
