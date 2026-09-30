@@ -1664,8 +1664,8 @@ round, for five rounds, accept exactly 10 each round; the same burst through `re
   through.
 - **A resend after a dead connection** reuses the same event id, so `consume` records no extra event;
   it may answer "rejected" for a request that was in fact recorded (the first run took the last
-  slot). A resent `release` with `at` removes nothing more; without `at` it also removes the
-  next-newest event.
+  slot). A resent `release` with `at` removes a second event only when another one shares that
+  millisecond; without `at` it also removes the next-newest event.
 - To run scripts, `RedisKvStore.eval(script, keys, args)` was added: keys are prefixed like every
   other method's, `args` arrive as `ARGV`.
 

@@ -119,7 +119,8 @@ function finite(name: string, value: number): void {
  * - A resend after a connection died mid-call sends the same command with the same event id, so
  *   `consume` records no extra event. What can happen: the first run took the last free slot, so
  *   the resend reports "rejected" for a request that was in fact recorded. A resent `release`
- *   with an `at` removes nothing more; without `at` it removes the next-newest event too.
+ *   with an `at` removes a second event only when another one shares that millisecond; without
+ *   `at` it removes the next-newest event too.
  * - `now`, `windowMs`, `limit` and event timestamps must be finite numbers, else `RangeError`.
  *
  * @param store An open `RedisKvStore`.

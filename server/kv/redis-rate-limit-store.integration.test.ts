@@ -102,6 +102,21 @@ describe("createRedisRateLimitStore against a real server", () => {
     }
   })
 
+  it("releases the event at the given time, or the newest one without a time", async () => {
+    await requireReachable(redisSettings().address)
+    const stores = await connectInstances(1, uniqueKeyPrefix("it_rl_release"))
+    try {
+      const store = createRedisRateLimitStore(stores[0])
+      for (const at of [T0, T0 + 1, T0 + 2]) await store.consume!(`k`, at, 60_000, 5)
+      await store.release!(`k`, T0 + 1)
+      assertEquals(await store.read(`k`), [T0, T0 + 2])
+      await store.release!(`k`)
+      assertEquals(await store.read(`k`), [T0])
+    } finally {
+      await closeAll(stores)
+    }
+  })
+
   it("keeps a rejected request out of the window and leaves the key's expiry alone", async () => {
     await requireReachable(redisSettings().address)
     const settings = redisSettings()
