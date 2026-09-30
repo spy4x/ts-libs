@@ -1604,6 +1604,18 @@ export const config = loadConfig(configSchema)
 `financy`'s copy differs from the template's by one import line (its own module alias for the cache
 interface) and was not otherwise consulted.
 
+**Password and ACL user.** `RedisKvStore.connect(host, port, prefix, { username?, password? })` sends
+`AUTH` before `PING`, on the first connection and on every reconnect. Without a `password` nothing
+is sent and three-argument calls behave as before; an empty password counts as none; a `username`
+without a `password` throws a `TypeError`. `AUTH` and `PING` share the connect deadline. A server
+that refuses the credentials or needs ones you did not give makes `connect` reject with a
+`RedisKvStoreAuthError`, whose `code` is `WRONGPASS` or `NOAUTH` (match on that, not on the text) and
+whose messages are `KV server refused the credentials (WRONGPASS)` and
+`KV server requires a password: pass options.password to connect()`. The socket is closed, and
+neither the password nor the server's own text appears in the error. If the password changes on the
+server later, the next reconnect fails with a `RedisKvStoreConnectionError` whose `cause` is that
+`RedisKvStoreAuthError`.
+
 **Structurally compatible with `ICacheStorage`.** `@spy4x/platform/cache`'s `ICacheStorage` (#125)
 names `server/kv` in its own doc as the interface's Redis implementation, briefed against these exact
 signatures: `get(key): Promise<string | null>`, `set(key, value: string, ttlSec): Promise<void>`,

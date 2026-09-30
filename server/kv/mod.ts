@@ -6,7 +6,9 @@
  */
 export {
   RedisKvStore,
+  RedisKvStoreAuthError,
   RedisKvStoreClosedError,
   RedisKvStoreConnectionError,
+  type RedisKvStoreOptions,
 } from "./redis-kv-store.ts"
 export { type RateLimitRedisStore, redisRateLimitKv } from "./rate-limit-kv.ts"
