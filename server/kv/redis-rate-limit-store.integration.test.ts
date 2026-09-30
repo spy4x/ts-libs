@@ -165,12 +165,16 @@ describe("createRedisRateLimitStore against a real server", () => {
         const key = `client:${round}`
         // One recorded request to refund; each racing check has its own timestamp.
         assertEquals((await limiters[0].check(key, T0)).allowed, true)
+        // The refund is issued last so the other instances' checks are already in flight or
+        // recorded when it runs; it must take out only the event at T0.
         const racing = [
-          limiters[1].refund(key, T0),
           ...Array.from({ length: 8 }, (_, i) => limiters[i % 4].check(key, T0 + 1 + i)),
+          limiters[1].refund(key, T0),
         ]
         const settled = await Promise.all(racing)
-        const accepted = settled.slice(1).filter((d) => (d as { allowed: boolean }).allowed).length
+        const accepted = settled.slice(0, 8).filter((d) =>
+          (d as { allowed: boolean }).allowed
+        ).length
         const held = await reader.read(key)
         // Every accepted racing request is still recorded, the refunded one is gone, and the
         // window never holds more than the limit.
