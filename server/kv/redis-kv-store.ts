@@ -148,6 +148,17 @@ function trapWriteErrors(
   })
 }
 
+/** Credentials for {@link RedisKvStore.connect}, for a server with `requirepass` or ACL users. */
+export interface RedisKvStoreOptions {
+  /** ACL user name (Redis 6+, Valkey). Omit to use the `default` user, as `requirepass` does. */
+  username?: string
+  /**
+   * Sent as `AUTH` before anything else, on the first connection and on every reconnect. Never
+   * put into an error message or a log line by this module. An empty string counts as none.
+   */
+  password?: string
+}
+
 /** What {@link RedisKvStore.#openConnection} hands back: one live, PING-checked socket. */
 interface OpenedConnection {
   connection: Deno.Conn
@@ -202,13 +213,17 @@ export class RedisKvStore {
   #client: RedisClient
   #connectionError: ConnectionErrorHolder
   #reconnecting: Promise<void> | null = null
+  #credentials: RedisKvStoreOptions
 
   private constructor(
     private readonly hostname: string,
     private readonly port: number,
     private readonly keyPrefix: string,
     opened: OpenedConnection,
+    // A `#private` field on purpose: not visible to `console.log(store)` or `JSON.stringify`.
+    credentials: RedisKvStoreOptions,
   ) {
+    this.#credentials = credentials
     this.#connection = opened.connection
     this.#client = opened.client
     this.#connectionError = opened.connectionError
@@ -231,7 +246,11 @@ export class RedisKvStore {
    * error reply such as `NOAUTH`, or a connection that died before it answered) left
    * a socket open with nothing left holding a reference to it.
    */
-  static async #openConnection(hostname: string, port: number): Promise<OpenedConnection> {
+  static async #openConnection(
+    hostname: string,
+    port: number,
+    credentials: RedisKvStoreOptions,
+  ): Promise<OpenedConnection> {
     const connection = await Deno.connect({
       hostname,
       port,
@@ -248,13 +267,35 @@ export class RedisKvStore {
       timedOut = true
       connection.close()
     }, CONNECT_TIMEOUT_MS)
+    let step: "AUTH" | "PING" = "PING"
     try {
+      if (credentials.password) {
+        step = "AUTH"
+        const authReply = await client.sendCommand(
+          credentials.username
+            ? ["AUTH", credentials.username, credentials.password]
+            : ["AUTH", credentials.password],
+        )
+        if (authReply !== "OK") throw new Error("KV server did not accept the credentials")
+        step = "PING"
+      }
       reply = await client.sendCommand(["PING"])
     } catch (error) {
       if (timedOut) {
-        throw new DOMException("PING got no reply in time", "TimeoutError")
+        throw new DOMException(`${step} got no reply in time`, "TimeoutError")
       }
       connection.close()
+      // Redis error replies name the failure by their first word (`WRONGPASS`, `NOAUTH`). The
+      // rethrown errors carry that word only, never the server's text and never the password.
+      if (error instanceof RedisError) {
+        const code = error.message.split(" ")[0]
+        if (step === "AUTH") {
+          throw new Error(`KV server refused the credentials (${code})`)
+        }
+        if (code === "NOAUTH") {
+          throw new Error("KV server requires a password: pass options.password to connect()")
+        }
+      }
       throw error
     } finally {
       clearTimeout(deadline)
@@ -269,6 +310,9 @@ export class RedisKvStore {
   /**
    * Connects to Redis and scopes every key this store touches under `keyPrefix`.
    *
+   * With `options.password` the store sends `AUTH` first, on every reconnect too. A wrong or
+   * missing password rejects with an error that names the refusal code and never the password.
+   *
    * `keyPrefix` must be non-empty: a store with an empty prefix would make
    * {@link reset} equivalent to the `FLUSHDB` this module deliberately does not send.
    */
@@ -276,12 +320,14 @@ export class RedisKvStore {
     hostname: string,
     port: number,
     keyPrefix: string,
+    options: RedisKvStoreOptions = {},
   ): Promise<RedisKvStore> {
     if (keyPrefix.length === 0) {
       throw new TypeError("keyPrefix must be a non-empty string")
     }
-    const opened = await RedisKvStore.#openConnection(hostname, port)
-    return new RedisKvStore(hostname, port, keyPrefix, opened)
+    const credentials = { username: options.username, password: options.password }
+    const opened = await RedisKvStore.#openConnection(hostname, port, credentials)
+    return new RedisKvStore(hostname, port, keyPrefix, opened, credentials)
   }
 
   #prefixed(key: string): string {
@@ -312,7 +358,7 @@ export class RedisKvStore {
   }
 
   async #doReconnect(): Promise<void> {
-    const opened = await RedisKvStore.#openConnection(this.hostname, this.port)
+    const opened = await RedisKvStore.#openConnection(this.hostname, this.port, this.#credentials)
     if (this.#closed) {
       opened.connection.close()
       throw new RedisKvStoreClosedError()

@@ -174,6 +174,89 @@ describe("RedisKvStore.connect", () => {
   })
 })
 
+/** Installs a fake `Deno.connect` that hands out `conn` once, after queueing `replies` on it. */
+function stubConnectWith(conn: FakeConn, replies: RespLine[]): void {
+  for (const line of replies) conn.reply(line)
+  Deno.connect = (() => Promise.resolve(conn.conn)) as unknown as typeof Deno.connect
+}
+
+const SECRET = "hunter2-not-a-real-password"
+
+describe("RedisKvStore.connect authentication", () => {
+  it("sends AUTH with the password before PING", async () => {
+    const conn = createFakeConn()
+    stubConnectWith(conn, ["+OK", "+PONG"])
+
+    await RedisKvStore.connect("fake-host", 6379, "unit_kv", { password: SECRET })
+
+    assertEquals(conn.writes.length, 2)
+    assertEquals(conn.writes[0], `*2\r\n$4\r\nAUTH\r\n$${SECRET.length}\r\n${SECRET}\r\n`)
+    assertEquals(conn.writes[1], "*1\r\n$4\r\nPING\r\n")
+  })
+
+  it("sends the user name too when one is given", async () => {
+    const conn = createFakeConn()
+    stubConnectWith(conn, ["+OK", "+PONG"])
+
+    await RedisKvStore.connect("fake-host", 6379, "unit_kv", { username: "api", password: SECRET })
+
+    assertEquals(
+      conn.writes[0],
+      `*3\r\n$4\r\nAUTH\r\n$3\r\napi\r\n$${SECRET.length}\r\n${SECRET}\r\n`,
+    )
+  })
+
+  it("sends no AUTH when no password is given", async () => {
+    const conn = createFakeConn()
+    stubConnectWith(conn, ["+PONG"])
+
+    await RedisKvStore.connect("fake-host", 6379, "unit_kv")
+
+    assertEquals(conn.writes, ["*1\r\n$4\r\nPING\r\n"])
+  })
+
+  it("rejects a wrong password with a clear error, closes the socket, and never repeats the password", async () => {
+    const conn = createFakeConn()
+    stubConnectWith(conn, ["-WRONGPASS invalid username-password pair"])
+
+    const error = await assertRejects(
+      () => RedisKvStore.connect("fake-host", 6379, "unit_kv", { password: SECRET }),
+      Error,
+    )
+
+    assertEquals(error.message, "KV server refused the credentials (WRONGPASS)")
+    assertEquals(String(error).includes(SECRET), false)
+    assertEquals(conn.closed, true)
+  })
+
+  it("rejects a missing password with an error that says a password is needed and closes the socket", async () => {
+    const conn = createFakeConn()
+    stubConnectWith(conn, ["-NOAUTH Authentication required."])
+
+    const error = await assertRejects(
+      () => RedisKvStore.connect("fake-host", 6379, "unit_kv"),
+      Error,
+    )
+
+    assertEquals(error.message.includes("requires a password"), true)
+    assertEquals(conn.closed, true)
+  })
+
+  it("sends AUTH again on the connection that replaces a dead one", async () => {
+    const first = createFakeConn()
+    stubConnectWith(first, ["+OK", "+PONG"])
+    const store = await RedisKvStore.connect("fake-host", 6379, "unit_kv", { password: SECRET })
+    first.breakConnection()
+    const replacement = createFakeConn()
+    stubConnectWith(replacement, ["+OK", "+PONG", "$-1"])
+
+    assertEquals(await store.get("k"), null)
+
+    assertEquals(replacement.writes[0].includes(`AUTH\r\n$${SECRET.length}\r\n${SECRET}`), true)
+    assertEquals(replacement.writes[1], "*1\r\n$4\r\nPING\r\n")
+  })
+})
+
 describe("RedisKvStore reconnecting after a dead connection", () => {
   it("shares one reconnect attempt between concurrent callers", async () => {
     const { store, conns } = await connectFake()
