@@ -1169,7 +1169,7 @@ net/url-shape.ts      normalizeUrlShape()   — shape only
 net/url-policy.ts     validatePublicUrl()   — the SSRF guard
 net/safe-fetch.ts     safeFetch()           — guard + redirect re-validation
 net/bounded-body.ts   readBoundedText/Json/Body, readContentLength, parseBoundedFormData
-net/ip.ts             parseIp(), normalizeIp(), ipInRanges()
+net/ip.ts             parseIp(), normalizeIp(), ipInRanges(), CLOUDFLARE_IP_RANGES
 ```
 
 ## Install
