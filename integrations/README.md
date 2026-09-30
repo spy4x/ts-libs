@@ -18,15 +18,36 @@ Runs on: server (Deno).
 
 ## Entry points
 
-| Export           | What it is                                                                |
-| ---------------- | ------------------------------------------------------------------------- |
-| `.` (`mod.ts`)   | Barrel.                                                                   |
-| `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority` |
-| `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`  |
-| `./cloudflare`   | `purgeUrls` — Cloudflare cache purge by URL                               |
-| `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification                 |
+| Export           | What it is                                                                   |
+| ---------------- | ---------------------------------------------------------------------------- |
+| `.` (`mod.ts`)   | Barrel.                                                                      |
+| `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`    |
+| `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`     |
+| `./cloudflare`   | `purgeUrls` — Cloudflare cache purge by URL                                  |
+| `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification                    |
+| `./push`         | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices |
 
 ## Contracts
+
+### `createWebPushSender` — Web Push
+
+```ts
+const { publicKey, keys } = await generateVapidKeyPair() // once; store `keys`, serve `publicKey`
+const sender = await createWebPushSender({
+  vapidKeys: keys,
+  subject: "mailto:ops@example.com",
+  store,
+})
+const result = await sender.send(user.id, { title: "Backup done", body: null, url: null })
+```
+
+`store` is the app's port: `listByUser(userId)` and `deleteByEndpoint(userId, endpoint)`, over
+`platform/model`'s `PushSubscriptionJson`. `send` never throws and returns one delivery per
+subscription. A 404 or 410 from the push service deletes that subscription; every other failure
+keeps it. Encryption and VAPID signing come from `@negrel/webpush`. The library calls the global
+`fetch` itself, so there is no `fetch` option: tests pass a `transport`, or stub `globalThis.fetch`.
+A timed-out request is abandoned, not aborted. Endpoints must be public HTTPS addresses; the DNS
+check and the library's own lookup are separate, so a DNS-rebinding race remains.
 
 ### `HealthchecksClient` — dead-man's switch
 
