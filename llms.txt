@@ -287,6 +287,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `BodyReadOptions` (interface), `jsr:@spy4x/net`: Per-call overrides for a bounded body read.
 - `BodyReadTimeoutError` (class), `jsr:@spy4x/net`: No chunk arrived within the stall budget.
 - `BodySource` (interface), `jsr:@spy4x/net`: The read surface shared by `Request` and `Response`.
+- `CLOUDFLARE_IP_RANGES` (constant), `jsr:@spy4x/net`: Cloudflare's published edge ranges, IPv4 then IPv6, from https://www.cloudflare.com/ips-v4 and https://www.cloudflare.com/ips-v6 as of 2026-09-26.
 - `CREDENTIAL_HEADERS` (constant), `jsr:@spy4x/net`: Request headers that must not follow a redirect to another origin.
 - `DEFAULT_BODY_TIMEOUT_MS` (constant), `jsr:@spy4x/net`: Default stall budget: 10s without a chunk.
 - `DEFAULT_MAX_BYTES` (constant), `jsr:@spy4x/net`: Default ceiling for a body read: 5 MiB.
@@ -350,6 +351,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/net/ip`
 
+- `CLOUDFLARE_IP_RANGES` (constant), `jsr:@spy4x/net/ip`: Cloudflare's published edge ranges, IPv4 then IPv6, from https://www.cloudflare.com/ips-v4 and https://www.cloudflare.com/ips-v6 as of 2026-09-26.
 - `ParsedIp` (interface), `jsr:@spy4x/net/ip`: An address that parseIp accepted.
 - `ipInRanges` (function), `jsr:@spy4x/net/ip`: True when `ip` lies inside at least one of `cidrs`.
 - `normalizeIp` (function), `jsr:@spy4x/net/ip`: The canonical spelling of `input` (parseIp), or `null` when it is not an address.
@@ -1938,4 +1940,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 5cc9a37e579446b1b6d5581e3974ae5a81fe94ad601a7b158197762ca35b50f5 -->
+<!-- export surface: sha256 a37bf0f879bde4772a88f609baa9c19c84d305cb87a4785e3562fd3f37e0bf34 -->
