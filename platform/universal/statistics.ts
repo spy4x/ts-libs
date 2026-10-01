@@ -16,6 +16,24 @@ function assertNoNaN(values: readonly number[]): void {
   }
 }
 
+/** Throws when a bootstrap sample holds `NaN` or an infinity, which no interval can describe. */
+function assertFinite(values: readonly number[]): void {
+  for (const v of values) {
+    if (!Number.isFinite(v)) throw new RangeError("sample contains a non-finite value")
+  }
+}
+
+/** Throws unless the options can produce an interval; runs before any resampling. */
+function checkOptions(options: BootstrapOptions): { iterations: number; level: number } {
+  const iterations = options.iterations ?? DEFAULT_ITERATIONS
+  const level = options.level ?? 0.95
+  if (!Number.isInteger(iterations) || iterations < 1) {
+    throw new RangeError("iterations must be a positive integer")
+  }
+  if (!(level > 0 && level < 1)) throw new RangeError("level must be between 0 and 1, exclusive")
+  return { iterations, level }
+}
+
 /**
  * Median of `values`; `undefined` for an empty list. Even counts average the middle two.
  *
@@ -78,7 +96,7 @@ export interface Interval {
   readonly hi: number
 }
 
-/** Bootstrap settings. The same seed and data always give the same interval. */
+/** Bootstrap settings. The same seed and data always give the same interval. Invalid values throw. */
 export interface BootstrapOptions {
   /** Seed of the resampling generator, default 1. */
   readonly seed?: number
@@ -98,9 +116,9 @@ function resample(values: readonly number[], random: () => number): number[] {
 }
 
 function percentileInterval(value: number, draws: number[], level: number): Interval {
-  if (!(level > 0 && level < 1)) throw new RangeError("level must be between 0 and 1, exclusive")
+  if (!Number.isFinite(value)) throw new RangeError("the statistic is not finite on the data")
   const sorted = draws.filter((d) => Number.isFinite(d)).sort((a, b) => a - b)
-  if (sorted.length === 0) return { value, lo: NaN, hi: NaN }
+  if (sorted.length === 0) throw new RangeError("no resample gave a finite statistic")
   const tail = (1 - level) / 2
   return { value, lo: quantileSorted(sorted, tail), hi: quantileSorted(sorted, 1 - tail) }
 }
@@ -109,30 +127,33 @@ function percentileInterval(value: number, draws: number[], level: number): Inte
  * Percentile bootstrap interval of `statistic` over `values`. Returns `undefined` for an empty
  * sample, since there is nothing to resample.
  *
- * @throws {RangeError} when `values` contains `NaN` or `options.level` is outside 0 to 1.
+ * @throws {RangeError} when `values` holds a non-finite number, `options.iterations` is not a
+ * positive integer, `options.level` is outside 0 to 1, or no resample gives a finite statistic.
  */
 export function bootstrap(
   values: readonly number[],
   statistic: (sample: readonly number[]) => number | undefined,
   options: BootstrapOptions = {},
 ): Interval | undefined {
-  assertNoNaN(values)
+  const { iterations, level } = checkOptions(options)
+  assertFinite(values)
   const value = statistic(values)
   if (value === undefined) return undefined
   const random = seededRandom(options.seed ?? DEFAULT_SEED)
   const draws: number[] = []
-  for (let i = 0; i < (options.iterations ?? DEFAULT_ITERATIONS); i++) {
+  for (let i = 0; i < iterations; i++) {
     const d = statistic(resample(values, random))
     if (d !== undefined) draws.push(d)
   }
-  return percentileInterval(value, draws, options.level ?? 0.95)
+  return percentileInterval(value, draws, level)
 }
 
 /**
  * Bootstrap interval of `statistic(b) - statistic(a)`, resampling each group on its own, so the
  * two groups may differ in size. Returns `undefined` when either group is empty.
  *
- * @throws {RangeError} when either group contains `NaN` or `options.level` is outside 0 to 1.
+ * @throws {RangeError} when either group holds a non-finite number, `options.iterations` is not a
+ * positive integer, `options.level` is outside 0 to 1, or no resample gives a finite statistic.
  */
 export function bootstrapDifference(
   a: readonly number[],
@@ -140,19 +161,20 @@ export function bootstrapDifference(
   statistic: (sample: readonly number[]) => number | undefined,
   options: BootstrapOptions = {},
 ): Interval | undefined {
-  assertNoNaN(a)
-  assertNoNaN(b)
+  const { iterations, level } = checkOptions(options)
+  assertFinite(a)
+  assertFinite(b)
   const va = statistic(a)
   const vb = statistic(b)
   if (va === undefined || vb === undefined) return undefined
   const random = seededRandom(options.seed ?? DEFAULT_SEED)
   const draws: number[] = []
-  for (let i = 0; i < (options.iterations ?? DEFAULT_ITERATIONS); i++) {
+  for (let i = 0; i < iterations; i++) {
     const da = statistic(resample(a, random))
     const db = statistic(resample(b, random))
     if (da !== undefined && db !== undefined) draws.push(db - da)
   }
-  return percentileInterval(vb - va, draws, options.level ?? 0.95)
+  return percentileInterval(vb - va, draws, level)
 }
 
 /** True when the interval contains zero, so the data do not show a difference. */

@@ -97,6 +97,46 @@ describe("bootstrap", () => {
     expect(() => bootstrap([1, 2], median, { level: 0 })).toThrow(RangeError)
   })
 
+  it("rejects an iterations count that is not a positive integer", () => {
+    for (const iterations of [0, -1, NaN, 1.5, Infinity]) {
+      expect(() => bootstrap([1, 2, 3], mean, { iterations })).toThrow(RangeError)
+      expect(() => bootstrapDifference([1, 2], [3, 4], mean, { iterations })).toThrow(RangeError)
+    }
+  })
+
+  it("checks the options before resampling, even for an empty sample", () => {
+    let calls = 0
+    const counting = (sample: readonly number[]) => (calls++, sample.length)
+    expect(() => bootstrap([], counting, { level: 5 })).toThrow(RangeError)
+    expect(() => bootstrap([1, 2], counting, { level: 5 })).toThrow(RangeError)
+    expect(() => bootstrapDifference([], [1], counting, { iterations: 0 })).toThrow(RangeError)
+    expect(calls).toBe(0)
+  })
+
+  it("rejects an infinite value in the sample", () => {
+    expect(() => bootstrap([1, Infinity], mean)).toThrow(RangeError)
+    expect(() => bootstrap([-Infinity, 1], mean)).toThrow(RangeError)
+    expect(() => bootstrapDifference([1, Infinity], [1], mean)).toThrow(RangeError)
+    expect(() => bootstrapDifference([1], [1, -Infinity], mean)).toThrow(RangeError)
+  })
+
+  it("ignores resamples whose statistic is not finite", () => {
+    // The first call is the point estimate; later calls alternate between Infinity and 3.
+    let calls = 0
+    const flaky = () => (calls++ === 0 ? 2 : calls % 2 === 0 ? Infinity : 3)
+    expect(bootstrap([1, 2, 3], flaky, { iterations: 40 })).toEqual({ value: 2, lo: 3, hi: 3 })
+  })
+
+  it("throws when no resample gives a finite statistic", () => {
+    let first = true
+    const onlyFirst = () => (first ? (first = false, 1) : NaN)
+    expect(() => bootstrap([1, 2, 3], onlyFirst, { iterations: 20 })).toThrow(RangeError)
+  })
+
+  it("throws when the statistic is not finite on the data itself", () => {
+    expect(() => bootstrap([1, 2, 3], () => Infinity, { iterations: 5 })).toThrow(RangeError)
+  })
+
   it("a wider level gives a wider interval", () => {
     const data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     const narrow = bootstrap(data, mean, { seed: 3, iterations: 500, level: 0.5 })!
