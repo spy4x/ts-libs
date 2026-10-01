@@ -4,8 +4,14 @@
 // half is asserted on the composition rule — a value is escaped exactly once, by
 // `escapeHtml` at the interpolation, and the shell never escapes its body.
 
-import { assertEquals, assertFalse, assertStringIncludes, assertThrows } from "@std/assert"
-import { DARK_HTML_SHELL_THEME, DEFAULT_HTML_SHELL_THEME, escapeHtml, htmlWrap } from "./html.ts"
+import { assert, assertEquals, assertFalse, assertStringIncludes, assertThrows } from "@std/assert"
+import {
+  DARK_HTML_SHELL_THEME,
+  DEFAULT_HTML_SHELL_THEME,
+  emailButton,
+  escapeHtml,
+  htmlWrap,
+} from "./html.ts"
 
 Deno.test("escapes the five HTML metacharacters", () => {
   assertEquals(escapeHtml("<"), "&lt;")
@@ -254,4 +260,64 @@ Deno.test("omits the signature line but keeps the header brand when signaturePre
   const html = htmlWrap({ body: "<p>hi</p>", brand: "Ben & Co", signaturePrefix: null })
   assertFalse(html.includes("Sent by"))
   assertStringIncludes(html, '<div style="margin-bottom:16px">Ben &amp; Co</div>')
+})
+
+const BODY_OPEN = `font-size:16px;line-height:1.6">\n`
+
+Deno.test("puts the escaped preheader first in the body, hidden", () => {
+  const html = htmlWrap({ body: "<p>hi</p>", brand: "Ben", preheader: "Fish & <chips>" })
+  const afterBody = html.slice(html.indexOf(BODY_OPEN) + BODY_OPEN.length)
+  assert(afterBody.startsWith('<span style="display:none;'), afterBody.slice(0, 80))
+  assertStringIncludes(afterBody, "mso-hide:all")
+  assertStringIncludes(afterBody, ">Fish &amp; &lt;chips&gt;&zwnj;&nbsp;&zwnj;&nbsp;")
+  assertFalse(html.includes("<chips>"))
+  assert(afterBody.indexOf("</span>") < afterBody.indexOf('<div style="max-width'))
+})
+
+Deno.test("leaves the output byte for byte unchanged without a preheader", () => {
+  assertEquals(
+    htmlWrap({ body: "<p>hi</p>" }),
+    `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:24px;background:#ffffff;color:#1f2937;
+             font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;
+             font-size:16px;line-height:1.6">
+<div style="max-width:480px;margin:0 auto">
+
+<p>hi</p>
+
+
+</div>
+</body></html>`,
+  )
+})
+
+Deno.test("renders emailButton as a table with the escaped label and the given colours", () => {
+  const html = emailButton({
+    href: "https://example.com/go?a=1&b=2",
+    label: 'Read <now> & "learn"',
+    background: "#f97316",
+    color: "#fff",
+  })
+  assert(html.startsWith("<table "))
+  assertStringIncludes(html, 'href="https://example.com/go?a=1&amp;b=2"')
+  assertStringIncludes(html, ">Read &lt;now&gt; &amp; &quot;learn&quot;</a>")
+  assertStringIncludes(html, 'bgcolor="#f97316"')
+  assertStringIncludes(html, "color:#fff;")
+})
+
+Deno.test("emailButton refuses a javascript: href, a relative href and a non-hex colour", () => {
+  const ok = { href: "https://example.com", label: "Go", background: "#000", color: "#fff" }
+  assertThrows(() => emailButton({ ...ok, href: "javascript:alert(1)" }), TypeError, "must use")
+  assertThrows(() => emailButton({ ...ok, href: "/relative" }), TypeError, "absolute URL")
+  assertThrows(
+    () => emailButton({ ...ok, background: 'red;"><script>' }),
+    TypeError,
+    "EmailButtonOptions.background",
+  )
+  assertThrows(
+    () => emailButton({ ...ok, color: "rgb(0,0,0)" }),
+    TypeError,
+    "EmailButtonOptions.color",
+  )
 })

@@ -34,7 +34,12 @@ import type { SendMailOptions, SMTPTransportOptions } from "nodemailer"
 import { decodeBase64, encodeBase64 } from "@std/encoding"
 import { type EmailAddress, parseAddress } from "./address.ts"
 import { type MessageAddresses, parseMessageAddresses } from "./message-addresses.ts"
-import { assertSendableMessage, type EmailMessage, hasBody } from "./message.ts"
+import {
+  assertSendableMessage,
+  type EmailMessage,
+  hasBody,
+  listUnsubscribeHeaders,
+} from "./message.ts"
 import type { EmailSender, SendResult } from "./sender.ts"
 
 export type { EmailSender, SendFailure, SendResult, SendSuccess } from "./sender.ts"
@@ -278,6 +283,9 @@ function mailOptions(
   }
 
   if (replyTo !== undefined) options.replyTo = replyTo.map(mailbox)
+  if (message.listUnsubscribe !== undefined) {
+    options.headers = listUnsubscribeHeaders(message.listUnsubscribe)
+  }
   if (hasBody(message.text)) options.text = message.text
   if (hasBody(message.html)) options.html = message.html
   if (message.attachments !== undefined && message.attachments.length > 0) {

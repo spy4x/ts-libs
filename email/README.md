@@ -65,13 +65,13 @@ point.
 
 ## Exports
 
-| Specifier              | Contents                                                                                        |
-| ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `@spy4x/email/smtp`    | `createSmtpSender`, `SmtpOptions`, the transport factory seam                                   |
-| `@spy4x/email/sender`  | `EmailSender`, `SendResult`, `createConsoleSender`                                              |
-| `@spy4x/email/message` | `EmailMessage`, validation, timezone framing, ICS attachment                                    |
-| `@spy4x/email/html`    | `escapeHtml`, `htmlWrap`, `HtmlShellTheme`, `DEFAULT_HTML_SHELL_THEME`, `DARK_HTML_SHELL_THEME` |
-| `@spy4x/email/address` | mailbox parsing, formatting and list deduplication                                              |
+| Specifier              | Contents                                                                                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `@spy4x/email/smtp`    | `createSmtpSender`, `SmtpOptions`, the transport factory seam                                                  |
+| `@spy4x/email/sender`  | `EmailSender`, `SendResult`, `createConsoleSender`                                                             |
+| `@spy4x/email/message` | `EmailMessage`, validation, timezone framing, ICS attachment                                                   |
+| `@spy4x/email/html`    | `escapeHtml`, `htmlWrap`, `emailButton`, `HtmlShellTheme`, `DEFAULT_HTML_SHELL_THEME`, `DARK_HTML_SHELL_THEME` |
+| `@spy4x/email/address` | mailbox parsing, formatting and list deduplication                                                             |
 
 ## The `EmailSender` port
 
@@ -102,6 +102,12 @@ interface EmailSender {
   omitted `replyTo` renders no header. Check a visitor-supplied address with
   `parseAddress` first and leave it out when that throws, so a typo in a contact
   form costs the reply route rather than the whole mail.
+- **`listUnsubscribe` adds the mailing-list headers.** `{ url, mailto?, oneClick? }`
+  sends `List-Unsubscribe: <url>, <mailto:…>` and, with `oneClick: true`,
+  `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058), so Gmail and Apple
+  Mail show their own Unsubscribe button. `url` must be absolute `https:` and `mailto`
+  a bare address; a control character, whitespace, `<` or `>` in either, or `oneClick`
+  without `url`, fails the message with an error starting `listUnsubscribe:`.
 - **Credentials are redacted.** Every string that leaves through `error` has the
   password, the `user:pass` pair and every base64 SASL blob they can form replaced
   with `<REDACTED:CREDENTIAL>`. That is not a fixed list of encodings: after the
@@ -222,6 +228,14 @@ value or `htmlWrap` throws, because a colour lands inside a double-quoted
 (default `480`) is the letter column's width in pixels, and `signaturePrefix`
 (default `"— Sent by"`) is the footer wording before the brand — pass `null`
 to drop the footer line while keeping the header brand block.
+
+`preheader` is the hidden preview line an inbox shows beside the subject: escaped,
+placed first in `<body>` in an invisible span and padded so the client does not
+fill the preview with body text. Without it the output is unchanged.
+
+`emailButton({ href, label, background, color })` returns a table-based button that
+renders as a button in Gmail, Apple Mail and Outlook. `href` is checked like
+`brandUrl`, the colours like the theme's, and `label` is escaped.
 
 ## Per-recipient timezone framing
 

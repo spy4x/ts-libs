@@ -23,6 +23,8 @@ export {
 export {
   DARK_HTML_SHELL_THEME,
   DEFAULT_HTML_SHELL_THEME,
+  emailButton,
+  type EmailButtonOptions,
   escapeHtml,
   type HtmlShellOptions,
   type HtmlShellTheme,
@@ -40,6 +42,7 @@ export {
   hasBody,
   icalAttachment,
   type IcalAttachmentOptions,
+  type ListUnsubscribe,
 } from "./message.ts"
 
 export {

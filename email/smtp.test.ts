@@ -887,3 +887,72 @@ Deno.test("carries the cancelled status into the attachment MIME type", async ()
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
 }
+
+// ---------- List-Unsubscribe ----------
+
+Deno.test("sends List-Unsubscribe and List-Unsubscribe-Post exactly for a one-click message", async () => {
+  const sink = { mime: "" }
+  const sender = createSmtpSender(BASE_OPTIONS, mimeFactory(sink))
+
+  const result = await sender.send({
+    ...MESSAGE,
+    listUnsubscribe: {
+      url: "https://example.com/unsubscribe?token=abc",
+      mailto: "unsubscribe@example.com",
+      oneClick: true,
+    },
+  })
+
+  assert(result.ok, JSON.stringify(result))
+  // nodemailer folds a header past 76 columns (RFC 5322 §2.2.3); unfolding removes only the CRLF.
+  const lines = sink.mime.replaceAll(/\r\n(?=[ \t])/g, "").split("\r\n")
+  assert(
+    lines.includes(
+      "List-Unsubscribe: <https://example.com/unsubscribe?token=abc>, <mailto:unsubscribe@example.com>",
+    ),
+    sink.mime,
+  )
+  assert(lines.includes("List-Unsubscribe-Post: List-Unsubscribe=One-Click"), sink.mime)
+})
+
+Deno.test("sends only the url target and no Post header when oneClick is not set", async () => {
+  const sink = { mime: "" }
+  const sender = createSmtpSender(BASE_OPTIONS, mimeFactory(sink))
+
+  await sender.send({ ...MESSAGE, listUnsubscribe: { url: "https://example.com/u" } })
+
+  assert(sink.mime.split("\r\n").includes("List-Unsubscribe: <https://example.com/u>"))
+  assertFalse(sink.mime.includes("List-Unsubscribe-Post"))
+})
+
+Deno.test("adds no List-Unsubscribe header or headers key without listUnsubscribe", async () => {
+  const recorded: Recorded = { configs: [], messages: [] }
+  await createSmtpSender(BASE_OPTIONS, recorder(recorded)).send(MESSAGE)
+  assertFalse("headers" in recorded.messages[0])
+})
+
+Deno.test("refuses a bad listUnsubscribe and sends nothing", async () => {
+  const bad: { listUnsubscribe: NonNullable<EmailMessage["listUnsubscribe"]> }[] = [
+    { listUnsubscribe: { url: "https://example.com/u\r\nBcc: v@example.com" } },
+    { listUnsubscribe: { url: "https://example.com/u>, <https://evil.example" } },
+    { listUnsubscribe: { url: "https://example.com/<u" } },
+    { listUnsubscribe: { url: "http://example.com/u" } },
+    { listUnsubscribe: { url: "mailto:u@example.com" } },
+    { listUnsubscribe: { url: "/relative" } },
+    { listUnsubscribe: { url: "https://example.com/u", mailto: "a@example.com\r\nBcc: v@x.com" } },
+    { listUnsubscribe: { url: "https://example.com/u", mailto: "<a@example.com>" } },
+    { listUnsubscribe: { url: "https://example.com/u", mailto: "not an address" } },
+    { listUnsubscribe: { url: "", oneClick: true } },
+    { listUnsubscribe: { oneClick: true } as never },
+  ]
+  for (const { listUnsubscribe } of bad) {
+    const recorded: Recorded = { configs: [], messages: [] }
+    const result = await createSmtpSender(BASE_OPTIONS, recorder(recorded)).send({
+      ...MESSAGE,
+      listUnsubscribe,
+    })
+    assertFalse(result.ok, JSON.stringify(listUnsubscribe))
+    assertStringIncludes((result as SendFailure).error, "listUnsubscribe:")
+    assertEquals(recorded.messages.length, 0, JSON.stringify(listUnsubscribe))
+  }
+})
