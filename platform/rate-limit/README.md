@@ -334,3 +334,8 @@ is reserved before the handler and given back after a successful response throug
 `refund`, so a burst of parallel wrong guesses still stops at `limit`. Both limiters in `memory.ts`
 implement `refund`; a custom limiter must too. A predicate must not read the response body unless
 it calls `response.clone()` first, because the same response is sent to the client afterwards.
+
+A refund that fails, for example because the shared store went down after the handler ran, never
+changes the response: the slot stays spent, which errs on the safe side, and a completed sign-in
+keeps its status and its `Set-Cookie`. Pass `onRefundError: (error, key) => …` to hear about it; an
+`onRefundError` that throws or rejects is ignored.
