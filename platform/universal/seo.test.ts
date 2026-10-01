@@ -232,8 +232,15 @@ describe("jsonLdText", () => {
     expect(text).toContain("\\u003c/script")
   })
 
+  it("emits none of <, >, &, U+2028 or U+2029 raw", () => {
+    const text = jsonLdText({ description: "<!-- a > b && c \u2028 d \u2029 -->" })
+
+    for (const char of ["<", ">", "&", "\u2028", "\u2029"]) expect(text).not.toContain(char)
+    expect(text).toContain("\\u003c!-- a \\u003e b \\u0026\\u0026 c \\u2028 d \\u2029 --\\u003e")
+  })
+
   it("still parses back to the original value", () => {
-    const value = { name: "</script>", nested: { list: [1, "<b>"] } }
+    const value = { name: "</script>", nested: { list: [1, "<b>&amp;\u2028\u2029"] } }
 
     expect(JSON.parse(jsonLdText(value))).toEqual(value)
   })

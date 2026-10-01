@@ -147,9 +147,16 @@ export function breadcrumbListJsonLd(
 /**
  * Serialise JSON-LD for a `<script>` body.
  *
- * `<` is escaped to `\u003c` (valid JSON, same string) so a description containing `</script>`
- * cannot close the element it is embedded in.
+ * `<`, `>` and `&` are escaped to `\u003c`, `\u003e` and `\u0026` (valid JSON, same string) so
+ * a value containing `</script>`, `<!--` or an entity cannot close or alter the element it is
+ * embedded in. U+2028 and U+2029 are escaped to `\u2028` and `\u2029` because older JavaScript
+ * parsers treat them as line terminators inside a string.
  */
 export function jsonLdText(value: unknown): string {
-  return JSON.stringify(value).replace(/</g, "\\u003c")
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, jsonLdEscape)
+}
+
+/** The `\uXXXX` escape of one character `jsonLdText` must not emit raw. */
+function jsonLdEscape(char: string): string {
+  return `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`
 }
