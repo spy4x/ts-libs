@@ -7,6 +7,7 @@ import {
   safeFetch,
   SafeFetchMethod,
 } from "./safe-fetch.ts"
+import { fakeResponse } from "./_fake-fetcher.test.ts"
 import { type DnsResolver, UrlValidationError, validatePublicUrl } from "./url-policy.ts"
 
 /** Obviously fake credentials: what a caller's headers would carry in production. */
@@ -65,11 +66,15 @@ function fakeFetcher(
           }),
         )
       }
-      const headers = new Headers(step.headers ?? {})
-      if (step.location) headers.set("location", step.location)
-      const status = step.status ?? 200
-      const body = step.body ?? `<html>ok:${input}</html>`
-      return Promise.resolve(new Response(body, { status, headers }))
+      const headers = { ...step.headers }
+      if (step.location) headers.location = step.location
+      return Promise.resolve(
+        fakeResponse(input, {
+          status: step.status ?? 200,
+          headers,
+          body: step.body ?? `<html>ok:${input}</html>`,
+        }, init.signal),
+      )
     },
   }
   return { fetcher, getCalls: () => calls, methods, sentHeaders }
