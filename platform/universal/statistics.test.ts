@@ -92,7 +92,7 @@ describe("bootstrap", () => {
   })
 
   it("rejects NaN in the sample and a level outside 0 to 1", () => {
-    expect(() => bootstrap([1, NaN], median)).toThrow(RangeError)
+    expect(() => bootstrap([1, NaN], (sample) => sample.length)).toThrow(RangeError)
     expect(() => bootstrap([1, 2], median, { level: 1 })).toThrow(RangeError)
     expect(() => bootstrap([1, 2], median, { level: 0 })).toThrow(RangeError)
   })
@@ -121,8 +121,9 @@ describe("bootstrapDifference", () => {
   })
 
   it("rejects NaN in either group", () => {
-    expect(() => bootstrapDifference([NaN], [1], median)).toThrow(RangeError)
-    expect(() => bootstrapDifference([1], [NaN], median)).toThrow(RangeError)
+    const count = (sample: readonly number[]) => sample.length
+    expect(() => bootstrapDifference([NaN], [1], count)).toThrow(RangeError)
+    expect(() => bootstrapDifference([1], [NaN], count)).toThrow(RangeError)
   })
 })
 
