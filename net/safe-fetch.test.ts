@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert"
+import { assertEquals, assertRejects, assertStrictEquals, assertStringIncludes } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import {
   DEFAULT_MAX_REDIRECTS,
@@ -966,6 +966,54 @@ describe("defaultFetcher", () => {
       globalThis.fetch = original
     }
     assertEquals(seen, ["manual"])
+  })
+
+  it("hands the method, headers and signal to the platform fetch unchanged", async () => {
+    const seen: (RequestInit | undefined)[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+      seen.push(init)
+      return Promise.resolve(new Response("ok", { status: 200 }))
+    }) as typeof fetch
+    const signal = new AbortController().signal
+    try {
+      await defaultFetcher.fetch("https://example.com/submit", {
+        redirect: "manual",
+        method: "POST",
+        headers: { "x-trace": "one" },
+        signal,
+      })
+    } finally {
+      globalThis.fetch = original
+    }
+    assertEquals(seen.length, 1)
+    assertEquals(seen[0]?.method, "POST")
+    assertEquals(seen[0]?.headers, { "x-trace": "one" })
+    assertStrictEquals(seen[0]?.signal, signal)
+  })
+
+  it("keeps a POST a POST across a 307 when safeFetch uses it by default", async () => {
+    // No `fetcher` option: this is the path every production caller takes.
+    const methods: string[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+      methods.push(String(init?.method))
+      return Promise.resolve(
+        methods.length === 1
+          ? new Response(null, { status: 307, headers: { location: "/done" } })
+          : new Response("ok", { status: 200 }),
+      )
+    }) as typeof fetch
+    try {
+      const result = await safeFetch("https://example.com/submit", {
+        resolver: ALWAYS_PUBLIC,
+        method: SafeFetchMethod.Post,
+      })
+      assertEquals(result.url, "https://example.com/done")
+    } finally {
+      globalThis.fetch = original
+    }
+    assertEquals(methods, ["POST", "POST"])
   })
 })
 
