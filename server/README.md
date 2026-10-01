@@ -53,6 +53,8 @@ Runs on: server (Deno).
 | `@spy4x/server/env-age64`         | Per-value `.env` encryption (`KEY=age64:...`), no `age` binary, no `--allow-run`     |
 | `@spy4x/server/outbox`            | Transactional outbox drain: claim, publish, retry, over a generic SQL table          |
 | `@spy4x/server/idempotency`       | Idempotent commands: CQRS middleware, fingerprint, Postgres and memory stores        |
+| `@spy4x/server/lockout`           | Escalating lockout for guessed secrets: policy, flow, store port, in-memory store    |
+| `@spy4x/server/lockout/postgres`  | The Postgres lockout store over a table and columns the caller names                 |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -1903,3 +1905,57 @@ out `undefined` properties like `JSON.stringify`, and throws a `TypeError` for a
 other non-plain object without `toJSON`, because it would hash like `{}`. A command class name over
 100 characters fails with `INVALID_COMMAND`. `leaseSeconds` and `retentionDays` must be finite and
 above zero, or the constructor throws a `RangeError`.
+
+## `server/lockout`
+
+`createLockout`, `lockDelayMs`, `beginCheck`, `resolveLockoutPolicy`, `DEFAULT_LOCKOUT_POLICY`, the
+`LockoutStore` port and `MemoryLockoutStore` for tests; `createPostgresLockoutStore` in
+`server/lockout/postgres`. Ported from spy4x/template `apps/api/services/totp-failures.ts` (#315).
+
+An escalating lockout for any secret a person can guess: a one-time code, an e-mail code, a PIN, a
+recovery code. Counters are kept per subject, a key the caller chooses (a user id, an address), in a
+store that survives a restart and that every server instance shares. `@spy4x/platform/rate-limit`
+stops bursts; this stops a patient guesser.
+
+The default policy: 5 wrong guesses cost nothing, the next wrong one locks for 15 minutes, each one
+after doubles the lock up to one day, and 7 days with no wrong guess reset the count. Every number
+is an option. That caps a guesser at fewer than 400 guesses a year, a chance under 1% of hitting one
+of 3 valid six-digit codes.
+
+```ts
+import { createLockout } from "@spy4x/server/lockout"
+import { createPostgresLockoutStore } from "@spy4x/server/lockout/postgres"
+
+const lockout = createLockout({
+  store: createPostgresLockoutStore({ sql, table: "user_totp", columns: { subject: "user_id" } }),
+})
+
+const waitMs = await lockout.begin(userId)
+if (waitMs > 0) return tooManyAttempts(waitMs)
+if (await codeIsValid(userId, code)) await lockout.refund(userId)
+else await lockout.fail(userId)
+```
+
+**Count first, refund on success.** `begin` counts the check as a failure before the secret is
+compared, in one atomic store update (`SELECT … FOR UPDATE` in Postgres), so parallel guesses cannot
+all slip through the free budget: of any number of simultaneous checks, at most the free budget plus
+one run. A correct secret gives back that one slot; it does not wipe the count, which would hand a
+guesser a fresh budget every time the owner signs in. While a lock runs, every check is refused, a
+correct one included, so someone who can reach the check can keep the owner out of it for up to the
+maximum lock.
+
+**The Postgres store takes the caller's table.** Table, schema and column names must be lower-case
+identifiers; they are validated and sent through the driver's identifier quoting, never spliced
+into the SQL. The subject column must be unique. With `createMissing` (the default) an unknown
+subject's row is inserted, so every subject is counted; with `createMissing: false` a subject
+without a row has nothing to guess and is let through, which fits a table holding one row per
+enrolled secret.
+
+**Fixes applied at extraction time.**
+
+- `lockDelayMs` capped the doublings at 30 to keep the number finite. With the numbers now options,
+  a maximum lock more than 2^30 times the first one could never be reached. The cap is gone:
+  `Math.min` already turns an infinite product into the maximum lock.
+- A check that `begin` counted but whose `fail` never ran (the process crashed, the request was
+  dropped) was never forgotten for a subject with no wrong guess on record, because the quiet reset
+  counted from a time that was never stamped. `begin` now stamps that time when it is empty.
