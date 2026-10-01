@@ -254,8 +254,11 @@ export function describeSocketContract(name: string, open: OpenSocket): void {
         const closed = nextClose(socket)
         socket.close()
         expect(socket.state).toBe(SocketState.Closing)
-        await closed
+        const info = await closed
         expect(opened).toBe(false)
+        // Deno reports code 0 and browsers 1006, so only "not a clean 1000" is common to both.
+        expect(info.abnormal).toBe(true)
+        expect(info.code).not.toBe(1000)
         expect(socket.state).toBe(SocketState.Closed)
       })
     })

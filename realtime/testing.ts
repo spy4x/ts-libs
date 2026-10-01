@@ -183,12 +183,23 @@ export class FakeSocket implements ManagedSocket {
    * after calling it sees `Closing`, and code that assumed otherwise (a fixed bug in this package,
    * issue #74) has to be wrong in a way a test can catch. `closeCalls` still records the call
    * immediately, so a test asserting *that* a close was requested does not need to await anything.
+   *
+   * The close event reports a clean close of an open socket as `abnormal: false` with the given
+   * code. Closing before the connection opened never completes a handshake, so it reports
+   * `abnormal: true` with code 1006, as a real socket does (browsers say 1006, Deno says 0).
    */
   close(code = 1000, reason = ""): void {
     this.closeCalls.push({ code, reason })
     if (this.#state === SocketState.Closing || this.#state === SocketState.Closed) return
+    // A close before the connection opened never completes a handshake, so a real socket reports it
+    // as abnormal (code 1006 in browsers, 0 in Deno); a close of an open socket is clean.
+    const beforeOpen = this.#state === SocketState.Connecting
     this.#state = SocketState.Closing
-    queueMicrotask(() => this.#shutdown({ code, reason, abnormal: false }))
+    queueMicrotask(() =>
+      this.#shutdown(
+        beforeOpen ? { code: 1006, reason: "", abnormal: true } : { code, reason, abnormal: false },
+      )
+    )
   }
 
   onOpen(handler: () => void): Unsubscribe {
