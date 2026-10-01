@@ -833,10 +833,17 @@ Deno.test("constantTimeEqualsText — delegates the comparison to timingSafeEqua
   assert(comparisons.some((line) => line.includes("digestA.byteLength !== digestB.byteLength")))
 })
 
-Deno.test("deriveSecret — matches an HMAC-SHA-256 computed independently with openssl", async () => {
-  // printf 'label' | openssl dgst -sha256 -hmac "<32 x k>"
-  const expected = "49c63fd6abff65aae8b15e4b926b2ffa1e629d9ded54af82b9388746ff3e87cd"
+Deno.test("deriveSecret — matches an HKDF-SHA-256 computed independently with openssl", async () => {
+  // openssl kdf -keylen 32 -kdfopt digest:SHA256 -kdfopt key:<32 x k>
+  //   -kdfopt salt:spy4x.derive-secret.v1 -kdfopt info:label HKDF
+  const expected = "460cf40d9df52c942d273cc0575cfb484d058efd57cfc91fe3bf989ff605300d"
   assertEquals(await deriveSecret("k".repeat(32), "label"), expected)
+})
+
+Deno.test("deriveSecret — differs from the HMAC of the label a signed cookie would carry", async () => {
+  // printf 'label' | openssl dgst -sha256 -hmac "<32 x k>"
+  const cookieSignature = "49c63fd6abff65aae8b15e4b926b2ffa1e629d9ded54af82b9388746ff3e87cd"
+  assertFalse(await deriveSecret("k".repeat(32), "label") === cookieSignature)
 })
 
 Deno.test("deriveSecret — different labels and different secrets give different values", async () => {
