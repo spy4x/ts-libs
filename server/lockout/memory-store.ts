@@ -19,7 +19,7 @@ export interface MemoryLockoutStoreOptions {
 
 /** Counters in a `Map`. Each update runs synchronously, so it is atomic within the process. */
 export class MemoryLockoutStore implements LockoutStore {
-  readonly #rows = new Map<LockoutSubject, LockoutState>()
+  readonly #rows = new Map<string, LockoutState>()
   readonly #createMissing: boolean
 
   constructor(options: MemoryLockoutStoreOptions = {}) {
@@ -28,14 +28,15 @@ export class MemoryLockoutStore implements LockoutStore {
 
   /** Starts tracking `subject` at a zero count, as inserting its row would. */
   track(subject: LockoutSubject): void {
-    if (!this.#rows.has(subject)) {
-      this.#rows.set(subject, { failures: 0, lockedUntil: null, lastFailureAt: null })
+    const key = String(subject)
+    if (!this.#rows.has(key)) {
+      this.#rows.set(key, { failures: 0, lockedUntil: null, lastFailureAt: null })
     }
   }
 
   /** A copy of the subject's state, or `undefined` when it is not tracked. */
   get(subject: LockoutSubject): LockoutState | undefined {
-    const row = this.#rows.get(subject)
+    const row = this.#rows.get(String(subject))
     return row === undefined ? undefined : { ...row }
   }
 
@@ -46,7 +47,8 @@ export class MemoryLockoutStore implements LockoutStore {
     try {
       if (this.#createMissing) this.track(subject)
       const next = change(this.get(subject))
-      if (next !== undefined && this.#rows.has(subject)) this.#rows.set(subject, { ...next })
+      const key = String(subject)
+      if (next !== undefined && this.#rows.has(key)) this.#rows.set(key, { ...next })
       return Promise.resolve()
     } catch (error) {
       return Promise.reject(error)

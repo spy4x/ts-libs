@@ -19,6 +19,22 @@
  * table must have a default. With `createMissing: false` a subject without a row has nothing to
  * guess: `begin` lets it through and writes nothing.
  *
+ * Rows are never deleted: with `createMissing` every new subject adds one, so an endpoint keyed by
+ * something a stranger chooses, such as an e-mail address, grows the table by one row per address.
+ * A row whose quiet reset has passed and whose lock has ended decides nothing any more, and a row
+ * whose last failure time is `NULL` was never counted by `begin`, so both can be deleted without
+ * changing any later decision. On a table that holds only counters, with the default policy and
+ * columns, run on a schedule:
+ *
+ * ```sql
+ * DELETE FROM lockouts
+ * WHERE (last_failure_at IS NULL OR last_failure_at < now() - interval '7 days')
+ *   AND (locked_until IS NULL OR locked_until < now())
+ * ```
+ *
+ * On a table that holds something else, such as enrolled secrets, never delete the row: the
+ * counter goes with it when the secret does.
+ *
  * Table, schema and column names are validated as lower-case identifiers and sent through the
  * driver's identifier quoting, never spliced into the SQL text. One that the client's own column
  * transform (such as `postgres.camel`) would rewrite is refused too: rows are read positionally, so

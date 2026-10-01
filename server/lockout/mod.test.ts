@@ -38,18 +38,33 @@ describe("lockDelayMs", () => {
     expect(lockDelayMs(Number.MAX_SAFE_INTEGER)).toBe(maxLockMs)
   })
 
-  it("keeps a guesser under a 1% chance a year of hitting one of 3 valid six-digit codes", () => {
-    // The worst case: the guesser tries again the moment each lock ends, for a year.
+  it("keeps the best burst-then-wait guesser under 600 guesses and a 1% chance a year", () => {
+    // A guesser either tries again the moment each lock ends, or makes `burst` guesses that way and
+    // then waits out the quiet reset, so the count starts again from 0. Try every burst length.
     const year = 365 * 24 * HOUR
-    let now = 0
-    let guesses = 0
-    while (now < year) {
-      guesses += 1
-      now += lockDelayMs(guesses)
+    const guessesInAYear = (burst: number): number => {
+      let now = 0
+      let guesses = 0
+      let streak = 0
+      while (now < year) {
+        guesses += 1
+        streak += 1
+        if (streak === burst) {
+          now += DEFAULT_LOCKOUT_POLICY.quietResetMs
+          streak = 0
+        } else {
+          now += lockDelayMs(streak)
+        }
+      }
+      return guesses
     }
-    const chance = 1 - (1 - 3 / 1_000_000) ** guesses
-    expect(guesses).toBeLessThan(400)
-    expect(chance).toBeLessThan(0.01)
+    const best = Math.max(
+      guessesInAYear(Infinity),
+      ...Array.from({ length: 40 }, (_, index) => guessesInAYear(index + 1)),
+    )
+    expect(best).toBeGreaterThan(guessesInAYear(Infinity))
+    expect(best).toBeLessThan(600)
+    expect(1 - (1 - 3 / 1_000_000) ** best).toBeLessThan(0.01)
   })
 
   it("follows a custom policy's budget, first lock and cap", () => {
@@ -85,9 +100,14 @@ describe("resolveLockoutPolicy", () => {
     })
   })
 
-  it("refuses a negative, fractional or zero number, and a maximum below the first lock", () => {
+  it("accepts a maximum lock of exactly one year", () => {
+    expect(resolveLockoutPolicy({ maxLockMs: 365 * 24 * HOUR }).maxLockMs).toBe(365 * 24 * HOUR)
+  })
+
+  it("refuses a negative, fractional or zero number, a maximum below the first lock or over a year", () => {
     for (
       const overrides of [
+        { maxLockMs: 365 * 24 * HOUR + 1 },
         { freeFailures: -1 },
         { freeFailures: 1.5 },
         { firstLockMs: 0 },

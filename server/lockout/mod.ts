@@ -41,6 +41,9 @@ export interface LockoutPolicy {
 const MINUTE_MS = 60_000
 const DAY_MS = 24 * 60 * MINUTE_MS
 
+/** The longest {@link LockoutPolicy.maxLockMs} accepted: one year, far inside a `Date`'s range. */
+export const MAX_LOCK_LIMIT_MS = 365 * DAY_MS
+
 /** 5 free failures, then 15 minutes doubling up to one day; 7 quiet days reset the count. */
 export const DEFAULT_LOCKOUT_POLICY: Readonly<LockoutPolicy> = Object.freeze({
   freeFailures: 5,
@@ -52,7 +55,8 @@ export const DEFAULT_LOCKOUT_POLICY: Readonly<LockoutPolicy> = Object.freeze({
 const lockoutPolicy = type({
   freeFailures: "number.integer >= 0",
   firstLockMs: "number.integer > 0",
-  maxLockMs: "number.integer > 0",
+  // 31_536_000_000 is MAX_LOCK_LIMIT_MS; arktype needs the literal to type the string.
+  maxLockMs: "0 < number.integer <= 31536000000",
   quietResetMs: "number.integer > 0",
 }).narrow((policy, ctx) =>
   policy.maxLockMs >= policy.firstLockMs || ctx.mustBe("a policy whose maxLockMs >= firstLockMs")
@@ -61,7 +65,7 @@ const lockoutPolicy = type({
 /**
  * {@link DEFAULT_LOCKOUT_POLICY} with `overrides` applied. Throws a `TypeError` naming the problem
  * when a number is negative, fractional, zero where a wait is expected, or when the maximum lock is
- * shorter than the first one.
+ * shorter than the first one or longer than {@link MAX_LOCK_LIMIT_MS}.
  */
 export function resolveLockoutPolicy(overrides: Partial<LockoutPolicy> = {}): LockoutPolicy {
   const merged = { ...DEFAULT_LOCKOUT_POLICY }
@@ -101,7 +105,10 @@ export interface LockoutState {
 /** The caller's key for whatever is being guessed: a user id, an e-mail address, a device. */
 export type LockoutSubject = string | number
 
-/** Where counters live. Implementations: {@link MemoryLockoutStore} and `@spy4x/server/lockout/postgres`. */
+/**
+ * Where counters live: `@spy4x/server/lockout/memory-store` and `@spy4x/server/lockout/postgres`.
+ * Neither deletes a counter; see the Postgres store for a safe cleanup.
+ */
 export interface LockoutStore {
   /**
    * Reads the subject's state, passes it to `change` and writes what `change` returns, as one
@@ -123,9 +130,10 @@ export interface Lockout {
    */
   begin(subject: LockoutSubject): Promise<number>
   /**
-   * Gives back the slot {@link begin} took, after a correct secret. Always clears the lock: one a
-   * concurrent wrong guess set in the meantime is cleared too. That race is accepted; the count
-   * itself only goes down by one.
+   * Gives back the slot {@link begin} took. Call it only after `begin` returned 0 and the secret
+   * was right. Always clears the lock: one a concurrent wrong guess set in the meantime is cleared
+   * too, which gives a guesser back one guess per correct entry by the owner. That race is
+   * accepted; the count itself only goes down by one.
    */
   refund(subject: LockoutSubject): Promise<void>
   /** Records a wrong secret: the time the quiet reset counts from. */
@@ -210,5 +218,3 @@ export function createLockout(options: LockoutOptions): Lockout {
     },
   }
 }
-
-export { MemoryLockoutStore, type MemoryLockoutStoreOptions } from "./memory-store.ts"

@@ -23,6 +23,14 @@ describe("MemoryLockoutStore", () => {
     expect(store.get("ann")?.failures).toBe(3)
   })
 
+  it('counts the number 1 and the string "1" as one subject', async () => {
+    const store = new MemoryLockoutStore()
+    await store.update(1, (current) => current && { ...current, failures: 2 })
+    await store.update("1", (current) => current && { ...current, failures: current.failures + 1 })
+    expect(store.get(1)?.failures).toBe(3)
+    expect(store.get("1")?.failures).toBe(3)
+  })
+
   it("rejects instead of throwing when the change throws", () => {
     const store = new MemoryLockoutStore()
     const pending = store.update("ann", () => {
