@@ -494,15 +494,19 @@ describe("delayed and repeating jobs against a real server", () => {
 
   it("counts a delay on the database clock", async () => {
     await withOutboxSchema(async (sql) => {
-      await scheduleOutboxEvent(
-        sql,
-        { eventKind: "x", aggregateType: "job", aggregateId: JOB_SUBJECT },
-        { inMs: 90_000 },
-      )
-      const [row] = await sql<{ seconds: number }[]>`
-        SELECT round(extract(epoch FROM available_at - now()))::int AS seconds FROM outbox_events
-      `
-      assertEquals(row.seconds, 90)
+      await sql.begin(async (tx) => {
+        // now() is fixed at the start of a transaction; the app clock moves on during the sleep.
+        await tx`SELECT pg_sleep(1.5)`
+        await scheduleOutboxEvent(
+          tx,
+          { eventKind: "x", aggregateType: "job", aggregateId: JOB_SUBJECT },
+          { inMs: 90_000 },
+        )
+        const [row] = await tx<{ ms: number }[]>`
+          SELECT round(extract(epoch FROM available_at - now()) * 1000)::int AS ms FROM outbox_events
+        `
+        assertEquals(row.ms, 90_000)
+      })
     })
   })
 
