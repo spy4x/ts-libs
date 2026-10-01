@@ -75,6 +75,12 @@ export interface HtmlShellOptions {
    * brand block but drop the footer signature line entirely.
    */
   signaturePrefix?: string | null
+  /**
+   * Hidden preview text, the line an inbox shows beside the subject. Escaped by the
+   * shell and placed first in `<body>` in an invisible span, followed by padding so the
+   * client does not fill the preview with body text. Omitted, the output is unchanged.
+   */
+  preheader?: string
 }
 
 /** The four colours {@link htmlWrap} draws the shell in. */
@@ -163,18 +169,63 @@ export function htmlWrap(options: HtmlShellOptions): string {
       escapeHtml(signaturePrefix)
     } ${brandAnchor(options, brand, theme)}</p>`
 
+  const preheader = options.preheader === undefined ? "" : `${preheaderSpan(options.preheader)}\n`
+
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"></head>
 <body style="margin:0;padding:24px;background:${theme.background};color:${theme.color};
              font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;
              font-size:16px;line-height:1.6">
-<div style="max-width:${maxWidth}px;margin:0 auto">
+${preheader}<div style="max-width:${maxWidth}px;margin:0 auto">
 ${header}
 ${options.body}
 ${options.footer ?? ""}
 ${signature}
 </div>
 </body></html>`
+}
+
+/** Padding after the preheader so the client shows nothing of the body in the preview. */
+const PREHEADER_PADDING = "&zwnj;&nbsp;".repeat(60)
+
+/** The hidden preview line: zero-size, invisible, and out of the way of screen readers' flow. */
+function preheaderSpan(text: string): string {
+  return `<span style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;visibility:hidden">${
+    escapeHtml(text)
+  }${PREHEADER_PADDING}</span>`
+}
+
+/** What {@link emailButton} needs. */
+export interface EmailButtonOptions {
+  /** Absolute `http:`, `https:` or `mailto:` URL, checked like `brandUrl`. */
+  href: string
+  /** Button text, escaped. */
+  label: string
+  /** Button fill, a `#rgb` or `#rrggbb` hex colour. */
+  background: string
+  /** Label colour, a `#rgb` or `#rrggbb` hex colour. */
+  color: string
+}
+
+/**
+ * A table-based "bulletproof" call-to-action button for the body of a mail.
+ *
+ * The fill sits on the `td` and the link is inline, so Gmail, Apple Mail and Outlook
+ * all draw a button without CSS the client strips. Returns pre-escaped HTML for
+ * `htmlWrap`'s `body` or `footer`.
+ *
+ * @throws {TypeError} when `href` is not an absolute `http:`, `https:` or `mailto:`
+ * URL, or a colour is not a `#rgb`/`#rrggbb` hex colour.
+ */
+export function emailButton(options: EmailButtonOptions): string {
+  assertLinkableUrl(options.href, "EmailButtonOptions.href")
+  assertHexColor(options.background, "background", "EmailButtonOptions")
+  assertHexColor(options.color, "color", "EmailButtonOptions")
+  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td align="center" bgcolor="${options.background}" style="border-radius:6px;background:${options.background};mso-padding-alt:12px 24px"><a href="${
+    escapeHtml(options.href)
+  }" style="display:inline-block;padding:12px 24px;color:${options.color};font-weight:600;text-decoration:none;border-radius:6px">${
+    escapeHtml(options.label)
+  }</a></td></tr></table>`
 }
 
 /**
@@ -208,12 +259,10 @@ const HEX_COLOR_RE = /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/
  * mistake, not a recipient's, but one this shell should surface rather than
  * emit.
  */
-function assertHexColor(value: string, fieldName: string): void {
+function assertHexColor(value: string, fieldName: string, owner = "HtmlShellOptions"): void {
   if (!HEX_COLOR_RE.test(value)) {
     throw new TypeError(
-      `HtmlShellOptions.${fieldName} must be a #rgb or #rrggbb hex colour, got ${
-        JSON.stringify(value)
-      }`,
+      `${owner}.${fieldName} must be a #rgb or #rrggbb hex colour, got ${JSON.stringify(value)}`,
     )
   }
 }
@@ -249,18 +298,18 @@ const LINKABLE_SCHEMES = ["http:", "https:", "mailto:"]
  * that a string comparison would miss. A relative URL has no meaning in a message
  * that is read outside any page, so it is rejected with everything else.
  */
-function assertLinkableUrl(value: string): void {
+function assertLinkableUrl(value: string, name = "HtmlShellOptions.brandUrl"): void {
   let parsed: URL
   try {
     parsed = new URL(value)
   } catch {
     throw new TypeError(
-      `HtmlShellOptions.brandUrl must be an absolute URL, got ${JSON.stringify(value)}`,
+      `${name} must be an absolute URL, got ${JSON.stringify(value)}`,
     )
   }
   if (!LINKABLE_SCHEMES.includes(parsed.protocol)) {
     throw new TypeError(
-      `HtmlShellOptions.brandUrl must use ${LINKABLE_SCHEMES.join(", ")}, got ` +
+      `${name} must use ${LINKABLE_SCHEMES.join(", ")}, got ` +
         JSON.stringify(parsed.protocol),
     )
   }

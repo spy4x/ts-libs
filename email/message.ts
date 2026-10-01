@@ -18,7 +18,7 @@ import {
   zonedDateTime,
 } from "@spy4x/time/tz"
 import { generateIcs, type IcsEvent, type IcsOptions } from "@spy4x/time/ics"
-import { assertNoControlCharacters } from "./address.ts"
+import { assertNoControlCharacters, isAddress } from "./address.ts"
 
 /** One attachment: text content plus the metadata the MIME part needs. */
 export interface EmailAttachment {
@@ -64,6 +64,26 @@ export interface EmailMessage {
   html?: string
   /** Attachments, in the order they should appear. Omitted entirely when empty. */
   attachments?: readonly EmailAttachment[]
+  /**
+   * Mailing-list unsubscribe, so Gmail and Apple Mail show their own Unsubscribe
+   * button. Produces `List-Unsubscribe: <url>` (plus `, <mailto:…>` when `mailto` is
+   * given) and, with `oneClick: true`, `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+   * (RFC 8058). `url` must be an absolute `https:` URL and `mailto` a bare address;
+   * either holding a control character, `<` or `>` is refused with an error starting
+   * `listUnsubscribe:`, as is `oneClick` without a `url`. Omitted, no such header is sent.
+   * A typed field, not a header map: a free-form map is a header-injection surface.
+   */
+  listUnsubscribe?: ListUnsubscribe
+}
+
+/** The `List-Unsubscribe` targets of one message. See {@link EmailMessage.listUnsubscribe}. */
+export interface ListUnsubscribe {
+  /** Absolute `https:` URL that unsubscribes the recipient. Required, also for `oneClick`. */
+  url: string
+  /** A bare address that unsubscribes by mail, e.g. `unsubscribe@example.com`. */
+  mailto?: string
+  /** Also send `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058). */
+  oneClick?: boolean
 }
 
 /** The fields of an ICS attachment the caller must supply. */
@@ -101,6 +121,8 @@ export function assertSendableMessage(message: EmailMessage): void {
     throw new TypeError("replyTo is an empty list; omit it instead")
   }
 
+  if (message.listUnsubscribe !== undefined) assertListUnsubscribe(message.listUnsubscribe)
+
   assertNoControlCharacters(message.subject, "Subject")
   if (!hasBody(message.text) && !hasBody(message.html)) {
     throw new TypeError("A message needs a text body, an html body, or both")
@@ -114,6 +136,55 @@ export function assertSendableMessage(message: EmailMessage): void {
     }
     if (attachment.contentType.trim() === "") {
       throw new TypeError(`Attachment ${attachment.filename} has no contentType`)
+    }
+  }
+}
+
+/**
+ * The `List-Unsubscribe` and `List-Unsubscribe-Post` header values for a validated
+ * {@link ListUnsubscribe}, ready for the transport's `headers` option.
+ */
+export function listUnsubscribeHeaders(value: ListUnsubscribe): Record<string, string> {
+  // `href`, not the raw text, so a non-ASCII host or path goes out as plain ASCII.
+  const targets = [`<${new URL(value.url).href}>`]
+  if (value.mailto !== undefined) targets.push(`<mailto:${value.mailto}>`)
+  const headers: Record<string, string> = { "List-Unsubscribe": targets.join(", ") }
+  if (value.oneClick === true) headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+  return headers
+}
+
+/** Characters that end a `<…>` target early or inject a header. */
+// deno-lint-ignore no-control-regex -- the point is to refuse C0/C1 control characters
+const LIST_TARGET_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029<>\s]/
+
+function assertListUnsubscribe(value: ListUnsubscribe): void {
+  const fail = (reason: string): never => {
+    throw new TypeError(`listUnsubscribe: ${reason}`)
+  }
+  if (typeof value.url !== "string" || value.url === "") {
+    return fail(value.oneClick === true ? "oneClick needs a url" : "url is required")
+  }
+  if (LIST_TARGET_FORBIDDEN.test(value.url)) {
+    fail("url must not hold a control character, whitespace, `<` or `>`")
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(value.url)
+  } catch {
+    return fail(`url must be an absolute https: URL, got ${JSON.stringify(value.url)}`)
+  }
+  if (parsed.protocol !== "https:") {
+    fail(`url must use https:, got ${JSON.stringify(parsed.protocol)}`)
+  }
+  if (value.mailto !== undefined) {
+    // `?` and `%` would start a mailto header field or an escape; refused instead of encoded.
+    if (
+      /[?%]/.test(value.mailto) || LIST_TARGET_FORBIDDEN.test(value.mailto) ||
+      !isAddress(value.mailto)
+    ) {
+      fail(
+        "mailto must be a bare address without control characters, whitespace, `<`, `>`, `?` or `%`",
+      )
     }
   }
 }
