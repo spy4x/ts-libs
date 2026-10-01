@@ -22,36 +22,37 @@ Runs on: server (Deno).
 
 ## Subpaths
 
-| Export                            | What it is                                                                           |
-| --------------------------------- | ------------------------------------------------------------------------------------ |
-| `@spy4x/server/http/bounded-body` | Byte-capped, stall-budgeted request body reading; `readJsonBody` for Hono routes     |
-| `@spy4x/server/http/cors`         | Exact-match origin allowlist and the `hono/cors` origin resolver                     |
-| `@spy4x/server/http/bearer-auth`  | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)    |
-| `@spy4x/server/http/same-origin`  | Hono middleware that refuses cross-site mutations and cross-site WebSocket upgrades  |
-| `@spy4x/server/export`            | Versioned export envelope and `Content-Disposition` download response                |
-| `@spy4x/server/static`            | Static-file serving with a MIME table and path-traversal protection                  |
-| `@spy4x/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                  |
-| `@spy4x/server/storage`           | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning |
-| `@spy4x/server/auth`              | Sign-in account model and `AuthStore`: see the `server/auth` section below           |
-| `@spy4x/server/auth/postgres`     | The Postgres `AuthStore` and `SessionStore`, and the `AUTH_POSTGRES_SCHEMA` tables   |
-| `@spy4x/server/auth/memory-store` | The in-memory `AuthStore`, held to the same contract as the Postgres one, for tests  |
-| `@spy4x/server/auth/password`     | Password sign-up, sign-in, change and reset: see `server/auth/password` below        |
-| `@spy4x/server/auth/email-code`   | Sign-in with a one-time code sent by email: see `server/auth/email-code` below       |
-| `@spy4x/server/auth/oauth`        | OAuth2 sign-in with PKCE, matched by the provider's `sub`: see `server/auth/oauth`   |
-| `@spy4x/server/auth/oauth-google` | Google's provider configuration for `@spy4x/server/auth/oauth`                       |
-| `@spy4x/server/sign-in`           | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP      |
-| `@spy4x/server/crypto`            | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                  |
-| `@spy4x/server/user-secrets`      | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert            |
-| `@spy4x/server/quota`             | Usage metering with an atomic reserve and 429/503 — not a rate limiter               |
-| `@spy4x/server/db`                | Barrel: Postgres and SQLite adapters plus the migration runner they share            |
-| `@spy4x/server/db/migrate`        | Migration runner: discovers, orders and applies `.sql` files, one port for both      |
-| `@spy4x/server/db/postgres`       | Postgres pool with sane connect/idle/statement timeout defaults                      |
-| `@spy4x/server/db/sqlite`         | SQLite adapter behind an injectable driver port; ships no driver                     |
-| `@spy4x/server/request-log`       | Hono request-logging middleware, method/path/status/elapsed only, injected writer    |
-| `@spy4x/server/config`            | `EnvReader` + `loadConfig`: one arktype schema validated against the environment     |
-| `@spy4x/server/kv`                | A Redis-backed key-value store, keys scoped under a caller-supplied prefix           |
-| `@spy4x/server/env-age64`         | Per-value `.env` encryption (`KEY=age64:...`), no `age` binary, no `--allow-run`     |
-| `@spy4x/server/outbox`            | Transactional outbox drain: claim, publish, retry, over a generic SQL table          |
+| Export                            | What it is                                                                            |
+| --------------------------------- | ------------------------------------------------------------------------------------- |
+| `@spy4x/server/http/bounded-body` | Byte-capped, stall-budgeted request body reading; `readJsonBody` for Hono routes      |
+| `@spy4x/server/http/cors`         | Exact-match origin allowlist and the `hono/cors` origin resolver                      |
+| `@spy4x/server/http/bearer-auth`  | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)     |
+| `@spy4x/server/http/same-origin`  | Hono middleware that refuses cross-site mutations and cross-site WebSocket upgrades   |
+| `@spy4x/server/export`            | Versioned export envelope and `Content-Disposition` download response                 |
+| `@spy4x/server/static`            | Static-file serving with a MIME table and path-traversal protection                   |
+| `@spy4x/server/healthcheck`       | Loopback TCP probe, exit 0/1, for distroless images                                   |
+| `@spy4x/server/storage`           | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning  |
+| `@spy4x/server/auth`              | Sign-in account model and `AuthStore`: see the `server/auth` section below            |
+| `@spy4x/server/auth/postgres`     | The Postgres `AuthStore` and `SessionStore`, and the `AUTH_POSTGRES_SCHEMA` tables    |
+| `@spy4x/server/auth/memory-store` | The in-memory `AuthStore`, held to the same contract as the Postgres one, for tests   |
+| `@spy4x/server/auth/password`     | Password sign-up, sign-in, change and reset: see `server/auth/password` below         |
+| `@spy4x/server/auth/email-code`   | Sign-in with a one-time code sent by email: see `server/auth/email-code` below        |
+| `@spy4x/server/auth/oauth`        | OAuth2 sign-in with PKCE, matched by the provider's `sub`: see `server/auth/oauth`    |
+| `@spy4x/server/auth/oauth-google` | Google's provider configuration for `@spy4x/server/auth/oauth`                        |
+| `@spy4x/server/sign-in`           | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP       |
+| `@spy4x/server/crypto`            | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                   |
+| `@spy4x/server/user-secrets`      | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert             |
+| `@spy4x/server/quota`             | Usage metering with an atomic reserve and 429/503 — not a rate limiter                |
+| `@spy4x/server/db`                | Barrel: Postgres and SQLite adapters plus the migration runner they share             |
+| `@spy4x/server/db/migrate`        | Migration runner: discovers, orders and applies `.sql` files, one port for both       |
+| `@spy4x/server/db/postgres`       | Postgres pool with sane connect/idle/statement timeout defaults                       |
+| `@spy4x/server/db/sqlite`         | SQLite adapter behind an injectable driver port; ships no driver                      |
+| `@spy4x/server/request-log`       | Hono request-logging middleware, method/path/status/elapsed only, injected writer     |
+| `@spy4x/server/config`            | `EnvReader` + `loadConfig`: one arktype schema validated against the environment      |
+| `@spy4x/server/kv`                | A Redis-backed key-value store, keys scoped under a caller-supplied prefix            |
+| `@spy4x/server/env-age64`         | Per-value `.env` encryption (`KEY=age64:...`), no `age` binary, no `--allow-run`      |
+| `@spy4x/server/outbox`            | Transactional outbox drain: claim, publish, retry, over a generic SQL table           |
+| `@spy4x/server/idempotency`       | Idempotent commands: CQRS middleware, request fingerprint, Postgres and memory stores |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -1850,3 +1851,43 @@ required: a unique index on `(aggregate_type, aggregate_id, aggregate_version, e
 what makes a retried `INSERT` (after a crash between the state change and the outbox row) idempotent
 instead of writing the event twice — the template had this index; it is not enforced here because
 the repository reads and updates rows but never creates or migrates the table.
+
+## `server/idempotency`
+
+`createIdempotencyMiddleware`, `fingerprint`, `isIdempotencyKey`, `IdempotencyError`,
+`IdempotencyStore`, `PostgresIdempotencyStore`, `IDEMPOTENCY_POSTGRES_SCHEMA`,
+`MemoryIdempotencyStore`, `IDEMPOTENCY_LEASE_SECONDS`, `IDEMPOTENCY_RETENTION_DAYS`. Extracted from
+`template/libs/server/idempotency/` (#313).
+
+A command whose data carries an `idempotencyKey` and an `actor.userId` runs once per (user, key).
+A repeat returns the first run's result as JSON and changes nothing. Register the middleware on the
+`CommandBus` from `@spy4x/platform/cqrs`:
+
+```ts
+bus.use(createIdempotencyMiddleware({ store: new PostgresIdempotencyStore(sql) }))
+```
+
+- A command without a key passes through.
+- A repeat that arrives while the first run is in flight waits (`waitMs`, default 8 s, polling every
+  `pollMs`, default 100 ms), then fails with `IdempotencyError` code `IN_PROGRESS`. It never runs
+  the command beside the first.
+- The same key with a different command name or different input fails with `KEY_REUSED`; a malformed
+  key (1 to 128 printable ASCII characters) or one without a signed-in user fails with
+  `INVALID_KEY`. The input is fingerprinted by SHA-256 over the sorted-key JSON of the data, minus
+  `actor`, `idempotencyKey`, `requestId` and `request`.
+- A run that throws releases its claim, so the retry runs again.
+
+**Options.** Both stores take `leaseSeconds` (default 30: how long an unfinished claim holds before
+a retry may take it over, so set it above your slowest command) and `retentionDays` (default 7: how
+long the longest-offline client may still retry). `MemoryIdempotencyStore` also takes `now`. The
+Postgres store compares against the database clock. Call `store.sweep()` from a periodic job to
+delete expired rows; `begin` also forgets an expired row for its own key.
+
+**The table.** `IDEMPOTENCY_POSTGRES_SCHEMA` is the SQL for `idempotency_keys`; run it as one of
+your migrations. It has no foreign key on `user_id`, because this library does not own your users
+table; add `REFERENCES users (id) ON DELETE CASCADE` if you want rows to go with the user.
+
+**What it does not do.** The claim and the command are not one transaction. A process that dies
+after the command committed and before its result was stored leaves a claim that expires after the
+lease, and a retry then runs the command again. A run slower than the lease can be taken over, and
+both runs then complete or release the same row; keep the lease above the slowest command.

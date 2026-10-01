@@ -1698,6 +1698,26 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createSameOriginMutationGuard` (function), `jsr:@spy4x/server/http/same-origin`: Build a Hono middleware that refuses cross-site mutations.
 - `createSameOriginUpgradeGuard` (function), `jsr:@spy4x/server/http/same-origin`: Build a Hono middleware that refuses a WebSocket upgrade from another site.
 
+### `jsr:@spy4x/server/idempotency`
+
+- `BeginOutcome` (type), `jsr:@spy4x/server/idempotency`: What IdempotencyStore.begin found for a key.
+- `IDEMPOTENCY_LEASE_SECONDS` (constant), `jsr:@spy4x/server/idempotency`: Default for how long an unfinished run keeps its claim.
+- `IDEMPOTENCY_POSTGRES_SCHEMA` (constant), `jsr:@spy4x/server/idempotency`: The table and index, as SQL text the app runs as a migration.
+- `IDEMPOTENCY_RETENTION_DAYS` (constant), `jsr:@spy4x/server/idempotency`: Default for how long a stored key stays usable: the longest a client may be offline.
+- `IdempotencyClaim` (interface), `jsr:@spy4x/server/idempotency`: The user, key and input a command was sent with.
+- `IdempotencyError` (class), `jsr:@spy4x/server/idempotency`: Why a command with an idempotency key was refused before it ran.
+- `IdempotencyErrorCode` (type), `jsr:@spy4x/server/idempotency`
+- `IdempotencyOptions` (interface), `jsr:@spy4x/server/idempotency`: What createIdempotencyMiddleware needs.
+- `IdempotencyStore` (interface), `jsr:@spy4x/server/idempotency`: Keeps the outcome of every command that carried an idempotency key.
+- `MAX_IDEMPOTENCY_KEY_LENGTH` (constant), `jsr:@spy4x/server/idempotency`: The longest key the stores accept; the Postgres column is `VARCHAR(128)`.
+- `MemoryIdempotencyStore` (class), `jsr:@spy4x/server/idempotency`: An IdempotencyStore that keeps rows in memory, for tests and single-process tools.
+- `MemoryIdempotencyStoreOptions` (interface), `jsr:@spy4x/server/idempotency`: What MemoryIdempotencyStore reads from outside.
+- `PostgresIdempotencyStore` (class), `jsr:@spy4x/server/idempotency`: IdempotencyStore over the `idempotency_keys` table (IDEMPOTENCY_POSTGRES_SCHEMA).
+- `PostgresIdempotencyStoreOptions` (interface), `jsr:@spy4x/server/idempotency`: What PostgresIdempotencyStore reads from outside.
+- `createIdempotencyMiddleware` (function), `jsr:@spy4x/server/idempotency`: Makes a command safe to send twice.
+- `fingerprint` (function), `jsr:@spy4x/server/idempotency`: A stable SHA-256 hex fingerprint of a command's name and input.
+- `isIdempotencyKey` (function), `jsr:@spy4x/server/idempotency`: Whether `key` is usable: 1 to 128 printable ASCII characters.
+
 ### `jsr:@spy4x/server/kv`
 
 - `RateLimitRedisScriptStore` (interface), `jsr:@spy4x/server/kv`: The part of RedisKvStore the store needs.
@@ -2009,4 +2029,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 f09e2c41f38f67868ae693ac1adddb30b05d41e315d0faa8bcb0216959883733 -->
+<!-- export surface: sha256 e50a69c73934ffe5e6680cadeff02dc1305648973166eafda8fbf52397757290 -->

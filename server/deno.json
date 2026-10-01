@@ -22,6 +22,7 @@
     "./request-log": "./request-log/log.ts",
     "./kv": "./kv/mod.ts",
     "./outbox": "./outbox/mod.ts",
+    "./idempotency": "./idempotency/mod.ts",
     "./crypto": "./crypto.ts",
     "./user-secrets": "./user-secrets.ts",
     "./quota": "./quota.ts",
