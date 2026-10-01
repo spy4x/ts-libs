@@ -1068,6 +1068,18 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `sortRows` (function), `jsr:@spy4x/platform/universal/sort`: Sort rows by every rule in order.
 - `toggleSort` (function), `jsr:@spy4x/platform/universal/sort`: Advance one column through `asc` → `desc` → `off`.
 
+### `jsr:@spy4x/platform/universal/statistics`
+
+- `BootstrapOptions` (interface), `jsr:@spy4x/platform/universal/statistics`: Bootstrap settings.
+- `Interval` (interface), `jsr:@spy4x/platform/universal/statistics`: A statistic's value on the data and its bootstrap interval.
+- `bootstrap` (function), `jsr:@spy4x/platform/universal/statistics`: Percentile bootstrap interval of `statistic` over `values`.
+- `bootstrapDifference` (function), `jsr:@spy4x/platform/universal/statistics`: Bootstrap interval of `statistic(b) - statistic(a)`, resampling each group on its own, so the two groups may differ in size.
+- `crossesZero` (function), `jsr:@spy4x/platform/universal/statistics`: True when the interval contains zero, so the data do not show a difference.
+- `mean` (function), `jsr:@spy4x/platform/universal/statistics`: Arithmetic mean; `undefined` for an empty list.
+- `median` (function), `jsr:@spy4x/platform/universal/statistics`: Median of `values`; `undefined` for an empty list.
+- `quantileSorted` (function), `jsr:@spy4x/platform/universal/statistics`: The `p`-th quantile (0 to 1) of an ascending-sorted list, by linear interpolation between the two nearest ranks (the default of NumPy and R).
+- `seededRandom` (function), `jsr:@spy4x/platform/universal/statistics`: A seeded random number generator returning floats in [0, 1): mulberry32.
+
 ### `jsr:@spy4x/platform/universal/text`
 
 - `convertToKebabCase` (function), `jsr:@spy4x/platform/universal/text`: Convert a free-form identifier to kebab-case.
@@ -2095,4 +2107,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 6749ad0c07b6cb664208a99c36dc12011761ee34d03a2d50580d7481cecb7962 -->
+<!-- export surface: sha256 f8219b545f85d4fade8ae9a8e4366184892a8f9276aa15cb381e06f49b98358b -->
