@@ -908,6 +908,73 @@ describe("policy RFC 6376 leaves to the caller", () => {
 
 // --- the cost of selecting the headers a signature names --------------------
 
+/** Microseconds of CPU time, as Node's `process.cpuUsage` reports them. */
+interface CpuUsage {
+  user: number
+  system: number
+}
+
+/**
+ * Node's `process`, which Deno provides as a global. It is read from `globalThis`
+ * rather than imported from `node:process`: that import brings Node's global
+ * types into the type check every test file shares, and `setTimeout` elsewhere
+ * then returns a Node `Timeout` instead of a number.
+ */
+const process = (globalThis as unknown as {
+  process: { cpuUsage(previous?: CpuUsage): CpuUsage }
+}).process
+
+/** The CPU time this process spends on `run`, in milliseconds. */
+async function cpuMilliseconds(run: () => unknown): Promise<number> {
+  const start = process.cpuUsage()
+  await run()
+  const spent = process.cpuUsage(start)
+  return (spent.user + spent.system) / 1000
+}
+
+/**
+ * How many times more CPU time `run` needs for an input of size `large` than for
+ * one of size `small`: the order of growth, without a budget in milliseconds.
+ *
+ * The budgets these tests used before compared wall-clock time against a
+ * reference loop timed once, and failed whenever the machine was busy at the
+ * wrong moment: under a load average of 53 on 16 cores, the header test failed 3
+ * runs in 10. CPU time leaves out the time the process waits for a core, so load
+ * barely moves it: 48 busy processes on the same 16 cores left these ratios
+ * within their usual run-to-run spread. Each size still runs several times, in
+ * turns, and keeps its fastest run.
+ */
+async function growthRatio(
+  run: (size: number) => unknown,
+  small: number,
+  large: number,
+  repeats: number,
+): Promise<number> {
+  // One untimed run first, so the timed runs do not pay for compilation.
+  await run(small)
+  let fastestSmall = Infinity
+  let fastestLarge = Infinity
+  for (let round = 0; round < repeats; round++) {
+    fastestSmall = Math.min(fastestSmall, await cpuMilliseconds(() => run(small)))
+    fastestLarge = Math.min(fastestLarge, await cpuMilliseconds(() => run(large)))
+  }
+  assert(fastestSmall > 0, `the small input ran too fast to time: ${fastestSmall}ms`)
+  return fastestLarge / fastestSmall
+}
+
+/** Eight times the input: linear work grows about 8x, quadratic work about 64x. */
+const GROWTH = 8
+/**
+ * Over 36 measurements, idle and under three busy processes per core, the
+ * verifier's linear code grew 7x to 19x, a little over 8 because the heap grows
+ * with the input. The quadratic versions these tests guard against grew 44x to
+ * 190x (the headers) and 66x to 82x (the body). 28 sits between 19 and 44 on a
+ * logarithmic scale, with about half as much again as room on either side.
+ */
+const LINEAR_GROWTH_LIMIT = 28
+/** Rounds per size; the fastest of them is the one compared. */
+const GROWTH_REPEATS = 5
+
 /**
  * The same harm as the body freeze, reached through the header block instead.
  *
@@ -918,15 +985,11 @@ describe("policy RFC 6376 leaves to the caller", () => {
  * spend it: measured on the code before this change, 0.21 MB of such headers took
  * 344 ms, 0.89 MB took 4.2 s and 1.81 MB took 46 s.
  *
- * The budget below is a multiple of one linear scan of the same message, timed on
- * the machine running the test, rather than a number of milliseconds. The
- * quadratic version comes in at roughly 350 times that scan and the linear one at
- * about 4, so a factor of 50 tells them apart with room on both sides.
+ * The test compares the time for 5 000 headers with the time for 40 000
+ * ({@link growthRatio}), so a slow or loaded machine does not move the result.
  */
 describe("the cost of selecting the headers a signature names", () => {
-  const REFERENCE_PASSES = 3
-  const LINEAR_BUDGET_FACTOR = 50
-  const HEADER_COUNT = 40_000
+  const HEADER_COUNT = 5_000
 
   /** A message of `count` distinct headers, every one of them named in `h=`. */
   function messageNamingEveryHeader(count: number): string {
@@ -943,46 +1006,31 @@ describe("the cost of selecting the headers a signature names", () => {
     return `${lines.join("\r\n")}\r\n\r\nbody\r\n`
   }
 
-  /** One linear pass over the message, doing the kind of work the verifier does. */
-  function scanHeaders(raw: string): number {
-    let work = 0
-    for (const line of raw.split("\r\n")) {
-      const colon = line.indexOf(":")
-      if (colon === -1) continue
-      work += line.slice(0, colon).trim().toLowerCase().length
-    }
-    return work
-  }
-
-  it("selects from a message of 40 000 signed headers within a linear budget", async () => {
-    const raw = messageNamingEveryHeader(HEADER_COUNT)
+  it("selects from a message of signed headers in time linear in its size", async () => {
     // A key that cannot be imported: the selection runs before the body hash is
     // compared, so this measures header work and no cryptography.
     const key: DkimPublicKey = { algorithm: "rsa", keyBytes: new Uint8Array([0x30, 0x02, 0x00]) }
+    const largest = HEADER_COUNT * GROWTH
     // The caps that would refuse a message of this shape outright are raised on
     // purpose: what is under test is the selection loop, and the caps have their
     // own tests below.
-    const limits = { maxHeaderFields: HEADER_COUNT * 2, maxSignedHeaderNames: HEADER_COUNT * 2 }
+    const limits = { maxHeaderFields: largest * 2, maxSignedHeaderNames: largest * 2 }
+    const messages = new Map<number, string>()
+    for (const count of [HEADER_COUNT, largest]) {
+      messages.set(count, messageNamingEveryHeader(count))
+    }
 
-    let referenceWork = 0
-    const referenceStart = performance.now()
-    for (let pass = 0; pass < REFERENCE_PASSES; pass++) referenceWork += scanHeaders(raw)
-    const reference = (performance.now() - referenceStart) / REFERENCE_PASSES
-    assert(referenceWork > 0, "the reference pass must not be optimised away")
-    assert(reference > 0, `the reference pass was too fast to time: ${reference}ms`)
-
-    const start = performance.now()
-    const result = await verifyDkim(raw, key, limits)
-    const elapsed = performance.now() - start
-
-    // The message really was processed: it reached the body hash, which is the
-    // step after the selection.
-    assertEquals(result.valid, false)
-    assertEquals(result.reason, "body hash mismatch (body modified after signing)")
+    const verify = async (count: number) => {
+      const result = await verifyDkim(messages.get(count)!, key, limits)
+      // The message really was processed: it reached the body hash, which is the
+      // step after the selection.
+      assertEquals(result.reason, "body hash mismatch (body modified after signing)")
+    }
+    const growth = await growthRatio(verify, HEADER_COUNT, largest, GROWTH_REPEATS)
     assert(
-      elapsed < reference * LINEAR_BUDGET_FACTOR,
-      `selecting ${HEADER_COUNT} headers took ${elapsed.toFixed(0)}ms, over ` +
-        `${LINEAR_BUDGET_FACTOR}x the ${reference.toFixed(1)}ms linear reference`,
+      growth < LINEAR_GROWTH_LIMIT,
+      `${GROWTH}x the headers took ${growth.toFixed(1)}x the time, over the ` +
+        `${LINEAR_GROWTH_LIMIT}x that separates linear from quadratic work`,
     )
   })
 
@@ -1834,48 +1882,34 @@ describe("canonicalizeBody", () => {
  * 80 000 took 4 291 ms. The body comes from whoever sent the message, the work
  * is synchronous, and one large message froze the process.
  *
- * The budget below is a multiple of a linear pass over the same strings, timed on
- * the machine running the test, rather than a number of milliseconds: a slow or
- * loaded machine moves both sides of the comparison together. The factor is
- * enormous on purpose. A linear implementation comes in at well under 10x the
- * reference and the quadratic one at several thousand times it, so anything in
- * between is still a clear failure.
+ * The test compares the time for 16 KiB with the time for 128 KiB
+ * ({@link growthRatio}), so a slow or loaded machine does not move the result.
  */
 describe("the cost of canonicalizing a large body", () => {
-  const REFERENCE_PASSES = 5
-  const LINEAR_BUDGET_FACTOR = 200
-
-  it("canonicalizes 128 KiB of the pathological shapes within a linear budget", () => {
-    const size = 128 * 1024
-    const spaces = `${" ".repeat(size)}x\r\n`
-    const endings = `x${"\r\n".repeat(size / 2)}`
-
-    // The reference: split and re-join the same strings, which is the same order
-    // of work the canonicalizer does and is unambiguously linear. The length is
-    // accumulated so the optimiser cannot drop the loop.
-    let referenceChars = 0
-    const referenceStart = performance.now()
-    for (let pass = 0; pass < REFERENCE_PASSES; pass++) {
-      referenceChars += spaces.split("\r\n").join("\r\n").length
-      referenceChars += endings.split("\r\n").join("\r\n").length
+  it("canonicalizes the pathological shapes in time linear in their size", async () => {
+    const size = 16 * 1024
+    // A run of spaces before a line ending, and a run of line endings at the end:
+    // the two shapes the backtracking expressions retried at every offset.
+    const bodies = new Map<number, { spaces: string; endings: string }>()
+    for (const length of [size, size * GROWTH]) {
+      bodies.set(length, {
+        spaces: `${" ".repeat(length)}x\r\n`,
+        endings: `x${"\r\n".repeat(length / 2)}`,
+      })
     }
-    const reference = (performance.now() - referenceStart) / REFERENCE_PASSES
-    assert(referenceChars > 0, "the reference pass must not be optimised away")
-    assert(reference > 0, `the reference pass was too fast to time: ${reference}ms`)
 
-    const start = performance.now()
-    const relaxed = canonicalizeBody(spaces, "relaxed")
-    const simple = canonicalizeBody(endings, "simple")
-    const elapsed = performance.now() - start
-
-    // The results are asserted too: a canonicalizer that returned early would be
-    // fast and wrong.
-    assertEquals(relaxed, " x\r\n")
-    assertEquals(simple, "x\r\n")
+    const canonicalize = (length: number) => {
+      const { spaces, endings } = bodies.get(length)!
+      // The results are asserted too: a canonicalizer that returned early would be
+      // fast and wrong.
+      assertEquals(canonicalizeBody(spaces, "relaxed"), " x\r\n")
+      assertEquals(canonicalizeBody(endings, "simple"), "x\r\n")
+    }
+    const growth = await growthRatio(canonicalize, size, size * GROWTH, GROWTH_REPEATS)
     assert(
-      elapsed < reference * LINEAR_BUDGET_FACTOR,
-      `canonicalizing ${size} characters took ${elapsed.toFixed(1)}ms, over ` +
-        `${LINEAR_BUDGET_FACTOR}x the ${reference.toFixed(1)}ms linear reference`,
+      growth < LINEAR_GROWTH_LIMIT,
+      `${GROWTH}x the body took ${growth.toFixed(1)}x the time, over the ` +
+        `${LINEAR_GROWTH_LIMIT}x that separates linear from quadratic work`,
     )
   })
 })
