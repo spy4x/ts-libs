@@ -30,9 +30,9 @@ export enum IntegrationEnvName {
 
 /**
  * The credentials every container in `infra/compose.integration.yml` that takes one
- * is started with (the plain Redis takes none; the password-protected one takes this). Deliberately one obviously fake literal: these
- * containers are throw-away, listen on the loopback interface only, and hold nothing
- * worth reading.
+ * is started with (the plain Redis takes none; the password-protected one takes this).
+ * Deliberately one obviously fake literal: these containers are throw-away, listen on
+ * the loopback interface only, and hold nothing worth reading.
  */
 export const THROWAWAY_CREDENTIAL = "integration-test-only"
 
@@ -100,7 +100,7 @@ export interface MailpitSettings {
   address: ServiceAddress
 }
 
-/** Connection fields for the password-protected Redis container: the plain ones plus the password. */
+/** Connection fields for the password-protected Redis: the plain ones plus the password. */
 export interface RedisAuthSettings extends RedisSettings {
   password: string
 }

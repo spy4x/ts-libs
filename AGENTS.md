@@ -183,9 +183,9 @@ that can silently skip when its dependency is missing must fail loudly instead.
 | `deno task ts:check`         | `deno check` over every `.ts`/`.tsx` in the tree           |
 | `deno task test`             | the unit tier — every test except `*.integration.test.ts`  |
 | `deno task test:integration` | the integration tier — only `*.integration.test.ts`        |
-| `deno task services:up`      | start the four integration services, wait until healthy    |
+| `deno task services:up`      | start the five integration services, wait until healthy    |
 | `deno task services:down`    | stop them and drop their volumes                           |
-| `deno task services:logs`    | logs of the four containers                                |
+| `deno task services:logs`    | logs of the five containers                                |
 | `deno task publish:dry`      | `deno publish --dry-run` over the workspace; CI runs it    |
 | `deno task contract`         | regenerate `docs/1.0-contract.md` from `deno doc` (#77)    |
 | `deno task llms`             | regenerate `llms.txt` and `llms-full.txt` (#297)           |
@@ -281,8 +281,9 @@ TS_LIBS_IT_REDIS_AUTH_PORT       56380
 ```
 
 Every container that takes a credential uses `integration-test-only` as the user, password and
-database name; the plain Redis takes none, and the second Redis (`redis-auth`) uses it as its password. They hold throw-away data and listen on loopback only; the
-literal is meant to be unmistakable if it ever turns up in a log. It is the one credential-shaped
+database name; the plain Redis takes none, and the second Redis (`redis-auth`) uses it as its
+password. They hold throw-away data and listen on loopback only; the literal is meant to be
+unmistakable if it ever turns up in a log. It is the one credential-shaped
 string this repository commits.
 
 ## Code style

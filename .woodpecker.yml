@@ -14,7 +14,7 @@ when:
   - event: tag
     ref: refs/tags/v*
 
-# The integration tier's dependencies (#74). Same four images as
+# The integration tier's dependencies (#74). Same five images as
 # `infra/compose.integration.yml`, same exact version pins; only the addresses
 # differ, because Woodpecker publishes a service under its own name as hostname on
 # the container's own port. The credentials are the same obviously fake literal, and

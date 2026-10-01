@@ -278,7 +278,7 @@ export function describeSqlLockRefusalContract(
   open: OpenSql<SqlLockFixture>,
 ): void {
   describe(`${name} (sql lock refusal contract)`, () => {
-    it("a try-lock is refused on each of the first attempts while the key is held, then granted once it is let go", async () => {
+    it("refuses a held try-lock, then grants it once the key is let go", async () => {
       await withFixture(open, async (fixture) => {
         const key = BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) + 1n
         const reserved = await fixture.sql.reserve()

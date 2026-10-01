@@ -17,9 +17,10 @@
 # 3. **Obviously fake credentials.** `integration-test-only` is the user, the
 #    password and the database name everywhere a service takes one (`redis` takes
 #    none: no `requirepass`, same as every other service here on a loopback-only
-#    port; `redis-auth` takes the literal as its password). These containers hold throw-away data, are reachable from the
-#    loopback interface only, and the string is meant to be unmistakable if it
-#    ever shows up in a log or a bug report.
+#    port; `redis-auth` takes the literal as its password). These containers hold
+#    throw-away data, are reachable from the loopback interface only, and the
+#    string is meant to be unmistakable if it ever shows up in a log or a bug
+#    report.
 #
 # Images are pinned to an exact version tag, never `latest`, for the same reason the
 # import map pins every dependency: a silent upgrade turns a green suite red with no
