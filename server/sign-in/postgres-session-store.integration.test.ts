@@ -10,15 +10,10 @@
  * `finally`.
  */
 
-import postgres from "postgres"
-import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
-import {
-  AUTH_POSTGRES_SCHEMA,
-  createPostgresAuthStore,
-  createPostgresSessionStore,
-} from "../auth/postgres.ts"
+import { postgresSettings, requireReachable } from "@integration-testing"
+import { openAuthSchema } from "../auth/postgres-schema-fixture.test.ts"
+import { createPostgresAuthStore, createPostgresSessionStore } from "../auth/postgres.ts"
 import type { AuthSessionRecord } from "../auth/model.ts"
-import { buildPostgresOptions, type Sql } from "../db/index.ts"
 import {
   describeSessionStoreContract,
   type SessionStoreFixture,
@@ -30,33 +25,11 @@ describeSessionStoreContract(
     const settings = postgresSettings()
     await requireReachable(settings.address)
 
-    const schema = uniqueIdentifier("it_sessions")
-    const admin = postgres({
-      ...buildPostgresOptions({ connection: settings.connection, max: 1 }),
-      onnotice: () => {},
-    }) as unknown as Sql
-    await admin`CREATE SCHEMA ${admin(schema)}`
-    const sql = postgres({
-      ...buildPostgresOptions({ connection: settings.connection, max: 2 }),
-      connection: { application_name: schema, search_path: schema },
-      onnotice: () => {},
-    }) as unknown as Sql
-
-    const close = async () => {
-      try {
-        await sql.end()
-        await admin`DROP SCHEMA IF EXISTS ${admin(schema)} CASCADE`
-      } finally {
-        await admin.end()
-      }
-    }
-
-    try {
-      await sql.unsafe(AUTH_POSTGRES_SCHEMA)
-    } catch (error) {
-      await close()
-      throw error
-    }
+    const { sql, close } = await openAuthSchema({
+      prefix: "it_sessions",
+      connection: settings.connection,
+      poolSize: 2,
+    })
 
     // A session row references a key of its own user, so each user comes with one.
     const authStore = createPostgresAuthStore(sql)
