@@ -30,7 +30,7 @@
  * @module
  */
 
-import { type Type, type } from "arktype"
+import { type Out, type Type, type } from "arktype"
 import {
   createSignedPayloadCodec,
   SignedPayloadError,
@@ -78,7 +78,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * millisecond the encoder saw. `2026-01-01T00:00:00Z` (no milliseconds) and any offset other than
  * `Z` are refused.
  */
-const isoInstant = type("string").narrow((value, ctx) => {
+const isoInstant: Type<string> = type("string").narrow((value, ctx) => {
   const date = new Date(value)
   return (!Number.isNaN(date.valueOf()) && date.toISOString() === value) ||
     ctx.mustBe("an ISO instant as toISOString prints it")
@@ -88,8 +88,13 @@ const isoInstant = type("string").narrow((value, ctx) => {
  * The default page key, `{ updatedAt, id }`: the last row of a page ordered by `updated_at` then
  * `id`. Its input is the JSON form (`updatedAt` an ISO string), its output holds a `Date`, and no
  * other key is accepted.
+ *
+ * A `Date` holds milliseconds, and a cursor refuses anything finer. A Postgres `TIMESTAMPTZ` column
+ * holds microseconds, so two rows inside one millisecond would be skipped (descending order) or
+ * repeated (ascending order). Declare the column `TIMESTAMPTZ(3)`, or compare the cursor against
+ * `date_trunc('milliseconds', updated_at)` and order by that expression.
  */
-export const updatedAtIdPageKey = type({
+export const updatedAtIdPageKey: Type<{ updatedAt: (In: string) => Out<Date>; id: string }> = type({
   updatedAt: isoInstant.pipe((value) => new Date(value)),
   id: type(UUID_PATTERN),
   "+": "reject",
