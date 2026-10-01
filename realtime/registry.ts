@@ -343,6 +343,15 @@ export class ConnectionRegistry {
     return this.#byUser.get(userId)?.size ?? 0
   }
 
+  /**
+   * Ids of a user's live sockets, in attach order. A copy: changing it does not change the
+   * registry. Empty for a user with no sockets. Use it to reach one user's sockets (for example to
+   * close them on sign-out) without scanning every open connection.
+   */
+  socketIdsFor(userId: string): string[] {
+    return [...(this.#byUser.get(userId) ?? [])]
+  }
+
   /** Number of live sockets overall. */
   count(): number {
     return this.#connections.size
