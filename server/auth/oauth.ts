@@ -30,6 +30,7 @@ import { encodeBase64Url } from "@std/encoding/base64url"
 import { type } from "arktype"
 import { constantTimeEquals, randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import { systemClock } from "@spy4x/platform/universal/time"
+import { readBoundedJson } from "@spy4x/net/bounded-body"
 import { SecondFactorStatus } from "../sign-in/mod.ts"
 import { validate } from "@spy4x/validation"
 
@@ -75,7 +76,8 @@ export interface OAuthProfileContext {
    * Sends a GET to the `https:` URL `url` with the sign-in's access token and returns the JSON
    * answer, within the same time limit as the other provider requests.
    *
-   * @throws {OAuthSignInError} `profile-failed` when the request fails or the answer is not JSON.
+   * @throws {OAuthSignInError} `profile-failed` when the request fails, or the answer is not JSON,
+   * is larger than 64 KiB or stalls.
    */
   getJson(url: string): Promise<unknown>
 }
@@ -124,7 +126,11 @@ export interface OAuthSignInOptions extends ProviderDeps {
   redirectUri: string
   /** How long a started flow can be completed, in whole seconds. Defaults to 600. */
   flowTtlSeconds?: number
-  /** Time limit of each request to the provider, in milliseconds. Defaults to 10 000. */
+  /**
+   * Time limit of each request to the provider, in milliseconds, and the longest wait for the next
+   * chunk of its answer. Defaults to 10 000. An answer is read up to 64 KiB; a larger one refuses
+   * the step.
+   */
   timeoutMs?: number
   /** Sends the requests to the provider. Defaults to the global `fetch`. */
   fetch?: (request: Request) => Promise<Response>
@@ -207,7 +213,7 @@ export type OAuthFailure =
   | "provider-error"
   /** The token request failed or its answer was unusable. */
   | "token-exchange-failed"
-  /** The user-info request failed or its answer was not JSON. */
+  /** The user-info request failed, or its answer was not JSON, too large or stalled. */
   | "profile-failed"
   /** The user-info answer does not describe a person the store can key. */
   | "invalid-profile"
@@ -270,6 +276,11 @@ export interface ConfirmableOAuthSignIn extends Omit<OAuthSignIn, "handleCallbac
 
 const DEFAULT_FLOW_TTL_SECONDS = 600
 const DEFAULT_TIMEOUT_MS = 10_000
+/**
+ * Most bytes read from one provider answer. A token, profile or address list is a few KiB at most;
+ * anything larger refuses the step instead of being buffered (#331).
+ */
+const MAX_RESPONSE_BYTES = 64 * 1024
 /** 256 bits each; base64url renders them as 43 characters, the PKCE verifier's minimum length. */
 const STATE_BYTES = 32
 const VERIFIER_BYTES = 32
@@ -374,8 +385,11 @@ export function createOAuthSignIn(
       throw new OAuthSignInError(failure)
     }
     try {
-      return await response.json()
+      return await readBoundedJson(response, { maxBytes: MAX_RESPONSE_BYTES, timeoutMs })
     } catch (cause) {
+      // JSON.parse quotes the start of the body in its message, and a token answer carries secrets,
+      // so a parse failure keeps no cause. The size and stall errors name only their limits.
+      if (cause instanceof SyntaxError) throw new OAuthSignInError(failure)
       throw new OAuthSignInError(failure, { cause })
     }
   }

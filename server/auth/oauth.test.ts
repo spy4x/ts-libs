@@ -11,6 +11,7 @@ import { createFakeStore } from "../sign-in/fake-store.test.ts"
 import { MemoryAuthStore } from "./memory-store.ts"
 import type { AuthSessionRecord, AuthUser } from "./model.ts"
 import { sha256Hex } from "@spy4x/platform/tokens"
+import { BodyReadTimeoutError, PayloadTooLargeError } from "@spy4x/net/bounded-body"
 import {
   type ConfirmableOAuthSignIn,
   createMemoryOAuthFlowStore,
@@ -863,5 +864,134 @@ describe("createOAuthSignIn: completeProfile", () => {
       (request) => request.url.endsWith("?more"),
     )
     expect(await failure(signInAs(oauth, fake, ANN))).toBe("profile-failed")
+  })
+})
+
+describe("createOAuthSignIn: provider answers are bounded", () => {
+  /** The cap `oauth.ts` reads a provider answer up to. */
+  const CAP = 64 * 1024
+  const TOKEN = "https://provider.test/token"
+  const USER_INFO = "https://provider.test/userinfo"
+
+  /** A JSON answer streamed in 4 KiB chunks with no `Content-Length`, so only the running count can stop it. */
+  function streamed(text: string): Response {
+    const bytes = new TextEncoder().encode(text)
+    let offset = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset >= bytes.byteLength) return controller.close()
+        controller.enqueue(bytes.slice(offset, offset + 4096))
+        offset += 4096
+      },
+    })
+    return new Response(body, { headers: { "content-type": "application/json" } })
+  }
+
+  /** `value` as JSON with a `pad` field that makes it exactly `size` bytes long. */
+  function padded(value: Record<string, unknown>, size: number): string {
+    const bare = JSON.stringify({ ...value, pad: "" })
+    return JSON.stringify({ ...value, pad: "a".repeat(size - bare.length) })
+  }
+
+  /** The fake provider, with the answer from `url` replaced by `rewrite`'s. */
+  function rewriting(
+    url: string,
+    rewrite: (real: Response) => Promise<Response>,
+    overrides: Partial<OAuthSignInOptions> = {},
+  ) {
+    const fixture = memoryFixture()
+    const provider = createFakeProvider()
+    const oauth = createOAuthSignIn({
+      ...fakeOptions(fixture, provider),
+      clock: fixedClock(),
+      fetch: async (request) => {
+        const response = await provider.fetch(request)
+        return request.url === url ? await rewrite(response) : response
+      },
+      ...overrides,
+    })
+    return { fixture, provider, oauth }
+  }
+
+  async function refusal(promise: Promise<unknown>): Promise<OAuthSignInError> {
+    const error = await promise.then(() => null, (caught: unknown) => caught)
+    expect(error).toBeInstanceOf(OAuthSignInError)
+    return error as OAuthSignInError
+  }
+
+  it("refuses the sign-in as token-exchange-failed when the token answer passes 64 KiB", async () => {
+    const { fixture, provider, oauth } = rewriting(
+      TOKEN,
+      async (real) => streamed(padded(await real.json(), CAP + 1)),
+    )
+    const error = await refusal(signInAs(oauth, provider, ANN))
+    expect(error.reason).toBe("token-exchange-failed")
+    expect(error.cause).toBeInstanceOf(PayloadTooLargeError)
+    expect(await fixture.store.findKey("oauth:fake", ANN.sub)).toBeNull()
+  })
+
+  it("refuses the sign-in as profile-failed when the profile answer passes 64 KiB", async () => {
+    const { fixture, provider, oauth } = rewriting(
+      USER_INFO,
+      async (real) => streamed(padded(await real.json(), CAP + 1)),
+    )
+    const error = await refusal(signInAs(oauth, provider, ANN))
+    expect(error.reason).toBe("profile-failed")
+    expect(error.cause).toBeInstanceOf(PayloadTooLargeError)
+    expect(await fixture.store.findKey("oauth:fake", ANN.sub)).toBeNull()
+  })
+
+  it("accepts a profile answer of exactly 64 KiB", async () => {
+    const { provider, oauth } = rewriting(
+      USER_INFO,
+      async (real) => streamed(padded(await real.json(), CAP)),
+    )
+    const result = await signInAs(oauth, provider, ANN)
+    expect(result.key.subject).toBe(ANN.sub)
+  })
+
+  it("refuses a token answer that is not JSON without quoting it in the error", async () => {
+    // JSON.parse quotes the first characters of what it was given, so the marker comes first.
+    const secret = "gho_not-a-real-token-but-quoted-if-leaked"
+    const { provider, oauth } = rewriting(TOKEN, () => Promise.resolve(new Response(secret)))
+    const error = await refusal(signInAs(oauth, provider, ANN))
+    expect(error.reason).toBe("token-exchange-failed")
+    expect(error.message).not.toContain("gho_")
+    expect(String(error.cause)).not.toContain("gho_")
+  })
+
+  it("refuses the sign-in as token-exchange-failed when the token answer stalls", async () => {
+    const timeoutMs = 4321
+    const reading = Promise.withResolvers<void>()
+    const stalled = new ReadableStream<Uint8Array>({
+      pull() {
+        reading.resolve()
+        return new Promise<void>(() => {})
+      },
+    }, { highWaterMark: 0 })
+    const { provider, oauth } = rewriting(
+      TOKEN,
+      () => Promise.resolve(new Response(stalled)),
+      { timeoutMs },
+    )
+
+    // The stall timer is fired by hand, so the test never waits on a real clock.
+    const timers: { fire: () => void; ms: number }[] = []
+    const realSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = ((fire: () => void, ms: number) => {
+      timers.push({ fire, ms })
+      // Negative, so the real clearTimeout this id later reaches cannot cancel a real timer.
+      return -timers.length
+    }) as typeof setTimeout
+    try {
+      const signingIn = refusal(signInAs(oauth, provider, ANN))
+      await reading.promise
+      for (const timer of timers) if (timer.ms === timeoutMs) timer.fire()
+      const error = await signingIn
+      expect(error.reason).toBe("token-exchange-failed")
+      expect(error.cause).toBeInstanceOf(BodyReadTimeoutError)
+    } finally {
+      globalThis.setTimeout = realSetTimeout
+    }
   })
 })
