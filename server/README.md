@@ -907,8 +907,13 @@ has this provider's method; any other id returns `false` and deletes nothing. On
 the key's sessions end with it, through the cascade.
 
 **The provider requests are bounded.** Endpoints must be `https:`. The client secret goes in the
-token request's form body. Each request has a 10-second limit by default (`timeoutMs`), and a token
-answer whose `token_type` is present and not `bearer` is refused. The redirect URI is sent exactly
+token request's form body. Each request has a 10-second limit by default (`timeoutMs`). Every
+answer (token, profile and `completeProfile`'s `getJson`) is read with `readBoundedJson` from
+`@spy4x/net/bounded-body`: up to 64 KiB, and with the same `timeoutMs` as the longest wait for its
+next chunk (#331). An answer that is larger, stalls or is not JSON refuses the step with its own
+reason (`token-exchange-failed` or `profile-failed`); a parse failure keeps no `cause`, because the
+parser's message quotes the start of the body. A token answer whose `token_type` is present and not
+`bearer` is refused. The redirect URI is sent exactly
 as given, because providers compare it character by character.
 
 ### What it does not do
