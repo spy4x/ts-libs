@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/realtime",
-  "version": "1.23.0",
+  "version": "1.24.0",
   "exports": {
     ".": "./mod.ts",
     "./client": "./client-transport.ts",
