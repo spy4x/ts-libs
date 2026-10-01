@@ -5,7 +5,12 @@
 
 import { postgresSettings, requireReachable } from "@integration-testing"
 import { createSql } from "./postgres.ts"
-import { describeSqlHandleContract, describeSqlLockContract } from "./sql-contract.test.ts"
+import {
+  describeSqlHandleContract,
+  describeSqlLockContract,
+  describeSqlLockRefusalContract,
+  type SqlLockFixture,
+} from "./sql-contract.test.ts"
 
 describeSqlHandleContract("postgres", async () => {
   const settings = postgresSettings()
@@ -14,7 +19,8 @@ describeSqlHandleContract("postgres", async () => {
   return { sql, close: () => sql.end() }
 }, { full: true })
 
-describeSqlLockContract("postgres", async () => {
+/** A real client plus a second session that holds advisory locks. */
+async function openLockFixture(): Promise<SqlLockFixture> {
   const settings = postgresSettings()
   await requireReachable(settings.address)
   const sql = createSql({ connection: settings.connection })
@@ -43,4 +49,7 @@ describeSqlLockContract("postgres", async () => {
       }
     },
   }
-})
+}
+
+describeSqlLockContract("postgres", openLockFixture)
+describeSqlLockRefusalContract("postgres", openLockFixture)

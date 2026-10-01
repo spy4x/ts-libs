@@ -24,13 +24,15 @@ export enum IntegrationEnvName {
   MailpitUrl = "TS_LIBS_IT_MAILPIT_URL",
   RedisHost = "TS_LIBS_IT_REDIS_HOST",
   RedisPort = "TS_LIBS_IT_REDIS_PORT",
+  RedisAuthHost = "TS_LIBS_IT_REDIS_AUTH_HOST",
+  RedisAuthPort = "TS_LIBS_IT_REDIS_AUTH_PORT",
 }
 
 /**
  * The credentials every container in `infra/compose.integration.yml` that takes one
- * is started with (Redis takes none). Deliberately one obviously fake literal: these
- * containers are throw-away, listen on the loopback interface only, and hold nothing
- * worth reading.
+ * is started with (the plain Redis takes none; the password-protected one takes this).
+ * Deliberately one obviously fake literal: these containers are throw-away, listen on
+ * the loopback interface only, and hold nothing worth reading.
  */
 export const THROWAWAY_CREDENTIAL = "integration-test-only"
 
@@ -46,6 +48,8 @@ export const LOCAL_DEFAULTS = {
   mailpitUrl: "http://127.0.0.1:58025",
   redisHost: "127.0.0.1",
   redisPort: 56379,
+  redisAuthHost: "127.0.0.1",
+  redisAuthPort: 56380,
 } as const
 
 /** One TCP endpoint, named well enough for a failure message to be actionable. */
@@ -94,6 +98,11 @@ export interface MailpitSettings {
   /** Origin with no trailing slash, e.g. `http://127.0.0.1:58025`. */
   baseUrl: string
   address: ServiceAddress
+}
+
+/** Connection fields for the password-protected Redis: the plain ones plus the password. */
+export interface RedisAuthSettings extends RedisSettings {
+  password: string
 }
 
 /** Connection fields for the Redis container, plus the address to probe. */
@@ -242,6 +251,27 @@ export function redisSettings(): RedisSettings {
       hostname,
       port,
       envName: IntegrationEnvName.RedisHost,
+    },
+  }
+}
+
+/**
+ * Settings of the second Redis, the one started with `requirepass` (`redis-auth` in
+ * `infra/compose.integration.yml`). Its password is {@link THROWAWAY_CREDENTIAL}.
+ */
+export function redisAuthSettings(): RedisAuthSettings {
+  const hostname = readEnv(IntegrationEnvName.RedisAuthHost) ?? LOCAL_DEFAULTS.redisAuthHost
+  const port = readPort(IntegrationEnvName.RedisAuthPort, LOCAL_DEFAULTS.redisAuthPort)
+
+  return {
+    hostname,
+    port,
+    password: THROWAWAY_CREDENTIAL,
+    address: {
+      service: "Redis (password-protected)",
+      hostname,
+      port,
+      envName: IntegrationEnvName.RedisAuthHost,
     },
   }
 }

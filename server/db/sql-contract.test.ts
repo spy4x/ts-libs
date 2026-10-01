@@ -228,8 +228,8 @@ export function describeSqlLockContract(name: string, open: OpenSql<SqlLockFixtu
       await withFixture(open, async (fixture) => {
         const key = freshKey()
         const reserved = await fixture.sql.reserve()
-        await fixture.holdLockElsewhere(key)
         try {
+          await fixture.holdLockElsewhere(key)
           assertEquals(
             await positional(reserved`SELECT pg_try_advisory_lock(${key}) AS locked`),
             [[false]],
@@ -259,6 +259,47 @@ export function describeSqlLockContract(name: string, open: OpenSql<SqlLockFixtu
     it("a bare SELECT 1 answers one row of one column", async () => {
       await withFixture(open, async ({ sql }) => {
         assertEquals(await positional(sql`SELECT 1`), [[1]])
+      })
+    })
+  })
+}
+
+/** How many try-locks {@link describeSqlLockRefusalContract} expects to be refused. */
+export const LOCK_REFUSALS = 3
+
+/**
+ * Registers the case that a lock held for a number of attempts and then let go answers `false`
+ * that many times, then `true`. This is what the migration fake's `lockRefusals` option stands
+ * for, so the fake's fixture holds the lock for exactly {@link LOCK_REFUSALS} attempts through
+ * that option and the real client's fixture holds it through a second session.
+ */
+export function describeSqlLockRefusalContract(
+  name: string,
+  open: OpenSql<SqlLockFixture>,
+): void {
+  describe(`${name} (sql lock refusal contract)`, () => {
+    it("refuses a held try-lock, then grants it once the key is let go", async () => {
+      await withFixture(open, async (fixture) => {
+        const key = BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) + 1n
+        const reserved = await fixture.sql.reserve()
+        try {
+          await fixture.holdLockElsewhere(key)
+          for (let attempt = 1; attempt <= LOCK_REFUSALS; attempt++) {
+            assertEquals(
+              await positional(reserved`SELECT pg_try_advisory_lock(${key}) AS locked`),
+              [[false]],
+              `attempt ${attempt} of ${LOCK_REFUSALS} while held`,
+            )
+          }
+          await fixture.releaseLockElsewhere(key)
+          assertEquals(
+            await positional(reserved`SELECT pg_try_advisory_lock(${key}) AS locked`),
+            [[true]],
+          )
+          await reserved`SELECT pg_advisory_unlock(${key})`
+        } finally {
+          reserved.release()
+        }
       })
     })
   })
