@@ -299,7 +299,7 @@ Deno.test("renders emailButton as a table with the escaped label and the given c
     background: "#f97316",
     color: "#fff",
   })
-  assert(html.startsWith("<table "))
+  assert(html.startsWith(`<table role="presentation" `))
   assertStringIncludes(html, 'href="https://example.com/go?a=1&amp;b=2"')
   assertStringIncludes(html, ">Read &lt;now&gt; &amp; &quot;learn&quot;</a>")
   assertStringIncludes(html, 'bgcolor="#f97316"')
