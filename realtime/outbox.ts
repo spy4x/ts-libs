@@ -205,8 +205,31 @@ export function createMemoryOutboxStore<P, S>(): OutboxStore<P, S> {
   }
 }
 
+/** The outbox as the app uses it. */
+export interface Outbox<P, S extends { version: number }> {
+  /** The waiting writes as of the last change to the queue. */
+  entries(): readonly OutboxEntry<P, S>[]
+  /** Calls `listener` after every change to the queue. Returns the way to stop. */
+  subscribe(listener: (entries: readonly OutboxEntry<P, S>[]) => void): () => void
+  /** Reads the queue from the store, for example after a restart. */
+  reload(): Promise<OutboxEntry<P, S>[]>
+  /** Records a change and sends it when the connection allows. */
+  submit(change: Change<P>): Promise<Outcome<S>>
+  /**
+   * Sends every waiting write in order, stopping at the first that cannot reach the server.
+   * Call it after a change, after a reconnect and after every push that is news.
+   */
+  flush(): Promise<void>
+  /** Sends the person's version again on the server's: see `ConflictRef`. Stale cards do nothing. */
+  keepMine(shown: ConflictRef): Promise<void>
+  /** Drops the person's version and shows the server's. Stale cards do nothing. */
+  useTheirs(shown: ConflictRef): Promise<void>
+}
+
 /** The queue: see the module documentation for the rules it keeps. */
-export function createOutbox<P, S extends { version: number }>(ports: OutboxPorts<P, S>) {
+export function createOutbox<P, S extends { version: number }>(
+  ports: OutboxPorts<P, S>,
+): Outbox<P, S> {
   const { store, cache } = ports
   const newKey = ports.newKey ?? (() => crypto.randomUUID())
   const now = ports.now ?? (() => new Date().toISOString())
@@ -466,6 +489,3 @@ export function createOutbox<P, S extends { version: number }>(ports: OutboxPort
     useTheirs,
   }
 }
-
-/** The outbox as the app uses it. */
-export type Outbox<P, S extends { version: number }> = ReturnType<typeof createOutbox<P, S>>
