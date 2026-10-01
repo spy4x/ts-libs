@@ -48,6 +48,7 @@
     "./universal/schema": "./universal/schema.ts",
     "./universal/seo": "./universal/seo.ts",
     "./universal/sort": "./universal/sort.ts",
+    "./universal/statistics": "./universal/statistics.ts",
     "./universal/text": "./universal/text.ts",
     "./universal/time": "./universal/time.ts",
     "./universal/time-constants": "./universal/time-constants.ts",
