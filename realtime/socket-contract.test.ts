@@ -87,6 +87,15 @@ async function openSocket(socket: ManagedSocket, peer: SocketPeer): Promise<void
   await opened
 }
 
+/** Rejects, rather than hanging, when `promise` has not settled within `ms`. */
+function within<T>(promise: Promise<T>, ms = 2_000): Promise<T> {
+  let timer: number | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no event within ${ms}ms`)), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
 /** Lets pending events run, for asserting that something did not happen. */
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 50))
 
@@ -135,7 +144,7 @@ export function describeSocketContract(name: string, open: OpenSocket): void {
         peer.send("a")
         peer.send("b")
         expect(await first).toEqual(["a", "b"])
-        expect(await second).toEqual(["a", "b"])
+        expect(await within(second)).toEqual(["a", "b"])
       })
     })
 
