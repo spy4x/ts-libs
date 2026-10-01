@@ -223,6 +223,13 @@ Deno.test("randomBase64Url — 1 and 32 bytes stay unpadded and fully random", (
   assertFalse(wide.includes("="))
 })
 
+Deno.test("randomBase64Url — accepts exactly 65536 bytes and refuses 65537", () => {
+  // 65536 bytes is the widest buffer crypto.getRandomValues fills: ceil(65536 * 4 / 3) characters.
+  assertEquals(randomBase64Url(65_536).length, 87_382)
+  const error = assertThrows(() => randomBase64Url(65_537), Error)
+  assertEquals((error as TokenError).code, TokenErrorCode.InvalidByteCount)
+})
+
 Deno.test("randomBase64Url — rejects a zero, negative, fractional or absurd byte count", () => {
   for (const bad of [0, -1, 1.5, Number.NaN, 65_537]) {
     const error = assertThrows(() => randomBase64Url(bad), Error)
