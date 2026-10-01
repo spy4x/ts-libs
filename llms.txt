@@ -1394,6 +1394,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `OAuthPendingFlow` (interface), `jsr:@spy4x/server/auth/oauth`: What a started flow needs at its callback.
 - `OAuthPendingSignUp` (interface), `jsr:@spy4x/server/auth/oauth`: A callback that would have created a user, with `signUp: "confirm"`.
 - `OAuthProfile` (interface), `jsr:@spy4x/server/auth/oauth`: What a provider says about the person who signed in, read from its user-info response.
+- `OAuthProfileContext` (interface), `jsr:@spy4x/server/auth/oauth`: What OAuthProviderConfig.completeProfile may use.
 - `OAuthProviderConfig` (interface), `jsr:@spy4x/server/auth/oauth`: One provider, supplied by the app.
 - `OAuthSignIn` (interface), `jsr:@spy4x/server/auth/oauth`: Sign-in with one provider.
 - `OAuthSignInError` (class), `jsr:@spy4x/server/auth/oauth`: Thrown by OAuthSignIn.handleCallback.
@@ -1404,6 +1405,18 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createMemoryOAuthFlowStore` (function), `jsr:@spy4x/server/auth/oauth`: The in-process store `createOAuthSignIn` uses when it is given none.
 - `createOAuthSignIn` (function), `jsr:@spy4x/server/auth/oauth`: Creates sign-in with one provider.
 - `pkceChallenge` (function), `jsr:@spy4x/server/auth/oauth`: The S256 code challenge: base64url (unpadded) of the SHA-256 of the verifier (RFC 7636).
+
+### `jsr:@spy4x/server/auth/oauth-github`
+
+- `GITHUB_AUTHORIZATION_ENDPOINT` (constant), `jsr:@spy4x/server/auth/oauth-github`: GitHub's authorization endpoint.
+- `GITHUB_DEFAULT_SCOPES` (constant), `jsr:@spy4x/server/auth/oauth-github`: The scopes that let GitHub answer the person and their addresses.
+- `GITHUB_EMAILS_ENDPOINT` (constant), `jsr:@spy4x/server/auth/oauth-github`: GitHub's REST endpoint listing the signed-in person's addresses.
+- `GITHUB_TOKEN_ENDPOINT` (constant), `jsr:@spy4x/server/auth/oauth-github`: GitHub's token endpoint.
+- `GITHUB_USER_ENDPOINT` (constant), `jsr:@spy4x/server/auth/oauth-github`: GitHub's REST endpoint for the signed-in person.
+- `GitHubOAuthOptions` (interface), `jsr:@spy4x/server/auth/oauth-github`: Options of createGitHubOAuthProvider.
+- `createGitHubOAuthProvider` (function), `jsr:@spy4x/server/auth/oauth-github`: GitHub as an OAuthProviderConfig, method `oauth:github`.
+- `readGitHubPrimaryEmail` (function), `jsr:@spy4x/server/auth/oauth-github`: Reads GitHub's `GET /user/emails` answer: the address marked both `primary: true` and `verified: true`, or null when there is none or the body is not a list of addresses.
+- `readGitHubUser` (function), `jsr:@spy4x/server/auth/oauth-github`: Reads GitHub's `GET /user` answer: the numeric `id` as the subject, as a decimal string.
 
 ### `jsr:@spy4x/server/auth/oauth-google`
 
@@ -2060,4 +2073,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 aaf86f1c40221ae2f35f394f3b21793e685c31e02bd66a0a7c3767744628a8b3 -->
+<!-- export surface: sha256 9fa2e9120b2ee6490517fdc5a817956f9985f1b8cf490f95f085a26d7d57e3f3 -->

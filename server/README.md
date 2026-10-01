@@ -39,6 +39,7 @@ Runs on: server (Deno).
 | `@spy4x/server/auth/email-code`      | Sign-in with a one-time code sent by email: see `server/auth/email-code` below        |
 | `@spy4x/server/auth/oauth`           | OAuth2 sign-in with PKCE, matched by the provider's `sub`: see `server/auth/oauth`    |
 | `@spy4x/server/auth/oauth-google`    | Google's provider configuration for `@spy4x/server/auth/oauth`                        |
+| `@spy4x/server/auth/oauth-github`    | GitHub's provider configuration for `@spy4x/server/auth/oauth`                        |
 | `@spy4x/server/sign-in`              | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP       |
 | `@spy4x/server/crypto`               | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                   |
 | `@spy4x/server/user-secrets`         | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert             |
@@ -789,11 +790,15 @@ rejects, the rejection reaches the caller and the code is already issued.
 `OAuthPendingFlow`, `OAuthTakenFlow`, `DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and
 result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
 `createGoogleOAuthProvider`, `readGoogleProfile` and Google's endpoint and default-scope constants.
+GitHub's is `@spy4x/server/auth/oauth-github`: `createGitHubOAuthProvider`, `readGitHubUser`,
+`readGitHubPrimaryEmail` and GitHub's endpoint and default-scope constants.
 
 OAuth2 sign-in with any provider that has a user-info endpoint (#57). The provider is configuration,
 not an enum: an `id` (lower-case letters, digits and `-`, 1 to 58 characters), the client
 credentials, three `https:` endpoints, scopes, and a `profile(body)` function that reads the
-user-info answer. Refusals are `OAuthSignInError`s with a `reason`.
+user-info answer. A provider whose user-info answer lacks something adds `completeProfile(profile,
+{ getJson })`, which may send further authenticated `GET`s to `https:` URLs; GitHub's address is
+read that way. Refusals are `OAuthSignInError`s with a `reason`.
 
 ```ts
 import { createOAuthSignIn } from "@spy4x/server/auth/oauth"
@@ -852,6 +857,13 @@ in `result.profile`. A deleted user is refused as `user-deleted`, both on sign-i
 target. When a parallel callback or a proof changes what the resolution read, it reads again once; a
 second conflict is thrown. `readGoogleProfile` counts only the boolean `email_verified: true`, with
 an address present, as vouched for.
+
+**GitHub.** `createGitHubOAuthProvider({ clientId, clientSecret })` writes method `oauth:github`
+with GitHub's numeric user id, as a decimal string, as the subject. GitHub's `/user` answer carries
+only the address the person made public, and does not say whether it is verified, so the address
+is read from `/user/emails` (scopes `read:user` and `user:email`). Only the address marked both
+`primary` and `verified` is vouched for; any other address is ignored, and without one the person
+signs in with no address. A failed `/user/emails` request refuses the sign-in as `profile-failed`.
 
 **PKCE and a single-use, expiring `state`.** `authorizationUrl()` makes a 256-bit `state` and a
 256-bit verifier and sends the S256 challenge. The flow lives 600 seconds by default
