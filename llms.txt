@@ -695,6 +695,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `Clock` (type), `jsr:@spy4x/platform/rate-limit`: Monotonic millisecond clock.
 - `DEFAULT_IDLE_MS` (constant), `jsr:@spy4x/platform/rate-limit`: How long a bucket survives after it stops being active.
 - `DenoKvLike` (interface), `jsr:@spy4x/platform/rate-limit`: The three `Deno.Kv` operations this adapter needs.
+- `FailOpenLimiterOptions` (interface), `jsr:@spy4x/platform/rate-limit`: Options for failOpenLimiter.
 - `KeyResolver` (type), `jsr:@spy4x/platform/rate-limit`: Key the current request.
 - `KvStoreOptions` (interface), `jsr:@spy4x/platform/rate-limit`: Options for createKvStore.
 - `MemoryRateLimiter` (class), `jsr:@spy4x/platform/rate-limit`: In-process sliding-window limiter.
@@ -731,6 +732,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createStoreLimiter` (function), `jsr:@spy4x/platform/rate-limit`: Build a limiter over a shared store.
 - `decisionHeaders` (function), `jsr:@spy4x/platform/rate-limit`: Draft-6 headers for one decision.
 - `denoKvBackend` (function), `jsr:@spy4x/platform/rate-limit`: Deno KV adapter.
+- `failOpenLimiter` (function), `jsr:@spy4x/platform/rate-limit`: Wrap a limiter so that a failing backend lets requests through instead of failing them.
 - `humanRetry` (function), `jsr:@spy4x/platform/rate-limit`: Milliseconds as a human retry hint: `"1 second"`, `"45 seconds"`, `"2 minutes"`.
 - `rateLimitKey` (function), `jsr:@spy4x/platform/rate-limit`: Build a limiter key from an identity.
 - `systemClock` (function), `jsr:@spy4x/platform/rate-limit`: Default: real time.
@@ -777,6 +779,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `Clock` (type), `jsr:@spy4x/platform/rate-limit/memory`: Monotonic millisecond clock.
 - `DEFAULT_IDLE_MS` (constant), `jsr:@spy4x/platform/rate-limit/memory`: How long a bucket survives after it stops being active.
+- `FailOpenLimiterOptions` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Options for failOpenLimiter.
 - `MemoryRateLimiter` (class), `jsr:@spy4x/platform/rate-limit/memory`: In-process sliding-window limiter.
 - `MemoryRateLimiterOptions` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Constructor options for MemoryRateLimiter.
 - `RateLimitConsumeResult` (interface), `jsr:@spy4x/platform/rate-limit/memory`: Outcome of RateLimitStore.consume.
@@ -789,6 +792,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `StoreRateLimiter` (class), `jsr:@spy4x/platform/rate-limit/memory`: Store-backed sliding window over any RateLimitStore.
 - `createMemoryRateLimiter` (function), `jsr:@spy4x/platform/rate-limit/memory`: Build an in-process limiter.
 - `createStoreLimiter` (function), `jsr:@spy4x/platform/rate-limit/memory`: Build a limiter over a shared store.
+- `failOpenLimiter` (function), `jsr:@spy4x/platform/rate-limit/memory`: Wrap a limiter so that a failing backend lets requests through instead of failing them.
 - `rateLimitKey` (function), `jsr:@spy4x/platform/rate-limit/memory`: Build a limiter key from an identity.
 - `systemClock` (function), `jsr:@spy4x/platform/rate-limit/memory`: Default: real time.
 
@@ -2077,4 +2081,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 5a187e2c556150e28da12277fc6f33d39c31f98a44b28ff44cd7cd75b5ff616e -->
+<!-- export surface: sha256 7dd3391a387b39e7c1d9f5a3adcbc4bc9d12a68ee7794534b31f0b3d795a6a94 -->

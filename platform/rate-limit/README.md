@@ -79,6 +79,23 @@ one Lua script, and implements the optional `RateLimitStore.release` for an atom
 Over a store without `release`, `refund` is read-modify-write and a refund that overlaps other
 instances' checks can erase their events.
 
+**When the store goes down.** A store-backed limiter throws when its store does, and the request
+fails. That is right for a limit that stops guessing a password or a one-time code. For a limit that
+only shields capacity, wrap the limiter so an outage lets requests through and is reported:
+
+```ts
+import { createStoreLimiter, failOpenLimiter } from "@spy4x/platform/rate-limit"
+
+const limiter = failOpenLimiter(createStoreLimiter(store, { windowMs: 60_000, limit: 100 }), {
+  limit: 100,
+  onError: (error, key) => console.error(`rate limit store failed for ${key}`, error),
+})
+```
+
+A fail-open decision records nothing and carries no `at`, and the wrapper's `refund` ignores a call
+without `at`, so `skipSuccessful` cannot remove another request's event after an outage. An `onError`
+that throws or rejects is ignored, so a failing reporter cannot fail the request it reports on.
+
 ## Sliding window, not fixed
 
 A bucket holds one timestamp per _accepted_ request; only timestamps newer than `now - windowMs`

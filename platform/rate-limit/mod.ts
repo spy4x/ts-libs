@@ -16,6 +16,8 @@ export {
   createMemoryRateLimiter,
   createStoreLimiter,
   DEFAULT_IDLE_MS,
+  failOpenLimiter,
+  type FailOpenLimiterOptions,
   MemoryRateLimiter,
   type MemoryRateLimiterOptions,
   type RateLimitConsumeResult,

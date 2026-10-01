@@ -18,6 +18,7 @@ describe("public surface", () => {
       "decisionHeaders",
       "DEFAULT_IDLE_MS",
       "denoKvBackend",
+      "failOpenLimiter",
       "humanRetry",
       "MemoryRateLimiter",
       "RATE_LIMIT_HEADERS",
