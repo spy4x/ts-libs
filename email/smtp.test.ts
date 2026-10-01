@@ -939,6 +939,7 @@ Deno.test("refuses a bad listUnsubscribe and sends nothing", async () => {
     { listUnsubscribe: { url: "https://example.com/un subscribe" } },
     { listUnsubscribe: { url: "https://example.com/u", mailto: "a@example.com?subject=x" } },
     { listUnsubscribe: { url: "https://example.com/u", mailto: "a%40@example.com" } },
+    { listUnsubscribe: { url: "https://example.com/u", mailto: "a?b@example.com" } },
     { listUnsubscribe: { url: "http://example.com/u" } },
     { listUnsubscribe: { url: "mailto:u@example.com" } },
     { listUnsubscribe: { url: "/relative" } },
