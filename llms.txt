@@ -1732,6 +1732,33 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createRedisRateLimitStore` (function), `jsr:@spy4x/server/kv`: Build an atomic `RateLimitStore` over a `RedisKvStore` (the caller keeps ownership and closes it).
 - `redisRateLimitKv` (function), `jsr:@spy4x/server/kv`: Turn a Redis store into the `RateLimitKv` port that `createKvStore` from `@spy4x/platform/rate-limit/kv` takes.
 
+### `jsr:@spy4x/server/lockout`
+
+- `DEFAULT_LOCKOUT_POLICY` (constant), `jsr:@spy4x/server/lockout`: 5 free failures, then 15 minutes doubling up to one day; 7 quiet days reset the count.
+- `Lockout` (interface), `jsr:@spy4x/server/lockout`: The begin, fail and refund flow over one store and one policy.
+- `LockoutOptions` (interface), `jsr:@spy4x/server/lockout`: Options for createLockout.
+- `LockoutPolicy` (interface), `jsr:@spy4x/server/lockout`: The numbers that decide when a subject is locked and for how long.
+- `LockoutState` (interface), `jsr:@spy4x/server/lockout`: One subject's counter, as a store holds it.
+- `LockoutStore` (interface), `jsr:@spy4x/server/lockout`: Where counters live: `@spy4x/server/lockout/memory-store` and `@spy4x/server/lockout/postgres`.
+- `LockoutSubject` (type), `jsr:@spy4x/server/lockout`: The caller's key for whatever is being guessed: a user id, an e-mail address, a device.
+- `MAX_LOCK_LIMIT_MS` (constant), `jsr:@spy4x/server/lockout`: The longest LockoutPolicy.maxLockMs accepted: one year, far inside a `Date`'s range.
+- `beginCheck` (function), `jsr:@spy4x/server/lockout`: The state after Lockout.begin counted a check at `now`, and the wait it returns.
+- `createLockout` (function), `jsr:@spy4x/server/lockout`: Builds the Lockout flow.
+- `lockDelayMs` (function), `jsr:@spy4x/server/lockout`: How long a subject is locked after its `failures`-th wrong guess in a row: nothing up to LockoutPolicy.freeFailures, then LockoutPolicy.firstLockMs doubling per failure, capped at LockoutPolicy.maxLockMs.
+- `resolveLockoutPolicy` (function), `jsr:@spy4x/server/lockout`: DEFAULT_LOCKOUT_POLICY with `overrides` applied.
+
+### `jsr:@spy4x/server/lockout/memory-store`
+
+- `MemoryLockoutStore` (class), `jsr:@spy4x/server/lockout/memory-store`: Counters in a `Map`.
+- `MemoryLockoutStoreOptions` (interface), `jsr:@spy4x/server/lockout/memory-store`: Options for MemoryLockoutStore.
+
+### `jsr:@spy4x/server/lockout/postgres`
+
+- `DEFAULT_LOCKOUT_COLUMNS` (constant), `jsr:@spy4x/server/lockout/postgres`: `subject`, `failed_attempts`, `locked_until`, `last_failure_at`.
+- `LockoutColumns` (interface), `jsr:@spy4x/server/lockout/postgres`: The column names the store reads and writes.
+- `PostgresLockoutStoreOptions` (interface), `jsr:@spy4x/server/lockout/postgres`: Options for createPostgresLockoutStore.
+- `createPostgresLockoutStore` (function), `jsr:@spy4x/server/lockout/postgres`: Builds the store.
+
 ### `jsr:@spy4x/server/outbox`
 
 - `DrainResult` (interface), `jsr:@spy4x/server/outbox`: What one `drainOnce` did.
@@ -2030,4 +2057,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 35d912f80a14deab7650fbd191e95c0a6996408d89ba73ef6a6c10e5a21ba1bf -->
+<!-- export surface: sha256 5df2712b6f193d8fb6f6e84cb5239bb92d8e01e999cc0be3a08a0d334e759853 -->
