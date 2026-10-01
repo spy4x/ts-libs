@@ -2,6 +2,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { Hono } from "hono"
 import {
+  createSameOriginCheck,
   createSameOriginMutationGuard,
   createSameOriginUpgradeGuard,
   SAFE_METHODS,
@@ -356,5 +357,39 @@ describe("same-origin upgrade guard", () => {
 
   it("throws at construction for an empty list of expected origins", () => {
     expect(() => createSameOriginUpgradeGuard({ expectedOrigin: [] })).toThrow(TypeError)
+  })
+})
+
+describe("same-origin check on a plain Request", () => {
+  function request(headers: Record<string, string>, method = "POST", url = `${APP}/thing`) {
+    return new Request(url, { method, headers })
+  }
+
+  it("accepts a same-origin POST that carries the session cookie", () => {
+    expect(createSameOriginCheck()(request(ACCEPTED))).toBeUndefined()
+  })
+
+  it("lets a GET through with no cookie, origin or fetch metadata", () => {
+    expect(createSameOriginCheck()(request({}, "GET"))).toBeUndefined()
+  })
+
+  it("reports each refusal in the documented order", () => {
+    const check = createSameOriginCheck()
+    expect(check(request({}))).toBe("no-session-cookie")
+    expect(check(request({ ...ACCEPTED, cookie: `${SESSION_COOKIE_NAME}=` })))
+      .toBe("no-session-cookie")
+    expect(check(request({ ...ACCEPTED, origin: "https://evil.example" }))).toBe("origin-mismatch")
+    expect(check(request({ ...ACCEPTED, "sec-fetch-site": "same-site" })))
+      .toBe("not-same-origin-fetch")
+  })
+
+  it("skips the cookie check when requireSessionCookie is false", () => {
+    const { cookie: _, ...noCookie } = ACCEPTED
+    expect(createSameOriginCheck({ requireSessionCookie: false })(request(noCookie)))
+      .toBeUndefined()
+  })
+
+  it("throws at construction for an expected origin that is not bare", () => {
+    expect(() => createSameOriginCheck({ expectedOrigin: `${APP}/path` })).toThrow(TypeError)
   })
 })

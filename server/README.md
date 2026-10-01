@@ -96,8 +96,9 @@ error is rethrown unchanged.
 
 ## `server/http/same-origin`
 
-`createSameOriginMutationGuard`, `createSameOriginUpgradeGuard`, `SAFE_METHODS`,
-`SAME_ORIGIN_REFUSED`, and the types `SameOriginGuardOptions` and `SameOriginRefusal`.
+`createSameOriginMutationGuard`, `createSameOriginUpgradeGuard`, `createSameOriginCheck`,
+`SAFE_METHODS`, `SAME_ORIGIN_REFUSED`, and the types `SameOriginCheckOptions`,
+`SameOriginGuardOptions` and `SameOriginRefusal`.
 
 The mutation guard lets GET, HEAD and OPTIONS through and refuses any other request unless the
 session cookie is present, `Origin` is an expected origin and `Sec-Fetch-Site` is `same-origin`.
@@ -105,6 +106,11 @@ A WebSocket handshake is a GET, so it passes that guard. The upgrade guard takes
 and refuses every request it sees unless the session cookie is present and `Origin` is exactly an
 expected origin; `Origin: null` is refused and `Sec-Fetch-Site` is not required. Mount it on the
 upgrade route only, before the upgrade handler.
+
+A server that is not Hono, such as a Fresh app handling form posts, uses `createSameOriginCheck`: it
+takes the same options except `onReject`, and returns a function from a standard `Request` to the
+mutation guard's verdict (`undefined` to let it through, or the refusal reason). The guard calls it,
+so the two cannot drift apart.
 
 ## `server/http/cors`
 

@@ -1659,8 +1659,10 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `SAFE_METHODS` (constant), `jsr:@spy4x/server/http/same-origin`: Methods that must not change state, and so pass the guard unchecked.
 - `SAME_ORIGIN_REFUSED` (constant), `jsr:@spy4x/server/http/same-origin`: Body `error` of the default 403 response.
+- `SameOriginCheckOptions` (interface), `jsr:@spy4x/server/http/same-origin`: Options for createSameOriginCheck, and the checks every guard here runs.
 - `SameOriginGuardOptions` (interface), `jsr:@spy4x/server/http/same-origin`: Options for createSameOriginMutationGuard and createSameOriginUpgradeGuard.
 - `SameOriginRefusal` (type), `jsr:@spy4x/server/http/same-origin`: Why the guard refused a request, passed to SameOriginGuardOptions.onReject:
+- `createSameOriginCheck` (function), `jsr:@spy4x/server/http/same-origin`: Build the mutation guard's rule as a plain function over a standard `Request`, for a server that is not Hono.
 - `createSameOriginMutationGuard` (function), `jsr:@spy4x/server/http/same-origin`: Build a Hono middleware that refuses cross-site mutations.
 - `createSameOriginUpgradeGuard` (function), `jsr:@spy4x/server/http/same-origin`: Build a Hono middleware that refuses a WebSocket upgrade from another site.
 
@@ -1975,4 +1977,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 e9a939bba2f96ea57735966bc367c8cd9525ecebf86a8113d1a122d25cc36868 -->
+<!-- export surface: sha256 58758771077f1b59dfd7e502772c232c7d0793fbcf5917558a76379dc0c61360 -->
