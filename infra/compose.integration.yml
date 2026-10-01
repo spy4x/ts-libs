@@ -1,7 +1,7 @@
 # Dependencies of the integration test tier (issue #74), for local runs.
 #
 # Start them with `deno task services:up` and stop them with `deno task services:down`.
-# CI does not use this file: Woodpecker starts the same four images through the
+# CI does not use this file: Woodpecker starts the same images through the
 # `services:` block of `.woodpecker.yml`, and the tests find them through the same
 # environment variables.
 #
@@ -15,9 +15,9 @@
 #    ports are deliberately unusual (the 5xxxx range) so they cannot collide with a
 #    Postgres, MinIO, mail or Redis server already running on the developer's machine.
 # 3. **Obviously fake credentials.** `integration-test-only` is the user, the
-#    password and the database name everywhere a service takes one (Redis takes
+#    password and the database name everywhere a service takes one (`redis` takes
 #    none: no `requirepass`, same as every other service here on a loopback-only
-#    port). These containers hold throw-away data, are reachable from the
+#    port; `redis-auth` takes the literal as its password). These containers hold throw-away data, are reachable from the
 #    loopback interface only, and the string is meant to be unmistakable if it
 #    ever shows up in a log or a bug report.
 #
@@ -87,15 +87,32 @@ services:
       retries: 30
       start_period: 3s
 
-  # No `requirepass`: the container is reachable from loopback only, like the other
-  # three, and the key-value adapter this tier exists for (#75) does not authenticate
-  # either. No volume: throw-away keys, nothing survives a restart.
+  # No `requirepass`: most tests need no AUTH, and the container is reachable from
+  # loopback only, like the others. `redis-auth` below covers the password path.
+  # No volume: throw-away keys, nothing survives a restart.
   redis:
     image: redis:8.10.2-alpine
     ports:
       - "127.0.0.1:56379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+  # A second instance with `requirepass`, for the AUTH handshake (#360). A second
+  # service rather than an ACL user on `redis`: a user needs an ACL file or a startup
+  # command per user and the tests would share one server anyway, while this is one
+  # flag and leaves the password-free instance every other test uses untouched.
+  # The password is the repository's one throw-away credential.
+  redis-auth:
+    image: redis:8.10.2-alpine
+    command: ["redis-server", "--requirepass", "integration-test-only"]
+    ports:
+      - "127.0.0.1:56380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "integration-test-only", "ping"]
       interval: 2s
       timeout: 3s
       retries: 30

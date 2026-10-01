@@ -3,7 +3,7 @@
  *
  * Four jobs, and nothing else belongs here:
  *
- * 1. **Addresses.** Where Postgres, MinIO, Mailpit and Redis are, from one
+ * 1. **Addresses.** Where Postgres, MinIO, Mailpit and the two Redis servers are, from one
  *    environment variable each, defaulting to `infra/compose.integration.yml`.
  * 2. **Failing loudly.** `requireReachable` turns a missing container into a red
  *    test that names the service, the address and the command that starts it.
@@ -23,6 +23,8 @@ export {
   mailpitSettings,
   type PostgresSettings,
   postgresSettings,
+  type RedisAuthSettings,
+  redisAuthSettings,
   type RedisSettings,
   redisSettings,
   requireReachable,

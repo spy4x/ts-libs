@@ -47,6 +47,12 @@ services:
   redis:
     image: redis:8.10.2-alpine
 
+  # Password-protected twin of `redis`, for the AUTH tests (#360).
+  redis-auth:
+    image: redis:8.10.2-alpine
+    commands:
+      - redis-server --requirepass integration-test-only
+
 # Steps run in declaration order. Unit first, integration second, which is the order
 # issue #74 asks for: format, lint, types and the unit suite fail in seconds, the
 # integration tier takes a container start-up to fail.
@@ -72,6 +78,8 @@ steps:
       TS_LIBS_IT_MAILPIT_URL: http://mailpit:8025
       TS_LIBS_IT_REDIS_HOST: redis
       TS_LIBS_IT_REDIS_PORT: "6379"
+      TS_LIBS_IT_REDIS_AUTH_HOST: redis-auth
+      TS_LIBS_IT_REDIS_AUTH_PORT: "6379"
     commands:
       - deno task test:integration
 
