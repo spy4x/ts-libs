@@ -76,20 +76,25 @@ interface Site {
   port: number
   /** The headers of every request it has answered, in order. */
   received: Headers[]
+  /** The method of every request it has answered, in order. */
+  methods: string[]
   shutdown(): Promise<void>
 }
 
 /** Start one site on an ephemeral loopback port. */
 function startSite(host: string, handler: (request: Request) => Response): Site {
   const received: Headers[] = []
+  const methods: string[] = []
   const server = Deno.serve({ port: 0, hostname: LOOPBACK, onListen: () => {} }, (request) => {
     received.push(new Headers(request.headers))
+    methods.push(request.method)
     return handler(request)
   })
   return {
     origin: `https://${host}`,
     port: server.addr.port,
     received,
+    methods,
     shutdown: () => server.shutdown(),
   }
 }
@@ -332,6 +337,29 @@ describe("safeFetch over real sockets", () => {
       await waitFor("the refused redirect's body was cancelled", body.cancelled)
     } finally {
       body.close()
+      await site.shutdown()
+    }
+  })
+
+  it("sends a POST as a POST, and again after a 307", async () => {
+    // A 307 exists so the method survives the redirect; the server is the only
+    // witness that the platform `fetch` was really asked for a POST both times.
+    const site = startSite(
+      "site-a.test",
+      (request) =>
+        new URL(request.url).pathname === "/submit"
+          ? new Response(null, { status: 307, headers: { location: "/done" } })
+          : new Response("done"),
+    )
+    try {
+      const result = await safeFetch(`${site.origin}/submit`, {
+        fetcher: loopbackFetcher([site]),
+        resolver: PUBLIC_RESOLVER,
+        method: "POST",
+      })
+      assertEquals(await readBoundedText(result.response), "done")
+      assertEquals(site.methods, ["POST", "POST"])
+    } finally {
       await site.shutdown()
     }
   })
