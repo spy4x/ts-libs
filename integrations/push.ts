@@ -12,6 +12,8 @@
  *
  * Behaviour:
  *
+ *  - {@link WebPushSender.sendTo} pushes to one given subscription through the same delivery
+ *    path, never touches the store, and leaves deleting a `gone` subscription to the caller.
  *  - {@link WebPushSender.send} never throws. It returns one {@link PushDelivery} per
  *    subscription; one bad subscription does not stop the others.
  *  - A push service answering 404 or 410 says the subscription is gone: it is deleted from
@@ -86,13 +88,13 @@ export interface WebPushSenderOptions {
 /** Outcome for one subscription. */
 export interface PushDelivery {
   endpoint: string
-  /** `sent`; `gone` (404 or 410, deleted); `failed` (kept). */
+  /** `sent`; `gone` (404 or 410, deleted by `send`, left to the caller by `sendTo`); `failed`. */
   status: "sent" | "gone" | "failed"
   /** The push service's HTTP status, when it answered. */
   httpStatus?: number
   /** Why it failed, without secrets. Empty for `sent` and `gone`. */
   error: string
-  /** True when the subscription was removed from the store. */
+  /** True when the subscription was removed from the store; false for `sendTo`. */
   deleted: boolean
 }
 
@@ -128,7 +130,10 @@ const MAX_PAYLOAD_ERROR_CHARS = 200
 const MAX_PAYLOAD_BYTES = 3993
 const encoder = new TextEncoder()
 
-/** Sends to every stored subscription of a user. Build one with {@link createWebPushSender}. */
+/**
+ * Sends to every stored subscription of a user, or to one given subscription. Build one with
+ * {@link createWebPushSender}.
+ */
 export interface WebPushSender {
   /**
    * Pushes `message` to each subscription of `userId` and reports each outcome. Never throws.
@@ -141,6 +146,24 @@ export interface WebPushSender {
    */
   send(
     userId: string | number,
+    message: PushNotificationMessage,
+    options?: PushOptions,
+  ): Promise<PushSendResult>
+
+  /**
+   * Pushes `message` to this one subscription and reports the outcome in the same shape as
+   * {@link WebPushSender.send}, with one delivery. Never throws and never touches the store.
+   * A 404 or 410 gives status `gone` with `deleted: false`: the sender has no user to delete
+   * it for, so the caller removes the subscription.
+   *
+   * @example
+   * ```ts
+   * const result = await sender.sendTo(subscription, { title: "Welcome", body: null, url: null })
+   * if (result.deliveries[0]?.status === "gone") await myStore.delete(subscription.endpoint)
+   * ```
+   */
+  sendTo(
+    subscription: PushSubscriptionJson,
     message: PushNotificationMessage,
     options?: PushOptions,
   ): Promise<PushSendResult>
@@ -165,10 +188,11 @@ export const createWebPushSender = async (
   })
 
   const deliver = async (
-    userId: string | number,
     subscription: PushSubscriptionJson,
     message: Uint8Array,
     pushOptions: PushOptions,
+    /** Removes a gone subscription; absent when the caller deletes it. */
+    onGone?: () => Promise<void>,
   ): Promise<PushDelivery> => {
     const { endpoint } = subscription
     const fail = (error: string, httpStatus?: number): PushDelivery => ({
@@ -228,8 +252,14 @@ export const createWebPushSender = async (
       if (response.ok) return { endpoint, status: "sent", error: "", deleted: false }
       if (GONE_STATUSES.has(response.status)) {
         try {
-          await store.deleteByEndpoint(userId, endpoint)
-          return { endpoint, status: "gone", httpStatus: response.status, error: "", deleted: true }
+          await onGone?.()
+          return {
+            endpoint,
+            status: "gone",
+            httpStatus: response.status,
+            error: "",
+            deleted: onGone !== undefined,
+          }
         } catch (storeCause) {
           return fail(
             `HTTP ${response.status}, subscription not deleted: ${
@@ -255,40 +285,67 @@ export const createWebPushSender = async (
     }
   }
 
+  const failure = (error: string): PushSendResult => ({
+    success: false,
+    output: "",
+    error,
+    deliveries: [],
+  })
+
+  /** Validates and encodes the payload: the bytes to encrypt, or the failure to return. */
+  const encode = (message: PushNotificationMessage): Uint8Array | PushSendResult => {
+    const parsed = pushNotificationMessageSchema(message)
+    if (parsed instanceof type.errors) {
+      return failure(`invalid push payload: ${parsed.summary.slice(0, MAX_PAYLOAD_ERROR_CHARS)}`)
+    }
+    const bytes = encoder.encode(JSON.stringify(parsed))
+    if (bytes.length > MAX_PAYLOAD_BYTES) {
+      return failure(`push payload is ${bytes.length} bytes; the limit is ${MAX_PAYLOAD_BYTES}`)
+    }
+    return bytes
+  }
+
+  const summarize = (deliveries: readonly PushDelivery[]): PushSendResult => {
+    const count = (status: PushDelivery["status"]) =>
+      deliveries.filter((delivery) => delivery.status === status).length
+    const removed = deliveries.filter((delivery) => delivery.deleted).length
+    const failed = deliveries.filter((delivery) => delivery.status === "failed")
+    return {
+      success: failed.length === 0,
+      output: `${
+        count("sent")
+      } sent, ${removed} removed, ${failed.length} failed of ${deliveries.length}`,
+      error: [...new Set(failed.map((delivery) => delivery.error))].join("; "),
+      deliveries,
+    }
+  }
+
   return {
     async send(userId, message, pushOptions = {}) {
-      const failure = (error: string): PushSendResult => ({
-        success: false,
-        output: "",
-        error,
-        deliveries: [],
-      })
       try {
-        const parsed = pushNotificationMessageSchema(message)
-        if (parsed instanceof type.errors) {
-          return failure(
-            `invalid push payload: ${parsed.summary.slice(0, MAX_PAYLOAD_ERROR_CHARS)}`,
-          )
-        }
-        const bytes = encoder.encode(JSON.stringify(parsed))
-        if (bytes.length > MAX_PAYLOAD_BYTES) {
-          return failure(`push payload is ${bytes.length} bytes; the limit is ${MAX_PAYLOAD_BYTES}`)
-        }
+        const bytes = encode(message)
+        if (!(bytes instanceof Uint8Array)) return bytes
         const subscriptions = await store.listByUser(userId)
         const deliveries = await Promise.all(
-          subscriptions.map((subscription) => deliver(userId, subscription, bytes, pushOptions)),
+          subscriptions.map((subscription) =>
+            deliver(
+              subscription,
+              bytes,
+              pushOptions,
+              () => store.deleteByEndpoint(userId, subscription.endpoint),
+            )
+          ),
         )
-        const count = (status: PushDelivery["status"]) =>
-          deliveries.filter((delivery) => delivery.status === status).length
-        const failed = deliveries.filter((delivery) => delivery.status === "failed")
-        return {
-          success: failed.length === 0,
-          output: `${count("sent")} sent, ${
-            count("gone")
-          } removed, ${failed.length} failed of ${deliveries.length}`,
-          error: [...new Set(failed.map((delivery) => delivery.error))].join("; "),
-          deliveries,
-        }
+        return summarize(deliveries)
+      } catch (cause) {
+        return failure(describeTransportError(cause))
+      }
+    },
+    async sendTo(subscription, message, pushOptions = {}) {
+      try {
+        const bytes = encode(message)
+        if (!(bytes instanceof Uint8Array)) return bytes
+        return summarize([await deliver(subscription, bytes, pushOptions)])
       } catch (cause) {
         return failure(describeTransportError(cause))
       }
