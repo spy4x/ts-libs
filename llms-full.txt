@@ -1768,9 +1768,10 @@ opaque, signed page key that decodes only under the purpose (`notes.list`) and t
 (`["userId", "groupId"]`) it was issued for. The scope values are covered by the signature but not
 carried in the cursor. The default page key, `updatedAtIdPageKey`, is `{ updatedAt, id }`: an
 instant exactly as `toISOString` prints it, decoded to a `Date`, and a lower-case UUID of any
-version; no other key is accepted. A `Date` holds milliseconds only, so the `updated_at` column must be
-`TIMESTAMPTZ(3)`, or the query must compare against `date_trunc('milliseconds', updated_at)`;
-with a microsecond column, rows that share a millisecond are skipped or repeated. Pass another arktype schema as `pageKey` for another ordering.
+version; no other key is accepted. A `Date` holds milliseconds only, so the `updated_at` column
+must be `TIMESTAMPTZ(3)`, or the query must compare against and order by
+`date_trunc('milliseconds', updated_at)`; with a microsecond column, rows that share a millisecond
+are skipped or repeated. Pass another arktype schema as `pageKey` for another ordering.
 Every refused cursor throws `KeysetCursorError`, whose `KeysetCursorErrorCode` the caller maps to
 its own error; a missing scope value is a `TypeError`, a bug in the caller rather than a bad cursor.
 The codec takes the master secret (usually the session-cookie secret) and signs with
