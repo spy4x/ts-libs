@@ -35,6 +35,21 @@ describe("round", () => {
     expect(round(2.5, 0)).toBe(3)
   })
 
+  it("rounds a whole number to tens and hundreds when decimals is negative", () => {
+    expect(round(1234, -2)).toBe(1200)
+    expect(round(1250, -2)).toBe(1300)
+    expect(round(1234, -1)).toBe(1230)
+    // Agrees with the fractional neighbour, which rounded correctly before the fix.
+    expect(round(1234.5, -2)).toBe(1200)
+  })
+
+  it("rounds a negative whole number with negative decimals, halfway toward plus infinity", () => {
+    // Same halfway rule as `Math.round` and as `round(-2.5)`, which is -2.
+    expect(round(-1234, -2)).toBe(-1200)
+    expect(round(-1250, -2)).toBe(-1200)
+    expect(round(-1251, -2)).toBe(-1300)
+  })
+
   it("rounds float arithmetic noise away", () => {
     expect(round(0.1 + 0.2, 2)).toBe(0.3)
   })
