@@ -41,30 +41,52 @@ function abortError(signal: AbortSignal): unknown {
  */
 export function fakeResponse(url: string, spec: ResponseSpec, signal?: AbortSignal): Response {
   let body: BodyInit | null = null
-  if (typeof spec.body === "string") {
-    body = spec.body
-  } else if (spec.body !== undefined || spec.stall) {
-    const chunks = spec.body ?? []
+  if (spec.body !== undefined || spec.stall) {
+    const chunks = typeof spec.body === "string"
+      ? [new TextEncoder().encode(spec.body)]
+      : [...(spec.body ?? [])]
+    // Chunks are handed out on demand, so an abort fails the body even when the whole of it was
+    // already available and unread, as it does on the platform `fetch`.
     body = new ReadableStream<Uint8Array>({
       start(controller) {
-        for (const chunk of chunks) controller.enqueue(chunk)
-        if (!spec.stall) {
-          controller.close()
-          return
-        }
         signal?.addEventListener("abort", () => {
           try {
             controller.error(abortError(signal))
           } catch {
-            // Already cancelled by the reader: nothing left to fail.
+            // Already closed or cancelled: nothing left to fail.
           }
         }, { once: true })
+      },
+      pull(controller) {
+        const chunk = chunks.shift()
+        if (chunk) controller.enqueue(chunk)
+        else if (!spec.stall) controller.close()
       },
     })
   }
   const response = new Response(body, { status: spec.status ?? 200, headers: spec.headers })
   Object.defineProperty(response, "url", { value: url })
   return response
+}
+
+/**
+ * One request as the fake answers it: an already-aborted signal rejects with its reason, a
+ * `hang` spec waits for the abort, anything else resolves with {@link fakeResponse}. Every fake
+ * fetcher the net tests inject answers through this, so the contract covers all of them.
+ */
+export function fakeFetch(
+  input: string,
+  init: Parameters<Fetcher["fetch"]>[1],
+  spec: ResponseSpec,
+): Promise<Response> {
+  const signal = init.signal
+  if (signal?.aborted) return Promise.reject(abortError(signal))
+  if (spec.hang) {
+    return new Promise<Response>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(abortError(signal)), { once: true })
+    })
+  }
+  return Promise.resolve(fakeResponse(input, spec, signal))
 }
 
 /** The fake under contract: routes by path, records every request, honours the signal. */
@@ -85,15 +107,7 @@ export function createFakeFetcher(origin = "https://fake.test"): {
           Object.entries(init.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
         ),
       })
-      const signal = init.signal
-      if (signal?.aborted) return Promise.reject(abortError(signal))
-      const spec = routes.get(url.pathname) ?? { status: 404 }
-      if (spec.hang) {
-        return new Promise<Response>((_resolve, reject) => {
-          signal?.addEventListener("abort", () => reject(abortError(signal)), { once: true })
-        })
-      }
-      return Promise.resolve(fakeResponse(input, spec, signal))
+      return fakeFetch(input, init, routes.get(url.pathname) ?? { status: 404 })
     },
   }
   return {

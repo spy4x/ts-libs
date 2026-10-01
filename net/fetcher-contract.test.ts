@@ -198,5 +198,20 @@ export function describeFetcherContract(name: string, open: OpenFetcher): void {
         expect((error as Error | undefined)?.name).toBe("AbortError")
       })
     })
+
+    it("fails an unread body with an AbortError when the signal aborts, even if the whole body was sent", async () => {
+      await withFixture(open, async ({ fetcher, serve }) => {
+        const url = serve("/complete-abort", {
+          body: [encoder.encode("one"), encoder.encode("two")],
+        })
+        const controller = new AbortController()
+        const response = await fetcher.fetch(url, { redirect: "manual", signal: controller.signal })
+        const reader = response.body!.getReader()
+        await reader.read()
+        controller.abort()
+        const error = await reader.read().then(() => undefined, (e: unknown) => e)
+        expect((error as Error | undefined)?.name).toBe("AbortError")
+      })
+    })
   })
 }
