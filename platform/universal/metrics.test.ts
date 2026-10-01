@@ -26,8 +26,12 @@ describe("createCounter", () => {
     expect(counter.value()).toBe(1)
   })
 
+  it("refuses a counter name that does not end in _total", () => {
+    expect(() => createCounter("jobs_failed", "x")).toThrow(RangeError)
+  })
+
   it("refuses a name, a label or an amount Prometheus cannot take", () => {
-    expect(() => createCounter("1bad", "x")).toThrow(RangeError)
+    expect(() => createCounter("1bad_total", "x")).toThrow(RangeError)
     const counter = createCounter("x_total", "x")
     expect(() => counter.increment({ "bad-label": "v" })).toThrow(RangeError)
     expect(() => counter.increment({ __reserved: "v" })).toThrow(RangeError)
@@ -50,10 +54,10 @@ describe("renderPrometheus", () => {
   })
 
   it("escapes quotes, backslashes and newlines in label values and help", () => {
-    const counter = createCounter("x_total", "line one\nline two")
+    const counter = createCounter("x_total", "line one\nline \\ two")
     counter.increment({ v: 'a"b\\c\nd' })
     expect(renderPrometheus([counter])).toBe(
-      `# HELP x_total line one\\nline two\n# TYPE x_total counter\n` +
+      `# HELP x_total line one\\nline \\\\ two\n# TYPE x_total counter\n` +
         `x_total{v="a\\"b\\\\c\\nd"} 1\n`,
     )
   })
@@ -65,6 +69,12 @@ describe("renderPrometheus", () => {
     expect(renderPrometheus([a, b])).toBe(
       `# HELP a_total a\n# TYPE a_total counter\na_total 1\n# HELP b_total b\n# TYPE b_total counter\n`,
     )
+  })
+
+  it("refuses two counters with the same name instead of printing a second HELP and TYPE", () => {
+    const a = createCounter("x_total", "a")
+    const b = createCounter("x_total", "b")
+    expect(() => renderPrometheus([a, b])).toThrow(RangeError)
   })
 
   it("renders nothing for no counters", () => {

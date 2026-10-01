@@ -9,7 +9,12 @@
 /** The labels of one series, for example `{ event: "UserSignedOut", listener: "close" }`. */
 export type MetricLabels = Readonly<Record<string, string>>
 
-/** A monotonically increasing count, kept separately for every distinct set of labels. */
+/**
+ * A monotonically increasing count, kept separately for every distinct set of labels.
+ *
+ * Every distinct label set stays in memory for the life of the process, so label values must come
+ * from a small fixed set (an event name, a status), never user ids, paths or other open-ended text.
+ */
 export interface Counter {
   readonly name: string
   readonly help: string
@@ -35,11 +40,14 @@ function seriesKey(labels: MetricLabels): string {
 }
 
 /**
- * Creates a counter. Throws `RangeError` for a name Prometheus would not accept, and later for an
- * invalid label name or an increment that is not a non-negative integer.
+ * Creates a counter. The name must end in `_total`, as Prometheus convention asks of counters, and
+ * be a valid metric name; otherwise this throws `RangeError`. `increment` throws `RangeError` for
+ * an invalid label name or an amount that is not a non-negative integer. Mind the label-value
+ * rule on {@link Counter}.
  */
 export function createCounter(name: string, help: string): Counter {
   if (!METRIC_NAME.test(name)) throw new RangeError(`invalid metric name: ${name}`)
+  if (!name.endsWith("_total")) throw new RangeError(`a counter name ends in _total: ${name}`)
   const values = new Map<string, { labels: MetricLabels; value: number }>()
   return {
     name,
@@ -65,11 +73,15 @@ function escapeLabelValue(value: string): string {
 /**
  * The counters in the Prometheus text exposition format (version 0.0.4), ready to serve with
  * `Content-Type: text/plain; version=0.0.4`. A counter with no series still prints its `# HELP`
- * and `# TYPE` lines.
+ * and `# TYPE` lines. Throws `RangeError` when two counters share a name: a second `# HELP` and
+ * `# TYPE` pair makes Prometheus reject the whole scrape.
  */
 export function renderPrometheus(counters: readonly Counter[]): string {
   const lines: string[] = []
+  const seen = new Set<string>()
   for (const counter of counters) {
+    if (seen.has(counter.name)) throw new RangeError(`two counters are named ${counter.name}`)
+    seen.add(counter.name)
     lines.push(
       `# HELP ${counter.name} ${counter.help.replaceAll("\\", "\\\\").replaceAll("\n", "\\n")}`,
     )
