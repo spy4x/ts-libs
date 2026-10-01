@@ -16,3 +16,9 @@ export {
 } from "./processor.ts"
 export { LoggingOutboxPublisher } from "./logging-publisher.ts"
 export { PostgresOutboxRepository } from "./postgres-repository.ts"
+export {
+  ensureScheduledOutboxEvent,
+  type OutboxSchedule,
+  type ScheduledOutboxEvent,
+  scheduleOutboxEvent,
+} from "./schedule.ts"

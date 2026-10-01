@@ -13,12 +13,13 @@
  * single-connection `Sql` clients at it with `search_path`, and drops the schema in a
  * `finally`. Nothing shared is touched.
  */
-import { assertEquals } from "@std/assert"
+import { assert, assertEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import { createSql, type Sql } from "../db/index.ts"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { PostgresOutboxRepository } from "./postgres-repository.ts"
 import { OutboxProcessor } from "./processor.ts"
+import { ensureScheduledOutboxEvent, scheduleOutboxEvent } from "./schedule.ts"
 
 const OUTBOX_EVENTS_TABLE = `
   CREATE TABLE outbox_events (
@@ -335,6 +336,196 @@ describe("PostgresOutboxRepository against a real server", () => {
       ])
       const next = await repository.claimBatch(10, 5, 60)
       assertEquals(next.map((row) => [row.id, row.attemptCount]), [[ROW_B, 1]])
+    })
+  })
+})
+
+const JOB_SUBJECT = "33333333-3333-4333-8333-333333333333"
+
+describe("delayed and repeating jobs against a real server", () => {
+  it("does not claim a job scheduled for later until its time has come", async () => {
+    await withOutboxSchema(async (sql) => {
+      await scheduleOutboxEvent(
+        sql,
+        { eventKind: "account.delete", aggregateType: "user", aggregateId: JOB_SUBJECT },
+        { inMs: 60 * 60_000 },
+      )
+      const repository = new PostgresOutboxRepository(sql)
+
+      assertEquals((await repository.claimBatch(10, 5, 60)).length, 0)
+
+      // Moves the stored times an hour back, which is what the clock reaching them looks like.
+      await sql`UPDATE outbox_events SET available_at = available_at - INTERVAL '61 minutes'`
+      const claimed = await repository.claimBatch(10, 5, 60)
+      assertEquals(claimed.map((row) => row.eventKind), ["account.delete"])
+    })
+  })
+
+  it("writes the next run of a repeating job when its run succeeds, once", async () => {
+    await withOutboxSchema(async (sql) => {
+      await scheduleOutboxEvent(
+        sql,
+        { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT },
+        { inMs: 0 },
+      )
+      const repository = new PostgresOutboxRepository(sql)
+      const processor = new OutboxProcessor(repository, { publish: () => Promise.resolve() }, {
+        repeatEveryMs: { "nightly.cleanup": 24 * 60 * 60_000 },
+      })
+
+      assertEquals((await processor.drainOnce()).published, 1)
+      // The second drain finds nothing: the successor is a day away.
+      assertEquals((await processor.drainOnce()).claimed, 0)
+
+      const rows = await sql<{ processed: boolean; hours: number }[]>`
+        SELECT processed_at IS NOT NULL AS processed,
+          round(extract(epoch FROM available_at - now()) / 3600)::int AS hours
+        FROM outbox_events ORDER BY processed_at NULLS LAST
+      `
+      assertEquals(rows.map((row) => row.processed), [true, false])
+      assertEquals(rows[1].hours, 24)
+
+      // A redelivery of the finished run must not start a second chain.
+      const [done] = await sql<{ id: string }[]>`
+        SELECT id FROM outbox_events WHERE processed_at IS NOT NULL
+      `
+      await repository.markProcessed(done.id, 86_400)
+      const [{ count }] = await sql<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM outbox_events
+      `
+      assertEquals(count, 2)
+    })
+  })
+
+  it("retries a failing job with backoff, then stops with its error stored", async () => {
+    await withOutboxSchema(async (sql) => {
+      await scheduleOutboxEvent(
+        sql,
+        { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT },
+        { inMs: 0 },
+      )
+      const processor = new OutboxProcessor(
+        new PostgresOutboxRepository(sql),
+        { publish: () => Promise.reject(new TypeError("boom")) },
+        { maxAttempts: 3, baseRetryDelayMs: 1_000 },
+      )
+
+      const delays: number[] = []
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        assertEquals((await processor.drainOnce()).failed, 1)
+        const [row] = await sql<{ seconds: number }[]>`
+          SELECT round(extract(epoch FROM available_at - now()))::int AS seconds FROM outbox_events
+        `
+        delays.push(row.seconds)
+        // Lets the retry time pass.
+        await sql`UPDATE outbox_events SET available_at = now() - INTERVAL '1 second'`
+      }
+      assertEquals(delays, [1, 2, 4])
+
+      assertEquals((await processor.drainOnce()).claimed, 0)
+      const [row] = await sql<{ error: string; attempts: number; done: boolean }[]>`
+        SELECT last_error_code AS error, attempt_count AS attempts,
+          processed_at IS NOT NULL AS done
+        FROM outbox_events
+      `
+      assertEquals(row, { error: "TypeError", attempts: 3, done: false })
+    })
+  })
+
+  it("starts a repeating job once however often it is asked", async () => {
+    await withOutboxSchema(async (sql) => {
+      const job = { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT }
+      assertEquals(typeof await ensureScheduledOutboxEvent(sql, job, { inMs: 1000 }), "string")
+      assertEquals(await ensureScheduledOutboxEvent(sql, job, { inMs: 1000 }), null)
+    })
+  })
+
+  it("leaves one chain when two workers start the same job at once", async () => {
+    await withOutboxSchema(async (sql, schema) => {
+      const other = await openSecondClient(schema)
+      try {
+        const job = {
+          eventKind: "nightly.cleanup",
+          aggregateType: "job",
+          aggregateId: JOB_SUBJECT,
+        }
+        for (let round = 0; round < 10; round++) {
+          await sql`DELETE FROM outbox_events`
+          const results = await Promise.all([
+            ensureScheduledOutboxEvent(sql, job, { inMs: 1000 }),
+            ensureScheduledOutboxEvent(other, job, { inMs: 1000 }),
+          ])
+          assertEquals(results.filter((id) => id !== null).length, 1)
+          const [{ count }] = await sql<{ count: number }[]>`
+            SELECT count(*)::int AS count FROM outbox_events WHERE processed_at IS NULL
+          `
+          assertEquals(count, 1)
+        }
+      } finally {
+        await other.end()
+      }
+    })
+  })
+
+  it("starts the same kind of job for another aggregate", async () => {
+    await withOutboxSchema(async (sql) => {
+      const job = { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT }
+      await ensureScheduledOutboxEvent(sql, job, { inMs: 1000 })
+      const other = { ...job, aggregateId: ROW_A }
+      assertEquals(typeof await ensureScheduledOutboxEvent(sql, other, { inMs: 1000 }), "string")
+      const another = { ...job, aggregateType: "report" }
+      assertEquals(typeof await ensureScheduledOutboxEvent(sql, another, { inMs: 1000 }), "string")
+    })
+  })
+
+  it("does not restart a chain that gave up, so its stored error stays visible", async () => {
+    await withOutboxSchema(async (sql) => {
+      const job = { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT }
+      await ensureScheduledOutboxEvent(sql, job, { inMs: 0 })
+      await sql`UPDATE outbox_events SET attempt_count = 5, last_error_code = 'TypeError'`
+
+      assertEquals(await ensureScheduledOutboxEvent(sql, job, { inMs: 0 }), null)
+      const [{ count }] = await sql<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM outbox_events
+      `
+      assertEquals(count, 1)
+    })
+  })
+
+  it("counts a delay on the database clock", async () => {
+    await withOutboxSchema(async (sql) => {
+      await sql.begin(async (tx) => {
+        // now() is fixed at the start of a transaction; the app clock moves on during the sleep.
+        await tx`SELECT pg_sleep(1.5)`
+        await scheduleOutboxEvent(
+          tx,
+          { eventKind: "x", aggregateType: "job", aggregateId: JOB_SUBJECT },
+          { inMs: 90_000 },
+        )
+        const [row] = await tx<{ ms: number }[]>`
+          SELECT round(extract(epoch FROM available_at - now()) * 1000)::int AS ms FROM outbox_events
+        `
+        // The delay is read back through a JS Date, which keeps milliseconds, while now() and the
+        // timestamptz column keep microseconds: the stored time can sit up to a millisecond early.
+        // The app clock would be 1500 ms off here.
+        assert(Math.abs(row.ms - 90_000) <= 1, `expected 90000 ms, got ${row.ms}`)
+      })
+    })
+  })
+
+  it("refuses a negative delay", async () => {
+    await withOutboxSchema(async (sql) => {
+      let error: unknown
+      try {
+        await scheduleOutboxEvent(
+          sql,
+          { eventKind: "x", aggregateType: "job", aggregateId: JOB_SUBJECT },
+          { inMs: -1 },
+        )
+      } catch (caught) {
+        error = caught
+      }
+      assertEquals(error instanceof RangeError, true)
     })
   })
 })

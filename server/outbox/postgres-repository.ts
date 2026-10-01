@@ -105,12 +105,36 @@ export class PostgresOutboxRepository implements OutboxRepository {
     `
   }
 
-  async markProcessed(id: string): Promise<void> {
+  async markProcessed(id: string, repeatInSeconds?: number): Promise<void> {
+    if (repeatInSeconds === undefined) {
+      await this.sql`
+        UPDATE outbox_events
+        SET processed_at = now(),
+            last_error_code = NULL
+        WHERE id = ${id}
+      `
+      return
+    }
+    // One statement, so the row is finished and its successor written, or neither. A row that
+    // was already processed (a redelivery) writes no second successor. The next row copies
+    // only the library's own columns; its version is the run time in epoch milliseconds, so it
+    // stays unique per aggregate and kind.
     await this.sql`
-      UPDATE outbox_events
-      SET processed_at = now(),
-          last_error_code = NULL
-      WHERE id = ${id}
+      WITH done AS (
+        UPDATE outbox_events
+        SET processed_at = now(),
+            last_error_code = NULL
+        WHERE id = ${id}
+          AND processed_at IS NULL
+        RETURNING event_kind, aggregate_type, aggregate_id,
+          now() + (${repeatInSeconds}::double precision * INTERVAL '1 second') AS next_at
+      )
+      INSERT INTO outbox_events (
+        id, event_kind, aggregate_type, aggregate_id, aggregate_version, available_at
+      )
+      SELECT gen_random_uuid(), event_kind, aggregate_type, aggregate_id,
+        (extract(epoch FROM next_at) * 1000)::bigint, next_at
+      FROM done
     `
   }
 

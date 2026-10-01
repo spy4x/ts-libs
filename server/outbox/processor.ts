@@ -39,7 +39,11 @@ export interface OutboxPublisher {
 
 export interface OutboxRepository {
   claimBatch(limit: number, maxAttempts: number, leaseSeconds: number): Promise<OutboxEvent[]>
-  markProcessed(id: string): Promise<void>
+  /**
+   * Marks the event done. With `repeatInSeconds`, also writes the event's next run, that many
+   * seconds from now, in the same atomic step, so a crash can leave neither no next run nor two.
+   */
+  markProcessed(id: string, repeatInSeconds?: number): Promise<void>
   scheduleRetry(
     id: string,
     delaySeconds: number,
@@ -116,6 +120,14 @@ export interface OutboxProcessorOptions {
    * anything else throws a `RangeError` at construction.
    */
   slowestPublishMs?: number
+  /**
+   * Event kinds that repeat, each with its interval in milliseconds. After such an event is
+   * published, the repository writes the same event again to run one interval later, so a nightly
+   * job is one row that reschedules itself. A run that fails keeps its own retry schedule and
+   * reschedules only once it succeeds; one that fails until `maxAttempts` ends the chain, with its
+   * error stored. Use {@link ensureScheduledOutboxEvent} at start-up to begin a chain.
+   */
+  repeatEveryMs?: Readonly<Record<string, number>>
   /**
    * Milliseconds clock used to measure a batch against its lease. Defaults to
    * `Date.now`; tests pass a fake one.
@@ -212,6 +224,7 @@ export class OutboxProcessor {
   readonly #maxRetryDelayMs: number
   readonly #leaseSeconds: number
   readonly #now: () => number
+  readonly #repeatEveryMs: Readonly<Record<string, number>>
   readonly #slowestPublishMs: number
 
   constructor(
@@ -225,6 +238,12 @@ export class OutboxProcessor {
     this.#maxRetryDelayMs = options.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs
     this.#leaseSeconds = options.leaseSeconds ?? DEFAULTS.leaseSeconds
     this.#now = options.now ?? Date.now
+    this.#repeatEveryMs = options.repeatEveryMs ?? {}
+    for (const [kind, ms] of Object.entries(this.#repeatEveryMs)) {
+      if (!Number.isFinite(ms) || ms <= 0) {
+        throw new RangeError(`repeatEveryMs for ${kind} must be a finite number above 0, got ${ms}`)
+      }
+    }
     const floor = options.slowestPublishMs ?? 0
     if (!Number.isFinite(floor) || floor < 0) {
       throw new RangeError(
@@ -273,7 +292,9 @@ export class OutboxProcessor {
       }
       try {
         await this.publisher.publish(event)
-        await this.repository.markProcessed(event.id)
+        const repeatMs = this.#repeatEveryMs[event.eventKind]
+        if (repeatMs === undefined) await this.repository.markProcessed(event.id)
+        else await this.repository.markProcessed(event.id, repeatMs / 1000)
         published++
       } catch (error) {
         failed++
