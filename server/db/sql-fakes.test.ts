@@ -4,7 +4,12 @@
 
 import { createFakeSql as createMigrateFake } from "./testing/fake-sql-migrate.ts"
 import { createFakeSql as createServicesFake } from "./testing/fake-sql-services.ts"
-import { describeSqlHandleContract, describeSqlLockContract } from "./sql-contract.test.ts"
+import {
+  describeSqlHandleContract,
+  describeSqlLockContract,
+  describeSqlLockRefusalContract,
+  LOCK_REFUSALS,
+} from "./sql-contract.test.ts"
 
 describeSqlHandleContract("the migration fake", () => {
   return Promise.resolve({ sql: createMigrateFake().sql, close: () => Promise.resolve() })
@@ -27,5 +32,17 @@ describeSqlLockContract("the migration fake", () => {
       fake.setLockHeldElsewhere(false)
       return Promise.resolve()
     },
+  })
+})
+
+// The fake counts attempts instead of watching a second session, so `lockRefusals` stands in for
+// "held for the first N attempts"; holding and releasing are no-ops here.
+describeSqlLockRefusalContract("the migration fake", () => {
+  const fake = createMigrateFake({ lockRefusals: LOCK_REFUSALS })
+  return Promise.resolve({
+    sql: fake.sql,
+    close: () => Promise.resolve(),
+    holdLockElsewhere: () => Promise.resolve(),
+    releaseLockElsewhere: () => Promise.resolve(),
   })
 })
