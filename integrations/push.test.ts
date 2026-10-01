@@ -186,6 +186,47 @@ describe("web push sender", () => {
     })
   }
 
+  it("pushes to one given subscription only and never consults the store", async () => {
+    const other = await subscription("other")
+    const { sender, calls, requests } = await build([other], answering(201))
+    const result = await sender.sendTo(await subscription("one"), MESSAGE)
+    expect(requests.map((r) => r.url)).toEqual(["https://push.example.com/send/one"])
+    expect(calls).toEqual([])
+    expect(result.success).toBe(true)
+    expect(result.output).toBe("1 sent, 0 removed, 0 failed of 1")
+    expect(result.deliveries).toEqual([
+      { endpoint: "https://push.example.com/send/one", status: "sent", error: "", deleted: false },
+    ])
+  })
+
+  for (const status of [404, 410]) {
+    it(`reports ${status} to one subscription as gone, for the caller to delete`, async () => {
+      const { sender, calls } = await build([], answering(status))
+      const result = await sender.sendTo(await subscription("one"), MESSAGE)
+      expect(calls).toEqual([])
+      expect(result.success).toBe(true)
+      expect(result.deliveries).toEqual([{
+        endpoint: "https://push.example.com/send/one",
+        status: "gone",
+        httpStatus: status,
+        error: "",
+        deleted: false,
+      }])
+    })
+  }
+
+  it("reports a failure to one subscription and rejects a bad payload without sending", async () => {
+    const { sender, requests } = await build([], answering(503))
+    const failed = await sender.sendTo(await subscription("one"), MESSAGE)
+    expect(failed.success).toBe(false)
+    expect(failed.error).toBe("HTTP 503")
+    requests.length = 0
+    const bad = await sender.sendTo(await subscription("one"), { title: 1 } as never)
+    expect(bad.success).toBe(false)
+    expect(bad.error).toContain("invalid push payload")
+    expect(requests).toEqual([])
+  })
+
   it("keeps sending to the other subscriptions when one fails", async () => {
     const { sender, calls } = await build(
       [await subscription("a"), await subscription("gone"), await subscription("c")],
