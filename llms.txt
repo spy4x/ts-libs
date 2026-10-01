@@ -656,6 +656,18 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `QueryHandler` (type), `jsr:@spy4x/platform/cqrs`: Handler a QueryBus runs for one query class.
 - `QueryResult` (type), `jsr:@spy4x/platform/cqrs`: The result type a Query class carries, extracted from its phantom `__resultType`.
 
+### `jsr:@spy4x/platform/keyset-cursor`
+
+- `KeysetCursorCodec` (interface), `jsr:@spy4x/platform/keyset-cursor`: Encodes and decodes one list's cursors.
+- `KeysetCursorCodecOptions` (interface), `jsr:@spy4x/platform/keyset-cursor`: Settings fixed for the codec's lifetime.
+- `KeysetCursorError` (class), `jsr:@spy4x/platform/keyset-cursor`: The one error every refusal raises.
+- `KeysetCursorErrorCode` (enum), `jsr:@spy4x/platform/keyset-cursor`: Why a cursor was refused.
+- `ScopeValue` (type), `jsr:@spy4x/platform/keyset-cursor`: A scope value: a string, or a finite number.
+- `UpdatedAtIdPageKey` (type), `jsr:@spy4x/platform/keyset-cursor`: The decoded default page key: `{ updatedAt: Date, id: string }`.
+- `createKeysetCursorCodec` (function), `jsr:@spy4x/platform/keyset-cursor`: Creates a cursor codec for one list.
+- `deriveCursorSecret` (function), `jsr:@spy4x/platform/keyset-cursor`: The cursor signing key for `purpose`: deriveSecret of the master secret under the label `spy4x.keyset-cursor.v1:<purpose>`, 64 hex characters.
+- `updatedAtIdPageKey` (constant), `jsr:@spy4x/platform/keyset-cursor`: The default page key, `{ updatedAt, id }`: the last row of a page ordered by `updated_at` then `id`.
+
 ### `jsr:@spy4x/platform/model`
 
 - `BaseModel` (type), `jsr:@spy4x/platform/model`: Value BaseModelSchema produces.
@@ -1977,4 +1989,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 58758771077f1b59dfd7e502772c232c7d0793fbcf5917558a76379dc0c61360 -->
+<!-- export surface: sha256 5d25df55a797a17c67186cd8ab98ba967b9a54d4802a7dd83fea7a71206c82da -->
