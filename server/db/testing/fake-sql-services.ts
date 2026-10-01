@@ -6,6 +6,14 @@
 
 import type { Sql, Transaction } from "../ports.ts"
 
+/**
+ * What awaiting `sql("users")` or `sql({ name })` does in the driver: both are thenable and throw,
+ * because a value to splice is not a query.
+ */
+function notTaggedCall(): never {
+  throw new Error("NOT_TAGGED_CALL: Query not called as a tagged template literal")
+}
+
 /** Options for {@link createFakeSql}. */
 export interface FakeSqlOptions {
   /** Statements that should reject instead of answering, matched by substring. */
@@ -25,11 +33,13 @@ export interface FakeSqlOptions {
 /** A value `postgres` splices in as a quoted identifier. */
 interface FakeIdentifier {
   __identifier: string
+  then(): never
 }
 
 /** A value `postgres` splices in as a column list. */
 interface FakeColumnList {
   __columns: Record<string, unknown>
+  then(): never
 }
 
 /**
@@ -115,8 +125,11 @@ export function createFakeSql(options: FakeSqlOptions = {}) {
     function (strings: unknown, ...values: unknown[]): unknown {
       if (!Array.isArray(strings)) {
         return typeof strings === "string"
-          ? { __identifier: strings } satisfies FakeIdentifier
-          : { __columns: strings as Record<string, unknown> } satisfies FakeColumnList
+          ? { __identifier: strings, then: notTaggedCall } satisfies FakeIdentifier
+          : {
+            __columns: strings as Record<string, unknown>,
+            then: notTaggedCall,
+          } satisfies FakeColumnList
       }
       const query = render(strings as unknown as TemplateStringsArray, values)
       return inTransaction
@@ -247,9 +260,11 @@ export function createFakeSql(options: FakeSqlOptions = {}) {
           throw error
         })
     },
-    reserve: async function (): Promise<unknown> {
+    // The driver's reserved connection: the call forms and helpers of a handle, plus `release`,
+    // and none of the pool-only `begin`, `reserve`, `listen` and `end`.
+    reserve: function (): Promise<unknown> {
       topLevel.push("reserve()")
-      return await Promise.resolve(client)
+      return Promise.resolve(Object.assign(makeTag(), makeSqlHelpers(), { release: () => {} }))
     },
     listen: async function (channel: string): Promise<unknown> {
       topLevel.push(`listen(${channel})`)

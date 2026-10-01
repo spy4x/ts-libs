@@ -755,7 +755,7 @@ Deno.test("every call form works while the clone is still live", async () => {
     assertEquals(sql.types.shout("hello"), { __shout: "HELLO" })
     assertEquals(sql.typed.shout("hello"), { __shout: "HELLO" })
     assertEquals(sql.json({ a: 1 }), { __json: { a: 1 } })
-    assertEquals(sql("users"), { __identifier: "users" })
+    assertEquals((sql("users") as { __identifier?: string }).__identifier, "users")
     // Reading the same helper twice gives the same function, so an identity comparison
     // still holds through the wrapper.
     assertStrictEquals(sql.types.shout, sql.types.shout)

@@ -159,7 +159,7 @@ export function createFakeSql(options: FakeSqlOptions = {}) {
       topLevel.push("BEGIN")
       inTransaction = true
       try {
-        const result = await callback(asTag as unknown as Transaction)
+        const result = await callback(makeTag("pool") as unknown as Transaction)
         topLevel.push("COMMIT")
         return result
       } catch (error) {
@@ -215,4 +215,9 @@ function withValues<T extends Promise<unknown[]>>(
 /** `postgres@3.4.7`'s `Identifier` (`src/types.js:44-48`): the quoted text, in `value`. */
 class FakeIdentifier {
   constructor(readonly value: string) {}
+
+  /** The driver's `Identifier` is thenable and throws when awaited: it is not a query. */
+  then(): never {
+    throw new Error("NOT_TAGGED_CALL: Query not called as a tagged template literal")
+  }
 }
