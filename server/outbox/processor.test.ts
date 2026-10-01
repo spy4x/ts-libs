@@ -36,8 +36,10 @@ class FakeRepository implements OutboxRepository {
     if (!batch) this.onExhausted?.()
     return Promise.resolve(batch ?? [])
   }
-  markProcessed(id: string): Promise<void> {
+  repeats: (number | undefined)[] = []
+  markProcessed(id: string, repeatInSeconds?: number): Promise<void> {
     this.processed.push(id)
+    this.repeats.push(repeatInSeconds)
     return Promise.resolve()
   }
   scheduleRetry(
@@ -547,5 +549,45 @@ describe("OutboxProcessor slowestPublishMs floor", () => {
     }
     expect(() => new OutboxProcessor(repository, publisher, { slowestPublishMs: 0 }))
       .not.toThrow()
+  })
+})
+
+describe("OutboxProcessor repeatEveryMs", () => {
+  const ok = { publish: () => Promise.resolve() }
+
+  it("asks for the next run, in seconds, only for a kind that repeats", async () => {
+    const repository = new FakeRepository([[
+      event({ id: "nightly", eventKind: "nightly.cleanup" }),
+      event({ id: "plain", eventKind: "group.created" }),
+    ]])
+    const processor = new OutboxProcessor(repository, ok, {
+      repeatEveryMs: { "nightly.cleanup": 86_400_000 },
+    })
+
+    await processor.drainOnce()
+
+    expect(repository.processed).toEqual(["nightly", "plain"])
+    expect(repository.repeats).toEqual([86_400, undefined])
+  })
+
+  it("asks for no next run when the publish fails", async () => {
+    const repository = new FakeRepository([[event({ eventKind: "nightly.cleanup" })]])
+    const processor = new OutboxProcessor(
+      repository,
+      { publish: () => Promise.reject(new Error("down")) },
+      { repeatEveryMs: { "nightly.cleanup": 1000 } },
+    )
+
+    await processor.drainOnce()
+
+    expect(repository.processed).toEqual([])
+    expect(repository.retries.length).toBe(1)
+  })
+
+  it("refuses an interval that is zero, negative or not finite", () => {
+    for (const ms of [0, -1, Infinity, NaN]) {
+      expect(() => new OutboxProcessor(new FakeRepository([]), ok, { repeatEveryMs: { k: ms } }))
+        .toThrow(RangeError)
+    }
   })
 })

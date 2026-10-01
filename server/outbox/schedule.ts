@@ -1,0 +1,82 @@
+import type { Sql } from "../db/index.ts"
+
+/** The row a job is: what it is called and what it is about. Nothing else is stored. */
+export interface ScheduledOutboxEvent {
+  /** What the publisher switches on, for example `account.delete`. At most 64 characters. */
+  eventKind: string
+  /** The kind of thing the job is about, for example `user`. */
+  aggregateType: string
+  /** The thing the job is about; the publisher reads its data from here, not from a payload. */
+  aggregateId: string
+}
+
+/** When the job first runs: at a moment, or a number of milliseconds from now. */
+export type OutboxSchedule = { at: Date } | { inMs: number }
+
+/**
+ * Writes one outbox row that becomes claimable at the given time and returns its id. Pass the
+ * transaction of the change that needs the job, so both commit together or neither does.
+ *
+ * `aggregateVersion` is the run time in epoch milliseconds: the same job for the same thing at
+ * the same moment is the unique-index conflict a caller who wants it once should expect.
+ *
+ * @throws RangeError when `inMs` is not a finite number of at least 0, or `at` is not a date.
+ */
+export async function scheduleOutboxEvent(
+  sql: Sql,
+  event: ScheduledOutboxEvent,
+  when: OutboxSchedule,
+): Promise<string> {
+  const runAt = resolveRunTime(when)
+  const id = crypto.randomUUID()
+  await sql`
+    INSERT INTO outbox_events (
+      id, event_kind, aggregate_type, aggregate_id, aggregate_version, available_at
+    ) VALUES (
+      ${id}, ${event.eventKind}, ${event.aggregateType}, ${event.aggregateId},
+      ${runAt.getTime()}, ${runAt}
+    )
+  `
+  return id
+}
+
+/**
+ * Starts a repeating job, once. Writes the row only when no row of that kind is waiting, so a
+ * worker may call it at every start-up. A row that gave up after `maxAttempts` still counts as
+ * waiting: the chain stays stopped, with its error visible in `last_error_code`, until someone
+ * deals with it. Returns the new id, or `null` when a row already existed.
+ */
+export async function ensureScheduledOutboxEvent(
+  sql: Sql,
+  event: ScheduledOutboxEvent,
+  when: OutboxSchedule,
+): Promise<string | null> {
+  const runAt = resolveRunTime(when)
+  const id = crypto.randomUUID()
+  const rows = await sql<{ id: string }[]>`
+    INSERT INTO outbox_events (
+      id, event_kind, aggregate_type, aggregate_id, aggregate_version, available_at
+    )
+    SELECT ${id}::uuid, ${event.eventKind}::text, ${event.aggregateType}::text,
+      ${event.aggregateId}::uuid, ${runAt.getTime()}::bigint, ${runAt}::timestamptz
+    WHERE NOT EXISTS (
+      SELECT 1 FROM outbox_events
+      WHERE event_kind = ${event.eventKind} AND processed_at IS NULL
+    )
+    RETURNING id
+  `
+  return rows[0]?.id ?? null
+}
+
+function resolveRunTime(when: OutboxSchedule): Date {
+  if ("at" in when) {
+    if (!(when.at instanceof Date) || Number.isNaN(when.at.getTime())) {
+      throw new RangeError(`at must be a valid Date`)
+    }
+    return when.at
+  }
+  if (!Number.isFinite(when.inMs) || when.inMs < 0) {
+    throw new RangeError(`inMs must be a finite number of at least 0, got ${when.inMs}`)
+  }
+  return new Date(Date.now() + when.inMs)
+}
