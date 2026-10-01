@@ -10,6 +10,7 @@ import { createFakeStore } from "../sign-in/fake-store.test.ts"
 import { MemoryAuthStore } from "./memory-store.ts"
 import type { AuthSessionRecord } from "./model.ts"
 import { createOAuthSignIn, OAuthOutcome, OAuthSignInError } from "./oauth.ts"
+import { PayloadTooLargeError } from "@spy4x/net/bounded-body"
 import {
   createGitHubOAuthProvider,
   GITHUB_AUTHORIZATION_ENDPOINT,
@@ -229,6 +230,18 @@ describe("createOAuthSignIn with GitHub's config", () => {
     const result = await signInAs(oauth, provider, { sub: "unused" })
     expect(result.outcome).toBe(OAuthOutcome.Linked)
     expect(result.user.id).toBe(owner.user.id)
+  })
+
+  it("refuses the sign-in as profile-failed when the /user/emails answer passes 64 KiB", async () => {
+    const address = { email: "ann@example.com", primary: false, verified: true, visibility: null }
+    const emails = Array.from({ length: 1000 }, () => address)
+    expect(JSON.stringify(emails).length).toBeGreaterThan(64 * 1024)
+    const { store, oauth, provider } = github(emails)
+    const error = await signInAs(oauth, provider, { sub: "unused" }).catch((caught) => caught)
+    expect(error).toBeInstanceOf(OAuthSignInError)
+    expect((error as OAuthSignInError).reason).toBe("profile-failed")
+    expect((error as OAuthSignInError).cause).toBeInstanceOf(PayloadTooLargeError)
+    expect(await store.findKey("oauth:github", "583231")).toBeNull()
   })
 
   it("refuses the sign-in as profile-failed when /user/emails fails", async () => {
