@@ -22,9 +22,10 @@
  * Rows are never deleted: with `createMissing` every new subject adds one, so an endpoint keyed by
  * something a stranger chooses, such as an e-mail address, grows the table by one row per address.
  * A row whose quiet reset has passed and whose lock has ended decides nothing any more, and a row
- * whose last failure time is `NULL` was never counted by `begin`, so both can be deleted without
- * changing any later decision. On a table that holds only counters, with the default policy and
- * columns, run on a schedule:
+ * whose last failure time is `NULL` was never counted by `begin`, so both can be deleted. One
+ * exception: a delete that commits while a `begin` for that subject is running lets that one check
+ * through uncounted, on a row that had been quiet for the whole reset period anyway. On a table
+ * that holds only counters, with the default policy and columns, run on a schedule:
  *
  * ```sql
  * DELETE FROM lockouts
