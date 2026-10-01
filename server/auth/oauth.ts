@@ -68,6 +68,17 @@ export interface OAuthProfile {
   emailVerified: boolean
 }
 
+/** What {@link OAuthProviderConfig.completeProfile} may use. */
+export interface OAuthProfileContext {
+  /**
+   * Sends a GET to the `https:` URL `url` with the sign-in's access token and returns the JSON
+   * answer, within the same time limit as the other provider requests.
+   *
+   * @throws {OAuthSignInError} `profile-failed` when the request fails or the answer is not JSON.
+   */
+  getJson(url: string): Promise<unknown>
+}
+
 /**
  * One provider, supplied by the app. `oauth-google.ts` ships Google's; any other OAuth2 provider
  * with a user-info endpoint is added the same way, without editing an enum.
@@ -94,6 +105,15 @@ export interface OAuthProviderConfig {
   authorizationParams?: Readonly<Record<string, string>>
   /** Reads the user-info response body; null when it does not describe a person. */
   profile(body: unknown): OAuthProfile | null
+  /**
+   * Completes the profile `profile` read with further requests, for a provider whose user-info
+   * answer lacks something, such as GitHub's address. Returns the profile to use, or null when the
+   * person cannot be keyed. Optional: without it the profile is used as read.
+   */
+  completeProfile?(
+    profile: OAuthProfile,
+    context: OAuthProfileContext,
+  ): Promise<OAuthProfile | null>
 }
 
 /** Options of {@link createOAuthSignIn}. */
@@ -392,6 +412,12 @@ export function createOAuthSignIn(
     let profile: OAuthProfile | null
     try {
       profile = keyable(provider.profile(body))
+      if (profile && provider.completeProfile) {
+        const context: OAuthProfileContext = {
+          getJson: (url) => getJson(requireUrl(url, "completeProfile URL"), accessToken),
+        }
+        profile = keyable(await provider.completeProfile(profile, context))
+      }
     } catch (cause) {
       if (cause instanceof OAuthSignInError) throw cause
       throw new OAuthSignInError("invalid-profile", { cause })

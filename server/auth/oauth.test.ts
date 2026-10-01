@@ -20,6 +20,7 @@ import {
   type OAuthFlowStore,
   OAuthOutcome,
   type OAuthPendingSignUp,
+  type OAuthProviderConfig,
   type OAuthSignIn,
   OAuthSignInError,
   type OAuthSignInOptions,
@@ -740,5 +741,78 @@ describe("createOAuthSignIn: signUp confirm", () => {
   it("creates the user in the callback when signUp is left out", async () => {
     const { oauth, provider } = setup()
     expect((await signInAs(oauth, provider, BOB)).outcome).toBe(OAuthOutcome.SignedUp)
+  })
+})
+
+describe("createOAuthSignIn: completeProfile", () => {
+  type Complete = NonNullable<OAuthProviderConfig["completeProfile"]>
+
+  /** A sign-in whose provider completes the profile with `complete`; `fail` answers 503 instead. */
+  function completing(complete: Complete, fail = (_request: Request) => false) {
+    const fixture = memoryFixture()
+    const fake = createFakeProvider()
+    const authorizations: string[] = []
+    const oauth = createOAuthSignIn({
+      ...fakeOptions(fixture, fake),
+      provider: { ...fakeProviderConfig(), completeProfile: complete },
+      fetch: (request) => {
+        if (fail(request)) return Promise.resolve(new Response("down", { status: 503 }))
+        const authorization = request.headers.get("authorization")
+        if (authorization !== null) authorizations.push(authorization)
+        return fake.fetch(request)
+      },
+    })
+    return { fixture, fake, oauth, authorizations }
+  }
+
+  it("uses the profile completeProfile returns, read with the sign-in's access token", async () => {
+    const { fake, oauth, authorizations } = completing(async (profile, { getJson }) => {
+      const body = await getJson("https://provider.test/userinfo") as { email: string }
+      return { subject: profile.subject, email: body.email, emailVerified: true }
+    })
+    const result = await signInAs(oauth, fake, { sub: "sub-ann", email: "ann@example.com" })
+    expect(result.profile).toEqual({
+      subject: "sub-ann",
+      email: "ann@example.com",
+      emailVerified: true,
+    })
+    expect(result.key).toMatchObject({ email: "ann@example.com", provenAt: NOW })
+    expect(authorizations).toHaveLength(2)
+    expect(authorizations[1]).toBe(authorizations[0])
+    expect(authorizations[0]).toMatch(/^Bearer token-\d+$/)
+  })
+
+  for (
+    const [name, complete] of [
+      ["a null profile", () => Promise.resolve(null)],
+      [
+        "an empty subject",
+        () => Promise.resolve({ subject: "", email: null, emailVerified: false }),
+      ],
+      [
+        "a request to an http: URL",
+        async (_profile, { getJson }) => {
+          await getJson("http://provider.test/userinfo")
+          return null
+        },
+      ],
+    ] as [string, Complete][]
+  ) {
+    it(`refuses the sign-in as invalid-profile when completeProfile gives ${name}`, async () => {
+      const { fixture, fake, oauth } = completing(complete)
+      expect(await failure(signInAs(oauth, fake, ANN))).toBe("invalid-profile")
+      expect(await fixture.store.findKey("oauth:fake", ANN.sub)).toBeNull()
+    })
+  }
+
+  it("refuses the sign-in as profile-failed when a completeProfile request fails", async () => {
+    const { fake, oauth } = completing(
+      async (profile, { getJson }) => {
+        await getJson("https://provider.test/userinfo?more")
+        return profile
+      },
+      (request) => request.url.endsWith("?more"),
+    )
+    expect(await failure(signInAs(oauth, fake, ANN))).toBe("profile-failed")
   })
 })
