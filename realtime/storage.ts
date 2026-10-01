@@ -33,7 +33,7 @@ export class MemoryKeyValueStore implements KeyValueStore {
   }
 
   setItem(key: string, value: string): void {
-    this.#items.set(key, value)
+    this.#items.set(key, String(value))
   }
 
   removeItem(key: string): void {

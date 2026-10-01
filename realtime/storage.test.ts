@@ -3,6 +3,7 @@ import { expect } from "@std/expect"
 import { type } from "arktype"
 import { makeStorage, type StorageLike } from "@spy4x/platform/browser/storage"
 
+import { describeKeyValueStoreContract } from "./key-value-store-contract.test.ts"
 import { MemoryKeyValueStore } from "./storage.ts"
 
 describe("MemoryKeyValueStore", () => {
@@ -57,4 +58,9 @@ describe("interop with @spy4x/platform/browser/storage (deprecated StorageLike)"
     expect(store.set("dark").status).toBe("ok")
     expect(store.get()).toEqual({ status: "ok", value: "dark" })
   })
+})
+
+describeKeyValueStoreContract("MemoryKeyValueStore", () => {
+  const store = new MemoryKeyValueStore()
+  return { store, key: (name) => name, close: () => {} }
 })
