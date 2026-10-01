@@ -1260,6 +1260,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `Change` (type), `jsr:@spy4x/realtime/outbox`: What a person did to an entity.
 - `ConflictReason` (type), `jsr:@spy4x/realtime/outbox`: Why a write stopped the queue for its entity and now waits for a person: - `version`: the entity changed on the server since this write was based on it; - `gone`: the entity was deleted on the server; - `rejected`: the server refused the write (for example the role no longer allows it).
+- `ConflictRef` (interface), `jsr:@spy4x/realtime/outbox`: The conflict a person was shown: an OutboxEntry from `entries()` fits.
 - `LockManagerLike` (interface), `jsr:@spy4x/realtime/outbox`: The part of a browser's `LockManager` the outbox uses.
 - `Outbox` (type), `jsr:@spy4x/realtime/outbox`: The outbox as the app uses it.
 - `OutboxCommand` (interface), `jsr:@spy4x/realtime/outbox`: The command the app sends for one entry.
@@ -2008,4 +2009,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 a9296c2ff22b8a789e591b039a61645422245a170aa843504844d0095d99ac26 -->
+<!-- export surface: sha256 a1cec08df6c27894f8f1251fa027d7cd64afc29619990afe2500c9f7974f49a5 -->

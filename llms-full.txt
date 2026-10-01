@@ -2693,13 +2693,15 @@ The rules it keeps, each one a lost edit found in a product that wrote the queue
 - **Never as someone else.** `canSend()` is checked before every entry; a queue is not sent while
   the page is signed in as another user.
 - **Conflicts wait for a person.** A stale, gone or refused write is marked, never applied over
-  the other side; `keepMine(seq)` sends it again on the server's version, `useTheirs(seq)` drops
-  it.
+  the other side; `keepMine(entry)` sends it again on the server's version (only for a stale
+  write: a gone or refused one has no server version), `useTheirs(entry)` drops it. Both take the
+  entry the person saw and do nothing once the queue holds a different one, so a stale screen in
+  another tab cannot delete a newer edit.
 
-A created entity starts at version 1: after an attempted create, a delete is sent against version
-
-1. The library ships the queue, its storage port and an in-memory store. It ships no IndexedDB
-   store and adds no dependency; implement `OutboxStore` over Dexie or raw IndexedDB in the app.
+A created entity starts at version one: after an attempted create, a delete is sent against that
+version. The library ships the queue, its storage port and an in-memory store. It ships no
+IndexedDB store and adds no dependency; implement `OutboxStore` over Dexie or raw IndexedDB in the
+app. `send` runs under the lock, so it must settle or time out.
 
 ## Explicitly not implemented
 

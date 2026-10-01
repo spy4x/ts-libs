@@ -91,6 +91,13 @@ export type SendFailure =
   | { kind: "already-exists" }
   | { kind: "rejected"; message: string }
 
+/** The conflict a person was shown: an {@link OutboxEntry} from `entries()` fits. */
+export interface ConflictRef {
+  /** Saved entries have one; an entry without it matches nothing. */
+  seq?: number
+  key: string
+}
+
 /** The command the app sends for one entry. */
 export interface OutboxCommand<P> {
   kind: OutboxKind
@@ -122,6 +129,8 @@ export interface OutboxPorts<P, S extends { version: number }> {
   /**
    * Sends one command over the connection with the idempotency key. One try; the outbox retries.
    * Resolves the server's entity as it is after the write, or nothing (a delete has none).
+   * It runs under the lock, so it must settle or time out: one that never does blocks every
+   * `submit` in every tab that shares the lock.
    */
   send(command: OutboxCommand<P>, idempotencyKey: string): Promise<S | undefined | void>
   /** The server's entity as it is now, or `null` when it is gone. Rejects when unreachable. */
@@ -211,6 +220,13 @@ export function createOutbox<P, S extends { version: number }>(ports: OutboxPort
 
   async function find(seq: number): Promise<Entry | undefined> {
     return (await store.readOutbox()).find((entry) => entry.seq === seq)
+  }
+
+  /** The entry, only while it is still the conflict the caller was shown. */
+  async function findConflict(shown: ConflictRef): Promise<Entry | undefined> {
+    if (shown.seq === undefined) return undefined
+    const entry = await find(shown.seq)
+    return entry?.status === "conflict" && entry.key === shown.key ? entry : undefined
   }
 
   /** Whether the queue still holds the entry as it was sent: same entry, same idempotency key. */
@@ -350,6 +366,8 @@ export function createOutbox<P, S extends { version: number }>(ports: OutboxPort
       } catch (_unreachable) {
         return false
       }
+      // The answer took a round trip: an edit made meanwhile has a new key and must stay queued.
+      if (!await unchanged(entry)) return true
       reason = server ? "version" : "gone"
     }
     await markConflict(
@@ -391,10 +409,15 @@ export function createOutbox<P, S extends { version: number }>(ports: OutboxPort
     }
   }
 
-  /** Sends the person's version again, on top of the server's current one. */
-  async function keepMine(seq: number): Promise<void> {
+  /**
+   * Sends the person's version again, on top of the server's current one. `shown` is the conflict
+   * the person saw; nothing happens unless the queue still holds that conflict under that key
+   * (another tab may have settled it, or the person edited again). Does nothing for a `gone` or
+   * `rejected` conflict, which has no server entity to build on: use `useTheirs` there.
+   */
+  async function keepMine(shown: ConflictRef): Promise<void> {
     await locked(async () => {
-      const entry = await find(seq)
+      const entry = await findConflict(shown)
       const server = entry?.conflict?.server
       if (!entry || !server) return
       await cache?.put(server)
@@ -411,15 +434,19 @@ export function createOutbox<P, S extends { version: number }>(ports: OutboxPort
     await flush()
   }
 
-  /** Drops the person's version and shows the server's. */
-  async function useTheirs(seq: number): Promise<void> {
+  /**
+   * Drops the person's version and shows the server's. `shown` is the conflict the person saw;
+   * nothing happens unless the queue still holds that conflict under that key, so a stale screen
+   * cannot delete a newer edit.
+   */
+  async function useTheirs(shown: ConflictRef): Promise<void> {
     await locked(async () => {
-      const entry = await find(seq)
+      const entry = await findConflict(shown)
       if (!entry) return
       const server = entry.conflict?.server
       if (server) await cache?.put(server)
       else if (entry.conflict?.reason === "gone") await cache?.remove(entry.entityId)
-      await drop(seq)
+      await drop(entry.seq!)
     })
   }
 

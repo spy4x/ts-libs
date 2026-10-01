@@ -401,7 +401,7 @@ describe("outbox conflicts found after a reconnect", () => {
     const { outbox, sent, state } = await staleUpdate()
     state.server = () => item("n", 3, "Mine")
     sent.length = 0
-    await outbox.keepMine(outbox.entries()[0].seq!)
+    await outbox.keepMine(outbox.entries()[0])
     expect(sent.map((s) => [s.command.kind, s.command.payload.title, s.command.baseVersion]))
       .toEqual([["update", "Mine", 2]])
     expect(outbox.entries()).toEqual([])
@@ -409,7 +409,7 @@ describe("outbox conflicts found after a reconnect", () => {
 
   it("shows the server's entity and drops mine when I use theirs", async () => {
     const { outbox, cache } = await staleUpdate()
-    await outbox.useTheirs(outbox.entries()[0].seq!)
+    await outbox.useTheirs(outbox.entries()[0])
     expect(outbox.entries()).toEqual([])
     expect([...cache.items.values()].map((i) => i.title)).toEqual(["Theirs"])
   })
@@ -438,7 +438,7 @@ describe("outbox conflicts found after a reconnect", () => {
     }
     h.state.online = true
     await h.outbox.flush()
-    await h.outbox.useTheirs(h.outbox.entries()[0].seq!)
+    await h.outbox.useTheirs(h.outbox.entries()[0])
     expect(h.cache.items.has("n")).toBe(false)
     expect(h.outbox.entries()).toEqual([])
   })
@@ -633,6 +633,133 @@ function fakeLockManager(): LockManagerLike & { requested: string[] } {
     },
   }
 }
+
+describe("outbox conflicts settled from two tabs", () => {
+  const conflicted = {
+    key: "k-conflict",
+    entityId: "n",
+    kind: "update" as const,
+    payload: text("Mine"),
+    baseVersion: 1,
+    attempted: true,
+    status: "conflict" as const,
+    conflict: { reason: "version" as const, message: "m", server: item("n", 2, "Theirs") },
+    queuedAt: "",
+  }
+
+  it("keeps a newer edit when another tab's stale conflict card chooses the server's version", async () => {
+    const locks = fakeLockManager()
+    const store: Store = createMemoryOutboxStore()
+    const cache = fakeCache()
+    let keys = 0
+    const tab = (name: string) =>
+      createOutbox<Text, Item>({
+        store,
+        lock: createWebLock(locks, "outbox:1"),
+        canSend: () => false,
+        newKey: () => `${name}-${++keys}`,
+        cache: cache.port,
+        classify,
+        send: () => Promise.reject(new ConnectionLostError("down")),
+        fetchServer: () => Promise.resolve(null),
+      })
+    const tabA = tab("a")
+    const tabB = tab("b")
+    const saved = await store.putEntry(conflicted)
+    const [cardInA] = await tabA.reload()
+    // Tab B keeps its version, then the person edits the item again there.
+    await tabB.reload()
+    await tabB.keepMine(saved)
+    await tabB.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Mine, edited again"),
+      version: 2,
+    })
+    // Tab A still shows the old conflict card and chooses the server's version.
+    await tabA.useTheirs(cardInA)
+    expect((await store.readOutbox()).map((e) => [e.payload.title, e.status])).toEqual([
+      ["Mine, edited again", "pending"],
+    ])
+    expect(cache.items.get("n")).toEqual(item("n", 2, "Theirs"))
+  })
+
+  it("ignores a stale conflict card when the entry has since become a newer conflict", async () => {
+    const store: Store = createMemoryOutboxStore()
+    const sent: string[] = []
+    const outbox = createOutbox<Text, Item>({
+      store,
+      lock: createPromiseLock(),
+      canSend: () => true,
+      classify,
+      send: (command) => {
+        sent.push(command.payload.title)
+        return Promise.resolve(item("n", 3))
+      },
+      fetchServer: () => Promise.resolve(null),
+    })
+    const saved = await store.putEntry(conflicted)
+    await store.putEntry({ ...saved, key: "k-newer" })
+    await outbox.keepMine(saved)
+    await outbox.useTheirs(saved)
+    expect(sent).toEqual([])
+    expect((await store.readOutbox()).map((e) => [e.key, e.status])).toEqual([
+      ["k-newer", "conflict"],
+    ])
+  })
+
+  it("ignores a conflict card once the entry is no longer a conflict, even under the same key", async () => {
+    const store: Store = createMemoryOutboxStore()
+    const outbox = createOutbox<Text, Item>({
+      store,
+      lock: createPromiseLock(),
+      canSend: () => false,
+      classify,
+      send: () => Promise.reject(new ConnectionLostError("down")),
+      fetchServer: () => Promise.resolve(null),
+    })
+    const saved = await store.putEntry(conflicted)
+    await store.putEntry({ ...saved, status: "pending", conflict: undefined })
+    await outbox.useTheirs(saved)
+    await outbox.keepMine(saved)
+    expect((await store.readOutbox()).map((e) => [e.key, e.status, e.baseVersion])).toEqual([
+      ["k-conflict", "pending", 1],
+    ])
+  })
+
+  it("keeps an edit made in another tab while the server is asked about a refusal", async () => {
+    const store: Store = createMemoryOutboxStore()
+    let answer: () => void = () => {}
+    const gate = new Promise<void>((resolve) => (answer = resolve))
+    let asked: () => void = () => {}
+    const fetchStarted = new Promise<void>((resolve) => (asked = resolve))
+    let keys = 0
+    const tab = (canSend: boolean, name: string) =>
+      createOutbox<Text, Item>({
+        store,
+        lock: createPromiseLock(),
+        canSend: () => canSend,
+        newKey: () => `${name}-${++keys}`,
+        classify,
+        send: () => Promise.reject(refused("VERSION_CONFLICT")),
+        async fetchServer() {
+          asked()
+          await gate
+          return item("n", 2, "Theirs")
+        },
+      })
+    const tabA = tab(false, "a")
+    const tabB = tab(true, "b")
+    await tabA.submit({ kind: "update", entityId: "n", payload: text("Old"), version: 1 })
+    const flushing = tabB.flush()
+    await fetchStarted
+    await tabA.submit({ kind: "update", entityId: "n", payload: text("Edit in A"), version: 1 })
+    answer()
+    await flushing
+    const [kept] = await store.readOutbox()
+    expect([kept?.payload.title, kept?.status]).toEqual(["Edit in A", "pending"])
+  })
+})
 
 describe("createWebLock", () => {
   it("takes the lock under the name it was given", async () => {
