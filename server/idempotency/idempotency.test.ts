@@ -64,6 +64,15 @@ function slowCommand<T>(result: Promise<T>) {
   }
 }
 
+/**
+ * A store whose clock never moves, so the first run's claim never runs out of lease. With the real
+ * clock, a test stalled past the 30-second lease by a loaded machine would let the repeat take the
+ * claim over and run the command.
+ */
+function frozenClockStore(): SpyStore {
+  return new SpyStore({ now: () => 0 })
+}
+
 /** The error a call is refused with; fails the test when the call succeeds. */
 async function refusal(call: Promise<unknown>): Promise<IdempotencyError> {
   try {
@@ -134,7 +143,7 @@ describe("idempotency middleware", () => {
   })
 
   it("makes a repeat that arrives mid-run wait for the first result instead of running twice", async () => {
-    const store = new SpyStore()
+    const store = frozenClockStore()
     const finishFirst = deferred<string>()
     let polls = 0
     const run = createIdempotencyMiddleware({
@@ -164,7 +173,7 @@ describe("idempotency middleware", () => {
   })
 
   it("fails a repeat with IN_PROGRESS when the first run outlives the wait", async () => {
-    const store = new SpyStore()
+    const store = frozenClockStore()
     const never = deferred<string>()
     const slept: number[] = []
     const run = createIdempotencyMiddleware({
