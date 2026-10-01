@@ -9,16 +9,12 @@
 
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import postgres from "postgres"
-import { buildPostgresOptions, type Sql } from "../db/index.ts"
+import type { Sql } from "../db/index.ts"
 import { createPasswordHasher, type PasswordHasher, SessionManager } from "../sign-in/mod.ts"
-import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
+import { postgresSettings, requireReachable } from "@integration-testing"
 import type { AuthSessionRecord } from "./model.ts"
-import {
-  AUTH_POSTGRES_SCHEMA,
-  createPostgresAuthStore,
-  createPostgresSessionStore,
-} from "./postgres.ts"
+import { openAuthSchema } from "./postgres-schema-fixture.test.ts"
+import { createPostgresAuthStore, createPostgresSessionStore } from "./postgres.ts"
 import {
   createPasswordSignIn,
   PASSWORD_METHOD,
@@ -37,27 +33,15 @@ async function withDatabase(body: (sql: Sql) => Promise<void>): Promise<void> {
   const settings = postgresSettings()
   await requireReachable(settings.address)
 
-  const schema = uniqueIdentifier("it_auth_pw")
-  const admin = postgres({
-    ...buildPostgresOptions({ connection: settings.connection, max: 1 }),
-    onnotice: () => {},
-  }) as unknown as Sql
+  const { sql, close } = await openAuthSchema({
+    prefix: "it_auth_pw",
+    connection: settings.connection,
+    poolSize: 4,
+  })
   try {
-    await admin`CREATE SCHEMA ${admin(schema)}`
-    const sql = postgres({
-      ...buildPostgresOptions({ connection: settings.connection, max: 4 }),
-      connection: { application_name: schema, search_path: schema },
-      onnotice: () => {},
-    }) as unknown as Sql
-    try {
-      await sql.unsafe(AUTH_POSTGRES_SCHEMA)
-      await body(sql)
-    } finally {
-      await sql.end()
-      await admin`DROP SCHEMA IF EXISTS ${admin(schema)} CASCADE`
-    }
+    await body(sql)
   } finally {
-    await admin.end()
+    await close()
   }
 }
 

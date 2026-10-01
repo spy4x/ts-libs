@@ -13,12 +13,12 @@
 
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import postgres from "postgres"
-import { buildPostgresOptions, type Sql } from "../db/index.ts"
+import type { Sql } from "../db/index.ts"
 import { SessionManager, SessionStatus } from "../sign-in/mod.ts"
-import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
+import { postgresSettings, requireReachable } from "@integration-testing"
 
 import type { AuthSessionRecord } from "./model.ts"
+import { openAuthSchema } from "./postgres-schema-fixture.test.ts"
 import { createOAuthSignIn } from "./oauth.ts"
 import {
   createFakeProvider,
@@ -28,11 +28,7 @@ import {
   PEPPER,
   signInAs,
 } from "./oauth-scenarios.test.ts"
-import {
-  AUTH_POSTGRES_SCHEMA,
-  createPostgresAuthStore,
-  createPostgresSessionStore,
-} from "./postgres.ts"
+import { createPostgresAuthStore, createPostgresSessionStore } from "./postgres.ts"
 
 const POOL_SIZE = 4
 
@@ -45,34 +41,11 @@ async function openDatabase(): Promise<Database> {
   const settings = postgresSettings()
   await requireReachable(settings.address)
 
-  const schema = uniqueIdentifier("it_oauth")
-  const admin = postgres({
-    ...buildPostgresOptions({ connection: settings.connection, max: 1 }),
-    onnotice: () => {},
-  }) as unknown as Sql
-  await admin`CREATE SCHEMA ${admin(schema)}`
-
-  const sql = postgres({
-    ...buildPostgresOptions({ connection: settings.connection, max: POOL_SIZE }),
-    connection: { application_name: schema, search_path: schema },
-    onnotice: () => {},
-  }) as unknown as Sql
-
-  const close = async () => {
-    try {
-      await sql.end()
-      await admin`DROP SCHEMA IF EXISTS ${admin(schema)} CASCADE`
-    } finally {
-      await admin.end()
-    }
-  }
-
-  try {
-    await sql.unsafe(AUTH_POSTGRES_SCHEMA)
-  } catch (error) {
-    await close()
-    throw error
-  }
+  const { sql, close } = await openAuthSchema({
+    prefix: "it_oauth",
+    connection: settings.connection,
+    poolSize: POOL_SIZE,
+  })
   const sessions = new SessionManager<AuthSessionRecord>({
     store: createPostgresSessionStore(sql),
     pepper: PEPPER,

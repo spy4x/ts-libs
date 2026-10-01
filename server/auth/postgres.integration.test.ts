@@ -17,13 +17,10 @@ import { describe, it } from "@std/testing/bdd"
 import postgres from "postgres"
 import { buildPostgresOptions, type Sql } from "../db/index.ts"
 import { SecondFactorStatus, SessionManager, SessionStatus } from "../sign-in/mod.ts"
-import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
+import { postgresSettings, requireReachable } from "@integration-testing"
+import { openAuthSchema } from "./postgres-schema-fixture.test.ts"
 import { AuthConflictError, type AuthSessionRecord } from "./model.ts"
-import {
-  AUTH_POSTGRES_SCHEMA,
-  createPostgresAuthStore,
-  createPostgresSessionStore,
-} from "./postgres.ts"
+import { createPostgresAuthStore, createPostgresSessionStore } from "./postgres.ts"
 import {
   describeAuthStoreContract,
   emailKey,
@@ -46,34 +43,11 @@ async function openDatabase(): Promise<Database> {
   const settings = postgresSettings()
   await requireReachable(settings.address)
 
-  const schema = uniqueIdentifier("it_auth")
-  const admin = postgres({
-    ...buildPostgresOptions({ connection: settings.connection, max: 1 }),
-    onnotice: () => {},
-  }) as unknown as Sql
-  await admin`CREATE SCHEMA ${admin(schema)}`
-
-  const sql = postgres({
-    ...buildPostgresOptions({ connection: settings.connection, max: POOL_SIZE }),
-    connection: { application_name: schema, search_path: schema },
-    onnotice: () => {},
-  }) as unknown as Sql
-
-  const close = async () => {
-    try {
-      await sql.end()
-      await admin`DROP SCHEMA IF EXISTS ${admin(schema)} CASCADE`
-    } finally {
-      await admin.end()
-    }
-  }
-
-  try {
-    await sql.unsafe(AUTH_POSTGRES_SCHEMA)
-  } catch (error) {
-    await close()
-    throw error
-  }
+  const { sql, schema, close } = await openAuthSchema({
+    prefix: "it_auth",
+    connection: settings.connection,
+    poolSize: POOL_SIZE,
+  })
   return { sql, schema, close }
 }
 
