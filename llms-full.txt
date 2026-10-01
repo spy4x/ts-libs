@@ -2874,6 +2874,7 @@ Runs on: server (Deno).
 | `@spy4x/server/kv`                | A Redis-backed key-value store, keys scoped under a caller-supplied prefix           |
 | `@spy4x/server/env-age64`         | Per-value `.env` encryption (`KEY=age64:...`), no `age` binary, no `--allow-run`     |
 | `@spy4x/server/outbox`            | Transactional outbox drain: claim, publish, retry, over a generic SQL table          |
+| `@spy4x/server/idempotency`       | Idempotent commands: CQRS middleware, fingerprint, Postgres and memory stores        |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -4672,6 +4673,58 @@ required: a unique index on `(aggregate_type, aggregate_id, aggregate_version, e
 what makes a retried `INSERT` (after a crash between the state change and the outbox row) idempotent
 instead of writing the event twice — the template had this index; it is not enforced here because
 the repository reads and updates rows but never creates or migrates the table.
+
+## `server/idempotency`
+
+`createIdempotencyMiddleware`, `fingerprint`, `isIdempotencyKey`, `IdempotencyError`,
+`IdempotencyStore`, `PostgresIdempotencyStore`, `IDEMPOTENCY_POSTGRES_SCHEMA`,
+`MemoryIdempotencyStore`, `IDEMPOTENCY_LEASE_SECONDS`, `IDEMPOTENCY_RETENTION_DAYS`. Extracted from
+`template/libs/server/idempotency/` (#313).
+
+A command whose data carries an `idempotencyKey` and an `actor.userId` runs once per (user, key).
+A repeat returns the first run's result as JSON and changes nothing. Register the middleware on the
+`CommandBus` from `@spy4x/platform/cqrs`:
+
+```ts
+bus.use(createIdempotencyMiddleware({ store: new PostgresIdempotencyStore(sql) }))
+```
+
+- A command without a key passes through.
+- A repeat that arrives while the first run is in flight waits (`waitMs`, default 8 s, polling every
+  `pollMs`, default 100 ms), then fails with `IdempotencyError` code `IN_PROGRESS`. It never runs
+  the command beside the first.
+- The same key with a different command name or different input fails with `KEY_REUSED`; a malformed
+  key (1 to 128 printable ASCII characters) or one without a signed-in user fails with
+  `INVALID_KEY`. The input is fingerprinted by SHA-256 over the sorted-key JSON of the data, minus
+  `actor`, `idempotencyKey`, `requestId` and `request`.
+- A run that throws releases its claim, so the retry runs again.
+
+**Options.** Both stores take `leaseSeconds` (default 30: how long an unfinished claim holds before
+a retry may take it over, so set it above your slowest command) and `retentionDays` (default 7: how
+long the longest-offline client may still retry). `MemoryIdempotencyStore` also takes `now`. The
+Postgres store compares against the database clock. Call `store.sweep()` from a periodic job to
+delete expired rows; `begin` also forgets an expired row for its own key.
+
+**The table.** `IDEMPOTENCY_POSTGRES_SCHEMA` is the SQL for `idempotency_keys`; run it as one of
+your migrations. It has no foreign key on `user_id`, because this library does not own your users
+table; add `REFERENCES users (id) ON DELETE CASCADE` if you want rows to go with the user.
+
+**Fencing.** `begin` returns `{ status: "claimed", token }`; `complete` and `release` take that token
+and change nothing when it is not the key's current one. A run that outlives its lease and loses its
+claim to a retry therefore can neither free the new owner's claim nor store its own result over it.
+
+**What it does not do.** The claim and the command are not one transaction. A process that dies
+after the command committed and before its result was stored leaves a claim that expires after the
+lease, and a retry then runs the command again. So does a run that outlives its lease: the retry
+takes the claim over and runs the command a second time (at most one extra run per expired lease).
+Keep the lease above your slowest command. If the store fails after the command ran, the caller
+still gets the command's result and the failure goes to `onStoreFailure`.
+
+**Input rules.** The fingerprint counts a value with `toJSON` (a `Date`) as what it returns, leaves
+out `undefined` properties like `JSON.stringify`, and throws a `TypeError` for a `Map`, `Set` or
+other non-plain object without `toJSON`, because it would hash like `{}`. A command class name over
+100 characters fails with `INVALID_COMMAND`. `leaseSeconds` and `retentionDays` must be finite and
+above zero, or the constructor throws a `RangeError`.
 
 # server/env-age64/README.md
 
