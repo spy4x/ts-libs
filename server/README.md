@@ -1806,17 +1806,20 @@ committed rows and hand them to a publisher, rescheduling a failing row with exp
 without blocking the rest of the batch. Consumers use a drained row to learn that something changed
 and pull the authoritative state, which is what keeps the outbox itself out of the correctness path.
 
-**Delayed and repeating jobs are the same rows with a later `available_at`.** `scheduleOutboxEvent(sql,
-{ eventKind, aggregateType, aggregateId }, { at } | { inMs })` writes a row that no drain claims
-before its time; pass the transaction of the change that needs it. Like every outbox row it carries
-no payload: the publisher reads what it needs from the aggregate. Failures already back off
-exponentially and stop at `maxAttempts` with the last error name in `last_error_code`. A repeating
-job lists its kind in `OutboxProcessorOptions.repeatEveryMs`; once a run succeeds,
-`markProcessed(id, repeatInSeconds)` writes the next run in the same statement, so the chain is one
-row at a time, never two (a redelivery of a finished run writes nothing). A chain whose run gives up
-stops, and `ensureScheduledOutboxEvent` at start-up does not restart it while that row is unprocessed:
-the stored error is the signal. Both functions write only the library's columns, so any extra column in an app's `outbox_events` (the template's `group_id`) must be nullable or have a default. `ensureScheduledOutboxEvent` takes an advisory lock on kind, aggregate type and aggregate id inside its own transaction, so two workers starting together leave one chain; give it the pool, not a transaction. The repeat interval counts from the end of a run, not from a fixed
-clock time.
+**Delayed and repeating jobs are the same rows with a later `available_at`.**
+`scheduleOutboxEvent(sql, { eventKind, aggregateType, aggregateId }, { at } | { inMs })` writes a
+row that no drain claims before its time; pass the transaction of the change that needs it. Like
+every outbox row it carries no payload: the publisher reads what it needs from the aggregate.
+Failures already back off exponentially and stop at `maxAttempts` with the last error name in
+`last_error_code`. A repeating job lists its kind in `OutboxProcessorOptions.repeatEveryMs`; once a
+run succeeds, `markProcessed(id, repeatInSeconds)` writes the next run in the same statement, so the
+chain is one row at a time, never two (a redelivery of a finished run writes nothing). A chain whose
+run gives up stops, and `ensureScheduledOutboxEvent` at start-up does not restart it while that row
+is unprocessed: the stored error is the signal. Both functions write only the library's columns, so
+any extra column in an app's `outbox_events` (the template's `group_id`) must be nullable or have a
+default. `ensureScheduledOutboxEvent` takes an advisory lock on kind, aggregate type and aggregate
+id inside its own transaction, so two workers starting together leave one chain; give it the pool,
+not a transaction. The repeat interval counts from the end of a run, not from a fixed clock time.
 
 **The row this library defines is smaller than the template's.** The ported original's row also
 carried `groupId` and `actorUserId` — the template's own data model, not something a generic outbox

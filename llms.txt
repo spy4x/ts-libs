@@ -1784,9 +1784,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `OutboxProcessorOptions` (interface), `jsr:@spy4x/server/outbox`
 - `OutboxPublisher` (interface), `jsr:@spy4x/server/outbox`
 - `OutboxRepository` (interface), `jsr:@spy4x/server/outbox`
+- `OutboxSchedule` (type), `jsr:@spy4x/server/outbox`: When the job first runs: at a moment, or a number of milliseconds from now.
 - `PostgresOutboxRepository` (class), `jsr:@spy4x/server/outbox`
+- `ScheduledOutboxEvent` (interface), `jsr:@spy4x/server/outbox`: The row a job is: what it is called and what it is about.
+- `ensureScheduledOutboxEvent` (function), `jsr:@spy4x/server/outbox`: Starts a repeating job, once.
 - `errorCodeOf` (function), `jsr:@spy4x/server/outbox`: Short, stable label recorded on the row so failures are greppable.
 - `retryDelayMs` (function), `jsr:@spy4x/server/outbox`: Exponential backoff on the attempt just made, so the first failure waits `baseMs` and each later one doubles up to `maxMs`.
+- `scheduleOutboxEvent` (function), `jsr:@spy4x/server/outbox`: Writes one outbox row that becomes claimable at the given time and returns its id.
 
 ### `jsr:@spy4x/server/quota`
 
@@ -2073,4 +2077,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 9fa2e9120b2ee6490517fdc5a817956f9985f1b8cf490f95f085a26d7d57e3f3 -->
+<!-- export surface: sha256 88d50eb4f0de4ceea0116128b70e6c676d476bc8704676652fd594e1cfb041cd -->
