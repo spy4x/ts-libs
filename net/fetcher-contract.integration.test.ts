@@ -3,7 +3,7 @@ import type { ReceivedRequest, ResponseSpec } from "./_fake-fetcher.test.ts"
 import { describeFetcherContract } from "./fetcher-contract.test.ts"
 
 /** The platform "fetch", behind "defaultFetcher", against a real server on an ephemeral port. */
-describeFetcherContract("defaultFetcher over loopback", async () => {
+describeFetcherContract("defaultFetcher over loopback", () => {
   const routes = new Map<string, ResponseSpec>()
   const requests: ReceivedRequest[] = []
   const server = Deno.serve({ port: 0, hostname: "127.0.0.1", onListen: () => {} }, (request) => {
@@ -34,7 +34,7 @@ describeFetcherContract("defaultFetcher over loopback", async () => {
     return new Response(body, { status: spec.status ?? 200, headers: spec.headers })
   })
   const base = `http://127.0.0.1:${server.addr.port}`
-  return {
+  return Promise.resolve({
     fetcher: defaultFetcher,
     serve: (path, spec) => {
       routes.set(new URL(path, base).pathname, spec)
@@ -42,5 +42,5 @@ describeFetcherContract("defaultFetcher over loopback", async () => {
     },
     requests,
     close: () => server.shutdown(),
-  }
+  })
 })
