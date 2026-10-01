@@ -10,7 +10,8 @@
  */
 
 /**
- * Round to the nearest 10^-`decimals`.
+ * Round to the nearest 10^-`decimals`. A negative `decimals` rounds to tens, hundreds and so on:
+ * `round(1234, -2)` is `1200`, whole numbers included.
  *
  * Halfway values are resolved by the *decimal* representation of `value`, which is what a reader
  * means by "round" — `round(1.005, 2)` is `1.01`, where `Math.round(1.005 * 100) / 100` is `1`.
@@ -25,7 +26,9 @@
  * receive a `NaN` from a rounding call.
  */
 export function round(value: number, decimals = 0): number {
-  if (!Number.isFinite(value) || Number.isInteger(value)) return value
+  if (!Number.isFinite(value)) return value
+  // A whole number is already exact at zero or more decimals, but not at tens or hundreds.
+  if (Number.isInteger(value) && decimals >= 0) return value
   const shifted = shiftDecimal(value, decimals)
   if (!Number.isFinite(shifted)) return value
   // A literal `Math.round(x * factor) / factor` re-introduces the representation error for a

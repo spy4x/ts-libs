@@ -144,10 +144,13 @@ Only these touch `Deno` anyway: `denoFileSystem` and `denoByteReader` (`server/d
 methods**, three are covered by `server/deno-fs.test.ts` under the read-only grant — `exists`,
 `readText`, `readDir` (including its `isNotFound` mapping and the `NotADirectory` rethrow) — and the
 `exists`/`readText`/`readDir` rethrow branches are reached via `ENOTDIR`. `denoByteReader` is
-covered separately (chunk-size independence and a missing-file rethrow). **Not covered, and not
-coverable under this grant:** `writeText`, `appendText`, `rename`, `mkdirp`, `lock` (which opens
-`create: true, write: true`), and the successful branch of `remove` — the calls that actually need
-`--allow-write`.
+covered separately (chunk-size independence and a missing-file rethrow). The write side —
+`writeText`, `appendText`, `rename`, `mkdirp`, `lock` and the successful branch of `remove` — needs
+`--allow-write`, so it runs in the integration tier: `server/deno-fs.integration.test.ts` holds
+`denoFileSystem` on a real scratch folder to the shared contract in `server/fs-contract.test.ts`,
+and the unit tier runs the same contract on the in-memory fake. Like the real disk, the fake refuses
+to write into a folder that does not exist, `mkdirp` creates the parents, and `lock` leaves an empty
+lock file behind.
 
 | Module                   | Contents                                                                                          |
 | ------------------------ | ------------------------------------------------------------------------------------------------- |

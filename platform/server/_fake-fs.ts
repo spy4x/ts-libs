@@ -32,12 +32,44 @@ export interface FakeFs extends FileSystemPort {
   readonly locks: Set<string>
 }
 
-/** Create an in-memory filesystem seeded with `files`. */
+/**
+ * `path` and every ancestor of it, without a trailing slash: `/a/b` → `/a/b`, `/a`. The filesystem
+ * root and a bare relative name's `.` are left out, because they always exist.
+ */
+function withAncestors(path: string): string[] {
+  const chain: string[] = []
+  let current = path.replace(/\/+$/, "")
+  while (current !== "" && current !== "." && current !== "/") {
+    chain.push(current)
+    const slash = current.lastIndexOf("/")
+    current = slash === -1 ? "" : current.slice(0, slash)
+  }
+  return chain
+}
+
+/** The folder holding `path`, or `null` for a path at the root or a bare relative name. */
+function parentOf(path: string): string | null {
+  return withAncestors(path)[1] ?? null
+}
+
+/**
+ * Create an in-memory filesystem seeded with `files`.
+ *
+ * Like the real disk, it refuses to write, append, rename or lock into a folder that does not exist:
+ * the folders that hold the seeded files exist, and `mkdirp` creates a folder with its parents.
+ * `lock` leaves an empty lock file behind, as `Deno.open` with `create` does.
+ */
 export function fakeFs(initial: Record<string, string> = {}): FakeFs {
   const files = new Map<string, string>(Object.entries(initial))
-  const dirs = new Set<string>()
+  const dirs = new Set<string>(Object.keys(initial).flatMap((path) => withAncestors(path).slice(1)))
   const calls: FsCall[] = []
   const locks = new Set<string>()
+  /** A rejection like the real one when the folder for `path` is missing, otherwise `null`. */
+  const missingParent = (path: string): Promise<never> | null => {
+    const parent = parentOf(path)
+    if (parent === null || dirs.has(parent)) return null
+    return Promise.reject(new Deno.errors.NotFound(`no such directory: ${parent}`))
+  }
   const fake: FakeFs = {
     files,
     dirs,
@@ -59,6 +91,8 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
     writeText(path, content) {
       calls.push({ op: "writeText", path, extra: content })
       if (fake.failWrites.has(path)) return Promise.reject(new Error(`write refused: ${path}`))
+      const missing = missingParent(path)
+      if (missing) return missing
       files.set(path, content)
       return Promise.resolve()
     },
@@ -66,6 +100,8 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
     appendText(path, content) {
       calls.push({ op: "appendText", path, extra: content })
       if (fake.failWrites.has(path)) return Promise.reject(new Error(`write refused: ${path}`))
+      const missing = missingParent(path)
+      if (missing) return missing
       files.set(path, (files.get(path) ?? "") + content)
       return Promise.resolve()
     },
@@ -75,6 +111,8 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       if (fake.failRenames.has(from)) return Promise.reject(new Error(`rename refused: ${from}`))
       const content = files.get(from)
       if (content === undefined) return Promise.reject(new Error(`rename source missing: ${from}`))
+      const missing = missingParent(to)
+      if (missing) return missing
       files.delete(from)
       files.set(to, content)
       return Promise.resolve()
@@ -88,7 +126,7 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
 
     mkdirp(path) {
       calls.push({ op: "mkdirp", path })
-      dirs.add(path)
+      for (const folder of withAncestors(path)) dirs.add(folder)
       return Promise.resolve()
     },
 
@@ -123,6 +161,9 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
 
     lock(path) {
       calls.push({ op: "lock", path })
+      const missing = missingParent(path)
+      if (missing) return missing
+      if (!files.has(path)) files.set(path, "")
       if (locks.has(path)) return Promise.resolve(null)
       locks.add(path)
       const handle: LockHandle = {
