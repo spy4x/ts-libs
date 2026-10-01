@@ -15,6 +15,7 @@
 
 import { type } from "arktype"
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
+import type { OAuthProfile } from "./oauth.ts"
 
 /** Most flows the memory store keeps pending at once; the oldest is dropped beyond this. */
 export const MAX_PENDING_OAUTH_FLOWS = 10_000
@@ -26,6 +27,12 @@ export const DEFAULT_OAUTH_FLOW_KEY_PREFIX = "oauth-flow:"
 export interface OAuthPendingFlow {
   /** The PKCE verifier the code is redeemed with. A secret: it never leaves the server. */
   verifier: string
+  /**
+   * Set only on a pending sign-up (`signUp: "confirm"`): the profile `confirmSignUp` creates the
+   * user from. Such an entry is kept under the hash of its token, and its `verifier` is random
+   * filler that nobody redeems. A store must return it as it was put.
+   */
+  signUp?: OAuthProfile
 }
 
 /** A flow {@link OAuthFlowStore.take} returns: the flow as it was put, and its expiry. */
@@ -71,7 +78,7 @@ export function createMemoryOAuthFlowStore(
     throw new TypeError("maxFlows must be a positive integer")
   }
   /** state → flow, oldest first. */
-  const flows = new Map<string, { verifier: string; expiresAt: number }>()
+  const flows = new Map<string, { flow: OAuthPendingFlow; expiresAt: number }>()
 
   return {
     put(state, flow, expiresAt) {
@@ -80,14 +87,14 @@ export function createMemoryOAuthFlowStore(
         if (entry.expiresAt > now && flows.size < maxFlows) break
         flows.delete(kept)
       }
-      flows.set(state, { verifier: flow.verifier, expiresAt: expiresAt.getTime() })
+      flows.set(state, { flow: copyFlow(flow), expiresAt: expiresAt.getTime() })
       return Promise.resolve()
     },
     take(state) {
       const entry = flows.get(state)
       flows.delete(state)
       if (!entry || entry.expiresAt <= clock.now()) return Promise.resolve(null)
-      return Promise.resolve({ verifier: entry.verifier, expiresAt: new Date(entry.expiresAt) })
+      return Promise.resolve({ ...copyFlow(entry.flow), expiresAt: new Date(entry.expiresAt) })
     },
   }
 }
@@ -142,29 +149,41 @@ export function createKvOAuthFlowStore(
     async put(state, flow, expiresAt) {
       const lifetimeMs = expiresAt.getTime() - clock.now()
       if (!(lifetimeMs > 0)) return
-      const value = JSON.stringify({ verifier: flow.verifier, expiresAt: expiresAt.getTime() })
+      const value = JSON.stringify({ ...copyFlow(flow), expiresAt: expiresAt.getTime() })
       await kv.set(`${prefix}${state}`, value, Math.ceil(lifetimeMs / 1000))
     },
     async take(state) {
       const value = await kv.take(`${prefix}${state}`)
       const entry = value === null ? null : parseEntry(value)
       if (!entry || entry.expiresAt <= clock.now()) return null
-      return { verifier: entry.verifier, expiresAt: new Date(entry.expiresAt) }
+      return { ...copyFlow(entry), expiresAt: new Date(entry.expiresAt) }
     },
   }
 }
 
 /**
+ * Only the fields a flow has, copied, so a store neither keeps the caller's object nor returns
+ * fields it was not given.
+ */
+function copyFlow(flow: OAuthPendingFlow): OAuthPendingFlow {
+  if (!flow.signUp) return { verifier: flow.verifier }
+  const { subject, email, emailVerified } = flow.signUp
+  return { verifier: flow.verifier, signUp: { subject, email, emailVerified } }
+}
+
+/**
  * A value {@link createKvOAuthFlowStore} wrote, as JSON: a PKCE verifier (RFC 7636: 43 to 128
- * unreserved characters; this module writes 43 base64url ones) and the expiry in milliseconds.
+ * unreserved characters; this module writes 43 base64url ones), the expiry in milliseconds, and a
+ * pending sign-up's profile when there is one.
  */
 const storedFlow = type("string.json.parse").to({
   verifier: /^[A-Za-z0-9._~-]{43,128}$/,
   expiresAt: type("number").narrow((value) => Number.isFinite(value)),
+  "signUp?": { subject: "string", email: "string | null", emailVerified: "boolean" },
 })
 
-function parseEntry(value: string): { verifier: string; expiresAt: number } | null {
+function parseEntry(value: string): OAuthPendingFlow & { expiresAt: number } | null {
   const entry = storedFlow(value)
   if (entry instanceof type.errors) return null
-  return { verifier: entry.verifier, expiresAt: entry.expiresAt }
+  return { ...copyFlow(entry), expiresAt: entry.expiresAt }
 }

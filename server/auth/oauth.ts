@@ -14,6 +14,9 @@
  * - The pending flow is deleted before anything else happens in the callback, so it is gone on
  *   every exit, including a token or profile request that throws.
  * - `disconnect` deletes one key by id, and only when it is this provider's key of this user.
+ * - With `signUp: "confirm"` a callback that would create a user stops instead and returns a
+ *   single-use token, kept in the flow store under its SHA-256 hash for 10 minutes;
+ *   `confirmSignUp(token)` creates the user. Signing in and linking stay automatic.
  *
  * Pending flows live in an {@link OAuthFlowStore}. The default keeps them in memory inside the
  * object {@link createOAuthSignIn} returns, so a callback must reach the same process that built
@@ -114,6 +117,15 @@ export interface OAuthSignInOptions extends ProviderDeps {
   flows?: OAuthFlowStore
 }
 
+/** Options of {@link createOAuthSignIn} for a sign-in that asks before it creates a user. */
+export interface ConfirmableOAuthSignInOptions extends OAuthSignInOptions {
+  /**
+   * Stops a callback that would create a user and returns an {@link OAuthPendingSignUp} instead,
+   * so the app can ask before a new account exists. Without it the callback creates the user.
+   */
+  signUp: "confirm"
+}
+
 /** A started flow: send the browser to `url`, and keep `state` in an HttpOnly cookie until the callback. */
 export interface OAuthAuthorization {
   url: URL
@@ -137,12 +149,31 @@ export enum OAuthOutcome {
   SignedUp = 2,
   /** The key was added to the existing user who owns the verified address. */
   Linked = 3,
+  /** Nobody was created yet: the callback returned a token for `confirmSignUp` (`signUp: "confirm"`). */
+  PendingSignUp = 4,
 }
 
 /** A successful callback: the session, plus how the person was resolved and what the provider said. */
 export interface OAuthSignInResult extends SignInResult {
-  outcome: OAuthOutcome
+  outcome: OAuthOutcome.SignedIn | OAuthOutcome.SignedUp | OAuthOutcome.Linked
   profile: OAuthProfile
+}
+
+/**
+ * A callback that would have created a user, with `signUp: "confirm"`. Nothing is written yet: show
+ * the person `profile`, and call `confirmSignUp(token)` when they choose to create the account.
+ */
+export interface OAuthPendingSignUp {
+  outcome: OAuthOutcome.PendingSignUp
+  /** What the provider said about the person. */
+  profile: OAuthProfile
+  /**
+   * Single-use, 256-bit secret. Keep it server-side or in an HttpOnly cookie, never in a URL. Only
+   * its SHA-256 hash is stored.
+   */
+  token: string
+  /** When `token` stops working: 10 minutes after the callback. */
+  expiresAt: Date
 }
 
 /** Why a callback was refused. */
@@ -161,6 +192,8 @@ export type OAuthFailure =
   | "invalid-profile"
   /** The user this sign-in resolves to is deleted. */
   | "user-deleted"
+  /** `confirmSignUp` got a token that is unknown, already used or expired. */
+  | "invalid-sign-up"
 
 /** Thrown by {@link OAuthSignIn.handleCallback}. `reason` says why; the message is not an API. */
 export class OAuthSignInError extends Error {
@@ -194,6 +227,26 @@ export interface OAuthSignIn {
   disconnect(userId: number, keyId: number): Promise<boolean>
 }
 
+/** Sign-in with one provider, created with `signUp: "confirm"`. */
+export interface ConfirmableOAuthSignIn extends Omit<OAuthSignIn, "handleCallback"> {
+  /**
+   * Like {@link OAuthSignIn.handleCallback}, but returns an {@link OAuthPendingSignUp} instead of
+   * creating a user. Signing in an existing key and linking to the owner of a vouched-for address
+   * still complete here.
+   *
+   * @throws {OAuthSignInError} When the callback is refused. The flow is consumed either way.
+   */
+  handleCallback(input: OAuthCallbackInput): Promise<OAuthSignInResult | OAuthPendingSignUp>
+  /**
+   * Redeems a pending sign-up's token and creates the user, then starts the session. The token is
+   * removed in the same step it is read, so of parallel calls only one proceeds. Resolution runs in
+   * full again, so a key or proven address that appeared since the callback signs in or links instead.
+   *
+   * @throws {OAuthSignInError} `invalid-sign-up` when the token is unknown, used or expired.
+   */
+  confirmSignUp(token: string): Promise<OAuthSignInResult>
+}
+
 const DEFAULT_FLOW_TTL_SECONDS = 600
 const DEFAULT_TIMEOUT_MS = 10_000
 /** 256 bits each; base64url renders them as 43 characters, the PKCE verifier's minimum length. */
@@ -202,6 +255,10 @@ const VERIFIER_BYTES = 32
 const PROVIDER_ID = /^[a-z0-9][a-z0-9-]{0,57}$/
 /** Tries of the account resolution when a parallel write changed what it read. */
 const RESOLVE_ATTEMPTS = 2
+/** How long a pending sign-up's token can be confirmed. */
+const SIGN_UP_TTL_MS = 600_000
+/** Flow-store key prefix of pending sign-ups, before the token's hash. */
+const SIGN_UP_KEY_PREFIX = "sign-up:"
 
 const tokenResponse = type({
   access_token: "0 < string <= 4096",
@@ -211,10 +268,14 @@ const tokenResponse = type({
 /**
  * Creates sign-in with one provider. Validates the configuration once, here.
  *
- * @throws {TypeError} When the provider id, a credential, an endpoint, the redirect URI or a number
- *     option is not valid.
+ * @throws {TypeError} When the provider id, a credential, an endpoint, the redirect URI, `signUp`
+ *     or a number option is not valid.
  */
-export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
+export function createOAuthSignIn(options: ConfirmableOAuthSignInOptions): ConfirmableOAuthSignIn
+export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn
+export function createOAuthSignIn(
+  options: OAuthSignInOptions | ConfirmableOAuthSignInOptions,
+): OAuthSignIn | ConfirmableOAuthSignIn {
   const { provider, store, sessions } = options
   if (typeof provider.id !== "string" || !PROVIDER_ID.test(provider.id)) {
     throw new TypeError("provider.id must be 1 to 58 lower-case letters, digits or '-'")
@@ -233,6 +294,10 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
   const clock = options.clock ?? systemClock
   const method = `oauth:${provider.id}`
   const flows = options.flows ?? createMemoryOAuthFlowStore({ clock })
+  const signUp = "signUp" in options ? options.signUp : undefined
+  if (signUp !== undefined && signUp !== "confirm") {
+    throw new TypeError(`signUp must be "confirm" or left out`)
+  }
 
   async function authorizationUrl(): Promise<OAuthAuthorization> {
     const state = randomBase64Url(STATE_BYTES)
@@ -260,7 +325,9 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
    */
   async function takeFlow(state: string, browserState: unknown): Promise<OAuthTakenFlow> {
     const flow = await flows.take(state)
-    if (!flow || typeof browserState !== "string") throw new OAuthSignInError("invalid-state")
+    if (!flow || flow.signUp || typeof browserState !== "string") {
+      throw new OAuthSignInError("invalid-state")
+    }
     const same = await constantTimeEquals(await sha256Hex(state), await sha256Hex(browserState))
     // Checked here too, so a store that ignores `expiresAt` still cannot complete a stale flow.
     const live = flow.expiresAt instanceof Date && flow.expiresAt.getTime() > clock.now()
@@ -312,24 +379,24 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
     return data.access_token
   }
 
-  async function fetchProfile(accessToken: string): Promise<OAuthProfile> {
-    const body = await request(() =>
-      new Request(userInfoEndpoint, {
+  function getJson(url: string, accessToken: string): Promise<unknown> {
+    return request(() =>
+      new Request(url, {
         headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(timeoutMs),
       }), "profile-failed")
+  }
+
+  async function fetchProfile(accessToken: string): Promise<OAuthProfile> {
+    const body = await getJson(userInfoEndpoint, accessToken)
     let profile: OAuthProfile | null
     try {
-      profile = provider.profile(body)
+      profile = keyable(provider.profile(body))
     } catch (cause) {
+      if (cause instanceof OAuthSignInError) throw cause
       throw new OAuthSignInError("invalid-profile", { cause })
     }
-    if (
-      !profile || !isStoreText(profile.subject) || profile.subject.length === 0 ||
-      profile.subject.length > MAX_SUBJECT_LENGTH
-    ) {
-      throw new OAuthSignInError("invalid-profile")
-    }
+    if (!profile) throw new OAuthSignInError("invalid-profile")
     return profile
   }
 
@@ -348,10 +415,12 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
    * 3. The provider vouches for the address and nobody owns it → a new user with a proven key; the
    *    store evicts every other user's unproven claim to the address.
    * 4. Otherwise → a new user with a key that carries no address.
+   *
+   * With `create` false it stops before 3 and 4 and returns null.
    */
-  async function resolveKey(
-    profile: OAuthProfile,
-  ): Promise<{ user: AuthUser; key: AuthKey; outcome: OAuthOutcome }> {
+  async function resolveKey(profile: OAuthProfile, create: true): Promise<Resolved>
+  async function resolveKey(profile: OAuthProfile, create: boolean): Promise<Resolved | null>
+  async function resolveKey(profile: OAuthProfile, create: boolean): Promise<Resolved | null> {
     const email = profile.emailVerified === true ? normalizeEmail(profile.email) : null
     for (let attempt = 1;; attempt++) {
       try {
@@ -376,6 +445,7 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
           const user = await liveUser(ownerId)
           return { user, key: await store.addKey(user.id, newKey), outcome: OAuthOutcome.Linked }
         }
+        if (!create) return null
         const created = await store.createUserWithKey(newKey)
         return { ...created, outcome: OAuthOutcome.SignedUp }
       } catch (error) {
@@ -386,7 +456,9 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
     }
   }
 
-  async function handleCallback(input: OAuthCallbackInput): Promise<OAuthSignInResult> {
+  async function handleCallback(
+    input: OAuthCallbackInput,
+  ): Promise<OAuthSignInResult | OAuthPendingSignUp> {
     const state = input.query.get("state")
     if (state === null || state === "") throw new OAuthSignInError("invalid-request")
     const flow = await takeFlow(state, input.browserState)
@@ -396,12 +468,43 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
 
     const accessToken = await exchangeCode(code, flow.verifier)
     const profile = await fetchProfile(accessToken)
-    const { user, key, outcome } = await resolveKey(profile)
+    const resolved = await resolveKey(profile, signUp === undefined)
+    if (!resolved) return await holdSignUp(profile)
+    return await startSession(resolved, profile)
+  }
+
+  async function startSession(
+    { user, key, outcome }: Resolved,
+    profile: OAuthProfile,
+  ): Promise<OAuthSignInResult> {
     const secondFactor = options.secondFactorFor
       ? await options.secondFactorFor(user)
       : SecondFactorStatus.NotRequired
     const session = await sessions.create({ userId: user.id, keyId: key.id, secondFactor })
     return { user, key, session, outcome, profile }
+  }
+
+  /** Keeps `profile` under the hash of a fresh token until the person confirms the sign-up. */
+  async function holdSignUp(profile: OAuthProfile): Promise<OAuthPendingSignUp> {
+    const token = randomBase64Url(STATE_BYTES)
+    const expiresAt = new Date(clock.now() + SIGN_UP_TTL_MS)
+    const { subject, email, emailVerified } = profile
+    await flows.put(
+      `${SIGN_UP_KEY_PREFIX}${await sha256Hex(token)}`,
+      { verifier: randomBase64Url(VERIFIER_BYTES), signUp: { subject, email, emailVerified } },
+      expiresAt,
+    )
+    return { outcome: OAuthOutcome.PendingSignUp, profile, token, expiresAt }
+  }
+
+  async function confirmSignUp(token: string): Promise<OAuthSignInResult> {
+    if (typeof token !== "string" || token === "") throw new OAuthSignInError("invalid-sign-up")
+    const entry = await flows.take(`${SIGN_UP_KEY_PREFIX}${await sha256Hex(token)}`)
+    // Checked here too, so a store that ignores `expiresAt` still cannot confirm a stale sign-up.
+    const live = entry?.expiresAt instanceof Date && entry.expiresAt.getTime() > clock.now()
+    const profile = live ? keyable(entry.signUp ?? null) : null
+    if (!profile) throw new OAuthSignInError("invalid-sign-up")
+    return await startSession(await resolveKey(profile, true), profile)
   }
 
   async function disconnect(userId: number, keyId: number): Promise<boolean> {
@@ -410,7 +513,32 @@ export function createOAuthSignIn(options: OAuthSignInOptions): OAuthSignIn {
     return await store.deleteKey(userId, key.id)
   }
 
-  return { method, authorizationUrl, handleCallback, disconnect }
+  const signIn: ConfirmableOAuthSignIn = {
+    method,
+    authorizationUrl,
+    handleCallback,
+    confirmSignUp,
+    disconnect,
+  }
+  return signIn
+}
+
+/** How {@link createOAuthSignIn} resolved a profile to a user and key. */
+interface Resolved {
+  user: AuthUser
+  key: AuthKey
+  outcome: OAuthSignInResult["outcome"]
+}
+
+/** `profile` when the store can key its subject, otherwise null. */
+function keyable(profile: OAuthProfile | null): OAuthProfile | null {
+  if (
+    !profile || !isStoreText(profile.subject) || profile.subject.length === 0 ||
+    profile.subject.length > MAX_SUBJECT_LENGTH
+  ) {
+    return null
+  }
+  return profile
 }
 
 /** The S256 code challenge: base64url (unpadded) of the SHA-256 of the verifier (RFC 7636). */

@@ -91,5 +91,25 @@ export function describeOAuthFlowStoreContract(
         expect(await store.take("state-b")).toEqual({ verifier: VERIFIER_B, expiresAt })
         expect(await store.take("state-a")).toEqual({ verifier: VERIFIER_A, expiresAt })
       }))
+
+    it("returns a pending sign-up's profile as it was put, and only once", () =>
+      withStore(async ({ store, now }) => {
+        const expiresAt = new Date(now() + TEN_MINUTES)
+        const vouched = { subject: "sub-1", email: "ann@example.com", emailVerified: true }
+        const bare = { subject: "sub-2", email: null, emailVerified: false }
+        await store.put("sign-up:a", { verifier: VERIFIER_A, signUp: vouched }, expiresAt)
+        await store.put("sign-up:b", { verifier: VERIFIER_B, signUp: bare }, expiresAt)
+        expect(await store.take("sign-up:a")).toEqual({
+          verifier: VERIFIER_A,
+          signUp: vouched,
+          expiresAt,
+        })
+        expect(await store.take("sign-up:b")).toEqual({
+          verifier: VERIFIER_B,
+          signUp: bare,
+          expiresAt,
+        })
+        expect(await store.take("sign-up:a")).toBeNull()
+      }))
   })
 }

@@ -3605,7 +3605,8 @@ rejects, the rejection reaches the caller and the code is already issued.
 ## `server/auth/oauth`
 
 `createOAuthSignIn`, `OAuthSignInError`, `OAuthFailure`, `OAuthOutcome`, `OAuthProviderConfig`,
-`OAuthProfile`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, the flow stores
+`OAuthProfile`, `OAuthProfileContext`, `ConfirmableOAuthSignIn`, `ConfirmableOAuthSignInOptions`,
+`OAuthPendingSignUp`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, the flow stores
 (`createMemoryOAuthFlowStore`, `createKvOAuthFlowStore`, `OAuthFlowStore`, `OAuthFlowKv`,
 `OAuthPendingFlow`, `OAuthTakenFlow`, `DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and
 result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
@@ -3647,6 +3648,26 @@ order, and reports which in `result.outcome`:
 3. The provider vouches for the address and nobody owns it: a new user with a proven key
    (`SignedUp`), which deletes every other user's unproven claim to the address.
 4. Otherwise: a new user whose key carries no address and is unproven (`SignedUp`).
+
+**Ask before creating an account: `signUp: "confirm"` (#317).** A person who picks the wrong
+provider account otherwise gets a silent second account. With this option, a callback that would
+reach rule 3 or 4 creates nothing and returns `{ outcome: OAuthOutcome.PendingSignUp, profile,
+token, expiresAt }` instead; rules 1 and 2 still complete in the callback. Show the person the
+profile, keep `token` server-side or in an HttpOnly cookie, and call `confirmSignUp(token)` when
+they choose to create the account. The token is 256 random bits, works once and for 10 minutes, and
+only its SHA-256 hash is kept, in the same flow store as started flows (under `sign-up:`). Of
+parallel confirmations of one token only one proceeds; the others, and an unknown, used or expired
+token, are refused as `invalid-sign-up`. `confirmSignUp` runs the whole resolution again, so a key
+or proven address that appeared meanwhile signs in or links instead of creating a duplicate.
+
+```ts
+const google = createOAuthSignIn({ store, sessions, redirectUri, provider, signUp: "confirm" })
+const result = await google.handleCallback({ query, browserState })
+if (result.outcome === OAuthOutcome.PendingSignUp) {
+  // ask "create a new account for ${result.profile.email}?", then:
+  const signedUp = await google.confirmSignUp(result.token)
+}
+```
 
 An address the provider does not vouch for is not stored on the key at all; the app still sees it
 in `result.profile`. A deleted user is refused as `user-deleted`, both on sign-in and as a link

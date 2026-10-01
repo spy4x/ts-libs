@@ -10,13 +10,16 @@ import { SecondFactorStatus, SessionManager } from "../sign-in/mod.ts"
 import { createFakeStore } from "../sign-in/fake-store.test.ts"
 import { MemoryAuthStore } from "./memory-store.ts"
 import type { AuthSessionRecord, AuthUser } from "./model.ts"
+import { sha256Hex } from "@spy4x/platform/tokens"
 import {
+  type ConfirmableOAuthSignIn,
   createMemoryOAuthFlowStore,
   createOAuthSignIn,
   MAX_PENDING_OAUTH_FLOWS,
   type OAuthFailure,
   type OAuthFlowStore,
   OAuthOutcome,
+  type OAuthPendingSignUp,
   type OAuthSignIn,
   OAuthSignInError,
   type OAuthSignInOptions,
@@ -561,5 +564,181 @@ describe("createOAuthSignIn: configuration", () => {
     const { oauth } = setup({ redirectUri: "https://app.test" })
     const { url } = await oauth.authorizationUrl()
     expect(url.searchParams.get("redirect_uri")).toBe("https://app.test")
+  })
+})
+
+describe("createOAuthSignIn: signUp confirm", () => {
+  const BOB = { sub: "sub-bob" }
+
+  function confirming(store: MemoryAuthStore = new MemoryAuthStore(), flows?: OAuthFlowStore) {
+    const fixture = memoryFixture(store)
+    const provider = createFakeProvider()
+    const clock = fixedClock()
+    const oauth: ConfirmableOAuthSignIn = createOAuthSignIn({
+      ...fakeOptions(fixture, provider),
+      clock,
+      signUp: "confirm",
+      ...(flows ? { flows } : {}),
+    })
+    return { store, provider, clock, oauth }
+  }
+
+  async function pending(
+    oauth: ConfirmableOAuthSignIn,
+    provider: FakeProvider,
+    identity: Parameters<typeof signInAs>[2],
+  ): Promise<OAuthPendingSignUp> {
+    const started = await oauth.authorizationUrl()
+    const query = await provider.approve(started.url, identity)
+    const result = await oauth.handleCallback({ query, browserState: started.state })
+    if (result.outcome !== OAuthOutcome.PendingSignUp) throw new Error("expected a pending sign-up")
+    return result
+  }
+
+  it("returns a pending sign-up for a new sub and creates no user", async () => {
+    const { store, provider, oauth } = confirming()
+    const started = await oauth.authorizationUrl()
+    const query = await provider.approve(started.url, ANN)
+    const result = await oauth.handleCallback({ query, browserState: started.state })
+    expect(result).toEqual({
+      outcome: OAuthOutcome.PendingSignUp,
+      profile: { subject: "sub-ann", email: "ann@example.com", emailVerified: true },
+      token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      expiresAt: new Date(NOW.getTime() + 600_000),
+    })
+    expect(await store.findKey("oauth:fake", "sub-ann")).toBeNull()
+    expect(await store.findUserIdByProvenEmail("ann@example.com")).toBeNull()
+  })
+
+  it("keeps only the token's SHA-256 hash in the flow store", async () => {
+    const memory = createMemoryOAuthFlowStore({ clock: fixedClock() })
+    const keys: string[] = []
+    const flows: OAuthFlowStore = {
+      put: (key, flow, expiresAt) => {
+        keys.push(key)
+        return memory.put(key, flow, expiresAt)
+      },
+      take: (key) => memory.take(key),
+    }
+    const { provider, oauth } = confirming(new MemoryAuthStore(), flows)
+    const { token } = await pending(oauth, provider, BOB)
+    expect(keys).toHaveLength(2)
+    expect(keys[1]).toBe(`sign-up:${await sha256Hex(token)}`)
+    expect(keys.some((key) => key.includes(token))).toBe(false)
+  })
+
+  it("confirms a vouched-for address into a new user with a proven key (rule 3)", async () => {
+    const { store, provider, oauth } = confirming()
+    const { token } = await pending(oauth, provider, ANN)
+    const result = await oauth.confirmSignUp(token)
+    expect(result.outcome).toBe(OAuthOutcome.SignedUp)
+    expect(result.key).toMatchObject({
+      method: "oauth:fake",
+      subject: "sub-ann",
+      email: "ann@example.com",
+      provenAt: NOW,
+    })
+    expect(result.session.session).toMatchObject({ userId: result.user.id, keyId: result.key.id })
+    expect(await store.findUserIdByProvenEmail("ann@example.com")).toBe(result.user.id)
+  })
+
+  it("confirms a sub with no address into a new user with an unproven key (rule 4)", async () => {
+    const { store, provider, oauth } = confirming()
+    const { token } = await pending(oauth, provider, BOB)
+    const result = await oauth.confirmSignUp(token)
+    expect(result.outcome).toBe(OAuthOutcome.SignedUp)
+    expect(result.key).toMatchObject({ subject: "sub-bob", email: null, provenAt: null })
+    expect(await store.findKey("oauth:fake", "sub-bob")).toEqual(result.key)
+  })
+
+  it("accepts a token a millisecond before ten minutes and refuses one at ten minutes", async () => {
+    const { store, provider, clock, oauth } = confirming()
+    const early = await pending(oauth, provider, ANN)
+    const late = await pending(oauth, provider, BOB)
+    clock.advance(600_000 - 1)
+    expect((await oauth.confirmSignUp(early.token)).outcome).toBe(OAuthOutcome.SignedUp)
+    clock.advance(1)
+    expect(await failure(oauth.confirmSignUp(late.token))).toBe("invalid-sign-up")
+    expect(await store.findKey("oauth:fake", "sub-bob")).toBeNull()
+  })
+
+  it("refuses a token that was already confirmed", async () => {
+    const { provider, oauth } = confirming()
+    const { token } = await pending(oauth, provider, BOB)
+    await oauth.confirmSignUp(token)
+    expect(await failure(oauth.confirmSignUp(token))).toBe("invalid-sign-up")
+  })
+
+  it("refuses a token it never issued", async () => {
+    const { oauth } = confirming()
+    expect(await failure(oauth.confirmSignUp("a".repeat(43)))).toBe("invalid-sign-up")
+    expect(await failure(oauth.confirmSignUp(""))).toBe("invalid-sign-up")
+  })
+
+  it("gives one of two parallel confirms of one token the user and refuses the other", async () => {
+    const { store, provider, oauth } = confirming()
+    const { token } = await pending(oauth, provider, BOB)
+    const settled = await Promise.allSettled([
+      oauth.confirmSignUp(token),
+      oauth.confirmSignUp(token),
+    ])
+    const done = settled.filter((s) => s.status === "fulfilled")
+    const refused = settled.filter((s) => s.status === "rejected")
+    expect(done).toHaveLength(1)
+    expect(refused.map((s) => (s.reason as OAuthSignInError).reason)).toEqual(["invalid-sign-up"])
+    const key = await store.findKey("oauth:fake", "sub-bob")
+    expect(key).not.toBeNull()
+    expect(await store.listKeys(key?.userId ?? 0)).toHaveLength(1)
+  })
+
+  it("signs in when another pending sign-up of the same sub was confirmed first", async () => {
+    const { provider, oauth } = confirming()
+    const first = await pending(oauth, provider, BOB)
+    const second = await pending(oauth, provider, BOB)
+    const created = await oauth.confirmSignUp(first.token)
+    const again = await oauth.confirmSignUp(second.token)
+    expect(again.outcome).toBe(OAuthOutcome.SignedIn)
+    expect(again.key.id).toBe(created.key.id)
+  })
+
+  it("signs an existing sub in from the callback, with no pending step (rule 1)", async () => {
+    const { provider, oauth } = confirming()
+    const created = await oauth.confirmSignUp((await pending(oauth, provider, BOB)).token)
+    const result = await signInAs(oauth as unknown as OAuthSignIn, provider, BOB)
+    expect(result.outcome).toBe(OAuthOutcome.SignedIn)
+    expect(result.key.id).toBe(created.key.id)
+    expect(result.session.session.userId).toBe(created.user.id)
+  })
+
+  it("links a vouched-for address to its owner from the callback, with no pending step (rule 2)", async () => {
+    const store = new MemoryAuthStore()
+    const owner = await store.createUserWithKey(emailKey("password", "ann@example.com", NOW))
+    const { provider, oauth } = confirming(store)
+    const result = await signInAs(oauth as unknown as OAuthSignIn, provider, ANN)
+    expect(result.outcome).toBe(OAuthOutcome.Linked)
+    expect(result.user.id).toBe(owner.user.id)
+    expect(result.session.session.userId).toBe(owner.user.id)
+  })
+
+  it("refuses a pending sign-up's key used as a callback state", async () => {
+    const memory = createMemoryOAuthFlowStore({ clock: fixedClock() })
+    const { provider, oauth } = confirming(new MemoryAuthStore(), memory)
+    const { token } = await pending(oauth, provider, BOB)
+    const state = `sign-up:${await sha256Hex(token)}`
+    const query = new URLSearchParams({ code: "code-x", state })
+    expect(await failure(oauth.handleCallback({ query, browserState: state }))).toBe(
+      "invalid-state",
+    )
+  })
+
+  it("throws a TypeError for a signUp other than confirm", () => {
+    const { fixture, provider } = setup()
+    const options = { ...fakeOptions(fixture, provider), signUp: "later" }
+    expect(() => createOAuthSignIn(options as OAuthSignInOptions)).toThrow(TypeError)
+  })
+
+  it("creates the user in the callback when signUp is left out", async () => {
+    const { oauth, provider } = setup()
+    expect((await signInAs(oauth, provider, BOB)).outcome).toBe(OAuthOutcome.SignedUp)
   })
 })
