@@ -114,10 +114,10 @@ describe("bootstrap", () => {
   })
 
   it("rejects an infinite value in the sample", () => {
-    expect(() => bootstrap([1, Infinity], mean)).toThrow(RangeError)
-    expect(() => bootstrap([-Infinity, 1], mean)).toThrow(RangeError)
-    expect(() => bootstrapDifference([1, Infinity], [1], mean)).toThrow(RangeError)
-    expect(() => bootstrapDifference([1], [1, -Infinity], mean)).toThrow(RangeError)
+    expect(() => bootstrap([1, Infinity], mean)).toThrow("non-finite value")
+    expect(() => bootstrap([-Infinity, 1], mean)).toThrow("non-finite value")
+    expect(() => bootstrapDifference([1, Infinity], [1], mean)).toThrow("non-finite value")
+    expect(() => bootstrapDifference([1], [1, -Infinity], mean)).toThrow("non-finite value")
   })
 
   it("ignores resamples whose statistic is not finite", () => {
@@ -134,7 +134,9 @@ describe("bootstrap", () => {
   })
 
   it("throws when the statistic is not finite on the data itself", () => {
-    expect(() => bootstrap([1, 2, 3], () => Infinity, { iterations: 5 })).toThrow(RangeError)
+    expect(() => bootstrap([1, 2, 3], () => Infinity, { iterations: 5 })).toThrow(
+      "not finite on the data",
+    )
   })
 
   it("a wider level gives a wider interval", () => {
