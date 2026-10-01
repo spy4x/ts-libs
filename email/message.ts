@@ -145,7 +145,8 @@ export function assertSendableMessage(message: EmailMessage): void {
  * {@link ListUnsubscribe}, ready for the transport's `headers` option.
  */
 export function listUnsubscribeHeaders(value: ListUnsubscribe): Record<string, string> {
-  const targets = [`<${value.url}>`]
+  // `href`, not the raw text, so a non-ASCII host or path goes out as plain ASCII.
+  const targets = [`<${new URL(value.url).href}>`]
   if (value.mailto !== undefined) targets.push(`<mailto:${value.mailto}>`)
   const headers: Record<string, string> = { "List-Unsubscribe": targets.join(", ") }
   if (value.oneClick === true) headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
@@ -153,6 +154,7 @@ export function listUnsubscribeHeaders(value: ListUnsubscribe): Record<string, s
 }
 
 /** Characters that end a `<…>` target early or inject a header. */
+// deno-lint-ignore no-control-regex -- the point is to refuse C0/C1 control characters
 const LIST_TARGET_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029<>\s]/
 
 function assertListUnsubscribe(value: ListUnsubscribe): void {
@@ -175,8 +177,14 @@ function assertListUnsubscribe(value: ListUnsubscribe): void {
     fail(`url must use https:, got ${JSON.stringify(parsed.protocol)}`)
   }
   if (value.mailto !== undefined) {
-    if (LIST_TARGET_FORBIDDEN.test(value.mailto) || !isAddress(value.mailto)) {
-      fail("mailto must be a bare address without control characters, whitespace, `<` or `>`")
+    // `?` and `%` would start a mailto header field or an escape; refused instead of encoded.
+    if (
+      /[?%]/.test(value.mailto) || LIST_TARGET_FORBIDDEN.test(value.mailto) ||
+      !isAddress(value.mailto)
+    ) {
+      fail(
+        "mailto must be a bare address without control characters, whitespace, `<`, `>`, `?` or `%`",
+      )
     }
   }
 }

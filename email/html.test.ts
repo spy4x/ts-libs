@@ -303,6 +303,7 @@ Deno.test("renders emailButton as a table with the escaped label and the given c
   assertStringIncludes(html, 'href="https://example.com/go?a=1&amp;b=2"')
   assertStringIncludes(html, ">Read &lt;now&gt; &amp; &quot;learn&quot;</a>")
   assertStringIncludes(html, 'bgcolor="#f97316"')
+  assertStringIncludes(html, "mso-padding-alt:12px 24px")
   assertStringIncludes(html, "color:#fff;")
 })
 

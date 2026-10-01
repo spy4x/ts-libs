@@ -936,6 +936,9 @@ Deno.test("refuses a bad listUnsubscribe and sends nothing", async () => {
     { listUnsubscribe: { url: "https://example.com/u\r\nBcc: v@example.com" } },
     { listUnsubscribe: { url: "https://example.com/u>, <https://evil.example" } },
     { listUnsubscribe: { url: "https://example.com/<u" } },
+    { listUnsubscribe: { url: "https://example.com/un subscribe" } },
+    { listUnsubscribe: { url: "https://example.com/u", mailto: "a@example.com?subject=x" } },
+    { listUnsubscribe: { url: "https://example.com/u", mailto: "a%40@example.com" } },
     { listUnsubscribe: { url: "http://example.com/u" } },
     { listUnsubscribe: { url: "mailto:u@example.com" } },
     { listUnsubscribe: { url: "/relative" } },
@@ -955,4 +958,15 @@ Deno.test("refuses a bad listUnsubscribe and sends nothing", async () => {
     assertStringIncludes((result as SendFailure).error, "listUnsubscribe:")
     assertEquals(recorded.messages.length, 0, JSON.stringify(listUnsubscribe))
   }
+})
+
+Deno.test("sends a non-ASCII unsubscribe link as plain ASCII", async () => {
+  const sink = { mime: "" }
+  const sender = createSmtpSender(BASE_OPTIONS, mimeFactory(sink))
+
+  await sender.send({ ...MESSAGE, listUnsubscribe: { url: "https://example.com/ü?x=ü" } })
+
+  const line = sink.mime.replaceAll(/\r\n(?=[ \t])/g, "").split("\r\n")
+    .find((l) => l.startsWith("List-Unsubscribe:"))
+  assertEquals(line, "List-Unsubscribe: <https://example.com/%C3%BC?x=%C3%BC>")
 })

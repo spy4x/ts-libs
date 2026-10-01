@@ -107,7 +107,9 @@ interface EmailSender {
   `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058), so Gmail and Apple
   Mail show their own Unsubscribe button. `url` must be absolute `https:` and `mailto`
   a bare address; a control character, whitespace, `<` or `>` in either, or `oneClick`
-  without `url`, fails the message with an error starting `listUnsubscribe:`.
+  without `url`, fails the message with an error starting `listUnsubscribe:`. The
+  mail server's DKIM signature must cover `List-Unsubscribe` and `List-Unsubscribe-Post`,
+  or a forwarder can swap the link.
 - **Credentials are redacted.** Every string that leaves through `error` has the
   password, the `user:pass` pair and every base64 SASL blob they can form replaced
   with `<REDACTED:CREDENTIAL>`. That is not a fixed list of encodings: after the

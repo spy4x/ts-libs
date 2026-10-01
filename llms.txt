@@ -38,11 +38,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `DnsTxtResolver` (interface), `jsr:@spy4x/email`: DNS TXT lookup contract, defaulting to `Deno.resolveDns(name, "TXT")`, which needs `--allow-net`.
 - `EmailAddress` (interface), `jsr:@spy4x/email`: A parsed mailbox: the addr-spec, plus the display name that preceded it.
 - `EmailAttachment` (interface), `jsr:@spy4x/email`: One attachment: text content plus the metadata the MIME part needs.
+- `EmailButtonOptions` (interface), `jsr:@spy4x/email`: What emailButton needs.
 - `EmailMessage` (interface), `jsr:@spy4x/email`: Everything one send needs.
 - `EmailSender` (interface), `jsr:@spy4x/email`: The port every transport implements, and the only thing callers depend on.
 - `HtmlShellOptions` (interface), `jsr:@spy4x/email`: Everything the shell interpolates around a body.
 - `HtmlShellTheme` (interface), `jsr:@spy4x/email`: The four colours htmlWrap draws the shell in.
 - `IcalAttachmentOptions` (interface), `jsr:@spy4x/email`: The fields of an ICS attachment the caller must supply.
+- `ListUnsubscribe` (interface), `jsr:@spy4x/email`: The `List-Unsubscribe` targets of one message.
 - `MIN_RSA_KEY_BITS` (constant), `jsr:@spy4x/email`: RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less than 1024 bits as valid."
 - `ParsedRecipients` (interface), `jsr:@spy4x/email`: The recipient list after parsing: deduplicated, with what was dropped recorded.
 - `REDACTED_CREDENTIAL` (constant), `jsr:@spy4x/email`: Placeholder that replaces a credential in any string this module reports.
@@ -60,6 +62,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `canonicalizeHeader` (function), `jsr:@spy4x/email`: Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
 - `createConsoleSender` (function), `jsr:@spy4x/email`: A sender that logs instead of sending, for local runs and for tests that need a port implementation without a mail server.
 - `createSmtpSender` (function), `jsr:@spy4x/email`: Create a sender for one SMTP configuration.
+- `emailButton` (function), `jsr:@spy4x/email`: A table-based "bulletproof" call-to-action button for the body of a mail.
 - `escapeHtml` (function), `jsr:@spy4x/email`: Escape a value for interpolation into HTML element text or a double-quoted attribute.
 - `fetchDkimPublicKey` (function), `jsr:@spy4x/email`: Fetch and parse a DKIM public key from DNS, from `<selector>._domainkey.<domain>`.
 - `formatAddress` (function), `jsr:@spy4x/email`: Render a mailbox for a log line or a plain-text body.
@@ -125,8 +128,10 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `DARK_HTML_SHELL_THEME` (constant), `jsr:@spy4x/email/html`: The look `htmlWrap` had before HtmlShellOptions.theme existed: a dark navy body with light text and an orange brand link, ported as-is from `mig`.
 - `DEFAULT_HTML_SHELL_THEME` (constant), `jsr:@spy4x/email/html`: `htmlWrap`'s default look: a neutral light shell with no product association, so a caller gets a plain, readable letter unless it asks for something else.
+- `EmailButtonOptions` (interface), `jsr:@spy4x/email/html`: What emailButton needs.
 - `HtmlShellOptions` (interface), `jsr:@spy4x/email/html`: Everything the shell interpolates around a body.
 - `HtmlShellTheme` (interface), `jsr:@spy4x/email/html`: The four colours htmlWrap draws the shell in.
+- `emailButton` (function), `jsr:@spy4x/email/html`: A table-based "bulletproof" call-to-action button for the body of a mail.
 - `escapeHtml` (function), `jsr:@spy4x/email/html`: Escape a value for interpolation into HTML element text or a double-quoted attribute.
 - `htmlWrap` (function), `jsr:@spy4x/email/html`: Wrap a body in the shared letter-shaped shell.
 
@@ -135,6 +140,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `EmailAttachment` (interface), `jsr:@spy4x/email/message`: One attachment: text content plus the metadata the MIME part needs.
 - `EmailMessage` (interface), `jsr:@spy4x/email/message`: Everything one send needs.
 - `IcalAttachmentOptions` (interface), `jsr:@spy4x/email/message`: The fields of an ICS attachment the caller must supply.
+- `ListUnsubscribe` (interface), `jsr:@spy4x/email/message`: The `List-Unsubscribe` targets of one message.
 - `assertSendableMessage` (function), `jsr:@spy4x/email/message`: Validate a message before any transport sees it.
 - `frameInstantLong` (function), `jsr:@spy4x/email/message`: Render an instant as the recipient's own clock reads it, with the zone spelled out: `"Friday, 28 August 2026 at 04:00 (America/New_York)"`.
 - `frameInstantShort` (function), `jsr:@spy4x/email/message`: frameInstantLong without the zone name, for a subject line: `"Fri 28 Aug 04:00"`.
@@ -142,6 +148,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `frameWallClockShort` (function), `jsr:@spy4x/email/message`: frameWallClockLong without the zone name, for a subject line.
 - `hasBody` (function), `jsr:@spy4x/email/message`: True when a body field carries something worth sending.
 - `icalAttachment` (function), `jsr:@spy4x/email/message`: Build the ICS attachment for an event.
+- `listUnsubscribeHeaders` (function), `jsr:@spy4x/email/message`: The `List-Unsubscribe` and `List-Unsubscribe-Post` header values for a validated ListUnsubscribe, ready for the transport's `headers` option.
 
 ### `jsr:@spy4x/email/sender`
 
@@ -2088,4 +2095,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 7ee31f4f3ef46b1cd8e40843d7c0fb154aed976e360bd63a58c2dfe5aa497941 -->
+<!-- export surface: sha256 6749ad0c07b6cb664208a99c36dc12011761ee34d03a2d50580d7481cecb7962 -->

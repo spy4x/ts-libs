@@ -221,7 +221,7 @@ export function emailButton(options: EmailButtonOptions): string {
   assertLinkableUrl(options.href, "EmailButtonOptions.href")
   assertHexColor(options.background, "background", "EmailButtonOptions")
   assertHexColor(options.color, "color", "EmailButtonOptions")
-  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td align="center" bgcolor="${options.background}" style="border-radius:6px;background:${options.background}"><a href="${
+  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td align="center" bgcolor="${options.background}" style="border-radius:6px;background:${options.background};mso-padding-alt:12px 24px"><a href="${
     escapeHtml(options.href)
   }" style="display:inline-block;padding:12px 24px;color:${options.color};font-weight:600;text-decoration:none;border-radius:6px">${
     escapeHtml(options.label)
