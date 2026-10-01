@@ -440,6 +440,72 @@ describe("delayed and repeating jobs against a real server", () => {
     })
   })
 
+  it("leaves one chain when two workers start the same job at once", async () => {
+    await withOutboxSchema(async (sql, schema) => {
+      const other = await openSecondClient(schema)
+      try {
+        const job = {
+          eventKind: "nightly.cleanup",
+          aggregateType: "job",
+          aggregateId: JOB_SUBJECT,
+        }
+        for (let round = 0; round < 10; round++) {
+          await sql`DELETE FROM outbox_events`
+          const results = await Promise.all([
+            ensureScheduledOutboxEvent(sql, job, { inMs: 1000 }),
+            ensureScheduledOutboxEvent(other, job, { inMs: 1000 }),
+          ])
+          assertEquals(results.filter((id) => id !== null).length, 1)
+          const [{ count }] = await sql<{ count: number }[]>`
+            SELECT count(*)::int AS count FROM outbox_events WHERE processed_at IS NULL
+          `
+          assertEquals(count, 1)
+        }
+      } finally {
+        await other.end()
+      }
+    })
+  })
+
+  it("starts the same kind of job for another aggregate", async () => {
+    await withOutboxSchema(async (sql) => {
+      const job = { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT }
+      await ensureScheduledOutboxEvent(sql, job, { inMs: 1000 })
+      const other = { ...job, aggregateId: ROW_A }
+      assertEquals(typeof await ensureScheduledOutboxEvent(sql, other, { inMs: 1000 }), "string")
+      const another = { ...job, aggregateType: "report" }
+      assertEquals(typeof await ensureScheduledOutboxEvent(sql, another, { inMs: 1000 }), "string")
+    })
+  })
+
+  it("does not restart a chain that gave up, so its stored error stays visible", async () => {
+    await withOutboxSchema(async (sql) => {
+      const job = { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT }
+      await ensureScheduledOutboxEvent(sql, job, { inMs: 0 })
+      await sql`UPDATE outbox_events SET attempt_count = 5, last_error_code = 'TypeError'`
+
+      assertEquals(await ensureScheduledOutboxEvent(sql, job, { inMs: 0 }), null)
+      const [{ count }] = await sql<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM outbox_events
+      `
+      assertEquals(count, 1)
+    })
+  })
+
+  it("counts a delay on the database clock", async () => {
+    await withOutboxSchema(async (sql) => {
+      await scheduleOutboxEvent(
+        sql,
+        { eventKind: "x", aggregateType: "job", aggregateId: JOB_SUBJECT },
+        { inMs: 90_000 },
+      )
+      const [row] = await sql<{ seconds: number }[]>`
+        SELECT round(extract(epoch FROM available_at - now()))::int AS seconds FROM outbox_events
+      `
+      assertEquals(row.seconds, 90)
+    })
+  })
+
   it("refuses a negative delay", async () => {
     await withOutboxSchema(async (sql) => {
       let error: unknown

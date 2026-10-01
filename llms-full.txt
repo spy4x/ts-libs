@@ -4637,7 +4637,7 @@ job lists its kind in `OutboxProcessorOptions.repeatEveryMs`; once a run succeed
 `markProcessed(id, repeatInSeconds)` writes the next run in the same statement, so the chain is one
 row at a time, never two (a redelivery of a finished run writes nothing). A chain whose run gives up
 stops, and `ensureScheduledOutboxEvent` at start-up does not restart it while that row is unprocessed:
-the stored error is the signal. The repeat interval counts from the end of a run, not from a fixed
+the stored error is the signal. Both functions write only the library's columns, so any extra column in an app's `outbox_events` (the template's `group_id`) must be nullable or have a default. `ensureScheduledOutboxEvent` takes an advisory lock on kind, aggregate type and aggregate id inside its own transaction, so two workers starting together leave one chain; give it the pool, not a transaction. The repeat interval counts from the end of a run, not from a fixed
 clock time.
 
 **The row this library defines is smaller than the template's.** The ported original's row also
