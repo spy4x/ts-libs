@@ -1,4 +1,5 @@
 import {
+  assertPositiveFinite,
   type BeginOutcome,
   IDEMPOTENCY_LEASE_SECONDS,
   IDEMPOTENCY_RETENTION_DAYS,
@@ -17,6 +18,7 @@ export interface MemoryIdempotencyStoreOptions {
 }
 
 interface Row {
+  token: string
   claim: IdempotencyClaim
   done: boolean
   result: unknown
@@ -36,8 +38,12 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
   private readonly now: () => number
 
   constructor(options: MemoryIdempotencyStoreOptions = {}) {
-    this.leaseMs = (options.leaseSeconds ?? IDEMPOTENCY_LEASE_SECONDS) * 1000
-    this.retentionMs = (options.retentionDays ?? IDEMPOTENCY_RETENTION_DAYS) * 86_400_000
+    const leaseSeconds = options.leaseSeconds ?? IDEMPOTENCY_LEASE_SECONDS
+    const retentionDays = options.retentionDays ?? IDEMPOTENCY_RETENTION_DAYS
+    assertPositiveFinite("leaseSeconds", leaseSeconds)
+    assertPositiveFinite("retentionDays", retentionDays)
+    this.leaseMs = leaseSeconds * 1000
+    this.retentionMs = retentionDays * 86_400_000
     this.now = options.now ?? Date.now
   }
 
@@ -50,8 +56,9 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
       row = undefined
     }
     if (!row) {
-      this.rows.set(id, { claim, done: false, result: null, createdAt: now, updatedAt: now })
-      return Promise.resolve({ status: "claimed" })
+      const token = crypto.randomUUID()
+      this.rows.set(id, { token, claim, done: false, result: null, createdAt: now, updatedAt: now })
+      return Promise.resolve({ status: "claimed", token })
     }
     if (
       row.claim.commandName !== claim.commandName || row.claim.requestHash !== claim.requestHash
@@ -61,12 +68,13 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     if (row.done) return Promise.resolve({ status: "replay", result: clone(row.result) })
     if (row.updatedAt >= now - this.leaseMs) return Promise.resolve({ status: "in_progress" })
     row.updatedAt = now
-    return Promise.resolve({ status: "claimed" })
+    row.token = crypto.randomUUID()
+    return Promise.resolve({ status: "claimed", token: row.token })
   }
 
-  complete(userId: number, key: string, result: unknown): Promise<void> {
+  complete(userId: number, key: string, token: string, result: unknown): Promise<void> {
     const row = this.rows.get(rowId(userId, key))
-    if (row && !row.done) {
+    if (row && !row.done && row.token === token) {
       row.done = true
       row.result = clone(result)
       row.updatedAt = this.now()
@@ -74,9 +82,10 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     return Promise.resolve()
   }
 
-  release(userId: number, key: string): Promise<void> {
+  release(userId: number, key: string, token: string): Promise<void> {
     const id = rowId(userId, key)
-    if (this.rows.get(id)?.done === false) this.rows.delete(id)
+    const row = this.rows.get(id)
+    if (row?.done === false && row.token === token) this.rows.delete(id)
     return Promise.resolve()
   }
 

@@ -17,6 +17,7 @@ export {
   type IdempotencyOptions,
   type IdempotencyStore,
   isIdempotencyKey,
+  MAX_IDEMPOTENCY_COMMAND_NAME_LENGTH,
   MAX_IDEMPOTENCY_KEY_LENGTH,
 } from "./idempotency.ts"
 export { MemoryIdempotencyStore, type MemoryIdempotencyStoreOptions } from "./memory.ts"

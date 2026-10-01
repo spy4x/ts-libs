@@ -30,6 +30,13 @@ function claim(overrides: Partial<IdempotencyClaim> = {}): IdempotencyClaim {
   return { userId: 7, key: "k1", commandName: "RenameCommand", requestHash: "hash-a", ...overrides }
 }
 
+/** Claims the key and returns the claim's token; fails the test when the key was not free. */
+async function claimToken(store: IdempotencyStore, c: IdempotencyClaim): Promise<string> {
+  const outcome = await store.begin(c)
+  if (outcome.status !== "claimed") throw new Error(`expected a claim, got ${outcome.status}`)
+  return outcome.token
+}
+
 /** Registers the contract's tests; `open` makes a fresh fixture per test. */
 export function describeIdempotencyStoreContract(
   name: string,
@@ -47,7 +54,7 @@ export function describeIdempotencyStoreContract(
   describe(`${name} idempotency store contract`, () => {
     it("claims a new key", async () => {
       await using(async ({ store }) => {
-        expect(await store.begin(claim())).toEqual({ status: "claimed" })
+        expect(await store.begin(claim())).toMatchObject({ status: "claimed" })
       })
     })
 
@@ -60,8 +67,8 @@ export function describeIdempotencyStoreContract(
 
     it("replays the stored result as JSON once the run is complete", async () => {
       await using(async ({ store }) => {
-        await store.begin(claim())
-        await store.complete(7, "k1", { name: "Team", tags: ["a"], at: new Date(0) })
+        const token = await claimToken(store, claim())
+        await store.complete(7, "k1", token, { name: "Team", tags: ["a"], at: new Date(0) })
         expect(await store.begin(claim())).toEqual({
           status: "replay",
           result: { name: "Team", tags: ["a"], at: "1970-01-01T00:00:00.000Z" },
@@ -71,29 +78,29 @@ export function describeIdempotencyStoreContract(
 
     it("replays a result of null when the command returned nothing", async () => {
       await using(async ({ store }) => {
-        await store.begin(claim())
-        await store.complete(7, "k1", undefined)
+        const token = await claimToken(store, claim())
+        await store.complete(7, "k1", token, undefined)
         expect(await store.begin(claim())).toEqual({ status: "replay", result: null })
       })
     })
 
     it("says reused for the same key with a different command or different input", async () => {
       await using(async ({ store }) => {
-        await store.begin(claim())
+        const token = await claimToken(store, claim())
         expect(await store.begin(claim({ requestHash: "hash-b" }))).toEqual({ status: "reused" })
         expect(await store.begin(claim({ commandName: "DeleteCommand" }))).toEqual({
           status: "reused",
         })
-        await store.complete(7, "k1", 1)
+        await store.complete(7, "k1", token, 1)
         expect(await store.begin(claim({ requestHash: "hash-b" }))).toEqual({ status: "reused" })
       })
     })
 
     it("keeps two users' identical keys apart", async () => {
       await using(async ({ store }) => {
-        await store.begin(claim({ userId: 1 }))
-        await store.complete(1, "k1", `one`)
-        expect(await store.begin(claim({ userId: 2 }))).toEqual({ status: "claimed" })
+        const token = await claimToken(store, claim({ userId: 1 }))
+        await store.complete(1, "k1", token, `one`)
+        expect(await store.begin(claim({ userId: 2 }))).toMatchObject({ status: "claimed" })
         expect(await store.begin(claim({ userId: 1 }))).toEqual({
           status: "replay",
           result: `one`,
@@ -103,26 +110,26 @@ export function describeIdempotencyStoreContract(
 
     it("lets a retry claim the key again after release", async () => {
       await using(async ({ store }) => {
-        await store.begin(claim())
-        await store.release(7, "k1")
-        expect(await store.begin(claim())).toEqual({ status: "claimed" })
+        const token = await claimToken(store, claim())
+        await store.release(7, "k1", token)
+        expect(await store.begin(claim())).toMatchObject({ status: "claimed" })
       })
     })
 
     it("does not let release undo a finished run", async () => {
       await using(async ({ store }) => {
-        await store.begin(claim())
-        await store.complete(7, "k1", `kept`)
-        await store.release(7, "k1")
+        const token = await claimToken(store, claim())
+        await store.complete(7, "k1", token, `kept`)
+        await store.release(7, "k1", token)
         expect(await store.begin(claim())).toEqual({ status: "replay", result: `kept` })
       })
     })
 
     it("ignores a second complete, so the first result stands", async () => {
       await using(async ({ store }) => {
-        await store.begin(claim())
-        await store.complete(7, "k1", `first`)
-        await store.complete(7, "k1", `second`)
+        const token = await claimToken(store, claim())
+        await store.complete(7, "k1", token, `first`)
+        await store.complete(7, "k1", token, `second`)
         expect(await store.begin(claim())).toEqual({ status: "replay", result: `first` })
       })
     })
@@ -133,9 +140,41 @@ export function describeIdempotencyStoreContract(
         await advance((IDEMPOTENCY_LEASE_SECONDS - 5) * SECOND)
         expect(await store.begin(claim())).toEqual({ status: "in_progress" })
         await advance(10 * SECOND)
-        expect(await store.begin(claim())).toEqual({ status: "claimed" })
+        expect(await store.begin(claim())).toMatchObject({ status: "claimed" })
         // The takeover restarts the lease.
         expect(await store.begin(claim())).toEqual({ status: "in_progress" })
+      })
+    })
+
+    it("hands a new token to a takeover, and the old token no longer releases the claim", async () => {
+      await using(async ({ store, advance }) => {
+        const stale = await claimToken(store, claim())
+        await advance((IDEMPOTENCY_LEASE_SECONDS + 5) * SECOND)
+        const current = await claimToken(store, claim())
+        expect(current).not.toBe(stale)
+
+        await store.release(7, "k1", stale)
+
+        expect(await store.begin(claim())).toEqual({ status: "in_progress" })
+        await store.release(7, "k1", current)
+        expect(await store.begin(claim())).toMatchObject({ status: "claimed" })
+      })
+    })
+
+    it("does not let a run that lost its claim to a takeover complete it", async () => {
+      await using(async ({ store, advance }) => {
+        const stale = await claimToken(store, claim())
+        await advance((IDEMPOTENCY_LEASE_SECONDS + 5) * SECOND)
+        const current = await claimToken(store, claim())
+
+        await store.complete(7, "k1", stale, `stale result`)
+
+        expect(await store.begin(claim())).toEqual({ status: "in_progress" })
+        await store.complete(7, "k1", current, `current result`)
+        expect(await store.begin(claim())).toEqual({
+          status: "replay",
+          result: `current result`,
+        })
       })
     })
 
@@ -161,12 +200,12 @@ export function describeIdempotencyStoreContract(
 
     it("forgets a finished key once it is past the retention", async () => {
       await using(async ({ store, advance }) => {
-        await store.begin(claim())
-        await store.complete(7, "k1", `old`)
+        const token = await claimToken(store, claim())
+        await store.complete(7, "k1", token, `old`)
         await advance((IDEMPOTENCY_RETENTION_DAYS - 1) * DAY)
         expect(await store.begin(claim())).toEqual({ status: "replay", result: `old` })
         await advance(2 * DAY)
-        expect(await store.begin(claim())).toEqual({ status: "claimed" })
+        expect(await store.begin(claim())).toMatchObject({ status: "claimed" })
       })
     })
 
@@ -179,7 +218,7 @@ export function describeIdempotencyStoreContract(
         expect(await store.sweep()).toBe(2)
         expect(await store.sweep()).toBe(0)
         expect(await store.begin(claim({ key: "fresh" }))).toEqual({ status: "in_progress" })
-        expect(await store.begin(claim({ key: "old1" }))).toEqual({ status: "claimed" })
+        expect(await store.begin(claim({ key: "old1" }))).toMatchObject({ status: "claimed" })
       })
     })
   })

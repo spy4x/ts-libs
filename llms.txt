@@ -1709,6 +1709,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `IdempotencyErrorCode` (type), `jsr:@spy4x/server/idempotency`
 - `IdempotencyOptions` (interface), `jsr:@spy4x/server/idempotency`: What createIdempotencyMiddleware needs.
 - `IdempotencyStore` (interface), `jsr:@spy4x/server/idempotency`: Keeps the outcome of every command that carried an idempotency key.
+- `MAX_IDEMPOTENCY_COMMAND_NAME_LENGTH` (constant), `jsr:@spy4x/server/idempotency`: The longest command name the stores accept; the Postgres column is `VARCHAR(100)`.
 - `MAX_IDEMPOTENCY_KEY_LENGTH` (constant), `jsr:@spy4x/server/idempotency`: The longest key the stores accept; the Postgres column is `VARCHAR(128)`.
 - `MemoryIdempotencyStore` (class), `jsr:@spy4x/server/idempotency`: An IdempotencyStore that keeps rows in memory, for tests and single-process tools.
 - `MemoryIdempotencyStoreOptions` (interface), `jsr:@spy4x/server/idempotency`: What MemoryIdempotencyStore reads from outside.
@@ -2029,4 +2030,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 e50a69c73934ffe5e6680cadeff02dc1305648973166eafda8fbf52397757290 -->
+<!-- export surface: sha256 35d912f80a14deab7650fbd191e95c0a6996408d89ba73ef6a6c10e5a21ba1bf -->

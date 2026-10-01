@@ -11,6 +11,9 @@ export const IDEMPOTENCY_RETENTION_DAYS = 7
  */
 export const IDEMPOTENCY_LEASE_SECONDS = 30
 
+/** The longest command name the stores accept; the Postgres column is `VARCHAR(100)`. */
+export const MAX_IDEMPOTENCY_COMMAND_NAME_LENGTH = 100
+
 /** The longest key the stores accept; the Postgres column is `VARCHAR(128)`. */
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 
@@ -26,8 +29,12 @@ export interface IdempotencyClaim {
 
 /** What {@link IdempotencyStore.begin} found for a key. */
 export type BeginOutcome =
-  /** The key is new (or its earlier run died): run the command, then `complete` or `release`. */
-  | { status: "claimed" }
+  /**
+   * The key is new (or its earlier run died): run the command, then `complete` or `release`, both
+   * with `token`. The token fences the claim: a run whose claim was taken over after its lease
+   * ran out holds a stale token, and its `complete` and `release` change nothing.
+   */
+  | { status: "claimed"; token: string }
   /** The command already ran; `result` is what it returned. */
   | { status: "replay"; result: unknown }
   /** The first run is still going. */
@@ -39,15 +46,25 @@ export type BeginOutcome =
 export interface IdempotencyStore {
   /** Claims the key for the caller, or says what the earlier claim left. */
   begin(claim: IdempotencyClaim): Promise<BeginOutcome>
-  /** Stores the result of a claimed run, so the next `begin` answers `replay`. */
-  complete(userId: number, key: string, result: unknown): Promise<void>
-  /** Gives up an unfinished claim, so a retry may run the command. */
-  release(userId: number, key: string): Promise<void>
+  /**
+   * Stores the result of a claimed run, so the next `begin` answers `replay`. Does nothing when
+   * `token` is not the key's current claim token.
+   */
+  complete(userId: number, key: string, token: string, result: unknown): Promise<void>
+  /**
+   * Gives up an unfinished claim, so a retry may run the command. Does nothing when `token` is not
+   * the key's current claim token.
+   */
+  release(userId: number, key: string, token: string): Promise<void>
   /** Removes keys older than the retention. Returns how many were removed. */
   sweep(): Promise<number>
 }
 
-export type IdempotencyErrorCode = "INVALID_KEY" | "KEY_REUSED" | "IN_PROGRESS"
+export type IdempotencyErrorCode =
+  | "INVALID_KEY"
+  | "INVALID_COMMAND"
+  | "KEY_REUSED"
+  | "IN_PROGRESS"
 
 /** Why a command with an idempotency key was refused before it ran. */
 export class IdempotencyError extends Error {
@@ -71,7 +88,9 @@ const NOT_INPUT = new Set(["actor", "idempotencyKey", "requestId", "request"])
  *
  * Two sends of the same command produce the same fingerprint even though their request ids and
  * request info differ; a different name or different input produces a different one. Object keys
- * are sorted, so the order a client wrote them in does not matter.
+ * are sorted, so the order a client wrote them in does not matter. A value with `toJSON` counts as
+ * what it returns; a `Map`, `Set` or other non-plain object without one makes this throw a
+ * `TypeError`, because it cannot be told apart from another one.
  */
 export async function fingerprint(
   commandName: string,
@@ -81,17 +100,39 @@ export async function fingerprint(
   for (const name of Object.keys(data)) {
     if (!NOT_INPUT.has(name)) input[name] = data[name]
   }
-  return await sha256Hex(stableStringify({ commandName, input }))
+  return await sha256Hex(stableStringify({ commandName, input }) as string)
 }
 
-function stableStringify(value: unknown): string {
-  if (value === undefined) return "null"
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null"
-  if (value instanceof Date) return JSON.stringify(value.toISOString())
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`
-  const entries = Object.keys(value).sort().map((name) =>
-    `${JSON.stringify(name)}:${stableStringify((value as Record<string, unknown>)[name])}`
-  )
+/**
+ * `JSON.stringify` with sorted object keys. Like it, a value with a `toJSON` method (a `Date`, a
+ * Temporal value) is replaced by what `toJSON` returns, and an object property that is `undefined`
+ * or a function is left out. Unlike it, an object that is neither a plain object, an array nor
+ * has a `toJSON` (a `Map`, a `Set`, a class instance) throws: it would otherwise serialise as `{}`
+ * and two different inputs would share a fingerprint.
+ */
+function stableStringify(value: unknown): string | undefined {
+  if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+    return undefined
+  }
+  if (value === null || typeof value !== "object") return JSON.stringify(value)
+  const { toJSON } = value as { toJSON?: unknown }
+  if (typeof toJSON === "function") return stableStringify(toJSON.call(value))
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item) ?? "null").join(",")}]`
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(
+      `Cannot fingerprint a ${
+        prototype.constructor?.name ?? "non-plain object"
+      }: use plain data or give it a toJSON method`,
+    )
+  }
+  const entries: string[] = []
+  for (const name of Object.keys(value).sort()) {
+    const text = stableStringify((value as Record<string, unknown>)[name])
+    if (text !== undefined) entries.push(`${JSON.stringify(name)}:${text}`)
+  }
   return `{${entries.join(",")}}`
 }
 
@@ -104,7 +145,11 @@ export interface IdempotencyOptions {
   pollMs?: number
   /** Waits `ms`; replaced in tests. */
   sleep?: (ms: number) => Promise<void>
-  /** Reports a failure to store a result, which the caller cannot act on. */
+  /**
+   * Reports a failure of the store after the command ran (storing the result or releasing the
+   * claim), which the caller cannot act on. The caller still gets the command's own result or
+   * error.
+   */
   onStoreFailure?: (error: unknown) => void
 }
 
@@ -125,10 +170,16 @@ const DEFAULT_POLL_MS = 100
  *   That is safe because a failed command changed nothing.
  * - The stored result is the command's result as JSON. A transport sends JSON anyway; an
  *   in-process caller of a replayed command sees dates as ISO strings.
+ * - If the store fails after the command ran, the command's own result (or error) still reaches the
+ *   caller and the failure goes to `onStoreFailure`. A result that cannot be stored leaves the claim
+ *   to expire, as below.
  * - The claim and the command are not one transaction. A process that dies after the command
  *   committed and before the result was stored leaves a claim that expires after
- *   {@link IDEMPOTENCY_LEASE_SECONDS}; a retry after that runs the command again. Closing that
- *   window needs the command to write its result in its own transaction.
+ *   {@link IDEMPOTENCY_LEASE_SECONDS}; a retry after that runs the command again. So does a run
+ *   that outlives its lease: the retry takes the claim over and runs the command a second time, but
+ *   the first run's claim token is then stale, so it can neither release nor complete the new
+ *   claim. Closing the duplicate window needs the command to write its result in its own
+ *   transaction.
  */
 export function createIdempotencyMiddleware(options: IdempotencyOptions): CqrsMiddleware {
   const { store } = options
@@ -147,13 +198,21 @@ export function createIdempotencyMiddleware(options: IdempotencyOptions): CqrsMi
     if (typeof userId !== "number") {
       throw new IdempotencyError("INVALID_KEY", "An idempotency key needs a signed-in user")
     }
+    const commandName = message.constructor.name
+    if (commandName.length > MAX_IDEMPOTENCY_COMMAND_NAME_LENGTH) {
+      throw new IdempotencyError(
+        "INVALID_COMMAND",
+        `The command name is longer than ${MAX_IDEMPOTENCY_COMMAND_NAME_LENGTH} characters`,
+      )
+    }
     const claim: IdempotencyClaim = {
       userId,
       key,
-      commandName: message.constructor.name,
-      requestHash: await fingerprint(message.constructor.name, data as Record<string, unknown>),
+      commandName,
+      requestHash: await fingerprint(commandName, data as Record<string, unknown>),
     }
 
+    let token: string
     let waited = 0
     while (true) {
       const outcome = await store.begin(claim)
@@ -164,7 +223,10 @@ export function createIdempotencyMiddleware(options: IdempotencyOptions): CqrsMi
           "The idempotency key was already used for a different request",
         )
       }
-      if (outcome.status === "claimed") break
+      if (outcome.status === "claimed") {
+        token = outcome.token
+        break
+      }
       if (waited >= waitMs) {
         throw new IdempotencyError(
           "IN_PROGRESS",
@@ -175,14 +237,32 @@ export function createIdempotencyMiddleware(options: IdempotencyOptions): CqrsMi
       waited += pollMs
     }
 
+    const report = (error: unknown) => {
+      try {
+        options.onStoreFailure?.(error)
+      } catch {
+        // A failing reporter must not replace the command's own result or error.
+      }
+    }
     let result: unknown
     try {
       result = await next()
     } catch (error) {
-      await store.release(userId, key).catch(options.onStoreFailure)
+      await store.release(userId, key, token).catch(report)
       throw error
     }
-    await store.complete(userId, key, JSON.parse(JSON.stringify(result ?? null)))
+    try {
+      await store.complete(userId, key, token, JSON.parse(JSON.stringify(result ?? null)))
+    } catch (error) {
+      report(error)
+    }
     return result
+  }
+}
+
+/** Throws unless `value` is a finite number above zero; the stores call it on their options. */
+export function assertPositiveFinite(name: string, value: number): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RangeError(`${name} must be a finite number above zero, got ${value}`)
   }
 }

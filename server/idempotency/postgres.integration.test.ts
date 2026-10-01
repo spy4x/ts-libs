@@ -78,10 +78,27 @@ describe("PostgresIdempotencyStore options", () => {
   it("forgets a key after the configured retention", async () => {
     const fixture = await openSchema({ retentionDays: 1 })
     try {
-      await fixture.store.begin(claim)
-      await fixture.store.complete(1, "k", 1)
+      const outcome = await fixture.store.begin(claim)
+      if (outcome.status !== "claimed") throw new Error(`expected a claim`)
+      await fixture.store.complete(1, "k", outcome.token, 1)
       await fixture.advance(2 * 86_400_000)
       expect((await fixture.store.begin(claim)).status).toBe("claimed")
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("refuses a lease or retention that is not a finite number above zero", async () => {
+    const fixture = await openSchema()
+    try {
+      for (const bad of [0, -1, NaN, Infinity]) {
+        expect(() => new PostgresIdempotencyStore(fixture.sql, { leaseSeconds: bad })).toThrow(
+          RangeError,
+        )
+        expect(() => new PostgresIdempotencyStore(fixture.sql, { retentionDays: bad })).toThrow(
+          RangeError,
+        )
+      }
     } finally {
       await fixture.close()
     }

@@ -32,9 +32,22 @@ describe("MemoryIdempotencyStore options", () => {
   it("forgets a key after the configured retention", async () => {
     let now = 0
     const store = new MemoryIdempotencyStore({ retentionDays: 1, now: () => now })
-    await store.begin(claim)
-    await store.complete(1, "k", 1)
+    const outcome = await store.begin(claim)
+    if (outcome.status !== "claimed") throw new Error(`expected a claim`)
+    await store.complete(1, "k", outcome.token, 1)
     now = 2 * 86_400_000
     expect((await store.begin(claim)).status).toBe("claimed")
+  })
+
+  it("refuses a lease that is not a finite number above zero", () => {
+    for (const bad of [0, -1, NaN, Infinity]) {
+      expect(() => new MemoryIdempotencyStore({ leaseSeconds: bad })).toThrow(RangeError)
+    }
+  })
+
+  it("refuses a retention that is not a finite number above zero", () => {
+    for (const bad of [0, -1, NaN, Infinity]) {
+      expect(() => new MemoryIdempotencyStore({ retentionDays: bad })).toThrow(RangeError)
+    }
   })
 })

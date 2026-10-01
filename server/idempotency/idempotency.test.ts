@@ -32,18 +32,20 @@ class SpyStore extends MemoryIdempotencyStore {
     return super.begin(claim)
   }
 
-  override release(userId: number, key: string): Promise<void> {
+  override release(userId: number, key: string, token: string): Promise<void> {
     this.released.push(`${userId}:${key}`)
-    return super.release(userId, key)
+    return super.release(userId, key, token)
   }
 }
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => {
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((done, fail) => {
     resolve = done
+    reject = fail
   })
-  return { promise, resolve }
+  return { promise, resolve, reject }
 }
 
 /** The error a call is refused with; fails the test when the call succeeds. */
@@ -188,6 +190,87 @@ describe("idempotency middleware", () => {
     expect(store.begun.length).toBe(0)
   })
 
+  it("returns the result and reports the failure when storing the result fails", async () => {
+    const store = new SpyStore()
+    store.complete = () => Promise.reject(new Error("store down"))
+    const reported: unknown[] = []
+    const run = createIdempotencyMiddleware({ store, onStoreFailure: (e) => reported.push(e) })
+
+    const result = await run(command(), () => Promise.resolve("done"))
+
+    expect(result).toBe("done")
+    expect((reported[0] as Error).message).toBe("store down")
+  })
+
+  it("returns the result and reports the failure when the result cannot be copied", async () => {
+    const reported: unknown[] = []
+    const run = createIdempotencyMiddleware({
+      store: new SpyStore(),
+      onStoreFailure: (e) => reported.push(e),
+    })
+
+    const result = await run(command(), () => Promise.resolve(10n))
+
+    expect(result).toBe(10n)
+    expect(reported.length).toBe(1)
+  })
+
+  it("lets the command's own error through when releasing the claim fails", async () => {
+    const store = new SpyStore()
+    store.release = () => Promise.reject(new Error("release failed"))
+    const run = createIdempotencyMiddleware({ store })
+
+    await expect(run(command(), () => Promise.reject(new Error("real cause")))).rejects.toThrow(
+      "real cause",
+    )
+  })
+
+  it("lets a run that lost its claim neither free it nor store over the new owner", async () => {
+    let now = 0
+    const store = new MemoryIdempotencyStore({ leaseSeconds: 30, now: () => now })
+    const run = createIdempotencyMiddleware({ store, waitMs: 0 })
+    const slow = deferred<string>()
+    const second = deferred<string>()
+    let runs = 0
+
+    const first = run(command(), () => {
+      runs++
+      return slow.promise
+    })
+    await Promise.resolve()
+    await new Promise((done) => setTimeout(done, 0))
+    now = 31_000
+    const taken = run(command(), () => {
+      runs++
+      return second.promise
+    })
+    await new Promise((done) => setTimeout(done, 0))
+    slow.reject(new Error("first run failed"))
+    await expect(first).rejects.toThrow("first run failed")
+
+    const third = await refusal(run(command(), () => Promise.resolve("third")))
+    second.resolve("second result")
+    await taken
+
+    expect(third.code).toBe("IN_PROGRESS")
+    expect(runs).toBe(2)
+    expect(await run(command(), () => Promise.resolve("never"))).toBe("second result")
+  })
+
+  it("refuses a command whose name does not fit the store", async () => {
+    const run = createIdempotencyMiddleware({ store: new SpyStore() })
+    const Long = {
+      [`C${"x".repeat(100)}`]: class {
+        constructor(public data: unknown) {}
+      },
+    }
+    const message = new (Object.values(Long)[0])(command().data) as Command<unknown, unknown>
+
+    const error = await refusal(run(message, () => Promise.resolve(1)))
+
+    expect(error.code).toBe("INVALID_COMMAND")
+  })
+
   it("refuses a key from a caller who is not signed in", async () => {
     const store = new SpyStore()
     const run = createIdempotencyMiddleware({ store })
@@ -217,6 +300,21 @@ describe("fingerprint", () => {
       actor: { userId: 2 },
     })
     expect(one).toBe(two)
+  })
+
+  it("counts a value with toJSON as what it returns", async () => {
+    const date = await fingerprint("C", { at: new Date(0) })
+    expect(await fingerprint("C", { at: `1970-01-01T00:00:00.000Z` })).toBe(date)
+    expect(await fingerprint("C", { at: new Date(1) })).not.toBe(date)
+  })
+
+  it("refuses to fingerprint a Map or a Set, which would hash as {}", async () => {
+    await expect(fingerprint("C", { tags: new Map([["a", 1]]) })).rejects.toThrow(TypeError)
+    await expect(fingerprint("C", { tags: new Set([1]) })).rejects.toThrow(TypeError)
+  })
+
+  it("treats a property that is undefined like a missing one", async () => {
+    expect(await fingerprint("C", { a: 1, b: undefined })).toBe(await fingerprint("C", { a: 1 }))
   })
 
   it("differs when the input or the command differs", async () => {

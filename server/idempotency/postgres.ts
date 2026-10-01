@@ -1,5 +1,6 @@
 import type { Sql } from "../db/index.ts"
 import {
+  assertPositiveFinite,
   type BeginOutcome,
   IDEMPOTENCY_LEASE_SECONDS,
   IDEMPOTENCY_RETENTION_DAYS,
@@ -13,7 +14,7 @@ import {
  * One row per command a client sent with an idempotency key. `status` is 1 while the first run is
  * in flight and 2 once its result is stored. `updated_at` is when the row was claimed or finished;
  * a claim that stays at 1 past its lease belongs to a run that died, and the next retry takes it
- * over. The key is scoped to the user, so one user cannot replay or block another user's key.
+ * over with a new `claim_token`; `complete` and `release` change only the row whose token they hold, so a run that lost its claim changes nothing. The key is scoped to the user, so one user cannot replay or block another user's key.
  * `request_hash` fingerprints the command's input: the same key with different input is refused.
  *
  * `user_id` has no foreign key, because this library does not own your users table. Add
@@ -25,6 +26,7 @@ CREATE TABLE idempotency_keys (
   key varchar(128) NOT NULL,
   command_name varchar(100) NOT NULL,
   request_hash varchar(64) NOT NULL,
+  claim_token uuid NOT NULL,
   status smallint NOT NULL,
   result jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -70,6 +72,8 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
   constructor(private readonly sql: Sql, options: PostgresIdempotencyStoreOptions = {}) {
     this.leaseSeconds = options.leaseSeconds ?? IDEMPOTENCY_LEASE_SECONDS
     this.retentionDays = options.retentionDays ?? IDEMPOTENCY_RETENTION_DAYS
+    assertPositiveFinite("leaseSeconds", this.leaseSeconds)
+    assertPositiveFinite("retentionDays", this.retentionDays)
   }
 
   async begin(claim: IdempotencyClaim): Promise<BeginOutcome> {
@@ -81,15 +85,17 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
         AND key = ${key}
         AND created_at < now() - (${this.retentionDays}::double precision * INTERVAL '1 day')
     `
+    const token = crypto.randomUUID()
     // A row released between the insert and the read is claimable again, so look twice.
     for (let attempt = 0; attempt < 3; attempt++) {
       const inserted = await this.sql`
-        INSERT INTO idempotency_keys (user_id, key, command_name, request_hash, status)
-        VALUES (${userId}, ${key}, ${commandName}, ${requestHash}, ${STARTED})
+        INSERT INTO idempotency_keys
+          (user_id, key, command_name, request_hash, claim_token, status)
+        VALUES (${userId}, ${key}, ${commandName}, ${requestHash}, ${token}, ${STARTED})
         ON CONFLICT (user_id, key) DO NOTHING
         RETURNING 1 AS claimed
       `
-      if (inserted.length > 0) return { status: "claimed" }
+      if (inserted.length > 0) return { status: "claimed", token }
 
       const row = (
         await this.sql<StoredKeyRow[]>`
@@ -114,32 +120,34 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
       // The first run died. Only one retry may take its claim over.
       const taken = await this.sql`
         UPDATE idempotency_keys
-        SET updated_at = now()
+        SET updated_at = now(), claim_token = ${token}
         WHERE user_id = ${userId}
           AND key = ${key}
           AND status = ${STARTED}
           AND updated_at < now() - (${this.leaseSeconds}::double precision * INTERVAL '1 second')
         RETURNING 1 AS claimed
       `
-      return taken.length > 0 ? { status: "claimed" } : { status: "in_progress" }
+      return taken.length > 0 ? { status: "claimed", token } : { status: "in_progress" }
     }
     return { status: "in_progress" }
   }
 
-  async complete(userId: number, key: string, result: unknown): Promise<void> {
+  async complete(userId: number, key: string, token: string, result: unknown): Promise<void> {
     await this.sql`
       UPDATE idempotency_keys
       SET status = ${DONE},
           result = ${JSON.stringify(result ?? null)}::text::jsonb,
           updated_at = now()
       WHERE user_id = ${userId} AND key = ${key} AND status = ${STARTED}
+        AND claim_token = ${token}
     `
   }
 
-  async release(userId: number, key: string): Promise<void> {
+  async release(userId: number, key: string, token: string): Promise<void> {
     await this.sql`
       DELETE FROM idempotency_keys
       WHERE user_id = ${userId} AND key = ${key} AND status = ${STARTED}
+        AND claim_token = ${token}
     `
   }
 
