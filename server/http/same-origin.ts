@@ -30,6 +30,10 @@
  * `@spy4x/server/sign-in`). A request with an expired or missing session then gets that guard's
  * 401, which tells the front end to sign in again, instead of this guard's 403.
  *
+ * A server that is not Hono, such as a Fresh app handling form posts, builds the same check with
+ * {@link createSameOriginCheck}: it takes a standard `Request` and returns the refusal reason, so
+ * both share one rule.
+ *
  * `hono/csrf` is not used because it is weaker in two ways. It checks only requests whose content
  * type a plain HTML form can send, so a JSON or other mutation passes unchecked. And it passes a
  * request when either `Origin` or `Sec-Fetch-Site` looks right, where this guard requires both.
@@ -64,7 +68,7 @@
  * @module
  */
 
-import { getCookie } from "hono/cookie"
+import { parse } from "hono/utils/cookie"
 import type { Context, Env, MiddlewareHandler } from "hono"
 import { SESSION_COOKIE_NAME } from "../sign-in/cookie.ts"
 
@@ -90,8 +94,8 @@ export const SAFE_METHODS: readonly string[] = Object.freeze(["GET", "HEAD", "OP
  */
 export type SameOriginRefusal = "no-session-cookie" | "origin-mismatch" | "not-same-origin-fetch"
 
-/** Options for {@link createSameOriginMutationGuard} and {@link createSameOriginUpgradeGuard}. */
-export interface SameOriginGuardOptions<E extends Env = Env> {
+/** Options for {@link createSameOriginCheck}, and the checks every guard here runs. */
+export interface SameOriginCheckOptions {
   /** Name of the session cookie. Defaults to {@link SESSION_COOKIE_NAME}. */
   cookieName?: string
   /**
@@ -112,6 +116,10 @@ export interface SameOriginGuardOptions<E extends Env = Env> {
    * Each value must be a bare origin (scheme, host and port only).
    */
   expectedOrigin?: string | readonly string[]
+}
+
+/** Options for {@link createSameOriginMutationGuard} and {@link createSameOriginUpgradeGuard}. */
+export interface SameOriginGuardOptions<E extends Env = Env> extends SameOriginCheckOptions {
   /**
    * Builds the response for a refused request. Defaults to `403 { error: SAME_ORIGIN_REFUSED }`.
    * The reason is for logs; do not tell the client which check failed.
@@ -130,20 +138,40 @@ export interface SameOriginGuardOptions<E extends Env = Env> {
 export function createSameOriginMutationGuard<E extends Env = Env>(
   options: SameOriginGuardOptions<E> = {},
 ): MiddlewareHandler<E> {
+  const check = createSameOriginCheck(options)
+  const onReject = options.onReject ??
+    ((c: Context<E>) => c.json({ error: SAME_ORIGIN_REFUSED }, 403))
+
+  return async (c, next) => {
+    const reason = check(c.req.raw)
+    if (reason !== undefined) return await onReject(c, reason)
+    return await next()
+  }
+}
+
+/**
+ * Build the mutation guard's rule as a plain function over a standard `Request`, for a server that
+ * is not Hono. The function returns `undefined` for a request the guard would let through, and the
+ * reason it would refuse one otherwise: the same verdict as {@link createSameOriginMutationGuard}
+ * with the same options, which calls it. The caller builds the response; do not tell the client
+ * which check failed.
+ *
+ * Build it once at startup, not per request, so a misconfigured `expectedOrigin` fails there.
+ *
+ * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin.
+ */
+export function createSameOriginCheck(
+  options: SameOriginCheckOptions = {},
+): (request: Request) => SameOriginRefusal | undefined {
   const cookieName = options.cookieName ?? SESSION_COOKIE_NAME
   const requireCookie = options.requireSessionCookie !== false
   const expected = options.expectedOrigin === undefined
     ? undefined
     : validateOrigins(options.expectedOrigin)
-  const onReject = options.onReject ??
-    ((c: Context<E>) => c.json({ error: SAME_ORIGIN_REFUSED }, 403))
 
-  return async (c, next) => {
-    if (SAFE_METHODS.includes(c.req.method)) return await next()
-
-    const reason = refusal(c, cookieName, requireCookie, expected)
-    if (reason !== undefined) return await onReject(c, reason)
-    return await next()
+  return (request) => {
+    if (SAFE_METHODS.includes(request.method)) return undefined
+    return refusal(request, cookieName, requireCookie, expected)
   }
 }
 
@@ -168,7 +196,7 @@ export function createSameOriginUpgradeGuard<E extends Env = Env>(
     ((c: Context<E>) => c.json({ error: SAME_ORIGIN_REFUSED }, 403))
 
   return async (c, next) => {
-    const reason = upgradeRefusal(c, cookieName, requireCookie, expected)
+    const reason = upgradeRefusal(c.req.raw, cookieName, requireCookie, expected)
     if (reason !== undefined) return await onReject(c, reason)
     return await next()
   }
@@ -179,21 +207,23 @@ export function createSameOriginUpgradeGuard<E extends Env = Env>(
  * `undefined` when no origin was configured, and the request URL's own origin is used instead.
  */
 function upgradeRefusal(
-  c: Context,
+  request: Request,
   cookieName: string,
   requireCookie: boolean,
   expected: readonly string[] | undefined,
 ): SameOriginRefusal | undefined {
-  if (requireCookie && !hasCookie(c, cookieName)) return "no-session-cookie"
-  const origin = c.req.header("origin")
-  const allowed = expected ?? [new URL(c.req.url).origin]
-  if (origin === undefined || !allowed.includes(origin)) return "origin-mismatch"
+  if (requireCookie && !hasCookie(request, cookieName)) return "no-session-cookie"
+  const origin = request.headers.get("origin")
+  const allowed = expected ?? [new URL(request.url).origin]
+  if (origin === null || !allowed.includes(origin)) return "origin-mismatch"
   return undefined
 }
 
 /** Whether the named cookie is present and not empty. */
-function hasCookie(c: Context, cookieName: string): boolean {
-  const value = getCookie(c, cookieName)
+function hasCookie(request: Request, cookieName: string): boolean {
+  const header = request.headers.get("cookie")
+  if (header === null) return false
+  const value = parse(header, cookieName)[cookieName]
   return value !== undefined && value !== ""
 }
 
@@ -203,16 +233,16 @@ function hasCookie(c: Context, cookieName: string): boolean {
  * and the request URL's own origin is used instead.
  */
 function refusal(
-  c: Context,
+  request: Request,
   cookieName: string,
   requireCookie: boolean,
   expected: readonly string[] | undefined,
 ): SameOriginRefusal | undefined {
-  if (requireCookie && !hasCookie(c, cookieName)) return "no-session-cookie"
-  const origin = c.req.header("origin")
-  const sameOriginFetch = c.req.header("sec-fetch-site") === "same-origin"
-  const allowed = expected ?? [new URL(c.req.url).origin]
-  const originMatches = origin !== undefined &&
+  if (requireCookie && !hasCookie(request, cookieName)) return "no-session-cookie"
+  const origin = request.headers.get("origin")
+  const sameOriginFetch = request.headers.get("sec-fetch-site") === "same-origin"
+  const allowed = expected ?? [new URL(request.url).origin]
+  const originMatches = origin !== null &&
     (allowed.includes(origin) || (origin === "null" && sameOriginFetch))
   if (!originMatches) return "origin-mismatch"
   if (!sameOriginFetch) return "not-same-origin-fetch"
