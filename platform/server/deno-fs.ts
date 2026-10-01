@@ -21,9 +21,9 @@ function isNotFound(error: unknown): boolean {
 /**
  * {@link FileSystemPort} backed by Deno's filesystem APIs.
  *
- * Every method body is a thin wrapper over one documented `Deno` call, which is why this file
- * holds the package's only untested statements: the root test task grants `--allow-read` and
- * `--allow-env` only, so no test here may write. The *decisions* — which file to write, when to
+ * Every method body is a thin wrapper over one documented `Deno` call. The root test task grants
+ * `--allow-read` and `--allow-env` only, so the write side is checked in the integration tier, by
+ * the same contract suite the in-memory fake passes. The *decisions* — which file to write, when to
  * flush, which entry to skip — are tested against an in-memory fake in the modules that use this
  * port. Reviewers should read this file as the boundary, not as logic.
  *

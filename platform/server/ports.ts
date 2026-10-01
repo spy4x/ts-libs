@@ -5,8 +5,8 @@
  * `--allow-run`. A helper that writes files therefore cannot be tested against the real
  * filesystem here. None of these modules call `Deno.*` directly — each takes a port, so the
  * decision logic (what to write, when to flush, which entry is skipped) is tested against an
- * in-memory fake, and {@link denoFileSystem} is a thin adapter whose individual calls are the
- * only untested lines. They are three-line bodies around documented `Deno` APIs.
+ * in-memory fake, and {@link denoFileSystem} is a thin adapter around documented `Deno` APIs. The
+ * integration tier holds the adapter and the fake to one shared contract (`fs-contract.test.ts`).
  *
  * This is also what keeps the module usable from an in-memory harness or a test double without
  * monkey-patching a global.

@@ -3,8 +3,8 @@
  *
  * Everything here runs under the root task's `--allow-read --allow-env` grant — no writes. The
  * methods that open for write (`writeText`, `appendText`, `rename`, `mkdirp`, `lock`) and the
- * successful branch of `remove` are the ones that genuinely cannot be covered here; they are named
- * in the package README.
+ * successful branch of `remove` run in `deno-fs.integration.test.ts`, against the shared contract
+ * in `fs-contract.test.ts`.
  *
  * Fixtures are resolved through the URL of this file, never through `$HOME` or a hardcoded checkout
  * path, so the suite is location-independent.
