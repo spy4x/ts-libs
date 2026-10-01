@@ -130,7 +130,10 @@ const MAX_PAYLOAD_ERROR_CHARS = 200
 const MAX_PAYLOAD_BYTES = 3993
 const encoder = new TextEncoder()
 
-/** Sends to every stored subscription of a user, or to one given subscription. Build one with {@link createWebPushSender}. */
+/**
+ * Sends to every stored subscription of a user, or to one given subscription. Build one with
+ * {@link createWebPushSender}.
+ */
 export interface WebPushSender {
   /**
    * Pushes `message` to each subscription of `userId` and reports each outcome. Never throws.
@@ -305,12 +308,13 @@ export const createWebPushSender = async (
   const summarize = (deliveries: readonly PushDelivery[]): PushSendResult => {
     const count = (status: PushDelivery["status"]) =>
       deliveries.filter((delivery) => delivery.status === status).length
+    const removed = deliveries.filter((delivery) => delivery.deleted).length
     const failed = deliveries.filter((delivery) => delivery.status === "failed")
     return {
       success: failed.length === 0,
-      output: `${count("sent")} sent, ${
-        count("gone")
-      } removed, ${failed.length} failed of ${deliveries.length}`,
+      output: `${
+        count("sent")
+      } sent, ${removed} removed, ${failed.length} failed of ${deliveries.length}`,
       error: [...new Set(failed.map((delivery) => delivery.error))].join("; "),
       deliveries,
     }

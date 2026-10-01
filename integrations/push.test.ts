@@ -164,6 +164,7 @@ describe("web push sender", () => {
       ])
       expect(result.deliveries[0]).toMatchObject({ status: "gone", httpStatus: status })
       expect(result.deliveries[0].deleted).toBe(true)
+      expect(result.output).toBe("0 sent, 1 removed, 0 failed of 1")
       expect(result.success).toBe(true)
     })
   }
@@ -205,6 +206,7 @@ describe("web push sender", () => {
       const result = await sender.sendTo(await subscription("one"), MESSAGE)
       expect(calls).toEqual([])
       expect(result.success).toBe(true)
+      expect(result.output).toBe("0 sent, 0 removed, 0 failed of 1")
       expect(result.deliveries).toEqual([{
         endpoint: "https://push.example.com/send/one",
         status: "gone",
@@ -214,6 +216,17 @@ describe("web push sender", () => {
       }])
     })
   }
+
+  it("sends the urgency, ttl and topic options to one given subscription", async () => {
+    const { sender, requests } = await build([], answering(201))
+    await sender.sendTo(await subscription("one"), MESSAGE, {
+      urgency: "high",
+      ttl: 60,
+      topic: "t",
+    })
+    const headers = requests[0].init.headers as Record<string, string>
+    expect([headers["Urgency"], headers["TTL"], headers["Topic"]]).toEqual(["high", "60", "t"])
+  })
 
   it("reports a failure to one subscription and rejects a bad payload without sending", async () => {
     const { sender, requests } = await build([], answering(503))
