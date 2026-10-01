@@ -79,6 +79,23 @@ one Lua script, and implements the optional `RateLimitStore.release` for an atom
 Over a store without `release`, `refund` is read-modify-write and a refund that overlaps other
 instances' checks can erase their events.
 
+**When the store goes down.** A store-backed limiter throws when its store does, and the request
+fails. That is right for a limit that stops guessing a password or a one-time code. For a limit that
+only shields capacity, wrap the limiter so an outage lets requests through and is reported:
+
+```ts
+import { createStoreLimiter, failOpenLimiter } from "@spy4x/platform/rate-limit"
+
+const limiter = failOpenLimiter(createStoreLimiter(store, { windowMs: 60_000, limit: 100 }), {
+  limit: 100,
+  onError: (error, key) => console.error(`rate limit store failed for ${key}`, error),
+})
+```
+
+A fail-open decision records nothing and carries no `at`, and the wrapper's `refund` ignores a call
+without `at`, so `skipSuccessful` cannot remove another request's event after an outage. An `onError`
+that throws or rejects is ignored, so a failing reporter cannot fail the request it reports on.
+
 ## Sliding window, not fixed
 
 A bucket holds one timestamp per _accepted_ request; only timestamps newer than `now - windowMs`
@@ -317,3 +334,8 @@ is reserved before the handler and given back after a successful response throug
 `refund`, so a burst of parallel wrong guesses still stops at `limit`. Both limiters in `memory.ts`
 implement `refund`; a custom limiter must too. A predicate must not read the response body unless
 it calls `response.clone()` first, because the same response is sent to the client afterwards.
+
+A refund that fails, for example because the shared store went down after the handler ran, never
+changes the response: the slot stays spent, which errs on the safe side, and a completed sign-in
+keeps its status and its `Set-Cookie`. Pass `onRefundError: (error, key) => …` to hear about it; an
+`onRefundError` that throws or rejects is ignored.

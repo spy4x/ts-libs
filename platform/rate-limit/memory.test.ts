@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd"
 import {
   createMemoryRateLimiter,
   createStoreLimiter,
+  failOpenLimiter,
   MemoryRateLimiter,
   rateLimitKey,
   RateLimitKind,
@@ -788,5 +789,147 @@ describe("StoreRateLimiter over a store with an atomic consume", () => {
     const decision = await limiter.check("k")
     // Oldest of the newest two is T0 - 300, so room returns in 700 ms (not 100 from T0 - 900).
     assertEquals(decision.allowed ? -1 : decision.retryAfterMs, 700)
+  })
+})
+
+describe("failOpenLimiter", () => {
+  /** A fake store that throws on every call while `down` is true. */
+  function flakyStore() {
+    const store = fakeStore()
+    const state = { down: false }
+    const guard = <A extends unknown[], R>(call: (...args: A) => Promise<R>) => (...args: A) =>
+      state.down ? Promise.reject(new Error("store is down")) : call(...args)
+    return {
+      state,
+      entries: store.entries,
+      store: {
+        read: guard(store.read),
+        write: guard(store.write),
+        delete: guard(store.delete),
+      } satisfies RateLimitStore,
+    }
+  }
+
+  it("allows the request and reports the error when the store fails", async () => {
+    const { state, store } = flakyStore()
+    const errors: [string, string][] = []
+    const limiter = failOpenLimiter(
+      createStoreLimiter(store, { windowMs: 1_000, limit: 3, clock: fakeClock().clock }),
+      { limit: 3, onError: (error, key) => void errors.push([(error as Error).message, key]) },
+    )
+    state.down = true
+
+    const decision = await limiter.check("k")
+
+    assertEquals(decision, {
+      allowed: true,
+      remaining: 3,
+      retryAfterMs: 0,
+      resetAfterMs: 0,
+      limit: 3,
+    })
+    assertEquals(errors, [["store is down", "k"]])
+  })
+
+  it("keeps the wrapped limiter's own decisions while the store works", async () => {
+    const { store } = flakyStore()
+    const limiter = failOpenLimiter(
+      createStoreLimiter(store, { windowMs: 1_000, limit: 3, clock: fakeClock().clock }),
+      { limit: 3, onError: () => {} },
+    )
+
+    const allowed = []
+    for (let i = 0; i < 4; i++) allowed.push((await limiter.check("k")).allowed)
+
+    assertEquals(allowed, [true, true, true, false])
+  })
+
+  it("does not refund another request's event after a fail-open decision", async () => {
+    const { state, entries, store } = flakyStore()
+    const limiter = failOpenLimiter(
+      createStoreLimiter(store, { windowMs: 1_000, limit: 3, clock: fakeClock().clock }),
+      { limit: 3, onError: () => {} },
+    )
+    await limiter.check("k")
+    state.down = true
+    const failedOpen = await limiter.check("k")
+    state.down = false
+
+    await limiter.refund?.("k", failedOpen.at)
+
+    assertEquals(entries.get("k"), [T0])
+  })
+
+  it("still allows the request when onError throws", async () => {
+    const { state, store } = flakyStore()
+    const limiter = failOpenLimiter(
+      createStoreLimiter(store, { windowMs: 1_000, limit: 3, clock: fakeClock().clock }),
+      {
+        limit: 3,
+        onError: () => {
+          throw new Error("reporter is down")
+        },
+      },
+    )
+    state.down = true
+
+    const decision = await limiter.check("k")
+
+    assertEquals(decision.allowed, true)
+  })
+
+  it("still allows the request when onError rejects", async () => {
+    const { state, store } = flakyStore()
+    const limiter = failOpenLimiter(
+      createStoreLimiter(store, { windowMs: 1_000, limit: 3, clock: fakeClock().clock }),
+      { limit: 3, onError: () => Promise.reject(new Error("reporter is down")) },
+    )
+    state.down = true
+
+    const decision = await limiter.check("k")
+    // An unhandled rejection would fail this test once the event loop turns.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assertEquals(decision.allowed, true)
+  })
+
+  it("passes a store error from reset through", async () => {
+    const { state, store } = flakyStore()
+    const limiter = failOpenLimiter(
+      createStoreLimiter(store, { windowMs: 1_000, limit: 3, clock: fakeClock().clock }),
+      { limit: 3, onError: () => {} },
+    )
+    state.down = true
+
+    const error = await Promise.resolve(limiter.reset("k")).then(() => null, (error) => error)
+
+    assertEquals((error as Error | null)?.message, "store is down")
+  })
+
+  it("has no refund when the wrapped limiter has none", () => {
+    const limiter = failOpenLimiter(
+      {
+        check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0, resetAfterMs: 0, limit: 1 }),
+        reset: () => {},
+      },
+      { limit: 1, onError: () => {} },
+    )
+
+    assertEquals(limiter.refund, undefined)
+  })
+
+  it("reports and swallows a refund that fails", async () => {
+    const { state, store } = flakyStore()
+    const errors: string[] = []
+    const limiter = failOpenLimiter(
+      createStoreLimiter(store, { windowMs: 1_000, limit: 3, clock: fakeClock().clock }),
+      { limit: 3, onError: (_, key) => void errors.push(key) },
+    )
+    const decision = await limiter.check("k")
+    state.down = true
+
+    await limiter.refund?.("k", decision.at)
+
+    assertEquals(errors, ["k"])
   })
 })

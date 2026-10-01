@@ -651,6 +651,58 @@ describe("skipSuccessful", () => {
     assertEquals((await send("bad")).status, 429)
   })
 
+  /** A limiter whose `refund` always throws, as one over a store that just went down. */
+  function failingRefundApp(onRefundError?: (error: unknown, key: string) => unknown) {
+    const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 3, clock: () => T0 })
+    const app = new Hono()
+    app.use(
+      createRateLimitMiddleware(
+        {
+          check: (key) => limiter.check(key),
+          reset: (key) => limiter.reset(key),
+          refund: () => Promise.reject(new Error("store is down")),
+        },
+        {
+          remoteAddr: () => undefined,
+          keyResolver: () => "user:1",
+          skipSuccessful: true,
+          onRefundError: onRefundError as (error: unknown, key: string) => void,
+        },
+      ),
+    )
+    app.get("/check", (c) => {
+      c.header("Set-Cookie", "session=new; HttpOnly")
+      return c.text("yes")
+    })
+    return () => app.request(new Request("http://localhost/check"))
+  }
+
+  it("keeps a successful response and its Set-Cookie when the refund fails", async () => {
+    const errors: string[] = []
+    const send = failingRefundApp((error, key) => {
+      errors.push(`${key}: ${(error as Error).message}`)
+    })
+
+    const response = await send()
+
+    assertEquals(response.status, 200)
+    assertEquals(response.headers.get("set-cookie"), "session=new; HttpOnly")
+    assertEquals(await response.text(), "yes")
+    assertEquals(errors, ["user:1: store is down"])
+    assertEquals(response.headers.get("ratelimit-remaining"), "2")
+  })
+
+  it("keeps the response when onRefundError itself throws or rejects", async () => {
+    const throwing = await failingRefundApp(() => {
+      throw new Error("reporter is down")
+    })()
+    const rejecting = await failingRefundApp(() => Promise.reject(new Error("reporter is down")))()
+    // An unhandled rejection would fail this test once the event loop turns.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assertEquals([throwing.status, rejecting.status], [200, 200])
+  })
+
   it("keeps a redirect a redirect when the budget is given back", async () => {
     const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 3, clock: () => T0 })
     const app = new Hono()

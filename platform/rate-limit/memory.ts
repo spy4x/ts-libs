@@ -541,6 +541,68 @@ export function createStoreLimiter(
   return new StoreRateLimiter(store, options)
 }
 
+/** Options for {@link failOpenLimiter}. */
+export interface FailOpenLimiterOptions {
+  /** Reported as `limit` and `remaining` on a decision made because the limiter failed. */
+  limit: number
+  /**
+   * Told about every error the wrapper swallowed, with the key it was checking or refunding. An
+   * `onError` that throws or rejects is ignored: a failing reporter must not fail the request.
+   */
+  onError: (error: unknown, key: string) => void | Promise<void>
+}
+
+/**
+ * Wrap a limiter so that a failing backend lets requests through instead of failing them.
+ *
+ * A shared store can go down. Left alone, the limiter throws and the request fails, which is right
+ * for a limit that stands between a guesser and a password or a one-time code. For a limit that
+ * only shields capacity, a store outage should not take the routes behind it down too: wrap it.
+ *
+ * - `check` that throws reports the error and answers allowed, with `remaining` equal to `limit`
+ *   and no `at`, since nothing was recorded.
+ * - `refund` without `at` does nothing, so a refund after a fail-open decision cannot remove
+ *   another request's event. Both limiters in this module always set `at` on an allowed decision.
+ *   A `refund` that throws is reported and swallowed: the request it follows already succeeded.
+ * - `reset` is passed through and still throws; it is an operator's action, not a request's.
+ *
+ * Never wrap a limit whose job is to stop guessing: an attacker who can slow the store down would
+ * get unlimited attempts.
+ */
+export function failOpenLimiter(
+  limiter: RateLimiter,
+  options: FailOpenLimiterOptions,
+): RateLimiter {
+  const { limit, onError } = options
+  const report = (error: unknown, key: string): void => {
+    try {
+      Promise.resolve(onError(error, key)).catch(() => {})
+    } catch {
+      // A failing reporter must not fail the request it reports on.
+    }
+  }
+  const refund = limiter.refund?.bind(limiter)
+  return {
+    async check(key: string, now?: number): Promise<RateLimitDecision> {
+      try {
+        return await limiter.check(key, now)
+      } catch (error) {
+        report(error, key)
+        return { allowed: true, remaining: limit, retryAfterMs: 0, resetAfterMs: 0, limit }
+      }
+    },
+    reset: (key: string, now?: number) => limiter.reset(key, now),
+    refund: refund === undefined ? undefined : async (key: string, at?: number) => {
+      if (at === undefined) return
+      try {
+        await refund(key, at)
+      } catch (error) {
+        report(error, key)
+      }
+    },
+  }
+}
+
 /**
  * Build a limiter key from an identity.
  *

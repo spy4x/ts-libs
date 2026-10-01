@@ -111,6 +111,7 @@ const optionsSchema = arkType({
   "headers?": "object",
   // Checked by hand below: arktype reads `Function` as "object" and words the error that way.
   "skipSuccessful?": "unknown",
+  "onRefundError?": "unknown",
 })
 
 /**
@@ -205,6 +206,14 @@ export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never
    * for one that does not. `RateLimit-Remaining` on a successful response reflects the give-back.
    */
   skipSuccessful?: boolean | ((response: Response) => boolean | Promise<boolean>)
+  /**
+   * Told when giving a slot back after a successful response fails, for example because the shared
+   * store went down after the handler ran. The response is sent unchanged either way: a failed
+   * refund only leaves the slot spent, which errs on the safe side, and turning a completed sign-in
+   * into a 500 would lose what the handler did, such as a new session cookie. An `onRefundError`
+   * that throws or rejects is ignored.
+   */
+  onRefundError?: (error: unknown, key: string) => void | Promise<void>
 }
 
 /**
@@ -273,6 +282,19 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
       : typeof skip === "function"
       ? skip as (response: Response) => boolean | Promise<boolean>
       : undefined
+  const onRefundError = parsed.onRefundError
+  if (onRefundError !== undefined && typeof onRefundError !== "function") {
+    throw new Error("invalid rate limit middleware options: onRefundError must be a function")
+  }
+  const reportRefundError = (error: unknown, key: string): void => {
+    try {
+      Promise.resolve(
+        (onRefundError as RateLimitMiddlewareOptions<E>["onRefundError"])?.(error, key),
+      ).catch(() => {})
+    } catch {
+      // A failing reporter must not fail the response it reports on.
+    }
+  }
   const refund = rateLimiter.refund?.bind(rateLimiter)
   if (isSuccessful !== undefined && refund === undefined) {
     throw new Error(
@@ -302,7 +324,13 @@ export function createRateLimitMiddleware<E extends Env = Record<string, never>>
     if (decision.allowed) {
       await next()
       if (isSuccessful !== undefined && await isSuccessful(c.res)) {
-        await refund?.(key, decision.at)
+        try {
+          await refund?.(key, decision.at)
+        } catch (error) {
+          // The slot stays spent and the response goes out as the handler built it.
+          reportRefundError(error, key)
+          return
+        }
         // Rebuilt first: a response from `Response.redirect()` or `fetch()` has immutable headers.
         c.res = new Response(c.res.body, c.res)
         c.res.headers.set(
