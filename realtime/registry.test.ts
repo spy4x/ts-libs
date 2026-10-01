@@ -369,6 +369,50 @@ describe("ConnectionRegistry", () => {
   })
 })
 
+describe("ConnectionRegistry socketIdsFor", () => {
+  const url = "wss://api.example.test/ws"
+
+  it("lists exactly the ids attached for that user", () => {
+    const { registry, factory } = createHarness()
+    const a = registry.attach("user-1", factory.open(url))
+    const b = registry.attach("user-1", factory.open(url))
+    const other = registry.attach("user-2", factory.open(url))
+
+    expect(registry.socketIdsFor("user-1")).toEqual([a!.id, b!.id])
+    expect(registry.socketIdsFor("user-2")).toEqual([other!.id])
+  })
+
+  it("drops a socket id once that socket is detached", () => {
+    const { registry, factory } = createHarness()
+    const a = registry.attach("user-1", factory.open(url))
+    const b = registry.attach("user-1", factory.open(url))
+
+    registry.detach(a!.id)
+    expect(registry.socketIdsFor("user-1")).toEqual([b!.id])
+
+    registry.detach(b!.id)
+    expect(registry.socketIdsFor("user-1")).toEqual([])
+  })
+
+  it("returns an empty array for an unknown user", () => {
+    const { registry } = createHarness()
+
+    expect(registry.socketIdsFor("nobody")).toEqual([])
+  })
+
+  it("returns a copy the caller can change without affecting the registry", () => {
+    const { registry, factory } = createHarness()
+    const a = registry.attach("user-1", factory.open(url))
+
+    const ids = registry.socketIdsFor("user-1")
+    ids.push("forged")
+    ids.length = 0
+
+    expect(registry.socketIdsFor("user-1")).toEqual([a!.id])
+    expect(registry.connectionsFor("user-1")).toBe(1)
+  })
+})
+
 describe("ConnectionRegistry limits", () => {
   it("refuses a socket once a user is at the connection cap", () => {
     // Issue #65, finding 5: one user id was measured holding 50 000 sockets.
