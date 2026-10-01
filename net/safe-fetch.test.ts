@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert"
+import { assertEquals, assertRejects, assertStrictEquals, assertStringIncludes } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import {
   DEFAULT_MAX_REDIRECTS,
@@ -989,7 +989,7 @@ describe("defaultFetcher", () => {
     assertEquals(seen.length, 1)
     assertEquals(seen[0]?.method, "POST")
     assertEquals(seen[0]?.headers, { "x-trace": "one" })
-    assertEquals(seen[0]?.signal, signal)
+    assertStrictEquals(seen[0]?.signal, signal)
   })
 
   it("keeps a POST a POST across a 307 when safeFetch uses it by default", async () => {
