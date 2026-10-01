@@ -1,11 +1,10 @@
 /**
  * Tests for the Postgres pool tuning and environment parsing.
  *
- * `buildPostgresOptions` is asserted rather than `createSql`, because a pool option is
- * only observable through a live server: `postgres` opens its first connection on the
- * first query, and this suite has none. The four values are checked on the object the
- * driver receives, and the claim that they reach the wire is the one thing here a
- * reviewer should treat as untested.
+ * No test here connects: `postgres` opens its first connection on the first query, and
+ * it keeps the options it resolved on the client. So the pool values are checked twice
+ * without a server: on the object `buildPostgresOptions` returns, and on `sql.options`
+ * of a client `createSql` built, which shows the caller's values reach the driver.
  */
 
 import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert"
@@ -196,6 +195,27 @@ Deno.test("createSql hands the four pool values to the driver", () => {
   assertStrictEquals(options.idle_timeout, DEFAULT_POOL_OPTIONS.idleTimeout)
   assertStrictEquals(options.max_lifetime, DEFAULT_POOL_OPTIONS.maxLifetimeSeconds)
   assertStrictEquals(options.host?.toString(), "db.internal")
+})
+
+Deno.test("createSql passes every pool setting the caller chose to the driver", async () => {
+  // Every value differs from its default, so a `createSql` that dropped the caller's pool
+  // settings and fell back to the defaults would fail here.
+  const sql = createSql({
+    connection: { host: "db.internal", user: "app", password: "p", database: "app" },
+    max: 3,
+    idleTimeout: 7,
+    maxLifetimeSeconds: 900,
+    connectTimeout: 4,
+  })
+  try {
+    const options = (sql as unknown as { options: Record<string, unknown> }).options
+    assertEquals(
+      [options.max, options.idle_timeout, options.max_lifetime, options.connect_timeout],
+      [3, 7, 900, 4],
+    )
+  } finally {
+    await sql.end({ timeout: 0 })
+  }
 })
 
 Deno.test("createSqlFromEnv returns undefined rather than a client pointed at nothing", () => {
