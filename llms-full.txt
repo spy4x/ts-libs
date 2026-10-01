@@ -911,6 +911,11 @@ const result = await sender.send(user.id, { title: "Backup done", body: null, ur
 subscription. A 404 or 410 from the push service deletes that subscription; every other failure
 keeps it, and so does a subscription with malformed keys, which is reported as such.
 
+`sendTo(subscription, message, options?)` pushes to one given subscription (a welcome push to the
+device that just subscribed, a test push from a settings page) and returns the same result with one
+delivery. It never reads or writes the store. A 404 or 410 gives status `gone` with
+`deleted: false`: there is no user to delete it for, so the caller removes the subscription.
+
 Keys, encryption (RFC 8291) and VAPID signing come from `@negrel/webpush` and `@negrel/http-ece`;
 the request is sent here, through the injectable `fetch` option, with `redirect: "manual"` and one
 abort signal that also bounds the DNS check. The library's own `pushMessage` is not used: it follows
