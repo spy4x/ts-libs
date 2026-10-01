@@ -547,6 +547,38 @@ describe("MemoryRateLimiter", () => {
   })
 })
 
+describe("a fractional limit", () => {
+  it("MemoryRateLimiter rounds 2.9 down: allows 2 requests and reports limit 2", () => {
+    const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 2.9, clock: () => T0 })
+    const first = limiter.check("a")
+    assertEquals(first.limit, 2)
+    assertEquals(first.allowed, true)
+    assertEquals(limiter.check("a").allowed, true)
+    assertEquals(limiter.check("a").allowed, false)
+  })
+
+  it("MemoryRateLimiter rounds 1.5 down: allows 1 request", () => {
+    const limiter = new MemoryRateLimiter({ windowMs: 1000, limit: 1.5, clock: () => T0 })
+    assertEquals(limiter.check("a").allowed, true)
+    assertEquals(limiter.check("a").allowed, false)
+  })
+
+  it("StoreRateLimiter rounds 2.9 down: allows 2 requests and reports limit 2", async () => {
+    const limiter = createStoreLimiter(fakeStore(), { windowMs: 1000, limit: 2.9, clock: () => T0 })
+    const first = await limiter.check("a")
+    assertEquals(first.limit, 2)
+    assertEquals(first.allowed, true)
+    assertEquals((await limiter.check("a")).allowed, true)
+    assertEquals((await limiter.check("a")).allowed, false)
+  })
+
+  it("StoreRateLimiter rounds 1.5 down: allows 1 request", async () => {
+    const limiter = createStoreLimiter(fakeStore(), { windowMs: 1000, limit: 1.5, clock: () => T0 })
+    assertEquals((await limiter.check("a")).allowed, true)
+    assertEquals((await limiter.check("a")).allowed, false)
+  })
+})
+
 describe("createMemoryRateLimiter", () => {
   it("builds a limiter that limits", () => {
     const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 10, clock: () => T0 })

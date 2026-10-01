@@ -94,7 +94,7 @@ export interface RateLimitDecision {
 export interface RateLimitOptions {
   /** Window length in milliseconds. */
   windowMs: number
-  /** Requests allowed per window per key. */
+  /** Requests allowed per window per key. A fractional limit is rounded down. */
   limit: number
   /** Clock the limiter reads. Defaults to {@link systemClock}. */
   clock?: Clock

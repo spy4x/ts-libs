@@ -3,9 +3,16 @@ import { expect } from "@std/expect"
 import { type } from "arktype"
 
 import { makeStorage, memoryStorage, type StorageLike } from "./storage.ts"
+import { describeStorageContract } from "./storage-contract.test.ts"
 
 const themeSchema = type("'light'|'dark'")
 const profileSchema = type({ name: "string", age: "number" })
+
+describeStorageContract("memoryStorage", () => ({
+  storage: memoryStorage(),
+  prefix: "",
+  close: () => {},
+}))
 
 describe("memoryStorage", () => {
   it("behaves like the Storage interface it stands in for", () => {

@@ -2013,6 +2013,8 @@ app.use(createRateLimitMiddleware(limiter, {
 }))
 ```
 
+`limit` must be at least 1; a fractional limit is rounded down (`limit: 2.9` allows 2 requests).
+
 Leave `trustedProxy` off (the default) unless a proxy in front strips and rewrites the forwarding
 headers; with it on and no proxy, the limiter is trivially defeated — see the trust boundary below.
 `trustedProxy` also accepts a single header name (`"x-real-ip"`, `"x-forwarded-for"` or
