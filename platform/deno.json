@@ -42,6 +42,7 @@
     "./universal/format-number": "./universal/format-number.ts",
     "./universal/honeypot": "./universal/honeypot.ts",
     "./universal/key-value-store": "./universal/key-value-store.ts",
+    "./universal/metrics": "./universal/metrics.ts",
     "./universal/money": "./universal/money.ts",
     "./universal/result": "./universal/result.ts",
     "./universal/schema": "./universal/schema.ts",

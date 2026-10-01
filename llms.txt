@@ -1007,6 +1007,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `KeyValueStore` (interface), `jsr:@spy4x/platform/universal/key-value-store`: Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias (#71).
 
+### `jsr:@spy4x/platform/universal/metrics`
+
+- `Counter` (interface), `jsr:@spy4x/platform/universal/metrics`: A monotonically increasing count, kept separately for every distinct set of labels.
+- `MetricLabels` (type), `jsr:@spy4x/platform/universal/metrics`: The labels of one series, for example `{ event: "UserSignedOut", listener: "close" }`.
+- `createCounter` (function), `jsr:@spy4x/platform/universal/metrics`: Creates a counter.
+- `renderPrometheus` (function), `jsr:@spy4x/platform/universal/metrics`: The counters in the Prometheus text exposition format (version 0.0.4), ready to serve with `Content-Type: text/plain; version=0.0.4`.
+
 ### `jsr:@spy4x/platform/universal/money`
 
 - `MoneyOptions` (interface), `jsr:@spy4x/platform/universal/money`: Optional, additive overrides for formatMoney, formatMoneyParts, parseMoney and currencyDecimals.
@@ -2081,4 +2088,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 7dd3391a387b39e7c1d9f5a3adcbc4bc9d12a68ee7794534b31f0b3d795a6a94 -->
+<!-- export surface: sha256 9c6c7b30c10c5d15ca2db5c2cbced98c99f1fe3401f015f4294256b0183f129e -->
