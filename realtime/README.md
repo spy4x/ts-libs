@@ -383,6 +383,51 @@ microtask, the way a real `WebSocket` does. It used to close synchronously,
 which every other suite in this package (and a host testing its own wiring)
 inherited without knowing it.
 
+## Offline outbox (`@spy4x/realtime/outbox`)
+
+A client queue for commands written while the connection was down, sent in order when it is back.
+It knows nothing about what an entity is: the payload is a type parameter, the entity id a string
+the caller picks, and everything else is a port.
+
+```ts
+import { createMemoryOutboxStore, createOutbox, createWebLock } from "@spy4x/realtime/outbox"
+
+const outbox = createOutbox<NotePayload, Note>({
+  store: createMemoryOutboxStore(), // or an IndexedDB store of yours, one per user
+  lock: createWebLock(navigator.locks, `outbox:${userId}`),
+  canSend: () => socketIsOpen() && pageUserIs(userId),
+  send: (command, key) => callOverSocket(command, key), // resolves the server's entity
+  fetchServer: (id) => readEntity(id), // null when it is gone
+  classify: (error) => ({ kind: "unreachable" }), // map your errors to a SendFailure
+  cache: { put: saveToLocalCache, remove: removeFromLocalCache },
+})
+await outbox.submit({ kind: "update", entityId: id, payload, version: 3 })
+await outbox.flush() // after a reconnect and after a pushed hint
+```
+
+The rules it keeps, each one a lost edit found in a product that wrote the queue by hand:
+
+- **One entry per entity.** A later edit replaces the waiting one; create then delete before any
+  send sends nothing.
+- **A fresh key after an unknown outcome.** An entry whose send may have reached the server gets a
+  new idempotency key when it is edited again, so the server does not answer the old key and drop
+  the new text.
+- **Clear only while the key matches.** After a send, an entry is removed, or marked a conflict,
+  only if the queue still holds it under the key that was sent. An edit another tab made in the
+  meantime stays queued.
+- **One writer at a time.** Every step runs under the lock: `createPromiseLock()` for one tab,
+  `createWebLock(navigator.locks, name)` for every tab of one browser. Name the lock for the user.
+- **Never as someone else.** `canSend()` is checked before every entry; a queue is not sent while
+  the page is signed in as another user.
+- **Conflicts wait for a person.** A stale, gone or refused write is marked, never applied over
+  the other side; `keepMine(seq)` sends it again on the server's version, `useTheirs(seq)` drops
+  it.
+
+A created entity starts at version 1: after an attempted create, a delete is sent against version
+
+1. The library ships the queue, its storage port and an in-memory store. It ships no IndexedDB
+   store and adds no dependency; implement `OutboxStore` over Dexie or raw IndexedDB in the app.
+
 ## Explicitly not implemented
 
 - **The sync protocol.** Bootstrap, the pull endpoint, `authorization_revision`,
