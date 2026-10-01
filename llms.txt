@@ -1256,6 +1256,25 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `RecipientResolver` (type), `jsr:@spy4x/realtime/notify`: Resolves the users entitled to see one change.
 - `UserFanout` (interface), `jsr:@spy4x/realtime/notify`: The only fan-out capability the notify path is given: explicit recipients.
 
+### `jsr:@spy4x/realtime/outbox`
+
+- `Change` (type), `jsr:@spy4x/realtime/outbox`: What a person did to an entity.
+- `ConflictReason` (type), `jsr:@spy4x/realtime/outbox`: Why a write stopped the queue for its entity and now waits for a person: - `version`: the entity changed on the server since this write was based on it; - `gone`: the entity was deleted on the server; - `rejected`: the server refused the write (for example the role no longer allows it).
+- `LockManagerLike` (interface), `jsr:@spy4x/realtime/outbox`: The part of a browser's `LockManager` the outbox uses.
+- `Outbox` (type), `jsr:@spy4x/realtime/outbox`: The outbox as the app uses it.
+- `OutboxCommand` (interface), `jsr:@spy4x/realtime/outbox`: The command the app sends for one entry.
+- `OutboxEntry` (interface), `jsr:@spy4x/realtime/outbox`: One write made while offline, waiting to be sent.
+- `OutboxKind` (type), `jsr:@spy4x/realtime/outbox`: What an outgoing write does to an entity.
+- `OutboxLock` (type), `jsr:@spy4x/realtime/outbox`: Runs `work` while no other caller holds the queue.
+- `OutboxPorts` (interface), `jsr:@spy4x/realtime/outbox`: What the outbox needs from the outside.
+- `OutboxStore` (interface), `jsr:@spy4x/realtime/outbox`: Where the queue is kept.
+- `Outcome` (type), `jsr:@spy4x/realtime/outbox`: How a change ended for the person who made it.
+- `SendFailure` (type), `jsr:@spy4x/realtime/outbox`: How the outbox reads a failed send: - `unreachable`: the outcome is unknown or the server was busy; keep the entry and stop; - `version`: the write was based on a version the server has moved past; - `not-found`: the entity does not exist on the server; - `already-exists`: a create hit an id that is taken; - `rejected`: the server refused it for good; `message` says why.
+- `createMemoryOutboxStore` (function), `jsr:@spy4x/realtime/outbox`: A store in memory, with the behaviour of the IndexedDB one that the queue relies on.
+- `createOutbox` (function), `jsr:@spy4x/realtime/outbox`: The queue: see the module documentation for the rules it keeps.
+- `createPromiseLock` (function), `jsr:@spy4x/realtime/outbox`: A lock for one tab: runs the work one piece at a time, in the order asked.
+- `createWebLock` (function), `jsr:@spy4x/realtime/outbox`: A lock shared by every tab of one browser, through Web Locks.
+
 ### `jsr:@spy4x/realtime/protocol`
 
 - `ChangeHint` (interface), `jsr:@spy4x/realtime/protocol`: A hint that a group moved to `sequence`.
@@ -1989,4 +2008,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 5d25df55a797a17c67186cd8ab98ba967b9a54d4802a7dd83fea7a71206c82da -->
+<!-- export surface: sha256 a9296c2ff22b8a789e591b039a61645422245a170aa843504844d0095d99ac26 -->
