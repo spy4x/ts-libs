@@ -48,6 +48,22 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+/**
+ * A command whose `next` signals `started` when it runs, which is when the middleware holds the
+ * claim. Awaiting `started` orders a later send after the claim without a timer: each send hashes
+ * its input on a worker thread, so under load a send started later can reach the store first.
+ */
+function slowCommand<T>(result: Promise<T>) {
+  const started = deferred<void>()
+  return {
+    started: started.promise,
+    next: () => {
+      started.resolve()
+      return result
+    },
+  }
+}
+
 /** The error a call is refused with; fails the test when the call succeeds. */
 async function refusal(call: Promise<unknown>): Promise<IdempotencyError> {
   try {
@@ -130,11 +146,13 @@ describe("idempotency middleware", () => {
       },
     })
     let runs = 0
+    const slow = slowCommand(finishFirst.promise)
 
     const first = run(command(), () => {
       runs++
-      return finishFirst.promise
+      return slow.next()
     })
+    await slow.started
     const repeat = run(command(), () => {
       runs++
       return Promise.resolve("second result")
@@ -148,18 +166,25 @@ describe("idempotency middleware", () => {
   it("fails a repeat with IN_PROGRESS when the first run outlives the wait", async () => {
     const store = new SpyStore()
     const never = deferred<string>()
+    const slept: number[] = []
     const run = createIdempotencyMiddleware({
       store,
       waitMs: 300,
       pollMs: 100,
-      sleep: () => Promise.resolve(),
+      sleep: (ms) => {
+        slept.push(ms)
+        return Promise.resolve()
+      },
     })
-    const first = run(command(), () => never.promise)
+    const slow = slowCommand(never.promise)
+    const first = run(command(), slow.next)
+    await slow.started
 
     const error = await refusal(run(command(), () => Promise.resolve("second")))
 
     expect(error).toBeInstanceOf(IdempotencyError)
     expect(error.code).toBe("IN_PROGRESS")
+    expect(slept).toEqual([100, 100, 100])
     never.resolve("done")
     await first
   })
@@ -229,27 +254,28 @@ describe("idempotency middleware", () => {
     let now = 0
     const store = new MemoryIdempotencyStore({ leaseSeconds: 30, now: () => now })
     const run = createIdempotencyMiddleware({ store, waitMs: 0 })
-    const slow = deferred<string>()
-    const second = deferred<string>()
+    const firstResult = deferred<string>()
+    const secondResult = deferred<string>()
+    const slow = slowCommand(firstResult.promise)
+    const second = slowCommand(secondResult.promise)
     let runs = 0
 
     const first = run(command(), () => {
       runs++
-      return slow.promise
+      return slow.next()
     })
-    await Promise.resolve()
-    await new Promise((done) => setTimeout(done, 0))
+    await slow.started
     now = 31_000
     const taken = run(command(), () => {
       runs++
-      return second.promise
+      return second.next()
     })
-    await new Promise((done) => setTimeout(done, 0))
-    slow.reject(new Error("first run failed"))
+    await second.started
+    firstResult.reject(new Error("first run failed"))
     await expect(first).rejects.toThrow("first run failed")
 
     const third = await refusal(run(command(), () => Promise.resolve("third")))
-    second.resolve("second result")
+    secondResult.resolve("second result")
     await taken
 
     expect(third.code).toBe("IN_PROGRESS")
