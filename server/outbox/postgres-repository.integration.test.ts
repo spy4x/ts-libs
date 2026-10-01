@@ -13,7 +13,7 @@
  * single-connection `Sql` clients at it with `search_path`, and drops the schema in a
  * `finally`. Nothing shared is touched.
  */
-import { assertEquals } from "@std/assert"
+import { assert, assertEquals } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import { createSql, type Sql } from "../db/index.ts"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
@@ -505,7 +505,10 @@ describe("delayed and repeating jobs against a real server", () => {
         const [row] = await tx<{ ms: number }[]>`
           SELECT round(extract(epoch FROM available_at - now()) * 1000)::int AS ms FROM outbox_events
         `
-        assertEquals(row.ms, 90_000)
+        // The delay is read back through a JS Date, which keeps milliseconds, while now() and the
+        // timestamptz column keep microseconds: the stored time can sit up to a millisecond early.
+        // The app clock would be 1500 ms off here.
+        assert(Math.abs(row.ms - 90_000) <= 1, `expected 90000 ms, got ${row.ms}`)
       })
     })
   })
