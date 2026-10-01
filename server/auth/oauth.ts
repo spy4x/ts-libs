@@ -15,7 +15,8 @@
  *   every exit, including a token or profile request that throws.
  * - `disconnect` deletes one key by id, and only when it is this provider's key of this user.
  * - With `signUp: "confirm"` a callback that would create a user stops instead and returns a
- *   single-use token, kept in the flow store under its SHA-256 hash for 10 minutes;
+ *   single-use token, kept in the flow store under the key method and the token's SHA-256 hash for
+ *   10 minutes, so only the sign-in that issued it can redeem it;
  *   `confirmSignUp(token)` creates the user. Signing in and linking stay automatic.
  *
  * Pending flows live in an {@link OAuthFlowStore}. The default keeps them in memory inside the
@@ -277,7 +278,10 @@ const PROVIDER_ID = /^[a-z0-9][a-z0-9-]{0,57}$/
 const RESOLVE_ATTEMPTS = 2
 /** How long a pending sign-up's token can be confirmed. */
 const SIGN_UP_TTL_MS = 600_000
-/** Flow-store key prefix of pending sign-ups, before the token's hash. */
+/**
+ * Flow-store key prefix of pending sign-ups, before the key method and the token's hash. The method
+ * binds a token to the sign-in that issued it, so a sign-in sharing the store cannot redeem it.
+ */
 const SIGN_UP_KEY_PREFIX = "sign-up:"
 
 const tokenResponse = type({
@@ -510,13 +514,18 @@ export function createOAuthSignIn(
     return { user, key, session, outcome, profile }
   }
 
+  /** Where a pending sign-up's token is kept: this sign-in's method and the token's hash. */
+  async function signUpKey(token: string): Promise<string> {
+    return `${SIGN_UP_KEY_PREFIX}${method}:${await sha256Hex(token)}`
+  }
+
   /** Keeps `profile` under the hash of a fresh token until the person confirms the sign-up. */
   async function holdSignUp(profile: OAuthProfile): Promise<OAuthPendingSignUp> {
     const token = randomBase64Url(STATE_BYTES)
     const expiresAt = new Date(clock.now() + SIGN_UP_TTL_MS)
     const { subject, email, emailVerified } = profile
     await flows.put(
-      `${SIGN_UP_KEY_PREFIX}${await sha256Hex(token)}`,
+      await signUpKey(token),
       { verifier: randomBase64Url(VERIFIER_BYTES), signUp: { subject, email, emailVerified } },
       expiresAt,
     )
@@ -525,7 +534,7 @@ export function createOAuthSignIn(
 
   async function confirmSignUp(token: string): Promise<OAuthSignInResult> {
     if (typeof token !== "string" || token === "") throw new OAuthSignInError("invalid-sign-up")
-    const entry = await flows.take(`${SIGN_UP_KEY_PREFIX}${await sha256Hex(token)}`)
+    const entry = await flows.take(await signUpKey(token))
     // Checked here too, so a store that ignores `expiresAt` still cannot confirm a stale sign-up.
     const live = entry?.expiresAt instanceof Date && entry.expiresAt.getTime() > clock.now()
     const profile = live ? keyable(entry.signUp ?? null) : null

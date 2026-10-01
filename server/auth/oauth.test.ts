@@ -24,6 +24,7 @@ import {
   type OAuthSignIn,
   OAuthSignInError,
   type OAuthSignInOptions,
+  type OAuthTakenFlow,
   pkceChallenge,
 } from "./oauth.ts"
 import {
@@ -624,7 +625,7 @@ describe("createOAuthSignIn: signUp confirm", () => {
     const { provider, oauth } = confirming(new MemoryAuthStore(), flows)
     const { token } = await pending(oauth, provider, BOB)
     expect(keys).toHaveLength(2)
-    expect(keys[1]).toBe(`sign-up:${await sha256Hex(token)}`)
+    expect(keys[1]).toBe(`sign-up:oauth:fake:${await sha256Hex(token)}`)
     expect(keys.some((key) => key.includes(token))).toBe(false)
   })
 
@@ -725,11 +726,59 @@ describe("createOAuthSignIn: signUp confirm", () => {
     const memory = createMemoryOAuthFlowStore({ clock: fixedClock() })
     const { provider, oauth } = confirming(new MemoryAuthStore(), memory)
     const { token } = await pending(oauth, provider, BOB)
-    const state = `sign-up:${await sha256Hex(token)}`
+    const state = `sign-up:oauth:fake:${await sha256Hex(token)}`
     const query = new URLSearchParams({ code: "code-x", state })
     expect(await failure(oauth.handleCallback({ query, browserState: state }))).toBe(
       "invalid-state",
     )
+  })
+
+  it("refuses a token issued by another sign-in that shares its flow store", async () => {
+    const store = new MemoryAuthStore()
+    const flows = createMemoryOAuthFlowStore({ clock: fixedClock() })
+    const fixture = memoryFixture(store)
+    const provider = createFakeProvider()
+    const alpha = createOAuthSignIn({
+      ...fakeOptions(fixture, provider, "alpha"),
+      flows,
+      signUp: "confirm",
+    })
+    const beta = createOAuthSignIn({
+      ...fakeOptions(fixture, provider, "beta"),
+      flows,
+      signUp: "confirm",
+    })
+    // The victim's account at beta has subject 123; the attacker holds an alpha token for 123.
+    const victim = await beta.confirmSignUp((await pending(beta, provider, { sub: "123" })).token)
+    const { token } = await pending(alpha, provider, { sub: "123" })
+    expect(await failure(beta.confirmSignUp(token))).toBe("invalid-sign-up")
+    expect(await store.listKeys(victim.user.id)).toHaveLength(1)
+    // The token still belongs to alpha.
+    expect((await alpha.confirmSignUp(token)).key.method).toBe("oauth:alpha")
+  })
+
+  it("refuses a token past its expiry even when the store still returns it", async () => {
+    // A third-party store that never expires anything: take returns whatever was put.
+    const kept = new Map<string, OAuthTakenFlow>()
+    const flows: OAuthFlowStore = {
+      put(key, flow, expiresAt) {
+        kept.set(key, { ...flow, expiresAt })
+        return Promise.resolve()
+      },
+      take(key) {
+        const flow = kept.get(key) ?? null
+        kept.delete(key)
+        return Promise.resolve(flow)
+      },
+    }
+    const { store, provider, clock, oauth } = confirming(new MemoryAuthStore(), flows)
+    const early = await pending(oauth, provider, ANN)
+    const late = await pending(oauth, provider, BOB)
+    clock.advance(600_000 - 1)
+    expect((await oauth.confirmSignUp(early.token)).outcome).toBe(OAuthOutcome.SignedUp)
+    clock.advance(1)
+    expect(await failure(oauth.confirmSignUp(late.token))).toBe("invalid-sign-up")
+    expect(await store.findKey("oauth:fake", "sub-bob")).toBeNull()
   })
 
   it("throws a TypeError for a signUp other than confirm", () => {

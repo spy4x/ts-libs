@@ -838,7 +838,8 @@ reach rule 3 or 4 creates nothing and returns `{ outcome: OAuthOutcome.PendingSi
 token, expiresAt }` instead; rules 1 and 2 still complete in the callback. Show the person the
 profile, keep `token` server-side or in an HttpOnly cookie, and call `confirmSignUp(token)` when
 they choose to create the account. The token is 256 random bits, works once and for 10 minutes, and
-only its SHA-256 hash is kept, in the same flow store as started flows (under `sign-up:`). Of
+only its SHA-256 hash is kept, in the same flow store as started flows (under `sign-up:<method>:`, so a token works only with the
+sign-in that issued it, even when several providers share one store). Of
 parallel confirmations of one token only one proceeds; the others, and an unknown, used or expired
 token, are refused as `invalid-sign-up`. `confirmSignUp` runs the whole resolution again, so a key
 or proven address that appeared meanwhile signs in or links instead of creating a duplicate.
