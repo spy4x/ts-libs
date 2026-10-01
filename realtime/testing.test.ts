@@ -14,7 +14,26 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 
 import { SocketState } from "./socket-port.ts"
-import { drainMicrotasks, FakeSocket } from "./testing.ts"
+import { describeSocketContract } from "./socket-contract.test.ts"
+import { drainMicrotasks, FakeSocket, FakeSocketFactory } from "./testing.ts"
+
+describeSocketContract("FakeSocket", () => {
+  const factory = new FakeSocketFactory({ autoOpen: false })
+  const socket = factory.open("wss://api.example.test/ws")
+  return Promise.resolve({
+    socket,
+    peer: {
+      accept: () => {
+        socket.openFromPeer()
+        return Promise.resolve()
+      },
+      received: (count) => Promise.resolve(socket.sent.slice(0, count)),
+      send: (data) => socket.receive(data),
+      close: (code, reason) => socket.dropFromPeer(code, reason),
+    },
+    close: () => Promise.resolve(),
+  })
+})
 
 describe("FakeSocket close", () => {
   it("moves to Closing immediately and only reaches Closed on a later microtask", async () => {

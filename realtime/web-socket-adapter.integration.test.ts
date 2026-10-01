@@ -24,6 +24,7 @@ import { PersistentCursorStore } from "./cursor.ts"
 import { RealtimeRequestError } from "./errors.ts"
 import { ConnectionRegistry } from "./registry.ts"
 import { MemoryKeyValueStore } from "./storage.ts"
+import { describeSocketContract } from "./socket-contract.test.ts"
 import { SocketState } from "./socket-port.ts"
 import { adaptWebSocket, createWebSocketFactory } from "./web-socket-adapter.ts"
 
@@ -339,5 +340,42 @@ describe("the real WebSocket adapter against a real local server", () => {
       registry.shutdown()
       await server.close()
     }
+  })
+})
+
+describeSocketContract("the real WebSocket adapter", () => {
+  const received: string[] = []
+  const serverSocket = Promise.withResolvers<WebSocket>()
+  const server = startServer((socket) => {
+    socket.addEventListener("message", (event) => received.push(String(event.data)))
+    serverSocket.resolve(socket)
+  })
+  const socket = createWebSocketFactory()(server.url)
+  return Promise.resolve({
+    socket,
+    peer: {
+      accept: async () => {
+        const peer = await serverSocket.promise
+        await waitFor(() => peer.readyState === WebSocket.OPEN)
+      },
+      received: async (count) => {
+        await waitFor(() => received.length >= count)
+        return received.slice(0, count)
+      },
+      send: (data) => {
+        serverSocket.promise.then((s) => s.send(data))
+      },
+      close: (code, reason) => {
+        serverSocket.promise.then((s) => s.close(code, reason))
+      },
+    },
+    close: async () => {
+      try {
+        socket.close()
+      } catch {
+        // Already closed.
+      }
+      await server.close()
+    },
   })
 })

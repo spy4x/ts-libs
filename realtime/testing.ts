@@ -188,7 +188,7 @@ export class FakeSocket implements ManagedSocket {
     this.closeCalls.push({ code, reason })
     if (this.#state === SocketState.Closing || this.#state === SocketState.Closed) return
     this.#state = SocketState.Closing
-    queueMicrotask(() => this.#shutdown({ code, reason, abnormal: code !== 1000 }))
+    queueMicrotask(() => this.#shutdown({ code, reason, abnormal: false }))
   }
 
   onOpen(handler: () => void): Unsubscribe {
@@ -216,9 +216,14 @@ export class FakeSocket implements ManagedSocket {
     for (const handler of [...this.#openHandlers]) handler()
   }
 
-  /** The peer dropped the connection. Fires the close handlers with an abnormal code. */
+  /**
+   * The peer dropped the connection. Fires the close handlers.
+   *
+   * Like a real `WebSocket`, the close counts as abnormal only when no close handshake finished,
+   * which is code `1006`; a peer that closes with any other code, `1000` or not, is a clean close.
+   */
   dropFromPeer(code = 1006, reason = "connection lost"): void {
-    this.#shutdown({ code, reason, abnormal: code !== 1000 })
+    this.#shutdown({ code, reason, abnormal: code === 1006 })
   }
 
   /** Deliver one frame from the peer. Ignored once the socket is closed. */
