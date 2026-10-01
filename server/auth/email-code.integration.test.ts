@@ -6,16 +6,14 @@
  * first session surviving the second login shows the key was kept.
  *
  * Isolation: every test creates its own schema from `uniqueIdentifier`, applies
- * `AUTH_POSTGRES_SCHEMA` inside it, and drops it in a `finally`. The schema helper is a copy of the
- * one in `postgres.integration.test.ts`: importing that file would register its tests again.
+ * `AUTH_POSTGRES_SCHEMA` inside it (`openAuthSchema`), and drops it in a `finally`.
  */
 
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import postgres from "postgres"
-import { buildPostgresOptions, type Sql } from "../db/index.ts"
+import type { Sql } from "../db/index.ts"
 import { createPasswordHasher, SessionManager } from "../sign-in/mod.ts"
-import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
+import { postgresSettings, requireReachable } from "@integration-testing"
 import {
   createEmailCodeSignIn,
   EMAIL_CODE_METHOD,
@@ -26,11 +24,8 @@ import {
 import { AuthConflictError, type AuthSessionRecord } from "./model.ts"
 import { createPasswordSignIn, PASSWORD_METHOD, type PasswordSignIn } from "./password.ts"
 import type { AuthStore } from "./store.ts"
-import {
-  AUTH_POSTGRES_SCHEMA,
-  createPostgresAuthStore,
-  createPostgresSessionStore,
-} from "./postgres.ts"
+import { openAuthSchema } from "./postgres-schema-fixture.test.ts"
+import { createPostgresAuthStore, createPostgresSessionStore } from "./postgres.ts"
 
 const PEPPER = "test-pepper-not-a-real-secret-0123456789"
 const ADDRESS = "victim@example.com"
@@ -51,54 +46,39 @@ async function withProvider(body: (harness: Harness) => Promise<void>): Promise<
   const settings = postgresSettings()
   await requireReachable(settings.address)
 
-  const schema = uniqueIdentifier("it_email_code")
-  const admin = postgres({
-    ...buildPostgresOptions({ connection: settings.connection, max: 1 }),
-    onnotice: () => {},
-  }) as unknown as Sql
+  const { sql, close } = await openAuthSchema({
+    prefix: "it_email_code",
+    connection: settings.connection,
+    poolSize: 4,
+  })
   try {
-    await admin`CREATE SCHEMA ${admin(schema)}`
-    const sql = postgres({
-      ...buildPostgresOptions({ connection: settings.connection, max: 4 }),
-      connection: { application_name: schema, search_path: schema },
-      onnotice: () => {},
-    }) as unknown as Sql
-    try {
-      await sql.unsafe(AUTH_POSTGRES_SCHEMA)
-      const store = createPostgresAuthStore(sql)
-      const sessions = new SessionManager<AuthSessionRecord>({
-        store: createPostgresSessionStore(sql),
-        pepper: PEPPER,
-        durationMinutes: 60,
-      })
-      const sent: string[] = []
-      const provider = createEmailCodeSignIn({
-        store,
-        sessions,
-        sendCode: (_email, code) => {
-          sent.push(code)
-          return Promise.resolve()
-        },
-      })
-      const codeFor = async (email = ADDRESS) => {
-        await provider.requestCode(email)
-        return sent[sent.length - 1]
-      }
-      const passwords = createPasswordSignIn({
-        store,
-        sessions,
-        hasher: createPasswordHasher({ pepper: PEPPER, iterations: 100_000 }),
-      })
-      await body({ sql, store, sessions, provider, passwords, codeFor })
-    } finally {
-      await sql.end()
+    const store = createPostgresAuthStore(sql)
+    const sessions = new SessionManager<AuthSessionRecord>({
+      store: createPostgresSessionStore(sql),
+      pepper: PEPPER,
+      durationMinutes: 60,
+    })
+    const sent: string[] = []
+    const provider = createEmailCodeSignIn({
+      store,
+      sessions,
+      sendCode: (_email, code) => {
+        sent.push(code)
+        return Promise.resolve()
+      },
+    })
+    const codeFor = async (email = ADDRESS) => {
+      await provider.requestCode(email)
+      return sent[sent.length - 1]
     }
+    const passwords = createPasswordSignIn({
+      store,
+      sessions,
+      hasher: createPasswordHasher({ pepper: PEPPER, iterations: 100_000 }),
+    })
+    await body({ sql, store, sessions, provider, passwords, codeFor })
   } finally {
-    try {
-      await admin`DROP SCHEMA IF EXISTS ${admin(schema)} CASCADE`
-    } finally {
-      await admin.end()
-    }
+    await close()
   }
 }
 
