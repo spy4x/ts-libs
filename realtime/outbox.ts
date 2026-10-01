@@ -366,8 +366,8 @@ export function createOutbox<P, S extends { version: number }>(ports: OutboxPort
    * Call it after a change, after a reconnect and after every push that is news.
    */
   async function flush(): Promise<void> {
-    const waiting = (await locked(reload)).filter((entry) => entry.status === "pending")
-    for (const entry of waiting) {
+    // `sendOne` skips an entry that is not pending, as the queue stands when its turn comes.
+    for (const entry of await locked(reload)) {
       const goOn = await locked(() => sendOne(entry.seq!))
       if (!goOn) return
     }
