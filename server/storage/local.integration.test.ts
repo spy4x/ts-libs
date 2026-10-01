@@ -9,6 +9,9 @@
  * MinIO, so a response body is streamed to a real file rather than the in-memory
  * fake.
  *
+ * It also runs the `ObjectFs` contract (`object-fs-contract.test.ts`) against
+ * `createDenoObjectFs`, the suite `memory-fs.test.ts` runs against the fake.
+ *
  * `createScratchFolder`/`removeScratchFolder` (`@integration-testing`) are the one
  * way into a real folder here: `Deno.makeTempDir()` writes outside `.volumes` and
  * stays refused under the tier's `--allow-write=.volumes` grant.
@@ -25,8 +28,17 @@ import {
   s3Settings,
   uniqueKeyPrefix,
 } from "@integration-testing"
+import { createDenoObjectFs } from "./fs.ts"
 import { LocalStorage } from "./local.ts"
+import { describeObjectFsContract } from "./object-fs-contract.test.ts"
 import { S3Storage } from "./s3.ts"
+
+// The same contract `memory-fs.test.ts` runs against the in-memory fake, here on real disk: every
+// rule the fake claims is checked against the filesystem it stands in for.
+describeObjectFsContract("createDenoObjectFs", async () => {
+  const root = await createScratchFolder("it_object_fs")
+  return { fs: createDenoObjectFs(), root, close: () => removeScratchFolder(root) }
+})
 
 describe("LocalStorage against a real filesystem", () => {
   it("writes and reads an object through real disk I/O", async () => {
