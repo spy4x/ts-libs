@@ -1,31 +1,8 @@
 import { assertEquals, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import { createKvStore } from "@spy4x/platform/rate-limit/kv"
-import { type RateLimitRedisStore, redisRateLimitKv } from "./rate-limit-kv.ts"
-
-interface FakeStore extends RateLimitRedisStore {
-  data: Map<string, { value: string; ttlSec: number | null }>
-}
-
-function fakeStore(): FakeStore {
-  const data = new Map<string, { value: string; ttlSec: number | null }>()
-  return {
-    data,
-    get: (key) => Promise.resolve(data.get(key)?.value ?? null),
-    set: (key, value, ttlSec) => {
-      data.set(key, { value, ttlSec })
-      return Promise.resolve()
-    },
-    setWithoutExpiry: (key, value) => {
-      data.set(key, { value, ttlSec: null })
-      return Promise.resolve()
-    },
-    del: (key) => {
-      data.delete(key)
-      return Promise.resolve()
-    },
-  }
-}
+import { redisRateLimitKv } from "./rate-limit-kv.ts"
+import { createFakeRedisStore as fakeStore } from "./fake-redis-store.test.ts"
 
 describe("redisRateLimitKv", () => {
   it("round-trips a JSON value and reports a missing key as undefined", async () => {
