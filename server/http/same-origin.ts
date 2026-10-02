@@ -159,9 +159,9 @@ export interface SameOriginGuardOptions<E extends Env = Env> extends SameOriginC
 /**
  * Build a Hono middleware that refuses cross-site mutations. See the module documentation for the
  * three checks and where to mount it. A request without `Sec-Fetch-Site` is refused, unless
- * `allowHeaderless` is set and `Origin` is absent too. Browsers omit
- * it over plain HTTP on a host that is not loopback, so such a deployment has every mutation
- * refused; without the header nothing shows that the app's own page sent the request.
+ * `allowHeaderless` is set and `Origin` is absent too. Browsers omit it over plain HTTP on a host
+ * that is not loopback, so such a deployment has every mutation refused; without the header
+ * nothing shows that the app's own page sent the request.
  *
  * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin, or
  * when `allowHeaderless` is set without `requireSessionCookie: false`.
@@ -199,9 +199,8 @@ export function createSameOriginCheck(
   const requireCookie = options.requireSessionCookie !== false
   const allowHeaderless = options.allowHeaderless === true
   if (allowHeaderless && requireCookie) {
-    throw new TypeError(
-      "allowHeaderless requires requireSessionCookie: false; with the cookie required it admits only forged requests",
-    )
+    const why = "with the cookie required it admits only forged requests"
+    throw new TypeError(`allowHeaderless requires requireSessionCookie: false; ${why}`)
   }
   const expected = options.expectedOrigin === undefined
     ? undefined
@@ -218,10 +217,10 @@ export function createSameOriginCheck(
  * upgrades" in the module documentation. Mount it on the upgrade route only: it checks every
  * request it sees, so a plain page load, which carries no `Origin`, is refused too.
  *
- * Refusal reasons are `no-session-cookie` and `origin-mismatch`, in that order.
+ * Refusal reasons are `no-session-cookie` and `origin-mismatch`, in that order. `allowHeaderless`
+ * is ignored here.
  *
- * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin, or
- * when `allowHeaderless` is set without `requireSessionCookie: false`.
+ * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin.
  */
 export function createSameOriginUpgradeGuard<E extends Env = Env>(
   options: SameOriginGuardOptions<E> = {},
