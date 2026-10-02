@@ -319,9 +319,10 @@ Properties a caller should know, each pinned by a test:
 
 A phone that backgrounds the app freezes its timers and may kill its socket, so the transport can be
 waiting out a long backoff, or hold a socket that is already dead. `transport.resume()` fixes both:
-while reconnecting it drops the wait and the backoff count and reconnects at once (the reconnect
-pulls every group from its cursor); while open it pings, so a dead socket is found after one pong
-deadline. A transport that was never started or has stopped stays so. `watchPageResume` from
+while reconnecting it drops the wait and reconnects at once (the reconnect pulls every group from its
+cursor, and the attempt count is kept so the open still counts as a reconnect); a connect attempt
+still under way is abandoned and repeated; while open it pings, so a dead socket is found after one
+pong deadline. Calling it several times in one tick is safe. A transport that was never started or has stopped stays so. `watchPageResume` from
 `@spy4x/realtime/page-lifecycle` calls a function when the page becomes visible, the browser goes
 online, or a page is restored from the back-forward cache:
 
