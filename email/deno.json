@@ -5,6 +5,7 @@
     ".": "./mod.ts",
     "./address": "./address.ts",
     "./html": "./html.ts",
+    "./letter": "./letter.ts",
     "./message": "./message.ts",
     "./sender": "./sender.ts",
     "./smtp": "./smtp.ts",

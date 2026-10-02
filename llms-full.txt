@@ -311,6 +311,7 @@ point.
 | `@spy4x/email/sender`  | `EmailSender`, `SendResult`, `createConsoleSender`                                                             |
 | `@spy4x/email/message` | `EmailMessage`, validation, timezone framing, ICS attachment                                                   |
 | `@spy4x/email/html`    | `escapeHtml`, `htmlWrap`, `emailButton`, `HtmlShellTheme`, `DEFAULT_HTML_SHELL_THEME`, `DARK_HTML_SHELL_THEME` |
+| `@spy4x/email/letter`  | `renderLetter`, block helpers, `fillUnsubscribe`, `UNSUBSCRIBE_PLACEHOLDER`                                    |
 | `@spy4x/email/address` | mailbox parsing, formatting and list deduplication                                                             |
 
 ## The `EmailSender` port
@@ -482,6 +483,37 @@ fill the preview with body text. Without it the output is unchanged.
 `emailButton({ href, label, background, color })` returns a table-based button that
 renders as a button in Gmail, Apple Mail and Outlook. `href` is checked like
 `brandUrl`, the colours like the theme's, and `label` is escaped.
+
+## Letter
+
+`@spy4x/email/letter` is a brand-free shell for mail an app sends to people who asked for
+it. It has a `header` slot, content `blocks`, an `afterword` slot, a small grey footer (the
+reason the reader gets the mail, an optional unsubscribe link, optional extra links) and a
+hidden `preheader`. It names no person, site or campaign: the app builds its own header
+(a portrait and a name) and afterword (a P.S., a reply line) from the same block helpers.
+
+```ts
+import { button, fillUnsubscribe, heading, paragraph, renderLetter } from "@spy4x/email/letter"
+import { UNSUBSCRIBE_PLACEHOLDER } from "@spy4x/email/letter"
+
+const letter = renderLetter({
+  blocks: [
+    heading("In short"),
+    paragraph("A new post is up."),
+    button("https://example.com/p", "Read"),
+  ],
+  afterword: [paragraph("Reply to this mail: it reaches me.")],
+  footer: { reason: "You subscribed on example.com.", unsubscribeLink: UNSUBSCRIBE_PLACEHOLDER },
+})
+const mine = fillUnsubscribe(letter, "https://example.com/u?t=abc") // one letter, many readers
+```
+
+Every block is an HTML and a plain-text rendering of the same content; `renderLetter` returns
+both. Every value reaches the HTML through `escapeHtml`. An `href` or image `src` that is not
+`https:`, `http:` or `mailto:` throws a `TypeError`. Block `html` is trusted as pre-escaped, as
+`htmlWrap` treats its body, so build blocks with the helpers. `fillUnsubscribe` validates the link
+and gives output byte-identical to rendering with that link directly. `{{unsubscribe-link}}`
+written by a caller inside block text is also replaced, so keep that literal out of content.
 
 ## Per-recipient timezone framing
 

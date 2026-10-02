@@ -169,6 +169,20 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `escapeHtml` (function), `jsr:@spy4x/email/html`: Escape a value for interpolation into HTML element text or a double-quoted attribute.
 - `htmlWrap` (function), `jsr:@spy4x/email/html`: Wrap a body in the shared letter-shaped shell.
 
+### `jsr:@spy4x/email/letter`
+
+- `Letter` (interface), `jsr:@spy4x/email/letter`: A finished letter: the HTML part and the plain-text part.
+- `LetterBlock` (interface), `jsr:@spy4x/email/letter`: The letter's content: the same thing as HTML (already escaped) and as plain text.
+- `LetterInput` (interface), `jsr:@spy4x/email/letter`: What renderLetter needs.
+- `UNSUBSCRIBE_PLACEHOLDER` (constant), `jsr:@spy4x/email/letter`: Stands where a reader's own unsubscribe link goes in a letter rendered once and sent many times.
+- `bulletList` (function), `jsr:@spy4x/email/letter`: A bulleted list.
+- `button` (function), `jsr:@spy4x/email/letter`: A filled button.
+- `fillUnsubscribe` (function), `jsr:@spy4x/email/letter`: Put a reader's own link where UNSUBSCRIBE_PLACEHOLDER stands: escaped in the HTML part, as it is in the plain-text part.
+- `heading` (function), `jsr:@spy4x/email/letter`: A small heading, such as "In short".
+- `linkedImage` (function), `jsr:@spy4x/email/letter`: A picture linked to `href`, `width` pixels wide at most (default 600) and as wide as the column below that.
+- `paragraph` (function), `jsr:@spy4x/email/letter`: A paragraph of plain prose.
+- `renderLetter` (function), `jsr:@spy4x/email/letter`: Wrap the blocks in the letter layout and return both parts.
+
 ### `jsr:@spy4x/email/message`
 
 - `EmailAttachment` (interface), `jsr:@spy4x/email/message`: One attachment: text content plus the metadata the MIME part needs.
@@ -2155,4 +2169,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 653e1b2132897253c0feef7a501884b52f210ac5dcb31a19ea0e105a98216f82 -->
+<!-- export surface: sha256 62c2df07db664c1de37d89e525b0ce1c52ef5aab2595065e2f8e2671a3da7ca0 -->
