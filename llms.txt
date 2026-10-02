@@ -2019,10 +2019,18 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ConfirmOutcome` (type), `jsr:@spy4x/server/subscribers`: What confirming led to.
 - `ConfirmPreview` (type), `jsr:@spy4x/server/subscribers`: What a confirm link leads to, before anything is stored.
 - `ConfirmTokenResult` (type), `jsr:@spy4x/server/subscribers`: What SubscriptionCrypto.verifyConfirmToken found.
+- `FinishSendInput` (interface), `jsr:@spy4x/server/subscribers`: The input of SendLog.finish.
 - `FlowDeps` (interface), `jsr:@spy4x/server/subscribers`: Everything the flows need.
 - `FlowRequest` (interface), `jsr:@spy4x/server/subscribers`: What the app knows about the request.
 - `MailOutcome` (type), `jsr:@spy4x/server/subscribers`: What a mail callback may answer: nothing (it throws on failure) or a sender's result, such as `@spy4x/email`'s `SendResult`.
 - `RemoveSubscriberInput` (interface), `jsr:@spy4x/server/subscribers`: The input of SubscriberStore.remove.
+- `SendIssueInput` (interface), `jsr:@spy4x/server/subscribers`: Everything sendIssue needs for one issue.
+- `SendIssueLog` (interface), `jsr:@spy4x/server/subscribers`: Where a send writes.
+- `SendIssueResult` (type), `jsr:@spy4x/server/subscribers`: What a sendIssue run did.
+- `SendLock` (interface), `jsr:@spy4x/server/subscribers`: A held send lock.
+- `SendLog` (interface), `jsr:@spy4x/server/subscribers`: Where a send remembers what it did, so a repeated run mails nobody twice and a rerun after a partial failure mails only the people it missed.
+- `SendLogEntry` (interface), `jsr:@spy4x/server/subscribers`: One issue's record in a SendLog: who was meant to get it and who already did.
+- `StartSendInput` (interface), `jsr:@spy4x/server/subscribers`: The input of SendLog.start.
 - `SubscribeRequestOutcome` (interface), `jsr:@spy4x/server/subscribers`: The answer to a subscribe request.
 - `Subscriber` (interface), `jsr:@spy4x/server/subscribers`: One address on a mailing list.
 - `SubscriberLimits` (interface), `jsr:@spy4x/server/subscribers`: Optional rate limits, any `@spy4x/platform/rate-limit` limiter.
@@ -2042,8 +2050,14 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `previewConfirmation` (function), `jsr:@spy4x/server/subscribers`: Checks a confirm token without storing anything: the page a link opens shows this and asks for a click, so a mail scanner that follows links subscribes no one.
 - `previewUnsubscribe` (function), `jsr:@spy4x/server/subscribers`: Finds whom an unsubscribe token names without removing anything: the page a link opens shows this and asks for a click.
 - `requestSubscription` (function), `jsr:@spy4x/server/subscribers`: Mails a confirm link to the address in `field` (a form's raw email field).
+- `sendIssue` (function), `jsr:@spy4x/server/subscribers`: Mails one issue to the list, one mail each, with the recipient's own unsubscribe link in the body and in the one-click `List-Unsubscribe` header.
 - `unsubscribe` (function), `jsr:@spy4x/server/subscribers`: Removes the address an unsubscribe token names and records the unsubscribe, so a confirm link issued earlier cannot bring it back.
 - `unsubscribeTokenFrom` (function), `jsr:@spy4x/server/subscribers`: The unsubscribe token of a request: the `token` query parameter first, as a mail client's one-click POST (RFC 8058) keeps it on the URL with an unrelated body, then the `token` field of a form body read under `maxBytes`.
+
+### `jsr:@spy4x/server/subscribers/file`
+
+- `FileSendLogOptions` (interface), `jsr:@spy4x/server/subscribers/file`: Options for createFileSendLog.
+- `createFileSendLog` (function), `jsr:@spy4x/server/subscribers/file`: A SendLog kept in one JSON file, ported from antonshubin.com's `lib/newsletter-log.ts` and reading its `newsletter-log.json` unchanged: an array with one object per issue, keyed by `slug`.
 
 ### `jsr:@spy4x/server/subscribers/memory`
 
@@ -2052,6 +2066,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `RemoveSubscriberInput` (interface), `jsr:@spy4x/server/subscribers/memory`: The input of SubscriberStore.remove.
 - `Subscriber` (interface), `jsr:@spy4x/server/subscribers/memory`: One address on a mailing list.
 - `SubscriberStore` (interface), `jsr:@spy4x/server/subscribers/memory`: Where a mailing list lives.
+- `createMemorySendLog` (function), `jsr:@spy4x/server/subscribers/memory`: A SendLog held in this process, for tests and single-process prototypes.
 - `createMemorySubscriberStore` (function), `jsr:@spy4x/server/subscribers/memory`: A SubscriberStore held in this process, for tests and single-process prototypes.
 
 ### `jsr:@spy4x/server/user-secrets`
@@ -2212,4 +2227,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 adbe0d3aa4b6de7148f29ec9aa072df695e90d45f7426277dfec3e08fe692f98 -->
+<!-- export surface: sha256 d06e7d222480a6782c93d8558e9bc9aa0ebc37dcf644963aee15cda1f37cf820 -->
