@@ -126,7 +126,7 @@ describe("createSubscriptionCrypto: confirm tokens", () => {
     })
   })
 
-  it("refuses an unsubscribe token and garbage as invalid", async () => {
+  it("refuses an unsubscribe token and garbage as invalid without throwing", async () => {
     clock.at = NOW
     for (const token of [await crypto.unsubscribeToken(SITE.email), "", "a.b", "not a token"]) {
       expect(await crypto.verifyConfirmToken(token)).toEqual({ ok: false, reason: "invalid" })
@@ -174,7 +174,7 @@ describe("createSubscriptionCrypto: unsubscribe tokens", () => {
     expect(await crypto.verifyUnsubscribeToken(token, lookup)).toBeUndefined()
   })
 
-  it("refuses a confirm token and garbage", async () => {
+  it("refuses a confirm token and garbage without throwing", async () => {
     const { lookup } = await lookupOf(crypto, [SITE.email])
     for (const token of [await crypto.confirmToken(SITE.email), "", "x.y", "%%%"]) {
       expect(await crypto.verifyUnsubscribeToken(token, lookup)).toBeUndefined()

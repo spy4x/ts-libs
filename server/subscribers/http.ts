@@ -33,7 +33,7 @@ export async function unsubscribeTokenFrom(
 ): Promise<string | null> {
   const fromQuery = new URL(request.url).searchParams.get("token")
   if (fromQuery) return fromQuery
-  if (request.body === null || !request.headers.get("content-type")) return null
+  if (request.body === null) return null
   try {
     const form = await parseBoundedFormData(request, {
       maxBytes: options.maxBytes ?? UNSUBSCRIBE_FORM_MAX_BYTES,

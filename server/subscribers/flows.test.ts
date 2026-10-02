@@ -341,7 +341,9 @@ describe("logging", () => {
     }
     expect((await requestSubscription(JANE, deps)).status).toBe(500)
 
-    const text = JSON.stringify(logs)
+    const text = logs.flat().map((arg) =>
+      arg instanceof Error ? `${arg.message}\n${arg.stack}` : String(arg)
+    ).join("\n")
     expect(logs).toHaveLength(5)
     expect(text.toLowerCase()).not.toContain("jane")
     expect(text.match(/<REDACTED:EMAIL>/g)).toHaveLength(5)
