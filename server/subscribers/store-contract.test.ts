@@ -95,6 +95,14 @@ export function describeSubscriberStoreContract(name: string, open: OpenSubscrib
         expect((await store.findByKey("ann-key"))?.subscribedAt).toEqual(new Date(NOW))
       }))
 
+    it("answers known, not replay, for a listed address whose link predates an unsubscribe mark", () =>
+      withStore(open, async (store) => {
+        await store.add(subscription("ann", NOW))
+        // Another address's removal records ann's mark, as a re-subscribe after an unsubscribe would.
+        await store.remove({ ...removal("ann", NOW + HOUR), email: "other@example.com" })
+        expect(await store.add(subscription("ann", NOW + 2 * HOUR, NOW))).toBe("known")
+      }))
+
     it("removes an address, records it, and answers false the second time", () =>
       withStore(open, async (store) => {
         await store.add(subscription("ann"))

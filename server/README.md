@@ -59,7 +59,7 @@ Runs on: server (Deno).
 | `@spy4x/server/lockout/postgres`     | The Postgres lockout store over a table and columns the caller names                  |
 | `@spy4x/server/subscribers`          | Double opt-in mailing lists: signed links, subscriber store port, subscribe flows     |
 | `@spy4x/server/subscribers/memory`   | The in-memory subscriber store and send log, held to the shared contracts             |
-| `@spy4x/server/subscribers/file`     | The file send log, which reads antonshubin.com's `newsletter-log.json`                |
+| `@spy4x/server/subscribers/file`     | The JSON-file subscriber store and send log, compatible with antonshubin.com's files  |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -2166,6 +2166,25 @@ the switch; they expire within three days anyway.
 `add` and `remove` for one address must not overlap, or a replayed confirm link can slip in between
 the mark and the row: a Postgres adapter takes a row lock or an advisory lock on the address.
 
+**File store.** `createFileSubscriberStore({ path })` from `@spy4x/server/subscribers/file` keeps the
+list in a JSON file and the unsubscribe marks in `<path>.unsubscribed`. Every change runs under an
+in-process queue and `<path>.lock` (it retries `lockAttempts` times, `lockRetryMs` apart, then throws
+`LockUnavailableError`), so two processes never lose a write; each write is a temp file and a
+rename. A list that does not parse is never treated as empty: its first text is kept in
+`<path>.invalid`, the file is left as it is, and every call throws `SubscriberFileError` until a
+person repairs it. A damaged marks file is never overwritten without a copy: `remove` first keeps
+its text in `<path>.unsubscribed.invalid.<ms>` (a new name each time, with a suffix if that name
+exists), throws if the copy cannot be written, then writes a new record holding every mark it
+could still read, so an unsubscribe always works. `add` throws `SubscriberFileError` while the marks
+file is damaged. Once an unsubscribe has replaced the record, the marks that could not be read (all
+of them, for text that does not parse) stop being checked, so a replayed confirm link for those
+addresses gets in again; restore them from the copy if that matters. A mark with an unreadable time
+counts as damage, and the other marks in the file are kept. `LockUnavailableError` is re-exported
+from the same entry. The site's `subscribers.json` and `.unsubscribed` load unchanged; new rows
+carry a `key`. Rows the site wrote have none, so run `await store.backfillKeys(crypto)`
+once before mailing them a version 2 unsubscribe link: it is idempotent and returns how many rows
+it changed.
+
 **Sending an issue.** `sendIssue` mails one issue to the list, one mail each, and remembers who got
 it in a `SendLog`. Render the letter once with `renderLetter`, leave `UNSUBSCRIBE_PLACEHOLDER` where
 the link goes, and pass it with the rows of `store.list()`.
@@ -2223,6 +2242,10 @@ instead of allowing a second one.
   time.
 - Many clients could each send a few subscribe requests for one address and flood its inbox; the
   per-recipient limit stops that.
+- The site overwrote a damaged `.unsubscribed` file on the next unsubscribe, losing the replay
+  record without a trace, and treated it as empty, so `add` let a replayed confirm link in. The file
+  store keeps every damaged text under its own name before writing, and refuses `add` meanwhile;
+  the new record keeps every mark it could still read.
 - The site's send loop logged every recipient's address, once per mail sent and once per failure
   (`lib/newsletter.ts:89` and `:93`). `sendIssue` logs the row number, and a relay error has the
   address redacted in any letter case.
