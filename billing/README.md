@@ -85,7 +85,9 @@ return new Response(null, { status: 200 })
   gives none, and ISK and UGX with two decimals always ending in `00`, so the ISO count
   would show 100 times the amount.
 - **Trials.** A trial's first invoice is for zero, and Stripe marks it paid: it arrives as
-  `PaymentSucceeded` with `amount: 0`.
+  `PaymentSucceeded` with `amount: 0`. With `trialWithoutPaymentMethod`, checkout asks for no card
+  (`payment_method_collection=if_required`), and a trial that ends without one is cancelled, so it
+  arrives as `SubscriptionCanceled`.
 - **API version.** Requests send `STRIPE_API_VERSION` (`2026-09-30.endive`). A webhook payload
   follows the webhook endpoint's version, so set the endpoint to the same version in Stripe.
 

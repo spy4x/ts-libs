@@ -153,6 +153,13 @@ export interface CheckoutRequest {
   /** Days of free trial, a positive integer. */
   trialDays?: number
   /**
+   * Starts the trial without asking for a card; needs {@link trialDays}. The provider asks for a
+   * payment method only when one is due, and a trial that ends without one cancels the
+   * subscription, so it arrives as `SubscriptionCanceled` instead of a failed charge. Default
+   * `false`: the customer enters a card before the trial starts.
+   */
+  trialWithoutPaymentMethod?: boolean
+  /**
    * Makes a retried call safe: the provider returns the first call's session instead of creating
    * a second one. Use one key per intended checkout.
    */
