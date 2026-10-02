@@ -225,3 +225,91 @@ Deno.test("separates the footer reason, unsubscribe link and extra links with a 
   })
   assertEquals(html.split(" · ").length, 3)
 })
+
+const SMUGGLED = [
+  "https://example.com/u\nUnsubscribe: https://evil.example",
+  "https://example.com/u\r\nX",
+  "https://example.com/\tx",
+  "https://example.com/ x",
+  "\u0001https://example.com/u",
+  "https://example.com/\u007fx",
+]
+
+Deno.test("refuses a button link with whitespace or a control character", () => {
+  for (const bad of SMUGGLED) assertThrows(() => button(bad, "Go"), TypeError)
+})
+
+Deno.test("refuses an image link or src with whitespace or a control character", () => {
+  for (const bad of SMUGGLED) {
+    assertThrows(
+      () => linkedImage({ src: "https://example.com/a.png", alt: "", href: bad }),
+      TypeError,
+    )
+    assertThrows(
+      () => linkedImage({ src: bad, alt: "", href: "https://example.com" }),
+      TypeError,
+    )
+  }
+})
+
+Deno.test("refuses a footer link with whitespace or a control character", () => {
+  for (const bad of SMUGGLED) {
+    assertThrows(
+      () =>
+        renderLetter({ blocks: [], footer: { reason: "r", links: [{ href: bad, label: "x" }] } }),
+      TypeError,
+    )
+  }
+})
+
+Deno.test("refuses an unsubscribe link with whitespace or a control character", () => {
+  for (const bad of SMUGGLED) {
+    assertThrows(
+      () => renderLetter({ blocks: [], footer: { reason: "r", unsubscribeLink: bad } }),
+      TypeError,
+    )
+  }
+})
+
+Deno.test("refuses a fillUnsubscribe link with whitespace or a control character", () => {
+  const letter = renderLetter({
+    blocks: [],
+    footer: { reason: "r", unsubscribeLink: UNSUBSCRIBE_PLACEHOLDER },
+  })
+  for (const bad of SMUGGLED) assertThrows(() => fillUnsubscribe(letter, bad), TypeError)
+})
+
+Deno.test("refuses a mailto: image src", () => {
+  assertThrows(
+    () => linkedImage({ src: "mailto:a@example.com", alt: "", href: "https://example.com" }),
+    TypeError,
+  )
+})
+
+Deno.test("uses the caller's unsubscribe label in both parts, escaped in HTML", () => {
+  const { html, text } = renderLetter({
+    blocks: [],
+    footer: {
+      reason: "r",
+      unsubscribeLink: "https://example.com/u",
+      unsubscribeLabel: `Abmelden <b>`,
+    },
+  })
+  assertStringIncludes(html, `>Abmelden &lt;b&gt;</a>`)
+  assertStringIncludes(text, `Abmelden <b>: https://example.com/u`)
+  assertFalse(html.includes(">Unsubscribe<"))
+})
+
+Deno.test("colours the footer text and links from the theme", () => {
+  const { html } = renderLetter({
+    blocks: [],
+    footer: {
+      reason: "r",
+      unsubscribeLink: "https://example.com/u",
+      links: [{ href: "https://example.com", label: "Site" }],
+    },
+    theme: { mutedColor: "#ff0000", linkColor: "#00ff00" },
+  })
+  assertStringIncludes(html, "color:#ff0000")
+  assertEquals(html.split("color:#00ff00").length, 3)
+})

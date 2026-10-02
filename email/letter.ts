@@ -5,14 +5,26 @@
  * The layout is a header slot, content blocks, an afterword slot and a small grey
  * footer holding the reason the reader gets the mail, an optional unsubscribe link
  * and optional extra links, under a hidden preheader. Nothing about a person, a
- * brand, a site or a campaign lives here: an app builds its own `header` (a
- * portrait and a name, say) and `afterword` (a P.S., a reply line) with the same
- * block helpers and passes them in.
+ * brand, a site or a campaign lives here, and no wording but the footer's
+ * "Unsubscribe" default (see `footer.unsubscribeLabel`). An app supplies its own
+ * `header` and `afterword`. The block helpers cover plain content (paragraph,
+ * heading, list, button, linked image); a portrait beside a name, or a P.S. with a
+ * link inside the prose, is a {@link LetterBlock} the app writes by hand, escaping
+ * every value with `escapeHtml` from `@spy4x/email/html`:
+ *
+ * ```ts
+ * const ps = (name: string, href: string): LetterBlock => ({
+ *   html: `<p>P.S. <a href="${escapeHtml(href)}">${escapeHtml(name)}</a></p>`,
+ *   text: `P.S. ${name}: ${href}`,
+ * })
+ * ```
  *
  * Every block is an HTML and a plain-text rendering of the same content. Every
- * caller value reaches the HTML through {@link escapeHtml}, links included, and a
- * link whose scheme is not `https:`, `http:` or `mailto:` throws a `TypeError`
- * instead of rendering: escaping keeps `javascript:alert(1)` a well-formed link.
+ * caller value reaches the HTML through {@link escapeHtml}, links included. A link
+ * whose scheme is not `https:`, `http:` or `mailto:`, or that contains whitespace or
+ * a control character, throws a `TypeError` instead of rendering: escaping keeps
+ * `javascript:alert(1)` a well-formed link, and `URL` ignores a newline that the
+ * plain-text part would print as a second line.
  *
  * Inline styles on a light background, so a client that inverts the colours for
  * dark mode still shows the letter readably.
@@ -20,13 +32,20 @@
  */
 import { emailButton, escapeHtml, type HtmlShellTheme, htmlWrap } from "./html.ts"
 
-/** Stands where a reader's own unsubscribe link goes in a letter rendered once and sent many times. */
+/**
+ * Stands where a reader's own unsubscribe link goes in a letter rendered once and sent many
+ * times.
+ */
 export const UNSUBSCRIBE_PLACEHOLDER = "{{unsubscribe-link}}"
 
 const HEADING_FONT = "Georgia,'Times New Roman',serif"
 const BODY_FONT = "Arial,Helvetica,sans-serif"
-const MUTED = "#6b7280"
-const LINK = "#2563eb"
+const DEFAULT_THEME: HtmlShellTheme = {
+  background: "#ffffff",
+  color: "#1f2937",
+  mutedColor: "#6b7280",
+  linkColor: "#6b7280",
+}
 
 /** The default button: white text on a neutral blue. */
 const DEFAULT_BUTTON_COLORS = { background: "#2563eb", color: "#ffffff" }
@@ -60,33 +79,44 @@ export interface LetterInput {
      * when the mail goes to someone who has not subscribed yet.
      */
     unsubscribeLink?: string
+    /** The word for the unsubscribe link, in both parts. Default `"Unsubscribe"`. */
+    unsubscribeLabel?: string
     /** Extra links after the reason, such as the sender's site. */
     links?: readonly { href: string; label: string }[]
   }
   /** The hidden preview line the inbox shows next to the subject. */
   preheader?: string
-  /** Colours of the shell. Defaults to the neutral light theme of `htmlWrap`. */
+  /**
+   * Colours of the shell: `background` and `color` for the page and text, `mutedColor` for the
+   * footer text, `linkColor` for the footer links. Defaults to a neutral light theme.
+   */
   theme?: Partial<HtmlShellTheme>
   /** Width of the letter column in pixels. Default `600`. */
   maxWidth?: number
 }
 
 const LINKABLE_SCHEMES = ["https:", "http:", "mailto:"]
+const IMAGE_SCHEMES = ["https:", "http:"]
+/** Whitespace and control characters, which `URL` strips but the letter would print raw. */
+const UNSAFE_LINK_CHARS = /[\u0000-\u0020\u007f]/
 
 /**
  * Throw a `TypeError` unless `value` is an absolute `https:`, `http:` or `mailto:` URL.
  * The scheme is read with `URL`, so `JaVaScript:` and a leading newline do not slip past.
  */
-function assertLink(value: string, name: string): void {
+function assertLink(value: string, name: string, schemes = LINKABLE_SCHEMES): void {
+  if (UNSAFE_LINK_CHARS.test(value)) {
+    throw new TypeError(`${name} must not contain whitespace or control characters`)
+  }
   let parsed: URL
   try {
     parsed = new URL(value)
   } catch {
     throw new TypeError(`${name} must be an absolute URL, got ${JSON.stringify(value)}`)
   }
-  if (!LINKABLE_SCHEMES.includes(parsed.protocol)) {
+  if (!schemes.includes(parsed.protocol)) {
     throw new TypeError(
-      `${name} must use ${LINKABLE_SCHEMES.join(", ")}, got ${JSON.stringify(parsed.protocol)}`,
+      `${name} must use ${schemes.join(", ")}, got ${JSON.stringify(parsed.protocol)}`,
     )
   }
 }
@@ -136,13 +166,13 @@ export function button(
  * A picture linked to `href`, `width` pixels wide at most (default 600) and as wide as the
  * column below that. It has no plain-text part, so `alt` is not repeated there.
  *
- * @throws {TypeError} when `src` or `href` is not an `https:`, `http:` or `mailto:` URL, or
- * `width` is not a finite positive number.
+ * @throws {TypeError} when `src` is not an `https:` or `http:` URL, `href` is not an `https:`,
+ * `http:` or `mailto:` URL, either contains whitespace or a control character, or `width` is not a finite positive number.
  */
 export function linkedImage(
   { src, alt, href, width = 600 }: { src: string; alt: string; href: string; width?: number },
 ): LetterBlock {
-  assertLink(src, "linkedImage src")
+  assertLink(src, "linkedImage src", IMAGE_SCHEMES)
   assertLink(href, "linkedImage href")
   if (!Number.isFinite(width) || width <= 0) {
     throw new TypeError(`linkedImage width must be a finite positive number, got ${width}`)
@@ -175,16 +205,22 @@ export function renderLetter(input: LetterInput): Letter {
   }
   for (const link of footer.links ?? []) assertLink(link.href, "footer.links href")
 
+  const theme = { ...DEFAULT_THEME, ...input.theme }
+  const unsubscribeLabel = footer.unsubscribeLabel ?? "Unsubscribe"
   const htmlLinks = [
     ...(unsubscribe === undefined ? [] : [
-      `<a href="${escapeHtml(unsubscribe)}" style="color:${MUTED}">Unsubscribe</a>`,
+      `<a href="${escapeHtml(unsubscribe)}" style="color:${theme.linkColor}">${
+        escapeHtml(unsubscribeLabel)
+      }</a>`,
     ]),
     ...(footer.links ?? []).map((link) =>
-      `<a href="${escapeHtml(link.href)}" style="color:${MUTED}">${escapeHtml(link.label)}</a>`
+      `<a href="${escapeHtml(link.href)}" style="color:${theme.linkColor}">${
+        escapeHtml(link.label)
+      }</a>`
     ),
   ]
   const footerHtml =
-    `<p style="margin:32px 0 0;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;line-height:1.5;color:${MUTED}">${
+    `<p style="margin:32px 0 0;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;line-height:1.5;color:${theme.mutedColor}">${
       [escapeHtml(footer.reason), ...htmlLinks].join(" · ")
     }</p>`
 
@@ -199,19 +235,13 @@ export function renderLetter(input: LetterInput): Letter {
     body: `<div style="font-family:${BODY_FONT}">\n${blocksHtml}\n</div>`,
     maxWidth: input.maxWidth ?? 600,
     signaturePrefix: null,
-    theme: {
-      background: "#ffffff",
-      color: "#1f2937",
-      mutedColor: MUTED,
-      linkColor: LINK,
-      ...input.theme,
-    },
+    theme,
     ...(input.preheader ? { preheader: input.preheader } : {}),
   })
 
   const footerText = [
     footer.reason,
-    ...(unsubscribe === undefined ? [] : [`Unsubscribe: ${unsubscribe}`]),
+    ...(unsubscribe === undefined ? [] : [`${unsubscribeLabel}: ${unsubscribe}`]),
     ...(footer.links ?? []).map((link) => `${link.label}: ${link.href}`),
   ].join("\n")
   const textParts = [

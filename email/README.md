@@ -249,12 +249,18 @@ renders as a button in Gmail, Apple Mail and Outlook. `href` is checked like
 `@spy4x/email/letter` is a brand-free shell for mail an app sends to people who asked for
 it. It has a `header` slot, content `blocks`, an `afterword` slot, a small grey footer (the
 reason the reader gets the mail, an optional unsubscribe link, optional extra links) and a
-hidden `preheader`. It names no person, site or campaign: the app builds its own header
-(a portrait and a name) and afterword (a P.S., a reply line) from the same block helpers.
+hidden `preheader`. It names no person, site or campaign, and its only wording is the
+footer's "Unsubscribe", which `footer.unsubscribeLabel` replaces.
 
 ```ts
-import { button, fillUnsubscribe, heading, paragraph, renderLetter } from "@spy4x/email/letter"
-import { UNSUBSCRIBE_PLACEHOLDER } from "@spy4x/email/letter"
+import {
+  button,
+  fillUnsubscribe,
+  heading,
+  paragraph,
+  renderLetter,
+  UNSUBSCRIBE_PLACEHOLDER,
+} from "@spy4x/email/letter"
 
 const letter = renderLetter({
   blocks: [
@@ -268,12 +274,31 @@ const letter = renderLetter({
 const mine = fillUnsubscribe(letter, "https://example.com/u?t=abc") // one letter, many readers
 ```
 
-Every block is an HTML and a plain-text rendering of the same content; `renderLetter` returns
-both. Every value reaches the HTML through `escapeHtml`. An `href` or image `src` that is not
-`https:`, `http:` or `mailto:` throws a `TypeError`. Block `html` is trusted as pre-escaped, as
-`htmlWrap` treats its body, so build blocks with the helpers. `fillUnsubscribe` validates the link
-and gives output byte-identical to rendering with that link directly. `{{unsubscribe-link}}`
-written by a caller inside block text is also replaced, so keep that literal out of content.
+The helpers cover plain content: `paragraph`, `heading`, `bulletList`, `button` and
+`linkedImage` (which has no plain-text part). A header with a portrait beside a name, or a P.S.
+with a link inside the sentence, is a `LetterBlock` the app writes by hand: an `html` string and
+a `text` string, escaping every value with `escapeHtml` from `@spy4x/email/html`.
+
+```ts
+import { escapeHtml } from "@spy4x/email/html"
+import type { LetterBlock } from "@spy4x/email/letter"
+
+const postscript = (label: string, href: string): LetterBlock => ({
+  html: `<p>P.S. <a href="${escapeHtml(href)}">${escapeHtml(label)}</a></p>`,
+  text: `P.S. ${label}: ${href}`,
+})
+```
+
+Block `html` is trusted as pre-escaped, as `htmlWrap` treats its body. Every value the shell
+interpolates itself is escaped. A link, whether in a button, an image, the footer or
+`fillUnsubscribe`, throws a `TypeError` unless it is an `https:`, `http:` or `mailto:` URL
+(an image `src`: `https:` or `http:`) with no whitespace or control character: `URL` ignores a
+newline that the plain-text part would print as a second line. `fillUnsubscribe` gives output
+byte-identical to rendering with that link directly. `{{unsubscribe-link}}` written by a caller
+inside block text is also replaced, so keep that literal out of content.
+
+`theme` sets `background` and `color` (page and text), `mutedColor` (footer text) and `linkColor`
+(footer links); a button takes its own colours.
 
 ## Per-recipient timezone framing
 
