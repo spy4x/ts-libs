@@ -12,6 +12,7 @@ import {
   MAX_ADDR_SPEC_LENGTH,
   parseAddress,
   parseAddresses,
+  parseBareAddress,
 } from "./address.ts"
 
 Deno.test("parses a bare addr-spec", () => {
@@ -255,4 +256,47 @@ Deno.test("a rejected display name never reaches a formatted string", () => {
   const injected = "Jane\r\nBcc: victim@example.com"
   assertThrows(() => parseAddress(injected), TypeError)
   assertStringIncludes(parseAddress("Jane <jane@example.com>").address, "jane@example.com")
+})
+
+Deno.test("parseBareAddress returns a trimmed, lowercased bare address", () => {
+  assertEquals(parseBareAddress("  Jane.Doe+News@Example.COM \n"), "jane.doe+news@example.com")
+})
+
+Deno.test("parseBareAddress refuses a display name or angle brackets", () => {
+  assertEquals(parseBareAddress("Jane <jane@example.com>"), null)
+  assertEquals(parseBareAddress('"Account locked" <victim@example.com>'), null)
+  assertEquals(parseBareAddress("<jane@example.com>"), null)
+})
+
+Deno.test("parseBareAddress refuses a value that is not a string", () => {
+  for (
+    const value of [undefined, null, 42, ["jane@example.com"], { address: "jane@example.com" }]
+  ) {
+    assertEquals(parseBareAddress(value), null)
+  }
+})
+
+Deno.test("parseBareAddress refuses a malformed or control-character address", () => {
+  for (const value of ["", "jane", "jane@localhost", "jane@exa mple.com", "jane\r\n@example.com"]) {
+    assertEquals(parseBareAddress(value), null)
+  }
+})
+
+Deno.test("parseBareAddress refuses an address over 254 characters", () => {
+  const domain = `${"d".repeat(60)}.${"d".repeat(60)}.${"d".repeat(60)}.${"d".repeat(60)}.com`
+  const fits = `${"a".repeat(254 - domain.length - 1)}@${domain}`
+  assertEquals(fits.length, 254)
+  assertEquals(parseBareAddress(fits), fits)
+  assertEquals(parseBareAddress(`  ${fits}\n`), fits)
+  assertEquals(parseBareAddress(`a${fits}`), null)
+})
+
+Deno.test("parseBareAddress refuses a local part over 64 characters", () => {
+  assertEquals(parseBareAddress(`${"a".repeat(64)}@example.com`), `${"a".repeat(64)}@example.com`)
+  assertEquals(parseBareAddress(`${"a".repeat(65)}@example.com`), null)
+})
+
+Deno.test("parseBareAddress refuses a non-ASCII character that lowercases to ASCII", () => {
+  // U+212A KELVIN SIGN lowercases to "k", so lowercasing first would register kevin@example.com.
+  assertEquals(parseBareAddress("\u212Aevin@example.com"), null)
 })

@@ -231,6 +231,33 @@ export function isAddress(value: string): boolean {
   return ADDRESS_PATTERN.test(value)
 }
 
+/** Longest local part, in characters, that RFC 5321 §4.5.3.1.1 allows. */
+const MAX_LOCAL_PART_LENGTH = 64
+
+/**
+ * The bare address a form field holds, trimmed and lowercased, or `null` when it holds anything
+ * else.
+ *
+ * Use it at a trust boundary where only an addr-spec is wanted, such as a subscribe form. Unlike
+ * {@link parseAddress} it never accepts a display name: `"Your account is locked" <victim@example.com>`
+ * would otherwise carry the caller's words into a `To:` line. It also refuses a value that is not a
+ * string, an address over {@link MAX_ADDR_SPEC_LENGTH} characters and a local part over 64, which
+ * no relay delivers.
+ *
+ * The whole address is lowercased so one inbox is one entry in a list. RFC 5321 lets a server treat
+ * the local part as case-sensitive, but no mainstream mailbox provider does, and a list that keeps
+ * `Jane@` and `jane@` apart mails the same person twice.
+ */
+export function parseBareAddress(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const address = value.trim()
+  if (address.length > MAX_ADDR_SPEC_LENGTH) return null
+  if (address.indexOf("@") > MAX_LOCAL_PART_LENGTH) return null
+  // Validate before lowercasing: a non-ASCII character such as U+212A KELVIN SIGN lowercases to
+  // an ASCII letter and would turn a look-alike into a real mailbox.
+  return isAddress(address) ? address.toLowerCase() : null
+}
+
 /**
  * Validate an addr-spec, naming the offending input on failure.
  *
