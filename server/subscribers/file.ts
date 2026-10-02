@@ -6,6 +6,7 @@
  * @module
  */
 
+export { LockUnavailableError } from "@spy4x/platform/server/file-lock"
 export {
   createFileSubscriberStore,
   type FileSubscriberStore,

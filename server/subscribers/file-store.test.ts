@@ -131,22 +131,73 @@ describe("createFileSubscriberStore", () => {
     expect(fs.files.get(`${PATH}.invalid`)).toBe(`first damage`)
   })
 
-  it("keeps an unreadable unsubscribe record aside, logs it, and still serves the list", async () => {
-    const fs = fakeFs({ [`${PATH}.unsubscribed`]: `not json` })
-    const { store, logged } = open(fs)
-    expect(await store.add(input("ada"))).toBe("added")
-    expect(fs.files.get(`${PATH}.unsubscribed.invalid`)).toBe(`not json`)
-    expect(logged.length).toBe(1)
-    await store.remove({
-      email: "ada@example.com",
-      mark: "ada-mark",
+  describe("a damaged unsubscribe record", () => {
+    const MARKS = `${PATH}.unsubscribed`
+    const removal = (name: string) => ({
+      email: `${name}@example.com`,
+      mark: `${name}-mark`,
       at: new Date(NOW),
       pruneBefore: new Date(0),
     })
-    expect(fs.files.get(`${PATH}.unsubscribed.invalid`)).toBe(`not json`)
-    expect(JSON.parse(fs.files.get(`${PATH}.unsubscribed`)!)).toEqual([
-      { mark: "ada-mark", at: new Date(NOW).toISOString() },
-    ])
+    const copies = (fs: FakeFs) =>
+      [...fs.files.keys()].filter((p) => p.startsWith(`${MARKS}.invalid.`)).sort()
+
+    it("keeps every damaged text on disk, however often it is damaged", async () => {
+      const fs = fakeFs({ [MARKS]: `damage one` })
+      const { store, logged } = open(fs)
+      await store.remove(removal("ada"))
+      fs.files.set(MARKS, `[{"mark": "precious", `)
+      await store.remove(removal("grace"))
+      fs.files.set(MARKS, `damage three`)
+      await store.remove(removal("alan"))
+      expect(copies(fs).map((p) => fs.files.get(p)).sort()).toEqual([
+        `[{"mark": "precious", `,
+        `damage one`,
+        `damage three`,
+      ])
+      expect(JSON.parse(fs.files.get(MARKS)!).map((m: { mark: string }) => m.mark)).toEqual([
+        "alan-mark",
+      ])
+      expect(logged.length).toBe(3)
+    })
+
+    it("writes nothing when it cannot keep a copy of the damaged text", async () => {
+      const fs = fakeFs({ [PATH]: SITE_LIST, [MARKS]: `damaged` })
+      const failing: FileSystemPort = {
+        ...fs,
+        writeText: (path, text) =>
+          path.includes(`.unsubscribed.invalid.`)
+            ? Promise.reject(new Error(`disk full`))
+            : fs.writeText(path, text),
+      }
+      const { store } = open(failing)
+      await expect(store.remove(removal("ada"))).rejects.toThrow(/disk full/)
+      expect(fs.files.get(MARKS)).toBe(`damaged`)
+      expect(fs.files.get(PATH)).toBe(SITE_LIST)
+      expect(copies(fs)).toEqual([])
+    })
+
+    it("refuses add and writes nothing, so a replayed link cannot get in", async () => {
+      const fs = fakeFs({ [PATH]: SITE_LIST, [MARKS]: `damaged` })
+      const { store, logged } = open(fs)
+      await expect(store.add(input("alan"))).rejects.toBeInstanceOf(SubscriberFileError)
+      expect(fs.files.get(MARKS)).toBe(`damaged`)
+      expect(fs.files.get(PATH)).toBe(SITE_LIST)
+      expect(copies(fs)).toEqual([])
+      expect(logged.length).toBe(1)
+      // An unsubscribe still works, and once it has replaced the record, add works again.
+      expect(await store.remove(removal("ada"))).toBe(true)
+      expect(await store.add(input("alan"))).toBe("added")
+    })
+
+    it("treats a mark with an unparseable time as damage, not as a missing mark", async () => {
+      const text = `[{"mark":"alan-mark","at":"garbage"}]`
+      const fs = fakeFs({ [MARKS]: text })
+      const { store } = open(fs)
+      await expect(store.add(input("alan"))).rejects.toThrow(/not an unsubscribe record/)
+      await store.remove(removal("ada"))
+      expect(copies(fs).map((p) => JSON.parse(fs.files.get(p)!))).toEqual([JSON.parse(text)])
+    })
   })
 
   it("loads the site's files unchanged: rows without a key, dates as Dates", async () => {

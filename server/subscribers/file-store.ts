@@ -20,8 +20,8 @@ export class SubscriberFileError extends Error {
 
 /** Options for {@link createFileSubscriberStore}. */
 export interface FileSubscriberStoreOptions {
-  /** The list, for example `data/subscribers.json`. `<path>.lock`, `<path>.invalid`,
-   * `<path>.unsubscribed` and `<path>.unsubscribed.invalid` sit next to it. */
+  /** The list, for example `data/subscribers.json`. `<path>.lock`, `<path>.invalid` and
+   * `<path>.unsubscribed` sit next to it. */
   path: string
   /** Defaults to the real filesystem. */
   fs?: FileSystemPort
@@ -90,8 +90,11 @@ function copy(row: Subscriber): Subscriber {
  *
  * Unsubscribes are recorded in `<path>.unsubscribed` as `{ mark, at }`. A change that writes both
  * files writes the record first, so a crash in between never leaves the address removed without
- * its record. An unreadable record is kept in `<path>.unsubscribed.invalid`, logged, and treated as
- * empty so the list stays usable.
+ * its record. A damaged record is never overwritten without a copy: `remove` first keeps its text
+ * in `<path>.unsubscribed.invalid.<ms>` (a name no earlier copy has, and it throws if the copy
+ * fails), then starts a new record, so an unsubscribe always works. `add` throws
+ * {@link SubscriberFileError} while the record is damaged, so a replayed confirm link can never
+ * re-subscribe someone: new subscriptions wait for a person to repair the file.
  *
  * The files stay compatible with antonshubin.com: its `subscribers.json` and `.unsubscribed` load
  * unchanged, and the store writes the same shape, plus `key` on rows that have one.
@@ -156,19 +159,56 @@ export function createFileSubscriberStore(
     throw error
   }
 
-  async function loadMarks(): Promise<Mark[]> {
+  /** The marks, or the damaged text when the file is unreadable or holds a mark with a bad date. */
+  async function readMarks(): Promise<{ marks: Mark[] } | { damaged: string; reason: string }> {
     const read = await readJsonFile<unknown>(fs, marksPath)
-    if (read.kind === "missing") return []
-    if (read.kind === "ok") {
-      const checked = storedMarks(read.value)
-      if (!(checked instanceof type.errors)) {
-        return checked.map(({ mark, at }) => ({ mark, at: Date.parse(at) }))
-          .filter((m) => !Number.isNaN(m.at))
-      }
+    if (read.kind === "missing") return { marks: [] }
+    if (read.kind === "invalid") return { damaged: read.raw, reason: read.reason }
+    const checked = storedMarks(read.value)
+    const text = JSON.stringify(read.value, null, 2)
+    if (checked instanceof type.errors) return { damaged: text, reason: checked.summary }
+    const marks = checked.map(({ mark, at }) => ({ mark, at: Date.parse(at) }))
+    if (marks.some((m) => Number.isNaN(m.at))) {
+      return { damaged: text, reason: `a mark has a time that is not a date` }
     }
-    const raw = read.kind === "invalid" ? read.raw : JSON.stringify(read.value)
-    const aside = await setAside(marksPath, raw)
-    log.error("[SUBSCRIBERS]", `${marksPath} is not an unsubscribe record; ${aside}`)
+    return { marks }
+  }
+
+  /** The marks for `add`: a damaged record is an error, so a replayed confirm link is never let in. */
+  async function marksForAdd(): Promise<Mark[]> {
+    const read = await readMarks()
+    if ("marks" in read) return read.marks
+    const error = new SubscriberFileError(
+      `${marksPath} is not an unsubscribe record (${read.reason}); subscribing is refused until ` +
+        `it is repaired, because the replay rule cannot be checked. An unsubscribe still works: ` +
+        `it keeps this text in ${marksPath}.invalid.<time> and starts a new record`,
+    )
+    log.error("[SUBSCRIBERS]", error.message)
+    throw error
+  }
+
+  /**
+   * The marks for `remove`. A damaged record is copied to a name no earlier copy has, and the copy
+   * must succeed: the caller overwrites the record next, so a failed copy throws instead.
+   */
+  async function marksForRemove(): Promise<Mark[]> {
+    const read = await readMarks()
+    if ("marks" in read) return read.marks
+    const stamp = Date.now()
+    let copyPath = `${marksPath}.invalid.${stamp}`
+    for (let n = 1; await fs.exists(copyPath); n++) copyPath = `${marksPath}.invalid.${stamp}-${n}`
+    try {
+      await fs.writeText(copyPath, read.damaged)
+    } catch (error) {
+      throw new SubscriberFileError(
+        `${marksPath} is not an unsubscribe record (${read.reason}) and a copy could not be kept in ` +
+          `${copyPath}, so nothing is written: ${error instanceof Error ? error.message : error}`,
+      )
+    }
+    log.error(
+      "[SUBSCRIBERS]",
+      `${marksPath} is not an unsubscribe record (${read.reason}); its text is kept in ${copyPath}`,
+    )
     return []
   }
 
@@ -219,7 +259,7 @@ export function createFileSubscriberStore(
       return locked(async () => {
         const rows = await load()
         if (rows.some((row) => row.email === input.email)) return "known"
-        const unsubscribedAt = (await loadMarks()).find((m) => m.mark === input.mark)?.at
+        const unsubscribedAt = (await marksForAdd()).find((m) => m.mark === input.mark)?.at
         if (unsubscribedAt !== undefined && unsubscribedAt >= input.issuedAt) return "replay"
         rows.push({ email: input.email, key: input.key, subscribedAt: new Date(input.at) })
         await writeRows(rows)
@@ -231,7 +271,9 @@ export function createFileSubscriberStore(
       return locked(async () => {
         const rows = await load()
         const oldest = input.pruneBefore.getTime()
-        const marks = (await loadMarks()).filter((m) => m.mark !== input.mark && m.at >= oldest)
+        const marks = (await marksForRemove()).filter((m) =>
+          m.mark !== input.mark && m.at >= oldest
+        )
         marks.push({ mark: input.mark, at: input.at.getTime() })
         // The record goes first: a crash between the two writes must not leave the address removed
         // without its mark.
