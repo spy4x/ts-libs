@@ -28,6 +28,7 @@
     "./lockout/memory-store": "./lockout/memory-store.ts",
     "./lockout/postgres": "./lockout/postgres.ts",
     "./subscribers": "./subscribers/mod.ts",
+    "./subscribers/file": "./subscribers/file.ts",
     "./subscribers/memory": "./subscribers/memory.ts",
     "./crypto": "./crypto.ts",
     "./user-secrets": "./user-secrets.ts",

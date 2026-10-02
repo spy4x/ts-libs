@@ -1,0 +1,10 @@
+[
+  {
+    "email": "ada@example.com",
+    "subscribedAt": "2026-03-01T09:30:00.000Z"
+  },
+  {
+    "email": "grace@example.org",
+    "subscribedAt": "2026-03-02T18:05:12.345Z"
+  }
+]
