@@ -2049,6 +2049,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `FileSubscriberStore` (interface), `jsr:@spy4x/server/subscribers/file`: A SubscriberStore on disk, plus the one-time key backfill.
 - `FileSubscriberStoreOptions` (interface), `jsr:@spy4x/server/subscribers/file`: Options for createFileSubscriberStore.
+- `LockUnavailableError` (class), `jsr:@spy4x/server/subscribers/file`: Raised when another holder owns the lock.
 - `SubscriberFileError` (class), `jsr:@spy4x/server/subscribers/file`: A list or unsubscribe record on disk that this store cannot use.
 - `createFileSubscriberStore` (function), `jsr:@spy4x/server/subscribers/file`: A SubscriberStore in a JSON file, for a single server or a few processes on one disk.
 
@@ -2219,4 +2220,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 b77f2ca538d45b867886b34540f027861270c92e3d5a14358d06d084862083a4 -->
+<!-- export surface: sha256 0b9620be52e1965bc7c9f8fa48139f11e8ba916c493c9e05c1ae3b3e15ebb4c6 -->
