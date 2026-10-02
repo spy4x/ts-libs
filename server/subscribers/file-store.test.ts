@@ -111,7 +111,9 @@ describe("createFileSubscriberStore", () => {
   it("refuses valid JSON that is not a subscriber list, and a row with a bad date", async () => {
     for (const text of [`{"email":"ada@example.com"}`, `[{"email":"a@example.com"}]`]) {
       const fs = fakeFs({ [PATH]: text })
-      await expect(open(fs).store.list()).rejects.toBeInstanceOf(SubscriberFileError)
+      const error = await open(fs).store.list().then(() => undefined, (e: Error) => e)
+      expect(error).toBeInstanceOf(SubscriberFileError)
+      expect(error?.message).not.toContain(`is not a date`)
       expect(fs.files.get(`${PATH}.invalid`)).toBe(JSON.stringify(JSON.parse(text)))
     }
     const bad = `[{"email":"a@example.com","subscribedAt":"yesterday"}]`
