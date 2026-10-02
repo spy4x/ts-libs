@@ -1,7 +1,7 @@
 # ts-libs
 
 > Small TypeScript libraries on web standards, for the server and the browser, published to JSR
-> as `@spy4x/*`. 8 packages cover validation, time zones, email, networking, server
+> as `@spy4x/*`. 9 packages cover validation, time zones, email, networking, server
 > primitives, realtime and more. Each one is a Deno workspace member with no UI.
 
 ## When to use
@@ -14,6 +14,39 @@ Import it, and if it falls short, extend it in the library rather than keeping a
 `deno add jsr:@spy4x/<package>`, then import a name from the entry point listed with it, for
 example `import { parseIp } from "@spy4x/net/ip"`. Every package carries the same version.
 The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/ts-libs/main/llms-full.txt).
+
+## @spy4x/billing
+
+### `jsr:@spy4x/billing`
+
+- `BillingError` (interface), `jsr:@spy4x/billing`: A failed request, safe to log: it never carries the secret key.
+- `BillingErrorCode` (type), `jsr:@spy4x/billing`: Why a request to the provider failed.
+- `BillingEvent` (type), `jsr:@spy4x/billing`: A verified webhook delivery, in provider-neutral terms.
+- `BillingEventRejectReason` (type), `jsr:@spy4x/billing`: Why a delivery was refused: the signature check's reasons, or a payload it cannot read.
+- `BillingEventType` (enum), `jsr:@spy4x/billing`: What happened, as the discriminant of BillingEvent.
+- `BillingProvider` (interface), `jsr:@spy4x/billing`: One payment provider behind one interface.
+- `CheckoutRequest` (interface), `jsr:@spy4x/billing`: What BillingProvider.createCheckout needs to start a subscription checkout.
+- `CheckoutSession` (interface), `jsr:@spy4x/billing`: A hosted checkout page to send the customer to.
+- `ParseEventResult` (type), `jsr:@spy4x/billing`: Result of BillingProvider.parseEvent.
+- `Payment` (interface), `jsr:@spy4x/billing`: A payment, successful or failed, as an event reports it.
+- `PaymentEvent` (interface), `jsr:@spy4x/billing`: A payment that went through or failed.
+- `PlanRef` (interface), `jsr:@spy4x/billing`: One of the app's plans, mapped to the provider's price that bills it.
+- `PortalRequest` (interface), `jsr:@spy4x/billing`: What BillingProvider.createPortalSession needs.
+- `PortalSession` (interface), `jsr:@spy4x/billing`: A customer portal page, where the customer changes plan, card or cancels and sees invoices.
+- `STRIPE_API_VERSION` (constant), `jsr:@spy4x/billing`: The Stripe API version every request is pinned to.
+- `STRIPE_SIGNATURE_HEADER` (constant), `jsr:@spy4x/billing`: Stripe's `Stripe-Signature: t=<seconds>,v1=<hex>[,v1=<hex>][,v0=<hex>]` header layout.
+- `StripeBillingOptions` (interface), `jsr:@spy4x/billing`: Options for createStripeBilling.
+- `Subscription` (interface), `jsr:@spy4x/billing`: A subscription as an event reports it.
+- `SubscriptionEvent` (interface), `jsr:@spy4x/billing`: A subscription created, changed or ended.
+- `SubscriptionStatus` (enum), `jsr:@spy4x/billing`: Where a subscription stands, as every provider reports it.
+- `createStripeBilling` (function), `jsr:@spy4x/billing`: A Stripe BillingProvider.
+
+### `jsr:@spy4x/billing/stripe`
+
+- `STRIPE_API_VERSION` (constant), `jsr:@spy4x/billing/stripe`: The Stripe API version every request is pinned to.
+- `STRIPE_SIGNATURE_HEADER` (constant), `jsr:@spy4x/billing/stripe`: Stripe's `Stripe-Signature: t=<seconds>,v1=<hex>[,v1=<hex>][,v0=<hex>]` header layout.
+- `StripeBillingOptions` (interface), `jsr:@spy4x/billing/stripe`: Options for createStripeBilling.
+- `createStripeBilling` (function), `jsr:@spy4x/billing/stripe`: A Stripe BillingProvider.
 
 ## @spy4x/email
 
@@ -2121,4 +2154,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 0f6470e7cb1fc0c2e188c1cd48291ce65bdb17778164f7c727d090684ccf7c4d -->
+<!-- export surface: sha256 04609c6d1193f1d572283d321e60b973691abb9e30cb46ed1779e90079762e7a -->
