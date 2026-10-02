@@ -25,7 +25,7 @@ describe("unsubscribeTokenFrom", () => {
   })
 
   it("answers null for a body over the cap", async () => {
-    const body = `token=${"a".repeat(200)}`
+    const body = `token=${"a".repeat(95)}` // 101 bytes
     const request = new Request(URL_BASE, { method: "POST", headers: FORM, body })
     expect(await unsubscribeTokenFrom(request, { maxBytes: 100 })).toBeNull()
   })
