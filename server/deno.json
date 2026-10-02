@@ -29,6 +29,7 @@
     "./lockout/postgres": "./lockout/postgres.ts",
     "./subscribers": "./subscribers/mod.ts",
     "./subscribers/memory": "./subscribers/memory.ts",
+    "./subscribers/file": "./subscribers/file.ts",
     "./crypto": "./crypto.ts",
     "./user-secrets": "./user-secrets.ts",
     "./quota": "./quota.ts",
