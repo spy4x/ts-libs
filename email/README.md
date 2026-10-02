@@ -146,6 +146,10 @@ fails the whole message rather than dropping that entry:
   path, and it would render a header line over the 998-character limit. The limit
   is exported as `MAX_ADDR_SPEC_LENGTH` from `@spy4x/email/address`; `isAddress`
   checks only the pattern, so a caller pairing it with a length check reads it there.
+- A form field that must hold only an address goes through `parseBareAddress`: it
+  trims and lowercases the value and returns `null` for anything but a bare
+  addr-spec of at most 254 characters with a local part of at most 64. A display
+  name is refused, so a caller's words never reach a `To:` line.
 - A display name containing a comma is accepted unquoted (`Doe, Jane <jane@example.com>`)
   and re-emitted quoted. Non-ASCII names travel to the transport as structured
   fields, so nodemailer encodes them per RFC 2047 instead of emitting mojibake.
