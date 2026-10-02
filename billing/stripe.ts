@@ -1,7 +1,7 @@
 /**
  * Stripe adapter for {@link BillingProvider}, over Stripe's REST API with `fetch`. No Stripe SDK:
- * three calls (Checkout Sessions, Billing Portal Sessions, webhook events) do not justify a large
- * npm dependency.
+ * a few calls (Checkout Sessions, Billing Portal Sessions, Subscriptions, webhook events) do not
+ * justify a large npm dependency.
  *
  * - **API version.** Every request sends {@link STRIPE_API_VERSION}. A webhook payload follows the
  *   version of the webhook endpoint, not of the request, so set the endpoint in Stripe's dashboard
@@ -34,6 +34,7 @@ import {
   type ParseEventResult,
   type PlanRef,
   type PortalSession,
+  type QuantityRequest,
   type Subscription,
   SubscriptionStatus,
 } from "./provider.ts"
@@ -133,6 +134,12 @@ const checkoutRequestSchema = type({
   "idempotencyKey?": "0 < string <= 255",
 })
 
+const quantityRequestSchema = type({
+  subscriptionId: /^[A-Za-z0-9_]+$/,
+  quantity: "number.integer > 0",
+  "idempotencyKey?": "0 < string <= 255",
+})
+
 const portalRequestSchema = type({
   customerId: "string > 0",
   returnUrl: "string.url",
@@ -161,7 +168,9 @@ const stripeSubscriptionSchema = type({
   "metadata?": "Record<string, string> | null",
   items: {
     data: type({
+      "id?": "string > 0",
       price: { id: "string > 0" },
+      "quantity?": "number.integer >= 0 | null",
       "current_period_end?": "number.integer | null",
     }).array(),
   },
@@ -300,24 +309,28 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
     error: { code, message: message.replaceAll(secretKey, "<REDACTED:STRIPE_KEY>"), status },
   })
 
-  /** POSTs a form to Stripe and returns the `{ id, url }` every session endpoint answers. */
-  const postSession = async (
+  /**
+   * Sends one request to Stripe and returns its JSON body, or the failure: no answer, an error
+   * status (with Stripe's own message), or a 2xx body that is not JSON.
+   */
+  const send = async (
+    method: "GET" | "POST",
     path: string,
-    form: URLSearchParams,
+    form: URLSearchParams | undefined,
     idempotencyKey: string | undefined,
-  ): Promise<Result<{ id: string; url: string }, BillingError>> => {
+  ): Promise<Result<unknown, BillingError>> => {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${secretKey}`,
-      "Content-Type": "application/x-www-form-urlencoded",
       "Stripe-Version": STRIPE_API_VERSION,
     }
+    if (form !== undefined) headers["Content-Type"] = "application/x-www-form-urlencoded"
     if (idempotencyKey !== undefined) headers["Idempotency-Key"] = idempotencyKey
     let response: Response
     try {
       response = await doFetch(`${API}${path}`, {
-        method: "POST",
+        method,
         headers,
-        body: form.toString(),
+        body: form?.toString(),
         redirect: "manual",
         signal: AbortSignal.timeout(requestTimeoutMs),
       })
@@ -347,7 +360,18 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
         response.status,
       )
     }
-    const session = sessionResponseSchema(body)
+    return { ok: true, value: body }
+  }
+
+  /** POSTs a form to Stripe and returns the `{ id, url }` every session endpoint answers. */
+  const postSession = async (
+    path: string,
+    form: URLSearchParams,
+    idempotencyKey: string | undefined,
+  ): Promise<Result<{ id: string; url: string }, BillingError>> => {
+    const answer = await send("POST", path, form, idempotencyKey)
+    if (!answer.ok) return answer
+    const session = sessionResponseSchema(answer.value)
     if (session instanceof type.errors) {
       return failure("malformed_response", `Stripe's answer has no session: ${session.summary}`)
     }
@@ -377,6 +401,7 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
         currentPeriodEnd: fromSeconds(item?.current_period_end),
         cancelAtPeriodEnd: stripe.cancel_at_period_end,
         trialEnd: fromSeconds(stripe.trial_end),
+        quantity: item?.quantity ?? null,
         reference: typeof reference === "string" && reference !== "" ? reference : null,
       },
     }
@@ -407,6 +432,36 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
         checked.idempotencyKey,
       )
       return result.ok ? { ok: true, value: result.value satisfies CheckoutSession } : result
+    },
+
+    async updateQuantity(request: QuantityRequest) {
+      const checked = quantityRequestSchema(request)
+      if (checked instanceof type.errors) {
+        return failure("invalid_request", `quantity request: ${checked.summary}`)
+      }
+      const path = `/subscriptions/${checked.subscriptionId}`
+      // The change names the subscription item, so read which item bills the plan first.
+      const current = await send("GET", path, undefined, undefined)
+      if (!current.ok) return current
+      const before = stripeSubscriptionSchema(current.value)
+      if (before instanceof type.errors) {
+        return failure("malformed_response", `Stripe's subscription: ${before.summary}`)
+      }
+      const item = before.items.data.find((candidate) => planForPrice.has(candidate.price.id))
+      if (item === undefined) {
+        return failure("unknown_plan", `subscription bills no configured plan`)
+      }
+      if (item.id === undefined) {
+        return failure("malformed_response", `Stripe's subscription item has no ID`)
+      }
+      const form = new URLSearchParams()
+      form.set("items[0][id]", item.id)
+      form.set("items[0][quantity]", String(checked.quantity))
+      const updated = await send("POST", path, form, checked.idempotencyKey)
+      if (!updated.ok) return updated
+      const after = toSubscription(updated.value as object)
+      if (!after.ok) return failure("malformed_response", `Stripe's subscription: ${after.error}`)
+      return after
     },
 
     async createPortalSession(request) {

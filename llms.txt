@@ -33,6 +33,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `PlanRef` (interface), `jsr:@spy4x/billing`: One of the app's plans, mapped to the provider's price that bills it.
 - `PortalRequest` (interface), `jsr:@spy4x/billing`: What BillingProvider.createPortalSession needs.
 - `PortalSession` (interface), `jsr:@spy4x/billing`: A customer portal page, where the customer changes plan, card or cancels and sees invoices.
+- `QuantityRequest` (interface), `jsr:@spy4x/billing`: What BillingProvider.updateQuantity needs to change how many seats a plan bills.
 - `STRIPE_API_VERSION` (constant), `jsr:@spy4x/billing`: The Stripe API version every request is pinned to.
 - `STRIPE_SIGNATURE_HEADER` (constant), `jsr:@spy4x/billing`: Stripe's `Stripe-Signature: t=<seconds>,v1=<hex>[,v1=<hex>][,v0=<hex>]` header layout.
 - `StripeBillingOptions` (interface), `jsr:@spy4x/billing`: Options for createStripeBilling.
@@ -2244,4 +2245,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 4572375f7a23c70a6358d58673b42526ca76ffba2b4c8e31f717337e78e8b733 -->
+<!-- export surface: sha256 aaa1aec32ece526d7f62b9d48c6412ef7084932991f85492184f849f0f45274f -->

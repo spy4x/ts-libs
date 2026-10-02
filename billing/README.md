@@ -63,10 +63,16 @@ return new Response(null, { status: 200 })
 
 ## Contracts
 
-- **One interface.** `BillingProvider` has `createCheckout`, `createPortalSession` and
-  `parseEvent`. The app names plans by its own IDs; `PlanRef` maps each to the provider's price.
-  A price in no `PlanRef` comes back as `planId: null`.
-- **Results, not throws.** `createCheckout` and `createPortalSession` return
+- **One interface.** `BillingProvider` has `createCheckout`, `updateQuantity`,
+  `createPortalSession` and `parseEvent`. The app names plans by its own IDs; `PlanRef` maps each
+  to the provider's price. A price in no `PlanRef` comes back as `planId: null`.
+- **Seats.** `updateQuantity({ subscriptionId, quantity, idempotencyKey })` sets how many seats the
+  plan's item bills, for per-seat pricing. Stripe prorates the change by its own default. The
+  Stripe adapter reads the subscription first to find the item of a configured plan, so it makes
+  two calls; a subscription that bills no configured plan is `unknown_plan` and nothing changes.
+  `Subscription.quantity` reports the seats an event's subscription bills, `null` for a metered
+  price.
+- **Results, not throws.** `createCheckout`, `updateQuantity` and `createPortalSession` return
   `{ ok: true, value }` or `{ ok: false, error: { code, message, status } }`. `code` is
   `unknown_plan`, `invalid_request` (nothing was sent), `provider_error`, `network_error` or
   `malformed_response`. The secret key is cut out of every message. Only `createStripeBilling`

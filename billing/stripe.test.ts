@@ -328,6 +328,119 @@ describe("createCheckout", () => {
   })
 })
 
+describe("updateQuantity", () => {
+  /** Stripe's recorded subscription object, its plan's item `si_Na6dzxczY5fwHx` billing one seat. */
+  const recorded = async (quantity = 1) => {
+    const event = JSON.parse(
+      new TextDecoder().decode(await fixture("customer.subscription.created")),
+    )
+    const object = event.data.object
+    object.items.data[0].quantity = quantity
+    return object
+  }
+  /** A `fetch` that answers each call with the next response, and records every call. */
+  const scriptedFetch = (responses: Response[]) => {
+    let next = 0
+    return fakeFetch(() => responses[next++] ?? json({ error: { message: "unexpected" } }, 500))
+  }
+
+  it("reads which item bills the plan, then posts its new quantity, and answers the subscription", async () => {
+    const { calls, fetcher } = scriptedFetch([json(await recorded(1)), json(await recorded(4))])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 4,
+      idempotencyKey: "seats-group-1-4",
+    })
+    expect(result.ok && result.value).toMatchObject({
+      id: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      planId: "pro",
+      quantity: 4,
+    })
+    expect(calls.map((call) => [call.init.method, call.url])).toEqual([
+      ["GET", "https://api.stripe.com/v1/subscriptions/sub_1MowQVLkdIwHu7ixeRlqHVzs"],
+      ["POST", "https://api.stripe.com/v1/subscriptions/sub_1MowQVLkdIwHu7ixeRlqHVzs"],
+    ])
+    expect(calls[0].init.body).toBe(undefined)
+    expect(calls[0].init.headers).toEqual({
+      Authorization: `Bearer ${SECRET_KEY}`,
+      "Stripe-Version": STRIPE_API_VERSION,
+    })
+    expect(calls[1].init.body).toBe(
+      "items%5B0%5D%5Bid%5D=si_Na6dzxczY5fwHx&items%5B0%5D%5Bquantity%5D=4",
+    )
+    expect(calls[1].init.headers).toEqual({
+      Authorization: `Bearer ${SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Stripe-Version": STRIPE_API_VERSION,
+      "Idempotency-Key": "seats-group-1-4",
+    })
+  })
+
+  it("refuses a zero quantity or an ID that is not a subscription's, without calling Stripe", async () => {
+    const { calls, fetcher } = fakeFetch(() => json({}))
+    const provider = billing({ fetch: fetcher })
+    for (
+      const request of [
+        { subscriptionId: "sub_1", quantity: 0 },
+        { subscriptionId: "sub_1", quantity: 1.5 },
+        { subscriptionId: "../customers/cus_1", quantity: 2 },
+        { subscriptionId: "", quantity: 2 },
+      ]
+    ) {
+      const result = await provider.updateQuantity(request)
+      expect(!result.ok && result.error.code).toBe("invalid_request")
+    }
+    expect(calls.length).toBe(0)
+  })
+
+  it("changes nothing on a subscription that bills no configured plan", async () => {
+    const other = await recorded()
+    other.items.data[0].price.id = "price_unmapped"
+    const { calls, fetcher } = scriptedFetch([json(other)])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 2,
+    })
+    expect(!result.ok && result.error.code).toBe("unknown_plan")
+    expect(calls.length).toBe(1)
+  })
+
+  it("reports Stripe's error on the read and posts nothing", async () => {
+    const { calls, fetcher } = scriptedFetch([
+      json({ error: { message: "No such subscription: 'sub_gone'" } }, 404),
+    ])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_gone",
+      quantity: 2,
+    })
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "provider_error",
+        message: "Stripe answered 404: No such subscription: 'sub_gone'",
+        status: 404,
+      },
+    })
+    expect(calls.length).toBe(1)
+  })
+
+  it("reports a failed post as the provider's error, so the caller retries it", async () => {
+    const { fetcher } = scriptedFetch([
+      json(await recorded()),
+      json({ error: { message: "Try again later" } }, 503),
+    ])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 2,
+    })
+    expect(!result.ok && result.error).toEqual({
+      code: "provider_error",
+      message: "Stripe answered 503: Try again later",
+      status: 503,
+    })
+  })
+})
+
 describe("createPortalSession", () => {
   it("posts the customer and return URL to Stripe's Billing Portal Sessions endpoint", async () => {
     const { calls, fetcher } = fakeFetch(() =>
@@ -368,6 +481,7 @@ describe("parseEvent: Stripe's recorded payloads", () => {
     priceId: "price_1MowQULkdIwHu7ixraBm864M",
     currentPeriodEnd: new Date(1682288167 * 1000),
     trialEnd: null,
+    quantity: 1,
     reference: "acct_42",
   }
 
@@ -519,6 +633,16 @@ describe("parseEvent: mapping edge cases", () => {
       planId: null,
       priceId: "price_unmapped",
     })
+  })
+
+  it("reports a metered item, which has no quantity, as quantity null", async () => {
+    const event = parsedEvent(
+      await parseEdited("customer.subscription.created", (object) => {
+        const items = object.items as { data: { quantity?: number }[] }
+        delete items.data[0].quantity
+      }),
+    )
+    expect(event && "subscription" in event && event.subscription.quantity).toBe(null)
   })
 
   it("reports a subscription without a reference as reference null", async () => {
