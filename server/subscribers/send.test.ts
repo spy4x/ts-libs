@@ -300,7 +300,7 @@ describe("sendIssue", () => {
     ]
     const relay = fakeSender((to) => {
       if (to === TWO) return refused(`550 5.1.1 <${TWO.toUpperCase()}> unknown user`)
-      if (to === THREE) throw new Error(`connection reset while sending to ${THREE}`)
+      if (to === THREE) throw new Error(`connection reset while sending to ${THREE.toUpperCase()}`)
       return accepted(to)
     })
     const result = await sendIssue(input(subscribers, { sender: relay.sender }), log)
