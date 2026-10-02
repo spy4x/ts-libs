@@ -6,6 +6,7 @@ import type {
   SubscriberStore,
 } from "./store.ts"
 
+export { createMemorySendLog } from "./memory-send-log.ts"
 export type {
   AddSubscriberInput,
   AddSubscriberResult,
