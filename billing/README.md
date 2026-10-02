@@ -77,7 +77,7 @@ return new Response(null, { status: 200 })
   price.
 - **Results, not throws.** `createCheckout`, `updateQuantity` and `createPortalSession` return
   `{ ok: true, value }` or `{ ok: false, error: { code, message, status } }`. `code` is
-  `unknown_plan`, `invalid_request` (nothing was sent), `provider_error`, `network_error` or
+  `unknown_plan`, `invalid_request` (nothing was changed), `provider_error`, `network_error` or
   `malformed_response`. The secret key is cut out of every message. Only `createStripeBilling`
   throws, on a missing secret or a broken plan list, so a misconfiguration fails at start-up.
 - **Webhooks.** `parseEvent` checks `Stripe-Signature` with `verifyWebhookRequest` from

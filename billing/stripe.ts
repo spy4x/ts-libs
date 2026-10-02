@@ -462,7 +462,7 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
       const form = new URLSearchParams()
       form.set("items[0][id]", item.id)
       form.set("items[0][quantity]", String(checked.quantity))
-      // Pinned rather than left to the account's default: the rest of the period goes to the next
+      // Pinned rather than left to Stripe's default: the rest of the period goes to the next
       // invoice as a charge or a credit, and nothing is charged now.
       form.set("proration_behavior", "create_prorations")
       const updated = await send("POST", path, form, checked.idempotencyKey)

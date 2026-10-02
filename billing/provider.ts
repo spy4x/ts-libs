@@ -209,7 +209,7 @@ export interface PortalSession {
 
 /** Why a request to the provider failed. */
 export type BillingErrorCode =
-  /** The plan ID is in no {@link PlanRef}. Nothing was sent. */
+  /** The plan ID is in no {@link PlanRef}, or the subscription bills none. Nothing was changed. */
   | "unknown_plan"
   /**
    * The request failed its own checks, such as a relative URL, or the subscription it names cannot
