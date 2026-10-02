@@ -379,7 +379,7 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
   }
 
   /** Maps a verified Stripe subscription object, or explains why it cannot. */
-  const toSubscription = (object: object): Result<Subscription, string> => {
+  const toSubscription = (object: unknown): Result<Subscription, string> => {
     const stripe = stripeSubscriptionSchema(object)
     if (stripe instanceof type.errors) return { ok: false, error: stripe.summary }
     const status = STATUS.get(stripe.status)
@@ -447,9 +447,14 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
       if (before instanceof type.errors) {
         return failure("malformed_response", `Stripe's subscription: ${before.summary}`)
       }
-      const item = before.items.data.find((candidate) => planForPrice.has(candidate.price.id))
+      const billed = before.items.data.filter((candidate) => planForPrice.has(candidate.price.id))
+      const item = billed[0]
       if (item === undefined) {
         return failure("unknown_plan", `subscription bills no configured plan`)
+      }
+      // Two seat counts would leave the change ambiguous; the subscription is fixed in Stripe.
+      if (billed.length > 1) {
+        return failure("invalid_request", `subscription bills ${billed.length} configured plans`)
       }
       if (item.id === undefined) {
         return failure("malformed_response", `Stripe's subscription item has no ID`)
@@ -457,9 +462,12 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
       const form = new URLSearchParams()
       form.set("items[0][id]", item.id)
       form.set("items[0][quantity]", String(checked.quantity))
+      // Pinned rather than left to the account's default: the rest of the period goes to the next
+      // invoice as a charge or a credit, and nothing is charged now.
+      form.set("proration_behavior", "create_prorations")
       const updated = await send("POST", path, form, checked.idempotencyKey)
       if (!updated.ok) return updated
-      const after = toSubscription(updated.value as object)
+      const after = toSubscription(updated.value)
       if (!after.ok) return failure("malformed_response", `Stripe's subscription: ${after.error}`)
       return after
     },

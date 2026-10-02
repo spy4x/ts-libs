@@ -366,7 +366,8 @@ describe("updateQuantity", () => {
       "Stripe-Version": STRIPE_API_VERSION,
     })
     expect(calls[1].init.body).toBe(
-      "items%5B0%5D%5Bid%5D=si_Na6dzxczY5fwHx&items%5B0%5D%5Bquantity%5D=4",
+      "items%5B0%5D%5Bid%5D=si_Na6dzxczY5fwHx&items%5B0%5D%5Bquantity%5D=4" +
+        "&proration_behavior=create_prorations",
     )
     expect(calls[1].init.headers).toEqual({
       Authorization: `Bearer ${SECRET_KEY}`,
@@ -391,6 +392,55 @@ describe("updateQuantity", () => {
       expect(!result.ok && result.error.code).toBe("invalid_request")
     }
     expect(calls.length).toBe(0)
+  })
+
+  /** The recorded subscription with an unconfigured add-on item put before its plan's item. */
+  const withAddOnFirst = async (planPriceId = "price_1MowQULkdIwHu7ixraBm864M") => {
+    const object = await recorded(3)
+    const plan = object.items.data[0]
+    plan.price.id = planPriceId
+    const addOn = { ...plan, id: "si_addon", price: { ...plan.price, id: "price_addon" } }
+    addOn.quantity = 7
+    object.items.data = [addOn, plan]
+    return object
+  }
+
+  it("posts the quantity of the item that bills the plan, even when another item comes first", async () => {
+    const { calls, fetcher } = scriptedFetch([
+      json(await withAddOnFirst()),
+      json(await withAddOnFirst()),
+    ])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 3,
+    })
+    expect(new URLSearchParams(String(calls[1].init.body)).get("items[0][id]"))
+      .toBe("si_Na6dzxczY5fwHx")
+    expect(result.ok && result.value).toMatchObject({ planId: "pro", quantity: 3 })
+  })
+
+  it("refuses a subscription that bills two configured plans, and posts nothing", async () => {
+    const object = await withAddOnFirst()
+    object.items.data[0].price.id = "price_team_0000"
+    const { calls, fetcher } = scriptedFetch([json(object)])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 2,
+    })
+    expect(!result.ok && result.error.code).toBe("invalid_request")
+    expect(calls.length).toBe(1)
+  })
+
+  it("reports a plan item without an ID as malformed, and posts nothing", async () => {
+    const object = await recorded()
+    delete object.items.data[0].id
+    const { calls, fetcher } = scriptedFetch([json(object)])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 2,
+    })
+    expect(!result.ok && result.error.code).toBe("malformed_response")
+    expect(calls.length).toBe(1)
   })
 
   it("changes nothing on a subscription that bills no configured plan", async () => {
@@ -643,6 +693,32 @@ describe("parseEvent: mapping edge cases", () => {
       }),
     )
     expect(event && "subscription" in event && event.subscription.quantity).toBe(null)
+  })
+
+  it("reports the quantity of the item that bills the plan, even when another item comes first", async () => {
+    const event = parsedEvent(
+      await parseEdited("customer.subscription.created", (object) => {
+        const items = object.items as { data: Record<string, unknown>[] }
+        const plan = { ...items.data[0], quantity: 3 }
+        const addOn = { ...plan, id: "si_addon", price: { id: "price_addon" }, quantity: 7 }
+        items.data = [addOn, plan]
+      }),
+    )
+    expect(event && "subscription" in event && event.subscription).toMatchObject({
+      planId: "pro",
+      quantity: 3,
+    })
+  })
+
+  it("reports a quantity that is not a whole number as malformed", async () => {
+    for (const quantity of [1.5, "2"]) {
+      const result = await parseEdited("customer.subscription.created", (object) => {
+        const items = object.items as { data: Record<string, unknown>[] }
+        items.data[0].quantity = quantity
+      })
+      expect({ quantity, ok: result.ok, reason: !result.ok && result.reason })
+        .toEqual({ quantity, ok: false, reason: "malformed_payload" })
+    }
   })
 
   it("reports a subscription without a reference as reference null", async () => {

@@ -67,9 +67,12 @@ return new Response(null, { status: 200 })
   `createPortalSession` and `parseEvent`. The app names plans by its own IDs; `PlanRef` maps each
   to the provider's price. A price in no `PlanRef` comes back as `planId: null`.
 - **Seats.** `updateQuantity({ subscriptionId, quantity, idempotencyKey })` sets how many seats the
-  plan's item bills, for per-seat pricing. Stripe prorates the change by its own default. The
-  Stripe adapter reads the subscription first to find the item of a configured plan, so it makes
-  two calls; a subscription that bills no configured plan is `unknown_plan` and nothing changes.
+  plan's item bills, for per-seat pricing. The change adds a charge or a credit for the rest of
+  the current period to the next invoice; nothing is charged now (Stripe's
+  `proration_behavior=create_prorations`, sent explicitly). The Stripe adapter reads the
+  subscription first to find the item of a configured plan, so it makes two calls. A subscription
+  that bills no configured plan is `unknown_plan`, one that bills two is `invalid_request`, and
+  nothing changes.
   `Subscription.quantity` reports the seats an event's subscription bills, `null` for a metered
   price.
 - **Results, not throws.** `createCheckout`, `updateQuantity` and `createPortalSession` return

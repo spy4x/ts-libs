@@ -211,7 +211,10 @@ export interface PortalSession {
 export type BillingErrorCode =
   /** The plan ID is in no {@link PlanRef}. Nothing was sent. */
   | "unknown_plan"
-  /** The request failed its own checks, such as a relative URL. Nothing was sent. */
+  /**
+   * The request failed its own checks, such as a relative URL, or the subscription it names cannot
+   * take it, such as one billing two configured plans. Nothing was changed.
+   */
   | "invalid_request"
   /** The provider answered with an error status. */
   | "provider_error"
@@ -235,8 +238,9 @@ export interface BillingProvider {
   /** Starts a hosted subscription checkout for one plan. */
   createCheckout(request: CheckoutRequest): Promise<Result<CheckoutSession, BillingError>>
   /**
-   * Sets how many seats or units a subscription's plan bills. The provider prorates the change by
-   * its own default; the answer is the subscription as it stands after it.
+   * Sets how many seats or units a subscription's plan bills. The change adds a charge or a credit
+   * for the rest of the current period to the next invoice; nothing is charged now. The answer is
+   * the subscription as it stands after the change.
    */
   updateQuantity(request: QuantityRequest): Promise<Result<Subscription, BillingError>>
   /** Opens the provider's customer portal for one customer. */
