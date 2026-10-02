@@ -289,15 +289,16 @@ const postscript = (label: string, href: string): LetterBlock => ({
 })
 ```
 
-`escapeHtml` does not check a link's scheme: a hand-built block that takes a link from outside
-must check its scheme itself, or a `javascript:` link renders. Block `html` is trusted as
-pre-escaped, as `htmlWrap` treats its body. Every value the shell interpolates itself is escaped. A link, whether in a button, an image, the footer or
-`fillUnsubscribe`, throws a `TypeError` unless it is an `https:`, `http:` or `mailto:` URL
-(an image `src`: `https:` or `http:`) made only of printable ASCII (`!` to `~`): `URL` ignores a
-newline or a Unicode line separator that the plain-text part would print as a second line. Pass an
-international address as `new URL(link).href`, which is always ASCII. `fillUnsubscribe` gives
-output byte-identical to rendering with that link directly. `{{unsubscribe-link}}` written by a caller
-inside block text is also replaced, so keep that literal out of content.
+`escapeHtml` does not check a link's scheme: a hand-built block that takes a link from outside must
+check its scheme itself, or a `javascript:` link renders. Block `html` is trusted as pre-escaped, as
+`htmlWrap` treats its body. Every value the shell interpolates itself is escaped. A link, whether in
+a button, an image, the footer or `fillUnsubscribe`, throws a `TypeError` unless it is an `https:`,
+`http:` or `mailto:` URL (an image `src`: `https:` or `http:`) made only of printable ASCII (`!` to
+`~`): `URL` ignores a newline or a Unicode line separator that the plain-text part would print as a
+second line. Pass an international address as `new URL(link).href`, which is always ASCII.
+`fillUnsubscribe` gives output byte-identical to rendering with that link directly.
+`{{unsubscribe-link}}` written by a caller inside block text is also replaced, so keep that literal
+out of content.
 
 `theme` sets `background` and `color` (page and text), `mutedColor` (footer text) and `linkColor`
 (footer links); a button takes its own colours.
