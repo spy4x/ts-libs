@@ -313,6 +313,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `SafeFetchMethod` (enum), `jsr:@spy4x/net`: Request methods a redirect is allowed to carry unchanged.
 - `SafeFetchOptions` (interface), `jsr:@spy4x/net`: Per-call overrides for safeFetch.
 - `SafeFetchResult` (interface), `jsr:@spy4x/net`: Successful outcome of safeFetch.
+- `SafeRedirectPathOptions` (interface), `jsr:@spy4x/net`: Options of safeRedirectPath.
 - `UrlPolicyErrorCode` (type), `jsr:@spy4x/net`: Machine-readable rejection reason.
 - `UrlShapeError` (interface), `jsr:@spy4x/net`: Rejected input, with the reason a caller can branch on.
 - `UrlShapeErrorCode` (type), `jsr:@spy4x/net`: Machine-readable rejection reason.
@@ -339,6 +340,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `readBoundedText` (function), `jsr:@spy4x/net`: Read a body as text, decoding incrementally so the cap is enforced before the whole payload is materialised as one string.
 - `readContentLength` (function), `jsr:@spy4x/net`: Read the declared `Content-Length`, if the sender provided a usable one.
 - `safeFetch` (function), `jsr:@spy4x/net`: Fetch a URL following redirects manually, validating each `Location` through the public-URL policy.
+- `safeRedirectPath` (function), `jsr:@spy4x/net`: The path to send a person to next: `value` when it is a path on this origin, `fallback` otherwise.
 - `validatePublicUrl` (function), `jsr:@spy4x/net`: Validate a URL and return the canonical form.
 
 ### `jsr:@spy4x/net/bounded-body`
@@ -363,6 +365,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ipInRanges` (function), `jsr:@spy4x/net/ip`: True when `ip` lies inside at least one of `cidrs`.
 - `normalizeIp` (function), `jsr:@spy4x/net/ip`: The canonical spelling of `input` (parseIp), or `null` when it is not an address.
 - `parseIp` (function), `jsr:@spy4x/net/ip`: Parse one IPv4 or IPv6 address.
+
+### `jsr:@spy4x/net/redirect-path`
+
+- `SafeRedirectPathOptions` (interface), `jsr:@spy4x/net/redirect-path`: Options of safeRedirectPath.
+- `safeRedirectPath` (function), `jsr:@spy4x/net/redirect-path`: The path to send a person to next: `value` when it is a path on this origin, `fallback` otherwise.
 
 ### `jsr:@spy4x/net/safe-fetch`
 
@@ -2111,4 +2118,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 5524451ee6a54673717a535e67793b883f8440f11d371cb73429f1f801dab9ce -->
+<!-- export surface: sha256 e452855eb352f7893f68a958bb6b9fba7e0cad8130ebca4901c24bbbe13a0492 -->

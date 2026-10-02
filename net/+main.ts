@@ -15,6 +15,9 @@
  * `bounded-body.ts` is re-exported alongside: reading a response under a hard
  * byte cap and a stall budget is the other half of fetching safely.
  *
+ * `redirect-path.ts` checks a "go here next" value, such as `?next=` after
+ * sign-in, so following it cannot leave the site.
+ *
  * `ip.ts` parses one IP address into a canonical spelling and checks it against
  * CIDR ranges, for example to trust a header only from a known proxy.
  *
@@ -79,3 +82,6 @@ export type { BodyReadOptions, BodySource } from "./bounded-body.ts"
 
 export { CLOUDFLARE_IP_RANGES, ipInRanges, normalizeIp, parseIp } from "./ip.ts"
 export type { ParsedIp } from "./ip.ts"
+
+export { safeRedirectPath } from "./redirect-path.ts"
+export type { SafeRedirectPathOptions } from "./redirect-path.ts"
