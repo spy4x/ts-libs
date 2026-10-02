@@ -45,3 +45,11 @@ export {
   unsubscribeTokenFrom,
   type UnsubscribeTokenOptions,
 } from "./http.ts"
+export { sendIssue, type SendIssueInput, type SendIssueLog, type SendIssueResult } from "./send.ts"
+export type {
+  FinishSendInput,
+  SendLock,
+  SendLog,
+  SendLogEntry,
+  StartSendInput,
+} from "./send-log.ts"
