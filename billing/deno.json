@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/billing",
-  "version": "1.32.0",
+  "version": "1.33.0",
   "exports": {
     ".": "./mod.ts",
     "./stripe": "./stripe.ts"
