@@ -2,7 +2,8 @@
 
 Outbound-request primitives for Deno: a URL shape normaliser, an SSRF guard, a
 redirect-safe `fetch`, and bounded body readers. Plus an IP address parser and a
-CIDR range check, for deciding which proxy to believe about a client's address.
+CIDR range check, for deciding which proxy to believe about a client's address,
+and a check for a "go here next" path, so a link cannot redirect off the site.
 
 Zero runtime dependencies. Platform APIs only — `URL`, `Deno.resolveDns`,
 `AbortController`, `ReadableStream`, `TextDecoder`. Nothing here imports `@std/*`
@@ -15,6 +16,7 @@ net/url-policy.ts     validatePublicUrl()   — the SSRF guard
 net/safe-fetch.ts     safeFetch()           — guard + redirect re-validation
 net/bounded-body.ts   readBoundedText/Json/Body, readContentLength, parseBoundedFormData
 net/ip.ts             parseIp(), normalizeIp(), ipInRanges(), CLOUDFLARE_IP_RANGES
+net/redirect-path.ts  safeRedirectPath()    — a ?next= value that stays on the site
 ```
 
 ## Install
@@ -23,7 +25,7 @@ net/ip.ts             parseIp(), normalizeIp(), ipInRanges(), CLOUDFLARE_IP_RANG
 deno add jsr:@spy4x/net
 ```
 
-Runs on: server (Deno).
+Runs on: server (Deno), with `./redirect-path` and `./url-shape` also in a browser bundle.
 
 ```ts
 import { validatePublicUrl } from "@spy4x/net/url-policy"
@@ -284,6 +286,32 @@ that one address. A malformed range throws a `RangeError` on every call, whether
 or not an earlier range matched: a typo in a trusted-proxy list should break
 loudly, not quietly trust nobody. No provider's range list ships here; those
 change, so the caller passes its own.
+
+## A path to go to next
+
+```ts
+import { safeRedirectPath } from "@spy4x/net/redirect-path"
+
+const options = { fallback: "/notes", refuse: ["/api"] }
+safeRedirectPath("/notes/abc?tab=2", options) // "/notes/abc?tab=2"
+safeRedirectPath("//evil.example", options) // "/notes"
+safeRedirectPath("/%5Cevil.example", options) // "/notes"
+safeRedirectPath("/notes/../api/auth/me", options) // "/notes"
+```
+
+A sign-in page that sends a person back to `?next=` afterwards is an open
+redirect unless that value is checked: a link to your sign-in page could send
+them on to a look-alike site. `safeRedirectPath` accepts only a path that starts
+with exactly one `/`, and returns it with its `.` and `..` segments resolved. It
+returns `fallback` for anything else: a scheme, a leading `//`, a backslash
+anywhere, a control character, the percent-encoded forms of these (each decoded
+form is checked, up to four rounds), encoding that does not decode, dots that
+resolve to a leading `//`, and every path under one of `refuse` (compared without
+letter case, after decoding and resolving dots). It runs in a browser too.
+
+Check the value again on every hop that carries it, such as each step of a
+sign-in that asks for a one-time code: a value that passed once may have been
+changed in between.
 
 ## Explicitly out of scope
 
