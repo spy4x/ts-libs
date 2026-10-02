@@ -1,9 +1,11 @@
 /**
  * One address on a mailing list.
  *
- * `key` is the address's `SubscriptionCrypto.subscriberKey`: a version 2 unsubscribe link
- * finds the row by it. A row written before keys existed has none, and only a version 1 link,
- * which scans the list, can find it.
+ * `key` is the address's `SubscriptionCrypto.subscriberKey` under the secret current when the row
+ * was added: a version 2 unsubscribe link finds the row by it. It is an opaque lookup id that
+ * survives a secret rotation, so mint a listed subscriber's link with it. A row written before
+ * keys existed has none: only a version 1 link, which scans the list, can find it until its key is
+ * backfilled.
  */
 export interface Subscriber {
   /** Trimmed and lowercased, as `parseBareAddress` returns it. */
@@ -49,6 +51,11 @@ export interface RemoveSubscriberInput {
  * its mark, never by address, in the same atomic step that removes the row, and records it even
  * when the row was already gone. `describeSubscriberStoreContract` in `store-contract.test.ts`
  * pins every rule.
+ *
+ * `add` and `remove` for one address must not overlap. Otherwise an `add` that found neither row
+ * nor mark can store the address after a concurrent `remove` recorded its mark, letting a replayed
+ * confirm link back in. A Postgres store takes a row lock or an advisory lock on the address, and
+ * a file store runs each call under its lock.
  */
 export interface SubscriberStore {
   /** Every subscriber, oldest first. */
