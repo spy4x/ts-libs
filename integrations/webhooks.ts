@@ -6,7 +6,8 @@
  * header (the default), or one combined header carrying both, such as
  * Stripe's `Stripe-Signature: t=<ts>,v1=<hex>` (see
  * {@link WebhookVerifierConfig.combinedHeader}). Either way the signed string is
- * `<timestamp>.<raw body>`. This is **not** a drop-in verifier for GitHub or
+ * `<timestamp>.<raw body>`, or `<timestamp>:<raw body>` for Paddle through
+ * {@link CombinedSignatureHeader.signedSeparator}. This is **not** a drop-in verifier for GitHub or
  * Slack: GitHub sends no timestamp at all, so every real GitHub delivery is
  * rejected as `missing_timestamp`, and Slack signs a different string; see the
  * package README for the full comparison.
@@ -69,6 +70,11 @@ export interface CombinedSignatureHeader {
   timestampKey: string
   /** Key of a signature pair, a 64-character hex HMAC: `"v1"` for Stripe. */
   signatureKey: string
+  /**
+   * What joins the timestamp and the body in the signed string: `<timestamp><signedSeparator><body>`.
+   * Default `"."`, as Stripe signs. Paddle signs `<ts>:<body>`, so it needs `":"`.
+   */
+  signedSeparator?: string
 }
 
 /** Shared secret and header names {@link verifyWebhookRequest} needs to check a delivery. */
@@ -82,7 +88,10 @@ export interface WebhookVerifierConfig {
    * secret must refuse every delivery rather than sign with the falsy value.
    */
   secret: string
-  /** Accepted age and future skew of a signature, in seconds. Default 300. */
+  /**
+   * Accepted age and future skew of a signature, in seconds. Default 300. Must be a finite number
+   * above zero: `NaN` or `Infinity` would accept a replay from any time, so either one throws.
+   */
   toleranceSeconds?: number
   /**
    * Signature header name. Configurable because senders disagree on it —
@@ -282,6 +291,7 @@ const readCombinedHeader = (
  *
  * @param rawBody Body bytes exactly as received. A `string` is rejected so a
  *   decoded body cannot be passed to a byte-level comparison by accident.
+ * @throws {RangeError} When `toleranceSeconds` is not a finite number above 0.
  */
 export const verifyWebhookRequest = async (
   rawBody: Uint8Array | ArrayBuffer,
@@ -309,6 +319,13 @@ export const verifyWebhookRequest = async (
     }
   }
 
+  const tolerance = config.toleranceSeconds ?? DEFAULT_TOLERANCE_SECONDS
+  if (!Number.isFinite(tolerance) || tolerance <= 0) {
+    // A configuration error, not a bad delivery: thrown so it surfaces at the first request
+    // instead of turning replay protection off.
+    throw new RangeError(`toleranceSeconds must be a finite number above 0, got ${tolerance}`)
+  }
+
   if (!(rawBody instanceof Uint8Array) && !(rawBody instanceof ArrayBuffer)) {
     return { ok: false, reason: "malformed_body", message: "raw body must be bytes" }
   }
@@ -330,7 +347,6 @@ export const verifyWebhookRequest = async (
     }
   }
   const timestampSeconds = Number.parseInt(timestampValue, 10)
-  const tolerance = config.toleranceSeconds ?? DEFAULT_TOLERANCE_SECONDS
   const ageSeconds = Math.floor(clock() / 1000) - timestampSeconds
   if (ageSeconds > tolerance) {
     return { ok: false, reason: "stale_timestamp", message: `timestamp is ${ageSeconds}s old` }
@@ -344,8 +360,10 @@ export const verifyWebhookRequest = async (
   }
 
   // One construction of the signed string, used by the only verification path
-  // in this module: `<timestamp seconds>.<raw body>`, both as bytes.
-  const prefixBytes = textEncoder.encode(`${timestampSeconds}.`)
+  // in this module: `<timestamp seconds><separator><raw body>`, both as bytes. The separator is
+  // "." unless a combined header names another.
+  const separator = config.combinedHeader?.signedSeparator ?? "."
+  const prefixBytes = textEncoder.encode(`${timestampSeconds}${separator}`)
   const signed = new Uint8Array(new ArrayBuffer(prefixBytes.length + bytes.length))
   signed.set(prefixBytes, 0)
   signed.set(bytes, prefixBytes.length)

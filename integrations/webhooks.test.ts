@@ -24,8 +24,13 @@ const BODY_TEXT = `{
 }`
 const BODY = new TextEncoder().encode(BODY_TEXT)
 
-/** Signer that mirrors what a sender does: HMAC-SHA256 over `<ts>.<raw body>`. */
-const sign = async (secret: string, timestampSeconds: number, body: Uint8Array) => {
+/** Signer that mirrors what a sender does: HMAC-SHA256 over `<ts><separator><raw body>`. */
+const sign = async (
+  secret: string,
+  timestampSeconds: number,
+  body: Uint8Array,
+  separator = ".",
+) => {
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -33,7 +38,7 @@ const sign = async (secret: string, timestampSeconds: number, body: Uint8Array) 
     false,
     ["sign"],
   )
-  const prefix = new TextEncoder().encode(`${timestampSeconds}.`)
+  const prefix = new TextEncoder().encode(`${timestampSeconds}${separator}`)
   const signed = new Uint8Array(prefix.length + body.length)
   signed.set(prefix, 0)
   signed.set(body, prefix.length)
@@ -225,6 +230,16 @@ describe("verifyWebhookRequest", () => {
     })
     expect(result.ok).toBe(false)
     expect(result.ok === false && result.reason).toBe("stale_timestamp")
+  })
+
+  it("throws instead of accepting any age when toleranceSeconds is NaN, Infinity, 0 or negative", async () => {
+    const yearOld = AT_SECONDS - 365 * 24 * 3600
+    const signature = await sign(SECRET, yearOld, BODY)
+    for (const toleranceSeconds of [Number.NaN, Number.POSITIVE_INFINITY, 0, -5]) {
+      await expect(
+        verifyWebhookRequest(BODY, headersFor(signature, yearOld), { ...config, toleranceSeconds }),
+      ).rejects.toThrow("toleranceSeconds must be a finite number above 0")
+    }
   })
 
   it("rejects a string body, which cannot be compared byte for byte", async () => {
@@ -449,5 +464,33 @@ describe("verifyWebhookRequest with a combined header", () => {
     const signature = await sign(SECRET, AT_SECONDS, BODY)
     const result = await verifyWebhookRequest(BODY, headersFor(signature, AT_SECONDS), stripeConfig)
     expect(result.ok === false && result.reason).toBe("missing_signature")
+  })
+
+  it("verifies Paddle's ts=…;h1=… header over <ts>:<body>, and refuses one signed over <ts>.<body>", async () => {
+    const paddle = {
+      secret: SECRET,
+      clock: clockAt(AT_SECONDS * 1000),
+      combinedHeader: {
+        name: "Paddle-Signature",
+        pairSeparator: ";",
+        timestampKey: "ts",
+        signatureKey: "h1",
+        signedSeparator: ":",
+      },
+    }
+    const colon = await sign(SECRET, AT_SECONDS, BODY, ":")
+    const accepted = await verifyWebhookRequest(
+      BODY,
+      new Headers({ "Paddle-Signature": `ts=${AT_SECONDS};h1=${colon}` }),
+      paddle,
+    )
+    expect(accepted.ok).toBe(true)
+    const dot = await sign(SECRET, AT_SECONDS, BODY)
+    const refused = await verifyWebhookRequest(
+      BODY,
+      new Headers({ "Paddle-Signature": `ts=${AT_SECONDS};h1=${dot}` }),
+      paddle,
+    )
+    expect(refused.ok === false && refused.reason).toBe("signature_mismatch")
   })
 })

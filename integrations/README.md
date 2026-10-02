@@ -225,6 +225,14 @@ without `=`, a second timestamp, a signature that is not 64 hex characters, more
 signatures or a header over 1024 characters rejects the delivery. All candidates are verified with
 no early exit.
 
+`signedSeparator` (default `"."`) is what joins the timestamp and the body in the signed string.
+Paddle sends `Paddle-Signature: ts=<ts>;h1=<hex>` and signs `<ts>:<body>`, so it is read with
+`{ name: "Paddle-Signature", pairSeparator: ";", timestampKey: "ts", signatureKey: "h1",
+signedSeparator: ":" }`.
+
+`toleranceSeconds` must be a finite number above 0. `NaN` or `Infinity` would accept a replay from
+any time, so such a value, 0 or a negative one makes `verifyWebhookRequest` throw a `RangeError`.
+
 **This is not a drop-in verifier for GitHub or Slack.** Neither signs `<timestamp>.<raw body>`:
 
 | provider | its actual scheme                                                                | this module                                 |
@@ -232,6 +240,7 @@ no early exit.
 | GitHub   | `X-Hub-Signature-256: sha256=<hmac-of-body>`, no timestamp, no replay protection | needs an adapter: sign the body alone       |
 | Slack    | `X-Slack-Signature: v0=<hmac-of-"v0:<ts>:<body>">`                               | needs an adapter: the signed string differs |
 | Stripe   | `Stripe-Signature: t=<ts>,v1=<hmac-of-"<ts>.<body>">`                            | supported with `combinedHeader`             |
+| Paddle   | `Paddle-Signature: ts=<ts>;h1=<hmac-of-"<ts>:<body>">`                           | supported with `combinedHeader`             |
 | generic  | `<ts>.<raw body>`                                                                | supported directly                          |
 
 What is worth reusing regardless of provider is the part that is easy to get wrong: signing the raw
