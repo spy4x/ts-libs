@@ -84,9 +84,9 @@ export function describeSendLogContract(name: string, open: OpenSendLog) {
       withLog(open, async (log) => {
         await start(log, "one")
         await start(log, "two")
-        await log.record("one", "a1")
-        expect((await log.find("one"))?.recipients).toEqual(["a1"])
-        expect((await log.find("two"))?.recipients).toEqual([])
+        await log.record("two", "a1")
+        expect((await log.find("two"))?.recipients).toEqual(["a1"])
+        expect((await log.find("one"))?.recipients).toEqual([])
       }))
 
     it("refuses to record or finish an issue that was never started", () =>
