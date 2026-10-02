@@ -10,6 +10,7 @@
   // tooling, not a package.
   "workspace": [
     "./ai",
+    "./billing",
     "./email",
     "./integrations",
     "./net",
