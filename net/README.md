@@ -304,10 +304,13 @@ redirect unless that value is checked: a link to your sign-in page could send
 them on to a look-alike site. `safeRedirectPath` accepts only a path that starts
 with exactly one `/`, and returns it with its `.` and `..` segments resolved. It
 returns `fallback` for anything else: a scheme, a leading `//`, a backslash
-anywhere, a control character, the percent-encoded forms of these (each decoded
-form is checked, up to four rounds), encoding that does not decode, dots that
-resolve to a leading `//`, and every path under one of `refuse` (compared without
-letter case, after decoding and resolving dots). It runs in a browser too.
+anywhere, a control character, the percent-encoded forms of these, encoding that
+does not decode, dots that resolve to a leading `//`, and every path under one of
+`refuse` (compared without letter case; `/api` and `/api/` mean the same). Every
+decoded form of the value, up to four rounds, is checked with its dots resolved,
+so `/.%2F/evil.example` (`/.//evil.example` once decoded) and
+`/notes/%252e%252e/api` are refused like their plain forms. It runs in a browser
+too.
 
 Check the value again on every hop that carries it, such as each step of a
 sign-in that asks for a one-time code: a value that passed once may have been

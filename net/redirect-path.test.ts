@@ -75,6 +75,22 @@ describe("safeRedirectPath", () => {
     expect(next("/a/..//evil.example")).toBe("/notes")
   })
 
+  it("refuses encoded dot segments that resolve to a leading slash pair once decoded", () => {
+    expect(next("/.%2F/evil.example")).toBe("/notes")
+    expect(next("/%2e%2e%2f%2fevil.example")).toBe("/notes")
+  })
+
+  it("refuses a refused path behind doubly encoded dot segments", () => {
+    expect(next("/notes/%252e%252e/api/auth/me")).toBe("/notes")
+  })
+
+  it("refuses the same paths for a refused prefix written with a trailing slash", () => {
+    const withSlash = { fallback: "/notes", refuse: ["/api/"] }
+    expect(safeRedirectPath("/api", withSlash)).toBe("/notes")
+    expect(safeRedirectPath("/api/auth/me", withSlash)).toBe("/notes")
+    expect(safeRedirectPath("/apiary", withSlash)).toBe("/apiary")
+  })
+
   it("resolves dot segments that stay on this origin", () => {
     expect(next("/notes/../groups")).toBe("/groups")
   })

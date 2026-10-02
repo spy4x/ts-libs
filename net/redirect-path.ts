@@ -85,8 +85,10 @@ function isRefused(pathname: string, prefixes: readonly string[]): boolean {
  * `.` and `..` segments resolved. Refused, so `fallback` comes back: a missing or empty value, a
  * scheme (`https:`, `javascript:`), a leading `//`, a backslash anywhere, a control character,
  * the percent-encoded forms of these (`/%2F%2Fevil.example`, `%5C`, `%09`), percent encoding that
- * does not decode, a path whose `..` segments resolve to a leading `//`, and every path under one
- * of `options.refuse`.
+ * does not decode, a path whose `.` and `..` segments resolve to a leading `//`, and every path
+ * under one of `options.refuse`. Each decoded form of the value (up to four rounds) is checked,
+ * with its dot segments resolved, so `/.%2F/evil.example` and `/notes/%252e%252e/api` are refused
+ * like their plain forms.
  *
  * Check the value again on every hop that carries it, such as each page of a sign-in that takes
  * two steps: a value that passed once may have been changed in between.
@@ -108,14 +110,20 @@ export function safeRedirectPath(
   const forms = decodedForms(value)
   if (!forms || !forms.every(isPlainPath)) return fallback
   let url: URL
+  let resolved: string[]
   try {
     url = new URL(value, BASE)
+    // Each decoded form with its `.` and `..` segments resolved: a browser or a server may decode
+    // the value once more before it resolves them, so `/.%2F/evil.example`, which is
+    // `/.//evil.example` once decoded, resolves to `//evil.example`.
+    resolved = forms.map((form) => new URL(form, BASE).pathname)
   } catch {
     return fallback
   }
+  // Defence in depth: a value that passed `isPlainPath` always parses onto `BASE`'s origin.
   if (url.origin !== BASE.origin) return fallback
   const path = `${url.pathname}${url.search}${url.hash}`
-  // Resolving `..` can bring a leading `//` back: `/.//evil.example` becomes `//evil.example`.
-  if (!isPlainPath(path) || isRefused(url.pathname, refuse)) return fallback
+  if (!isPlainPath(path) || !resolved.every(isPlainPath)) return fallback
+  if (resolved.some((pathname) => isRefused(pathname, refuse))) return fallback
   return path
 }
