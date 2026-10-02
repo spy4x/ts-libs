@@ -112,6 +112,7 @@ export function safeRedirectPath(
   return checkOnce(once, options) === once ? once : options.fallback
 }
 
+/** One pass of {@link safeRedirectPath}'s checks: the fallback, or the value as a checked path. */
 function checkOnce(
   value: string | null | undefined,
   options: SafeRedirectPathOptions,
