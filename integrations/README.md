@@ -18,14 +18,14 @@ Runs on: server (Deno).
 
 ## Entry points
 
-| Export           | What it is                                                                   |
-| ---------------- | ---------------------------------------------------------------------------- |
-| `.` (`mod.ts`)   | Barrel.                                                                      |
-| `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`    |
-| `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`     |
-| `./cloudflare`   | `purgeUrls` — Cloudflare cache purge by URL                                  |
-| `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification                    |
-| `./push`         | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices |
+| Export           | What it is                                                                     |
+| ---------------- | ------------------------------------------------------------------------------ |
+| `.` (`mod.ts`)   | Barrel.                                                                        |
+| `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`      |
+| `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`       |
+| `./cloudflare`   | `purgeUrls` — Cloudflare cache purge by URL                                    |
+| `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
+| `./push`         | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
 
 ## Contracts
 
@@ -204,15 +204,44 @@ const payload = JSON.parse(new TextDecoder().decode(result.body))
 Headers default to `X-Signature-256` and `X-Signature-Timestamp`, both overridable, and the
 `algorithm` prefix is configurable (`sha256=<hex>` is accepted as well as a bare hex digest).
 
-**This is not a drop-in verifier for GitHub, Slack or Stripe.** None of them signs
-`<timestamp>.<raw body>` with the timestamp in a header:
+`combinedHeader` reads the timestamp and the signatures from one header instead, as Stripe sends
+them:
 
-| provider | its actual scheme                                                                | this module                                  |
-| -------- | -------------------------------------------------------------------------------- | -------------------------------------------- |
-| GitHub   | `X-Hub-Signature-256: sha256=<hmac-of-body>`, no timestamp, no replay protection | needs an adapter: sign the body alone        |
-| Slack    | `X-Slack-Signature: v0=<hmac-of-"v0:<ts>:<body>">`                               | needs an adapter: the signed string differs  |
-| Stripe   | `Stripe-Signature: t=<ts>,v1=<hmac-of-"<ts>.<body>">`                            | equivalent scheme, different header encoding |
-| generic  | `<ts>.<raw body>`                                                                | supported directly                           |
+```ts
+const result = await verifyWebhookRequest(raw, request.headers, {
+  secret,
+  combinedHeader: {
+    name: "Stripe-Signature",
+    pairSeparator: ",",
+    timestampKey: "t",
+    signatureKey: "v1",
+  },
+})
+```
+
+Every `v1` pair is a candidate and one match passes, because a sender rolling its secret signs with
+both. Other keys (Stripe's test-only `v0`) are ignored, so they can never stand in for `v1`. A part
+without `=`, a second timestamp, a signature that is not 64 hex characters, more than eight
+signatures or a header over 1024 characters rejects the delivery. All candidates are verified with
+no early exit.
+
+`signedSeparator` (default `"."`) is what joins the timestamp and the body in the signed string.
+Paddle sends `Paddle-Signature: ts=<ts>;h1=<hex>` and signs `<ts>:<body>`, so it is read with
+`{ name: "Paddle-Signature", pairSeparator: ";", timestampKey: "ts", signatureKey: "h1",
+signedSeparator: ":" }`.
+
+`toleranceSeconds` must be a finite number above 0. `NaN` or `Infinity` would accept a replay from
+any time, so such a value, 0 or a negative one makes `verifyWebhookRequest` throw a `RangeError`.
+
+**This is not a drop-in verifier for GitHub or Slack.** Neither signs `<timestamp>.<raw body>`:
+
+| provider | its actual scheme                                                                | this module                                 |
+| -------- | -------------------------------------------------------------------------------- | ------------------------------------------- |
+| GitHub   | `X-Hub-Signature-256: sha256=<hmac-of-body>`, no timestamp, no replay protection | needs an adapter: sign the body alone       |
+| Slack    | `X-Slack-Signature: v0=<hmac-of-"v0:<ts>:<body>">`                               | needs an adapter: the signed string differs |
+| Stripe   | `Stripe-Signature: t=<ts>,v1=<hmac-of-"<ts>.<body>">`                            | supported with `combinedHeader`             |
+| Paddle   | `Paddle-Signature: ts=<ts>;h1=<hmac-of-"<ts>:<body>">`                           | supported with `combinedHeader`             |
+| generic  | `<ts>.<raw body>`                                                                | supported directly                          |
 
 What is worth reusing regardless of provider is the part that is easy to get wrong: signing the raw
 bytes, comparing with `crypto.subtle.verify`, failing closed on an unusable secret, and refusing a
