@@ -224,6 +224,49 @@ describe("createPasswordSignIn: signIn", () => {
   })
 })
 
+describe("createPasswordSignIn: checkCredentials", () => {
+  it("returns the user and key the password matches, and creates no session", async () => {
+    const { provider, sessionStore } = setup()
+    const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+    sessionStore.calls.length = 0
+    const checked = await provider.checkCredentials({
+      email: "Ann@Example.com",
+      password: "correct horse",
+    })
+    expect(checked.user.id).toBe(signedUp.user.id)
+    expect(checked.key.id).toBe(signedUp.key.id)
+    expect(sessionStore.calls).toEqual([])
+  })
+
+  it("refuses a wrong password and a missing account as signIn does, with one verification each", async () => {
+    const { provider, hasherCalls } = setup()
+    await provider.signUp({ email: ANN, password: "correct horse" })
+    for (const email of [ANN, "nobody@example.com", "not-an-address"]) {
+      hasherCalls.length = 0
+      const error = await refusal(provider.checkCredentials({ email, password: "wrong horse" }))
+      expect(error.reason).toBe("invalid-credentials")
+      expect(hasherCalls.map((call) => call.name)).toEqual(["verify"])
+    }
+  })
+
+  it("replaces an outdated hash and returns the key with the new one", async () => {
+    const { provider, store } = setup({
+      hasher: createPasswordHasher({ pepper: PEPPER, iterations: ITERATIONS + 1 }),
+    })
+    const created = await store.createUserWithKey({
+      method: PASSWORD_METHOD,
+      subject: ANN,
+      email: ANN,
+      secret: await createPasswordHasher({ pepper: PEPPER, iterations: ITERATIONS })
+        .hash("correct horse"),
+      provenAt: null,
+    })
+    const checked = await provider.checkCredentials({ email: ANN, password: "correct horse" })
+    expect(checked.key.secret).toMatch(/^pbkdf2-sha256\$100001\$/)
+    expect((await store.findKeyById(created.key.id))?.secret).toBe(checked.key.secret)
+  })
+})
+
 describe("createPasswordSignIn: changePassword", () => {
   it("refuses a wrong current password and keeps the old one", async () => {
     const { provider } = setup()

@@ -163,6 +163,12 @@ export interface PasswordCredentials {
   password: string
 }
 
+/** What {@link PasswordSignIn.checkCredentials} returns: whose password matched, and its key. */
+export interface CheckedCredentials {
+  user: AuthUser
+  key: AuthKey
+}
+
 /** Input of {@link PasswordSignIn.changePassword}. */
 export interface ChangePasswordInput {
   /** The signed-in user, from a validated session. */
@@ -227,6 +233,19 @@ export interface PasswordSignIn {
    *     never depends on whether the account exists.
    */
   signIn(input: PasswordCredentials): Promise<SignInResult>
+  /**
+   * The password check of {@link PasswordSignIn.signIn}, without the session: the same single hash
+   * verification, the same refusals and the same rehash, and nothing else written. For an app that
+   * creates the session itself, with `SessionManager.create`, in a database transaction that also
+   * writes its own rows (an audit row, a last-login time), so that all of them are kept or none.
+   * The hash is verified before that transaction begins, so it holds no connection for the length
+   * of a hash.
+   *
+   * @returns The live user and the password key that matched, re-read after any rehash. The key
+   *     carries `secret` (the password hash): keep it on the server, never in a response body.
+   * @throws {PasswordSignInError} `invalid-credentials`, exactly as `signIn`.
+   */
+  checkCredentials(input: PasswordCredentials): Promise<CheckedCredentials>
   /**
    * Replaces the password after checking the current one, creates a new session, then signs out
    * every other session of the user. The caller replaces its cookie with the returned one.
@@ -443,6 +462,24 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     return { method: PASSWORD_METHOD, subject, email: null, secret, provenAt: null }
   }
 
+  /** Checks the password with exactly one hash verification. See {@link PasswordSignIn.checkCredentials}. */
+  async function checkCredentials(
+    { email: rawEmail, password }: PasswordCredentials,
+  ): Promise<CheckedCredentials> {
+    const subject = toSubject(rawEmail)
+    const key = subject === null ? null : await store.findKey(PASSWORD_METHOD, subject)
+    // Exactly one verification on every path: the key's own hash, or the dummy one.
+    const stored = key?.secret ?? await dummyHash
+    const check = await hasher.verify(password, stored)
+    if (key === null || key.secret === null || !check.valid) {
+      throw new PasswordSignInError("invalid-credentials")
+    }
+    const user = await liveUser(key.userId)
+    if (!user) throw new PasswordSignInError("invalid-credentials")
+    if (check.needsRehash) await store.updateKeySecret(key.id, await hasher.hash(password))
+    return { user, key: await reloadKey(key.id) }
+  }
+
   return {
     async signUp({ email: rawEmail, password }) {
       const subject = toSubject(rawEmail)
@@ -462,20 +499,12 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
       return await signInWith(created.user, created.key)
     },
 
-    async signIn({ email: rawEmail, password }) {
-      const subject = toSubject(rawEmail)
-      const key = subject === null ? null : await store.findKey(PASSWORD_METHOD, subject)
-      // Exactly one verification on every path: the key's own hash, or the dummy one.
-      const stored = key?.secret ?? await dummyHash
-      const check = await hasher.verify(password, stored)
-      if (key === null || key.secret === null || !check.valid) {
-        throw new PasswordSignInError("invalid-credentials")
-      }
-      const user = await liveUser(key.userId)
-      if (!user) throw new PasswordSignInError("invalid-credentials")
-      if (check.needsRehash) await store.updateKeySecret(key.id, await hasher.hash(password))
-      return await signInWith(user, await reloadKey(key.id))
+    async signIn(input) {
+      const { user, key } = await checkCredentials(input)
+      return await signInWith(user, key)
     },
+
+    checkCredentials,
 
     async changePassword({ userId, currentPassword, newPassword }) {
       const secret = await hashNewPassword(newPassword)
