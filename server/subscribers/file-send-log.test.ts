@@ -93,9 +93,10 @@ describe("createFileSendLog", () => {
     const fs = fakeFs({ [PATH]: `[{"slug": "p", ` })
     const log = createFileSendLog({ path: PATH, fs })
     await expect(log.start({ issue: "p", subject: "S", audience: [], at: new Date() })).rejects
-      .toThrow("fix it by hand")
-    await expect(log.find("p")).rejects.toThrow("fix it by hand")
+      .toThrow("Fix it by hand")
+    await expect(log.find("p")).rejects.toThrow("Fix it by hand")
     expect(fs.files.get(PATH)).toBe(`[{"slug": "p", `)
+    expect(fs.files.get(`${PATH}.invalid`)).toBe(`[{"slug": "p", `)
   })
 
   it("never overwrites a log that is not an array", async () => {
@@ -103,6 +104,7 @@ describe("createFileSendLog", () => {
     const log = createFileSendLog({ path: PATH, fs })
     await expect(log.record("p", "a1")).rejects.toThrow("not a JSON array")
     expect(fs.files.get(PATH)).toBe(`{"slug": "p"}`)
+    expect(fs.files.get(`${PATH}.invalid`)).toBe(`{"slug": "p"}`)
   })
 
   it("leaves the old log and no temp file when a write fails", async () => {
@@ -126,5 +128,15 @@ describe("createFileSendLog", () => {
     expect(await two.lock("p")).toBeUndefined()
     await held?.release()
     expect(fs.locks.has(`${PATH}.lock`)).toBe(false)
+  })
+
+  it("keeps the first damaged copy when the file is damaged again", async () => {
+    const fs = fakeFs({ [PATH]: `first damage` })
+    const log = createFileSendLog({ path: PATH, fs })
+    await expect(log.find("p")).rejects.toThrow("kept in")
+    fs.files.set(PATH, `second damage`)
+    await expect(log.find("p")).rejects.toThrow("earlier copy is already kept")
+    expect(fs.files.get(`${PATH}.invalid`)).toBe(`first damage`)
+    expect(fs.files.get(PATH)).toBe(`second damage`)
   })
 })

@@ -40,6 +40,8 @@ export function describeSendLogContract(name: string, open: OpenSendLog) {
     it("finds nothing for an issue that was never started", () =>
       withLog(open, async (log) => {
         expect(await log.find("post")).toBeUndefined()
+        await start(log, "other")
+        expect(await log.find("post")).toBeUndefined()
       }))
 
     it("stores the subject, start time and audience when an issue starts, with no recipient yet", () =>

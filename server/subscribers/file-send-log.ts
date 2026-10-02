@@ -46,8 +46,9 @@ function fromStored(row: StoredEntry): SendLogEntry {
  *   crash or a full disk never leaves a torn log. Changes made by one log object queue behind each
  *   other. Take {@link SendLog.lock} before sending: two processes that change the file without it
  *   can lose a recipient.
- * - A file that does not parse, or is not an array, is never overwritten: the call throws and the
- *   file stays for a person to repair. A corrupt log must stop a send, not allow a second one.
+ * - A file that does not parse, or is not an array, is never overwritten: its text is copied to
+ *   `<path>.invalid` (the first copy stays), the call throws and the file stays for a person to
+ *   repair. A corrupt log must stop a send, not allow a second one.
  */
 export function createFileSendLog(options: FileSendLogOptions): SendLog {
   const { path } = options
@@ -55,14 +56,31 @@ export function createFileSendLog(options: FileSendLogOptions): SendLog {
   let sequence = 0
   let queue: Promise<unknown> = Promise.resolve()
 
+  /** Keeps the first damaged copy of the file in `<path>.invalid` and says what happened. A later
+   * one does not replace it, and the file itself is never touched. */
+  async function keepCopy(raw: string): Promise<string> {
+    const invalid = `${path}.invalid`
+    try {
+      if (await fs.exists(invalid)) return `an earlier copy is already kept in ${invalid}`
+      await fs.writeText(invalid, raw)
+      return `its text is kept in ${invalid}`
+    } catch {
+      return `its text could not be kept in ${invalid}`
+    }
+  }
+
   async function load(): Promise<StoredEntry[]> {
     const result = await readJsonFile<unknown>(fs, path)
     if (result.kind === "missing") return []
     if (result.kind === "invalid") {
-      throw new Error(`${path} does not parse (${result.reason}); fix it by hand before sending`)
+      const kept = await keepCopy(result.raw)
+      throw new Error(
+        `${path} does not parse (${result.reason}); ${kept}. Fix it by hand before sending`,
+      )
     }
     if (!Array.isArray(result.value)) {
-      throw new Error(`${path} is not a JSON array; fix it by hand before sending`)
+      const kept = await keepCopy((await fs.readText(path)) ?? ``)
+      throw new Error(`${path} is not a JSON array; ${kept}. Fix it by hand before sending`)
     }
     return result.value as StoredEntry[]
   }
