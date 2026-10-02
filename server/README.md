@@ -2108,13 +2108,27 @@ return render(result, { headers: TOKEN_PAGE_HEADERS })
 
 **Links.** A confirm link (version 2) carries the address and its issue time, binds the address as
 the signed context, and expires after three days. An unsubscribe link (version 2) carries the
-address's 16-byte keyed `subscriberKey` and binds the address as context, so it costs one store
-lookup and one HMAC, and the URL holds no address. Both are `@spy4x/platform/signed-payload` tokens.
-One secret serves every purpose, kept apart by purpose labels and HMAC message prefixes.
-`previousSecrets` only verifies unsubscribe links, so links mailed before a rotation keep working.
-A pending confirm link stops working at a rotation: unsubscribe marks are keyed by the current
-secret alone, so an old confirm link could not be matched against an unsubscribe recorded before
-the rotation. The visitor asks for a new one.
+row's 16-byte keyed `subscriberKey` and binds the address as context, so it costs one store lookup
+and one HMAC, and the URL holds no address. Both are `@spy4x/platform/signed-payload` tokens. One
+secret serves every purpose, kept apart by purpose labels and HMAC message prefixes.
+
+**Rotating the secret.** Put the new secret in `secret` and the old one first in `previousSecrets`.
+
+- Unsubscribe links mailed before the rotation keep working: they verify under `previousSecrets`.
+- A stored subscriber key is an opaque lookup id and keeps the secret it was made under. When you
+  mail a listed subscriber, mint the link with the row's key, `unsubscribeToken(row.email, row.key)`,
+  so a link minted after the rotation still finds a row keyed under the old secret. Without the
+  key argument the token carries the key under the new secret, which only rows added since the
+  rotation have. The welcome mail of `confirmSubscription` is such a row.
+- A row with no key (antonshubin.com's rows) cannot be found by any version 2 link. Backfill each
+  such row's key once, with `subscriberKey(row.email)`, before mailing it a version 2 link. `add`
+  answering `"known"` never fills a missing key.
+- A pending confirm link stops working: unsubscribe marks are keyed by the current secret alone, so
+  an old confirm link could not be matched against an unsubscribe recorded before the rotation. The
+  visitor asks for a new one.
+- `sentMarks(email, issue)` returns the sent mark under every secret, current first. A send log
+  records the first and skips a recipient that has any of them, so an issue resumed after a
+  rotation does not mail anyone twice.
 
 **Pages that open a link only preview.** `previewConfirmation` and `previewUnsubscribe` read the
 token and change nothing, so a mail scanner that follows every link subscribes and unsubscribes no
@@ -2147,6 +2161,8 @@ the switch; they expire within three days anyway.
 
 **Stores.** `SubscriberStore` offers one method per intent, so each adapter can make it atomic.
 `describeSubscriberStoreContract` in `store-contract.test.ts` is the contract every adapter runs.
+`add` and `remove` for one address must not overlap, or a replayed confirm link can slip in between
+the mark and the row: a Postgres adapter takes a row lock or an advisory lock on the address.
 
 **Fixes applied at extraction time.**
 
