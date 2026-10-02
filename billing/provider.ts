@@ -68,6 +68,10 @@ export interface Subscription {
   cancelAtPeriodEnd: boolean
   /** End of the trial, or `null` when there is none. */
   trialEnd: Date | null
+  /**
+   * Seats or units the plan's item bills, or `null` when the provider gives none (a metered price).
+   */
+  quantity: number | null
   /** The {@link CheckoutRequest.reference} the checkout carried, or `null`. */
   reference: string | null
 }
@@ -166,6 +170,19 @@ export interface CheckoutRequest {
   idempotencyKey?: string
 }
 
+/** What {@link BillingProvider.updateQuantity} needs to change how many seats a plan bills. */
+export interface QuantityRequest {
+  /** The provider's subscription ID, from a {@link Subscription}. */
+  subscriptionId: string
+  /** The new number of seats or units, a positive integer. */
+  quantity: number
+  /**
+   * Makes a retried call safe: the provider applies the first call once. Use one key per intended
+   * change, such as the subscription, the quantity and the change that asked for it.
+   */
+  idempotencyKey?: string
+}
+
 /** A hosted checkout page to send the customer to. */
 export interface CheckoutSession {
   /** The provider's checkout session ID. */
@@ -192,9 +209,12 @@ export interface PortalSession {
 
 /** Why a request to the provider failed. */
 export type BillingErrorCode =
-  /** The plan ID is in no {@link PlanRef}. Nothing was sent. */
+  /** The plan ID is in no {@link PlanRef}, or the subscription bills none. Nothing was changed. */
   | "unknown_plan"
-  /** The request failed its own checks, such as a relative URL. Nothing was sent. */
+  /**
+   * The request failed its own checks, such as a relative URL, or the subscription it names cannot
+   * take it, such as one billing two configured plans. Nothing was changed.
+   */
   | "invalid_request"
   /** The provider answered with an error status. */
   | "provider_error"
@@ -217,6 +237,12 @@ export interface BillingError {
 export interface BillingProvider {
   /** Starts a hosted subscription checkout for one plan. */
   createCheckout(request: CheckoutRequest): Promise<Result<CheckoutSession, BillingError>>
+  /**
+   * Sets how many seats or units a subscription's plan bills. The change adds a charge or a credit
+   * for the rest of the current period to the next invoice; nothing is charged now. The answer is
+   * the subscription as it stands after the change.
+   */
+  updateQuantity(request: QuantityRequest): Promise<Result<Subscription, BillingError>>
   /** Opens the provider's customer portal for one customer. */
   createPortalSession(request: PortalRequest): Promise<Result<PortalSession, BillingError>>
   /**

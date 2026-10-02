@@ -63,12 +63,21 @@ return new Response(null, { status: 200 })
 
 ## Contracts
 
-- **One interface.** `BillingProvider` has `createCheckout`, `createPortalSession` and
-  `parseEvent`. The app names plans by its own IDs; `PlanRef` maps each to the provider's price.
-  A price in no `PlanRef` comes back as `planId: null`.
-- **Results, not throws.** `createCheckout` and `createPortalSession` return
+- **One interface.** `BillingProvider` has `createCheckout`, `updateQuantity`,
+  `createPortalSession` and `parseEvent`. The app names plans by its own IDs; `PlanRef` maps each
+  to the provider's price. A price in no `PlanRef` comes back as `planId: null`.
+- **Seats.** `updateQuantity({ subscriptionId, quantity, idempotencyKey })` sets how many seats the
+  plan's item bills, for per-seat pricing. The change adds a charge or a credit for the rest of
+  the current period to the next invoice; nothing is charged now (Stripe's
+  `proration_behavior=create_prorations`, sent explicitly). The Stripe adapter reads the
+  subscription first to find the item of a configured plan, so it makes two calls. A subscription
+  that bills no configured plan is `unknown_plan`, one that bills two is `invalid_request`, and
+  nothing changes.
+  `Subscription.quantity` reports the seats an event's subscription bills, `null` for a metered
+  price.
+- **Results, not throws.** `createCheckout`, `updateQuantity` and `createPortalSession` return
   `{ ok: true, value }` or `{ ok: false, error: { code, message, status } }`. `code` is
-  `unknown_plan`, `invalid_request` (nothing was sent), `provider_error`, `network_error` or
+  `unknown_plan`, `invalid_request` (nothing was changed), `provider_error`, `network_error` or
   `malformed_response`. The secret key is cut out of every message. Only `createStripeBilling`
   throws, on a missing secret or a broken plan list, so a misconfiguration fails at start-up.
 - **Webhooks.** `parseEvent` checks `Stripe-Signature` with `verifyWebhookRequest` from

@@ -328,6 +328,169 @@ describe("createCheckout", () => {
   })
 })
 
+describe("updateQuantity", () => {
+  /** Stripe's recorded subscription object, its plan's item `si_Na6dzxczY5fwHx` billing one seat. */
+  const recorded = async (quantity = 1) => {
+    const event = JSON.parse(
+      new TextDecoder().decode(await fixture("customer.subscription.created")),
+    )
+    const object = event.data.object
+    object.items.data[0].quantity = quantity
+    return object
+  }
+  /** A `fetch` that answers each call with the next response, and records every call. */
+  const scriptedFetch = (responses: Response[]) => {
+    let next = 0
+    return fakeFetch(() => responses[next++] ?? json({ error: { message: "unexpected" } }, 500))
+  }
+
+  it("reads which item bills the plan, then posts its new quantity, and answers the subscription", async () => {
+    const { calls, fetcher } = scriptedFetch([json(await recorded(1)), json(await recorded(4))])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 4,
+      idempotencyKey: "seats-group-1-4",
+    })
+    expect(result.ok && result.value).toMatchObject({
+      id: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      planId: "pro",
+      quantity: 4,
+    })
+    expect(calls.map((call) => [call.init.method, call.url])).toEqual([
+      ["GET", "https://api.stripe.com/v1/subscriptions/sub_1MowQVLkdIwHu7ixeRlqHVzs"],
+      ["POST", "https://api.stripe.com/v1/subscriptions/sub_1MowQVLkdIwHu7ixeRlqHVzs"],
+    ])
+    expect(calls[0].init.body).toBe(undefined)
+    expect(calls[0].init.headers).toEqual({
+      Authorization: `Bearer ${SECRET_KEY}`,
+      "Stripe-Version": STRIPE_API_VERSION,
+    })
+    expect(calls[1].init.body).toBe(
+      "items%5B0%5D%5Bid%5D=si_Na6dzxczY5fwHx&items%5B0%5D%5Bquantity%5D=4" +
+        "&proration_behavior=create_prorations",
+    )
+    expect(calls[1].init.headers).toEqual({
+      Authorization: `Bearer ${SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Stripe-Version": STRIPE_API_VERSION,
+      "Idempotency-Key": "seats-group-1-4",
+    })
+  })
+
+  it("refuses a zero quantity or an ID that is not a subscription's, without calling Stripe", async () => {
+    const { calls, fetcher } = fakeFetch(() => json({}))
+    const provider = billing({ fetch: fetcher })
+    for (
+      const request of [
+        { subscriptionId: "sub_1", quantity: 0 },
+        { subscriptionId: "sub_1", quantity: 1.5 },
+        { subscriptionId: "../customers/cus_1", quantity: 2 },
+        { subscriptionId: "", quantity: 2 },
+      ]
+    ) {
+      const result = await provider.updateQuantity(request)
+      expect(!result.ok && result.error.code).toBe("invalid_request")
+    }
+    expect(calls.length).toBe(0)
+  })
+
+  /** The recorded subscription with an unconfigured add-on item put before its plan's item. */
+  const withAddOnFirst = async (planPriceId = "price_1MowQULkdIwHu7ixraBm864M") => {
+    const object = await recorded(3)
+    const plan = object.items.data[0]
+    plan.price.id = planPriceId
+    const addOn = { ...plan, id: "si_addon", price: { ...plan.price, id: "price_addon" } }
+    addOn.quantity = 7
+    object.items.data = [addOn, plan]
+    return object
+  }
+
+  it("posts the quantity of the item that bills the plan, even when another item comes first", async () => {
+    const { calls, fetcher } = scriptedFetch([
+      json(await withAddOnFirst()),
+      json(await withAddOnFirst()),
+    ])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 3,
+    })
+    expect(new URLSearchParams(String(calls[1].init.body)).get("items[0][id]"))
+      .toBe("si_Na6dzxczY5fwHx")
+    expect(result.ok && result.value).toMatchObject({ planId: "pro", quantity: 3 })
+  })
+
+  it("refuses a subscription that bills two configured plans, and posts nothing", async () => {
+    const object = await withAddOnFirst()
+    object.items.data[0].price.id = "price_team_0000"
+    const { calls, fetcher } = scriptedFetch([json(object)])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 2,
+    })
+    expect(!result.ok && result.error.code).toBe("invalid_request")
+    expect(calls.length).toBe(1)
+  })
+
+  it("reports a plan item without an ID as malformed, and posts nothing", async () => {
+    const object = await recorded()
+    delete object.items.data[0].id
+    const { calls, fetcher } = scriptedFetch([json(object)])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 2,
+    })
+    expect(!result.ok && result.error.code).toBe("malformed_response")
+    expect(calls.length).toBe(1)
+  })
+
+  it("changes nothing on a subscription that bills no configured plan", async () => {
+    const other = await recorded()
+    other.items.data[0].price.id = "price_unmapped"
+    const { calls, fetcher } = scriptedFetch([json(other)])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 2,
+    })
+    expect(!result.ok && result.error.code).toBe("unknown_plan")
+    expect(calls.length).toBe(1)
+  })
+
+  it("reports Stripe's error on the read and posts nothing", async () => {
+    const { calls, fetcher } = scriptedFetch([
+      json({ error: { message: "No such subscription: 'sub_gone'" } }, 404),
+    ])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_gone",
+      quantity: 2,
+    })
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "provider_error",
+        message: "Stripe answered 404: No such subscription: 'sub_gone'",
+        status: 404,
+      },
+    })
+    expect(calls.length).toBe(1)
+  })
+
+  it("reports a failed post as the provider's error, so the caller retries it", async () => {
+    const { fetcher } = scriptedFetch([
+      json(await recorded()),
+      json({ error: { message: "Try again later" } }, 503),
+    ])
+    const result = await billing({ fetch: fetcher }).updateQuantity({
+      subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
+      quantity: 2,
+    })
+    expect(!result.ok && result.error).toEqual({
+      code: "provider_error",
+      message: "Stripe answered 503: Try again later",
+      status: 503,
+    })
+  })
+})
+
 describe("createPortalSession", () => {
   it("posts the customer and return URL to Stripe's Billing Portal Sessions endpoint", async () => {
     const { calls, fetcher } = fakeFetch(() =>
@@ -368,6 +531,7 @@ describe("parseEvent: Stripe's recorded payloads", () => {
     priceId: "price_1MowQULkdIwHu7ixraBm864M",
     currentPeriodEnd: new Date(1682288167 * 1000),
     trialEnd: null,
+    quantity: 1,
     reference: "acct_42",
   }
 
@@ -519,6 +683,42 @@ describe("parseEvent: mapping edge cases", () => {
       planId: null,
       priceId: "price_unmapped",
     })
+  })
+
+  it("reports a metered item, which has no quantity, as quantity null", async () => {
+    const event = parsedEvent(
+      await parseEdited("customer.subscription.created", (object) => {
+        const items = object.items as { data: { quantity?: number }[] }
+        delete items.data[0].quantity
+      }),
+    )
+    expect(event && "subscription" in event && event.subscription.quantity).toBe(null)
+  })
+
+  it("reports the quantity of the item that bills the plan, even when another item comes first", async () => {
+    const event = parsedEvent(
+      await parseEdited("customer.subscription.created", (object) => {
+        const items = object.items as { data: Record<string, unknown>[] }
+        const plan = { ...items.data[0], quantity: 3 }
+        const addOn = { ...plan, id: "si_addon", price: { id: "price_addon" }, quantity: 7 }
+        items.data = [addOn, plan]
+      }),
+    )
+    expect(event && "subscription" in event && event.subscription).toMatchObject({
+      planId: "pro",
+      quantity: 3,
+    })
+  })
+
+  it("reports a quantity that is not a whole number as malformed", async () => {
+    for (const quantity of [1.5, "2"]) {
+      const result = await parseEdited("customer.subscription.created", (object) => {
+        const items = object.items as { data: Record<string, unknown>[] }
+        items.data[0].quantity = quantity
+      })
+      expect({ quantity, ok: result.ok, reason: !result.ok && result.reason })
+        .toEqual({ quantity, ok: false, reason: "malformed_payload" })
+    }
   })
 
   it("reports a subscription without a reference as reference null", async () => {
