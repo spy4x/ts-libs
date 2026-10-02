@@ -198,6 +198,15 @@ describe("createFileSubscriberStore", () => {
       await store.remove(removal("ada"))
       expect(copies(fs).map((p) => JSON.parse(fs.files.get(p)!))).toEqual([JSON.parse(text)])
     })
+
+    it("keeps the readable marks when one mark has a bad time, so a replay is still refused", async () => {
+      const good = new Date(NOW).toISOString()
+      const text = `[{"mark":"alan-mark","at":"${good}"},{"mark":"x","at":"garbage"}]`
+      const fs = fakeFs({ [MARKS]: text })
+      const { store } = open(fs)
+      await store.remove(removal("ada"))
+      expect(await store.add(input("alan", { issuedAt: NOW - 1 }))).toBe("replay")
+    })
   })
 
   it("loads the site's files unchanged: rows without a key, dates as Dates", async () => {

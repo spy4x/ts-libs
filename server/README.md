@@ -2173,11 +2173,12 @@ rename. A list that does not parse is never treated as empty: its first text is 
 `<path>.invalid`, the file is left as it is, and every call throws `SubscriberFileError` until a
 person repairs it. A damaged marks file is never overwritten without a copy: `remove` first keeps
 its text in `<path>.unsubscribed.invalid.<ms>` (a new name each time, with a suffix if that name
-exists), throws if the copy cannot be written, then starts a new record, so an unsubscribe always
-works. `add` throws `SubscriberFileError` while the marks file is damaged, so a replayed confirm
-link can never re-subscribe someone who unsubscribed; new subscriptions wait until the next
-unsubscribe replaces the record or a person repairs it. A mark with an unreadable time counts as
-damage. `LockUnavailableError` is re-exported from the same entry. The site's `subscribers.json` and `.unsubscribed` load unchanged;
+exists), throws if the copy cannot be written, then writes a new record holding every mark it
+could still read, so an unsubscribe always works. `add` throws `SubscriberFileError` while the marks
+file is damaged. Once an unsubscribe has replaced the record, the marks that could not be read (all
+of them, for text that does not parse) stop being checked, so a replayed confirm link for those
+addresses gets in again; restore them from the copy if that matters. A mark with an unreadable time
+counts as damage, and the other marks in the file are kept. `LockUnavailableError` is re-exported from the same entry. The site's `subscribers.json` and `.unsubscribed` load unchanged;
 new rows carry a `key`. Rows the site wrote have none, so run `await store.backfillKeys(crypto)`
 once before mailing them a version 2 unsubscribe link: it is idempotent and returns how many rows
 it changed.

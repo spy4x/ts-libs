@@ -92,9 +92,10 @@ function copy(row: Subscriber): Subscriber {
  * files writes the record first, so a crash in between never leaves the address removed without
  * its record. A damaged record is never overwritten without a copy: `remove` first keeps its text
  * in `<path>.unsubscribed.invalid.<ms>` (a name no earlier copy has, and it throws if the copy
- * fails), then starts a new record, so an unsubscribe always works. `add` throws
- * {@link SubscriberFileError} while the record is damaged, so a replayed confirm link can never
- * re-subscribe someone: new subscriptions wait for a person to repair the file.
+ * fails), then writes a new record holding every mark it could still read, so an unsubscribe
+ * always works. `add` throws {@link SubscriberFileError} while the record is damaged. Once an
+ * unsubscribe has replaced it, the marks that could not be read (all of them, for text that does
+ * not parse) stop being checked, so a replayed confirm link for those addresses gets in again.
  *
  * The files stay compatible with antonshubin.com: its `subscribers.json` and `.unsubscribed` load
  * unchanged, and the store writes the same shape, plus `key` on rows that have one.
@@ -159,17 +160,25 @@ export function createFileSubscriberStore(
     throw error
   }
 
-  /** The marks, or the damaged text when the file is unreadable or holds a mark with a bad date. */
-  async function readMarks(): Promise<{ marks: Mark[] } | { damaged: string; reason: string }> {
+  /**
+   * The marks, or the damaged text when the file is unreadable or holds a mark with a bad date. A
+   * damaged record still carries the marks that could be read (`readable`), so `remove` keeps them.
+   */
+  async function readMarks(): Promise<
+    { marks: Mark[] } | { damaged: string; reason: string; readable: Mark[] }
+  > {
     const read = await readJsonFile<unknown>(fs, marksPath)
     if (read.kind === "missing") return { marks: [] }
-    if (read.kind === "invalid") return { damaged: read.raw, reason: read.reason }
+    if (read.kind === "invalid") return { damaged: read.raw, reason: read.reason, readable: [] }
     const checked = storedMarks(read.value)
     const text = JSON.stringify(read.value, null, 2)
-    if (checked instanceof type.errors) return { damaged: text, reason: checked.summary }
+    if (checked instanceof type.errors) {
+      return { damaged: text, reason: checked.summary, readable: [] }
+    }
     const marks = checked.map(({ mark, at }) => ({ mark, at: Date.parse(at) }))
-    if (marks.some((m) => Number.isNaN(m.at))) {
-      return { damaged: text, reason: `a mark has a time that is not a date` }
+    const readable = marks.filter((m) => !Number.isNaN(m.at))
+    if (readable.length < marks.length) {
+      return { damaged: text, reason: `a mark has a time that is not a date`, readable }
     }
     return { marks }
   }
@@ -189,7 +198,8 @@ export function createFileSubscriberStore(
 
   /**
    * The marks for `remove`. A damaged record is copied to a name no earlier copy has, and the copy
-   * must succeed: the caller overwrites the record next, so a failed copy throws instead.
+   * must succeed: the caller overwrites the record next, so a failed copy throws instead. The new
+   * record keeps every mark that could be read; only the unreadable ones stop being checked.
    */
   async function marksForRemove(): Promise<Mark[]> {
     const read = await readMarks()
@@ -209,7 +219,7 @@ export function createFileSubscriberStore(
       "[SUBSCRIBERS]",
       `${marksPath} is not an unsubscribe record (${read.reason}); its text is kept in ${copyPath}`,
     )
-    return []
+    return read.readable
   }
 
   /** Takes `<path>.lock`, waiting for another process, and runs `task` under it. */
