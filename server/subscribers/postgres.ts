@@ -72,7 +72,11 @@ function checkListId(options: PostgresSubscribersOptions): string {
   return listId
 }
 
-/** The text hashed into an advisory lock key: length-prefixed, so two lists cannot share one. */
+/**
+ * The text hashed into an advisory lock key: length-prefixed, so two lists cannot share one. Each
+ * query prefixes it with `current_schema()`, because advisory locks belong to the whole database:
+ * two apps in separate schemas of one database never block each other.
+ */
 function lockText(listId: string, kind: string, name: string): string {
   return `${listId.length}:${listId}:${kind}:${name}`
 }
@@ -126,7 +130,11 @@ export function createPostgresSubscriberStore(
     add(input: AddSubscriberInput): Promise<AddSubscriberResult> {
       const address = lockText(listId, `address`, input.email)
       return sql.begin(async (tx) => {
-        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${address}::text, 0))`
+        await tx`
+          SELECT pg_advisory_xact_lock(
+            hashtextextended(current_schema() || ':' || ${address}::text, 0)
+          )
+        `
         const known = await tx`
           SELECT 1 FROM subscribers WHERE list_id = ${listId} AND email = ${input.email}
         `
@@ -152,7 +160,11 @@ export function createPostgresSubscriberStore(
     remove(input: RemoveSubscriberInput): Promise<boolean> {
       const address = lockText(listId, `address`, input.email)
       return sql.begin(async (tx) => {
-        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${address}::text, 0))`
+        await tx`
+          SELECT pg_advisory_xact_lock(
+            hashtextextended(current_schema() || ':' || ${address}::text, 0)
+          )
+        `
         const removed = await tx`
           DELETE FROM subscribers WHERE list_id = ${listId} AND email = ${input.email}
         `
@@ -231,7 +243,9 @@ export function createPostgresSendLog(
       const connection = await sql.reserve()
       try {
         const [row] = await connection<{ locked: boolean }[]>`
-          SELECT pg_try_advisory_lock(hashtextextended(${key}::text, 0)) AS locked
+          SELECT pg_try_advisory_lock(
+            hashtextextended(current_schema() || ':' || ${key}::text, 0)
+          ) AS locked
         `
         if (!row.locked) {
           connection.release()
@@ -247,7 +261,11 @@ export function createPostgresSendLog(
           if (!held) return
           held = false
           try {
-            await connection`SELECT pg_advisory_unlock(hashtextextended(${key}::text, 0))`
+            await connection`
+              SELECT pg_advisory_unlock(
+                hashtextextended(current_schema() || ':' || ${key}::text, 0)
+              )
+            `
           } finally {
             connection.release()
           }

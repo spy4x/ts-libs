@@ -5314,7 +5314,10 @@ serve one list each, so several lists can share the tables.
 - `lock` takes a session-scoped `pg_try_advisory_lock` on a connection it reserves with
   `sql.reserve()` and gives back on `release`, so two locks never share a session (advisory locks are
   re-entrant within one). A crashed holder loses its connection and the lock with it. The send holds
-  that connection throughout, so the pool needs at least two connections.
+  that connection throughout, so the pool needs at least two connections. `lock` never waits for
+  another holder, but it does wait for a free pool connection.
+- Advisory locks belong to the whole database, so every key includes `current_schema()`: two apps
+  in separate schemas of one database, even with the same list id, never block each other.
 - A second address with an existing `key` on the same list throws instead of being stored.
 
 **Sending an issue.** `sendIssue` mails one issue to the list, one mail each, and remembers who got

@@ -213,6 +213,28 @@ describe("createPostgresSendLog on a real server", () => {
     }
   })
 
+  it("locks the same list and issue separately in two schemas of one database", async () => {
+    const one = await openSchema()
+    try {
+      const two = await openSchema()
+      try {
+        const first = await createPostgresSendLog(one.sql, { listId: `news` }).lock(`post`)
+        const second = await createPostgresSendLog(two.sql, { listId: `news` }).lock(`post`)
+        try {
+          expect(first).toBeDefined()
+          expect(second).toBeDefined()
+        } finally {
+          await first?.release()
+          await second?.release()
+        }
+      } finally {
+        await two.close()
+      }
+    } finally {
+      await one.close()
+    }
+  })
+
   it("keeps two lists' entries for one issue apart", async () => {
     const { sql, close } = await openSchema()
     try {
