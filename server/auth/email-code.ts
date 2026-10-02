@@ -24,6 +24,11 @@
  * code sign-in or password reset lands in the same user. Without it, `verifyCode` for that address
  * creates a new user and evicts the unproven password key.
  *
+ * `proveAddress` on the sign-in provider uses the sign-in code, which is bound to the address alone:
+ * anyone can spend that code's guesses by guessing for the address. A signed-in user who proves an
+ * address for their own account should use {@link createEmailProof} instead. Its codes are bound to
+ * the user and the address, each pair keeps its own guess counter, and it needs no session manager.
+ *
  * **Rate-limit the route that calls `requestCode`.** This module limits guesses per code, not how
  * often a code is asked for, and every new code moves the expiry of a locked challenge. Put
  * `createRateLimitMiddleware` from `@spy4x/platform/rate-limit` in front of that route with two
@@ -45,6 +50,7 @@ import {
   ChallengeOutcome,
   normalizeEmail,
 } from "./model.ts"
+import type { Clock } from "@spy4x/platform/universal/time"
 import type { ProviderDeps, SignInResult } from "./provider.ts"
 import type { AuthStore } from "./store.ts"
 
@@ -53,6 +59,9 @@ export const EMAIL_CODE_METHOD = "email-code"
 
 /** The challenge purpose `requestCode` issues and `verifyCode` checks. */
 export const EMAIL_CODE_PURPOSE = "email-code"
+
+/** The challenge purpose {@link createEmailProof} issues and checks. */
+export const EMAIL_PROOF_PURPOSE = "email-proof"
 
 /** Random bytes in a code: 48 bits, rendered as 8 base64url characters. */
 export const EMAIL_CODE_BYTES = 6
@@ -136,6 +145,9 @@ export interface EmailCodeSignIn {
    * `proveKey`; when none does, a proven email-code key is added to the user. The user keeps their
    * id and keys and becomes the owner of the address, and every other user's unproven claim to it
    * is deleted. An address the user already owns is a success that writes nothing.
+   *
+   * Prefer {@link createEmailProof} for this: the code here is the sign-in code, and anyone may
+   * spend its guesses by guessing for the address, so another account can lock the owner out.
    *
    * The code is the one `requestCode` sends for sign-in: it is bound to the address, not to a user.
    * The session proves who asks and the code proves the mailbox, so a code only ever works for the
@@ -224,6 +236,121 @@ export function createEmailCodeSignIn(deps: EmailCodeSignInDeps): EmailCodeSignI
       return await proveFor(store, user.id, address, now)
     },
   }
+}
+
+/** What {@link createEmailProof} needs from the app. */
+export interface EmailProofDeps {
+  store: AuthStore
+  /**
+   * Sends `code` to `email`, the normalised address. A rejection reaches the caller of
+   * `requestCode`; the code is already issued then.
+   */
+  sendCode(email: string, code: string): Promise<void>
+  clock?: Clock
+  /** How long a code stays valid, in whole minutes. Defaults to {@link DEFAULT_CODE_TTL_MINUTES}. */
+  codeTtlMinutes?: number
+  /** Guesses one code allows. Defaults to {@link DEFAULT_CODE_MAX_ATTEMPTS}. */
+  maxAttempts?: number
+}
+
+/**
+ * Codes a signed-in user proves an address with, for their own account. Unlike the sign-in code,
+ * each code is bound to the user and the address: two users proving the same address hold two
+ * separate codes with separate guess counters, so one user's wrong guesses never spend another's
+ * code. It creates no user and no session.
+ */
+export interface EmailProof {
+  /**
+   * Issues a new code for `userId` and the address, and sends it. A code asked for while an earlier
+   * one for the same user and address is live replaces it and keeps its guess counter.
+   *
+   * @throws {EmailCodeError} `invalid-email`, or `account-deleted` when the user is soft-deleted.
+   * @throws {RangeError} When no user has the id `userId`. Nothing is issued or sent.
+   */
+  requestCode(userId: number, email: string): Promise<void>
+  /**
+   * Checks one guess of a code from `requestCode` for the same user and address and, on a match,
+   * proves the address for the user exactly as {@link EmailCodeSignIn.proveAddress} does. Take
+   * `userId` from a validated session, never from the request. Surrounding whitespace in the code
+   * is ignored.
+   *
+   * @returns The user's keys that carry the address, all proven, sorted by id. They carry `secret`:
+   *     keep them on the server.
+   * @throws {EmailCodeError} `invalid-email`, `wrong-code`, `locked-out`, `no-code`, or
+   *     `account-deleted` (checked before a guess is spent).
+   * @throws {AuthConflictError} `email-owned` when another user owns the address; the code is used
+   *     by then.
+   * @throws {RangeError} When no user has the id `userId`. No guess is spent.
+   */
+  proveAddress(userId: number, email: string, code: string): Promise<AuthKey[]>
+}
+
+/**
+ * Creates the codes a signed-in user proves an address with. See {@link EmailProof}.
+ *
+ * @throws {RangeError} When `codeTtlMinutes` or `maxAttempts` is not a positive integer.
+ */
+export function createEmailProof(deps: EmailProofDeps): EmailProof {
+  const ttlMinutes = positiveInteger(
+    "codeTtlMinutes",
+    deps.codeTtlMinutes ?? DEFAULT_CODE_TTL_MINUTES,
+  )
+  const maxAttempts = positiveInteger("maxAttempts", deps.maxAttempts ?? DEFAULT_CODE_MAX_ATTEMPTS)
+  const clock = deps.clock ?? systemClock
+  const { store } = deps
+
+  async function liveUser(userId: number): Promise<AuthUser> {
+    const user = await store.findUser(userId)
+    if (user === null) throw new RangeError(`no auth user with id ${userId}`)
+    if (user.deletedAt !== null) throw new EmailCodeError("account-deleted")
+    return user
+  }
+
+  return {
+    async requestCode(userId: number, email: string): Promise<void> {
+      const address = requireEmail(email)
+      await liveUser(userId)
+      const now = new Date(clock.now())
+      const code = randomBase64Url(EMAIL_CODE_BYTES)
+      await store.issueChallenge({
+        purpose: EMAIL_PROOF_PURPOSE,
+        subject: await proofSubject(userId, address),
+        secretHash: await hashProof(userId, address, code),
+        expiresAt: new Date(now.getTime() + ttlMinutes * 60_000),
+        now,
+      })
+      await deps.sendCode(address, code)
+    },
+
+    async proveAddress(userId: number, email: string, code: string): Promise<AuthKey[]> {
+      const address = requireEmail(email)
+      if (typeof code !== "string") throw new EmailCodeError("wrong-code")
+      const user = await liveUser(userId)
+      const now = new Date(clock.now())
+      const outcome = await store.attemptChallenge({
+        purpose: EMAIL_PROOF_PURPOSE,
+        subject: await proofSubject(user.id, address),
+        secretHash: await hashProof(user.id, address, code.trim()),
+        maxAttempts,
+        now,
+      })
+      if (outcome !== ChallengeOutcome.Matched) throw new EmailCodeError(refusalOf(outcome))
+      return await proveFor(store, user.id, address, now)
+    },
+  }
+}
+
+/**
+ * The challenge subject of a proof code: the user id and a digest of the address, so the subject
+ * stays within the store's 255 characters for any valid address and holds no raw address.
+ */
+async function proofSubject(userId: number, address: string): Promise<string> {
+  return `${userId}:${await sha256Hex(address)}`
+}
+
+/** The stored form of a proof code: SHA-256 of the purpose, the user, the address and the code. */
+function hashProof(userId: number, address: string, code: string): Promise<string> {
+  return sha256Hex(`${EMAIL_PROOF_PURPOSE}\n${userId}\n${address}\n${code}`)
 }
 
 /**

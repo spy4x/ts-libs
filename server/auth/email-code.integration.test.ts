@@ -16,8 +16,10 @@ import { createPasswordHasher, SessionManager } from "../sign-in/mod.ts"
 import { postgresSettings, requireReachable } from "@integration-testing"
 import {
   createEmailCodeSignIn,
+  createEmailProof,
   EMAIL_CODE_METHOD,
   EMAIL_CODE_PURPOSE,
+  EMAIL_PROOF_PURPOSE,
   EmailCodeError,
   type EmailCodeSignIn,
 } from "./email-code.ts"
@@ -276,5 +278,59 @@ describe("createEmailCodeSignIn on Postgres", () => {
       const other = await passwords.signUp({ email: "other@example.com", password: PASSWORD })
       const proven = await provider.proveAddress(other.user.id, ADDRESS, code)
       expect(proven[0].userId).toBe(other.user.id)
+    }))
+})
+
+describe("createEmailProof on Postgres", () => {
+  /** A proof over the harness's store and the codes it sent, in order. */
+  function proofOver(store: AuthStore) {
+    const sent: string[] = []
+    const proof = createEmailProof({
+      store,
+      sendCode: (_email, code) => {
+        sent.push(code)
+        return Promise.resolve()
+      },
+    })
+    const proofCode = async (userId: number, email: string) => {
+      await proof.requestCode(userId, email)
+      return sent[sent.length - 1]
+    }
+    return { proof, proofCode }
+  }
+
+  it("keeps another account's wrong guesses off this account's code, for the longest address", () =>
+    withProvider(async ({ store, passwords }) => {
+      const longest = `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`
+      expect(longest).toHaveLength(254)
+      const owner = await passwords.signUp({ email: longest, password: PASSWORD })
+      const other = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+      const { proof, proofCode } = proofOver(store)
+      const code = await proofCode(owner.user.id, longest)
+
+      await proofCode(other.user.id, longest)
+      for (let guess = 0; guess < 5; guess++) {
+        expect(await refusalOf(proof.proveAddress(other.user.id, longest, `wrong-${guess}`)))
+          .toBe("wrong-code")
+      }
+
+      await proof.proveAddress(owner.user.id, longest, code)
+      expect(await store.findUserIdByProvenEmail(longest)).toBe(owner.user.id)
+    }))
+
+  it("stores a hash of the code under the user, never the code or the address", () =>
+    withProvider(async ({ sql, store, passwords }) => {
+      const signedUp = await passwords.signUp({ email: ADDRESS, password: PASSWORD })
+      const { proofCode } = proofOver(store)
+      const code = await proofCode(signedUp.user.id, ADDRESS)
+
+      const rows = await sql<{ subject: string; secretHash: string }[]>`
+        SELECT subject, secret_hash AS "secretHash" FROM auth_challenges
+        WHERE purpose = ${EMAIL_PROOF_PURPOSE}
+      `
+      expect(rows).toHaveLength(1)
+      expect(rows[0].subject).toMatch(new RegExp(`^${signedUp.user.id}:[0-9a-f]{64}$`))
+      expect(rows[0].secretHash).not.toContain(code)
+      expect(JSON.stringify(rows)).not.toContain(ADDRESS)
     }))
 })

@@ -9,6 +9,7 @@ import {
 } from "../sign-in/fake-store.test.ts"
 import {
   createEmailCodeSignIn,
+  createEmailProof,
   DEFAULT_CODE_MAX_ATTEMPTS,
   DEFAULT_CODE_TTL_MINUTES,
   EMAIL_CODE_METHOD,
@@ -16,9 +17,11 @@ import {
   type EmailCodeErrorReason,
   type EmailCodeSignIn,
   type EmailCodeSignInDeps,
+  type EmailProof,
+  type EmailProofDeps,
 } from "./email-code.ts"
 import { MemoryAuthStore } from "./memory-store.ts"
-import { AuthConflictError, type AuthSessionRecord } from "./model.ts"
+import { AuthConflictError, type AuthSessionRecord, type AuthUser } from "./model.ts"
 import { createPasswordSignIn, PASSWORD_METHOD, type PasswordSignIn } from "./password.ts"
 
 const MINUTE = 60_000
@@ -484,6 +487,176 @@ describe("createEmailCodeSignIn: proveAddress", () => {
       provider.proveAddress(signedUp.user.id, ADDRESS, 42 as unknown as string),
       "wrong-code",
     )
+  })
+})
+
+describe("createEmailProof", () => {
+  const BEA = "bea@example.com"
+
+  /** A proof over the sign-in harness's store, with only a store, a sender and a clock. */
+  function proofSetup(overrides: Partial<EmailProofDeps> = {}) {
+    const harness = setup()
+    const proofSent: { email: string; code: string }[] = []
+    const proof: EmailProof = createEmailProof({
+      store: harness.store,
+      clock: harness.clock,
+      sendCode: (email, code) => {
+        proofSent.push({ email, code })
+        return Promise.resolve()
+      },
+      ...overrides,
+    })
+    const proofCode = async (userId: number, email = ADDRESS) => {
+      await proof.requestCode(userId, email)
+      return proofSent[proofSent.length - 1].code
+    }
+    /** Ann signed up with a password for ADDRESS (unproven); Bea for BEA. */
+    const accounts = async () => ({
+      ann: (await harness.passwords.signUp({ email: ADDRESS, password: PASSWORD })).user.id,
+      bea: (await harness.passwords.signUp({ email: BEA, password: PASSWORD })).user.id,
+    })
+    return { ...harness, proof, proofSent, proofCode, accounts }
+  }
+
+  it("sends a code to the normalised address that proves it for the user, with no session manager", async () => {
+    const { proof, proofSent, proofCode, accounts, store } = proofSetup()
+    const { ann } = await accounts()
+
+    const code = await proofCode(ann, " Ann@Example.com ")
+    const proven = await proof.proveAddress(ann, ADDRESS, ` ${code} `)
+
+    expect(proofSent.map(({ email }) => email)).toEqual([ADDRESS])
+    expect(code).toMatch(/^[A-Za-z0-9_-]{8}$/)
+    expect(proven.map((key) => key.method)).toEqual([PASSWORD_METHOD])
+    expect(await store.findUserIdByProvenEmail(ADDRESS)).toBe(ann)
+  })
+
+  it("keeps another user's wrong guesses for the same address off this user's code", async () => {
+    const { proof, proofCode, accounts, store } = proofSetup()
+    const { ann, bea } = await accounts()
+    const annCode = await proofCode(ann)
+
+    await proofCode(bea, ADDRESS)
+    for (let guess = 0; guess < DEFAULT_CODE_MAX_ATTEMPTS; guess++) {
+      await expectRefusal(proof.proveAddress(bea, ADDRESS, `wrong-${guess}`), "wrong-code")
+    }
+    await expectRefusal(proof.proveAddress(bea, ADDRESS, "wrong-x"), "locked-out")
+
+    await proof.proveAddress(ann, ADDRESS, annCode)
+    expect(await store.findUserIdByProvenEmail(ADDRESS)).toBe(ann)
+  })
+
+  it("refuses a code issued to another user for the same address", async () => {
+    const { proof, proofCode, accounts } = proofSetup()
+    const { ann, bea } = await accounts()
+    const beaCode = await proofCode(bea, ADDRESS)
+
+    await expectRefusal(proof.proveAddress(ann, ADDRESS, beaCode), "no-code")
+  })
+
+  it("refuses a sign-in code, and a sign-in refuses a proof code", async () => {
+    const { proof, proofCode, accounts, provider, codeFor } = proofSetup()
+    const { ann } = await accounts()
+
+    await expectRefusal(proof.proveAddress(ann, ADDRESS, await codeFor()), "no-code")
+    const code = await proofCode(ann)
+    await expectRefusal(provider.verifyCode(ADDRESS, code), "wrong-code")
+    await proof.proveAddress(ann, ADDRESS, code)
+  })
+
+  it("accepts a code once, and only the latest one once a new one is asked for", async () => {
+    const { proof, proofCode, accounts } = proofSetup()
+    const { ann } = await accounts()
+    const first = await proofCode(ann)
+    const second = await proofCode(ann)
+
+    await expectRefusal(proof.proveAddress(ann, ADDRESS, first), "wrong-code")
+    await proof.proveAddress(ann, ADDRESS, second)
+    await expectRefusal(proof.proveAddress(ann, ADDRESS, second), "no-code")
+  })
+
+  it("locks a code after maxAttempts wrong guesses, and a new code keeps the count", async () => {
+    const { proof, proofCode, accounts } = proofSetup({ maxAttempts: 2 })
+    const { ann } = await accounts()
+    await proofCode(ann)
+    await expectRefusal(proof.proveAddress(ann, ADDRESS, "wrong-1"), "wrong-code")
+    await expectRefusal(proof.proveAddress(ann, ADDRESS, "wrong-2"), "wrong-code")
+
+    const fresh = await proofCode(ann)
+    await expectRefusal(proof.proveAddress(ann, ADDRESS, fresh), "locked-out")
+  })
+
+  it("refuses a code after codeTtlMinutes", async () => {
+    const { proof, proofCode, accounts, clock } = proofSetup({ codeTtlMinutes: 2 })
+    const { ann } = await accounts()
+    const code = await proofCode(ann)
+    clock.advance(2 * MINUTE)
+
+    await expectRefusal(proof.proveAddress(ann, ADDRESS, code), "no-code")
+  })
+
+  it("answers email-owned only after a right code for an address another user owns", async () => {
+    const { proof, proofCode, accounts, store } = proofSetup()
+    const { ann, bea } = await accounts()
+    await proof.proveAddress(ann, ADDRESS, await proofCode(ann))
+    const code = await proofCode(bea, ADDRESS)
+
+    await expectRefusal(proof.proveAddress(bea, ADDRESS, "wrong-code"), "wrong-code")
+    await expect(proof.proveAddress(bea, ADDRESS, code)).rejects.toThrow(AuthConflictError)
+    expect(await store.findUserIdByProvenEmail(ADDRESS)).toBe(ann)
+  })
+
+  it("throws a RangeError for an unknown user, sending nothing and spending no guess", async () => {
+    const { proof, proofSent, proofCode, accounts } = proofSetup()
+    const { ann } = await accounts()
+    const code = await proofCode(ann)
+
+    await expect(proof.requestCode(999, ADDRESS)).rejects.toThrow(RangeError)
+    await expect(proof.proveAddress(999, ADDRESS, code)).rejects.toThrow(RangeError)
+    expect(proofSent).toHaveLength(1)
+  })
+
+  it("refuses a deleted account before sending or spending a guess", async () => {
+    const harness = setup()
+    const ann = (await harness.passwords.signUp({ email: ADDRESS, password: PASSWORD })).user.id
+    const sent: string[] = []
+    const deleted = new Proxy(harness.store, {
+      get(target, name) {
+        if (name === "findUser") {
+          return async (id: number): Promise<AuthUser | null> => {
+            const user = await target.findUser(id)
+            return user && { ...user, deletedAt: new Date(0) }
+          }
+        }
+        const value = Reflect.get(target, name)
+        return typeof value === "function" ? value.bind(target) : value
+      },
+    })
+    const proof = createEmailProof({
+      store: deleted,
+      clock: harness.clock,
+      sendCode: (_email, code) => {
+        sent.push(code)
+        return Promise.resolve()
+      },
+    })
+
+    await expectRefusal(proof.requestCode(ann, ADDRESS), "account-deleted")
+    await expectRefusal(proof.proveAddress(ann, ADDRESS, "whatever"), "account-deleted")
+    expect(sent).toEqual([])
+  })
+
+  it("refuses an address that is not one and a code that is not a string", async () => {
+    const { proof, accounts } = proofSetup()
+    const { ann } = await accounts()
+
+    await expectRefusal(proof.requestCode(ann, "nobody"), "invalid-email")
+    await expectRefusal(proof.proveAddress(ann, ADDRESS, 42 as unknown as string), "wrong-code")
+  })
+
+  it("refuses a ttl or guess limit that is not a positive integer", () => {
+    expect(() => proofSetup({ codeTtlMinutes: 0 })).toThrow(RangeError)
+    expect(() => proofSetup({ maxAttempts: 1.5 })).toThrow(RangeError)
   })
 })
 
