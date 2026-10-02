@@ -60,6 +60,7 @@ Runs on: server (Deno).
 | `@spy4x/server/subscribers`          | Double opt-in mailing lists: signed links, subscriber store port, subscribe flows     |
 | `@spy4x/server/subscribers/memory`   | The in-memory subscriber store and send log, held to the shared contracts             |
 | `@spy4x/server/subscribers/file`     | The JSON-file subscriber store and send log, compatible with antonshubin.com's files  |
+| `@spy4x/server/subscribers/postgres` | The Postgres subscriber store and send log, with the schema to migrate                |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -2063,7 +2064,8 @@ subjects as strings, as a `TEXT` column does: `1` and `"1"` are one subject.
 `requestSubscription`, `previewConfirmation`, `confirmSubscription`, `previewUnsubscribe` and
 `unsubscribe`, `unsubscribeTokenFrom`, `UNSUBSCRIBE_FORM_MAX_BYTES` and `TOKEN_PAGE_HEADERS`;
 `sendIssue` and the `SendLog` port; `createMemorySubscriberStore` and `createMemorySendLog` in
-`server/subscribers/memory`, `createFileSendLog` in `server/subscribers/file`. Ported from
+`server/subscribers/memory`, `createFileSendLog` in `server/subscribers/file`; `createPostgresSubscriberStore`,
+`createPostgresSendLog` and `SUBSCRIBERS_POSTGRES_SCHEMA` in `server/subscribers/postgres`. Ported from
 spy4x/antonshubin.com (#369).
 
 A double opt-in mailing list. A visitor enters an address, gets a confirm link, and joins the list
@@ -2184,6 +2186,25 @@ from the same entry. The site's `subscribers.json` and `.unsubscribed` load unch
 carry a `key`. Rows the site wrote have none, so run `await store.backfillKeys(crypto)`
 once before mailing them a version 2 unsubscribe link: it is idempotent and returns how many rows
 it changed.
+
+**Postgres store.** `SUBSCRIBERS_POSTGRES_SCHEMA` from `@spy4x/server/subscribers/postgres` is the
+DDL to copy into your migration: `subscribers` (primary key `(list_id, email)`, unique
+`(list_id, key)`), `subscriber_unsubscribes` (marks, never addresses) and `subscriber_sends` (the
+send log). `createPostgresSubscriberStore(sql, { listId })` and `createPostgresSendLog(sql, { listId })`
+serve one list each, so several lists can share the tables.
+
+- `add` and `remove` each run in one transaction that takes `pg_advisory_xact_lock` on the list and
+  address first, so a replayed confirm link racing an unsubscribe can never bring the address back.
+  Other addresses do not wait for each other.
+- When two unsubscribes of one address are recorded, the later time is kept.
+- `lock` takes a session-scoped `pg_try_advisory_lock` on a connection it reserves with
+  `sql.reserve()` and gives back on `release`, so two locks never share a session (advisory locks are
+  re-entrant within one). A crashed holder loses its connection and the lock with it. The send holds
+  that connection throughout, so the pool needs at least two connections. `lock` never waits for
+  another holder, but it does wait for a free pool connection.
+- Advisory locks belong to the whole database, so every key includes `current_schema()`: two apps
+  in separate schemas of one database, even with the same list id, never block each other.
+- A second address with an existing `key` on the same list throws instead of being stored.
 
 **Sending an issue.** `sendIssue` mails one issue to the list, one mail each, and remembers who got
 it in a `SendLog`. Render the letter once with `renderLetter`, leave `UNSUBSCRIBE_PLACEHOLDER` where

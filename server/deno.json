@@ -30,6 +30,7 @@
     "./subscribers": "./subscribers/mod.ts",
     "./subscribers/file": "./subscribers/file.ts",
     "./subscribers/memory": "./subscribers/memory.ts",
+    "./subscribers/postgres": "./subscribers/postgres.ts",
     "./crypto": "./crypto.ts",
     "./user-secrets": "./user-secrets.ts",
     "./quota": "./quota.ts",
