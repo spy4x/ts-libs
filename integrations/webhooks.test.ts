@@ -1,7 +1,7 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { verifyWebhookRequest } from "./webhooks.ts"
-import type { WebhookRejectReason } from "./webhooks.ts"
+import type { WebhookRejectReason, WebhookVerifierConfig } from "./webhooks.ts"
 
 const SECRET = "test-secret-not-real"
 
@@ -346,5 +346,108 @@ describe("verifyWebhookRequest secret handling", () => {
       clock,
     })
     expect(result.ok).toBe(true)
+  })
+})
+
+describe("verifyWebhookRequest with a combined header", () => {
+  /** Stripe's layout, as its documentation describes `Stripe-Signature`. */
+  const STRIPE = {
+    name: "Stripe-Signature",
+    pairSeparator: ",",
+    timestampKey: "t",
+    signatureKey: "v1",
+  }
+  const stripeConfig = { secret: SECRET, combinedHeader: STRIPE, clock: clockAt(AT_SECONDS * 1000) }
+
+  const stripeHeaders = (value: string) => new Headers({ "Stripe-Signature": value })
+
+  const stripeRejection = async (
+    body: Uint8Array,
+    value: string,
+    config: WebhookVerifierConfig = stripeConfig,
+  ): Promise<WebhookRejectReason> => {
+    const result = await verifyWebhookRequest(body, stripeHeaders(value), config)
+    expect(result.ok).toBe(false)
+    return result.ok === false ? result.reason : "signature_mismatch"
+  }
+
+  it("accepts a valid delivery with the test-only v0 signature beside v1", async () => {
+    const signature = await sign(SECRET, AT_SECONDS, BODY)
+    const v0 = await sign("another-secret-not-real", AT_SECONDS, BODY)
+    const result = await verifyWebhookRequest(
+      BODY,
+      stripeHeaders(`t=${AT_SECONDS},v1=${signature},v0=${v0}`),
+      stripeConfig,
+    )
+    expect(result.ok).toBe(true)
+    expect(result.ok === true && result.timestampSeconds).toBe(AT_SECONDS)
+  })
+
+  it("accepts a delivery when any one of several v1 signatures matches, as during a secret roll", async () => {
+    const old = await sign("old-secret-not-real", AT_SECONDS, BODY)
+    const current = await sign(SECRET, AT_SECONDS, BODY)
+    const result = await verifyWebhookRequest(
+      BODY,
+      stripeHeaders(`t=${AT_SECONDS}, v1=${old}, v1=${current}`),
+      stripeConfig,
+    )
+    expect(result.ok).toBe(true)
+  })
+
+  it("rejects a tampered body", async () => {
+    const signature = await sign(SECRET, AT_SECONDS, BODY)
+    const tampered = new TextEncoder().encode(BODY_TEXT.replace(`"n": 1`, `"n": 2`))
+    expect(await stripeRejection(tampered, `t=${AT_SECONDS},v1=${signature}`))
+      .toBe("signature_mismatch")
+  })
+
+  it("rejects an expired delivery older than the tolerance window", async () => {
+    const signature = await sign(SECRET, AT_SECONDS - 301, BODY)
+    expect(await stripeRejection(BODY, `t=${AT_SECONDS - 301},v1=${signature}`))
+      .toBe("stale_timestamp")
+  })
+
+  it("rejects a replayed signature moved onto a fresh timestamp", async () => {
+    // An attacker who captured an old delivery cannot make it look recent: the
+    // timestamp is inside the signed string.
+    const captured = await sign(SECRET, AT_SECONDS - 3600, BODY)
+    expect(await stripeRejection(BODY, `t=${AT_SECONDS},v1=${captured}`)).toBe("signature_mismatch")
+  })
+
+  it("never lets the test-only v0 scheme stand in for v1", async () => {
+    const signature = await sign(SECRET, AT_SECONDS, BODY)
+    expect(await stripeRejection(BODY, `t=${AT_SECONDS},v0=${signature}`))
+      .toBe("missing_signature")
+    const wrong = await sign("another-secret-not-real", AT_SECONDS, BODY)
+    expect(await stripeRejection(BODY, `t=${AT_SECONDS},v1=${wrong},v0=${signature}`))
+      .toBe("signature_mismatch")
+  })
+
+  it("rejects a missing header, a missing timestamp and a second timestamp", async () => {
+    const signature = await sign(SECRET, AT_SECONDS, BODY)
+    const absent = await verifyWebhookRequest(BODY, new Headers(), stripeConfig)
+    expect(absent.ok === false && absent.reason).toBe("missing_signature")
+    expect(await stripeRejection(BODY, `v1=${signature}`)).toBe("missing_timestamp")
+    expect(await stripeRejection(BODY, `t=${AT_SECONDS},t=${AT_SECONDS},v1=${signature}`))
+      .toBe("malformed_timestamp")
+    expect(await stripeRejection(BODY, `t=soon,v1=${signature}`)).toBe("malformed_timestamp")
+  })
+
+  it("rejects a malformed signature, a part without =, too many signatures and an oversized header", async () => {
+    const signature = await sign(SECRET, AT_SECONDS, BODY)
+    expect(await stripeRejection(BODY, `t=${AT_SECONDS},v1=${signature.slice(1)}`))
+      .toBe("malformed_signature")
+    expect(await stripeRejection(BODY, `t=${AT_SECONDS},v1=${signature},junk`))
+      .toBe("malformed_signature")
+    const nine = Array.from({ length: 9 }, () => `v1=${signature}`).join(",")
+    expect(await stripeRejection(BODY, `t=${AT_SECONDS},${nine}`)).toBe("malformed_signature")
+    expect(await stripeRejection(BODY, `t=${AT_SECONDS},v1=${signature},x=${"a".repeat(1024)}`))
+      .toBe("malformed_signature")
+  })
+
+  it("ignores the separate signature and timestamp headers once a combined header is set", async () => {
+    const signature = await sign(SECRET, AT_SECONDS, BODY)
+    const result = await verifyWebhookRequest(BODY, headersFor(signature, AT_SECONDS), stripeConfig)
+    expect(result.ok === false && result.reason).toBe("missing_signature")
   })
 })

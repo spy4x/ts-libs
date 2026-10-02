@@ -5,7 +5,12 @@
  */
 
 export { verifyWebhookRequest } from "./webhooks.ts"
-export type { WebhookRejectReason, WebhookVerifierConfig, WebhookVerifyResult } from "./webhooks.ts"
+export type {
+  CombinedSignatureHeader,
+  WebhookRejectReason,
+  WebhookVerifierConfig,
+  WebhookVerifyResult,
+} from "./webhooks.ts"
 
 export {
   HealthchecksClient,

@@ -180,6 +180,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `Clock` (type), `jsr:@spy4x/integrations`: Millisecond time source.
 - `CloudflarePurgeOptions` (interface), `jsr:@spy4x/integrations`: Options for purgeUrls.
 - `CloudflarePurgeResult` (interface), `jsr:@spy4x/integrations`: Outcome of a purge: `output` describes what happened on success, `error` on failure.
+- `CombinedSignatureHeader` (interface), `jsr:@spy4x/integrations`: One header that carries the timestamp and the signatures together, as a list of `key=value` pairs: Stripe's `Stripe-Signature: t=1492774577,v1=5257…,v0=6ffb…` is `{ name: "Stripe-Signature", pairSeparator: ",", timestampKey: "t", signatureKey: "v1" }`.
 - `DEFAULT_REQUEST_TIMEOUT_MS` (constant), `jsr:@spy4x/integrations`: Bounds a single outgoing request, used by every client in this package unless a caller overrides it.
 - `HealthchecksClient` (class), `jsr:@spy4x/integrations`: healthchecks.io client.
 - `HealthchecksClientConfig` (interface), `jsr:@spy4x/integrations`: Where to ping, for HealthchecksClient.
@@ -280,6 +281,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/integrations/webhooks`
 
+- `CombinedSignatureHeader` (interface), `jsr:@spy4x/integrations/webhooks`: One header that carries the timestamp and the signatures together, as a list of `key=value` pairs: Stripe's `Stripe-Signature: t=1492774577,v1=5257…,v0=6ffb…` is `{ name: "Stripe-Signature", pairSeparator: ",", timestampKey: "t", signatureKey: "v1" }`.
 - `WebhookRejectReason` (type), `jsr:@spy4x/integrations/webhooks`: Why a delivery was rejected.
 - `WebhookVerifierConfig` (interface), `jsr:@spy4x/integrations/webhooks`: Shared secret and header names verifyWebhookRequest needs to check a delivery.
 - `WebhookVerifyResult` (type), `jsr:@spy4x/integrations/webhooks`: Result of verifyWebhookRequest: the verified body, or why it was rejected.
@@ -2119,4 +2121,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 dae1c0f30c7d127052e68d9cab72f14e69aa096168bae443480e3ba0b1924a84 -->
+<!-- export surface: sha256 0f6470e7cb1fc0c2e188c1cd48291ce65bdb17778164f7c727d090684ccf7c4d -->
