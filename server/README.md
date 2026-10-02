@@ -117,6 +117,12 @@ takes the same options except `onReject`, and returns a function from a standard
 mutation guard's verdict (`undefined` to let it through, or the refusal reason). The guard calls it,
 so the two cannot drift apart.
 
+`allowHeaderless: true` lets a mutation through when it carries neither `Origin` nor
+`Sec-Fetch-Site`, which is what a mail client's RFC 8058 one-click unsubscribe POST looks like. A
+browser's cross-site POST always carries `Origin`, so it is still refused. Use it with
+`requireSessionCookie: false`, and only on a route whose request proves itself, such as one that
+carries a signed token.
+
 ## `server/http/cors`
 
 `resolveAllowedOrigin`, `createCorsOriginResolver`, `CORS_ALLOW_METHODS`, `CORS_ALLOW_HEADERS`,
