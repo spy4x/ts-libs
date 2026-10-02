@@ -311,6 +311,7 @@ point.
 | `@spy4x/email/sender`  | `EmailSender`, `SendResult`, `createConsoleSender`                                                             |
 | `@spy4x/email/message` | `EmailMessage`, validation, timezone framing, ICS attachment                                                   |
 | `@spy4x/email/html`    | `escapeHtml`, `htmlWrap`, `emailButton`, `HtmlShellTheme`, `DEFAULT_HTML_SHELL_THEME`, `DARK_HTML_SHELL_THEME` |
+| `@spy4x/email/letter`  | `renderLetter`, block helpers, `fillUnsubscribe`, `UNSUBSCRIBE_PLACEHOLDER`                                    |
 | `@spy4x/email/address` | mailbox parsing, formatting and list deduplication                                                             |
 
 ## The `EmailSender` port
@@ -482,6 +483,65 @@ fill the preview with body text. Without it the output is unchanged.
 `emailButton({ href, label, background, color })` returns a table-based button that
 renders as a button in Gmail, Apple Mail and Outlook. `href` is checked like
 `brandUrl`, the colours like the theme's, and `label` is escaped.
+
+## Letter
+
+`@spy4x/email/letter` is a brand-free shell for mail an app sends to people who asked for
+it. It has a `header` slot, content `blocks`, an `afterword` slot, a small grey footer (the
+reason the reader gets the mail, an optional unsubscribe link, optional extra links) and a
+hidden `preheader`. It names no person, site or campaign, and its only wording is the
+footer's "Unsubscribe", which `footer.unsubscribeLabel` replaces.
+
+```ts
+import {
+  button,
+  fillUnsubscribe,
+  heading,
+  paragraph,
+  renderLetter,
+  UNSUBSCRIBE_PLACEHOLDER,
+} from "@spy4x/email/letter"
+
+const letter = renderLetter({
+  blocks: [
+    heading("In short"),
+    paragraph("A new post is up."),
+    button("https://example.com/p", "Read"),
+  ],
+  afterword: [paragraph("Reply to this mail: it reaches me.")],
+  footer: { reason: "You subscribed on example.com.", unsubscribeLink: UNSUBSCRIBE_PLACEHOLDER },
+})
+const mine = fillUnsubscribe(letter, "https://example.com/u?t=abc") // one letter, many readers
+```
+
+The helpers cover plain content: `paragraph`, `heading`, `bulletList`, `button` and
+`linkedImage` (which has no plain-text part). A header with a portrait beside a name, or a P.S.
+with a link inside the sentence, is a `LetterBlock` the app writes by hand: an `html` string and
+a `text` string, escaping every value with `escapeHtml` from `@spy4x/email/html`.
+
+```ts
+import { escapeHtml } from "@spy4x/email/html"
+import type { LetterBlock } from "@spy4x/email/letter"
+
+const postscript = (label: string, href: string): LetterBlock => ({
+  html: `<p>P.S. <a href="${escapeHtml(href)}">${escapeHtml(label)}</a></p>`,
+  text: `P.S. ${label}: ${href}`,
+})
+```
+
+`escapeHtml` does not check a link's scheme: a hand-built block that takes a link from outside must
+check its scheme itself, or a `javascript:` link renders. Block `html` is trusted as pre-escaped, as
+`htmlWrap` treats its body. Every value the shell interpolates itself is escaped. A link, whether in
+a button, an image, the footer or `fillUnsubscribe`, throws a `TypeError` unless it is an `https:`,
+`http:` or `mailto:` URL (an image `src`: `https:` or `http:`) made only of printable ASCII (`!` to
+`~`): `URL` ignores a newline or a Unicode line separator that the plain-text part would print as a
+second line. Pass an international address as `new URL(link).href`, which is always ASCII.
+`fillUnsubscribe` gives output byte-identical to rendering with that link directly.
+`{{unsubscribe-link}}` written by a caller inside block text is also replaced, so keep that literal
+out of content.
+
+`theme` sets `background` and `color` (page and text), `mutedColor` (footer text) and `linkColor`
+(footer links); a button takes its own colours.
 
 ## Per-recipient timezone framing
 
