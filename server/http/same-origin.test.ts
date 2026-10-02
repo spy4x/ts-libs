@@ -193,7 +193,7 @@ describe("same-origin mutation guard", () => {
   describe("allowHeaderless", () => {
     const options = { requireSessionCookie: false, allowHeaderless: true }
 
-    it("passes a POST with neither Origin nor Sec-Fetch-Site, as a mail client's one-click unsubscribe sends", async () => {
+    it("passes a POST with neither header, as a one-click unsubscribe sends", async () => {
       expect((await send({}, { options })).status).toBe(200)
     })
 
@@ -207,9 +207,10 @@ describe("same-origin mutation guard", () => {
       expect((await send({ "sec-fetch-site": "cross-site" }, { options })).status).toBe(403)
     })
 
-    it("still requires the session cookie when the cookie is required", async () => {
-      const response = await send({}, { options: { allowHeaderless: true } })
-      expect(response.status).toBe(403)
+    it("throws at construction when the session cookie is still required", () => {
+      expect(() => createSameOriginCheck({ allowHeaderless: true })).toThrow(TypeError)
+      const required = { allowHeaderless: true, requireSessionCookie: true }
+      expect(() => createSameOriginMutationGuard(required)).toThrow(TypeError)
     })
 
     it("is off by default", async () => {

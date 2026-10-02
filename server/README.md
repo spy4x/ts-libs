@@ -119,9 +119,10 @@ so the two cannot drift apart.
 
 `allowHeaderless: true` lets a mutation through when it carries neither `Origin` nor
 `Sec-Fetch-Site`, which is what a mail client's RFC 8058 one-click unsubscribe POST looks like. A
-browser's cross-site POST always carries `Origin`, so it is still refused. Use it with
-`requireSessionCookie: false`, and only on a route whose request proves itself, such as one that
-carries a signed token.
+cross-site POST from every current browser carries `Origin`, so it is still refused. Firefox before
+70 and Internet Explorer 11 sent neither header on a form post, so the option requires
+`requireSessionCookie: false` and throws without it. Build a separate check for the one-click route
+alone, whose request proves itself with a signed token; never set it on a guard for the whole app.
 
 ## `server/http/cors`
 
