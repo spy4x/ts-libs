@@ -54,6 +54,7 @@ Deno.serve(async (request) => {
 | [`@spy4x/time`](https://jsr.io/@spy4x/time)                 | IANA time-zone arithmetic on `Intl`, plain-date math, `.ics` writer        | shared                 |
 | [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker              | server                 |
 | [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync | both halves            |
+| [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter      | server                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
 `ai/` (chat completion, JSON recovery) is planned, not built (#11, #76). `billing/` (a

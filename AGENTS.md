@@ -22,6 +22,7 @@ exactly one top-level directory.
 | `email/`        | address, html, message, sender, smtp transport, dkim-verify                                                                                                                                                                                                      |
 | `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync                                                                                                                                                                                                  |
 | `validation/`   | arktype validate helpers, validation model                                                                                                                                                                                                                       |
+| `billing/`      | provider-neutral payments (checkout, portal, webhook events), Stripe adapter                                                                                                                                                                                     |
 
 ## Adding a package
 
