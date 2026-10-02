@@ -130,6 +130,14 @@ export function describeSendLogContract(name: string, open: OpenSendLog) {
         expect(stored?.recipients).toEqual([])
         expect(stored?.audience).toEqual(["a1", "b2"])
         expect(stored?.startedAt).toEqual(AT)
+        const found = await log.find("post")
+        found?.recipients?.push("hacked")
+        found?.audience?.push("hacked")
+        found?.startedAt.setFullYear(1999)
+        const again = await log.find("post")
+        expect(again?.recipients).toEqual([])
+        expect(again?.audience).toEqual(["a1", "b2"])
+        expect(again?.startedAt).toEqual(AT)
       }))
 
     it("refuses a second lock on an issue while the first is held, and grants it after release", () =>
