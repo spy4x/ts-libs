@@ -30,10 +30,12 @@ export interface SubscriptionCryptoOptions {
   secret: string
   /**
    * Earlier secrets, tried after `secret` when an unsubscribe token is verified, so links mailed
-   * before a rotation keep working. Never used to sign, to key a mark or to verify a confirm token:
-   * unsubscribe marks are keyed by `secret` alone, so a confirm link signed before the rotation
-   * could not be matched against an unsubscribe recorded before it. A pending confirm link stops
-   * working at a rotation; the visitor asks again.
+   * before a rotation keep working, and keying the extra marks of `sentMarks`. Never used to sign,
+   * to key a new subscriber key or unsubscribe mark, or to verify a confirm token: unsubscribe marks
+   * are keyed by `secret` alone, so a confirm link signed before the rotation could not be matched
+   * against an unsubscribe recorded before it. A pending confirm link stops working at a rotation;
+   * the visitor asks again. Stored subscriber keys stay valid: they are opaque lookup ids, and a
+   * link minted after the rotation carries the row's stored key (see `unsubscribeToken`).
    */
   previousSecrets?: readonly string[]
   /** Clock in Unix milliseconds. Defaults to `Date.now`. */
@@ -57,9 +59,16 @@ export interface SubscriptionCrypto {
    * verifies it, never `previousSecrets`. A version 1 token (antonshubin.com's) is `"invalid"`.
    * Never throws. */
   verifyConfirmToken(token: string): Promise<ConfirmTokenResult>
-  /** A version 2 unsubscribe token for `email`: it carries the address's {@link subscriberKey},
-   * binds the address as context and never expires. The token holds no address. */
-  unsubscribeToken(email: string): Promise<string>
+  /**
+   * A version 2 unsubscribe token for `email`, signed with `secret`: it carries `key`, binds the
+   * address as context and never expires. The token holds no address. Pass the row's stored key
+   * (`Subscriber.key`) when mailing a listed subscriber: a key made under an earlier secret then
+   * still finds the row after a rotation. `key` defaults to {@link subscriberKey} under `secret`,
+   * which fits only a row added after the last rotation. A row with no key at all cannot be found
+   * by a version 2 token: backfill its key once before mailing it one. The address stays bound, so
+   * a token minted with another row's key verifies for no one.
+   */
+  unsubscribeToken(email: string, key?: string): Promise<string>
   /**
    * The subscriber an unsubscribe token was issued for, or `undefined` for a forged token and for
    * an address no longer on the list alike. A version 2 token costs one `findByKey` and one HMAC
@@ -74,6 +83,12 @@ export interface SubscriptionCrypto {
   unsubscribeMark(email: string): Promise<string>
   /** The keyed hash that records "`email` got `issue`" without naming the address, in hex. */
   sentMark(email: string, issue: string): Promise<string>
+  /**
+   * {@link sentMark} under `secret`, then under each of `previousSecrets` in order. A send log
+   * records the first and treats any of them as "already sent", so an issue resumed after a
+   * rotation skips the recipients it reached before.
+   */
+  sentMarks(email: string, issue: string): Promise<string[]>
 }
 
 /** The token's unverified envelope: version and payload, read only to pick a lookup. */
@@ -117,18 +132,21 @@ export function createSubscriptionCrypto(options: SubscriptionCryptoOptions): Su
     }),
   }))
   const current = codecs[0]
-  const hmacKey = crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(options.secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
+  const hmacKeys = secrets.map((secret) =>
+    crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    )
   )
 
-  async function mac(message: string): Promise<Uint8Array> {
+  /** HMAC-SHA256 of `message` under `secrets[index]`, the current secret by default. */
+  async function mac(message: string, index = 0): Promise<Uint8Array> {
     const signature = await crypto.subtle.sign(
       "HMAC",
-      await hmacKey,
+      await hmacKeys[index],
       new TextEncoder().encode(message),
     )
     return new Uint8Array(signature)
@@ -159,9 +177,9 @@ export function createSubscriptionCrypto(options: SubscriptionCryptoOptions): Su
       }
     },
 
-    async unsubscribeToken(email) {
+    async unsubscribeToken(email, key) {
       const address = normalize(email)
-      return await current.unsubscribe.sign({ k: await subscriberKey(address) }, {
+      return await current.unsubscribe.sign({ k: key ?? await subscriberKey(address) }, {
         context: address,
       })
     },
@@ -201,6 +219,13 @@ export function createSubscriptionCrypto(options: SubscriptionCryptoOptions): Su
 
     async sentMark(email, issue) {
       return encodeHex(await mac(`${SENT_MARK_PREFIX}${issue}:${normalize(email)}`))
+    },
+
+    async sentMarks(email, issue) {
+      const message = `${SENT_MARK_PREFIX}${issue}:${normalize(email)}`
+      return await Promise.all(
+        secrets.map(async (_, index) => encodeHex(await mac(message, index))),
+      )
     },
   }
 }

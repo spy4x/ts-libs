@@ -160,10 +160,11 @@ export async function confirmSubscription(token: string, deps: FlowDeps): Promis
   let unsubscribeLink: string
   let result: Awaited<ReturnType<SubscriberStore["add"]>>
   try {
-    unsubscribeLink = deps.links.unsubscribe(await deps.crypto.unsubscribeToken(email))
+    const key = await deps.crypto.subscriberKey(email)
+    unsubscribeLink = deps.links.unsubscribe(await deps.crypto.unsubscribeToken(email, key))
     result = await deps.store.add({
       email,
-      key: await deps.crypto.subscriberKey(email),
+      key,
       mark: await deps.crypto.unsubscribeMark(email),
       issuedAt,
       at: new Date((deps.now ?? Date.now)()),

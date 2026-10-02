@@ -20,6 +20,7 @@ const SECRET = "fixture-secret-not-a-real-one-0123456789"
  * `crypto.test.ts`). */
 const SITE_UNSUBSCRIBE_TOKEN =
   "eyJwdXJwb3NlIjoidW5zdWJzY3JpYmUiLCJ2ZXJzaW9uIjoxLCJwYXlsb2FkIjp7fX0.ykHC53_rs7XXy79oIQoSxzg9BpwrwHenQyROeLMIGJI"
+const OTHER_SECRET = "another-fixture-secret-not-real-98765432"
 const NOW = Date.UTC(2001, 0, 1)
 const JANE = "jane@example.com"
 
@@ -272,6 +273,23 @@ describe("unsubscribe", () => {
     const { deps, store } = harness()
     await store.add({ email: JANE, key: "legacy", mark: "m", issuedAt: NOW, at: new Date(NOW) })
     expect(await unsubscribe(SITE_UNSUBSCRIBE_TOKEN, deps)).toEqual({ state: "done" })
+    expect(await store.count()).toBe(0)
+  })
+
+  it("honours a link minted after a secret rotation for a subscriber from before it", async () => {
+    const { deps, mails, store, clock } = harness()
+    await subscribe(deps, mails)
+    const rotated: FlowDeps = {
+      ...deps,
+      crypto: createSubscriptionCrypto({
+        secret: OTHER_SECRET,
+        previousSecrets: [SECRET],
+        now: () => clock.at,
+      }),
+    }
+    const [row] = await store.list()
+    const token = await rotated.crypto.unsubscribeToken(row.email, row.key)
+    expect(await unsubscribe(token, rotated)).toEqual({ state: "done" })
     expect(await store.count()).toBe(0)
   })
 

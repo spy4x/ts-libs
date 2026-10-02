@@ -213,7 +213,7 @@ describe("createSubscriptionCrypto: secret rotation", () => {
     })
   })
 
-  it("signs and keys only with the current secret", async () => {
+  it("signs new tokens and keys new hashes with the current secret", async () => {
     const current = createSubscriptionCrypto({ secret: SITE.secret, now: () => NOW })
     expect(await rotated.confirmToken(SITE.email)).toBe(await current.confirmToken(SITE.email))
     expect(await rotated.unsubscribeToken(SITE.email)).toBe(
@@ -221,6 +221,29 @@ describe("createSubscriptionCrypto: secret rotation", () => {
     )
     expect(await rotated.subscriberKey(SITE.email)).toBe(await current.subscriberKey(SITE.email))
     expect(await rotated.unsubscribeMark(SITE.email)).toBe(SITE.unsubscribeMark)
+  })
+
+  it("mints a link that finds a row keyed under a previous secret", async () => {
+    const { lookup } = await lookupOf(old, ["ann@example.com", SITE.email])
+    const oldKey = await old.subscriberKey(SITE.email)
+    const token = await rotated.unsubscribeToken(SITE.email, oldKey)
+    expect((await rotated.verifyUnsubscribeToken(token, lookup))?.email).toBe(SITE.email)
+  })
+
+  it("refuses a link minted with another row's key", async () => {
+    const { lookup } = await lookupOf(old, ["ann@example.com", SITE.email])
+    const annKey = await old.subscriberKey("ann@example.com")
+    const token = await rotated.unsubscribeToken(SITE.email, annKey)
+    expect(await rotated.verifyUnsubscribeToken(token, lookup)).toBeUndefined()
+  })
+
+  it("gives the sent mark under every secret, current first", async () => {
+    const current = createSubscriptionCrypto({ secret: SITE.secret })
+    expect(await rotated.sentMarks(SITE.email, "hello-world")).toEqual([
+      SITE.sentMark,
+      await old.sentMark(SITE.email, "hello-world"),
+    ])
+    expect(await current.sentMarks(SITE.email, "hello-world")).toEqual([SITE.sentMark])
   })
 
   it("throws on an unusable previous secret", () => {
