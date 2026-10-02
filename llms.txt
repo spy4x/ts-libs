@@ -2074,6 +2074,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createMemorySendLog` (function), `jsr:@spy4x/server/subscribers/memory`: A SendLog held in this process, for tests and single-process prototypes.
 - `createMemorySubscriberStore` (function), `jsr:@spy4x/server/subscribers/memory`: A SubscriberStore held in this process, for tests and single-process prototypes.
 
+### `jsr:@spy4x/server/subscribers/postgres`
+
+- `PostgresSubscribersOptions` (interface), `jsr:@spy4x/server/subscribers/postgres`: What the Postgres subscriber store and send log are created for.
+- `SUBSCRIBERS_POSTGRES_SCHEMA` (constant), `jsr:@spy4x/server/subscribers/postgres`: The three tables, as SQL text the app runs as a migration.
+- `createPostgresSendLog` (function), `jsr:@spy4x/server/subscribers/postgres`: A SendLog over the `subscriber_sends` table (SUBSCRIBERS_POSTGRES_SCHEMA) for the list `listId`.
+- `createPostgresSubscriberStore` (function), `jsr:@spy4x/server/subscribers/postgres`: A SubscriberStore over the `subscribers` and `subscriber_unsubscribes` tables (SUBSCRIBERS_POSTGRES_SCHEMA) for the list `listId`.
+
 ### `jsr:@spy4x/server/user-secrets`
 
 - `MAX_API_KEY_LENGTH` (constant), `jsr:@spy4x/server/user-secrets`: Longest accepted api key.
@@ -2232,4 +2239,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 8f53fc44aa5de44b579290bb4a9f99f5cce7bb474d400d064d7c436ce494fef4 -->
+<!-- export surface: sha256 901115ae39099494b3f1ea35ac1a5d42e915aedc4b74a1d3fcf290cad32561de -->
