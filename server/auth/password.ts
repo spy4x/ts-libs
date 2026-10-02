@@ -241,6 +241,11 @@ export interface PasswordSignIn {
    * The hash is verified before that transaction begins, so it holds no connection for the length
    * of a hash.
    *
+   * It does not call the provider's `secondFactorFor`. The caller must work out the session's
+   * second-factor status itself, the same way `signIn` would, create the session inside its
+   * transaction, and set the cookie only after that transaction commits. Passing
+   * `SecondFactorStatus.NotRequired` for a user who needs a second factor skips the second factor.
+   *
    * @returns The live user and the password key that matched, re-read after any rehash. The key
    *     carries `secret` (the password hash): keep it on the server, never in a response body.
    * @throws {PasswordSignInError} `invalid-credentials`, exactly as `signIn`.

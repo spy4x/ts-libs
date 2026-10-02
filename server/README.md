@@ -596,7 +596,9 @@ the same refusals and the same rehash, and returns the user and key. An app that
 its own together with the session (an audit row, a last-login time) checks the password first, then
 creates the session with `SessionManager.create` inside its own transaction, so a failed row also
 undoes the session. The hash is verified before the transaction begins, so no connection is held for
-the length of a hash.
+the length of a hash. It does not call `secondFactorFor`: the caller works out the session's second-factor
+status itself, as `signIn` would, and sets the cookie only after the transaction commits. Passing
+`SecondFactorStatus.NotRequired` for a user who needs a second factor skips the second factor.
 
 **Sign-up does not prove the address; the verification step does.** The key starts unproven, with
 `email` equal to its subject, the normalised address. Sign-up is refused as `email-taken` when
