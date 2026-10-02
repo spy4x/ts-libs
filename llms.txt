@@ -2045,6 +2045,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `unsubscribe` (function), `jsr:@spy4x/server/subscribers`: Removes the address an unsubscribe token names and records the unsubscribe, so a confirm link issued earlier cannot bring it back.
 - `unsubscribeTokenFrom` (function), `jsr:@spy4x/server/subscribers`: The unsubscribe token of a request: the `token` query parameter first, as a mail client's one-click POST (RFC 8058) keeps it on the URL with an unrelated body, then the `token` field of a form body read under `maxBytes`.
 
+### `jsr:@spy4x/server/subscribers/file`
+
+- `FileSubscriberStore` (interface), `jsr:@spy4x/server/subscribers/file`: A SubscriberStore on disk, plus the one-time key backfill.
+- `FileSubscriberStoreOptions` (interface), `jsr:@spy4x/server/subscribers/file`: Options for createFileSubscriberStore.
+- `SubscriberFileError` (class), `jsr:@spy4x/server/subscribers/file`: A list or unsubscribe record on disk that this store cannot use.
+- `createFileSubscriberStore` (function), `jsr:@spy4x/server/subscribers/file`: A SubscriberStore in a JSON file, for a single server or a few processes on one disk.
+
 ### `jsr:@spy4x/server/subscribers/memory`
 
 - `AddSubscriberInput` (interface), `jsr:@spy4x/server/subscribers/memory`: The input of SubscriberStore.add.
@@ -2212,4 +2219,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 adbe0d3aa4b6de7148f29ec9aa072df695e90d45f7426277dfec3e08fe692f98 -->
+<!-- export surface: sha256 b77f2ca538d45b867886b34540f027861270c92e3d5a14358d06d084862083a4 -->

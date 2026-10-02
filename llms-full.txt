@@ -3173,6 +3173,7 @@ Runs on: server (Deno).
 | `@spy4x/server/lockout/postgres`     | The Postgres lockout store over a table and columns the caller names                  |
 | `@spy4x/server/subscribers`          | Double opt-in mailing lists: signed links, subscriber store port, subscribe flows     |
 | `@spy4x/server/subscribers/memory`   | The in-memory subscriber store, held to the shared store contract                     |
+| `@spy4x/server/subscribers/file`     | The JSON-file subscriber store: lock, quarantine, site-compatible files, key backfill |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -5278,6 +5279,18 @@ the switch; they expire within three days anyway.
 `add` and `remove` for one address must not overlap, or a replayed confirm link can slip in between
 the mark and the row: a Postgres adapter takes a row lock or an advisory lock on the address.
 
+**File store.** `createFileSubscriberStore({ path })` from `@spy4x/server/subscribers/file` keeps the
+list in a JSON file and the unsubscribe marks in `<path>.unsubscribed`. Every change runs under an
+in-process queue and `<path>.lock` (it retries `lockAttempts` times, `lockRetryMs` apart, then throws
+`LockUnavailableError`), so two processes never lose a write; each write is a temp file and a
+rename. A list that does not parse is never treated as empty: its first text is kept in
+`<path>.invalid`, the file is left as it is, and every call throws `SubscriberFileError` until a
+person repairs it. An unreadable marks file is kept in `<path>.unsubscribed.invalid` and treated as
+empty, so the list stays usable. The site's `subscribers.json` and `.unsubscribed` load unchanged;
+new rows carry a `key`. Rows the site wrote have none, so run `await store.backfillKeys(crypto)`
+once before mailing them a version 2 unsubscribe link: it is idempotent and returns how many rows
+it changed.
+
 **Fixes applied at extraction time.**
 
 - The site's relay-error redaction matched the address exactly as stored, so a mail server that
@@ -5291,6 +5304,8 @@ the mark and the row: a Postgres adapter takes a row lock or an advisory lock on
   time.
 - Many clients could each send a few subscribe requests for one address and flood its inbox; the
   per-recipient limit stops that.
+- The site overwrote a damaged `.unsubscribed` file on the next unsubscribe, losing the replay
+  record without a trace; the file store now keeps its text in `.unsubscribed.invalid` first.
 
 # server/env-age64/README.md
 
