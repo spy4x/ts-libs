@@ -98,14 +98,20 @@ export interface LetterInput {
 const LINKABLE_SCHEMES = ["https:", "http:", "mailto:"]
 const IMAGE_SCHEMES = ["https:", "http:"]
 /** Whitespace and control characters, which `URL` strips but the letter would print raw. */
-const UNSAFE_LINK_CHARS = /[\u0000-\u0020\u007f]/
+function hasUnsafeLinkChar(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code <= 0x20 || code === 0x7f) return true
+  }
+  return false
+}
 
 /**
  * Throw a `TypeError` unless `value` is an absolute `https:`, `http:` or `mailto:` URL.
  * The scheme is read with `URL`, so `JaVaScript:` and a leading newline do not slip past.
  */
 function assertLink(value: string, name: string, schemes = LINKABLE_SCHEMES): void {
-  if (UNSAFE_LINK_CHARS.test(value)) {
+  if (hasUnsafeLinkChar(value)) {
     throw new TypeError(`${name} must not contain whitespace or control characters`)
   }
   let parsed: URL
