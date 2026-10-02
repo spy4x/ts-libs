@@ -64,16 +64,15 @@ function decodedForms(text: string): string[] | null {
   return null
 }
 
-/** True when the path, decoded and without letter case, is one of `prefixes` or below one. */
+/**
+ * True when `pathname`, without letter case, is one of `prefixes` or below one. The caller passes
+ * every decoded form of the value, so this compares one form as it is.
+ */
 function isRefused(pathname: string, prefixes: readonly string[]): boolean {
-  const forms = decodedForms(pathname)
-  if (!forms) return true
-  return forms.some((form) => {
-    const path = form.toLowerCase()
-    return prefixes.some((prefix) => {
-      const refused = prefix.toLowerCase().replace(/\/+$/, ``)
-      return path === refused || path.startsWith(`${refused}/`)
-    })
+  const path = pathname.toLowerCase()
+  return prefixes.some((prefix) => {
+    const refused = prefix.toLowerCase().replace(/\/+$/, ``)
+    return path === refused || path.startsWith(`${refused}/`)
   })
 }
 
