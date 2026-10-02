@@ -11,6 +11,8 @@
  *     `same-origin`;
  *  3. `Sec-Fetch-Site` is `same-origin`.
  *
+ * The one exception is {@link SameOriginCheckOptions.allowHeaderless}, described below.
+ *
  * A browser sets both headers itself and a page cannot forge them. A client outside a browser can
  * forge them, but it has no victim's cookie to ride on, so this guard is not authentication.
  *
@@ -47,6 +49,18 @@
  *  - The expected origin can be configured. Behind a proxy that terminates TLS, the request URL the
  *    server sees is `http://`, while the browser sends `Origin: https://…`.
  *  - The source refused `Origin: null`, so a same-origin form post under `no-referrer` failed.
+ *
+ * ## Requests with no fetch metadata
+ *
+ * A mail client's one-click unsubscribe (RFC 8058) is a POST from the mail provider's server, with
+ * neither `Origin` nor `Sec-Fetch-Site`, and this guard refuses it. Pass
+ * {@link SameOriginCheckOptions.allowHeaderless} on such a route: a request that carries neither
+ * header then passes, while a cross-site POST from every current browser, which carries `Origin`,
+ * is still refused. Firefox before version 70 and Internet Explorer 11 sent neither header on a
+ * form post, so the option is only safe where the cookie proves nothing: it requires
+ * `requireSessionCookie: false` and throws otherwise. Build a separate check for the one-click
+ * route alone, whose request proves itself with a signed token, and never set the option on a
+ * guard that covers the whole app.
  *
  * ## WebSocket upgrades
  *
@@ -116,6 +130,21 @@ export interface SameOriginCheckOptions {
    * Each value must be a bare origin (scheme, host and port only).
    */
   expectedOrigin?: string | readonly string[]
+  /**
+   * Let a mutation through when it carries neither `Origin` nor `Sec-Fetch-Site`. Defaults to
+   * `false`. The cookie check still runs first.
+   *
+   * Such a request comes from a client outside a browser, such as a mail provider sending an
+   * RFC 8058 one-click unsubscribe POST. Every current browser sends `Origin` on a cross-origin
+   * POST, so a cross-site form post is still refused; a request with only one of the two headers
+   * gets the usual checks. The upgrade guard ignores this option: a browser always sends `Origin`
+   * on a WebSocket handshake.
+   *
+   * Requires `requireSessionCookie: false`. With the cookie required, the only headerless request
+   * the option would admit is an old browser's forged form post carrying the victim's cookie, so
+   * that combination throws. Use it on a separate check for one token-bearing route.
+   */
+  allowHeaderless?: boolean
 }
 
 /** Options for {@link createSameOriginMutationGuard} and {@link createSameOriginUpgradeGuard}. */
@@ -129,11 +158,13 @@ export interface SameOriginGuardOptions<E extends Env = Env> extends SameOriginC
 
 /**
  * Build a Hono middleware that refuses cross-site mutations. See the module documentation for the
- * three checks and where to mount it. A request without `Sec-Fetch-Site` is refused. Browsers omit
- * it over plain HTTP on a host that is not loopback, so such a deployment has every mutation
- * refused; without the header nothing shows that the app's own page sent the request.
+ * three checks and where to mount it. A request without `Sec-Fetch-Site` is refused, unless
+ * `allowHeaderless` is set and `Origin` is absent too. Browsers omit it over plain HTTP on a host
+ * that is not loopback, so such a deployment has every mutation refused; without the header
+ * nothing shows that the app's own page sent the request.
  *
- * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin.
+ * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin, or
+ * when `allowHeaderless` is set without `requireSessionCookie: false`.
  */
 export function createSameOriginMutationGuard<E extends Env = Env>(
   options: SameOriginGuardOptions<E> = {},
@@ -158,20 +189,26 @@ export function createSameOriginMutationGuard<E extends Env = Env>(
  *
  * Build it once at startup, not per request, so a misconfigured `expectedOrigin` fails there.
  *
- * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin.
+ * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin, or
+ * when `allowHeaderless` is set without `requireSessionCookie: false`.
  */
 export function createSameOriginCheck(
   options: SameOriginCheckOptions = {},
 ): (request: Request) => SameOriginRefusal | undefined {
   const cookieName = options.cookieName ?? SESSION_COOKIE_NAME
   const requireCookie = options.requireSessionCookie !== false
+  const allowHeaderless = options.allowHeaderless === true
+  if (allowHeaderless && requireCookie) {
+    const why = "with the cookie required it admits only forged requests"
+    throw new TypeError(`allowHeaderless requires requireSessionCookie: false; ${why}`)
+  }
   const expected = options.expectedOrigin === undefined
     ? undefined
     : validateOrigins(options.expectedOrigin)
 
   return (request) => {
     if (SAFE_METHODS.includes(request.method)) return undefined
-    return refusal(request, cookieName, requireCookie, expected)
+    return refusal(request, cookieName, requireCookie, allowHeaderless, expected)
   }
 }
 
@@ -180,7 +217,8 @@ export function createSameOriginCheck(
  * upgrades" in the module documentation. Mount it on the upgrade route only: it checks every
  * request it sees, so a plain page load, which carries no `Origin`, is refused too.
  *
- * Refusal reasons are `no-session-cookie` and `origin-mismatch`, in that order.
+ * Refusal reasons are `no-session-cookie` and `origin-mismatch`, in that order. `allowHeaderless`
+ * is ignored here.
  *
  * @throws {TypeError} When `expectedOrigin` is empty or holds a value that is not a bare origin.
  */
@@ -236,11 +274,14 @@ function refusal(
   request: Request,
   cookieName: string,
   requireCookie: boolean,
+  allowHeaderless: boolean,
   expected: readonly string[] | undefined,
 ): SameOriginRefusal | undefined {
   if (requireCookie && !hasCookie(request, cookieName)) return "no-session-cookie"
   const origin = request.headers.get("origin")
-  const sameOriginFetch = request.headers.get("sec-fetch-site") === "same-origin"
+  const fetchSite = request.headers.get("sec-fetch-site")
+  if (allowHeaderless && origin === null && fetchSite === null) return undefined
+  const sameOriginFetch = fetchSite === "same-origin"
   const allowed = expected ?? [new URL(request.url).origin]
   const originMatches = origin !== null &&
     (allowed.includes(origin) || (origin === "null" && sameOriginFetch))

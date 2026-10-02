@@ -190,6 +190,39 @@ describe("same-origin mutation guard", () => {
     expect((await send(crossSite, { options })).status).toBe(403)
   })
 
+  describe("allowHeaderless", () => {
+    const options = { requireSessionCookie: false, allowHeaderless: true }
+
+    it("passes a POST with neither header, as a one-click unsubscribe sends", async () => {
+      expect((await send({}, { options })).status).toBe(200)
+    })
+
+    it("still refuses a cross-site browser POST", async () => {
+      const crossSite = { origin: "https://evil.example.com", "sec-fetch-site": "cross-site" }
+      expect((await send(crossSite, { options })).status).toBe(403)
+    })
+
+    it("still refuses a POST with only one of the two headers", async () => {
+      expect((await send({ origin: "https://evil.example.com" }, { options })).status).toBe(403)
+      expect((await send({ "sec-fetch-site": "cross-site" }, { options })).status).toBe(403)
+    })
+
+    it("throws at construction when the session cookie is still required", () => {
+      expect(() => createSameOriginCheck({ allowHeaderless: true })).toThrow(TypeError)
+      const required = { allowHeaderless: true, requireSessionCookie: true }
+      expect(() => createSameOriginMutationGuard(required)).toThrow(TypeError)
+    })
+
+    it("is off by default", async () => {
+      expect((await send({}, { options: { requireSessionCookie: false } })).status).toBe(403)
+    })
+
+    it("lets createSameOriginCheck pass the same request", () => {
+      const check = createSameOriginCheck(options)
+      expect(check(new Request(`${APP}/thing`, { method: "POST" }))).toBeUndefined()
+    })
+  })
+
   it("hands each refusal reason to onReject and returns its response", async () => {
     const reasons: SameOriginRefusal[] = []
     const options: SameOriginGuardOptions = {
