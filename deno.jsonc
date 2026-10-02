@@ -5,11 +5,12 @@
   // its own `<dir>/deno.json` lands. That is what keeps this file untouched by
   // every package PR — no shared-file conflicts between parallel agents.
   //
-  // The list mirrors the package table of README.md, plus the planned `ai/`.
+  // The list mirrors the package table of README.md, plus the planned `ai/` and `billing/`.
   // `infra/` is deliberately not a member: `infra/scripts/type-check.ts` is repo
   // tooling, not a package.
   "workspace": [
     "./ai",
+    "./billing",
     "./email",
     "./integrations",
     "./net",
