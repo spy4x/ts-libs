@@ -104,6 +104,18 @@ export function safeRedirectPath(
   value: string | null | undefined,
   options: SafeRedirectPathOptions,
 ): string {
+  // The checks run on forms of the value (decoded, then resolved), never on forms of the path it
+  // returns (resolved, then decoded). An encoded slash inside a segment that `..` removes makes
+  // those differ, so a result is kept only if checking it again returns it unchanged.
+  const once = checkOnce(value, options)
+  if (once === options.fallback) return once
+  return checkOnce(once, options) === once ? once : options.fallback
+}
+
+function checkOnce(
+  value: string | null | undefined,
+  options: SafeRedirectPathOptions,
+): string {
   const { fallback, refuse = [] } = options
   if (!value) return fallback
   const forms = decodedForms(value)

@@ -109,6 +109,21 @@ describe("safeRedirectPath", () => {
     expect(next("/notes/%2e%2e/api/auth/me")).toBe("/notes")
   })
 
+  it("refuses an encoded slash or a refused path hidden in a segment that dot segments remove", () => {
+    expect(next("/a%2Fb/../%61pi/x")).toBe("/notes")
+    expect(next("/a%2Fb/../%2561pi/x")).toBe("/notes")
+    expect(next("/a%2Fb/../%2Fevil.example")).toBe("/notes")
+  })
+
+  it("returns a path that passes the check again unchanged", () => {
+    for (
+      const value of ["/notes/1?x=1#h", "/notes/../groups", "/a%20b", "/a%2Fb/../%2Fevil.example"]
+    ) {
+      const once = next(value)
+      expect(next(once)).toBe(once)
+    }
+  })
+
   it("keeps a path that only shares the first letters of a refused one", () => {
     expect(next("/apiary")).toBe("/apiary")
   })
