@@ -129,6 +129,7 @@ const checkoutRequestSchema = type({
   "reference?": "0 < string <= 200",
   "quantity?": "number.integer > 0",
   "trialDays?": "number.integer > 0",
+  "trialWithoutPaymentMethod?": "boolean",
   "idempotencyKey?": "0 < string <= 255",
 })
 
@@ -255,6 +256,10 @@ const checkoutForm = (request: CheckoutRequest, priceId: string): URLSearchParam
   }
   if (request.trialDays !== undefined) {
     form.set("subscription_data[trial_period_days]", String(request.trialDays))
+  }
+  if (request.trialWithoutPaymentMethod === true) {
+    form.set("payment_method_collection", "if_required")
+    form.set("subscription_data[trial_settings][end_behavior][missing_payment_method]", "cancel")
   }
   return form
 }
@@ -385,6 +390,12 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
       }
       if (checked.customerId !== undefined && checked.customerEmail !== undefined) {
         return failure("invalid_request", "checkout request: pass customerId or customerEmail")
+      }
+      if (checked.trialWithoutPaymentMethod === true && checked.trialDays === undefined) {
+        return failure(
+          "invalid_request",
+          "checkout request: trialWithoutPaymentMethod needs trialDays",
+        )
       }
       const priceId = priceForPlan.get(checked.planId)
       if (priceId === undefined) {

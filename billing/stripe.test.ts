@@ -176,6 +176,41 @@ describe("createCheckout", () => {
       .toBe("checkout-acct_42-1")
   })
 
+  it("starts a trial without a card, cancelled at its end when no card was added", async () => {
+    const { calls, fetcher } = fakeFetch(() =>
+      json({ id: "cs_test_4", url: "https://checkout.stripe.com/c/pay/cs_test_4" })
+    )
+    await billing({ fetch: fetcher }).createCheckout({
+      planId: "pro",
+      successUrl: "https://app.example.com/ok",
+      cancelUrl: "https://app.example.com/no",
+      trialDays: 14,
+      trialWithoutPaymentMethod: true,
+    })
+    const form = new URLSearchParams(String(calls[0].init.body))
+    expect(form.get("subscription_data[trial_period_days]")).toBe("14")
+    expect(form.get("payment_method_collection")).toBe("if_required")
+    expect(form.get("subscription_data[trial_settings][end_behavior][missing_payment_method]"))
+      .toBe("cancel")
+  })
+
+  it("asks for a card before a trial unless told otherwise", async () => {
+    const { calls, fetcher } = fakeFetch(() =>
+      json({ id: "cs_test_5", url: "https://checkout.stripe.com/c/pay/cs_test_5" })
+    )
+    await billing({ fetch: fetcher }).createCheckout({
+      planId: "pro",
+      successUrl: "https://app.example.com/ok",
+      cancelUrl: "https://app.example.com/no",
+      trialDays: 14,
+      trialWithoutPaymentMethod: false,
+    })
+    const form = new URLSearchParams(String(calls[0].init.body))
+    expect(form.has("payment_method_collection")).toBe(false)
+    expect(form.has("subscription_data[trial_settings][end_behavior][missing_payment_method]"))
+      .toBe(false)
+  })
+
   it("sends a new customer's e-mail as customer_email", async () => {
     const { calls, fetcher } = fakeFetch(() =>
       json({ id: "cs_test_3", url: "https://checkout.stripe.com/c/pay/cs_test_3" })
@@ -201,7 +236,7 @@ describe("createCheckout", () => {
     expect(calls.length).toBe(0)
   })
 
-  it("refuses a relative URL, a zero quantity, or a customer ID with an e-mail, without calling Stripe", async () => {
+  it("refuses a relative URL, a zero quantity, a card-free trial without days, or a customer ID with an e-mail, without calling Stripe", async () => {
     const { calls, fetcher } = fakeFetch(() => json({}))
     const provider = billing({ fetch: fetcher })
     const urls = {
@@ -212,6 +247,7 @@ describe("createCheckout", () => {
       { planId: "pro", ...urls, successUrl: "/billing/done" },
       { planId: "pro", ...urls, quantity: 0 },
       { planId: "pro", ...urls, trialDays: 1.5 },
+      { planId: "pro", ...urls, trialWithoutPaymentMethod: true },
       { planId: "pro", ...urls, customerId: "cus_1", customerEmail: "jenny@example.com" },
     ]
     for (const request of requests) {
