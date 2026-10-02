@@ -57,8 +57,7 @@ Deno.serve(async (request) => {
 | [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter      | server                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
-`ai/` (chat completion, JSON recovery) is planned, not built (#11, #76). `billing/` (a
-provider-neutral billing interface with a Stripe adapter) is planned, not built (#362).
+`ai/` (chat completion, JSON recovery) is planned, not built (#11, #76).
 
 The example above validates a booking request, formats its time in Berlin and sends a confirmation
 by SMTP: three packages, no framework. `Deno.serve` hands in a standard `Request`, and each package
