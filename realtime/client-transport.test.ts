@@ -661,6 +661,68 @@ describe("ClientTransport heartbeat", () => {
     expect(harness.transport.status).toBe(TransportStatus.Open)
   })
 
+  it("resume reconnects at once instead of waiting out the backoff", async () => {
+    const harness = createHarness({
+      heartbeatIntervalMs: 600_000,
+      backoff: { baseMs: 10_000, factor: 2, maxMs: 40_000, jitterRatio: 0 },
+    })
+    await harness.open()
+    harness.factory.latest.dropFromPeer(1006, "network lost")
+    await drainMicrotasks()
+    expect(harness.transport.status).toBe(TransportStatus.Reconnecting)
+
+    harness.transport.resume()
+    await drainMicrotasks()
+
+    expect(harness.factory.sockets.length).toBe(2)
+    expect(harness.transport.status).toBe(TransportStatus.Open)
+  })
+
+  it("resume restarts the backoff, so the next failure waits the base delay again", async () => {
+    const harness = createHarness({
+      backoff: { baseMs: 100, factor: 2, maxMs: 400, jitterRatio: 0 },
+      autoOpen: false,
+      connectTimeoutMs: 50,
+    })
+    harness.transport.connect()
+    await harness.clock.advance(50) // attempt 1 times out, backoff now at its second step
+    await harness.clock.advance(100)
+    await harness.clock.advance(50) // attempt 2 times out, next delay is 200
+    expect(harness.transport.statusSnapshot.attempt).toBe(2)
+
+    harness.transport.resume()
+    await drainMicrotasks()
+
+    expect(harness.transport.statusSnapshot.attempt).toBe(0)
+  })
+
+  it("resume pings an open socket so a dead one is found within the pong deadline", async () => {
+    const harness = createHarness({ heartbeatIntervalMs: 60_000, pongTimeoutMs: 500 })
+    await harness.open()
+    const pingsBefore = kinds(harness.factory.latest).filter((k) => k === "client.ping").length
+
+    harness.transport.resume()
+    const pingsAfter = kinds(harness.factory.latest).filter((k) => k === "client.ping").length
+    expect(pingsAfter).toBe(pingsBefore + 1)
+
+    await harness.clock.advance(500)
+
+    expect(harness.errors.at(-1)).toBeInstanceOf(PongTimeoutError)
+    expect(harness.transport.status).toBe(TransportStatus.Reconnecting)
+  })
+
+  it("resume leaves a stopped transport stopped", async () => {
+    const harness = createHarness()
+    await harness.open()
+    harness.transport.stop()
+
+    harness.transport.resume()
+    await drainMicrotasks()
+
+    expect(harness.transport.status).toBe(TransportStatus.Stopped)
+    expect(harness.factory.sockets.length).toBe(1)
+  })
+
   it("keeps the original pong deadline instead of re-arming it on every unanswered ping", async () => {
     // #74: this needs a heartbeat interval shorter than the pong timeout, so more than one ping is
     // sent before the deadline — the existing "closes the socket…" test above has the interval

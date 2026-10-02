@@ -1363,6 +1363,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createPromiseLock` (function), `jsr:@spy4x/realtime/outbox`: A lock for one tab: runs the work one piece at a time, in the order asked.
 - `createWebLock` (function), `jsr:@spy4x/realtime/outbox`: A lock shared by every tab of one browser, through Web Locks.
 
+### `jsr:@spy4x/realtime/page-lifecycle`
+
+- `PageLifecycleTarget` (interface), `jsr:@spy4x/realtime/page-lifecycle`: The parts of `window` and `document` the watcher uses, so a test or a worker can supply them.
+- `watchPageResume` (function), `jsr:@spy4x/realtime/page-lifecycle`: Calls `onResume` when the page becomes visible, the browser goes online, or a page is restored from the back-forward cache (`pageshow` with `persisted`).
+
 ### `jsr:@spy4x/realtime/protocol`
 
 - `ChangeHint` (interface), `jsr:@spy4x/realtime/protocol`: A hint that a group moved to `sequence`.
@@ -2239,4 +2244,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 901115ae39099494b3f1ea35ac1a5d42e915aedc4b74a1d3fcf290cad32561de -->
+<!-- export surface: sha256 4572375f7a23c70a6358d58673b42526ca76ffba2b4c8e31f717337e78e8b733 -->

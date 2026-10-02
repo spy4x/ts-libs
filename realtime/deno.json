@@ -4,6 +4,7 @@
   "exports": {
     ".": "./mod.ts",
     "./client": "./client-transport.ts",
+    "./page-lifecycle": "./page-lifecycle.ts",
     "./registry": "./registry.ts",
     "./notify": "./notify.ts",
     "./cursor": "./cursor.ts",
