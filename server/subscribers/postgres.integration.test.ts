@@ -106,6 +106,25 @@ describe("createPostgresSubscriberStore on a real server", () => {
     }
   })
 
+  it("keeps the later unsubscribe when an earlier one is recorded after it", async () => {
+    const { sql, close } = await openSchema()
+    try {
+      const store = createPostgresSubscriberStore(sql, { listId: `news` })
+      const removal = (at: number) => ({
+        email: `ann@example.com`,
+        mark: `ann-mark`,
+        at: new Date(at),
+        pruneBefore: new Date(0),
+      })
+      await store.remove(removal(NOW + 2 * 3600_000))
+      await store.remove(removal(NOW))
+      const link = { email: `ann@example.com`, key: `ann-key`, mark: `ann-mark`, at: new Date(NOW) }
+      expect(await store.add({ ...link, issuedAt: NOW + 3600_000 })).toBe(`replay`)
+    } finally {
+      await close()
+    }
+  })
+
   it("never brings an address back when a replayed confirm link races its removal", async () => {
     const { sql, close } = await openSchema()
     try {
