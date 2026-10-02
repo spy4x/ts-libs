@@ -60,10 +60,10 @@ function setup(overrides: Partial<SendIssueInput> = {}) {
     error: (...a: unknown[]) => lines.push(a),
   }
   const log = createMemorySendLog()
-  const input = async (
+  const input = (
     subscribers: readonly Subscriber[],
     extra: Partial<SendIssueInput> = {},
-  ): Promise<SendIssueInput> => ({
+  ): SendIssueInput => ({
     issue: "a-post",
     subject: "A post",
     letter,
@@ -84,7 +84,7 @@ describe("sendIssue", () => {
     const { log, input } = setup()
     const relay = fakeSender()
     const subscribers = [await row(ONE), await row(TWO)]
-    const result = await sendIssue(await input(subscribers, { sender: relay.sender }), log)
+    const result = await sendIssue(input(subscribers, { sender: relay.sender }), log)
     expect(result).toEqual({ status: "sent", sent: 2, failed: 0, skipped: 0 })
     const crypto = createSubscriptionCrypto({ secret: SECRET })
     for (const [i, sub] of subscribers.entries()) {
@@ -104,7 +104,7 @@ describe("sendIssue", () => {
     const { log, input } = setup()
     const subscribers = [await row(ONE), await row(TWO), await row(THREE)]
     const failing = fakeSender((to) => to === TWO ? refused("550 mailbox full") : accepted(to))
-    expect(await sendIssue(await input(subscribers, { sender: failing.sender }), log)).toEqual({
+    expect(await sendIssue(input(subscribers, { sender: failing.sender }), log)).toEqual({
       status: "sent",
       sent: 2,
       failed: 1,
@@ -113,7 +113,7 @@ describe("sendIssue", () => {
     expect((await log.find("a-post"))?.completedAt).toBeUndefined()
 
     const rerun = fakeSender()
-    expect(await sendIssue(await input(subscribers, { sender: rerun.sender }), log)).toEqual({
+    expect(await sendIssue(input(subscribers, { sender: rerun.sender }), log)).toEqual({
       status: "sent",
       sent: 1,
       failed: 0,
@@ -126,9 +126,9 @@ describe("sendIssue", () => {
   it("mails nobody on a repeated run after a clean one", async () => {
     const { log, input } = setup()
     const subscribers = [await row(ONE), await row(TWO)]
-    await sendIssue(await input(subscribers), log)
+    await sendIssue(input(subscribers), log)
     const again = fakeSender()
-    const result = await sendIssue(await input(subscribers, { sender: again.sender }), log)
+    const result = await sendIssue(input(subscribers, { sender: again.sender }), log)
     expect(result.status).toBe("already-sent")
     expect(again.messages).toEqual([])
   })
@@ -137,10 +137,10 @@ describe("sendIssue", () => {
     const { log, input } = setup()
     const first = [await row(ONE), await row(TWO)]
     const failing = fakeSender((to) => to === TWO ? refused("550 mailbox full") : accepted(to))
-    await sendIssue(await input(first, { sender: failing.sender }), log)
+    await sendIssue(input(first, { sender: failing.sender }), log)
     const rerun = fakeSender()
     const result = await sendIssue(
-      await input([...first, await row(THREE)], { sender: rerun.sender }),
+      input([...first, await row(THREE)], { sender: rerun.sender }),
       log,
     )
     expect(result).toEqual({ status: "sent", sent: 1, failed: 0, skipped: 2 })
@@ -154,7 +154,7 @@ describe("sendIssue", () => {
       return to === ONE ? refused("451 try later") : accepted(to)
     })
     const result = await sendIssue(
-      await input([await row(ONE), await row(TWO), await row(THREE)], { sender: flaky.sender }),
+      input([await row(ONE), await row(TWO), await row(THREE)], { sender: flaky.sender }),
       log,
     )
     expect(result).toEqual({ status: "sent", sent: 1, failed: 2, skipped: 0 })
@@ -168,12 +168,12 @@ describe("sendIssue", () => {
     const { log, input } = setup()
     const held = await log.lock("a-post")
     const relay = fakeSender()
-    const result = await sendIssue(await input([await row(ONE)], { sender: relay.sender }), log)
+    const result = await sendIssue(input([await row(ONE)], { sender: relay.sender }), log)
     expect(result).toEqual({ status: "in-progress" })
     expect(relay.messages).toEqual([])
     expect(await log.find("a-post")).toBeUndefined()
     await held?.release()
-    expect((await sendIssue(await input([await row(ONE)]), log)).status).toBe("sent")
+    expect((await sendIssue(input([await row(ONE)]), log)).status).toBe("sent")
   })
 
   it("holds the lock for the whole run, so two overlapping runs mail each person once", async () => {
@@ -187,8 +187,8 @@ describe("sendIssue", () => {
       },
     }
     const results = await Promise.all([
-      sendIssue(await input(subscribers, { sender: slow }), log),
-      sendIssue(await input(subscribers, { sender: slow }), log),
+      sendIssue(input(subscribers, { sender: slow }), log),
+      sendIssue(input(subscribers, { sender: slow }), log),
     ])
     expect(results.map((r) => r.status).toSorted()).toEqual(["in-progress", "sent"])
     expect(relay.recipients()).toEqual([ONE, TWO])
@@ -200,7 +200,7 @@ describe("sendIssue", () => {
       ...log,
       record: () => Promise.reject(new Error("disk full")),
     }
-    await expect(sendIssue(await input([await row(ONE)]), broken)).rejects.toThrow("disk full")
+    await expect(sendIssue(input([await row(ONE)]), broken)).rejects.toThrow("disk full")
     const lock = await log.lock("a-post")
     expect(lock).toBeDefined()
   })
@@ -210,7 +210,7 @@ describe("sendIssue", () => {
     const relay = fakeSender()
     const broken: SendLog = { ...log, record: () => Promise.reject(new Error("disk full")) }
     await expect(
-      sendIssue(await input([await row(ONE), await row(TWO)], { sender: relay.sender }), broken),
+      sendIssue(input([await row(ONE), await row(TWO)], { sender: relay.sender }), broken),
     ).rejects.toThrow("disk full")
     expect(relay.recipients()).toEqual([ONE])
   })
@@ -219,12 +219,12 @@ describe("sendIssue", () => {
     const { log, input } = setup()
     const subscribers = [await row(ONE), await row(TWO)]
     const failing = fakeSender((to) => to === TWO ? refused("550 mailbox full") : accepted(to))
-    await sendIssue(await input(subscribers, { sender: failing.sender }), log)
+    await sendIssue(input(subscribers, { sender: failing.sender }), log)
 
     const rotated = createSubscriptionCrypto({ secret: NEW_SECRET, previousSecrets: [SECRET] })
     const rerun = fakeSender()
     const result = await sendIssue(
-      await input(subscribers, { sender: rerun.sender, crypto: rotated }),
+      input(subscribers, { sender: rerun.sender, crypto: rotated }),
       log,
     )
     expect(result).toEqual({ status: "sent", sent: 1, failed: 0, skipped: 1 })
@@ -239,11 +239,11 @@ describe("sendIssue", () => {
   it("mails nobody on a repeat after a rotation when the issue was already closed", async () => {
     const { log, input } = setup()
     const subscribers = [await row(ONE)]
-    await sendIssue(await input(subscribers), log)
+    await sendIssue(input(subscribers), log)
     const rotated = createSubscriptionCrypto({ secret: NEW_SECRET, previousSecrets: [SECRET] })
     const again = fakeSender()
     const result = await sendIssue(
-      await input(subscribers, { sender: again.sender, crypto: rotated }),
+      input(subscribers, { sender: again.sender, crypto: rotated }),
       log,
     )
     expect(result.status).toBe("already-sent")
@@ -253,11 +253,11 @@ describe("sendIssue", () => {
   it("keeps the audience across a rotation, so a subscriber who joined meanwhile is still left out", async () => {
     const { log, input } = setup()
     const failing = fakeSender((to) => to === TWO ? refused("550") : accepted(to))
-    await sendIssue(await input([await row(ONE), await row(TWO)], { sender: failing.sender }), log)
+    await sendIssue(input([await row(ONE), await row(TWO)], { sender: failing.sender }), log)
     const rotated = createSubscriptionCrypto({ secret: NEW_SECRET, previousSecrets: [SECRET] })
     const rerun = fakeSender()
     await sendIssue(
-      await input([await row(ONE), await row(TWO), await row(THREE, NEW_SECRET)], {
+      input([await row(ONE), await row(TWO), await row(THREE, NEW_SECRET)], {
         sender: rerun.sender,
         crypto: rotated,
       }),
@@ -272,7 +272,7 @@ describe("sendIssue", () => {
     const rotated = createSubscriptionCrypto({ secret: NEW_SECRET, previousSecrets: [SECRET] })
     const relay = fakeSender()
     await sendIssue(
-      await input([old], {
+      input([old], {
         sender: relay.sender,
         crypto: rotated,
       }),
@@ -303,7 +303,7 @@ describe("sendIssue", () => {
       if (to === THREE) throw new Error(`connection reset while sending to ${THREE}`)
       return accepted(to)
     })
-    const result = await sendIssue(await input(subscribers, { sender: relay.sender }), log)
+    const result = await sendIssue(input(subscribers, { sender: relay.sender }), log)
     expect(result).toEqual({ status: "sent", sent: 1, failed: 3, skipped: 0 })
     const everything = JSON.stringify([lines, await log.find("a-post")])
     expect(lines.length).toBeGreaterThanOrEqual(4)
@@ -316,7 +316,7 @@ describe("sendIssue", () => {
     const { log, input } = setup()
     const relay = fakeSender()
     const result = await sendIssue(
-      await input(
+      input(
         [
           await row(ONE),
           { email: "Jane Doe <jane@example.com>", subscribedAt: new Date(NOW) },
@@ -332,7 +332,7 @@ describe("sendIssue", () => {
 
   it("refuses an empty list and records nothing, so the real send can still happen", async () => {
     const { log, input } = setup()
-    expect(await sendIssue(await input([]), log)).toEqual({ status: "no-subscribers" })
+    expect(await sendIssue(input([]), log)).toEqual({ status: "no-subscribers" })
     expect(await log.find("a-post")).toBeUndefined()
   })
 
@@ -343,7 +343,7 @@ describe("sendIssue", () => {
       ...log,
       find: () => Promise.resolve({ issue: "a-post", subject: "Old", startedAt: new Date(NOW) }),
     }
-    const result = await sendIssue(await input([await row(ONE)], { sender: relay.sender }), legacy)
+    const result = await sendIssue(input([await row(ONE)], { sender: relay.sender }), legacy)
     expect(result.status).toBe("already-sent")
     expect(relay.messages).toEqual([])
   })
