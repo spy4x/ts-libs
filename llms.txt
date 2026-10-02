@@ -1472,6 +1472,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/server/auth/password`
 
 - `ChangePasswordInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.changePassword.
+- `CheckedCredentials` (interface), `jsr:@spy4x/server/auth/password`: What PasswordSignIn.checkCredentials returns: whose password matched, and its key.
 - `CompleteResetInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.completeReset.
 - `CompleteVerificationInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.completeVerification.
 - `DEFAULT_MAX_RESET_ATTEMPTS` (constant), `jsr:@spy4x/server/auth/password`: Guesses allowed per reset code by default.
@@ -2118,4 +2119,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 e452855eb352f7893f68a958bb6b9fba7e0cad8130ebca4901c24bbbe13a0492 -->
+<!-- export surface: sha256 dae1c0f30c7d127052e68d9cab72f14e69aa096168bae443480e3ba0b1924a84 -->

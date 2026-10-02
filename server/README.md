@@ -591,6 +591,16 @@ password, a missing account, a malformed address and a deleted user all answer
 `invalid-credentials`. A legacy or lower-iteration hash still verifies faster than the dummy until
 its first successful sign-in, which rehashes it.
 
+**`checkCredentials` is `signIn` without the session.** It runs the same single verification, gives
+the same refusals and the same rehash, and returns the user and key. An app that must write rows of
+its own together with the session (an audit row, a last-login time) checks the password first, then
+creates the session with `SessionManager.create` inside its own transaction, so a failed row also
+undoes the session. The hash is verified before the transaction begins, so no connection is held for
+the length of a hash. It does not call `secondFactorFor`: the caller works out the session's
+second-factor status itself, as `signIn` would, and sets the cookie only after the transaction
+commits. Passing `SecondFactorStatus.NotRequired` for a user who needs a second factor skips the
+second factor.
+
 **Sign-up does not prove the address; the verification step does.** The key starts unproven, with
 `email` equal to its subject, the normalised address. Sign-up is refused as `email-taken` when
 another user owns the address or a password key for it already exists. Follow every sign-up with the
