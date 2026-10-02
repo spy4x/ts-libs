@@ -427,15 +427,31 @@ export class ClientTransport {
    * The app has returned (a hidden tab became visible, the network came back, a page was restored
    * from the back-forward cache): get back to a working socket without waiting out a timer.
    *
-   * While waiting to reconnect, it drops the wait and the backoff count and attempts at once; the
-   * reconnect pulls every group from its cursor, as any reconnect does. While open, it pings, so a
+   * While waiting to reconnect, it drops the wait and attempts at once, and the reconnect pulls
+   * every group from its cursor, as any reconnect does (the attempt count is kept, because it is
+   * what tells a reconnect from a first connect). A connect attempt still under way is abandoned
+   * and repeated at once. While open, it pings, so a
    * socket the system silently killed in the background is found after one pong deadline rather
    * than after the next heartbeat. A transport that was never started or has stopped stays so.
    */
   resume(): void {
     if (this.#status === TransportStatus.Reconnecting) {
       this.#clearReconnectTimer()
-      this.#attempt = 0
+      this.#enqueue(() => this.#attemptReconnect())
+    } else if (this.#status === TransportStatus.Connecting) {
+      // An attempt started while the app was away may never finish: the system can leave a socket
+      // half-open until the connect timeout. Abandon it and try again at once.
+      const socket = this.#socket
+      this.#clearConnectTimer()
+      if (socket) {
+        this.#forgetSocket()
+        try {
+          socket.close(1000, "resume")
+        } catch {
+          // Already gone.
+        }
+      }
+      this.#setStatus(TransportStatus.Reconnecting)
       this.#enqueue(() => this.#attemptReconnect())
     } else if (this.#status === TransportStatus.Open) {
       this.#ping()

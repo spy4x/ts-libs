@@ -678,22 +678,52 @@ describe("ClientTransport heartbeat", () => {
     expect(harness.transport.status).toBe(TransportStatus.Open)
   })
 
-  it("resume restarts the backoff, so the next failure waits the base delay again", async () => {
+  it("resume after a drop pulls every group the client holds, as a reconnect does", async () => {
     const harness = createHarness({
-      backoff: { baseMs: 100, factor: 2, maxMs: 400, jitterRatio: 0 },
-      autoOpen: false,
-      connectTimeoutMs: 50,
+      cursors: { g1: 3 },
+      heartbeatIntervalMs: 600_000,
+      backoff: { baseMs: 10_000, factor: 2, maxMs: 40_000, jitterRatio: 0 },
     })
-    harness.transport.connect()
-    await harness.clock.advance(50) // attempt 1 times out, backoff now at its second step
-    await harness.clock.advance(100)
-    await harness.clock.advance(50) // attempt 2 times out, next delay is 200
-    expect(harness.transport.statusSnapshot.attempt).toBe(2)
+    await harness.open()
+    harness.factory.latest.dropFromPeer(1006, "network lost")
+    await drainMicrotasks()
+    expect(harness.gaps).toEqual([])
 
     harness.transport.resume()
     await drainMicrotasks()
 
-    expect(harness.transport.statusSnapshot.attempt).toBe(0)
+    expect(harness.gaps.map((gap) => gap.groupId)).toEqual(["g1"])
+  })
+
+  it("resume abandons a connect attempt that is still under way and tries again at once", async () => {
+    const harness = createHarness({ autoOpen: false, connectTimeoutMs: 60_000 })
+    harness.transport.connect()
+    await drainMicrotasks()
+    expect(harness.transport.status).toBe(TransportStatus.Connecting)
+    const first = harness.factory.latest
+
+    harness.transport.resume()
+    await drainMicrotasks()
+
+    expect(first.closeCalls.length).toBe(1)
+    expect(harness.factory.sockets.length).toBe(2)
+    expect(harness.transport.status).toBe(TransportStatus.Connecting)
+  })
+
+  it("two resumes in one tick open one socket", async () => {
+    const harness = createHarness({
+      heartbeatIntervalMs: 600_000,
+      backoff: { baseMs: 10_000, factor: 2, maxMs: 40_000, jitterRatio: 0 },
+    })
+    await harness.open()
+    harness.factory.latest.dropFromPeer(1006, "network lost")
+    await drainMicrotasks()
+
+    harness.transport.resume()
+    harness.transport.resume()
+    await drainMicrotasks()
+
+    expect(harness.factory.sockets.length).toBe(2)
   })
 
   it("resume pings an open socket so a dead one is found within the pong deadline", async () => {
