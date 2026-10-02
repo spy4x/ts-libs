@@ -35,7 +35,9 @@
  * limiters: one keyed by the normalised address (`normalizeEmail` of the submitted value), so one
  * mailbox cannot be flooded, and one keyed by `clientIp` from `@spy4x/platform/rate-limit`, so one
  * client cannot walk through many addresses. Rate-limit the route that calls `verifyCode` by
- * `clientIp` too.
+ * `clientIp` too. For {@link createEmailProof}, key the `requestCode` limiters by the user id and by
+ * the normalised target address, so a signed-in user can neither flood one mailbox nor walk
+ * through many.
  *
  * @module
  */
@@ -164,6 +166,8 @@ export interface EmailCodeSignIn {
    * @throws {AuthConflictError} `email-owned` when another user owns the address; the code is used
    *     by then. `key-exists` when an email-code key for the address carries no `email`.
    * @throws {RangeError} When no user has the id `userId`. No guess is spent.
+   * @deprecated Use {@link createEmailProof}: its codes are bound to the user, so another account
+   *     cannot spend them.
    */
   proveAddress(userId: number, email: string, code: string): Promise<AuthKey[]>
 }
@@ -279,7 +283,7 @@ export interface EmailProof {
    * @throws {EmailCodeError} `invalid-email`, `wrong-code`, `locked-out`, `no-code`, or
    *     `account-deleted` (checked before a guess is spent).
    * @throws {AuthConflictError} `email-owned` when another user owns the address; the code is used
-   *     by then.
+   *     by then. `key-exists` when an email-code key for the address carries no `email`.
    * @throws {RangeError} When no user has the id `userId`. No guess is spent.
    */
   proveAddress(userId: number, email: string, code: string): Promise<AuthKey[]>
