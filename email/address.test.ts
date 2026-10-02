@@ -287,6 +287,7 @@ Deno.test("parseBareAddress refuses an address over 254 characters", () => {
   const fits = `${"a".repeat(254 - domain.length - 1)}@${domain}`
   assertEquals(fits.length, 254)
   assertEquals(parseBareAddress(fits), fits)
+  assertEquals(parseBareAddress(`  ${fits}\n`), fits)
   assertEquals(parseBareAddress(`a${fits}`), null)
 })
 

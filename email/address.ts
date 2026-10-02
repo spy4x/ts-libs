@@ -250,11 +250,11 @@ const MAX_LOCAL_PART_LENGTH = 64
  */
 export function parseBareAddress(value: unknown): string | null {
   if (typeof value !== "string") return null
-  // Validate before lowercasing: a non-ASCII character such as U+212A KELVIN SIGN lowercases to
-  // an ASCII letter and would turn a look-alike into a real mailbox.
   const address = value.trim()
   if (address.length > MAX_ADDR_SPEC_LENGTH) return null
   if (address.indexOf("@") > MAX_LOCAL_PART_LENGTH) return null
+  // Validate before lowercasing: a non-ASCII character such as U+212A KELVIN SIGN lowercases to
+  // an ASCII letter and would turn a look-alike into a real mailbox.
   return isAddress(address) ? address.toLowerCase() : null
 }
 
