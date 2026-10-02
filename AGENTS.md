@@ -93,7 +93,8 @@ before the export goes.
 
 Every package carries the same version, and all of them are released together. After 1.0.0, an
 exported name, parameter or return type changes only additively, or it waits for 2.0
-(`docs/1.0-contract.md`, #77).
+(`docs/1.0-contract.md`, #77). An interface an app implements, such as `BillingProvider`, may gain
+a required member in a minor release; the PR body names the known implementers.
 
 1. One PR sets `version` in every `<dir>/deno.json` to the new version, and passes
    `deno task check:cold publish:dry`.
