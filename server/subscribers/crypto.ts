@@ -28,8 +28,13 @@ const legacyUnsubscribePayload = type({ "+": "reject" })
 export interface SubscriptionCryptoOptions {
   /** Signs every new token and keys every mark, at least 32 printable characters. */
   secret: string
-  /** Earlier secrets, tried after `secret` when a token is verified, so links mailed before a
-   * rotation keep working. Never used to sign or to key a mark. */
+  /**
+   * Earlier secrets, tried after `secret` when an unsubscribe token is verified, so links mailed
+   * before a rotation keep working. Never used to sign, to key a mark or to verify a confirm token:
+   * unsubscribe marks are keyed by `secret` alone, so a confirm link signed before the rotation
+   * could not be matched against an unsubscribe recorded before it. A pending confirm link stops
+   * working at a rotation; the visitor asks again.
+   */
   previousSecrets?: readonly string[]
   /** Clock in Unix milliseconds. Defaults to `Date.now`. */
   now?: () => number
@@ -48,8 +53,9 @@ export interface SubscriptionCrypto {
   /** A version 2 confirm token for `email`: it carries the address and its issue time, binds the
    * address as context, and expires after {@link CONFIRM_TTL_MS}. */
   confirmToken(email: string): Promise<string>
-  /** The address and issue time a confirm token carries, or why it is refused. A version 1 token
-   * (antonshubin.com's) is `"invalid"`. Never throws. */
+  /** The address and issue time a confirm token carries, or why it is refused. Only `secret`
+   * verifies it, never `previousSecrets`. A version 1 token (antonshubin.com's) is `"invalid"`.
+   * Never throws. */
   verifyConfirmToken(token: string): Promise<ConfirmTokenResult>
   /** A version 2 unsubscribe token for `email`: it carries the address's {@link subscriberKey},
    * binds the address as context and never expires. The token holds no address. */
@@ -89,14 +95,14 @@ interface Peeked {
 export function createSubscriptionCrypto(options: SubscriptionCryptoOptions): SubscriptionCrypto {
   const secrets = [options.secret, ...(options.previousSecrets ?? [])]
   const now = options.now ?? Date.now
+  const confirm = createSignedPayloadCodec({
+    secret: options.secret,
+    purpose: CONFIRM_PURPOSE,
+    version: 2,
+    schema: confirmPayload,
+    now,
+  })
   const codecs = secrets.map((secret) => ({
-    confirm: createSignedPayloadCodec({
-      secret,
-      purpose: CONFIRM_PURPOSE,
-      version: 2,
-      schema: confirmPayload,
-      now,
-    }),
     unsubscribe: createSignedPayloadCodec({
       secret,
       purpose: UNSUBSCRIBE_PURPOSE,
@@ -136,7 +142,7 @@ export function createSubscriptionCrypto(options: SubscriptionCryptoOptions): Su
   return {
     async confirmToken(email) {
       const address = normalize(email)
-      return await current.confirm.sign({ email: address, iat: now() }, {
+      return await confirm.sign({ email: address, iat: now() }, {
         context: address,
         ttlMs: CONFIRM_TTL_MS,
       })
@@ -145,15 +151,12 @@ export function createSubscriptionCrypto(options: SubscriptionCryptoOptions): Su
     async verifyConfirmToken(token) {
       const email = peek(token)?.payload.email
       if (typeof email !== "string") return { ok: false, reason: "invalid" }
-      let expired = false
-      for (const codec of codecs) {
-        const result = await codec.confirm.verify(token, { context: email })
-        if (result.ok) {
-          return { ok: true, email: result.value.email, issuedAt: result.value.iat }
-        }
-        if (result.error === SignedPayloadErrorCode.Expired) expired = true
+      const result = await confirm.verify(token, { context: email })
+      if (result.ok) return { ok: true, email: result.value.email, issuedAt: result.value.iat }
+      return {
+        ok: false,
+        reason: result.error === SignedPayloadErrorCode.Expired ? "expired" : "invalid",
       }
-      return { ok: false, reason: expired ? "expired" : "invalid" }
     },
 
     async unsubscribeToken(email) {

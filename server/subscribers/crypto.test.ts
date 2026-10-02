@@ -190,11 +190,27 @@ describe("createSubscriptionCrypto: secret rotation", () => {
     now: () => NOW,
   })
 
-  it("verifies links signed with a previous secret", async () => {
+  it("verifies unsubscribe links signed with a previous secret", async () => {
     const { lookup } = await lookupOf(old, [SITE.email])
     const unsubscribe = await old.unsubscribeToken(SITE.email)
     expect((await rotated.verifyUnsubscribeToken(unsubscribe, lookup))?.email).toBe(SITE.email)
-    expect((await rotated.verifyConfirmToken(await old.confirmToken(SITE.email))).ok).toBe(true)
+  })
+
+  it("verifies a site link signed with a previous secret", async () => {
+    const legacy = createSubscriptionCrypto({
+      secret: OTHER_SECRET,
+      previousSecrets: [SITE.secret],
+    })
+    const { lookup } = await lookupOf(legacy, [SITE.email])
+    expect((await legacy.verifyUnsubscribeToken(SITE.unsubscribeToken, lookup))?.email)
+      .toBe(SITE.email)
+  })
+
+  it("refuses a confirm link signed with a previous secret", async () => {
+    expect(await rotated.verifyConfirmToken(await old.confirmToken(SITE.email))).toEqual({
+      ok: false,
+      reason: "invalid",
+    })
   })
 
   it("signs and keys only with the current secret", async () => {
