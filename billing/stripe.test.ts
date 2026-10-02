@@ -2,6 +2,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { BillingEventType, type ParseEventResult, SubscriptionStatus } from "./provider.ts"
 import { createStripeBilling, STRIPE_API_VERSION, type StripeBillingOptions } from "./stripe.ts"
+import { formatMoney } from "@spy4x/platform/universal/money"
 
 const SECRET_KEY = "sk_test_not_a_real_key_0000"
 const WEBHOOK_SECRET = "whsec_not_a_real_secret_0000"
@@ -101,6 +102,14 @@ describe("createStripeBilling", () => {
         plans: [PLANS[0], { ...PLANS[1], priceId: PLANS[0].priceId }],
       })
     ).toThrow("mapped to two plans")
+  })
+
+  it("refuses a webhook window that is not a finite number above 0, which would accept replays", () => {
+    const base = { secretKey: SECRET_KEY, webhookSecret: WEBHOOK_SECRET, plans: PLANS }
+    for (const toleranceSeconds of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+      expect(() => createStripeBilling({ ...base, toleranceSeconds }))
+        .toThrow("toleranceSeconds must be a positive finite number")
+    }
   })
 })
 
@@ -271,6 +280,16 @@ describe("createCheckout", () => {
     })
     expect(result.ok === false && result.error.code).toBe("malformed_response")
   })
+
+  it("reports a session URL that is not https as malformed, so no customer is sent to it", async () => {
+    const { fetcher } = fakeFetch(() => json({ id: "cs_test_5", url: "http://checkout.example/x" }))
+    const result = await billing({ fetch: fetcher }).createCheckout({
+      planId: "pro",
+      successUrl: "https://app.example.com/ok",
+      cancelUrl: "https://app.example.com/no",
+    })
+    expect(result.ok === false && result.error.code).toBe("malformed_response")
+  })
 })
 
 describe("createPortalSession", () => {
@@ -370,6 +389,7 @@ describe("parseEvent: Stripe's recorded payloads", () => {
         subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
         amount: 1000,
         currency: "USD",
+        decimals: 2,
       },
     })
   })
@@ -386,6 +406,7 @@ describe("parseEvent: Stripe's recorded payloads", () => {
         subscriptionId: "sub_1MowQVLkdIwHu7ixeRlqHVzs",
         amount: 1000,
         currency: "USD",
+        decimals: 2,
       },
     })
   })
@@ -393,6 +414,17 @@ describe("parseEvent: Stripe's recorded payloads", () => {
   it("returns no event for a verified type it does not handle", async () => {
     const { body, headers } = await signedFixture("setup_intent.created")
     expect(await billing().parseEvent(body, headers)).toEqual({ ok: true, event: null })
+  })
+
+  it("returns no event for a type named like an Object.prototype member", async () => {
+    for (const eventType of ["constructor", "toString", "hasOwnProperty"]) {
+      const event = JSON.parse(new TextDecoder().decode(await fixture("invoice.paid")))
+      event.type = eventType
+      const body = new TextEncoder().encode(JSON.stringify(event))
+      const headers = { "Stripe-Signature": await stripeSignature(body) }
+      expect({ eventType, result: await billing().parseEvent(body, headers) })
+        .toEqual({ eventType, result: { ok: true, event: null } })
+    }
   })
 })
 
@@ -428,14 +460,16 @@ describe("parseEvent: mapping edge cases", () => {
   })
 
   it("refuses a subscription status it does not know rather than guessing", async () => {
-    const result = await parseEdited("customer.subscription.updated", (object) => {
-      object.status = "frozen"
-    })
-    expect(result).toEqual({
-      ok: false,
-      reason: "malformed_payload",
-      message: `customer.subscription.updated: unknown subscription status "frozen"`,
-    })
+    for (const status of ["frozen", "toString", "constructor", "__proto__"]) {
+      const result = await parseEdited("customer.subscription.updated", (object) => {
+        object.status = status
+      })
+      expect(result).toEqual({
+        ok: false,
+        reason: "malformed_payload",
+        message: `customer.subscription.updated: unknown subscription status "${status}"`,
+      })
+    }
   })
 
   it("reports a price in no plan as planId null, keeping the price ID", async () => {
@@ -460,30 +494,36 @@ describe("parseEvent: mapping edge cases", () => {
     expect(event && "subscription" in event && event.subscription.reference).toBe(null)
   })
 
-  it("converts ISK, which Stripe writes with two decimals, to whole krónur", async () => {
+  const paymentIn = async (currency: string, amount: number) => {
     const event = parsedEvent(
       await parseEdited("invoice.paid", (object) => {
-        object.currency = "isk"
-        object.amount_paid = 50000
+        object.currency = currency
+        object.amount_paid = amount
       }),
     )
-    expect(event && "payment" in event && event.payment).toMatchObject({
-      amount: 500,
-      currency: "ISK",
-    })
+    return event && "payment" in event ? event.payment : null
+  }
+
+  it("reports RSD with the two decimals Stripe writes, so formatMoney shows the real amount", async () => {
+    const payment = await paymentIn("rsd", 12345)
+    expect(payment).toMatchObject({ amount: 12345, currency: "RSD", decimals: 2 })
+    const { amount, currency, decimals } = payment!
+    expect(formatMoney(amount, currency, "en", { decimals })).toBe(formatMoney(123, "RSD") + ".45")
   })
 
-  it("keeps a two-decimal currency's amount as Stripe sends it", async () => {
-    const event = parsedEvent(
-      await parseEdited("invoice.paid", (object) => {
-        object.currency = "eur"
-        object.amount_paid = 1999
-      }),
-    )
-    expect(event && "payment" in event && event.payment).toMatchObject({
+  it("reports ISK and UGX with two decimals, as Stripe writes them although ISO gives none", async () => {
+    expect(await paymentIn("isk", 50000)).toMatchObject({ amount: 50000, decimals: 2 })
+    expect(await paymentIn("ugx", 50000)).toMatchObject({ amount: 50000, decimals: 2 })
+  })
+
+  it("reports a zero-decimal, a two-decimal and a three-decimal currency with Stripe's decimals", async () => {
+    expect(await paymentIn("jpy", 500)).toMatchObject({ amount: 500, currency: "JPY", decimals: 0 })
+    expect(await paymentIn("eur", 1999)).toMatchObject({
       amount: 1999,
       currency: "EUR",
+      decimals: 2,
     })
+    expect(await paymentIn("kwd", 12340)).toMatchObject({ amount: 12340, decimals: 3 })
   })
 
   it("reports a one-off invoice with no subscription parent as subscriptionId null", async () => {

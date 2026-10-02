@@ -3,8 +3,8 @@
  * verified webhook turns into. An adapter (Stripe today, `./stripe`) implements
  * {@link BillingProvider}; the app never sees a provider's own payload.
  *
- * Money is a whole number in the currency's smallest unit, the same unit `formatMoney` from
- * `@spy4x/platform/universal/money` formats. Nothing here stores anything: the app owns its
+ * Money is a whole number in the provider's unit for that currency, with its decimal count beside
+ * it, ready for `formatMoney` from `@spy4x/platform/universal/money`. Nothing here stores anything: the app owns its
  * database and records what an event says.
  *
  * @module
@@ -81,12 +81,17 @@ export interface Payment {
   /** The subscription the invoice bills, or `null` for a one-off invoice. */
   subscriptionId: string | null
   /**
-   * Paid amount for a success, amount due for a failure: an integer in the currency's smallest
-   * unit, as `formatMoney` expects.
+   * Paid amount for a success, amount due for a failure: an integer exactly as the provider writes
+   * it, in units of 10^-{@link decimals}. A trial's zero-amount invoice is a success with 0.
    */
   amount: number
   /** ISO 4217 code, upper case: `"EUR"`. */
   currency: string
+  /**
+   * How many decimals {@link amount} carries. Not always the ISO 4217 count: Stripe writes RSD with
+   * two where ISO gives none. Pass it on: `formatMoney(amount, currency, locale, { decimals })`.
+   */
+  decimals: number
 }
 
 /** A subscription created, changed or ended. */

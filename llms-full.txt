@@ -56,6 +56,7 @@ Deno.serve(async (request) => {
 | [`@spy4x/time`](https://jsr.io/@spy4x/time)                 | IANA time-zone arithmetic on `Intl`, plain-date math, `.ics` writer        | shared                 |
 | [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker              | server                 |
 | [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync | both halves            |
+| [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter      | server                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
 `ai/` (chat completion, JSON recovery) is planned, not built (#11, #76).
@@ -146,6 +147,8 @@ Runs on: server (Deno).
 
 ```ts
 import { BillingEventType, createStripeBilling } from "@spy4x/billing"
+import { readBoundedBody } from "@spy4x/net/bounded-body"
+import { formatMoney } from "@spy4x/platform/universal/money"
 
 const billing = createStripeBilling({
   secretKey, // read from your own config; the library never reads the environment
@@ -161,12 +164,22 @@ const result = await billing.createCheckout({
   reference: account.id, // comes back as `subscription.reference` on every event
 })
 
-// Webhook: pass the raw bytes, never a parsed body.
-const raw = new Uint8Array(await request.arrayBuffer())
+// Webhook: pass the raw bytes, never a parsed body. Stripe's events are small; cap the read.
+// (`readBoundedBody` throws PayloadTooLargeError past the cap: answer it with a 413.)
+const raw = await readBoundedBody(request, { maxBytes: 512 * 1024 })
 const parsed = await billing.parseEvent(raw, request.headers)
-if (!parsed.ok) return new Response(null, { status: 400 })
+if (!parsed.ok && parsed.reason !== "malformed_payload") {
+  return new Response(null, { status: 400 }) // not signed by Stripe with this secret: refuse it
+}
+if (!parsed.ok) {
+  // Signed by Stripe, but in a shape this package cannot read, most often because the webhook
+  // endpoint uses another API version. Log it and answer 2xx: a 4xx makes Stripe retry for days.
+  console.error(parsed.message)
+  return new Response(null, { status: 200 })
+}
 if (parsed.event?.type === BillingEventType.PaymentSucceeded) {
-  // parsed.event.payment.amount is an integer in the smallest unit: format it with formatMoney.
+  const { amount, currency, decimals } = parsed.event.payment
+  formatMoney(amount, currency, "en", { decimals })
 }
 return new Response(null, { status: 200 })
 ```
@@ -184,12 +197,18 @@ return new Response(null, { status: 200 })
 - **Webhooks.** `parseEvent` checks `Stripe-Signature` with `verifyWebhookRequest` from
   `@spy4x/integrations/webhooks` (constant-time, five-minute window) before it reads the body. A
   tampered, expired, replayed-after-the-window or unsigned delivery is refused with the verifier's
-  reason; a body that is signed but unreadable is `malformed_payload`. A verified event of a type
-  not listed below is `{ ok: true, event: null }`: answer it with a 2xx.
+  reason: answer it with a 400. A body that is signed but unreadable is `malformed_payload`: Stripe
+  did send it, so log it and answer with a 2xx, or Stripe retries it for days. A verified event of
+  a type not listed below is `{ ok: true, event: null }`: answer it with a 2xx.
 - **Duplicates.** A delivery Stripe sends twice inside the window passes twice. Record `event.id`
   and skip an ID you have seen, as Stripe's documentation advises.
-- **Money** is an integer in the ISO 4217 smallest unit, ready for `formatMoney`. Stripe writes ISK
-  and UGX with two decimals although ISO gives them none; their amounts are divided by 100.
+- **Money.** `Payment.amount` is the integer Stripe sent, and `Payment.decimals` says how many
+  decimals it carries. Format it with `formatMoney(amount, currency, locale, { decimals })`, never
+  with `currency` alone: Stripe writes RSD, AFN and a few others with two decimals where ISO 4217
+  and `Intl` give none, and ISK and UGX with two decimals always ending in `00`, so the ISO count
+  would show 100 times the amount.
+- **Trials.** A trial's first invoice is for zero, and Stripe marks it paid: it arrives as
+  `PaymentSucceeded` with `amount: 0`.
 - **API version.** Requests send `STRIPE_API_VERSION` (`2026-09-30.endive`). A webhook payload
   follows the webhook endpoint's version, so set the endpoint to the same version in Stripe.
 
@@ -1205,6 +1224,14 @@ without `=`, a second timestamp, a signature that is not 64 hex characters, more
 signatures or a header over 1024 characters rejects the delivery. All candidates are verified with
 no early exit.
 
+`signedSeparator` (default `"."`) is what joins the timestamp and the body in the signed string.
+Paddle sends `Paddle-Signature: ts=<ts>;h1=<hex>` and signs `<ts>:<body>`, so it is read with
+`{ name: "Paddle-Signature", pairSeparator: ";", timestampKey: "ts", signatureKey: "h1",
+signedSeparator: ":" }`.
+
+`toleranceSeconds` must be a finite number above 0. `NaN` or `Infinity` would accept a replay from
+any time, so such a value, 0 or a negative one makes `verifyWebhookRequest` throw a `RangeError`.
+
 **This is not a drop-in verifier for GitHub or Slack.** Neither signs `<timestamp>.<raw body>`:
 
 | provider | its actual scheme                                                                | this module                                 |
@@ -1212,6 +1239,7 @@ no early exit.
 | GitHub   | `X-Hub-Signature-256: sha256=<hmac-of-body>`, no timestamp, no replay protection | needs an adapter: sign the body alone       |
 | Slack    | `X-Slack-Signature: v0=<hmac-of-"v0:<ts>:<body>">`                               | needs an adapter: the signed string differs |
 | Stripe   | `Stripe-Signature: t=<ts>,v1=<hmac-of-"<ts>.<body>">`                            | supported with `combinedHeader`             |
+| Paddle   | `Paddle-Signature: ts=<ts>;h1=<hmac-of-"<ts>:<body>">`                           | supported with `combinedHeader`             |
 | generic  | `<ts>.<raw body>`                                                                | supported directly                          |
 
 What is worth reusing regardless of provider is the part that is easy to get wrong: signing the raw

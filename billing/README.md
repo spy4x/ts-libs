@@ -24,6 +24,8 @@ Runs on: server (Deno).
 
 ```ts
 import { BillingEventType, createStripeBilling } from "@spy4x/billing"
+import { readBoundedBody } from "@spy4x/net/bounded-body"
+import { formatMoney } from "@spy4x/platform/universal/money"
 
 const billing = createStripeBilling({
   secretKey, // read from your own config; the library never reads the environment
@@ -39,12 +41,22 @@ const result = await billing.createCheckout({
   reference: account.id, // comes back as `subscription.reference` on every event
 })
 
-// Webhook: pass the raw bytes, never a parsed body.
-const raw = new Uint8Array(await request.arrayBuffer())
+// Webhook: pass the raw bytes, never a parsed body. Stripe's events are small; cap the read.
+// (`readBoundedBody` throws PayloadTooLargeError past the cap: answer it with a 413.)
+const raw = await readBoundedBody(request, { maxBytes: 512 * 1024 })
 const parsed = await billing.parseEvent(raw, request.headers)
-if (!parsed.ok) return new Response(null, { status: 400 })
+if (!parsed.ok && parsed.reason !== "malformed_payload") {
+  return new Response(null, { status: 400 }) // not signed by Stripe with this secret: refuse it
+}
+if (!parsed.ok) {
+  // Signed by Stripe, but in a shape this package cannot read, most often because the webhook
+  // endpoint uses another API version. Log it and answer 2xx: a 4xx makes Stripe retry for days.
+  console.error(parsed.message)
+  return new Response(null, { status: 200 })
+}
 if (parsed.event?.type === BillingEventType.PaymentSucceeded) {
-  // parsed.event.payment.amount is an integer in the smallest unit: format it with formatMoney.
+  const { amount, currency, decimals } = parsed.event.payment
+  formatMoney(amount, currency, "en", { decimals })
 }
 return new Response(null, { status: 200 })
 ```
@@ -62,12 +74,18 @@ return new Response(null, { status: 200 })
 - **Webhooks.** `parseEvent` checks `Stripe-Signature` with `verifyWebhookRequest` from
   `@spy4x/integrations/webhooks` (constant-time, five-minute window) before it reads the body. A
   tampered, expired, replayed-after-the-window or unsigned delivery is refused with the verifier's
-  reason; a body that is signed but unreadable is `malformed_payload`. A verified event of a type
-  not listed below is `{ ok: true, event: null }`: answer it with a 2xx.
+  reason: answer it with a 400. A body that is signed but unreadable is `malformed_payload`: Stripe
+  did send it, so log it and answer with a 2xx, or Stripe retries it for days. A verified event of
+  a type not listed below is `{ ok: true, event: null }`: answer it with a 2xx.
 - **Duplicates.** A delivery Stripe sends twice inside the window passes twice. Record `event.id`
   and skip an ID you have seen, as Stripe's documentation advises.
-- **Money** is an integer in the ISO 4217 smallest unit, ready for `formatMoney`. Stripe writes ISK
-  and UGX with two decimals although ISO gives them none; their amounts are divided by 100.
+- **Money.** `Payment.amount` is the integer Stripe sent, and `Payment.decimals` says how many
+  decimals it carries. Format it with `formatMoney(amount, currency, locale, { decimals })`, never
+  with `currency` alone: Stripe writes RSD, AFN and a few others with two decimals where ISO 4217
+  and `Intl` give none, and ISK and UGX with two decimals always ending in `00`, so the ISO count
+  would show 100 times the amount.
+- **Trials.** A trial's first invoice is for zero, and Stripe marks it paid: it arrives as
+  `PaymentSucceeded` with `amount: 0`.
 - **API version.** Requests send `STRIPE_API_VERSION` (`2026-09-30.endive`). A webhook payload
   follows the webhook endpoint's version, so set the endpoint to the same version in Stripe.
 

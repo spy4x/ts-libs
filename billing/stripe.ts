@@ -63,7 +63,10 @@ export interface StripeBillingOptions {
   requestTimeoutMs?: number
   /** Millisecond clock for the webhook window. Defaults to `Date.now`. */
   clock?: () => number
-  /** Accepted webhook age and future skew, in seconds. Default 300, as Stripe's libraries use. */
+  /**
+   * Accepted webhook age and future skew, in seconds. Default 300, as Stripe's libraries use. Must
+   * be a finite number above 0, or `createStripeBilling` throws.
+   */
   toleranceSeconds?: number
 }
 
@@ -74,11 +77,48 @@ const MAX_RESPONSE_BYTES = 256 * 1024
 const REFERENCE_KEY = "reference"
 
 /**
- * Currencies Stripe writes with two decimals although ISO 4217 gives them none, so `500` is 5 ISK.
- * Divided by 100 here, so every amount an event reports is in the ISO smallest unit that
- * `formatMoney` expects. See Stripe's "Supported currencies", "Special cases".
+ * Currencies Stripe writes with no decimals ("Supported currencies", "Zero-decimal currencies").
+ * Every other currency is two-decimal unless {@link STRIPE_THREE_DECIMAL} names it.
  */
-const STRIPE_TWO_DECIMAL_ZERO_DECIMAL = new Set(["ISK", "UGX"])
+const STRIPE_ZERO_DECIMAL = new Set([
+  "BIF",
+  "CLP",
+  "DJF",
+  "GNF",
+  "JPY",
+  "KMF",
+  "KRW",
+  "MGA",
+  "PYG",
+  "RWF",
+  "UGX",
+  "VND",
+  "VUV",
+  "XAF",
+  "XOF",
+  "XPF",
+])
+
+/**
+ * Stripe's special cases: zero-decimal currencies it still writes with two decimals, always ending
+ * in `00`, so `500` is 5 ISK. Checked before {@link STRIPE_ZERO_DECIMAL}, which lists UGX too.
+ */
+const STRIPE_TWO_DECIMAL_SPECIAL = new Set(["ISK", "UGX"])
+
+/** Currencies Stripe writes with three decimals. */
+const STRIPE_THREE_DECIMAL = new Set(["BHD", "JOD", "KWD", "OMR", "TND"])
+
+/**
+ * How many decimals Stripe's amount in `currency` carries. Not always the ISO 4217 count: Stripe
+ * writes RSD or AFN with two decimals where ISO and `Intl` give none, and ISK and UGX with two
+ * where ISO gives none.
+ */
+const stripeDecimals = (currency: string): number => {
+  if (STRIPE_TWO_DECIMAL_SPECIAL.has(currency)) return 2
+  if (STRIPE_ZERO_DECIMAL.has(currency)) return 0
+  if (STRIPE_THREE_DECIMAL.has(currency)) return 3
+  return 2
+}
 
 const checkoutRequestSchema = type({
   planId: "string > 0",
@@ -97,7 +137,12 @@ const portalRequestSchema = type({
   returnUrl: "string.url",
 })
 
-const sessionResponseSchema = type({ id: "string > 0", url: "string.url" })
+const sessionResponseSchema = type({
+  id: "string > 0",
+  url: type("string.url").narrow((url, ctx) =>
+    url.startsWith("https://") || ctx.mustBe("an https URL")
+  ),
+})
 
 const eventSchema = type({
   id: "string > 0",
@@ -134,7 +179,7 @@ const stripeInvoiceSchema = type({
 })
 
 /** Stripe's subscription statuses, each mapped to one {@link SubscriptionStatus}. */
-const STATUS: Record<string, SubscriptionStatus> = {
+const STATUS = new Map<string, SubscriptionStatus>(Object.entries({
   trialing: SubscriptionStatus.Trialing,
   active: SubscriptionStatus.Active,
   past_due: SubscriptionStatus.PastDue,
@@ -145,18 +190,18 @@ const STATUS: Record<string, SubscriptionStatus> = {
   incomplete_expired: SubscriptionStatus.Canceled,
   incomplete: SubscriptionStatus.Incomplete,
   paused: SubscriptionStatus.Paused,
-}
+}))
 
-const SUBSCRIPTION_EVENTS: Record<string, BillingEventType> = {
+const SUBSCRIPTION_EVENTS = new Map<string, BillingEventType>(Object.entries({
   "customer.subscription.created": BillingEventType.SubscriptionCreated,
   "customer.subscription.updated": BillingEventType.SubscriptionUpdated,
   "customer.subscription.deleted": BillingEventType.SubscriptionCanceled,
-}
+}))
 
-const PAYMENT_EVENTS: Record<string, BillingEventType> = {
+const PAYMENT_EVENTS = new Map<string, BillingEventType>(Object.entries({
   "invoice.paid": BillingEventType.PaymentSucceeded,
   "invoice.payment_failed": BillingEventType.PaymentFailed,
-}
+}))
 
 const fromSeconds = (seconds: number | null | undefined): Date | null =>
   seconds === null || seconds === undefined ? null : new Date(seconds * 1000)
@@ -230,6 +275,12 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
   if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
     throw new Error("createStripeBilling: requestTimeoutMs must be a positive number")
   }
+  const toleranceSeconds = options.toleranceSeconds
+  if (
+    toleranceSeconds !== undefined && (!Number.isFinite(toleranceSeconds) || toleranceSeconds <= 0)
+  ) {
+    throw new Error("createStripeBilling: toleranceSeconds must be a positive finite number")
+  }
 
   const priceForPlan = new Map(plans.map((plan) => [plan.planId, plan.priceId]))
   const planForPrice = new Map(plans.map((plan) => [plan.priceId, plan.planId]))
@@ -302,7 +353,7 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
   const toSubscription = (object: object): Result<Subscription, string> => {
     const stripe = stripeSubscriptionSchema(object)
     if (stripe instanceof type.errors) return { ok: false, error: stripe.summary }
-    const status = STATUS[stripe.status]
+    const status = STATUS.get(stripe.status)
     if (status === undefined) {
       return { ok: false, error: `unknown subscription status ${JSON.stringify(stripe.status)}` }
     }
@@ -365,7 +416,7 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
         secret: webhookSecret,
         combinedHeader: STRIPE_SIGNATURE_HEADER,
         clock: options.clock,
-        toleranceSeconds: options.toleranceSeconds,
+        toleranceSeconds,
       })
       if (!verified.ok) return verified
 
@@ -384,7 +435,7 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
       if (event instanceof type.errors) return malformed(`event: ${event.summary}`)
       const occurredAt = new Date(event.created * 1000)
 
-      const subscriptionType = SUBSCRIPTION_EVENTS[event.type]
+      const subscriptionType = SUBSCRIPTION_EVENTS.get(event.type)
       if (subscriptionType !== undefined) {
         const subscription = toSubscription(event.data.object)
         if (!subscription.ok) return malformed(`${event.type}: ${subscription.error}`)
@@ -400,21 +451,14 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
         return { ok: true, event: parsed }
       }
 
-      const paymentType = PAYMENT_EVENTS[event.type]
+      const paymentType = PAYMENT_EVENTS.get(event.type)
       if (paymentType !== undefined) {
         const invoice = stripeInvoiceSchema(event.data.object)
         if (invoice instanceof type.errors) return malformed(`${event.type}: ${invoice.summary}`)
         const currency = invoice.currency.toUpperCase()
-        const stripeAmount = paymentType === BillingEventType.PaymentSucceeded
+        const amount = paymentType === BillingEventType.PaymentSucceeded
           ? invoice.amount_paid
           : invoice.amount_due
-        let amount = stripeAmount
-        if (STRIPE_TWO_DECIMAL_ZERO_DECIMAL.has(currency)) {
-          if (stripeAmount % 100 !== 0) {
-            return malformed(`${event.type}: ${currency} amount ${stripeAmount} is not whole`)
-          }
-          amount = stripeAmount / 100
-        }
         const parent = invoice.parent
         const subscriptionId = parent?.type === "subscription_details"
           ? parent.subscription_details?.subscription ?? null
@@ -429,6 +473,7 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
             subscriptionId,
             amount,
             currency,
+            decimals: stripeDecimals(currency),
           },
         }
         return { ok: true, event: parsed }
