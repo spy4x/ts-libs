@@ -294,3 +294,8 @@ Deno.test("parseBareAddress refuses a local part over 64 characters", () => {
   assertEquals(parseBareAddress(`${"a".repeat(64)}@example.com`), `${"a".repeat(64)}@example.com`)
   assertEquals(parseBareAddress(`${"a".repeat(65)}@example.com`), null)
 })
+
+Deno.test("parseBareAddress refuses a non-ASCII character that lowercases to ASCII", () => {
+  // U+212A KELVIN SIGN lowercases to "k", so lowercasing first would register kevin@example.com.
+  assertEquals(parseBareAddress("\u212Aevin@example.com"), null)
+})
