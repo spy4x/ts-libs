@@ -204,8 +204,8 @@ return new Response(null, { status: 200 })
   and skip an ID you have seen, as Stripe's documentation advises.
 - **Money.** `Payment.amount` is the integer Stripe sent, and `Payment.decimals` says how many
   decimals it carries. Format it with `formatMoney(amount, currency, locale, { decimals })`, never
-  with `currency` alone: Stripe writes RSD, AFN and a few others with two decimals where ISO 4217
-  and `Intl` give none, and ISK and UGX with two decimals always ending in `00`, so the ISO count
+  with `currency` alone: Stripe writes RSD, AFN and a few others with two decimals where `Intl`
+  gives none, and ISK and UGX with two decimals always ending in `00`, so the ISO count
   would show 100 times the amount.
 - **Trials.** A trial's first invoice is for zero, and Stripe marks it paid: it arrives as
   `PaymentSucceeded` with `amount: 0`.

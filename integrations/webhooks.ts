@@ -71,7 +71,8 @@ export interface CombinedSignatureHeader {
   /** Key of a signature pair, a 64-character hex HMAC: `"v1"` for Stripe. */
   signatureKey: string
   /**
-   * What joins the timestamp and the body in the signed string: `<timestamp><signedSeparator><body>`.
+   * What joins the timestamp and the body in the signed string:
+   * `<timestamp><signedSeparator><body>`.
    * Default `"."`, as Stripe signs. Paddle signs `<ts>:<body>`, so it needs `":"`.
    */
   signedSeparator?: string

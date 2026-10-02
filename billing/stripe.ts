@@ -109,9 +109,9 @@ const STRIPE_TWO_DECIMAL_SPECIAL = new Set(["ISK", "UGX"])
 const STRIPE_THREE_DECIMAL = new Set(["BHD", "JOD", "KWD", "OMR", "TND"])
 
 /**
- * How many decimals Stripe's amount in `currency` carries. Not always the ISO 4217 count: Stripe
- * writes RSD or AFN with two decimals where ISO and `Intl` give none, and ISK and UGX with two
- * where ISO gives none.
+ * How many decimals Stripe's amount in `currency` carries. Not always the `Intl` count: Stripe
+ * writes RSD or AFN with two decimals where `Intl` gives none, and ISK and UGX with two where ISO
+ * 4217 and `Intl` give none.
  */
 const stripeDecimals = (currency: string): number => {
   if (STRIPE_TWO_DECIMAL_SPECIAL.has(currency)) return 2

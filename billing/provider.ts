@@ -4,8 +4,8 @@
  * {@link BillingProvider}; the app never sees a provider's own payload.
  *
  * Money is a whole number in the provider's unit for that currency, with its decimal count beside
- * it, ready for `formatMoney` from `@spy4x/platform/universal/money`. Nothing here stores anything: the app owns its
- * database and records what an event says.
+ * it, ready for `formatMoney` from `@spy4x/platform/universal/money`. Nothing here stores
+ * anything: the app owns its database and records what an event says.
  *
  * @module
  */
@@ -88,8 +88,8 @@ export interface Payment {
   /** ISO 4217 code, upper case: `"EUR"`. */
   currency: string
   /**
-   * How many decimals {@link amount} carries. Not always the ISO 4217 count: Stripe writes RSD with
-   * two where ISO gives none. Pass it on: `formatMoney(amount, currency, locale, { decimals })`.
+   * How many decimals {@link amount} carries. Not always the `Intl` count: Stripe writes RSD with
+   * two where `Intl` gives none. Pass it on: `formatMoney(amount, currency, locale, { decimals })`.
    */
   decimals: number
 }
@@ -204,7 +204,9 @@ export interface BillingError {
   status: number | null
 }
 
-/** One payment provider behind one interface. An adapter such as `createStripeBilling` builds it. */
+/**
+ * One payment provider behind one interface. An adapter such as `createStripeBilling` builds it.
+ */
 export interface BillingProvider {
   /** Starts a hosted subscription checkout for one plan. */
   createCheckout(request: CheckoutRequest): Promise<Result<CheckoutSession, BillingError>>
