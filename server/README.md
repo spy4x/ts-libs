@@ -58,7 +58,8 @@ Runs on: server (Deno).
 | `@spy4x/server/lockout/memory-store` | The in-memory lockout store, held to the same contract as the Postgres one, for tests |
 | `@spy4x/server/lockout/postgres`     | The Postgres lockout store over a table and columns the caller names                  |
 | `@spy4x/server/subscribers`          | Double opt-in mailing lists: signed links, subscriber store port, subscribe flows     |
-| `@spy4x/server/subscribers/memory`   | The in-memory subscriber store, held to the shared store contract                     |
+| `@spy4x/server/subscribers/memory`   | The in-memory subscriber store and send log, held to the shared contracts             |
+| `@spy4x/server/subscribers/file`     | The file send log, which reads antonshubin.com's `newsletter-log.json`                |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -2061,8 +2062,9 @@ subjects as strings, as a `TEXT` column does: `1` and `"1"` are one subject.
 `createSubscriptionCrypto`, `CONFIRM_TTL_MS`, the `SubscriberStore` port, the flows
 `requestSubscription`, `previewConfirmation`, `confirmSubscription`, `previewUnsubscribe` and
 `unsubscribe`, `unsubscribeTokenFrom`, `UNSUBSCRIBE_FORM_MAX_BYTES` and `TOKEN_PAGE_HEADERS`;
-`createMemorySubscriberStore` in `server/subscribers/memory`. Ported from spy4x/antonshubin.com
-(#369).
+`sendIssue` and the `SendLog` port; `createMemorySubscriberStore` and `createMemorySendLog` in
+`server/subscribers/memory`, `createFileSendLog` in `server/subscribers/file`. Ported from
+spy4x/antonshubin.com (#369).
 
 A double opt-in mailing list. A visitor enters an address, gets a confirm link, and joins the list
 only after clicking it. Every mail after that carries an unsubscribe link that holds no address.
@@ -2164,6 +2166,50 @@ the switch; they expire within three days anyway.
 `add` and `remove` for one address must not overlap, or a replayed confirm link can slip in between
 the mark and the row: a Postgres adapter takes a row lock or an advisory lock on the address.
 
+**Sending an issue.** `sendIssue` mails one issue to the list, one mail each, and remembers who got
+it in a `SendLog`. Render the letter once with `renderLetter`, leave `UNSUBSCRIBE_PLACEHOLDER` where
+the link goes, and pass it with the rows of `store.list()`.
+
+```ts
+import { sendIssue } from "@spy4x/server/subscribers"
+import { createFileSendLog } from "@spy4x/server/subscribers/file"
+
+const result = await sendIssue({
+  issue: post.slug, // the id the log remembers, part of every sent mark
+  subject: post.title,
+  letter, // from renderLetter(), once
+  subscribers: await deps.store.list(),
+  crypto: deps.crypto,
+  unsubscribeLink: deps.links.unsubscribe,
+  sender,
+}, createFileSendLog({ path: `data/newsletter-log.json` }))
+// { status: "sent", sent, failed, skipped } | "already-sent" | "in-progress" | "no-subscribers"
+```
+
+- The first run records the audience, the marks of everyone on the list then. A rerun after a
+  partial failure mails only the audience members the log does not list as reached. A subscriber
+  who joined later never gets an old issue. A run after a clean one answers `already-sent` and mails
+  nobody.
+- A mark goes into the log only after the relay accepted that mail, so a crash costs at most the
+  one mail in flight. A log write that fails stops the run and throws: carrying on could mail
+  someone twice.
+- The run holds the log's send lock, and a second call answers `in-progress` instead of waiting.
+  The file log locks `<path>.lock`, held by the OS, so a crashed run frees it, and the lock covers
+  the whole file: one issue sends at a time.
+- Each link is minted with the row's stored key, so it survives a rotation. Marks are read under the
+  current and every previous secret, and written under the current one, so a rotation between runs
+  does not mail anyone twice.
+- A row that is not a bare address, a link that cannot be built and a send that throws each count
+  as one failure, and the run goes on. The log names a row by its number, and a relay error is
+  redacted before it is logged. The send log holds marks, never addresses.
+- An empty list answers `no-subscribers` and records nothing: it usually means the store could not
+  be read.
+
+`describeSendLogContract` in `send-log-contract.test.ts` is the contract every adapter runs. The
+file log reads and writes antonshubin.com's `newsletter-log.json` unchanged. A file that does not
+parse, or is not an array, is left alone and every call throws, so a corrupt log stops a send
+instead of allowing a second one.
+
 **Fixes applied at extraction time.**
 
 - The site's relay-error redaction matched the address exactly as stored, so a mail server that
@@ -2177,3 +2223,6 @@ the mark and the row: a Postgres adapter takes a row lock or an advisory lock on
   time.
 - Many clients could each send a few subscribe requests for one address and flood its inbox; the
   per-recipient limit stops that.
+- The site's send loop logged every recipient's address, once per mail sent and once per failure
+  (`lib/newsletter.ts:89` and `:93`). `sendIssue` logs the row number, and a relay error has the
+  address redacted in any letter case.
