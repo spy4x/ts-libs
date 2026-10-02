@@ -57,6 +57,8 @@ Runs on: server (Deno).
 | `@spy4x/server/lockout`              | Escalating lockout for guessed secrets: policy, begin/fail/refund flow, store port    |
 | `@spy4x/server/lockout/memory-store` | The in-memory lockout store, held to the same contract as the Postgres one, for tests |
 | `@spy4x/server/lockout/postgres`     | The Postgres lockout store over a table and columns the caller names                  |
+| `@spy4x/server/subscribers`          | Double opt-in mailing lists: signed links, subscriber store port, subscribe flows     |
+| `@spy4x/server/subscribers/memory`   | The in-memory subscriber store, held to the shared store contract                     |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -2053,3 +2055,125 @@ subjects as strings, as a `TEXT` column does: `1` and `"1"` are one subject.
 - The source's year test called a guesser who tries again the moment each lock ends "the worst
   case". It is not: stopping after 12 guesses and waiting out the quiet reset gets about 576
   guesses a year, not 376. The test here tries every burst length from 1 to 40.
+
+## `server/subscribers`
+
+`createSubscriptionCrypto`, `CONFIRM_TTL_MS`, the `SubscriberStore` port, the flows
+`requestSubscription`, `previewConfirmation`, `confirmSubscription`, `previewUnsubscribe` and
+`unsubscribe`, `unsubscribeTokenFrom`, `UNSUBSCRIBE_FORM_MAX_BYTES` and `TOKEN_PAGE_HEADERS`;
+`createMemorySubscriberStore` in `server/subscribers/memory`. Ported from spy4x/antonshubin.com
+(#369).
+
+A double opt-in mailing list. A visitor enters an address, gets a confirm link, and joins the list
+only after clicking it. Every mail after that carries an unsubscribe link that holds no address.
+The app keeps its wording, layout, pages and routes: the flows hand it a `SubscriberMail` (`confirm`
+or `welcome`, the address and the link) and the app builds and sends the mail.
+
+```ts
+import {
+  confirmSubscription,
+  createSubscriptionCrypto,
+  type FlowDeps,
+  requestSubscription,
+  TOKEN_PAGE_HEADERS,
+  unsubscribe,
+  unsubscribeTokenFrom,
+} from "@spy4x/server/subscribers"
+import { createMemorySubscriberStore } from "@spy4x/server/subscribers/memory"
+import { createMemoryRateLimiter } from "@spy4x/platform/rate-limit/memory"
+
+const deps: FlowDeps = {
+  crypto: createSubscriptionCrypto({ secret: requiredEnv("SUBSCRIBERS_SECRET") }),
+  store: createMemorySubscriberStore(),
+  links: {
+    confirm: (token) => `${baseUrl}/subscribe/confirm?token=${encodeURIComponent(token)}`,
+    unsubscribe: (token) => `${baseUrl}/unsubscribe?token=${encodeURIComponent(token)}`,
+  },
+  sendMail: (mail) => sender.send(buildMail(mail)), // the app's wording; a SendResult is fine
+  limits: {
+    client: createMemoryRateLimiter({ limit: 3, windowMs: 3600_000 }),
+    recipient: createMemoryRateLimiter({ limit: 3, windowMs: 86_400_000 }),
+  },
+}
+
+// POST /api/subscribe
+const outcome = await requestSubscription(body.email, deps, { clientKey })
+return new Response(null, { status: outcome.status })
+
+// POST /unsubscribe: the on-page form and a mail client's one-click POST alike
+const token = await unsubscribeTokenFrom(request)
+const result = token ? await unsubscribe(token, deps, { clientKey }) : { state: "not-recognised" }
+return render(result, { headers: TOKEN_PAGE_HEADERS })
+```
+
+**Links.** A confirm link (version 2) carries the address and its issue time, binds the address as
+the signed context, and expires after three days. An unsubscribe link (version 2) carries the
+row's 16-byte keyed `subscriberKey` and binds the address as context, so it costs one store lookup
+and one HMAC, and the URL holds no address. Both are `@spy4x/platform/signed-payload` tokens. One
+secret serves every purpose, kept apart by purpose labels and HMAC message prefixes.
+
+**Rotating the secret.** Put the new secret in `secret` and the old one first in `previousSecrets`.
+
+- Unsubscribe links mailed before the rotation keep working: they verify under `previousSecrets`.
+- A stored subscriber key is an opaque lookup id and keeps the secret it was made under. When you
+  mail a listed subscriber, mint the link with the row's key, `unsubscribeToken(row.email, row.key)`,
+  so a link minted after the rotation still finds a row keyed under the old secret. Without the
+  key argument the token carries the key under the new secret, which only rows added since the
+  rotation have. The welcome mail of `confirmSubscription` is such a row.
+- A row with no key (antonshubin.com's rows) cannot be found by any version 2 link. Backfill each
+  such row's key once, with `subscriberKey(row.email)`, before mailing it a version 2 link. `add`
+  answering `"known"` never fills a missing key.
+- A pending confirm link stops working: unsubscribe marks are keyed by the current secret alone, so
+  an old confirm link could not be matched against an unsubscribe recorded before the rotation. The
+  visitor asks for a new one.
+- `sentMarks(email, issue)` returns the sent mark under every secret, current first. A send log
+  records the first and skips a recipient that has any of them, so an issue resumed after a
+  rotation does not mail anyone twice.
+
+**Pages that open a link only preview.** `previewConfirmation` and `previewUnsubscribe` read the
+token and change nothing, so a mail scanner that follows every link subscribes and unsubscribes no
+one. The page asks for a click, and that POST calls `confirmSubscription` or `unsubscribe`. A
+one-click unsubscribe POST (RFC 8058) carries the token on the query string with an unrelated
+body; `unsubscribeTokenFrom` reads the query first, then a form body capped at 4 KiB. Serve every
+such page with `TOKEN_PAGE_HEADERS`: `no-store` keeps a page that shows an address out of caches,
+and `strict-origin` keeps the token out of the `Referer` other sites receive.
+
+**The replay rule.** A confirm link works for three days and can be clicked again and again. Without
+a record, confirm, unsubscribe, confirm again would put the address back. `remove` records each
+unsubscribe as a keyed mark, never the address, and `add` answers `"replay"` for a link issued at or
+before it. Records older than three days are pruned, since every link they could refuse has expired.
+
+**What the answers reveal.** `requestSubscription` neither reads nor writes the store, so a listed
+address and a new one cost the same and get the same 200 and the same mail. Over the per-recipient
+limit it still answers 200 and sends nothing. Every log line is free of addresses: a relay's or a
+store's error is redacted in any letter case before it is logged, and only its name and message are
+logged, never its stack.
+
+**Rate limits.** `limits.client` counts every subscribe request and every unsubscribe request that
+carries a version 1 link, the only one that scans the list. Version 2 unsubscribe links are never
+limited: a mail provider's one-click POSTs share a few addresses. `limits.recipient` is keyed on the
+`subscriberKey`, so many clients cannot flood one inbox with confirm mails.
+
+**Compatibility with antonshubin.com.** Under the same secret, the site's unsubscribe links
+(version 1) verify by a scan of the list, and its unsubscribe and sent marks match byte for byte, so
+its data files and the links in old mails keep working. Its version 1 confirm links stop working at
+the switch; they expire within three days anyway.
+
+**Stores.** `SubscriberStore` offers one method per intent, so each adapter can make it atomic.
+`describeSubscriberStoreContract` in `store-contract.test.ts` is the contract every adapter runs.
+`add` and `remove` for one address must not overlap, or a replayed confirm link can slip in between
+the mark and the row: a Postgres adapter takes a row lock or an advisory lock on the address.
+
+**Fixes applied at extraction time.**
+
+- The site's relay-error redaction matched the address exactly as stored, so a mail server that
+  echoed `JANE@EXAMPLE.COM` for `jane@example.com` put the address in the log. Redaction is now
+  case-insensitive, and store and link-building errors are redacted too.
+- Every unsubscribe GET checked the token against each subscriber in turn, one HMAC per address,
+  for anyone holding any string. Version 2 links cost one lookup, and the version 1 scan is
+  rate-limited per client.
+- The site derived a confirm link's issue time from its expiry minus the current TTL, so shortening
+  the TTL made older links look newer and let a replay through. Version 2 links carry their issue
+  time.
+- Many clients could each send a few subscribe requests for one address and flood its inbox; the
+  per-recipient limit stops that.

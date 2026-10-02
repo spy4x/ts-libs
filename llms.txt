@@ -2011,6 +2011,49 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `signS3Request` (function), `jsr:@spy4x/server/storage`: Build a SigV4 query-string presigned URL for one S3 request.
 - `storageEnvNames` (function), `jsr:@spy4x/server/storage`: Every variable this package reads, for a startup configuration check.
 
+### `jsr:@spy4x/server/subscribers`
+
+- `AddSubscriberInput` (interface), `jsr:@spy4x/server/subscribers`: The input of SubscriberStore.add.
+- `AddSubscriberResult` (type), `jsr:@spy4x/server/subscribers`: What SubscriberStore.add did: stored the address, found it already there, or refused a confirm link issued before the address last unsubscribed.
+- `CONFIRM_TTL_MS` (constant), `jsr:@spy4x/server/subscribers`: How long a confirm link works: three days.
+- `ConfirmOutcome` (type), `jsr:@spy4x/server/subscribers`: What confirming led to.
+- `ConfirmPreview` (type), `jsr:@spy4x/server/subscribers`: What a confirm link leads to, before anything is stored.
+- `ConfirmTokenResult` (type), `jsr:@spy4x/server/subscribers`: What SubscriptionCrypto.verifyConfirmToken found.
+- `FlowDeps` (interface), `jsr:@spy4x/server/subscribers`: Everything the flows need.
+- `FlowRequest` (interface), `jsr:@spy4x/server/subscribers`: What the app knows about the request.
+- `MailOutcome` (type), `jsr:@spy4x/server/subscribers`: What a mail callback may answer: nothing (it throws on failure) or a sender's result, such as `@spy4x/email`'s `SendResult`.
+- `RemoveSubscriberInput` (interface), `jsr:@spy4x/server/subscribers`: The input of SubscriberStore.remove.
+- `SubscribeRequestOutcome` (interface), `jsr:@spy4x/server/subscribers`: The answer to a subscribe request.
+- `Subscriber` (interface), `jsr:@spy4x/server/subscribers`: One address on a mailing list.
+- `SubscriberLimits` (interface), `jsr:@spy4x/server/subscribers`: Optional rate limits, any `@spy4x/platform/rate-limit` limiter.
+- `SubscriberLog` (interface), `jsr:@spy4x/server/subscribers`: Where the flows write.
+- `SubscriberMail` (type), `jsr:@spy4x/server/subscribers`: A mail the flows ask the app to send.
+- `SubscriberStore` (interface), `jsr:@spy4x/server/subscribers`: Where a mailing list lives.
+- `SubscriptionCrypto` (interface), `jsr:@spy4x/server/subscribers`: Tokens and keyed hashes for one mailing list.
+- `SubscriptionCryptoOptions` (interface), `jsr:@spy4x/server/subscribers`: Options of createSubscriptionCrypto.
+- `TOKEN_PAGE_HEADERS` (constant), `jsr:@spy4x/server/subscribers`: Headers for every page that a token opens or a token form posts to.
+- `UNSUBSCRIBE_FORM_MAX_BYTES` (constant), `jsr:@spy4x/server/subscribers`: The form-body cap unsubscribeTokenFrom applies by default: a token is a few hundred bytes, so 4 KiB fits any real form and nothing more.
+- `UnsubscribeLookup` (type), `jsr:@spy4x/server/subscribers`: The lookups SubscriptionCrypto.verifyUnsubscribeToken needs.
+- `UnsubscribeOutcome` (type), `jsr:@spy4x/server/subscribers`: What unsubscribing led to.
+- `UnsubscribePreview` (type), `jsr:@spy4x/server/subscribers`: What an unsubscribe link leads to, before anything is removed.
+- `UnsubscribeTokenOptions` (interface), `jsr:@spy4x/server/subscribers`: Options of unsubscribeTokenFrom.
+- `confirmSubscription` (function), `jsr:@spy4x/server/subscribers`: Adds the address a confirm token carries, then asks for the welcome mail.
+- `createSubscriptionCrypto` (function), `jsr:@spy4x/server/subscribers`: Creates the tokens and keyed hashes of one mailing list over one secret.
+- `previewConfirmation` (function), `jsr:@spy4x/server/subscribers`: Checks a confirm token without storing anything: the page a link opens shows this and asks for a click, so a mail scanner that follows links subscribes no one.
+- `previewUnsubscribe` (function), `jsr:@spy4x/server/subscribers`: Finds whom an unsubscribe token names without removing anything: the page a link opens shows this and asks for a click.
+- `requestSubscription` (function), `jsr:@spy4x/server/subscribers`: Mails a confirm link to the address in `field` (a form's raw email field).
+- `unsubscribe` (function), `jsr:@spy4x/server/subscribers`: Removes the address an unsubscribe token names and records the unsubscribe, so a confirm link issued earlier cannot bring it back.
+- `unsubscribeTokenFrom` (function), `jsr:@spy4x/server/subscribers`: The unsubscribe token of a request: the `token` query parameter first, as a mail client's one-click POST (RFC 8058) keeps it on the URL with an unrelated body, then the `token` field of a form body read under `maxBytes`.
+
+### `jsr:@spy4x/server/subscribers/memory`
+
+- `AddSubscriberInput` (interface), `jsr:@spy4x/server/subscribers/memory`: The input of SubscriberStore.add.
+- `AddSubscriberResult` (type), `jsr:@spy4x/server/subscribers/memory`: What SubscriberStore.add did: stored the address, found it already there, or refused a confirm link issued before the address last unsubscribed.
+- `RemoveSubscriberInput` (interface), `jsr:@spy4x/server/subscribers/memory`: The input of SubscriberStore.remove.
+- `Subscriber` (interface), `jsr:@spy4x/server/subscribers/memory`: One address on a mailing list.
+- `SubscriberStore` (interface), `jsr:@spy4x/server/subscribers/memory`: Where a mailing list lives.
+- `createMemorySubscriberStore` (function), `jsr:@spy4x/server/subscribers/memory`: A SubscriberStore held in this process, for tests and single-process prototypes.
+
 ### `jsr:@spy4x/server/user-secrets`
 
 - `MAX_API_KEY_LENGTH` (constant), `jsr:@spy4x/server/user-secrets`: Longest accepted api key.
@@ -2169,4 +2212,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 ae57d5b1d5e7e79355e8789727a4b17bc92222847c58543a8a7aabeeb852d473 -->
+<!-- export surface: sha256 adbe0d3aa4b6de7148f29ec9aa072df695e90d45f7426277dfec3e08fe692f98 -->
