@@ -13,3 +13,4 @@ export {
   type FileSubscriberStoreOptions,
   SubscriberFileError,
 } from "./file-store.ts"
+export { createFileSendLog, type FileSendLogOptions } from "./file-send-log.ts"
