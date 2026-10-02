@@ -233,13 +233,19 @@ const SMUGGLED = [
   "https://example.com/ x",
   "\u0001https://example.com/u",
   "https://example.com/\u007fx",
+  "https://example.com/u\u2028Unsubscribe: https://evil.example",
+  "https://example.com/u\u2029x",
+  "https://example.com/u\u0085x",
+  "https://example.com/u\u00a0x",
+  "https://example.com/u\u200bx",
+  "https://example.com/u\n",
 ]
 
-Deno.test("refuses a button link with whitespace or a control character", () => {
+Deno.test("refuses a button link with a character outside printable ASCII", () => {
   for (const bad of SMUGGLED) assertThrows(() => button(bad, "Go"), TypeError)
 })
 
-Deno.test("refuses an image link or src with whitespace or a control character", () => {
+Deno.test("refuses an image link or src with a character outside printable ASCII", () => {
   for (const bad of SMUGGLED) {
     assertThrows(
       () => linkedImage({ src: "https://example.com/a.png", alt: "", href: bad }),
@@ -252,7 +258,7 @@ Deno.test("refuses an image link or src with whitespace or a control character",
   }
 })
 
-Deno.test("refuses a footer link with whitespace or a control character", () => {
+Deno.test("refuses a footer link with a character outside printable ASCII", () => {
   for (const bad of SMUGGLED) {
     assertThrows(
       () =>
@@ -262,7 +268,7 @@ Deno.test("refuses a footer link with whitespace or a control character", () => 
   }
 })
 
-Deno.test("refuses an unsubscribe link with whitespace or a control character", () => {
+Deno.test("refuses an unsubscribe link with a character outside printable ASCII", () => {
   for (const bad of SMUGGLED) {
     assertThrows(
       () => renderLetter({ blocks: [], footer: { reason: "r", unsubscribeLink: bad } }),
@@ -271,7 +277,7 @@ Deno.test("refuses an unsubscribe link with whitespace or a control character", 
   }
 })
 
-Deno.test("refuses a fillUnsubscribe link with whitespace or a control character", () => {
+Deno.test("refuses a fillUnsubscribe link with a character outside printable ASCII", () => {
   const letter = renderLetter({
     blocks: [],
     footer: { reason: "r", unsubscribeLink: UNSUBSCRIBE_PLACEHOLDER },

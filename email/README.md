@@ -289,11 +289,13 @@ const postscript = (label: string, href: string): LetterBlock => ({
 })
 ```
 
-Block `html` is trusted as pre-escaped, as `htmlWrap` treats its body. Every value the shell
+`escapeHtml` does not check a link's scheme: a hand-built block that takes a link from outside
+must check it is `https:` itself, or a `javascript:` link renders. Block `html` is trusted as pre-escaped, as `htmlWrap` treats its body. Every value the shell
 interpolates itself is escaped. A link, whether in a button, an image, the footer or
 `fillUnsubscribe`, throws a `TypeError` unless it is an `https:`, `http:` or `mailto:` URL
-(an image `src`: `https:` or `http:`) with no whitespace or control character: `URL` ignores a
-newline that the plain-text part would print as a second line. `fillUnsubscribe` gives output
+(an image `src`: `https:` or `http:`) made only of printable ASCII (`!` to `~`): `URL` ignores a
+newline or a Unicode line separator that the plain-text part would print as a second line. Pass an
+international address as `new URL(link).href`, which is always ASCII. `fillUnsubscribe` gives output
 byte-identical to rendering with that link directly. `{{unsubscribe-link}}` written by a caller
 inside block text is also replaced, so keep that literal out of content.
 

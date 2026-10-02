@@ -21,8 +21,8 @@
  *
  * Every block is an HTML and a plain-text rendering of the same content. Every
  * caller value reaches the HTML through {@link escapeHtml}, links included. A link
- * whose scheme is not `https:`, `http:` or `mailto:`, or that contains whitespace or
- * a control character, throws a `TypeError` instead of rendering: escaping keeps
+ * whose scheme is not `https:`, `http:` or `mailto:`, or that holds any character outside
+ * printable ASCII, throws a `TypeError` instead of rendering: escaping keeps
  * `javascript:alert(1)` a well-formed link, and `URL` ignores a newline that the
  * plain-text part would print as a second line.
  *
@@ -97,11 +97,16 @@ export interface LetterInput {
 
 const LINKABLE_SCHEMES = ["https:", "http:", "mailto:"]
 const IMAGE_SCHEMES = ["https:", "http:"]
-/** Whitespace and control characters, which `URL` strips but the letter would print raw. */
+/**
+ * Any character outside printable ASCII. `URL` strips or encodes them, but the letter would print
+ * the raw string, and a newline or a Unicode line separator (U+2028, U+2029, U+0085) there shows a
+ * second line in the plain-text part. `new URL(link).href` is always printable ASCII, so an
+ * international domain or path passes once serialised that way.
+ */
 function hasUnsafeLinkChar(value: string): boolean {
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i)
-    if (code <= 0x20 || code === 0x7f) return true
+    if (code <= 0x20 || code >= 0x7f) return true
   }
   return false
 }
@@ -112,7 +117,9 @@ function hasUnsafeLinkChar(value: string): boolean {
  */
 function assertLink(value: string, name: string, schemes = LINKABLE_SCHEMES): void {
   if (hasUnsafeLinkChar(value)) {
-    throw new TypeError(`${name} must not contain whitespace or control characters`)
+    throw new TypeError(
+      `${name} must contain only printable ASCII; serialise it with new URL().href`,
+    )
   }
   let parsed: URL
   try {
@@ -173,7 +180,8 @@ export function button(
  * column below that. It has no plain-text part, so `alt` is not repeated there.
  *
  * @throws {TypeError} when `src` is not an `https:` or `http:` URL, `href` is not an `https:`,
- * `http:` or `mailto:` URL, either contains whitespace or a control character, or `width` is not a finite positive number.
+ * `http:` or `mailto:` URL, either holds a character outside printable ASCII, or `width` is not
+ * a finite positive number.
  */
 export function linkedImage(
   { src, alt, href, width = 600 }: { src: string; alt: string; href: string; width?: number },
