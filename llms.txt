@@ -611,8 +611,16 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `HotkeyEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that matchesHotkey reads.
 - `MakeStorageOptions` (interface), `jsr:@spy4x/platform/browser`: Options for makeStorage.
 - `ObjectUrlAdapter` (interface), `jsr:@spy4x/platform/browser`: Object-URL surface, injected so a test never allocates a real blob URL.
+- `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser`: Options of installOfflineShell.
 - `PlatformNavigator` (interface), `jsr:@spy4x/platform/browser`: The part of `navigator` that isApplePlatform reads.
 - `ReportHeightOptions` (interface), `jsr:@spy4x/platform/browser`: Options for reportHeight.
+- `SKIP_WAITING_MESSAGE` (constant), `jsr:@spy4x/platform/browser`: The message `SWUpdater` posts to a waiting worker; installOfflineShell acts on it.
+- `ShellCache` (interface), `jsr:@spy4x/platform/browser`: Cache surface this module needs; a real `Cache` fits.
+- `ShellCacheStorage` (interface), `jsr:@spy4x/platform/browser`: Cache storage surface; a real `CacheStorage` fits.
+- `ShellEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of an `ExtendableEvent` this module uses.
+- `ShellFetchEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of a `FetchEvent` this module uses.
+- `ShellMessageEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of a `message` event this module uses.
+- `ShellScope` (interface), `jsr:@spy4x/platform/browser`: The parts of the service-worker global scope this module uses; `self` fits.
 - `StorageLike` (type), `jsr:@spy4x/platform/browser`: The subset of the DOM `Storage` interface this module uses.
 - `StorageRead` (type), `jsr:@spy4x/platform/browser`: Outcome of a write or a read, so a caller can tell "absent" from "present but rejected".
 - `TimerAdapter` (interface), `jsr:@spy4x/platform/browser`: Timer surface, injected so a test never waits on a real delay.
@@ -624,8 +632,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `downloadResponseAsFile` (function), `jsr:@spy4x/platform/browser`: Save a response body to disk under `filename`.
 - `fillEmptyTimeZoneField` (function), `jsr:@spy4x/platform/browser`: Put the visitor's time zone into a form field, only when the field is still empty — a zone the page already filled in (from a link's `tz` parameter, say) is what the visitor saw on screen, and overwriting it would submit a different one.
 - `getCookie` (function), `jsr:@spy4x/platform/browser`: Look up `name` in `doc.cookie`, decoding its value.
+- `installOfflineShell` (function), `jsr:@spy4x/platform/browser`: Register the install, activate, fetch and message listeners that keep the app shell offline.
 - `isApplePlatform` (function), `jsr:@spy4x/platform/browser`: Whether the browser runs on macOS, iOS or iPadOS, where `mod` means Command.
 - `isTypingTarget` (function), `jsr:@spy4x/platform/browser`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
+- `isUnderPath` (function), `jsr:@spy4x/platform/browser`: Whether `pathname` is `base` or below it (`/api` matches `/api` and `/api/x`, not `/apix`).
+- `linkedPaths` (function), `jsr:@spy4x/platform/browser`: Same-origin paths named by `src="..."` and `href="..."` in `html`.
 - `makeStorage` (function), `jsr:@spy4x/platform/browser`: Bind a StorageLike to one key.
 - `matchesHotkey` (function), `jsr:@spy4x/platform/browser`: Whether a key press is the combination.
 - `memoryStorage` (function), `jsr:@spy4x/platform/browser`: A `Map`-backed StorageLike.
@@ -682,6 +693,20 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `isTypingTarget` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
 - `matchesHotkey` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether a key press is the combination.
 - `parseHotkey` (function), `jsr:@spy4x/platform/browser/hotkeys`: Parse a combination such as `"mod+k"`, `"shift+n"`, `"?"` or `"ctrl+alt+delete"`.
+
+### `jsr:@spy4x/platform/browser/offline-shell`
+
+- `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser/offline-shell`: Options of installOfflineShell.
+- `SKIP_WAITING_MESSAGE` (constant), `jsr:@spy4x/platform/browser/offline-shell`: The message `SWUpdater` posts to a waiting worker; installOfflineShell acts on it.
+- `ShellCache` (interface), `jsr:@spy4x/platform/browser/offline-shell`: Cache surface this module needs; a real `Cache` fits.
+- `ShellCacheStorage` (interface), `jsr:@spy4x/platform/browser/offline-shell`: Cache storage surface; a real `CacheStorage` fits.
+- `ShellEvent` (interface), `jsr:@spy4x/platform/browser/offline-shell`: The parts of an `ExtendableEvent` this module uses.
+- `ShellFetchEvent` (interface), `jsr:@spy4x/platform/browser/offline-shell`: The parts of a `FetchEvent` this module uses.
+- `ShellMessageEvent` (interface), `jsr:@spy4x/platform/browser/offline-shell`: The parts of a `message` event this module uses.
+- `ShellScope` (interface), `jsr:@spy4x/platform/browser/offline-shell`: The parts of the service-worker global scope this module uses; `self` fits.
+- `installOfflineShell` (function), `jsr:@spy4x/platform/browser/offline-shell`: Register the install, activate, fetch and message listeners that keep the app shell offline.
+- `isUnderPath` (function), `jsr:@spy4x/platform/browser/offline-shell`: Whether `pathname` is `base` or below it (`/api` matches `/api` and `/api/x`, not `/apix`).
+- `linkedPaths` (function), `jsr:@spy4x/platform/browser/offline-shell`: Same-origin paths named by `src="..."` and `href="..."` in `html`.
 
 ### `jsr:@spy4x/platform/browser/storage`
 
@@ -2273,4 +2298,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 4fb4a359490000ad9a0887acef244cb0c2c9e0961c9091c8e8914e24c3cc86eb -->
+<!-- export surface: sha256 3394dbb57185d4adde4d0497c94605d14c72cfaf2d52eee1db38f88aa1b76b8a -->

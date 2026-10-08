@@ -11,6 +11,7 @@
     "./browser/embed": "./browser/embed.ts",
     "./browser/geolocation": "./browser/geolocation.ts",
     "./browser/hotkeys": "./browser/hotkeys.ts",
+    "./browser/offline-shell": "./browser/offline-shell.ts",
     "./browser/storage": "./browser/storage.ts",
     "./cache": "./cache/mod.ts",
     "./cqrs": "./cqrs/mod.ts",
