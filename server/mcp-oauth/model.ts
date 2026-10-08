@@ -83,14 +83,21 @@ export interface OAuthStore {
    * and set on every later one. `undefined` when there is no such code.
    */
   consumeCode(key: string): Promise<CodeRecord | undefined>
-  /** Save a new access token. */
-  saveAccessToken(key: string, record: AccessTokenRecord): Promise<void>
+  /**
+   * Save a new access token, unless its grant is revoked. Returns `false`, saving nothing, when it
+   * is. The check and the save must be atomic with {@link OAuthStore.revokeGrant}.
+   */
+  saveAccessToken(key: string, record: AccessTokenRecord): Promise<boolean>
   /** Read an access token, or `undefined` when there is none. */
   findAccessToken(key: string): Promise<AccessTokenRecord | undefined>
-  /** Save a new refresh token. */
-  saveRefreshToken(key: string, record: RefreshTokenRecord): Promise<void>
+  /** Same contract as {@link OAuthStore.saveAccessToken}, for refresh tokens. */
+  saveRefreshToken(key: string, record: RefreshTokenRecord): Promise<boolean>
   /** Same contract as {@link OAuthStore.consumeCode}, for refresh tokens. */
   consumeRefreshToken(key: string): Promise<RefreshTokenRecord | undefined>
-  /** Delete every access and refresh token of a grant. */
-  revokeGrant(grantId: string): Promise<void>
+  /**
+   * Delete every access and refresh token of a grant, and refuse to save new ones for it until
+   * `until` (epoch milliseconds). The refusal closes a race: a request that redeemed the code or
+   * refresh token first may still be about to save its tokens when the replay revokes the grant.
+   */
+  revokeGrant(grantId: string, until: number): Promise<void>
 }

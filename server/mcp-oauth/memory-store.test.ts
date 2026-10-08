@@ -64,10 +64,24 @@ describe("MemoryOAuthStore", () => {
     await store.saveAccessToken("a1", { ...refresh })
     await store.saveRefreshToken("r1", refresh)
     await store.saveAccessToken("a2", { ...refresh, grantId: "g2" })
-    await store.revokeGrant("g1")
+    await store.revokeGrant("g1", 3_000)
     expect(await store.findAccessToken("a1")).toBeUndefined()
     expect(await store.consumeRefreshToken("r1")).toBeUndefined()
     expect(await store.findAccessToken("a2")).toBeDefined()
+  })
+
+  it("refuses to save tokens of a revoked grant until the revocation lapses", async () => {
+    let now = 1_000
+    const store = new MemoryOAuthStore({ clock: { now: () => now } })
+    await store.revokeGrant("g1", 3_000)
+    expect(await store.saveAccessToken("a1", { ...refresh })).toBe(false)
+    expect(await store.saveRefreshToken("r1", refresh)).toBe(false)
+    expect(await store.findAccessToken("a1")).toBeUndefined()
+    expect(await store.consumeRefreshToken("r1")).toBeUndefined()
+    expect(await store.saveAccessToken("a2", { ...refresh, grantId: "g2" })).toBe(true)
+    now = 3_000
+    expect(await store.saveAccessToken("a1", { ...refresh })).toBe(true)
+    expect(await store.findAccessToken("a1")).toBeDefined()
   })
 
   it("drops expired records when a new one is saved", async () => {

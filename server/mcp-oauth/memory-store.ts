@@ -27,7 +27,8 @@ interface Expiring {
  * Keeps every record in a `Map`. JavaScript runs each method to its first `await` without
  * interruption and these methods never await, so `consumeCode`, `consumeRefreshToken` and
  * `takePending` are atomic. Records are copied in and out, so a caller cannot edit a stored one.
- * Expired records are dropped whenever a new one is saved.
+ * Expired records are dropped whenever a new one is saved. A revoked grant id is kept until its
+ * `until`, so a token saved late for it is refused.
  */
 export class MemoryOAuthStore implements OAuthStore {
   readonly #clock: Clock
@@ -35,6 +36,8 @@ export class MemoryOAuthStore implements OAuthStore {
   readonly #codes = new Map<string, CodeRecord>()
   readonly #access = new Map<string, AccessTokenRecord>()
   readonly #refresh = new Map<string, RefreshTokenRecord>()
+  /** Revoked grant ids, each mapped to the epoch milliseconds its refusal lasts until. */
+  readonly #revoked = new Map<string, number>()
 
   constructor(options: MemoryOAuthStoreOptions = {}) {
     this.#clock = options.clock ?? systemClock
@@ -58,8 +61,8 @@ export class MemoryOAuthStore implements OAuthStore {
     return Promise.resolve(this.#consume(this.#codes, key))
   }
 
-  saveAccessToken(key: string, record: AccessTokenRecord): Promise<void> {
-    return this.#save(this.#access, key, record)
+  saveAccessToken(key: string, record: AccessTokenRecord): Promise<boolean> {
+    return this.#saveToken(this.#access, key, record)
   }
 
   findAccessToken(key: string): Promise<AccessTokenRecord | undefined> {
@@ -67,15 +70,16 @@ export class MemoryOAuthStore implements OAuthStore {
     return Promise.resolve(record && structuredClone(record))
   }
 
-  saveRefreshToken(key: string, record: RefreshTokenRecord): Promise<void> {
-    return this.#save(this.#refresh, key, record)
+  saveRefreshToken(key: string, record: RefreshTokenRecord): Promise<boolean> {
+    return this.#saveToken(this.#refresh, key, record)
   }
 
   consumeRefreshToken(key: string): Promise<RefreshTokenRecord | undefined> {
     return Promise.resolve(this.#consume(this.#refresh, key))
   }
 
-  revokeGrant(grantId: string): Promise<void> {
+  revokeGrant(grantId: string, until: number): Promise<void> {
+    this.#revoked.set(grantId, Math.max(until, this.#revoked.get(grantId) ?? 0))
     for (const map of [this.#access, this.#refresh]) {
       for (const [key, record] of map) {
         if (record.grantId === grantId) map.delete(key)
@@ -92,6 +96,22 @@ export class MemoryOAuthStore implements OAuthStore {
     return before
   }
 
+  #isRevoked(grantId: string): boolean {
+    const until = this.#revoked.get(grantId)
+    return until !== undefined && until > this.#clock.now()
+  }
+
+  #saveToken<T extends Expiring & { grantId: string }>(
+    map: Map<string, T>,
+    key: string,
+    record: T,
+  ): Promise<boolean> {
+    if (this.#isRevoked(record.grantId)) return Promise.resolve(false)
+    this.#prune()
+    map.set(key, structuredClone(record))
+    return Promise.resolve(true)
+  }
+
   #save<T extends Expiring>(map: Map<string, T>, key: string, record: T): Promise<void> {
     this.#prune()
     map.set(key, structuredClone(record))
@@ -104,6 +124,9 @@ export class MemoryOAuthStore implements OAuthStore {
       for (const [key, record] of map as Map<string, Expiring>) {
         if (record.expiresAt <= now) map.delete(key)
       }
+    }
+    for (const [grantId, until] of this.#revoked) {
+      if (until <= now) this.#revoked.delete(grantId)
     }
   }
 }

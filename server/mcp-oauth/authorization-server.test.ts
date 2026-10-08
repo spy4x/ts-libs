@@ -175,6 +175,30 @@ function setup(overrides: Partial<AuthorizationServerOptions> = {}) {
   }
 }
 
+/**
+ * After a replay raced the first redemption, no token may work: every response is refused, or the
+ * tokens it carries are refused by the guard and by the token endpoint.
+ */
+async function expectNoWorkingToken(t: ReturnType<typeof setup>, responses: Response[]) {
+  let refused = 0
+  for (const response of responses) {
+    const body = await response.json()
+    if (response.status !== 200) {
+      expect(body.error).toBe("invalid_grant")
+      refused++
+      continue
+    }
+    expect((await t.callMcp(body.access_token)).status).toBe(401)
+    const refresh = await t.token({
+      grant_type: "refresh_token",
+      refresh_token: body.refresh_token,
+      client_id: CLAUDE,
+    })
+    expect((await refresh.json()).error).toBe("invalid_grant")
+  }
+  expect(refused).toBeGreaterThanOrEqual(1)
+}
+
 describe("createAuthorizationServer", () => {
   it("completes a full flow: consent, code, tokens, a guarded call and a refresh", async () => {
     const t = setup()
@@ -430,6 +454,23 @@ describe("createAuthorizationServer", () => {
       expect((await refresh.json()).error).toBe("invalid_grant")
     })
 
+    it("for a code redeemed twice at once, leaving no working token", async () => {
+      const t = setup()
+      const code = (await t.approve()).searchParams.get("code")!
+      const responses = await Promise.all([t.redeem(code), t.redeem(code)])
+      await expectNoWorkingToken(t, responses)
+    })
+
+    it("when the store refuses the tokens because the grant was revoked", async () => {
+      const store = new MemoryOAuthStore({ clock: { now: () => 1_000_000 } })
+      store.saveRefreshToken = () => Promise.resolve(false)
+      const t = setup({ store })
+      const code = (await t.approve()).searchParams.get("code")!
+      const response = await t.redeem(code)
+      expect(response.status).toBe(400)
+      expect((await response.json()).error).toBe("invalid_grant")
+    })
+
     it("for an expired code", async () => {
       const t = setup()
       const code = (await t.approve()).searchParams.get("code")!
@@ -536,6 +577,18 @@ describe("createAuthorizationServer", () => {
       expect((await t.callMcp(second.access_token)).status).toBe(401)
       const next = await t.token({ ...body, refresh_token: second.refresh_token })
       expect((await next.json()).error).toBe("invalid_grant")
+    })
+
+    it("for a refresh token redeemed twice at once, leaving no working token", async () => {
+      const t = setup()
+      const first = await signedIn(t)
+      const body = {
+        grant_type: "refresh_token",
+        refresh_token: first.refresh_token,
+        client_id: CLAUDE,
+      }
+      const responses = await Promise.all([t.token(body), t.token(body)])
+      await expectNoWorkingToken(t, responses)
     })
 
     it("for an expired refresh token", async () => {

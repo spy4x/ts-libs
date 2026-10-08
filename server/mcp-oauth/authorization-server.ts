@@ -240,6 +240,8 @@ export function createAuthorizationServer(
   const codeTtl = positive(options.codeTtlMs, 60_000, "codeTtlMs")
   const consentTtl = positive(options.consentTtlMs, 10 * 60_000, "consentTtlMs")
   const clock = options.clock ?? systemClock
+  /** How long a revoked grant refuses new tokens: past the life of any token it could still get. */
+  const revokeTtl = Math.max(accessTtl, refreshTtl)
   const store = options.store
   const clients = options.clients ?? createClientMetadataFetcher({ clock })
   const renderConsent = options.renderConsent ?? defaultConsentPage
@@ -300,14 +302,15 @@ export function createAuthorizationServer(
     }
     const accessToken = randomBase64Url(SECRET_BYTES)
     const refreshToken = randomBase64Url(SECRET_BYTES)
-    await store.saveAccessToken(await sha256Hex(accessToken), {
-      ...fields,
-      expiresAt: now + accessTtl,
-    })
-    await store.saveRefreshToken(await sha256Hex(refreshToken), {
+    const savedRefresh = await store.saveRefreshToken(await sha256Hex(refreshToken), {
       ...fields,
       expiresAt: now + refreshTtl,
     })
+    const savedAccess = savedRefresh && await store.saveAccessToken(await sha256Hex(accessToken), {
+      ...fields,
+      expiresAt: now + accessTtl,
+    })
+    if (!savedAccess) return tokenError(c, "invalid_grant", "the grant was revoked")
     c.header("Cache-Control", "no-store")
     c.header("Pragma", "no-cache")
     return c.json({
@@ -472,7 +475,7 @@ export function createAuthorizationServer(
       const record = await store.consumeCode(await sha256Hex(code))
       if (record === undefined) return tokenError(c, "invalid_grant", "unknown code")
       if (record.usedAt !== undefined) {
-        await store.revokeGrant(record.grantId)
+        await store.revokeGrant(record.grantId, clock.now() + revokeTtl)
         return tokenError(c, "invalid_grant", "code already used")
       }
       if (record.expiresAt <= clock.now()) return tokenError(c, "invalid_grant", "code expired")
@@ -496,7 +499,7 @@ export function createAuthorizationServer(
       const record = await store.consumeRefreshToken(await sha256Hex(refreshToken))
       if (record === undefined) return tokenError(c, "invalid_grant", "unknown refresh token")
       if (record.usedAt !== undefined) {
-        await store.revokeGrant(record.grantId)
+        await store.revokeGrant(record.grantId, clock.now() + revokeTtl)
         return tokenError(c, "invalid_grant", "refresh token already used")
       }
       if (record.expiresAt <= clock.now()) {
