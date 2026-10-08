@@ -8,8 +8,10 @@
  *   (default `/api`). Data belongs to the app's own offline store, never to this cache.
  * - Files under `/assets/` (a build names them by content hash) are answered cache-first.
  * - Everything else is network-first, so a deploy shows at once; the cache answers only when the
- *   network fails. Only complete (status 200), unredirected responses are stored. A page load (`navigate`) is stored and served
- *   under one key (default `/`), because every route of a single-page app is the same document.
+ *   network fails. Only complete (status 200), unredirected responses are stored. A page load
+ *   (`navigate`) that answers `text/html` is stored and served under one key (default `/`),
+ *   because every route of a single-page app is the same document; any other page load (an image
+ *   opened directly) is not stored.
  *
  * The worker's whole file is then the lines below. A browser cannot load a `.ts` URL or a `jsr:`
  * specifier, so bundle the worker (esbuild, Vite's worker build) before serving it:
@@ -180,7 +182,8 @@ export function installOfflineShell(scope: ShellScope, options: OfflineShellOpti
         const response = await fetchWithRetry(request)
         // A failed cache write must not fail a response that arrived.
         // Only a whole answer (200) is kept: a 206 slice would later answer a request for the file.
-        if (response.status === 200) {
+        // Only HTML may become the offline page: opening an icon's URL must not replace the app.
+        if (response.status === 200 && (key !== navigationKey || isHtml(response))) {
           event.waitUntil(cache.put(key, response.clone()).catch(() => {}))
         }
         return response
@@ -196,4 +199,8 @@ export function installOfflineShell(scope: ShellScope, options: OfflineShellOpti
     const data = event.data as { action?: unknown } | null | undefined
     if (data?.action === SKIP_WAITING_MESSAGE.action) void scope.skipWaiting()
   })
+}
+
+function isHtml(response: Response): boolean {
+  return response.headers.get("content-type")?.toLowerCase().startsWith("text/html") ?? false
 }
