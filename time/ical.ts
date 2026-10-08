@@ -561,7 +561,7 @@ export function writeDate(
   options: IcalWriteDateOptions = {},
 ): IcalResult<IcalProperty> {
   const upper = name.toUpperCase()
-  if (!Object.values(IcalDateKind).includes(value.kind)) {
+  if (typeof value.kind !== `number` || !Object.values(IcalDateKind).includes(value.kind)) {
     return fail(IcalErrorCode.InvalidValue, `unknown date kind ${JSON.stringify(value.kind)}`)
   }
   const existing = getProperty(component, upper)
