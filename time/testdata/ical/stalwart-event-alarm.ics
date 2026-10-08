@@ -1,0 +1,31 @@
+BEGIN:VCALENDAR
+PRODID:-//caldav-mcp//EN
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Saigon:20260710T140000
+UID:bc8ad589-98ff-493b-9c30-1f6d67e3168a
+DESCRIPTION:Cneo ilomyzuhb. Oxh vafpckzlng xid blxtpqq yq dvvczxxu — pjaho
+ xwqai bsye cmpvjmbi xf 07-95 mkamj. Uqa'kg xtsnsso dk izkvydsb cz udssx bu
+ f sdopf.\n\nZekay scvz:\n- Gkhlseh ykuw ~$8732 hx Rz Xqlh. Yl ksxhogytor. 
+ Zle qtikhjon = bntooyfmfo.\n- Rav $22t dhpvgubboj = 7.8 gzzly tmkvubj.\n- 
+ Ewg oyu'g lzcx $554q/iylh. Uci kuhs $79-01h zaky xxbe smmvxcar.\n\nRczm ln
+ coemcwz:\n- Wvmajyxsex ojg grjej peof (Udspe\, Ukqrbn FALULH)\n- Cqjzie sg
+ ndwogm uq yoc-gdmetuwpw qhjgvqjt — PhaqUuhi iyuwgjksjt OMP\n- Zgokax eys
+ di\, haz sygitthp cjpsku. Qxnkk ykq fy svn kmnactz.\n\nKcqk ssw lvk jlmdgt
+ sr UWJV ULZQ teme fxunxm qqglrxp vmhtrl?
+DTSTAMP:20260709T195800Z
+DTEND;TZID=Asia/Saigon:20260710T161500
+SUMMARY:CAUZUCM: ygicb-ajgr mflm\, suoxzd toyrt vsdh xow coft
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+CLASS:PUBLIC
+SHOW-WITHOUT-TIME:FALSE
+BEGIN:VALARM
+TRIGGER;RELATED=START:-PT10M
+ACTION:DISPLAY
+JSPROP;JSPTR=acknowledged:null
+JSPROP;JSPTR=relatedTo:null
+JSID:alert1
+END:VALARM
+END:VEVENT
+END:VCALENDAR
