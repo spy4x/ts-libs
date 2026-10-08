@@ -6015,8 +6015,11 @@ const next = nextOccurrence(parsed.output, { start: due, after: new Date("2026-0
   completion and the series stops at 1. "Repeat after completion" is stored only on the phone and
   never appears in the VTODO, so it cannot be honoured.
 - **Month ends.** A plain monthly rule (no `BYDAY`, no `BYMONTH`, no `BYMONTHDAY` or one positive
-  day) moves the start by `INTERVAL` months and uses the month's last day when the day is missing,
-  as Tasks.org does: 31 January is followed by 28 February. Every other rule skips a missing day
+  day) is anchored on that day, or on the start's day, and uses the month's last day when a month
+  is shorter than the anchor, as Tasks.org does: 31 January is followed by 28 February. Like
+  Tasks.org, when the month `INTERVAL` months after the start is too short for the anchor, its
+  last day comes next even if the anchor is still ahead in the start's month: `BYMONTHDAY=31` from
+  15 January gives 28 February, not 31 January. Every other rule skips a missing day
   (RFC 5545 section 3.3.10): yearly on 29 February waits for the next leap year, and
   `BYMONTHDAY=30,31` jumps from January to March.
 - **Refused for Tasks.org parity.** `BYDAY` with DAILY or YEARLY, because Tasks.org deletes it
