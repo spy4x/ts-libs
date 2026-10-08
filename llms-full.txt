@@ -5880,8 +5880,8 @@ if (!result.success) throw new Error(result.error.message) // root is unchanged
 
 A patch changes the patched fields plus DTSTAMP, LAST-MODIFIED and SEQUENCE; `null` clears a field.
 Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
-task keeps its RRULE and reads `repeats: true`; moving a series to its next occurrence is not done
-here. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
+task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
+`completeSeries: true`, and moving a series to its next occurrence is not done here. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
 
 ## Not in scope
 
