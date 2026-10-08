@@ -211,7 +211,10 @@ function ok<T>(output: T): IcalResult<T> {
   return { success: true, output, error: null }
 }
 
-/** The component an app edits: `root` itself, or the first child of that name that is not an override. */
+/**
+ * The component an app edits: `root` itself, or the first child of that name that is not an override.
+ * `name` must be upper-case (`VTODO`); component names in the document match in any case.
+ */
 export function findMaster(root: IcalComponent, name: string): IcalComponent | undefined {
   if (root.name.toUpperCase() === name) return root
   return root.components.find((component) =>
