@@ -47,6 +47,72 @@ describe("createClientMetadataFetcher", () => {
     })
   })
 
+  it("refuses a document not served as JSON, and accepts a +json type", async () => {
+    const html = createClientMetadataFetcher({
+      fetcher: fetcherFor(() =>
+        new Response(JSON.stringify(goodDocument), { headers: { "content-type": "text/html" } })
+      ),
+      resolver: publicResolver,
+    })
+    expect(await html.load(CLIENT_ID)).toBeUndefined()
+    const typed = createClientMetadataFetcher({
+      fetcher: fetcherFor(() =>
+        new Response(JSON.stringify(goodDocument), {
+          headers: { "content-type": "application/oauth-client+json; charset=utf-8" },
+        })
+      ),
+      resolver: publicResolver,
+    })
+    expect((await typed.load(CLIENT_ID))?.clientName).toBe("Claude")
+  })
+
+  it("strips invisible characters from client_name and caps its length", async () => {
+    const load = (clientName: string) =>
+      createClientMetadataFetcher({
+        fetcher: fetcherFor(() => json({ ...goodDocument, client_name: clientName })),
+        resolver: publicResolver,
+      }).load(CLIENT_ID)
+    expect((await load("Cla\u202Eude\u200B\n"))?.clientName).toBe("Claude")
+    const long = (await load("x".repeat(500)))?.clientName ?? ""
+    expect(Array.from(long)).toHaveLength(100)
+    expect(long.endsWith("…")).toBe(true)
+    expect((await load("\u200B\u202E"))?.clientName).toBe("claude.example")
+  })
+
+  it("gives up on a body that drips past the time budget, and cancels it", async () => {
+    let cancelled = false
+    let timer: ReturnType<typeof setInterval> | undefined
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const bytes = new TextEncoder().encode(JSON.stringify(goodDocument))
+        let i = 0
+        timer = setInterval(() => {
+          if (i < bytes.length) controller.enqueue(bytes.subarray(i, ++i))
+          else controller.close()
+        }, 20)
+      },
+      cancel() {
+        cancelled = true
+        clearInterval(timer)
+      },
+    })
+    const source = createClientMetadataFetcher({
+      fetcher: fetcherFor(() =>
+        new Response(body, { headers: { "content-type": "application/json" } })
+      ),
+      resolver: publicResolver,
+      timeoutMs: 200,
+    })
+    const started = Date.now()
+    try {
+      expect(await source.load(CLIENT_ID)).toBeUndefined()
+      expect(Date.now() - started).toBeLessThan(1_000)
+      expect(cancelled).toBe(true)
+    } finally {
+      clearInterval(timer)
+    }
+  })
+
   it("refuses a document whose client_id is not its own URL", async () => {
     const fetcher = fetcherFor(() => json({ ...goodDocument, client_id: "https://evil.example/c" }))
     const source = createClientMetadataFetcher({ fetcher, resolver: publicResolver })
@@ -91,7 +157,9 @@ describe("createClientMetadataFetcher", () => {
     })
     expect(await missing.load(CLIENT_ID)).toBeUndefined()
     const garbage = createClientMetadataFetcher({
-      fetcher: fetcherFor(() => new Response("<html>")),
+      fetcher: fetcherFor(() =>
+        new Response("<html>", { headers: { "content-type": "application/json" } })
+      ),
       resolver: publicResolver,
     })
     expect(await garbage.load(CLIENT_ID)).toBeUndefined()

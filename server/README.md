@@ -2323,9 +2323,17 @@ two hosts share one store: one process serving both, or a shared `OAuthStore`.
   `/.well-known/oauth-protected-resource/<path>`, and its `401` carries
   `WWW-Authenticate: Bearer resource_metadata="…"`.
 - **Clients.** A `client_id` is an HTTPS URL. The server fetches the JSON document there through
-  the SSRF guard of `@spy4x/net/safe-fetch` (no redirects, 5 KiB cap, cached 10 minutes) and
-  accepts it only when its `client_id` equals the URL and it asks for no client secret.
-  `trustedHosts` narrows which hosts may serve one.
+  the SSRF guard of `@spy4x/net/safe-fetch` (no redirects, 5 KiB cap, 5 seconds for the whole
+  fetch including the body, cached 10 minutes) and accepts it only when it is served as JSON, its
+  `client_id` equals the URL, and it asks for no client secret. The self-asserted `client_name` is
+  shown without control or format characters and cut to 100 characters. `trustedHosts` narrows
+  which hosts may serve one.
+- **Run with `--deny-net`.** The SSRF guard checks the address a host resolves to, but `fetch`
+  resolves it again, so a DNS-rebinding host can pass the check and then point at a private
+  address. Deno's `--deny-net` is checked at connect time and closes that gap: start the server
+  with the flag `denyNetFlag()` from `@spy4x/net/url-policy` returns. It denies loopback and the
+  private ranges, so the process cannot reach a database or service on those addresses either;
+  see `net/README.md` for what it covers and what it cannot.
 - **Redirects.** The redirect URI must be on the server's allowlist and in the client's own
   document. The default allowlist is `https://claude.ai/api/mcp/auth_callback` plus
   `http://localhost/callback` and `http://127.0.0.1/callback`, which match on any port for Claude
