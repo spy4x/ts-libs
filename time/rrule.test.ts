@@ -666,15 +666,17 @@ Deno.test(`nextOccurrence follows Tasks.org's chains of completions around month
   ])
 })
 
-Deno.test(`nextOccurrence answers a huge COUNT from a distant start in under a second`, () => {
+Deno.test(`nextOccurrence walks a huge COUNT from year 1 without zone maths per day`, () => {
+  // About 740,000 days are counted. With zone maths on every day this takes minutes; without, a
+  // second or two. The 10-second bound leaves room for a loaded CI machine.
   const began = performance.now()
   const result = nextOccurrence(rule(`FREQ=DAILY;COUNT=1000000`), {
-    start: berlin(`1700-01-01`),
+    start: berlin(`0001-01-01`),
     after: new Date(`2026-10-08T12:00:00Z`),
   })
   assert(result.success)
   assertEquals(label(result.output), `2026-10-09T09:00:00[Europe/Berlin]`)
-  assert(performance.now() - began < 1000, `took ${performance.now() - began} ms`)
+  assert(performance.now() - began < 10_000, `took ${performance.now() - began} ms`)
 })
 
 Deno.test(`nextOccurrence reads a UTC start against a far-east zone without skipping a day`, () => {

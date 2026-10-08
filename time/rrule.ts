@@ -330,6 +330,7 @@ function parseIsoDate(date: string): number {
 // ---- candidate days of one period --------------------------------------------------------------
 
 function dayMatches(rule: Rrule, days: number): boolean {
+  if (!rule.byMonth.length && !rule.byMonthDay.length) return true
   const { year, month, day } = fromDays(days)
   const length = daysInMonth(year, month)
   if (rule.byMonth.length && !rule.byMonth.includes(month)) return false
