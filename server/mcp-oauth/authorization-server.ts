@@ -36,7 +36,10 @@ export const AUTHORIZE_PATH = "/authorize"
 /** Path of the token endpoint. */
 export const TOKEN_PATH = "/token"
 
-/** The scope a client asks for to get a refresh token. Always accepted; refresh tokens always issued. */
+/**
+ * The scope some clients ask for to get a refresh token. Accepted when asked for, but not listed in
+ * `scopes_supported`: refresh tokens are always issued, so asking for it changes nothing.
+ */
 export const OFFLINE_ACCESS_SCOPE = "offline_access"
 
 const SECRET_BYTES = 32
@@ -170,11 +173,11 @@ async function s256(verifier: string): Promise<string> {
 export function defaultConsentPage(details: ConsentDetails): string {
   const e = escapeHtml
   const scopes = details.scopes.length > 0 ? details.scopes.join(" ") : "(none)"
-  const warning = details.loopbackRedirect
-    ? `<p><strong>The code goes to a program on this computer (${
-      e(details.redirectHost)
-    }). Approve only if you just started this sign-in yourself.</strong></p>`
+  const loopback = details.loopbackRedirect
+    ? `The code goes to a program on this computer (${e(details.redirectHost)}). `
     : ""
+  const warning =
+    `<p><strong>${loopback}Approve only if you just started this sign-in yourself.</strong></p>`
   return `<!doctype html>
 <html lang="en">
 <head>

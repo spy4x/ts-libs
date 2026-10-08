@@ -177,7 +177,8 @@ export function createResourceServer(options: ResourceServerOptions): ResourceSe
     const token = bearerTokenFromHeaders(c.req.raw.headers)
     if (token === undefined) {
       c.header("WWW-Authenticate", challenge())
-      return c.json({ error: "invalid_token", error_description: "Authentication required" }, 401)
+      // RFC 6750 section 3.1: a request that carries no credentials gets no error code.
+      return c.text("Authentication required", 401)
     }
     const verified = await options.verifier.verify(token)
     if (verified === undefined || verified.resource !== resource) {

@@ -39,6 +39,7 @@ describe("createResourceServer", () => {
     expect(response.headers.get("www-authenticate")).toBe(
       `Bearer resource_metadata="${METADATA_URL}"`,
     )
+    expect(await response.text()).not.toContain("invalid_token")
   })
 
   it("adds the scope to the challenge when scopes are configured", async () => {

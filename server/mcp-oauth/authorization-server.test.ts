@@ -204,6 +204,10 @@ describe("createAuthorizationServer", () => {
     const t = setup()
     const page = await t.getAuthorize(await t.authorizeParams())
     expect(page.headers.get("x-frame-options")).toBe("DENY")
+    expect(page.headers.get("cache-control")).toBe("no-store")
+    expect(page.headers.get("content-security-policy")).toBe(
+      "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+    )
     const html = await page.clone().text()
     expect(html).toContain("claude.example")
     expect(html).toContain("claude.ai")
@@ -281,6 +285,13 @@ describe("createAuthorizationServer", () => {
       }),
     )
     expect(await page.text()).toContain("a program on this computer")
+  })
+
+  it("asks the owner to approve only a sign-in they started, for every client", async () => {
+    const t = setup()
+    const html = await (await t.getAuthorize(await t.authorizeParams())).text()
+    expect(html).toContain("Approve only if you just started this sign-in yourself.")
+    expect(html).not.toContain("a program on this computer")
   })
 
   describe("refuses the authorization request", () => {
