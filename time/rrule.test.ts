@@ -416,6 +416,21 @@ const rows: Row[] = [
     steps: [[`2026-01-02T09:00:00Z`, `2026-01-03T09:00:00Z`], [`2026-01-03T09:00:00Z`, `none`]],
   },
   {
+    name: `UNTIL as a UTC time ends a series west of UTC on the zone's wall clock`,
+    // 20:00 in Honolulu (UTC-10) on 10 October is 06:00Z on 11 October, after UNTIL.
+    rule: `FREQ=DAILY;UNTIL=20261011T000000Z`,
+    start: {
+      kind: IcalDateKind.Zoned,
+      date: `2026-10-01`,
+      time: `20:00:00`,
+      tzid: `Pacific/Honolulu`,
+    },
+    steps: [
+      [`2026-10-09T07:00:00Z`, `2026-10-09T20:00:00[Pacific/Honolulu]`],
+      [`2026-10-10T06:00:00Z`, `none`],
+    ],
+  },
+  {
     name: `UNTIL as a UTC time excludes an occurrence one second later`,
     rule: `FREQ=DAILY;UNTIL=20260103T085959Z`,
     start: utc(`2026-01-01`),
