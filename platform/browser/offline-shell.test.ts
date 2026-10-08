@@ -43,11 +43,13 @@ function setup(options: Partial<OfflineShellOptions> = {}) {
     online: true,
     navigatorOnLine: false,
     calls: [] as string[],
+    hrefs: [] as string[],
     responses: new Map<string, () => Response>(),
   }
   const network = (input: Request | string): Promise<Response> => {
     const url = typeof input === "string" ? new URL(input, ORIGIN).href : input.url
-    net.calls.push(new URL(url).pathname)
+    net.calls.push(new URL(url, ORIGIN).pathname)
+    net.hrefs.push(new URL(url, ORIGIN).href)
     if (!net.online) return Promise.reject(new TypeError(`offline`))
     const make = net.responses.get(new URL(url).pathname)
     return Promise.resolve(make ? make() : new Response(`net:${new URL(url).pathname}`))
@@ -180,6 +182,48 @@ describe("install", () => {
     expect(s.cache().size).toBe(0)
   })
 
+  it("never requests or stores a linked file in a neverCache path or on another host", async () => {
+    const s = setup()
+    const html = [
+      `/api/logout`,
+      `/\\evil.example/x.js`,
+      `/\t/tab.example/y.png`,
+      `/assets/ok.js`,
+    ].map((path) => `<script src="${path}"></script>`).join("")
+    s.net.responses.set(
+      "/",
+      () => new Response(html, { headers: { "content-type": "text/html" } }),
+    )
+    await s.lifecycle("install")
+    expect(s.net.hrefs.every((href) => href.startsWith(ORIGIN))).toBe(true)
+    expect(s.net.calls.sort()).toEqual(["/", "/assets/ok.js"])
+    expect([...s.cache().keys()].sort()).toEqual(["/", "/assets/ok.js"])
+  })
+
+  it("reads links only from HTML responses", async () => {
+    const s = setup({ shellUrls: ["/", "/data.txt"] })
+    s.net.responses.set(
+      "/data.txt",
+      () =>
+        new Response(`<script src="/assets/a.js"></script>`, {
+          headers: { "content-type": "text/plain" },
+        }),
+    )
+    await s.lifecycle("install")
+    expect([...s.cache().keys()].sort()).toEqual(["/", "/data.txt"])
+  })
+
+  it("does not keep a redirected shell response", async () => {
+    const s = setup()
+    s.net.responses.set("/", () => {
+      const response = new Response("login page")
+      Object.defineProperty(response, "redirected", { value: true })
+      return response
+    })
+    await s.lifecycle("install")
+    expect(s.cache().size).toBe(0)
+  })
+
   it("skips linked files when precacheLinkedFiles is off", async () => {
     const s = setup({ precacheLinkedFiles: false })
     s.net.responses.set(
@@ -214,6 +258,14 @@ describe("fetch", () => {
     const { response } = await s.request("/assets/app-1.js")
     expect(await response!.text()).toBe("cached")
     expect(s.net.calls).toEqual([])
+  })
+
+  it("asks the network for a partial (Range) request, even for a cached /assets/ file", async () => {
+    const s = setup()
+    const cache = await s.scope.caches.open("shell-v1")
+    await cache.put("/assets/movie.mp4", new Response("whole file"))
+    const { response } = await s.request("/assets/movie.mp4", { headers: { range: "bytes=0-9" } })
+    expect(await response!.text()).toBe("net:/assets/movie.mp4")
   })
 
   it("fetches an /assets/ file that is not cached yet, and stores it", async () => {

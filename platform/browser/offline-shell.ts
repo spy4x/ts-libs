@@ -11,10 +11,12 @@
  *   network fails. Only OK responses are stored. A page load (`navigate`) is stored and served
  *   under one key (default `/`), because every route of a single-page app is the same document.
  *
- * The worker's whole file is then:
+ * The worker's whole file is then the lines below. A browser cannot load a `.ts` URL or a `jsr:`
+ * specifier, so bundle the worker (esbuild, Vite's worker build) before serving it:
  *
  * ```js
- * import { installOfflineShell } from "https://jsr.io/@spy4x/platform/<version>/browser/offline-shell.ts"
+ * // installOfflineShell comes from this package's `browser/offline-shell` entry point
+ * import { installOfflineShell } from "<this package>/browser/offline-shell"
  * installOfflineShell(self, { shellUrls: ["/", "/config.json"] })
  * ```
  *
@@ -59,7 +61,9 @@ export interface ShellScope {
   clients: { claim: () => Promise<void> }
   skipWaiting: () => Promise<void> | void
   fetch: (input: Request | string, init?: RequestInit) => Promise<Response>
-  addEventListener: (type: string, listener: (event: never) => void) => void
+  /** `any` because the real scope types each event name's listener differently. */
+  // deno-lint-ignore no-explicit-any
+  addEventListener(type: string, listener: (event: any) => void): void
 }
 
 /** Options of {@link installOfflineShell}. */
@@ -108,12 +112,13 @@ export function installOfflineShell(scope: ShellScope, options: OfflineShellOpti
   const navigationKey = options.navigationKey ?? "/"
   const linked = options.precacheLinkedFiles ?? true
 
-  const isShellRequest = (request: Request): boolean => {
-    if (request.method !== "GET") return false
-    const url = new URL(request.url)
-    return url.origin === scope.location.origin &&
-      !neverCache.some((base) => isUnderPath(url.pathname, base))
-  }
+  /** Whether the worker may handle this URL: same origin and outside every `neverCache` path. */
+  const isShellUrl = (url: URL): boolean =>
+    url.origin === scope.location.origin &&
+    !neverCache.some((base) => isUnderPath(url.pathname, base))
+
+  const isShellRequest = (request: Request): boolean =>
+    request.method === "GET" && isShellUrl(new URL(request.url))
 
   /** `fetch`, tried once more while the browser says it is online (a network change mid-request). */
   const fetchWithRetry = async (request: Request): Promise<Response> => {
@@ -127,71 +132,65 @@ export function installOfflineShell(scope: ShellScope, options: OfflineShellOpti
 
   const precache = async (): Promise<void> => {
     const cache = await scope.caches.open(cacheName)
-    const paths = new Set<string>()
+    const linkedUrls = new Map<string, string>()
     // One file that fails to load must not stop the worker from installing.
     await Promise.allSettled(options.shellUrls.map(async (url) => {
       const response = await scope.fetch(url, { cache: "reload" })
-      if (!response.ok) return
+      // A redirected response cannot answer a page load, so it is not kept.
+      if (!response.ok || response.redirected) return
       await cache.put(url, response.clone())
       if (linked && (response.headers.get("content-type") ?? "").includes("text/html")) {
-        for (const path of linkedPaths(await response.text())) paths.add(path)
+        for (const path of linkedPaths(await response.text())) {
+          // A link may resolve to another host (`/\host/x`) or into an API path.
+          const target = new URL(path, scope.location.origin)
+          if (isShellUrl(target)) linkedUrls.set(target.href, target.href)
+        }
       }
     }))
-    await Promise.allSettled([...paths].map((path) => cache.add(path)))
+    await Promise.allSettled([...linkedUrls.values()].map((href) => cache.add(href)))
   }
 
-  scope.addEventListener(
-    "install",
-    ((event: ShellEvent) => {
-      event.waitUntil(precache())
-    }) as (event: never) => void,
-  )
+  scope.addEventListener("install", (event: ShellEvent) => {
+    event.waitUntil(precache())
+  })
 
-  scope.addEventListener(
-    "activate",
-    ((event: ShellEvent) => {
-      event.waitUntil((async () => {
-        for (const name of await scope.caches.keys()) {
-          if (name.startsWith("shell-") && name !== cacheName) await scope.caches.delete(name)
-        }
-        // Take over the page that registered this worker, so its next requests are cached too.
-        await scope.clients.claim()
-      })())
-    }) as (event: never) => void,
-  )
+  scope.addEventListener("activate", (event: ShellEvent) => {
+    event.waitUntil((async () => {
+      for (const name of await scope.caches.keys()) {
+        if (name.startsWith("shell-") && name !== cacheName) await scope.caches.delete(name)
+      }
+      // Take over the page that registered this worker, so its next requests are cached too.
+      await scope.clients.claim()
+    })())
+  })
 
-  scope.addEventListener(
-    "fetch",
-    ((event: ShellFetchEvent) => {
-      const { request } = event
-      if (!isShellRequest(request)) return
-      const url = new URL(request.url)
-      event.respondWith((async () => {
-        const cache = await scope.caches.open(cacheName)
-        if (url.pathname.startsWith(assetsPrefix)) {
-          const cached = await cache.match(request)
-          if (cached) return cached
-        }
-        const key = request.mode === "navigate" ? navigationKey : request
-        try {
-          const response = await fetchWithRetry(request)
-          // A failed cache write must not fail a response that arrived.
-          if (response.ok) event.waitUntil(cache.put(key, response.clone()).catch(() => {}))
-          return response
-        } catch (error) {
-          const cached = await cache.match(key)
-          if (cached) return cached
-          throw error
-        }
-      })())
-    }) as (event: never) => void,
-  )
+  scope.addEventListener("fetch", (event: ShellFetchEvent) => {
+    const { request } = event
+    if (!isShellRequest(request)) return
+    const url = new URL(request.url)
+    event.respondWith((async () => {
+      const cache = await scope.caches.open(cacheName)
+      // A partial (`Range`) request, such as a video seek, is never answered with a whole file.
+      if (url.pathname.startsWith(assetsPrefix) && !request.headers.has("range")) {
+        const cached = await cache.match(request)
+        if (cached) return cached
+      }
+      const key = request.mode === "navigate" ? navigationKey : request
+      try {
+        const response = await fetchWithRetry(request)
+        // A failed cache write must not fail a response that arrived.
+        if (response.ok) event.waitUntil(cache.put(key, response.clone()).catch(() => {}))
+        return response
+      } catch (error) {
+        const cached = await cache.match(key)
+        if (cached) return cached
+        throw error
+      }
+    })())
+  })
 
-  scope.addEventListener(
-    "message",
-    ((event: ShellMessageEvent) => {
-      const data = event.data as { action?: unknown } | null | undefined
-      if (data?.action === SKIP_WAITING_MESSAGE.action) void scope.skipWaiting()
-    }) as (event: never) => void,
-  )
+  scope.addEventListener("message", (event: ShellMessageEvent) => {
+    const data = event.data as { action?: unknown } | null | undefined
+    if (data?.action === SKIP_WAITING_MESSAGE.action) void scope.skipWaiting()
+  })
 }
