@@ -570,7 +570,17 @@ describe("createAuthorizationServer", () => {
         { authorization: "Basic eDp5" },
       )
       expect(response.status).toBe(401)
+      expect(response.headers.get("www-authenticate")).toBe(`Basic realm="token"`)
       expect((await response.json()).error).toBe("invalid_client")
+    })
+
+    it("naming the scheme the client tried, but never echoing other text", async () => {
+      const t = setup()
+      const body = { grant_type: "authorization_code", code: "x", client_id: CLAUDE }
+      const digest = await t.token(body, { authorization: `Digest username="a"` })
+      expect(digest.headers.get("www-authenticate")).toBe(`Digest realm="token"`)
+      const odd = await t.token(body, { authorization: `x"y, z` })
+      expect(odd.headers.get("www-authenticate")).toBe(`Basic realm="token"`)
     })
 
     it("for a JSON body", async () => {

@@ -49,6 +49,8 @@ const MAX_CONSENT_BODY_BYTES = 4 * 1024
 /** S256 output: 32 bytes as unpadded base64url. */
 const CODE_CHALLENGE = /^[A-Za-z0-9_-]{43}$/
 /** RFC 7636 section 4.1. */
+/** An HTTP authentication scheme name: one RFC 9110 token. */
+const AUTH_SCHEME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,32}$/
 const CODE_VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/
 const FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 
@@ -453,7 +455,12 @@ export function createAuthorizationServer(
   })
 
   app.post(TOKEN_PATH, async (c) => {
-    if (c.req.header("authorization") !== undefined) {
+    const authorization = c.req.header("authorization")
+    if (authorization !== undefined) {
+      // RFC 6749 section 5.2: a 401 names the scheme the client tried. Echo it only when it is a
+      // plain token, so the header cannot carry anything the client chose beyond that.
+      const scheme = authorization.split(" ")[0]
+      c.header("WWW-Authenticate", `${AUTH_SCHEME.test(scheme) ? scheme : "Basic"} realm="token"`)
       return tokenError(c, "invalid_client", "only public clients are supported", 401)
     }
     const contentType = c.req.header("content-type")?.split(";")[0].trim().toLowerCase()
