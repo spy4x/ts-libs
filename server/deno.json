@@ -27,6 +27,8 @@
     "./lockout": "./lockout/mod.ts",
     "./lockout/memory-store": "./lockout/memory-store.ts",
     "./lockout/postgres": "./lockout/postgres.ts",
+    "./mcp-oauth": "./mcp-oauth/mod.ts",
+    "./mcp-oauth/memory-store": "./mcp-oauth/memory-store.ts",
     "./subscribers": "./subscribers/mod.ts",
     "./subscribers/file": "./subscribers/file.ts",
     "./subscribers/memory": "./subscribers/memory.ts",
