@@ -517,6 +517,25 @@ describe("request builders", () => {
     }
   })
 
+  it("writes an is-not-defined prop-filter for each property the components must lack", () => {
+    const body = calendarQueryBody({
+      component: "VTODO",
+      timeRange: { start: new Date(Date.UTC(2026, 9, 1)) },
+      withoutProperties: ["COMPLETED"],
+    })
+    const root = output(parseXml(body))
+    const outer = childElement(childElement(root, CALDAV_NS, "filter")!, CALDAV_NS, "comp-filter")!
+    const inner = childElement(outer, CALDAV_NS, "comp-filter")!
+    // RFC 4791 §9.7.1: time-range comes before prop-filter inside a comp-filter.
+    assertEquals(
+      inner.children.map((child) => typeof child === "string" ? child : child.name),
+      ["time-range", "prop-filter"],
+    )
+    const filter = childElement(inner, CALDAV_NS, "prop-filter")!
+    assertEquals(filter.attributes.map((a) => [a.name, a.value]), [["name", "COMPLETED"]])
+    assert(childElement(filter, CALDAV_NS, "is-not-defined") !== undefined, body)
+  })
+
   it("writes a calendar-query with the component and a UTC time range", () => {
     const body = calendarQueryBody({
       component: "VEVENT",
