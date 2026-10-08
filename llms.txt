@@ -2123,6 +2123,34 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `startOfQuarter` (function), `jsr:@spy4x/time/date`: First day of the calendar quarter `date` falls in.
 - `startOfYear` (function), `jsr:@spy4x/time/date`: First day of the calendar year `date` falls in.
 
+### `jsr:@spy4x/time/ical`
+
+- `IcalComponent` (interface), `jsr:@spy4x/time/ical`: A `BEGIN:…`/`END:…` block with its properties and nested components.
+- `IcalDateKind` (enum), `jsr:@spy4x/time/ical`: Whether a date value is a date, a floating time, a UTC time or a time in a named zone.
+- `IcalDateValue` (interface), `jsr:@spy4x/time/ical`: A DATE or DATE-TIME value in a form that keeps its kind through a round trip.
+- `IcalError` (interface), `jsr:@spy4x/time/ical`: The error half of IcalResult.
+- `IcalErrorCode` (enum), `jsr:@spy4x/time/ical`: Why an operation of this module failed.
+- `IcalParameter` (interface), `jsr:@spy4x/time/ical`: One parameter of a property, such as `TZID=Europe/Berlin`.
+- `IcalParseOptions` (interface), `jsr:@spy4x/time/ical`: Limits for parseIcal.
+- `IcalProperty` (interface), `jsr:@spy4x/time/ical`: One content line: a name, its parameters and its raw (still escaped) value.
+- `IcalResolveOptions` (interface), `jsr:@spy4x/time/ical`: Options for resolveInstant.
+- `IcalResult` (type), `jsr:@spy4x/time/ical`: `{ success, output, error }`: the output, or why there is none.
+- `IcalWriteDateOptions` (interface), `jsr:@spy4x/time/ical`: Options for writeDate.
+- `getParameter` (function), `jsr:@spy4x/time/ical`: The first parameter named `name` (any case) of a property, or `undefined`.
+- `getProperties` (function), `jsr:@spy4x/time/ical`: Every property named `name` (any case), in document order.
+- `getProperty` (function), `jsr:@spy4x/time/ical`: The first property named `name` (any case), or `undefined`.
+- `parseIcal` (function), `jsr:@spy4x/time/ical`: Parse one iCalendar object (normally a `VCALENDAR`) into a component tree.
+- `readDate` (function), `jsr:@spy4x/time/ical`: Read a DATE or DATE-TIME property as an IcalDateValue, or `undefined` when its value is not a valid date.
+- `readList` (function), `jsr:@spy4x/time/ical`: Every item of every property named `name`, such as all CATEGORIES across several lines.
+- `readText` (function), `jsr:@spy4x/time/ical`: The unescaped TEXT value of a property (RFC 5545 §3.3.11).
+- `removeProperty` (function), `jsr:@spy4x/time/ical`: Remove every property named `name` (any case).
+- `resolveInstant` (function), `jsr:@spy4x/time/ical`: The instant a date value denotes, or `undefined` when it has none.
+- `serializeIcal` (function), `jsr:@spy4x/time/ical`: Serialise a component tree to iCalendar text with CRLF line breaks, the last line included.
+- `setProperty` (function), `jsr:@spy4x/time/ical`: Set the raw value of the first property named `name`, in place, or append a new property.
+- `writeDate` (function), `jsr:@spy4x/time/ical`: Write `value` to the property `name` of `component`, keeping its kind: a date gets `VALUE=DATE`, a zoned time gets `TZID`, a UTC time a trailing `Z`.
+- `writeList` (function), `jsr:@spy4x/time/ical`: Replace every property named `name` with one line listing `items`, each escaped as TEXT.
+- `writeText` (function), `jsr:@spy4x/time/ical`: Escape `text` as TEXT and set it with setProperty, keeping existing parameters.
+
 ### `jsr:@spy4x/time/ics`
 
 - `IcsAddress` (interface), `jsr:@spy4x/time/ics`: A calendar address: a bare mailbox address, e.g. `jane@example.com`.
@@ -2245,4 +2273,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 1013e9985205a533d0a9dafce4e90ef24c956a159d847177240187d1c0955fc7 -->
+<!-- export surface: sha256 1aba29627e04d6983e15fc16816ce4bef1faa37fac76daa7e0d927937063a8b1 -->
