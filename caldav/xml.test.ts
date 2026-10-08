@@ -382,49 +382,33 @@ describe("parseXml", () => {
     assertEquals(errorCode(parseXml(xml)), XmlErrorCode.Malformed)
   })
 
-  // Time ratios, not absolute times. The small input grows until one parse takes at least 10 ms,
-  // and each side keeps its fastest of several runs, so timer resolution and a stray pause do not
-  // decide the result. 16 times the input takes about 16 times as long when the work is linear
-  // and about 256 times when it is quadratic; the bound of 64 is far from both.
-  const fastest = (xml: string, runs: number) => {
-    let best = Infinity
-    for (let i = 0; i < runs; i++) {
-      const start = performance.now()
-      output(parseXml(xml))
-      best = Math.min(best, performance.now() - start)
-    }
-    return best
+  // Fixed budgets on large hostile inputs. Linear code parses each in well under a second; the
+  // quadratic variants these tests guard against took six minutes or more (see the PR's mutation
+  // lines), so the ten-second budget leaves room for a loaded machine and is still far from them.
+  const budgetMs = 10_000
+  const maxBytes = 64 * 1024 * 1024
+  const assertParsesWithin = (xml: string) => {
+    const start = performance.now()
+    output(parseXml(xml, { maxBytes }))
+    const elapsed = performance.now() - start
+    assert(elapsed < budgetMs, `parsing took ${elapsed.toFixed(0)} ms, budget ${budgetMs} ms`)
   }
-  const growth = (build: (size: number) => string, start: number) => {
-    let size = start
-    while (fastest(build(size), 3) < 10 && size < start * 1024) size *= 2
-    return fastest(build(size * 16), 3) / fastest(build(size), 5)
-  }
-  const assertLinear = (ratio: number) =>
-    assert(ratio < 64, `parsing 16x the input took ${ratio.toFixed(0)}x as long`)
+  const declarations = (count: number, uri: (i: number) => string) =>
+    Array.from({ length: count }, (_, i) => ` xmlns:p${i}="${uri(i)}"`).join("")
 
-  it("parses a large flat document in linear time", () => {
+  it("parses a 10 MB flat document within its time budget", () => {
     const item = `<d:response><d:href>/a&amp;b.ics</d:href></d:response>`
-    assertLinear(growth(
-      (size) => `<d:multistatus xmlns:d="DAV:">${item.repeat(size)}</d:multistatus>`,
-      500,
-    ))
+    assertParsesWithin(`<d:multistatus xmlns:d="DAV:">${item.repeat(200_000)}</d:multistatus>`)
   })
 
-  it("parses many namespace declarations over many children in linear time", () => {
-    const build = (size: number) => {
-      const declarations = Array.from({ length: size }, (_, i) => ` xmlns:n${i}="urn:${i}"`)
-      return `<a${declarations.join("")}>${"<b/>".repeat(size)}</a>`
-    }
-    assertLinear(growth(build, 100))
+  it("parses 80,000 root declarations over 80,000 children within its time budget", () => {
+    assertParsesWithin(`<a${declarations(80_000, (i) => `urn:${i}`)}>${"<b/>".repeat(80_000)}</a>`)
   })
 
-  it("parses many declarations over many children that each declare one, in linear time", () => {
-    const build = (size: number) => {
-      const declarations = Array.from({ length: size }, (_, i) => ` xmlns:p${i}="u"`)
-      return `<r${declarations.join("")}>${`<a xmlns="u"/>`.repeat(size)}</r>`
-    }
-    assertLinear(growth(build, 100))
+  it("parses 80,000 root declarations over 80,000 declaring children within its time budget", () => {
+    assertParsesWithin(
+      `<r${declarations(80_000, () => "u")}>${`<a xmlns="u"/>`.repeat(80_000)}</r>`,
+    )
   })
 })
 
