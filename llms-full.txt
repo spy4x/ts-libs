@@ -5573,6 +5573,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                           |
 | `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                        |
 | `time/ical`     | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                       |
+| `time/rrule`    | Repeat rules for the subset Tasks.org writes: `parseRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
@@ -5859,9 +5860,34 @@ const ics = serializeIcal(root) // every other line byte-identical to icsFromSer
   CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE.
 - **Instants.** `resolveInstant` resolves UTC values and IANA `TZID`s through `time/tz`. A vendor
   zone such as Outlook's `W. Europe Standard Time` stays unresolved (`undefined`), never guessed.
-- **Not here.** No recurrence expansion, no VTIMEZONE generation, no task or event semantics
+- **Not here.** No recurrence expansion (see `time/rrule`), no VTIMEZONE generation, no task or event semantics
   (status, `RELATED-TO`, `SEQUENCE` bumps) and no networking. Runs in a browser: the module and
   its imports use no `Deno.*` API, and a test enforces it.
+
+## Repeat rules
+
+`time/rrule` computes the next occurrence of an `RRULE` for the subset Tasks.org writes, and refuses
+the rest by name so an app can say "complete this one in Tasks.org" instead of guessing.
+
+```ts
+import { describeRrule, nextOccurrence, parseRrule } from "@spy4x/time/rrule"
+
+const parsed = parseRrule("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TH")
+if (!parsed.success) throw new Error(`${parsed.error.code} ${parsed.error.part}`) // BYSETPOS, …
+describeRrule(parsed.output) // "Every 2 weeks on Mon, Thu"
+const next = nextOccurrence(parsed.output, {
+  start: { kind: IcalDateKind.Zoned, date: "2026-03-26", time: "09:00:00", tzid: "Europe/Berlin" },
+  after: new Date(),
+}) // next.output: an IcalDateValue of the start's kind, or null once COUNT or UNTIL is used up
+```
+
+- **Subset.** `FREQ` DAILY, WEEKLY, MONTHLY, YEARLY; `INTERVAL`; `BYDAY` with ordinals (`2MO`,
+  `-1FR`); `BYMONTHDAY`; `BYMONTH`; `COUNT`; `UNTIL`; `WKST`. Anything else (`BYSETPOS`, `BYHOUR`,
+  `FREQ=HOURLY`, `X-` parts) is `RruleErrorCode.Unsupported` with `error.part` naming it.
+- **Missing days are skipped, not clipped.** Monthly on the 31st goes January, March, May; yearly on
+  29 February waits for the next leap year (RFC 5545 section 3.3.10).
+- **Clock changes.** Occurrences keep the start's wall clock. A time a zone skips (spring forward)
+  keeps its date and wall clock; a time it repeats (fall back) occurs once, at its first reading.
 
 ## Not in scope
 
