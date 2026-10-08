@@ -14,7 +14,7 @@ when:
   - event: tag
     ref: refs/tags/v*
 
-# The integration tier's dependencies (#74). Same five images as
+# The integration tier's dependencies (#74). Same seven services as
 # `infra/compose.integration.yml`, same exact version pins; only the addresses
 # differ, because Woodpecker publishes a service under its own name as hostname on
 # the container's own port. The credentials are the same obviously fake literal, and
@@ -53,6 +53,29 @@ services:
     commands:
       - redis-server --requirepass integration-test-only
 
+  # CalDAV servers (#417); see `infra/compose.integration.yml` for the Stalwart
+  # setup script. Woodpecker services take no pids or memory limit, so only the
+  # compose file caps them. `$$` keeps Woodpecker from substituting the variables.
+  radicale:
+    image: tomsquest/docker-radicale:3.8.3.0
+
+  stalwart:
+    image: stalwartlabs/stalwart:v0.16.25
+    environment:
+      STALWART_RECOVERY_ADMIN: admin:integration-test-only
+      HTTPS_PROXY: http://127.0.0.1:9
+    commands:
+      - |
+          if [ ! -f /etc/stalwart/config.json ]; then
+            STALWART_RECOVERY_MODE_PORT=8081 stalwart --config /etc/stalwart/config.json &
+            pid=$$!
+            until curl -fsS -o /dev/null -u "$$STALWART_RECOVERY_ADMIN" http://127.0.0.1:8081/jmap/session; do sleep 0.5; done
+            curl -fsS -o /dev/null -u "$$STALWART_RECOVERY_ADMIN" -H 'Content-Type: application/json' -d '{"using":["urn:ietf:params:jmap:core","urn:stalwart:jmap"],"methodCalls":[["x:Bootstrap/set",{"update":{"singleton":{"serverHostname":"localhost","defaultDomain":"example.com","requestTlsCertificate":false,"generateDkimKeys":false}}},"0"]]}' http://127.0.0.1:8081/jmap/
+            kill "$$pid"
+            wait "$$pid" || true
+          fi
+          exec stalwart --config /etc/stalwart/config.json
+
 # Steps run in declaration order. Unit first, integration second, which is the order
 # issue #74 asks for: format, lint, types and the unit suite fail in seconds, the
 # integration tier takes a container start-up to fail.
@@ -80,6 +103,8 @@ steps:
       TS_LIBS_IT_REDIS_PORT: "6379"
       TS_LIBS_IT_REDIS_AUTH_HOST: redis-auth
       TS_LIBS_IT_REDIS_AUTH_PORT: "6379"
+      TS_LIBS_IT_RADICALE_URL: http://radicale:5232
+      TS_LIBS_IT_STALWART_URL: http://stalwart:8080
     commands:
       - deno task test:integration
 
