@@ -562,32 +562,69 @@ export function getPropText(
   return prop === undefined ? undefined : textContent(prop)
 }
 
-/** Escape text for an XML element body or a double-quoted attribute value. */
-export function escapeXml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => `&${ENTITY_FOR[char]};`)
+/** Characters XML 1.0 cannot carry at all, not even as a reference, and lone surrogates. */
+const NOT_XML_CHAR =
+  // deno-lint-ignore no-control-regex -- matching control characters is the point of this pattern
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+
+const ESCAPE_FOR: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&apos;",
+  "\r": "&#13;",
+  "\n": "&#10;",
+  "\t": "&#9;",
 }
 
-const ENTITY_FOR: Record<string, string> = {
-  "&": "amp",
-  "<": "lt",
-  ">": "gt",
-  '"': "quot",
-  "'": "apos",
+/**
+ * Escape text for an XML element body or a double-quoted attribute value. A carriage return is
+ * written as `&#13;` so that a reader's line-ending normalisation cannot drop it. Throws a
+ * `RangeError` on a character XML 1.0 cannot carry, such as U+0001 or a lone surrogate.
+ */
+export function escapeXml(value: string): string {
+  return escapeWith(value, /[&<>"'\r]/g)
+}
+
+/** {@link escapeXml}, plus line feeds and tabs, which a reader would turn into spaces in an attribute. */
+function escapeAttribute(value: string): string {
+  return escapeWith(value, /[&<>"'\r\n\t]/g)
+}
+
+function escapeWith(value: string, special: RegExp): string {
+  const bad = NOT_XML_CHAR.exec(value)
+  if (bad !== null) {
+    const code = bad[0].charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")
+    throw new RangeError(`U+${code} cannot be written in XML`)
+  }
+  return value.replace(special, (char) => ESCAPE_FOR[char])
+}
+
+/** Throw a `TypeError` unless `name` is a valid XML name without a prefix. */
+function assertXmlName(name: string): void {
+  if (!NC_NAME.test(name)) throw new TypeError(`"${name}" is not a valid XML name`)
 }
 
 /**
  * Serialise an element tree as an XML document. Every namespace gets a generated prefix declared
  * on the root, and every text and attribute value is escaped, so `parseXml(serializeXml(e))`
- * gives back an equal tree.
+ * gives back an equal tree. Throws a `TypeError` on a name that is not a valid XML name, so a
+ * property name cannot inject markup, and a `RangeError` on text XML cannot carry.
  */
 export function serializeXml(root: XmlElement): string {
-  const prefixes = new Map<string, string>()
+  // The `xml` prefix is bound by definition and may not be declared again.
+  const prefixes = new Map<string, string>([[XML_NS, "xml"]])
   const collect = (element: XmlElement) => {
     for (const name of [element, ...element.attributes]) {
+      assertXmlName(name.name)
+      if (name.namespace === XMLNS_NS) {
+        throw new TypeError("namespace declarations are written by serializeXml itself")
+      }
       if (name.namespace !== "" && !prefixes.has(name.namespace)) {
         prefixes.set(
           name.namespace,
-          name.namespace === DAV_NS ? "D" : `N${prefixes.size}`,
+          name.namespace === DAV_NS ? "D" : `N${prefixes.size - 1}`,
         )
       }
     }
@@ -600,7 +637,7 @@ export function serializeXml(root: XmlElement): string {
     name.namespace === "" ? name.name : `${prefixes.get(name.namespace)}:${name.name}`
   const write = (element: XmlElement, declarations: string): string => {
     const attributes = element.attributes
-      .map((attribute) => ` ${qualify(attribute)}="${escapeXml(attribute.value)}"`)
+      .map((attribute) => ` ${qualify(attribute)}="${escapeAttribute(attribute.value)}"`)
       .join("")
     const open = `${qualify(element)}${declarations}${attributes}`
     if (element.children.length === 0) return `<${open}/>`
@@ -610,7 +647,8 @@ export function serializeXml(root: XmlElement): string {
     return `<${open}>${body}</${qualify(element)}>`
   }
   const declarations = [...prefixes]
-    .map(([namespace, prefix]) => ` xmlns:${prefix}="${escapeXml(namespace)}"`)
+    .filter(([namespace]) => namespace !== XML_NS)
+    .map(([namespace, prefix]) => ` xmlns:${prefix}="${escapeAttribute(namespace)}"`)
     .join("")
   return `<?xml version="1.0" encoding="utf-8"?>\n${write(root, declarations)}`
 }

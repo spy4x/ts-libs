@@ -2,7 +2,7 @@
 // `testdata/` are real responses from Stalwart 0.16 and Radicale 3.8 with the user, host and task
 // text replaced.
 
-import { assert, assertEquals } from "@std/assert"
+import { assert, assertEquals, assertThrows } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import {
   APPLE_ICAL_NS,
@@ -445,6 +445,54 @@ describe("request builders", () => {
         JSON.stringify(value),
       )
     }
+  })
+
+  it("refuses element and attribute names that would inject markup", () => {
+    const evil = "getetag/><D:evil/><D:x"
+    assertThrows(() => propfindBody([{ namespace: DAV_NS, name: evil }]), TypeError)
+    for (const name of ["a<b", "1a", "a b", "", "p:a"]) {
+      assertThrows(() => serializeXml(xmlElement(DAV_NS, name)), TypeError, undefined, name)
+      assertThrows(
+        () => serializeXml(xmlElement(DAV_NS, "a", [], [{ namespace: "", name, value: "" }])),
+        TypeError,
+        undefined,
+        name,
+      )
+    }
+  })
+
+  it("refuses characters XML 1.0 cannot carry, in text and in attribute values", () => {
+    for (const bad of ["\u0001", "\u001f", "\ufffe", "\ud800", "a\udc00b"]) {
+      assertThrows(() => serializeXml(xmlElement(DAV_NS, "a", [bad])), RangeError)
+      assertThrows(
+        () => serializeXml(xmlElement(DAV_NS, "a", [], [{ namespace: "", name: "v", value: bad }])),
+        RangeError,
+      )
+    }
+    assertEquals(
+      textContent(output(parseXml(serializeXml(xmlElement(DAV_NS, "a", ["😀\t\n"]))))),
+      "😀\t\n",
+    )
+  })
+
+  it("writes carriage returns, and line breaks and tabs in attributes, as references", () => {
+    const tree = xmlElement(DAV_NS, "a", ["x\r\ny"], [{
+      namespace: "",
+      name: "v",
+      value: "\r\n\t",
+    }])
+    const xml = serializeXml(tree)
+    assert(xml.includes(`v="&#13;&#10;&#9;"`), xml)
+    assert(xml.includes(`>x&#13;\ny<`), xml)
+    assertEquals(output(parseXml(xml)), tree)
+  })
+
+  it("writes an xml:lang attribute without declaring the xml prefix", () => {
+    const xmlNs = "http://www.w3.org/XML/1998/namespace"
+    const tree = xmlElement(DAV_NS, "a", [], [{ namespace: xmlNs, name: "lang", value: "en" }])
+    const xml = serializeXml(tree)
+    assert(xml.includes(` xml:lang="en"`) && !xml.includes("xmlns:xml"), xml)
+    assertEquals(output(parseXml(xml)), tree)
   })
 
   it("writes a PROPFIND that asks for each property in its namespace", () => {
