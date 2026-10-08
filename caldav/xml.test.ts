@@ -23,6 +23,7 @@ import {
   serializeXml,
   textContent,
   type XmlElement,
+  xmlElement,
   XmlErrorCode,
   type XmlResult,
 } from "./xml.ts"
@@ -338,27 +339,70 @@ describe("parseXml", () => {
     }
   })
 
-  // Time ratios, not absolute times: 32 times the input takes about 32 times as long when the
-  // work is linear and about 1000 times when it is quadratic, so the bound of 200 is far from both.
-  const growth = (build: (size: number) => string, size: number) => {
-    const time = (xml: string) => {
-      const start = performance.now()
-      for (let i = 0; i < 3; i++) output(parseXml(xml))
-      return performance.now() - start
+  it("refuses element and attribute names that are not XML names", () => {
+    for (const xml of [`<a<b/>`, `<1a/>`, `<a\u0000b/>`, `<a 1b="v"/>`, `<p:/>`, `<:a/>`]) {
+      assertEquals(errorCode(parseXml(xml)), XmlErrorCode.Malformed, JSON.stringify(xml))
     }
-    const small = build(size)
-    const large = build(size * 32)
-    time(small)
-    return time(large) / Math.max(time(small), 1)
+  })
+
+  it("refuses declarations that rebind the reserved xml and xmlns prefixes", () => {
+    for (
+      const declaration of [
+        `xmlns:xml="urn:x"`,
+        `xmlns:xmlns="urn:x"`,
+        `xmlns:p="http://www.w3.org/2000/xmlns/"`,
+        `xmlns="http://www.w3.org/2000/xmlns/"`,
+        `xmlns:p="http://www.w3.org/XML/1998/namespace"`,
+        `xmlns:p=""`,
+      ]
+    ) {
+      assertEquals(errorCode(parseXml(`<a ${declaration}/>`)), XmlErrorCode.Malformed, declaration)
+    }
+  })
+
+  it("resolves the xml prefix without a declaration", () => {
+    const root = output(
+      parseXml(`<a xml:lang="en"/>`),
+    )
+    assertEquals(root.attributes, [{
+      namespace: "http://www.w3.org/XML/1998/namespace",
+      name: "lang",
+      value: "en",
+    }])
+  })
+
+  it("refuses the same attribute written through two prefixes bound to one namespace", () => {
+    const xml = `<a xmlns:p="urn:x" xmlns:q="urn:x" p:v="1" q:v="2"/>`
+    assertEquals(errorCode(parseXml(xml)), XmlErrorCode.Malformed)
+  })
+
+  // Time ratios, not absolute times. The small input grows until one parse takes at least 10 ms,
+  // and each side keeps its fastest of several runs, so timer resolution and a stray pause do not
+  // decide the result. 16 times the input takes about 16 times as long when the work is linear
+  // and about 256 times when it is quadratic; the bound of 64 is far from both.
+  const fastest = (xml: string, runs: number) => {
+    let best = Infinity
+    for (let i = 0; i < runs; i++) {
+      const start = performance.now()
+      output(parseXml(xml))
+      best = Math.min(best, performance.now() - start)
+    }
+    return best
   }
+  const growth = (build: (size: number) => string, start: number) => {
+    let size = start
+    while (fastest(build(size), 3) < 10 && size < start * 1024) size *= 2
+    return fastest(build(size * 16), 3) / fastest(build(size), 5)
+  }
+  const assertLinear = (ratio: number) =>
+    assert(ratio < 64, `parsing 16x the input took ${ratio.toFixed(0)}x as long`)
 
   it("parses a large flat document in linear time", () => {
     const item = `<d:response><d:href>/a&amp;b.ics</d:href></d:response>`
-    const ratio = growth(
+    assertLinear(growth(
       (size) => `<d:multistatus xmlns:d="DAV:">${item.repeat(size)}</d:multistatus>`,
-      2_000,
-    )
-    assert(ratio < 200, `parsing 32x the input took ${ratio.toFixed(0)}x as long`)
+      500,
+    ))
   })
 
   it("parses many namespace declarations over many children in linear time", () => {
@@ -366,8 +410,15 @@ describe("parseXml", () => {
       const declarations = Array.from({ length: size }, (_, i) => ` xmlns:n${i}="urn:${i}"`)
       return `<a${declarations.join("")}>${"<b/>".repeat(size)}</a>`
     }
-    const ratio = growth(build, 500)
-    assert(ratio < 200, `parsing 32x the input took ${ratio.toFixed(0)}x as long`)
+    assertLinear(growth(build, 100))
+  })
+
+  it("parses many declarations over many children that each declare one, in linear time", () => {
+    const build = (size: number) => {
+      const declarations = Array.from({ length: size }, (_, i) => ` xmlns:p${i}="u"`)
+      return `<r${declarations.join("")}>${`<a xmlns="u"/>`.repeat(size)}</r>`
+    }
+    assertLinear(growth(build, 100))
   })
 })
 

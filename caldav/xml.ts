@@ -155,34 +155,73 @@ function utf8Length(text: string): number {
 
 const isSpace = (char: string) => char === " " || char === "\t" || char === "\n" || char === "\r"
 
+const XMLNS_NS = "http://www.w3.org/2000/xmlns/"
+
+/**
+ * An XML name without a colon (an NCName), simplified to the ranges that matter here: a letter,
+ * `_` or any non-ASCII character first, then also digits, `-` and `.`. Run on one name at a time.
+ */
+const NC_NAME = /^[A-Za-z_\u00C0-\uFFFF][A-Za-z0-9_.\-\u00B7\u00C0-\uFFFF]*$/
+
+/**
+ * An open element and the namespaces it declares itself. Scopes are not copied: a prefix is
+ * resolved by walking up the open elements, at most `maxDepth` of them, so the cost per name is
+ * bounded however many declarations the document makes.
+ */
 interface OpenElement {
   qname: string
   element: XmlElement
-  scope: Map<string, string>
+  declared: Map<string, string> | null
 }
 
-/** Split `prefix:local`, refusing an empty part. */
+/** Split `prefix:local`, refusing anything that is not a valid qualified name. */
 function splitQName(qname: string): [string, string] {
   const colon = qname.indexOf(":")
-  if (colon === -1) return ["", qname]
-  const prefix = qname.slice(0, colon)
-  const local = qname.slice(colon + 1)
-  if (prefix === "" || local === "" || local.includes(":")) {
+  const prefix = colon === -1 ? "" : qname.slice(0, colon)
+  const local = colon === -1 ? qname : qname.slice(colon + 1)
+  if ((colon !== -1 && !NC_NAME.test(prefix)) || !NC_NAME.test(local)) {
     fail(XmlErrorCode.Malformed, `invalid name "${qname}"`)
   }
   return [prefix, local]
 }
 
+/** The namespace bound to `prefix` ("" for the default) by `own` or the open elements. */
+function lookupPrefix(
+  stack: OpenElement[],
+  own: Map<string, string> | null,
+  prefix: string,
+): string | undefined {
+  const mine = own?.get(prefix)
+  if (mine !== undefined) return mine
+  for (let i = stack.length - 1; i >= 0; i--) {
+    const found = stack[i].declared?.get(prefix)
+    if (found !== undefined) return found
+  }
+  if (prefix === "xml") return XML_NS
+  return prefix === "" ? "" : undefined
+}
+
 function resolvePrefix(
-  scope: Map<string, string>,
+  stack: OpenElement[],
+  own: Map<string, string> | null,
   prefix: string,
   qname: string,
 ): string {
-  const namespace = scope.get(prefix)
+  const namespace = lookupPrefix(stack, own, prefix)
   if (namespace === undefined) {
     fail(XmlErrorCode.Malformed, `unbound prefix in "${qname}"`)
   }
   return namespace as string
+}
+
+/** Refuse the declarations the Namespaces spec forbids: rebinding `xml` or `xmlns`. */
+function checkDeclaration(prefix: string, namespace: string): void {
+  const reserved = prefix === "xml" ? namespace !== XML_NS : prefix === "xmlns" ||
+    namespace === XMLNS_NS || (namespace === XML_NS && prefix !== "xml")
+  if (reserved) fail(XmlErrorCode.Malformed, `reserved namespace binding for "${prefix}"`)
+  if (prefix !== "" && namespace === "") {
+    fail(XmlErrorCode.Malformed, `empty namespace for xmlns:${prefix}`)
+  }
 }
 
 /**
@@ -337,10 +376,7 @@ function tokenize(text: string, options: XmlParseOptions): XmlElement {
     if (stack.length >= maxDepth) {
       fail(XmlErrorCode.TooLarge, `elements nested deeper than ${maxDepth}`)
     }
-    // Copy the parent's scope only when this element declares a namespace: copying it for every
-    // element would make a root with many declarations and many children quadratic.
-    let scope = stack.at(-1)?.scope ?? new Map([["xml", XML_NS]])
-    let ownScope = stack.length === 0
+    let declared: Map<string, string> | null = null
     const seen = new Set<string>()
     for (const [name, value] of rawAttributes) {
       if (seen.has(name)) {
@@ -348,32 +384,35 @@ function tokenize(text: string, options: XmlParseOptions): XmlElement {
       }
       seen.add(name)
       if (name !== "xmlns" && !name.startsWith("xmlns:")) continue
-      if (name !== "xmlns" && value === "") {
-        fail(XmlErrorCode.Malformed, `empty namespace for ${name}`)
-      }
-      if (!ownScope) {
-        scope = new Map(scope)
-        ownScope = true
-      }
-      scope.set(name === "xmlns" ? "" : name.slice(6), value)
+      const declaredPrefix = name === "xmlns" ? "" : splitQName(name)[1]
+      checkDeclaration(declaredPrefix, value)
+      declared ??= new Map()
+      declared.set(declaredPrefix, value)
     }
     const [prefix, local] = splitQName(qname)
     const element: XmlElement = {
-      namespace: prefix === "" ? scope.get("") ?? "" : resolvePrefix(scope, prefix, qname),
+      namespace: resolvePrefix(stack, declared, prefix, qname),
       name: local,
       attributes: [],
       children: [],
     }
+    const attributeNames = new Set<string>()
     for (const [name, value] of rawAttributes) {
       if (name === "xmlns" || name.startsWith("xmlns:")) continue
       const [attributePrefix, attributeLocal] = splitQName(name)
-      const namespace = attributePrefix === "" ? "" : resolvePrefix(scope, attributePrefix, name)
+      const namespace = attributePrefix === ""
+        ? ""
+        : resolvePrefix(stack, declared, attributePrefix, name)
+      // Two prefixes bound to one namespace still name the same attribute.
+      const key = `${namespace} ${attributeLocal}`
+      if (attributeNames.has(key)) fail(XmlErrorCode.Malformed, `duplicate attribute ${name}`)
+      attributeNames.add(key)
       element.attributes.push({ namespace, name: attributeLocal, value })
     }
     const parent = stack.at(-1)
     if (parent === undefined) root = element
     else parent.element.children.push(element)
-    if (!selfClosing) stack.push({ qname, element, scope })
+    if (!selfClosing) stack.push({ qname, element, declared })
     return at + 1
   }
 }
