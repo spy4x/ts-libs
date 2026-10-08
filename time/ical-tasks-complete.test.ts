@@ -117,6 +117,19 @@ Deno.test(`a rule with COUNT=1 completes the task and keeps its rule`, async () 
   assertEquals(result.output.todo.completed?.date, `2026-10-08`)
 })
 
+Deno.test(`COUNT=1 completes the task even when DUE is not a day the rule selects`, async () => {
+  // DUE is a Tuesday; the rule selects Mondays, so the next Monday would be the first occurrence.
+  const text = await withLine(
+    `weekly-start-differs-from-due`,
+    `RRULE:FREQ=WEEKLY;INTERVAL=2`,
+    `RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=1`,
+  )
+  const { result } = complete(text)
+  assert(result.success)
+  assertEquals(result.output.kind, CompleteTodoKind.Completed)
+  assertEquals(result.output.todo.due?.date, `2026-08-18`)
+})
+
 Deno.test(`a rule with no occurrence left completes the task instead of moving it`, async () => {
   const text = await withLine(
     `daily-overdue`,

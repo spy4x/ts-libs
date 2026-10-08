@@ -35,7 +35,7 @@ import {
   resolveInstant,
 } from "./ical.ts"
 import { patchTodo, readTodo, type Todo, type TodoPatch, TodoStatus } from "./ical-tasks.ts"
-import { nextOccurrence, parseRrule, RruleFreq } from "./rrule.ts"
+import { nextOccurrence, parseRrule } from "./rrule.ts"
 import { hhmmInTz, isoDateInTz, isValidTimeZone } from "./tz.ts"
 
 /** What {@link completeTodo} did. */
@@ -227,15 +227,6 @@ export function completeTodo(
   }
   const rule = parsed.output
   if (rule.count === 1) return complete(true)
-  if (
-    rule.byDay.length > 0 && rule.freq !== RruleFreq.Weekly && rule.freq !== RruleFreq.Monthly
-  ) {
-    return refuse(
-      CompleteTodoErrorCode.UnsupportedRule,
-      `Tasks.org ignores BYDAY on a rule that is not weekly or monthly`,
-      `BYDAY`,
-    )
-  }
   const due = todo.due
   if (!due) return refuse(CompleteTodoErrorCode.NoDueDate, `a repeating task needs a DUE date`)
 
