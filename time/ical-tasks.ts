@@ -4,7 +4,8 @@
  *
  * A patch changes the patched properties plus DTSTAMP, LAST-MODIFIED and SEQUENCE. Every other
  * line, including reminders, vendor `X-` properties, time zones and recurrence overrides, is
- * written back byte for byte. CREATED is never rewritten. A patch is atomic: when it is
+ * written back byte for byte. CREATED is never rewritten, and COMPLETED of an already completed
+ * task is kept. A patch is atomic: when it is
  * refused, the document is left as it was.
  *
  * Runs in the browser and on the server: web-platform APIs only, no `Deno.*`. The clock, the
@@ -87,6 +88,7 @@ export interface Todo {
   uid?: string
   summary?: string
   description?: string
+  /** Absent when the task has no STATUS or one this module does not know. */
   status?: TodoStatus
   /** 0 (undefined) to 9, as written. */
   priority?: number
@@ -116,6 +118,7 @@ export interface CalendarEvent {
   summary?: string
   description?: string
   location?: string
+  /** Absent when the event has no STATUS or one this module does not know. */
   status?: EventStatus
   start?: IcalDateValue
   end?: IcalDateValue
@@ -174,6 +177,11 @@ export interface EventPatch {
 export interface PatchOptions {
   /** The moment of the edit: DTSTAMP, LAST-MODIFIED and, for completing, COMPLETED. */
   now: Date
+  /**
+   * Allow `status: Completed` on a task that has an RRULE, which ends the whole series. Without
+   * it such a patch is refused; completing one occurrence and moving on is not done here.
+   */
+  completeSeries?: boolean
 }
 
 /** Caller-supplied inputs for a new object. */
@@ -297,7 +305,7 @@ function readStatus<T>(component: IcalComponent, table: [string, T][]): T | unde
  * there is none.
  */
 export function readTodo(root: IcalComponent): Todo | undefined {
-  const todo = findMaster(root, `VTODO`)
+  const todo = findMaster(root, "VTODO")
   if (!todo) return undefined
   return compact({
     ...readCommon(todo),
@@ -317,7 +325,7 @@ export function readTodo(root: IcalComponent): Todo | undefined {
  * there is none.
  */
 export function readEvent(root: IcalComponent): CalendarEvent | undefined {
-  const event = findMaster(root, `VEVENT`)
+  const event = findMaster(root, "VEVENT")
   if (!event) return undefined
   return compact({
     ...readCommon(event),
@@ -335,7 +343,7 @@ export function readEvent(root: IcalComponent): CalendarEvent | undefined {
 function utcOf(now: Date): IcalDateValue | undefined {
   if (!(now instanceof Date) || Number.isNaN(now.getTime())) return undefined
   const iso = now.toISOString()
-  if (iso.startsWith(`+`) || iso.startsWith(`-`)) return undefined
+  if (iso.startsWith("+") || iso.startsWith("-")) return undefined
   return { kind: IcalDateKind.Utc, date: iso.slice(0, 10), time: iso.slice(11, 19) }
 }
 
@@ -435,14 +443,34 @@ function writeOptionalInteger(
   return undefined
 }
 
+const FREQUENCIES = ["SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"]
+
+/** Shape check only: every part is `NAME=VALUE`, names are unique and FREQ is a known one. */
+function validRrule(value: string): boolean {
+  const names = new Set<string>()
+  let freq = ""
+  for (const part of value.split(";")) {
+    const match = /^([A-Za-z][A-Za-z0-9-]*)=([^\s;=\r\n][^\s;\r\n]*)$/.exec(part)
+    if (!match) return false
+    const name = match[1]!.toUpperCase()
+    if (names.has(name)) return false
+    names.add(name)
+    if (name === "FREQ") freq = match[2]!.toUpperCase()
+  }
+  return FREQUENCIES.includes(freq)
+}
+
 function writeRrule(component: IcalComponent, value: string | null | undefined) {
   if (value === undefined) return undefined
   if (value === null) {
     removeProperty(component, "RRULE")
     return undefined
   }
-  if (!/^(?:[^\r\n]*;)?FREQ=[A-Z]+(?:;[^\r\n]*)?$/.test(value)) {
-    return fail(IcalErrorCode.InvalidValue, `RRULE must be a recurrence rule with FREQ`)
+  if (typeof value !== "string" || !validRrule(value)) {
+    return fail(
+      IcalErrorCode.InvalidValue,
+      "RRULE must be NAME=VALUE parts with a FREQ of SECONDLY to YEARLY and no repeated name",
+    )
   }
   setProperty(component, "RRULE", value)
   return undefined
@@ -459,16 +487,23 @@ function writeRelatedTo(
 ): IcalResult<unknown> | undefined {
   if (value === undefined) return undefined
   const wanted = value ?? []
+  if (!Array.isArray(wanted)) return fail(IcalErrorCode.InvalidValue, "relatedTo must be a list")
   for (const entry of wanted) {
+    if (
+      entry === null || typeof entry !== "object" || typeof entry.uid !== "string" ||
+      (entry.type !== undefined && typeof entry.type !== "string")
+    ) {
+      return fail(IcalErrorCode.InvalidValue, "RELATED-TO entries need a string uid and type")
+    }
     if (!entry.uid || /[\r\n]/.test(entry.uid) || /[^A-Za-z0-9-]/.test(entry.type ?? "")) {
-      return fail(IcalErrorCode.InvalidValue, `RELATED-TO needs a uid and a plain RELTYPE`)
+      return fail(IcalErrorCode.InvalidValue, "RELATED-TO needs a uid and a plain RELTYPE")
     }
   }
   const existing = getProperties(component, "RELATED-TO")
   const keep = new Set<IcalProperty>()
   const fresh: IcalProperty[] = []
   for (const entry of wanted) {
-    const type = entry.type?.toUpperCase() ?? "PARENT"
+    const type = entry.type?.toUpperCase() || "PARENT"
     const match = existing.find((property) => {
       if (keep.has(property)) return false
       const related = relatedOf(property)
@@ -528,20 +563,47 @@ function applyTodo(
   patch: TodoPatch,
   now: IcalDateValue,
   fresh: boolean,
+  completeSeries: boolean,
 ): IcalResult<never> | undefined {
+  const typed = checkTypes(patch)
+  if (typed) return typed
   const mismatch = checkPair(todo, patch as Record<string, unknown>, ["start", "DTSTART"], [
     "due",
     "DUE",
   ])
   if (mismatch) return mismatch as IcalResult<never>
-  if (patch.completed != null && patch.status !== TodoStatus.Completed) {
-    return fail(IcalErrorCode.InvalidValue, `completed only goes with status Completed`)
+  if (patch.completed !== undefined && patch.status !== TodoStatus.Completed) {
+    return fail(IcalErrorCode.InvalidValue, "completed only goes with status Completed")
+  }
+  if (
+    patch.status !== undefined && patch.status !== TodoStatus.Completed &&
+    patch.percentComplete === 100
+  ) {
+    return fail(IcalErrorCode.InvalidValue, "only a completed task is 100 percent complete")
+  }
+  if (
+    patch.status === undefined && patch.percentComplete !== undefined &&
+    patch.percentComplete !== 100 && isCompleted(todo)
+  ) {
+    return fail(
+      IcalErrorCode.InvalidValue,
+      "a completed task is 100 percent complete; reopen it with a status to change the percent",
+    )
+  }
+  if (patch.status === TodoStatus.Completed && !completeSeries) {
+    const rrule = patch.rrule === undefined ? getProperty(todo, "RRULE") : patch.rrule
+    if (rrule) {
+      return fail(
+        IcalErrorCode.InvalidValue,
+        "a repeating task is not completed here; pass completeSeries to end the series",
+      )
+    }
   }
   if (
     patch.status === TodoStatus.Completed && patch.percentComplete !== undefined &&
     patch.percentComplete !== 100
   ) {
-    return fail(IcalErrorCode.InvalidValue, `a completed task is 100 percent complete`)
+    return fail(IcalErrorCode.InvalidValue, "a completed task is 100 percent complete")
   }
   if (
     patch.status !== undefined && patch.status !== null &&
@@ -572,6 +634,29 @@ function applyTodo(
   )
 }
 
+function isCompleted(todo: IcalComponent): boolean {
+  return readStatus(todo, STATUS_TODO) === TodoStatus.Completed || !!getProperty(todo, "COMPLETED")
+}
+
+/** Reject values of the wrong JavaScript type with an error instead of a thrown TypeError. */
+function checkTypes(patch: TodoPatch | EventPatch): IcalResult<never> | undefined {
+  const texts = ["summary", "description", "location"] as const
+  for (const key of texts) {
+    const value = (patch as Record<string, unknown>)[key]
+    if (value !== undefined && value !== null && typeof value !== "string") {
+      return fail(IcalErrorCode.InvalidValue, `${key} must be a string`)
+    }
+  }
+  const categories = patch.categories
+  if (
+    categories !== undefined && categories !== null &&
+    (!Array.isArray(categories) || categories.some((item) => typeof item !== "string"))
+  ) {
+    return fail(IcalErrorCode.InvalidValue, "categories must be a list of strings")
+  }
+  return undefined
+}
+
 /** STATUS with COMPLETED and PERCENT-COMPLETE kept consistent with it. */
 function applyStatus(
   todo: IcalComponent,
@@ -581,11 +666,14 @@ function applyStatus(
 ): IcalResult<unknown> | undefined {
   if (patch.status === undefined) return undefined
   if (patch.status === TodoStatus.Completed) {
+    const already = readStatus(todo, STATUS_TODO) === TodoStatus.Completed &&
+      getProperty(todo, "COMPLETED") !== undefined && !patch.completed
     setProperty(todo, "STATUS", "COMPLETED")
     setProperty(todo, "PERCENT-COMPLETE", "100")
+    if (already) return undefined
     return putDate(todo, root, "COMPLETED", patch.completed ?? now).success
       ? undefined
-      : fail(IcalErrorCode.InvalidValue, `COMPLETED must be a UTC date-time`)
+      : fail(IcalErrorCode.InvalidValue, "COMPLETED must be a UTC date-time")
   }
   if (patch.status === null) removeProperty(todo, "STATUS")
   else setProperty(todo, "STATUS", STATUS_TODO.find(([, value]) => value === patch.status)![0])
@@ -625,9 +713,14 @@ function transaction(
  * date with no VTIMEZONE ({@link IcalErrorCode.UnknownTzid}); a bad priority, percent, status,
  * date, RRULE or RELATED-TO ({@link IcalErrorCode.InvalidValue}).
  *
- * A repeating task stays repeating: `status: Completed` is written as asked and the result has
- * `repeats: true`, so the caller can tell. Moving a series to its next occurrence is not done
- * here.
+ * A repeating task stays repeating, and `status: Completed` on one is refused unless
+ * `options.completeSeries` is true, which ends the series as written. Moving a series to its
+ * next occurrence is not done here. `percentComplete` other than 100 on a completed task is
+ * refused: reopen it with a `status` to change it.
+ *
+ * On success `root.properties` and `root.components` are replaced with new arrays, so objects
+ * the caller took from `root` before the call no longer belong to it; on refusal `root` is not
+ * touched.
  */
 export function patchTodo(
   root: IcalComponent,
@@ -635,15 +728,15 @@ export function patchTodo(
   options: PatchOptions,
 ): IcalResult<Todo> {
   const now = utcOf(options.now)
-  if (!now) return fail(IcalErrorCode.InvalidValue, `now is not a valid date`)
+  if (!now) return fail(IcalErrorCode.InvalidValue, "now is not a valid date")
   if (!hasKeys(patch)) {
     const current = readTodo(root)
-    return current ? ok(current) : fail(IcalErrorCode.Malformed, `no VTODO to patch`)
+    return current ? ok(current) : fail(IcalErrorCode.Malformed, "no VTODO to patch")
   }
   const done = transaction(
     root,
-    `VTODO`,
-    (todo, copy) => applyTodo(todo, copy, patch, now, false),
+    "VTODO",
+    (todo, copy) => applyTodo(todo, copy, patch, now, false, options.completeSeries === true),
   )
   return done.success ? ok(readTodo(root)!) : done
 }
@@ -659,14 +752,14 @@ export function patchEvent(
   options: PatchOptions,
 ): IcalResult<CalendarEvent> {
   const now = utcOf(options.now)
-  if (!now) return fail(IcalErrorCode.InvalidValue, `now is not a valid date`)
+  if (!now) return fail(IcalErrorCode.InvalidValue, "now is not a valid date")
   if (!hasKeys(patch)) {
     const current = readEvent(root)
-    return current ? ok(current) : fail(IcalErrorCode.Malformed, `no VEVENT to patch`)
+    return current ? ok(current) : fail(IcalErrorCode.Malformed, "no VEVENT to patch")
   }
   const done = transaction(
     root,
-    `VEVENT`,
+    "VEVENT",
     (event, copy) => applyEvent(event, copy, patch, now, false),
   )
   return done.success ? ok(readEvent(root)!) : done
@@ -679,8 +772,10 @@ function applyEvent(
   now: IcalDateValue,
   fresh: boolean,
 ): IcalResult<never> | undefined {
+  const typed = checkTypes(patch)
+  if (typed) return typed
   if (patch.end && patch.duration) {
-    return fail(IcalErrorCode.InvalidValue, `an event has an end or a duration, not both`)
+    return fail(IcalErrorCode.InvalidValue, "an event has an end or a duration, not both")
   }
   if (
     patch.status !== undefined && patch.status !== null &&
@@ -692,7 +787,7 @@ function applyEvent(
     patch.duration != null &&
     !/^[+-]?P(?:\d+W|(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+S)?)?)$/.test(patch.duration)
   ) {
-    return fail(IcalErrorCode.InvalidValue, `DURATION must be an ISO 8601 duration`)
+    return fail(IcalErrorCode.InvalidValue, "DURATION must be an ISO 8601 duration")
   }
   const mismatch = checkPair(event, patch as Record<string, unknown>, ["start", "DTSTART"], [
     "end",
@@ -725,10 +820,10 @@ function applyEvent(
 /** A VCALENDAR with the VERSION and PRODID headers and an empty component of `name`. */
 function skeleton(name: string, options: NewOptions): IcalResult<[IcalComponent, IcalComponent]> {
   if (!options.uid || /[\r\n]/.test(options.uid)) {
-    return fail(IcalErrorCode.InvalidValue, `uid must be a non-empty single line`)
+    return fail(IcalErrorCode.InvalidValue, "uid must be a non-empty single line")
   }
   if (!options.prodid || /[\r\n]/.test(options.prodid)) {
-    return fail(IcalErrorCode.InvalidValue, `prodid must be a non-empty single line`)
+    return fail(IcalErrorCode.InvalidValue, "prodid must be a non-empty single line")
   }
   const item: IcalComponent = { name, properties: [], components: [] }
   setProperty(item, "UID", icsEscape(options.uid))
@@ -750,21 +845,22 @@ function skeleton(name: string, options: NewOptions): IcalResult<[IcalComponent,
  */
 export function newTodo(fields: TodoPatch, options: NewOptions): IcalResult<IcalComponent> {
   const now = utcOf(options.now)
-  if (!now) return fail(IcalErrorCode.InvalidValue, `now is not a valid date`)
+  if (!now) return fail(IcalErrorCode.InvalidValue, "now is not a valid date")
   const made = skeleton("VTODO", options)
   if (!made.success) return made
   const [root, todo] = made.output
   const clean = Object.fromEntries(
     Object.entries(fields).filter(([, value]) => value !== null),
   ) as TodoPatch
-  const failure = applyTodo(todo, root, clean, now, true) ?? addCreated(todo, root, now)
+  const failure = applyTodo(todo, root, clean, now, true, options.completeSeries === true) ??
+    addCreated(todo, root, now)
   return failure ?? ok(root)
 }
 
 /** Build a new calendar object holding one VEVENT; see {@link newTodo}. */
 export function newEvent(fields: EventPatch, options: NewOptions): IcalResult<IcalComponent> {
   const now = utcOf(options.now)
-  if (!now) return fail(IcalErrorCode.InvalidValue, `now is not a valid date`)
+  if (!now) return fail(IcalErrorCode.InvalidValue, "now is not a valid date")
   const made = skeleton("VEVENT", options)
   if (!made.success) return made
   const [root, event] = made.output
