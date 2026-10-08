@@ -2327,6 +2327,20 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `monthLabel` (function), `jsr:@spy4x/time/locale`: Localised "August 2026" for the month `date` falls in.
 - `weekdayLabels` (function), `jsr:@spy4x/time/locale`: Seven localised weekday labels, starting on the locale's own first day.
 
+### `jsr:@spy4x/time/rrule`
+
+- `NextOccurrenceOptions` (interface), `jsr:@spy4x/time/rrule`: Inputs of nextOccurrence.
+- `Rrule` (interface), `jsr:@spy4x/time/rrule`: A parsed repeat rule.
+- `RruleDay` (interface), `jsr:@spy4x/time/rrule`: One `BYDAY` entry: a weekday, with an ordinal in a month (`2MO` is 2, `-1FR` is -1).
+- `RruleError` (interface), `jsr:@spy4x/time/rrule`: The error half of RruleResult.
+- `RruleErrorCode` (enum), `jsr:@spy4x/time/rrule`: Why an operation of this module failed.
+- `RruleFreq` (enum), `jsr:@spy4x/time/rrule`: How often the rule repeats.
+- `RruleResult` (type), `jsr:@spy4x/time/rrule`: `{ success, output, error }`: the output, or why there is none.
+- `RruleWeekday` (enum), `jsr:@spy4x/time/rrule`: A day of the week, numbered like ISO 8601: Monday is 1, Sunday is 7.
+- `describeRrule` (function), `jsr:@spy4x/time/rrule`: An English label for the rule, such as `Every 2 weeks on Mon, Thu`, `Monthly on the last Friday` or `Daily, 5 times`.
+- `nextOccurrence` (function), `jsr:@spy4x/time/rrule`: The first occurrence of `rule` strictly after `options.after`, as a value of the same kind (and zone) as `options.start`, with the start's time of day.
+- `parseRrule` (function), `jsr:@spy4x/time/rrule`: Parse the value of an `RRULE` property (a leading `RRULE:` is accepted).
+
 ### `jsr:@spy4x/time/tz`
 
 - `WallClockKind` (enum), `jsr:@spy4x/time/tz`: How often a wall clock occurs in a zone on its date.
@@ -2409,4 +2423,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 8072b7749cd32282b9b7ff5ee98c9cc8447c06c55416a58ccf8e7677447614cd -->
+<!-- export surface: sha256 ba8b8f33730cbee3cb3fc2dfbc37217bbe9f86cd298a91607b76acb24fb7feda -->

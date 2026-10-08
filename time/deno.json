@@ -8,6 +8,7 @@
     "./ics": "./ics.ts",
     "./ics-core": "./ics-core.ts",
     "./ical": "./ical.ts",
+    "./rrule": "./rrule.ts",
     "./ical-tasks": "./ical-tasks.ts"
   },
   "publish": {

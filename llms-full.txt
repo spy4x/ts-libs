@@ -5763,6 +5763,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/ics-core`   | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                        |
 | `time/ical`       | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                       |
 | `time/ical-tasks` | Tasks and events on the ical model: `readTodo`, `patchTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`                                                                                                                              |
+| `time/rrule`      | Repeat rules for the subset Tasks.org writes: `parseRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
@@ -6049,9 +6050,10 @@ const ics = serializeIcal(root) // every other line byte-identical to icsFromSer
   CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE.
 - **Instants.** `resolveInstant` resolves UTC values and IANA `TZID`s through `time/tz`. A vendor
   zone such as Outlook's `W. Europe Standard Time` stays unresolved (`undefined`), never guessed.
-- **Not here.** No recurrence expansion, no VTIMEZONE generation, no networking. Task and event
-  semantics (status, `RELATED-TO`, `SEQUENCE` bumps) live in `time/ical-tasks`. Runs in a browser: the module and
-  its imports use no `Deno.*` API, and a test enforces it.
+- **Not here.** No recurrence expansion (see `time/rrule`), no VTIMEZONE generation, no
+  networking. Task and event semantics (status, `RELATED-TO`, `SEQUENCE` bumps) live in
+  `time/ical-tasks`. Runs in a browser: the module and its imports use no `Deno.*` API, and a test
+  enforces it.
 
 ### Tasks and events
 
@@ -6071,6 +6073,49 @@ A patch changes the patched fields plus DTSTAMP, LAST-MODIFIED and SEQUENCE; `nu
 Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
 task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
 `completeSeries: true`, and moving a series to its next occurrence is not done here. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
+
+## Repeat rules
+
+`time/rrule` computes the next occurrence of an `RRULE` for the subset Tasks.org writes, and refuses
+the rest by name so an app can say "complete this one in Tasks.org" instead of guessing.
+
+```ts
+import { IcalDateKind } from "@spy4x/time/ical"
+import { describeRrule, nextOccurrence, parseRrule } from "@spy4x/time/rrule"
+
+const parsed = parseRrule("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TH")
+if (!parsed.success) throw new Error(`${parsed.error.code} ${parsed.error.part}`) // BYSETPOS, …
+describeRrule(parsed.output) // "Every 2 weeks on Mon, Thu"
+// Complete a repeating task like Tasks.org: the due date is both `start` and `after`.
+const due = {
+  kind: IcalDateKind.Zoned,
+  date: "2026-03-26",
+  time: "09:00:00",
+  tzid: "Europe/Berlin",
+}
+const next = nextOccurrence(parsed.output, { start: due, after: new Date("2026-03-26T08:00:00Z") })
+// next.output: an IcalDateValue of the start's kind, or null once COUNT or UNTIL is used up
+```
+
+- **Subset.** `FREQ` DAILY, WEEKLY, MONTHLY, YEARLY; `INTERVAL`; `BYDAY` for WEEKLY and MONTHLY
+  (ordinals such as `2MO`, `-1FR` for MONTHLY); `BYMONTHDAY`; `BYMONTH`; `COUNT`; `UNTIL`; `WKST`. Anything else (`BYSETPOS`, `BYHOUR`,
+  `FREQ=HOURLY`, `X-` parts) is `RruleErrorCode.Unsupported` with `error.part` naming it.
+- **Completing a task as Tasks.org does.** Pass the task's due date as both `start` and `after`,
+  even when the task is overdue; DTSTART is ignored. The caller lowers `COUNT` by one per
+  completion and the series stops at 1. "Repeat after completion" is stored only on the phone and
+  never appears in the VTODO, so it cannot be honoured.
+- **Month ends.** A plain monthly rule (no `BYDAY`, no `BYMONTH`, no `BYMONTHDAY` or one positive
+  day) is anchored on that day, or on the start's day, and uses the month's last day when a month
+  is shorter than the anchor, as Tasks.org does: 31 January is followed by 28 February. Like
+  Tasks.org, when the month `INTERVAL` months after the start is too short for the anchor, its
+  last day comes next even if the anchor is still ahead in the start's month: `BYMONTHDAY=31` from
+  15 January gives 28 February, not 31 January. Every other rule skips a missing day
+  (RFC 5545 section 3.3.10): yearly on 29 February waits for the next leap year, and
+  `BYMONTHDAY=30,31` jumps from January to March.
+- **Refused for Tasks.org parity.** `BYDAY` with DAILY or YEARLY, because Tasks.org deletes it
+  there and no answer of ours could match.
+- **Clock changes.** Occurrences keep the start's wall clock. A time a zone skips (spring forward)
+  keeps its date and wall clock; a time it repeats (fall back) occurs once, at its first reading.
 
 ## Not in scope
 
