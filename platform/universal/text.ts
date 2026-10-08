@@ -1,28 +1,34 @@
 /**
  * Small, dependency-free text helpers: accent and case folding (`fold`), a list filter
- * (`searchWords`, `search`, `filterRows`), a
- * naive English pluraliser (`pluralize`), a kebab-case converter (`convertToKebabCase`), edit
+ * (`searchWords`, `search`, `filterRows`), a naive English pluraliser (`pluralize`), a kebab-case converter (`convertToKebabCase`), edit
  * distance and a normalised similarity score (`levenshtein`, `similarity`), a UTF-8
  * byte-length count (`utf8ByteLength`), and a name's initials in any script (`initials`).
  *
  * @module
  */
 
-/** Combining marks left after `NFD`: accents, tones and the like. */
-const MARKS = /\p{M}/gu
-/** Letters whose stroke is not a combining mark, so `NFD` leaves them whole. */
+/**
+ * Combining marks after a Latin, Greek or Cyrillic letter, where they are accents. In Devanagari,
+ * Thai and similar scripts the marks are vowel signs and part of the spelling, so they stay.
+ */
+const ACCENTS = /([\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}])\p{M}+/gu
+/** Common letters whose stroke is not a combining mark, so `NFD` leaves them whole. */
 const STROKED: Record<string, string> = { "đ": "d", "ł": "l", "ø": "o", "ħ": "h", "ŧ": "t" }
+const ASCII = /^[\x00-\x7f]*$/
 
 /**
  * Fold text for matching: accents removed and lower-cased.
  *
  * `"Đà Nẵng"` and `"da nang"` fold to the same `"da nang"`, and `"ÉCU"` to `"ecu"`. Accents go
- * through `NFD` plus a mark strip; the few letters whose stroke is part of the letter (`đ`, `ł`,
- * `ø`, `ħ`, `ŧ`) are mapped by hand. Case folding is `toLowerCase()`, not `toLocaleLowerCase()`,
- * so a match never depends on the host locale.
+ * through `NFD` and lose the marks that follow a Latin, Greek or Cyrillic letter; marks in other
+ * scripts are vowel signs and stay, so Hindi `"का"` and `"कि"` still differ. A few common letters
+ * whose stroke is part of the letter (`đ`, `ł`, `ø`, `ħ`, `ŧ`) are mapped by hand; rarer ones such
+ * as `ǥ` stay as they are. Case folding is `toLowerCase()`, not `toLocaleLowerCase()`, so a match
+ * never depends on the host locale. Plain ASCII skips normalisation, so the common case stays cheap.
  */
 export function fold(value: string): string {
-  return value.normalize("NFD").replace(MARKS, "").toLowerCase().replace(
+  if (ASCII.test(value)) return value.toLowerCase()
+  return value.normalize("NFD").replace(ACCENTS, "$1").normalize("NFC").toLowerCase().replace(
     /[đłøħŧ]/g,
     (letter) => STROKED[letter],
   )

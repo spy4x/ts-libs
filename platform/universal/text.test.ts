@@ -34,6 +34,12 @@ describe("fold", () => {
     expect(fold("Đà Nẵng")).toBe("da nang")
     expect(fold("ÉCU")).toBe("ecu")
     expect(fold("Łódź Øre Ħamrun Ŧ")).toBe("lodz ore hamrun t")
+    expect(fold("Ёлка Άλφα")).toBe("елка αλφα")
+  })
+
+  it("keeps vowel signs in scripts where they are spelling, and keeps syllables whole", () => {
+    expect(fold("किताब")).toBe("किताब")
+    expect(fold("가")).toBe("가")
   })
 })
 
@@ -41,6 +47,14 @@ describe("search", () => {
   it("matches a substring case-insensitively", () => {
     expect(search("Hello World", "wor")).toBe(true)
     expect(search("Hello World", "xyz")).toBe(false)
+  })
+
+  it("tells Hindi words apart by their vowel signs", () => {
+    expect(search("का", "कि")).toBe(false)
+  })
+
+  it("matches nothing for a word of bare combining marks", () => {
+    expect(search("Café", "\u0301")).toBe(false)
   })
 
   it("ignores accents on either side", () => {
