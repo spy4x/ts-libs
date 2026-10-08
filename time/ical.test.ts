@@ -454,6 +454,16 @@ Deno.test("parseIcal reports malformed input with its line number", () => {
   }
 })
 
+Deno.test("parseIcal names a continuation line that has no line to continue", () => {
+  for (const text of [" X:1\r\nBEGIN:A\r\nEND:A\r\n", "\tX:1\r\nBEGIN:A\r\nEND:A\r\n"]) {
+    assertEquals(
+      parseIcal(text).error?.message,
+      "continuation line without a line to continue",
+      JSON.stringify(text),
+    )
+  }
+})
+
 Deno.test("time/ical and its local imports use web-platform APIs only", async () => {
   const seen = new Set<string>()
   const queue = [new URL("./ical.ts", import.meta.url)]
@@ -465,7 +475,7 @@ Deno.test("time/ical and its local imports use web-platform APIs only", async ()
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|\s)\/\/.*$/gm, "$1")
     assertEquals(/\bDeno\./.test(code), false, `${url.pathname} uses Deno.*`)
-    for (const [, specifier] of code.matchAll(/\bfrom\s+"([^"]+)"/g)) {
+    for (const [, specifier] of code.matchAll(/\b(?:from|import)\s*\(?\s*"([^"]+)"/g)) {
       assert(specifier!.startsWith("./"), `${url.pathname} imports ${specifier}`)
       queue.push(new URL(specifier!, url))
     }
