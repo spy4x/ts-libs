@@ -2352,8 +2352,9 @@ two hosts share one store: one process serving both, or a shared `OAuthStore`.
   another MCP server. Refresh tokens last 30 days and rotate on every use; a reused one revokes the
   whole grant. A revoked grant also refuses tokens saved after the revocation, so a replay that
   races the first redemption leaves no working token. A refresh that names another resource or a
-  wider scope is refused without spending the token; one from another client spends it. The PKCE verifier is compared in constant
-  time. `offline_access` is accepted but not advertised, since refresh tokens are always issued.
+  wider scope is refused without spending the token; one from another client spends it. The PKCE
+  verifier is compared in constant time. `offline_access` is accepted but not advertised, since
+  refresh tokens are always issued.
 - **Errors.** RFC 6749 codes: `invalid_grant` for every bad code or refresh token, `invalid_target`
   for a foreign resource, `invalid_client` for any client authentication.
 

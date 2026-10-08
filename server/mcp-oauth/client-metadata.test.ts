@@ -76,6 +76,8 @@ describe("createClientMetadataFetcher", () => {
     const long = (await load("x".repeat(500)))?.clientName ?? ""
     expect(Array.from(long)).toHaveLength(100)
     expect(long.endsWith("…")).toBe(true)
+    const emoji = (await load("😀".repeat(150)))?.clientName ?? ""
+    expect(emoji).toBe("😀".repeat(99) + "…")
     expect((await load("\u200B\u202E"))?.clientName).toBe("claude.example")
   })
 

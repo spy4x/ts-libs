@@ -48,9 +48,9 @@ const MAX_TOKEN_BODY_BYTES = 16 * 1024
 const MAX_CONSENT_BODY_BYTES = 4 * 1024
 /** S256 output: 32 bytes as unpadded base64url. */
 const CODE_CHALLENGE = /^[A-Za-z0-9_-]{43}$/
-/** RFC 7636 section 4.1. */
 /** An HTTP authentication scheme name: one RFC 9110 token. */
 const AUTH_SCHEME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,32}$/
+/** RFC 7636 section 4.1. */
 const CODE_VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/
 const FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 
