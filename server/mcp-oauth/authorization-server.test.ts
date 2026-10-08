@@ -752,20 +752,34 @@ describe("createAuthorizationServer", () => {
 
 describe("defaultConsentPage", () => {
   it("escapes every value it shows", () => {
+    const hostile = (field: string) => `"><x-${field}>`
     const html = defaultConsentPage({
-      consentId: `"><script>`,
-      action: "/authorize",
-      clientId: "https://claude.example/c",
-      clientHost: "claude.example",
-      clientName: "<img src=x onerror=alert(1)>",
-      redirectUri: CLAUDE_REDIRECT_URI,
-      redirectHost: "claude.ai",
-      loopbackRedirect: false,
-      resource: RESOURCE,
-      scopes: [],
+      consentId: hostile("consent"),
+      action: `/authorize${hostile("action")}`,
+      clientId: `https://claude.example/c${hostile("client-id")}`,
+      clientHost: hostile("client-host"),
+      clientName: hostile("client-name"),
+      redirectUri: `${CLAUDE_REDIRECT_URI}${hostile("redirect-uri")}`,
+      redirectHost: hostile("redirect-host"),
+      loopbackRedirect: true,
+      resource: `${RESOURCE}${hostile("resource")}`,
+      scopes: [hostile("scope")],
     })
-    expect(html).not.toContain("<img")
-    expect(html).not.toContain("<script>")
-    expect(html).toContain("&lt;img")
+    for (
+      const field of [
+        "consent",
+        "action",
+        "client-id",
+        "client-host",
+        "client-name",
+        "redirect-uri",
+        "redirect-host",
+        "resource",
+        "scope",
+      ]
+    ) {
+      expect(html).not.toContain(`<x-${field}>`)
+      expect(html).toContain(`&lt;x-${field}&gt;`)
+    }
   })
 })
