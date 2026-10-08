@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/server",
-  "version": "1.37.0",
+  "version": "1.38.0",
   "exports": {
     "./http/bounded-body": "./http/bounded-body.ts",
     "./http/cors": "./http/cors.ts",
@@ -27,6 +27,8 @@
     "./lockout": "./lockout/mod.ts",
     "./lockout/memory-store": "./lockout/memory-store.ts",
     "./lockout/postgres": "./lockout/postgres.ts",
+    "./mcp-oauth": "./mcp-oauth/mod.ts",
+    "./mcp-oauth/memory-store": "./mcp-oauth/memory-store.ts",
     "./subscribers": "./subscribers/mod.ts",
     "./subscribers/file": "./subscribers/file.ts",
     "./subscribers/memory": "./subscribers/memory.ts",

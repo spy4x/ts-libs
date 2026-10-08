@@ -1,15 +1,17 @@
 # `@spy4x/time`
 
 Time and calendar primitives with no application domain attached. IANA timezone math on `Intl`,
-plus an RFC 5545 iCalendar writer. Zero runtime dependencies.
+plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime dependencies.
 
-| Module          | Exports                                                                                                                                                                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `time/date`     | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
-| `time/locale`   | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `weekdayLabels`, `WeekdayLabel`                                                                                                                               |
-| `time/tz`       | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, …                                                                              |
-| `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                           |
-| `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                        |
+| Module            | Exports                                                                                                                                                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `time/date`       | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
+| `time/locale`     | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `weekdayLabels`, `WeekdayLabel`                                                                                                                               |
+| `time/tz`         | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, …                                                                              |
+| `time/ics`        | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                           |
+| `time/ics-core`   | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                        |
+| `time/ical`       | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                       |
+| `time/ical-tasks` | Tasks and events on the ical model: `readTodo`, `patchTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`                                                                                                                              |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
@@ -254,6 +256,71 @@ generateIcs({ ...event, start: zonedDateTime("2026-08-28", "10:00", "Europe/Berl
 generateIcs(event, { prodid, dtstamp })
 ```
 
+## Editing a calendar object
+
+`time/ical` reads an iCalendar object written by any client, lets you change a few properties, and
+writes it back without losing what you did not touch: reminders, subtask links, repeat rules,
+Tasks.org's sort order, vendor `X-` properties, time zone definitions and recurrence overrides.
+
+```ts
+import {
+  getProperty,
+  parseIcal,
+  readDate,
+  serializeIcal,
+  writeDate,
+  writeText,
+} from "@spy4x/time/ical"
+
+const parsed = parseIcal(icsFromServer)
+if (!parsed.success) throw new Error(parsed.error.message)
+const root = parsed.output
+const todo = root.components.find((component) => component.name === "VTODO")!
+writeText(todo, "SUMMARY", "Renew the passport")
+const due = readDate(getProperty(todo, "DUE")!)! // { kind: IcalDateKind.Date, date: "2026-10-09" }
+writeDate(todo, "DUE", { ...due, date: "2026-10-12" }, { root }) // stays DUE;VALUE=DATE
+const ics = serializeIcal(root) // every other line byte-identical to icsFromServer
+```
+
+- **Lossless.** Each property keeps the physical lines it was parsed from. `serializeIcal` writes
+  them back unchanged while the property's name, parameters and value still match, and writes a
+  fresh line, folded to 75 octets, only for a property that changed. Parse then serialise of
+  untouched CRLF input is byte-identical, including a property a server wrote after a
+  subcomponent (Radicale writes `X-APPLE-SORT-ORDER` after `VALARM`).
+- **Wire format.** Output uses CRLF; bare LF input is accepted. Continuation lines may start with
+  SPACE or HTAB. Parameters are decoded per RFC 6868 and quoted when they contain `:`, `;` or `,`.
+  `readList` merges every line of a property (several `CATEGORIES` lines) and splits only on
+  unescaped commas. `parseIcal` refuses input over `maxBytes` (4 MiB) or nested deeper than
+  `maxDepth` (16) and returns `{ success, output, error }` instead of throwing.
+- **Dates keep their kind.** `readDate` returns a date, a floating time, a UTC time or a time with
+  a `TZID`, and `writeDate` writes the same kind back. It refuses a DUE or DTEND whose value type
+  would differ from DTSTART's, a non-UTC COMPLETED, DTSTAMP, CREATED or LAST-MODIFIED, a second
+  CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE.
+- **Instants.** `resolveInstant` resolves UTC values and IANA `TZID`s through `time/tz`. A vendor
+  zone such as Outlook's `W. Europe Standard Time` stays unresolved (`undefined`), never guessed.
+- **Not here.** No recurrence expansion, no VTIMEZONE generation, no networking. Task and event
+  semantics (status, `RELATED-TO`, `SEQUENCE` bumps) live in `time/ical-tasks`. Runs in a browser: the module and
+  its imports use no `Deno.*` API, and a test enforces it.
+
+### Tasks and events
+
+`time/ical-tasks` reads and patches a VTODO or VEVENT without losing the rest of the object.
+
+```ts
+import { patchTodo, readTodo, TodoStatus } from "@spy4x/time/ical-tasks"
+
+const todo = readTodo(root) // summary, status, due, relatedTo (PARENT by default), sortOrder, alarms…
+const result = patchTodo(root, { status: TodoStatus.Completed, priority: null }, {
+  now: new Date(),
+})
+if (!result.success) throw new Error(result.error.message) // root is unchanged
+```
+
+A patch changes the patched fields plus DTSTAMP, LAST-MODIFIED and SEQUENCE; `null` clears a field.
+Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
+task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
+`completeSeries: true`, and moving a series to its next occurrence is not done here. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
+
 ## Not in scope
 
 **Across the package.** Inputs are typed values, and anything outside the type throws rather than
@@ -269,7 +336,7 @@ a non-negative integer and an empty mail address. There is no silent conversion 
 - **No other components.** No VTODO, no VJOURNAL, no VFREEBUSY, no multiple VEVENTs in one
   VCALENDAR.
 - **No parsing of a calendar.** The writer is write-only, and no ISO-8601 or relative-date parser
-  feeds it. A calendar client (`caldav/`) used to read one; it was removed from ts-libs (#63).
+  feeds it. Reading and editing an existing calendar object is `time/ical`'s job.
 - **No CalDAV wire concerns.** `RELATED-TO`, `ETag`/`If-Match` and HTTP transport are not this
   package's job.
 - **No product domain.** No bookings, hosts, guests, availability, rate limits or cancel tokens —
