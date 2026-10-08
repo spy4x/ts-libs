@@ -464,23 +464,26 @@ Deno.test("parseIcal names a continuation line that has no line to continue", ()
   }
 })
 
-Deno.test("time/ical and its local imports use web-platform APIs only", async () => {
-  const seen = new Set<string>()
-  const queue = [new URL("./ical.ts", import.meta.url)]
-  while (queue.length > 0) {
-    const url = queue.pop()!
-    if (seen.has(url.href)) continue
-    seen.add(url.href)
-    const code = (await Deno.readTextFile(url))
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/(^|\s)\/\/.*$/gm, "$1")
-    assertEquals(/\bDeno\./.test(code), false, `${url.pathname} uses Deno.*`)
-    for (const [, specifier] of code.matchAll(/\b(?:from|import)\s*\(?\s*"([^"]+)"/g)) {
-      assert(specifier!.startsWith("./"), `${url.pathname} imports ${specifier}`)
-      queue.push(new URL(specifier!, url))
+Deno.test("time/ical and time/ical-tasks and their local imports use web-platform APIs only", async () => {
+  // ical-tasks.ts adds only itself to the files ical.ts already reaches.
+  for (const [entry, count] of [["./ical.ts", 4], ["./ical-tasks.ts", 5]] as const) {
+    const seen = new Set<string>()
+    const queue = [new URL(entry, import.meta.url)]
+    while (queue.length > 0) {
+      const url = queue.pop()!
+      if (seen.has(url.href)) continue
+      seen.add(url.href)
+      const code = (await Deno.readTextFile(url))
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|\s)\/\/.*$/gm, "$1")
+      assertEquals(/\bDeno\./.test(code), false, `${url.pathname} uses Deno.*`)
+      for (const [, specifier] of code.matchAll(/\b(?:from|import)\s*\(?\s*"([^"]+)"/g)) {
+        assert(specifier!.startsWith("./"), `${url.pathname} imports ${specifier}`)
+        queue.push(new URL(specifier!, url))
+      }
     }
+    assertEquals(seen.size, count, `${entry} reaches ${[...seen].join(" ")}`)
   }
-  assertEquals(seen.size, 4, "ical.ts, ics-core.ts, tz.ts and date.ts")
 })
 
 Deno.test("foldLine output of a fresh property parses back to the same value", () => {
