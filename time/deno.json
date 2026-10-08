@@ -7,7 +7,8 @@
     "./tz": "./tz.ts",
     "./ics": "./ics.ts",
     "./ics-core": "./ics-core.ts",
-    "./ical": "./ical.ts"
+    "./ical": "./ical.ts",
+    "./rrule": "./rrule.ts"
   },
   "publish": {
     "exclude": ["testdata"]
