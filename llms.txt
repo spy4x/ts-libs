@@ -594,6 +594,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `debounce` (function), `jsr:@spy4x/platform`: Wrap `fn` in a trailing-edge debounce.
 - `err` (function), `jsr:@spy4x/platform`: Wrap a failure.
 - `filterRows` (function), `jsr:@spy4x/platform`: Keep the rows that every word of the query matches.
+- `fold` (function), `jsr:@spy4x/platform`: Fold text for matching: accents removed and lower-cased.
 - `formatBytes` (function), `jsr:@spy4x/platform`: A byte count for display, in binary (1024) steps: `"512 B"`, `"1.5 KB"`, `"2 MB"`.
 - `formatDecimal` (function), `jsr:@spy4x/platform`: Format a decimal number to exactly two decimal places.
 - `formatPct` (function), `jsr:@spy4x/platform`: Format a fraction in `0..1` as a percentage string with two decimals.
@@ -1212,6 +1213,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `convertToKebabCase` (function), `jsr:@spy4x/platform/universal/text`: Convert a free-form identifier to kebab-case.
 - `filterRows` (function), `jsr:@spy4x/platform/universal/text`: Keep the rows that every word of the query matches.
+- `fold` (function), `jsr:@spy4x/platform/universal/text`: Fold text for matching: accents removed and lower-cased.
 - `initials` (function), `jsr:@spy4x/platform/universal/text`: Reduce a name to one or two initials, e.g. for an avatar's fallback face.
 - `levenshtein` (function), `jsr:@spy4x/platform/universal/text`: Levenshtein edit distance between two strings, computed over code points.
 - `pluralize` (function), `jsr:@spy4x/platform/universal/text`: Naive English pluraliser for UI copy.
@@ -2423,4 +2425,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 ba8b8f33730cbee3cb3fc2dfbc37217bbe9f86cd298a91607b76acb24fb7feda -->
+<!-- export surface: sha256 d14c3465319f98097c14d5870b9be76f5f7a314cf6467c3b810f2e4d66915ea3 -->

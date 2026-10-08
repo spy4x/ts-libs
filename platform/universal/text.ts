@@ -1,11 +1,41 @@
 /**
- * Small, dependency-free text helpers: a list filter (`searchWords`, `search`, `filterRows`), a
- * naive English pluraliser (`pluralize`), a kebab-case converter (`convertToKebabCase`), edit
- * distance and a normalised similarity score (`levenshtein`, `similarity`), a UTF-8
- * byte-length count (`utf8ByteLength`), and a name's initials in any script (`initials`).
+ * Small, dependency-free text helpers: accent and case folding (`fold`), a list filter
+ * (`searchWords`, `search`, `filterRows`), a naive English pluraliser (`pluralize`), a
+ * kebab-case converter (`convertToKebabCase`), edit distance and a normalised similarity score
+ * (`levenshtein`, `similarity`), a UTF-8 byte-length count (`utf8ByteLength`), and a name's
+ * initials in any script (`initials`).
  *
  * @module
  */
+
+/**
+ * Combining marks after a Latin, Greek or Cyrillic letter, where they are accents. In Devanagari,
+ * Thai and similar scripts the marks are vowel signs and part of the spelling, so they stay.
+ */
+const ACCENTS = /([\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}])\p{M}+/gu
+/** Common letters whose stroke is not a combining mark, so `NFD` leaves them whole. */
+const STROKED: Record<string, string> = { "đ": "d", "ł": "l", "ø": "o", "ħ": "h", "ŧ": "t" }
+const ASCII = /^[ -~]*$/
+
+/**
+ * Fold text for matching: accents removed and lower-cased.
+ *
+ * `"Đà Nẵng"` and `"da nang"` fold to the same `"da nang"`, and `"ÉCU"` to `"ecu"`. Accents go
+ * through `NFD` and lose the marks that follow a Latin, Greek or Cyrillic letter; marks in other
+ * scripts are vowel signs and stay, so Hindi `"का"` and `"कि"` still differ. A few common letters
+ * whose stroke is part of the letter (`đ`, `ł`, `ø`, `ħ`, `ŧ`) are mapped by hand; rarer ones such
+ * as `ǥ` stay as they are. Case folding is `toLowerCase()`, not `toLocaleLowerCase()`, so a match
+ * never depends on the host locale. Printable ASCII skips normalisation, so the common case stays
+ * cheap. Like `ñ` to `n`, some letters fold into a neighbour: Cyrillic `й` matches `и`. Folding
+ * only ever adds matches.
+ */
+export function fold(value: string): string {
+  if (ASCII.test(value)) return value.toLowerCase()
+  return value.normalize("NFD").replace(ACCENTS, "$1").normalize("NFC").toLowerCase().replace(
+    /[đłøħŧ]/g,
+    (letter) => STROKED[letter],
+  )
+}
 
 /** Maximum number of words a query is split into; the rest are ignored. */
 const MAX_SEARCH_WORDS = 16
@@ -23,14 +53,15 @@ export function searchWords(query: string): string[] {
 /**
  * Whether one search word occurs in one value.
  *
- * A string matches on a case-insensitive substring. A number matches by equality, so
+ * A string matches on a substring after {@link fold}, so case and accents are ignored: `"cafe"`
+ * finds `"Café"`, and `"Đà"` finds `"da"`. A number matches by equality, so
  * `search(12, "12")` is true and `search(120, "12")` is false. Anything else, including `null`,
  * `undefined`, an empty string and an object, matches nothing, so a field a row does not have
  * cannot make every word match. `condition: false` makes the match fail outright.
  */
 export function search(value: unknown, word: string, condition = true): boolean {
   if (!condition || value === "") return false
-  if (typeof value === "string") return value.toLowerCase().includes(word.toLowerCase())
+  if (typeof value === "string") return fold(value).includes(fold(word))
   if (typeof value === "number") return value === Number(word)
   return false
 }
