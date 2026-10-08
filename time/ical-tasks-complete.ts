@@ -34,7 +34,14 @@ import {
   removeProperty,
   resolveInstant,
 } from "./ical.ts"
-import { patchTodo, readTodo, type Todo, type TodoPatch, TodoStatus } from "./ical-tasks.ts"
+import {
+  findMaster,
+  patchTodo,
+  readTodo,
+  type Todo,
+  type TodoPatch,
+  TodoStatus,
+} from "./ical-tasks.ts"
 import { nextOccurrence, parseRrule } from "./rrule.ts"
 import { hhmmInTz, isoDateInTz, isValidTimeZone } from "./tz.ts"
 
@@ -107,12 +114,6 @@ function rejected(result: IcalResult<unknown>) {
     CompleteTodoErrorCode.Rejected,
     result.error?.message ?? `the edit was refused`,
   )
-}
-
-function findTodo(root: IcalComponent): IcalComponent | undefined {
-  const isTodo = (component: IcalComponent) => component.name.toUpperCase() === `VTODO`
-  if (isTodo(root)) return root
-  return root.components.find((child) => isTodo(child) && !getProperty(child, `RECURRENCE-ID`))
 }
 
 /** The wall-clock zone of a value, or `undefined` when it has none we can read. */
@@ -203,7 +204,7 @@ export function completeTodo(
   root: IcalComponent,
   options: CompleteTodoOptions,
 ): CompleteTodoResult<CompleteTodoOutput> {
-  const target = findTodo(root)
+  const target = findMaster(root, `VTODO`)
   const todo = target && readTodo(root)
   if (!target || !todo) return refuse(CompleteTodoErrorCode.NoTodo, `no VTODO to complete`)
   if (isCompleted(todo)) {
@@ -254,7 +255,10 @@ export function completeTodo(
   const copy = structuredClone(root)
   const result = patchTodo(copy, patch, { now: options.now })
   if (!result.success) return rejected(result)
-  moveReminders(findTodo(copy)!, resolveInstant(newDue, FLOATING)!.getTime() - after.getTime())
+  moveReminders(
+    findMaster(copy, `VTODO`)!,
+    resolveInstant(newDue, FLOATING)!.getTime() - after.getTime(),
+  )
   commit(root, copy)
   return done({ kind: CompleteTodoKind.Advanced, todo: readTodo(root)! })
 }
@@ -272,7 +276,7 @@ export function reopenTodo(
   root: IcalComponent,
   options: CompleteTodoOptions,
 ): CompleteTodoResult<Todo> {
-  const todo = findTodo(root) && readTodo(root)
+  const todo = findMaster(root, `VTODO`) && readTodo(root)
   if (!todo) return refuse(CompleteTodoErrorCode.NoTodo, `no VTODO to reopen`)
   if (!isCompleted(todo)) {
     return refuse(CompleteTodoErrorCode.NotCompleted, `the task is not completed`)

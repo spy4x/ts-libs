@@ -212,7 +212,7 @@ function ok<T>(output: T): IcalResult<T> {
 }
 
 /** The component an app edits: `root` itself, or the first child of that name that is not an override. */
-function findMaster(root: IcalComponent, name: string): IcalComponent | undefined {
+export function findMaster(root: IcalComponent, name: string): IcalComponent | undefined {
   if (root.name.toUpperCase() === name) return root
   return root.components.find((component) =>
     component.name.toUpperCase() === name && !getProperty(component, "RECURRENCE-ID")

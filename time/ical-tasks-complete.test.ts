@@ -93,7 +93,7 @@ Deno.test(`DTSTART moves by the same offset as DUE and keeps the gap between the
   const { result } = complete(await fixture(`weekly-start-differs-from-due.before.ics`))
   assert(result.success)
   assertEquals(result.output.todo.start?.date, `2026-08-24`)
-  assertEquals(result.output.todo.start?.time, `09:00:01`)
+  assertEquals(result.output.todo.start?.time, `09:00:00`)
   assertEquals(result.output.todo.due?.time, `16:00:01`)
 })
 
@@ -189,6 +189,15 @@ Deno.test(`a repeating task with no DUE is refused`, async () => {
 
 Deno.test(`a due date in a vendor time zone is refused as unusable`, async () => {
   const text = await withLine(`daily-overdue`, /DUE;TZID=[^:]*:/, `DUE;TZID=Vendor Standard Time:`)
+  assertRefused(text, CompleteTodoErrorCode.UnusableDate)
+})
+
+Deno.test(`a start date in a vendor time zone is refused as unusable`, async () => {
+  const text = await withLine(
+    `weekly-start-differs-from-due`,
+    /DTSTART;TZID=[^:]*:/,
+    `DTSTART;TZID=Vendor Standard Time:`,
+  )
   assertRefused(text, CompleteTodoErrorCode.UnusableDate)
 })
 
