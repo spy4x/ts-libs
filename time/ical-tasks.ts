@@ -714,8 +714,8 @@ function transaction(
  * date, RRULE or RELATED-TO ({@link IcalErrorCode.InvalidValue}).
  *
  * A repeating task stays repeating, and `status: Completed` on one is refused unless
- * `options.completeSeries` is true, which ends the series as written. Moving a series to its
- * next occurrence is not done here. `percentComplete` other than 100 on a completed task is
+ * `options.completeSeries` is true, which ends the series as written. To move a series to its
+ * next occurrence, use `completeTodo`. `percentComplete` other than 100 on a completed task is
  * refused: reopen it with a `status` to change it.
  *
  * On success `root.properties` and `root.components` are replaced with new arrays, so objects
@@ -879,3 +879,5 @@ function addCreated(
   const result = putDate(component, root, "CREATED", now)
   return result.success ? undefined : (result as IcalResult<never>)
 }
+
+export * from "./ical-tasks-complete.ts"

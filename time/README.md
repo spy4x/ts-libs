@@ -11,7 +11,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/ics`        | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                           |
 | `time/ics-core`   | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                        |
 | `time/ical`       | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                       |
-| `time/ical-tasks` | Tasks and events on the ical model: `readTodo`, `patchTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`                                                                                                                              |
+| `time/ical-tasks` | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`                                                                                                |
 | `time/rrule`      | Repeat rules for the subset Tasks.org writes: `parseRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
 
 ```ts
@@ -321,7 +321,23 @@ if (!result.success) throw new Error(result.error.message) // root is unchanged
 A patch changes the patched fields plus DTSTAMP, LAST-MODIFIED and SEQUENCE; `null` clears a field.
 Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
 task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
-`completeSeries: true`, and moving a series to its next occurrence is not done here. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
+`completeSeries: true`. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
+
+`completeTodo` completes a task the way Tasks.org does. A plain task is completed; a repeating task
+moves to its next occurrence and stays open. The next date is the first occurrence after DUE (never
+DTSTART, never "now": an overdue task moves one step), DTSTART moves by the same offset, `COUNT`
+goes down by one, and the series ends in a completed task at `COUNT=1` or after `UNTIL`. A rule
+outside `time/rrule`, or one Tasks.org reads differently, is refused with a code and the document
+untouched. Tasks.org's "repeat after completion" switch is not in the VTODO, so it cannot be seen.
+`reopenTodo` undoes a completion.
+
+```ts
+import { completeTodo, CompleteTodoKind } from "@spy4x/time/ical-tasks"
+
+const done = completeTodo(root, { now: new Date(), timeZone: "Europe/Madrid" })
+if (!done.success) throw new Error(done.error.message) // root is unchanged
+done.output.kind === CompleteTodoKind.Advanced // the repeating task is open on its next date
+```
 
 ## Repeat rules
 
