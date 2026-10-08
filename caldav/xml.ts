@@ -86,6 +86,9 @@ class XmlFailure extends Error {
   }
 }
 
+/** Shorten document text quoted in an error message, so a hostile document cannot make it huge. */
+const clip = (text: string) => text.length > 64 ? `${text.slice(0, 64)}…` : text
+
 const fail = (code: XmlErrorCode, message: string): never => {
   throw new XmlFailure(code, message)
 }
@@ -121,7 +124,7 @@ function decodeEntities(raw: string): string {
         (code >= 0xe000 && code <= 0xfffd) ||
         (code >= 0x10000 && code <= 0x10ffff)
       if (!allowed) {
-        fail(XmlErrorCode.Malformed, `invalid character reference &${entity};`)
+        fail(XmlErrorCode.Malformed, `invalid character reference &${clip(entity)};`)
       }
       out += String.fromCodePoint(code)
     } else if (Object.hasOwn(PREDEFINED, entity)) {
@@ -129,7 +132,7 @@ function decodeEntities(raw: string): string {
     } else {
       fail(
         XmlErrorCode.Forbidden,
-        `entity &${entity}; is not one of the predefined five`,
+        `entity &${clip(entity)}; is not one of the predefined five`,
       )
     }
     from = end + 1
@@ -180,7 +183,7 @@ function splitQName(qname: string): [string, string] {
   const prefix = colon === -1 ? "" : qname.slice(0, colon)
   const local = colon === -1 ? qname : qname.slice(colon + 1)
   if ((colon !== -1 && !NC_NAME.test(prefix)) || !NC_NAME.test(local)) {
-    fail(XmlErrorCode.Malformed, `invalid name "${qname}"`)
+    fail(XmlErrorCode.Malformed, `invalid name "${clip(qname)}"`)
   }
   return [prefix, local]
 }
@@ -209,7 +212,7 @@ function resolvePrefix(
 ): string {
   const namespace = lookupPrefix(stack, own, prefix)
   if (namespace === undefined) {
-    fail(XmlErrorCode.Malformed, `unbound prefix in "${qname}"`)
+    fail(XmlErrorCode.Malformed, `unbound prefix in "${clip(qname)}"`)
   }
   return namespace as string
 }
@@ -218,9 +221,9 @@ function resolvePrefix(
 function checkDeclaration(prefix: string, namespace: string): void {
   const reserved = prefix === "xml" ? namespace !== XML_NS : prefix === "xmlns" ||
     namespace === XMLNS_NS || (namespace === XML_NS && prefix !== "xml")
-  if (reserved) fail(XmlErrorCode.Malformed, `reserved namespace binding for "${prefix}"`)
+  if (reserved) fail(XmlErrorCode.Malformed, `reserved namespace binding for "${clip(prefix)}"`)
   if (prefix !== "" && namespace === "") {
-    fail(XmlErrorCode.Malformed, `empty namespace for xmlns:${prefix}`)
+    fail(XmlErrorCode.Malformed, `empty namespace for xmlns:${clip(prefix)}`)
   }
 }
 
@@ -310,7 +313,7 @@ function tokenize(text: string, options: XmlParseOptions): XmlElement {
       const qname = text.slice(pos + 2, end - 1).trimEnd()
       const open = stack.pop()
       if (open === undefined || open.qname !== qname) {
-        fail(XmlErrorCode.Malformed, `unexpected end tag </${qname}>`)
+        fail(XmlErrorCode.Malformed, `unexpected end tag </${clip(qname)}>`)
       }
       pos = end
     } else {
@@ -319,7 +322,7 @@ function tokenize(text: string, options: XmlParseOptions): XmlElement {
   }
   if (root === null) fail(XmlErrorCode.Malformed, "no root element")
   if (stack.length > 0) {
-    fail(XmlErrorCode.Malformed, `unclosed element <${stack.at(-1)?.qname}>`)
+    fail(XmlErrorCode.Malformed, `unclosed element <${clip(stack.at(-1)?.qname ?? "")}>`)
   }
   return root as unknown as XmlElement
 
@@ -336,7 +339,7 @@ function tokenize(text: string, options: XmlParseOptions): XmlElement {
     for (;;) {
       while (at < text.length && isSpace(text[at])) at++
       if (at >= text.length) {
-        fail(XmlErrorCode.Malformed, `unterminated start tag <${qname}`)
+        fail(XmlErrorCode.Malformed, `unterminated start tag <${clip(qname)}`)
       }
       if (text[at] === ">") break
       if (text.startsWith("/>", at)) {
@@ -351,21 +354,21 @@ function tokenize(text: string, options: XmlParseOptions): XmlElement {
       const name = text.slice(nameStart, at)
       while (at < text.length && isSpace(text[at])) at++
       if (name === "" || text[at] !== "=") {
-        fail(XmlErrorCode.Malformed, `bad attribute in <${qname}`)
+        fail(XmlErrorCode.Malformed, `bad attribute in <${clip(qname)}`)
       }
       at++
       while (at < text.length && isSpace(text[at])) at++
       const quote = text[at]
       if (quote !== `"` && quote !== "'") {
-        fail(XmlErrorCode.Malformed, `unquoted attribute ${name}`)
+        fail(XmlErrorCode.Malformed, `unquoted attribute ${clip(name)}`)
       }
       const close = text.indexOf(quote, at + 1)
       if (close === -1) {
-        fail(XmlErrorCode.Malformed, `unterminated attribute ${name}`)
+        fail(XmlErrorCode.Malformed, `unterminated attribute ${clip(name)}`)
       }
       const raw = text.slice(at + 1, close)
       if (raw.includes("<")) {
-        fail(XmlErrorCode.Malformed, `"<" in attribute ${name}`)
+        fail(XmlErrorCode.Malformed, `"<" in attribute ${clip(name)}`)
       }
       rawAttributes.push([name, decodeEntities(raw)])
       at = close + 1
@@ -380,7 +383,7 @@ function tokenize(text: string, options: XmlParseOptions): XmlElement {
     const seen = new Set<string>()
     for (const [name, value] of rawAttributes) {
       if (seen.has(name)) {
-        fail(XmlErrorCode.Malformed, `duplicate attribute ${name}`)
+        fail(XmlErrorCode.Malformed, `duplicate attribute ${clip(name)}`)
       }
       seen.add(name)
       if (name !== "xmlns" && !name.startsWith("xmlns:")) continue
@@ -405,7 +408,7 @@ function tokenize(text: string, options: XmlParseOptions): XmlElement {
         : resolvePrefix(stack, declared, attributePrefix, name)
       // Two prefixes bound to one namespace still name the same attribute.
       const key = `${namespace} ${attributeLocal}`
-      if (attributeNames.has(key)) fail(XmlErrorCode.Malformed, `duplicate attribute ${name}`)
+      if (attributeNames.has(key)) fail(XmlErrorCode.Malformed, `duplicate attribute ${clip(name)}`)
       attributeNames.add(key)
       element.attributes.push({ namespace, name: attributeLocal, value })
     }
@@ -469,7 +472,7 @@ export interface DavResponse {
 function parseStatusLine(line: string): number {
   const match = /^HTTP\/\d+(?:\.\d+)?\s+(\d{3})(?:\s|$)/.exec(line.trim())
   if (match === null) {
-    fail(XmlErrorCode.Malformed, `invalid status line "${line.trim()}"`)
+    fail(XmlErrorCode.Malformed, `invalid status line "${clip(line.trim())}"`)
   }
   return Number((match as RegExpExecArray)[1])
 }
@@ -493,7 +496,7 @@ export function parseMultistatus(
     if (root.namespace !== DAV_NS || root.name !== "multistatus") {
       fail(
         XmlErrorCode.Malformed,
-        `root element is {${root.namespace}}${root.name}, not multistatus`,
+        `root element is {${clip(root.namespace)}}${clip(root.name)}, not multistatus`,
       )
     }
     const responses = childElements(root, DAV_NS, "response").map(
@@ -603,7 +606,7 @@ function escapeWith(value: string, special: RegExp): string {
 
 /** Throw a `TypeError` unless `name` is a valid XML name without a prefix. */
 function assertXmlName(name: string): void {
-  if (!NC_NAME.test(name)) throw new TypeError(`"${name}" is not a valid XML name`)
+  if (!NC_NAME.test(name)) throw new TypeError(`"${clip(name)}" is not a valid XML name`)
 }
 
 /**

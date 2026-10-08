@@ -345,6 +345,12 @@ describe("parseXml", () => {
     }
   })
 
+  it("quotes at most 64 characters of the document in an error", () => {
+    const result = parseXml(`<${"a".repeat(10_000)}<b/>`)
+    assert(!result.success)
+    assertEquals(result.error.message, `invalid name "${"a".repeat(64)}…"`)
+  })
+
   it("refuses declarations that rebind the reserved xml and xmlns prefixes", () => {
     for (
       const declaration of [
