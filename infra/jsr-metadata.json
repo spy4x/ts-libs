@@ -1,10 +1,14 @@
 {
-  "$comment": "Applied by `deno task jsr:metadata` (infra/scripts/jsr-metadata.ts) via JSR's PATCH package API. Each package gets its own description, its GitHub repository link, and the runtime flags this repo can back with evidence: `deno: true` everywhere (every package is type-checked and tested on Deno in CI), plus `browser: true` only for the two packages with zero `Deno.*` usage anywhere in their sources (validation, time). See CONTRIBUTING.md 'Maintaining' for how to run this against the real API.",
+  "$comment": "Applied by `deno task jsr:metadata` (infra/scripts/jsr-metadata.ts) via JSR's PATCH package API. Each package gets its own description, its GitHub repository link, and the runtime flags this repo can back with evidence: `deno: true` everywhere (every package is type-checked and tested on Deno in CI), plus `browser: true` only for the packages with zero `Deno.*` usage anywhere in their sources (validation, time, caldav). See CONTRIBUTING.md 'Maintaining' for how to run this against the real API.",
   "repository": { "owner": "spy4x", "name": "ts-libs" },
   "packages": {
     "billing": {
       "description": "Provider-neutral payments: checkout, customer portal and verified webhook events, with a Stripe adapter.",
       "runtimeCompat": { "deno": true }
+    },
+    "caldav": {
+      "description": "CalDAV building blocks: a safe WebDAV multistatus reader, escaped request bodies, and href and origin rules.",
+      "runtimeCompat": { "deno": true, "browser": true }
     },
     "email": {
       "description": "SMTP sending, address parsing, an HTML mail wrapper, and a DKIM signature checker for incoming mail.",

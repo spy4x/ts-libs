@@ -21,6 +21,7 @@ exactly one top-level directory.
 | `billing/`      | provider-neutral payments (checkout, portal, webhook events), Stripe adapter                                                                                                                                                                                     |
 | `email/`        | address, html, message, sender, smtp transport, dkim-verify                                                                                                                                                                                                      |
 | `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync                                                                                                                                                                                                  |
+| `caldav/`       | WebDAV XML reader and request builders, CalDAV URL rules (client planned)                                                                                                                                                                                        |
 | `validation/`   | arktype validate helpers, validation model                                                                                                                                                                                                                       |
 
 ## Adding a package

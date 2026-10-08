@@ -11,6 +11,7 @@
   "workspace": [
     "./ai",
     "./billing",
+    "./caldav",
     "./email",
     "./integrations",
     "./net",
@@ -174,6 +175,8 @@
   },
   "exclude": [
     ".volumes",
+    // Recorded server responses, byte for byte: `deno fmt` would re-indent the XML.
+    "caldav/testdata",
     "**/coverage/*",
     "**/dist/*",
     "node_modules",

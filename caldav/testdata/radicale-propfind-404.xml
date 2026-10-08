@@ -1,0 +1,2 @@
+<?xml version='1.0' encoding='utf-8'?>
+<multistatus xmlns="DAV:" xmlns:ns1="urn:example:missing"><response><href>/user%40example.com/inbox/task-file-name.ics</href><propstat><prop><getetag>"81aae0839f994b318c18c4acea1896b00dafa0de7cc42c881249abab455ed167"</getetag><getcontenttype>text/calendar;charset=utf-8;component=VTODO</getcontenttype></prop><status>HTTP/1.1 200 OK</status></propstat><propstat><prop><ns1:no-such-property /></prop><status>HTTP/1.1 404 Not Found</status></propstat></response></multistatus>
