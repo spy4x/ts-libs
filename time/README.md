@@ -334,7 +334,7 @@ untouched. Tasks.org's "repeat after completion" switch is not in the VTODO, so 
 ```ts
 import { completeTodo, CompleteTodoKind } from "@spy4x/time/ical-tasks"
 
-const done = completeTodo(root, { now: new Date(), timeZone: "Europe/Madrid" })
+const done = completeTodo(root, { now: new Date() })
 if (!done.success) throw new Error(done.error.message) // root is unchanged
 done.output.kind === CompleteTodoKind.Advanced // the repeating task is open on its next date
 ```

@@ -36,7 +36,7 @@ async function withLine(name: string, from: string | RegExp, to: string): Promis
   return changed
 }
 
-function complete(text: string, options: { now: Date; timeZone?: string } = OPTIONS) {
+function complete(text: string, options: { now: Date } = OPTIONS) {
   const root = parse(text)
   const result = completeTodo(root, options)
   return { root, result, text: serializeIcal(root) }
@@ -45,7 +45,7 @@ function complete(text: string, options: { now: Date; timeZone?: string } = OPTI
 function assertRefused(
   text: string,
   code: CompleteTodoErrorCode,
-  options: { now: Date; timeZone?: string } = OPTIONS,
+  options: { now: Date } = OPTIONS,
 ): string | undefined {
   const { result, text: after } = complete(text, options)
   assert(!result.success, `expected a refusal with code ${code}`)
@@ -190,9 +190,9 @@ Deno.test(`a document with no VTODO is refused`, () => {
   )
 })
 
-Deno.test(`floating times are read in the given time zone when the rule is stepped`, async () => {
+Deno.test(`a floating due time moves a day and keeps its time of day`, async () => {
   const text = await withLine(`daily-overdue`, /DUE;TZID=[^:]*:/, `DUE:`)
-  const { result } = complete(text, { now: NOW, timeZone: `Asia/Ho_Chi_Minh` })
+  const { result } = complete(text)
   assert(result.success)
   assertEquals(result.output.todo.due?.date, `2026-08-15`)
   assertEquals(result.output.todo.due?.time, `11:00:01`)

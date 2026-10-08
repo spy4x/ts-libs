@@ -58,7 +58,7 @@ export enum CompleteTodoErrorCode {
   NoDueDate,
   /** The repeat rule is outside what this module reproduces (`part` names the rule part). */
   UnsupportedRule,
-  /** A date has no usable instant, such as a vendor TZID or an unknown `timeZone`. */
+  /** A date has no usable instant, such as a vendor TZID. */
   UnusableDate,
   /** The edit itself was refused by the task helpers; `message` says why. */
   Rejected,
@@ -88,12 +88,10 @@ export interface CompleteTodoOutput {
 export interface CompleteTodoOptions {
   /** The moment of the edit: DTSTAMP, LAST-MODIFIED and, for completing, COMPLETED. */
   now: Date
-  /**
-   * IANA zone that reads floating times and dates, as the phone's zone does. Default `UTC`.
-   * Zoned and UTC values use their own zone.
-   */
-  timeZone?: string
 }
+
+/** Floating times and dates are read as UTC: only differences between them are used. */
+const FLOATING = { zone: `UTC` }
 
 const DAY_MS = 86_400_000
 
@@ -118,12 +116,12 @@ function findTodo(root: IcalComponent): IcalComponent | undefined {
 }
 
 /** The wall-clock zone of a value, or `undefined` when it has none we can read. */
-function zoneOf(value: IcalDateValue, fallback: string): string | undefined {
+function zoneOf(value: IcalDateValue): string | undefined {
   const zone = value.kind === IcalDateKind.Utc
     ? `UTC`
     : value.kind === IcalDateKind.Zoned
     ? value.tzid
-    : fallback
+    : `UTC`
   return zone && isValidTimeZone(zone) ? zone : undefined
 }
 
@@ -143,7 +141,6 @@ function shift(
   value: IcalDateValue,
   from: IcalDateValue,
   to: IcalDateValue,
-  fallback: string,
 ): IcalDateValue | undefined {
   if (value.kind === IcalDateKind.Date) {
     return {
@@ -151,10 +148,10 @@ function shift(
       date: isoFromDays(isoDays(value.date) + isoDays(to.date) - isoDays(from.date)),
     }
   }
-  const zone = zoneOf(value, fallback)
-  const a = resolveInstant(from, { zone: fallback })
-  const b = resolveInstant(to, { zone: fallback })
-  const v = resolveInstant(value, { zone: fallback })
+  const zone = zoneOf(value)
+  const a = resolveInstant(from, FLOATING)
+  const b = resolveInstant(to, FLOATING)
+  const v = resolveInstant(value, FLOATING)
   if (!zone || !a || !b || !v) return undefined
   const moved = new Date(v.getTime() + b.getTime() - a.getTime())
   const seconds = String(moved.getUTCSeconds()).padStart(2, `0`)
@@ -242,17 +239,11 @@ export function completeTodo(
   const due = todo.due
   if (!due) return refuse(CompleteTodoErrorCode.NoDueDate, `a repeating task needs a DUE date`)
 
-  const zone = options.timeZone ?? `UTC`
-  const after = resolveInstant(due, { zone })
+  const after = resolveInstant(due, FLOATING)
   if (!after) {
     return refuse(CompleteTodoErrorCode.UnusableDate, `DUE has no usable time zone`)
   }
-  // COUNT is lowered by hand below; the series would otherwise be counted from DUE.
-  const next = nextOccurrence({ ...rule, count: undefined }, {
-    start: due,
-    after,
-    timeZone: zone,
-  })
+  const next = nextOccurrence(rule, { start: due, after })
   if (!next.success) {
     return refuse(CompleteTodoErrorCode.UnusableDate, next.error.message)
   }
@@ -261,7 +252,7 @@ export function completeTodo(
   const newDue = next.output
   const patch: TodoPatch = { due: newDue }
   if (todo.start) {
-    const start = shift(todo.start, due, newDue, zone)
+    const start = shift(todo.start, due, newDue)
     if (!start) {
       return refuse(CompleteTodoErrorCode.UnusableDate, `DTSTART has no usable time zone`)
     }
@@ -272,7 +263,7 @@ export function completeTodo(
   const copy = structuredClone(root)
   const result = patchTodo(copy, patch, { now: options.now })
   if (!result.success) return rejected(result)
-  moveReminders(findTodo(copy)!, resolveInstant(newDue, { zone })!.getTime() - after.getTime())
+  moveReminders(findTodo(copy)!, resolveInstant(newDue, FLOATING)!.getTime() - after.getTime())
   commit(root, copy)
   return done({ kind: CompleteTodoKind.Advanced, todo: readTodo(root)! })
 }
