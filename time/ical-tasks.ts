@@ -590,7 +590,7 @@ function applyTodo(
       "a completed task is 100 percent complete; reopen it with a status to change the percent",
     )
   }
-  if (patch.status === TodoStatus.Completed && !completeSeries) {
+  if (patch.status === TodoStatus.Completed && !completeSeries && !isCompleted(todo)) {
     const rrule = patch.rrule === undefined ? getProperty(todo, "RRULE") : patch.rrule
     if (rrule) {
       return fail(

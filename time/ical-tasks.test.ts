@@ -272,6 +272,20 @@ Deno.test("completing a repeating task is refused unless completeSeries is set",
   assertEquals(created.error?.code, IcalErrorCode.InvalidValue)
 })
 
+Deno.test("an ended series that resends status Completed can still be saved", async () => {
+  const done = parse(
+    (await fixture("stalwart-tasksorg-recurring.ics")).replace(
+      "STATUS:NEEDS-ACTION\r\n",
+      "STATUS:COMPLETED\r\nCOMPLETED:20250101T000000Z\r\n",
+    ),
+  )
+  const todo = () => done.components.find((c) => c.name === "VTODO")!
+  const before = getProperty(todo(), "COMPLETED")!.source
+  const saved = patchTodo(done, { status: TodoStatus.Completed, summary: "renamed" }, { now: NOW })
+  assert(saved.success, saved.error?.message)
+  assertEquals(getProperty(todo(), "COMPLETED")!.source, before)
+})
+
 Deno.test("a repeating task keeps its RRULE, reports repeats and is not advanced when completed", async () => {
   const text = await fixture("stalwart-tasksorg-recurring.ics")
   const root = parse(text)
