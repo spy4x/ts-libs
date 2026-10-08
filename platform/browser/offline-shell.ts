@@ -8,9 +8,10 @@
  *   (default `/api`). Data belongs to the app's own offline store, never to this cache.
  * - Files under `/assets/` (a build names them by content hash) are answered cache-first.
  * - Everything else is network-first, so a deploy shows at once; the cache answers only when the
- *   network fails. Only complete (status 200), unredirected responses are stored. A page load (`navigate`) that answers HTML is stored and
- *   served under one key (default `/`), because every route of a single-page app is the same
- *   document; any other page load (an image opened directly) is not stored.
+ *   network fails. Only complete (status 200), unredirected responses are stored. A page load
+ *   (`navigate`) that answers `text/html` is stored and served under one key (default `/`),
+ *   because every route of a single-page app is the same document; any other page load (an image
+ *   opened directly) is not stored.
  *
  * The worker's whole file is then the lines below. A browser cannot load a `.ts` URL or a `jsr:`
  * specifier, so bundle the worker (esbuild, Vite's worker build) before serving it:
