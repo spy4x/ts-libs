@@ -1,8 +1,9 @@
 /**
  * Small, dependency-free text helpers: accent and case folding (`fold`), a list filter
- * (`searchWords`, `search`, `filterRows`), a naive English pluraliser (`pluralize`), a kebab-case converter (`convertToKebabCase`), edit
- * distance and a normalised similarity score (`levenshtein`, `similarity`), a UTF-8
- * byte-length count (`utf8ByteLength`), and a name's initials in any script (`initials`).
+ * (`searchWords`, `search`, `filterRows`), a naive English pluraliser (`pluralize`), a
+ * kebab-case converter (`convertToKebabCase`), edit distance and a normalised similarity score
+ * (`levenshtein`, `similarity`), a UTF-8 byte-length count (`utf8ByteLength`), and a name's
+ * initials in any script (`initials`).
  *
  * @module
  */
@@ -24,7 +25,9 @@ const ASCII = /^[ -~]*$/
  * scripts are vowel signs and stay, so Hindi `"का"` and `"कि"` still differ. A few common letters
  * whose stroke is part of the letter (`đ`, `ł`, `ø`, `ħ`, `ŧ`) are mapped by hand; rarer ones such
  * as `ǥ` stay as they are. Case folding is `toLowerCase()`, not `toLocaleLowerCase()`, so a match
- * never depends on the host locale. Printable ASCII skips normalisation, so the common case stays cheap.
+ * never depends on the host locale. Printable ASCII skips normalisation, so the common case stays
+ * cheap. Like `ñ` to `n`, some letters fold into a neighbour: Cyrillic `й` matches `и`. Folding
+ * only ever adds matches.
  */
 export function fold(value: string): string {
   if (ASCII.test(value)) return value.toLowerCase()
