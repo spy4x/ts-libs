@@ -22,45 +22,47 @@ Runs on: server (Deno).
 
 ## Subpaths
 
-| Export                               | What it is                                                                            |
-| ------------------------------------ | ------------------------------------------------------------------------------------- |
-| `@spy4x/server/http/bounded-body`    | Byte-capped, stall-budgeted request body reading; `readJsonBody` for Hono routes      |
-| `@spy4x/server/http/cors`            | Exact-match origin allowlist and the `hono/cors` origin resolver                      |
-| `@spy4x/server/http/bearer-auth`     | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)     |
-| `@spy4x/server/http/same-origin`     | Hono middleware that refuses cross-site mutations and cross-site WebSocket upgrades   |
-| `@spy4x/server/export`               | Versioned export envelope and `Content-Disposition` download response                 |
-| `@spy4x/server/static`               | Static-file serving with a MIME table and path-traversal protection                   |
-| `@spy4x/server/healthcheck`          | Loopback TCP probe, exit 0/1, for distroless images                                   |
-| `@spy4x/server/storage`              | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning  |
-| `@spy4x/server/auth`                 | Sign-in account model and `AuthStore`: see the `server/auth` section below            |
-| `@spy4x/server/auth/postgres`        | The Postgres `AuthStore` and `SessionStore`, and the `AUTH_POSTGRES_SCHEMA` tables    |
-| `@spy4x/server/auth/memory-store`    | The in-memory `AuthStore`, held to the same contract as the Postgres one, for tests   |
-| `@spy4x/server/auth/password`        | Password sign-up, sign-in, change and reset: see `server/auth/password` below         |
-| `@spy4x/server/auth/email-code`      | Sign-in with a one-time code sent by email: see `server/auth/email-code` below        |
-| `@spy4x/server/auth/oauth`           | OAuth2 sign-in with PKCE, matched by the provider's `sub`: see `server/auth/oauth`    |
-| `@spy4x/server/auth/oauth-google`    | Google's provider configuration for `@spy4x/server/auth/oauth`                        |
-| `@spy4x/server/auth/oauth-github`    | GitHub's provider configuration for `@spy4x/server/auth/oauth`                        |
-| `@spy4x/server/sign-in`              | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP       |
-| `@spy4x/server/crypto`               | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                   |
-| `@spy4x/server/user-secrets`         | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert             |
-| `@spy4x/server/quota`                | Usage metering with an atomic reserve and 429/503 — not a rate limiter                |
-| `@spy4x/server/db`                   | Barrel: Postgres and SQLite adapters plus the migration runner they share             |
-| `@spy4x/server/db/migrate`           | Migration runner: discovers, orders and applies `.sql` files, one port for both       |
-| `@spy4x/server/db/postgres`          | Postgres pool with sane connect/idle/statement timeout defaults                       |
-| `@spy4x/server/db/sqlite`            | SQLite adapter behind an injectable driver port; ships no driver                      |
-| `@spy4x/server/request-log`          | Hono request-logging middleware, method/path/status/elapsed only, injected writer     |
-| `@spy4x/server/config`               | `EnvReader` + `loadConfig`: one arktype schema validated against the environment      |
-| `@spy4x/server/kv`                   | A Redis-backed key-value store, keys scoped under a caller-supplied prefix            |
-| `@spy4x/server/env-age64`            | Per-value `.env` encryption (`KEY=age64:...`), no `age` binary, no `--allow-run`      |
-| `@spy4x/server/outbox`               | Transactional outbox drain: claim, publish, retry, over a generic SQL table           |
-| `@spy4x/server/idempotency`          | Idempotent commands: CQRS middleware, fingerprint, Postgres and memory stores         |
-| `@spy4x/server/lockout`              | Escalating lockout for guessed secrets: policy, begin/fail/refund flow, store port    |
-| `@spy4x/server/lockout/memory-store` | The in-memory lockout store, held to the same contract as the Postgres one, for tests |
-| `@spy4x/server/lockout/postgres`     | The Postgres lockout store over a table and columns the caller names                  |
-| `@spy4x/server/subscribers`          | Double opt-in mailing lists: signed links, subscriber store port, subscribe flows     |
-| `@spy4x/server/subscribers/memory`   | The in-memory subscriber store and send log, held to the shared contracts             |
-| `@spy4x/server/subscribers/file`     | The JSON-file subscriber store and send log, compatible with antonshubin.com's files  |
-| `@spy4x/server/subscribers/postgres` | The Postgres subscriber store and send log, with the schema to migrate                |
+| Export                                 | What it is                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------- |
+| `@spy4x/server/http/bounded-body`      | Byte-capped, stall-budgeted request body reading; `readJsonBody` for Hono routes      |
+| `@spy4x/server/http/cors`              | Exact-match origin allowlist and the `hono/cors` origin resolver                      |
+| `@spy4x/server/http/bearer-auth`       | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)     |
+| `@spy4x/server/http/same-origin`       | Hono middleware that refuses cross-site mutations and cross-site WebSocket upgrades   |
+| `@spy4x/server/export`                 | Versioned export envelope and `Content-Disposition` download response                 |
+| `@spy4x/server/static`                 | Static-file serving with a MIME table and path-traversal protection                   |
+| `@spy4x/server/healthcheck`            | Loopback TCP probe, exit 0/1, for distroless images                                   |
+| `@spy4x/server/storage`                | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning  |
+| `@spy4x/server/auth`                   | Sign-in account model and `AuthStore`: see the `server/auth` section below            |
+| `@spy4x/server/auth/postgres`          | The Postgres `AuthStore` and `SessionStore`, and the `AUTH_POSTGRES_SCHEMA` tables    |
+| `@spy4x/server/auth/memory-store`      | The in-memory `AuthStore`, held to the same contract as the Postgres one, for tests   |
+| `@spy4x/server/auth/password`          | Password sign-up, sign-in, change and reset: see `server/auth/password` below         |
+| `@spy4x/server/auth/email-code`        | Sign-in with a one-time code sent by email: see `server/auth/email-code` below        |
+| `@spy4x/server/auth/oauth`             | OAuth2 sign-in with PKCE, matched by the provider's `sub`: see `server/auth/oauth`    |
+| `@spy4x/server/auth/oauth-google`      | Google's provider configuration for `@spy4x/server/auth/oauth`                        |
+| `@spy4x/server/auth/oauth-github`      | GitHub's provider configuration for `@spy4x/server/auth/oauth`                        |
+| `@spy4x/server/sign-in`                | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP       |
+| `@spy4x/server/crypto`                 | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                   |
+| `@spy4x/server/user-secrets`           | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert             |
+| `@spy4x/server/quota`                  | Usage metering with an atomic reserve and 429/503 — not a rate limiter                |
+| `@spy4x/server/db`                     | Barrel: Postgres and SQLite adapters plus the migration runner they share             |
+| `@spy4x/server/db/migrate`             | Migration runner: discovers, orders and applies `.sql` files, one port for both       |
+| `@spy4x/server/db/postgres`            | Postgres pool with sane connect/idle/statement timeout defaults                       |
+| `@spy4x/server/db/sqlite`              | SQLite adapter behind an injectable driver port; ships no driver                      |
+| `@spy4x/server/request-log`            | Hono request-logging middleware, method/path/status/elapsed only, injected writer     |
+| `@spy4x/server/config`                 | `EnvReader` + `loadConfig`: one arktype schema validated against the environment      |
+| `@spy4x/server/kv`                     | A Redis-backed key-value store, keys scoped under a caller-supplied prefix            |
+| `@spy4x/server/env-age64`              | Per-value `.env` encryption (`KEY=age64:...`), no `age` binary, no `--allow-run`      |
+| `@spy4x/server/outbox`                 | Transactional outbox drain: claim, publish, retry, over a generic SQL table           |
+| `@spy4x/server/idempotency`            | Idempotent commands: CQRS middleware, fingerprint, Postgres and memory stores         |
+| `@spy4x/server/lockout`                | Escalating lockout for guessed secrets: policy, begin/fail/refund flow, store port    |
+| `@spy4x/server/lockout/memory-store`   | The in-memory lockout store, held to the same contract as the Postgres one, for tests |
+| `@spy4x/server/lockout/postgres`       | The Postgres lockout store over a table and columns the caller names                  |
+| `@spy4x/server/mcp-oauth`              | Single-user OAuth 2.1 server for remote MCP connectors, and the resource guard        |
+| `@spy4x/server/mcp-oauth/memory-store` | The in-memory OAuth store, for tests and single-process servers                       |
+| `@spy4x/server/subscribers`            | Double opt-in mailing lists: signed links, subscriber store port, subscribe flows     |
+| `@spy4x/server/subscribers/memory`     | The in-memory subscriber store and send log, held to the shared contracts             |
+| `@spy4x/server/subscribers/file`       | The JSON-file subscriber store and send log, compatible with antonshubin.com's files  |
+| `@spy4x/server/subscribers/postgres`   | The Postgres subscriber store and send log, with the schema to migrate                |
 
 **Verification beyond `deno task check`.** `deno task check` is green with an `exports` entry pointing
 at a file that does not exist, so every branch that touches `server/deno.json` must also run:
@@ -2270,3 +2272,72 @@ instead of allowing a second one.
 - The site's send loop logged every recipient's address, once per mail sent and once per failure
   (`lib/newsletter.ts:89` and `:93`). `sendIssue` logs the row number, and a relay error has the
   address redacted in any letter case.
+
+## `server/mcp-oauth`
+
+A single-user OAuth 2.1 authorization server, so one person can connect their own remote MCP
+server to claude.ai, the Claude apps and Claude Code, plus the Hono guard the MCP server puts in
+front of its endpoint. It follows Claude's connector requirements
+(<https://claude.com/docs/connectors/building/authentication>) and the MCP authorization spec
+(2025-11-25).
+
+```ts
+import { createAuthorizationServer, createResourceServer } from "@spy4x/server/mcp-oauth"
+import { MemoryOAuthStore } from "@spy4x/server/mcp-oauth/memory-store"
+
+const issuer = "https://auth.example.com"
+const resource = "https://mcp.example.com/mcp"
+const as = createAuthorizationServer({
+  issuer,
+  resources: [resource],
+  store: new MemoryOAuthStore(),
+  // Authelia forward-auth guards /authorize and sets Remote-User.
+  confirmOwner: (c) => c.req.header("remote-user") === "owner",
+})
+app.route("/", as.app)
+
+const rs = createResourceServer({ resource, issuer, verifier: as.verifier })
+app.get(rs.metadataPath, rs.metadataHandler)
+app.use("/mcp", rs.guard)
+```
+
+### What it does
+
+- **Discovery.** `GET /.well-known/oauth-authorization-server` advertises S256 PKCE, public
+  clients (`none`) and `client_id_metadata_document_supported`, the pair Claude needs before it
+  uses a Client ID Metadata Document. The resource server serves its RFC 9728 document at
+  `/.well-known/oauth-protected-resource/<path>`, and its `401` carries
+  `WWW-Authenticate: Bearer resource_metadata="…"`.
+- **Clients.** A `client_id` is an HTTPS URL. The server fetches the JSON document there through
+  the SSRF guard of `@spy4x/net/safe-fetch` (no redirects, 5 KiB cap, cached 10 minutes) and
+  accepts it only when its `client_id` equals the URL and it asks for no client secret.
+  `trustedHosts` narrows which hosts may serve one.
+- **Redirects.** The redirect URI must be on the server's allowlist and in the client's own
+  document. The default allowlist is `https://claude.ai/api/mcp/auth_callback` plus
+  `http://localhost/callback` and `http://127.0.0.1/callback`, which match on any port for Claude
+  Code. Until the redirect URI has passed, a refusal is a `400` page, never a redirect.
+- **Consent.** `GET /authorize` calls `confirmOwner` first and does nothing else for anyone else.
+  It then shows a consent page naming the client's host and the redirect host, with a warning when
+  the code goes to a loopback address. The page cannot be framed. Approving posts a single-use,
+  10-minute consent id back to `/authorize`; that post must be same-origin and passes
+  `confirmOwner` again. `renderConsent` replaces the built-in page.
+- **Codes.** Single-use, 60 seconds, bound to the client, redirect URI, PKCE challenge and
+  resource. A replayed code is refused and revokes every token the first exchange issued.
+- **Tokens.** Opaque 256-bit random strings; the store keeps only their SHA-256 digest. Access
+  tokens last 15 minutes and are bound to one resource: the guard refuses a token issued for
+  another MCP server. Refresh tokens last 30 days and rotate on every use; a reused one revokes the
+  whole grant. The PKCE verifier is compared in constant time.
+- **Errors.** RFC 6749 codes: `invalid_grant` for every bad code or refresh token, `invalid_target`
+  for a foreign resource, `invalid_client` for any client authentication.
+
+### What it does not do
+
+- No dynamic client registration. Claude, the Claude apps and Claude Code all use a Client ID
+  Metadata Document when the metadata advertises it, so the registration endpoint would only add
+  attack surface.
+- No confidential clients, no `client_credentials` grant, no OpenID Connect.
+- No rate limiting: mount `@spy4x/platform/rate-limit/hono` in front of `/authorize` and `/token`.
+- No persistent store. `MemoryOAuthStore` loses every grant on restart, after which Claude asks the
+  owner to connect again. Implement `OAuthStore` over a database to keep them; `consumeCode`,
+  `consumeRefreshToken` and `takePending` must be atomic.
+- No issuer with a path: the issuer is a bare origin, and the endpoints sit at its root.
