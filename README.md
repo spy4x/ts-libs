@@ -55,6 +55,7 @@ Deno.serve(async (request) => {
 | [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker              | server                 |
 | [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync | both halves            |
 | [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter      | server                 |
+| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | WebDAV multistatus reader, escaped request bodies, href and origin rules   | shared                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
 `ai/` (chat completion, JSON recovery) is planned, not built (#11, #76).
@@ -71,8 +72,8 @@ way in.
 
 - **Web standards first.** `fetch`, Web Crypto, `ReadableStream`, `Intl` and ES modules, with Deno
   as the runtime.
-- **Runs where the code allows.** Every package is tested on Deno. `@spy4x/time` and
-  `@spy4x/validation` use no `Deno.*` API, so they also run in a browser, untested there.
+- **Runs where the code allows.** Every package is tested on Deno. `@spy4x/time`,
+  `@spy4x/validation` and `@spy4x/caldav` use no `Deno.*` API, so they also run in a browser, untested there.
 - **Expected failures are data.** `validate` returns `{ error, data }`, `send` resolves with
   `ok: false` instead of throwing, and `@spy4x/platform` has `Result`, `ok` and `err` for your code.
 - **Few dependencies.** `@spy4x/net` and `@spy4x/time` have none. Shared
