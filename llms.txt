@@ -611,8 +611,16 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `HotkeyEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that matchesHotkey reads.
 - `MakeStorageOptions` (interface), `jsr:@spy4x/platform/browser`: Options for makeStorage.
 - `ObjectUrlAdapter` (interface), `jsr:@spy4x/platform/browser`: Object-URL surface, injected so a test never allocates a real blob URL.
+- `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser`: Options of installOfflineShell.
 - `PlatformNavigator` (interface), `jsr:@spy4x/platform/browser`: The part of `navigator` that isApplePlatform reads.
 - `ReportHeightOptions` (interface), `jsr:@spy4x/platform/browser`: Options for reportHeight.
+- `SKIP_WAITING_MESSAGE` (constant), `jsr:@spy4x/platform/browser`: The message `SWUpdater` posts to a waiting worker; installOfflineShell acts on it.
+- `ShellCache` (interface), `jsr:@spy4x/platform/browser`: Cache surface this module needs; a real `Cache` fits.
+- `ShellCacheStorage` (interface), `jsr:@spy4x/platform/browser`: Cache storage surface; a real `CacheStorage` fits.
+- `ShellEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of an `ExtendableEvent` this module uses.
+- `ShellFetchEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of a `FetchEvent` this module uses.
+- `ShellMessageEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of a `message` event this module uses.
+- `ShellScope` (interface), `jsr:@spy4x/platform/browser`: The parts of the service-worker global scope this module uses; `self` fits.
 - `StorageLike` (type), `jsr:@spy4x/platform/browser`: The subset of the DOM `Storage` interface this module uses.
 - `StorageRead` (type), `jsr:@spy4x/platform/browser`: Outcome of a write or a read, so a caller can tell "absent" from "present but rejected".
 - `TimerAdapter` (interface), `jsr:@spy4x/platform/browser`: Timer surface, injected so a test never waits on a real delay.
@@ -624,8 +632,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `downloadResponseAsFile` (function), `jsr:@spy4x/platform/browser`: Save a response body to disk under `filename`.
 - `fillEmptyTimeZoneField` (function), `jsr:@spy4x/platform/browser`: Put the visitor's time zone into a form field, only when the field is still empty — a zone the page already filled in (from a link's `tz` parameter, say) is what the visitor saw on screen, and overwriting it would submit a different one.
 - `getCookie` (function), `jsr:@spy4x/platform/browser`: Look up `name` in `doc.cookie`, decoding its value.
+- `installOfflineShell` (function), `jsr:@spy4x/platform/browser`: Register the install, activate, fetch and message listeners that keep the app shell offline.
 - `isApplePlatform` (function), `jsr:@spy4x/platform/browser`: Whether the browser runs on macOS, iOS or iPadOS, where `mod` means Command.
 - `isTypingTarget` (function), `jsr:@spy4x/platform/browser`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
+- `isUnderPath` (function), `jsr:@spy4x/platform/browser`: Whether `pathname` is `base` or below it (`/api` matches `/api` and `/api/x`, not `/apix`).
+- `linkedPaths` (function), `jsr:@spy4x/platform/browser`: Same-origin paths named by `src="..."` and `href="..."` in `html`.
 - `makeStorage` (function), `jsr:@spy4x/platform/browser`: Bind a StorageLike to one key.
 - `matchesHotkey` (function), `jsr:@spy4x/platform/browser`: Whether a key press is the combination.
 - `memoryStorage` (function), `jsr:@spy4x/platform/browser`: A `Map`-backed StorageLike.
@@ -682,6 +693,20 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `isTypingTarget` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
 - `matchesHotkey` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether a key press is the combination.
 - `parseHotkey` (function), `jsr:@spy4x/platform/browser/hotkeys`: Parse a combination such as `"mod+k"`, `"shift+n"`, `"?"` or `"ctrl+alt+delete"`.
+
+### `jsr:@spy4x/platform/browser/offline-shell`
+
+- `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser/offline-shell`: Options of installOfflineShell.
+- `SKIP_WAITING_MESSAGE` (constant), `jsr:@spy4x/platform/browser/offline-shell`: The message `SWUpdater` posts to a waiting worker; installOfflineShell acts on it.
+- `ShellCache` (interface), `jsr:@spy4x/platform/browser/offline-shell`: Cache surface this module needs; a real `Cache` fits.
+- `ShellCacheStorage` (interface), `jsr:@spy4x/platform/browser/offline-shell`: Cache storage surface; a real `CacheStorage` fits.
+- `ShellEvent` (interface), `jsr:@spy4x/platform/browser/offline-shell`: The parts of an `ExtendableEvent` this module uses.
+- `ShellFetchEvent` (interface), `jsr:@spy4x/platform/browser/offline-shell`: The parts of a `FetchEvent` this module uses.
+- `ShellMessageEvent` (interface), `jsr:@spy4x/platform/browser/offline-shell`: The parts of a `message` event this module uses.
+- `ShellScope` (interface), `jsr:@spy4x/platform/browser/offline-shell`: The parts of the service-worker global scope this module uses; `self` fits.
+- `installOfflineShell` (function), `jsr:@spy4x/platform/browser/offline-shell`: Register the install, activate, fetch and message listeners that keep the app shell offline.
+- `isUnderPath` (function), `jsr:@spy4x/platform/browser/offline-shell`: Whether `pathname` is `base` or below it (`/api` matches `/api` and `/api/x`, not `/apix`).
+- `linkedPaths` (function), `jsr:@spy4x/platform/browser/offline-shell`: Same-origin paths named by `src="..."` and `href="..."` in `html`.
 
 ### `jsr:@spy4x/platform/browser/storage`
 
@@ -2167,6 +2192,56 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `startOfQuarter` (function), `jsr:@spy4x/time/date`: First day of the calendar quarter `date` falls in.
 - `startOfYear` (function), `jsr:@spy4x/time/date`: First day of the calendar year `date` falls in.
 
+### `jsr:@spy4x/time/ical`
+
+- `IcalComponent` (interface), `jsr:@spy4x/time/ical`: A `BEGIN:…`/`END:…` block with its properties and nested components.
+- `IcalDateKind` (enum), `jsr:@spy4x/time/ical`: Whether a date value is a date, a floating time, a UTC time or a time in a named zone.
+- `IcalDateValue` (interface), `jsr:@spy4x/time/ical`: A DATE or DATE-TIME value in a form that keeps its kind through a round trip.
+- `IcalError` (interface), `jsr:@spy4x/time/ical`: The error half of IcalResult.
+- `IcalErrorCode` (enum), `jsr:@spy4x/time/ical`: Why an operation of this module failed.
+- `IcalParameter` (interface), `jsr:@spy4x/time/ical`: One parameter of a property, such as `TZID=Europe/Berlin`.
+- `IcalParseOptions` (interface), `jsr:@spy4x/time/ical`: Limits for parseIcal.
+- `IcalProperty` (interface), `jsr:@spy4x/time/ical`: One content line: a name, its parameters and its raw (still escaped) value.
+- `IcalResolveOptions` (interface), `jsr:@spy4x/time/ical`: Options for resolveInstant.
+- `IcalResult` (type), `jsr:@spy4x/time/ical`: `{ success, output, error }`: the output, or why there is none.
+- `IcalWriteDateOptions` (interface), `jsr:@spy4x/time/ical`: Options for writeDate.
+- `getParameter` (function), `jsr:@spy4x/time/ical`: The first parameter named `name` (any case) of a property, or `undefined`.
+- `getProperties` (function), `jsr:@spy4x/time/ical`: Every property named `name` (any case), in document order.
+- `getProperty` (function), `jsr:@spy4x/time/ical`: The first property named `name` (any case), or `undefined`.
+- `parseIcal` (function), `jsr:@spy4x/time/ical`: Parse one iCalendar object (normally a `VCALENDAR`) into a component tree.
+- `readDate` (function), `jsr:@spy4x/time/ical`: Read a DATE or DATE-TIME property as an IcalDateValue, or `undefined` when its value is not a valid date.
+- `readList` (function), `jsr:@spy4x/time/ical`: Every item of every property named `name`, such as all CATEGORIES across several lines.
+- `readText` (function), `jsr:@spy4x/time/ical`: The unescaped TEXT value of a property (RFC 5545 §3.3.11).
+- `removeProperty` (function), `jsr:@spy4x/time/ical`: Remove every property named `name` (any case).
+- `resolveInstant` (function), `jsr:@spy4x/time/ical`: The instant a date value denotes, or `undefined` when it has none.
+- `serializeIcal` (function), `jsr:@spy4x/time/ical`: Serialise a component tree to iCalendar text with CRLF line breaks, the last line included.
+- `setProperty` (function), `jsr:@spy4x/time/ical`: Set the raw value of the first property named `name`, in place, or append a new property.
+- `writeDate` (function), `jsr:@spy4x/time/ical`: Write `value` to the property `name` of `component`, keeping its kind: a date gets `VALUE=DATE`, a zoned time gets `TZID`, a UTC time a trailing `Z`.
+- `writeList` (function), `jsr:@spy4x/time/ical`: Replace every property named `name` with one line listing `items`, each escaped as TEXT.
+- `writeText` (function), `jsr:@spy4x/time/ical`: Escape `text` as TEXT and set it with setProperty, keeping existing parameters.
+
+### `jsr:@spy4x/time/ical-tasks`
+
+- `Alarm` (interface), `jsr:@spy4x/time/ical-tasks`: A reminder (VALARM), read-only.
+- `AlarmRelated` (enum), `jsr:@spy4x/time/ical-tasks`: What a relative trigger is counted from (`RELATED`, default `START`).
+- `AlarmTrigger` (type), `jsr:@spy4x/time/ical-tasks`: The trigger of a reminder.
+- `AlarmTriggerKind` (enum), `jsr:@spy4x/time/ical-tasks`: Whether a reminder's trigger is an offset or a moment.
+- `CalendarEvent` (interface), `jsr:@spy4x/time/ical-tasks`: The fields of an event that apps read.
+- `EventPatch` (interface), `jsr:@spy4x/time/ical-tasks`: Changes to an event.
+- `EventStatus` (enum), `jsr:@spy4x/time/ical-tasks`: The STATUS of an event.
+- `NewOptions` (interface), `jsr:@spy4x/time/ical-tasks`: Caller-supplied inputs for a new object.
+- `PatchOptions` (interface), `jsr:@spy4x/time/ical-tasks`: Caller-supplied inputs: the clock is never read here.
+- `RelatedTo` (interface), `jsr:@spy4x/time/ical-tasks`: A link to another task (RELATED-TO).
+- `Todo` (interface), `jsr:@spy4x/time/ical-tasks`: The fields of a task that apps read.
+- `TodoPatch` (interface), `jsr:@spy4x/time/ical-tasks`: Changes to a task.
+- `TodoStatus` (enum), `jsr:@spy4x/time/ical-tasks`: The STATUS of a task.
+- `newEvent` (function), `jsr:@spy4x/time/ical-tasks`: Build a new calendar object holding one VEVENT; see newTodo.
+- `newTodo` (function), `jsr:@spy4x/time/ical-tasks`: Build a new calendar object holding one VTODO from `fields`, with UID, DTSTAMP, CREATED and LAST-MODIFIED from `options`.
+- `patchEvent` (function), `jsr:@spy4x/time/ical-tasks`: Patch the first VEVENT of `root` in place and return the event as it now reads.
+- `patchTodo` (function), `jsr:@spy4x/time/ical-tasks`: Patch the first VTODO of `root` in place and return the task as it now reads.
+- `readEvent` (function), `jsr:@spy4x/time/ical-tasks`: Read the first VEVENT of `root` that is not a recurrence override.
+- `readTodo` (function), `jsr:@spy4x/time/ical-tasks`: Read the first VTODO of `root` that is not a recurrence override.
+
 ### `jsr:@spy4x/time/ics`
 
 - `IcsAddress` (interface), `jsr:@spy4x/time/ics`: A calendar address: a bare mailbox address, e.g. `jane@example.com`.
@@ -2289,4 +2364,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 87c0f31a6df9169ddb37557b57c8f72c8b988a58b90df1ffdeeaa401ea946a06 -->
+<!-- export surface: sha256 bb4bdb96c24afc8c8471e602e92368bbe3aad6eca6bcd92b34ffafe921aceb74 -->

@@ -6,6 +6,11 @@
     "./locale": "./locale.ts",
     "./tz": "./tz.ts",
     "./ics": "./ics.ts",
-    "./ics-core": "./ics-core.ts"
+    "./ics-core": "./ics-core.ts",
+    "./ical": "./ical.ts",
+    "./ical-tasks": "./ical-tasks.ts"
+  },
+  "publish": {
+    "exclude": ["testdata"]
   }
 }
