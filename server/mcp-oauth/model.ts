@@ -92,6 +92,11 @@ export interface OAuthStore {
   findAccessToken(key: string): Promise<AccessTokenRecord | undefined>
   /** Same contract as {@link OAuthStore.saveAccessToken}, for refresh tokens. */
   saveRefreshToken(key: string, record: RefreshTokenRecord): Promise<boolean>
+  /**
+   * Read a refresh token without marking it used, or `undefined` when there is none. Lets the
+   * server refuse a request that names the wrong resource or scope without spending the token.
+   */
+  findRefreshToken(key: string): Promise<RefreshTokenRecord | undefined>
   /** Same contract as {@link OAuthStore.consumeCode}, for refresh tokens. */
   consumeRefreshToken(key: string): Promise<RefreshTokenRecord | undefined>
   /**

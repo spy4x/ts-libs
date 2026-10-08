@@ -33,6 +33,15 @@ describe("MemoryOAuthStore", () => {
     expect(await store.consumeCode("missing")).toBeUndefined()
   })
 
+  it("reads a refresh token without marking it used", async () => {
+    const store = new MemoryOAuthStore({ clock: { now: () => 1_000 } })
+    await store.saveRefreshToken("k", refresh)
+    expect((await store.findRefreshToken("k"))?.usedAt).toBeUndefined()
+    expect((await store.consumeRefreshToken("k"))?.usedAt).toBeUndefined()
+    expect((await store.findRefreshToken("k"))?.usedAt).toBe(1_000)
+    expect(await store.findRefreshToken("missing")).toBeUndefined()
+  })
+
   it("lets only one of two concurrent consumers see a refresh token unused", async () => {
     const store = new MemoryOAuthStore({ clock: { now: () => 1_000 } })
     await store.saveRefreshToken("k", refresh)

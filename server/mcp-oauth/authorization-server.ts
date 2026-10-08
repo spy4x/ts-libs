@@ -506,11 +506,29 @@ export function createAuthorizationServer(
     }
 
     if (grantType === "refresh_token") {
+      /** The scope a refresh asks for, within the grant's; `undefined` when it asks for more. */
+      const scopeFor = (grant: { scope: string }) => {
+        const granted = new Set(grant.scope === "" ? [] : grant.scope.split(" "))
+        return params.has("scope") ? grantedScope(params.get("scope"), granted) : grant.scope
+      }
       const refreshToken = params.get("refresh_token")
       if (refreshToken === undefined) {
         return tokenError(c, "invalid_request", "refresh_token is required")
       }
-      const record = await store.consumeRefreshToken(await sha256Hex(refreshToken))
+      const key = await sha256Hex(refreshToken)
+      // A wrong resource or scope is a client mistake, not a theft signal: refuse it before the
+      // token is spent, so the next correct request is not taken for reuse.
+      const current = await store.findRefreshToken(key)
+      if (current === undefined) return tokenError(c, "invalid_grant", "unknown refresh token")
+      if (current.usedAt === undefined) {
+        if (resource !== undefined && resource !== current.resource) {
+          return tokenError(c, "invalid_target", "refresh token was issued for another resource")
+        }
+        if (scopeFor(current) === undefined) {
+          return tokenError(c, "invalid_scope", "scope exceeds the grant")
+        }
+      }
+      const record = await store.consumeRefreshToken(key)
       if (record === undefined) return tokenError(c, "invalid_grant", "unknown refresh token")
       if (record.usedAt !== undefined) {
         await store.revokeGrant(record.grantId, clock.now() + revokeTtl)
@@ -525,8 +543,7 @@ export function createAuthorizationServer(
       if (resource !== undefined && resource !== record.resource) {
         return tokenError(c, "invalid_target", "refresh token was issued for another resource")
       }
-      const granted = new Set(record.scope === "" ? [] : record.scope.split(" "))
-      const scope = params.has("scope") ? grantedScope(params.get("scope"), granted) : record.scope
+      const scope = scopeFor(record)
       if (scope === undefined) return tokenError(c, "invalid_scope", "scope exceeds the grant")
       return await issueTokens(c, { ...record, scope })
     }

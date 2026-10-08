@@ -640,19 +640,20 @@ describe("createAuthorizationServer", () => {
       expect((await response.json()).error).toBe("invalid_grant")
     })
 
-    it("for another resource", async () => {
+    it("for another resource, without spending the token", async () => {
       const t = setup()
       const first = await signedIn(t)
-      const response = await t.token({
+      const body = {
         grant_type: "refresh_token",
         refresh_token: first.refresh_token,
         client_id: CLAUDE,
-        resource: OTHER_RESOURCE,
-      })
+      }
+      const response = await t.token({ ...body, resource: OTHER_RESOURCE })
       expect((await response.json()).error).toBe("invalid_target")
+      expect((await t.token({ ...body, resource: RESOURCE })).status).toBe(200)
     })
 
-    it("for another client", async () => {
+    it("for another client, and spends the token as a theft signal", async () => {
       const t = setup()
       const first = await signedIn(t)
       const response = await t.token({
@@ -661,18 +662,25 @@ describe("createAuthorizationServer", () => {
         client_id: CLAUDE_CODE,
       })
       expect((await response.json()).error).toBe("invalid_grant")
-    })
-
-    it("for a scope wider than the grant", async () => {
-      const t = setup({ scopes: ["tasks", "admin"] })
-      const first = await signedIn(t)
-      const response = await t.token({
+      const retry = await t.token({
         grant_type: "refresh_token",
         refresh_token: first.refresh_token,
         client_id: CLAUDE,
-        scope: "tasks admin",
       })
+      expect((await retry.json()).error).toBe("invalid_grant")
+    })
+
+    it("for a scope wider than the grant, without spending the token", async () => {
+      const t = setup({ scopes: ["tasks", "admin"] })
+      const first = await signedIn(t)
+      const body = {
+        grant_type: "refresh_token",
+        refresh_token: first.refresh_token,
+        client_id: CLAUDE,
+      }
+      const response = await t.token({ ...body, scope: "tasks admin" })
       expect((await response.json()).error).toBe("invalid_scope")
+      expect((await t.token({ ...body, scope: "tasks" })).status).toBe(200)
     })
   })
 

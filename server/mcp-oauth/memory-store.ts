@@ -74,6 +74,11 @@ export class MemoryOAuthStore implements OAuthStore {
     return this.#saveToken(this.#refresh, key, record)
   }
 
+  findRefreshToken(key: string): Promise<RefreshTokenRecord | undefined> {
+    const record = this.#refresh.get(key)
+    return Promise.resolve(record && structuredClone(record))
+  }
+
   consumeRefreshToken(key: string): Promise<RefreshTokenRecord | undefined> {
     return Promise.resolve(this.#consume(this.#refresh, key))
   }
