@@ -2334,8 +2334,8 @@ two hosts share one store: one process serving both, or a shared `OAuthStore`.
   calls `confirmOwner` and does nothing else for anyone else. It then shows a consent page naming
   the client's host and the redirect host, asking the owner to approve only a sign-in they just
   started, with an extra warning when the code goes to a loopback address. The page cannot be
-  framed. Approving posts a single-use, 10-minute consent id back to `/authorize`; that post must reach the issuer's host, be
-  same-origin, and pass `confirmOwner` again. `renderConsent` replaces the built-in page.
+  framed. Approving posts a single-use, 10-minute consent id back to `/authorize`; that post must
+  reach the issuer's host, be same-origin, and pass `confirmOwner` again. `renderConsent` replaces the built-in page.
 - **Codes.** Single-use, 60 seconds, bound to the client, redirect URI, PKCE challenge and
   resource. A replayed code is refused and revokes every token the first exchange issued.
 - **Tokens.** Opaque 256-bit random strings; the store keeps only their SHA-256 digest. Access
