@@ -283,6 +283,22 @@ Deno.test("null clears a field and a field left out stays", async () => {
   assertEquals(out.includes(`X-MOZ-LASTACK:`), true)
 })
 
+Deno.test("null clears the summary and description lines and nothing else of the text", async () => {
+  const text = await fixture(`radicale-tasksorg-subtask.ics`)
+  const root = parse(text)
+  const todo = mustPatch(root, { summary: null, description: null })
+  assertEquals("summary" in todo, false)
+  assertEquals(changedNames(text, serializeIcal(root)), [
+    `DTSTAMP`,
+    `LAST-MODIFIED`,
+    `SEQUENCE`,
+    `SUMMARY`,
+  ])
+  const fresh = parse(`BEGIN:VTODO\r\nSUMMARY:a\r\nDESCRIPTION:b\r\nEND:VTODO\r\n`)
+  assertEquals(mustPatch(fresh, { description: null }).summary, `a`)
+  assertEquals(getProperty(fresh, `DESCRIPTION`), undefined)
+})
+
 Deno.test("X-APPLE-SORT-ORDER is set as a number and replaces the old line in place", async () => {
   const text = await fixture(`radicale-tasksorg-subtask.ics`)
   const root = parse(text)
