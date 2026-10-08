@@ -461,6 +461,15 @@ describe("request builders", () => {
     }
   })
 
+  it("refuses an unprefixed xmlns attribute, which would redeclare the default namespace", () => {
+    const tree = xmlElement(DAV_NS, "a", [xmlElement(DAV_NS, "b")], [{
+      namespace: "",
+      name: "xmlns",
+      value: "urn:other",
+    }])
+    assertThrows(() => serializeXml(tree), TypeError)
+  })
+
   it("refuses characters XML 1.0 cannot carry, in text and in attribute values", () => {
     for (const bad of ["\u0001", "\u001f", "\ufffe", "\ud800", "a\udc00b"]) {
       assertThrows(() => serializeXml(xmlElement(DAV_NS, "a", [bad])), RangeError)

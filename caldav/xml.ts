@@ -616,6 +616,12 @@ export function serializeXml(root: XmlElement): string {
   // The `xml` prefix is bound by definition and may not be declared again.
   const prefixes = new Map<string, string>([[XML_NS, "xml"]])
   const collect = (element: XmlElement) => {
+    for (const attribute of element.attributes) {
+      // An unprefixed `xmlns` attribute would be read as a default namespace declaration.
+      if (attribute.namespace === "" && attribute.name === "xmlns") {
+        throw new TypeError("namespace declarations are written by serializeXml itself")
+      }
+    }
     for (const name of [element, ...element.attributes]) {
       assertXmlName(name.name)
       if (name.namespace === XMLNS_NS) {
