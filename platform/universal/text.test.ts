@@ -4,6 +4,7 @@ import { expect } from "@std/expect"
 import {
   convertToKebabCase,
   filterRows,
+  fold,
   initials,
   levenshtein,
   pluralize,
@@ -28,10 +29,26 @@ describe("searchWords", () => {
   })
 })
 
+describe("fold", () => {
+  it("removes accents and case, stroked letters included", () => {
+    expect(fold("Đà Nẵng")).toBe("da nang")
+    expect(fold("ÉCU")).toBe("ecu")
+    expect(fold("Łódź Øre Ħamrun Ŧ")).toBe("lodz ore hamrun t")
+  })
+})
+
 describe("search", () => {
   it("matches a substring case-insensitively", () => {
     expect(search("Hello World", "wor")).toBe(true)
     expect(search("Hello World", "xyz")).toBe(false)
+  })
+
+  it("ignores accents on either side", () => {
+    expect(search("Café Đà Nẵng", "cafe")).toBe(true)
+    expect(search("cafe da nang", "Đà")).toBe(true)
+    expect(filterRows(["Mua sữa", "Gọi điện"], "sua", (row, word) => search(row, word))).toEqual([
+      "Mua sữa",
+    ])
   })
 
   it("matches a number by exact numeric equality, not by substring", () => {
