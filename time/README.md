@@ -3,15 +3,16 @@
 Time and calendar primitives with no application domain attached. IANA timezone math on `Intl`,
 plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime dependencies.
 
-| Module          | Exports                                                                                                                                                                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `time/date`     | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
-| `time/locale`   | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `weekdayLabels`, `WeekdayLabel`                                                                                                                               |
-| `time/tz`       | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, …                                                                              |
-| `time/ics`      | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                           |
-| `time/ics-core` | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                        |
-| `time/ical`     | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                       |
-| `time/rrule`    | Repeat rules for the subset Tasks.org writes: `parseRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
+| Module            | Exports                                                                                                                                                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `time/date`       | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
+| `time/locale`     | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `weekdayLabels`, `WeekdayLabel`                                                                                                                               |
+| `time/tz`         | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, …                                                                              |
+| `time/ics`        | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                           |
+| `time/ics-core`   | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                        |
+| `time/ical`       | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                       |
+| `time/ical-tasks` | Tasks and events on the ical model: `readTodo`, `patchTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`                                                                                                                              |
+| `time/rrule`      | Repeat rules for the subset Tasks.org writes: `parseRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
@@ -298,9 +299,29 @@ const ics = serializeIcal(root) // every other line byte-identical to icsFromSer
   CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE.
 - **Instants.** `resolveInstant` resolves UTC values and IANA `TZID`s through `time/tz`. A vendor
   zone such as Outlook's `W. Europe Standard Time` stays unresolved (`undefined`), never guessed.
-- **Not here.** No recurrence expansion (see `time/rrule`), no VTIMEZONE generation, no task or event semantics
-  (status, `RELATED-TO`, `SEQUENCE` bumps) and no networking. Runs in a browser: the module and
-  its imports use no `Deno.*` API, and a test enforces it.
+- **Not here.** No recurrence expansion (see `time/rrule`), no VTIMEZONE generation, no
+  networking. Task and event semantics (status, `RELATED-TO`, `SEQUENCE` bumps) live in
+  `time/ical-tasks`. Runs in a browser: the module and its imports use no `Deno.*` API, and a test
+  enforces it.
+
+### Tasks and events
+
+`time/ical-tasks` reads and patches a VTODO or VEVENT without losing the rest of the object.
+
+```ts
+import { patchTodo, readTodo, TodoStatus } from "@spy4x/time/ical-tasks"
+
+const todo = readTodo(root) // summary, status, due, relatedTo (PARENT by default), sortOrder, alarms…
+const result = patchTodo(root, { status: TodoStatus.Completed, priority: null }, {
+  now: new Date(),
+})
+if (!result.success) throw new Error(result.error.message) // root is unchanged
+```
+
+A patch changes the patched fields plus DTSTAMP, LAST-MODIFIED and SEQUENCE; `null` clears a field.
+Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
+task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
+`completeSeries: true`, and moving a series to its next occurrence is not done here. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
 
 ## Repeat rules
 
