@@ -602,20 +602,20 @@ Deno.test(`nextOccurrence chains due date to next date the way Tasks.org complet
 Deno.test(`nextOccurrence answers a huge COUNT from a distant start in under a second`, () => {
   const began = performance.now()
   const result = nextOccurrence(rule(`FREQ=DAILY;COUNT=1000000`), {
-    start: utc(`1700-01-01`),
+    start: berlin(`1700-01-01`),
     after: new Date(`2026-10-08T12:00:00Z`),
   })
   assert(result.success)
-  assertEquals(label(result.output), `2026-10-09T09:00:00Z`)
+  assertEquals(label(result.output), `2026-10-09T09:00:00[Europe/Berlin]`)
   assert(performance.now() - began < 1000, `took ${performance.now() - began} ms`)
 })
 
 Deno.test(`nextOccurrence reads a UTC start against a far-east zone without skipping a day`, () => {
-  // 22:00Z on 7 October is already 8 October 12:00 in Kiritimati (UTC+14): the UTC occurrence
-  // at 09:00Z on 8 October is still ahead, so a search that cut by the zone's date would skip it.
+  // 22:00Z on 7 October is already 8 October 12:00 in Kiritimati (UTC+14), yet the UTC occurrence
+  // at 23:30Z on 7 October is still ahead; a search that cut by the zone's date would skip it.
   assertEquals(
-    next(`FREQ=DAILY`, utc(`2026-10-01`), `2026-10-07T22:00:00Z`, `Pacific/Kiritimati`),
-    `2026-10-08T09:00:00Z`,
+    next(`FREQ=DAILY`, utc(`2026-10-01`, `23:30:00`), `2026-10-07T22:00:00Z`, `Pacific/Kiritimati`),
+    `2026-10-07T23:30:00Z`,
   )
 })
 
