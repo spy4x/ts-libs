@@ -8,7 +8,7 @@
  *   (default `/api`). Data belongs to the app's own offline store, never to this cache.
  * - Files under `/assets/` (a build names them by content hash) are answered cache-first.
  * - Everything else is network-first, so a deploy shows at once; the cache answers only when the
- *   network fails. Only OK responses are stored. A page load (`navigate`) is stored and served
+ *   network fails. Only complete (status 200), unredirected responses are stored. A page load (`navigate`) is stored and served
  *   under one key (default `/`), because every route of a single-page app is the same document.
  *
  * The worker's whole file is then the lines below. A browser cannot load a `.ts` URL or a `jsr:`
