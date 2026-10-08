@@ -489,3 +489,41 @@ Deno.test("foldLine output of a fresh property parses back to the same value", (
   const root = parse(`BEGIN:A\r\n${foldLine(`X:${value}`)}\r\nEND:A\r\n`)
   assertEquals(getProperty(root, "X")!.value, value)
 })
+
+Deno.test("serializeIcal is linear in the number of interleaved subcomponents", () => {
+  // 70,000 subcomponents, each followed by a property of the parent: 1.47 MB, under maxBytes.
+  const text = `BEGIN:VCALENDAR\r\n${"BEGIN:A\r\nEND:A\r\nX:1\r\n".repeat(70_000)}END:VCALENDAR\r\n`
+  const root = parse(text)
+  const started = performance.now()
+  const out = serializeIcal(root)
+  const elapsed = performance.now() - started
+  assertEquals(out, text)
+  assert(elapsed < 1000, `serialising took ${Math.round(elapsed)} ms`)
+})
+
+Deno.test("a parameter-only edit re-serialises the property and keeps its value", async () => {
+  const root = parse(await fixture("stalwart-tasksorg-recurring.ics"))
+  const todo = child(root, "VTODO")
+  const due = getProperty(todo, "DUE")!
+  getParameter(due, "TZID")!.values[0] = "Europe/Berlin"
+  assert(serializeIcal(root).includes("\r\nDUE;TZID=Europe/Berlin:20260814T110001\r\n"))
+  due.params.push({ name: "X-NOTE", values: ["1"] })
+  assert(serializeIcal(root).includes("\r\nDUE;TZID=Europe/Berlin;X-NOTE=1:20260814T110001\r\n"))
+  const trigger = getProperty(child(todo, "VALARM"), "TRIGGER")!
+  trigger.params[0]!.name = "X-RELATED"
+  assert(serializeIcal(root).includes("\r\nTRIGGER;X-RELATED=END:PT0S\r\n"))
+})
+
+Deno.test("writeDate refuses a property that holds a list of dates", () => {
+  const root = parse("BEGIN:VEVENT\r\nEXDATE:20261005T100000Z,20261012T100000Z\r\nEND:VEVENT\r\n")
+  const value = { kind: IcalDateKind.Utc, date: "2026-10-19", time: "10:00:00" }
+  assertEquals(writeDate(root, "EXDATE", value).error?.code, IcalErrorCode.InvalidValue)
+  assertEquals(getProperty(root, "EXDATE")!.value, "20261005T100000Z,20261012T100000Z")
+})
+
+Deno.test("writeDate refuses an unknown date kind", () => {
+  const root = parse("BEGIN:VTODO\r\nEND:VTODO\r\n")
+  const value = { kind: 99 as IcalDateKind, date: "2026-10-19", time: "10:00:00" }
+  assertEquals(writeDate(root, "DUE", value).error?.code, IcalErrorCode.InvalidValue)
+  assertEquals(getProperty(root, "DUE"), undefined)
+})

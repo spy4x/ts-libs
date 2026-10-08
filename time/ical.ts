@@ -59,6 +59,10 @@ export interface IcalComponent {
    * the input. {@link serializeIcal} writes the component just before that property, so a
    * document that interleaves the two keeps its order. Without it, components follow the
    * parent's properties.
+   *
+   * It is an object reference into the parent's `properties`, so it survives `structuredClone`
+   * but not a JSON round trip: a tree rebuilt from JSON writes such a component after the
+   * parent's properties instead.
    */
   before?: IcalProperty
 }
@@ -335,17 +339,22 @@ function writeComponent(component: IcalComponent, out: string[]): void {
   const keeps = (line: string, keyword: string) =>
     line.replace(/\r?\n[ \t]/g, "").toUpperCase() === `${keyword}:${name}`
   out.push(keeps(begin, "BEGIN") ? begin : `BEGIN:${name}`)
-  const placed = new Set<IcalComponent>()
+  // One pass to group children by the property they precede keeps serialising linear.
+  const present = new Set(component.properties)
+  const preceding = new Map<IcalProperty, IcalComponent[]>()
+  const trailing: IcalComponent[] = []
+  for (const child of component.components) {
+    if (child.before && present.has(child.before)) {
+      const group = preceding.get(child.before)
+      if (group) group.push(child)
+      else preceding.set(child.before, [child])
+    } else trailing.push(child)
+  }
   for (const property of component.properties) {
-    for (const child of component.components) {
-      if (child.before === property && !placed.has(child)) {
-        placed.add(child)
-        writeComponent(child, out)
-      }
-    }
+    for (const child of preceding.get(property) ?? []) writeComponent(child, out)
     out.push(sourceMatches(property) ? property.source! : formatProperty(property))
   }
-  for (const child of component.components) if (!placed.has(child)) writeComponent(child, out)
+  for (const child of trailing) writeComponent(child, out)
   out.push(keeps(end, "END") ? end : `END:${name}`)
 }
 
@@ -535,7 +544,9 @@ export interface IcalWriteDateOptions {
  * existing property stay.
  *
  * Refuses, with an error instead of a write:
- * - a malformed date or time ({@link IcalErrorCode.InvalidValue});
+ * - a malformed date or time, or an unknown kind ({@link IcalErrorCode.InvalidValue});
+ * - a property that holds a list, such as `EXDATE:d1,d2`: writing one date would drop the
+ *   others ({@link IcalErrorCode.InvalidValue});
  * - a non-UTC value for COMPLETED, DTSTAMP, CREATED or LAST-MODIFIED, or a second CREATED
  *   ({@link IcalErrorCode.InvalidValue});
  * - a DUE, DTEND or DTSTART whose value type (date versus date-time) would differ from its
@@ -550,6 +561,13 @@ export function writeDate(
   options: IcalWriteDateOptions = {},
 ): IcalResult<IcalProperty> {
   const upper = name.toUpperCase()
+  if (!Object.values(IcalDateKind).includes(value.kind)) {
+    return fail(IcalErrorCode.InvalidValue, `unknown date kind ${JSON.stringify(value.kind)}`)
+  }
+  const existing = getProperty(component, upper)
+  if (existing && splitList(existing.value).length > 1) {
+    return fail(IcalErrorCode.InvalidValue, `${upper} holds a list; writeDate writes one value`)
+  }
   const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.date)
   if (!dateMatch || !validDate(Number(dateMatch[1]), Number(dateMatch[2]), Number(dateMatch[3]))) {
     return fail(IcalErrorCode.InvalidValue, `invalid date ${JSON.stringify(value.date)}`)
@@ -583,7 +601,7 @@ export function writeDate(
     }
   }
 
-  const keep = (getProperty(component, upper)?.params ?? []).filter((param) =>
+  const keep = (existing?.params ?? []).filter((param) =>
     param.name !== "VALUE" && param.name !== "TZID"
   )
   const params: IcalParameter[] = isDate
