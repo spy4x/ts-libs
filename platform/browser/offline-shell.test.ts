@@ -306,8 +306,26 @@ describe("fetch", () => {
 
   it("stores every page load under one key", async () => {
     const s = setup()
+    s.net.responses.set(
+      "/tasks/42",
+      () => new Response("app", { headers: { "content-type": "text/html; charset=utf-8" } }),
+    )
     await s.request("/tasks/42", { mode: "navigate" })
     expect([...s.cache().keys()]).toEqual(["/"])
+  })
+
+  it("keeps the offline page when a page load answers something other than HTML", async () => {
+    const s = setup()
+    const cache = await s.scope.caches.open("shell-v1")
+    await cache.put("/", new Response("shell"))
+    s.net.responses.set(
+      "/icons/icon.svg",
+      () => new Response("<svg/>", { headers: { "content-type": "image/svg+xml" } }),
+    )
+    await s.request("/icons/icon.svg", { mode: "navigate" })
+    s.net.online = false
+    const { response } = await s.request("/lists", { mode: "navigate" })
+    expect(await response!.text()).toBe("shell")
   })
 
   it("fails when the network is off and nothing is cached", async () => {
