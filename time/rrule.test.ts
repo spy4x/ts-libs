@@ -97,6 +97,8 @@ Deno.test(`parseRrule refuses parts outside the subset and names the part`, () =
     [`FREQ=WEEKLY;BYDAY=2MO`, `BYDAY`],
     [`FREQ=YEARLY;BYDAY=1MO`, `BYDAY`],
     [`FREQ=YEARLY;BYDAY=MO`, `BYDAY`],
+    [`FREQ=YEARLY;BYMONTH=11;BYDAY=4TH`, `BYDAY`],
+    [`FREQ=DAILY;BYDAY=MO,TU`, `BYDAY`],
     [`FREQ=WEEKLY;BYMONTHDAY=3`, `BYMONTHDAY`],
     [`FREQ=HOURLY;BYHOUR=3`, `FREQ`],
   ]
@@ -196,22 +198,38 @@ const rows: Row[] = [
     ],
   },
   {
-    name: `monthly on the 31st skips months without a 31st`,
+    name: `monthly on the 31st falls back to the month's last day, as Tasks.org does`,
     rule: `FREQ=MONTHLY`,
-    start: utc(`2026-01-31`),
+    start: utc(`2017-01-31`),
     steps: [
-      [`2026-01-31T09:00:00Z`, `2026-03-31T09:00:00Z`],
-      [`2026-03-31T09:00:00Z`, `2026-05-31T09:00:00Z`],
-      [`2026-05-31T09:00:00Z`, `2026-07-31T09:00:00Z`],
+      [`2017-01-31T09:00:00Z`, `2017-02-28T09:00:00Z`],
+      [`2017-02-28T09:00:00Z`, `2017-03-31T09:00:00Z`],
+      [`2017-03-31T09:00:00Z`, `2017-04-30T09:00:00Z`],
     ],
   },
   {
-    name: `monthly on the 30th skips February, in leap years too`,
-    rule: `FREQ=MONTHLY;BYMONTHDAY=30`,
+    name: `monthly on the 31st lands on 29 February in a leap year`,
+    rule: `FREQ=MONTHLY;BYMONTHDAY=31`,
+    start: utc(`2028-01-31`),
+    steps: [[`2028-01-31T09:00:00Z`, `2028-02-29T09:00:00Z`]],
+  },
+  {
+    name: `every 6 months from 30 August ends on 28 February`,
+    rule: `FREQ=MONTHLY;INTERVAL=6`,
+    start: utc(`2026-08-30`),
+    steps: [
+      [`2026-08-30T09:00:00Z`, `2027-02-28T09:00:00Z`],
+      [`2027-02-28T09:00:00Z`, `2027-08-30T09:00:00Z`],
+    ],
+  },
+  {
+    name: `several month days skip a month that lacks one`,
+    rule: `FREQ=MONTHLY;BYMONTHDAY=30,31`,
     start: utc(`2027-12-30`),
     steps: [
-      [`2027-12-30T09:00:00Z`, `2028-01-30T09:00:00Z`],
-      [`2028-01-30T09:00:00Z`, `2028-03-30T09:00:00Z`],
+      [`2027-12-30T09:00:00Z`, `2027-12-31T09:00:00Z`],
+      [`2027-12-31T09:00:00Z`, `2028-01-30T09:00:00Z`],
+      [`2028-01-31T09:00:00Z`, `2028-03-30T09:00:00Z`],
     ],
   },
   {
@@ -228,8 +246,8 @@ const rows: Row[] = [
     rule: `FREQ=MONTHLY;INTERVAL=3`,
     start: utc(`2026-01-31`),
     steps: [
-      [`2026-01-31T09:00:00Z`, `2026-07-31T09:00:00Z`],
-      [`2026-07-31T09:00:00Z`, `2026-10-31T09:00:00Z`],
+      [`2026-01-31T09:00:00Z`, `2026-04-30T09:00:00Z`],
+      [`2026-04-30T09:00:00Z`, `2026-07-31T09:00:00Z`],
     ],
   },
   {
@@ -333,15 +351,6 @@ const rows: Row[] = [
     steps: [[`2026-06-15T09:00:00Z`, `2028-06-15T09:00:00Z`]],
   },
   {
-    name: `yearly on the fourth Thursday of November`,
-    rule: `FREQ=YEARLY;BYMONTH=11;BYDAY=4TH`,
-    start: utc(`2026-11-26`),
-    steps: [
-      [`2026-11-26T09:00:00Z`, `2027-11-25T09:00:00Z`],
-      [`2027-11-25T09:00:00Z`, `2028-11-23T09:00:00Z`],
-    ],
-  },
-  {
     name: `yearly in two months on one day each`,
     rule: `FREQ=YEARLY;BYMONTH=6,3;BYMONTHDAY=1`,
     start: utc(`2026-03-01`),
@@ -355,15 +364,6 @@ const rows: Row[] = [
     rule: `FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=-1`,
     start: utc(`2026-02-28`),
     steps: [[`2026-02-28T09:00:00Z`, `2027-02-28T09:00:00Z`]],
-  },
-  {
-    name: `daily limited to weekdays`,
-    rule: `FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR`,
-    start: utc(`2026-01-02`),
-    steps: [
-      [`2026-01-02T09:00:00Z`, `2026-01-05T09:00:00Z`],
-      [`2026-01-09T09:00:00Z`, `2026-01-12T09:00:00Z`],
-    ],
   },
   {
     name: `daily limited to the first of the month`,
@@ -394,10 +394,20 @@ const rows: Row[] = [
     ],
   },
   {
-    name: `COUNT does not count a month that lacks the day`,
+    name: `COUNT counts a clipped month once`,
     rule: `FREQ=MONTHLY;COUNT=3`,
     start: utc(`2026-01-31`),
-    steps: [[`2026-03-31T09:00:00Z`, `2026-05-31T09:00:00Z`], [`2026-05-31T09:00:00Z`, `none`]],
+    steps: [
+      [`2026-01-31T09:00:00Z`, `2026-02-28T09:00:00Z`],
+      [`2026-02-28T09:00:00Z`, `2026-03-31T09:00:00Z`],
+      [`2026-03-31T09:00:00Z`, `none`],
+    ],
+  },
+  {
+    name: `COUNT does not count a month that lacks one of several days`,
+    rule: `FREQ=MONTHLY;BYMONTHDAY=30,31;COUNT=3`,
+    start: utc(`2027-12-30`),
+    steps: [[`2027-12-31T09:00:00Z`, `2028-01-30T09:00:00Z`], [`2028-01-30T09:00:00Z`, `none`]],
   },
   {
     name: `UNTIL as a UTC time includes an occurrence at that very instant`,
@@ -531,10 +541,10 @@ const rows: Row[] = [
     ],
   },
   {
-    name: `a zoned monthly 31st skips months without one`,
+    name: `a zoned monthly 31st falls back to the last day`,
     rule: `FREQ=MONTHLY`,
     start: berlin(`2026-01-31`),
-    steps: [[`2026-01-31T08:00:00Z`, `2026-03-31T09:00:00[Europe/Berlin]`]],
+    steps: [[`2026-01-31T08:00:00Z`, `2026-02-28T09:00:00[Europe/Berlin]`]],
   },
 ]
 
@@ -558,6 +568,55 @@ Deno.test(`nextOccurrence moves 23 hours over spring forward and 25 over fall ba
   }
   assertEquals(hours(`2026-03-28T08:00:00Z`, `FREQ=DAILY`, berlin(`2026-03-27`)), 23)
   assertEquals(hours(`2026-10-24T07:00:00Z`, `FREQ=DAILY`, berlin(`2026-10-23`)), 25)
+})
+
+Deno.test(`nextOccurrence chains due date to next date the way Tasks.org completes a task`, () => {
+  // Tasks.org passes the due date as both start and after, even when the task is overdue, and
+  // lowers COUNT by one per completion; the series ends when COUNT is 1.
+  const chain = (text: string, due: string, count: number | null) => {
+    const dates: string[] = []
+    let current: IcalDateValue = utc(due)
+    for (;;) {
+      const rule_ = rule(count === null ? text : `${text};COUNT=${count}`)
+      const result = nextOccurrence(rule_, {
+        start: current,
+        after: new Date(`${current.date}T${current.time}Z`),
+      })
+      if (!result.success) throw new Error(result.error.message)
+      if (result.output === null) return dates
+      dates.push(result.output.date)
+      current = result.output
+      if (count !== null) count--
+    }
+  }
+  assertEquals(chain(`FREQ=MONTHLY`, `2026-01-31`, 3), [`2026-02-28`, `2026-03-28`])
+  assertEquals(chain(`FREQ=WEEKLY;BYDAY=MO,TH`, `2026-01-01`, 4), [
+    `2026-01-05`,
+    `2026-01-08`,
+    `2026-01-12`,
+  ])
+  assertEquals(chain(`FREQ=DAILY;INTERVAL=3`, `2026-12-30`, 2), [`2027-01-02`])
+  assertEquals(chain(`FREQ=MONTHLY`, `2026-01-31`, 1), [])
+})
+
+Deno.test(`nextOccurrence answers a huge COUNT from a distant start in under a second`, () => {
+  const began = performance.now()
+  const result = nextOccurrence(rule(`FREQ=DAILY;COUNT=1000000`), {
+    start: utc(`1700-01-01`),
+    after: new Date(`2026-10-08T12:00:00Z`),
+  })
+  assert(result.success)
+  assertEquals(label(result.output), `2026-10-09T09:00:00Z`)
+  assert(performance.now() - began < 1000, `took ${performance.now() - began} ms`)
+})
+
+Deno.test(`nextOccurrence reads a UTC start against a far-east zone without skipping a day`, () => {
+  // 22:00Z on 7 October is already 8 October 12:00 in Kiritimati (UTC+14): the UTC occurrence
+  // at 09:00Z on 8 October is still ahead, so a search that cut by the zone's date would skip it.
+  assertEquals(
+    next(`FREQ=DAILY`, utc(`2026-10-01`), `2026-10-07T22:00:00Z`, `Pacific/Kiritimati`),
+    `2026-10-08T09:00:00Z`,
+  )
 })
 
 Deno.test(`nextOccurrence skips ahead without changing the answer`, () => {
@@ -623,7 +682,6 @@ const descriptions: [string, string][] = [
   [`FREQ=DAILY`, `Daily`],
   [`FREQ=DAILY;INTERVAL=1`, `Daily`],
   [`FREQ=DAILY;INTERVAL=3`, `Every 3 days`],
-  [`FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR`, `Daily on every Mon, Tue, Wed, Thu, Fri`],
   [`FREQ=WEEKLY`, `Weekly`],
   [`FREQ=WEEKLY;INTERVAL=2;BYDAY=TH,MO`, `Every 2 weeks on Mon, Thu`],
   [`FREQ=MONTHLY`, `Monthly`],
@@ -640,7 +698,6 @@ const descriptions: [string, string][] = [
   [`FREQ=MONTHLY;BYMONTH=9,3`, `Monthly in Mar, Sep`],
   [`FREQ=YEARLY`, `Yearly`],
   [`FREQ=YEARLY;INTERVAL=2`, `Every 2 years`],
-  [`FREQ=YEARLY;BYMONTH=11;BYDAY=4TH`, `Yearly on the fourth Thursday in Nov`],
   [`FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29`, `Yearly on day 29 in Feb`],
   [`FREQ=DAILY;COUNT=5`, `Daily, 5 times`],
   [`FREQ=DAILY;COUNT=1`, `Daily, 1 time`],

@@ -308,22 +308,37 @@ const ics = serializeIcal(root) // every other line byte-identical to icsFromSer
 the rest by name so an app can say "complete this one in Tasks.org" instead of guessing.
 
 ```ts
+import { IcalDateKind } from "@spy4x/time/ical"
 import { describeRrule, nextOccurrence, parseRrule } from "@spy4x/time/rrule"
 
 const parsed = parseRrule("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TH")
 if (!parsed.success) throw new Error(`${parsed.error.code} ${parsed.error.part}`) // BYSETPOS, …
 describeRrule(parsed.output) // "Every 2 weeks on Mon, Thu"
-const next = nextOccurrence(parsed.output, {
-  start: { kind: IcalDateKind.Zoned, date: "2026-03-26", time: "09:00:00", tzid: "Europe/Berlin" },
-  after: new Date(),
-}) // next.output: an IcalDateValue of the start's kind, or null once COUNT or UNTIL is used up
+// Complete a repeating task like Tasks.org: the due date is both `start` and `after`.
+const due = {
+  kind: IcalDateKind.Zoned,
+  date: "2026-03-26",
+  time: "09:00:00",
+  tzid: "Europe/Berlin",
+}
+const next = nextOccurrence(parsed.output, { start: due, after: new Date("2026-03-26T08:00:00Z") })
+// next.output: an IcalDateValue of the start's kind, or null once COUNT or UNTIL is used up
 ```
 
-- **Subset.** `FREQ` DAILY, WEEKLY, MONTHLY, YEARLY; `INTERVAL`; `BYDAY` with ordinals (`2MO`,
-  `-1FR`); `BYMONTHDAY`; `BYMONTH`; `COUNT`; `UNTIL`; `WKST`. Anything else (`BYSETPOS`, `BYHOUR`,
+- **Subset.** `FREQ` DAILY, WEEKLY, MONTHLY, YEARLY; `INTERVAL`; `BYDAY` for WEEKLY and MONTHLY
+  (ordinals such as `2MO`, `-1FR` for MONTHLY); `BYMONTHDAY`; `BYMONTH`; `COUNT`; `UNTIL`; `WKST`. Anything else (`BYSETPOS`, `BYHOUR`,
   `FREQ=HOURLY`, `X-` parts) is `RruleErrorCode.Unsupported` with `error.part` naming it.
-- **Missing days are skipped, not clipped.** Monthly on the 31st goes January, March, May; yearly on
-  29 February waits for the next leap year (RFC 5545 section 3.3.10).
+- **Completing a task as Tasks.org does.** Pass the task's due date as both `start` and `after`,
+  even when the task is overdue; DTSTART is ignored. The caller lowers `COUNT` by one per
+  completion and the series stops at 1. "Repeat after completion" is stored only on the phone and
+  never appears in the VTODO, so it cannot be honoured.
+- **Month ends.** A plain monthly rule (no `BYDAY`, no `BYMONTH`, no `BYMONTHDAY` or one positive
+  day) moves the start by `INTERVAL` months and uses the month's last day when the day is missing,
+  as Tasks.org does: 31 January is followed by 28 February. Every other rule skips a missing day
+  (RFC 5545 section 3.3.10): yearly on 29 February waits for the next leap year, and
+  `BYMONTHDAY=30,31` jumps from January to March.
+- **Refused for Tasks.org parity.** `BYDAY` with DAILY or YEARLY, because Tasks.org deletes it
+  there and no answer of ours could match.
 - **Clock changes.** Occurrences keep the start's wall clock. A time a zone skips (spring forward)
   keeps its date and wall clock; a time it repeats (fall back) occurs once, at its first reading.
 

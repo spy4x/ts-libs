@@ -10,7 +10,10 @@
  * go through `./tz.ts`. {@link describeRrule} gives an English label.
  *
  * A date a month does not have (the 31st in April, 29 February in a common year) is skipped, as
- * RFC 5545 section 3.3.10 requires, not clipped. A wall clock a zone skips (a spring-forward
+ * RFC 5545 section 3.3.10 requires, with one exception that follows Tasks.org: a plain monthly
+ * rule (no `BYDAY`, no `BYMONTH`, no `BYMONTHDAY` or one positive day) moves the start by
+ * `INTERVAL` months and uses the month's last day when the start's day is missing, so 31 January
+ * is followed by 28 February. A wall clock a zone skips (a spring-forward
  * gap) is kept: the occurrence keeps its date and wall clock, which `resolveInstant` shifts
  * forward, so a task due at 02:30 is not lost on that day.
  *
@@ -126,7 +129,7 @@ const WEEKDAY_BY_CODE: Record<string, RruleWeekday> = {
 }
 const MAX_INTERVAL = 100_000
 const MAX_COUNT = 1_000_000
-/** Periods one search looks at. A rule without a match inside it is reported, not looped on. */
+/** Consecutive periods without a match one search looks at. A rule without a match inside it is reported, not looped on. */
 const SEARCH_LIMIT = 100_000
 
 /**
@@ -198,24 +201,12 @@ export function parseRrule(text: string): RruleResult<Rrule> {
     return fail(RruleErrorCode.Malformed, `BYDAY is empty`, `BYDAY`)
   }
 
-  if (byDay.some((day) => day.ordinal !== undefined)) {
-    if (freq === RruleFreq.Daily || freq === RruleFreq.Weekly) {
-      return fail(
-        RruleErrorCode.Unsupported,
-        `BYDAY with a number needs FREQ=MONTHLY or YEARLY`,
-        `BYDAY`,
-      )
-    }
-    if (freq === RruleFreq.Yearly && byMonth.length === 0) {
-      return fail(
-        RruleErrorCode.Unsupported,
-        `BYDAY with a number in a year needs BYMONTH`,
-        `BYDAY`,
-      )
-    }
+  // Tasks.org deletes BYDAY from a daily or yearly rule, so no answer of ours could match it.
+  if (byDay.length > 0 && (freq === RruleFreq.Daily || freq === RruleFreq.Yearly)) {
+    return fail(RruleErrorCode.Unsupported, `BYDAY does not apply to DAILY or YEARLY`, `BYDAY`)
   }
-  if (freq === RruleFreq.Yearly && byDay.length > 0 && byMonth.length === 0) {
-    return fail(RruleErrorCode.Unsupported, `yearly BYDAY needs BYMONTH`, `BYDAY`)
+  if (freq === RruleFreq.Weekly && byDay.some((day) => day.ordinal !== undefined)) {
+    return fail(RruleErrorCode.Unsupported, `BYDAY with a number needs FREQ=MONTHLY`, `BYDAY`)
   }
   if (freq === RruleFreq.Weekly && byMonthDay.length > 0) {
     return fail(RruleErrorCode.Unsupported, `BYMONTHDAY does not apply to WEEKLY`, `BYMONTHDAY`)
@@ -346,9 +337,6 @@ function dayMatches(rule: Rrule, days: number): boolean {
     rule.byMonthDay.length &&
     !rule.byMonthDay.some((n) => (n > 0 ? n : length + n + 1) === day)
   ) return false
-  if (rule.byDay.length && !rule.byDay.some((entry) => weekdayMatches(entry, day, length, days))) {
-    return false
-  }
   return true
 }
 
@@ -381,6 +369,12 @@ function monthDays(rule: Rrule, year: number, month: number, startDay: number): 
   return out
 }
 
+/** Tasks.org's plain monthly shape: start plus INTERVAL months, clipped to the month's end. */
+function clipsMonthEnd(rule: Rrule): boolean {
+  return rule.freq === RruleFreq.Monthly && rule.byDay.length === 0 && rule.byMonth.length === 0 &&
+    (rule.byMonthDay.length === 0 || (rule.byMonthDay.length === 1 && rule.byMonthDay[0]! > 0))
+}
+
 /** The day numbers period `k` of the rule selects, ascending. */
 function periodDays(rule: Rrule, startDays: number, k: number): number[] {
   const start = fromDays(startDays)
@@ -405,6 +399,9 @@ function periodDays(rule: Rrule, startDays: number, k: number): number[] {
       const year = Math.floor(index / 12)
       const month = (index % 12) + 1
       if (rule.byMonth.length && !rule.byMonth.includes(month)) return []
+      if (clipsMonthEnd(rule)) {
+        return [toDays(year, month, Math.min(start.day, daysInMonth(year, month)))]
+      }
       return monthDays(rule, year, month, start.day)
     }
     case RruleFreq.Yearly: {
@@ -439,7 +436,7 @@ function firstPeriod(rule: Rrule, startDays: number, refDays: number): number {
       periods = (ref.year - start.year) / rule.interval
       break
   }
-  return Math.max(0, Math.floor(periods) - 1)
+  return Math.max(0, Math.floor(periods))
 }
 
 // ---- next occurrence ---------------------------------------------------------------------------
@@ -457,7 +454,15 @@ export interface NextOccurrenceOptions {
 /**
  * The first occurrence of `rule` strictly after `options.after`, as a value of the same kind
  * (and zone) as `options.start`, with the start's time of day. `output` is `null` when the rule
- * is exhausted by `COUNT` or `UNTIL`. A `start` that does not match the rule is not itself an
+ * is exhausted by `COUNT` or `UNTIL`.
+ *
+ * To get the date Tasks.org gives a repeating task, pass the task's due date as both `start` and
+ * `after`, even when the task is overdue: DTSTART is ignored and the result is the first
+ * occurrence after the due date. The caller lowers `COUNT` by one on each completion, and the
+ * series stops when it reaches 1 (`output` is then `null`). Tasks.org's "repeat after completion"
+ * switch lives only on the phone and never appears in the VTODO, so it cannot be honoured here.
+ *
+ * A `start` that does not match the rule is not itself an
  * occurrence; the series begins at the first day the rule selects on or after it.
  *
  * Fails with {@link RruleErrorCode.InvalidStart} when `start` is malformed or a zone is unknown,
@@ -497,9 +502,12 @@ export function nextOccurrence(
     return instant !== undefined && instant.getTime() > after.getTime()
   }
   const until = rule.until
-  const withinUntil = (date: string): boolean => {
+  const untilDays = until ? parseIsoDate(until.date) : 0
+  const withinUntil = (date: string, days: number): boolean => {
     if (!until) return true
     if (until.kind === IcalDateKind.Utc) {
+      // A zone shifts a wall date by under a day, so two days apart needs no zone maths.
+      if (days + 2 <= untilDays) return true
       const instant = resolveInstant(make(date), { zone })
       const limit = resolveInstant(until)
       return instant !== undefined && limit !== undefined && instant <= limit
@@ -508,21 +516,26 @@ export function nextOccurrence(
   }
 
   // COUNT needs every occurrence from the start counted; otherwise skip to near `after`.
+  // `afterDate` is `after` read in `zone`, while a UTC or floating start's wall clock may lie up
+  // to a day away from that; two days back is certainly before `after` whatever the kind.
   const refDays = parseIsoDate(afterDate) - 2
   let k = rule.count === undefined ? firstPeriod(rule, startDays, refDays) : 0
   let seen = 0
-  for (const last = k + SEARCH_LIMIT; k < last; k++) {
-    for (const days of periodDays(rule, startDays, k)) {
-      if (days < startDays) continue
-      const date = isoDate(days)
+  let emptyRun = 0
+  while (emptyRun < SEARCH_LIMIT) {
+    const days = periodDays(rule, startDays, k++).filter((day) => day >= startDays)
+    emptyRun = days.length === 0 ? emptyRun + 1 : 0
+    for (const day of days) {
+      const date = isoDate(day)
       if (date === undefined) return ok(null)
       seen++
       if (rule.count !== undefined && seen > rule.count) return ok(null)
-      if (!withinUntil(date)) return ok(null)
-      if (isAfter(date)) return ok(make(date))
+      if (!withinUntil(date, day)) return ok(null)
+      // Dates far before `after` are decided by comparing days; zone maths only runs near it.
+      if (day >= refDays && isAfter(date)) return ok(make(date))
     }
   }
-  return fail(RruleErrorCode.SearchLimit, `no occurrence found in ${SEARCH_LIMIT} periods`)
+  return fail(RruleErrorCode.SearchLimit, `no occurrence found in ${SEARCH_LIMIT} periods in a row`)
 }
 
 // ---- English label -----------------------------------------------------------------------------
