@@ -14,7 +14,7 @@
 const ACCENTS = /([\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}])\p{M}+/gu
 /** Common letters whose stroke is not a combining mark, so `NFD` leaves them whole. */
 const STROKED: Record<string, string> = { "đ": "d", "ł": "l", "ø": "o", "ħ": "h", "ŧ": "t" }
-const ASCII = /^[\x00-\x7f]*$/
+const ASCII = /^[ -~]*$/
 
 /**
  * Fold text for matching: accents removed and lower-cased.
@@ -24,7 +24,7 @@ const ASCII = /^[\x00-\x7f]*$/
  * scripts are vowel signs and stay, so Hindi `"का"` and `"कि"` still differ. A few common letters
  * whose stroke is part of the letter (`đ`, `ł`, `ø`, `ħ`, `ŧ`) are mapped by hand; rarer ones such
  * as `ǥ` stay as they are. Case folding is `toLowerCase()`, not `toLocaleLowerCase()`, so a match
- * never depends on the host locale. Plain ASCII skips normalisation, so the common case stays cheap.
+ * never depends on the host locale. Printable ASCII skips normalisation, so the common case stays cheap.
  */
 export function fold(value: string): string {
   if (ASCII.test(value)) return value.toLowerCase()
