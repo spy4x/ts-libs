@@ -2281,9 +2281,11 @@ front of its endpoint. It follows Claude's connector requirements
 (<https://claude.com/docs/connectors/building/authentication>) and the MCP authorization spec
 (2025-11-25).
 
-The authorization server and the MCP server run on two hosts. The issuer's host sits entirely
-behind Authelia's forward-auth; the MCP host cannot, because Claude calls it with a bearer token
-and no browser session.
+The authorization server and the MCP server run on two hosts. Every route to the issuer's host
+passes Authelia's forward-auth, and `/authorize` requires a signed-in owner there. Clients call
+`/token` and the metadata documents without a browser session, so Authelia bypasses those paths
+for the issuer's host. The MCP host cannot sit behind forward-auth, because Claude calls it with a
+bearer token and no browser session.
 
 ```ts
 import { Hono } from "hono"
@@ -2331,8 +2333,8 @@ two hosts share one store: one process serving both, or a shared `OAuthStore`.
 - **Consent.** `GET /authorize` answers `403` unless the request's host is the issuer's, then
   calls `confirmOwner` and does nothing else for anyone else. It then shows a consent page naming
   the client's host and the redirect host, asking the owner to approve only a sign-in they just
-  started, with an extra warning when the code goes to a loopback address. The page cannot be framed. Approving posts a single-use,
-  10-minute consent id back to `/authorize`; that post must reach the issuer's host, be
+  started, with an extra warning when the code goes to a loopback address. The page cannot be
+  framed. Approving posts a single-use, 10-minute consent id back to `/authorize`; that post must reach the issuer's host, be
   same-origin, and pass `confirmOwner` again. `renderConsent` replaces the built-in page.
 - **Codes.** Single-use, 60 seconds, bound to the client, redirect URI, PKCE challenge and
   resource. A replayed code is refused and revokes every token the first exchange issued.
