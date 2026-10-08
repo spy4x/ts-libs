@@ -268,6 +268,17 @@ describe("fetch", () => {
     expect(await response!.text()).toBe("net:/assets/movie.mp4")
   })
 
+  it("returns a 206 partial answer to the page without storing it", async () => {
+    const s = setup()
+    s.net.responses.set(
+      "/assets/movie.mp4",
+      () => new Response("slice", { status: 206 }),
+    )
+    const { response } = await s.request("/assets/movie.mp4", { headers: { range: "bytes=0-4" } })
+    expect([response!.status, await response!.text()]).toEqual([206, "slice"])
+    expect(s.cache().size).toBe(0)
+  })
+
   it("fetches an /assets/ file that is not cached yet, and stores it", async () => {
     const s = setup()
     const { response } = await s.request("/assets/new.js")

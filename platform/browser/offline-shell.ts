@@ -179,7 +179,10 @@ export function installOfflineShell(scope: ShellScope, options: OfflineShellOpti
       try {
         const response = await fetchWithRetry(request)
         // A failed cache write must not fail a response that arrived.
-        if (response.ok) event.waitUntil(cache.put(key, response.clone()).catch(() => {}))
+        // Only a whole answer (200) is kept: a 206 slice would later answer a request for the file.
+        if (response.status === 200) {
+          event.waitUntil(cache.put(key, response.clone()).catch(() => {}))
+        }
         return response
       } catch (error) {
         const cached = await cache.match(key)
