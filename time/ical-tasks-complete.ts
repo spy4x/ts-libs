@@ -26,7 +26,6 @@
 import {
   getParameter,
   getProperties,
-  getProperty,
   IcalComponent,
   IcalDateKind,
   IcalDateValue,
