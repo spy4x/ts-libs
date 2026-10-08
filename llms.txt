@@ -1,7 +1,7 @@
 # ts-libs
 
 > Small TypeScript libraries on web standards, for the server and the browser, published to JSR
-> as `@spy4x/*`. 9 packages cover validation, time zones, email, networking, server
+> as `@spy4x/*`. 10 packages cover validation, time zones, email, networking, server
 > primitives, realtime and more. Each one is a Deno workspace member with no UI.
 
 ## When to use
@@ -48,6 +48,51 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `STRIPE_SIGNATURE_HEADER` (constant), `jsr:@spy4x/billing/stripe`: Stripe's `Stripe-Signature: t=<seconds>,v1=<hex>[,v1=<hex>][,v0=<hex>]` header layout.
 - `StripeBillingOptions` (interface), `jsr:@spy4x/billing/stripe`: Options for createStripeBilling.
 - `createStripeBilling` (function), `jsr:@spy4x/billing/stripe`: A Stripe BillingProvider.
+
+## @spy4x/caldav
+
+### `jsr:@spy4x/caldav/url`
+
+- `childUrl` (function), `jsr:@spy4x/caldav/url`: The URL of a new member of `collectionUrl`, named `segment` encoded with `encodeURIComponent`.
+- `isSameOrigin` (function), `jsr:@spy4x/caldav/url`: Whether `target` is on the same origin as `serverUrl`: the same scheme, host and port.
+- `resolveHref` (function), `jsr:@spy4x/caldav/url`: Resolve an `href` from a multistatus body against the URL of the request that returned it.
+- `sameResource` (function), `jsr:@spy4x/caldav/url`: Whether two absolute URLs name the same resource: same origin, same query and the same path segments once each segment is percent-decoded.
+
+### `jsr:@spy4x/caldav/xml`
+
+- `APPLE_ICAL_NS` (constant), `jsr:@spy4x/caldav/xml`: Apple's iCal namespace, home of `calendar-color` and `calendar-order`.
+- `CALDAV_NS` (constant), `jsr:@spy4x/caldav/xml`: The CalDAV namespace (RFC 4791).
+- `CALENDARSERVER_NS` (constant), `jsr:@spy4x/caldav/xml`: The CalendarServer namespace, home of `getctag`.
+- `CalendarProps` (interface), `jsr:@spy4x/caldav/xml`: Calendar collection properties written by mkcalendarBody and proppatchBody.
+- `CalendarQueryOptions` (interface), `jsr:@spy4x/caldav/xml`: Options of calendarQueryBody.
+- `DAV_NS` (constant), `jsr:@spy4x/caldav/xml`: The WebDAV namespace (RFC 4918).
+- `DEFAULT_MAX_XML_BYTES` (constant), `jsr:@spy4x/caldav/xml`: Default size limit of parseXml and parseMultistatus: 10 MiB of UTF-8.
+- `DEFAULT_MAX_XML_DEPTH` (constant), `jsr:@spy4x/caldav/xml`: Default nesting limit of parseXml and parseMultistatus.
+- `DavPropstat` (interface), `jsr:@spy4x/caldav/xml`: One `propstat` of a `response`: its HTTP status and the property elements under it.
+- `DavResponse` (interface), `jsr:@spy4x/caldav/xml`: One `response` of a multistatus.
+- `XmlAttribute` (interface), `jsr:@spy4x/caldav/xml`: An attribute with its namespace resolved.
+- `XmlElement` (interface), `jsr:@spy4x/caldav/xml`: An element with its namespace resolved.
+- `XmlError` (interface), `jsr:@spy4x/caldav/xml`: A refused document: the code to branch on and a message for logs.
+- `XmlErrorCode` (enum), `jsr:@spy4x/caldav/xml`: Why a document was refused.
+- `XmlName` (interface), `jsr:@spy4x/caldav/xml`: A namespace-qualified name.
+- `XmlNode` (type), `jsr:@spy4x/caldav/xml`: A child of an element: another element, or decoded text.
+- `XmlParseOptions` (interface), `jsr:@spy4x/caldav/xml`: Limits for parseXml and parseMultistatus.
+- `XmlResult` (type), `jsr:@spy4x/caldav/xml`: The outcome of a parse: the value, or why the document was refused.
+- `calendarMultigetBody` (function), `jsr:@spy4x/caldav/xml`: A `calendar-multiget` REPORT body (RFC 4791 §7.9) for `hrefs`, written as given.
+- `calendarQueryBody` (function), `jsr:@spy4x/caldav/xml`: A `calendar-query` REPORT body (RFC 4791 §7.8).
+- `childElement` (function), `jsr:@spy4x/caldav/xml`: The first child element of `element` named `namespace`/`name`.
+- `childElements` (function), `jsr:@spy4x/caldav/xml`: The child elements of `element` named `namespace`/`name`, in document order.
+- `escapeXml` (function), `jsr:@spy4x/caldav/xml`: Escape text for an XML element body or a double-quoted attribute value.
+- `getProp` (function), `jsr:@spy4x/caldav/xml`: The property `namespace`/`name` from a 2xx propstat of `response`; never from a 404 one.
+- `getPropText` (function), `jsr:@spy4x/caldav/xml`: The text of getProp, untrimmed, or `undefined` when the property is not there.
+- `mkcalendarBody` (function), `jsr:@spy4x/caldav/xml`: A `MKCALENDAR` body (RFC 4791 §5.3.1).
+- `parseMultistatus` (function), `jsr:@spy4x/caldav/xml`: Parse a `207 Multi-Status` body into its responses.
+- `parseXml` (function), `jsr:@spy4x/caldav/xml`: Parse an XML document into a tree of elements with resolved namespaces.
+- `propfindBody` (function), `jsr:@spy4x/caldav/xml`: A `PROPFIND` body asking for `props`.
+- `proppatchBody` (function), `jsr:@spy4x/caldav/xml`: A `PROPPATCH` body that sets the given calendar properties (RFC 4918 §9.2).
+- `serializeXml` (function), `jsr:@spy4x/caldav/xml`: Serialise an element tree as an XML document.
+- `textContent` (function), `jsr:@spy4x/caldav/xml`: All text under `element`, in document order, with nothing trimmed.
+- `xmlElement` (function), `jsr:@spy4x/caldav/xml`: Build an element.
 
 ## @spy4x/email
 
@@ -2364,4 +2409,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 bb4bdb96c24afc8c8471e602e92368bbe3aad6eca6bcd92b34ffafe921aceb74 -->
+<!-- export surface: sha256 8072b7749cd32282b9b7ff5ee98c9cc8447c06c55416a58ccf8e7677447614cd -->
