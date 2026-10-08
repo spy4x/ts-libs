@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<multistatus xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><response><href>/user%40example.com/inbox/task-file-name.ics</href><propstat><prop><getetag>"81aae0839f994b318c18c4acea1896b00dafa0de7cc42c881249abab455ed167"</getetag><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//example.com//fixture//EN
+BEGIN:VTODO
+DTSTAMP:20261008T090000Z
+DUE;VALUE=DATE:20261010
+SUMMARY:Water the plants &amp; &lt;check&gt; the soil
+UID:6c1f0e52-7a4b-4f7e-9c3d-2b8e5a1d0f43
+END:VTODO
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>
