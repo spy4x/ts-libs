@@ -211,8 +211,11 @@ function ok<T>(output: T): IcalResult<T> {
   return { success: true, output, error: null }
 }
 
-/** The component an app edits: `root` itself, or the first child of that name that is not an override. */
-function findMaster(root: IcalComponent, name: string): IcalComponent | undefined {
+/**
+ * The component an app edits: `root` itself, or the first child of that name that is not an override.
+ * `name` must be upper-case (`VTODO`); component names in the document match in any case.
+ */
+export function findMaster(root: IcalComponent, name: string): IcalComponent | undefined {
   if (root.name.toUpperCase() === name) return root
   return root.components.find((component) =>
     component.name.toUpperCase() === name && !getProperty(component, "RECURRENCE-ID")
@@ -714,8 +717,8 @@ function transaction(
  * date, RRULE or RELATED-TO ({@link IcalErrorCode.InvalidValue}).
  *
  * A repeating task stays repeating, and `status: Completed` on one is refused unless
- * `options.completeSeries` is true, which ends the series as written. Moving a series to its
- * next occurrence is not done here. `percentComplete` other than 100 on a completed task is
+ * `options.completeSeries` is true, which ends the series as written. To move a series to its
+ * next occurrence, use `completeTodo`. `percentComplete` other than 100 on a completed task is
  * refused: reopen it with a `status` to change it.
  *
  * On success `root.properties` and `root.components` are replaced with new arrays, so objects
@@ -879,3 +882,5 @@ function addCreated(
   const result = putDate(component, root, "CREATED", now)
   return result.success ? undefined : (result as IcalResult<never>)
 }
+
+export * from "./ical-tasks-complete.ts"
