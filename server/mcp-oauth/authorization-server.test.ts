@@ -284,6 +284,15 @@ describe("createAuthorizationServer", () => {
   })
 
   describe("refuses the authorization request", () => {
+    it("on a host other than the issuer's, even with a forged Remote-User", async () => {
+      const t = setup()
+      const query = await t.authorizeParams()
+      const response = await t.app.request(`https://mcp.example.com/authorize?${query}`, {
+        headers: { "remote-user": "owner" },
+      })
+      expect(response.status).toBe(403)
+    })
+
     it("when the owner is not confirmed, and stores nothing", async () => {
       const t = setup()
       const response = await t.getAuthorize(await t.authorizeParams(), false)
@@ -389,6 +398,23 @@ describe("createAuthorizationServer", () => {
   })
 
   describe("refuses the consent submission", () => {
+    it("on a host other than the issuer's, even with forged headers", async () => {
+      const t = setup()
+      const id = await t.consentId(await t.getAuthorize(await t.authorizeParams()))
+      const forged = await t.app.request("https://mcp.example.com/authorize", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "remote-user": "owner",
+          origin: ISSUER,
+          "sec-fetch-site": "same-origin",
+        },
+        body: new URLSearchParams({ consent_id: id, decision: "approve" }).toString(),
+      })
+      expect(forged.status).toBe(403)
+      expect(forged.headers.get("location")).toBeNull()
+    })
+
     it("from another site", async () => {
       const t = setup()
       const id = await t.consentId(await t.getAuthorize(await t.authorizeParams()))

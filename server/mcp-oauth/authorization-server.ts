@@ -83,8 +83,13 @@ export interface AuthorizationServerOptions {
   store: OAuthStore
   /**
    * True only when the request comes from the owner, e.g. when the `Remote-User` header that
-   * Authelia's forward-auth sets names the owner. Called before anything else on both the consent
-   * page and its submission; `false` answers `403` and does nothing.
+   * Authelia's forward-auth sets names the owner. Called on both the consent page and its
+   * submission; `false` answers `403` and does nothing.
+   *
+   * A header such as `Remote-User` proves nothing by itself: anyone can send it. Trust it only when
+   * every route into this app passes forward-auth, which strips a forged one. So serve `app` on its
+   * own host (the issuer's), entirely behind forward-auth, and never mount it on the public MCP
+   * host. `/authorize` answers `403` to any request whose host is not the issuer's.
    */
   confirmOwner(c: Context): boolean | Promise<boolean>
   /**
@@ -242,6 +247,7 @@ export function createAuthorizationServer(
   const clock = options.clock ?? systemClock
   /** How long a revoked grant refuses new tokens: past the life of any token it could still get. */
   const revokeTtl = Math.max(accessTtl, refreshTtl)
+  const issuerHost = new URL(issuer).host
   const store = options.store
   const clients = options.clients ?? createClientMetadataFetcher({ clock })
   const renderConsent = options.renderConsent ?? defaultConsentPage
@@ -326,7 +332,11 @@ export function createAuthorizationServer(
 
   app.get(AUTHORIZATION_SERVER_METADATA_PATH, (c) => c.json(metadata))
 
+  /** Is the request addressed to the issuer's host? Only that host is behind forward-auth. */
+  const onIssuerHost = (c: Context) => new URL(c.req.url).host === issuerHost
+
   app.get(AUTHORIZE_PATH, async (c) => {
+    if (!onIssuerHost(c)) return page(c, 403, "Approve access on the authorization server's host.")
     if (!(await options.confirmOwner(c))) return page(c, 403, "Only the owner can approve access.")
     const params = readParams(new URL(c.req.url).searchParams)
     if (params === undefined) return page(c, 400, "Malformed authorization request.")
@@ -399,6 +409,7 @@ export function createAuthorizationServer(
   })
 
   app.post(AUTHORIZE_PATH, async (c) => {
+    if (!onIssuerHost(c)) return page(c, 403, "Approve access on the authorization server's host.")
     if (sameOrigin(c.req.raw) !== undefined) return page(c, 403, "Cross-site request refused.")
     if (!(await options.confirmOwner(c))) return page(c, 403, "Only the owner can approve access.")
     let params: Params | undefined

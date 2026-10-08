@@ -2281,7 +2281,12 @@ front of its endpoint. It follows Claude's connector requirements
 (<https://claude.com/docs/connectors/building/authentication>) and the MCP authorization spec
 (2025-11-25).
 
+The authorization server and the MCP server run on two hosts. The issuer's host sits entirely
+behind Authelia's forward-auth; the MCP host cannot, because Claude calls it with a bearer token
+and no browser session.
+
 ```ts
+import { Hono } from "hono"
 import { createAuthorizationServer, createResourceServer } from "@spy4x/server/mcp-oauth"
 import { MemoryOAuthStore } from "@spy4x/server/mcp-oauth/memory-store"
 
@@ -2291,15 +2296,22 @@ const as = createAuthorizationServer({
   issuer,
   resources: [resource],
   store: new MemoryOAuthStore(),
-  // Authelia forward-auth guards /authorize and sets Remote-User.
+  // Trustworthy only because every route to auth.example.com passes forward-auth,
+  // which strips a Remote-User header the client sent.
   confirmOwner: (c) => c.req.header("remote-user") === "owner",
 })
-app.route("/", as.app)
+const authApp = new Hono().route("/", as.app) // served on auth.example.com only
 
 const rs = createResourceServer({ resource, issuer, verifier: as.verifier })
-app.get(rs.metadataPath, rs.metadataHandler)
-app.use("/mcp", rs.guard)
+const mcpApp = new Hono() // served on mcp.example.com; never mount as.app here
+mcpApp.get(rs.metadataPath, rs.metadataHandler)
+mcpApp.use("/mcp", rs.guard)
 ```
+
+Forward-auth on the MCP host would break Claude, so `as.app` must not be reachable there. If it
+were, anyone could send `Remote-User: owner` and approve themselves. As a second line,
+`/authorize` answers `403` to any request whose host is not the issuer's. In a real deployment the
+two hosts share one store: one process serving both, or a shared `OAuthStore`.
 
 ### What it does
 
@@ -2316,17 +2328,20 @@ app.use("/mcp", rs.guard)
   document. The default allowlist is `https://claude.ai/api/mcp/auth_callback` plus
   `http://localhost/callback` and `http://127.0.0.1/callback`, which match on any port for Claude
   Code. Until the redirect URI has passed, a refusal is a `400` page, never a redirect.
-- **Consent.** `GET /authorize` calls `confirmOwner` first and does nothing else for anyone else.
-  It then shows a consent page naming the client's host and the redirect host, with a warning when
-  the code goes to a loopback address. The page cannot be framed. Approving posts a single-use,
-  10-minute consent id back to `/authorize`; that post must be same-origin and passes
-  `confirmOwner` again. `renderConsent` replaces the built-in page.
+- **Consent.** `GET /authorize` answers `403` unless the request's host is the issuer's, then
+  calls `confirmOwner` and does nothing else for anyone else. It then shows a consent page naming
+  the client's host and the redirect host, asking the owner to approve only a sign-in they just
+  started, with an extra warning when the code goes to a loopback address. The page cannot be framed. Approving posts a single-use,
+  10-minute consent id back to `/authorize`; that post must reach the issuer's host, be
+  same-origin, and pass `confirmOwner` again. `renderConsent` replaces the built-in page.
 - **Codes.** Single-use, 60 seconds, bound to the client, redirect URI, PKCE challenge and
   resource. A replayed code is refused and revokes every token the first exchange issued.
 - **Tokens.** Opaque 256-bit random strings; the store keeps only their SHA-256 digest. Access
   tokens last 15 minutes and are bound to one resource: the guard refuses a token issued for
   another MCP server. Refresh tokens last 30 days and rotate on every use; a reused one revokes the
-  whole grant. The PKCE verifier is compared in constant time.
+  whole grant. A revoked grant also refuses tokens saved after the revocation, so a replay that
+  races the first redemption leaves no working token. The PKCE verifier is compared in constant
+  time. `offline_access` is accepted but not advertised, since refresh tokens are always issued.
 - **Errors.** RFC 6749 codes: `invalid_grant` for every bad code or refresh token, `invalid_target`
   for a foreign resource, `invalid_client` for any client authentication.
 
