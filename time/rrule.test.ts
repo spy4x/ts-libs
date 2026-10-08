@@ -599,6 +599,73 @@ Deno.test(`nextOccurrence chains due date to next date the way Tasks.org complet
   assertEquals(chain(`FREQ=MONTHLY`, `2026-01-31`, 1), [])
 })
 
+/** The next due date Tasks.org gives a task due at `due` (UTC wall clock), or `none`. */
+function completeOnce(text: string, due: string, time = `13:30:00`): string {
+  return next(text, utc(due, time), `${due}T${time}Z`)
+}
+
+Deno.test(`nextOccurrence gives the next due date Tasks.org's RepeatMonthlyTests expect`, () => {
+  // Rows ported from tasks/tasks RepeatMonthlyTests.kt at b5c8b08, plus the review's cases for a
+  // single BYMONTHDAY; each completes a task due on the date, so start and after are the same.
+  const cases: [rule: string, due: string, expected: string][] = [
+    [`FREQ=MONTHLY;INTERVAL=3`, `2016-08-28`, `2016-11-28`],
+    [`FREQ=MONTHLY;INTERVAL=1`, `2017-01-31`, `2017-02-28`],
+    [`FREQ=MONTHLY`, `2017-11-01`, `2017-12-01`],
+    [`FREQ=MONTHLY`, `2017-11-30`, `2017-12-30`],
+    [`FREQ=MONTHLY;BYMONTHDAY=-1`, `2017-11-30`, `2017-12-31`],
+    [`FREQ=MONTHLY;INTERVAL=1`, `2017-01-30`, `2017-02-28`],
+    [`FREQ=MONTHLY;INTERVAL=6`, `2026-08-30`, `2027-02-28`],
+    [`FREQ=MONTHLY;INTERVAL=6`, `2026-08-29`, `2027-02-28`],
+    [`FREQ=MONTHLY;INTERVAL=6`, `2027-08-29`, `2028-02-29`],
+    [`FREQ=MONTHLY;INTERVAL=6`, `2026-08-28`, `2027-02-28`],
+    [`FREQ=MONTHLY;BYMONTH=1,3,5,7,9,11`, `2017-01-31`, `2017-03-31`],
+    [`FREQ=MONTHLY;BYMONTHDAY=-1`, `2017-01-31`, `2017-02-28`],
+    [`FREQ=MONTHLY;INTERVAL=6;BYMONTHDAY=-1`, `2026-08-31`, `2027-02-28`],
+    [`FREQ=MONTHLY;UNTIL=20260228`, `2026-01-30`, `2026-02-28`],
+    [`FREQ=MONTHLY;UNTIL=20260215`, `2026-01-30`, `none`],
+    [`FREQ=MONTHLY;BYMONTHDAY=31`, `2017-01-31`, `2017-02-28`],
+    [`FREQ=MONTHLY;BYMONTHDAY=20`, `2026-01-15`, `2026-01-20`],
+    [`FREQ=MONTHLY;BYMONTHDAY=31`, `2026-02-28`, `2026-03-31`],
+    [`FREQ=MONTHLY;BYMONTHDAY=31`, `2026-01-15`, `2026-02-28`],
+    [`FREQ=MONTHLY;BYMONTHDAY=31`, `2026-02-10`, `2026-03-31`],
+    // A clipped due date is an occurrence, so COUNT=1 ends the series as handleRepeat does.
+    [`FREQ=MONTHLY;BYMONTHDAY=31;COUNT=1`, `2026-02-28`, `none`],
+  ]
+  for (const [text, due, expected] of cases) {
+    const result = completeOnce(text, due)
+    assertEquals(result === `none` ? result : result.slice(0, 10), expected, `${text} from ${due}`)
+  }
+})
+
+Deno.test(`nextOccurrence follows Tasks.org's chains of completions around month ends`, () => {
+  const chain = (text: string, due: string, length: number, time: string) => {
+    const dates: string[] = []
+    for (let i = 0; i < length; i++) {
+      due = completeOnce(text, due, time).slice(0, 10)
+      dates.push(due)
+    }
+    return dates
+  }
+  // A single BYMONTHDAY returns to its day after a clipped month.
+  assertEquals(chain(`FREQ=MONTHLY;BYMONTHDAY=31`, `2017-01-31`, 4, `13:30:00`), [
+    `2017-02-28`,
+    `2017-03-31`,
+    `2017-04-30`,
+    `2017-05-31`,
+  ])
+  assertEquals(chain(`FREQ=MONTHLY;INTERVAL=6;BYMONTHDAY=30`, `2026-08-30`, 3, `18:00:00`), [
+    `2027-02-28`,
+    `2027-08-30`,
+    `2028-02-29`,
+  ])
+  // Without BYMONTHDAY the anchor is the due date, so a clipped date drifts.
+  assertEquals(chain(`FREQ=MONTHLY;INTERVAL=6`, `2026-08-30`, 3, `18:00:00`), [
+    `2027-02-28`,
+    `2027-08-28`,
+    `2028-02-28`,
+  ])
+})
+
 Deno.test(`nextOccurrence answers a huge COUNT from a distant start in under a second`, () => {
   const began = performance.now()
   const result = nextOccurrence(rule(`FREQ=DAILY;COUNT=1000000`), {

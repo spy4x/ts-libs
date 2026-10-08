@@ -11,9 +11,9 @@
  *
  * A date a month does not have (the 31st in April, 29 February in a common year) is skipped, as
  * RFC 5545 section 3.3.10 requires, with one exception that follows Tasks.org: a plain monthly
- * rule (no `BYDAY`, no `BYMONTH`, no `BYMONTHDAY` or one positive day) moves the start by
- * `INTERVAL` months and uses the month's last day when the start's day is missing, so 31 January
- * is followed by 28 February. A wall clock a zone skips (a spring-forward
+ * rule (no `BYDAY`, no `BYMONTH`, no `BYMONTHDAY` or one positive day) is anchored on that day, or
+ * on the start's day without one, and uses the month's last day when a month is shorter than the
+ * anchor, so 31 January is followed by 28 February. A wall clock a zone skips (a spring-forward
  * gap) is kept: the occurrence keeps its date and wall clock, which `resolveInstant` shifts
  * forward, so a task due at 02:30 is not lost on that day.
  *
@@ -369,10 +369,36 @@ function monthDays(rule: Rrule, year: number, month: number, startDay: number): 
   return out
 }
 
-/** Tasks.org's plain monthly shape: start plus INTERVAL months, clipped to the month's end. */
+/** Tasks.org's plain monthly shape, which it clips to the month's end instead of skipping. */
 function clipsMonthEnd(rule: Rrule): boolean {
   return rule.freq === RruleFreq.Monthly && rule.byDay.length === 0 && rule.byMonth.length === 0 &&
     (rule.byMonthDay.length === 0 || (rule.byMonthDay.length === 1 && rule.byMonthDay[0]! > 0))
+}
+
+/**
+ * Tasks.org's month-end handling of a plain monthly rule, as a series. The anchor is the single
+ * `BYMONTHDAY`, or the start's day. Every later period holds the anchor, or the month's last day
+ * when the month is shorter. The start's own month holds the start when the start sits on the
+ * (clipped) anchor. It also holds an anchor later in that month, but only when the month
+ * `INTERVAL` months on is long enough for the anchor; otherwise Tasks.org goes straight to that
+ * month's last day, so 15 January with `BYMONTHDAY=31` is followed by 28 February.
+ */
+function clippedMonthDays(
+  rule: Rrule,
+  start: { year: number; month: number; day: number },
+  k: number,
+  year: number,
+  month: number,
+): number[] {
+  const anchor = rule.byMonthDay[0] ?? start.day
+  const length = daysInMonth(year, month)
+  if (k > 0) return [toDays(year, month, Math.min(anchor, length))]
+  if (Math.min(anchor, length) === start.day) return [toDays(year, month, start.day)]
+  const later = start.year * 12 + start.month - 1 + rule.interval
+  const laterLength = daysInMonth(Math.floor(later / 12), (later % 12) + 1)
+  return anchor > start.day && anchor <= length && anchor <= laterLength
+    ? [toDays(year, month, anchor)]
+    : []
 }
 
 /** The day numbers period `k` of the rule selects, ascending. */
@@ -399,9 +425,7 @@ function periodDays(rule: Rrule, startDays: number, k: number): number[] {
       const year = Math.floor(index / 12)
       const month = (index % 12) + 1
       if (rule.byMonth.length && !rule.byMonth.includes(month)) return []
-      if (clipsMonthEnd(rule)) {
-        return [toDays(year, month, Math.min(start.day, daysInMonth(year, month)))]
-      }
+      if (clipsMonthEnd(rule)) return clippedMonthDays(rule, start, k, year, month)
       return monthDays(rule, year, month, start.day)
     }
     case RruleFreq.Yearly: {
