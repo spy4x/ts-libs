@@ -68,7 +68,8 @@ export async function securityHeaders(
   const extra = options.extraSources ?? {}
   const html = options.shellHtml ?? ``
   const more = (key: keyof ExtraSources) => [...extra[key] ?? []]
-  const optional = (key: keyof ExtraSources) => extra[key] ? { [key]: more(key) } : {}
+  const optional = (key: keyof ExtraSources) =>
+    extra[key] ? { [key]: [`'self'`, ...more(key)] } : {}
   return secureHeaders({
     contentSecurityPolicy: {
       defaultSrc: [`'self'`],

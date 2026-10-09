@@ -8,6 +8,9 @@
  * objects came from, and for the others compares object etags with the stored ones: only new or
  * changed objects are written, and stored objects the server no longer lists are dropped.
  *
+ * An object whose etag matches the stored one is not fetched again: the engine trusts that the
+ * stored body is what the server holds under that etag, as RFC 4791 requires of an etag.
+ *
  * @module
  */
 
@@ -96,7 +99,11 @@ export interface CalDavSyncStore<C extends SyncCalendar = SyncCalendar> {
 export interface SyncOutcome {
   /** False when the calendar list got no answer: nothing was changed. */
   answered: boolean
-  /** Addresses of the calendars whose objects could not be fetched this time. */
+  /**
+   * Addresses of the calendars that are not fully in step: the objects could not be fetched, or the
+   * server's multiget left out a requested one. Their previous change marker is kept, so the next
+   * refresh tries again.
+   */
   failed: string[]
   /** Objects written (new or changed), over all calendars. */
   written: number
@@ -113,7 +120,9 @@ export interface CalDavSync {
   refresh(): Promise<SyncOutcome>
   /**
    * Fetches one calendar including its completed tasks, and keeps including them in later
-   * refreshes. Resolves false when the calendar is unknown or the server did not answer.
+   * refreshes. Resolves false when the calendar is unknown, the server did not answer or its answer
+   * was incomplete. It does not wait for a running refresh: if the two overlap, the refresh may
+   * write `completedLoaded` false after this call wrote true, and a later call repairs it.
    */
   loadCompleted(calendarHref: string): Promise<boolean>
 }
@@ -129,7 +138,10 @@ export function createCalDavSync<C extends SyncCalendar>(
   async function syncObjects(
     calendar: StoredCalendar<C>,
     completed: boolean,
-  ): Promise<{ ok: true; written: number; removed: number } | { ok: false; offline: boolean }> {
+  ): Promise<
+    | { ok: true; written: number; removed: number; incomplete: boolean }
+    | { ok: false; offline: boolean }
+  > {
     const options = { includeCompleted: completed }
     const stored = new Map(
       (await store.listVersions(calendar.href)).map((v) => [v.href, v.etag]),
@@ -139,6 +151,7 @@ export function createCalDavSync<C extends SyncCalendar>(
 
     let versions: SyncObjectVersion[]
     let upsert: SyncObject[]
+    let incomplete = false
     if (transport.listVersions && transport.getObjects) {
       const listed = await transport.listVersions(calendar, options)
       if (!listed.ok) return listed
@@ -149,6 +162,8 @@ export function createCalDavSync<C extends SyncCalendar>(
         const fetched = await transport.getObjects(calendar, wanted)
         if (!fetched.ok) return fetched
         upsert = fetched.data
+        const came = new Set(upsert.map((o) => o.href))
+        incomplete = wanted.some((href) => !came.has(href))
       }
     } else {
       const listed = await transport.listObjects(calendar, options)
@@ -158,11 +173,13 @@ export function createCalDavSync<C extends SyncCalendar>(
     }
     const present = new Set(versions.map((v) => v.href))
     const remove = [...stored.keys()].filter((href) => !present.has(href))
-    await store.applyChanges(
-      { ...calendar, syncedMarker: calendar.changeMarker, completedLoaded: completed },
-      { upsert, remove },
-    )
-    return { ok: true, written: upsert.length, removed: remove.length }
+    // A changed object the server left out keeps its old copy, so the calendar must not count as in
+    // step: the previous markers stay and the next refresh asks again.
+    const next = incomplete
+      ? calendar
+      : { ...calendar, syncedMarker: calendar.changeMarker, completedLoaded: completed }
+    await store.applyChanges(next, { upsert, remove })
+    return { ok: true, written: upsert.length, removed: remove.length, incomplete }
   }
 
   async function run(): Promise<SyncOutcome> {
@@ -185,6 +202,7 @@ export function createCalDavSync<C extends SyncCalendar>(
       if (result.ok) {
         outcome.written += result.written
         outcome.removed += result.removed
+        if (result.incomplete) outcome.failed.push(calendar.href)
         continue
       }
       outcome.failed.push(calendar.href)
@@ -202,7 +220,8 @@ export function createCalDavSync<C extends SyncCalendar>(
     async loadCompleted(calendarHref) {
       const calendar = (await store.listCalendars()).find((c) => c.href === calendarHref)
       if (!calendar) return false
-      return (await syncObjects(calendar, true)).ok
+      const result = await syncObjects(calendar, true)
+      return result.ok && !result.incomplete
     },
   }
 }

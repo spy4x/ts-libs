@@ -193,6 +193,33 @@ Deno.test(`with etag listing and multiget, only the bodies of changed objects ar
   expect(held(A)).toEqual([`${A}1`, `${A}2`])
 })
 
+Deno.test(`a multiget that leaves out a changed object keeps the old marker so the next refresh asks again`, async () => {
+  const { server, withVersions } = fakeServer()
+  const { store, calendars, held, objects } = fakeStore()
+  server.objects.set(A, [obj(`${A}1`, `"1"`, `old`), obj(`${A}2`, `"2"`)])
+  const sync = createCalDavSync(withVersions, store)
+  await sync.refresh()
+
+  server.objects.set(A, [obj(`${A}1`, `"1b"`, `new`), obj(`${A}2`, `"2b"`)])
+  server.calendars[0].changeMarker = `m2`
+  const getObjects = withVersions.getObjects!
+  withVersions.getObjects = async (calendar, hrefs) => {
+    const result = await getObjects(calendar, hrefs)
+    return result.ok ? { ok: true, data: result.data.filter((o) => o.href !== `${A}1`) } : result
+  }
+  const first = await sync.refresh()
+  expect(first.failed).toEqual([A])
+  expect(calendars.get(A)?.syncedMarker).toBe(`m1`)
+  expect(objects.get(A)?.get(`${A}1`)?.ics).toBe(`old`)
+  expect(held(A)).toEqual([`${A}1`, `${A}2`])
+
+  withVersions.getObjects = getObjects
+  const second = await sync.refresh()
+  expect(second.failed).toEqual([])
+  expect(objects.get(A)?.get(`${A}1`)?.ics).toBe(`new`)
+  expect(calendars.get(A)?.syncedMarker).toBe(`m2`)
+})
+
 Deno.test(`a calendar the server no longer lists is dropped with its objects`, async () => {
   const { server, transport } = fakeServer()
   const { store, calendars, held } = fakeStore()

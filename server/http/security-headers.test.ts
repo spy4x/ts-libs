@@ -54,7 +54,7 @@ Deno.test(`a consumer's extra sources are appended to the defaults, not replacin
   })).headers.get(`content-security-policy`) ?? ``
   expect(csp).toContain(`img-src 'self' data: https://img.example.com`)
   expect(csp).toContain(`connect-src 'self' https://api.example.com`)
-  expect(csp).toContain(`font-src https://fonts.example.com`)
+  expect(csp).toContain(`font-src 'self' https://fonts.example.com`)
   expect(csp).toContain(`default-src 'self'`)
 })
 
@@ -64,4 +64,17 @@ Deno.test(`without extra sources no font, media, worker or manifest directive is
     expect(csp).not.toContain(name)
   }
   expect(csp).toContain(`object-src 'none'`)
+})
+
+Deno.test(`widening workerSrc, mediaSrc or manifestSrc keeps the app's own origin allowed`, async () => {
+  const csp = (await policy({
+    extraSources: {
+      workerSrc: [`blob:`],
+      mediaSrc: [`https://media.example.com`],
+      manifestSrc: [`https://cdn.example.com`],
+    },
+  })).headers.get(`content-security-policy`) ?? ``
+  expect(csp).toContain(`worker-src 'self' blob:`)
+  expect(csp).toContain(`media-src 'self' https://media.example.com`)
+  expect(csp).toContain(`manifest-src 'self' https://cdn.example.com`)
 })
