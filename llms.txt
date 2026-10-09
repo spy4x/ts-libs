@@ -2587,6 +2587,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `RruleResult` (type), `jsr:@spy4x/time/rrule`: `{ success, output, error }`: the output, or why there is none.
 - `RruleWeekday` (enum), `jsr:@spy4x/time/rrule`: A day of the week, numbered like ISO 8601: Monday is 1, Sunday is 7.
 - `describeRrule` (function), `jsr:@spy4x/time/rrule`: An English label for the rule, such as `Every 2 weeks on Mon, Thu`, `Monthly on the last Friday` or `Daily, 5 times`.
+- `formatRrule` (function), `jsr:@spy4x/time/rrule`: Write `rule` as the value of an `RRULE` property (no `RRULE:` prefix), so that parseRrule reads it back to an equal rule.
 - `nextOccurrence` (function), `jsr:@spy4x/time/rrule`: The first occurrence of `rule` strictly after `options.after`, as a value of the same kind (and zone) as `options.start`, with the start's time of day.
 - `parseRrule` (function), `jsr:@spy4x/time/rrule`: Parse the value of an `RRULE` property (a leading `RRULE:` is accepted).
 
@@ -2672,4 +2673,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 523f0c6cccb68e4c2e0c2f3586a2dc81c2446ed26a713379e1b0d14ae933d322 -->
+<!-- export surface: sha256 102d8c4ab727c44bb96bf01a0b329278d1dd0b35cbb8304874df6b1d6659181f -->
