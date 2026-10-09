@@ -321,7 +321,12 @@ export function createOutbox<P, S extends { version: number }>(
    * earlier write when the submit queued it, so a refusal may drop it with nothing else lost.
    */
   const interactive = new Map<number, boolean>()
-  const outcomes = new Map<number, Outcome<S>>()
+  /** The `submit` calls waiting on each entry; a send settles all of them with its outcome. */
+  const waiters = new Map<number, Set<{ outcome?: Outcome<S> }>>()
+
+  function settle(seq: number, outcome: Outcome<S>): void {
+    for (const waiter of waiters.get(seq) ?? []) waiter.outcome = outcome
+  }
 
   async function find(seq: number): Promise<Entry | undefined> {
     return (await store.readOutbox()).find((entry) => entry.seq === seq)
@@ -451,7 +456,7 @@ export function createOutbox<P, S extends { version: number }>(
       // has its own key and must stay queued.
       if (await unchanged(sending)) await drop(seq)
       if (wants) {
-        outcomes.set(seq, { kind: "sent", server: sending.kind === "delete" ? undefined : server })
+        settle(seq, { kind: "sent", server: sending.kind === "delete" ? undefined : server })
       }
       return true
     } catch (error) {
@@ -477,13 +482,13 @@ export function createOutbox<P, S extends { version: number }>(
     if (failure.kind === "not-found" && entry.kind === "delete") {
       await cache?.remove(entry.entityId)
       await drop(entry.seq!)
-      if (wants) outcomes.set(entry.seq!, { kind: "sent" })
+      if (wants) settle(entry.seq!, { kind: "sent" })
       return true
     }
     if (wants && alone) {
       // The person is looking at the screen: the app shows the refusal itself.
       await drop(entry.seq!)
-      outcomes.set(entry.seq!, { kind: "failed", error })
+      settle(entry.seq!, { kind: "failed", error })
       return true
     }
     let reason: ConflictReason = "rejected"
@@ -506,7 +511,7 @@ export function createOutbox<P, S extends { version: number }>(
       server,
       reason === "rejected" && failure.kind === "rejected" ? failure.message : undefined,
     )
-    if (wants) outcomes.set(entry.seq!, { kind: "conflict", reason })
+    if (wants) settle(entry.seq!, { kind: "conflict", reason })
     return true
   }
 
@@ -524,20 +529,31 @@ export function createOutbox<P, S extends { version: number }>(
 
   /** Records a change and sends it when the connection allows. */
   async function submit(change: Change<P>): Promise<Outcome<S>> {
+    const waiter: { outcome?: Outcome<S> } = {}
     const entry = await locked(async () => {
       const earlier = (await store.readOutbox()).some((e) => e.entityId === change.entityId)
       const queued = await enqueue(change)
       // Marked inside the same step, so no send can settle the entry before it is watched.
-      if (queued) interactive.set(queued.seq!, !earlier)
+      if (queued) {
+        interactive.set(queued.seq!, !earlier)
+        const set = waiters.get(queued.seq!) ?? new Set()
+        set.add(waiter)
+        waiters.set(queued.seq!, set)
+      }
       return queued
     })
     if (!entry) return { kind: "dropped" }
     try {
       await flush()
-      return outcomes.get(entry.seq!) ?? { kind: "queued" }
+      return waiter.outcome ?? { kind: "queued" }
     } finally {
-      interactive.delete(entry.seq!)
-      outcomes.delete(entry.seq!)
+      // Callers that merged into one entry share it: the last one to leave clears the marks.
+      const set = waiters.get(entry.seq!)
+      set?.delete(waiter)
+      if (!set?.size) {
+        waiters.delete(entry.seq!)
+        interactive.delete(entry.seq!)
+      }
     }
   }
 
