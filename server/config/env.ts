@@ -15,6 +15,8 @@
  * so a variable that was genuinely blank in production behaved differently from the same case
  * under test. Fixed here by normalising in both readers, at the one boundary every caller goes
  * through.
+ *
+ * @module
  */
 
 /** Reads environment values. Injected so nothing here depends on the process environment. */
@@ -54,7 +56,7 @@ export function createEnvReader(values: Record<string, string | undefined>): Env
 /**
  * Read one required value now, outside a schema — for the one variable a caller needs before the
  * rest of its configuration can even be assembled (`ENV`, deciding which schema to validate
- * against, for example). {@link loadConfig} in `./config.ts` is the entry point for everything
+ * against, for example). `loadConfig` in `@spy4x/server/config` is the entry point for everything
  * else.
  *
  * @throws {MissingEnvError} When `name` is unset or blank, unless `optional`.

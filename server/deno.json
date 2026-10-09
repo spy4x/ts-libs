@@ -20,6 +20,7 @@
     "./auth/oauth-github": "./auth/oauth-github.ts",
     "./sign-in": "./sign-in/mod.ts",
     "./config": "./config/index.ts",
+    "./config/env": "./config/env.ts",
     "./request-log": "./request-log/log.ts",
     "./kv": "./kv/mod.ts",
     "./outbox": "./outbox/mod.ts",

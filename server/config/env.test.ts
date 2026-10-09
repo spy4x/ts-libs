@@ -78,3 +78,12 @@ describe("readEnvVar", () => {
     expect(readEnvVar(env, "OPTIONAL", { optional: true })).toBe("")
   })
 })
+
+describe("the config/env entry point", () => {
+  it("imports nothing, so @spy4x/server/config/env pulls in no dependency", async () => {
+    const source = await Deno.readTextFile(new URL("./env.ts", import.meta.url))
+    expect(source.match(/\bfrom\s*["'`]/g)).toBeNull()
+    expect(source.match(/^\s*import\b/gm)).toBeNull()
+    expect(source.match(/\bimport\s*\(/g)).toBeNull()
+  })
+})
