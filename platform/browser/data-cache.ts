@@ -101,14 +101,12 @@ export function createDataCache<T>(options: DataCacheOptions<T>): DataCache<T> {
       ) as Row<T> | undefined
       return found?.item
     },
-    async replace(scope, items) {
-      // Built before the transaction opens: an item without an id must not leave a half-replaced scope.
-      const rows = items.map((item) => row(scope, item))
-      await write(async (store) => {
+    replace: (scope, items) =>
+      // An item whose id cannot be read aborts the transaction: the scope stays as it was.
+      write(async (store) => {
         await deleteScope(store, scope)
-        for (const r of rows) store.put(r)
-      })
-    },
+        for (const item of items) store.put(row(scope, item))
+      }),
     async put(scope, item) {
       const r = row(scope, item)
       await write((store) => void store.put(r))
