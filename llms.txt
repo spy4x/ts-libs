@@ -2312,6 +2312,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `Alarm` (interface), `jsr:@spy4x/time/ical-tasks`: A reminder (VALARM) as read.
 - `AlarmInput` (interface), `jsr:@spy4x/time/ical-tasks`: A reminder (VALARM) to write.
+- `AlarmOwner` (enum), `jsr:@spy4x/time/ical-tasks`: What owns a reminder.
 - `AlarmRelated` (enum), `jsr:@spy4x/time/ical-tasks`: What a relative trigger is counted from (`RELATED`, default `START`).
 - `AlarmTrigger` (type), `jsr:@spy4x/time/ical-tasks`: The trigger of a reminder.
 - `AlarmTriggerInput` (type), `jsr:@spy4x/time/ical-tasks`: The trigger of a reminder to write: `related` defaults to AlarmRelated.Start.
@@ -2323,6 +2324,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `CompleteTodoOptions` (interface), `jsr:@spy4x/time/ical-tasks`: Inputs of completeTodo and reopenTodo.
 - `CompleteTodoOutput` (interface), `jsr:@spy4x/time/ical-tasks`: What a successful completeTodo reports.
 - `CompleteTodoResult` (type), `jsr:@spy4x/time/ical-tasks`: `{ success, output, error }`: the output, or why there is none.
+- `DescribeAlarmTriggerOptions` (interface), `jsr:@spy4x/time/ical-tasks`: Options of describeAlarmTrigger.
 - `EventPatch` (interface), `jsr:@spy4x/time/ical-tasks`: Changes to an event.
 - `EventStatus` (enum), `jsr:@spy4x/time/ical-tasks`: The STATUS of an event.
 - `NewOptions` (interface), `jsr:@spy4x/time/ical-tasks`: Caller-supplied inputs for a new object.
@@ -2332,6 +2334,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `TodoPatch` (interface), `jsr:@spy4x/time/ical-tasks`: Changes to a task.
 - `TodoStatus` (enum), `jsr:@spy4x/time/ical-tasks`: The STATUS of a task.
 - `completeTodo` (function), `jsr:@spy4x/time/ical-tasks`: Complete the first VTODO of `root` in place, as Tasks.org does.
+- `describeAlarmTrigger` (function), `jsr:@spy4x/time/ical-tasks`: An English phrase for a reminder's trigger, such as `15 minutes before due`, `1 hour 30 minutes after start`, `at end` or `Friday, 28 August 2026 at 10:00`.
 - `findMaster` (function), `jsr:@spy4x/time/ical-tasks`: The component an app edits: `root` itself, or the first child of that name that is not an override.
 - `newEvent` (function), `jsr:@spy4x/time/ical-tasks`: Build a new calendar object holding one VEVENT; see newTodo.
 - `newTodo` (function), `jsr:@spy4x/time/ical-tasks`: Build a new calendar object holding one VTODO from `fields`, with UID, DTSTAMP, CREATED and LAST-MODIFIED from `options`.
@@ -2477,4 +2480,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 0dc90ab571d77274d71afd8140a28e12871e7d4c7bce34442f9b9ca95581ab4a -->
+<!-- export surface: sha256 7225a86f9b0200eef7f93cf9bf33cbb34f0e6b61d2ec313e22c330e76b45009e -->

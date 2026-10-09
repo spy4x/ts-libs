@@ -30,12 +30,14 @@ import {
   readList,
   readText,
   removeProperty,
+  resolveInstant,
   setProperty,
   writeDate,
   writeList,
   writeText,
 } from "./ical.ts"
 import { icsEscape } from "./ics-core.ts"
+import { formatInstantLong, isValidTimeZone } from "./tz.ts"
 
 /** The STATUS of a task. */
 export enum TodoStatus {
@@ -99,6 +101,74 @@ export interface AlarmInput {
   action?: "DISPLAY" | "AUDIO"
   trigger: AlarmTriggerInput
   description?: string
+}
+
+/** What owns a reminder. It decides whether the end of the object is called "due" or "end". */
+export enum AlarmOwner {
+  /** A VTODO: its end is `DUE`. */
+  Task = 1,
+  /** A VEVENT: its end is `DTEND`. */
+  Event,
+}
+
+/** Options of {@link describeAlarmTrigger}. */
+export interface DescribeAlarmTriggerOptions {
+  /** The component the VALARM sits in. Default: {@link AlarmOwner.Task}. */
+  owner?: AlarmOwner
+  /** BCP 47 tag for the date of an absolute trigger. Default `en-GB`. The words stay English. */
+  locale?: string
+  /** IANA zone the date of an absolute trigger is shown in. Default `UTC`. */
+  timeZone?: string
+}
+
+const TRIGGER_DURATION = /^([+-]?)P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i
+const TRIGGER_UNITS = ["week", "day", "hour", "minute", "second"]
+
+/**
+ * An English phrase for a reminder's trigger, such as `15 minutes before due`,
+ * `1 hour 30 minutes after start`, `at end` or `Friday, 28 August 2026 at 10:00`.
+ *
+ * A relative trigger counts from the start or the end of the object ({@link AlarmRelated}). The
+ * end is called `due` for a task and `end` for an event, because RFC 5545 relates a task's
+ * reminder to `DUE` and an event's to `DTEND`. A zero offset reads `at start`, `at due` or
+ * `at end`. A negative duration is before, a positive or unsigned one after. An absolute trigger is
+ * a moment, shown in `options.timeZone` and `options.locale` as `formatInstantLong` writes it.
+ *
+ * Like {@link readTodo}, it answers `undefined` for what it cannot describe instead of throwing:
+ * a duration outside the RFC 5545 grammar (including one with no unit), an absolute trigger with
+ * no instant, an unknown zone or an unreadable locale. Show the raw value then.
+ *
+ * @param trigger A trigger as read, from `Alarm.trigger`.
+ */
+export function describeAlarmTrigger(
+  trigger: AlarmTrigger,
+  options: DescribeAlarmTriggerOptions = {},
+): string | undefined {
+  if (trigger.kind === AlarmTriggerKind.Absolute) {
+    const zone = options.timeZone ?? "UTC"
+    const instant = isValidTimeZone(zone) ? resolveInstant(trigger.at, { zone }) : undefined
+    if (!instant) return undefined
+    try {
+      return formatInstantLong(instant, zone, options.locale)
+    } catch {
+      return undefined
+    }
+  }
+  const match = TRIGGER_DURATION.exec(trigger.duration.trim())
+  if (!match || match.slice(2).every((part) => part === undefined)) return undefined
+  // A `T` with nothing after it (`P1DT`) is not in the grammar.
+  if (/T$/i.test(trigger.duration.trim())) return undefined
+  const parts = TRIGGER_UNITS.flatMap((unit, index) => {
+    const count = Number(match[index + 2] ?? 0)
+    return count === 0 ? [] : [`${count} ${unit}${count === 1 ? "" : "s"}`]
+  })
+  const anchor = trigger.related === AlarmRelated.Start
+    ? "start"
+    : options.owner === AlarmOwner.Event
+    ? "end"
+    : "due"
+  if (parts.length === 0) return `at ${anchor}`
+  return `${parts.join(" ")} ${match[1] === "-" ? "before" : "after"} ${anchor}`
 }
 
 /** A link to another task (RELATED-TO). */
