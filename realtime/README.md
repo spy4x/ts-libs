@@ -410,7 +410,7 @@ the caller picks, and everything else is a port.
 import { createMemoryOutboxStore, createOutbox, createWebLock } from "@spy4x/realtime/outbox"
 
 const outbox = createOutbox<NotePayload, Note>({
-  store: createMemoryOutboxStore(), // or an IndexedDB store of yours, one per user
+  store: createMemoryOutboxStore(), // tests; browsers use createIndexedDbOutboxStore, one per user
   lock: createWebLock(navigator.locks, `outbox:${userId}`),
   canSend: () => socketIsOpen() && pageUserIs(userId),
   send: (command, key) => callOverSocket(command, key), // resolves the server's entity
@@ -425,7 +425,8 @@ await outbox.flush() // after a reconnect and after a pushed hint
 The rules it keeps, each one a lost edit found in a product that wrote the queue by hand:
 
 - **One entry per entity.** A later edit replaces the waiting one; create then delete before any
-  send sends nothing.
+  send sends nothing. Once a send of the create was started, even before a later edit, the delete
+  is sent.
 - **A fresh key after an unknown outcome.** An entry whose send may have reached the server gets a
   new idempotency key when it is edited again, so the server does not answer the old key and drop
   the new text.
@@ -443,9 +444,75 @@ The rules it keeps, each one a lost edit found in a product that wrote the queue
   another tab cannot delete a newer edit.
 
 A created entity starts at version one: after an attempted create, a delete is sent against that
-version. The library ships the queue, its storage port and an in-memory store. It ships no
-IndexedDB store and adds no dependency; implement `OutboxStore` over Dexie or raw IndexedDB in the
-app. `send` runs under the lock, so it must settle or time out.
+version. `send` runs under the lock, so it must settle or time out.
+
+`withdraw(entityId)` takes back the latest change to an entity, for example the "Undo" of a delete
+made offline. When that change was merged into an earlier waiting write (an edit, then a delete),
+only the delete is taken back: the edit stays queued, with its key and its `attempted` flag as they
+were, so a send that may already have happened is repeated idempotently. Each withdraw takes back
+one more change (edit, edit, delete, then two withdraws leave the first edit queued), and a write
+whose send was started is never taken back. Only the last 20 changes can be taken back: an entity
+edited offline more often keeps a bounded entry, and a withdraw past the 20th answers `false` (a
+forgotten step whose send was started still counts as possibly on the server). Otherwise the entry
+is removed and never sent. It answers `false`, changing nothing, when there is nothing to take back or
+it cannot be: the entry's send was already started (the server may have it, so only an online
+restore is safe) or it is a conflict (use `keepMine` or `useTheirs`). A withdraw asked during a send
+waits for it. A create that was deleted before any send leaves nothing queued, so there is nothing
+to withdraw: submit the create again.
+
+### Durable store (`@spy4x/realtime/outbox-indexeddb`)
+
+`createIndexedDbOutboxStore({ name })` keeps the queue in plain IndexedDB, so a write made offline
+survives a closed tab and a restart. `createMemoryOutboxStore` is still the store for tests and
+servers; one contract suite runs against both, so they behave alike. Name the database for the
+user (`outbox:${userId}`), as the lock is named. Ask the browser not to evict it with
+`requestPersistentStorage` from `@spy4x/platform/browser/persistent-storage`.
+
+## Sync runner (`@spy4x/realtime/sync-runner`)
+
+Sends the outbox at the moments a browser gives a page: on start, when the browser goes online,
+when the tab becomes visible, when the window gains focus, when a page returns from the
+back-forward cache, and on `kick()`. It does not use Background Sync (Safari has none): a write
+queued while the app is closed is sent the next time the app opens.
+
+- One run at a time. A kick during a run schedules exactly one more run, however many arrive.
+- A flush that throws, or answers `"unreachable"`, is retried after `backoffDelay` (1 s doubling to
+  60 s, jittered). Any wake-up above cancels the wait and runs at once.
+- `stop()` removes every listener and timer.
+- `getState()` and `subscribe()` give `{ running, lastError, failures, nextRetryAt }` for a UI. No
+  Preact in this package: bind it to a signal in the app.
+
+`Outbox.flush` stops silently at the first write it cannot send; `flushOutbox(outbox)` turns "a
+write is still pending after the flush" into the `"unreachable"` that asks for a retry.
+
+### Wiring an offline-first PWA
+
+```ts
+import { createDataCache } from "@spy4x/platform/browser/data-cache"
+import { requestPersistentStorage } from "@spy4x/platform/browser/persistent-storage"
+import { installOfflineShell } from "@spy4x/platform/browser/offline-shell" // in the service worker
+import { createIndexedDbOutboxStore } from "@spy4x/realtime/outbox-indexeddb"
+import { createOutbox, createWebLock } from "@spy4x/realtime/outbox"
+import { createSyncRunner, flushOutbox } from "@spy4x/realtime/sync-runner"
+
+const outbox = createOutbox<NotePayload, Note>({
+  store: createIndexedDbOutboxStore({ name: `outbox:${userId}` }),
+  lock: createWebLock(navigator.locks, `outbox:${userId}`),
+  // canSend, send, fetchServer, classify, cache: as in the outbox example above
+})
+const cache = createDataCache<Note>({ name: `data:${userId}`, getId: (n) => n.id })
+
+await outbox.reload() // the queue left by the last visit
+const runner = createSyncRunner({ flush: flushOutbox(outbox) })
+runner.start()
+void requestPersistentStorage()
+```
+
+The UI side lives in `spy4x/preact-components`: `createOnlineStatus` (`@spy4x/preact-signals`)
+for an offline badge, `SWUpdater` and `startUpdates` (`@spy4x/preact-system`) for the "new version"
+prompt, and the `serviceWorker()` Vite plugin (`@spy4x/preact-theme/vite`) to build the worker that
+calls `installOfflineShell`. Bind `runner.subscribe` to a signal for a "syncing" or "retrying at"
+indicator.
 
 ## Explicitly not implemented
 

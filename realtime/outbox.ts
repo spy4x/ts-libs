@@ -34,6 +34,51 @@ export type OutboxKind = "create" | "update" | "delete"
  */
 export type ConflictReason = "version" | "gone" | "rejected"
 
+/** The parts of an {@link OutboxEntry} that an edit merged into it changes. */
+export interface OutboxEntrySnapshot<P> {
+  key: string
+  kind: OutboxKind
+  payload: P
+  baseVersion: number
+  attempted: boolean
+  /** The snapshot's own step back, so `withdraw` walks back one merged edit at a time. */
+  before?: OutboxEntrySnapshot<P>
+  /** Older steps were forgotten (beyond `UNDO_STEPS`), so `withdraw` stops here. */
+  truncated?: boolean
+}
+
+/**
+ * How many merged edits `withdraw` can take back. Older steps are forgotten, so an entity edited
+ * offline thousands of times keeps a bounded entry; whether a forgotten step was sent is kept.
+ */
+const UNDO_STEPS = 20
+
+/** The chain cut to {@link UNDO_STEPS} steps; the last kept step remembers a forgotten send. */
+function capped<P>(snapshot: OutboxEntrySnapshot<P>): OutboxEntrySnapshot<P> {
+  const steps: OutboxEntrySnapshot<P>[] = []
+  for (let step: OutboxEntrySnapshot<P> | undefined = snapshot; step; step = step.before) {
+    steps.push(step)
+  }
+  if (steps.length <= UNDO_STEPS) return snapshot
+  const last = steps[UNDO_STEPS - 1]
+  let chain: OutboxEntrySnapshot<P> = {
+    ...last,
+    attempted: mayHaveReachedServer(last),
+    truncated: true,
+    before: undefined,
+  }
+  for (let i = UNDO_STEPS - 2; i >= 0; i--) chain = { ...steps[i], before: chain }
+  return chain
+}
+
+/** Whether a send of this write, or of any write merged into it, was started. */
+function mayHaveReachedServer<P>(entry: OutboxEntrySnapshot<P>): boolean {
+  for (let step: OutboxEntrySnapshot<P> | undefined = entry; step; step = step.before) {
+    if (step.attempted) return true
+  }
+  return false
+}
+
 /**
  * One write made while offline, waiting to be sent. `P` is the caller's payload (what the person
  * wrote), `S` the server's snapshot of the entity.
@@ -52,6 +97,14 @@ export interface OutboxEntry<P, S> {
   /** Whether a send was started: its outcome may be unknown, so the key must not be reused. */
   attempted: boolean
   status: "pending" | "conflict"
+  /**
+   * What the entry was just before the latest edit was merged into it, so `withdraw` can take that
+   * edit back and keep the write before it. Each snapshot carries its own `before`, a chain back to
+   * the first write. Absent on an entry no edit was merged into.
+   */
+  before?: OutboxEntrySnapshot<P>
+  /** Older steps were forgotten, so `withdraw` cannot take this write back. */
+  truncated?: boolean
   conflict?: { reason: ConflictReason; message: string; server: S | null }
   queuedAt: string
 }
@@ -220,6 +273,19 @@ export interface Outbox<P, S extends { version: number }> {
    * Call it after a change, after a reconnect and after every push that is news.
    */
   flush(): Promise<void>
+  /**
+   * Takes back the waiting write of an entity, for example an "Undo" of a delete made offline.
+   * Takes back the latest change and resolves `true`. When that change was merged into an earlier
+   * waiting write (an edit, then a delete), only the delete is taken back and the edit stays
+   * queued, as it was, key included. Each call takes back one more merged change. Otherwise the
+   * entry is removed and will never be sent.
+   * Resolves `false`, changing nothing, when there is nothing to take back or it cannot be: the
+   * entry's send was started (its outcome may be unknown, so the server may have it) or it is a
+   * conflict (settle it with `keepMine` or `useTheirs`). A create that was deleted before any send
+   * leaves nothing queued: submit the create again. The caller otherwise falls back to asking the
+   * server, for example an online restore.
+   */
+  withdraw(entityId: string): Promise<boolean>
   /** Sends the person's version again on the server's: see `ConflictRef`. Stale cards do nothing. */
   keepMine(shown: ConflictRef): Promise<void>
   /** Drops the person's version and shows the server's. Stale cards do nothing. */
@@ -292,14 +358,24 @@ export function createOutbox<P, S extends { version: number }>(
     }
     // A deleted entity is not edited again.
     if (existing.kind === "delete" || change.kind === "create") return existing
+    const before = capped<P>({
+      key: existing.key,
+      kind: existing.kind,
+      payload: existing.payload,
+      baseVersion: existing.baseVersion,
+      attempted: existing.attempted,
+      before: existing.before,
+      truncated: existing.truncated,
+    })
     const renewed = existing.attempted
       ? { key: newKey(), attempted: false }
       : { key: existing.key, attempted: false }
     if (change.kind === "update") {
-      return await save({ ...existing, payload: change.payload, ...renewed })
+      return await save({ ...existing, payload: change.payload, ...renewed, before })
     }
     if (existing.kind === "create") {
-      if (!existing.attempted) {
+      // A create is on the server only if a send of it, before or after a merged edit, was started.
+      if (!mayHaveReachedServer(existing)) {
         await drop(existing.seq!)
         return null
       }
@@ -313,9 +389,16 @@ export function createOutbox<P, S extends { version: number }>(
         attempted: false,
         status: "pending",
         conflict: undefined,
+        before,
       })
     }
-    return await save({ ...existing, payload: change.payload, kind: "delete", ...renewed })
+    return await save({
+      ...existing,
+      payload: change.payload,
+      kind: "delete",
+      ...renewed,
+      before,
+    })
   }
 
   /** Marks an entry as waiting for a person's decision. */
@@ -452,6 +535,8 @@ export function createOutbox<P, S extends { version: number }>(
         attempted: false,
         status: "pending",
         conflict: undefined,
+        before: undefined,
+        truncated: undefined,
       })
     })
     await flush()
@@ -473,6 +558,23 @@ export function createOutbox<P, S extends { version: number }>(
     })
   }
 
+  async function withdraw(entityId: string): Promise<boolean> {
+    return await locked(async () => {
+      const entry = (await store.readOutbox()).find((e) => e.entityId === entityId)
+      if (!entry || entry.attempted || entry.status !== "pending") return false
+      if (!entry.before) {
+        if (entry.truncated) return false
+        await drop(entry.seq!)
+        return true
+      }
+      // An edit was merged into the entry: take back that edit only, and keep the write before it
+      // (with its key and `attempted`, so a send that may have happened is repeated idempotently).
+      // The restored write keeps its own step back, so the next withdraw takes back one more edit.
+      await save({ ...entry, ...entry.before, before: entry.before.before })
+      return true
+    })
+  }
+
   return {
     /** The waiting writes as of the last change to the queue. */
     entries: (): readonly Entry[] => current,
@@ -485,6 +587,7 @@ export function createOutbox<P, S extends { version: number }>(
     reload: () => locked(reload),
     submit,
     flush,
+    withdraw,
     keepMine,
     useTheirs,
   }

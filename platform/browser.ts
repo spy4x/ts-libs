@@ -11,9 +11,12 @@
 
 export * from "./browser/clipboard.ts"
 export * from "./browser/cookie.ts"
+export * from "./browser/data-cache.ts"
 export * from "./browser/download.ts"
 export * from "./browser/embed.ts"
 export * from "./browser/geolocation.ts"
 export * from "./browser/hotkeys.ts"
+export * from "./browser/indexeddb.ts"
 export * from "./browser/offline-shell.ts"
+export * from "./browser/persistent-storage.ts"
 export * from "./browser/storage.ts"

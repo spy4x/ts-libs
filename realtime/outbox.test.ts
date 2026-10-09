@@ -13,6 +13,7 @@ import {
   type OutboxStore,
   type SendFailure,
 } from "./outbox.ts"
+import { describeOutboxStoreContract } from "./outbox-store-contract.test.ts"
 
 interface Text {
   title: string
@@ -799,3 +800,288 @@ describe("createPromiseLock", () => {
     expect(order).toEqual(["a", "b"])
   })
 })
+
+describe("outbox withdraw", () => {
+  it("removes a waiting delete so it is never sent", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("T"), version: 3 })
+
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(h.outbox.entries()).toEqual([])
+    expect(await h.store.readOutbox()).toEqual([])
+
+    h.state.online = true
+    h.state.server = () => item("n", 4)
+    await h.outbox.flush()
+    expect(h.sent).toEqual([])
+  })
+
+  it("removes a waiting create or update of any kind", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "create", entityId: "a", payload: text("A") })
+    await h.outbox.submit({ kind: "update", entityId: "b", payload: text("B"), version: 1 })
+
+    expect(await h.outbox.withdraw("a")).toBe(true)
+    expect(h.outbox.entries().map((e) => e.entityId)).toEqual(["b"])
+    expect(await h.outbox.withdraw("b")).toBe(true)
+    expect(h.outbox.entries()).toEqual([])
+  })
+
+  it("leaves the other entities' entries queued", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "update", entityId: "a", payload: text("A"), version: 1 })
+    await h.outbox.submit({ kind: "update", entityId: "b", payload: text("B"), version: 1 })
+
+    await h.outbox.withdraw("a")
+
+    expect((await h.store.readOutbox()).map((e) => e.entityId)).toEqual(["b"])
+  })
+
+  it("answers false for an entity with no waiting entry", async () => {
+    const h = harness()
+    expect(await h.outbox.withdraw("nothing")).toBe(false)
+  })
+
+  it("answers false and changes nothing for an entry that was already sent", async () => {
+    const h = harness()
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("T"), version: 1 })
+    expect(h.sent.length).toBe(1)
+
+    expect(await h.outbox.withdraw("n")).toBe(false)
+    expect(h.sent.length).toBe(1)
+  })
+
+  it("answers false and keeps an entry whose send was started but did not finish", async () => {
+    const h = harness()
+    h.state.server = () => {
+      throw new ConnectionLostError("the socket closed mid-send")
+    }
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("T"), version: 1 })
+    const before = await h.store.readOutbox()
+    expect(before[0].attempted).toBe(true)
+
+    expect(await h.outbox.withdraw("n")).toBe(false)
+    expect(await h.store.readOutbox()).toEqual(before)
+  })
+
+  it("waits for a send in progress and then answers false, the send completing", async () => {
+    const h = harness()
+    let asked: Promise<boolean> | undefined
+    h.state.onSend = () => {
+      // The send holds the lock, so the withdraw can only run after it.
+      asked = h.outbox.withdraw("n")
+      return Promise.resolve()
+    }
+    const outcome = await h.outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("T"),
+      version: 1,
+    })
+
+    expect(await asked).toBe(false)
+    expect(outcome.kind).toBe("sent")
+  })
+
+  it("takes back only a delete merged into an earlier edit, and the edit is still sent", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Edited offline"),
+      version: 3,
+    })
+    await h.outbox.submit({
+      kind: "delete",
+      entityId: "n",
+      payload: text("Edited offline"),
+      version: 3,
+    })
+
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(h.outbox.entries().map((e) => [e.kind, e.payload.title])).toEqual([
+      ["update", "Edited offline"],
+    ])
+
+    h.state.online = true
+    h.state.server = () => item("n", 4, "Edited offline")
+    await h.outbox.flush()
+    expect(h.sent.map((s) => [s.command.kind, s.command.payload.title])).toEqual([
+      ["update", "Edited offline"],
+    ])
+  })
+
+  it("takes back only a second edit, and the first edit is still sent", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "create", entityId: "n", payload: text("First") })
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("Second"), version: 1 })
+
+    expect(await h.outbox.withdraw("n")).toBe(true)
+
+    h.state.online = true
+    await h.outbox.flush()
+    expect(h.sent.map((s) => [s.command.kind, s.command.payload.title])).toEqual([
+      ["create", "First"],
+    ])
+  })
+
+  async function lostSend(kind: "update" | "create") {
+    const h = harness()
+    h.state.server = () => {
+      throw new ConnectionLostError("the socket closed mid-send")
+    }
+    await h.outbox.submit(
+      kind === "create"
+        ? { kind, entityId: "n", payload: text("Sent, answer lost") }
+        : { kind, entityId: "n", payload: text("Sent, answer lost"), version: 1 },
+    )
+    const original = (await h.store.readOutbox())[0]
+    expect(original.attempted).toBe(true)
+    h.state.online = false // the next changes wait in the queue
+    return { h, original }
+  }
+
+  for (const kind of ["update", "create"] as const) {
+    it(`keeps a ${kind} whose send was lost when an edit merged into it is withdrawn`, async () => {
+      const { h, original } = await lostSend(kind)
+      await h.outbox.submit({ kind: "update", entityId: "n", payload: text("Edit"), version: 1 })
+      expect((await h.store.readOutbox())[0].key).not.toBe(original.key)
+
+      expect(await h.outbox.withdraw("n")).toBe(true)
+
+      const [kept] = await h.store.readOutbox()
+      expect([kept.kind, kept.key, kept.attempted, kept.payload.title]).toEqual([
+        kind,
+        original.key,
+        true,
+        "Sent, answer lost",
+      ])
+      expect(await h.outbox.withdraw("n")).toBe(false)
+      expect((await h.store.readOutbox()).length).toBe(1)
+    })
+
+    it(`keeps a ${kind} whose send was lost when a delete merged into it is withdrawn`, async () => {
+      const { h, original } = await lostSend(kind)
+      await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("x"), version: 1 })
+      expect((await h.store.readOutbox())[0].kind).toBe("delete")
+
+      expect(await h.outbox.withdraw("n")).toBe(true)
+
+      const [kept] = await h.store.readOutbox()
+      expect([kept.kind, kept.key, kept.attempted]).toEqual([kind, original.key, true])
+      h.state.online = true
+      h.state.server = () => item("n", 2)
+      await h.outbox.flush()
+      expect(h.sent[h.sent.length - 1].key).toBe(original.key)
+      expect(h.sent.some((s, i) => i > 0 && s.command.kind === "delete")).toBe(false)
+    })
+  }
+
+  it("takes back one change per withdraw, so edit, edit, delete and two withdraws send the first edit", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("E1"), version: 3 })
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("E2"), version: 3 })
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("E2"), version: 3 })
+
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(h.outbox.entries().map((e) => [e.kind, e.payload.title])).toEqual([["update", "E2"]])
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(h.outbox.entries().map((e) => [e.kind, e.payload.title])).toEqual([["update", "E1"]])
+
+    h.state.online = true
+    h.state.server = () => item("n", 4, "E1")
+    await h.outbox.flush()
+    expect(h.sent.map((s) => [s.command.kind, s.command.payload.title, s.key])).toEqual([
+      ["update", "E1", "key-1"],
+    ])
+  })
+
+  it("never drops an update whose send was lost, however many withdraws follow an edit and a delete", async () => {
+    const { h, original } = await lostSend("update")
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("U2"), version: 1 })
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("U2"), version: 1 })
+
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(await h.outbox.withdraw("n")).toBe(false)
+    const [kept] = await h.store.readOutbox()
+    expect([kept.kind, kept.key, kept.attempted, kept.payload.title]).toEqual([
+      "update",
+      original.key,
+      true,
+      "Sent, answer lost",
+    ])
+
+    h.state.online = true
+    h.state.server = () => item("n", 2)
+    await h.outbox.flush()
+    expect(h.sent.slice(1).map((s) => [s.command.kind, s.command.payload.title, s.key])).toEqual([
+      ["update", "Sent, answer lost", original.key],
+    ])
+  })
+
+  it("sends a delete for a create whose send was lost, then edited and deleted offline", async () => {
+    const { h } = await lostSend("create")
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("Edit"), version: 1 })
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("Edit"), version: 1 })
+
+    expect(h.outbox.entries().map((e) => [e.kind, e.baseVersion])).toEqual([["delete", 1]])
+
+    h.state.online = true
+    h.state.server = () => undefined
+    await h.outbox.flush()
+    expect(h.sent.slice(1).map((s) => [s.command.kind, s.command.entityId])).toEqual([
+      ["delete", "n"],
+    ])
+  })
+
+  it("keeps the last 20 steps of an entity edited offline 100 times, and no more", async () => {
+    const h = harness()
+    h.offline()
+    for (let i = 0; i <= 100; i++) {
+      await h.outbox.submit({ kind: "update", entityId: "n", payload: text(`E${i}`), version: 3 })
+    }
+    const [entry] = await h.store.readOutbox()
+    let depth = 0
+    for (let step = entry.before; step; step = step.before) depth++
+    expect(depth).toBe(20)
+
+    for (let i = 0; i < 20; i++) expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(await h.outbox.withdraw("n")).toBe(false)
+    expect(h.outbox.entries().map((e) => e.payload.title)).toEqual(["E80"])
+  })
+
+  it("sends a delete for a lost create whose send fell out of the last 20 steps", async () => {
+    const { h } = await lostSend("create")
+    for (let i = 0; i < 25; i++) {
+      await h.outbox.submit({ kind: "update", entityId: "n", payload: text(`E${i}`), version: 1 })
+    }
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("E24"), version: 1 })
+
+    expect(h.outbox.entries().map((e) => [e.kind, e.baseVersion])).toEqual([["delete", 1]])
+  })
+
+  it("answers false for a conflict that waits for a person", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("T"), version: 1 })
+    h.state.online = true
+    h.state.current = item("n", 5)
+    h.state.server = () => {
+      throw refused("VERSION_CONFLICT")
+    }
+    await h.outbox.flush()
+    expect(h.outbox.entries()[0].status).toBe("conflict")
+
+    expect(await h.outbox.withdraw("n")).toBe(false)
+    expect(h.outbox.entries().length).toBe(1)
+  })
+})
+
+describeOutboxStoreContract("createMemoryOutboxStore", () => createMemoryOutboxStore())

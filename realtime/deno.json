@@ -9,6 +9,8 @@
     "./notify": "./notify.ts",
     "./cursor": "./cursor.ts",
     "./outbox": "./outbox.ts",
+    "./outbox-indexeddb": "./outbox-indexeddb.ts",
+    "./sync-runner": "./sync-runner.ts",
     "./protocol": "./codec.ts",
     "./web-socket": "./web-socket-adapter.ts",
     "./testing": "./testing.ts"

@@ -104,15 +104,53 @@ Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `get
 factory, a timer, a clipboard, a `Geolocation`) as a parameter, defaulting to the real global only
 when the caller passes none.
 
-| Module                | Contents                                                                                                                          |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `browser/clipboard`   | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                               |
-| `browser/cookie`      | `getCookie`                                                                                                                       |
-| `browser/download`    | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                |
-| `browser/embed`       | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                           |
-| `browser/geolocation` | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                           |
-| `browser/hotkeys`     | `parseHotkey`, `matchesHotkey`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyEvent`, `PlatformNavigator`, `TypingTarget` |
-| `browser/storage`     | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
+| Module                       | Contents                                                                                                                          |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                               |
+| `browser/cookie`             | `getCookie`                                                                                                                       |
+| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                 |
+| `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                |
+| `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                           |
+| `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                           |
+| `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyEvent`, `PlatformNavigator`, `TypingTarget` |
+| `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                        |
+| `browser/persistent-storage` | `requestPersistentStorage`, `PersistentStorageManager`                                                                            |
+| `browser/storage`            | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
+
+`browser/data-cache` keeps the last data the server sent, in IndexedDB, so a page opens with it and
+shows it with no network. Items live in scopes (a user, a calendar); a full server answer replaces a
+whole scope in one transaction, so an item the server dropped goes too, and a single item can be
+put or deleted when one pushed change arrives. It holds server state only: writes made offline
+wait in the outbox (`@spy4x/realtime/outbox-indexeddb`). Name the database for the signed-in user
+and `clear` the scopes at sign-out. `browser/indexeddb` is the small plumbing under it (a lazily
+opened database, promises for a request and a transaction), exported so a store of your own does
+not repeat it. `requestPersistentStorage` asks for `navigator.storage.persist()` and answers
+whether it was granted. Ask once the first offline write is queued: Safari clears the storage of a
+site that is not installed as an app after seven days unused, which would lose writes that were
+never sent.
+
+```ts
+import { createDataCache } from "@spy4x/platform/browser/data-cache"
+import { requestPersistentStorage } from "@spy4x/platform/browser/persistent-storage"
+
+const cache = createDataCache<Task>({ name: `data:${userId}`, getId: (t) => t.id })
+const shown = await cache.read(calendarId) // render this first, then ask the server
+await cache.replace(calendarId, await fetchTasks(calendarId)) // a full answer
+await cache.put(calendarId, changedTask) // one pushed change
+const persistent = await requestPersistentStorage() // false: tell the person to install the app
+```
+
+Items read back in the order `replace` wrote them, so the server's order survives without the app
+wrapping each item with a position. A single item `put` later follows the others; one put again
+keeps its place. `batch(ops)` applies puts, deletes, replaces and clears across items and scopes in
+one transaction, all or none: a sync answer ("these calendars, these changed objects, these
+removed") lands without a reader seeing it half applied, and an item whose id cannot be read leaves
+the cache as it was. A CalDAV sync store, for instance, keeps the calendar list in one scope and each
+calendar's objects in a scope of their own; `replaceCalendars` is one `batch` that replaces the list
+and `clear`s the scope of every calendar `scopes()` shows that the list no longer has. `clearAll()`
+empties every scope at sign-out. After `indexedDB.deleteDatabase(name)` at sign-out, stop whatever
+still holds the cache or an outbox store: the next call on a store that is still referenced
+creates an empty database again.
 
 `browser/embed` (from `mig`'s height-report and time-zone scripts) is for a page inside another
 site's frame. `reportHeight` posts `{ type, height }` for one element's own box to the parent, on

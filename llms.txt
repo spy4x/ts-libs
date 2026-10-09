@@ -683,6 +683,10 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ClipboardDocument` (interface), `jsr:@spy4x/platform/browser`: The document surface the legacy `execCommand("copy")` path needs.
 - `ClipboardWriter` (interface), `jsr:@spy4x/platform/browser`: The one clipboard method this helper calls.
 - `CopyToClipboardOptions` (interface), `jsr:@spy4x/platform/browser`: Where copyToClipboard writes.
+- `DataCache` (interface), `jsr:@spy4x/platform/browser`: The durable cache: see the module documentation.
+- `DataCacheOp` (type), `jsr:@spy4x/platform/browser`: One step of DataCache.batch.
+- `DataCacheOptions` (interface), `jsr:@spy4x/platform/browser`: Options of createDataCache.
+- `DatabaseSpec` (interface), `jsr:@spy4x/platform/browser`: How to open one database.
 - `DownloadDocument` (interface), `jsr:@spy4x/platform/browser`: Minimal document surface this helper needs, so the caller passes its own `document`.
 - `DownloadOptions` (interface), `jsr:@spy4x/platform/browser`: Everything downloadResponseAsFile needs; all of it injectable.
 - `EMBED_HEIGHT_MESSAGE_TYPE` (constant), `jsr:@spy4x/platform/browser`: Default `type` of the message reportHeight posts: `{ type, height }`.
@@ -698,6 +702,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `MakeStorageOptions` (interface), `jsr:@spy4x/platform/browser`: Options for makeStorage.
 - `ObjectUrlAdapter` (interface), `jsr:@spy4x/platform/browser`: Object-URL surface, injected so a test never allocates a real blob URL.
 - `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser`: Options of installOfflineShell.
+- `PersistentStorageManager` (interface), `jsr:@spy4x/platform/browser`: The part of a browser's `StorageManager` this module uses.
 - `PlatformNavigator` (interface), `jsr:@spy4x/platform/browser`: The part of `navigator` that isApplePlatform reads.
 - `ReportHeightOptions` (interface), `jsr:@spy4x/platform/browser`: Options for reportHeight.
 - `SKIP_WAITING_MESSAGE` (constant), `jsr:@spy4x/platform/browser`: The message `SWUpdater` posts to a waiting worker; installOfflineShell acts on it.
@@ -714,10 +719,14 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `TypingTarget` (interface), `jsr:@spy4x/platform/browser`: The part of an element that isTypingTarget reads.
 - `captureTimeZone` (function), `jsr:@spy4x/platform/browser`: The visitor's IANA time zone (`Europe/Berlin`), or `undefined` when the runtime reports none.
 - `copyToClipboard` (function), `jsr:@spy4x/platform/browser`: Write `text` to the clipboard, and say whether it got there.
+- `createDataCache` (function), `jsr:@spy4x/platform/browser`: A data cache over IndexedDB.
+- `createDatabaseOpener` (function), `jsr:@spy4x/platform/browser`: Returns a function that opens the database on first use and returns the same connection after.
 - `downloadCsv` (function), `jsr:@spy4x/platform/browser`: Write rows as a CSV file and save it: toCsvBytes handed to downloadResponseAsFile.
 - `downloadResponseAsFile` (function), `jsr:@spy4x/platform/browser`: Save a response body to disk under `filename`.
 - `fillEmptyTimeZoneField` (function), `jsr:@spy4x/platform/browser`: Put the visitor's time zone into a form field, only when the field is still empty — a zone the page already filled in (from a link's `tz` parameter, say) is what the visitor saw on screen, and overwriting it would submit a different one.
 - `getCookie` (function), `jsr:@spy4x/platform/browser`: Look up `name` in `doc.cookie`, decoding its value.
+- `idbRequest` (function), `jsr:@spy4x/platform/browser`: Resolves a request's result, or rejects with its error.
+- `idbTransactionDone` (function), `jsr:@spy4x/platform/browser`: Resolves when a transaction has committed, rejects when it aborts or fails.
 - `installOfflineShell` (function), `jsr:@spy4x/platform/browser`: Register the install, activate, fetch and message listeners that keep the app shell offline.
 - `isApplePlatform` (function), `jsr:@spy4x/platform/browser`: Whether the browser runs on macOS, iOS or iPadOS, where `mod` means Command.
 - `isTypingTarget` (function), `jsr:@spy4x/platform/browser`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
@@ -729,6 +738,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `parseHotkey` (function), `jsr:@spy4x/platform/browser`: Parse a combination such as `"mod+k"`, `"shift+n"`, `"?"` or `"ctrl+alt+delete"`.
 - `reportHeight` (function), `jsr:@spy4x/platform/browser`: Post the element's height, in whole CSS pixels, to the parent frame — once the page has loaded, and again each time the element's size changes.
 - `requestGeolocation` (function), `jsr:@spy4x/platform/browser`: Ask for the current position and report the result.
+- `requestPersistentStorage` (function), `jsr:@spy4x/platform/browser`: Resolves `true` when this site's storage is persistent, asking the browser if it is not yet.
 
 ### `jsr:@spy4x/platform/browser/clipboard`
 
@@ -740,6 +750,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/platform/browser/cookie`
 
 - `getCookie` (function), `jsr:@spy4x/platform/browser/cookie`: Look up `name` in `doc.cookie`, decoding its value.
+
+### `jsr:@spy4x/platform/browser/data-cache`
+
+- `DataCache` (interface), `jsr:@spy4x/platform/browser/data-cache`: The durable cache: see the module documentation.
+- `DataCacheOp` (type), `jsr:@spy4x/platform/browser/data-cache`: One step of DataCache.batch.
+- `DataCacheOptions` (interface), `jsr:@spy4x/platform/browser/data-cache`: Options of createDataCache.
+- `createDataCache` (function), `jsr:@spy4x/platform/browser/data-cache`: A data cache over IndexedDB.
 
 ### `jsr:@spy4x/platform/browser/download`
 
@@ -780,6 +797,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `matchesHotkey` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether a key press is the combination.
 - `parseHotkey` (function), `jsr:@spy4x/platform/browser/hotkeys`: Parse a combination such as `"mod+k"`, `"shift+n"`, `"?"` or `"ctrl+alt+delete"`.
 
+### `jsr:@spy4x/platform/browser/indexeddb`
+
+- `DatabaseSpec` (interface), `jsr:@spy4x/platform/browser/indexeddb`: How to open one database.
+- `createDatabaseOpener` (function), `jsr:@spy4x/platform/browser/indexeddb`: Returns a function that opens the database on first use and returns the same connection after.
+- `idbRequest` (function), `jsr:@spy4x/platform/browser/indexeddb`: Resolves a request's result, or rejects with its error.
+- `idbTransactionDone` (function), `jsr:@spy4x/platform/browser/indexeddb`: Resolves when a transaction has committed, rejects when it aborts or fails.
+
 ### `jsr:@spy4x/platform/browser/offline-shell`
 
 - `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser/offline-shell`: Options of installOfflineShell.
@@ -793,6 +817,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `installOfflineShell` (function), `jsr:@spy4x/platform/browser/offline-shell`: Register the install, activate, fetch and message listeners that keep the app shell offline.
 - `isUnderPath` (function), `jsr:@spy4x/platform/browser/offline-shell`: Whether `pathname` is `base` or below it (`/api` matches `/api` and `/api/x`, not `/apix`).
 - `linkedPaths` (function), `jsr:@spy4x/platform/browser/offline-shell`: Same-origin paths named by `src="..."` and `href="..."` in `html`.
+
+### `jsr:@spy4x/platform/browser/persistent-storage`
+
+- `PersistentStorageManager` (interface), `jsr:@spy4x/platform/browser/persistent-storage`: The part of a browser's `StorageManager` this module uses.
+- `requestPersistentStorage` (function), `jsr:@spy4x/platform/browser/persistent-storage`: Resolves `true` when this site's storage is persistent, asking the browser if it is not yet.
 
 ### `jsr:@spy4x/platform/browser/storage`
 
@@ -1490,6 +1519,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `Outbox` (interface), `jsr:@spy4x/realtime/outbox`: The outbox as the app uses it.
 - `OutboxCommand` (interface), `jsr:@spy4x/realtime/outbox`: The command the app sends for one entry.
 - `OutboxEntry` (interface), `jsr:@spy4x/realtime/outbox`: One write made while offline, waiting to be sent.
+- `OutboxEntrySnapshot` (interface), `jsr:@spy4x/realtime/outbox`: The parts of an OutboxEntry that an edit merged into it changes.
 - `OutboxKind` (type), `jsr:@spy4x/realtime/outbox`: What an outgoing write does to an entity.
 - `OutboxLock` (type), `jsr:@spy4x/realtime/outbox`: Runs `work` while no other caller holds the queue.
 - `OutboxPorts` (interface), `jsr:@spy4x/realtime/outbox`: What the outbox needs from the outside.
@@ -1500,6 +1530,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createOutbox` (function), `jsr:@spy4x/realtime/outbox`: The queue: see the module documentation for the rules it keeps.
 - `createPromiseLock` (function), `jsr:@spy4x/realtime/outbox`: A lock for one tab: runs the work one piece at a time, in the order asked.
 - `createWebLock` (function), `jsr:@spy4x/realtime/outbox`: A lock shared by every tab of one browser, through Web Locks.
+
+### `jsr:@spy4x/realtime/outbox-indexeddb`
+
+- `IndexedDbOutboxStoreOptions` (interface), `jsr:@spy4x/realtime/outbox-indexeddb`: Options of createIndexedDbOutboxStore.
+- `createIndexedDbOutboxStore` (function), `jsr:@spy4x/realtime/outbox-indexeddb`: An outbox store over IndexedDB.
 
 ### `jsr:@spy4x/realtime/page-lifecycle`
 
@@ -1549,6 +1584,16 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `RegistryCloseInfo` (interface), `jsr:@spy4x/realtime/registry`: What a close handler is told.
 - `RequestContext` (interface), `jsr:@spy4x/realtime/registry`: A request handed to the dispatcher.
 - `RequestDispatcher` (type), `jsr:@spy4x/realtime/registry`: Answers one request.
+
+### `jsr:@spy4x/realtime/sync-runner`
+
+- `SyncFlushResult` (type), `jsr:@spy4x/realtime/sync-runner`: What a flush answers.
+- `SyncRunner` (interface), `jsr:@spy4x/realtime/sync-runner`: The runner as the app uses it.
+- `SyncRunnerOptions` (interface), `jsr:@spy4x/realtime/sync-runner`: Options of createSyncRunner.
+- `SyncRunnerState` (interface), `jsr:@spy4x/realtime/sync-runner`: What a UI may show about the runner.
+- `SyncRunnerTarget` (interface), `jsr:@spy4x/realtime/sync-runner`: The parts of `window` and `document` the runner listens to.
+- `createSyncRunner` (function), `jsr:@spy4x/realtime/sync-runner`: The runner: see the module documentation for the rules it keeps.
+- `flushOutbox` (function), `jsr:@spy4x/realtime/sync-runner`: A flush for createSyncRunner that sends an outbox.
 
 ### `jsr:@spy4x/realtime/testing`
 
@@ -2585,4 +2630,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 26c9607d11d5d65c96af74c758122d9bc51068fec665384d92c0a06ddb9dd783 -->
+<!-- export surface: sha256 24b895a3758a4b63442d8a79920b5b153477ba2e6856f5ced146aaa00b5f4838 -->
