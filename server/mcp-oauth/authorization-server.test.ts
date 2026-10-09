@@ -787,6 +787,18 @@ describe("createAuthorizationServer", () => {
             expect(taken).toEqual([await sha256Hex(code)])
           })
 
+          it("counts a wrong code-shaped value as a wrong password, up to the lockout", async () => {
+            const t = setup({
+              confirmOwner: undefined,
+              ownerPassword: { ...ownerPassword, maxFailures: 3, windowMs: 60_000 },
+            })
+            const fake = `approve_${`A`.repeat(43)}`
+            for (let i = 0; i < 3; i++) {
+              expect((await approve(t, await newConsent(t), fake)).status).toBe(403)
+            }
+            expect((await approve(t, await newConsent(t), OWNER_PASSWORD)).status).toBe(429)
+          })
+
           it("works once: a second approval with the same code is refused", async () => {
             const { t, id } = await lockedOut()
             const { code } = await createApprovalCode(t.store, { clock: t.clock })
