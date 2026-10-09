@@ -155,3 +155,12 @@ export interface OAuthStore {
   /** Uncount one attempt `takeAttempt` counted under `key` at `at`, after a right password. */
   releaseAttempt(key: string, at: number): Promise<void>
 }
+
+/**
+ * Thrown by a store that gave up on a write because other writes to the same key kept winning, as
+ * `KvOAuthStore` does after 32 conflicts. The authorization server answers a password attempt that
+ * hits it with `429`; any other store error is a failure and surfaces as `500`.
+ */
+export class OAuthStoreContentionError extends Error {
+  override name = "OAuthStoreContentionError"
+}

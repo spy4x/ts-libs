@@ -17,7 +17,13 @@ import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import { createSameOriginCheck } from "../http/same-origin.ts"
 import type { PasswordHasher } from "../sign-in/password.ts"
 import { type ClientMetadataSource, createClientMetadataFetcher } from "./client-metadata.ts"
-import type { CodeRecord, OAuthStore, PendingAuthorization, RefreshTokenRecord } from "./model.ts"
+import {
+  type CodeRecord,
+  type OAuthStore,
+  OAuthStoreContentionError,
+  type PendingAuthorization,
+  type RefreshTokenRecord,
+} from "./model.ts"
 import {
   assertRedirectAllowlist,
   DEFAULT_REDIRECT_URIS,
@@ -532,9 +538,11 @@ export function createAuthorizationServer(
         await releaseAttempt(address, at)
         return totalLocked
       }
-    } catch {
+    } catch (error) {
       // The store gave up, as `KvOAuthStore` does when a burst of guesses keeps rewriting the
       // server-wide count. Refuse without running the hasher, as a lockout does, and uncount.
+      // Any other error is a failure, so it surfaces.
+      if (!(error instanceof OAuthStoreContentionError)) throw error
       if (addressTaken) await releaseAttempt(address, at)
       return STORE_BUSY_MS
     }
@@ -546,14 +554,14 @@ export function createAuthorizationServer(
   }
 
   /**
-   * Uncounts an attempt, ignoring a store that gives up: the count then lasts only until its window
-   * ends, which is better than failing the request.
+   * Uncounts an attempt, ignoring a store that gives up under contention: the count then lasts
+   * only until its window ends, which is better than failing the request.
    */
   async function releaseAttempt(key: string, at: number): Promise<void> {
     try {
       await store.releaseAttempt(key, at)
-    } catch {
-      // Expires with its window.
+    } catch (error) {
+      if (!(error instanceof OAuthStoreContentionError)) throw error
     }
   }
 

@@ -18,6 +18,7 @@ import {
 import type { ClientMetadataSource } from "./client-metadata.ts"
 import { KvOAuthStore } from "./kv-store.ts"
 import { MemoryOAuthStore } from "./memory-store.ts"
+import { OAuthStoreContentionError } from "./model.ts"
 import { CLAUDE_REDIRECT_URI } from "./redirect-uri.ts"
 import { createResourceServer, type ResourceGuardEnv } from "./resource-server.ts"
 
@@ -760,22 +761,29 @@ describe("createAuthorizationServer", () => {
           }
         })
 
-        it("answers 429, keeps the consent and uncounts the address when the store gives up", async () => {
+        /**
+         * A server whose store throws `fail.error` from `fail.method` for the server-wide count
+         * while `fail.error` is set, and otherwise behaves as `MemoryOAuthStore`.
+         */
+        const failingStore = (fail: {
+          method: "takeAttempt" | "releaseAttempt"
+          error?: Error
+        }) => {
           const shared = perAddress({ maxFailures: 1 })
-          const busy = { on: true }
           const store = new Proxy(shared.store, {
             get(target, name) {
-              if (name === "takeAttempt") {
-                return (key: string, at: number, limit: number, windowMs: number) =>
-                  busy.on && key === "total"
-                    ? Promise.reject(new Error("gave up after conflicting writes"))
-                    : target.takeAttempt(key, at, limit, windowMs)
+              if (name === fail.method) {
+                return (key: string, ...rest: number[]) =>
+                  fail.error !== undefined && key === "total"
+                    ? Promise.reject(fail.error)
+                    : (target[fail.method] as (key: string, ...rest: number[]) => Promise<unknown>)
+                      .call(target, key, ...rest)
               }
               const value = Reflect.get(target, name, target)
               return typeof value === "function" ? value.bind(target) : value
             },
           })
-          const t = setup({
+          return setup({
             confirmOwner: undefined,
             store,
             ownerPassword: {
@@ -784,12 +792,37 @@ describe("createAuthorizationServer", () => {
               clientAddress: (c) => c.req.header("x-test-address"),
             },
           })
+        }
+
+        it("answers 429, keeps the consent and uncounts the address when the store gives up", async () => {
+          const fail: { method: "takeAttempt"; error?: Error } = {
+            method: "takeAttempt",
+            error: new OAuthStoreContentionError("gave up after conflicting writes"),
+          }
+          const t = failingStore(fail)
           const id = await newConsent(t)
           const refused = await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")
           expect(refused.status).toBe(429)
           expect(refused.headers.get("retry-after")).toBe("1")
-          busy.on = false
+          fail.error = undefined
           expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        it("approves when the store gives up releasing the server-wide count", async () => {
+          const t = failingStore({
+            method: "releaseAttempt",
+            error: new OAuthStoreContentionError("gave up after conflicting writes"),
+          })
+          const id = await newConsent(t)
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        it("answers 500 when the store fails for any reason other than giving up", async () => {
+          for (const method of ["takeAttempt", "releaseAttempt"] as const) {
+            const t = failingStore({ method, error: new Error("disk I/O error") })
+            const id = await newConsent(t)
+            expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(500)
+          }
         })
 
         describe("on Deno KV", () => {

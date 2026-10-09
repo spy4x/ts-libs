@@ -25,13 +25,14 @@ export {
   createClientMetadataFetcher,
   isClientIdUrl,
 } from "./client-metadata.ts"
-export type {
-  AccessTokenRecord,
-  CodeRecord,
-  GrantRecord,
-  OAuthStore,
-  PendingAuthorization,
-  RefreshTokenRecord,
+export {
+  type AccessTokenRecord,
+  type CodeRecord,
+  type GrantRecord,
+  type OAuthStore,
+  OAuthStoreContentionError,
+  type PendingAuthorization,
+  type RefreshTokenRecord,
 } from "./model.ts"
 export {
   assertRedirectAllowlist,

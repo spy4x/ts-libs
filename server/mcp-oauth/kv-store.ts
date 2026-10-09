@@ -10,13 +10,14 @@
  */
 
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
-import type {
-  AccessTokenRecord,
-  CodeRecord,
-  GrantRecord,
-  OAuthStore,
-  PendingAuthorization,
-  RefreshTokenRecord,
+import {
+  type AccessTokenRecord,
+  type CodeRecord,
+  type GrantRecord,
+  type OAuthStore,
+  OAuthStoreContentionError,
+  type PendingAuthorization,
+  type RefreshTokenRecord,
 } from "./model.ts"
 
 /** One read from {@link OAuthKv.get}: `versionstamp` is `null` when the key is absent. */
@@ -339,8 +340,8 @@ function attempts(value: unknown): { at: number[]; expiresAt: number } {
   return { at, expiresAt }
 }
 
-function contention(method: string): Error {
-  return new Error(
+function contention(method: string): OAuthStoreContentionError {
+  return new OAuthStoreContentionError(
     `KvOAuthStore.${method}: gave up after ${MAX_ATTEMPTS} conflicting writes to the same key`,
   )
 }

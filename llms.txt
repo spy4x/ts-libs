@@ -2028,6 +2028,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `DEFAULT_REDIRECT_URIS` (constant), `jsr:@spy4x/server/mcp-oauth`: The default redirect allowlist: the hosted Claude apps' callback, plus the two loopback callbacks Claude Code declares in its client metadata document.
 - `GrantRecord` (interface), `jsr:@spy4x/server/mcp-oauth`: One client the owner approved: what `listGrants` shows, so the owner can see who is connected and revoke one without signing every client out.
 - `OAuthStore` (interface), `jsr:@spy4x/server/mcp-oauth`: Where the authorization server keeps its state.
+- `OAuthStoreContentionError` (class), `jsr:@spy4x/server/mcp-oauth`: Thrown by a store that gave up on a write because other writes to the same key kept winning, as `KvOAuthStore` does after 32 conflicts.
 - `OFFLINE_ACCESS_SCOPE` (constant), `jsr:@spy4x/server/mcp-oauth`: The scope some clients ask for to get a refresh token.
 - `OWNER_PASSWORD_FIELD` (constant), `jsr:@spy4x/server/mcp-oauth`: Name of the password input the consent page sends when `ownerPassword` is set.
 - `OwnerPassword` (interface), `jsr:@spy4x/server/mcp-oauth`: The owner password the consent page asks for.
@@ -2571,4 +2572,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 8fe623b2d3954fc095891832515415acbf1461376d773f139af2ba487023f4c2 -->
+<!-- export surface: sha256 3d62da5a1a80ebb6145ec4e9c4db76ca95a8e72213720c646259a0606362ab3f -->
