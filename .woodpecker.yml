@@ -108,9 +108,11 @@ steps:
     commands:
       - deno task test:integration
 
-  # A `v*` tag publishes to JSR with the global token, so the tagged commit must already be on
-  # `main` (reviewed, green CI). A tag on an unmerged branch stops here, before `publish` runs.
-  # Woodpecker's clone is shallow and has no `main`, so fetch it with full depth first.
+  # Guards against an accidental release: a `v*` tag publishes to JSR with the global token, so
+  # this step fails the build unless the tagged commit is already on `main` (reviewed, green CI).
+  # It is not access control: Woodpecker runs the tagged commit's own `.woodpecker.yml`, so a tag
+  # on a branch that predates this step, or one that removes it, still publishes. A tag build's
+  # clone is full but has no `main` ref, which is why the step fetches it.
   on-main:
     image: alpine/git:2.47.2
     when:
