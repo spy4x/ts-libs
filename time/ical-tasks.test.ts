@@ -14,9 +14,12 @@ import {
   serializeIcal,
 } from "./ical.ts"
 import {
+  Alarm,
   AlarmInput,
+  AlarmOwner,
   AlarmRelated,
   AlarmTriggerKind,
+  describeAlarmTrigger,
   EventStatus,
   newEvent,
   newTodo,
@@ -1096,4 +1099,87 @@ Deno.test("an AUDIO reminder is written without DESCRIPTION, refuses one, and re
   assertEquals(refused.error?.code, IcalErrorCode.InvalidValue)
   const display = parse(TASK_WITH_ALARMS)
   assertEquals(readTodo(display)!.alarms.map((a) => a.description), ["old", undefined])
+})
+
+const relative = (duration: string, related = AlarmRelated.Start) => ({
+  kind: AlarmTriggerKind.Relative as const,
+  duration,
+  related,
+})
+
+Deno.test("describeAlarmTrigger counts a relative trigger before or after the start", () => {
+  assertEquals(describeAlarmTrigger(relative("-PT15M")), "15 minutes before start")
+  assertEquals(describeAlarmTrigger(relative("-PT1H")), "1 hour before start")
+  assertEquals(describeAlarmTrigger(relative("PT1H30M")), "1 hour 30 minutes after start")
+  assertEquals(describeAlarmTrigger(relative("+P1W")), "1 week after start")
+  assertEquals(describeAlarmTrigger(relative("-P1DT2H")), "1 day 2 hours before start")
+  assertEquals(describeAlarmTrigger(relative("-pt30s")), "30 seconds before start")
+})
+
+Deno.test("describeAlarmTrigger says due for a task and end for an event when related to the end", () => {
+  const end = relative("-PT15M", AlarmRelated.End)
+  assertEquals(describeAlarmTrigger(end), "15 minutes before due")
+  assertEquals(describeAlarmTrigger(end, { owner: AlarmOwner.Task }), "15 minutes before due")
+  assertEquals(describeAlarmTrigger(end, { owner: AlarmOwner.Event }), "15 minutes before end")
+  assertEquals(
+    describeAlarmTrigger(relative("PT1H", AlarmRelated.End), { owner: AlarmOwner.Event }),
+    "1 hour after end",
+  )
+})
+
+Deno.test("describeAlarmTrigger says start, never due or end, for a start-related trigger", () => {
+  assertEquals(
+    describeAlarmTrigger(relative("-PT5M"), { owner: AlarmOwner.Event }),
+    "5 minutes before start",
+  )
+})
+
+Deno.test("describeAlarmTrigger reads a zero offset as at the anchor", () => {
+  assertEquals(describeAlarmTrigger(relative("PT0S", AlarmRelated.End)), "at due")
+  assertEquals(describeAlarmTrigger(relative("-PT0M")), "at start")
+  assertEquals(
+    describeAlarmTrigger(relative("PT0S", AlarmRelated.End), { owner: AlarmOwner.Event }),
+    "at end",
+  )
+})
+
+Deno.test("describeAlarmTrigger formats an absolute trigger in the caller's zone and locale", () => {
+  const trigger = {
+    kind: AlarmTriggerKind.Absolute as const,
+    at: { kind: IcalDateKind.Utc, date: "2026-08-28", time: "08:00:00" },
+  }
+  assertEquals(describeAlarmTrigger(trigger), "Friday, 28 August 2026 at 08:00")
+  assertEquals(
+    describeAlarmTrigger(trigger, { timeZone: "Asia/Tokyo" }),
+    "Friday, 28 August 2026 at 17:00",
+  )
+  assertEquals(
+    describeAlarmTrigger(trigger, { timeZone: "Pacific/Auckland", locale: "de-DE" }),
+    "Freitag, 28. August 2026 um 20:00",
+  )
+})
+
+Deno.test("describeAlarmTrigger answers undefined for a trigger it cannot describe", () => {
+  for (const duration of ["", "P", "PT", "P1DT", "15M", "-PT1.5H", "PT1H-", "-P1M"]) {
+    assertEquals(describeAlarmTrigger(relative(duration)), undefined, duration)
+  }
+  const at = { kind: IcalDateKind.Utc, date: "2026-08-28", time: "08:00:00" }
+  const absolute = { kind: AlarmTriggerKind.Absolute as const, at }
+  assertEquals(describeAlarmTrigger(absolute, { timeZone: "Mars/Base" }), undefined)
+  assertEquals(describeAlarmTrigger(absolute, { locale: "not a locale" }), undefined)
+  assertEquals(
+    describeAlarmTrigger({
+      kind: AlarmTriggerKind.Absolute,
+      at: { kind: IcalDateKind.Zoned, date: "2026-08-28", time: "08:00:00", tzid: "Vendor Zone" },
+    }),
+    undefined,
+  )
+})
+
+Deno.test("describeAlarmTrigger takes the trigger of a read alarm, which may be missing", () => {
+  const alarms: Alarm[] = [{ trigger: relative("-PT10M") }, { action: "DISPLAY" }]
+  assertEquals(alarms.map((alarm) => describeAlarmTrigger(alarm.trigger)), [
+    "10 minutes before start",
+    undefined,
+  ])
 })
