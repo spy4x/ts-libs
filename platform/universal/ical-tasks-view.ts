@@ -294,7 +294,7 @@ export interface SortOrderChange {
  *   task keeps its value where the integers between its kept neighbours suffice. The values
  *   written are spread evenly between those neighbours, or one step apart past an end.
  *
- * A task is written only when its effective position changes, and the result lists tasks in their
+ * Only tasks that lose their place are written, and the result lists them in their
  * new order. Apply it with `sortOrder` on each listed task, then sort again.
  */
 export function reorderTask(
@@ -360,7 +360,7 @@ export function reorderTask(
   const changes: SortOrderChange[] = []
   list.forEach((task, index) => {
     const value = values[index]
-    if (value !== undefined && value !== current[index]) {
+    if (value !== undefined) {
       changes.push({ uid: task.uid, sortOrder: value })
     }
   })
