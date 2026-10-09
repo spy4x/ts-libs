@@ -148,7 +148,11 @@ describe(`createIndexedDbCalDavCache`, () => {
     const indexedDB = freshFactory()
     await new Promise<void>((resolve, reject) => {
       const request = indexedDB.open(`legacy`, 1)
-      request.onupgradeneeded = () => request.result.createObjectStore(`tasks`, { keyPath: `id` })
+      request.onupgradeneeded = () => {
+        // Same store names as the cache, other keys: creating them again would throw.
+        request.result.createObjectStore(`calendars`, { keyPath: `id` })
+        request.result.createObjectStore(`tasks`, { keyPath: `id` })
+      }
       request.onsuccess = () => {
         request.result.close()
         resolve()
