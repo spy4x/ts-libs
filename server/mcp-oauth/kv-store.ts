@@ -86,9 +86,9 @@ const APPROVAL = "approval"
  * Keeps every record in Deno KV under `[...prefix, kind, key]`, with `expireIn` set from the
  * record's `expiresAt`, so the database drops it once it has expired.
  *
- * - `takePending`, `takeApprovalCode`, `consumeCode` and `consumeRefreshToken` read the record, then commit their change
- *   with a versionstamp check and retry on a conflict. Of two concurrent calls, only one sees the
- *   record unused.
+ * - `takePending`, `takeApprovalCode`, `consumeCode` and `consumeRefreshToken` read the record,
+ *   then commit their change with a versionstamp check and retry on a conflict. Of two concurrent
+ *   calls, only one sees the record unused.
  * - `saveAccessToken` and `saveRefreshToken` read the grant's revocation key and commit the token
  *   with a check on it, so a token is never saved after `revokeGrant` has started for its grant.
  * - Every token also writes an index key `[...prefix, "grant", grantId, kind, key]` in the same
@@ -261,7 +261,7 @@ export class KvOAuthStore implements OAuthStore {
     return this.#take<ApprovalCodeRecord>(this.#key(APPROVAL, key), "takeApprovalCode")
   }
 
-  /** Delete a record and return it, committed with a versionstamp check so only one caller gets it. */
+  /** Delete a record and return it, with a versionstamp check so only one caller gets it. */
   async #take<T>(kvKey: readonly string[], method: string): Promise<T | undefined> {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const entry = await this.#kv.get(kvKey)

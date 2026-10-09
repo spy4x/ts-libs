@@ -39,10 +39,11 @@ interface Expiring {
  * Keeps every record in a `Map`. JavaScript runs each method to its first `await` without
  * interruption and these methods never await, so `consumeCode`, `consumeRefreshToken`,
  * `takePending` and `takeApprovalCode` are atomic. Records are copied in and out, so a caller
- * cannot edit a stored one. Expired records are dropped whenever a new one is saved. A revoked grant id is kept until its
- * `until`, so a token saved late for it is refused. Pending consents are capped at `maxPending`,
- * dropping the oldest first. Password attempts live in memory too, so a restart forgets them: use
- * `KvOAuthStore` where a restart must not reset the owner-password lockout.
+ * cannot edit a stored one. Expired records are dropped whenever a new one is saved. A revoked
+ * grant id is kept until its `until`, so a token saved late for it is refused. Pending consents are
+ * capped at `maxPending`, dropping the oldest first. Password attempts live in memory too, so a
+ * restart forgets them: use `KvOAuthStore` where a restart must not reset the owner-password
+ * lockout.
  */
 export class MemoryOAuthStore implements OAuthStore {
   readonly #clock: Clock

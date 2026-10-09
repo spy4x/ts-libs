@@ -107,10 +107,10 @@ export interface ApprovalCodeRecord {
 /**
  * Where the authorization server keeps its state. Keys are SHA-256 hex digests of the secrets.
  *
- * The two `consume*` methods, `takePending` and `takeApprovalCode` must be atomic: two concurrent calls with the same
- * key must not both see the record unused. That is what makes a code single-use and lets a reused
- * refresh token be detected. A store may drop a record once its `expiresAt` has passed; the server
- * checks expiry itself, so keeping it longer is harmless.
+ * The two `consume*` methods, `takePending` and `takeApprovalCode` must be atomic: two concurrent
+ * calls with the same key must not both see the record unused. That is what makes a code single-use
+ * and lets a reused refresh token be detected. A store may drop a record once its `expiresAt` has
+ * passed; the server checks expiry itself, so keeping it longer is harmless.
  */
 export interface OAuthStore {
   /** Save a pending authorization under the digest of its id. */
