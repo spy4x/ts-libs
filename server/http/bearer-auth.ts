@@ -3,6 +3,8 @@
 // module scope, never read from a query parameter, and the comparison is constant
 // time: a byte-by-byte `===` on a bearer token is a timing oracle.
 
+import { crypto as stdCrypto } from "@std/crypto/crypto"
+import { timingSafeEqual } from "@std/crypto/timing-safe-equal"
 import { constantTimeEqualsText } from "@spy4x/platform/tokens"
 
 /** The canonical redaction marker. Used by every log path that could see a credential. */
@@ -12,6 +14,13 @@ export const REDACTED_TOKEN = "<REDACTED:TOKEN>"
 export interface TokenVerifier {
   /** True only for an exact, configured token. Never called with an absent header. */
   verify(token: string): Promise<boolean>
+  /**
+   * The same check as {@link TokenVerifier.verify}, answered synchronously. Use it when the
+   * caller must not yield between a limiter check and the verify — for example a transport
+   * that reserves a rate-limit slot, verifies, and refunds the slot on a correct token. With
+   * an `await` in between, parallel requests see each other's reservations.
+   */
+  verifySync(token: string): boolean
 }
 
 /** The header a token is read from. No alternative source exists by design. */
@@ -61,6 +70,7 @@ export function createTokenVerifier(token: string): TokenVerifier {
   if (token.length === 0) {
     throw new Error("createTokenVerifier requires a non-empty token: refusing to fail open")
   }
+  const expectedDigest = sha256Sync(token)
   return {
     /**
      * Both sides are SHA-256 digested on every call and compared with `timingSafeEqual`,
@@ -71,7 +81,22 @@ export function createTokenVerifier(token: string): TokenVerifier {
       if (presented.length === 0) return false
       return await constantTimeEquals(presented, token)
     },
+    /**
+     * The configured token is digested once, here at construction; each call digests only
+     * the presented token and compares the two 32-byte digests with `timingSafeEqual`. The
+     * work per call is one digest whatever the presented length, so timing still reveals
+     * neither the length nor a shared prefix of the configured token.
+     */
+    verifySync(presented: string): boolean {
+      if (presented.length === 0) return false
+      return timingSafeEqual(sha256Sync(presented), expectedDigest)
+    },
   }
+}
+
+/** SHA-256 of a string's UTF-8 bytes, computed synchronously by `@std/crypto`. */
+function sha256Sync(text: string): Uint8Array {
+  return new Uint8Array(stdCrypto.subtle.digestSync("SHA-256", new TextEncoder().encode(text)))
 }
 
 /**
