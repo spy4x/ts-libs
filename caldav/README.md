@@ -5,11 +5,12 @@ someone else's edit, plus the building blocks it uses: a safe reader for WebDAV 
 request bodies that escape what they write, and the URL rules a CalDAV client needs (resolving
 hrefs, comparing resources, sending credentials only to the configured server).
 
-| Module       | Exports                                                                                                                                                                                                    |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `caldav`     | `createCalDavClient`, `CalDavErrorCode`, `CalDavClient`, `CalDavCalendar`, `CalDavObject`, …                                                                                                               |
-| `caldav/xml` | `parseMultistatus`, `getProp`, `getPropText`, `parseXml`, `childElement`, `textContent`, `serializeXml`, `propfindBody`, `calendarQueryBody`, `calendarMultigetBody`, `mkcalendarBody`, `proppatchBody`, … |
-| `caldav/url` | `resolveHref`, `sameResource`, `childUrl`, `isSameOrigin`                                                                                                                                                  |
+| Module        | Exports                                                                                                                                                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `caldav`      | `createCalDavClient`, `CalDavErrorCode`, `CalDavClient`, `CalDavCalendar`, `CalDavObject`, …                                                                                                               |
+| `caldav/xml`  | `parseMultistatus`, `getProp`, `getPropText`, `parseXml`, `childElement`, `textContent`, `serializeXml`, `propfindBody`, `calendarQueryBody`, `calendarMultigetBody`, `mkcalendarBody`, `proppatchBody`, … |
+| `caldav/url`  | `resolveHref`, `sameResource`, `childUrl`, `isSameOrigin`                                                                                                                                                  |
+| `caldav/sync` | `createCalDavSync`, `createClientTransport`, `CalDavSyncTransport`, `CalDavSyncStore`, …                                                                                                                   |
 
 ## Install
 
@@ -117,6 +118,27 @@ What the reader guarantees:
 `propfindBody`, `calendarQueryBody`, `calendarMultigetBody`, `mkcalendarBody` and `proppatchBody`
 return a complete XML document. Every value they write — a display name, an href, a component name
 — is escaped, so a display name cannot inject an element.
+
+## Keeping a local copy in step
+
+`createCalDavSync(transport, store)` brings a device's copy of the calendars up to date. It has two
+ports and no signals, wording or storage engine of its own:
+
+- `CalDavSyncTransport` reaches the server: `listCalendars`, `listObjects` (bodies included) and,
+  optionally, the pair `listVersions` + `getObjects` that lists only etags and fetches the bodies
+  of the changed objects. A call reports `{ ok: false, offline }` instead of throwing; `offline`
+  means no answer at all, and the run stops asking.
+  `createClientTransport(client, { homeUrl, component })` builds one over a `CalDavClient`.
+- `CalDavSyncStore` holds the copy: `listCalendars`, `listVersions(calendarHref)`,
+  `replaceCalendars` and `applyChanges(calendar, { upsert, remove })`. The last two are atomic. A
+  generic keyed cache with an index on the calendar can satisfy it.
+
+`refresh()` lists the calendars, skips each one whose change marker equals the marker its stored
+objects came from, and for the others writes only the objects whose etag is new or different (an
+object without an etag always counts as different) and removes stored ones the server no longer
+lists. A calendar the server no longer lists is dropped with its objects. Overlapping calls share
+one run. `loadCompleted(href)` fetches one calendar with its completed tasks, which later refreshes
+keep. Writes (PUT with `If-Match`, DELETE) are not part of it; they go through the client.
 
 ## URL rules
 

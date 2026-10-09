@@ -28,6 +28,7 @@ Runs on: server (Deno).
 | `@spy4x/server/http/cors`              | Exact-match origin allowlist and the `hono/cors` origin resolver                      |
 | `@spy4x/server/http/bearer-auth`       | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)     |
 | `@spy4x/server/http/same-origin`       | Hono middleware that refuses cross-site mutations and cross-site WebSocket upgrades   |
+| `@spy4x/server/http/security-headers`  | CSP and framing headers for a same-origin single-page app, with inline-block hashes   |
 | `@spy4x/server/export`                 | Versioned export envelope and `Content-Disposition` download response                 |
 | `@spy4x/server/static`                 | Static-file serving with a MIME table and path-traversal protection                   |
 | `@spy4x/server/healthcheck`            | Loopback TCP probe, exit 0/1, for distroless images                                   |
@@ -107,6 +108,19 @@ body over the cap, 408 for a stalled body and 400 for a body that is not JSON, t
 included. A route without `onError` answers with that status on its own; a route with its own error
 shape catches the exception and reads `status`, and the reader's error is kept as `cause`. Any other
 error is rethrown unchanged.
+
+## `server/http/security-headers`
+
+`securityHeaders`, `inlineBlockHashes` and the types `SecurityHeadersOptions` and `ExtraSources`.
+
+`await securityHeaders({ shellHtml, extraSources })` returns Hono middleware over `secureHeaders`:
+a Content-Security-Policy that allows only the app's own origin (`'self'`; images also `data:`;
+no objects; `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and
+`X-Content-Type-Options: nosniff`. `shellHtml` is the built `index.html`: the hash of each inline
+`<script>` and `<style>` block in it is allowed, so the policy needs no `unsafe-inline`. A service
+worker from the app's own origin needs nothing extra. `extraSources` appends sources per directive
+(`scriptSrc`, `styleSrc`, `imgSrc`, `connectSrc`, `fontSrc`, `mediaSrc`, `workerSrc`,
+`manifestSrc`) and never replaces the defaults.
 
 ## `server/http/same-origin`
 
