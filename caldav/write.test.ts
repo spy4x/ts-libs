@@ -201,6 +201,43 @@ describe("update", () => {
   })
 })
 
+describe("a writer that does not check etags itself", () => {
+  it("is never asked to update or delete without an etag", async () => {
+    const calls: string[] = []
+    const writer = {
+      createObject: () => Promise.reject(new Error("unused")),
+      getObject: () => Promise.reject(new Error("unused")),
+      updateObject: (url: string | URL) => {
+        calls.push(`update ${url}`)
+        return Promise.reject(new Error("must not be called"))
+      },
+      deleteObject: (url: string | URL) => {
+        calls.push(`delete ${url}`)
+        return Promise.reject(new Error("must not be called"))
+      },
+    }
+    const transport = createCalDavWriteTransport<string, Task>({
+      writer,
+      calendarUrl: () => CALENDAR,
+      urlOf: (id) => objectUrl(CALENDAR, id),
+      etagOf: () => null,
+      toIcs: (command) => ics(command.payload),
+      toEntity: () => {
+        throw new Error("unused")
+      },
+    })
+    for (const kind of ["update", "delete"] as const) {
+      const error = await transport.send(
+        { kind, entityId: "e1", payload: "x", baseVersion: 1 },
+        "k",
+      )
+        .catch((caught) => caught)
+      expect(transport.classify(error).kind).toBe("rejected")
+    }
+    expect(calls).toEqual([])
+  })
+})
+
 describe("delete", () => {
   it("deletes with If-Match and resolves nothing", async () => {
     const { send, seen, objects } = setup()
