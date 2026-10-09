@@ -5618,6 +5618,12 @@ were, anyone could send `Remote-User: owner` and approve themselves. As a second
 `/authorize` answers `403` to any request whose host is not the issuer's. In a real deployment the
 two hosts share one store: one process serving both, or a shared `OAuthStore`.
 
+**Pending consents are capped.** Each `GET /authorize` stores a pending consent of up to about
+5 KB for 10 minutes, for anyone who calls it. `MemoryOAuthStore` keeps at most `maxPending` of them
+(default 1 000, about 5 MB) and drops the oldest when a new one would pass the cap; the owner then
+reloads the sign-in. `KvOAuthStore` keeps them on disk with no cap; rate-limit `/authorize` to bound
+that.
+
 ### What it does
 
 - **Discovery.** `GET /.well-known/oauth-authorization-server` advertises S256 PKCE, public

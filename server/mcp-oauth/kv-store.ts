@@ -88,7 +88,10 @@ const REFRESH = "refresh"
  * - Every token also writes an index key `[...prefix, "grant", grantId, kind, key]` in the same
  *   commit; `revokeGrant` lists it to find the grant's tokens.
  *
- * The caller owns the handle and closes it.
+ * Pending consents have no count cap, unlike `MemoryOAuthStore`'s `maxPending`: they live on disk,
+ * not in the process's memory, and Deno KV deletes each once its consent page expires. Anyone can
+ * create one with `GET /authorize`, so put a rate limiter in front of that route to bound the disk
+ * they take. The caller owns the handle and closes it.
  */
 export class KvOAuthStore implements OAuthStore {
   readonly #kv: OAuthKv

@@ -2035,6 +2035,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/server/mcp-oauth/memory-store`
 
+- `DEFAULT_MAX_PENDING` (constant), `jsr:@spy4x/server/mcp-oauth/memory-store`: Default MemoryOAuthStoreOptions.maxPending: at most about 5 MB of pending consents.
 - `MemoryOAuthStore` (class), `jsr:@spy4x/server/mcp-oauth/memory-store`: Keeps every record in a `Map`.
 - `MemoryOAuthStoreOptions` (interface), `jsr:@spy4x/server/mcp-oauth/memory-store`: Options for MemoryOAuthStore.
 
@@ -2491,4 +2492,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 63127089ccb941e08193a8ba2d732cba164ed7ed1519b371f0fa383017c1c5c4 -->
+<!-- export surface: sha256 03f6c98b3906065e5322452304f89f6f82fb6cbb90d260cc035bb1b624b3d025 -->
