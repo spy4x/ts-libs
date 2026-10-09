@@ -46,6 +46,9 @@ const CODES: Record<string, SendFailure> = {
   ID_ALREADY_EXISTS: { kind: "already-exists" },
 }
 
+/** One refusal code for each way the server refuses: stale, gone, and refused for good. */
+const REFUSALS = ["VERSION_CONFLICT", "NOTE_NOT_FOUND", "ROLE_INSUFFICIENT"]
+
 function classify(error: unknown): SendFailure {
   if (!(error instanceof RealtimeRequestError)) return { kind: "unreachable" }
   const code = (error.details as { code?: string } | undefined)?.code
@@ -347,19 +350,143 @@ describe("outbox when the server answers", () => {
     expect(cache.items.has("n")).toBe(false)
   })
 
-  it("hands a refusal to the person who just made the change and queues nothing", async () => {
-    const { outbox, state } = harness()
-    state.server = () => {
+  for (const code of REFUSALS) {
+    it(`hands a ${code} refusal to the person who just made the change and queues nothing`, async () => {
+      const { outbox, state } = harness()
+      state.server = () => {
+        throw refused(code)
+      }
+      const outcome = await outbox.submit({
+        kind: "update",
+        entityId: "n",
+        payload: text("Mine"),
+        version: 1,
+      })
+      expect(outcome.kind).toBe("failed")
+      expect(outbox.entries()).toEqual([])
+    })
+  }
+})
+
+describe("outbox when a change made online joins a write queued offline", () => {
+  /**
+   * An edit queued offline, the server copy changed meanwhile, and a second edit of the same
+   * entity made once the connection is back, before the queue was sent: the two merge into one
+   * entry, which the server refuses with `code`.
+   */
+  async function editAfterReconnect(code: string, current: Item | null) {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("Offline"), version: 1 })
+    h.state.server = () => {
+      throw refused(code)
+    }
+    h.state.current = current
+    h.state.online = true
+    const outcome = await h.outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Online"),
+      version: 1,
+    })
+    return { ...h, outcome }
+  }
+
+  const cases = [
+    { code: "VERSION_CONFLICT", current: item("n", 2, "Theirs"), reason: "version" },
+    { code: "NOTE_NOT_FOUND", current: null, reason: "gone" },
+    { code: "ROLE_INSUFFICIENT", current: null, reason: "rejected" },
+  ] as const
+  for (const { code, current, reason } of cases) {
+    it(`keeps the offline edit as a ${reason} conflict and answers conflict, not failed`, async () => {
+      const { outbox, outcome } = await editAfterReconnect(code, current)
+      expect(outcome).toEqual({ kind: "conflict", reason })
+      const [entry] = outbox.entries()
+      expect(outbox.entries()).toHaveLength(1)
+      expect(entry.status).toBe("conflict")
+      expect(entry.conflict?.reason).toBe(reason)
+      expect(entry.payload.title).toBe("Online")
+      expect(entry.before?.payload.title).toBe("Offline")
+    })
+  }
+
+  it("sends the merged edit on top of the server's version when I keep mine", async () => {
+    const { outbox, sent, state } = await editAfterReconnect(
+      "VERSION_CONFLICT",
+      item("n", 2, "Theirs"),
+    )
+    state.server = () => item("n", 3, "Online")
+    sent.length = 0
+    await outbox.keepMine(outbox.entries()[0])
+    expect(sent.map((s) => [s.command.kind, s.command.payload.title, s.command.baseVersion]))
+      .toEqual([["update", "Online", 2]])
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("drops the merged edit and shows the server's entity when I use theirs", async () => {
+    const { outbox, cache } = await editAfterReconnect("VERSION_CONFLICT", item("n", 2, "Theirs"))
+    await outbox.useTheirs(outbox.entries()[0])
+    expect(outbox.entries()).toEqual([])
+    expect(cache.items.get("n")?.title).toBe("Theirs")
+  })
+
+  it("keeps a delete queued offline as a conflict when an edit made online after it is refused", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("Offline"), version: 1 })
+    h.state.server = () => {
       throw refused("VERSION_CONFLICT")
     }
-    const outcome = await outbox.submit({
+    h.state.current = item("n", 2, "Theirs")
+    h.state.online = true
+    const outcome = await h.outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Online"),
+      version: 1,
+    })
+    expect(outcome).toEqual({ kind: "conflict", reason: "version" })
+    expect(h.outbox.entries().map((e) => [e.kind, e.status])).toEqual([["delete", "conflict"]])
+  })
+
+  it("keeps an edit another tab merged into my write before its send as a conflict", async () => {
+    const store: Store = createMemoryOutboxStore()
+    const ports = {
+      store,
+      classify,
+      send: () => Promise.reject(refused("VERSION_CONFLICT")),
+      fetchServer: () => Promise.resolve(item("n", 2, "Theirs")),
+    }
+    const otherTab = createOutbox<Text, Item>({
+      ...ports,
+      lock: createPromiseLock(),
+      canSend: () => false,
+    })
+    // The third step of this tab's submit is the send: the other tab edits just before it.
+    const steps = createPromiseLock()
+    let step = 0
+    const lock: OutboxLock = (work) =>
+      steps(async () => {
+        if (++step === 3) {
+          await otherTab.submit({
+            kind: "update",
+            entityId: "n",
+            payload: text("Other tab"),
+            version: 1,
+          })
+        }
+        return await work()
+      })
+    const thisTab = createOutbox<Text, Item>({ ...ports, lock, canSend: () => true })
+    const outcome = await thisTab.submit({
       kind: "update",
       entityId: "n",
       payload: text("Mine"),
       version: 1,
     })
-    expect(outcome.kind).toBe("failed")
-    expect(outbox.entries()).toEqual([])
+    expect(outcome).toEqual({ kind: "conflict", reason: "version" })
+    const [entry] = await store.readOutbox()
+    expect([entry.status, entry.payload.title]).toEqual(["conflict", "Other tab"])
   })
 })
 
