@@ -2004,6 +2004,8 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `DEFAULT_REDIRECT_URIS` (constant), `jsr:@spy4x/server/mcp-oauth`: The default redirect allowlist: the hosted Claude apps' callback, plus the two loopback callbacks Claude Code declares in its client metadata document.
 - `OAuthStore` (interface), `jsr:@spy4x/server/mcp-oauth`: Where the authorization server keeps its state.
 - `OFFLINE_ACCESS_SCOPE` (constant), `jsr:@spy4x/server/mcp-oauth`: The scope some clients ask for to get a refresh token.
+- `OWNER_PASSWORD_FIELD` (constant), `jsr:@spy4x/server/mcp-oauth`: Name of the password input the consent page sends when `ownerPassword` is set.
+- `OwnerPassword` (interface), `jsr:@spy4x/server/mcp-oauth`: The owner password the consent page asks for.
 - `PROTECTED_RESOURCE_METADATA_PATH` (constant), `jsr:@spy4x/server/mcp-oauth`: The well-known path prefix of a protected resource metadata document.
 - `PendingAuthorization` (interface), `jsr:@spy4x/server/mcp-oauth`: An authorization request that passed every check and waits for the owner's click.
 - `ProtectedResourceMetadata` (interface), `jsr:@spy4x/server/mcp-oauth`: The protected resource metadata document (RFC 9728).
@@ -2500,4 +2502,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 b0dacab3d5ed6f507438c99e0e25389f7b758952749178fe2f79d902c1ffcbd5 -->
+<!-- export surface: sha256 de0003b3b6471f6281b2c93c09c806af52e2bfac171da239f49162fd5818d85f -->

@@ -2,7 +2,8 @@
  * A single-user OAuth 2.1 authorization server for remote MCP connectors (claude.ai, the Claude
  * apps and Claude Code). Public clients only, identified by Client ID Metadata Documents; S256
  * PKCE only; tokens bound to one resource; codes single-use; refresh tokens rotated, and a reused
- * one revokes its whole grant. The app decides who the owner is through `confirmOwner`.
+ * one revokes its whole grant. The app decides who the owner is through `confirmOwner`, an owner
+ * password asked on the consent page (`ownerPassword`), or both.
  * @module
  */
 
@@ -14,6 +15,7 @@ import { parseBoundedFormData } from "@spy4x/net/bounded-body"
 import { constantTimeEqualsText, randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import { createSameOriginCheck } from "../http/same-origin.ts"
+import type { PasswordHasher } from "../sign-in/password.ts"
 import { type ClientMetadataSource, createClientMetadataFetcher } from "./client-metadata.ts"
 import type { OAuthStore, PendingAuthorization } from "./model.ts"
 import {
@@ -35,6 +37,9 @@ export const AUTHORIZATION_SERVER_METADATA_PATH = "/.well-known/oauth-authorizat
 export const AUTHORIZE_PATH = "/authorize"
 /** Path of the token endpoint. */
 export const TOKEN_PATH = "/token"
+
+/** Name of the password input the consent page sends when `ownerPassword` is set. */
+export const OWNER_PASSWORD_FIELD = "owner_password"
 
 /**
  * The scope some clients ask for to get a refresh token. Accepted when asked for, but not listed in
@@ -76,6 +81,22 @@ export interface ConsentDetails {
   resource: string
   /** Scopes asked for. */
   scopes: string[]
+  /**
+   * Set when the server asks for the owner password ({@link AuthorizationServerOptions.ownerPassword}):
+   * the name of the password input the form must send with an approval,
+   * {@link OWNER_PASSWORD_FIELD}.
+   */
+  passwordField?: string
+  /** Set when the page is shown again after a missing or wrong password: why, to show the owner. */
+  passwordError?: string
+}
+
+/** The owner password the consent page asks for. */
+export interface OwnerPassword {
+  /** The password's hash, as `hasher.hash` made it (for example with the `password-hash` CLI). */
+  hash: string
+  /** Checks a typed password against `hash`, e.g. `createPasswordHasher({ pepper })`. */
+  hasher: PasswordHasher
 }
 
 /** Options for {@link createAuthorizationServer}. */
@@ -89,14 +110,23 @@ export interface AuthorizationServerOptions {
   /**
    * True only when the request comes from the owner, e.g. when the `Remote-User` header that
    * Authelia's forward-auth sets names the owner. Called on both the consent page and its
-   * submission; `false` answers `403` and does nothing.
+   * submission; `false` answers `403` and does nothing. Optional when `ownerPassword` is set; with
+   * both set, a request must pass this check and an approval must also carry the password.
    *
    * A header such as `Remote-User` proves nothing by itself: anyone can send it. Trust it only when
    * every route into this app passes forward-auth, which strips a forged one. So serve `app` on its
    * own host (the issuer's), entirely behind forward-auth, and never mount it on the public MCP
    * host. `/authorize` answers `403` to any request whose host is not the issuer's.
    */
-  confirmOwner(c: Context): boolean | Promise<boolean>
+  confirmOwner?(c: Context): boolean | Promise<boolean>
+  /**
+   * Ask for the owner's password on the consent page, for an app with no forward-auth in front of
+   * `/authorize`. The default page then shows a password input; an approval must carry the right
+   * password, and a denial needs none. A missing or wrong password shows the page again with an
+   * error, and the same consent can still be approved. The server does not limit guesses: put a
+   * rate limiter in front of `POST /authorize`.
+   */
+  ownerPassword?: OwnerPassword
   /**
    * Redirect URIs any client may use; the client's own document must list the URI too. Loopback
    * entries match on any port. Defaults to {@link DEFAULT_REDIRECT_URIS}.
@@ -199,11 +229,27 @@ export function defaultConsentPage(details: ConsentDetails): string {
 ${warning}
 <form method="post" action="${e(details.action)}">
 <input type="hidden" name="consent_id" value="${e(details.consentId)}">
-<button type="submit" name="decision" value="approve">Allow</button>
+${passwordInput(details)}<button type="submit" name="decision" value="approve">Allow</button>
 <button type="submit" name="decision" value="deny">Deny</button>
 </form>
 </body>
 </html>`
+}
+
+/** The default page's password input and its error, or nothing when no password is asked for. */
+function passwordInput(details: ConsentDetails): string {
+  if (details.passwordField === undefined) return ""
+  const e = escapeHtml
+  const error = details.passwordError === undefined
+    ? ""
+    : `<p id="owner-password-error" role="alert">${e(details.passwordError)}</p>\n`
+  const invalid = details.passwordError === undefined
+    ? ""
+    : ` aria-invalid="true" aria-describedby="owner-password-error" autofocus`
+  return `<p><label for="owner-password">Owner password</label>
+<input id="owner-password" type="password" name="${e(details.passwordField)}" ` +
+    `autocomplete="current-password"${invalid}></p>
+${error}`
 }
 
 function positive(value: number | undefined, fallback: number, name: string): number {
@@ -214,8 +260,8 @@ function positive(value: number | undefined, fallback: number, name: string): nu
 
 /**
  * Build the authorization server. Mount `app` at the root of the issuer's origin, put the owner's
- * sign-in (Authelia forward-auth) in front of `/authorize`, and keep `/token` and the metadata
- * document public: the client calls them without a browser.
+ * sign-in (Authelia forward-auth) in front of `/authorize` or set `ownerPassword`, and keep `/token`
+ * and the metadata document public: the client calls them without a browser.
  *
  * The flow: `GET /authorize` checks the owner, the client's metadata document, the redirect URI
  * (allowlist and document both), S256 PKCE, the resource and the scopes, then shows the consent
@@ -223,7 +269,8 @@ function positive(value: number | undefined, fallback: number, name: string): nu
  * is a redirect with an `error`. `POST /authorize` takes the owner's decision and redirects with a
  * single-use code. `POST /token` redeems a code or rotates a refresh token.
  *
- * @throws {TypeError} When `issuer`, a resource, a redirect URI, a scope or a lifetime is invalid.
+ * @throws {TypeError} When `issuer`, a resource, a redirect URI, a scope or a lifetime is invalid,
+ *     when neither `confirmOwner` nor `ownerPassword` is set, or when `ownerPassword.hash` is empty.
  */
 export function createAuthorizationServer(
   options: AuthorizationServerOptions,
@@ -233,6 +280,17 @@ export function createAuthorizationServer(
     throw new TypeError(`issuer ${options.issuer} must be a bare https origin`)
   }
   const issuer: string = canonicalIssuer
+  const ownerPassword = options.ownerPassword
+  if (options.confirmOwner === undefined && ownerPassword === undefined) {
+    throw new TypeError("set confirmOwner, ownerPassword or both")
+  }
+  if (
+    ownerPassword !== undefined &&
+    (typeof ownerPassword.hash !== "string" || ownerPassword.hash === "")
+  ) {
+    throw new TypeError("ownerPassword.hash must be a password hash")
+  }
+  const confirmOwner = options.confirmOwner ?? (() => true)
   if (options.resources.length === 0) throw new TypeError("resources must list at least one URL")
   const resources = new Set<string>()
   for (const raw of options.resources) {
@@ -333,6 +391,47 @@ export function createAuthorizationServer(
     })
   }
 
+  /** The consent page for `pending`, with `passwordError` when it is shown again after one. */
+  function consentPage(
+    c: Context,
+    consentId: string,
+    pending: PendingAuthorization,
+    passwordError?: { status: 400 | 403; message: string },
+  ): Response {
+    c.header("Cache-Control", "no-store")
+    c.header("Referrer-Policy", "no-referrer")
+    c.header("X-Frame-Options", "DENY")
+    c.header(
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+    )
+    const html = renderConsent({
+      consentId,
+      action: AUTHORIZE_PATH,
+      clientId: pending.clientId,
+      clientHost: hostOf(pending.clientId),
+      clientName: pending.clientName,
+      redirectUri: pending.redirectUri,
+      redirectHost: hostOf(pending.redirectUri),
+      loopbackRedirect: isLoopbackRedirect(new URL(pending.redirectUri)),
+      resource: pending.resource,
+      scopes: pending.scope === "" ? [] : pending.scope.split(" "),
+      ...(ownerPassword === undefined ? {} : { passwordField: OWNER_PASSWORD_FIELD }),
+      ...(passwordError === undefined ? {} : { passwordError: passwordError.message }),
+    })
+    return c.html(html, passwordError?.status ?? 200)
+  }
+
+  /** Why an approval's password is refused, or `undefined` when none is needed or it is right. */
+  async function passwordRefusal(
+    password: string | undefined,
+  ): Promise<{ status: 400 | 403; message: string } | undefined> {
+    if (ownerPassword === undefined) return undefined
+    if (password === undefined) return { status: 400, message: "Enter the owner password." }
+    const check = await ownerPassword.hasher.verify(password, ownerPassword.hash)
+    return check.valid ? undefined : { status: 403, message: "Wrong password. Try again." }
+  }
+
   const app = new Hono()
 
   app.get(AUTHORIZATION_SERVER_METADATA_PATH, (c) => c.json(metadata))
@@ -342,7 +441,7 @@ export function createAuthorizationServer(
 
   app.get(AUTHORIZE_PATH, async (c) => {
     if (!onIssuerHost(c)) return page(c, 403, "Approve access on the authorization server's host.")
-    if (!(await options.confirmOwner(c))) return page(c, 403, "Only the owner can approve access.")
+    if (!(await confirmOwner(c))) return page(c, 403, "Only the owner can approve access.")
     const params = readParams(new URL(c.req.url).searchParams)
     if (params === undefined) return page(c, 400, "Malformed authorization request.")
 
@@ -391,32 +490,13 @@ export function createAuthorizationServer(
       expiresAt: clock.now() + consentTtl,
     }
     await store.savePending(await sha256Hex(consentId), pending)
-
-    c.header("Cache-Control", "no-store")
-    c.header("Referrer-Policy", "no-referrer")
-    c.header("X-Frame-Options", "DENY")
-    c.header(
-      "Content-Security-Policy",
-      "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
-    )
-    return c.html(renderConsent({
-      consentId,
-      action: AUTHORIZE_PATH,
-      clientId,
-      clientHost: hostOf(clientId),
-      clientName: client.clientName,
-      redirectUri,
-      redirectHost: hostOf(redirectUri),
-      loopbackRedirect: isLoopbackRedirect(new URL(redirectUri)),
-      resource,
-      scopes: scope === "" ? [] : scope.split(" "),
-    }))
+    return consentPage(c, consentId, pending)
   })
 
   app.post(AUTHORIZE_PATH, async (c) => {
     if (!onIssuerHost(c)) return page(c, 403, "Approve access on the authorization server's host.")
     if (sameOrigin(c.req.raw) !== undefined) return page(c, 403, "Cross-site request refused.")
-    if (!(await options.confirmOwner(c))) return page(c, 403, "Only the owner can approve access.")
+    if (!(await confirmOwner(c))) return page(c, 403, "Only the owner can approve access.")
     let params: Params | undefined
     try {
       params = readParams(
@@ -430,9 +510,19 @@ export function createAuthorizationServer(
     if (consentId === undefined || (decision !== "approve" && decision !== "deny")) {
       return page(c, 400, "Malformed consent.")
     }
-    const pending = await store.takePending(await sha256Hex(consentId))
+    const pendingKey = await sha256Hex(consentId)
+    const pending = await store.takePending(pendingKey)
     if (pending === undefined || pending.expiresAt <= clock.now()) {
       return page(c, 400, "This request has expired. Start again from the app.")
+    }
+    if (decision === "approve") {
+      // Taking the consent first keeps it single-use while the password is checked, and gives the
+      // page its details to show again. A refused password puts it back, so the owner can retry.
+      const refusal = await passwordRefusal(params?.get(OWNER_PASSWORD_FIELD))
+      if (refusal !== undefined) {
+        await store.savePending(pendingKey, pending)
+        return consentPage(c, consentId, pending, refusal)
+      }
     }
     if (decision === "deny") {
       return redirect(c, pending.redirectUri, {

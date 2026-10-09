@@ -5678,12 +5678,12 @@ that.
   `http://localhost/callback` and `http://127.0.0.1/callback`, which match on any port for Claude
   Code. Until the redirect URI has passed, a refusal is a `400` page, never a redirect.
 - **Consent.** `GET /authorize` answers `403` unless the request's host is the issuer's, then
-  calls `confirmOwner` and does nothing else for anyone else. It then shows a consent page naming
+  calls `confirmOwner` (when set) and does nothing else for anyone else. It then shows a consent page naming
   the client's host and the redirect host, asking the owner to approve only a sign-in they just
   started, with an extra warning when the code goes to a loopback address. The page cannot be
   framed. Approving posts a single-use, 10-minute consent id back to `/authorize`; that post must
-  reach the issuer's host, be same-origin, and pass `confirmOwner` again. `renderConsent` replaces
-  the built-in page.
+  reach the issuer's host, be same-origin, pass `confirmOwner` again and, with `ownerPassword`
+  set, carry the owner password. `renderConsent` replaces the built-in page.
 - **Codes.** Single-use, 60 seconds, bound to the client, redirect URI, PKCE challenge and
   resource. A replayed code is refused and revokes every token the first exchange issued.
 - **Tokens.** Opaque 256-bit random strings; the store keeps only their SHA-256 digest. Access
@@ -5697,7 +5697,37 @@ that.
 - **Errors.** RFC 6749 codes: `invalid_grant` for every bad code or refresh token, `invalid_target`
   for a foreign resource, `invalid_client` for any client authentication.
 
-### Keeping grants across restarts: `KvOAuthStore`
+### Without forward-auth: `ownerPassword`
+
+An app with no forward-auth in front of `/authorize` asks the owner for a password on the consent
+page instead of passing `confirmOwner`. Make the hash once with the `password-hash` CLI of
+`server/sign-in`, under the pepper the app runs with:
+
+```ts
+import { createPasswordHasher } from "@spy4x/server/sign-in"
+
+const as = createAuthorizationServer({
+  issuer,
+  resources: [resource],
+  store,
+  ownerPassword: {
+    hash: Deno.env.get("OWNER_PASSWORD_HASH")!,
+    hasher: createPasswordHasher({ pepper: Deno.env.get("AUTH_PEPPER")! }),
+  },
+})
+```
+
+The default consent page then shows a labelled password input named `owner_password`
+(`OWNER_PASSWORD_FIELD`; a custom `renderConsent` gets it as `passwordField`). Showing the page needs
+no password, since nothing is granted until the form is submitted. Approving needs it; denying does
+not, because a denial only sends the client away with `access_denied`. A missing password (`400`) or
+a wrong one (`403`) shows the page again with the error in a `role="alert"` paragraph tied to the
+input, and the same consent can still be approved. With both `confirmOwner` and `ownerPassword`
+set, both must pass: `confirmOwner` on every request, the password on an approval. At least one of
+them is required.
+
+The server does not count wrong passwords. Put `@spy4x/platform/rate-limit/hono` in front of
+`POST /authorize`, as "What it does not do" below says for every route.
 
 `MemoryOAuthStore` signs every client out on a restart or deploy. `KvOAuthStore` keeps the same
 records in Deno KV, which needs no service beside the app: open the database on a mounted volume
