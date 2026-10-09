@@ -133,20 +133,23 @@ describe(`createIndexedDbCalDavCache`, () => {
     createIndexedDbCalDavCache<StoredCalendar, Task>({ indexedDB: freshFactory() }).close()
   })
 
-  it(`closes its connection on close, so the database can be deleted`, async () => {
-    const indexedDB = freshFactory()
-    const cache = createIndexedDbCalDavCache({ indexedDB })
+  it(`closes its connection on close`, async () => {
+    const real = freshFactory()
+    const opened: IDBDatabase[] = []
+    const watching = {
+      open(name: string, version?: number) {
+        const request = real.open(name, version)
+        request.addEventListener("success", () => opened.push(request.result as IDBDatabase))
+        return request
+      },
+    } as unknown as IDBFactory
+    const cache = createIndexedDbCalDavCache({ indexedDB: watching })
     await cache.replaceCalendars([calendar(`/a/`)])
+
     cache.close()
 
-    const outcome = await new Promise<string>((resolve) => {
-      const request = indexedDB.deleteDatabase(`caldav-cache`)
-      request.onblocked = () => resolve(`blocked`)
-      request.onsuccess = () => resolve(`deleted`)
-      request.onerror = () => resolve(`error`)
-    })
-
-    expect(outcome).toBe(`deleted`)
+    expect(opened.length).toBe(1)
+    expect(() => opened[0].transaction(`calendars`)).toThrow()
   })
 
   it(`keeps the data across a restart on the same database`, async () => {
