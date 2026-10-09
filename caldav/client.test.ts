@@ -532,6 +532,20 @@ describe("writes", () => {
     assertEquals(seen[0].body, ICS)
   })
 
+  it("creates under the given name when one is passed, and refuses a name that is not a file name", async () => {
+    const { client, seen } = setup(() => new Response(null, { status: 201 }))
+    const written = output(await client.createObject(INBOX, ICS, { name: "task-1.ics" }))
+    assert(written.url.endsWith("/1.0%20%2F%20Inbox/task-1.ics"), written.url)
+    for (const name of ["", "a/b", "..", ".", "a b", "x?y"]) {
+      assertEquals(
+        failure(await client.createObject(INBOX, ICS, { name })).code,
+        CalDavErrorCode.InvalidArgument,
+        name,
+      )
+    }
+    assertEquals(seen.length, 1)
+  })
+
   it("refuses * and etag lists, which would make a guarded write blind, before any request", async () => {
     const { client, seen } = setup(() => new Response(null, { status: 204 }))
     for (const etag of ["*", `"1", "2"`, `"1,2"`, "W/", "abc", `W/abc`]) {
