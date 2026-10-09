@@ -53,6 +53,40 @@ export function dayLabel(date: string, locale: string = DEFAULT_LOCALE): string 
   }).format(new Date(parseIsoDate(date)))
 }
 
+/** Localised "Thu 15 Oct": weekday, day and month, no year. Throws on a value that is not a date. */
+export function shortDayLabel(date: string, locale: string = DEFAULT_LOCALE): string {
+  return new Intl.DateTimeFormat(locale, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(new Date(parseIsoDate(date)))
+}
+
+/**
+ * A day as a person says it: "Yesterday", "Today", "Tomorrow", otherwise {@link shortDayLabel}.
+ *
+ * Both dates are plain `YYYY-MM-DD` values, so the comparison is calendar arithmetic with no zone
+ * in it; the caller decides what "today" is, usually with `isoDateInTz`. The three words come from
+ * `Intl.RelativeTimeFormat` in the locale, with the first letter upper-cased by that locale's own
+ * rules because the platform writes them mid-sentence ("yesterday"). Throws on a value that is not
+ * a date.
+ *
+ * @param date The day to describe.
+ * @param today The day the viewer is on.
+ * @param locale A BCP 47 tag, e.g. `de-DE`.
+ */
+export function relativeDayLabel(
+  date: string,
+  today: string,
+  locale: string = DEFAULT_LOCALE,
+): string {
+  const offset = Math.round((parseIsoDate(date) - parseIsoDate(today)) / 86_400_000)
+  if (offset < -1 || offset > 1) return shortDayLabel(date, locale)
+  const word = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(offset, "day")
+  return word.charAt(0).toLocaleUpperCase(locale) + word.slice(1)
+}
+
 /** One weekday header: what its column shows, and what that abbreviation stands for. */
 export interface WeekdayLabel {
   /** The abbreviation the column header shows, e.g. `Mon`. */
