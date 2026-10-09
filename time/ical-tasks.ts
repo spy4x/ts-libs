@@ -76,6 +76,8 @@ export interface Alarm {
   /** `DISPLAY`, `AUDIO`, `EMAIL`, … as written. */
   action?: string
   trigger?: AlarmTrigger
+  /** The DESCRIPTION text, when the VALARM has one. */
+  description?: string
 }
 
 /** The trigger of a reminder to write: `related` defaults to {@link AlarmRelated.Start}. */
@@ -286,6 +288,8 @@ function readAlarm(alarm: IcalComponent): Alarm {
       }
     }
   }
+  const description = getProperty(alarm, "DESCRIPTION")
+  if (description) out.description = readText(description)
   return out
 }
 
@@ -558,7 +562,7 @@ function writeRelatedTo(
   return undefined
 }
 
-const DURATION_TIME = String.raw`T(?:\d+H(?:\d+M)?(?:\d+S)?|\d+M(?:\d+S)?|\d+S)`
+const DURATION_TIME = String.raw`T(?:\d+H(?:\d+M(?:\d+S)?)?|\d+M(?:\d+S)?|\d+S)`
 /** RFC 5545 `dur-value`: `P` then weeks, or days with an optional time, or a time. */
 const DURATION = new RegExp(`^[+-]?P(?:\\d+W|\\d+D(?:${DURATION_TIME})?|${DURATION_TIME})$`)
 
@@ -614,6 +618,9 @@ function wantedAlarms(value: unknown): IcalResult<WantedAlarm[]> {
     } else {
       return fail(IcalErrorCode.InvalidValue, "unknown alarm trigger kind")
     }
+    if (action === "AUDIO" && entry.description !== undefined) {
+      return fail(IcalErrorCode.InvalidValue, "an AUDIO alarm has no description")
+    }
     out.push({ action, trigger: parsed, description: entry.description })
   }
   return ok(out)
@@ -644,13 +651,25 @@ function newAlarm(wanted: WantedAlarm, fallback: string): IcalComponent {
     getProperty(alarm, "TRIGGER")!.params = [{ name: "VALUE", values: ["DATE-TIME"] }]
   }
   if (wanted.action === "DISPLAY") writeText(alarm, "DESCRIPTION", wanted.description ?? fallback)
-  else if (wanted.description !== undefined) writeText(alarm, "DESCRIPTION", wanted.description)
   return alarm
 }
 
 /**
+ * The property a new relative trigger needs in `component`, or undefined when it has it
+ * (RFC 5545 §3.8.6.3: a trigger counts from DTSTART, or from DUE or DTEND with `RELATED=END`).
+ */
+function missingAnchor(component: IcalComponent, related: AlarmRelated): string | undefined {
+  const has = (name: string) => getProperty(component, name) !== undefined
+  const task = component.name.toUpperCase() === "VTODO"
+  if (related === AlarmRelated.Start) return has("DTSTART") ? undefined : "DTSTART"
+  if (task) return has("DUE") || (has("DTSTART") && has("DURATION")) ? undefined : "DUE"
+  return has("DTEND") || (has("DTSTART") && has("DURATION")) ? undefined : "DTEND or DURATION"
+}
+
+/**
  * Replace the VALARMs of `component` with `value` (see {@link TodoPatch.alarms}). Call it after
- * SUMMARY is written: the default DESCRIPTION is the final SUMMARY.
+ * SUMMARY and the dates are written: the default DESCRIPTION is the final SUMMARY, and a new
+ * relative trigger is refused when the component lacks the date it counts from.
  */
 function writeAlarms(
   component: IcalComponent,
@@ -676,7 +695,20 @@ function writeAlarms(
       return entry.description === undefined || textOf(child, "DESCRIPTION") === entry.description
     })
     if (match) keep.add(match)
-    else fresh.push(newAlarm(entry, fallback))
+    else {
+      if (entry.trigger.kind === AlarmTriggerKind.Relative) {
+        const missing = missingAnchor(component, entry.trigger.related)
+        if (missing) {
+          return fail(
+            IcalErrorCode.InvalidValue,
+            `a reminder counted from the ${
+              entry.trigger.related === AlarmRelated.End ? "end" : "start"
+            } needs ${missing} on the ${component.name.toLowerCase().slice(1)}`,
+          )
+        }
+      }
+      fresh.push(newAlarm(entry, fallback))
+    }
   }
   component.components = component.components.filter((child) => !isAlarm(child) || keep.has(child))
   component.components.push(...fresh)
@@ -875,7 +907,8 @@ function transaction(
  * Patch the first VTODO of `root` in place and return the task as it now reads.
  *
  * Changes only the patched fields plus DTSTAMP, LAST-MODIFIED (both `options.now`) and, when the
- * patch sets `start`, `due`, `rrule` or `status`, SEQUENCE (+1). A patch with no fields is a no-op: nothing is stamped. See {@link TodoPatch}.
+ * patch sets `start`, `due`, `rrule` or `status`, SEQUENCE (+1). A patch with no fields is a
+ * no-op: nothing is stamped. See {@link TodoPatch}.
  *
  * Refuses, leaving `root` untouched: no VTODO ({@link IcalErrorCode.Malformed}); a DUE and
  * DTSTART that would differ in value type ({@link IcalErrorCode.ValueTypeMismatch}); a zoned
