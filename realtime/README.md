@@ -446,6 +446,15 @@ The rules it keeps, each one a lost edit found in a product that wrote the queue
 A created entity starts at version one: after an attempted create, a delete is sent against that
 version. `send` runs under the lock, so it must settle or time out.
 
+`submit` answers how the change ended: `sent` (with the server's entity), `queued` (it goes out
+later), `dropped` (created and deleted before any send), `failed` or `conflict`. A refusal of a
+change that stands alone answers `failed` and queues nothing, because the person is looking at the
+screen and the app shows the refusal itself. A change that joined a write still queued from earlier
+(an edit made offline, then another made right after the connection came back) is never dropped
+with it: the refused entry stays queued as a conflict, exactly as a refusal found by `flush` would,
+and `submit` answers `{ kind: "conflict", reason }`. Show the conflict from `entries()` and let the
+person settle it with `keepMine` or `useTheirs`.
+
 `withdraw(entityId)` takes back the latest change to an entity, for example the "Undo" of a delete
 made offline. When that change was merged into an earlier waiting write (an edit, then a delete),
 only the delete is taken back: the edit stays queued, with its key and its `attempted` flag as they
