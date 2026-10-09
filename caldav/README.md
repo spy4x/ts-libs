@@ -5,12 +5,13 @@ someone else's edit, plus the building blocks it uses: a safe reader for WebDAV 
 request bodies that escape what they write, and the URL rules a CalDAV client needs (resolving
 hrefs, comparing resources, sending credentials only to the configured server).
 
-| Module        | Exports                                                                                                                                                                                                    |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `caldav`      | `createCalDavClient`, `CalDavErrorCode`, `CalDavClient`, `CalDavCalendar`, `CalDavObject`, …                                                                                                               |
-| `caldav/xml`  | `parseMultistatus`, `getProp`, `getPropText`, `parseXml`, `childElement`, `textContent`, `serializeXml`, `propfindBody`, `calendarQueryBody`, `calendarMultigetBody`, `mkcalendarBody`, `proppatchBody`, … |
-| `caldav/url`  | `resolveHref`, `sameResource`, `childUrl`, `isSameOrigin`                                                                                                                                                  |
-| `caldav/sync` | `createCalDavSync`, `createClientTransport`, `CalDavSyncTransport`, `CalDavSyncStore`, …                                                                                                                   |
+| Module         | Exports                                                                                                                                                                                                    |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `caldav`       | `createCalDavClient`, `CalDavErrorCode`, `CalDavClient`, `CalDavCalendar`, `CalDavObject`, …                                                                                                               |
+| `caldav/xml`   | `parseMultistatus`, `getProp`, `getPropText`, `parseXml`, `childElement`, `textContent`, `serializeXml`, `propfindBody`, `calendarQueryBody`, `calendarMultigetBody`, `mkcalendarBody`, `proppatchBody`, … |
+| `caldav/url`   | `resolveHref`, `sameResource`, `childUrl`, `isSameOrigin`                                                                                                                                                  |
+| `caldav/sync`  | `createCalDavSync`, `createClientTransport`, `CalDavSyncTransport`, `CalDavSyncStore`, …                                                                                                                   |
+| `caldav/write` | `createCalDavWriteTransport`, `classifyCalDavError`, `objectUrl`, `CalDavWriteError`, …                                                                                                                    |
 
 ## Install
 
@@ -161,3 +162,36 @@ isSameOrigin(target!, server) // false: another host, port or scheme never gets 
 
 Never derive an address from a display name or from an event's iCalendar `URL` property: pass a
 generated name to `childUrl` and resolve only hrefs the server sent.
+
+## Offline writes
+
+`caldav/write` fills the `send`, `fetchServer` and `classify` ports of the outbox in
+`@spy4x/realtime/outbox`, so a queue of offline edits reaches a CalDAV server without overwriting
+anyone's change. A create is `PUT` with `If-None-Match: *` to `<entityId>.ics` (a repeat after a
+lost answer finds its own object, by its UID, and succeeds even if the server reordered the text);
+an update is `PUT` with `If-Match: <etag>`; a delete is `DELETE` with `If-Match`. Only a create
+needs the entity id to be a plain file name: an update or delete goes to the address `urlOf` gives.
+The app supplies the calendar, the object's address, the etag a write is based on, the iCalendar
+text, and how to turn an object into its entity.
+
+| Server answer                                                                         | The queue sees                                 |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 412 on an update or delete                                                            | `version`; the outbox then calls `fetchServer` |
+| 412 on a create (address taken, different content)                                    | `already-exists`                               |
+| 404 or 410 on an update                                                               | `not-found`                                    |
+| 404 or 410 on a delete                                                                | success                                        |
+| network error, timeout, 5xx, 401, 403, 408, 429                                       | `unreachable`: keep the entry, retry later     |
+| other 4xx (not 401, 403, 408, 429), a UID clash, a bad entity id on a create, no etag | `rejected`, with the message                   |
+
+```ts
+const writer = createCalDavClient({ serverUrl, auth }) // or an adapter with the same results
+const transport = createCalDavWriteTransport({
+  writer,
+  calendarUrl,
+  urlOf,
+  etagOf,
+  toIcs,
+  toEntity,
+})
+const outbox = createOutbox({ store, ...transport, lock, canSend })
+```

@@ -200,6 +200,15 @@ export interface NewCalendar {
   color?: string
 }
 
+/** Options of {@link CalDavClient.createObject}. */
+export interface CreateObjectOptions {
+  /**
+   * The object's file name, such as `<uuid>.ics`: letters, digits, `.`, `_`, `~` and `-` only,
+   * else the call fails with `InvalidArgument`. Never the display name. Default: a fresh UUID.
+   */
+  name?: string
+}
+
 /** A CalDAV client bound to one server and one user. See {@link createCalDavClient}. */
 export interface CalDavClient {
   /** Find the principal and calendar homes: `.well-known/caldav`, the server URL, then the principal. */
@@ -218,8 +227,16 @@ export interface CalDavClient {
   ): Promise<CalDavResult<CalDavMultiget>>
   /** One object. */
   getObject(url: string | URL): Promise<CalDavResult<CalDavObject>>
-  /** Add an object under a new random name; fails with `AlreadyExists` rather than overwrite. */
-  createObject(calendarUrl: string | URL, ics: string): Promise<CalDavResult<CalDavWrite>>
+  /**
+   * Add an object under a new random name, or under `options.name` when given; fails with
+   * `AlreadyExists` rather than overwrite. A caller that may repeat the call (an offline queue)
+   * passes a stable name, so a repeat cannot create a second object.
+   */
+  createObject(
+    calendarUrl: string | URL,
+    ics: string,
+    options?: CreateObjectOptions,
+  ): Promise<CalDavResult<CalDavWrite>>
   /** Replace an object if it still has `etag`; a stale etag fails with `Conflict`. */
   updateObject(
     url: string | URL,
@@ -711,12 +728,19 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
         return { url: reply.url.href, etag: entityTag(reply.headers.get("ETag")), data: reply.text }
       }),
 
-    createObject: (calendarUrl, ics) =>
+    createObject: (calendarUrl, ics, options) =>
       run(async (call) => {
         const calendar = own(calendarUrl, "calendarUrl")
         const body = requireIcs(ics)
+        const name = options?.name
+        if (name !== undefined && !/^[A-Za-z0-9._~-]+$/.test(name)) {
+          fail(CalDavErrorCode.InvalidArgument, "name must be letters, digits, . _ ~ and -")
+        }
+        if (name === "." || name === "..") {
+          fail(CalDavErrorCode.InvalidArgument, "name cannot be . or ..")
+        }
         // A fresh name, never the UID: Tasks.org and DAVx5 name resources unlike their UIDs.
-        const target = childUrl(calendar, `${crypto.randomUUID()}.ics`)
+        const target = childUrl(calendar, name ?? `${crypto.randomUUID()}.ics`)
         const reply = await send(call, {
           method: "PUT",
           url: target,
