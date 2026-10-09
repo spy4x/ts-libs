@@ -186,10 +186,14 @@ describe("create", () => {
     expect(objects.size).toBe(1)
   })
 
-  it("reports an address held by an object with another UID as already-exists", async () => {
-    const { send, objects, failureOf } = setup()
-    objects.set(new URL(`${CALENDAR}e1.ics`).pathname, { ics: ics("milk", "other"), etag: 7 })
-    expect(await failureOf(send("create", "e1", "milk", 0))).toEqual({ kind: "already-exists" })
+  it("refuses a create whose file name is held by an object with another UID, leaving it untouched", async () => {
+    const { send, objects, seen, failureOf } = setup()
+    const path = new URL(`${CALENDAR}e1.ics`).pathname
+    objects.set(path, { ics: ics("milk", "other"), etag: 7 })
+    const failure = await failureOf(send("create", "e1", "milk", 0))
+    expect(failure.kind).toBe("rejected")
+    expect(objects.get(path)).toEqual({ ics: ics("milk", "other"), etag: 7 })
+    expect(seen.map((s) => s.method)).toEqual(["PUT", "GET"])
   })
 })
 
@@ -234,12 +238,19 @@ describe("update", () => {
     expect(task?.etag).toBe(`"1"`)
   })
 
-  it("refuses to send without an etag instead of overwriting blind", async () => {
-    const { send, seen, failureOf } = setup()
-    const failure = await failureOf(send("update", "never-seen"))
-    expect(failure.kind).toBe("rejected")
-    expect(seen.length).toBe(0)
-  })
+  for (const kind of ["update", "delete"] as const) {
+    it(`answers version and sends nothing for a ${kind} with no known etag, leaving another device's edit untouched`, async () => {
+      const { send, seen, objects, known, failureOf } = setup()
+      await send("create", "e1", "milk", 0)
+      known.clear()
+      const path = new URL(`${CALENDAR}e1.ics`).pathname
+      objects.set(path, { ics: ics("edited on the phone", "e1"), etag: 50 })
+      seen.length = 0
+      expect(await failureOf(send(kind, "e1", "oat milk"))).toEqual({ kind: "version" })
+      expect(seen).toEqual([])
+      expect(objects.get(path)).toEqual({ ics: ics("edited on the phone", "e1"), etag: 50 })
+    })
+  }
 })
 
 /** A writer that records the names it is given and answers as scripted. */
@@ -277,15 +288,17 @@ function scriptedWriter(
 }
 
 describe("a writer that does not check anything itself", () => {
-  it("is never asked to update or delete without an etag", async () => {
-    const { transport } = scriptedWriter()
+  it("is never asked to read, update or delete when no etag is known: the answer is version", async () => {
+    const { transport } = scriptedWriter({
+      getObject: () => Promise.reject(new Error("must not be called")),
+    })
     for (const kind of ["update", "delete"] as const) {
       const error = await transport.send(
         { kind, entityId: "e1", payload: "x", baseVersion: 1 },
         "k",
       )
         .catch((caught) => caught)
-      expect(transport.classify(error).kind).toBe("rejected")
+      expect(transport.classify(error).kind).toBe("version")
     }
   })
 
@@ -318,7 +331,7 @@ describe("a writer that does not check anything itself", () => {
     expect(names).toEqual(["ok-1.ics"])
   })
 
-  it("reports a repeated create as already-exists when neither text has a UID", async () => {
+  it("refuses a repeated create when neither text has a UID, as it cannot tell the objects apart", async () => {
     const noUid = "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nSUMMARY:x\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
     const { transport } = scriptedWriter({
       getObject: (url) =>
@@ -332,7 +345,7 @@ describe("a writer that does not check anything itself", () => {
       { kind: "create", entityId: "e1", payload: "x", baseVersion: 0 },
       "k",
     ).catch((caught) => caught)
-    expect(transport.classify(error)).toEqual({ kind: "already-exists" })
+    expect(transport.classify(error).kind).toBe("rejected")
   })
 
   it("reads a repeated create whose follow-up read lost the connection as unreachable", async () => {
@@ -486,6 +499,23 @@ describe("with the outbox", () => {
     expect(objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!.ics).toContain("oat milk")
   })
 
+  it("shows an edit with no known etag as a conflict with the server's copy and does not overwrite it", async () => {
+    const { outbox, objects, known, state } = queue()
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    known.clear()
+    const path = new URL(`${CALENDAR}e1.ics`).pathname
+    objects.set(path, { ics: ics("edited on the phone", "e1"), etag: 50 })
+    state.down = true
+    await outbox.submit({ kind: "update", entityId: "e1", payload: "oat milk", version: 1 })
+    state.down = false
+    await outbox.flush()
+    const [entry] = await outbox.entries()
+    expect(entry.status).toBe("conflict")
+    expect(entry.conflict?.reason).toBe("version")
+    expect(entry.conflict?.server?.ics).toContain("edited on the phone")
+    expect(objects.get(path)!.ics).toContain("edited on the phone")
+  })
+
   for (const status of [401, 403]) {
     it(`keeps an offline edit pending when the server answers ${status}`, async () => {
       const { outbox, state } = queue()
@@ -502,4 +532,88 @@ describe("with the outbox", () => {
       expect(await outbox.entries()).toEqual([])
     })
   }
+})
+
+describe("a path-only calendar address", () => {
+  it("objectUrl keeps a path-only address path-only and encodes the file name", () => {
+    expect(objectUrl("/dav/cal/me/tasks/", "e1")).toBe("/dav/cal/me/tasks/e1.ics")
+    expect(objectUrl("/dav/cal/me/tasks", "a b")).toBe("/dav/cal/me/tasks/a%20b.ics")
+  })
+
+  it("objectUrl still resolves an absolute address against its host", () => {
+    expect(objectUrl(CALENDAR, "e1")).toBe(`${CALENDAR}e1.ics`)
+    expect(objectUrl(new URL(CALENDAR), "e1")).toBe(`${CALENDAR}e1.ics`)
+  })
+
+  it("hands the writer only paths for a create, a repeated create, an update and a delete", async () => {
+    const urls: string[] = []
+    const stored = new Map<string, string>()
+    const ok = <T>(output: T) => Promise.resolve({ success: true as const, output, error: null })
+    const writer: CalDavWriter = {
+      createObject: (calendar, text, options) => {
+        urls.push(String(calendar))
+        const url = `${calendar}${options?.name}`
+        if (stored.has(url)) {
+          return Promise.resolve({
+            success: false as const,
+            output: null,
+            error: { code: CalDavErrorCode.AlreadyExists, message: "taken" },
+          })
+        }
+        stored.set(url, text)
+        return ok({ url, etag: `"1"`, data: text })
+      },
+      getObject: (url) => {
+        urls.push(String(url))
+        return ok({ url: String(url), etag: `"1"`, data: stored.get(String(url)) ?? "" })
+      },
+      updateObject: (url, text) => {
+        urls.push(String(url))
+        return ok({ url: String(url), etag: `"2"`, data: text })
+      },
+      deleteObject: (url) => {
+        urls.push(String(url))
+        return ok(null)
+      },
+    }
+    const calendar = "/dav/cal/me/tasks/"
+    const transport = createCalDavWriteTransport<string, Task>({
+      writer,
+      calendarUrl: () => calendar,
+      urlOf: (id) => objectUrl(calendar, id),
+      etagOf: () => `"1"`,
+      toIcs: (command) => ics(command.payload, command.entityId),
+      toEntity: (object) => ({ version: 1, url: object.url, etag: object.etag, ics: object.data }),
+    })
+    const command = (kind: CalDavWriteCommand<string>["kind"]) => ({
+      kind,
+      entityId: "e1",
+      payload: "milk",
+      baseVersion: 1,
+    })
+    await transport.send(command("create"), "k")
+    await transport.send(command("create"), "k")
+    await transport.send(command("update"), "k")
+    await transport.send(command("delete"), "k")
+    expect(urls.length).toBe(5)
+    expect(urls.every((url) => url.startsWith("/dav/cal/me/tasks/"))).toBe(true)
+  })
+
+  for (
+    const address of [
+      "/.//h/",
+      "/a/..//h/",
+      "/a/%2e%2e/%2e%2e//h/",
+      "/\\h/x/",
+      "//h/x/",
+    ]
+  ) {
+    it(`objectUrl refuses ${address} instead of returning an address on another host`, () => {
+      expect(() => objectUrl(address, "e1")).toThrow()
+    })
+  }
+
+  it("objectUrl normalises dot segments inside a path and never starts with //", () => {
+    expect(objectUrl("/a/../b/./c/", "e1")).toBe("/b/c/e1.ics")
+  })
 })
