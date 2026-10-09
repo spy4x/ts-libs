@@ -16,7 +16,8 @@
  * the text being sent; the text itself may differ, as some servers reorder properties.
  *
  * A 401 or 403 is not a refusal of the write: the session may need signing in again, so the write
- * stays queued (`unreachable`). Entity ids must be plain file names (see {@link isSafeEntityId}).
+ * stays queued (`unreachable`). A created entity's id must be a plain file name (see
+ * {@link isSafeEntityId}); an update or delete goes to the address `urlOf` gives, whatever the id.
  *
  * @module
  */
@@ -172,14 +173,15 @@ export function createCalDavWriteTransport<P, S>(
 
   return {
     async send(command) {
-      if (!isSafeEntityId(command.entityId)) {
-        const error: CalDavError = {
-          code: CalDavErrorCode.InvalidArgument,
-          message: "the entity id is not a plain file name",
-        }
-        throw new CalDavWriteError(classifyCalDavError(error), error)
-      }
       if (command.kind === "create") {
+        // Only a create turns the id into a file name; an update or delete goes to `urlOf`.
+        if (!isSafeEntityId(command.entityId)) {
+          const error: CalDavError = {
+            code: CalDavErrorCode.InvalidArgument,
+            message: "the entity id is not a plain file name",
+          }
+          throw new CalDavWriteError(classifyCalDavError(error), error)
+        }
         const ics = options.toIcs(command)
         const calendar = options.calendarUrl(command)
         const name = `${command.entityId}.ics`
