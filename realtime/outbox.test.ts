@@ -87,6 +87,8 @@ function harness() {
     /** Throws to simulate the server; returns the answer otherwise. */
     server: (_sent: Sent): Item | undefined => item("n", 2),
     current: null as Item | null,
+    /** The server's copy cannot be read: `fetchServer` loses the connection. */
+    fetchFails: false,
     online: true,
     /** Runs when a send starts, before the server answers. */
     onSend: undefined as undefined | (() => Promise<void>),
@@ -106,7 +108,10 @@ function harness() {
       await state.onSend?.()
       return state.server(call)
     },
-    fetchServer: () => Promise.resolve(state.current),
+    fetchServer: () =>
+      state.fetchFails
+        ? Promise.reject(new ConnectionLostError("lost before the read"))
+        : Promise.resolve(state.current),
   })
   const offline = () => {
     state.online = false
@@ -428,6 +433,26 @@ describe("outbox when a change made online joins a write queued offline", () => 
     await outbox.useTheirs(outbox.entries()[0])
     expect(outbox.entries()).toEqual([])
     expect(cache.items.get("n")?.title).toBe("Theirs")
+  })
+
+  it("keeps the offline edit queued when the server refuses and its copy cannot be read", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("Offline"), version: 1 })
+    h.state.server = () => {
+      throw refused("VERSION_CONFLICT")
+    }
+    h.state.fetchFails = true
+    h.state.online = true
+    const outcome = await h.outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Online"),
+      version: 1,
+    })
+    expect(outcome).toEqual({ kind: "queued" })
+    expect(h.outbox.entries().map((e) => [e.status, e.payload.title, e.before?.payload.title]))
+      .toEqual([["pending", "Online", "Offline"]])
   })
 
   it("keeps a delete queued offline as a conflict when an edit made online after it is refused", async () => {
