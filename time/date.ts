@@ -164,6 +164,23 @@ export function monthFirstWeekday(date: string, firstWeekday = 1): number {
   return (sundayFirst - (firstWeekday % 7) + 7) % 7
 }
 
+/**
+ * First day of the week `date` falls in: the Monday, or whichever day the week opens on.
+ *
+ * Plain day arithmetic on a zone-free date, so it crosses month, year and leap-day boundaries the
+ * way the calendar does: the week of 2026-01-01 opens on 2025-12-29.
+ *
+ * @param date An existing `YYYY-MM-DD` date.
+ * @param firstWeekday The week's first day, `1` = Monday … `7` = Sunday, as `Intl` numbers them.
+ * `localeFirstWeekday` in `./locale.ts` reads it from a locale. Default: Monday, the ISO week.
+ * @throws When `date` is not a `YYYY-MM-DD` date, and when the week opens before `0001-01-01`.
+ */
+export function startOfWeek(date: string, firstWeekday = 1): string {
+  const ms = parseIsoDate(date)
+  const back = (new Date(ms).getUTCDay() - (firstWeekday % 7) + 7) % 7
+  return formatIsoDate(ms - back * MS_PER_DAY)
+}
+
 /** First day of the calendar quarter `date` falls in. */
 export function startOfQuarter(date: string): string {
   const month = Number(formatIsoDate(parseIsoDate(date)).slice(5, 7))

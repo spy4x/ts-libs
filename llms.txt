@@ -2278,6 +2278,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `shiftMonth` (function), `jsr:@spy4x/time/date`: The first day of the month `months` away from `date`.
 - `startOfMonth` (function), `jsr:@spy4x/time/date`: First day of the month `date` falls in.
 - `startOfQuarter` (function), `jsr:@spy4x/time/date`: First day of the calendar quarter `date` falls in.
+- `startOfWeek` (function), `jsr:@spy4x/time/date`: First day of the week `date` falls in: the Monday, or whichever day the week opens on.
 - `startOfYear` (function), `jsr:@spy4x/time/date`: First day of the calendar year `date` falls in.
 
 ### `jsr:@spy4x/time/ical`
@@ -2477,4 +2478,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 0dc90ab571d77274d71afd8140a28e12871e7d4c7bce34442f9b9ca95581ab4a -->
+<!-- export surface: sha256 0b6ed04687c736e6445cf18d3474e83ddf598b4421086dea7a91f987a562144e -->
