@@ -6036,7 +6036,9 @@ console.log(`Type this into the password field before ${new Date(expiresAt)}: ${
 kv.close()
 ```
 
-The code is a 256-bit random string, and the store keeps only its SHA-256 digest. The first
+A code is `approve_` followed by 43 base64url characters (256 random bits; `APPROVAL_CODE_SHAPE`),
+and the store keeps only its SHA-256 digest. The server looks a typed value up as a code only when
+it has that shape, so a typed password never reaches the store, not even as a digest. The first
 approval spends it, atomically, so two parallel approvals cannot both use it; a denial does not
 spend it. It stops working after 5 minutes (`ttlMs`, at most 15 minutes). No route of the
 authorization server makes one, so only someone with a shell on the server can. A code needs the

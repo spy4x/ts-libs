@@ -5,6 +5,8 @@
  */
 
 export {
+  APPROVAL_CODE_PREFIX,
+  APPROVAL_CODE_SHAPE,
   type ApprovalCode,
   type ApprovalCodeOptions,
   createApprovalCode,

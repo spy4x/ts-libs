@@ -2095,6 +2095,8 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/server/mcp-oauth`
 
+- `APPROVAL_CODE_PREFIX` (constant), `jsr:@spy4x/server/mcp-oauth`: What every approval code starts with, so a typed password is never taken for one.
+- `APPROVAL_CODE_SHAPE` (constant), `jsr:@spy4x/server/mcp-oauth`: The shape of every approval code: APPROVAL_CODE_PREFIX and 43 base64url characters (256 random bits).
 - `AUTHORIZATION_SERVER_METADATA_PATH` (constant), `jsr:@spy4x/server/mcp-oauth`: Path of the authorization server metadata document (RFC 8414).
 - `AUTHORIZE_PATH` (constant), `jsr:@spy4x/server/mcp-oauth`: Path of the authorization endpoint.
 - `AccessTokenRecord` (interface), `jsr:@spy4x/server/mcp-oauth`: An issued access token.
@@ -2662,4 +2664,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 f1be10bd0ab49d84afe357bb9bb8b3e0e2b349c08609eab9a23e14aeadcc0001 -->
+<!-- export surface: sha256 b509ff088043bbdbbd7fabcaa4d9f8039c4880af9b918aaa45c11ca0548f3225 -->

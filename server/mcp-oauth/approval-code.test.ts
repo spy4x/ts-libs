@@ -2,6 +2,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { sha256Hex } from "@spy4x/platform/tokens"
 import {
+  APPROVAL_CODE_SHAPE,
   createApprovalCode,
   DEFAULT_APPROVAL_CODE_TTL_MS,
   MAX_APPROVAL_CODE_TTL_MS,
@@ -21,7 +22,8 @@ describe("createApprovalCode", () => {
       },
     } as unknown as OAuthStore
     const { code, expiresAt } = await createApprovalCode(store, { clock })
-    expect(code).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(code).toMatch(/^approve_[A-Za-z0-9_-]{43}$/)
+    expect(code).toMatch(APPROVAL_CODE_SHAPE)
     expect(expiresAt).toBe(1_000 + DEFAULT_APPROVAL_CODE_TTL_MS)
     expect(DEFAULT_APPROVAL_CODE_TTL_MS).toBe(5 * 60_000)
     expect(saved).toEqual([[await sha256Hex(code), { expiresAt }]])

@@ -16,6 +16,7 @@ import { constantTimeEqualsText, randomBase64Url, sha256Hex } from "@spy4x/platf
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import { createSameOriginCheck } from "../http/same-origin.ts"
 import type { PasswordHasher } from "../sign-in/password.ts"
+import { APPROVAL_CODE_SHAPE } from "./approval-code.ts"
 import { type ClientMetadataSource, createClientMetadataFetcher } from "./client-metadata.ts"
 import {
   type CodeRecord,
@@ -567,11 +568,13 @@ export function createAuthorizationServer(
   }
 
   /**
-   * Spends a one-time approval code (`createApprovalCode`) typed in place of the password. True when
-   * it was one and has not expired. The store keys codes by their digest, so the lookup compares
-   * digests, never the code, and its timing tells a guesser nothing about a real code.
+   * Spends a one-time approval code (`createApprovalCode`) typed in place of the password. True
+   * when it was one and has not expired. Only a value shaped like a code reaches the store, so a
+   * fast digest of the owner password never does. The store keys codes by their digest, so the
+   * lookup compares digests, never the code, and its timing tells a guesser nothing about a code.
    */
   async function approvalCodeAccepted(typed: string): Promise<boolean> {
+    if (!APPROVAL_CODE_SHAPE.test(typed)) return false
     const record = await store.takeApprovalCode(await sha256Hex(typed))
     return record !== undefined && record.expiresAt > clock.now()
   }

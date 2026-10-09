@@ -770,6 +770,23 @@ describe("createAuthorizationServer", () => {
             expect((await fromAddress(t, next, OWNER_PASSWORD, "203.0.113.9")).status).toBe(429)
           })
 
+          it("never hands the store a typed value that is not shaped like a code", async () => {
+            const t = withPassword()
+            const taken: string[] = []
+            const take = t.store.takeApprovalCode.bind(t.store)
+            t.store.takeApprovalCode = (key) => {
+              taken.push(key)
+              return take(key)
+            }
+            const { code } = await createApprovalCode(t.store, { clock: t.clock })
+            for (const typed of [OWNER_PASSWORD, WRONG, code.slice("approve_".length)]) {
+              await approve(t, await newConsent(t), typed)
+            }
+            expect(taken).toEqual([])
+            expect((await approve(t, await newConsent(t), code)).status).toBe(302)
+            expect(taken).toEqual([await sha256Hex(code)])
+          })
+
           it("works once: a second approval with the same code is refused", async () => {
             const { t, id } = await lockedOut()
             const { code } = await createApprovalCode(t.store, { clock: t.clock })
