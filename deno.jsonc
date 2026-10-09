@@ -46,14 +46,16 @@
     // Every test in the workspace reads its own sources, and a few read env
     // vars. Both grants are as narrow as the tests allow; they are repo-wide
     // only because `deno test` discovers every member's suite in one process.
-    // Nothing here needs `net`, `run` or `write`.
+    // Nothing here needs `net`, `run` or `write`. `--unstable-kv` lets
+    // `kv-store-deno.test.ts` open an in-memory Deno KV database; a member's
+    // `unstable` setting does not reach `deno test` run from the root.
     //
     // `--ignore` is what keeps the two tiers apart: Deno's discovery matches
     // `*.test.ts`, and `x.integration.test.ts` ends in `.test.ts`, so without it
     // the unit run would pick up the integration suite and fail with no container.
     // `.volumes` is named here as well because `--ignore` replaces the root `exclude` for this
     // run instead of adding to it; without it a `*.test.ts` under `.volumes` would be run.
-    "test": "deno test --no-prompt --allow-read --allow-env --ignore=**/*.integration.test.ts,.volumes",
+    "test": "deno test --no-prompt --unstable-kv --allow-read --allow-env --ignore=**/*.integration.test.ts,.volumes",
     // The integration tier. The glob is the only thing that selects it, so a file
     // joins the tier by its name alone.
     //

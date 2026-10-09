@@ -2004,6 +2004,8 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `DEFAULT_REDIRECT_URIS` (constant), `jsr:@spy4x/server/mcp-oauth`: The default redirect allowlist: the hosted Claude apps' callback, plus the two loopback callbacks Claude Code declares in its client metadata document.
 - `OAuthStore` (interface), `jsr:@spy4x/server/mcp-oauth`: Where the authorization server keeps its state.
 - `OFFLINE_ACCESS_SCOPE` (constant), `jsr:@spy4x/server/mcp-oauth`: The scope some clients ask for to get a refresh token.
+- `OWNER_PASSWORD_FIELD` (constant), `jsr:@spy4x/server/mcp-oauth`: Name of the password input the consent page sends when `ownerPassword` is set.
+- `OwnerPassword` (interface), `jsr:@spy4x/server/mcp-oauth`: The owner password the consent page asks for.
 - `PROTECTED_RESOURCE_METADATA_PATH` (constant), `jsr:@spy4x/server/mcp-oauth`: The well-known path prefix of a protected resource metadata document.
 - `PendingAuthorization` (interface), `jsr:@spy4x/server/mcp-oauth`: An authorization request that passed every check and waits for the owner's click.
 - `ProtectedResourceMetadata` (interface), `jsr:@spy4x/server/mcp-oauth`: The protected resource metadata document (RFC 9728).
@@ -2025,8 +2027,17 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `isLoopbackRedirect` (function), `jsr:@spy4x/server/mcp-oauth`: True for an `http:` URL on `localhost`, `127.0.0.1` or `[::1]`.
 - `redirectUriMatches` (function), `jsr:@spy4x/server/mcp-oauth`: Does a requested `redirect_uri` match a registered one?
 
+### `jsr:@spy4x/server/mcp-oauth/kv-store`
+
+- `KvOAuthStore` (class), `jsr:@spy4x/server/mcp-oauth/kv-store`: Keeps every record in Deno KV under `[...prefix, kind, key]`, with `expireIn` set from the record's `expiresAt`, so the database drops it once it has expired.
+- `KvOAuthStoreOptions` (interface), `jsr:@spy4x/server/mcp-oauth/kv-store`: Options for KvOAuthStore.
+- `OAuthKv` (interface), `jsr:@spy4x/server/mcp-oauth/kv-store`: The part of a `Deno.Kv` handle that KvOAuthStore uses.
+- `OAuthKvAtomic` (interface), `jsr:@spy4x/server/mcp-oauth/kv-store`: The part of a `Deno.AtomicOperation` that KvOAuthStore uses.
+- `OAuthKvEntry` (interface), `jsr:@spy4x/server/mcp-oauth/kv-store`: One read from OAuthKv.get: `versionstamp` is `null` when the key is absent.
+
 ### `jsr:@spy4x/server/mcp-oauth/memory-store`
 
+- `DEFAULT_MAX_PENDING` (constant), `jsr:@spy4x/server/mcp-oauth/memory-store`: Default MemoryOAuthStoreOptions.maxPending: at most about 5 MB of pending consents.
 - `MemoryOAuthStore` (class), `jsr:@spy4x/server/mcp-oauth/memory-store`: Keeps every record in a `Map`.
 - `MemoryOAuthStoreOptions` (interface), `jsr:@spy4x/server/mcp-oauth/memory-store`: Options for MemoryOAuthStore.
 
@@ -2114,6 +2125,16 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `secondFactorSatisfied` (function), `jsr:@spy4x/server/sign-in`: Whether a session's second-factor status lets a request through.
 - `totpEnrolment` (function), `jsr:@spy4x/server/sign-in`: The enrolment link and QR code for a secret.
 - `verifyTotp` (function), `jsr:@spy4x/server/sign-in`: Checks a code against a secret at the current time.
+
+### `jsr:@spy4x/server/sign-in/password-hash`
+
+- `HiddenLine` (class), `jsr:@spy4x/server/sign-in/password-hash`: A line typed at the hidden prompt, fed one byte at a time.
+- `KeyResult` (enum), `jsr:@spy4x/server/sign-in/password-hash`: What one byte typed at the hidden prompt does.
+- `PasswordHashInput` (interface), `jsr:@spy4x/server/sign-in/password-hash`: Where runPasswordHash gets its two inputs.
+- `PasswordHashResult` (interface), `jsr:@spy4x/server/sign-in/password-hash`: What runPasswordHash prints: the hash on success, otherwise a message without secrets.
+- `eraseLastCharacter` (function), `jsr:@spy4x/server/sign-in/password-hash`: Removes the last character from UTF-8 `bytes`, however many bytes it takes: the continuation bytes (`10xxxxxx`) and the byte that starts it.
+- `passwordFromInput` (function), `jsr:@spy4x/server/sign-in/password-hash`: The password in piped input: everything but one trailing `\n` or `\r\n`.
+- `runPasswordHash` (function), `jsr:@spy4x/server/sign-in/password-hash`: Hashes the password `input` reads under its pepper.
 
 ### `jsr:@spy4x/server/static`
 
@@ -2483,4 +2504,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 e5d7311c321e6b2266e90ed5aae0c92f6e14084f6b854ba1fccdc8a1eb6adfbe -->
+<!-- export surface: sha256 69e99090d03089e92c18544738f310ce8055197fcd61f861d3a6af3a8c14d0c2 -->

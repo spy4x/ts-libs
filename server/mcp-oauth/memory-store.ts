@@ -17,7 +17,17 @@ import type {
 export interface MemoryOAuthStoreOptions {
   /** Decides when a record has expired and may be dropped. Defaults to the system clock. */
   clock?: Clock
+  /**
+   * Most pending consents kept at once. `GET /authorize` stores one for anyone who calls it, so
+   * without a cap a caller could fill the process's memory. When a new one would pass the cap, the
+   * oldest is dropped: its consent page then answers that the request expired. Defaults to
+   * {@link DEFAULT_MAX_PENDING}.
+   */
+  maxPending?: number
 }
+
+/** Default {@link MemoryOAuthStoreOptions.maxPending}: at most about 5 MB of pending consents. */
+export const DEFAULT_MAX_PENDING = 1_000
 
 interface Expiring {
   expiresAt: number
@@ -28,10 +38,12 @@ interface Expiring {
  * interruption and these methods never await, so `consumeCode`, `consumeRefreshToken` and
  * `takePending` are atomic. Records are copied in and out, so a caller cannot edit a stored one.
  * Expired records are dropped whenever a new one is saved. A revoked grant id is kept until its
- * `until`, so a token saved late for it is refused.
+ * `until`, so a token saved late for it is refused. Pending consents are capped at `maxPending`,
+ * dropping the oldest first.
  */
 export class MemoryOAuthStore implements OAuthStore {
   readonly #clock: Clock
+  readonly #maxPending: number
   readonly #pending = new Map<string, PendingAuthorization>()
   readonly #codes = new Map<string, CodeRecord>()
   readonly #access = new Map<string, AccessTokenRecord>()
@@ -39,12 +51,26 @@ export class MemoryOAuthStore implements OAuthStore {
   /** Revoked grant ids, each mapped to the epoch milliseconds its refusal lasts until. */
   readonly #revoked = new Map<string, number>()
 
+  /** @throws {RangeError} When `maxPending` is not a positive integer. */
   constructor(options: MemoryOAuthStoreOptions = {}) {
     this.#clock = options.clock ?? systemClock
+    const maxPending = options.maxPending ?? DEFAULT_MAX_PENDING
+    if (!Number.isSafeInteger(maxPending) || maxPending < 1) {
+      throw new RangeError("maxPending must be a positive integer")
+    }
+    this.#maxPending = maxPending
   }
 
   savePending(key: string, record: PendingAuthorization): Promise<void> {
-    return this.#save(this.#pending, key, record)
+    this.#pending.delete(key)
+    this.#prune()
+    // A Map iterates in insertion order, so the first key is the oldest consent.
+    for (const oldest of this.#pending.keys()) {
+      if (this.#pending.size < this.#maxPending) break
+      this.#pending.delete(oldest)
+    }
+    this.#pending.set(key, structuredClone(record))
+    return Promise.resolve()
   }
 
   takePending(key: string): Promise<PendingAuthorization | undefined> {

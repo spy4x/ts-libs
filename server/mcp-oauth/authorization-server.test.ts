@@ -7,7 +7,13 @@ import {
   type AuthorizationServerOptions,
   createAuthorizationServer,
   defaultConsentPage,
+  OWNER_PASSWORD_FIELD,
 } from "./authorization-server.ts"
+import {
+  createPasswordHasher,
+  MIN_PASSWORD_ITERATIONS,
+  type PasswordHasher,
+} from "../sign-in/password.ts"
 import type { ClientMetadataSource } from "./client-metadata.ts"
 import { MemoryOAuthStore } from "./memory-store.ts"
 import { CLAUDE_REDIRECT_URI } from "./redirect-uri.ts"
@@ -38,6 +44,14 @@ const clients: ClientMetadataSource = {
     return Promise.resolve(undefined)
   },
 }
+
+/** An invented owner password and its hash; the lowest iteration count keeps the tests fast. */
+const OWNER_PASSWORD = "an invented owner password"
+const hasher = createPasswordHasher({
+  pepper: "an-invented-test-pepper-0123456789abcdef",
+  iterations: MIN_PASSWORD_ITERATIONS,
+})
+const ownerPassword = { hash: await hasher.hash(OWNER_PASSWORD), hasher }
 
 async function challengeOf(verifier: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))
@@ -474,6 +488,222 @@ describe("createAuthorizationServer", () => {
     expect(location.searchParams.get("code")).toBeNull()
   })
 
+  describe("with an owner password", () => {
+    const withPassword = () => setup({ confirmOwner: undefined, ownerPassword })
+
+    it("shows the consent page without forward-auth, with a labelled password input", async () => {
+      const t = withPassword()
+      const page = await t.getAuthorize(await t.authorizeParams(), false)
+      expect(page.status).toBe(200)
+      const html = await page.clone().text()
+      expect(html).toContain(`<label for="owner-password">Owner password</label>`)
+      expect(html).toMatch(
+        /<input id="owner-password" type="password" name="owner_password" autocomplete="current-password">/,
+      )
+      expect(html).not.toContain(`role="alert"`)
+    })
+
+    it("approves with the right password", async () => {
+      const t = withPassword()
+      const id = await t.consentId(await t.getAuthorize(await t.authorizeParams(), false))
+      const response = await t.postConsent({
+        consent_id: id,
+        decision: "approve",
+        [OWNER_PASSWORD_FIELD]: OWNER_PASSWORD,
+      })
+      expect(response.status).toBe(302)
+      const code = new URL(response.headers.get("location")!).searchParams.get("code")!
+      expect((await t.redeem(code)).status).toBe(200)
+    })
+
+    it("shows the page again with an accessible error on a wrong password, and the consent still works", async () => {
+      const t = withPassword()
+      const id = await t.consentId(await t.getAuthorize(await t.authorizeParams(), false))
+      const wrong = await t.postConsent({
+        consent_id: id,
+        decision: "approve",
+        [OWNER_PASSWORD_FIELD]: "an invented wrong password",
+      })
+      expect(wrong.status).toBe(403)
+      expect(wrong.headers.get("location")).toBeNull()
+      expect(wrong.headers.get("x-frame-options")).toBe("DENY")
+      const html = await wrong.text()
+      expect(html).toContain(
+        `<p id="owner-password-error" role="alert">Wrong password. Try again.</p>`,
+      )
+      expect(html).toContain(`aria-invalid="true" aria-describedby="owner-password-error"`)
+      expect(html).toContain(`name="consent_id" value="${id}"`)
+      const right = await t.postConsent({
+        consent_id: id,
+        decision: "approve",
+        [OWNER_PASSWORD_FIELD]: OWNER_PASSWORD,
+      })
+      expect(right.status).toBe(302)
+      expect(new URL(right.headers.get("location")!).searchParams.get("code")).not.toBeNull()
+    })
+
+    it("shows the page again on an empty password, and the consent still works", async () => {
+      const t = withPassword()
+      const id = await t.consentId(await t.getAuthorize(await t.authorizeParams(), false))
+      const bodies: Record<string, string>[] = [{}, { [OWNER_PASSWORD_FIELD]: "" }]
+      for (const body of bodies) {
+        const empty = await t.postConsent({ consent_id: id, decision: "approve", ...body })
+        expect(empty.status).toBe(400)
+        expect(await empty.text()).toContain(`role="alert">Enter the owner password.</p>`)
+      }
+      const right = await t.postConsent({
+        consent_id: id,
+        decision: "approve",
+        [OWNER_PASSWORD_FIELD]: OWNER_PASSWORD,
+      })
+      expect(right.status).toBe(302)
+    })
+
+    it("denies without a password", async () => {
+      const t = withPassword()
+      const id = await t.consentId(await t.getAuthorize(await t.authorizeParams(), false))
+      const response = await t.postConsent({ consent_id: id, decision: "deny" })
+      expect(response.status).toBe(302)
+      const location = new URL(response.headers.get("location")!)
+      expect(location.searchParams.get("error")).toBe("access_denied")
+    })
+
+    it("requires both confirmOwner and the password when both are set", async () => {
+      const t = setup({ ownerPassword })
+      expect((await t.getAuthorize(await t.authorizeParams(), false)).status).toBe(403)
+      const id = await t.consentId(await t.getAuthorize(await t.authorizeParams()))
+      const noPassword = await t.postConsent({ consent_id: id, decision: "approve" })
+      expect(noPassword.status).toBe(400)
+      const notOwner = await t.app.request(`${ISSUER}/authorize`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          origin: ISSUER,
+          "sec-fetch-site": "same-origin",
+        },
+        body: new URLSearchParams({
+          consent_id: id,
+          decision: "approve",
+          [OWNER_PASSWORD_FIELD]: OWNER_PASSWORD,
+        }).toString(),
+      })
+      expect(notOwner.status).toBe(403)
+      const both = await t.postConsent({
+        consent_id: id,
+        decision: "approve",
+        [OWNER_PASSWORD_FIELD]: OWNER_PASSWORD,
+      })
+      expect(both.status).toBe(302)
+    })
+
+    describe("caps wrong passwords", () => {
+      /** The shared hasher, counting how often it checks a password. */
+      function countingHasher() {
+        const counter = { verifies: 0 }
+        const counted: PasswordHasher = {
+          hash: (password) => hasher.hash(password),
+          verify: (password, stored) => {
+            counter.verifies++
+            return hasher.verify(password, stored)
+          },
+        }
+        return { counter, ownerPassword: { hash: ownerPassword.hash, hasher: counted } }
+      }
+      const WRONG = "an invented wrong password"
+      const approve = (t: ReturnType<typeof setup>, id: string, password: string) =>
+        t.postConsent({ consent_id: id, decision: "approve", [OWNER_PASSWORD_FIELD]: password })
+      const newConsent = async (t: ReturnType<typeof setup>) =>
+        await t.consentId(await t.getAuthorize(await t.authorizeParams(), false))
+
+      it("refuses approvals with 429 and Retry-After after maxFailures wrong passwords, until the window ends, then counts again", async () => {
+        const t = setup({
+          confirmOwner: undefined,
+          ownerPassword: { ...ownerPassword, maxFailures: 3, windowMs: 60_000 },
+        })
+        const id = await newConsent(t)
+        for (let i = 0; i < 3; i++) expect((await approve(t, id, WRONG)).status).toBe(403)
+        const locked = await approve(t, id, OWNER_PASSWORD)
+        expect(locked.status).toBe(429)
+        expect(locked.headers.get("retry-after")).toBe("60")
+        t.advance(59_000)
+        const stillLocked = await approve(t, id, OWNER_PASSWORD)
+        expect(stillLocked.status).toBe(429)
+        expect(stillLocked.headers.get("retry-after")).toBe("1")
+        t.advance(1_000)
+        for (let i = 0; i < 3; i++) expect((await approve(t, id, WRONG)).status).toBe(403)
+        expect((await approve(t, id, OWNER_PASSWORD)).status).toBe(429)
+        t.advance(60_000)
+        expect((await approve(t, id, OWNER_PASSWORD)).status).toBe(302)
+      })
+
+      it("locks out after 10 wrong passwords for 15 minutes by default", async () => {
+        const t = withPassword()
+        const id = await newConsent(t)
+        for (let i = 0; i < 10; i++) expect((await approve(t, id, WRONG)).status).toBe(403)
+        const locked = await approve(t, id, OWNER_PASSWORD)
+        expect(locked.status).toBe(429)
+        expect(locked.headers.get("retry-after")).toBe("900")
+      })
+
+      it("does not run the hasher while locked out", async () => {
+        const { counter, ownerPassword } = countingHasher()
+        const t = setup({
+          confirmOwner: undefined,
+          ownerPassword: { ...ownerPassword, maxFailures: 2 },
+        })
+        const id = await newConsent(t)
+        for (let i = 0; i < 2; i++) await approve(t, id, WRONG)
+        expect(counter.verifies).toBe(2)
+        for (let i = 0; i < 5; i++) expect((await approve(t, id, WRONG)).status).toBe(429)
+        expect(counter.verifies).toBe(2)
+      })
+
+      it("runs the hasher at most maxFailures times for wrong passwords sent in parallel", async () => {
+        const { counter, ownerPassword } = countingHasher()
+        const t = setup({
+          confirmOwner: undefined,
+          ownerPassword: { ...ownerPassword, maxFailures: 3 },
+        })
+        const ids = await Promise.all(Array.from({ length: 8 }, () => newConsent(t)))
+        const statuses = (await Promise.all(ids.map((id) => approve(t, id, WRONG))))
+          .map((r) => r.status)
+        expect(counter.verifies).toBe(3)
+        expect(statuses.filter((s) => s === 403)).toHaveLength(3)
+        expect(statuses.filter((s) => s === 429)).toHaveLength(5)
+      })
+
+      it("counts neither right nor empty passwords", async () => {
+        const t = setup({
+          confirmOwner: undefined,
+          ownerPassword: { ...ownerPassword, maxFailures: 2 },
+        })
+        expect((await approve(t, await newConsent(t), OWNER_PASSWORD)).status).toBe(302)
+        const id = await newConsent(t)
+        expect((await t.postConsent({ consent_id: id, decision: "approve" })).status).toBe(400)
+        expect((await approve(t, id, WRONG)).status).toBe(403)
+        expect((await approve(t, id, WRONG)).status).toBe(403)
+        expect((await approve(t, id, OWNER_PASSWORD)).status).toBe(429)
+      })
+
+      it("still denies, and keeps issued tokens working, while locked out", async () => {
+        const t = setup({
+          confirmOwner: undefined,
+          ownerPassword: { ...ownerPassword, maxFailures: 1 },
+        })
+        const response = await approve(t, await newConsent(t), OWNER_PASSWORD)
+        const code = new URL(response.headers.get("location")!).searchParams.get("code")!
+        const id = await newConsent(t)
+        expect((await approve(t, id, WRONG)).status).toBe(403)
+        expect((await approve(t, id, OWNER_PASSWORD)).status).toBe(429)
+        const denied = await t.postConsent({ consent_id: id, decision: "deny" })
+        expect(denied.status).toBe(302)
+        expect(new URL(denied.headers.get("location")!).searchParams.get("error"))
+          .toBe("access_denied")
+        expect((await t.redeem(code)).status).toBe(200)
+      })
+    })
+  })
+
   describe("refuses the code exchange", () => {
     it("for a replayed code, and revokes the tokens the first exchange issued", async () => {
       const t = setup()
@@ -742,6 +972,38 @@ describe("createAuthorizationServer", () => {
       ).toThrow(TypeError)
     })
 
+    it("refuses a server with neither confirmOwner nor ownerPassword", () => {
+      expect(() => createAuthorizationServer({ ...base, issuer: ISSUER, confirmOwner: undefined }))
+        .toThrow("set confirmOwner, ownerPassword or both")
+    })
+
+    it("refuses an empty owner password hash", () => {
+      expect(() =>
+        createAuthorizationServer({
+          ...base,
+          issuer: ISSUER,
+          ownerPassword: { hash: "", hasher },
+        })
+      ).toThrow("ownerPassword.hash must be a password hash")
+    })
+
+    it("refuses a wrong-password cap that is not a positive integer or window", () => {
+      const server = (cap: { maxFailures?: number; windowMs?: number }) => () =>
+        createAuthorizationServer({
+          ...base,
+          issuer: ISSUER,
+          ownerPassword: { ...ownerPassword, ...cap },
+        })
+      for (const maxFailures of [0, -1, 1.5, Number.NaN]) {
+        expect(server({ maxFailures })).toThrow(
+          "ownerPassword.maxFailures must be a positive integer",
+        )
+      }
+      for (const windowMs of [0, -1, Number.POSITIVE_INFINITY]) {
+        expect(server({ windowMs })).toThrow("ownerPassword.windowMs must be positive")
+      }
+    })
+
     it("refuses an empty resource list", () => {
       expect(() => createAuthorizationServer({ ...base, issuer: ISSUER, resources: [] })).toThrow(
         TypeError,
@@ -764,6 +1026,8 @@ describe("defaultConsentPage", () => {
       loopbackRedirect: true,
       resource: `${RESOURCE}${hostile("resource")}`,
       scopes: [hostile("scope")],
+      passwordField: `owner_password${hostile("password-field")}`,
+      passwordError: hostile("password-error"),
     })
     for (
       const field of [
@@ -776,6 +1040,8 @@ describe("defaultConsentPage", () => {
         "redirect-host",
         "resource",
         "scope",
+        "password-field",
+        "password-error",
       ]
     ) {
       expect(html).not.toContain(`<x-${field}>`)

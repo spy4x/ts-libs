@@ -14,6 +14,8 @@ export {
   createAuthorizationServer,
   defaultConsentPage,
   OFFLINE_ACCESS_SCOPE,
+  OWNER_PASSWORD_FIELD,
+  type OwnerPassword,
   TOKEN_PATH,
 } from "./authorization-server.ts"
 export {
