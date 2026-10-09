@@ -329,8 +329,14 @@ already are — by where the code can run:
 | Directory       | Contents                                                                                                                                                                        |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `model/`        | `dateSchema`/`DateNullableSchema`, the `ImmutableBaseModelSchema`/`UndeletableBaseModelSchema`/`BaseModelSchema` tiers, and the Web Push wire schemas — universal, arktype only |
-| `api/`          | `ApiError`, `ApiResult<T>`, `apiFetch` — browser-only, needs `fetch`                                                                                                            |
+| `api/`          | `ApiError` (`status`, `message`, optional `code`), `ApiResult<T>`, `apiFetch` — browser-only, needs `fetch`                                                                     |
 | `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                               |
+
+`apiFetch` reads an error body in either common shape: `{ error }` or `{ code, message }`. The
+message is the string `error`, else the string `message`, else `"Request failed"`; `error.code` is
+the body's string `code` when it has one, so a client can branch on `caldav_unreachable` instead of
+on wording. Only HTTP answers resolve: a network failure still rejects, so wrap the call in
+`try`/`catch` where a throw is not acceptable.
 
 **Six bugs fixed at extraction time**, three in the request helpers and three in `model/`:
 
