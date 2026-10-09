@@ -25,8 +25,9 @@ export interface DatabaseSpec {
  * Returns a function that opens the database on first use and returns the same connection after.
  *
  * Opening fails loudly (private windows, blocked site data and an open blocked by another tab's
- * older connection all reject) and the next call tries again, so a store recovers when the browser allows storage later. When another tab upgrades the
- * database, or the browser closes the connection, the next call opens a fresh one.
+ * older connection all reject) and the next call tries again, so a store recovers when the browser
+ * allows storage later. When another tab upgrades the database, or the browser closes the
+ * connection, the next call opens a fresh one.
  */
 export function createDatabaseOpener(spec: DatabaseSpec): () => Promise<IDBDatabase> {
   let opened: Promise<IDBDatabase> | undefined

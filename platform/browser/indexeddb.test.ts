@@ -24,19 +24,32 @@ function stubbornConnection(indexedDB: IDBFactory): Promise<IDBDatabase> {
   })
 }
 
+/** Settles as `promise` does, or rejects after `ms`, so a regression that waits fails the test. */
+async function within<T>(promise: Promise<T>, ms = 2000): Promise<T> {
+  let timer: number | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`still waiting after ${ms} ms`)), ms)
+  })
+  try {
+    return await Promise.race([promise, deadline])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 describe("createDatabaseOpener", () => {
   it("fails instead of waiting for ever when an older connection blocks a newer version", async () => {
     const indexedDB = new IDBFactory()
     await stubbornConnection(indexedDB)
 
-    await expect(opener(indexedDB, 2)()).rejects.toThrow("blocked")
+    await expect(within(opener(indexedDB, 2)())).rejects.toThrow("blocked")
   })
 
   it("opens the newer version once the blocking connection has closed", async () => {
     const indexedDB = new IDBFactory()
     const old = await stubbornConnection(indexedDB)
     const open = opener(indexedDB, 2)
-    await expect(open()).rejects.toThrow("blocked")
+    await expect(within(open())).rejects.toThrow("blocked")
 
     old.close()
 
@@ -54,7 +67,7 @@ describe("createDatabaseOpener", () => {
         return request
       },
     } as unknown as IDBFactory
-    await expect(opener(watching, 2)()).rejects.toThrow("blocked")
+    await expect(within(opener(watching, 2)())).rejects.toThrow("blocked")
 
     old.close() // the late open now completes, and must close itself
     await new Promise((resolve) => setTimeout(resolve, 20))
