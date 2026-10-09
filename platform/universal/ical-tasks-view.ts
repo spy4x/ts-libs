@@ -299,7 +299,7 @@ export interface SortOrderChange {
  *   title the way the new order has them, so a tie alone writes nothing. A task that is written
  *   never shares its value with another, so its place does not depend on a title.
  *
- * Only tasks that lose their place are written, and the result lists them in their new order.
+ * Only the fewest tasks needed are written, and the result lists them in their new order.
  * Apply it with `sortOrder` on each listed task, then sort again. A value is a safe integer: a
  * neighbour near `Number.MAX_SAFE_INTEGER` leaves no room past it, and the `time` parser reads at
  * most 15 digits.
