@@ -30,6 +30,7 @@
     "./lockout/postgres": "./lockout/postgres.ts",
     "./mcp-oauth": "./mcp-oauth/mod.ts",
     "./mcp-oauth/memory-store": "./mcp-oauth/memory-store.ts",
+    "./mcp-oauth/kv-store": "./mcp-oauth/kv-store.ts",
     "./subscribers": "./subscribers/mod.ts",
     "./subscribers/file": "./subscribers/file.ts",
     "./subscribers/memory": "./subscribers/memory.ts",

@@ -2025,6 +2025,14 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `isLoopbackRedirect` (function), `jsr:@spy4x/server/mcp-oauth`: True for an `http:` URL on `localhost`, `127.0.0.1` or `[::1]`.
 - `redirectUriMatches` (function), `jsr:@spy4x/server/mcp-oauth`: Does a requested `redirect_uri` match a registered one?
 
+### `jsr:@spy4x/server/mcp-oauth/kv-store`
+
+- `KvOAuthStore` (class), `jsr:@spy4x/server/mcp-oauth/kv-store`: Keeps every record in Deno KV under `[...prefix, kind, key]`, with `expireIn` set from the record's `expiresAt`, so the database drops it once it has expired.
+- `KvOAuthStoreOptions` (interface), `jsr:@spy4x/server/mcp-oauth/kv-store`: Options for KvOAuthStore.
+- `OAuthKv` (interface), `jsr:@spy4x/server/mcp-oauth/kv-store`: The part of a `Deno.Kv` handle that KvOAuthStore uses.
+- `OAuthKvAtomic` (interface), `jsr:@spy4x/server/mcp-oauth/kv-store`: The part of a `Deno.AtomicOperation` that KvOAuthStore uses.
+- `OAuthKvEntry` (interface), `jsr:@spy4x/server/mcp-oauth/kv-store`: One read from OAuthKv.get: `versionstamp` is `null` when the key is absent.
+
 ### `jsr:@spy4x/server/mcp-oauth/memory-store`
 
 - `MemoryOAuthStore` (class), `jsr:@spy4x/server/mcp-oauth/memory-store`: Keeps every record in a `Map`.
@@ -2483,4 +2491,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 e5d7311c321e6b2266e90ed5aae0c92f6e14084f6b854ba1fccdc8a1eb6adfbe -->
+<!-- export surface: sha256 63127089ccb941e08193a8ba2d732cba164ed7ed1519b371f0fa383017c1c5c4 -->

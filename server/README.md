@@ -60,6 +60,7 @@ Runs on: server (Deno).
 | `@spy4x/server/lockout/postgres`       | The Postgres lockout store over a table and columns the caller names                  |
 | `@spy4x/server/mcp-oauth`              | Single-user OAuth 2.1 server for remote MCP connectors, and the resource guard        |
 | `@spy4x/server/mcp-oauth/memory-store` | The in-memory OAuth store, for tests and single-process servers                       |
+| `@spy4x/server/mcp-oauth/kv-store`     | The Deno KV OAuth store: grants survive restarts, no extra service                    |
 | `@spy4x/server/subscribers`            | Double opt-in mailing lists: signed links, subscriber store port, subscribe flows     |
 | `@spy4x/server/subscribers/memory`     | The in-memory subscriber store and send log, held to the shared contracts             |
 | `@spy4x/server/subscribers/file`       | The JSON-file subscriber store and send log, compatible with antonshubin.com's files  |
@@ -2366,6 +2367,26 @@ two hosts share one store: one process serving both, or a shared `OAuthStore`.
 - **Errors.** RFC 6749 codes: `invalid_grant` for every bad code or refresh token, `invalid_target`
   for a foreign resource, `invalid_client` for any client authentication.
 
+### Keeping grants across restarts: `KvOAuthStore`
+
+`MemoryOAuthStore` signs every client out on a restart or deploy. `KvOAuthStore` keeps the same
+records in Deno KV, which needs no service beside the app: open the database on a mounted volume
+and run the app with `--unstable-kv`.
+
+```ts
+import { KvOAuthStore } from "@spy4x/server/mcp-oauth/kv-store"
+
+const kv = await Deno.openKv("/data/oauth.kv") // a path on the mounted volume
+const store = new KvOAuthStore(kv) // keys under ["mcp-oauth"]; pass `prefix` to change that
+```
+
+Every write is one atomic operation. Taking a pending consent and redeeming a code or a refresh
+token read the record and commit with a versionstamp check, retrying on a conflict, so of two
+concurrent redemptions only one succeeds. Each record is written with `expireIn` set from its
+`expiresAt`, so Deno KV deletes it once it has expired. A token is saved with a check on its
+grant's revocation key, and `revokeGrant` finds a grant's tokens through an index
+`[...prefix, "grant", grantId, kind, key]`. The store does not close the handle.
+
 ### What it does not do
 
 - No dynamic client registration. Claude, the Claude apps and Claude Code all use a Client ID
@@ -2373,7 +2394,8 @@ two hosts share one store: one process serving both, or a shared `OAuthStore`.
   attack surface.
 - No confidential clients, no `client_credentials` grant, no OpenID Connect.
 - No rate limiting: mount `@spy4x/platform/rate-limit/hono` in front of `/authorize` and `/token`.
-- No persistent store. `MemoryOAuthStore` loses every grant on restart, after which Claude asks the
-  owner to connect again. Implement `OAuthStore` over a database to keep them; `consumeCode`,
-  `consumeRefreshToken` and `takePending` must be atomic.
+- No store over another database. `MemoryOAuthStore` loses every grant on restart, after which
+  Claude asks the owner to connect again; `KvOAuthStore` keeps them. For anything else, implement
+  `OAuthStore` and run it through the same rules; `consumeCode`, `consumeRefreshToken` and
+  `takePending` must be atomic.
 - No issuer with a path: the issuer is a bare origin, and the endpoints sit at its root.
