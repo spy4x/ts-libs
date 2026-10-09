@@ -175,6 +175,17 @@ describe("create", () => {
     expect(objects.size).toBe(1)
   })
 
+  it("counts a repeated create as done when the server folded the UID line", async () => {
+    const { send, state, objects, failureOf } = setup()
+    state.dropAnswerOnce = true
+    await failureOf(send("create", "e1", "milk", 0))
+    const stored = objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!
+    stored.ics = stored.ics.replace("UID:e1\r\n", "UID:e\r\n 1\r\n")
+    const task = await send("create", "e1", "milk", 0)
+    expect(task?.etag).toBe(`"1"`)
+    expect(objects.size).toBe(1)
+  })
+
   it("reports an address held by an object with another UID as already-exists", async () => {
     const { send, objects, failureOf } = setup()
     objects.set(new URL(`${CALENDAR}e1.ics`).pathname, { ics: ics("milk", "other"), etag: 7 })
@@ -206,6 +217,23 @@ describe("update", () => {
     expect(await failureOf(send("update", "e1", "oat milk"))).toEqual({ kind: "not-found" })
   })
 
+  it("updates and deletes an object whose entity id is a UID that is not a file name", async () => {
+    const { send, seen, objects, known } = setup()
+    const path = "/dav/cal/me/tasks/from-phone.ics"
+    const uid = "8a1c2f@google.com"
+    objects.set(path, { ics: ics("from phone", uid), etag: 7 })
+    known.set(uid, { url: `${SERVER}${path}`, etag: `"7"` })
+    const task = await send("update", uid, "edited")
+    expect(seen[0].method).toBe("PUT")
+    expect(seen[0].url).toBe(`${SERVER}${path}`)
+    expect(seen[0].headers.get("If-Match")).toBe(`"7"`)
+    expect(objects.get(path)!.ics).toContain("SUMMARY:edited")
+    expect(await send("delete", uid)).toBeUndefined()
+    expect(seen[1].method).toBe("DELETE")
+    expect(objects.size).toBe(0)
+    expect(task?.etag).toBe(`"1"`)
+  })
+
   it("refuses to send without an etag instead of overwriting blind", async () => {
     const { send, seen, failureOf } = setup()
     const failure = await failureOf(send("update", "never-seen"))
@@ -215,7 +243,10 @@ describe("update", () => {
 })
 
 /** A writer that records the names it is given and answers as scripted. */
-function scriptedWriter(answers: Partial<CalDavWriter> = {}) {
+function scriptedWriter(
+  answers: Partial<CalDavWriter> = {},
+  toIcs = (command: CalDavWriteCommand<string>) => ics(command.payload, command.entityId),
+) {
   const names: string[] = []
   const fail = (code: CalDavErrorCode) => ({
     success: false as const,
@@ -237,7 +268,7 @@ function scriptedWriter(answers: Partial<CalDavWriter> = {}) {
     calendarUrl: () => CALENDAR,
     urlOf: (id) => objectUrl(CALENDAR, id),
     etagOf: () => null,
-    toIcs: (command) => ics(command.payload, command.entityId),
+    toIcs,
     toEntity: () => {
       throw new Error("unused")
     },
@@ -258,21 +289,50 @@ describe("a writer that does not check anything itself", () => {
     }
   })
 
-  it("never receives an entity id that is not a plain file name", async () => {
+  it("never creates under an entity id that is not a plain file name", async () => {
     const { transport, names } = scriptedWriter()
-    const bad = ["../x", "a/b", "..", ".", "", "%2e%2e", "é", "a b", "x?y", "a\\b"]
-    for (const kind of ["create", "update", "delete"] as const) {
-      for (const entityId of bad) {
-        const error = await transport.send({ kind, entityId, payload: "x", baseVersion: 1 }, "k")
-          .catch((caught) => caught)
-        expect(transport.classify(error).kind, `${kind} ${entityId}`).toBe("rejected")
-      }
+    const bad = [
+      "../x",
+      "a/b",
+      "..",
+      ".",
+      "",
+      "%2e%2e",
+      "é",
+      "a b",
+      "x?y",
+      "a\\b",
+      "8a1c2f@google.com",
+    ]
+    for (const entityId of bad) {
+      const error = await transport.send(
+        { kind: "create", entityId, payload: "x", baseVersion: 0 },
+        "k",
+      ).catch((caught) => caught)
+      expect(transport.classify(error).kind, entityId).toBe("rejected")
     }
     expect(names).toEqual([])
     // A plain name does reach the writer.
     await transport.send({ kind: "create", entityId: "ok-1", payload: "x", baseVersion: 0 }, "k")
       .catch(() => {})
     expect(names).toEqual(["ok-1.ics"])
+  })
+
+  it("reports a repeated create as already-exists when neither text has a UID", async () => {
+    const noUid = "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nSUMMARY:x\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+    const { transport } = scriptedWriter({
+      getObject: (url) =>
+        Promise.resolve({
+          success: true as const,
+          output: { url: String(url), etag: `"3"`, data: noUid },
+          error: null,
+        }),
+    }, () => noUid)
+    const error = await transport.send(
+      { kind: "create", entityId: "e1", payload: "x", baseVersion: 0 },
+      "k",
+    ).catch((caught) => caught)
+    expect(transport.classify(error)).toEqual({ kind: "already-exists" })
   })
 
   it("reads a repeated create whose follow-up read lost the connection as unreachable", async () => {
