@@ -2380,6 +2380,8 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `dayLabel` (function), `jsr:@spy4x/time/locale`: Localised "23 August 2026", the date as a person reads it.
 - `localeFirstWeekday` (function), `jsr:@spy4x/time/locale`: The day the locale's week starts on, `1` = Monday … `7` = Sunday.
 - `monthLabel` (function), `jsr:@spy4x/time/locale`: Localised "August 2026" for the month `date` falls in.
+- `relativeDayLabel` (function), `jsr:@spy4x/time/locale`: A day as a person says it: "Yesterday", "Today", "Tomorrow", otherwise shortDayLabel.
+- `shortDayLabel` (function), `jsr:@spy4x/time/locale`: Localised "Thu 15 Oct": weekday, day and month, no year.
 - `weekdayLabels` (function), `jsr:@spy4x/time/locale`: Seven localised weekday labels, starting on the locale's own first day.
 
 ### `jsr:@spy4x/time/rrule`
@@ -2478,4 +2480,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 f70fbdbf3607eefba4d12eee3693db6a8b5288d4cd290049c91c4b6046f135d0 -->
+<!-- export surface: sha256 82fff4f755665cfc2b773c4b6e390470f3c619aa15695b78670e6453fa76c9bc -->

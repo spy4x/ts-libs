@@ -1,6 +1,13 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { dayLabel, localeFirstWeekday, monthLabel, weekdayLabels } from "./locale.ts"
+import {
+  dayLabel,
+  localeFirstWeekday,
+  monthLabel,
+  relativeDayLabel,
+  shortDayLabel,
+  weekdayLabels,
+} from "./locale.ts"
 
 describe("localeFirstWeekday", () => {
   it("reads the first day of the week out of the locale", () => {
@@ -18,6 +25,57 @@ describe("dayLabel", () => {
   it("writes the date the way the locale writes it", () => {
     expect(dayLabel("2026-08-23")).toBe("23 August 2026")
     expect(dayLabel("2026-08-23", "fr-FR")).toBe("23 août 2026")
+  })
+})
+
+describe("shortDayLabel", () => {
+  it("writes weekday, day and short month in the locale's language", () => {
+    expect(shortDayLabel("2026-10-15")).toBe("Thu 15 Oct")
+    expect(shortDayLabel("2026-10-15", "de-DE")).toBe("Do., 15. Okt.")
+  })
+
+  it("names the weekday correctly at a month and year boundary", () => {
+    expect(shortDayLabel("2026-12-31")).toBe("Thu 31 Dec")
+    expect(shortDayLabel("2027-01-01")).toBe("Fri 1 Jan")
+  })
+
+  it("throws on a value that is not a date", () => {
+    expect(() => shortDayLabel("2026-02-31")).toThrow()
+    expect(() => shortDayLabel("soon")).toThrow()
+  })
+})
+
+describe("relativeDayLabel", () => {
+  it("says Yesterday, Today and Tomorrow for the neighbouring days", () => {
+    expect(relativeDayLabel("2026-10-14", "2026-10-15")).toBe("Yesterday")
+    expect(relativeDayLabel("2026-10-15", "2026-10-15")).toBe("Today")
+    expect(relativeDayLabel("2026-10-16", "2026-10-15")).toBe("Tomorrow")
+  })
+
+  it("falls back to the short label two days away in either direction", () => {
+    expect(relativeDayLabel("2026-10-13", "2026-10-15")).toBe("Tue 13 Oct")
+    expect(relativeDayLabel("2026-10-17", "2026-10-15")).toBe("Sat 17 Oct")
+  })
+
+  it("speaks the locale's language and capitalises its words", () => {
+    expect(relativeDayLabel("2026-10-14", "2026-10-15", "de-DE")).toBe("Gestern")
+    expect(relativeDayLabel("2026-10-15", "2026-10-15", "de-DE")).toBe("Heute")
+    expect(relativeDayLabel("2026-10-16", "2026-10-15", "de-DE")).toBe("Morgen")
+    expect(relativeDayLabel("2026-10-14", "2026-10-15", "ru-RU")).toBe("Вчера")
+    expect(relativeDayLabel("2026-10-15", "2026-10-15", "ru-RU")).toBe("Сегодня")
+    expect(relativeDayLabel("2026-10-16", "2026-10-15", "ru-RU")).toBe("Завтра")
+    expect(relativeDayLabel("2026-10-18", "2026-10-15", "de-DE")).toBe("So., 18. Okt.")
+  })
+
+  it("counts neighbours across a month and a year boundary", () => {
+    expect(relativeDayLabel("2026-11-01", "2026-10-31")).toBe("Tomorrow")
+    expect(relativeDayLabel("2026-12-31", "2027-01-01")).toBe("Yesterday")
+    expect(relativeDayLabel("2027-01-01", "2026-12-31")).toBe("Tomorrow")
+  })
+
+  it("throws on a value that is not a date", () => {
+    expect(() => relativeDayLabel("soon", "2026-10-15")).toThrow()
+    expect(() => relativeDayLabel("2026-10-15", "2026-13-01")).toThrow()
   })
 })
 
