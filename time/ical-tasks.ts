@@ -803,12 +803,12 @@ function applyTodo(
   ) {
     return fail(IcalErrorCode.InvalidValue, `unknown task status ${String(patch.status)}`)
   }
-  const changed = scheduleChanges(todo, patch)
+  const bump = !fresh && changesSchedule(todo, patch)
   return firstFailure(
     () => writeOptionalText(todo, "SUMMARY", patch.summary),
     () => writeOptionalText(todo, "DESCRIPTION", patch.description),
-    () => writeOptionalDate(todo, root, "DTSTART", changed.start ? patch.start : undefined),
-    () => writeOptionalDate(todo, root, "DUE", changed.due ? patch.due : undefined),
+    () => writeOptionalDate(todo, root, "DTSTART", patch.start),
+    () => writeOptionalDate(todo, root, "DUE", patch.due),
     () => writeOptionalInteger(todo, "PRIORITY", patch.priority, 0, 9),
     () => writeOptionalInteger(todo, "PERCENT-COMPLETE", patch.percentComplete, 0, 100),
     () =>
@@ -821,10 +821,10 @@ function applyTodo(
       ),
     () => writeCategories(todo, patch.categories),
     () => writeRelatedTo(todo, patch.relatedTo),
-    () => writeRrule(todo, changed.rrule ? patch.rrule : undefined),
-    () => changed.status ? applyStatus(todo, root, patch, now) : undefined,
+    () => writeRrule(todo, patch.rrule),
+    () => applyStatus(todo, root, patch, now),
     () => writeAlarms(todo, patch.alarms),
-    () => stamp(todo, root, now, !fresh && changed.any),
+    () => stamp(todo, root, now, bump),
   )
 }
 
@@ -835,34 +835,21 @@ function sameDate(a: IcalDateValue | undefined, b: IcalDateValue | null | undefi
 }
 
 /**
- * Which of DTSTART, DUE, RRULE and STATUS a task patch really changes, compared with the stored
- * task (RFC 5545 §3.8.7.4 lists these as a revision). A field left out, or set to the value it
- * already has, is not a change; `null` is one only when the property is present. A title, a
- * reminder or a category is never one, so SEQUENCE stays. A field that is not a change is not
- * written, so its stored line stays byte for byte.
+ * Whether a task patch really changes what RFC 5545 §3.8.7.4 lists as a revision: DTSTART, DUE,
+ * RRULE or STATUS, compared with the stored task. A field left out, or given the value it
+ * already has (a form that saves every field does), is not a change; `null` is one only when
+ * the property is present. A title, a reminder or a category is never one, so SEQUENCE stays.
  */
-function scheduleChanges(todo: IcalComponent, patch: TodoPatch) {
+function changesSchedule(todo: IcalComponent, patch: TodoPatch): boolean {
   const date = (name: string, value: IcalDateValue | null | undefined) =>
     value !== undefined &&
     (value === null ? !!getProperty(todo, name) : !sameDate(dateOf(todo, name), value))
-  const start = date("DTSTART", patch.start)
-  const due = date("DUE", patch.due)
-  const rrule = patch.rrule !== undefined &&
-    (patch.rrule === null
-      ? !!getProperty(todo, "RRULE")
-      : getProperty(todo, "RRULE")?.value !== patch.rrule)
-  // A completed task with a missing COMPLETED line, or an explicit `completed`, is still written.
-  const status = patch.status !== undefined && (
-    patch.status === null
-      ? !!getProperty(todo, "STATUS")
-      : readStatus(todo, STATUS_TODO) !== patch.status ||
-        (patch.status === TodoStatus.Completed &&
-          (patch.completed !== undefined || !getProperty(todo, "COMPLETED")))
-  )
-  const stored = readStatus(todo, STATUS_TODO)
-  const statusRevision = patch.status !== undefined &&
-    (patch.status === null ? !!getProperty(todo, "STATUS") : stored !== patch.status)
-  return { start, due, rrule, status, any: start || due || rrule || statusRevision }
+  const rrule = getProperty(todo, "RRULE")?.value
+  return date("DTSTART", patch.start) || date("DUE", patch.due) ||
+    (patch.rrule !== undefined && (patch.rrule ?? undefined) !== rrule) ||
+    (patch.status !== undefined &&
+      (patch.status ?? undefined) !==
+        (getProperty(todo, "STATUS") ? readStatus(todo, STATUS_TODO) : undefined))
 }
 
 function isCompleted(todo: IcalComponent): boolean {
@@ -939,7 +926,7 @@ function transaction(
  * Changes only the patched fields plus DTSTAMP, LAST-MODIFIED (both `options.now`) and, when the
  * patch gives `start`, `due`, `rrule` or `status` a value different from the stored one (or
  * `null` for a present one), SEQUENCE (+1). A field repeated unchanged, as a form that saves
- * every field does, is not written and does not raise SEQUENCE. A patch with no fields is a
+ * every field does, does not raise SEQUENCE and its stored line stays as it was. A patch with no fields is a
  * no-op: nothing is stamped. See {@link TodoPatch}.
  *
  * Refuses, leaving `root` untouched: no VTODO ({@link IcalErrorCode.Malformed}); a DUE and

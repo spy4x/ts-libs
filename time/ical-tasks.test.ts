@@ -1099,7 +1099,7 @@ Deno.test("an AUDIO reminder is written without DESCRIPTION, refuses one, and re
 })
 
 const SAVED =
-  "BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nDTSTART:20261010T080000Z\r\nDUE;TZID=Europe/Paris:20261011T090000\r\nRRULE:FREQ=DAILY\r\nSTATUS:IN-PROCESS\r\nEND:VTODO\r\n"
+  "BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nDTSTART;X-KEEP=1:20261010T080000Z\r\nDUE;TZID=Europe/Paris:20261011T090000\r\nRRULE:FREQ=DAILY\r\nSTATUS:IN-PROCESS\r\nEND:VTODO\r\n"
 const SAVED_TZ = "BEGIN:VTIMEZONE\r\nTZID:Europe/Paris\r\nEND:VTIMEZONE\r\n"
 const SAVED_TZ2 = "BEGIN:VTIMEZONE\r\nTZID:Europe/Berlin\r\nEND:VTIMEZONE\r\n"
 
@@ -1130,7 +1130,7 @@ Deno.test("a whole-form save that changes only the title keeps SEQUENCE, DTSTART
     status: TodoStatus.InProcess,
   })
   assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:4")
-  assertEquals(lineOf(root, "DTSTART"), "DTSTART:20261010T080000Z")
+  assertEquals(lineOf(root, "DTSTART"), "DTSTART;X-KEEP=1:20261010T080000Z")
   assertEquals(lineOf(root, "DUE"), "DUE;TZID=Europe/Paris:20261011T090000")
   assertEquals(lineOf(root, "RRULE"), "RRULE:FREQ=DAILY")
   assertEquals(lineOf(root, "STATUS"), "STATUS:IN-PROCESS")
@@ -1156,4 +1156,12 @@ Deno.test("removing a present due raises SEQUENCE and removing an absent one doe
   const absent = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nEND:VTODO\r\n")
   mustPatch(absent, { due: null, summary: "b" })
   assertEquals(lineOf(absent, "SEQUENCE"), "SEQUENCE:4")
+})
+
+Deno.test("a different rrule or status on a task that already has both raises SEQUENCE by one", () => {
+  for (const patch of [{ rrule: "FREQ=WEEKLY" }, { status: TodoStatus.NeedsAction }]) {
+    const root = savedTask()
+    mustPatch(root, patch)
+    assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5", JSON.stringify(patch))
+  }
 })
