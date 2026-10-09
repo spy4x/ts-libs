@@ -43,6 +43,26 @@ describe("createDatabaseOpener", () => {
     expect((await open()).version).toBe(2)
   })
 
+  it("does not keep a connection from an open it already reported as failed", async () => {
+    const real = new IDBFactory()
+    const old = await stubbornConnection(real)
+    const opened: IDBDatabase[] = []
+    const watching = {
+      open(name: string, version?: number) {
+        const request = real.open(name, version)
+        request.addEventListener("success", () => opened.push(request.result as IDBDatabase))
+        return request
+      },
+    } as unknown as IDBFactory
+    await expect(opener(watching, 2)()).rejects.toThrow("blocked")
+
+    old.close() // the late open now completes, and must close itself
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(opened.length).toBe(1)
+    expect(() => opened[0].transaction("a")).toThrow()
+  })
+
   it("closes its own connection when another tab opens a newer version, so that tab is not blocked", async () => {
     const indexedDB = new IDBFactory()
     const first = await opener(indexedDB, 1)()
