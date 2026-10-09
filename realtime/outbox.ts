@@ -18,7 +18,8 @@
  * - **One writer at a time.** Every step on the queue runs under a {@link OutboxLock}: a promise
  *   chain in one tab, Web Locks across the tabs of one browser.
  * - **Conflicts wait for a person.** A write the server refuses as stale or for another reason is
- *   marked, never applied over the other side. The person chooses `keepMine` or `useTheirs`.
+ *   marked, never applied over the other side. The person chooses `keepMine` or `useTheirs`. A
+ *   refusal seen by `submit` drops only a write that holds nothing queued before it.
  *
  * @module
  */
@@ -175,6 +176,12 @@ export type Outcome<S> =
   | { kind: "dropped" }
   /** The server refused it. Nothing is queued; `error` is what the send threw. */
   | { kind: "failed"; error: unknown }
+  /**
+   * The server refused it, and the write also held changes queued on this device before it, so
+   * nothing was dropped: the entry waits in the queue as a conflict for the person to settle with
+   * `keepMine` or `useTheirs`.
+   */
+  | { kind: "conflict"; reason: ConflictReason }
 
 /** What the outbox needs from the outside. Injected so tests need no network or IndexedDB. */
 export interface OutboxPorts<P, S extends { version: number }> {
@@ -266,7 +273,12 @@ export interface Outbox<P, S extends { version: number }> {
   subscribe(listener: (entries: readonly OutboxEntry<P, S>[]) => void): () => void
   /** Reads the queue from the store, for example after a restart. */
   reload(): Promise<OutboxEntry<P, S>[]>
-  /** Records a change and sends it when the connection allows. */
+  /**
+   * Records a change and sends it when the connection allows. A refusal of a change that stands
+   * alone answers `failed` and queues nothing. A change merged into a write still queued from
+   * earlier is never dropped with it: a refusal keeps the entry as a conflict and answers
+   * `conflict`.
+   */
   submit(change: Change<P>): Promise<Outcome<S>>
   /**
    * Sends every waiting write in order, stopping at the first that cannot reach the server.
@@ -304,7 +316,11 @@ export function createOutbox<P, S extends { version: number }>(
   type Entry = OutboxEntry<P, S>
   let current: readonly Entry[] = []
   const listeners = new Set<(entries: readonly Entry[]) => void>()
-  const interactive = new Set<number>()
+  /**
+   * Entries a person is watching through `submit`. The value is `true` when the entry held no
+   * earlier write when the submit queued it, so a refusal may drop it with nothing else lost.
+   */
+  const interactive = new Map<number, boolean>()
   const outcomes = new Map<number, Outcome<S>>()
 
   async function find(seq: number): Promise<Entry | undefined> {
@@ -416,7 +432,10 @@ export function createOutbox<P, S extends { version: number }>(
     const entry = await find(seq)
     if (!entry || entry.status !== "pending") return true
     if (!ports.canSend()) return false
-    const wants = interactive.has(seq)
+    const watched = interactive.get(seq)
+    const wants = watched !== undefined
+    // An edit merged in after the submit (another tab) also counts as more than the watched write.
+    const alone = watched === true && !entry.before
     // Saved before the send: a page closed mid-send must not repeat it under a new key.
     const sending = await save({ ...entry, attempted: true })
     try {
@@ -438,16 +457,21 @@ export function createOutbox<P, S extends { version: number }>(
     } catch (error) {
       const failure = ports.classify(error)
       if (failure.kind === "unreachable") return false
-      return await refuse(sending, error, failure, wants)
+      return await refuse(sending, error, failure, wants, alone)
     }
   }
 
-  /** Handles a refusal by the server. Resolves `false` when the server could not be asked more. */
+  /**
+   * Handles a refusal by the server. Resolves `false` when the server could not be asked more.
+   * `wants`: a person is watching through `submit`. `alone`: the entry holds only that person's
+   * write, so it may be dropped; one that also holds earlier queued changes becomes a conflict.
+   */
   async function refuse(
     entry: Entry,
     error: unknown,
     failure: Exclude<SendFailure, { kind: "unreachable" }>,
     wants: boolean,
+    alone: boolean,
   ): Promise<boolean> {
     if (!await unchanged(entry)) return true
     if (failure.kind === "not-found" && entry.kind === "delete") {
@@ -456,7 +480,7 @@ export function createOutbox<P, S extends { version: number }>(
       if (wants) outcomes.set(entry.seq!, { kind: "sent" })
       return true
     }
-    if (wants) {
+    if (wants && alone) {
       // The person is looking at the screen: the app shows the refusal itself.
       await drop(entry.seq!)
       outcomes.set(entry.seq!, { kind: "failed", error })
@@ -482,6 +506,7 @@ export function createOutbox<P, S extends { version: number }>(
       server,
       reason === "rejected" && failure.kind === "rejected" ? failure.message : undefined,
     )
+    if (wants) outcomes.set(entry.seq!, { kind: "conflict", reason })
     return true
   }
 
@@ -500,9 +525,10 @@ export function createOutbox<P, S extends { version: number }>(
   /** Records a change and sends it when the connection allows. */
   async function submit(change: Change<P>): Promise<Outcome<S>> {
     const entry = await locked(async () => {
+      const earlier = (await store.readOutbox()).some((e) => e.entityId === change.entityId)
       const queued = await enqueue(change)
       // Marked inside the same step, so no send can settle the entry before it is watched.
-      if (queued) interactive.add(queued.seq!)
+      if (queued) interactive.set(queued.seq!, !earlier)
       return queued
     })
     if (!entry) return { kind: "dropped" }
