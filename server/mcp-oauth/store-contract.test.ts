@@ -158,6 +158,21 @@ export function describeOAuthStoreContract(
       expect(await store.findAccessToken("a2")).toBeUndefined()
     })
 
+    it("hands out an approval code once", async () => {
+      const store = open(manualClock())
+      await store.saveApprovalCode("k", { expiresAt: 2_000 })
+      expect(await store.takeApprovalCode("k")).toEqual({ expiresAt: 2_000 })
+      expect(await store.takeApprovalCode("k")).toBeUndefined()
+      expect(await store.takeApprovalCode("missing")).toBeUndefined()
+    })
+
+    it("hands out an approval code to only one of two concurrent takers", async () => {
+      const store = open(manualClock())
+      await store.saveApprovalCode("k", { expiresAt: 2_000 })
+      const taken = await Promise.all([store.takeApprovalCode("k"), store.takeApprovalCode("k")])
+      expect(taken.filter((record) => record !== undefined)).toHaveLength(1)
+    })
+
     it("refuses to save tokens of a revoked grant until the revocation lapses", async () => {
       const clock = manualClock()
       const store = open(clock)

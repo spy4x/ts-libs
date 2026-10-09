@@ -161,7 +161,8 @@ export interface AuthorizationServerOptions {
    * default), every approval does. Denials and issued tokens are unaffected. When the store gives up
    * counting under a burst, the approval answers `429` too. The trade-off: anyone who can reach
    * `/authorize` can keep sending wrong passwords and so keep every approval refused for as long as
-   * they keep it up, across restarts with a persistent store. The README says how to lift it.
+   * they keep it up, across restarts with a persistent store. The README says how to lift it. A
+   * one-time code from `createApprovalCode`, typed in place of the password, approves anyway.
    */
   ownerPassword?: OwnerPassword
   /**
@@ -532,6 +533,7 @@ export function createAuthorizationServer(
   ): Promise<{ status: 400 | 403; message: string } | number | undefined> {
     if (ownerPassword === undefined) return undefined
     if (password === undefined) return { status: 400, message: "Enter the owner password." }
+    if (await approvalCodeAccepted(password)) return undefined
     const at = clock.now()
     const address = await sha256Hex(`address ${ownerPassword.clientAddress?.(c) ?? ""}`)
     let addressTaken = false
@@ -562,6 +564,16 @@ export function createAuthorizationServer(
     await releaseAttempt(address, at)
     await releaseAttempt(TOTAL_ATTEMPTS, at)
     return undefined
+  }
+
+  /**
+   * Spends a one-time approval code (`createApprovalCode`) typed in place of the password. True when
+   * it was one and has not expired. The store keys codes by their digest, so the lookup compares
+   * digests, never the code, and its timing tells a guesser nothing about a real code.
+   */
+  async function approvalCodeAccepted(typed: string): Promise<boolean> {
+    const record = await store.takeApprovalCode(await sha256Hex(typed))
+    return record !== undefined && record.expiresAt > clock.now()
   }
 
   /**

@@ -5,6 +5,13 @@
  */
 
 export {
+  type ApprovalCode,
+  type ApprovalCodeOptions,
+  createApprovalCode,
+  DEFAULT_APPROVAL_CODE_TTL_MS,
+  MAX_APPROVAL_CODE_TTL_MS,
+} from "./approval-code.ts"
+export {
   AUTHORIZATION_SERVER_METADATA_PATH,
   type AuthorizationServer,
   type AuthorizationServerMetadata,
@@ -28,6 +35,7 @@ export {
 } from "./client-metadata.ts"
 export {
   type AccessTokenRecord,
+  type ApprovalCodeRecord,
   type CodeRecord,
   type GrantRecord,
   type OAuthStore,

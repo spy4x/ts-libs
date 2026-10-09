@@ -2099,6 +2099,9 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `AUTHORIZE_PATH` (constant), `jsr:@spy4x/server/mcp-oauth`: Path of the authorization endpoint.
 - `AccessTokenRecord` (interface), `jsr:@spy4x/server/mcp-oauth`: An issued access token.
 - `AccessTokenVerifier` (interface), `jsr:@spy4x/server/mcp-oauth`: Looks up an access token.
+- `ApprovalCode` (interface), `jsr:@spy4x/server/mcp-oauth`: A code createApprovalCode made.
+- `ApprovalCodeOptions` (interface), `jsr:@spy4x/server/mcp-oauth`: Options for createApprovalCode.
+- `ApprovalCodeRecord` (interface), `jsr:@spy4x/server/mcp-oauth`: A one-time approval code the owner made from a shell with `createApprovalCode`.
 - `AuthorizationServer` (interface), `jsr:@spy4x/server/mcp-oauth`: What createAuthorizationServer returns.
 - `AuthorizationServerMetadata` (interface), `jsr:@spy4x/server/mcp-oauth`: The authorization server metadata document (RFC 8414).
 - `AuthorizationServerOptions` (interface), `jsr:@spy4x/server/mcp-oauth`: Options for createAuthorizationServer.
@@ -2108,8 +2111,10 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ClientMetadataSource` (interface), `jsr:@spy4x/server/mcp-oauth`: Resolves a `client_id` to its metadata.
 - `CodeRecord` (interface), `jsr:@spy4x/server/mcp-oauth`: An issued authorization code.
 - `ConsentDetails` (interface), `jsr:@spy4x/server/mcp-oauth`: What the consent page shows and submits.
+- `DEFAULT_APPROVAL_CODE_TTL_MS` (constant), `jsr:@spy4x/server/mcp-oauth`: Default ApprovalCodeOptions.ttlMs: 5 minutes.
 - `DEFAULT_REDIRECT_URIS` (constant), `jsr:@spy4x/server/mcp-oauth`: The default redirect allowlist: the hosted Claude apps' callback, plus the two loopback callbacks Claude Code declares in its client metadata document.
 - `GrantRecord` (interface), `jsr:@spy4x/server/mcp-oauth`: One client the owner approved: what `listGrants` shows, so the owner can see who is connected and revoke one without signing every client out.
+- `MAX_APPROVAL_CODE_TTL_MS` (constant), `jsr:@spy4x/server/mcp-oauth`: Longest ApprovalCodeOptions.ttlMs allowed: 15 minutes, so a code is never a standing key.
 - `OAuthStore` (interface), `jsr:@spy4x/server/mcp-oauth`: Where the authorization server keeps its state.
 - `OAuthStoreContentionError` (class), `jsr:@spy4x/server/mcp-oauth`: Thrown by a store that gave up on a write because other writes to the same key kept winning, as `KvOAuthStore` does after 32 conflicts.
 - `OFFLINE_ACCESS_SCOPE` (constant), `jsr:@spy4x/server/mcp-oauth`: The scope some clients ask for to get a refresh token.
@@ -2129,6 +2134,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `assertScopes` (function), `jsr:@spy4x/server/mcp-oauth`: Check a configured scope list at startup.
 - `canonicalResource` (function), `jsr:@spy4x/server/mcp-oauth`: The canonical form of a resource URL (RFC 8707, as the MCP spec uses it): parsed by `URL`, so scheme and host are lower case and a default port is dropped, and without the trailing `/` of a bare origin.
 - `createAccessTokenVerifier` (function), `jsr:@spy4x/server/mcp-oauth`: Build an AccessTokenVerifier over the authorization server's store.
+- `createApprovalCode` (function), `jsr:@spy4x/server/mcp-oauth`: Make a one-time approval code for an authorization server that asks for the owner password.
 - `createAuthorizationServer` (function), `jsr:@spy4x/server/mcp-oauth`: Build the authorization server.
 - `createClientMetadataFetcher` (function), `jsr:@spy4x/server/mcp-oauth`: Build a ClientMetadataSource that fetches each document over HTTPS through the SSRF guard, follows no redirect, reads at most `maxBytes`, and accepts the document only when it is valid JSON whose `client_id` equals its URL, lists at least one redirect URI, and declares no token endpoint authentication other than `none` (this server has public clients only).
 - `createResourceServer` (function), `jsr:@spy4x/server/mcp-oauth`: Build the metadata document and the guard for one MCP server.
@@ -2656,4 +2662,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 495c1ff247d47be62603c1eca906d6fcd5b725cf3154c22a5c89b2d36d0bf72a -->
+<!-- export surface: sha256 f1be10bd0ab49d84afe357bb9bb8b3e0e2b349c08609eab9a23e14aeadcc0001 -->

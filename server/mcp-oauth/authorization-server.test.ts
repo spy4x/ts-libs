@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd"
 import { Hono } from "hono"
 import { encodeBase64Url } from "@std/encoding/base64url"
 import { randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
+import { createApprovalCode } from "./approval-code.ts"
 import {
   type AuthorizationServerOptions,
   createAuthorizationServer,
@@ -180,6 +181,7 @@ function setup(overrides: Partial<AuthorizationServerOptions> = {}) {
     server,
     store,
     verifier,
+    clock,
     advance: (ms: number) => (now += ms),
     authorizeParams,
     getAuthorize,
@@ -732,6 +734,73 @@ describe("createAuthorizationServer", () => {
           const locked = await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")
           expect(locked.status).toBe(429)
           expect(locked.headers.get("retry-after")).toBe(String(24 * 60 * 60))
+        })
+
+        describe("with a one-time approval code", () => {
+          /** A server whose server-wide ceiling is reached, a consent, and the hasher's count. */
+          async function lockedOut() {
+            const { counter, ownerPassword: counted } = countingHasher()
+            const t = setup({
+              confirmOwner: undefined,
+              ownerPassword: {
+                ...counted,
+                maxFailures: 2,
+                maxTotalFailures: 3,
+                clientAddress: (c) => c.req.header("x-test-address"),
+              },
+            })
+            const id = await newConsent(t)
+            for (let i = 0; i < 3; i++) {
+              expect((await fromAddress(t, id, WRONG, `198.51.100.${i}`)).status).toBe(403)
+            }
+            expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(429)
+            counter.verifies = 0
+            return { t, id, counter }
+          }
+
+          it("approves while the server-wide limit is reached, without running the hasher", async () => {
+            const { t, id, counter } = await lockedOut()
+            const { code } = await createApprovalCode(t.store, { clock: t.clock })
+            const approved = await fromAddress(t, id, code, "203.0.113.9")
+            expect(approved.status).toBe(302)
+            const location = new URL(approved.headers.get("location")!)
+            expect((await t.redeem(location.searchParams.get("code")!)).status).toBe(200)
+            expect(counter.verifies).toBe(0)
+            const next = await newConsent(t)
+            expect((await fromAddress(t, next, OWNER_PASSWORD, "203.0.113.9")).status).toBe(429)
+          })
+
+          it("works once: a second approval with the same code is refused", async () => {
+            const { t, id } = await lockedOut()
+            const { code } = await createApprovalCode(t.store, { clock: t.clock })
+            expect((await fromAddress(t, id, code, "203.0.113.9")).status).toBe(302)
+            const next = await newConsent(t)
+            expect((await fromAddress(t, next, code, "203.0.113.9")).status).toBe(429)
+          })
+
+          it("stops working once its lifetime has passed", async () => {
+            const { t, id } = await lockedOut()
+            const { code, expiresAt } = await createApprovalCode(t.store, {
+              clock: t.clock,
+              ttlMs: 60_000,
+            })
+            expect(expiresAt).toBe(t.clock.now() + 60_000)
+            t.advance(60_000)
+            expect((await fromAddress(t, id, code, "203.0.113.9")).status).toBe(429)
+          })
+
+          it("is spent only by an approval, not by a denial", async () => {
+            const { t, id } = await lockedOut()
+            const { code } = await createApprovalCode(t.store, { clock: t.clock })
+            const denied = await t.postConsent({
+              consent_id: id,
+              decision: "deny",
+              [OWNER_PASSWORD_FIELD]: code,
+            })
+            expect(denied.status).toBe(302)
+            const next = await newConsent(t)
+            expect((await fromAddress(t, next, code, "203.0.113.9")).status).toBe(302)
+          })
         })
 
         it("does not count an address's refused attempts toward the server-wide ceiling", async () => {

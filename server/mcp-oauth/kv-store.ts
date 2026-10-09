@@ -12,6 +12,7 @@
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import {
   type AccessTokenRecord,
+  type ApprovalCodeRecord,
   type CodeRecord,
   type GrantRecord,
   type OAuthStore,
@@ -79,12 +80,13 @@ const ACCESS = "access"
 const REFRESH = "refresh"
 const GRANTS = "grants"
 const ATTEMPTS = "attempts"
+const APPROVAL = "approval"
 
 /**
  * Keeps every record in Deno KV under `[...prefix, kind, key]`, with `expireIn` set from the
  * record's `expiresAt`, so the database drops it once it has expired.
  *
- * - `takePending`, `consumeCode` and `consumeRefreshToken` read the record, then commit their change
+ * - `takePending`, `takeApprovalCode`, `consumeCode` and `consumeRefreshToken` read the record, then commit their change
  *   with a versionstamp check and retry on a conflict. Of two concurrent calls, only one sees the
  *   record unused.
  * - `saveAccessToken` and `saveRefreshToken` read the grant's revocation key and commit the token
@@ -95,6 +97,7 @@ const ATTEMPTS = "attempts"
  *   as tokens and deleted by `revokeGrant`.
  * - Password attempts live under `[...prefix, "attempts", key]` as a list of times, updated with a
  *   versionstamp check, so the owner-password lockout survives a restart.
+ * - One-time approval codes live under `[...prefix, "approval", key]`.
  *
  * Pending consents have no count cap, unlike `MemoryOAuthStore`'s `maxPending`: they live on disk,
  * not in the process's memory, and Deno KV deletes each once its consent page expires. Anyone can
@@ -124,18 +127,8 @@ export class KvOAuthStore implements OAuthStore {
     return this.#put(this.#key("pending", key), record)
   }
 
-  async takePending(key: string): Promise<PendingAuthorization | undefined> {
-    const kvKey = this.#key("pending", key)
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const entry = await this.#kv.get(kvKey)
-      if (entry.versionstamp === null) return undefined
-      const result = await this.#kv.atomic()
-        .check({ key: kvKey, versionstamp: entry.versionstamp })
-        .delete(kvKey)
-        .commit()
-      if (result.ok) return entry.value as PendingAuthorization
-    }
-    throw contention("takePending")
+  takePending(key: string): Promise<PendingAuthorization | undefined> {
+    return this.#take<PendingAuthorization>(this.#key("pending", key), "takePending")
   }
 
   saveCode(key: string, record: CodeRecord): Promise<void> {
@@ -258,6 +251,28 @@ export class KvOAuthStore implements OAuthStore {
       }
     }
     throw contention("releaseAttempt")
+  }
+
+  saveApprovalCode(key: string, record: ApprovalCodeRecord): Promise<void> {
+    return this.#put(this.#key(APPROVAL, key), record)
+  }
+
+  takeApprovalCode(key: string): Promise<ApprovalCodeRecord | undefined> {
+    return this.#take<ApprovalCodeRecord>(this.#key(APPROVAL, key), "takeApprovalCode")
+  }
+
+  /** Delete a record and return it, committed with a versionstamp check so only one caller gets it. */
+  async #take<T>(kvKey: readonly string[], method: string): Promise<T | undefined> {
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const entry = await this.#kv.get(kvKey)
+      if (entry.versionstamp === null) return undefined
+      const result = await this.#kv.atomic()
+        .check({ key: kvKey, versionstamp: entry.versionstamp })
+        .delete(kvKey)
+        .commit()
+      if (result.ok) return entry.value as T
+    }
+    throw contention(method)
   }
 
   async #saveToken(

@@ -7,6 +7,7 @@
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import type {
   AccessTokenRecord,
+  ApprovalCodeRecord,
   CodeRecord,
   GrantRecord,
   OAuthStore,
@@ -36,9 +37,9 @@ interface Expiring {
 
 /**
  * Keeps every record in a `Map`. JavaScript runs each method to its first `await` without
- * interruption and these methods never await, so `consumeCode`, `consumeRefreshToken` and
- * `takePending` are atomic. Records are copied in and out, so a caller cannot edit a stored one.
- * Expired records are dropped whenever a new one is saved. A revoked grant id is kept until its
+ * interruption and these methods never await, so `consumeCode`, `consumeRefreshToken`,
+ * `takePending` and `takeApprovalCode` are atomic. Records are copied in and out, so a caller
+ * cannot edit a stored one. Expired records are dropped whenever a new one is saved. A revoked grant id is kept until its
  * `until`, so a token saved late for it is refused. Pending consents are capped at `maxPending`,
  * dropping the oldest first. Password attempts live in memory too, so a restart forgets them: use
  * `KvOAuthStore` where a restart must not reset the owner-password lockout.
@@ -51,6 +52,7 @@ export class MemoryOAuthStore implements OAuthStore {
   readonly #access = new Map<string, AccessTokenRecord>()
   readonly #refresh = new Map<string, RefreshTokenRecord>()
   readonly #grants = new Map<string, GrantRecord>()
+  readonly #approvalCodes = new Map<string, ApprovalCodeRecord>()
   /** Revoked grant ids, each mapped to the epoch milliseconds its refusal lasts until. */
   readonly #revoked = new Map<string, number>()
   /** Counted password attempts per key, oldest first, and when the newest leaves its window. */
@@ -79,9 +81,7 @@ export class MemoryOAuthStore implements OAuthStore {
   }
 
   takePending(key: string): Promise<PendingAuthorization | undefined> {
-    const record = this.#pending.get(key)
-    this.#pending.delete(key)
-    return Promise.resolve(record && structuredClone(record))
+    return Promise.resolve(this.#take(this.#pending, key))
   }
 
   saveCode(key: string, record: CodeRecord): Promise<void> {
@@ -163,6 +163,20 @@ export class MemoryOAuthStore implements OAuthStore {
     return Promise.resolve()
   }
 
+  saveApprovalCode(key: string, record: ApprovalCodeRecord): Promise<void> {
+    return this.#save(this.#approvalCodes, key, record)
+  }
+
+  takeApprovalCode(key: string): Promise<ApprovalCodeRecord | undefined> {
+    return Promise.resolve(this.#take(this.#approvalCodes, key))
+  }
+
+  #take<T>(map: Map<string, T>, key: string): T | undefined {
+    const record = map.get(key)
+    map.delete(key)
+    return record && structuredClone(record)
+  }
+
   #consume<T extends { usedAt?: number }>(map: Map<string, T>, key: string): T | undefined {
     const record = map.get(key)
     if (record === undefined) return undefined
@@ -202,6 +216,7 @@ export class MemoryOAuthStore implements OAuthStore {
       this.#refresh,
       this.#grants,
       this.#attempts,
+      this.#approvalCodes,
     ]
     for (const map of maps) {
       for (const [key, record] of map as Map<string, Expiring>) {

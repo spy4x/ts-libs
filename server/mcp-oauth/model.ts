@@ -96,9 +96,18 @@ export interface GrantRecord {
 }
 
 /**
+ * A one-time approval code the owner made from a shell with `createApprovalCode`. Typed into the
+ * consent page's password input, it approves once without the owner password and its lockout.
+ */
+export interface ApprovalCodeRecord {
+  /** Epoch milliseconds after which the code is refused. */
+  expiresAt: number
+}
+
+/**
  * Where the authorization server keeps its state. Keys are SHA-256 hex digests of the secrets.
  *
- * The two `consume*` methods and `takePending` must be atomic: two concurrent calls with the same
+ * The two `consume*` methods, `takePending` and `takeApprovalCode` must be atomic: two concurrent calls with the same
  * key must not both see the record unused. That is what makes a code single-use and lets a reused
  * refresh token be detected. A store may drop a record once its `expiresAt` has passed; the server
  * checks expiry itself, so keeping it longer is harmless.
@@ -159,6 +168,13 @@ export interface OAuthStore {
   takeAttempt(key: string, at: number, limit: number, windowMs: number): Promise<number>
   /** Uncount one attempt `takeAttempt` counted under `key` at `at`, after a right password. */
   releaseAttempt(key: string, at: number): Promise<void>
+  /** Save a one-time approval code under the digest of the code. */
+  saveApprovalCode(key: string, record: ApprovalCodeRecord): Promise<void>
+  /**
+   * Remove and return an approval code, or `undefined` when there is none. Atomic, as
+   * {@link OAuthStore.takePending} is: of two concurrent calls, only one gets the record.
+   */
+  takeApprovalCode(key: string): Promise<ApprovalCodeRecord | undefined>
 }
 
 /**
