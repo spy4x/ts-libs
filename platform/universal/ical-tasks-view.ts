@@ -324,7 +324,7 @@ export function reorderTask(
     previous[i] = -1
     for (let j = 0; j < i; j++) {
       const there = current[j]
-      if (there === undefined || length[j] === undefined || there >= here) continue
+      if (there === undefined || length[j] === undefined) continue
       if (Math.ceil(here) - 1 - Math.floor(there) < i - j - 1) continue
       if (length[j] + 1 > length[i]) {
         length[i] = length[j] + 1

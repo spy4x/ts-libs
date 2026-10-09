@@ -45,6 +45,7 @@ Deno.test("an index past the end is the end", () => {
   const toStart = reorderTask(tasks, `b`, -5, UTC)
   expect(toStart.length).toBe(1)
   expect(apply(tasks, toStart)).toEqual([`b`, `a`])
+  expect(reorderTask([...tasks, make(`c`, 30)], `c`, 99, UTC)).toEqual([])
 })
 
 Deno.test("moving a task to where it already is writes nothing", () => {
@@ -126,5 +127,9 @@ Deno.test("applying the changes and sorting again gives the intended order, for 
     const message = `round ${round}: ${JSON.stringify({ toIndex, changes, uids: uids(siblings) })}`
     expect(apply(siblings, changes), message).toEqual(uids(intended))
     expect(new Set(changes.map((c) => c.uid)).size, message).toBe(changes.length)
+    const before = new Map(siblings.map((t) => [t.uid, t.sortOrder]))
+    for (const change of changes) {
+      expect(change.sortOrder, message).not.toBe(before.get(change.uid))
+    }
   }
 })
