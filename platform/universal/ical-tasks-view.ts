@@ -269,3 +269,100 @@ export function upcomingView(tasks: readonly Task[], now: Date, zone: string): U
     tasks: sortTasks(byDay.get(date)!, SortMode.Due, zone),
   }))
 }
+
+/** A new `X-APPLE-SORT-ORDER` to write for one task. */
+export interface SortOrderChange {
+  uid: string
+  sortOrder: number
+}
+
+/**
+ * The `X-APPLE-SORT-ORDER` values to write so that task `uid` sits at `toIndex` among its
+ * siblings, as the manual order of {@link sortTasks} shows it, without touching more tasks than
+ * needed.
+ *
+ * `siblings` are the children of one parent (or the top level of one list) in manual order.
+ * `toIndex` counts after the task is taken out, so it is the index the task has in the new list;
+ * a value past either end is clamped to that end. Throws when `uid` is not in `siblings` or
+ * `toIndex` is not an integer.
+ *
+ * - Moving a task to where it already is returns `[]`.
+ * - Normally one change is returned: an integer strictly between the new neighbours, or one step
+ *   past the neighbour at an end.
+ * - With no room (neighbours less than 2 apart, tied, or a neighbour with neither a stored value
+ *   nor a creation time), the fewest tasks are rewritten that keep the new order: every other
+ *   task keeps its value where the integers between its kept neighbours suffice. The values
+ *   written are spread evenly between those neighbours, or one step apart past an end.
+ *
+ * A task is written only when its effective position changes, and the result lists tasks in their
+ * new order. Apply it with `sortOrder` on each listed task, then sort again.
+ */
+export function reorderTask(
+  siblings: readonly Task[],
+  uid: string,
+  toIndex: number,
+  zone: string,
+): SortOrderChange[] {
+  if (!Number.isInteger(toIndex)) throw new RangeError(`toIndex must be an integer`)
+  const from = siblings.findIndex((task) => task.uid === uid)
+  if (from < 0) throw new RangeError(`task ${uid} is not among the siblings`)
+  const list = siblings.filter((_, index) => index !== from)
+  const to = Math.min(Math.max(toIndex, 0), list.length)
+  if (to === from) return []
+  const moved = siblings[from]
+  list.splice(to, 0, moved)
+
+  const current = list.map((task) => manualPosition(task, zone))
+  // Chains of tasks that keep their value: strictly rising, with room for the writes between.
+  const length: number[] = []
+  const previous: number[] = []
+  let last = -1
+  for (let i = 0; i < list.length; i++) {
+    const here = current[i]
+    if (here === undefined) continue
+    length[i] = 1
+    previous[i] = -1
+    for (let j = 0; j < i; j++) {
+      const there = current[j]
+      if (there === undefined || length[j] === undefined || there >= here) continue
+      if (Math.ceil(here) - 1 - Math.floor(there) < i - j - 1) continue
+      if (length[j] + 1 > length[i]) {
+        length[i] = length[j] + 1
+        previous[i] = j
+      }
+    }
+    if (last < 0 || length[i] > length[last]) last = i
+  }
+
+  const anchors: number[] = []
+  for (let i = last; i >= 0; i = previous[i]) anchors.unshift(i)
+
+  const values: (number | undefined)[] = list.map(() => undefined)
+  const fill = (from: number, to: number, value: (k: number, count: number) => number) => {
+    for (let k = from; k < to; k++) values[k] = value(k - from, to - from)
+  }
+  if (anchors.length === 0) {
+    fill(0, list.length, (k) => k)
+  } else {
+    const first = anchors[0]
+    fill(0, first, (k, count) => Math.ceil(current[first]!) - 1 - (count - 1 - k))
+    for (let a = 0; a + 1 < anchors.length; a++) {
+      const lowIndex = anchors[a]
+      const highIndex = anchors[a + 1]
+      const low = Math.floor(current[lowIndex]!) + 1
+      const room = Math.ceil(current[highIndex]!) - low
+      fill(lowIndex + 1, highIndex, (k, count) => low + Math.floor(((k + 0.5) * room) / count))
+    }
+    const end = anchors[anchors.length - 1]
+    fill(end + 1, list.length, (k) => Math.floor(current[end]!) + 1 + k)
+  }
+
+  const changes: SortOrderChange[] = []
+  list.forEach((task, index) => {
+    const value = values[index]
+    if (value !== undefined && value !== current[index]) {
+      changes.push({ uid: task.uid, sortOrder: value })
+    }
+  })
+  return changes
+}

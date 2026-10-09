@@ -1242,6 +1242,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/platform/universal/ical-tasks-view`
 
 - `SortMode` (enum), `jsr:@spy4x/platform/universal/ical-tasks-view`: How a list shows its tasks.
+- `SortOrderChange` (interface), `jsr:@spy4x/platform/universal/ical-tasks-view`: A new `X-APPLE-SORT-ORDER` to write for one task.
 - `TodayView` (interface), `jsr:@spy4x/platform/universal/ical-tasks-view`: The Today view.
 - `TreeRow` (interface), `jsr:@spy4x/platform/universal/ical-tasks-view`: A task and how deep it sits, for a screen that draws the tree as indented rows.
 - `UPCOMING_DAYS` (constant), `jsr:@spy4x/platform/universal/ical-tasks-view`: How many days after today the Upcoming view reaches.
@@ -1249,6 +1250,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `buildTree` (function), `jsr:@spy4x/platform/universal/ical-tasks-view`: Nests each task under its parent (`parentUid`).
 - `flattenTree` (function), `jsr:@spy4x/platform/universal/ical-tasks-view`: The tree as rows, parents before their children.
 - `isOverdue` (function), `jsr:@spy4x/platform/universal/ical-tasks-view`: Whether a due value has passed.
+- `reorderTask` (function), `jsr:@spy4x/platform/universal/ical-tasks-view`: The `X-APPLE-SORT-ORDER` values to write so that task `uid` sits at `toIndex` among its siblings, as the manual order of sortTasks shows it, without touching more tasks than needed.
 - `searchTasks` (function), `jsr:@spy4x/platform/universal/ical-tasks-view`: The tasks that match `query`, in their input order.
 - `sortTasks` (function), `jsr:@spy4x/platform/universal/ical-tasks-view`: The tasks in the order `mode` names, as a viewer in `zone` sees them.
 - `todayView` (function), `jsr:@spy4x/platform/universal/ical-tasks-view`: Overdue above today.
@@ -2673,4 +2675,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 102d8c4ab727c44bb96bf01a0b329278d1dd0b35cbb8304874df6b1d6659181f -->
+<!-- export surface: sha256 e6ac1968de7bfc07404a0833be120b1eb2fbc97269e1ce7742bc57114a8f9380 -->
