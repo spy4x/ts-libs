@@ -5914,7 +5914,9 @@ No design avoids this without a cost: the ceiling exists to cap guesses that com
 addresses, so lifting it for an unknown address would hand every new address a free guess. To make
 it harder, put a rate limiter per address in front of `POST /authorize`
 (`@spy4x/platform/rate-limit/hono`), block the sending addresses at the proxy, or raise
-`maxTotalFailures`.
+`maxTotalFailures`. To take it away, put `/authorize` behind forward-auth and pass `confirmOwner`
+instead of `ownerPassword`: the owner then signs in at the proxy, and wrong passwords sent to the app
+cannot block that.
 
 To let the owner in while it lasts, delete the server-wide count. It is the key
 `[...prefix, "attempts", "total"]` (`["mcp-oauth", "attempts", "total"]` with the default prefix).
