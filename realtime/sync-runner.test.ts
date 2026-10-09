@@ -62,7 +62,14 @@ function controlledFlush() {
   }
 }
 
-function setup(overrides: { baseDelayMs?: number; maxDelayMs?: number } = {}) {
+function setup(
+  overrides: {
+    baseDelayMs?: number
+    maxDelayMs?: number
+    pollIntervalMs?: number
+    isOnline?: () => boolean
+  } = {},
+) {
   const page = createPage()
   const clock = new FakeClock()
   const control = controlledFlush()
@@ -498,6 +505,165 @@ describe("createSyncRunner stop", () => {
 
     expect(control.started()).toBe(2)
     expect(page.count()).toBe(4)
+  })
+})
+
+describe("createSyncRunner polling", () => {
+  const POLL = 30_000
+
+  it("runs again after the interval on a visible, online page with no event", async () => {
+    const { runner, clock, control } = setup({ pollIntervalMs: POLL })
+    runner.start()
+    await drainMicrotasks()
+    await control.finish()
+    await clock.advance(POLL - 1)
+    expect(control.started()).toBe(1)
+    await clock.advance(1)
+    expect(control.started()).toBe(2)
+    await control.finish()
+    await clock.advance(POLL)
+    expect(control.started()).toBe(3)
+  })
+
+  it("counts the interval from the end of the run, not its start", async () => {
+    const { runner, clock, control } = setup({ pollIntervalMs: POLL })
+    runner.start()
+    await drainMicrotasks()
+    await clock.advance(POLL * 3) // the run is still in flight: nothing polls meanwhile
+    expect(control.started()).toBe(1)
+    await control.finish()
+    await clock.advance(POLL - 1)
+    expect(control.started()).toBe(1)
+    await clock.advance(1)
+    expect(control.started()).toBe(2)
+  })
+
+  it("does not poll by default", async () => {
+    const { runner, clock, control } = setup()
+    runner.start()
+    await drainMicrotasks()
+    await control.finish()
+    await clock.advance(POLL * 10)
+    expect(control.started()).toBe(1)
+    expect(clock.pendingTimers).toBe(0)
+  })
+
+  it("does not poll while the page is hidden, and runs at once when it is visible again", async () => {
+    const { runner, clock, control, page } = setup({ pollIntervalMs: POLL })
+    runner.start()
+    await drainMicrotasks()
+    await control.finish()
+    page.visibilityState = "hidden"
+    await clock.advance(POLL * 3)
+    expect(control.started()).toBe(1)
+    page.visibilityState = "visible"
+    page.fire("visibilitychange")
+    await drainMicrotasks()
+    expect(control.started()).toBe(2)
+    await control.finish()
+    await clock.advance(POLL)
+    expect(control.started()).toBe(3)
+  })
+
+  it("does not arm the interval when a run ends while the page is hidden", async () => {
+    const { runner, clock, control, page } = setup({ pollIntervalMs: POLL })
+    runner.start()
+    await drainMicrotasks()
+    page.visibilityState = "hidden"
+    await control.finish()
+    expect(clock.pendingTimers).toBe(0)
+  })
+
+  it("does not poll while offline, and runs at once when the network returns", async () => {
+    let online = true
+    const { runner, clock, control, page } = setup({
+      pollIntervalMs: POLL,
+      isOnline: () => online,
+    })
+    runner.start()
+    await drainMicrotasks()
+    await control.finish()
+    online = false
+    await clock.advance(POLL * 3)
+    expect(control.started()).toBe(1)
+    online = true
+    page.fire("online")
+    await drainMicrotasks()
+    expect(control.started()).toBe(2)
+  })
+
+  it("restarts the interval on every wake-up", async () => {
+    const { runner, clock, control, page } = setup({ pollIntervalMs: POLL })
+    runner.start()
+    await drainMicrotasks()
+    await control.finish()
+    await clock.advance(POLL - 1000)
+    page.fire("focus")
+    await drainMicrotasks()
+    expect(control.started()).toBe(2)
+    await control.finish()
+    await clock.advance(POLL - 1)
+    expect(control.started()).toBe(2)
+    await clock.advance(1)
+    expect(control.started()).toBe(3)
+  })
+
+  it("leaves no timer after stop()", async () => {
+    const { runner, clock, control } = setup({ pollIntervalMs: POLL })
+    runner.start()
+    await drainMicrotasks()
+    await control.finish()
+    expect(clock.pendingTimers).toBe(1)
+    runner.stop()
+    expect(clock.pendingTimers).toBe(0)
+    await clock.advance(POLL * 2)
+    expect(control.started()).toBe(1)
+  })
+
+  it("retries a failing run by the backoff, then polls again after a success", async () => {
+    const { runner, clock, control } = setup({ pollIntervalMs: POLL, baseDelayMs: 1000 })
+    runner.start()
+    await drainMicrotasks()
+    await control.fail()
+    await clock.advance(999)
+    expect(control.started()).toBe(1)
+    await clock.advance(1) // the 1 s backoff, not the 30 s poll
+    expect(control.started()).toBe(2)
+    await control.fail()
+    await clock.advance(1999)
+    expect(control.started()).toBe(2)
+    await clock.advance(1)
+    expect(control.started()).toBe(3)
+    await control.finish()
+    await clock.advance(POLL)
+    expect(control.started()).toBe(4)
+  })
+
+  it("waits out a backoff longer than the interval instead of polling", async () => {
+    const { runner, clock, control } = setup({ pollIntervalMs: POLL, baseDelayMs: 60_000 })
+    runner.start()
+    await drainMicrotasks()
+    await control.fail()
+    await clock.advance(POLL * 1.5)
+    expect(control.started()).toBe(1)
+    await clock.advance(POLL * 0.5)
+    expect(control.started()).toBe(2)
+  })
+
+  it("rejects an interval that is not a positive finite number", () => {
+    for (const pollIntervalMs of [0, -1, NaN, Infinity, 2_147_483_648]) {
+      expect(() => createSyncRunner({ flush: () => Promise.resolve(), pollIntervalMs })).toThrow(
+        RangeError,
+      )
+    }
+  })
+})
+
+describe("createSyncRunner poll limit", () => {
+  it("accepts the longest interval a timer keeps", () => {
+    expect(() =>
+      createSyncRunner({ flush: () => Promise.resolve(), pollIntervalMs: 2_147_483_647 })
+    ).not.toThrow()
   })
 })
 

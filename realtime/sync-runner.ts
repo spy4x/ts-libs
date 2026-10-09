@@ -17,8 +17,13 @@
  * - **Any wake-up runs now.** `online`, the tab becoming visible, window focus, a page restored from
  *   the back-forward cache and `kick()` all cancel a pending retry and run at once: the person is
  *   back, and the next try should not wait out a delay chosen while they were away.
- * - **`stop()` leaves nothing behind**: every listener removed, the retry timer cleared. A run in
- *   flight finishes, and schedules nothing.
+ * - **Optional polling.** With `pollIntervalMs` set, a run that completes schedules the next one
+ *   that long after it ended, but only while the page is visible and online; a page that is hidden
+ *   or offline waits for the wake-up that brings it back. Every run restarts the interval, and a
+ *   failing run uses the backoff instead, so polling resumes only after a run completes. Off by
+ *   default. `pollIntervalMs` is at most 2 147 483 647 ms, the longest delay a timer keeps.
+ * - **`stop()` leaves nothing behind**: every listener removed, the retry and poll timers cleared.
+ *   A run in flight finishes, and schedules nothing.
  *
  * Time, the event targets and the random source are ports, so a test needs no real timers.
  *
@@ -72,6 +77,14 @@ export interface SyncRunnerOptions {
   baseDelayMs?: number
   /** The longest retry delay. Default 60 000. */
   maxDelayMs?: number
+  /**
+   * When set, a visible, online page runs `flush` again this long after the last run ended, with
+   * no event. A positive, finite number of milliseconds, at most 2 147 483 647 (about 24.8 days;
+   * timers cannot wait longer). Default: no polling.
+   */
+  pollIntervalMs?: number
+  /** Whether the network is up. Defaults to `navigator.onLine`, or `true` without `navigator`. */
+  isOnline?: () => boolean
 }
 
 /** The runner as the app uses it. */
@@ -108,17 +121,33 @@ export function flushOutbox(
   }
 }
 
+/** The longest timer delay a browser keeps; a larger one fires after 1 ms, which would loop. */
+const MAX_POLL_INTERVAL_MS = 2_147_483_647
+
 /** The runner: see the module documentation for the rules it keeps. */
 export function createSyncRunner(options: SyncRunnerOptions): SyncRunner {
   const clock = options.clock ?? createSystemClock()
   const baseDelayMs = options.baseDelayMs ?? 1000
   const maxDelayMs = options.maxDelayMs ?? 60_000
+  const pollIntervalMs = options.pollIntervalMs
+  if (
+    pollIntervalMs !== undefined &&
+    (typeof pollIntervalMs !== "number" || !Number.isFinite(pollIntervalMs) ||
+      pollIntervalMs <= 0 ||
+      pollIntervalMs > MAX_POLL_INTERVAL_MS)
+  ) {
+    throw new RangeError(
+      `pollIntervalMs must be a positive finite number of at most ${MAX_POLL_INTERVAL_MS} ms, got ${pollIntervalMs}`,
+    )
+  }
+  const isOnline = options.isOnline ?? (() => globalThis.navigator?.onLine !== false)
   const listeners = new Set<(state: SyncRunnerState) => void>()
   let state: SyncRunnerState = { running: false, lastError: null, failures: 0, nextRetryAt: null }
   let active = false
   let again = false
   let inProgress = false
   let retry: TimerHandle | undefined
+  let poll: TimerHandle | undefined
   let current: Promise<void> | undefined
   let unlisten: (() => void) | undefined
 
@@ -139,6 +168,25 @@ export function createSyncRunner(options: SyncRunnerOptions): SyncRunner {
     retry = undefined
   }
 
+  function cancelPoll(): void {
+    if (poll) clock.clearTimeout(poll)
+    poll = undefined
+  }
+
+  function pageIsLive(): boolean {
+    const target = options.target ?? (globalThis as unknown as SyncRunnerTarget)
+    return target.document.visibilityState !== "hidden" && isOnline()
+  }
+
+  function schedulePoll(): void {
+    if (pollIntervalMs === undefined || !pageIsLive()) return
+    poll = clock.setTimeout(() => {
+      poll = undefined
+      // Hidden or offline now: stay quiet; the wake-up that returns the person runs it.
+      if (active && pageIsLive()) void kick()
+    }, pollIntervalMs)
+  }
+
   function scheduleRetry(): void {
     const delay = backoffDelay({
       rawMs: baseDelayMs * 2 ** Math.max(0, state.failures - 1),
@@ -157,6 +205,7 @@ export function createSyncRunner(options: SyncRunnerOptions): SyncRunner {
   async function run(): Promise<void> {
     inProgress = true
     cancelRetry()
+    cancelPoll()
     update({ running: true, nextRetryAt: null })
     try {
       do {
@@ -176,6 +225,7 @@ export function createSyncRunner(options: SyncRunnerOptions): SyncRunner {
         }
         // A kick that arrived meanwhile runs at once, in place of the wait this failure would set.
         if (failed && !again && active) scheduleRetry()
+        else if (!failed && !again && active) schedulePoll()
       } while (again && active)
     } finally {
       again = false
@@ -214,6 +264,7 @@ export function createSyncRunner(options: SyncRunnerOptions): SyncRunner {
       unlisten?.()
       unlisten = undefined
       cancelRetry()
+      cancelPoll()
       if (state.nextRetryAt !== null) update({ nextRetryAt: null })
     },
     kick,
