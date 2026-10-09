@@ -1236,4 +1236,30 @@ describe("outbox withdraw", () => {
   })
 })
 
+describe("outbox with two overlapping submits for one entity", () => {
+  const edits = (h: ReturnType<typeof harness>) => [
+    h.outbox.submit({ kind: "update", entityId: "n", payload: text("A"), version: 1 }),
+    h.outbox.submit({ kind: "update", entityId: "n", payload: text("B"), version: 1 }),
+  ]
+
+  it("answers sent to both callers when the server accepts the shared write", async () => {
+    const h = harness()
+    const [a, b] = await Promise.all(edits(h))
+    expect(a.kind).toBe("sent")
+    expect(b.kind).toBe("sent")
+    expect(h.outbox.entries()).toEqual([])
+  })
+
+  it("answers conflict to both callers when the server refuses the shared write", async () => {
+    const h = harness()
+    h.state.current = item("n", 5)
+    h.state.server = () => {
+      throw refused("VERSION_CONFLICT")
+    }
+    const [a, b] = await Promise.all(edits(h))
+    expect(a).toEqual({ kind: "conflict", reason: "version" })
+    expect(b).toEqual({ kind: "conflict", reason: "version" })
+  })
+})
+
 describeOutboxStoreContract("createMemoryOutboxStore", () => createMemoryOutboxStore())
