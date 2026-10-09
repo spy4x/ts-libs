@@ -171,3 +171,12 @@ Deno.test("a task with no CREATED is created at its DTSTAMP", () => {
     time: `08:00:00`,
   })
 })
+
+Deno.test("a date and a floating time stay on the day they are written, even on a day the zone skipped", () => {
+  // Samoa went from 2011-12-29 straight to 2011-12-31, so no instant on the 30th exists there.
+  const skipped = `Pacific/Apia`
+  const date = { kind: IcalDateKind.Date, date: `2011-12-30` }
+  const floating = { kind: IcalDateKind.Floating, date: `2011-12-30`, time: `12:00:00` }
+  expect(dateDay(date, skipped)).toBe(`2011-12-30`)
+  expect(dateDay(floating, skipped)).toBe(`2011-12-30`)
+})
