@@ -69,7 +69,10 @@ export class CalDavWriteError extends Error {
 /** What an app supplies to turn a queue entry into a CalDAV request. */
 export interface CalDavWriteOptions<P, S> {
   writer: CalDavWriter
-  /** The calendar a new object goes into. */
+  /**
+   * The calendar a new object goes into. May be path-only (`/dav/cal/me/tasks/`) when the writer
+   * is a relay adapter; the addresses given to the writer then stay path-only.
+   */
   calendarUrl(command: CalDavWriteCommand<P>): string
   /**
    * The address of an entity's object. For an entity created on this device it is
@@ -118,6 +121,13 @@ function uidOf(ics: string): string | null {
 
 /** The address {@link createCalDavWriteTransport} gives a created entity's object. */
 export function objectUrl(calendarUrl: string | URL, entityId: string): string {
+  // A path-only address (`/dav/cal/me/tasks/`) stays path-only, for apps whose server relay owns
+  // the origin. `//host/...` is not a path and is handled as before.
+  if (typeof calendarUrl === "string" && /^\/(?!\/)/.test(calendarUrl)) {
+    const base = new URL(calendarUrl, "http://path.invalid")
+    const child = childUrl(base, `${entityId}.ics`)
+    return `${child.pathname}${child.search}`
+  }
   return childUrl(calendarUrl, `${entityId}.ics`).href
 }
 

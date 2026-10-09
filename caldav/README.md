@@ -174,14 +174,20 @@ needs the entity id to be a plain file name: an update or delete goes to the add
 The app supplies the calendar, the object's address, the etag a write is based on, the iCalendar
 text, and how to turn an object into its entity.
 
-| Server answer                                                                         | The queue sees                                 |
-| ------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| 412 on an update or delete                                                            | `version`; the outbox then calls `fetchServer` |
-| 412 on a create (address taken, different content)                                    | `already-exists`                               |
-| 404 or 410 on an update                                                               | `not-found`                                    |
-| 404 or 410 on a delete                                                                | success                                        |
-| network error, timeout, 5xx, 401, 403, 408, 429                                       | `unreachable`: keep the entry, retry later     |
-| other 4xx (not 401, 403, 408, 429), a UID clash, a bad entity id on a create, no etag | `rejected`, with the message                   |
+An update or delete whose `etagOf` gives no etag reads the object first and uses its current etag;
+a failed read keeps the write queued, a missing object is `not-found` (update) or done (delete).
+The calendar address may be path-only (`/dav/cal/me/tasks/`) for a browser app behind a relay:
+`objectUrl` then returns a path, and the writer receives paths only.
+
+| Server answer                                                                     | The queue sees                                 |
+| --------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 412 on an update or delete                                                        | `version`; the outbox then calls `fetchServer` |
+| 412 on a create (address taken, different content)                                | `already-exists`                               |
+| 404 or 410 on an update                                                           | `not-found`                                    |
+| 404 or 410 on a delete                                                            | success                                        |
+| network error, timeout, 5xx, 401, 403, 408, 429                                   | `unreachable`: keep the entry, retry later     |
+| other 4xx (not 401, 403, 408, 429), a bad entity id on a create, no etag anywhere | `rejected`, with the message                   |
+| a create whose file name is held by an object with another UID                    | `rejected`: no "Keep mine" can overwrite it    |
 
 ```ts
 const writer = createCalDavClient({ serverUrl, auth }) // or an adapter with the same results
