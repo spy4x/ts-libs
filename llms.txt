@@ -2310,9 +2310,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/time/ical-tasks`
 
-- `Alarm` (interface), `jsr:@spy4x/time/ical-tasks`: A reminder (VALARM), read-only.
+- `Alarm` (interface), `jsr:@spy4x/time/ical-tasks`: A reminder (VALARM) as read.
+- `AlarmInput` (interface), `jsr:@spy4x/time/ical-tasks`: A reminder (VALARM) to write.
 - `AlarmRelated` (enum), `jsr:@spy4x/time/ical-tasks`: What a relative trigger is counted from (`RELATED`, default `START`).
 - `AlarmTrigger` (type), `jsr:@spy4x/time/ical-tasks`: The trigger of a reminder.
+- `AlarmTriggerInput` (type), `jsr:@spy4x/time/ical-tasks`: The trigger of a reminder to write: `related` defaults to AlarmRelated.Start.
 - `AlarmTriggerKind` (enum), `jsr:@spy4x/time/ical-tasks`: Whether a reminder's trigger is an offset or a moment.
 - `CalendarEvent` (interface), `jsr:@spy4x/time/ical-tasks`: The fields of an event that apps read.
 - `CompleteTodoError` (interface), `jsr:@spy4x/time/ical-tasks`: The error half of CompleteTodoResult.
@@ -2475,4 +2477,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 8d58ff20d53dc8bdfdb38597c1a29905582828d5e8bac62a416398f53b50f1da -->
+<!-- export surface: sha256 3d4791953a619a003c00bc8e4099c57d2a28102c8e5b9783b390709275f2c787 -->

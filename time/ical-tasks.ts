@@ -2,7 +2,9 @@
  * Tasks (VTODO) and events (VEVENT) on top of the lossless iCalendar model in `./ical.ts`:
  * read the fields an app shows, patch only the fields it changes, create a new object.
  *
- * A patch changes the patched properties plus DTSTAMP, LAST-MODIFIED and SEQUENCE. Every other
+ * A patch changes the patched properties plus DTSTAMP and LAST-MODIFIED. SEQUENCE goes up by one
+ * on an event patch, and on a task patch that changes DTSTART, DUE, RRULE or STATUS (RFC 5545
+ * §3.8.7.4); a task patch of a title, reminder or category leaves it. Every other
  * line, including reminders, vendor `X-` properties, time zones and recurrence overrides, is
  * written back byte for byte. CREATED is never rewritten, and COMPLETED of an already completed
  * task is kept. A patch is atomic: when it is
@@ -69,11 +71,32 @@ export type AlarmTrigger =
   | { kind: AlarmTriggerKind.Relative; duration: string; related: AlarmRelated }
   | { kind: AlarmTriggerKind.Absolute; at: IcalDateValue }
 
-/** A reminder (VALARM), read-only. */
+/** A reminder (VALARM) as read. To write reminders, see {@link AlarmInput}. */
 export interface Alarm {
   /** `DISPLAY`, `AUDIO`, `EMAIL`, … as written. */
   action?: string
   trigger?: AlarmTrigger
+}
+
+/** The trigger of a reminder to write: `related` defaults to {@link AlarmRelated.Start}. */
+export type AlarmTriggerInput =
+  | { kind: AlarmTriggerKind.Relative; duration: string; related?: AlarmRelated }
+  | { kind: AlarmTriggerKind.Absolute; at: IcalDateValue }
+
+/**
+ * A reminder (VALARM) to write.
+ *
+ * - `action`: `DISPLAY` (default) or `AUDIO`; `EMAIL` needs recipients this module does not
+ *   write, so it is refused.
+ * - `trigger`: a relative duration such as `-PT1H` (RFC 5545 duration grammar, upper-case),
+ *   counted from the start or, with `related: End`, the end; or an absolute UTC moment.
+ * - `description`: the DESCRIPTION a DISPLAY reminder requires. Defaults to the SUMMARY of the
+ *   task or event as it is after the patch, or `Reminder` when it has none.
+ */
+export interface AlarmInput {
+  action?: "DISPLAY" | "AUDIO"
+  trigger: AlarmTriggerInput
+  description?: string
 }
 
 /** A link to another task (RELATED-TO). */
@@ -157,6 +180,12 @@ export interface TodoPatch {
   relatedTo?: { uid: string; type?: string }[] | null
   rrule?: string | null
   sortOrder?: number | null
+  /**
+   * Reminders. A list replaces every VALARM, except that an existing VALARM with the same ACTION
+   * and TRIGGER (and the same DESCRIPTION, when one is given) as an entry stays as it is, with
+   * its vendor lines such as `X-MOZ-LASTACK`. `null` removes every VALARM; left out, they stay.
+   */
+  alarms?: AlarmInput[] | null
 }
 
 /** Changes to an event. A field left out stays as it is; `null` clears it. */
@@ -171,6 +200,8 @@ export interface EventPatch {
   duration?: string | null
   categories?: string[] | null
   rrule?: string | null
+  /** Reminders; the same rules as {@link TodoPatch.alarms}. */
+  alarms?: AlarmInput[] | null
 }
 
 /** Caller-supplied inputs: the clock is never read here. */
@@ -527,18 +558,143 @@ function writeRelatedTo(
   return undefined
 }
 
-/** DTSTAMP and LAST-MODIFIED to `now`; SEQUENCE up by one unless `fresh`. */
+const DURATION_TIME = String.raw`T(?:\d+H(?:\d+M)?(?:\d+S)?|\d+M(?:\d+S)?|\d+S)`
+/** RFC 5545 `dur-value`: `P` then weeks, or days with an optional time, or a time. */
+const DURATION = new RegExp(`^[+-]?P(?:\\d+W|\\d+D(?:${DURATION_TIME})?|${DURATION_TIME})$`)
+
+interface WantedAlarm {
+  action: "DISPLAY" | "AUDIO"
+  trigger: AlarmTrigger
+  description?: string
+}
+
+function wantedAlarms(value: unknown): IcalResult<WantedAlarm[]> {
+  if (!Array.isArray(value)) return fail(IcalErrorCode.InvalidValue, "alarms must be a list")
+  const out: WantedAlarm[] = []
+  for (const entry of value as (AlarmInput | null)[]) {
+    if (entry === null || typeof entry !== "object" || !entry.trigger) {
+      return fail(IcalErrorCode.InvalidValue, "an alarm needs a trigger")
+    }
+    const action = entry.action ?? "DISPLAY"
+    if (action !== "DISPLAY" && action !== "AUDIO") {
+      return fail(IcalErrorCode.InvalidValue, "alarm action must be DISPLAY or AUDIO")
+    }
+    if (
+      entry.description !== undefined &&
+      (typeof entry.description !== "string" || !entry.description)
+    ) {
+      return fail(IcalErrorCode.InvalidValue, "alarm description must be a non-empty string")
+    }
+    const trigger = entry.trigger
+    let parsed: AlarmTrigger
+    if (trigger.kind === AlarmTriggerKind.Relative) {
+      if (typeof trigger.duration !== "string" || !DURATION.test(trigger.duration)) {
+        return fail(IcalErrorCode.InvalidValue, "alarm trigger must be an RFC 5545 duration")
+      }
+      if (
+        trigger.related !== undefined && trigger.related !== AlarmRelated.Start &&
+        trigger.related !== AlarmRelated.End
+      ) {
+        return fail(IcalErrorCode.InvalidValue, `unknown alarm related ${String(trigger.related)}`)
+      }
+      parsed = {
+        kind: AlarmTriggerKind.Relative,
+        duration: trigger.duration,
+        related: trigger.related ?? AlarmRelated.Start,
+      }
+    } else if (trigger.kind === AlarmTriggerKind.Absolute) {
+      const probe: IcalComponent = { name: "VALARM", properties: [], components: [] }
+      const written = trigger.at && trigger.at.kind === IcalDateKind.Utc
+        ? writeDate(probe, "TRIGGER", trigger.at)
+        : undefined
+      if (!written?.success) {
+        return fail(IcalErrorCode.InvalidValue, "an absolute alarm trigger must be a UTC date-time")
+      }
+      parsed = { kind: AlarmTriggerKind.Absolute, at: trigger.at }
+    } else {
+      return fail(IcalErrorCode.InvalidValue, "unknown alarm trigger kind")
+    }
+    out.push({ action, trigger: parsed, description: entry.description })
+  }
+  return ok(out)
+}
+
+function sameTrigger(left: AlarmTrigger | undefined, right: AlarmTrigger): boolean {
+  if (!left || left.kind !== right.kind) return false
+  if (left.kind === AlarmTriggerKind.Relative && right.kind === AlarmTriggerKind.Relative) {
+    return left.duration.toUpperCase() === right.duration && left.related === right.related
+  }
+  if (left.kind === AlarmTriggerKind.Absolute && right.kind === AlarmTriggerKind.Absolute) {
+    return left.at.kind === right.at.kind && left.at.date === right.at.date &&
+      left.at.time === right.at.time
+  }
+  return false
+}
+
+function newAlarm(wanted: WantedAlarm, fallback: string): IcalComponent {
+  const alarm: IcalComponent = { name: "VALARM", properties: [], components: [] }
+  setProperty(alarm, "ACTION", wanted.action)
+  if (wanted.trigger.kind === AlarmTriggerKind.Relative) {
+    const params: IcalParameter[] = wanted.trigger.related === AlarmRelated.End
+      ? [{ name: "RELATED", values: ["END"] }]
+      : []
+    setProperty(alarm, "TRIGGER", wanted.trigger.duration, params)
+  } else {
+    writeDate(alarm, "TRIGGER", wanted.trigger.at)
+    getProperty(alarm, "TRIGGER")!.params = [{ name: "VALUE", values: ["DATE-TIME"] }]
+  }
+  if (wanted.action === "DISPLAY") writeText(alarm, "DESCRIPTION", wanted.description ?? fallback)
+  else if (wanted.description !== undefined) writeText(alarm, "DESCRIPTION", wanted.description)
+  return alarm
+}
+
+/**
+ * Replace the VALARMs of `component` with `value` (see {@link TodoPatch.alarms}). Call it after
+ * SUMMARY is written: the default DESCRIPTION is the final SUMMARY.
+ */
+function writeAlarms(
+  component: IcalComponent,
+  value: AlarmInput[] | null | undefined,
+): IcalResult<unknown> | undefined {
+  if (value === undefined) return undefined
+  const isAlarm = (child: IcalComponent) => child.name.toUpperCase() === "VALARM"
+  if (value === null) {
+    component.components = component.components.filter((child) => !isAlarm(child))
+    return undefined
+  }
+  const wanted = wantedAlarms(value)
+  if (!wanted.success) return wanted
+  const fallback = textOf(component, "SUMMARY") || "Reminder"
+  const keep = new Set<IcalComponent>()
+  const fresh: IcalComponent[] = []
+  for (const entry of wanted.output) {
+    const match = component.components.find((child) => {
+      if (!isAlarm(child) || keep.has(child)) return false
+      const read = readAlarm(child)
+      if (read.action?.toUpperCase() !== entry.action) return false
+      if (!sameTrigger(read.trigger, entry.trigger)) return false
+      return entry.description === undefined || textOf(child, "DESCRIPTION") === entry.description
+    })
+    if (match) keep.add(match)
+    else fresh.push(newAlarm(entry, fallback))
+  }
+  component.components = component.components.filter((child) => !isAlarm(child) || keep.has(child))
+  component.components.push(...fresh)
+  return undefined
+}
+
+/** DTSTAMP and LAST-MODIFIED to `now`; SEQUENCE up by one when `bump`. */
 function stamp(
   component: IcalComponent,
   root: IcalComponent,
   now: IcalDateValue,
-  fresh: boolean,
+  bump: boolean,
 ): IcalResult<unknown> | undefined {
   for (const name of ["DTSTAMP", "LAST-MODIFIED"]) {
     const result = putDate(component, root, name, now)
     if (!result.success) return result
   }
-  if (!fresh) {
+  if (bump) {
     const current = integerOf(component, "SEQUENCE")
     setProperty(
       component,
@@ -633,8 +789,18 @@ function applyTodo(
     () => writeRelatedTo(todo, patch.relatedTo),
     () => writeRrule(todo, patch.rrule),
     () => applyStatus(todo, root, patch, now),
-    () => stamp(todo, root, now, fresh),
+    () => writeAlarms(todo, patch.alarms),
+    () => stamp(todo, root, now, !fresh && changesSchedule(patch)),
   )
+}
+
+/**
+ * Whether a task patch changes what RFC 5545 §3.8.7.4 lists as a revision: DTSTART, DUE, RRULE
+ * or STATUS. A title, a reminder or a category is not one, so SEQUENCE stays.
+ */
+function changesSchedule(patch: TodoPatch): boolean {
+  return patch.start !== undefined || patch.due !== undefined || patch.rrule !== undefined ||
+    patch.status !== undefined
 }
 
 function isCompleted(todo: IcalComponent): boolean {
@@ -708,8 +874,8 @@ function transaction(
 /**
  * Patch the first VTODO of `root` in place and return the task as it now reads.
  *
- * Changes only the patched fields plus DTSTAMP, LAST-MODIFIED (both `options.now`) and
- * SEQUENCE (+1). A patch with no fields is a no-op: nothing is stamped. See {@link TodoPatch}.
+ * Changes only the patched fields plus DTSTAMP, LAST-MODIFIED (both `options.now`) and, when the
+ * patch sets `start`, `due`, `rrule` or `status`, SEQUENCE (+1). A patch with no fields is a no-op: nothing is stamped. See {@link TodoPatch}.
  *
  * Refuses, leaving `root` untouched: no VTODO ({@link IcalErrorCode.Malformed}); a DUE and
  * DTSTART that would differ in value type ({@link IcalErrorCode.ValueTypeMismatch}); a zoned
@@ -816,7 +982,8 @@ function applyEvent(
     },
     () => writeCategories(event, patch.categories),
     () => writeRrule(event, patch.rrule),
-    () => stamp(event, root, now, fresh),
+    () => writeAlarms(event, patch.alarms),
+    () => stamp(event, root, now, !fresh),
   )
 }
 
