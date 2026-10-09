@@ -5925,6 +5925,13 @@ that.
   wider scope is refused without spending the token; one from another client spends it. The PKCE
   verifier is compared in constant time. `offline_access` is accepted but not advertised, since
   refresh tokens are always issued.
+- **Revocation.** `POST /revoke` (RFC 7009) lets a client sign itself out. It takes `token` and
+  an optional `token_type_hint`, which is ignored: both kinds are looked up. A refresh token
+  revokes its whole grant, as a reused one does, and an access token only itself. The answer is
+  `200` with an empty body whether the token was live, unknown, expired or already revoked, so the
+  endpoint cannot be used to find out which tokens exist. Like `/token`, it takes public clients
+  only: client authentication answers `401 invalid_client`. The metadata advertises it as
+  `revocation_endpoint`.
 - **Errors.** RFC 6749 codes: `invalid_grant` for every bad code or refresh token, `invalid_target`
   for a foreign resource, `invalid_client` for any client authentication.
 

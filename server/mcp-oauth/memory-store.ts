@@ -101,6 +101,11 @@ export class MemoryOAuthStore implements OAuthStore {
     return Promise.resolve(record && structuredClone(record))
   }
 
+  deleteAccessToken(key: string): Promise<void> {
+    this.#access.delete(key)
+    return Promise.resolve()
+  }
+
   saveRefreshToken(key: string, record: RefreshTokenRecord): Promise<boolean> {
     return this.#saveToken(this.#refresh, key, record)
   }

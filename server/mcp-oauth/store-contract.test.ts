@@ -144,6 +144,20 @@ export function describeOAuthStoreContract(
       expect(await store.findRefreshToken("r2")).toBeDefined()
     })
 
+    it("deletes one access token and leaves the rest of its grant", async () => {
+      const store = open(manualClock())
+      await store.saveAccessToken("a1", { ...refresh })
+      await store.saveAccessToken("a2", { ...refresh })
+      await store.saveRefreshToken("r1", refresh)
+      await store.deleteAccessToken("a1")
+      await store.deleteAccessToken("missing")
+      expect(await store.findAccessToken("a1")).toBeUndefined()
+      expect(await store.findAccessToken("a2")).toBeDefined()
+      expect(await store.findRefreshToken("r1")).toBeDefined()
+      await store.revokeGrant("g1", 3_000)
+      expect(await store.findAccessToken("a2")).toBeUndefined()
+    })
+
     it("refuses to save tokens of a revoked grant until the revocation lapses", async () => {
       const clock = manualClock()
       const store = open(clock)

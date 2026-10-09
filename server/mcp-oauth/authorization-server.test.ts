@@ -269,6 +269,8 @@ describe("createAuthorizationServer", () => {
       issuer: ISSUER,
       authorization_endpoint: `${ISSUER}/authorize`,
       token_endpoint: `${ISSUER}/token`,
+      revocation_endpoint: `${ISSUER}/revoke`,
+      revocation_endpoint_auth_methods_supported: ["none"],
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
@@ -1035,6 +1037,96 @@ describe("createAuthorizationServer", () => {
       const t = setup()
       const response = await t.token({ grant_type: "client_credentials", client_id: CLAUDE })
       expect((await response.json()).error).toBe("unsupported_grant_type")
+    })
+  })
+
+  describe("revokes a token (RFC 7009)", () => {
+    async function signedIn(t: ReturnType<typeof setup>) {
+      const code = (await t.approve()).searchParams.get("code")!
+      return await (await t.redeem(code)).json()
+    }
+
+    function revoke(
+      t: ReturnType<typeof setup>,
+      body: Record<string, string>,
+      headers: Record<string, string> = {},
+    ) {
+      return t.app.request(`${ISSUER}/revoke`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+        body: new URLSearchParams(body).toString(),
+      })
+    }
+
+    const refreshWith = (t: ReturnType<typeof setup>, refreshToken: string) =>
+      t.token({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: CLAUDE })
+
+    it("with a refresh token: the next refresh fails with invalid_grant and the access token stops", async () => {
+      const t = setup()
+      const tokens = await signedIn(t)
+      const response = await revoke(t, { token: tokens.refresh_token, client_id: CLAUDE })
+      expect(response.status).toBe(200)
+      expect(response.headers.get("cache-control")).toBe("no-store")
+      const refreshed = await refreshWith(t, tokens.refresh_token)
+      expect(refreshed.status).toBe(400)
+      expect((await refreshed.json()).error).toBe("invalid_grant")
+      expect((await t.callMcp(tokens.access_token)).status).toBe(401)
+      expect(await t.store.listGrants()).toEqual([])
+    })
+
+    it("with an access token: only that token stops, and the refresh token still refreshes", async () => {
+      const t = setup()
+      const tokens = await signedIn(t)
+      expect((await revoke(t, { token: tokens.access_token })).status).toBe(200)
+      expect((await t.callMcp(tokens.access_token)).status).toBe(401)
+      const refreshed = await refreshWith(t, tokens.refresh_token)
+      expect(refreshed.status).toBe(200)
+      expect((await t.callMcp((await refreshed.json()).access_token)).status).toBe(200)
+    })
+
+    it("revokes a refresh token sent with an access_token hint, since the hint is only a hint", async () => {
+      const t = setup()
+      const tokens = await signedIn(t)
+      const response = await revoke(t, {
+        token: tokens.refresh_token,
+        token_type_hint: "access_token",
+      })
+      expect(response.status).toBe(200)
+      expect((await (await refreshWith(t, tokens.refresh_token)).json()).error).toBe(
+        "invalid_grant",
+      )
+    })
+
+    it("answers an unknown or already revoked token exactly as a live one", async () => {
+      const t = setup()
+      const tokens = await signedIn(t)
+      const answers = []
+      for (const token of [tokens.refresh_token, tokens.refresh_token, randomBase64Url(32)]) {
+        const response = await revoke(t, { token })
+        answers.push([response.status, await response.text()])
+      }
+      expect(answers).toEqual([[200, ""], [200, ""], [200, ""]])
+    })
+
+    it("refuses client authentication, a missing token and a JSON body without revoking", async () => {
+      const t = setup()
+      const tokens = await signedIn(t)
+      const authenticated = await revoke(t, { token: tokens.refresh_token }, {
+        authorization: "Basic Y2xpZW50OnNlY3JldA==",
+      })
+      expect(authenticated.status).toBe(401)
+      expect((await authenticated.json()).error).toBe("invalid_client")
+      const missing = await revoke(t, { token_type_hint: "refresh_token" })
+      expect(missing.status).toBe(400)
+      expect((await missing.json()).error).toBe("invalid_request")
+      const json = await t.app.request(`${ISSUER}/revoke`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: tokens.refresh_token }),
+      })
+      expect(json.status).toBe(400)
+      expect((await json.json()).error).toBe("invalid_request")
+      expect((await refreshWith(t, tokens.refresh_token)).status).toBe(200)
     })
   })
 

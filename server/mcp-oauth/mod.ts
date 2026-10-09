@@ -16,6 +16,7 @@ export {
   OFFLINE_ACCESS_SCOPE,
   OWNER_PASSWORD_FIELD,
   type OwnerPassword,
+  REVOKE_PATH,
   TOKEN_PATH,
 } from "./authorization-server.ts"
 export {

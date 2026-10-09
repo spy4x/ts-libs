@@ -154,6 +154,15 @@ export class KvOAuthStore implements OAuthStore {
     return this.#find<AccessTokenRecord>(this.#key(ACCESS, key))
   }
 
+  async deleteAccessToken(key: string): Promise<void> {
+    const kvKey = this.#key(ACCESS, key)
+    const record = await this.#find<AccessTokenRecord>(kvKey)
+    if (record === undefined) return
+    await this.#commit(
+      this.#kv.atomic().delete(kvKey).delete(this.#key("grant", record.grantId, ACCESS, key)),
+    )
+  }
+
   saveRefreshToken(key: string, record: RefreshTokenRecord): Promise<boolean> {
     return this.#saveToken(REFRESH, key, record)
   }

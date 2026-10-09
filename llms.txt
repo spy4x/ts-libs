@@ -2118,6 +2118,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `PROTECTED_RESOURCE_METADATA_PATH` (constant), `jsr:@spy4x/server/mcp-oauth`: The well-known path prefix of a protected resource metadata document.
 - `PendingAuthorization` (interface), `jsr:@spy4x/server/mcp-oauth`: An authorization request that passed every check and waits for the owner's click.
 - `ProtectedResourceMetadata` (interface), `jsr:@spy4x/server/mcp-oauth`: The protected resource metadata document (RFC 9728).
+- `REVOKE_PATH` (constant), `jsr:@spy4x/server/mcp-oauth`: Path of the token revocation endpoint (RFC 7009).
 - `RefreshTokenRecord` (interface), `jsr:@spy4x/server/mcp-oauth`: An issued refresh token.
 - `ResourceGuardEnv` (interface), `jsr:@spy4x/server/mcp-oauth`: Hono variables the guard sets.
 - `ResourceServer` (interface), `jsr:@spy4x/server/mcp-oauth`: What createResourceServer returns.
@@ -2655,4 +2656,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 261d3c82835fc1471010026a879b5e3d079004eb755089ca4dd8be2884e5e987 -->
+<!-- export surface: sha256 495c1ff247d47be62603c1eca906d6fcd5b725cf3154c22a5c89b2d36d0bf72a -->

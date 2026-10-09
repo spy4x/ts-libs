@@ -122,6 +122,11 @@ export interface OAuthStore {
   saveAccessToken(key: string, record: AccessTokenRecord): Promise<boolean>
   /** Read an access token, or `undefined` when there is none. */
   findAccessToken(key: string): Promise<AccessTokenRecord | undefined>
+  /**
+   * Delete one access token and nothing else of its grant: what revoking an access token does. Does
+   * nothing when there is no such token.
+   */
+  deleteAccessToken(key: string): Promise<void>
   /** Same contract as {@link OAuthStore.saveAccessToken}, for refresh tokens. */
   saveRefreshToken(key: string, record: RefreshTokenRecord): Promise<boolean>
   /**

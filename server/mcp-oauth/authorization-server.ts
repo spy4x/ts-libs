@@ -43,6 +43,8 @@ export const AUTHORIZATION_SERVER_METADATA_PATH = "/.well-known/oauth-authorizat
 export const AUTHORIZE_PATH = "/authorize"
 /** Path of the token endpoint. */
 export const TOKEN_PATH = "/token"
+/** Path of the token revocation endpoint (RFC 7009). */
+export const REVOKE_PATH = "/revoke"
 
 /** Name of the password input the consent page sends when `ownerPassword` is set. */
 export const OWNER_PASSWORD_FIELD = "owner_password"
@@ -199,6 +201,10 @@ export interface AuthorizationServerMetadata {
   issuer: string
   authorization_endpoint: string
   token_endpoint: string
+  /** The RFC 7009 revocation endpoint, {@link REVOKE_PATH}. */
+  revocation_endpoint: string
+  /** `["none"]`: only public clients revoke, with no client authentication. */
+  revocation_endpoint_auth_methods_supported: string[]
   response_types_supported: string[]
   grant_types_supported: string[]
   code_challenge_methods_supported: string[]
@@ -210,7 +216,10 @@ export interface AuthorizationServerMetadata {
 
 /** What {@link createAuthorizationServer} returns. */
 export interface AuthorizationServer {
-  /** Routes for the metadata document, `GET`/`POST /authorize` and `POST /token`. Mount at `/`. */
+  /**
+   * Routes for the metadata document, `GET`/`POST /authorize`, `POST /token` and `POST /revoke`.
+   * Mount at `/`.
+   */
   app: Hono
   /** The metadata document. */
   metadata: AuthorizationServerMetadata
@@ -379,6 +388,8 @@ export function createAuthorizationServer(
     issuer,
     authorization_endpoint: issuer + AUTHORIZE_PATH,
     token_endpoint: issuer + TOKEN_PATH,
+    revocation_endpoint: issuer + REVOKE_PATH,
+    revocation_endpoint_auth_methods_supported: ["none"],
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
@@ -680,7 +691,11 @@ export function createAuthorizationServer(
     return redirect(c, pending.redirectUri, { code, state: pending.state })
   })
 
-  app.post(TOKEN_PATH, async (c) => {
+  /**
+   * The form parameters of a `/token` or `/revoke` request, or the error response that refuses it:
+   * any client authentication (public clients only), another content type, or a malformed body.
+   */
+  async function clientRequestParams(c: Context): Promise<Params | Response> {
     const authorization = c.req.header("authorization")
     if (authorization !== undefined) {
       // RFC 6749 section 5.2: a 401 names the scheme the client tried. Echo it only when it is a
@@ -699,7 +714,12 @@ export function createAuthorizationServer(
     } catch {
       params = undefined
     }
-    if (params === undefined) return tokenError(c, "invalid_request", "malformed request")
+    return params ?? tokenError(c, "invalid_request", "malformed request")
+  }
+
+  app.post(TOKEN_PATH, async (c) => {
+    const params = await clientRequestParams(c)
+    if (params instanceof Response) return params
     const clientId = params.get("client_id")
     if (clientId === undefined) return tokenError(c, "invalid_request", "client_id is required")
     const rawResource = params.get("resource")
@@ -782,6 +802,26 @@ export function createAuthorizationServer(
     }
 
     return tokenError(c, "unsupported_grant_type", "grant_type is not supported")
+  })
+
+  // RFC 7009. The token itself is the credential: whoever holds it could use it, so whoever holds
+  // it may end it. `token_type_hint` is ignored, as section 2.1 allows: both kinds are looked up.
+  // An unknown, expired or already revoked token answers 200 like a live one, so the endpoint
+  // cannot tell a caller whether a token exists.
+  app.post(REVOKE_PATH, async (c) => {
+    const params = await clientRequestParams(c)
+    if (params instanceof Response) return params
+    const token = params.get("token")
+    if (token === undefined) return tokenError(c, "invalid_request", "token is required")
+    const key = await sha256Hex(token)
+    // A refresh token stands for the whole grant: ending only it would leave the grant's access
+    // token working, so it revokes the grant, as a reused one does.
+    const refresh = await store.findRefreshToken(key)
+    if (refresh !== undefined) await store.revokeGrant(refresh.grantId, clock.now() + revokeTtl)
+    else await store.deleteAccessToken(key)
+    c.header("Cache-Control", "no-store")
+    c.header("Pragma", "no-cache")
+    return c.body(null, 200)
   })
 
   return { app, metadata, verifier: createAccessTokenVerifier(store, clock) }

@@ -179,6 +179,18 @@ describe("KvOAuthStore", () => {
     ])
   })
 
+  it("removes a deleted access token's index key along with the token", async () => {
+    const kv = fakeKv()
+    const store = new KvOAuthStore(kv, { clock: manualClock() })
+    await store.saveAccessToken("a", { ...refresh })
+    await store.saveRefreshToken("r", refresh)
+    await store.deleteAccessToken("a")
+    expect([...kv.entries.values()].map((entry) => entry.key)).toEqual([
+      ["mcp-oauth", "refresh", "r"],
+      ["mcp-oauth", "grant", refresh.grantId, "refresh", "r"],
+    ])
+  })
+
   it("leaves no token of a grant whose revocation raced the token's save", async () => {
     const kv = fakeKv()
     const store = new KvOAuthStore(kv, { clock: manualClock() })
