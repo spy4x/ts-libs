@@ -9,7 +9,11 @@ import {
   defaultConsentPage,
   OWNER_PASSWORD_FIELD,
 } from "./authorization-server.ts"
-import { createPasswordHasher, MIN_PASSWORD_ITERATIONS } from "../sign-in/password.ts"
+import {
+  createPasswordHasher,
+  MIN_PASSWORD_ITERATIONS,
+  type PasswordHasher,
+} from "../sign-in/password.ts"
 import type { ClientMetadataSource } from "./client-metadata.ts"
 import { MemoryOAuthStore } from "./memory-store.ts"
 import { CLAUDE_REDIRECT_URI } from "./redirect-uri.ts"
@@ -591,6 +595,113 @@ describe("createAuthorizationServer", () => {
       })
       expect(both.status).toBe(302)
     })
+
+    describe("caps wrong passwords", () => {
+      /** The shared hasher, counting how often it checks a password. */
+      function countingHasher() {
+        const counter = { verifies: 0 }
+        const counted: PasswordHasher = {
+          hash: (password) => hasher.hash(password),
+          verify: (password, stored) => {
+            counter.verifies++
+            return hasher.verify(password, stored)
+          },
+        }
+        return { counter, ownerPassword: { hash: ownerPassword.hash, hasher: counted } }
+      }
+      const WRONG = "an invented wrong password"
+      const approve = (t: ReturnType<typeof setup>, id: string, password: string) =>
+        t.postConsent({ consent_id: id, decision: "approve", [OWNER_PASSWORD_FIELD]: password })
+      const newConsent = async (t: ReturnType<typeof setup>) =>
+        await t.consentId(await t.getAuthorize(await t.authorizeParams(), false))
+
+      it("refuses approvals with 429 and Retry-After after maxFailures wrong passwords, until the window ends, then counts again", async () => {
+        const t = setup({
+          confirmOwner: undefined,
+          ownerPassword: { ...ownerPassword, maxFailures: 3, windowMs: 60_000 },
+        })
+        const id = await newConsent(t)
+        for (let i = 0; i < 3; i++) expect((await approve(t, id, WRONG)).status).toBe(403)
+        const locked = await approve(t, id, OWNER_PASSWORD)
+        expect(locked.status).toBe(429)
+        expect(locked.headers.get("retry-after")).toBe("60")
+        t.advance(59_000)
+        const stillLocked = await approve(t, id, OWNER_PASSWORD)
+        expect(stillLocked.status).toBe(429)
+        expect(stillLocked.headers.get("retry-after")).toBe("1")
+        t.advance(1_000)
+        for (let i = 0; i < 3; i++) expect((await approve(t, id, WRONG)).status).toBe(403)
+        expect((await approve(t, id, OWNER_PASSWORD)).status).toBe(429)
+        t.advance(60_000)
+        expect((await approve(t, id, OWNER_PASSWORD)).status).toBe(302)
+      })
+
+      it("locks out after 10 wrong passwords for 15 minutes by default", async () => {
+        const t = withPassword()
+        const id = await newConsent(t)
+        for (let i = 0; i < 10; i++) expect((await approve(t, id, WRONG)).status).toBe(403)
+        const locked = await approve(t, id, OWNER_PASSWORD)
+        expect(locked.status).toBe(429)
+        expect(locked.headers.get("retry-after")).toBe("900")
+      })
+
+      it("does not run the hasher while locked out", async () => {
+        const { counter, ownerPassword } = countingHasher()
+        const t = setup({
+          confirmOwner: undefined,
+          ownerPassword: { ...ownerPassword, maxFailures: 2 },
+        })
+        const id = await newConsent(t)
+        for (let i = 0; i < 2; i++) await approve(t, id, WRONG)
+        expect(counter.verifies).toBe(2)
+        for (let i = 0; i < 5; i++) expect((await approve(t, id, WRONG)).status).toBe(429)
+        expect(counter.verifies).toBe(2)
+      })
+
+      it("runs the hasher at most maxFailures times for wrong passwords sent in parallel", async () => {
+        const { counter, ownerPassword } = countingHasher()
+        const t = setup({
+          confirmOwner: undefined,
+          ownerPassword: { ...ownerPassword, maxFailures: 3 },
+        })
+        const ids = await Promise.all(Array.from({ length: 8 }, () => newConsent(t)))
+        const statuses = (await Promise.all(ids.map((id) => approve(t, id, WRONG))))
+          .map((r) => r.status)
+        expect(counter.verifies).toBe(3)
+        expect(statuses.filter((s) => s === 403)).toHaveLength(3)
+        expect(statuses.filter((s) => s === 429)).toHaveLength(5)
+      })
+
+      it("counts neither right nor empty passwords", async () => {
+        const t = setup({
+          confirmOwner: undefined,
+          ownerPassword: { ...ownerPassword, maxFailures: 2 },
+        })
+        expect((await approve(t, await newConsent(t), OWNER_PASSWORD)).status).toBe(302)
+        const id = await newConsent(t)
+        expect((await t.postConsent({ consent_id: id, decision: "approve" })).status).toBe(400)
+        expect((await approve(t, id, WRONG)).status).toBe(403)
+        expect((await approve(t, id, WRONG)).status).toBe(403)
+        expect((await approve(t, id, OWNER_PASSWORD)).status).toBe(429)
+      })
+
+      it("still denies, and keeps issued tokens working, while locked out", async () => {
+        const t = setup({
+          confirmOwner: undefined,
+          ownerPassword: { ...ownerPassword, maxFailures: 1 },
+        })
+        const response = await approve(t, await newConsent(t), OWNER_PASSWORD)
+        const code = new URL(response.headers.get("location")!).searchParams.get("code")!
+        const id = await newConsent(t)
+        expect((await approve(t, id, WRONG)).status).toBe(403)
+        expect((await approve(t, id, OWNER_PASSWORD)).status).toBe(429)
+        const denied = await t.postConsent({ consent_id: id, decision: "deny" })
+        expect(denied.status).toBe(302)
+        expect(new URL(denied.headers.get("location")!).searchParams.get("error"))
+          .toBe("access_denied")
+        expect((await t.redeem(code)).status).toBe(200)
+      })
+    })
   })
 
   describe("refuses the code exchange", () => {
@@ -874,6 +985,23 @@ describe("createAuthorizationServer", () => {
           ownerPassword: { hash: "", hasher },
         })
       ).toThrow("ownerPassword.hash must be a password hash")
+    })
+
+    it("refuses a wrong-password cap that is not a positive integer or window", () => {
+      const server = (cap: { maxFailures?: number; windowMs?: number }) => () =>
+        createAuthorizationServer({
+          ...base,
+          issuer: ISSUER,
+          ownerPassword: { ...ownerPassword, ...cap },
+        })
+      for (const maxFailures of [0, -1, 1.5, Number.NaN]) {
+        expect(server({ maxFailures })).toThrow(
+          "ownerPassword.maxFailures must be a positive integer",
+        )
+      }
+      for (const windowMs of [0, -1, Number.POSITIVE_INFINITY]) {
+        expect(server({ windowMs })).toThrow("ownerPassword.windowMs must be positive")
+      }
     })
 
     it("refuses an empty resource list", () => {

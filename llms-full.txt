@@ -5726,8 +5726,18 @@ input, and the same consent can still be approved. With both `confirmOwner` and 
 set, both must pass: `confirmOwner` on every request, the password on an approval. At least one of
 them is required.
 
-The server does not count wrong passwords. Put `@spy4x/platform/rate-limit/hono` in front of
-`POST /authorize`, as "What it does not do" below says for every route.
+**Wrong passwords are capped.** After 10 wrong passwords within 15 minutes, every approval answers
+`429` with a `Retry-After` header until the oldest of them is 15 minutes old. A locked-out approval
+is refused before the hasher runs, so a flood of guesses costs no PBKDF2 work. The count is kept in
+memory for the whole server, since there is one owner, and starts again on a restart. Only wrong
+passwords count: a missing one and the right one do not. Denials and tokens already issued keep
+working. Change the cap with `ownerPassword: { hash, hasher, maxFailures, windowMs }`.
+
+The trade-off: anyone who can reach the consent page can lock the owner out of approving new
+clients for the window, by sending wrong passwords. Clients that already have tokens are not
+affected. A rate limiter per address in front of `POST /authorize`
+(`@spy4x/platform/rate-limit/hono`) makes that harder, as "What it does not do" below says for
+every route.
 
 `MemoryOAuthStore` signs every client out on a restart or deploy. `KvOAuthStore` keeps the same
 records in Deno KV, which needs no service beside the app: open the database on a mounted volume
@@ -5753,7 +5763,8 @@ grant's revocation key, and `revokeGrant` finds a grant's tokens through an inde
   Metadata Document when the metadata advertises it, so the registration endpoint would only add
   attack surface.
 - No confidential clients, no `client_credentials` grant, no OpenID Connect.
-- No rate limiting: mount `@spy4x/platform/rate-limit/hono` in front of `/authorize` and `/token`.
+- No rate limiting beyond the cap on wrong owner passwords: mount
+  `@spy4x/platform/rate-limit/hono` in front of `/authorize` and `/token`.
 - No store over another database. `MemoryOAuthStore` loses every grant on restart, after which
   Claude asks the owner to connect again; `KvOAuthStore` keeps them. For anything else, implement
   `OAuthStore` and run it through the same rules; `consumeCode`, `consumeRefreshToken` and

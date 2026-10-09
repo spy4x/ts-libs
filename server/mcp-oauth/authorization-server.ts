@@ -97,6 +97,13 @@ export interface OwnerPassword {
   hash: string
   /** Checks a typed password against `hash`, e.g. `createPasswordHasher({ pepper })`. */
   hasher: PasswordHasher
+  /**
+   * Wrong passwords allowed within `windowMs` before approvals are refused with `429` until the
+   * window ends. Counted in memory for the whole server, since there is one owner. Defaults to 10.
+   */
+  maxFailures?: number
+  /** The window `maxFailures` counts over, in milliseconds. Defaults to 15 minutes. */
+  windowMs?: number
 }
 
 /** Options for {@link createAuthorizationServer}. */
@@ -123,8 +130,10 @@ export interface AuthorizationServerOptions {
    * Ask for the owner's password on the consent page, for an app with no forward-auth in front of
    * `/authorize`. The default page then shows a password input; an approval must carry the right
    * password, and a denial needs none. A missing or wrong password shows the page again with an
-   * error, and the same consent can still be approved. The server does not limit guesses: put a
-   * rate limiter in front of `POST /authorize`.
+   * error, and the same consent can still be approved. After `maxFailures` wrong passwords within
+   * `windowMs` (10 in 15 minutes by default), every approval answers `429` with `Retry-After` until
+   * the window ends, without running the hasher. Denials and issued tokens are unaffected. The
+   * trade-off: someone who can reach the page can keep the owner from approving new clients.
    */
   ownerPassword?: OwnerPassword
   /**
@@ -290,6 +299,17 @@ export function createAuthorizationServer(
   ) {
     throw new TypeError("ownerPassword.hash must be a password hash")
   }
+  const maxFailures = ownerPassword?.maxFailures ?? 10
+  if (!Number.isSafeInteger(maxFailures) || maxFailures < 1) {
+    throw new TypeError("ownerPassword.maxFailures must be a positive integer")
+  }
+  const failureWindow = positive(ownerPassword?.windowMs, 15 * 60_000, "ownerPassword.windowMs")
+  /**
+   * When each counted password attempt within the window was made, oldest first. An attempt is
+   * counted before the hasher runs and uncounted when the password is right, so parallel guesses
+   * cannot run the hasher more than `maxFailures` times between them.
+   */
+  const failures: { at: number }[] = []
   const confirmOwner = options.confirmOwner ?? (() => true)
   if (options.resources.length === 0) throw new TypeError("resources must list at least one URL")
   const resources = new Set<string>()
@@ -422,14 +442,39 @@ export function createAuthorizationServer(
     return c.html(html, passwordError?.status ?? 200)
   }
 
-  /** Why an approval's password is refused, or `undefined` when none is needed or it is right. */
+  /** Milliseconds until approvals are accepted again, or 0 when passwords are not locked out. */
+  function lockedFor(): number {
+    const now = clock.now()
+    while (failures.length > 0 && failures[0].at + failureWindow <= now) failures.shift()
+    return failures.length < maxFailures ? 0 : failures[0].at + failureWindow - now
+  }
+
+  /** Answers an approval while passwords are locked out. */
+  function lockedOut(c: Context, ms: number): Response {
+    c.header("Retry-After", String(Math.ceil(ms / 1000)))
+    c.header("Cache-Control", "no-store")
+    return c.text("Too many wrong passwords. Try again later.", 429)
+  }
+
+  /**
+   * Why an approval's password is refused, or `undefined` when none is needed or it is right. A
+   * number is how many milliseconds passwords stay locked out; the hasher did not run.
+   */
   async function passwordRefusal(
     password: string | undefined,
-  ): Promise<{ status: 400 | 403; message: string } | undefined> {
+  ): Promise<{ status: 400 | 403; message: string } | number | undefined> {
     if (ownerPassword === undefined) return undefined
     if (password === undefined) return { status: 400, message: "Enter the owner password." }
+    // Checked and counted with no await in between, so parallel guesses see each other.
+    const locked = lockedFor()
+    if (locked > 0) return locked
+    const attempt = { at: clock.now() }
+    failures.push(attempt)
     const check = await ownerPassword.hasher.verify(password, ownerPassword.hash)
-    return check.valid ? undefined : { status: 403, message: "Wrong password. Try again." }
+    if (!check.valid) return { status: 403, message: "Wrong password. Try again." }
+    const index = failures.indexOf(attempt)
+    if (index !== -1) failures.splice(index, 1)
+    return undefined
   }
 
   const app = new Hono()
@@ -521,6 +566,7 @@ export function createAuthorizationServer(
       const refusal = await passwordRefusal(params?.get(OWNER_PASSWORD_FIELD))
       if (refusal !== undefined) {
         await store.savePending(pendingKey, pending)
+        if (typeof refusal === "number") return lockedOut(c, refusal)
         return consentPage(c, consentId, pending, refusal)
       }
     }
