@@ -106,6 +106,14 @@ Deno.test(`completing a task that is already completed is refused, and is not a 
   expect(COMPLETE_REFUSED_BY_RULE.has(result.error!.code)).toBe(false)
 })
 
+Deno.test(`only a refused repeat rule or date counts as outside what can be reproduced`, () => {
+  expect([...COMPLETE_REFUSED_BY_RULE].sort()).toEqual([
+    CompleteTodoErrorCode.UnsupportedRule,
+    CompleteTodoErrorCode.NoDueDate,
+    CompleteTodoErrorCode.UnusableDate,
+  ].sort())
+})
+
 Deno.test(`reopening a completed task makes it open again and drops COMPLETED`, () => {
   const result = reopenTask(fixtureTask(COMPLETED), COMPLETE_NOW)
   if (!result.success) throw new Error(result.error.message)

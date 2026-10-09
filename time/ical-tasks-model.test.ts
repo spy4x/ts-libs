@@ -60,6 +60,11 @@ Deno.test("a task with no STATUS needs action, and a completed one is not open",
   expect(isOpen(fixtureTask(ERRANDS[`100200303`]))).toBe(true)
 })
 
+Deno.test("a task in process is open and a cancelled one is not", () => {
+  expect(isOpen(fixtureTask(task(`1`, `Going`, [`STATUS:IN-PROCESS`])))).toBe(true)
+  expect(isOpen(fixtureTask(task(`2`, `Dropped`, [`STATUS:CANCELLED`])))).toBe(false)
+})
+
 Deno.test("a resource with no VTODO is a failure, not a throw", () => {
   const result = parseTask({
     href: `/x.ics`,
