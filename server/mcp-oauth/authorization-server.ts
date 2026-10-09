@@ -150,8 +150,10 @@ export interface AuthorizationServerOptions {
    * address within `windowMs` (10 in 15 minutes by default), that address's approvals answer `429`
    * with `Retry-After` until the window ends, without running the hasher; other addresses still
    * approve. After `maxTotalFailures` from all addresses within `totalWindowMs` (100 in 24 hours by
-   * default), every approval does. Denials and issued tokens are unaffected. The trade-off: someone
-   * with enough addresses can keep the owner from approving new clients for a while.
+   * default), every approval does. Denials and issued tokens are unaffected. When the store gives up
+   * counting under a burst, the approval answers `429` too. The trade-off: anyone who can reach
+   * `/authorize` can keep sending wrong passwords and so keep every approval refused for as long as
+   * they keep it up, across restarts with a persistent store. The README says how to lift it.
    */
   ownerPassword?: OwnerPassword
   /**
@@ -489,6 +491,8 @@ export function createAuthorizationServer(
 
   /** Store key for the server-wide count of password attempts. */
   const TOTAL_ATTEMPTS = "total"
+  /** How long an approval waits when the store gave up counting its attempt. */
+  const STORE_BUSY_MS = 1_000
 
   /** Answers an approval while passwords are locked out. */
   function lockedOut(c: Context, ms: number): Response {
@@ -513,18 +517,44 @@ export function createAuthorizationServer(
     if (password === undefined) return { status: 400, message: "Enter the owner password." }
     const at = clock.now()
     const address = await sha256Hex(`address ${ownerPassword.clientAddress?.(c) ?? ""}`)
-    const addressLocked = await store.takeAttempt(address, at, maxFailures, failureWindow)
-    if (addressLocked > 0) return addressLocked
-    const totalLocked = await store.takeAttempt(TOTAL_ATTEMPTS, at, maxTotalFailures, totalWindow)
-    if (totalLocked > 0) {
-      await store.releaseAttempt(address, at)
-      return totalLocked
+    let addressTaken = false
+    try {
+      const addressLocked = await store.takeAttempt(address, at, maxFailures, failureWindow)
+      if (addressLocked > 0) return addressLocked
+      addressTaken = true
+      const totalLocked = await store.takeAttempt(
+        TOTAL_ATTEMPTS,
+        at,
+        maxTotalFailures,
+        totalWindow,
+      )
+      if (totalLocked > 0) {
+        await releaseAttempt(address, at)
+        return totalLocked
+      }
+    } catch {
+      // The store gave up, as `KvOAuthStore` does when a burst of guesses keeps rewriting the
+      // server-wide count. Refuse without running the hasher, as a lockout does, and uncount.
+      if (addressTaken) await releaseAttempt(address, at)
+      return STORE_BUSY_MS
     }
     const check = await ownerPassword.hasher.verify(password, ownerPassword.hash)
     if (!check.valid) return { status: 403, message: "Wrong password. Try again." }
-    await store.releaseAttempt(address, at)
-    await store.releaseAttempt(TOTAL_ATTEMPTS, at)
+    await releaseAttempt(address, at)
+    await releaseAttempt(TOTAL_ATTEMPTS, at)
     return undefined
+  }
+
+  /**
+   * Uncounts an attempt, ignoring a store that gives up: the count then lasts only until its window
+   * ends, which is better than failing the request.
+   */
+  async function releaseAttempt(key: string, at: number): Promise<void> {
+    try {
+      await store.releaseAttempt(key, at)
+    } catch {
+      // Expires with its window.
+    }
   }
 
   const app = new Hono()

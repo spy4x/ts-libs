@@ -1,3 +1,4 @@
+/// <reference lib="deno.unstable" />
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { Hono } from "hono"
@@ -15,6 +16,7 @@ import {
   type PasswordHasher,
 } from "../sign-in/password.ts"
 import type { ClientMetadataSource } from "./client-metadata.ts"
+import { KvOAuthStore } from "./kv-store.ts"
 import { MemoryOAuthStore } from "./memory-store.ts"
 import { CLAUDE_REDIRECT_URI } from "./redirect-uri.ts"
 import { createResourceServer, type ResourceGuardEnv } from "./resource-server.ts"
@@ -748,6 +750,101 @@ describe("createAuthorizationServer", () => {
           expect((await fromAddress(t, id, WRONG, "203.0.113.9")).status).toBe(429)
           t.advance(60_000)
           expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        it("does not count right passwords toward the server-wide ceiling", async () => {
+          const t = perAddress({ maxFailures: 1, maxTotalFailures: 2 })
+          for (let i = 0; i < 3; i++) {
+            const id = await newConsent(t)
+            expect((await fromAddress(t, id, OWNER_PASSWORD, `203.0.113.${i}`)).status).toBe(302)
+          }
+        })
+
+        it("answers 429, keeps the consent and uncounts the address when the store gives up", async () => {
+          const shared = perAddress({ maxFailures: 1 })
+          const busy = { on: true }
+          const store = new Proxy(shared.store, {
+            get(target, name) {
+              if (name === "takeAttempt") {
+                return (key: string, at: number, limit: number, windowMs: number) =>
+                  busy.on && key === "total"
+                    ? Promise.reject(new Error("gave up after conflicting writes"))
+                    : target.takeAttempt(key, at, limit, windowMs)
+              }
+              const value = Reflect.get(target, name, target)
+              return typeof value === "function" ? value.bind(target) : value
+            },
+          })
+          const t = setup({
+            confirmOwner: undefined,
+            store,
+            ownerPassword: {
+              ...ownerPassword,
+              maxFailures: 1,
+              clientAddress: (c) => c.req.header("x-test-address"),
+            },
+          })
+          const id = await newConsent(t)
+          const refused = await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")
+          expect(refused.status).toBe(429)
+          expect(refused.headers.get("retry-after")).toBe("1")
+          busy.on = false
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        describe("on Deno KV", () => {
+          const START = 1_000_000
+          const onKv = async (cap: { maxFailures?: number; maxTotalFailures?: number }) => {
+            const kv = await Deno.openKv(":memory:")
+            const t = setup({
+              confirmOwner: undefined,
+              store: new KvOAuthStore(kv, { clock: { now: () => START } }),
+              ownerPassword: {
+                ...ownerPassword,
+                ...cap,
+                clientAddress: (c) => c.req.header("x-test-address"),
+              },
+            })
+            return { kv, t }
+          }
+
+          it("never answers 500 to a parallel burst of wrong passwords, and the owner still gets in", async () => {
+            const { kv, t } = await onKv({ maxTotalFailures: 1_000 })
+            try {
+              const ids = await Promise.all(Array.from({ length: 100 }, () => newConsent(t)))
+              const ownerId = await newConsent(t)
+              const [owner, ...attackers] = await Promise.all([
+                fromAddress(t, ownerId, OWNER_PASSWORD, "203.0.113.9"),
+                ...ids.map((id, i) => fromAddress(t, id, WRONG, `198.51.${i >> 8}.${i & 255}`)),
+              ])
+              const statuses = attackers.map((r) => r.status)
+              expect(statuses.filter((s) => s !== 403 && s !== 429)).toEqual([])
+              expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0)
+              if (owner.status === 429) {
+                const retry = await fromAddress(t, ownerId, OWNER_PASSWORD, "203.0.113.9")
+                expect(retry.status).toBe(302)
+              } else {
+                expect(owner.status).toBe(302)
+              }
+            } finally {
+              kv.close()
+            }
+          })
+
+          it("lets the owner in again once the documented server-wide count key is deleted", async () => {
+            const { kv, t } = await onKv({ maxFailures: 2, maxTotalFailures: 3 })
+            try {
+              const id = await newConsent(t)
+              for (let i = 0; i < 3; i++) {
+                expect((await fromAddress(t, id, WRONG, `198.51.100.${i}`)).status).toBe(403)
+              }
+              expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(429)
+              await kv.delete(["mcp-oauth", "attempts", "total"])
+              expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+            } finally {
+              kv.close()
+            }
+          })
         })
       })
 
