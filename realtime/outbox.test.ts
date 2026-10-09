@@ -13,6 +13,7 @@ import {
   type OutboxStore,
   type SendFailure,
 } from "./outbox.ts"
+import { describeOutboxStoreContract } from "./outbox-store-contract.test.ts"
 
 interface Text {
   title: string
@@ -901,3 +902,5 @@ describe("outbox withdraw", () => {
     expect(h.outbox.entries().length).toBe(1)
   })
 })
+
+describeOutboxStoreContract("createMemoryOutboxStore", () => createMemoryOutboxStore())
