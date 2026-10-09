@@ -51,8 +51,11 @@ async function jmap(
   return replies.map(([, result]) => result)
 }
 
-/** Poll the liveness endpoint until the container's two-phase start has finished. */
-async function waitUntilLive(settings: CalDavServerSettings): Promise<void> {
+/**
+ * Poll the liveness endpoint until the container's two-phase start has finished. Call it before
+ * `requireReachable`: in CI the test step can start while Stalwart is still setting itself up.
+ */
+export async function waitForStalwart(settings: CalDavServerSettings): Promise<void> {
   let last = ""
   for (let attempt = 0; attempt < READY_ATTEMPTS; attempt++) {
     try {
@@ -81,7 +84,7 @@ export async function createStalwartUser(
   settings: CalDavServerSettings,
   name: string,
 ): Promise<StalwartUser> {
-  await waitUntilLive(settings)
+  await waitForStalwart(settings)
   const [query] = await jmap(settings, [["x:Domain/query", {}, "0"]])
   const ids = query.ids as string[]
   const [domains] = await jmap(settings, [["x:Domain/get", { ids, properties: ["name"] }, "0"]])

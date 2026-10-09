@@ -22,6 +22,7 @@ import {
   stalwartSettings,
   THROWAWAY_CREDENTIAL,
   uniqueSuffix,
+  waitForStalwart,
 } from "@integration-testing"
 import { parseIcal, serializeIcal } from "@spy4x/time/ical"
 import { newTodo, patchTodo, readTodo, TodoStatus } from "@spy4x/time/ical-tasks"
@@ -43,6 +44,8 @@ interface Login {
 interface Server {
   name: string
   settings: () => CalDavServerSettings
+  /** Wait for a server that sets itself up after its port opens. */
+  ready?: (settings: CalDavServerSettings) => Promise<void>
   login: (settings: CalDavServerSettings) => Promise<Login>
   /** A DAV path to start discovery from, besides the bare host. */
   davPath: (username: string) => string
@@ -66,6 +69,7 @@ const SERVERS: Server[] = [
   {
     name: "Stalwart",
     settings: stalwartSettings,
+    ready: waitForStalwart,
     login: async (settings) => {
       const user = await createStalwartUser(settings, `itcaldav${uniqueSuffix()}`)
       return { ...user, release: () => deleteStalwartUser(settings, user) }
@@ -105,6 +109,7 @@ for (const server of SERVERS) {
   describe(`caldav client against ${server.name}`, () => {
     it("discovers, writes safely and lists open tasks, never leaving the server's origin", async () => {
       const settings = server.settings()
+      await server.ready?.(settings)
       await requireReachable(settings.address)
       const login = await server.login(settings)
       const seen: string[] = []

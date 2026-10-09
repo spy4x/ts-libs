@@ -60,6 +60,11 @@ export {
 
 export { deleteObject, ensureBucket } from "./s3.ts"
 
-export { createStalwartUser, deleteStalwartUser, type StalwartUser } from "./stalwart.ts"
+export {
+  createStalwartUser,
+  deleteStalwartUser,
+  type StalwartUser,
+  waitForStalwart,
+} from "./stalwart.ts"
 
 export { createScratchFolder, removeScratchFolder } from "./scratch.ts"
