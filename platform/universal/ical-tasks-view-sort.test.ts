@@ -94,6 +94,14 @@ Deno.test("due order breaks a tie by priority, high first", () => {
   expect(order(tasks, SortMode.Due)).toEqual([`high`, `low`, `none`])
 })
 
+Deno.test("due order puts an earlier low-priority task before a later high-priority one", () => {
+  const tasks = [
+    make(`late-high`, `A`, `DUE;VALUE=DATE:20261011`, `PRIORITY:1`),
+    make(`early-low`, `B`, `DUE;VALUE=DATE:20261010`, `PRIORITY:9`),
+  ]
+  expect(order(tasks, SortMode.Due)).toEqual([`early-low`, `late-high`])
+})
+
 Deno.test("priority order groups 1 to 4 as high, then 5, then 6 to 9, then none", () => {
   const tasks = [
     make(`none`, `A`),
