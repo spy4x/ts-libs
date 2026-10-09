@@ -946,3 +946,15 @@ Deno.test("newTodo and newEvent write alarms and a new object reads them back", 
   assert(none.success)
   assertEquals(serializeIcal(none.output).includes("VALARM"), false)
 })
+
+Deno.test("an existing reminder with the same trigger but another action is replaced, not kept", () => {
+  const root = parse(
+    "BEGIN:VTODO\r\nSUMMARY:a\r\nBEGIN:VALARM\r\nACTION:AUDIO\r\nTRIGGER:-PT15M\r\n" +
+      "X-MOZ-LASTACK:20260101T000000Z\r\nEND:VALARM\r\nEND:VTODO\r\n",
+  )
+  const todo = mustPatch(root, {
+    alarms: [{ trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT15M" } }],
+  })
+  assertEquals(todo.alarms.map((alarm) => alarm.action), ["DISPLAY"])
+  assertEquals(serializeIcal(root).includes("X-MOZ-LASTACK"), false)
+})
