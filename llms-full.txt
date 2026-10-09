@@ -313,8 +313,10 @@ What the client guarantees:
   entity tag: `*` or a list would match any version, so both are refused, and a server etag of
   that kind reads as `null`. A stale etag fails with
   `Conflict`, a code no other failure uses; a UID clash fails with `UidConflict`.
-- **Failures are not empty lists.** A missing calendar is `NotFound`, never `[]`, including when
-  the server answers 207 with only the calendar's own entry at 404.
+- **Failures are not empty lists.** A missing calendar is `NotFound`, never `[]`. Stalwart
+  answers a `calendar-query` on an empty calendar, and on a calendar that does not exist, with 207
+  and only the calendar's own entry at 404; `listObjects` then asks the calendar's `resourcetype`
+  (`PROPFIND`, depth 0) and returns `[]` for a calendar, `NotFound` for anything else.
   `deleteCalendar` checks the collection is a calendar first, so it cannot delete the home.
 - **Bounded.** One `timeoutMs` (default 30 s) covers a whole call; no body is read past
   `maxResponseBytes` (default 10 MiB).
@@ -5822,16 +5824,16 @@ was rewritten, and every bug fixed over either source.
 Time and calendar primitives with no application domain attached. IANA timezone math on `Intl`,
 plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime dependencies.
 
-| Module            | Exports                                                                                                                                                                                                                                    |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `time/date`       | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
-| `time/locale`     | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `weekdayLabels`, `WeekdayLabel`                                                                                                                               |
-| `time/tz`         | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, …                                                                              |
-| `time/ics`        | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                           |
-| `time/ics-core`   | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                        |
-| `time/ical`       | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                       |
-| `time/ical-tasks` | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`, `describeAlarmTrigger`                                                                        |
-| `time/rrule`      | Repeat rules for the subset Tasks.org writes: `parseRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
+| Module            | Exports                                                                                                                                                                                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `time/date`       | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, `startOfWeek`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
+| `time/locale`     | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `weekdayLabels`, `WeekdayLabel`                                                                                                                                              |
+| `time/tz`         | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, …                                                                                             |
+| `time/ics`        | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                                          |
+| `time/ics-core`   | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                                       |
+| `time/ical`       | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                                      |
+| `time/ical-tasks` | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`, `describeAlarmTrigger`                                                                                       |
+| `time/rrule`      | Repeat rules for the subset Tasks.org writes: `parseRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                                             |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"

@@ -14,6 +14,7 @@ import {
   shiftMonth,
   startOfMonth,
   startOfQuarter,
+  startOfWeek,
   startOfYear,
 } from "./date.ts"
 
@@ -296,5 +297,45 @@ describe("shiftMonth before year 1000", () => {
     // A version that wrote the year unpadded answered `999-12-01`, which no parser here accepts.
     expect(shiftMonth("1000-01-15", -1)).toBe("0999-12-01")
     expect(parseIsoDate(shiftMonth("1000-01-15", -1))).toBe(Date.parse("0999-12-01T00:00:00Z"))
+  })
+})
+
+describe("startOfWeek", () => {
+  it("returns a Monday unchanged", () => {
+    expect(startOfWeek("2026-06-01")).toBe("2026-06-01")
+  })
+
+  it("returns the Monday of the week for a mid-week day and for Sunday", () => {
+    expect(startOfWeek("2026-06-03")).toBe("2026-06-01") // Wednesday
+    expect(startOfWeek("2026-06-07")).toBe("2026-06-01") // Sunday closes the ISO week
+  })
+
+  it("steps back into the previous month", () => {
+    expect(startOfWeek("2026-08-01")).toBe("2026-07-27") // Saturday
+  })
+
+  it("steps back into the previous year", () => {
+    expect(startOfWeek("2026-01-01")).toBe("2025-12-29") // Thursday
+  })
+
+  it("crosses a leap day", () => {
+    expect(startOfWeek("2028-03-01")).toBe("2028-02-28") // Wednesday, after 2028-02-29
+    expect(startOfWeek("2028-02-29")).toBe("2028-02-28") // the leap day itself, a Tuesday
+    expect(startOfWeek("2026-03-01")).toBe("2026-02-23") // no leap day: Sunday after 28 Feb
+  })
+
+  it("opens the week on the day asked for", () => {
+    expect(startOfWeek("2026-06-03", 7)).toBe("2026-05-31") // Sunday-first
+    expect(startOfWeek("2026-06-07", 7)).toBe("2026-06-07")
+    expect(startOfWeek("2026-06-03", 3)).toBe("2026-06-03") // Wednesday-first
+  })
+
+  it("rejects a date the calendar does not have", () => {
+    expect(() => startOfWeek("2026-02-30")).toThrow()
+  })
+
+  it("answers a year-0000 date for a week that opens before 0001-01-01", () => {
+    expect(startOfWeek("0001-01-02", 7)).toBe("0000-12-31")
+    expect(() => startOfWeek("0000-01-01")).toThrow()
   })
 })

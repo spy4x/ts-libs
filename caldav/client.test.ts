@@ -389,6 +389,92 @@ describe("listObjects", () => {
     )
   })
 
+  it("lists an empty calendar as an empty list when Stalwart answers 404 for the collection", async () => {
+    const { client, seen } = setup(async (request) =>
+      request.method === "REPORT"
+        ? multistatus(await fixture("stalwart-calendar-query-empty.xml"))
+        : multistatus(await fixture("stalwart-propfind-calendar-depth0.xml"))
+    )
+    assertEquals(output(await client.listObjects(INBOX, { component: "VTODO" })), [])
+    assertEquals(seen.map((request) => [request.method, request.headers.get("Depth")]), [
+      ["REPORT", "1"],
+      ["PROPFIND", "0"],
+    ])
+  })
+
+  it("reports Forbidden when the collection's own entry is a 403, without a second request", async () => {
+    const { client, seen } = setup(async (request) =>
+      request.method === "REPORT"
+        ? multistatus(
+          (await fixture("stalwart-calendar-query-empty.xml")).replace(
+            "404 Not Found",
+            "403 Forbidden",
+          ),
+        )
+        : multistatus(await fixture("stalwart-propfind-calendar-depth0.xml"))
+    )
+    assertEquals(
+      failure(await client.listObjects(INBOX, { component: "VTODO" })).code,
+      CalDavErrorCode.Forbidden,
+    )
+    assertEquals(seen.map((request) => request.method), ["REPORT"])
+  })
+
+  it("lists a calendar as empty when its own entry is a 410, as it does for a 404", async () => {
+    const { client } = setup(async (request) =>
+      request.method === "REPORT"
+        ? multistatus(
+          (await fixture("stalwart-calendar-query-empty.xml")).replace("404 Not Found", "410 Gone"),
+        )
+        : multistatus(await fixture("stalwart-propfind-calendar-depth0.xml"))
+    )
+    assertEquals(output(await client.listObjects(INBOX, { component: "VTODO" })), [])
+  })
+
+  it("lists [] with one request when the only entry is a missing child, not the calendar", async () => {
+    const { client, seen } = setup(async (request) =>
+      request.method === "REPORT"
+        ? multistatus(
+          (await fixture("stalwart-calendar-query-empty.xml")).replace(
+            "Inbox/</D:href>",
+            "Inbox/gone.ics</D:href>",
+          ),
+        )
+        : multistatus(await fixture("stalwart-propfind-calendar-depth0.xml"))
+    )
+    assertEquals(output(await client.listObjects(INBOX, { component: "VTODO" })), [])
+    assertEquals(seen.map((request) => request.method), ["REPORT"])
+  })
+
+  it("reports a calendar that does not exist as NotFound when Stalwart answers its REPORT like an empty one", async () => {
+    const { client } = setup(async (request) =>
+      request.method === "REPORT"
+        ? multistatus(await fixture("stalwart-calendar-query-empty.xml"))
+        : new Response(null, { status: 404 })
+    )
+    assertEquals(
+      failure(await client.listObjects(INBOX, { component: "VTODO" })).code,
+      CalDavErrorCode.NotFound,
+    )
+  })
+
+  it("reports a collection that is not a calendar as NotFound, not as an empty list", async () => {
+    const { client } = setup(async (request) =>
+      request.method === "REPORT"
+        ? multistatus(await fixture("stalwart-calendar-query-empty.xml"))
+        : multistatus(
+          (await fixture("stalwart-propfind-calendar-depth0.xml")).replace(
+            "<A:calendar/>",
+            "",
+          ),
+        )
+    )
+    assertEquals(
+      failure(await client.listObjects(INBOX, { component: "VTODO" })).code,
+      CalDavErrorCode.NotFound,
+    )
+  })
+
   it("reports a missing calendar as NotFound, never as an empty list", async () => {
     const { client } = setup(() => new Response("", { status: 404 }))
     assertEquals(
