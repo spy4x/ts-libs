@@ -2390,6 +2390,48 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `readTodo` (function), `jsr:@spy4x/time/ical-tasks`: Read the first VTODO of `root` that is not a recurrence override.
 - `reopenTodo` (function), `jsr:@spy4x/time/ical-tasks`: Reopen a completed task in place: STATUS becomes `NEEDS-ACTION`, COMPLETED and a `PERCENT-COMPLETE` of 100 are removed.
 
+### `jsr:@spy4x/time/ical-tasks-edit`
+
+- `COMPLETE_REFUSED_BY_RULE` (constant), `jsr:@spy4x/time/ical-tasks-edit`: The codes that mean the repeat rule or the dates are outside what can be reproduced, as opposed to a broken text.
+- `CompleteError` (interface), `jsr:@spy4x/time/ical-tasks-edit`
+- `CompleteKind` (enum), `jsr:@spy4x/time/ical-tasks-edit`: What a successful change did to the task.
+- `CompleteOutput` (interface), `jsr:@spy4x/time/ical-tasks-edit`
+- `CompleteResult` (type), `jsr:@spy4x/time/ical-tasks-edit`
+- `CreateOutput` (interface), `jsr:@spy4x/time/ical-tasks-edit`
+- `CreateResult` (type), `jsr:@spy4x/time/ical-tasks-edit`
+- `EditField` (enum), `jsr:@spy4x/time/ical-tasks-edit`: The task fields the editor changes.
+- `EditOutput` (interface), `jsr:@spy4x/time/ical-tasks-edit`
+- `EditResult` (type), `jsr:@spy4x/time/ical-tasks-edit`: The result of editTask.
+- `NewTaskContext` (interface), `jsr:@spy4x/time/ical-tasks-edit`
+- `NewTaskFields` (interface), `jsr:@spy4x/time/ical-tasks-edit`: The fields a new task can start with.
+- `RebaseKind` (enum), `jsr:@spy4x/time/ical-tasks-edit`
+- `RebaseResult` (type), `jsr:@spy4x/time/ical-tasks-edit`
+- `TaskEdit` (interface), `jsr:@spy4x/time/ical-tasks-edit`: What the editor changed.
+- `collisions` (function), `jsr:@spy4x/time/ical-tasks-edit`: The fields both sides changed, to different values.
+- `completeTask` (function), `jsr:@spy4x/time/ical-tasks-edit`: Completes `task`; a repeating task moves to its next occurrence instead.
+- `createTask` (function), `jsr:@spy4x/time/ical-tasks-edit`: Builds the text for a new task.
+- `editTask` (function), `jsr:@spy4x/time/ical-tasks-edit`: Patches `task.ics` with `edit`.
+- `keepMine` (function), `jsr:@spy4x/time/ical-tasks-edit`: "Keep mine": applies the fields `edit` really changed (against `base`) to `theirs`, overwriting the server's value where both changed the same field and leaving every other server change alone.
+- `rebaseEdit` (function), `jsr:@spy4x/time/ical-tasks-edit`: Re-applies `edit`, made on `base`, to `theirs`, the fresh copy from the server.
+- `reopenTask` (function), `jsr:@spy4x/time/ical-tasks-edit`: Reopens a completed task.
+
+### `jsr:@spy4x/time/ical-tasks-model`
+
+- `ParseTaskResult` (type), `jsr:@spy4x/time/ical-tasks-model`: The result of parseTask: the task, or a message that says why there is none.
+- `PriorityBand` (enum), `jsr:@spy4x/time/ical-tasks-model`: How Tasks.org groups the iCalendar priority numbers 1 to 9 (0 is none).
+- `Task` (interface), `jsr:@spy4x/time/ical-tasks-model`: One task as a screen shows it.
+- `TaskDate` (type), `jsr:@spy4x/time/ical-tasks-model`: A due or start value.
+- `TaskList` (interface), `jsr:@spy4x/time/ical-tasks-model`: A task list: a CalDAV calendar that holds tasks.
+- `TaskNode` (interface), `jsr:@spy4x/time/ical-tasks-model`: A task with its subtasks, for the tree a list shows.
+- `TaskReminder` (interface), `jsr:@spy4x/time/ical-tasks-model`: A reminder the task carries.
+- `TaskSource` (interface), `jsr:@spy4x/time/ical-tasks-model`: What the CalDAV server hands over for one task.
+- `TaskStatus` (enum), `jsr:@spy4x/time/ical-tasks-model`: The STATUS of a task.
+- `dateDay` (function), `jsr:@spy4x/time/ical-tasks-model`: The calendar day (`YYYY-MM-DD`) on which a due or start value falls for a viewer in `zone`.
+- `dateInstant` (function), `jsr:@spy4x/time/ical-tasks-model`: The instant a due or start value denotes for a viewer in `zone`.
+- `isOpen` (function), `jsr:@spy4x/time/ical-tasks-model`: Whether the task still needs doing: not completed and not cancelled.
+- `parseTask` (function), `jsr:@spy4x/time/ical-tasks-model`: Reads one task.
+- `priorityBand` (function), `jsr:@spy4x/time/ical-tasks-model`: Tasks.org's grouping of the iCalendar priority: 1 to 4 high, 5 medium, 6 to 9 low, 0 none.
+
 ### `jsr:@spy4x/time/ics`
 
 - `IcsAddress` (interface), `jsr:@spy4x/time/ics`: A calendar address: a bare mailbox address, e.g. `jane@example.com`.
@@ -2528,4 +2570,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 eb29bc16c60711e803179e21ba24a4f1c4d05d59180441681912d1b339292f9c -->
+<!-- export surface: sha256 347c1e026e0d01d3ccfe41ca4aa8fecacb99a90be18f0f20ea61e665b0ac066f -->
