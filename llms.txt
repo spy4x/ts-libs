@@ -585,6 +585,12 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `OperationState` (interface), `jsr:@spy4x/platform`: In-flight state of an operation, for a store or a form to render.
 - `OtherError` (interface), `jsr:@spy4x/platform`: An error this package has no category for.
 - `PayloadError` (interface), `jsr:@spy4x/platform`: A payload a schema rejected: a response body, or a remote feed item.
+- `QuickAddDue` (interface), `jsr:@spy4x/platform`: When the task is due: a calendar date in the given time zone, and a wall-clock time if typed.
+- `QuickAddOptions` (interface), `jsr:@spy4x/platform`: Options of parseQuickAdd.
+- `QuickAddPriority` (enum), `jsr:@spy4x/platform`: Task priority.
+- `QuickAddResult` (interface), `jsr:@spy4x/platform`: The result of parseQuickAdd.
+- `QuickAddSpan` (interface), `jsr:@spy4x/platform`: One recognised token, as a half-open range of UTF-16 offsets into the original line.
+- `QuickAddSpanKind` (enum), `jsr:@spy4x/platform`: What a recognised token is.
 - `RandomSource` (type), `jsr:@spy4x/platform`: A source of numbers in `[0, 1)`, the shape `Math.random` has.
 - `RequestError` (type), `jsr:@spy4x/platform`: Errors a request itself can produce.
 - `ResponseError` (type), `jsr:@spy4x/platform`: Errors from a response that never reached a usable body.
@@ -627,6 +633,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `normalizeCalendarDate` (function), `jsr:@spy4x/platform`: Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
 - `normalizeCanonical` (function), `jsr:@spy4x/platform`: The canonical address as it should be published: one clean `http`/`https` address.
 - `ok` (function), `jsr:@spy4x/platform`: Wrap a success.
+- `parseQuickAdd` (function), `jsr:@spy4x/platform`: Read the tokens out of a quick-add line.
 - `parseSort` (function), `jsr:@spy4x/platform`: Read sort rules out of a URL parameter.
 - `pluralize` (function), `jsr:@spy4x/platform`: Naive English pluraliser for UI copy.
 - `removeSortRule` (function), `jsr:@spy4x/platform`: Removes one sort priority while preserving all remaining priorities.
@@ -1175,6 +1182,16 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `formatMoneyParts` (function), `jsr:@spy4x/platform/universal/money`: formatMoney's output as `Intl.NumberFormatPart`s, for a caller that renders the currency symbol, the grouped digits and the sign as separate pieces instead of one string.
 - `moneyDecimalString` (function), `jsr:@spy4x/platform/universal/money`: `amount`, in `currency`'s smallest unit, as the exact base-ten string `Intl.NumberFormat` should format — `moneyDecimalString(12345, 2)` is `"123.45"`, `moneyDecimalString(-500, 0)` is `"-500"`, `moneyDecimalString(0, 2)` is `"0.00"`, `moneyDecimalString(0, 0)` is `"0"` — a zero amount gets `decimals` zero digits after the point, same as any other amount, never a bare `"0"` for a currency that has decimals.
 - `parseMoney` (function), `jsr:@spy4x/platform/universal/money`: Parse text typed in `locale` into a whole number of `currency`'s smallest unit — `parseMoney("12,5", "EUR", "de")` is `ok(1250)`, `parseMoney("1.234,56", "EUR", "de")` is `ok(123456)`.
+
+### `jsr:@spy4x/platform/universal/quick-add`
+
+- `QuickAddDue` (interface), `jsr:@spy4x/platform/universal/quick-add`: When the task is due: a calendar date in the given time zone, and a wall-clock time if typed.
+- `QuickAddOptions` (interface), `jsr:@spy4x/platform/universal/quick-add`: Options of parseQuickAdd.
+- `QuickAddPriority` (enum), `jsr:@spy4x/platform/universal/quick-add`: Task priority.
+- `QuickAddResult` (interface), `jsr:@spy4x/platform/universal/quick-add`: The result of parseQuickAdd.
+- `QuickAddSpan` (interface), `jsr:@spy4x/platform/universal/quick-add`: One recognised token, as a half-open range of UTF-16 offsets into the original line.
+- `QuickAddSpanKind` (enum), `jsr:@spy4x/platform/universal/quick-add`: What a recognised token is.
+- `parseQuickAdd` (function), `jsr:@spy4x/platform/universal/quick-add`: Read the tokens out of a quick-add line.
 
 ### `jsr:@spy4x/platform/universal/result`
 
@@ -2458,4 +2475,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 58b18838d4e0d96ee683265ab8158952ea2dfc759632e810ac1853a0982ef306 -->
+<!-- export surface: sha256 8d58ff20d53dc8bdfdb38597c1a29905582828d5e8bac62a416398f53b50f1da -->
