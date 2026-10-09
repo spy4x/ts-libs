@@ -3335,6 +3335,7 @@ Runs on: server (Deno).
 | `@spy4x/server/db/sqlite`              | SQLite adapter behind an injectable driver port; ships no driver                      |
 | `@spy4x/server/request-log`            | Hono request-logging middleware, method/path/status/elapsed only, injected writer     |
 | `@spy4x/server/config`                 | `EnvReader` + `loadConfig`: one arktype schema validated against the environment      |
+| `@spy4x/server/config/env`             | `readEnvVar`, `systemEnv`, `createEnvReader` alone, without the arktype dependency    |
 | `@spy4x/server/kv`                     | A Redis-backed key-value store, keys scoped under a caller-supplied prefix            |
 | `@spy4x/server/env-age64`              | Per-value `.env` encryption (`KEY=age64:...`), no `age` binary, no `--allow-run`      |
 | `@spy4x/server/outbox`                 | Transactional outbox drain: claim, publish, retry, over a generic SQL table           |

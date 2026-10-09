@@ -1653,6 +1653,14 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `stringBoolean` (constant), `jsr:@spy4x/server/config`: `"true"` or `"false"`, exactly — an environment boolean written by a person or a deploy script, not inferred from `"1"`, `"yes"` or an empty string.
 - `systemEnv` (constant), `jsr:@spy4x/server/config`: The process environment.
 
+### `jsr:@spy4x/server/config/env`
+
+- `EnvReader` (interface), `jsr:@spy4x/server/config/env`: Reads environment values.
+- `MissingEnvError` (class), `jsr:@spy4x/server/config/env`: Raised when a required environment variable is missing or blank.
+- `createEnvReader` (function), `jsr:@spy4x/server/config/env`: An `EnvReader` over a fixed record — what a unit test injects instead of the process environment, so a config or middleware test runs under `--allow-read --allow-env` without any environment variable actually being set.
+- `readEnvVar` (function), `jsr:@spy4x/server/config/env`: Read one required value now, outside a schema — for the one variable a caller needs before the rest of its configuration can even be assembled (`ENV`, deciding which schema to validate against, for example).
+- `systemEnv` (constant), `jsr:@spy4x/server/config/env`: The process environment.
+
 ### `jsr:@spy4x/server/crypto`
 
 - `AES_ALGORITHM` (constant), `jsr:@spy4x/server/crypto`: WebCrypto algorithm name.
@@ -2450,4 +2458,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 2c7f48ceff9a9c5e12cf897703a45f938641d572f4cab85656b61b6a1094e9e7 -->
+<!-- export surface: sha256 919e7e09caa879abfab5a4473249dfe409076455b9837f15e454c256e8256382 -->
