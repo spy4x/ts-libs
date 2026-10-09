@@ -204,6 +204,18 @@ export function createCalDavWriteTransport<P, S>(
         const ics = options.toIcs(command)
         const calendar = options.calendarUrl(command)
         const name = `${command.entityId}.ics`
+        // Checked before any request: an address that is not a plain path (or not a URL) is a
+        // refusal for good, never `unreachable`, which would keep the queue retrying in silence.
+        let objectAddress: string
+        try {
+          objectAddress = objectUrl(calendar, command.entityId)
+        } catch {
+          const error: CalDavError = {
+            code: CalDavErrorCode.InvalidArgument,
+            message: "The calendar address is not valid, so this item cannot be saved.",
+          }
+          throw new CalDavWriteError(classifyCalDavError(error), error)
+        }
         const created = await writer.createObject(calendar, ics, { name })
         if (created.success) {
           return await settled(created.output.url, created.output.etag, ics, command.entityId)
@@ -211,8 +223,7 @@ export function createCalDavWriteTransport<P, S>(
         if (created.error.code === CalDavErrorCode.AlreadyExists) {
           // A repeat of a create whose answer was lost finds its own object: that is success.
           // Compared by UID, because a server may store the text with its properties reordered.
-          const url = objectUrl(calendar, command.entityId)
-          const existing = await writer.getObject(url)
+          const existing = await writer.getObject(objectAddress)
           if (existing.success) {
             const uid = uidOf(ics)
             if (uid !== null && uid === uidOf(existing.output.data)) {
