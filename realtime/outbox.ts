@@ -220,6 +220,15 @@ export interface Outbox<P, S extends { version: number }> {
    * Call it after a change, after a reconnect and after every push that is news.
    */
   flush(): Promise<void>
+  /**
+   * Takes back the waiting write of an entity, for example an "Undo" of a delete made offline.
+   * Resolves `true` when the entry was removed and will never be sent. Resolves `false`, changing
+   * nothing, when there is no such entry or it cannot be taken back: a send was already started
+   * (its outcome may be unknown, so the server may have it) or it is a conflict (settle it with
+   * `keepMine` or `useTheirs`). The caller then falls back to asking the server, for example an
+   * online restore.
+   */
+  withdraw(entityId: string): Promise<boolean>
   /** Sends the person's version again on the server's: see `ConflictRef`. Stale cards do nothing. */
   keepMine(shown: ConflictRef): Promise<void>
   /** Drops the person's version and shows the server's. Stale cards do nothing. */
@@ -473,6 +482,15 @@ export function createOutbox<P, S extends { version: number }>(
     })
   }
 
+  async function withdraw(entityId: string): Promise<boolean> {
+    return await locked(async () => {
+      const entry = (await store.readOutbox()).find((e) => e.entityId === entityId)
+      if (!entry || entry.attempted || entry.status !== "pending") return false
+      await drop(entry.seq!)
+      return true
+    })
+  }
+
   return {
     /** The waiting writes as of the last change to the queue. */
     entries: (): readonly Entry[] => current,
@@ -485,6 +503,7 @@ export function createOutbox<P, S extends { version: number }>(
     reload: () => locked(reload),
     submit,
     flush,
+    withdraw,
     keepMine,
     useTheirs,
   }

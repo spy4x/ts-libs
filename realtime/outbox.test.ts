@@ -799,3 +799,105 @@ describe("createPromiseLock", () => {
     expect(order).toEqual(["a", "b"])
   })
 })
+
+describe("outbox withdraw", () => {
+  it("removes a waiting delete so it is never sent", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("T"), version: 3 })
+
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(h.outbox.entries()).toEqual([])
+    expect(await h.store.readOutbox()).toEqual([])
+
+    h.state.online = true
+    h.state.server = () => item("n", 4)
+    await h.outbox.flush()
+    expect(h.sent).toEqual([])
+  })
+
+  it("removes a waiting create or update of any kind", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "create", entityId: "a", payload: text("A") })
+    await h.outbox.submit({ kind: "update", entityId: "b", payload: text("B"), version: 1 })
+
+    expect(await h.outbox.withdraw("a")).toBe(true)
+    expect(h.outbox.entries().map((e) => e.entityId)).toEqual(["b"])
+    expect(await h.outbox.withdraw("b")).toBe(true)
+    expect(h.outbox.entries()).toEqual([])
+  })
+
+  it("leaves the other entities' entries queued", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "update", entityId: "a", payload: text("A"), version: 1 })
+    await h.outbox.submit({ kind: "update", entityId: "b", payload: text("B"), version: 1 })
+
+    await h.outbox.withdraw("a")
+
+    expect((await h.store.readOutbox()).map((e) => e.entityId)).toEqual(["b"])
+  })
+
+  it("answers false for an entity with no waiting entry", async () => {
+    const h = harness()
+    expect(await h.outbox.withdraw("nothing")).toBe(false)
+  })
+
+  it("answers false and changes nothing for an entry that was already sent", async () => {
+    const h = harness()
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("T"), version: 1 })
+    expect(h.sent.length).toBe(1)
+
+    expect(await h.outbox.withdraw("n")).toBe(false)
+    expect(h.sent.length).toBe(1)
+  })
+
+  it("answers false and keeps an entry whose send was started but did not finish", async () => {
+    const h = harness()
+    h.state.server = () => {
+      throw new ConnectionLostError("the socket closed mid-send")
+    }
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("T"), version: 1 })
+    const before = await h.store.readOutbox()
+    expect(before[0].attempted).toBe(true)
+
+    expect(await h.outbox.withdraw("n")).toBe(false)
+    expect(await h.store.readOutbox()).toEqual(before)
+  })
+
+  it("waits for a send in progress and then answers false, the send completing", async () => {
+    const h = harness()
+    let asked: Promise<boolean> | undefined
+    h.state.onSend = () => {
+      // The send holds the lock, so the withdraw can only run after it.
+      asked = h.outbox.withdraw("n")
+      return Promise.resolve()
+    }
+    const outcome = await h.outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("T"),
+      version: 1,
+    })
+
+    expect(await asked).toBe(false)
+    expect(outcome.kind).toBe("sent")
+  })
+
+  it("answers false for a conflict that waits for a person", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("T"), version: 1 })
+    h.state.online = true
+    h.state.current = item("n", 5)
+    h.state.server = () => {
+      throw refused("VERSION_CONFLICT")
+    }
+    await h.outbox.flush()
+    expect(h.outbox.entries()[0].status).toBe("conflict")
+
+    expect(await h.outbox.withdraw("n")).toBe(false)
+    expect(h.outbox.entries().length).toBe(1)
+  })
+})
