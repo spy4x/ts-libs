@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>/dav/cal/user%40example.com/1.0%20%2F%20Inbox/</D:href><D:status>HTTP/1.1 404 Not Found</D:status><D:responsedescription>No resources found</D:responsedescription></D:response></D:multistatus>

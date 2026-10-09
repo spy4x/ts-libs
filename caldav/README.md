@@ -61,8 +61,10 @@ What the client guarantees:
   entity tag: `*` or a list would match any version, so both are refused, and a server etag of
   that kind reads as `null`. A stale etag fails with
   `Conflict`, a code no other failure uses; a UID clash fails with `UidConflict`.
-- **Failures are not empty lists.** A missing calendar is `NotFound`, never `[]`, including when
-  the server answers 207 with only the calendar's own entry at 404.
+- **Failures are not empty lists.** A missing calendar is `NotFound`, never `[]`. Stalwart
+  answers a `calendar-query` on an empty calendar, and on a calendar that does not exist, with 207
+  and only the calendar's own entry at 404; `listObjects` then asks the calendar's `resourcetype`
+  (`PROPFIND`, depth 0) and returns `[]` for a calendar, `NotFound` for anything else.
   `deleteCalendar` checks the collection is a calendar first, so it cannot delete the home.
 - **Bounded.** One `timeoutMs` (default 30 s) covers a whole call; no body is read past
   `maxResponseBytes` (default 10 MiB).

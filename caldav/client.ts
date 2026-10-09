@@ -250,6 +250,7 @@ const XML_TYPE = "application/xml; charset=utf-8"
 
 const PRINCIPAL_PROPS: XmlName[] = [{ namespace: DAV_NS, name: "current-user-principal" }]
 const HOME_PROPS: XmlName[] = [{ namespace: CALDAV_NS, name: "calendar-home-set" }]
+const RESOURCE_TYPE_PROPS: XmlName[] = [{ namespace: DAV_NS, name: "resourcetype" }]
 const CALENDAR_PROPS: XmlName[] = [
   { namespace: DAV_NS, name: "resourcetype" },
   { namespace: DAV_NS, name: "displayname" },
@@ -515,6 +516,33 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
     return { reply, responses: multistatus(expectStatus(reply, [207]), maxBytes) }
   }
 
+  /**
+   * Whether a `calendar-query` answer means "an existing calendar with no matching objects".
+   *
+   * Stalwart answers an empty calendar with 207 holding one response, the collection itself at
+   * 404 ("No resources found"), and answers a calendar that does not exist the same way, so the
+   * REPORT cannot tell them apart. A `PROPFIND` of depth 0 can: it gives 404 for an address that
+   * names nothing, which fails with `NotFound`, and a `calendar` resource type for a calendar.
+   * An answer with any other shape is left to {@link toObjects}.
+   */
+  const isEmptyCalendarAnswer = async (
+    call: Call,
+    responses: DavResponse[],
+    base: URL,
+    calendar: URL,
+  ): Promise<boolean> => {
+    const [only] = responses
+    if (responses.length !== 1 || only.status === undefined || !isGone(only.status)) return false
+    if (!sameResource(ownHref(only.href, base), calendar)) return false
+    const probe = await propfind(call, calendar, "0", RESOURCE_TYPE_PROPS)
+    for (const response of probe.responses) {
+      if (!sameResource(ownHref(response.href, probe.reply.url), calendar)) continue
+      failIfSelfFailed(response)
+      if (isCalendar(response)) return true
+    }
+    fail(CalDavErrorCode.NotFound, "the address is not a calendar", { status: 404 })
+  }
+
   /** Turn calendar-data responses into objects; refuse a foreign href or a missing body. */
   const toObjects = (responses: DavResponse[], base: URL, collection: URL) => {
     const objects: CalDavObject[] = []
@@ -659,6 +687,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
           fail(CalDavErrorCode.InvalidArgument, messageOf(cause))
         }
         const { reply, responses } = await report(call, calendar, body)
+        if (await isEmptyCalendarAnswer(call, responses, reply.url, calendar)) return []
         return toObjects(responses, reply.url, calendar).objects
       }),
 
@@ -868,6 +897,10 @@ function failIfSelfFailed(response: DavResponse): void {
   if (response.status !== undefined && response.status >= 400) {
     failForStatus(response.status, "the collection itself answered with an error")
   }
+}
+
+function isGone(status: number): boolean {
+  return status === 404 || status === 410
 }
 
 function failForStatus(status: number, message: string, extra: Partial<CalDavError> = {}): never {
