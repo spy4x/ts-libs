@@ -75,7 +75,7 @@ export interface QuickAddOptions {
 }
 
 /** The words a locale uses for date and priority tokens, all lower case. */
-export interface QuickAddWords {
+interface QuickAddWords {
   today: string
   tomorrow: string
   /** Monday first. */
@@ -91,12 +91,17 @@ export interface QuickAddWords {
   low: string
 }
 
-/**
- * The word tables by lower-case language subtag. `en` is the fallback for any locale not listed;
- * an app can add its own language here before parsing.
- */
-export const quickAddWords: Record<string, QuickAddWords> = {
-  en: {
+/** Freeze a word table and its lists, so no caller can change what every caller reads. */
+function freezeWords(words: QuickAddWords): QuickAddWords {
+  Object.freeze(words.weekdays)
+  Object.freeze(words.days)
+  Object.freeze(words.weeks)
+  return Object.freeze(words)
+}
+
+/** The word tables by lower-case language subtag. `en` is the fallback for any other locale. */
+const WORDS: Readonly<Record<string, QuickAddWords>> = Object.freeze({
+  en: freezeWords({
     today: "today",
     tomorrow: "tomorrow",
     weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
@@ -107,8 +112,8 @@ export const quickAddWords: Record<string, QuickAddWords> = {
     high: "high",
     medium: "medium",
     low: "low",
-  },
-}
+  }),
+})
 
 /** What `dayOfWeek` answers for each weekday, Monday first. */
 const TZ_WEEKDAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
@@ -149,7 +154,7 @@ const COUNT = /^\d{1,4}$/
  */
 export function parseQuickAdd(line: string, options: QuickAddOptions): QuickAddResult {
   const language = options.locale?.split("-")[0].toLowerCase() ?? "en"
-  const words = Object.hasOwn(quickAddWords, language) ? quickAddWords[language] : quickAddWords.en
+  const words = Object.hasOwn(WORDS, language) ? WORDS[language] : WORDS.en
   const today = isoDateInTz(options.now, options.timeZone)
   const tokens = [...line.matchAll(/\S+/gu)].map((m) => ({ text: m[0], start: m.index }))
 

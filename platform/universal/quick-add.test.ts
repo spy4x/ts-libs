@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { parseQuickAdd, QuickAddPriority, QuickAddSpanKind, quickAddWords } from "./quick-add.ts"
+import { parseQuickAdd, QuickAddPriority, QuickAddSpanKind } from "./quick-add.ts"
 
 /** A Tuesday, noon UTC. */
 const NOON = new Date("2026-03-10T12:00:00Z")
@@ -260,18 +260,6 @@ describe("parseQuickAdd text", () => {
       expect(result.title).toBe("Call mom")
       expect(result.priority).toBeUndefined()
       expect(result.due).toEqual({ date: "2026-03-16" })
-    }
-  })
-
-  it("reads tokens with the table of the locale's language", () => {
-    quickAddWords.xx = { ...quickAddWords.en, tomorrow: "morgen" }
-    try {
-      const german = parseQuickAdd("t morgen", { ...UTC, locale: "xx-YY" })
-      expect(german.due).toEqual({ date: "2026-03-11" })
-      expect(parseQuickAdd("t morgen", UTC).due).toBeUndefined()
-      expect(parseQuickAdd("t tomorrow", { ...UTC, locale: "xx" }).due).toBeUndefined()
-    } finally {
-      delete quickAddWords.xx
     }
   })
 })
