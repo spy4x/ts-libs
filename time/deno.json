@@ -10,7 +10,8 @@
     "./ical": "./ical.ts",
     "./rrule": "./rrule.ts",
     "./ical-tasks": "./ical-tasks.ts",
-    "./ical-tasks-model": "./ical-tasks-model.ts"
+    "./ical-tasks-model": "./ical-tasks-model.ts",
+    "./ical-tasks-edit": "./ical-tasks-edit.ts"
   },
   "publish": {
     "exclude": ["testdata"]
