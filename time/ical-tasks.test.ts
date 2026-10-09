@@ -194,7 +194,7 @@ Deno.test("a task patch of the start, due, rrule or status raises SEQUENCE by on
     mustPatch(root, patch)
     assertEquals(getProperty(root, "SEQUENCE")!.value, "5", JSON.stringify(patch))
   }
-  const none = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nEND:VTODO\r\n")
+  const none = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nDUE:20261010T080000Z\r\nEND:VTODO\r\n")
   mustPatch(none, { due: null })
   assertEquals(getProperty(none, "SEQUENCE")!.value, "1")
 })
@@ -1096,4 +1096,64 @@ Deno.test("an AUDIO reminder is written without DESCRIPTION, refuses one, and re
   assertEquals(refused.error?.code, IcalErrorCode.InvalidValue)
   const display = parse(TASK_WITH_ALARMS)
   assertEquals(readTodo(display)!.alarms.map((a) => a.description), ["old", undefined])
+})
+
+const SAVED =
+  "BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nDTSTART:20261010T080000Z\r\nDUE;TZID=Europe/Paris:20261011T090000\r\nRRULE:FREQ=DAILY\r\nSTATUS:IN-PROCESS\r\nEND:VTODO\r\n"
+const SAVED_TZ = "BEGIN:VTIMEZONE\r\nTZID:Europe/Paris\r\nEND:VTIMEZONE\r\n"
+const SAVED_TZ2 = "BEGIN:VTIMEZONE\r\nTZID:Europe/Berlin\r\nEND:VTIMEZONE\r\n"
+
+function savedTask(): IcalComponent {
+  return parse(
+    `BEGIN:VCALENDAR\r\n${SAVED_TZ}${SAVED_TZ2}${SAVED}END:VCALENDAR\r\n`,
+  )
+}
+
+function lineOf(root: IcalComponent, name: string): string | undefined {
+  return serializeIcal(root).split("\r\n").find((line) => line.startsWith(name))
+}
+
+const DUE_PARIS = {
+  kind: IcalDateKind.Zoned,
+  date: "2026-10-11",
+  time: "09:00:00",
+  tzid: "Europe/Paris",
+}
+
+Deno.test("a whole-form save that changes only the title keeps SEQUENCE, DTSTART, DUE, RRULE and STATUS as they were", () => {
+  const root = savedTask()
+  mustPatch(root, {
+    summary: "renamed",
+    start: utc("2026-10-10", "08:00:00"),
+    due: DUE_PARIS,
+    rrule: "FREQ=DAILY",
+    status: TodoStatus.InProcess,
+  })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:4")
+  assertEquals(lineOf(root, "DTSTART"), "DTSTART:20261010T080000Z")
+  assertEquals(lineOf(root, "DUE"), "DUE;TZID=Europe/Paris:20261011T090000")
+  assertEquals(lineOf(root, "RRULE"), "RRULE:FREQ=DAILY")
+  assertEquals(lineOf(root, "STATUS"), "STATUS:IN-PROCESS")
+  assertEquals(lineOf(root, "SUMMARY"), "SUMMARY:renamed")
+})
+
+Deno.test("a different due date raises SEQUENCE by one", () => {
+  const root = savedTask()
+  mustPatch(root, { due: { ...DUE_PARIS, date: "2026-10-12" } })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5")
+})
+
+Deno.test("a due date that differs only in TZID counts as a change", () => {
+  const root = savedTask()
+  mustPatch(root, { due: { ...DUE_PARIS, tzid: "Europe/Berlin" } })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5")
+})
+
+Deno.test("removing a present due raises SEQUENCE and removing an absent one does not", () => {
+  const present = savedTask()
+  mustPatch(present, { due: null })
+  assertEquals(lineOf(present, "SEQUENCE"), "SEQUENCE:5")
+  const absent = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nEND:VTODO\r\n")
+  mustPatch(absent, { due: null, summary: "b" })
+  assertEquals(lineOf(absent, "SEQUENCE"), "SEQUENCE:4")
 })
