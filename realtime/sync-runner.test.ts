@@ -388,7 +388,66 @@ describe("createSyncRunner state", () => {
   })
 })
 
+describe("createSyncRunner listeners", () => {
+  it("keeps running when a state listener throws", async () => {
+    const { runner, control, page } = setup()
+    let throwOnce = true
+    runner.subscribe((state) => {
+      if (state.running && throwOnce) {
+        throwOnce = false
+        throw new Error("listener bug")
+      }
+    })
+    const logged = console.error
+    console.error = () => {}
+    try {
+      runner.start()
+      await control.finish()
+      expect(runner.getState().running).toBe(false)
+
+      page.fire("online")
+      await drainMicrotasks()
+      expect(control.started()).toBe(2)
+    } finally {
+      console.error = logged
+    }
+  })
+
+  it("still tells the other listeners when one throws", async () => {
+    const { runner, control } = setup()
+    const seen: boolean[] = []
+    runner.subscribe(() => {
+      throw new Error("listener bug")
+    })
+    runner.subscribe((state) => seen.push(state.running))
+    const logged = console.error
+    console.error = () => {}
+    try {
+      runner.start()
+      await control.finish()
+    } finally {
+      console.error = logged
+    }
+    expect(seen[0]).toBe(true)
+    expect(seen[seen.length - 1]).toBe(false)
+  })
+})
+
 describe("createSyncRunner stop", () => {
+  it("does not run a kick that was queued before it was stopped", async () => {
+    const { runner, control, page } = setup()
+    runner.start()
+    await drainMicrotasks()
+    page.fire("online") // queued: a run is in progress
+    void runner.kick()
+
+    runner.stop()
+    await control.finish()
+
+    expect(control.started()).toBe(1)
+    expect(runner.getState().running).toBe(false)
+  })
+
   it("removes every listener and timer", async () => {
     const { runner, control, clock, page } = setup()
     runner.start()

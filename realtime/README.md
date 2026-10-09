@@ -445,11 +445,15 @@ The rules it keeps, each one a lost edit found in a product that wrote the queue
 A created entity starts at version one: after an attempted create, a delete is sent against that
 version. `send` runs under the lock, so it must settle or time out.
 
-`withdraw(entityId)` takes back a write that is still waiting, for example the "Undo" of a delete
-made offline. It answers `true` when the entry was removed and will never be sent. It answers
-`false`, changing nothing, when there is no such entry or it cannot be taken back: a send was
-already started (the server may have it, so only an online restore is safe) or it is a conflict
-(use `keepMine` or `useTheirs`). A withdraw asked during a send waits for it.
+`withdraw(entityId)` takes back the latest change to an entity, for example the "Undo" of a delete
+made offline. When that change was merged into an earlier waiting write (an edit, then a delete),
+only the delete is taken back: the edit stays queued, with its key and its `attempted` flag as they
+were, so a send that may already have happened is repeated idempotently. Otherwise the entry is
+removed and never sent. It answers `false`, changing nothing, when there is nothing to take back or
+it cannot be: the entry's send was already started (the server may have it, so only an online
+restore is safe) or it is a conflict (use `keepMine` or `useTheirs`). A withdraw asked during a send
+waits for it. A create that was deleted before any send leaves nothing queued, so there is nothing
+to withdraw: submit the create again.
 
 ### Durable store (`@spy4x/realtime/outbox-indexeddb`)
 

@@ -34,6 +34,15 @@ export type OutboxKind = "create" | "update" | "delete"
  */
 export type ConflictReason = "version" | "gone" | "rejected"
 
+/** The parts of an {@link OutboxEntry} that an edit merged into it changes. */
+export interface OutboxEntrySnapshot<P> {
+  key: string
+  kind: OutboxKind
+  payload: P
+  baseVersion: number
+  attempted: boolean
+}
+
 /**
  * One write made while offline, waiting to be sent. `P` is the caller's payload (what the person
  * wrote), `S` the server's snapshot of the entity.
@@ -52,6 +61,11 @@ export interface OutboxEntry<P, S> {
   /** Whether a send was started: its outcome may be unknown, so the key must not be reused. */
   attempted: boolean
   status: "pending" | "conflict"
+  /**
+   * What the entry was just before the latest edit was merged into it, so `withdraw` can take that
+   * edit back and keep the write before it. Absent on an entry no edit was merged into.
+   */
+  before?: OutboxEntrySnapshot<P>
   conflict?: { reason: ConflictReason; message: string; server: S | null }
   queuedAt: string
 }
@@ -222,11 +236,14 @@ export interface Outbox<P, S extends { version: number }> {
   flush(): Promise<void>
   /**
    * Takes back the waiting write of an entity, for example an "Undo" of a delete made offline.
-   * Resolves `true` when the entry was removed and will never be sent. Resolves `false`, changing
-   * nothing, when there is no such entry or it cannot be taken back: a send was already started
-   * (its outcome may be unknown, so the server may have it) or it is a conflict (settle it with
-   * `keepMine` or `useTheirs`). The caller then falls back to asking the server, for example an
-   * online restore.
+   * Takes back the latest change and resolves `true`. When that change was merged into an earlier
+   * waiting write (an edit, then a delete), only the delete is taken back and the edit stays
+   * queued, as it was, key included. Otherwise the entry is removed and will never be sent.
+   * Resolves `false`, changing nothing, when there is nothing to take back or it cannot be: the
+   * entry's send was started (its outcome may be unknown, so the server may have it) or it is a
+   * conflict (settle it with `keepMine` or `useTheirs`). A create that was deleted before any send
+   * leaves nothing queued: submit the create again. The caller otherwise falls back to asking the
+   * server, for example an online restore.
    */
   withdraw(entityId: string): Promise<boolean>
   /** Sends the person's version again on the server's: see `ConflictRef`. Stale cards do nothing. */
@@ -301,11 +318,18 @@ export function createOutbox<P, S extends { version: number }>(
     }
     // A deleted entity is not edited again.
     if (existing.kind === "delete" || change.kind === "create") return existing
+    const before: OutboxEntrySnapshot<P> = {
+      key: existing.key,
+      kind: existing.kind,
+      payload: existing.payload,
+      baseVersion: existing.baseVersion,
+      attempted: existing.attempted,
+    }
     const renewed = existing.attempted
       ? { key: newKey(), attempted: false }
       : { key: existing.key, attempted: false }
     if (change.kind === "update") {
-      return await save({ ...existing, payload: change.payload, ...renewed })
+      return await save({ ...existing, payload: change.payload, ...renewed, before })
     }
     if (existing.kind === "create") {
       if (!existing.attempted) {
@@ -322,9 +346,16 @@ export function createOutbox<P, S extends { version: number }>(
         attempted: false,
         status: "pending",
         conflict: undefined,
+        before,
       })
     }
-    return await save({ ...existing, payload: change.payload, kind: "delete", ...renewed })
+    return await save({
+      ...existing,
+      payload: change.payload,
+      kind: "delete",
+      ...renewed,
+      before,
+    })
   }
 
   /** Marks an entry as waiting for a person's decision. */
@@ -461,6 +492,7 @@ export function createOutbox<P, S extends { version: number }>(
         attempted: false,
         status: "pending",
         conflict: undefined,
+        before: undefined,
       })
     })
     await flush()
@@ -486,7 +518,13 @@ export function createOutbox<P, S extends { version: number }>(
     return await locked(async () => {
       const entry = (await store.readOutbox()).find((e) => e.entityId === entityId)
       if (!entry || entry.attempted || entry.status !== "pending") return false
-      await drop(entry.seq!)
+      if (!entry.before) {
+        await drop(entry.seq!)
+        return true
+      }
+      // An edit was merged into the entry: take back that edit only, and keep the write before it
+      // (with its key and `attempted`, so a send that may have happened is repeated idempotently).
+      await save({ ...entry, ...entry.before, before: undefined })
       return true
     })
   }

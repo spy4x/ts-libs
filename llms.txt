@@ -684,6 +684,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ClipboardWriter` (interface), `jsr:@spy4x/platform/browser`: The one clipboard method this helper calls.
 - `CopyToClipboardOptions` (interface), `jsr:@spy4x/platform/browser`: Where copyToClipboard writes.
 - `DataCache` (interface), `jsr:@spy4x/platform/browser`: The durable cache: see the module documentation.
+- `DataCacheOp` (type), `jsr:@spy4x/platform/browser`: One step of DataCache.batch.
 - `DataCacheOptions` (interface), `jsr:@spy4x/platform/browser`: Options of createDataCache.
 - `DatabaseSpec` (interface), `jsr:@spy4x/platform/browser`: How to open one database.
 - `DownloadDocument` (interface), `jsr:@spy4x/platform/browser`: Minimal document surface this helper needs, so the caller passes its own `document`.
@@ -753,6 +754,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/platform/browser/data-cache`
 
 - `DataCache` (interface), `jsr:@spy4x/platform/browser/data-cache`: The durable cache: see the module documentation.
+- `DataCacheOp` (type), `jsr:@spy4x/platform/browser/data-cache`: One step of DataCache.batch.
 - `DataCacheOptions` (interface), `jsr:@spy4x/platform/browser/data-cache`: Options of createDataCache.
 - `createDataCache` (function), `jsr:@spy4x/platform/browser/data-cache`: A data cache over IndexedDB.
 
@@ -1517,6 +1519,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `Outbox` (interface), `jsr:@spy4x/realtime/outbox`: The outbox as the app uses it.
 - `OutboxCommand` (interface), `jsr:@spy4x/realtime/outbox`: The command the app sends for one entry.
 - `OutboxEntry` (interface), `jsr:@spy4x/realtime/outbox`: One write made while offline, waiting to be sent.
+- `OutboxEntrySnapshot` (interface), `jsr:@spy4x/realtime/outbox`: The parts of an OutboxEntry that an edit merged into it changes.
 - `OutboxKind` (type), `jsr:@spy4x/realtime/outbox`: What an outgoing write does to an entity.
 - `OutboxLock` (type), `jsr:@spy4x/realtime/outbox`: Runs `work` while no other caller holds the queue.
 - `OutboxPorts` (interface), `jsr:@spy4x/realtime/outbox`: What the outbox needs from the outside.
@@ -2627,4 +2630,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 e2c2f4596cb290508fb1fe0d3403e563e70e9c1693b6cc0c937dda30a4e8e8c4 -->
+<!-- export surface: sha256 7adee0715208a4c0fd143f3886c48340f21425cf12a95e424515d351d0a881e3 -->

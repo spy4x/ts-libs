@@ -108,7 +108,7 @@ when the caller passes none.
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                               |
 | `browser/cookie`             | `getCookie`                                                                                                                       |
-| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOptions`                                                                                |
+| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                 |
 | `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                |
 | `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                           |
 | `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                           |
@@ -139,6 +139,18 @@ await cache.replace(calendarId, await fetchTasks(calendarId)) // a full answer
 await cache.put(calendarId, changedTask) // one pushed change
 const persistent = await requestPersistentStorage() // false: tell the person to install the app
 ```
+
+Items read back in the order `replace` wrote them, so the server's order survives without the app
+wrapping each item with a position. A single item `put` later follows the others; one put again
+keeps its place. `batch(ops)` applies puts, deletes, replaces and clears across items and scopes in
+one transaction, all or none: a sync answer ("these calendars, these changed objects, these
+removed") lands without a reader seeing it half applied, and an item whose id cannot be read leaves
+the cache as it was. A CalDAV sync store, for instance, keeps the calendar list in one scope and each
+calendar's objects in a scope of their own; `replaceCalendars` is one `batch` that replaces the list
+and `clear`s the scope of every calendar `scopes()` shows that the list no longer has. `clearAll()`
+empties every scope at sign-out. After `indexedDB.deleteDatabase(name)` at sign-out, stop whatever
+still holds the cache or an outbox store: the next call on a store that is still referenced
+creates an empty database again.
 
 `browser/embed` (from `mig`'s height-report and time-zone scripts) is for a page inside another
 site's frame. `reportHeight` posts `{ type, height }` for one element's own box to the parent, on

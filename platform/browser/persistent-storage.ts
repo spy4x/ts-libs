@@ -6,6 +6,8 @@
  * browser grants the request on its own rules (an installed app, a bookmark, engagement), so the
  * answer is data for the UI, not an error: when it is `false`, tell the person to install the app
  * and to open it before a week passes.
+ *
+ * @module
  */
 
 /** The part of a browser's `StorageManager` this module uses. `navigator.storage` fits it. */

@@ -124,7 +124,14 @@ export function createSyncRunner(options: SyncRunnerOptions): SyncRunner {
 
   function update(patch: Partial<SyncRunnerState>): void {
     state = { ...state, ...patch }
-    for (const listener of [...listeners]) listener(state)
+    // A listener that throws must not stop the run it was told about, or every later run.
+    for (const listener of [...listeners]) {
+      try {
+        listener(state)
+      } catch (error) {
+        console.error("sync runner: a state listener threw", error)
+      }
+    }
   }
 
   function cancelRetry(): void {
