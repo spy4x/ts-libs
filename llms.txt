@@ -721,7 +721,10 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `GEOLOCATION_UNSUPPORTED` (constant), `jsr:@spy4x/platform/browser`: Message requestGeolocation reports when the runtime has no `Geolocation` at all.
 - `GeoCoordinates` (interface), `jsr:@spy4x/platform/browser`: A resolved position, reduced to the two numbers a caller stores.
 - `Hotkey` (interface), `jsr:@spy4x/platform/browser`: A parsed keyboard combination: one key and the modifiers held with it.
+- `HotkeyBinding` (interface), `jsr:@spy4x/platform/browser`: One entry of a createHotkeyMatcher table: the key presses that trigger `id`.
 - `HotkeyEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that matchesHotkey reads.
+- `HotkeyMatcherOptions` (interface), `jsr:@spy4x/platform/browser`: Options for createHotkeyMatcher.
+- `HotkeySequenceEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that createHotkeyMatcher reads.
 - `MakeStorageOptions` (interface), `jsr:@spy4x/platform/browser`: Options for makeStorage.
 - `ObjectUrlAdapter` (interface), `jsr:@spy4x/platform/browser`: Object-URL surface, injected so a test never allocates a real blob URL.
 - `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser`: Options of installOfflineShell.
@@ -744,6 +747,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `copyToClipboard` (function), `jsr:@spy4x/platform/browser`: Write `text` to the clipboard, and say whether it got there.
 - `createDataCache` (function), `jsr:@spy4x/platform/browser`: A data cache over IndexedDB.
 - `createDatabaseOpener` (function), `jsr:@spy4x/platform/browser`: Returns a function that opens the database on first use and returns the same connection after.
+- `createHotkeyMatcher` (function), `jsr:@spy4x/platform/browser`: Build a matcher for a table of bindings, each one or more key presses (`["g", "t"]`).
 - `downloadCsv` (function), `jsr:@spy4x/platform/browser`: Write rows as a CSV file and save it: toCsvBytes handed to downloadResponseAsFile.
 - `downloadResponseAsFile` (function), `jsr:@spy4x/platform/browser`: Save a response body to disk under `filename`.
 - `fillEmptyTimeZoneField` (function), `jsr:@spy4x/platform/browser`: Put the visitor's time zone into a form field, only when the field is still empty — a zone the page already filled in (from a link's `tz` parameter, say) is what the visitor saw on screen, and overwriting it would submit a different one.
@@ -812,9 +816,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/platform/browser/hotkeys`
 
 - `Hotkey` (interface), `jsr:@spy4x/platform/browser/hotkeys`: A parsed keyboard combination: one key and the modifiers held with it.
+- `HotkeyBinding` (interface), `jsr:@spy4x/platform/browser/hotkeys`: One entry of a createHotkeyMatcher table: the key presses that trigger `id`.
 - `HotkeyEvent` (interface), `jsr:@spy4x/platform/browser/hotkeys`: The part of a `KeyboardEvent` that matchesHotkey reads.
+- `HotkeyMatcherOptions` (interface), `jsr:@spy4x/platform/browser/hotkeys`: Options for createHotkeyMatcher.
+- `HotkeySequenceEvent` (interface), `jsr:@spy4x/platform/browser/hotkeys`: The part of a `KeyboardEvent` that createHotkeyMatcher reads.
 - `PlatformNavigator` (interface), `jsr:@spy4x/platform/browser/hotkeys`: The part of `navigator` that isApplePlatform reads.
 - `TypingTarget` (interface), `jsr:@spy4x/platform/browser/hotkeys`: The part of an element that isTypingTarget reads.
+- `createHotkeyMatcher` (function), `jsr:@spy4x/platform/browser/hotkeys`: Build a matcher for a table of bindings, each one or more key presses (`["g", "t"]`).
 - `isApplePlatform` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether the browser runs on macOS, iOS or iPadOS, where `mod` means Command.
 - `isTypingTarget` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
 - `matchesHotkey` (function), `jsr:@spy4x/platform/browser/hotkeys`: Whether a key press is the combination.
@@ -2665,4 +2673,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 a5fb922e1b2b9f534320d511818085c4c33be677dbdb71b020f5f1e0c2d32f7e -->
+<!-- export surface: sha256 102d8c4ab727c44bb96bf01a0b329278d1dd0b35cbb8304874df6b1d6659181f -->
