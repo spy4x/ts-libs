@@ -519,7 +519,7 @@ describe("isoDateInTz", () => {
   })
 
   it("gives the date Intl's en-CA format gives, for apps that formatted it that way", () => {
-    // caldav-tasks-web's `todayIn` was `new Intl.DateTimeFormat("en-CA", { timeZone }).format(now)`.
+    // An app that formatted today with `new Intl.DateTimeFormat("en-CA", { timeZone }).format(now)` can switch to `isoDateInTz`.
     const instants = ["2026-01-05T12:00:00Z", "2026-03-29T00:30:00Z", "2026-10-25T23:30:00Z"]
     for (const zone of [UTC_ZONE, BERLIN, LOS_ANGELES, "Asia/Ho_Chi_Minh", "Pacific/Auckland"]) {
       for (const at of instants) {

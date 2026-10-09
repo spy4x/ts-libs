@@ -195,6 +195,9 @@ export type RebaseResult =
  * Re-applies `edit`, made on `base`, to `theirs`, the fresh copy from the server. A field counts as
  * touched by the edit when its value differs from `base`, and as touched by the server when
  * `theirs` differs from `base`; if both ended up at the same value there is no collision.
+ *
+ * Never apply the whole edit with {@link editTask} to the fresh copy: a form sends every field, and
+ * the untouched ones would revert what the other side changed. Use this or {@link keepMine}.
  */
 export function rebaseEdit(base: Task, edit: TaskEdit, theirs: Task, now: Date): RebaseResult {
   const fields = collisions(base, edit, theirs)
@@ -209,6 +212,8 @@ export function rebaseEdit(base: Task, edit: TaskEdit, theirs: Task, now: Date):
 /**
  * "Keep mine": applies the fields `edit` really changed (against `base`) to `theirs`, overwriting
  * the server's value where both changed the same field and leaving every other server change alone.
+ * Use it instead of {@link editTask} on `theirs`: a form sends every field, and the untouched ones
+ * would revert what the other side changed.
  */
 export function keepMine(base: Task, edit: TaskEdit, theirs: Task, now: Date): EditResult {
   return editTask(theirs, changesOf(base, edit), now)

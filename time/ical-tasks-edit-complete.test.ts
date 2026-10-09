@@ -87,7 +87,7 @@ Deno.test(`a repeating task with no due date is refused as outside the repeat ru
   expect(COMPLETE_REFUSED_BY_RULE.has(result.error!.code)).toBe(true)
 })
 
-Deno.test(`a due date in a vendor time zone is refused as outside the repeat rule`, () => {
+Deno.test(`a due date in a vendor time zone is refused as outside what can be reproduced`, () => {
   const ics = vtodo([
     `DTSTAMP:20261001T080000Z`,
     `UID:vendor`,
