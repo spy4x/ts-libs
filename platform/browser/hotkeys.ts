@@ -296,3 +296,104 @@ export function isTypingTarget(target: TypingTarget | null | undefined): boolean
   if (tag === "INPUT") return !NON_TEXT_INPUTS.has((target.type ?? "text").toLowerCase())
   return false
 }
+
+/** One entry of a {@link createHotkeyMatcher} table: the key presses that trigger `id`. */
+export interface HotkeyBinding<Id> {
+  /** What the caller gets back when the presses complete. */
+  id: Id
+  /**
+   * The key presses in order, each written as {@link parseHotkey} takes it: `["n"]` is one press,
+   * `["g", "t"]` is `g` then `t`. A binding with several ways to fire is several entries.
+   */
+  keys: readonly string[]
+}
+
+/** The part of a `KeyboardEvent` that {@link createHotkeyMatcher} reads. */
+export interface HotkeySequenceEvent extends HotkeyEvent {
+  /** The element the press landed on. Read by {@link isTypingTarget}. */
+  target?: TypingTarget | null
+  /** When the press happened, in milliseconds. `KeyboardEvent.timeStamp` serves. */
+  timeStamp: number
+  /** `true` while an input method is composing text. */
+  isComposing?: boolean
+}
+
+/** Options for {@link createHotkeyMatcher}. */
+export interface HotkeyMatcherOptions<Event extends HotkeySequenceEvent> {
+  /** How long a pressed key waits for the next one, in milliseconds. Defaults to `1000`. */
+  timeoutMs?: number
+  /** Whether `mod` means Command. Pass {@link isApplePlatform}'s answer. Defaults to `false`. */
+  apple?: boolean
+  /** Return `true` to make the matcher ignore this press, for example inside a dialog. */
+  ignore?: (event: Event) => boolean
+}
+
+/** Keys that are only a modifier going down; they are never part of a sequence. */
+const MODIFIER_KEYS = new Set(["shift", "control", "alt", "meta", "altgraph", "os"])
+
+interface Progress<Id> {
+  id: Id
+  combos: readonly Hotkey[]
+  /** How many presses of the sequence have matched. */
+  matched: number
+}
+
+/**
+ * Build a matcher for a table of bindings, each one or more key presses (`["g", "t"]`). Call the
+ * result with every key press, in order: it returns the id of the binding the press completes, or
+ * `undefined`. It holds no DOM reference and starts no timer, so it runs on a server and in a test.
+ *
+ * - **Sequences.** A pressed key that starts a longer binding is kept for `timeoutMs`, counted from
+ *   the events' `timeStamp`. The next press must continue it; any other key, or a late one, drops
+ *   it. A dropped key is not lost: the press that dropped it is matched again from the start, so
+ *   `g g t` still reaches `g t`.
+ * - **A key that is also the start of a sequence.** The shorter binding wins. If `g` and `g t` are
+ *   both in the table, `g` fires at once and `g t` can never fire, because the matcher cannot know
+ *   whether a second key will follow without delaying `g`. Give the sequence its own first key.
+ *   When two bindings have the same keys, the earlier one in the table wins.
+ * - **Ignored presses.** A press while typing ({@link isTypingTarget}), while composing, or when
+ *   `ignore` returns `true` never matches, and it drops a waiting key. A lone modifier press
+ *   (`Shift`, `Control`, `Alt`, `Meta`) is skipped without dropping it, so `g` then `shift+t` works.
+ * - **Modifiers** follow {@link matchesHotkey}: a key with Control, Alt or Meta held matches only a
+ *   combination that names them.
+ *
+ * @param table The bindings, in priority order.
+ * @param options `timeoutMs`, `apple` and `ignore`.
+ * @returns A function to call with each key press.
+ * @throws {Error} When a key in the table cannot be read, or a binding has no keys.
+ */
+export function createHotkeyMatcher<Id, Event extends HotkeySequenceEvent = HotkeySequenceEvent>(
+  table: readonly HotkeyBinding<Id>[],
+  { timeoutMs = 1000, apple = false, ignore }: HotkeyMatcherOptions<Event> = {},
+): (event: Event) => Id | undefined {
+  const fresh: Progress<Id>[] = table.map(({ id, keys }) => {
+    if (keys.length === 0) throw new Error(`A hotkey binding needs at least one key`)
+    return { id, combos: keys.map((combo) => parseHotkey(combo)), matched: 0 }
+  })
+  let waiting: { progress: Progress<Id>[]; at: number } | null = null
+
+  const step = (candidates: readonly Progress<Id>[], event: Event): Progress<Id>[] =>
+    candidates
+      .filter((p) => matchesHotkey(p.combos[p.matched], event, apple))
+      .map((p) => ({ ...p, matched: p.matched + 1 }))
+
+  return (event) => {
+    if (
+      event.isComposing === true || isTypingTarget(event.target) || ignore?.(event) === true
+    ) {
+      waiting = null
+      return undefined
+    }
+    if (typeof event.key === "string" && MODIFIER_KEYS.has(event.key.toLowerCase())) {
+      return undefined
+    }
+    const live = waiting && event.timeStamp - waiting.at <= timeoutMs ? waiting.progress : null
+    waiting = null
+    let advanced = live ? step(live, event) : []
+    if (advanced.length === 0) advanced = step(fresh, event)
+    const done = advanced.find((p) => p.matched === p.combos.length)
+    if (done) return done.id
+    if (advanced.length > 0) waiting = { progress: advanced, at: event.timeStamp }
+    return undefined
+  }
+}

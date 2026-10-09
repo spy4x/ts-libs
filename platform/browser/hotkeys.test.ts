@@ -2,11 +2,14 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
 import {
+  createHotkeyMatcher,
   type HotkeyEvent,
+  type HotkeySequenceEvent,
   isApplePlatform,
   isTypingTarget,
   matchesHotkey,
   parseHotkey,
+  type TypingTarget,
 } from "./hotkeys.ts"
 
 /** A key press with no modifier held, overridden field by field. */
@@ -198,5 +201,157 @@ describe("isTypingTarget", () => {
     expect(isTypingTarget({ tagName: "BUTTON" })).toBe(false)
     expect(isTypingTarget({ tagName: "DIV", isContentEditable: false })).toBe(false)
     expect(isTypingTarget(null)).toBe(false)
+  })
+})
+
+describe("createHotkeyMatcher", () => {
+  /** A key press at `at` milliseconds. */
+  function at(key: string, time: number, fields: Partial<HotkeySequenceEvent> = {}) {
+    return { ...press(key), timeStamp: time, ...fields } as HotkeySequenceEvent
+  }
+
+  const table = [
+    { id: `new`, keys: [`n`] },
+    { id: `today`, keys: [`g`, `t`] },
+    { id: `upcoming`, keys: [`g`, `u`] },
+    { id: `help`, keys: [`?`] },
+    { id: `edit`, keys: [`enter`] },
+    { id: `edit-too`, keys: [`e`] },
+  ]
+
+  it("fires a single key at once", () => {
+    const match = createHotkeyMatcher(table)
+    expect(match(at(`n`, 0))).toBe(`new`)
+  })
+
+  it("fires a two-key sequence on its second key and returns the caller's id", () => {
+    const match = createHotkeyMatcher(table)
+    expect(match(at(`g`, 0))).toBeUndefined()
+    expect(match(at(`u`, 100))).toBe(`upcoming`)
+  })
+
+  it("forgets a finished sequence, so the second key alone does nothing", () => {
+    const match = createHotkeyMatcher(table)
+    match(at(`g`, 0))
+    match(at(`t`, 10))
+    expect(match(at(`t`, 20))).toBeUndefined()
+  })
+
+  it("drops the first key when the second comes after the timeout", () => {
+    const match = createHotkeyMatcher(table, { timeoutMs: 500 })
+    match(at(`g`, 0))
+    expect(match(at(`t`, 501))).toBeUndefined()
+  })
+
+  it("accepts the second key exactly at the timeout", () => {
+    const match = createHotkeyMatcher(table, { timeoutMs: 500 })
+    match(at(`g`, 0))
+    expect(match(at(`t`, 500))).toBe(`today`)
+  })
+
+  it("waits 1000 ms by default", () => {
+    const match = createHotkeyMatcher(table)
+    match(at(`g`, 0))
+    expect(match(at(`t`, 1000))).toBe(`today`)
+    match(at(`g`, 2000))
+    expect(match(at(`t`, 3001))).toBeUndefined()
+  })
+
+  it("drops the first key when another key comes between", () => {
+    const match = createHotkeyMatcher(table)
+    match(at(`g`, 0))
+    match(at(`x`, 10))
+    expect(match(at(`t`, 20))).toBeUndefined()
+  })
+
+  it("restarts from a key that breaks a sequence, so g g t still reaches g t", () => {
+    const match = createHotkeyMatcher(table)
+    match(at(`g`, 0))
+    match(at(`g`, 10))
+    expect(match(at(`t`, 20))).toBe(`today`)
+  })
+
+  it("lets a key that breaks a sequence fire its own single binding", () => {
+    const match = createHotkeyMatcher(table)
+    match(at(`g`, 0))
+    expect(match(at(`n`, 10))).toBe(`new`)
+  })
+
+  it("ignores a press on a text field and drops the waiting key", () => {
+    const match = createHotkeyMatcher(table)
+    expect(match(at(`n`, 0, { target: { tagName: `INPUT`, type: `text` } }))).toBeUndefined()
+    match(at(`g`, 10))
+    match(at(`t`, 20, { target: { tagName: `TEXTAREA` } }))
+    expect(match(at(`t`, 30))).toBeUndefined()
+  })
+
+  it("ignores a press while composing and drops the waiting key", () => {
+    const match = createHotkeyMatcher(table)
+    expect(match(at(`n`, 0, { isComposing: true }))).toBeUndefined()
+    match(at(`g`, 10))
+    match(at(`x`, 20, { isComposing: true }))
+    expect(match(at(`t`, 30))).toBeUndefined()
+  })
+
+  it("ignores a press the caller's ignore predicate rejects and drops the waiting key", () => {
+    const match = createHotkeyMatcher(table, {
+      ignore: (event) => (event.target as { inDialog?: boolean } | null)?.inDialog === true,
+    })
+    const dialog = { inDialog: true } as unknown as TypingTarget
+    expect(match(at(`n`, 0, { target: dialog }))).toBeUndefined()
+    match(at(`g`, 10))
+    match(at(`x`, 20, { target: dialog }))
+    expect(match(at(`t`, 30))).toBeUndefined()
+    expect(match(at(`n`, 40))).toBe(`new`)
+  })
+
+  it("does not match a key with Control held unless the binding names it", () => {
+    const match = createHotkeyMatcher(table)
+    expect(match(at(`n`, 0, { ctrlKey: true }))).toBeUndefined()
+  })
+
+  it("lets a lone Shift press pass without dropping the waiting key", () => {
+    const match = createHotkeyMatcher([{ id: `big`, keys: [`g`, `shift+t`] }])
+    match(at(`g`, 0))
+    expect(match(at(`Shift`, 10, { shiftKey: true }))).toBeUndefined()
+    expect(match(at(`T`, 20, { shiftKey: true }))).toBe(`big`)
+  })
+
+  it("matches a symbol typed with Shift held", () => {
+    const match = createHotkeyMatcher(table)
+    expect(match(at(`/`, 0, { shiftKey: true }))).toBeUndefined()
+    expect(match(at(`?`, 0, { shiftKey: true }))).toBe(`help`)
+  })
+
+  it("lets the shorter binding win when a key is also the start of a sequence", () => {
+    const match = createHotkeyMatcher([
+      { id: `single`, keys: [`g`] },
+      { id: `pair`, keys: [`g`, `t`] },
+    ])
+    expect(match(at(`g`, 0))).toBe(`single`)
+    expect(match(at(`t`, 10))).toBeUndefined()
+  })
+
+  it("lets the earlier binding win when two have the same keys", () => {
+    const match = createHotkeyMatcher([
+      { id: `first`, keys: [`g`, `t`] },
+      { id: `second`, keys: [`g`, `t`] },
+    ])
+    match(at(`g`, 0))
+    expect(match(at(`t`, 10))).toBe(`first`)
+  })
+
+  it("reads mod as Command when apple is set", () => {
+    const match = createHotkeyMatcher([{ id: `k`, keys: [`mod+k`] }], { apple: true })
+    expect(match(at(`k`, 0, { ctrlKey: true }))).toBeUndefined()
+    expect(match(at(`k`, 1, { metaKey: true }))).toBe(`k`)
+  })
+
+  it("throws for a binding with no keys", () => {
+    expect(() => createHotkeyMatcher([{ id: 1, keys: [] }])).toThrow(`at least one key`)
+  })
+
+  it("throws for a key it cannot read", () => {
+    expect(() => createHotkeyMatcher([{ id: 1, keys: [`ctrl+`] }])).toThrow()
   })
 })

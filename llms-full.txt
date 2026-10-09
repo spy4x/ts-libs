@@ -2083,18 +2083,18 @@ Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `get
 factory, a timer, a clipboard, a `Geolocation`) as a parameter, defaulting to the real global only
 when the caller passes none.
 
-| Module                       | Contents                                                                                                                          |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                               |
-| `browser/cookie`             | `getCookie`                                                                                                                       |
-| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                 |
-| `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                |
-| `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                           |
-| `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                           |
-| `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyEvent`, `PlatformNavigator`, `TypingTarget` |
-| `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                        |
-| `browser/persistent-storage` | `requestPersistentStorage`, `PersistentStorageManager`                                                                            |
-| `browser/storage`            | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
+| Module                       | Contents                                                                                                                                                                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                                                                                                                      |
+| `browser/cookie`             | `getCookie`                                                                                                                                                                                                              |
+| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                                                                                                        |
+| `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                                                                                                       |
+| `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                                                                                                                  |
+| `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                                                                                                                  |
+| `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget` |
+| `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                               |
+| `browser/persistent-storage` | `requestPersistentStorage`, `PersistentStorageManager`                                                                                                                                                                   |
+| `browser/storage`            | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage`                                                                                        |
 
 `browser/data-cache` keeps the last data the server sent, in IndexedDB, so a page opens with it and
 shows it with no network. Items live in scopes (a user, a calendar); a full server answer replaces a
