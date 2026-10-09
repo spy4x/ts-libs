@@ -292,9 +292,12 @@ const all = await client.listObjects(inbox, { component: "VTODO", includeComplet
 
 const created = await client.createObject(inbox, ics) // a UUID name, `If-None-Match: *`
 if (!created.success) throw new Error(created.error.message)
-const updated = await client.updateObject(created.output.url, changed, created.output.etag!)
+// A server may answer a PUT without an ETag (`etag: null`); then read the object to get one.
+const current = await client.getObject(created.output.url)
+if (!current.success || current.output.etag === null) throw new Error("no etag to update with")
+const updated = await client.updateObject(current.output.url, changed, current.output.etag)
 if (!updated.success && updated.error.code === CalDavErrorCode.Conflict) {
-  // Someone changed it since it was read: fetch it again, merge, retry with the new etag.
+  // Someone changed it since it was read: read it again, merge, retry with the new etag.
 }
 ```
 
@@ -306,9 +309,12 @@ What the client guarantees:
   to another origin never, failing with `CrossOriginRedirect` and the target in `error.target`.
 - **No blind writes.** `createObject` sends `If-None-Match: *` and names the object with a UUID,
   never the UID. `updateObject` and `deleteObject` need the etag, sent exactly as received, and
-  without one are refused with `InvalidArgument` before any request. A stale etag fails with
+  without one are refused with `InvalidArgument` before any request. The etag must be one quoted
+  entity tag: `*` or a list would match any version, so both are refused, and a server etag of
+  that kind reads as `null`. A stale etag fails with
   `Conflict`, a code no other failure uses; a UID clash fails with `UidConflict`.
-- **Failures are not empty lists.** A missing calendar is `NotFound`, never `[]`.
+- **Failures are not empty lists.** A missing calendar is `NotFound`, never `[]`, including when
+  the server answers 207 with only the calendar's own entry at 404.
   `deleteCalendar` checks the collection is a calendar first, so it cannot delete the home.
 - **Bounded.** One `timeoutMs` (default 30 s) covers a whole call; no body is read past
   `maxResponseBytes` (default 10 MiB).

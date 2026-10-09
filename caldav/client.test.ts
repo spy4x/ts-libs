@@ -36,6 +36,8 @@ type Handler = (request: Seen) => Response | Promise<Response>
 function setup(handler: Handler, options: Partial<CalDavClientOptions> = {}) {
   const seen: Seen[] = []
   const fakeFetch: typeof fetch = async (input, init) => {
+    // A fetch that follows redirects itself would carry the request to another origin unseen.
+    if (init?.redirect !== "manual") throw new Error("the client must follow redirects itself")
     const request: Seen = {
       method: init?.method ?? "GET",
       url: String(input),
@@ -161,6 +163,55 @@ describe("credentials", () => {
       assert(thrown, serverUrl)
     }
   })
+
+  it("refuses a URL argument carrying a username or password before sending anything", async () => {
+    const { client, seen } = setup(() => new Response(ICS))
+    const url = "https://u:p@dav.example.com/dav/cal/x.ics"
+    assertEquals(failure(await client.getObject(url)).code, CalDavErrorCode.InvalidArgument)
+    assertEquals(
+      failure(await client.deleteObject(url, `"1"`)).code,
+      CalDavErrorCode.InvalidArgument,
+    )
+    assertEquals(seen.length, 0)
+  })
+
+  it("refuses a server href carrying a username or password", async () => {
+    const { client } = setup(() =>
+      multistatus(
+        `<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:response><D:href>https://u:p@dav.example.com/x.ics</D:href><D:propstat><D:prop><D:getetag>"1"</D:getetag><C:calendar-data>${ICS}</C:calendar-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>`,
+      )
+    )
+    assertEquals(
+      failure(await client.listObjects(INBOX, { component: "VTODO" })).code,
+      CalDavErrorCode.Malformed,
+    )
+  })
+
+  it("never follows a same-origin redirect whose Location carries credentials", async () => {
+    const { client, seen } = setup(() => redirect(302, "https://u:p@dav.example.com/other.ics"))
+    assertEquals(failure(await client.getObject(TASK)).code, CalDavErrorCode.Server)
+    assertEquals(seen.length, 1)
+  })
+
+  it("refuses a limit that is not a positive integer", () => {
+    const bad: Partial<CalDavClientOptions>[] = [
+      { maxResponseBytes: 0 },
+      { maxResponseBytes: Number.NaN },
+      { timeoutMs: -1 },
+      { timeoutMs: Infinity },
+      { maxRedirects: -1 },
+      { maxRedirects: 1.5 },
+    ]
+    for (const options of bad) {
+      let thrown = false
+      try {
+        createCalDavClient({ serverUrl: SERVER, auth: AUTH, ...options })
+      } catch (error) {
+        thrown = error instanceof TypeError
+      }
+      assert(thrown, JSON.stringify(options))
+    }
+  })
 })
 
 describe("discover", () => {
@@ -275,6 +326,44 @@ describe("listCalendars", () => {
 })
 
 describe("listObjects", () => {
+  it("reports a 207 whose only entry is the calendar itself at 404 as NotFound", async () => {
+    const path = new URL(INBOX).pathname
+    const { client } = setup(() =>
+      multistatus(
+        `<D:multistatus xmlns:D="DAV:"><D:response><D:href>${path}</D:href><D:status>HTTP/1.1 404 Not Found</D:status></D:response></D:multistatus>`,
+      )
+    )
+    const error = failure(await client.listObjects(INBOX, { component: "VTODO" }))
+    assertEquals([error.code, error.status], [CalDavErrorCode.NotFound, 404])
+    assertEquals(failure(await client.listCalendars(INBOX)).code, CalDavErrorCode.NotFound)
+  })
+
+  it("refuses an invalid time range without throwing or sending", async () => {
+    const { client, seen } = setup(() => multistatus('<D:multistatus xmlns:D="DAV:"/>'))
+    const result = await client.listObjects(INBOX, {
+      component: "VTODO",
+      timeRange: { start: new Date("nope") },
+    })
+    assertEquals(failure(result).code, CalDavErrorCode.InvalidArgument)
+    assertEquals(seen.length, 0)
+  })
+
+  it("reads a server etag that is not one quoted entity tag as null", async () => {
+    const { client } = setup(() =>
+      multistatus(
+        `<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">${
+          ["*", "abc", `"1", "2"`].map((etag, index) =>
+            `<D:response><D:href>${
+              new URL(INBOX).pathname
+            }${index}.ics</D:href><D:propstat><D:prop><D:getetag>${etag}</D:getetag><C:calendar-data>${ICS}</C:calendar-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`
+          ).join("")
+        }</D:multistatus>`,
+      )
+    )
+    const objects = output(await client.listObjects(INBOX, { component: "VTODO" }))
+    assertEquals(objects.map((object) => object.etag), [null, null, null])
+  })
+
   it("lists open tasks only by default, asking the server to drop completed ones", async () => {
     const { client, seen } = setup(async () =>
       multistatus(await fixture("stalwart-calendar-query.xml"))
@@ -355,6 +444,45 @@ describe("writes", () => {
     assertEquals(seen[0].headers.get("If-Match"), null)
     assertEquals(seen[0].headers.get("Content-Type"), "text/calendar; charset=utf-8")
     assertEquals(seen[0].body, ICS)
+  })
+
+  it("refuses * and etag lists, which would make a guarded write blind, before any request", async () => {
+    const { client, seen } = setup(() => new Response(null, { status: 204 }))
+    for (const etag of ["*", `"1", "2"`, `"1,2"`, "W/", "abc", `W/abc`]) {
+      assertEquals(
+        failure(await client.updateObject(TASK, ICS, etag)).code,
+        CalDavErrorCode.InvalidArgument,
+        etag,
+      )
+      assertEquals(
+        failure(await client.deleteObject(TASK, etag)).code,
+        CalDavErrorCode.InvalidArgument,
+        etag,
+      )
+    }
+    assertEquals(seen.length, 0)
+  })
+
+  it("reports an empty or invalid ETag header as null", async () => {
+    for (const header of ["", "*", "abc"]) {
+      const { client } = setup(() => new Response(ICS, { status: 200, headers: { ETag: header } }))
+      assertEquals(output(await client.getObject(TASK)).etag, null, header)
+    }
+  })
+
+  it("returns the address a same-origin redirect led to", async () => {
+    const moved = `${INBOX}moved.ics`
+    const { client } = setup((request) =>
+      request.url === moved
+        ? new Response(request.method === "GET" ? ICS : null, {
+          status: request.method === "GET" ? 200 : 201,
+          headers: { ETag: `"2"` },
+        })
+        : redirect(307, moved)
+    )
+    assertEquals(output(await client.getObject(TASK)).url, moved)
+    assertEquals(output(await client.createObject(INBOX, ICS)).url, moved)
+    assertEquals(output(await client.updateObject(TASK, ICS, `"1"`)).url, moved)
   })
 
   it("reports an etag the server did not send as null", async () => {

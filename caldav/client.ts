@@ -263,6 +263,28 @@ class CallFailure extends Error {
   }
 }
 
+/** One entity tag, strong or weak, quoted as RFC 9110 §8.8.3 requires: never `*` or a list. */
+const ENTITY_TAG = /^(W\/)?"[^",]*"$/
+
+/** The etag a server sent, when it is one valid entity tag; anything else reads as missing. */
+function entityTag(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed && ENTITY_TAG.test(trimmed) ? trimmed : null
+}
+
+/** True when a URL carries a username or password, which `fetch` would send as a second login. */
+function hasUserInfo(url: URL): boolean {
+  return url.username !== "" || url.password !== ""
+}
+
+/** Throw a `TypeError` unless `value` is absent or a positive integer. */
+function requirePositiveInteger(value: number | undefined, name: string, allowZero = false) {
+  if (value === undefined) return
+  if (!Number.isInteger(value) || value < (allowZero ? 0 : 1)) {
+    throw new TypeError(`${name} must be ${allowZero ? "a non-negative" : "a positive"} integer`)
+  }
+}
+
 function fail(code: CalDavErrorCode, message: string, extra: Partial<CalDavError> = {}): never {
   throw new CallFailure({ code, message, ...extra })
 }
@@ -305,12 +327,15 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
   if (server.protocol !== "http:" && server.protocol !== "https:") {
     throw new TypeError("serverUrl must be an http: or https: URL")
   }
-  if (server.username !== "" || server.password !== "") {
+  if (hasUserInfo(server)) {
     throw new TypeError("serverUrl must not carry credentials; pass them as auth")
   }
   if (options.auth.username.includes(":")) {
     throw new TypeError("a Basic auth username cannot contain ':'")
   }
+  requirePositiveInteger(options.maxResponseBytes, "maxResponseBytes")
+  requirePositiveInteger(options.timeoutMs, "timeoutMs")
+  requirePositiveInteger(options.maxRedirects, "maxRedirects", true)
   const authorization = `Basic ${encodeBase64(`${options.auth.username}:${options.auth.password}`)}`
   const doFetch = options.fetch ?? ((input, init) => fetch(input, init))
   const maxBytes = options.maxResponseBytes ?? DEFAULT_MAX_XML_BYTES
@@ -325,6 +350,9 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
     } catch {
       fail(CalDavErrorCode.InvalidArgument, `${what} is not a valid URL`)
     }
+    if (hasUserInfo(url)) {
+      fail(CalDavErrorCode.InvalidArgument, `${what} must not carry credentials`)
+    }
     if (!isSameOrigin(url, server)) {
       fail(CalDavErrorCode.OutsideServer, `${what} is not on the server's origin`)
     }
@@ -335,6 +363,9 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
   const ownHref = (href: string, base: URL): URL => {
     const url = resolveHref(href, base)
     if (url === null) fail(CalDavErrorCode.Malformed, "the server sent an invalid href")
+    if (hasUserInfo(url)) {
+      fail(CalDavErrorCode.Malformed, "the server sent an href with credentials")
+    }
     if (!isSameOrigin(url, server)) {
       fail(CalDavErrorCode.OutsideServer, "the server sent an href on another origin")
     }
@@ -361,6 +392,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
       if (!isSameOrigin(url, server)) {
         fail(CalDavErrorCode.OutsideServer, "refusing a request outside the server's origin")
       }
+      if (hasUserInfo(url)) fail(CalDavErrorCode.InvalidArgument, "refusing a URL with credentials")
       let headers: Headers
       try {
         headers = new Headers(exchange.headers)
@@ -396,6 +428,11 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
         const target = location === null ? null : resolveHref(location, url)
         if (target === null) {
           fail(CalDavErrorCode.Server, "a redirect without a valid Location", {
+            status: response.status,
+          })
+        }
+        if (hasUserInfo(target)) {
+          fail(CalDavErrorCode.Server, "the server redirected to a URL with credentials", {
             status: response.status,
           })
         }
@@ -481,7 +518,10 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
     const missing: string[] = []
     for (const response of responses) {
       const url = ownHref(response.href, base)
-      if (sameResource(url, collection)) continue
+      if (sameResource(url, collection)) {
+        failIfSelfFailed(response)
+        continue
+      }
       if (response.status !== undefined && response.status >= 400) {
         for (const href of response.hrefs) missing.push(ownHref(href, base).href)
         continue
@@ -491,7 +531,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
         fail(CalDavErrorCode.Malformed, "a calendar object came without calendar-data")
       }
       // Whitespace around the element text is XML formatting, not part of the etag.
-      const etag = getPropText(response, DAV_NS, "getetag")?.trim() || null
+      const etag = entityTag(getPropText(response, DAV_NS, "getetag"))
       objects.push({ url: url.href, etag, data })
     }
     return { objects, missing }
@@ -502,13 +542,15 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
     if (typeof etag !== "string" || etag.trim() === "") {
       fail(CalDavErrorCode.InvalidArgument, "an etag is required; read the object first")
     }
+    // One quoted entity tag, as read: `*` would match any version and a list any of several, so
+    // either would turn a guarded write into a blind one.
+    if (!ENTITY_TAG.test(etag)) {
+      fail(CalDavErrorCode.InvalidArgument, "the etag must be one quoted entity tag, as read")
+    }
     try {
       new Headers({ "If-Match": etag })
     } catch {
       fail(CalDavErrorCode.InvalidArgument, "the etag cannot be sent as a header")
-    }
-    if (etag !== etag.trim()) {
-      fail(CalDavErrorCode.InvalidArgument, "the etag has surrounding whitespace")
     }
     return etag
   }
@@ -577,6 +619,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
         const calendars: CalDavCalendar[] = []
         for (const response of responses) {
           const url = ownHref(response.href, reply.url)
+          if (sameResource(url, home)) failIfSelfFailed(response)
           if (!isCalendar(response)) continue
           const components = getProp(response, CALDAV_NS, "supported-calendar-component-set")
           const calendar: CalDavCalendar = {
@@ -602,11 +645,16 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
         const calendar = own(calendarUrl, "calendarUrl")
         const openOnly = listOptions.component.toUpperCase() === "VTODO" &&
           listOptions.includeCompleted !== true
-        const body = calendarQueryBody({
-          component: listOptions.component,
-          timeRange: listOptions.timeRange,
-          withoutProperties: openOnly ? ["COMPLETED"] : [],
-        })
+        let body: string
+        try {
+          body = calendarQueryBody({
+            component: listOptions.component,
+            timeRange: listOptions.timeRange,
+            withoutProperties: openOnly ? ["COMPLETED"] : [],
+          })
+        } catch (cause) {
+          fail(CalDavErrorCode.InvalidArgument, messageOf(cause))
+        }
         const { reply, responses } = await report(call, calendar, body)
         return toObjects(responses, reply.url, calendar).objects
       }),
@@ -628,7 +676,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
           await send(call, { method: "GET", url: target, headers: { Accept: "text/calendar" } }),
           [200],
         )
-        return { url: target.href, etag: reply.headers.get("ETag"), data: reply.text }
+        return { url: reply.url.href, etag: entityTag(reply.headers.get("ETag")), data: reply.text }
       }),
 
     createObject: (calendarUrl, ics) =>
@@ -644,7 +692,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
           body,
         })
         expectStatus(reply, [200, 201, 204], CalDavErrorCode.AlreadyExists)
-        return { url: target.href, etag: reply.headers.get("ETag") }
+        return { url: reply.url.href, etag: entityTag(reply.headers.get("ETag")) }
       }),
 
     updateObject: (url, ics, etag) =>
@@ -659,7 +707,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
           body,
         })
         expectStatus(reply, [200, 201, 204], CalDavErrorCode.Conflict)
-        return { url: target.href, etag: reply.headers.get("ETag") }
+        return { url: reply.url.href, etag: entityTag(reply.headers.get("ETag")) }
       }),
 
     deleteObject: (url, etag) =>
@@ -807,6 +855,16 @@ function davCondition(text: string): XmlName | undefined {
   if (root.namespace !== DAV_NS || root.name !== "error") return undefined
   const first = root.children.find((child): child is XmlElement => typeof child !== "string")
   return first === undefined ? undefined : { namespace: first.namespace, name: first.name }
+}
+
+/**
+ * Fail when a multistatus reports an error for the collection that was asked about: a server may
+ * answer 207 with only that entry at 404, which must not read as an empty collection.
+ */
+function failIfSelfFailed(response: DavResponse): void {
+  if (response.status !== undefined && response.status >= 400) {
+    failForStatus(response.status, "the collection itself answered with an error")
+  }
 }
 
 function failForStatus(status: number, message: string, extra: Partial<CalDavError> = {}): never {
