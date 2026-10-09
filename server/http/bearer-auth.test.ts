@@ -230,8 +230,10 @@ describe("createTokenVerifier verifySync", () => {
     // The work per call depends only on the presented token, which the client already knows,
     // so precomputing the configured digest is safe. A raw `===` would skip every digest.
     const realDigestSync = stdCrypto.subtle.digestSync
+    const algorithms: string[] = []
     const inputs: number[] = []
     stdCrypto.subtle.digestSync = ((algorithm, data) => {
+      algorithms.push(String(algorithm))
       inputs.push(new Uint8Array(data as ArrayBuffer).byteLength)
       return realDigestSync.call(stdCrypto.subtle, algorithm, data)
     }) as typeof realDigestSync
@@ -242,6 +244,7 @@ describe("createTokenVerifier verifySync", () => {
         verifier.verifySync(presented)
       }
       assertEquals(inputs, [FAKE_TOKEN.length, 2, FAKE_TOKEN.length, FAKE_TOKEN.length + 1])
+      assertEquals(algorithms, ["SHA-256", "SHA-256", "SHA-256", "SHA-256"])
     } finally {
       stdCrypto.subtle.digestSync = realDigestSync
     }
