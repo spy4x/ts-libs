@@ -9,7 +9,8 @@
     "./ics-core": "./ics-core.ts",
     "./ical": "./ical.ts",
     "./rrule": "./rrule.ts",
-    "./ical-tasks": "./ical-tasks.ts"
+    "./ical-tasks": "./ical-tasks.ts",
+    "./ical-tasks-model": "./ical-tasks-model.ts"
   },
   "publish": {
     "exclude": ["testdata"]
