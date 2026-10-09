@@ -6,6 +6,7 @@
     "./xml": "./xml.ts",
     "./url": "./url.ts",
     "./sync": "./sync.ts",
+    "./indexeddb": "./indexeddb.ts",
     "./write": "./write.ts"
   }
 }
