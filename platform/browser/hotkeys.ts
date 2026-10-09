@@ -310,8 +310,12 @@ export interface HotkeyBinding<Id> {
 
 /** The part of a `KeyboardEvent` that {@link createHotkeyMatcher} reads. */
 export interface HotkeySequenceEvent extends HotkeyEvent {
-  /** The element the press landed on. Read by {@link isTypingTarget}. */
-  target?: TypingTarget | null
+  /**
+   * The element the press landed on. Anything fits, so a browser `KeyboardEvent` (whose target is
+   * an `EventTarget`) is accepted as it is. The matcher treats the target as an element for
+   * {@link isTypingTarget} only when it is an object, and as no element otherwise.
+   */
+  target?: object | null
   /** When the press happened, in milliseconds. `KeyboardEvent.timeStamp` serves. */
   timeStamp: number
   /** `true` while an input method is composing text. */
@@ -328,8 +332,22 @@ export interface HotkeyMatcherOptions<Event extends HotkeySequenceEvent> {
   ignore?: (event: Event) => boolean
 }
 
-/** Keys that are only a modifier going down; they are never part of a sequence. */
-const MODIFIER_KEYS = new Set(["shift", "control", "alt", "meta", "altgraph", "os"])
+/** Keys that are only a modifier or lock going down; they are never part of a sequence. */
+const MODIFIER_KEYS = new Set([
+  "shift",
+  "control",
+  "alt",
+  "meta",
+  "altgraph",
+  "os",
+  "capslock",
+  "numlock",
+  "scrolllock",
+  "fn",
+  "fnlock",
+  "hyper",
+  "super",
+])
 
 interface Progress<Id> {
   id: Id
@@ -346,14 +364,16 @@ interface Progress<Id> {
  * - **Sequences.** A pressed key that starts a longer binding is kept for `timeoutMs`, counted from
  *   the events' `timeStamp`. The next press must continue it; any other key, or a late one, drops
  *   it. A dropped key is not lost: the press that dropped it is matched again from the start, so
- *   `g g t` still reaches `g t`.
+ *   `g g t` still reaches `g t`. While a longer sequence is waiting, it has the first claim on the
+ *   next key: with `g t x` and `t` in one table, `t` after `g` continues `g t x` and does not fire
+ *   `t`; any later key that breaks the sequence is matched again from the start.
  * - **A key that is also the start of a sequence.** The shorter binding wins. If `g` and `g t` are
  *   both in the table, `g` fires at once and `g t` can never fire, because the matcher cannot know
  *   whether a second key will follow without delaying `g`. Give the sequence its own first key.
  *   When two bindings have the same keys, the earlier one in the table wins.
  * - **Ignored presses.** A press while typing ({@link isTypingTarget}), while composing, or when
  *   `ignore` returns `true` never matches, and it drops a waiting key. A lone modifier press
- *   (`Shift`, `Control`, `Alt`, `Meta`) is skipped without dropping it, so `g` then `shift+t` works.
+ *   (`Shift`, `Control`, `Alt`, `Meta`, `CapsLock` and the like) is skipped without dropping it, so `g` then `shift+t` works.
  * - **Modifiers** follow {@link matchesHotkey}: a key with Control, Alt or Meta held matches only a
  *   combination that names them.
  *
@@ -379,7 +399,8 @@ export function createHotkeyMatcher<Id, Event extends HotkeySequenceEvent = Hotk
 
   return (event) => {
     if (
-      event.isComposing === true || isTypingTarget(event.target) || ignore?.(event) === true
+      event.isComposing === true ||
+      isTypingTarget(event.target as TypingTarget | null | undefined) || ignore?.(event) === true
     ) {
       waiting = null
       return undefined

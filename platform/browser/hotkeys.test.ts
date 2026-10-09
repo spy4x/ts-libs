@@ -214,6 +214,7 @@ describe("createHotkeyMatcher", () => {
     { id: `new`, keys: [`n`] },
     { id: `today`, keys: [`g`, `t`] },
     { id: `upcoming`, keys: [`g`, `u`] },
+    { id: `search`, keys: [`/`] },
     { id: `help`, keys: [`?`] },
     { id: `edit`, keys: [`enter`] },
     { id: `edit-too`, keys: [`e`] },
@@ -317,9 +318,39 @@ describe("createHotkeyMatcher", () => {
     expect(match(at(`T`, 20, { shiftKey: true }))).toBe(`big`)
   })
 
+  it("lets a lock key pass without dropping the waiting key", () => {
+    const match = createHotkeyMatcher(table)
+    match(at(`g`, 0))
+    expect(match(at(`CapsLock`, 10))).toBeUndefined()
+    expect(match(at(`t`, 20))).toBe(`today`)
+  })
+
+  it("lets a waiting longer sequence take the next key before a single binding", () => {
+    const match = createHotkeyMatcher([
+      { id: `single`, keys: [`t`] },
+      { id: `triple`, keys: [`g`, `t`, `x`] },
+    ])
+    match(at(`g`, 0))
+    expect(match(at(`t`, 10))).toBeUndefined()
+    expect(match(at(`x`, 20))).toBe(`triple`)
+    expect(match(at(`t`, 30))).toBe(`single`)
+  })
+
+  it("takes a real KeyboardEvent, in the matcher and in ignore", () => {
+    // Type-level only (Deno has no `KeyboardEvent` at run time): `deno task ts:check` fails when a
+    // DOM event stops fitting `createHotkeyMatcher`, so the body is never called.
+    const _typeCheck = (event: KeyboardEvent): number | undefined => {
+      const match = createHotkeyMatcher<number, KeyboardEvent>([{ id: 1, keys: [`n`] }], {
+        ignore: (e) => (e.target as Element | null)?.closest(`dialog`) != null,
+      })
+      return match(event)
+    }
+    expect(typeof _typeCheck).toBe(`function`)
+  })
+
   it("matches a symbol typed with Shift held", () => {
     const match = createHotkeyMatcher(table)
-    expect(match(at(`/`, 0, { shiftKey: true }))).toBeUndefined()
+    expect(match(at(`/`, 0, { shiftKey: true }))).toBe(`search`)
     expect(match(at(`?`, 0, { shiftKey: true }))).toBe(`help`)
   })
 
