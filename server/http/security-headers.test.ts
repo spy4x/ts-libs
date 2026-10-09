@@ -5,7 +5,7 @@ import { inlineBlockHashes, securityHeaders } from "./security-headers.ts"
 const STYLE = `\nbody {\n  margin: 0;\n}\n`
 const SCRIPT = `\ndocument.documentElement.dataset.ready = "1"\n`
 const SHELL = `<html><head><style>${STYLE}</style><script>${SCRIPT}</script>` +
-  `<script src="/app.js"></script><script></script></head></html>`
+  `<script src="/app.js">fallback()</script><script></script></head></html>`
 
 async function sha(body: string): Promise<string> {
   const digest = new Uint8Array(
