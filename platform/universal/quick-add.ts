@@ -51,9 +51,9 @@ export interface QuickAddDue {
 export interface QuickAddResult {
   /** The line without its tokens, words joined by single spaces. Escapes are removed. */
   title: string
-  /** `#tag` names without the `#`, in order of appearance, each once. */
+  /** `#tag` names without the `#`, in order of appearance. `#Work #work` is one tag, `Work`. */
   tags: string[]
-  /** `@context` names without the `@`, nested ones as `work/meetings`, each once. */
+  /** `@context` names without the `@`, nested as `work/meetings`; case-insensitively unique. */
   contexts: string[]
   due?: QuickAddDue
   priority?: QuickAddPriority
@@ -75,7 +75,7 @@ export interface QuickAddOptions {
 }
 
 /** The words a locale uses for date and priority tokens, all lower case. */
-interface QuickAddWords {
+export interface QuickAddWords {
   today: string
   tomorrow: string
   /** Monday first. */
@@ -91,27 +91,31 @@ interface QuickAddWords {
   low: string
 }
 
-const WORDS: Record<string, QuickAddWords> = {
+/**
+ * The word tables by lower-case language subtag. `en` is the fallback for any locale not listed;
+ * an app can add its own language here before parsing.
+ */
+export const quickAddWords: Record<string, QuickAddWords> = {
   en: {
-    today: `today`,
-    tomorrow: `tomorrow`,
-    weekdays: [`monday`, `tuesday`, `wednesday`, `thursday`, `friday`, `saturday`, `sunday`],
-    in: `in`,
-    days: [`day`, `days`],
-    weeks: [`week`, `weeks`],
-    at: `at`,
-    high: `high`,
-    medium: `medium`,
-    low: `low`,
+    today: "today",
+    tomorrow: "tomorrow",
+    weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+    in: "in",
+    days: ["day", "days"],
+    weeks: ["week", "weeks"],
+    at: "at",
+    high: "high",
+    medium: "medium",
+    low: "low",
   },
 }
 
 /** What `dayOfWeek` answers for each weekday, Monday first. */
-const TZ_WEEKDAYS = [`MON`, `TUE`, `WED`, `THU`, `FRI`, `SAT`, `SUN`]
+const TZ_WEEKDAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 
 const NAME = String.raw`[\p{L}\p{N}\p{M}_-]+`
-const TAG = new RegExp(`^#(${NAME})$`, `u`)
-const CONTEXT = new RegExp(`^@(${NAME}(?:/${NAME})*)$`, `u`)
+const TAG = new RegExp(`^#(${NAME})$`, "u")
+const CONTEXT = new RegExp(`^@(${NAME}(?:/${NAME})*)$`, "u")
 const PRIORITY = /^!(.+)$/
 const TIME_12H = /^(\d{1,2})(?::(\d{2}))?(am|pm)$/
 const TIME_24H = /^(\d{1,2}):(\d{2})$/
@@ -141,15 +145,18 @@ const COUNT = /^\d{1,4}$/
  * The title is the remaining words joined by single spaces. Text is never changed otherwise, so
  * any script and emoji survive as typed.
  *
- * @throws When `timeZone` is not a valid IANA time zone.
+ * @throws When `timeZone` is not a valid IANA time zone, or `now` is an invalid `Date`.
  */
 export function parseQuickAdd(line: string, options: QuickAddOptions): QuickAddResult {
-  const words = WORDS[options.locale?.split(`-`)[0].toLowerCase() ?? `en`] ?? WORDS.en
+  const language = options.locale?.split("-")[0].toLowerCase() ?? "en"
+  const words = Object.hasOwn(quickAddWords, language) ? quickAddWords[language] : quickAddWords.en
   const today = isoDateInTz(options.now, options.timeZone)
   const tokens = [...line.matchAll(/\S+/gu)].map((m) => ({ text: m[0], start: m.index }))
 
   const tags: string[] = []
   const contexts: string[] = []
+  const seenTags = new Set<string>()
+  const seenContexts = new Set<string>()
   const spans: QuickAddSpan[] = []
   const title: string[] = []
   let date: string | undefined
@@ -206,7 +213,7 @@ export function parseQuickAdd(line: string, options: QuickAddOptions): QuickAddR
       const hour = Number(twelve[1])
       const minute = Number(twelve[2] ?? 0)
       if (hour < 1 || hour > 12 || minute > 59) return undefined
-      return minToHHMM(((hour % 12) + (twelve[3] === `pm` ? 12 : 0)) * 60 + minute)
+      return minToHHMM(((hour % 12) + (twelve[3] === "pm" ? 12 : 0)) * 60 + minute)
     }
     const full = TIME_24H.exec(lower)
     if (full) {
@@ -228,31 +235,37 @@ export function parseQuickAdd(line: string, options: QuickAddOptions): QuickAddR
   for (let i = 0; i < tokens.length; i++) {
     const { text } = tokens[i]
 
-    if (text.startsWith(`\\`) && looksLikeToken(text.slice(1))) {
+    if (text.startsWith("\\") && looksLikeToken(text.slice(1))) {
       title.push(text.slice(1))
       continue
     }
 
     const tag = TAG.exec(text)
     if (tag) {
-      if (!tags.includes(tag[1])) tags.push(tag[1])
+      if (!seenTags.has(tag[1].toLowerCase())) {
+        seenTags.add(tag[1].toLowerCase())
+        tags.push(tag[1])
+      }
       span(QuickAddSpanKind.Tag, i, i)
       continue
     }
 
     const context = CONTEXT.exec(text)
     if (context) {
-      if (!contexts.includes(context[1])) contexts.push(context[1])
+      if (!seenContexts.has(context[1].toLowerCase())) {
+        seenContexts.add(context[1].toLowerCase())
+        contexts.push(context[1])
+      }
       span(QuickAddSpanKind.Context, i, i)
       continue
     }
 
     const level = priority === undefined ? PRIORITY.exec(text)?.[1].toLowerCase() : undefined
-    const parsed = level === words.high || level === `1`
+    const parsed = level === words.high || level === "1"
       ? QuickAddPriority.High
-      : level === words.medium || level === `2`
+      : level === words.medium || level === "2"
       ? QuickAddPriority.Medium
-      : level === words.low || level === `3`
+      : level === words.low || level === "3"
       ? QuickAddPriority.Low
       : undefined
     if (parsed !== undefined) {
@@ -285,7 +298,7 @@ export function parseQuickAdd(line: string, options: QuickAddOptions): QuickAddR
     title.push(text)
   }
 
-  const result: QuickAddResult = { title: title.join(` `), tags, contexts, spans }
+  const result: QuickAddResult = { title: title.join(" "), tags, contexts, spans }
   if (priority !== undefined) result.priority = priority
   if (date !== undefined || time !== undefined) {
     result.due = { date: date ?? today }
