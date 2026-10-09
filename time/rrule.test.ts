@@ -6,6 +6,7 @@ import { assert, assertEquals } from "@std/assert"
 import { IcalDateKind, type IcalDateValue, resolveInstant } from "./ical.ts"
 import {
   describeRrule,
+  formatRrule,
   nextOccurrence,
   parseRrule,
   type Rrule,
@@ -829,4 +830,119 @@ Deno.test(`time/rrule and its local imports use web-platform APIs only`, async (
     }
   }
   assertEquals(seen.size, 5, `rrule.ts, ical.ts, ics-core.ts, tz.ts and date.ts`)
+})
+
+// ---- formatRrule -------------------------------------------------------------------------------
+
+function written(value: Rrule): string {
+  const result = formatRrule(value)
+  if (!result.success) throw new Error(result.error.message)
+  return result.output
+}
+
+Deno.test(`formatRrule writes the parts in a fixed order and always writes INTERVAL`, () => {
+  const table: [Partial<Rrule> & { freq: RruleFreq }, string][] = [
+    [{ freq: RruleFreq.Daily }, `FREQ=DAILY;INTERVAL=1`],
+    [{ freq: RruleFreq.Daily, interval: 3, count: 2 }, `FREQ=DAILY;COUNT=2;INTERVAL=3`],
+    [
+      { freq: RruleFreq.Weekly, byDay: [{ weekday: 1 }, { weekday: 4 }] },
+      `FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TH`,
+    ],
+    [
+      { freq: RruleFreq.Monthly, byDay: [{ weekday: 5, ordinal: -1 }], byMonth: [3] },
+      `FREQ=MONTHLY;INTERVAL=1;BYDAY=-1FR;BYMONTH=3`,
+    ],
+    [
+      { freq: RruleFreq.Monthly, byMonthDay: [1, -1], weekStart: RruleWeekday.Sunday },
+      `FREQ=MONTHLY;WKST=SU;INTERVAL=1;BYMONTHDAY=1,-1`,
+    ],
+    [
+      {
+        freq: RruleFreq.Daily,
+        until: { kind: IcalDateKind.Utc, date: `2026-08-14`, time: `04:00:00` },
+      },
+      `FREQ=DAILY;UNTIL=20260814T040000Z;INTERVAL=1`,
+    ],
+    [
+      { freq: RruleFreq.Daily, until: { kind: IcalDateKind.Date, date: `2026-08-14` } },
+      `FREQ=DAILY;UNTIL=20260814;INTERVAL=1`,
+    ],
+    [
+      {
+        freq: RruleFreq.Daily,
+        until: { kind: IcalDateKind.Floating, date: `2026-08-14`, time: `09:30:00` },
+      },
+      `FREQ=DAILY;UNTIL=20260814T093000;INTERVAL=1`,
+    ],
+  ]
+  for (const [partial, expected] of table) {
+    const full: Rrule = {
+      interval: 1,
+      byDay: [],
+      byMonthDay: [],
+      byMonth: [],
+      weekStart: RruleWeekday.Monday,
+      ...partial,
+    }
+    assertEquals(written(full), expected)
+  }
+})
+
+Deno.test(`formatRrule gives back a rule parseRrule reads as the same rule`, () => {
+  const lines = [
+    `FREQ=MONTHLY;INTERVAL=2;BYDAY=2MO,-1FR,TU;BYMONTHDAY=1,-1;BYMONTH=3,9;UNTIL=20271231T235959Z;WKST=SU`,
+    `FREQ=YEARLY;COUNT=5;BYMONTH=11;BYMONTHDAY=3`,
+    `FREQ=WEEKLY;UNTIL=20260814;BYDAY=SA,SU`,
+    `FREQ=DAILY;UNTIL=20260814T090000`,
+    ...Deno.readTextFileSync(new URL(`./testdata/tasks-org-rrules.txt`, import.meta.url))
+      .trim().split(`\n`),
+  ]
+  assert(lines.length > 5)
+  for (const line of lines) {
+    assertEquals(rule(written(rule(line))), rule(line), line)
+  }
+})
+
+Deno.test(`formatRrule leaves a rule Tasks.org wrote as it is`, () => {
+  const lines = Deno.readTextFileSync(new URL(`./testdata/tasks-org-rrules.txt`, import.meta.url))
+    .trim().split(`\n`).map((line) => line.replace(`RRULE:`, ``))
+  assertEquals(lines.length, 18)
+  for (const line of lines) assertEquals(written(rule(line)), line)
+})
+
+Deno.test(`formatRrule refuses a rule the parser would refuse instead of writing it`, () => {
+  const base: Rrule = {
+    freq: RruleFreq.Daily,
+    interval: 1,
+    byDay: [],
+    byMonthDay: [],
+    byMonth: [],
+    weekStart: RruleWeekday.Monday,
+  }
+  const bad: [Rrule, RruleErrorCode][] = [
+    [{ ...base, interval: 0 }, RruleErrorCode.Malformed],
+    [{ ...base, byDay: [{ weekday: RruleWeekday.Monday }] }, RruleErrorCode.Unsupported],
+    [
+      { ...base, count: 3, until: { kind: IcalDateKind.Date, date: `2026-01-01` } },
+      RruleErrorCode.Malformed,
+    ],
+    [{ ...base, byMonth: [13] }, RruleErrorCode.Malformed],
+    [
+      {
+        ...base,
+        until: {
+          kind: IcalDateKind.Zoned,
+          date: `2026-01-01`,
+          time: `09:00:00`,
+          tzid: `Europe/Paris`,
+        },
+      },
+      RruleErrorCode.Malformed,
+    ],
+  ]
+  for (const [value, code] of bad) {
+    const result = formatRrule(value)
+    assert(!result.success)
+    assertEquals(result.error.code, code)
+  }
 })
