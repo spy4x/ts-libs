@@ -2,7 +2,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { Hono } from "hono"
 import { encodeBase64Url } from "@std/encoding/base64url"
-import { randomBase64Url } from "@spy4x/platform/tokens"
+import { randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import {
   type AuthorizationServerOptions,
   createAuthorizationServer,
@@ -924,6 +924,120 @@ describe("createAuthorizationServer", () => {
     })
   })
 
+  describe("ends every grant", () => {
+    const DAY = 24 * 60 * 60_000
+    async function signedIn(t: ReturnType<typeof setup>) {
+      const code = (await t.approve()).searchParams.get("code")!
+      return await (await t.redeem(code)).json()
+    }
+    const refreshWith = (t: ReturnType<typeof setup>, refreshToken: string) =>
+      t.token({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: CLAUDE })
+
+    it("at grantTtlMs after approval, however often the client refreshes", async () => {
+      const t = setup({ grantTtlMs: 3 * DAY, refreshTokenTtlMs: 2 * DAY })
+      let tokens = await signedIn(t)
+      for (let day = 1; day < 3; day++) {
+        t.advance(DAY)
+        const response = await refreshWith(t, tokens.refresh_token)
+        expect(response.status).toBe(200)
+        tokens = await response.json()
+      }
+      t.advance(DAY - 1)
+      const last = await refreshWith(t, tokens.refresh_token)
+      expect(last.status).toBe(200)
+      const lastTokens = await last.json()
+      expect(lastTokens.expires_in).toBe(0)
+      t.advance(1)
+      expect((await t.callMcp(lastTokens.access_token)).status).toBe(401)
+      const after = await refreshWith(t, lastTokens.refresh_token)
+      expect((await after.json()).error).toBe("invalid_grant")
+    })
+
+    it("cuts the access token short when the grant ends first", async () => {
+      const t = setup({ grantTtlMs: 10 * 60_000 })
+      const tokens = await signedIn(t)
+      expect(tokens.expires_in).toBe(10 * 60)
+      t.advance(10 * 60_000)
+      expect((await t.callMcp(tokens.access_token)).status).toBe(401)
+    })
+
+    it("after 90 days by default", async () => {
+      const t = setup({ refreshTokenTtlMs: 100 * DAY })
+      const tokens = await signedIn(t)
+      t.advance(90 * DAY - 1)
+      const before = await refreshWith(t, tokens.refresh_token)
+      expect(before.status).toBe(200)
+      t.advance(1)
+      const after = await refreshWith(t, (await before.json()).refresh_token)
+      expect((await after.json()).error).toBe("invalid_grant")
+    })
+
+    it("and gives a grant issued before grants had an end one at its first refresh", async () => {
+      const t = setup({ grantTtlMs: 3 * DAY })
+      const legacy = randomBase64Url(32)
+      await t.store.saveRefreshToken(await sha256Hex(legacy), {
+        grantId: "legacy",
+        clientId: CLAUDE,
+        resource: RESOURCE,
+        scope: "tasks",
+        expiresAt: 1_000_000 + 30 * DAY,
+      })
+      const rotated = await refreshWith(t, legacy)
+      expect(rotated.status).toBe(200)
+      expect(await t.store.listGrants()).toEqual([{
+        grantId: "legacy",
+        clientId: CLAUDE,
+        resource: RESOURCE,
+        scope: "tasks",
+        createdAt: 1_000_000,
+        expiresAt: 1_000_000 + 3 * DAY,
+      }])
+      t.advance(3 * DAY)
+      const after = await refreshWith(t, (await rotated.json()).refresh_token)
+      expect((await after.json()).error).toBe("invalid_grant")
+    })
+  })
+
+  describe("lists grants", () => {
+    it("one per approved client, and revoking one signs out that client only", async () => {
+      const t = setup()
+      const first = await (await t.redeem((await t.approve()).searchParams.get("code")!)).json()
+      t.advance(1_000)
+      const second = await (await t.redeem((await t.approve()).searchParams.get("code")!)).json()
+      const grants = await t.store.listGrants()
+      expect(grants.map((g) => [g.clientId, g.resource, g.scope, g.createdAt])).toEqual([
+        [CLAUDE, RESOURCE, "tasks", 1_000_000],
+        [CLAUDE, RESOURCE, "tasks", 1_001_000],
+      ])
+      expect(grants[0].expiresAt).toBe(1_000_000 + 90 * 24 * 60 * 60_000)
+      await t.store.revokeGrant(grants[0].grantId, grants[0].expiresAt)
+      expect((await t.callMcp(first.access_token)).status).toBe(401)
+      const refreshed = await t.token({
+        grant_type: "refresh_token",
+        refresh_token: first.refresh_token,
+        client_id: CLAUDE,
+      })
+      expect((await refreshed.json()).error).toBe("invalid_grant")
+      expect((await t.callMcp(second.access_token)).status).toBe(200)
+      expect((await t.store.listGrants()).map((g) => g.grantId)).toEqual([grants[1].grantId])
+    })
+
+    it("keeps the grant's start and scope when the client refreshes with a narrower scope", async () => {
+      const t = setup()
+      const tokens = await (await t.redeem((await t.approve()).searchParams.get("code")!)).json()
+      t.advance(1_000)
+      const response = await t.token({
+        grant_type: "refresh_token",
+        refresh_token: tokens.refresh_token,
+        client_id: CLAUDE,
+        scope: "",
+      })
+      expect(response.status).toBe(200)
+      const [grant] = await t.store.listGrants()
+      expect([grant.createdAt, grant.scope]).toEqual([1_000_000, "tasks"])
+    })
+  })
+
   describe("binds tokens to their resource", () => {
     it("so a token for one MCP server is refused by another", async () => {
       const t = setup()
@@ -1001,6 +1115,14 @@ describe("createAuthorizationServer", () => {
       }
       for (const windowMs of [0, -1, Number.POSITIVE_INFINITY]) {
         expect(server({ windowMs })).toThrow("ownerPassword.windowMs must be positive")
+      }
+    })
+
+    it("refuses a grant lifetime that is not positive", () => {
+      for (const grantTtlMs of [0, -1, Number.NaN]) {
+        expect(() => createAuthorizationServer({ ...base, issuer: ISSUER, grantTtlMs })).toThrow(
+          "grantTtlMs must be positive",
+        )
       }
     })
 

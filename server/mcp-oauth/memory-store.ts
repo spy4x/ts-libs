@@ -8,6 +8,7 @@ import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import type {
   AccessTokenRecord,
   CodeRecord,
+  GrantRecord,
   OAuthStore,
   PendingAuthorization,
   RefreshTokenRecord,
@@ -48,6 +49,7 @@ export class MemoryOAuthStore implements OAuthStore {
   readonly #codes = new Map<string, CodeRecord>()
   readonly #access = new Map<string, AccessTokenRecord>()
   readonly #refresh = new Map<string, RefreshTokenRecord>()
+  readonly #grants = new Map<string, GrantRecord>()
   /** Revoked grant ids, each mapped to the epoch milliseconds its refusal lasts until. */
   readonly #revoked = new Map<string, number>()
 
@@ -111,12 +113,24 @@ export class MemoryOAuthStore implements OAuthStore {
 
   revokeGrant(grantId: string, until: number): Promise<void> {
     this.#revoked.set(grantId, Math.max(until, this.#revoked.get(grantId) ?? 0))
+    this.#grants.delete(grantId)
     for (const map of [this.#access, this.#refresh]) {
       for (const [key, record] of map) {
         if (record.grantId === grantId) map.delete(key)
       }
     }
     return Promise.resolve()
+  }
+
+  saveGrant(record: GrantRecord): Promise<boolean> {
+    return this.#saveToken(this.#grants, record.grantId, record)
+  }
+
+  listGrants(): Promise<GrantRecord[]> {
+    const now = this.#clock.now()
+    const grants = [...this.#grants.values()].filter((grant) => grant.expiresAt > now)
+    grants.sort((a, b) => a.createdAt - b.createdAt)
+    return Promise.resolve(grants.map((grant) => structuredClone(grant)))
   }
 
   #consume<T extends { usedAt?: number }>(map: Map<string, T>, key: string): T | undefined {
@@ -151,7 +165,7 @@ export class MemoryOAuthStore implements OAuthStore {
 
   #prune(): void {
     const now = this.#clock.now()
-    for (const map of [this.#pending, this.#codes, this.#access, this.#refresh]) {
+    for (const map of [this.#pending, this.#codes, this.#access, this.#refresh, this.#grants]) {
       for (const [key, record] of map as Map<string, Expiring>) {
         if (record.expiresAt <= now) map.delete(key)
       }

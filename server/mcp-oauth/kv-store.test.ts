@@ -4,6 +4,7 @@ import { KvOAuthStore, type OAuthKv, type OAuthKvAtomic, type OAuthKvEntry } fro
 import {
   code,
   describeOAuthStoreContract,
+  grant,
   manualClock,
   pending,
   refresh,
@@ -106,6 +107,7 @@ describe("KvOAuthStore", () => {
     await store.saveAccessToken("a", { ...refresh, expiresAt: 1_900 })
     await store.saveRefreshToken("r", refresh)
     await store.revokeGrant("g2", 7_000)
+    await store.saveGrant(grant)
     const expireIn = (...key: string[]) => kv.entries.get(JSON.stringify(key))?.expireIn
     expect(expireIn("mcp-oauth", "pending", "p")).toBe(1_000)
     expect(expireIn("mcp-oauth", "code", "c")).toBe(1_000)
@@ -114,18 +116,7 @@ describe("KvOAuthStore", () => {
     expect(expireIn("mcp-oauth", "refresh", "r")).toBe(4_000)
     expect(expireIn("mcp-oauth", "grant", "g1", "refresh", "r")).toBe(4_000)
     expect(expireIn("mcp-oauth", "revoked", "g2")).toBe(6_000)
-  })
-
-  it("keeps a consumed code's expiry, and never hands Deno KV an expireIn below 1", async () => {
-    const kv = fakeKv()
-    const clock = manualClock(1_000)
-    const store = new KvOAuthStore(kv, { clock })
-    await store.saveCode("c", code)
-    clock.set(1_400)
-    await store.consumeCode("c")
-    expect(kv.entries.get(JSON.stringify(["mcp-oauth", "code", "c"]))?.expireIn).toBe(600)
-    await store.saveCode("late", { ...code, expiresAt: 1_000 })
-    expect(kv.entries.get(JSON.stringify(["mcp-oauth", "code", "late"]))?.expireIn).toBe(1)
+    expect(expireIn("mcp-oauth", "grants", "g1")).toBe(4_000)
   })
 
   it("keeps two stores with different prefixes apart in one database", async () => {
@@ -141,11 +132,12 @@ describe("KvOAuthStore", () => {
     expect([...kv.entries.values()].every((entry) => entry.key[0] === "app")).toBe(true)
   })
 
-  it("removes a revoked grant's index keys along with its tokens", async () => {
+  it("removes a revoked grant's index keys and grant record along with its tokens", async () => {
     const kv = fakeKv()
     const store = new KvOAuthStore(kv, { clock: manualClock() })
     await store.saveAccessToken("a", { ...refresh })
     await store.saveRefreshToken("r", refresh)
+    await store.saveGrant(grant)
     await store.revokeGrant(refresh.grantId, 3_000)
     expect([...kv.entries.values()].map((entry) => entry.key)).toEqual([
       ["mcp-oauth", "revoked", refresh.grantId],

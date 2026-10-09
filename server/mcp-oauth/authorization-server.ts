@@ -17,7 +17,7 @@ import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import { createSameOriginCheck } from "../http/same-origin.ts"
 import type { PasswordHasher } from "../sign-in/password.ts"
 import { type ClientMetadataSource, createClientMetadataFetcher } from "./client-metadata.ts"
-import type { OAuthStore, PendingAuthorization } from "./model.ts"
+import type { CodeRecord, OAuthStore, PendingAuthorization, RefreshTokenRecord } from "./model.ts"
 import {
   assertRedirectAllowlist,
   DEFAULT_REDIRECT_URIS,
@@ -149,8 +149,17 @@ export interface AuthorizationServerOptions {
   renderConsent?: (details: ConsentDetails) => string
   /** Access token lifetime in milliseconds. Defaults to 15 minutes. */
   accessTokenTtlMs?: number
-  /** Refresh token lifetime in milliseconds, renewed on every rotation. Defaults to 30 days. */
+  /**
+   * Refresh token lifetime in milliseconds, renewed on every rotation up to the grant's end.
+   * Defaults to 30 days.
+   */
   refreshTokenTtlMs?: number
+  /**
+   * How long one approval lasts, in milliseconds, from the click: no token minted for it, by the
+   * code or by any later refresh, outlives it, so the owner approves each client again at least
+   * this often. Defaults to 90 days.
+   */
+  grantTtlMs?: number
   /** Authorization code lifetime in milliseconds. Defaults to 60 seconds. */
   codeTtlMs?: number
   /** How long the consent page can be approved, in milliseconds. Defaults to 10 minutes. */
@@ -325,6 +334,7 @@ export function createAuthorizationServer(
   const knownScopes = new Set([...scopes, OFFLINE_ACCESS_SCOPE])
   const accessTtl = positive(options.accessTokenTtlMs, 15 * 60_000, "accessTokenTtlMs")
   const refreshTtl = positive(options.refreshTokenTtlMs, 30 * 24 * 60 * 60_000, "refreshTokenTtlMs")
+  const grantTtl = positive(options.grantTtlMs, 90 * 24 * 60 * 60_000, "grantTtlMs")
   const codeTtl = positive(options.codeTtlMs, 60_000, "codeTtlMs")
   const consentTtl = positive(options.consentTtlMs, 10 * 60_000, "consentTtlMs")
   const clock = options.clock ?? systemClock
@@ -378,26 +388,40 @@ export function createAuthorizationServer(
     return c.json({ error, error_description: description }, status)
   }
 
+  /**
+   * Mint an access and a refresh token for a grant, neither outliving the grant's end. A redeemed
+   * code (`newGrant`) saves the grant record first, and so does the first refresh of a grant issued
+   * before grants had an end, which gets one `grantTtl` from now.
+   */
   async function issueTokens(
     c: Context,
-    grant: { grantId: string; clientId: string; resource: string; scope: string },
+    grant: CodeRecord | RefreshTokenRecord,
+    scope: string,
+    newGrant: boolean,
   ): Promise<Response> {
     const now = clock.now()
+    const grantExpiresAt = grant.grantExpiresAt ?? now + grantTtl
     const fields = {
       grantId: grant.grantId,
       clientId: grant.clientId,
       resource: grant.resource,
-      scope: grant.scope,
+      scope,
     }
+    const hasRecord = !newGrant && grant.grantExpiresAt !== undefined
+    const savedGrant = hasRecord ||
+      await store.saveGrant({ ...fields, createdAt: now, expiresAt: grantExpiresAt })
     const accessToken = randomBase64Url(SECRET_BYTES)
     const refreshToken = randomBase64Url(SECRET_BYTES)
-    const savedRefresh = await store.saveRefreshToken(await sha256Hex(refreshToken), {
-      ...fields,
-      expiresAt: now + refreshTtl,
-    })
+    const accessExpiresAt = Math.min(now + accessTtl, grantExpiresAt)
+    const savedRefresh = savedGrant &&
+      await store.saveRefreshToken(await sha256Hex(refreshToken), {
+        ...fields,
+        expiresAt: Math.min(now + refreshTtl, grantExpiresAt),
+        grantExpiresAt,
+      })
     const savedAccess = savedRefresh && await store.saveAccessToken(await sha256Hex(accessToken), {
       ...fields,
-      expiresAt: now + accessTtl,
+      expiresAt: accessExpiresAt,
     })
     if (!savedAccess) return tokenError(c, "invalid_grant", "the grant was revoked")
     c.header("Cache-Control", "no-store")
@@ -405,9 +429,9 @@ export function createAuthorizationServer(
     return c.json({
       access_token: accessToken,
       token_type: "Bearer",
-      expires_in: Math.floor(accessTtl / 1000),
+      expires_in: Math.floor((accessExpiresAt - now) / 1000),
       refresh_token: refreshToken,
-      ...(grant.scope !== "" ? { scope: grant.scope } : {}),
+      ...(scope !== "" ? { scope } : {}),
     })
   }
 
@@ -578,6 +602,7 @@ export function createAuthorizationServer(
       })
     }
     const code = randomBase64Url(SECRET_BYTES)
+    const now = clock.now()
     await store.saveCode(await sha256Hex(code), {
       grantId: randomBase64Url(SECRET_BYTES),
       clientId: pending.clientId,
@@ -585,7 +610,8 @@ export function createAuthorizationServer(
       codeChallenge: pending.codeChallenge,
       resource: pending.resource,
       scope: pending.scope,
-      expiresAt: clock.now() + codeTtl,
+      expiresAt: now + codeTtl,
+      grantExpiresAt: now + grantTtl,
     })
     return redirect(c, pending.redirectUri, { code, state: pending.state })
   })
@@ -645,7 +671,7 @@ export function createAuthorizationServer(
       if (!(await constantTimeEqualsText(await s256(verifier), record.codeChallenge))) {
         return tokenError(c, "invalid_grant", "code_verifier does not match")
       }
-      return await issueTokens(c, record)
+      return await issueTokens(c, record, record.scope, true)
     }
 
     if (grantType === "refresh_token") {
@@ -688,7 +714,7 @@ export function createAuthorizationServer(
       }
       const scope = scopeFor(record)
       if (scope === undefined) return tokenError(c, "invalid_scope", "scope exceeds the grant")
-      return await issueTokens(c, { ...record, scope })
+      return await issueTokens(c, record, scope, false)
     }
 
     return tokenError(c, "unsupported_grant_type", "grant_type is not supported")

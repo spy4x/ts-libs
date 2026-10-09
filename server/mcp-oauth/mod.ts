@@ -28,6 +28,7 @@ export {
 export type {
   AccessTokenRecord,
   CodeRecord,
+  GrantRecord,
   OAuthStore,
   PendingAuthorization,
   RefreshTokenRecord,

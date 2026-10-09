@@ -40,6 +40,11 @@ export interface CodeRecord {
   expiresAt: number
   /** Epoch milliseconds of the first redemption; `undefined` until then. */
   usedAt?: number
+  /**
+   * Epoch milliseconds the grant ends at: no token minted from this code, or from a refresh of
+   * those, outlives it. Unset only on records written before grants had an end.
+   */
+  grantExpiresAt?: number
 }
 
 /** An issued access token. */
@@ -61,6 +66,33 @@ export interface RefreshTokenRecord {
   expiresAt: number
   /** Epoch milliseconds of the redemption that rotated it; `undefined` while it is current. */
   usedAt?: number
+  /**
+   * Epoch milliseconds the grant ends at; a rotation never moves it. Unset only on tokens issued
+   * before grants had an end: their first rotation gives the grant one.
+   */
+  grantExpiresAt?: number
+}
+
+/**
+ * One client the owner approved: what `listGrants` shows, so the owner can see who is connected and
+ * revoke one without signing every client out. Saved when the code is redeemed.
+ */
+export interface GrantRecord {
+  /** Pass it to {@link OAuthStore.revokeGrant} to sign this client out. */
+  grantId: string
+  /** The client's `client_id` URL. Its host is who the owner approved. */
+  clientId: string
+  /** The canonical resource the grant's tokens work for. */
+  resource: string
+  /** Granted scopes, space separated; empty when none were asked for. */
+  scope: string
+  /** Epoch milliseconds the grant was saved at. */
+  createdAt: number
+  /**
+   * Epoch milliseconds the grant ends at, whatever its refresh tokens do. Revoking with this as
+   * `until` refuses the grant for good.
+   */
+  expiresAt: number
 }
 
 /**
@@ -100,9 +132,17 @@ export interface OAuthStore {
   /** Same contract as {@link OAuthStore.consumeCode}, for refresh tokens. */
   consumeRefreshToken(key: string): Promise<RefreshTokenRecord | undefined>
   /**
-   * Delete every access and refresh token of a grant, and refuse to save new ones for it until
-   * `until` (epoch milliseconds). The refusal closes a race: a request that redeemed the code or
-   * refresh token first may still be about to save its tokens when the replay revokes the grant.
+   * Delete every access and refresh token of a grant and its grant record, and refuse to save new
+   * ones for it until `until` (epoch milliseconds). The refusal closes a race: a request that
+   * redeemed the code or refresh token first may still be about to save its tokens when the replay
+   * revokes the grant.
    */
   revokeGrant(grantId: string, until: number): Promise<void>
+  /**
+   * Save a grant record, unless its grant is revoked. Same contract as
+   * {@link OAuthStore.saveAccessToken}; {@link OAuthStore.revokeGrant} deletes it.
+   */
+  saveGrant(record: GrantRecord): Promise<boolean>
+  /** Every grant whose `expiresAt` has not passed, oldest first. */
+  listGrants(): Promise<GrantRecord[]>
 }
