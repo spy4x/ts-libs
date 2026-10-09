@@ -465,8 +465,8 @@ Deno.test("parseIcal names a continuation line that has no line to continue", ()
 })
 
 Deno.test("time/ical and time/ical-tasks and their local imports use web-platform APIs only", async () => {
-  // ical-tasks.ts adds only itself to the files ical.ts already reaches.
-  for (const [entry, count] of [["./ical.ts", 4], ["./ical-tasks.ts", 5]] as const) {
+  // ical-tasks.ts adds itself, ical-tasks-complete.ts and rrule.ts to the files ical.ts reaches.
+  for (const [entry, count] of [["./ical.ts", 4], ["./ical-tasks.ts", 7]] as const) {
     const seen = new Set<string>()
     const queue = [new URL(entry, import.meta.url)]
     while (queue.length > 0) {

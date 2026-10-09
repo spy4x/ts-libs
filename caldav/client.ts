@@ -155,7 +155,10 @@ export interface CalDavCalendar {
 export interface CalDavObject {
   /** Absolute URL, with the server's percent-encoding kept. Never derived from the UID. */
   url: string
-  /** The etag exactly as the server sent it (quotes and `W/` included); `null` when it sent none. */
+  /**
+   * The etag exactly as the server sent it (quotes and `W/` included). `null` when it sent none, or
+   * sent something other than one quoted entity tag (`*`, a list, an unquoted value).
+   */
   etag: string | null
   /** The iCalendar text as received. */
   data: string

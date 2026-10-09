@@ -2290,6 +2290,12 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `AlarmTrigger` (type), `jsr:@spy4x/time/ical-tasks`: The trigger of a reminder.
 - `AlarmTriggerKind` (enum), `jsr:@spy4x/time/ical-tasks`: Whether a reminder's trigger is an offset or a moment.
 - `CalendarEvent` (interface), `jsr:@spy4x/time/ical-tasks`: The fields of an event that apps read.
+- `CompleteTodoError` (interface), `jsr:@spy4x/time/ical-tasks`: The error half of CompleteTodoResult.
+- `CompleteTodoErrorCode` (enum), `jsr:@spy4x/time/ical-tasks`: Why completeTodo or reopenTodo refused.
+- `CompleteTodoKind` (enum), `jsr:@spy4x/time/ical-tasks`: What completeTodo did.
+- `CompleteTodoOptions` (interface), `jsr:@spy4x/time/ical-tasks`: Inputs of completeTodo and reopenTodo.
+- `CompleteTodoOutput` (interface), `jsr:@spy4x/time/ical-tasks`: What a successful completeTodo reports.
+- `CompleteTodoResult` (type), `jsr:@spy4x/time/ical-tasks`: `{ success, output, error }`: the output, or why there is none.
 - `EventPatch` (interface), `jsr:@spy4x/time/ical-tasks`: Changes to an event.
 - `EventStatus` (enum), `jsr:@spy4x/time/ical-tasks`: The STATUS of an event.
 - `NewOptions` (interface), `jsr:@spy4x/time/ical-tasks`: Caller-supplied inputs for a new object.
@@ -2298,12 +2304,15 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `Todo` (interface), `jsr:@spy4x/time/ical-tasks`: The fields of a task that apps read.
 - `TodoPatch` (interface), `jsr:@spy4x/time/ical-tasks`: Changes to a task.
 - `TodoStatus` (enum), `jsr:@spy4x/time/ical-tasks`: The STATUS of a task.
+- `completeTodo` (function), `jsr:@spy4x/time/ical-tasks`: Complete the first VTODO of `root` in place, as Tasks.org does.
+- `findMaster` (function), `jsr:@spy4x/time/ical-tasks`: The component an app edits: `root` itself, or the first child of that name that is not an override.
 - `newEvent` (function), `jsr:@spy4x/time/ical-tasks`: Build a new calendar object holding one VEVENT; see newTodo.
 - `newTodo` (function), `jsr:@spy4x/time/ical-tasks`: Build a new calendar object holding one VTODO from `fields`, with UID, DTSTAMP, CREATED and LAST-MODIFIED from `options`.
 - `patchEvent` (function), `jsr:@spy4x/time/ical-tasks`: Patch the first VEVENT of `root` in place and return the event as it now reads.
 - `patchTodo` (function), `jsr:@spy4x/time/ical-tasks`: Patch the first VTODO of `root` in place and return the task as it now reads.
 - `readEvent` (function), `jsr:@spy4x/time/ical-tasks`: Read the first VEVENT of `root` that is not a recurrence override.
 - `readTodo` (function), `jsr:@spy4x/time/ical-tasks`: Read the first VTODO of `root` that is not a recurrence override.
+- `reopenTodo` (function), `jsr:@spy4x/time/ical-tasks`: Reopen a completed task in place: STATUS becomes `NEEDS-ACTION`, COMPLETED and a `PERCENT-COMPLETE` of 100 are removed.
 
 ### `jsr:@spy4x/time/ics`
 
@@ -2441,4 +2450,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 224967e5c33897243573bbf7e7c33d17fec164502d2157da979a309b03224d4e -->
+<!-- export surface: sha256 2c7f48ceff9a9c5e12cf897703a45f938641d572f4cab85656b61b6a1094e9e7 -->
