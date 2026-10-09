@@ -11,7 +11,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/ics`        | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                                          |
 | `time/ics-core`   | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                                       |
 | `time/ical`       | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                                      |
-| `time/ical-tasks` | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`                                                                                                               |
+| `time/ical-tasks` | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`, `describeAlarmTrigger`                                                                                       |
 | `time/rrule`      | Repeat rules for the subset Tasks.org writes: `parseRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                                             |
 
 ```ts
@@ -319,13 +319,21 @@ if (!result.success) throw new Error(result.error.message) // root is unchanged
 ```
 
 A patch changes the patched fields plus DTSTAMP and LAST-MODIFIED; `null` clears a field. SEQUENCE
-goes up by one on an event patch, and on a task patch that sets `start`, `due`, `rrule` or `status`.
+goes up by one on an event patch, and on a task patch that changes `start`, `due`, `rrule` or `status` to a different value
+(repeating the stored value, as a form that saves every field does, changes nothing).
 `alarms` writes reminders: a list replaces the VALARMs (an equal one stays as it is), `null` removes
 them all, and leaving it out keeps them. A reminder counted from the start or end needs that date on
 the task or event.
 Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
 task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
 `completeSeries: true`. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
+
+`describeAlarmTrigger(alarm.trigger, { owner, locale, timeZone })` words a reminder for a list:
+`15 minutes before due`, `1 hour after start`, `at end`, or for an absolute trigger the date in the
+given zone and locale. `owner` (`AlarmOwner.Task` by default, or `AlarmOwner.Event`) decides whether
+an end-related trigger says `due` or `end`. A trigger it cannot describe, or a VALARM with none,
+gives `undefined`: show the raw value. The words are English; only the date of an absolute
+trigger follows `locale`.
 
 `completeTodo` completes a task the way Tasks.org does. A plain task is completed; a repeating task
 moves to its next occurrence and stays open. The next date is the first occurrence after DUE (never

@@ -3,8 +3,9 @@
  * read the fields an app shows, patch only the fields it changes, create a new object.
  *
  * A patch changes the patched properties plus DTSTAMP and LAST-MODIFIED. SEQUENCE goes up by one
- * on an event patch, and on a task patch that changes DTSTART, DUE, RRULE or STATUS (RFC 5545
- * §3.8.7.4); a task patch of a title, reminder or category leaves it. Every other
+ * on an event patch, and on a task patch that really changes DTSTART, DUE, RRULE or STATUS (RFC
+ * 5545 §3.8.7.4); a task patch of a title, reminder or category, or one that repeats those four
+ * with their stored values, leaves it. Every other
  * line, including reminders, vendor `X-` properties, time zones and recurrence overrides, is
  * written back byte for byte. CREATED is never rewritten, and COMPLETED of an already completed
  * task is kept. A patch is atomic: when it is
@@ -30,12 +31,14 @@ import {
   readList,
   readText,
   removeProperty,
+  resolveInstant,
   setProperty,
   writeDate,
   writeList,
   writeText,
 } from "./ical.ts"
 import { icsEscape } from "./ics-core.ts"
+import { formatInstantLong } from "./tz.ts"
 
 /** The STATUS of a task. */
 export enum TodoStatus {
@@ -99,6 +102,76 @@ export interface AlarmInput {
   action?: "DISPLAY" | "AUDIO"
   trigger: AlarmTriggerInput
   description?: string
+}
+
+/** What owns a reminder. It decides whether the end of the object is called "due" or "end". */
+export enum AlarmOwner {
+  /** A VTODO: its end is `DUE`. */
+  Task = 1,
+  /** A VEVENT: its end is `DTEND`. */
+  Event,
+}
+
+/** Options of {@link describeAlarmTrigger}. */
+export interface DescribeAlarmTriggerOptions {
+  /** The component the VALARM sits in. Default: {@link AlarmOwner.Task}. */
+  owner?: AlarmOwner
+  /** BCP 47 tag for the date of an absolute trigger. Default `en-GB`. The words stay English. */
+  locale?: string
+  /** IANA zone the date of an absolute trigger is shown in. Default `UTC`. */
+  timeZone?: string
+}
+
+const TRIGGER_DURATION = /^([+-]?)P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i
+const TRIGGER_UNITS = ["week", "day", "hour", "minute", "second"]
+
+/**
+ * An English phrase for a reminder's trigger, such as `15 minutes before due`,
+ * `1 hour 30 minutes after start`, `at end` or `Friday, 28 August 2026 at 10:00`.
+ *
+ * A relative trigger counts from the start or the end of the object ({@link AlarmRelated}). The
+ * end is called `due` for a task and `end` for an event, because RFC 5545 relates a task's
+ * reminder to `DUE` and an event's to `DTEND`. A zero offset reads `at start`, `at due` or
+ * `at end`. A negative duration is before, a positive or unsigned one after. An absolute trigger is
+ * a moment, shown in `options.timeZone` and `options.locale` as `formatInstantLong` writes it.
+ *
+ * Like {@link readTodo}, it answers `undefined` for what it cannot describe instead of throwing:
+ * a duration the lenient reading of the grammar refuses (one with no unit, a month, a decimal),
+ * an absolute trigger with no instant, an unknown zone or an unreadable locale. Show the raw
+ * value then.
+ *
+ * @param trigger A trigger as read, from `Alarm.trigger`; a VALARM with none gives `undefined`.
+ */
+export function describeAlarmTrigger(
+  trigger: AlarmTrigger | undefined,
+  options: DescribeAlarmTriggerOptions = {},
+): string | undefined {
+  if (!trigger) return undefined
+  if (trigger.kind === AlarmTriggerKind.Absolute) {
+    const zone = options.timeZone ?? "UTC"
+    const instant = resolveInstant(trigger.at, { zone })
+    if (!instant) return undefined
+    try {
+      return formatInstantLong(instant, zone, options.locale)
+    } catch {
+      return undefined
+    }
+  }
+  const match = TRIGGER_DURATION.exec(trigger.duration.trim())
+  if (!match || match.slice(2).every((part) => part === undefined)) return undefined
+  // A `T` with nothing after it (`P1DT`) is not in the grammar.
+  if (/T$/i.test(trigger.duration.trim())) return undefined
+  const parts = TRIGGER_UNITS.flatMap((unit, index) => {
+    const count = Number(match[index + 2] ?? 0)
+    return count === 0 ? [] : [`${count} ${unit}${count === 1 ? "" : "s"}`]
+  })
+  const anchor = trigger.related === AlarmRelated.Start
+    ? "start"
+    : options.owner === AlarmOwner.Event
+    ? "end"
+    : "due"
+  if (parts.length === 0) return `at ${anchor}`
+  return `${parts.join(" ")} ${match[1] === "-" ? "before" : "after"} ${anchor}`
 }
 
 /** A link to another task (RELATED-TO). */
@@ -802,11 +875,12 @@ function applyTodo(
   ) {
     return fail(IcalErrorCode.InvalidValue, `unknown task status ${String(patch.status)}`)
   }
+  const changed = scheduleChanges(todo, patch)
   return firstFailure(
     () => writeOptionalText(todo, "SUMMARY", patch.summary),
     () => writeOptionalText(todo, "DESCRIPTION", patch.description),
-    () => writeOptionalDate(todo, root, "DTSTART", patch.start),
-    () => writeOptionalDate(todo, root, "DUE", patch.due),
+    () => writeOptionalDate(todo, root, "DTSTART", changed.start ? patch.start : undefined),
+    () => writeOptionalDate(todo, root, "DUE", changed.due ? patch.due : undefined),
     () => writeOptionalInteger(todo, "PRIORITY", patch.priority, 0, 9),
     () => writeOptionalInteger(todo, "PERCENT-COMPLETE", patch.percentComplete, 0, 100),
     () =>
@@ -819,20 +893,44 @@ function applyTodo(
       ),
     () => writeCategories(todo, patch.categories),
     () => writeRelatedTo(todo, patch.relatedTo),
-    () => writeRrule(todo, patch.rrule),
-    () => applyStatus(todo, root, patch, now),
+    () => writeRrule(todo, changed.rrule ? patch.rrule : undefined),
+    () => changed.writeStatus ? applyStatus(todo, root, patch, now) : undefined,
     () => writeAlarms(todo, patch.alarms),
-    () => stamp(todo, root, now, !fresh && changesSchedule(patch)),
+    () => stamp(todo, root, now, !fresh && changed.revision),
   )
 }
 
+/** Whether two date values are the same kind, date, time and TZID. */
+function sameDate(a: IcalDateValue | undefined, b: IcalDateValue | null | undefined): boolean {
+  return !!a && !!b && a.kind === b.kind && a.date === b.date && a.time === b.time &&
+    a.tzid === b.tzid
+}
+
 /**
- * Whether a task patch changes what RFC 5545 §3.8.7.4 lists as a revision: DTSTART, DUE, RRULE
- * or STATUS. A title, a reminder or a category is not one, so SEQUENCE stays.
+ * Which of DTSTART, DUE, RRULE and STATUS a task patch really changes, compared with the stored
+ * task: the four that RFC 5545 §3.8.7.4 lists as a revision. A field left out, or given the value
+ * it already has (a form that saves every field does), is not a change; `null` is one only when
+ * the line is present. A field that is not a change is not written, so its stored line stays
+ * byte for byte. A title, a reminder or a category is never one, so SEQUENCE stays.
+ * `writeStatus` is also true for a completed task that still needs its COMPLETED line.
  */
-function changesSchedule(patch: TodoPatch): boolean {
-  return patch.start !== undefined || patch.due !== undefined || patch.rrule !== undefined ||
-    patch.status !== undefined
+function scheduleChanges(todo: IcalComponent, patch: TodoPatch) {
+  const date = (name: string, value: IcalDateValue | null | undefined) =>
+    value !== undefined &&
+    (value === null ? !!getProperty(todo, name) : !sameDate(dateOf(todo, name), value))
+  const start = date("DTSTART", patch.start)
+  const due = date("DUE", patch.due)
+  const rrule = patch.rrule !== undefined &&
+    (patch.rrule === null
+      ? !!getProperty(todo, "RRULE")
+      : getProperty(todo, "RRULE")?.value !== patch.rrule)
+  const status = patch.status !== undefined &&
+    (patch.status === null
+      ? !!getProperty(todo, "STATUS")
+      : readStatus(todo, STATUS_TODO) !== patch.status)
+  const writeStatus = status || (patch.status === TodoStatus.Completed &&
+    (patch.completed !== undefined || !getProperty(todo, "COMPLETED")))
+  return { start, due, rrule, writeStatus, revision: start || due || rrule || status }
 }
 
 function isCompleted(todo: IcalComponent): boolean {
@@ -907,7 +1005,9 @@ function transaction(
  * Patch the first VTODO of `root` in place and return the task as it now reads.
  *
  * Changes only the patched fields plus DTSTAMP, LAST-MODIFIED (both `options.now`) and, when the
- * patch sets `start`, `due`, `rrule` or `status`, SEQUENCE (+1). A patch with no fields is a
+ * patch gives `start`, `due`, `rrule` or `status` a value different from the stored one (or
+ * `null` for a present one), SEQUENCE (+1). A field repeated unchanged, as a form that saves
+ * every field does, does not raise SEQUENCE and its stored line stays as it was. A patch with no fields is a
  * no-op: nothing is stamped. See {@link TodoPatch}.
  *
  * Refuses, leaving `root` untouched: no VTODO ({@link IcalErrorCode.Malformed}); a DUE and

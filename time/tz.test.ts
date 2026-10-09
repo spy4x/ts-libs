@@ -552,6 +552,12 @@ describe("formatInstantLong", () => {
     )
   })
 
+  it("writes the instant in the locale asked for, and keeps en-GB for the default", () => {
+    const instant = zonedDateTime("2026-08-28", "10:00", BERLIN)
+    expect(formatInstantLong(instant, BERLIN, "de-DE")).toBe("Freitag, 28. August 2026 um 10:00")
+    expect(formatInstantLong(instant, BERLIN)).toBe("Friday, 28 August 2026 at 10:00")
+  })
+
   it("formats an instant at midnight without a 24:00 hour", () => {
     expect(formatInstantLong(utc("2026-08-27T22:00:00Z"), BERLIN)).toBe(
       "Friday, 28 August 2026 at 00:00",
