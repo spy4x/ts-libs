@@ -1026,6 +1026,21 @@ describe("outbox withdraw", () => {
     ])
   })
 
+  it("sends a delete for a create whose send was lost, then edited and deleted offline", async () => {
+    const { h } = await lostSend("create")
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("Edit"), version: 1 })
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("Edit"), version: 1 })
+
+    expect(h.outbox.entries().map((e) => [e.kind, e.baseVersion])).toEqual([["delete", 1]])
+
+    h.state.online = true
+    h.state.server = () => undefined
+    await h.outbox.flush()
+    expect(h.sent.slice(1).map((s) => [s.command.kind, s.command.entityId])).toEqual([
+      ["delete", "n"],
+    ])
+  })
+
   it("answers false for a conflict that waits for a person", async () => {
     const h = harness()
     h.offline()

@@ -425,7 +425,8 @@ await outbox.flush() // after a reconnect and after a pushed hint
 The rules it keeps, each one a lost edit found in a product that wrote the queue by hand:
 
 - **One entry per entity.** A later edit replaces the waiting one; create then delete before any
-  send sends nothing.
+  send sends nothing. Once a send of the create was started, even before a later edit, the delete
+  is sent.
 - **A fresh key after an unknown outcome.** An entry whose send may have reached the server gets a
   new idempotency key when it is edited again, so the server does not answer the old key and drop
   the new text.

@@ -45,6 +45,14 @@ export interface OutboxEntrySnapshot<P> {
   before?: OutboxEntrySnapshot<P>
 }
 
+/** Whether a send of this write, or of any write merged into it, was started. */
+function mayHaveReachedServer<P>(entry: OutboxEntrySnapshot<P>): boolean {
+  for (let step: OutboxEntrySnapshot<P> | undefined = entry; step; step = step.before) {
+    if (step.attempted) return true
+  }
+  return false
+}
+
 /**
  * One write made while offline, waiting to be sent. `P` is the caller's payload (what the person
  * wrote), `S` the server's snapshot of the entity.
@@ -337,7 +345,8 @@ export function createOutbox<P, S extends { version: number }>(
       return await save({ ...existing, payload: change.payload, ...renewed, before })
     }
     if (existing.kind === "create") {
-      if (!existing.attempted) {
+      // A create is on the server only if a send of it, before or after a merged edit, was started.
+      if (!mayHaveReachedServer(existing)) {
         await drop(existing.seq!)
         return null
       }
