@@ -657,7 +657,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/platform/api`
 
-- `ApiError` (interface), `jsr:@spy4x/platform/api`: One failure `apiFetch` can report: an HTTP status and a message meant to be shown as-is.
+- `ApiError` (interface), `jsr:@spy4x/platform/api`: One failure `apiFetch` can report: an HTTP status, a message meant to be shown as-is, and the server's machine-readable `code` when the error body carried one.
 - `ApiResult` (type), `jsr:@spy4x/platform/api`: Outcome of apiFetch: the parsed body on success, or a typed error on failure.
 - `apiFetch` (function), `jsr:@spy4x/platform/api`: `fetch` a JSON API and report the outcome as an ApiResult instead of throwing.
 
@@ -2477,4 +2477,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 f327a7e0ab0adb238495c518d69867203ac7d4f3a2b8251871cd25178cfe28ef -->
+<!-- export surface: sha256 0dc90ab571d77274d71afd8140a28e12871e7d4c7bce34442f9b9ca95581ab4a -->

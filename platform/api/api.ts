@@ -6,7 +6,7 @@
  * server type, and this file must stay that way so a server bundle never pulls in `fetch`-shaped
  * browser code it does not need. {@link ApiError} and {@link ApiResult} are moved from
  * `template/libs/platform/types/+index.ts`; `ApiError` is now an `interface` with the same two
- * fields, `ApiResult` is unchanged.
+ * fields plus an optional `code`, `ApiResult` is unchanged.
  *
  * **Bug fixed at extraction time.** The source built the request as
  * `{ credentials: "include", headers: { "content-type": "application/json", ...init?.headers },
@@ -27,10 +27,15 @@
  * default so `fetch` sets its own `content-type`.
  */
 
-/** One failure `apiFetch` can report: an HTTP status and a message meant to be shown as-is. */
+/**
+ * One failure `apiFetch` can report: an HTTP status, a message meant to be shown as-is, and the
+ * server's machine-readable `code` when the error body carried one.
+ */
 export interface ApiError {
   status: number
   message: string
+  /** The error body's string `code` field (e.g. `caldav_unreachable`), for a caller to branch on. */
+  code?: string
 }
 
 /** Outcome of {@link apiFetch}: the parsed body on success, or a typed error on failure. */
@@ -51,8 +56,13 @@ export type ApiResult<T> =
  * one who passes `FormData`, not the same behaviour as one who passes no `body` at all.
  * The response body is read as JSON regardless of status; a body that is not valid JSON (including
  * an empty body) is treated as `null` rather than failing the call. On a non-2xx response, the
- * error message is the body's own `error` string when it has one string `error` field, else the
- * fallback `"Request failed"`.
+ * error message is the body's string `error` field, else its string `message` field, else the
+ * fallback `"Request failed"`; `error.code` is set from the body's string `code` field and is
+ * absent otherwise, so a server answering `{ code, message }` needs no wrapper of its own.
+ *
+ * Only an HTTP answer resolves. A network failure (no connection, DNS, CORS, an aborted `signal`)
+ * still rejects with whatever `fetch` threw, so a caller that must not throw wraps the call in
+ * `try`/`catch`.
  *
  * @example
  * ```ts
@@ -91,11 +101,17 @@ export async function apiFetch<T>(
   }
 
   if (!response.ok) {
-    const message =
-      data && typeof data === "object" && "error" in data && typeof data.error === "string"
-        ? data.error
-        : "Request failed"
-    return { ok: false, status: response.status, error: { status: response.status, message } }
+    const fields: Record<string, unknown> = data !== null && typeof data === "object"
+      ? data as Record<string, unknown>
+      : {}
+    const message = typeof fields.error === "string"
+      ? fields.error
+      : typeof fields.message === "string"
+      ? fields.message
+      : "Request failed"
+    const error: ApiError = { status: response.status, message }
+    if (typeof fields.code === "string") error.code = fields.code
+    return { ok: false, status: response.status, error }
   }
   return { ok: true, status: response.status, data: data as T }
 }

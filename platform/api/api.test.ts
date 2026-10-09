@@ -393,3 +393,69 @@ describe("apiFetch — result shape", () => {
     )
   })
 })
+
+describe("apiFetch — error body shapes", () => {
+  /** Fetch `/x` against a fake that answers `body` with `status`, and return the error. */
+  async function errorFor(body: unknown, status = 502) {
+    let result: Awaited<ReturnType<typeof apiFetch>> | undefined
+    await withFakeFetch(
+      () => jsonResponse(body, status),
+      async () => {
+        result = await apiFetch("/x")
+      },
+    )
+    if (result === undefined || result.ok) throw new Error(`expected a failure, got ${result}`)
+    return result.error
+  }
+
+  it("reads code and message from a { code, message } body", async () => {
+    expect(await errorFor({ code: "caldav_refused", message: "Server refused the login" }))
+      .toEqual({ status: 502, message: "Server refused the login", code: "caldav_refused" })
+  })
+
+  it("prefers the error string over message when the body has both", async () => {
+    expect(await errorFor({ error: "from error", message: "from message" })).toEqual({
+      status: 502,
+      message: "from error",
+    })
+  })
+
+  it("keeps the code alongside an error string", async () => {
+    expect(await errorFor({ error: "Unreachable", code: "caldav_unreachable" })).toEqual({
+      status: 502,
+      message: "Unreachable",
+      code: "caldav_unreachable",
+    })
+  })
+
+  it("sets the code and falls back to 'Request failed' when the body has only a code", async () => {
+    expect(await errorFor({ code: "caldav_unreachable" })).toEqual({
+      status: 502,
+      message: "Request failed",
+      code: "caldav_unreachable",
+    })
+  })
+
+  it("ignores a non-string code and a non-string message", async () => {
+    const error = await errorFor({ code: 42, message: { text: "nested" } })
+    expect(error).toEqual({ status: 502, message: "Request failed" })
+    expect("code" in error).toBe(false)
+  })
+
+  it("leaves code absent when the body has none", async () => {
+    const error = await errorFor({ error: "not found" }, 404)
+    expect("code" in error).toBe(false)
+  })
+})
+
+describe("apiFetch — network failure", () => {
+  it("rejects with fetch's own error instead of resolving a result", async () => {
+    const failure = new TypeError("network down")
+    await withFakeFetch(
+      () => Promise.reject(failure),
+      async () => {
+        await expect(apiFetch("/x")).rejects.toBe(failure)
+      },
+    )
+  })
+})
