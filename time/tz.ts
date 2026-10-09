@@ -80,19 +80,23 @@ const formatterCache = new Map<string, Intl.DateTimeFormat>()
  * Both halves belong in the cache key. A key that names only the option set —
  * the obvious first draft — hands the Berlin formatter to a Los Angeles call and
  * returns a confidently wrong answer for the rest of the process. The zone is
- * interpolated last and zones contain no `:` beyond a single `/`, so
- * `set:zone` cannot collide.
+ * interpolated last and neither zones nor locale tags contain a `:`, so
+ * `locale:set:zone` cannot collide.
  *
  * The cache is process-local and the values are pure: a formatter holds no
  * mutable state and `format` never reads the host zone or clock, so this cannot
  * change a result, only how long it takes to get one.
  */
-function zonedFormatter(set: OptionSetName, tz: string): Intl.DateTimeFormat {
-  const key = `${set}:${tz}`
+function zonedFormatter(
+  set: OptionSetName,
+  tz: string,
+  locale = "en-GB",
+): Intl.DateTimeFormat {
+  const key = `${locale}:${set}:${tz}`
   const cached = formatterCache.get(key)
   if (cached) return cached
 
-  const formatter = new Intl.DateTimeFormat("en-GB", { timeZone: tz, ...optionSets[set] })
+  const formatter = new Intl.DateTimeFormat(locale, { timeZone: tz, ...optionSets[set] })
   formatterCache.set(key, formatter)
   return formatter
 }
@@ -150,9 +154,13 @@ export function formatDateTimeLong(date: string, time: string, tz: string): stri
   return formatInstantLong(zonedDateTime(date, time, tz), tz)
 }
 
-/** Format an instant in `tz` as a long human string: `"Friday, 28 August 2026 at 04:00"`. */
-export function formatInstantLong(instant: Date, tz: string): string {
-  return zonedFormatter("longDateTime", tz).format(instant)
+/**
+ * Format an instant in `tz` as a long human string: `"Friday, 28 August 2026 at 04:00"`.
+ *
+ * @param locale A BCP 47 tag for the wording. Default `en-GB`, which the other formatters keep.
+ */
+export function formatInstantLong(instant: Date, tz: string, locale = "en-GB"): string {
+  return zonedFormatter("longDateTime", tz, locale).format(instant)
 }
 
 /** Format a date as `"Friday, 28 August 2026"` — the date-only row of a confirmation view. */
