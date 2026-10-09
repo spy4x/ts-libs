@@ -125,6 +125,30 @@ describe(`createIndexedDbCalDavCache`, () => {
     expect((await cache.listObjects(`/a/`))[0].summary).toBe(`parsed /a/1`)
   })
 
+  it(`requires fromSyncObject when the cached object type has extra fields`, () => {
+    interface Task extends CachedObject {
+      summary: string
+    }
+    // @ts-expect-error a Task needs fromSyncObject, or `summary` would be missing at runtime
+    createIndexedDbCalDavCache<StoredCalendar, Task>({ indexedDB: freshFactory() }).close()
+  })
+
+  it(`closes its connection on close, so the database can be deleted`, async () => {
+    const indexedDB = freshFactory()
+    const cache = createIndexedDbCalDavCache({ indexedDB })
+    await cache.replaceCalendars([calendar(`/a/`)])
+    cache.close()
+
+    const outcome = await new Promise<string>((resolve) => {
+      const request = indexedDB.deleteDatabase(`caldav-cache`)
+      request.onblocked = () => resolve(`blocked`)
+      request.onsuccess = () => resolve(`deleted`)
+      request.onerror = () => resolve(`error`)
+    })
+
+    expect(outcome).toBe(`deleted`)
+  })
+
   it(`keeps the data across a restart on the same database`, async () => {
     const indexedDB = freshFactory()
     const before = createIndexedDbCalDavCache({ indexedDB })

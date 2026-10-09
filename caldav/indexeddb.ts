@@ -43,21 +43,23 @@ export interface CachedObject {
 }
 
 /** Options of {@link createIndexedDbCalDavCache}. */
-export interface IndexedDbCalDavCacheOptions<
-  T extends CachedObject = CachedObject & SyncObject,
-> {
+export interface IndexedDbCalDavCacheOptions {
   /** The database name. Defaults to `caldav-cache`. One per user when the data belongs to one. */
   name?: string
-  /** The schema version. Defaults to 1. */
+  /** The schema version. Defaults to 1. Raising it empties the cache. */
   version?: number
   /** The factory to open with. Defaults to `globalThis.indexedDB`. */
   indexedDB?: IDBFactory
+}
+
+/** Options for a cache of a richer object type: it must say how to build one. */
+export interface IndexedDbCalDavCacheCustomOptions<T extends CachedObject>
+  extends IndexedDbCalDavCacheOptions {
   /**
-   * Builds the cached object for an object a sync run delivers. Required in practice when `T`
-   * carries fields beyond `SyncObject` and `calendarHref` (parse the `ics` here). Defaults to the
-   * object plus its `calendarHref`.
+   * Builds the cached object for an object a sync run delivers, for example by parsing its `ics`.
+   * It must set `calendarHref`.
    */
-  fromSyncObject?: (object: SyncObject, calendarHref: string) => T
+  fromSyncObject: (object: SyncObject, calendarHref: string) => T
 }
 
 /** Thrown when the cache cannot be opened: IndexedDB missing, blocked or refused (private window). */
@@ -93,10 +95,18 @@ const BY_CALENDAR = `calendarHref`
  * Creates the cache. Nothing is opened until the first call. A call rejects with
  * {@link IndexedDbUnavailableError} when storage cannot be opened, and the next call tries again.
  */
-export function createIndexedDbCalDavCache<
-  C extends SyncCalendar = SyncCalendar,
-  T extends CachedObject = CachedObject & SyncObject,
->(options: IndexedDbCalDavCacheOptions<T> = {}): IndexedDbCalDavCache<C, T> {
+export function createIndexedDbCalDavCache<C extends SyncCalendar = SyncCalendar>(
+  options?: IndexedDbCalDavCacheOptions,
+): IndexedDbCalDavCache<C, CachedObject & SyncObject>
+/** With a cached object type of your own, `fromSyncObject` is required. */
+export function createIndexedDbCalDavCache<C extends SyncCalendar, T extends CachedObject>(
+  options: IndexedDbCalDavCacheCustomOptions<T>,
+): IndexedDbCalDavCache<C, T>
+export function createIndexedDbCalDavCache<C extends SyncCalendar, T extends CachedObject>(
+  options: IndexedDbCalDavCacheOptions & {
+    fromSyncObject?: (object: SyncObject, calendarHref: string) => T
+  } = {},
+): IndexedDbCalDavCache<C, T> {
   const name = options.name ?? `caldav-cache`
   const fromSyncObject = options.fromSyncObject ??
     ((object: SyncObject, calendarHref: string) => ({ ...object, calendarHref }) as unknown as T)

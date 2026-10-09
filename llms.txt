@@ -72,6 +72,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `CachedObject` (interface), `jsr:@spy4x/caldav/indexeddb`: The part of a cached object the store reads.
 - `IndexedDbCalDavCache` (interface), `jsr:@spy4x/caldav/indexeddb`: A calendar and object cache over IndexedDB.
+- `IndexedDbCalDavCacheCustomOptions` (interface), `jsr:@spy4x/caldav/indexeddb`: Options for a cache of a richer object type: it must say how to build one.
 - `IndexedDbCalDavCacheOptions` (interface), `jsr:@spy4x/caldav/indexeddb`: Options of createIndexedDbCalDavCache.
 - `IndexedDbUnavailableError` (class), `jsr:@spy4x/caldav/indexeddb`: Thrown when the cache cannot be opened: IndexedDB missing, blocked or refused (private window).
 - `createIndexedDbCalDavCache` (function), `jsr:@spy4x/caldav/indexeddb`: Creates the cache.
@@ -2654,4 +2655,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 80b6bd92a9070fdd99ce0b9baee063829326fb5e270e9289b4cffb4221e5d1e1 -->
+<!-- export surface: sha256 261d3c82835fc1471010026a879b5e3d079004eb755089ca4dd8be2884e5e987 -->

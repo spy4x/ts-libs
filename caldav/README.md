@@ -160,12 +160,13 @@ const sync = createCalDavSync(transport, cache)
 
 - The cached object type is generic (`T extends CachedObject`: `href`, `calendarHref`, `etag`). To
   keep parsed fields, pass `fromSyncObject(object, calendarHref)`, which builds `T` from each
-  object a sync run delivers.
+  object a sync run delivers; it is required whenever you give your own `T`.
 - The default database name is `caldav-cache`. Dexie opens its database at ten times the version
   you give it, so an old `caldav-tasks` database cannot be opened at version 1; a fresh name avoids
   that. Delete the old one with `indexedDB.deleteDatabase("caldav-tasks")` if you care about the
-  space. Raising `version` on a database that holds different stores drops those stores and
-  creates this layout: the cache is only a copy of the server, so the next sync refills it.
+  space. Raising `version` drops every
+  store, this cache's own data included, and creates this layout: the cache is only a copy of the
+  server, so the next sync refills it.
 - When storage cannot be opened (no `indexedDB`, a private window, blocked site data) every call
   rejects with `IndexedDbUnavailableError`, with the cause attached. The next call tries again.
 
