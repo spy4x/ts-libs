@@ -133,9 +133,10 @@ export interface TaskEdit {
    * the same action and description. A paired `VALARM` keeps its lines, vendor lines included;
    * an `action` or `description` that differs is a change and is written. Reminders read from a
    * task have no action, so one without `action` matches an existing reminder whatever its
-   * action. A `VALARM` the editor cannot write (`EMAIL`, or no `TRIGGER`) is never touched, and
-   * does not count as a reminder; a reminder without `action` or `description` and with the
-   * trigger of such a `VALARM` stands for it, so a list read from the task does not duplicate it.
+   * action. A `VALARM` the editor cannot write (`EMAIL`) keeps its lines while a reminder without
+   * `action` or `description` and with its trigger stands for it, so a list read from the task does
+   * not duplicate it; left out of the list, it is removed. A `VALARM` without `TRIGGER` is not a
+   * reminder and stays. When the list changes, the ones kept move after the others.
    */
   reminders?: AlarmInput[]
 }
@@ -186,7 +187,8 @@ export function editTask(task: Task, edit: TaskEdit, now: Date): EditResult {
       }
     }
   }
-  // A VALARM the editor cannot represent (EMAIL, no trigger) is set aside and put back as it was.
+  // A VALARM the editor cannot write is set aside and put back as it was: one without a trigger
+  // always (the task's reminders do not list it), an EMAIL one while a sent reminder stands for it.
   const master = findMaster(root, `VTODO`)
   let setAside: IcalComponent[] = []
   if (edit.reminders !== undefined && master) {
@@ -194,7 +196,10 @@ export function editTask(task: Task, edit: TaskEdit, now: Date): EditResult {
     const paired = pairReminders(alarms, edit.reminders)
     if (!paired.unchanged) {
       const children = master.components.filter((child) => child.name.toUpperCase() === `VALARM`)
-      setAside = children.filter((_, at) => !isEditable(alarms[at]!))
+      const kept = new Set(paired.entries.flatMap((item) => item.foreign ? [item.at!] : []))
+      setAside = children.filter((_, at) =>
+        !isEditable(alarms[at]!) && (alarms[at]!.trigger === undefined || kept.has(at))
+      )
       master.components = master.components.filter((child) => !setAside.includes(child))
       const wanted = paired.entries.flatMap(({ entry, at, foreign }): AlarmInput[] => {
         if (foreign) return []
@@ -316,7 +321,7 @@ function pairReminders(alarms: Alarm[], list: AlarmInput[]): Pairing {
     return { entry }
   })
   const unchanged = entries.every((item) => item.at !== undefined) &&
-    alarms.every((alarm, index) => !isEditable(alarm) || used.has(index))
+    alarms.every((alarm, index) => alarm.trigger === undefined || used.has(index))
   return { entries, unchanged }
 }
 

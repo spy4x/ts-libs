@@ -360,12 +360,15 @@ Deno.test(`two reminders on one trigger both survive adding a third, vendor line
   expect(block(swapped.ics, `X-SOUND:1`)).toBe(block(MIXED.ics, `X-SOUND:1`))
 })
 
-Deno.test(`a reminder the editor cannot write (EMAIL, no trigger) stays as it was`, () => {
-  const out = edit(MIXED, { reminders: [end(`-PT1H`), end(`-PT1H`), end(`PT0S`)] })
+Deno.test(`an EMAIL reminder stays while the list has it and goes when it does not`, () => {
+  const out = edit(MIXED, { reminders: [end(`-PT1H`), end(`-PT1H`), end(`-P1D`), end(`PT0S`)] })
   expect(block(out.ics, `ACTION:EMAIL`)).toBe(block(MIXED.ics, `ACTION:EMAIL`))
   expect(block(out.ics, `no trigger`)).toBe(block(MIXED.ics, `no trigger`))
+  const dropped = edit(MIXED, { reminders: [end(`-PT1H`), end(`-PT1H`)] })
+  expect(dropped.ics).not.toContain(`ACTION:EMAIL`)
+  expect(block(dropped.ics, `X-SHOWN:1`)).toBe(block(MIXED.ics, `X-SHOWN:1`))
   const cleared = edit(MIXED, { reminders: [] })
-  expect(cleared.ics).toContain(`ACTION:EMAIL`)
+  expect(cleared.ics).not.toContain(`ACTION:EMAIL`)
   expect(cleared.ics).toContain(`DESCRIPTION:no trigger`)
   expect(cleared.ics).not.toContain(`X-SHOWN`)
   expect(cleared.ics).not.toContain(`X-SOUND`)
