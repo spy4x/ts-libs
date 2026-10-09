@@ -7,7 +7,8 @@
  * (`BYSETPOS`, `BYHOUR`, `FREQ=HOURLY`, a vendor `X-` part) is refused with the part's name, so an
  * app can say "complete this one in Tasks.org" instead of guessing. {@link nextOccurrence} steps
  * the wall clock of the start value and keeps its kind (date, floating, UTC, zoned); zone maths
- * go through `./tz.ts`. {@link describeRrule} gives an English label.
+ * go through `./tz.ts`. {@link describeRrule} gives an English label. {@link formatRrule} writes a
+ * rule back to its `RRULE` value.
  *
  * A date a month does not have (the 31st in April, 29 February in a common year) is skipped, as
  * RFC 5545 section 3.3.10 requires, with one exception that follows Tasks.org: a plain monthly
@@ -232,6 +233,55 @@ export function parseRrule(text: string): RruleResult<Rrule> {
   if (count !== undefined) rule.count = count
   if (until) rule.until = until
   return ok(rule)
+}
+
+const WEEKDAY_CODES = [`MO`, `TU`, `WE`, `TH`, `FR`, `SA`, `SU`]
+const FREQ_NAMES = [``, `DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`]
+
+/**
+ * Write `rule` as the value of an `RRULE` property (no `RRULE:` prefix), so that
+ * {@link parseRrule} reads it back to an equal rule. The parts come in the order Tasks.org writes
+ * them: `FREQ`, `WKST`, `UNTIL`, `COUNT`, `INTERVAL`, `BYDAY`, `BYMONTHDAY`, `BYMONTH`. `INTERVAL`
+ * is always written, as Tasks.org does (`FREQ=DAILY;INTERVAL=1`); `WKST` only when the week does
+ * not start on Monday. The lists keep the order they have in `rule`.
+ *
+ * The text is run through {@link parseRrule}, so a rule outside the subset (`BYDAY` on a daily
+ * rule, `COUNT` together with `UNTIL`, an interval of 0, a zoned `UNTIL`) is a failure with the
+ * parser's code and message, never a text Tasks.org would read differently.
+ */
+export function formatRrule(rule: Rrule): RruleResult<string> {
+  const parts = [`FREQ=${FREQ_NAMES[rule.freq] ?? ``}`]
+  if (rule.weekStart !== RruleWeekday.Monday) {
+    parts.push(`WKST=${WEEKDAY_CODES[rule.weekStart - 1] ?? ``}`)
+  }
+  if (rule.until) {
+    const { kind, date, time } = rule.until
+    if (kind === IcalDateKind.Zoned) {
+      return fail(RruleErrorCode.Malformed, `UNTIL cannot carry a time zone`, `UNTIL`)
+    }
+    const day = date.replaceAll(`-`, ``)
+    const clock = `T${(time ?? `00:00:00`).replaceAll(`:`, ``)}`
+    parts.push(
+      `UNTIL=${day}${kind === IcalDateKind.Date ? `` : clock}${
+        kind === IcalDateKind.Utc ? `Z` : ``
+      }`,
+    )
+  }
+  if (rule.count !== undefined) parts.push(`COUNT=${rule.count}`)
+  parts.push(`INTERVAL=${rule.interval}`)
+  if (rule.byDay.length) {
+    parts.push(
+      `BYDAY=${
+        rule.byDay.map((day) => `${day.ordinal ?? ``}${WEEKDAY_CODES[day.weekday - 1] ?? ``}`)
+          .join(`,`)
+      }`,
+    )
+  }
+  if (rule.byMonthDay.length) parts.push(`BYMONTHDAY=${rule.byMonthDay.join(`,`)}`)
+  if (rule.byMonth.length) parts.push(`BYMONTH=${rule.byMonth.join(`,`)}`)
+  const text = parts.join(`;`)
+  const check = parseRrule(text)
+  return check.success ? ok(text) : check
 }
 
 function integerPart(

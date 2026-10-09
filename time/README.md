@@ -14,7 +14,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/ical-tasks`       | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`, `describeAlarmTrigger`                                                                                       |
 | `time/ical-tasks-model` | The `Task` a screen shows, read from a CalDAV resource: `parseTask`, `priorityBand`, `isOpen`, `dateInstant`, `dateDay`                                                                                                                                   |
 | `time/ical-tasks-edit`  | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `completeTask`, `reopenTask`                                                                                                                                                   |
-| `time/rrule`            | Repeat rules for the subset Tasks.org writes: `parseRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                                             |
+| `time/rrule`            | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
@@ -360,11 +360,13 @@ the rest by name so an app can say "complete this one in Tasks.org" instead of g
 
 ```ts
 import { IcalDateKind } from "@spy4x/time/ical"
-import { describeRrule, nextOccurrence, parseRrule } from "@spy4x/time/rrule"
+import { describeRrule, formatRrule, nextOccurrence, parseRrule } from "@spy4x/time/rrule"
 
 const parsed = parseRrule("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TH")
 if (!parsed.success) throw new Error(`${parsed.error.code} ${parsed.error.part}`) // BYSETPOS, …
 describeRrule(parsed.output) // "Every 2 weeks on Mon, Thu"
+// Write a rule back, e.g. from an editor: the value for `TaskEdit.repeatRule`.
+formatRrule(parsed.output) // { success: true, output: "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TH", … }
 // Complete a repeating task like Tasks.org: the due date is both `start` and `after`.
 const due = {
   kind: IcalDateKind.Zoned,
@@ -395,6 +397,15 @@ const next = nextOccurrence(parsed.output, { start: due, after: new Date("2026-0
   there and no answer of ours could match.
 - **Clock changes.** Occurrences keep the start's wall clock. A time a zone skips (spring forward)
   keeps its date and wall clock; a time it repeats (fall back) occurs once, at its first reading.
+
+### Editing the repeat rule and the reminders of a task
+
+`TaskEdit.repeatRule` takes the `RRULE` value (`formatRrule` writes it; `null` removes the repeat)
+and `TaskEdit.reminders` takes the `AlarmInput` list the task should have afterwards (an empty list
+removes them all). Both go through the lossless patch: a rule that means what the task has, and
+reminders with the triggers it has, leave their lines as they are, and a reminder that stays keeps
+its vendor lines. `rebaseEdit`, `keepMine` and `collisions` know both fields (`EditField.Repeat`,
+`EditField.Reminders`). A rule `parseRrule` does not read is refused.
 
 ## Not in scope
 
