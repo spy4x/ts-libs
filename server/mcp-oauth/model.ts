@@ -145,4 +145,13 @@ export interface OAuthStore {
   saveGrant(record: GrantRecord): Promise<boolean>
   /** Every grant whose `expiresAt` has not passed, oldest first. */
   listGrants(): Promise<GrantRecord[]>
+  /**
+   * Count one password attempt under `key`, unless `limit` attempts made within the `windowMs`
+   * milliseconds before `at` are counted already. Returns 0 when it counted the attempt, else how
+   * many milliseconds until it would. Atomic: of concurrent calls, at most `limit` see 0. Must
+   * survive a restart when the store does, or a restart would reset the owner-password lockout.
+   */
+  takeAttempt(key: string, at: number, limit: number, windowMs: number): Promise<number>
+  /** Uncount one attempt `takeAttempt` counted under `key` at `at`, after a right password. */
+  releaseAttempt(key: string, at: number): Promise<void>
 }

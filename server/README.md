@@ -2448,18 +2448,39 @@ input, and the same consent can still be approved. With both `confirmOwner` and 
 set, both must pass: `confirmOwner` on every request, the password on an approval. At least one of
 them is required.
 
-**Wrong passwords are capped.** After 10 wrong passwords within 15 minutes, every approval answers
-`429` with a `Retry-After` header until the oldest of them is 15 minutes old. A locked-out approval
-is refused before the hasher runs, so a flood of guesses costs no PBKDF2 work. The count is kept in
-memory for the whole server, since there is one owner, and starts again on a restart. Only wrong
-passwords count: a missing one and the right one do not. Denials and tokens already issued keep
-working. Change the cap with `ownerPassword: { hash, hasher, maxFailures, windowMs }`.
+**Wrong passwords are capped per address.** After 10 wrong passwords from one client address within
+15 minutes, that address's approvals answer `429` with a `Retry-After` header until the oldest of
+them is 15 minutes old; the owner can still approve from another address. After 100 wrong
+passwords from all addresses together within 24 hours, every approval answers `429`: that ceiling
+stops guessing spread over many addresses. A locked-out approval is refused before the hasher runs,
+so a flood of guesses costs no PBKDF2 work. The counts live in the store, so `KvOAuthStore` keeps
+them across a restart. Only wrong passwords count: a missing one and the right one do not. Denials
+and tokens already issued keep working.
 
-The trade-off: anyone who can reach the consent page can lock the owner out of approving new
-clients for the window, by sending wrong passwords. Clients that already have tokens are not
-affected. A rate limiter per address in front of `POST /authorize`
-(`@spy4x/platform/rate-limit/hono`) makes that harder, as "What it does not do" below says for
-every route.
+Pass `clientAddress` so the server knows the address. Use the same one the app's rate limiter
+uses, read through the same trusted proxies, or a client can pick its own by sending a forged
+`X-Forwarded-For`:
+
+```ts
+import { clientIp, clientIpBucket } from "@spy4x/platform/rate-limit/client-ip"
+
+ownerPassword: {
+  hash,
+  hasher,
+  // One IPv6 /64 counts as one address, as it does for the rate limiter.
+  clientAddress: (c) =>
+    clientIpBucket(clientIp(c.req.raw, peerAddress, "x-forwarded-for", { trustedProxies })),
+}
+```
+
+Without `clientAddress`, every request shares one address, so a single guesser locks the owner
+out. Change the caps with `maxFailures` and `windowMs` per address, and `maxTotalFailures` (ten
+times `maxFailures` by default, and always more) and `totalWindowMs` for the server.
+
+The trade-off: someone with enough addresses can keep the owner from approving new clients for up
+to a day, by sending wrong passwords. Clients that already have tokens are not affected. A rate
+limiter per address in front of `POST /authorize` (`@spy4x/platform/rate-limit/hono`) makes that
+harder, as "What it does not do" below says for every route.
 
 ### Listing and revoking grants
 
@@ -2497,9 +2518,9 @@ token read the record and commit with a versionstamp check, retrying on a confli
 concurrent redemptions only one succeeds. Each record is written with `expireIn` set from its
 `expiresAt`, so Deno KV deletes it once it has expired. A token is saved with a check on its
 grant's revocation key, and `revokeGrant` finds a grant's tokens through an index
-`[...prefix, "grant", grantId, kind, key]`. Grant records sit under
-`[...prefix, "grants", grantId]`. Another process can open the same file to list or revoke grants
-while the app runs. The store does not close the handle.
+`[...prefix, "grant", grantId, kind, key]`. Grant records sit under `[...prefix, "grants", grantId]`
+and password attempt counts under `[...prefix, "attempts", key]`. Another process can open the same
+file to list or revoke grants while the app runs. The store does not close the handle.
 
 ### What it does not do
 
@@ -2511,6 +2532,6 @@ while the app runs. The store does not close the handle.
   `@spy4x/platform/rate-limit/hono` in front of `/authorize` and `/token`.
 - No store over another database. `MemoryOAuthStore` loses every grant on restart, after which
   Claude asks the owner to connect again; `KvOAuthStore` keeps them. For anything else, implement
-  `OAuthStore` and run it through the same rules; `consumeCode`, `consumeRefreshToken` and
-  `takePending` must be atomic.
+  `OAuthStore` and run it through the same rules; `consumeCode`, `consumeRefreshToken`,
+  `takePending` and `takeAttempt` must be atomic.
 - No issuer with a path: the issuer is a bare origin, and the endpoints sit at its root.

@@ -108,6 +108,8 @@ describe("KvOAuthStore", () => {
     await store.saveRefreshToken("r", refresh)
     await store.revokeGrant("g2", 7_000)
     await store.saveGrant(grant)
+    await store.takeAttempt("t", 1_000, 5, 300)
+    await store.takeAttempt("t", 1_100, 5, 300)
     const expireIn = (...key: string[]) => kv.entries.get(JSON.stringify(key))?.expireIn
     expect(expireIn("mcp-oauth", "pending", "p")).toBe(1_000)
     expect(expireIn("mcp-oauth", "code", "c")).toBe(1_000)
@@ -117,6 +119,39 @@ describe("KvOAuthStore", () => {
     expect(expireIn("mcp-oauth", "grant", "g1", "refresh", "r")).toBe(4_000)
     expect(expireIn("mcp-oauth", "revoked", "g2")).toBe(6_000)
     expect(expireIn("mcp-oauth", "grants", "g1")).toBe(4_000)
+    expect(expireIn("mcp-oauth", "attempts", "t")).toBe(400)
+  })
+
+  it("keeps an attempt list's expiry when one attempt is released", async () => {
+    const kv = fakeKv()
+    const clock = manualClock(1_000)
+    const store = new KvOAuthStore(kv, { clock })
+    await store.takeAttempt("t", 1_000, 5, 300)
+    await store.takeAttempt("t", 1_100, 5, 300)
+    clock.set(1_200)
+    await store.releaseAttempt("t", 1_000)
+    expect(kv.entries.get(JSON.stringify(["mcp-oauth", "attempts", "t"]))?.expireIn).toBe(200)
+    await store.releaseAttempt("t", 1_100)
+    expect(kv.entries.has(JSON.stringify(["mcp-oauth", "attempts", "t"]))).toBe(false)
+  })
+
+  it("keeps password attempts for a new store opened on the same database, as after a restart", async () => {
+    const kv = fakeKv()
+    const clock = manualClock()
+    await new KvOAuthStore(kv, { clock }).takeAttempt("t", 1_000, 1, 300)
+    expect(await new KvOAuthStore(kv, { clock }).takeAttempt("t", 1_100, 1, 300)).toBe(200)
+  })
+
+  it("keeps a consumed code's expiry, and never hands Deno KV an expireIn below 1", async () => {
+    const kv = fakeKv()
+    const clock = manualClock(1_000)
+    const store = new KvOAuthStore(kv, { clock })
+    await store.saveCode("c", code)
+    clock.set(1_400)
+    await store.consumeCode("c")
+    expect(kv.entries.get(JSON.stringify(["mcp-oauth", "code", "c"]))?.expireIn).toBe(600)
+    await store.saveCode("late", { ...code, expiresAt: 1_000 })
+    expect(kv.entries.get(JSON.stringify(["mcp-oauth", "code", "late"]))?.expireIn).toBe(1)
   })
 
   it("keeps two stores with different prefixes apart in one database", async () => {

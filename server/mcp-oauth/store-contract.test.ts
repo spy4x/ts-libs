@@ -1,7 +1,7 @@
 // The `OAuthStore` contract, written once and run against every store: `memory-store.test.ts` runs
 // it for `MemoryOAuthStore` and `kv-store.test.ts` for `KvOAuthStore`. It holds every rule the
 // authorization server relies on: single-use consents, codes and refresh tokens, revocation, grant
-// records, and copies in and out.
+// records, password attempt counts, and copies in and out.
 //
 // Not a test file in itself: it is named `*.test.ts` only so the root `publish.exclude` pattern keeps
 // it out of the published package, and it registers no tests until a caller runs
@@ -186,6 +186,36 @@ export function describeOAuthStoreContract(
       await store.revokeGrant("g1", 3_000)
       expect(await store.saveGrant(grant)).toBe(false)
       expect(await store.listGrants()).toEqual([])
+    })
+
+    it("counts attempts up to the limit, then says how long until the oldest leaves the window", async () => {
+      const store = open(manualClock())
+      expect(await store.takeAttempt("a", 1_000, 2, 500)).toBe(0)
+      expect(await store.takeAttempt("a", 1_100, 2, 500)).toBe(0)
+      expect(await store.takeAttempt("a", 1_200, 2, 500)).toBe(300)
+      expect(await store.takeAttempt("b", 1_200, 2, 500)).toBe(0)
+      expect(await store.takeAttempt("a", 1_500, 2, 500)).toBe(0)
+      expect(await store.takeAttempt("a", 1_550, 2, 500)).toBe(50)
+    })
+
+    it("uncounts a released attempt and only that one", async () => {
+      const store = open(manualClock())
+      await store.takeAttempt("a", 1_000, 2, 500)
+      await store.takeAttempt("a", 1_100, 2, 500)
+      await store.releaseAttempt("a", 1_100)
+      await store.releaseAttempt("a", 1_100)
+      await store.releaseAttempt("missing", 1_100)
+      expect(await store.takeAttempt("a", 1_200, 2, 500)).toBe(0)
+      expect(await store.takeAttempt("a", 1_300, 2, 500)).toBe(200)
+    })
+
+    it("counts at most the limit of attempts taken in parallel", async () => {
+      const store = open(manualClock())
+      const waits = await Promise.all(
+        Array.from({ length: 6 }, () => store.takeAttempt("a", 1_000, 3, 500)),
+      )
+      expect(waits.filter((wait) => wait === 0)).toHaveLength(3)
+      expect(waits.filter((wait) => wait === 500)).toHaveLength(3)
     })
 
     it("hands out copies, so a caller cannot edit a stored record", async () => {

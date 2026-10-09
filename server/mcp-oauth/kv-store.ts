@@ -77,6 +77,7 @@ const DELETE_BATCH = 100
 const ACCESS = "access"
 const REFRESH = "refresh"
 const GRANTS = "grants"
+const ATTEMPTS = "attempts"
 
 /**
  * Keeps every record in Deno KV under `[...prefix, kind, key]`, with `expireIn` set from the
@@ -91,6 +92,8 @@ const GRANTS = "grants"
  *   commit; `revokeGrant` lists it to find the grant's tokens.
  * - Grant records live under `[...prefix, "grants", grantId]`, saved with the same revocation check
  *   as tokens and deleted by `revokeGrant`.
+ * - Password attempts live under `[...prefix, "attempts", key]` as a list of times, updated with a
+ *   versionstamp check, so the owner-password lockout survives a restart.
  *
  * Pending consents have no count cap, unlike `MemoryOAuthStore`'s `maxPending`: they live on disk,
  * not in the process's memory, and Deno KV deletes each once its consent page expires. Anyone can
@@ -209,6 +212,44 @@ export class KvOAuthStore implements OAuthStore {
     return grants.sort((a, b) => a.createdAt - b.createdAt)
   }
 
+  async takeAttempt(key: string, at: number, limit: number, windowMs: number): Promise<number> {
+    const kvKey = this.#key(ATTEMPTS, key)
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const entry = await this.#kv.get(kvKey)
+      const recent = attempts(entry.value).at.filter((time) => time + windowMs > at)
+      if (recent.length >= limit) return recent[recent.length - limit] + windowMs - at
+      recent.push(at)
+      recent.sort((a, b) => a - b)
+      const expiresAt = recent[recent.length - 1] + windowMs
+      const result = await this.#kv.atomic()
+        .check({ key: kvKey, versionstamp: entry.versionstamp })
+        .set(kvKey, { at: recent, expiresAt }, { expireIn: this.#expireIn(expiresAt) })
+        .commit()
+      if (result.ok) return 0
+    }
+    throw contention("takeAttempt")
+  }
+
+  async releaseAttempt(key: string, at: number): Promise<void> {
+    const kvKey = this.#key(ATTEMPTS, key)
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const entry = await this.#kv.get(kvKey)
+      const { at: recent, expiresAt } = attempts(entry.value)
+      const index = recent.indexOf(at)
+      if (index === -1) return
+      recent.splice(index, 1)
+      const operation = this.#kv.atomic().check({ key: kvKey, versionstamp: entry.versionstamp })
+      const result = await (recent.length === 0
+        ? operation.delete(kvKey)
+        : operation.set(kvKey, { at: recent, expiresAt }, { expireIn: this.#expireIn(expiresAt) }))
+        .commit()
+      if (result.ok) {
+        return
+      }
+    }
+    throw contention("releaseAttempt")
+  }
+
   async #saveToken(
     kind: typeof ACCESS | typeof REFRESH,
     key: string,
@@ -288,6 +329,14 @@ export class KvOAuthStore implements OAuthStore {
   #key(...parts: string[]): readonly string[] {
     return [...this.#prefix, ...parts]
   }
+}
+
+/** The attempts stored under one key: none when the key is absent or malformed. */
+function attempts(value: unknown): { at: number[]; expiresAt: number } {
+  const stored = value as { at?: unknown; expiresAt?: unknown } | null
+  const at = Array.isArray(stored?.at) ? stored.at.filter((time) => typeof time === "number") : []
+  const expiresAt = typeof stored?.expiresAt === "number" ? stored.expiresAt : 0
+  return { at, expiresAt }
 }
 
 function contention(method: string): Error {

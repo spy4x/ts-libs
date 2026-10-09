@@ -685,6 +685,81 @@ describe("createAuthorizationServer", () => {
         expect((await approve(t, id, OWNER_PASSWORD)).status).toBe(429)
       })
 
+      describe("per client address", () => {
+        const fromAddress = (
+          t: ReturnType<typeof setup>,
+          id: string,
+          password: string,
+          ip: string,
+        ) =>
+          t.postConsent(
+            { consent_id: id, decision: "approve", [OWNER_PASSWORD_FIELD]: password },
+            { origin: ISSUER, "sec-fetch-site": "same-origin", "x-test-address": ip },
+          )
+        const perAddress = (
+          cap: { maxFailures?: number; maxTotalFailures?: number; totalWindowMs?: number },
+        ) =>
+          setup({
+            confirmOwner: undefined,
+            ownerPassword: {
+              ...ownerPassword,
+              ...cap,
+              clientAddress: (c) => c.req.header("x-test-address"),
+            },
+          })
+
+        it("lets the owner approve from another address while one address is locked out", async () => {
+          const t = perAddress({ maxFailures: 2 })
+          const id = await newConsent(t)
+          for (let i = 0; i < 2; i++) {
+            expect((await fromAddress(t, id, WRONG, "198.51.100.7")).status).toBe(403)
+          }
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "198.51.100.7")).status).toBe(429)
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        it("locks every address out once maxTotalFailures wrong passwords come from many", async () => {
+          const t = perAddress({ maxFailures: 2, maxTotalFailures: 5 })
+          const id = await newConsent(t)
+          for (let i = 0; i < 5; i++) {
+            expect((await fromAddress(t, id, WRONG, `198.51.100.${i}`)).status).toBe(403)
+          }
+          const locked = await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")
+          expect(locked.status).toBe(429)
+          expect(locked.headers.get("retry-after")).toBe(String(24 * 60 * 60))
+        })
+
+        it("does not count an address's refused attempts toward the server-wide ceiling", async () => {
+          const t = perAddress({ maxFailures: 1, maxTotalFailures: 2 })
+          const id = await newConsent(t)
+          expect((await fromAddress(t, id, WRONG, "198.51.100.7")).status).toBe(403)
+          for (let i = 0; i < 3; i++) {
+            expect((await fromAddress(t, id, WRONG, "198.51.100.7")).status).toBe(429)
+          }
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        it("does not count against an address an attempt the server-wide ceiling refused", async () => {
+          const t = perAddress({ maxFailures: 1, maxTotalFailures: 2, totalWindowMs: 60_000 })
+          const id = await newConsent(t)
+          for (const ip of ["198.51.100.1", "198.51.100.2"]) {
+            expect((await fromAddress(t, id, WRONG, ip)).status).toBe(403)
+          }
+          expect((await fromAddress(t, id, WRONG, "203.0.113.9")).status).toBe(429)
+          t.advance(60_000)
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+      })
+
+      it("keeps counting wrong passwords across a restart that keeps the store", async () => {
+        const first = setup({ confirmOwner: undefined, ownerPassword })
+        const id = await newConsent(first)
+        for (let i = 0; i < 10; i++) expect((await approve(first, id, WRONG)).status).toBe(403)
+        const restarted = setup({ confirmOwner: undefined, ownerPassword, store: first.store })
+        const locked = await approve(restarted, await newConsent(restarted), OWNER_PASSWORD)
+        expect(locked.status).toBe(429)
+      })
+
       it("still denies, and keeps issued tokens working, while locked out", async () => {
         const t = setup({
           confirmOwner: undefined,
@@ -1115,6 +1190,24 @@ describe("createAuthorizationServer", () => {
       }
       for (const windowMs of [0, -1, Number.POSITIVE_INFINITY]) {
         expect(server({ windowMs })).toThrow("ownerPassword.windowMs must be positive")
+      }
+    })
+
+    it("refuses a server-wide cap that does not exceed the per-address one, or an empty window", () => {
+      const server = (cap: { maxTotalFailures?: number; totalWindowMs?: number }) => () =>
+        createAuthorizationServer({
+          ...base,
+          issuer: ISSUER,
+          ownerPassword: { ...ownerPassword, maxFailures: 5, ...cap },
+        })
+      for (const maxTotalFailures of [5, 4, 5.5, Number.NaN]) {
+        expect(server({ maxTotalFailures })).toThrow(
+          "ownerPassword.maxTotalFailures must be an integer above maxFailures",
+        )
+      }
+      expect(server({ maxTotalFailures: 6 })).not.toThrow()
+      for (const totalWindowMs of [0, -1, Number.POSITIVE_INFINITY]) {
+        expect(server({ totalWindowMs })).toThrow("ownerPassword.totalWindowMs must be positive")
       }
     })
 
