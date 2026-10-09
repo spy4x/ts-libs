@@ -1165,3 +1165,57 @@ Deno.test("a different rrule or status on a task that already has both raises SE
     assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5", JSON.stringify(patch))
   }
 })
+
+Deno.test("a repeated field keeps its stored line even when the line is written in another form", () => {
+  const root = parse(
+    `BEGIN:VCALENDAR\r\n${SAVED_TZ}BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\n` +
+      "DTSTART;VALUE=DATE-TIME:20261010T080000\r\n" +
+      "DUE;X-FOO=1;TZID=Europe/Paris:20261011T090000\r\n" +
+      "RRULE;X-A=1:freq=daily\r\nSTATUS:in-process\r\nEND:VTODO\r\nEND:VCALENDAR\r\n",
+  )
+  mustPatch(root, {
+    summary: "renamed",
+    start: { kind: IcalDateKind.Floating, date: "2026-10-10", time: "08:00:00" },
+    due: DUE_PARIS,
+    rrule: "freq=daily",
+    status: TodoStatus.InProcess,
+  })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:4")
+  assertEquals(lineOf(root, "DTSTART"), "DTSTART;VALUE=DATE-TIME:20261010T080000")
+  assertEquals(lineOf(root, "DUE"), "DUE;X-FOO=1;TZID=Europe/Paris:20261011T090000")
+  assertEquals(lineOf(root, "RRULE"), "RRULE;X-A=1:freq=daily")
+  assertEquals(lineOf(root, "STATUS"), "STATUS:in-process")
+})
+
+Deno.test("a bare date repeated as a date keeps its line without VALUE=DATE", () => {
+  const root = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nDUE:20261011\r\nEND:VTODO\r\n")
+  mustPatch(root, { due: { kind: IcalDateKind.Date, date: "2026-10-11" }, summary: "b" })
+  assertEquals(lineOf(root, "DUE"), "DUE:20261011")
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:4")
+})
+
+Deno.test("a due date moved to another time on the same day raises SEQUENCE by one", () => {
+  const root = savedTask()
+  mustPatch(root, { due: { ...DUE_PARIS, time: "10:00:00" } })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5")
+})
+
+Deno.test("a floating start with the digits of a stored UTC start raises SEQUENCE by one", () => {
+  const root = savedTask()
+  mustPatch(root, { start: { kind: IcalDateKind.Floating, date: "2026-10-10", time: "08:00:00" } })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5")
+})
+
+Deno.test("status null on a stored status the library does not know raises SEQUENCE by one", () => {
+  const root = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nSTATUS:X-WAITING\r\nEND:VTODO\r\n")
+  mustPatch(root, { status: null })
+  assertEquals(lineOf(root, "STATUS"), undefined)
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5")
+})
+
+Deno.test("a repeated Completed status still adds the missing COMPLETED line and keeps SEQUENCE", () => {
+  const root = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nSTATUS:COMPLETED\r\nEND:VTODO\r\n")
+  mustPatch(root, { status: TodoStatus.Completed })
+  assert(lineOf(root, "COMPLETED") !== undefined)
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:4")
+})

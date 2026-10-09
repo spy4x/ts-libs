@@ -803,12 +803,12 @@ function applyTodo(
   ) {
     return fail(IcalErrorCode.InvalidValue, `unknown task status ${String(patch.status)}`)
   }
-  const bump = !fresh && changesSchedule(todo, patch)
+  const changed = scheduleChanges(todo, patch)
   return firstFailure(
     () => writeOptionalText(todo, "SUMMARY", patch.summary),
     () => writeOptionalText(todo, "DESCRIPTION", patch.description),
-    () => writeOptionalDate(todo, root, "DTSTART", patch.start),
-    () => writeOptionalDate(todo, root, "DUE", patch.due),
+    () => writeOptionalDate(todo, root, "DTSTART", changed.start ? patch.start : undefined),
+    () => writeOptionalDate(todo, root, "DUE", changed.due ? patch.due : undefined),
     () => writeOptionalInteger(todo, "PRIORITY", patch.priority, 0, 9),
     () => writeOptionalInteger(todo, "PERCENT-COMPLETE", patch.percentComplete, 0, 100),
     () =>
@@ -821,10 +821,10 @@ function applyTodo(
       ),
     () => writeCategories(todo, patch.categories),
     () => writeRelatedTo(todo, patch.relatedTo),
-    () => writeRrule(todo, patch.rrule),
-    () => applyStatus(todo, root, patch, now),
+    () => writeRrule(todo, changed.rrule ? patch.rrule : undefined),
+    () => changed.writeStatus ? applyStatus(todo, root, patch, now) : undefined,
     () => writeAlarms(todo, patch.alarms),
-    () => stamp(todo, root, now, bump),
+    () => stamp(todo, root, now, !fresh && changed.revision),
   )
 }
 
@@ -835,21 +835,30 @@ function sameDate(a: IcalDateValue | undefined, b: IcalDateValue | null | undefi
 }
 
 /**
- * Whether a task patch really changes what RFC 5545 §3.8.7.4 lists as a revision: DTSTART, DUE,
- * RRULE or STATUS, compared with the stored task. A field left out, or given the value it
- * already has (a form that saves every field does), is not a change; `null` is one only when
- * the property is present. A title, a reminder or a category is never one, so SEQUENCE stays.
+ * Which of DTSTART, DUE, RRULE and STATUS a task patch really changes, compared with the stored
+ * task: the four that RFC 5545 §3.8.7.4 lists as a revision. A field left out, or given the value
+ * it already has (a form that saves every field does), is not a change; `null` is one only when
+ * the line is present. A field that is not a change is not written, so its stored line stays
+ * byte for byte. A title, a reminder or a category is never one, so SEQUENCE stays.
+ * `writeStatus` is also true for a completed task that still needs its COMPLETED line.
  */
-function changesSchedule(todo: IcalComponent, patch: TodoPatch): boolean {
+function scheduleChanges(todo: IcalComponent, patch: TodoPatch) {
   const date = (name: string, value: IcalDateValue | null | undefined) =>
     value !== undefined &&
     (value === null ? !!getProperty(todo, name) : !sameDate(dateOf(todo, name), value))
-  const rrule = getProperty(todo, "RRULE")?.value
-  return date("DTSTART", patch.start) || date("DUE", patch.due) ||
-    (patch.rrule !== undefined && (patch.rrule ?? undefined) !== rrule) ||
-    (patch.status !== undefined &&
-      (patch.status ?? undefined) !==
-        (getProperty(todo, "STATUS") ? readStatus(todo, STATUS_TODO) : undefined))
+  const start = date("DTSTART", patch.start)
+  const due = date("DUE", patch.due)
+  const rrule = patch.rrule !== undefined &&
+    (patch.rrule === null
+      ? !!getProperty(todo, "RRULE")
+      : getProperty(todo, "RRULE")?.value !== patch.rrule)
+  const status = patch.status !== undefined &&
+    (patch.status === null
+      ? !!getProperty(todo, "STATUS")
+      : readStatus(todo, STATUS_TODO) !== patch.status)
+  const writeStatus = status || (patch.status === TodoStatus.Completed &&
+    (patch.completed !== undefined || !getProperty(todo, "COMPLETED")))
+  return { start, due, rrule, writeStatus, revision: start || due || rrule || status }
 }
 
 function isCompleted(todo: IcalComponent): boolean {
