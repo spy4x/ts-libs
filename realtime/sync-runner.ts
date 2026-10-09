@@ -79,8 +79,8 @@ export interface SyncRunnerOptions {
   maxDelayMs?: number
   /**
    * When set, a visible, online page runs `flush` again this long after the last run ended, with
-   * no event. A positive, finite number of milliseconds, at most 2 147 483 647 (about 24.8 days; timers
-   * cannot wait longer). Default: no polling.
+   * no event. A positive, finite number of milliseconds, at most 2 147 483 647 (about 24.8 days;
+   * timers cannot wait longer). Default: no polling.
    */
   pollIntervalMs?: number
   /** Whether the network is up. Defaults to `navigator.onLine`, or `true` without `navigator`. */
