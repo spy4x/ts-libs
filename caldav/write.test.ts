@@ -348,6 +348,13 @@ describe("answers", () => {
     expect(failure).toEqual({ kind: "rejected", message: "another object has this UID" })
   })
 
+  it("reads a 401 or 403 that a relay reports as a plain server error as unreachable", () => {
+    for (const status of [401, 403]) {
+      const failure = classifyCalDavError({ code: CalDavErrorCode.Server, message: "x", status })
+      expect(failure, `${status}`).toEqual({ kind: "unreachable" })
+    }
+  })
+
   it("reads an error it did not throw as unreachable", () => {
     const { transport } = setup()
     expect(transport.classify(new Error("boom"))).toEqual({ kind: "unreachable" })
