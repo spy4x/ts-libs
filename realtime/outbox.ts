@@ -43,6 +43,32 @@ export interface OutboxEntrySnapshot<P> {
   attempted: boolean
   /** The snapshot's own step back, so `withdraw` walks back one merged edit at a time. */
   before?: OutboxEntrySnapshot<P>
+  /** Older steps were forgotten (beyond `UNDO_STEPS`), so `withdraw` stops here. */
+  truncated?: boolean
+}
+
+/**
+ * How many merged edits `withdraw` can take back. Older steps are forgotten, so an entity edited
+ * offline thousands of times keeps a bounded entry; whether a forgotten step was sent is kept.
+ */
+const UNDO_STEPS = 20
+
+/** The chain cut to {@link UNDO_STEPS} steps; the last kept step remembers a forgotten send. */
+function capped<P>(snapshot: OutboxEntrySnapshot<P>): OutboxEntrySnapshot<P> {
+  const steps: OutboxEntrySnapshot<P>[] = []
+  for (let step: OutboxEntrySnapshot<P> | undefined = snapshot; step; step = step.before) {
+    steps.push(step)
+  }
+  if (steps.length <= UNDO_STEPS) return snapshot
+  const last = steps[UNDO_STEPS - 1]
+  let chain: OutboxEntrySnapshot<P> = {
+    ...last,
+    attempted: mayHaveReachedServer(last),
+    truncated: true,
+    before: undefined,
+  }
+  for (let i = UNDO_STEPS - 2; i >= 0; i--) chain = { ...steps[i], before: chain }
+  return chain
 }
 
 /** Whether a send of this write, or of any write merged into it, was started. */
@@ -77,6 +103,8 @@ export interface OutboxEntry<P, S> {
    * the first write. Absent on an entry no edit was merged into.
    */
   before?: OutboxEntrySnapshot<P>
+  /** Older steps were forgotten, so `withdraw` cannot take this write back. */
+  truncated?: boolean
   conflict?: { reason: ConflictReason; message: string; server: S | null }
   queuedAt: string
 }
@@ -330,14 +358,15 @@ export function createOutbox<P, S extends { version: number }>(
     }
     // A deleted entity is not edited again.
     if (existing.kind === "delete" || change.kind === "create") return existing
-    const before: OutboxEntrySnapshot<P> = {
+    const before = capped<P>({
       key: existing.key,
       kind: existing.kind,
       payload: existing.payload,
       baseVersion: existing.baseVersion,
       attempted: existing.attempted,
       before: existing.before,
-    }
+      truncated: existing.truncated,
+    })
     const renewed = existing.attempted
       ? { key: newKey(), attempted: false }
       : { key: existing.key, attempted: false }
@@ -507,6 +536,7 @@ export function createOutbox<P, S extends { version: number }>(
         status: "pending",
         conflict: undefined,
         before: undefined,
+        truncated: undefined,
       })
     })
     await flush()
@@ -533,6 +563,7 @@ export function createOutbox<P, S extends { version: number }>(
       const entry = (await store.readOutbox()).find((e) => e.entityId === entityId)
       if (!entry || entry.attempted || entry.status !== "pending") return false
       if (!entry.before) {
+        if (entry.truncated) return false
         await drop(entry.seq!)
         return true
       }

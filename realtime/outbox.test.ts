@@ -1041,6 +1041,32 @@ describe("outbox withdraw", () => {
     ])
   })
 
+  it("keeps the last 20 steps of an entity edited offline 100 times, and no more", async () => {
+    const h = harness()
+    h.offline()
+    for (let i = 0; i <= 100; i++) {
+      await h.outbox.submit({ kind: "update", entityId: "n", payload: text(`E${i}`), version: 3 })
+    }
+    const [entry] = await h.store.readOutbox()
+    let depth = 0
+    for (let step = entry.before; step; step = step.before) depth++
+    expect(depth).toBe(20)
+
+    for (let i = 0; i < 20; i++) expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(await h.outbox.withdraw("n")).toBe(false)
+    expect(h.outbox.entries().map((e) => e.payload.title)).toEqual(["E80"])
+  })
+
+  it("sends a delete for a lost create whose send fell out of the last 20 steps", async () => {
+    const { h } = await lostSend("create")
+    for (let i = 0; i < 25; i++) {
+      await h.outbox.submit({ kind: "update", entityId: "n", payload: text(`E${i}`), version: 1 })
+    }
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("E24"), version: 1 })
+
+    expect(h.outbox.entries().map((e) => [e.kind, e.baseVersion])).toEqual([["delete", 1]])
+  })
+
   it("answers false for a conflict that waits for a person", async () => {
     const h = harness()
     h.offline()

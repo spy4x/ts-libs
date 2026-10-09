@@ -451,7 +451,10 @@ made offline. When that change was merged into an earlier waiting write (an edit
 only the delete is taken back: the edit stays queued, with its key and its `attempted` flag as they
 were, so a send that may already have happened is repeated idempotently. Each withdraw takes back
 one more change (edit, edit, delete, then two withdraws leave the first edit queued), and a write
-whose send was started is never taken back. Otherwise the entry is removed and never sent. It answers `false`, changing nothing, when there is nothing to take back or
+whose send was started is never taken back. Only the last 20 changes can be taken back: an entity
+edited offline more often keeps a bounded entry, and a withdraw past the 20th answers `false` (a
+forgotten step whose send was started still counts as possibly on the server). Otherwise the entry
+is removed and never sent. It answers `false`, changing nothing, when there is nothing to take back or
 it cannot be: the entry's send was already started (the server may have it, so only an online
 restore is safe) or it is a conflict (use `keepMine` or `useTheirs`). A withdraw asked during a send
 waits for it. A create that was deleted before any send leaves nothing queued, so there is nothing
