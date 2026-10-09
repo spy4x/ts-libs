@@ -197,7 +197,7 @@ Deno.test("a task patch of the start, due, rrule or status raises SEQUENCE by on
     mustPatch(root, patch)
     assertEquals(getProperty(root, "SEQUENCE")!.value, "5", JSON.stringify(patch))
   }
-  const none = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nEND:VTODO\r\n")
+  const none = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nDUE:20261010T080000Z\r\nEND:VTODO\r\n")
   mustPatch(none, { due: null })
   assertEquals(getProperty(none, "SEQUENCE")!.value, "1")
 })
@@ -1099,6 +1099,128 @@ Deno.test("an AUDIO reminder is written without DESCRIPTION, refuses one, and re
   assertEquals(refused.error?.code, IcalErrorCode.InvalidValue)
   const display = parse(TASK_WITH_ALARMS)
   assertEquals(readTodo(display)!.alarms.map((a) => a.description), ["old", undefined])
+})
+
+const SAVED =
+  "BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nDTSTART;X-KEEP=1:20261010T080000Z\r\nDUE;TZID=Europe/Paris:20261011T090000\r\nRRULE:FREQ=DAILY\r\nSTATUS:IN-PROCESS\r\nEND:VTODO\r\n"
+const SAVED_TZ = "BEGIN:VTIMEZONE\r\nTZID:Europe/Paris\r\nEND:VTIMEZONE\r\n"
+const SAVED_TZ2 = "BEGIN:VTIMEZONE\r\nTZID:Europe/Berlin\r\nEND:VTIMEZONE\r\n"
+
+function savedTask(): IcalComponent {
+  return parse(
+    `BEGIN:VCALENDAR\r\n${SAVED_TZ}${SAVED_TZ2}${SAVED}END:VCALENDAR\r\n`,
+  )
+}
+
+function lineOf(root: IcalComponent, name: string): string | undefined {
+  return serializeIcal(root).split("\r\n").find((line) => line.startsWith(name))
+}
+
+const DUE_PARIS = {
+  kind: IcalDateKind.Zoned,
+  date: "2026-10-11",
+  time: "09:00:00",
+  tzid: "Europe/Paris",
+}
+
+Deno.test("a whole-form save that changes only the title keeps SEQUENCE, DTSTART, DUE, RRULE and STATUS as they were", () => {
+  const root = savedTask()
+  mustPatch(root, {
+    summary: "renamed",
+    start: utc("2026-10-10", "08:00:00"),
+    due: DUE_PARIS,
+    rrule: "FREQ=DAILY",
+    status: TodoStatus.InProcess,
+  })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:4")
+  assertEquals(lineOf(root, "DTSTART"), "DTSTART;X-KEEP=1:20261010T080000Z")
+  assertEquals(lineOf(root, "DUE"), "DUE;TZID=Europe/Paris:20261011T090000")
+  assertEquals(lineOf(root, "RRULE"), "RRULE:FREQ=DAILY")
+  assertEquals(lineOf(root, "STATUS"), "STATUS:IN-PROCESS")
+  assertEquals(lineOf(root, "SUMMARY"), "SUMMARY:renamed")
+})
+
+Deno.test("a different due date raises SEQUENCE by one", () => {
+  const root = savedTask()
+  mustPatch(root, { due: { ...DUE_PARIS, date: "2026-10-12" } })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5")
+})
+
+Deno.test("a due date that differs only in TZID counts as a change", () => {
+  const root = savedTask()
+  mustPatch(root, { due: { ...DUE_PARIS, tzid: "Europe/Berlin" } })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5")
+})
+
+Deno.test("removing a present due raises SEQUENCE and removing an absent one does not", () => {
+  const present = savedTask()
+  mustPatch(present, { due: null })
+  assertEquals(lineOf(present, "SEQUENCE"), "SEQUENCE:5")
+  const absent = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nEND:VTODO\r\n")
+  mustPatch(absent, { due: null, summary: "b" })
+  assertEquals(lineOf(absent, "SEQUENCE"), "SEQUENCE:4")
+})
+
+Deno.test("a different rrule or status on a task that already has both raises SEQUENCE by one", () => {
+  for (const patch of [{ rrule: "FREQ=WEEKLY" }, { status: TodoStatus.NeedsAction }]) {
+    const root = savedTask()
+    mustPatch(root, patch)
+    assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5", JSON.stringify(patch))
+  }
+})
+
+Deno.test("a repeated field keeps its stored line even when the line is written in another form", () => {
+  const root = parse(
+    `BEGIN:VCALENDAR\r\n${SAVED_TZ}BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\n` +
+      "DTSTART;VALUE=DATE-TIME:20261010T080000\r\n" +
+      "DUE;X-FOO=1;TZID=Europe/Paris:20261011T090000\r\n" +
+      "RRULE;X-A=1:freq=daily\r\nSTATUS:in-process\r\nEND:VTODO\r\nEND:VCALENDAR\r\n",
+  )
+  mustPatch(root, {
+    summary: "renamed",
+    start: { kind: IcalDateKind.Floating, date: "2026-10-10", time: "08:00:00" },
+    due: DUE_PARIS,
+    rrule: "freq=daily",
+    status: TodoStatus.InProcess,
+  })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:4")
+  assertEquals(lineOf(root, "DTSTART"), "DTSTART;VALUE=DATE-TIME:20261010T080000")
+  assertEquals(lineOf(root, "DUE"), "DUE;X-FOO=1;TZID=Europe/Paris:20261011T090000")
+  assertEquals(lineOf(root, "RRULE"), "RRULE;X-A=1:freq=daily")
+  assertEquals(lineOf(root, "STATUS"), "STATUS:in-process")
+})
+
+Deno.test("a bare date repeated as a date keeps its line without VALUE=DATE", () => {
+  const root = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nDUE:20261011\r\nEND:VTODO\r\n")
+  mustPatch(root, { due: { kind: IcalDateKind.Date, date: "2026-10-11" }, summary: "b" })
+  assertEquals(lineOf(root, "DUE"), "DUE:20261011")
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:4")
+})
+
+Deno.test("a due date moved to another time on the same day raises SEQUENCE by one", () => {
+  const root = savedTask()
+  mustPatch(root, { due: { ...DUE_PARIS, time: "10:00:00" } })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5")
+})
+
+Deno.test("a floating start with the digits of a stored UTC start raises SEQUENCE by one", () => {
+  const root = savedTask()
+  mustPatch(root, { start: { kind: IcalDateKind.Floating, date: "2026-10-10", time: "08:00:00" } })
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5")
+})
+
+Deno.test("status null on a stored status the library does not know raises SEQUENCE by one", () => {
+  const root = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nSTATUS:X-WAITING\r\nEND:VTODO\r\n")
+  mustPatch(root, { status: null })
+  assertEquals(lineOf(root, "STATUS"), undefined)
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:5")
+})
+
+Deno.test("a repeated Completed status still adds the missing COMPLETED line and keeps SEQUENCE", () => {
+  const root = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nSTATUS:COMPLETED\r\nEND:VTODO\r\n")
+  mustPatch(root, { status: TodoStatus.Completed })
+  assert(lineOf(root, "COMPLETED") !== undefined)
+  assertEquals(lineOf(root, "SEQUENCE"), "SEQUENCE:4")
 })
 
 const relative = (duration: string, related = AlarmRelated.Start) => ({
