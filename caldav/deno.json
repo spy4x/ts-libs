@@ -5,6 +5,7 @@
     ".": "./client.ts",
     "./xml": "./xml.ts",
     "./url": "./url.ts",
-    "./sync": "./sync.ts"
+    "./sync": "./sync.ts",
+    "./write": "./write.ts"
   }
 }
