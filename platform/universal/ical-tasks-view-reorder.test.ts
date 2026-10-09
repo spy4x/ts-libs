@@ -139,3 +139,84 @@ Deno.test("a list where no task has a position gets values for every task it reo
   const changes = reorderTask(tasks, `c`, 0, UTC)
   expect(apply(tasks, changes)).toEqual([`c`, `a`, `b`])
 })
+
+Deno.test("tasks tied at one position keep it when the title already orders them", () => {
+  const tasks = [make(`a`, 7), make(`b`, 7), make(`c`, 7), make(`d`, 100)]
+  expect(reorderTask(tasks, `a`, 3, UTC)).toEqual([{ uid: `a`, sortOrder: 101 }])
+  expect(reorderTask(tasks, `a`, 2, UTC).length).toBe(1)
+})
+
+Deno.test("never-dragged tasks created in one second are not all rewritten when one moves", () => {
+  const tasks = [make(`a`), make(`b`), make(`c`), make(`d`, 5_000_000_000)]
+  const changes = reorderTask(tasks, `d`, 1, UTC)
+  expect(changes.length).toBe(2)
+  expect(apply(tasks, changes)).toEqual([`a`, `d`, `b`, `c`])
+})
+
+/** The fewest writes that put `intended` in order, found by trying every set and every value. */
+function fewestWrites(intended: Task[], low: number, high: number): number {
+  const n = intended.length
+  const target = uids(intended)
+  // Only two tasks that both keep their value may share it; a written value is always unique.
+  const fits = (subset: number, index: number, previous: number, values: Task[]): boolean => {
+    if (index === n) {
+      return uids(sortTasks(values, SortMode.Manual, UTC)).join() === target.join()
+    }
+    const task = intended[index]
+    const written = (subset & (1 << index)) !== 0
+    const wasWritten = index > 0 && (subset & (1 << (index - 1))) !== 0
+    if (!written) {
+      const value = task.sortOrder!
+      const ok = value > previous || (value === previous && !wasWritten)
+      return ok && fits(subset, index + 1, value, [...values, task])
+    }
+    for (let value = Math.max(low, previous + 1); value <= high; value++) {
+      if (fits(subset, index + 1, value, [...values, { ...task, sortOrder: value }])) return true
+    }
+    return false
+  }
+  for (let size = 0; size <= n; size++) {
+    for (let subset = 0; subset < 1 << n; subset++) {
+      if (bits(subset) === size && fits(subset, 0, -Infinity, [])) return size
+    }
+  }
+  return n
+}
+
+const bits = (n: number): number => n === 0 ? 0 : (n & 1) + bits(n >> 1)
+
+Deno.test("reorderTask writes as few tasks as any answer could, on small lists", () => {
+  let seed = 777
+  const random = (n: number) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed % n
+  }
+  for (let round = 0; round < 150; round++) {
+    const size = 1 + random(5)
+    const tasks = Array.from({ length: size }, (_, i) => make(`t${i}`, random(6)))
+    const siblings = sortTasks(tasks, SortMode.Manual, UTC)
+    const moved = siblings[random(size)]
+    const toIndex = random(size)
+    const intended = siblings.filter((t) => t !== moved)
+    intended.splice(toIndex, 0, moved)
+    const changes = reorderTask(siblings, moved.uid, toIndex, UTC)
+    const same = uids(intended).join() === uids(siblings).join()
+    const message = `round ${round}: ${
+      JSON.stringify({
+        toIndex,
+        changes,
+        moved: moved.uid,
+        siblings: siblings.map((t) => [t.uid, t.sortOrder]),
+      })
+    }`
+    const min = same ? 0 : fewestWrites(intended, -7, 12)
+    expect(changes.length, message).toBe(min)
+  }
+})
+
+Deno.test("tied tasks that the title would order the other way are given distinct values", () => {
+  const tasks = [make(`a`, 7), make(`b`, 7), make(`c`, 100)]
+  const changes = reorderTask(tasks, `b`, 0, UTC)
+  expect(changes.length).toBe(1)
+  expect(apply(tasks, changes)).toEqual([`b`, `a`, `c`])
+})

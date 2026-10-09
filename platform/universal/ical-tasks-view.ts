@@ -282,6 +282,8 @@ export interface SortOrderChange {
  * needed.
  *
  * `siblings` are the children of one parent (or the top level of one list) in manual order.
+ * `zone` is the viewer's time zone: a task with no stored value sits at its creation time, and a
+ * floating creation time needs a zone to become a position, the same as in {@link sortTasks}.
  * `toIndex` counts after the task is taken out, so it is the index the task has in the new list;
  * a value past either end is clamped to that end. Throws when `uid` is not in `siblings` or
  * `toIndex` is not an integer.
@@ -293,9 +295,14 @@ export interface SortOrderChange {
  *   nor a creation time), the fewest tasks are rewritten that keep the new order: every other
  *   task keeps its value where the integers between its kept neighbours suffice. The values
  *   written are spread evenly between those neighbours, or one step apart past an end.
+ * - Tasks that share a position stay as they are when {@link sortTasks} already orders them by
+ *   title the way the new order has them, so a tie alone writes nothing. A task that is written
+ *   never shares its value with another, so its place does not depend on a title.
  *
- * Only tasks that lose their place are written, and the result lists them in their
- * new order. Apply it with `sortOrder` on each listed task, then sort again.
+ * Only tasks that lose their place are written, and the result lists them in their new order.
+ * Apply it with `sortOrder` on each listed task, then sort again. A value is a safe integer: a
+ * neighbour near `Number.MAX_SAFE_INTEGER` leaves no room past it, and the `time` parser reads at
+ * most 15 digits.
  */
 export function reorderTask(
   siblings: readonly Task[],
@@ -313,7 +320,7 @@ export function reorderTask(
   list.splice(to, 0, moved)
 
   const current = list.map((task) => manualPosition(task, zone))
-  // Chains of tasks that keep their value: strictly rising, with room for the writes between.
+  // Chains of tasks that keep their value, with room for the writes between them.
   const length: number[] = []
   const previous: number[] = []
   let last = -1
@@ -323,9 +330,13 @@ export function reorderTask(
     length[i] = 1
     previous[i] = -1
     for (let j = 0; j < i; j++) {
-      const there = current[j]
-      if (there === undefined || length[j] === undefined) continue
-      if (Math.ceil(here) - 1 - Math.floor(there) < i - j - 1) continue
+      if (current[j] === undefined || length[j] === undefined) continue
+      const there = current[j]!
+      if (i === j + 1) {
+        // Side by side: they may share a value when the title already orders them this way.
+        const inOrder = sortTasks([list[i], list[j]], SortMode.Manual, zone)[0] === list[j]
+        if (inOrder ? here < there : here <= there) continue
+      } else if (Math.ceil(here) - 1 - Math.floor(there) < i - j - 1) continue
       if (length[j] + 1 > length[i]) {
         length[i] = length[j] + 1
         previous[i] = j
@@ -351,7 +362,7 @@ export function reorderTask(
       const highIndex = anchors[a + 1]
       const low = Math.floor(current[lowIndex]!) + 1
       const room = Math.ceil(current[highIndex]!) - low
-      fill(lowIndex + 1, highIndex, (k, count) => low + Math.floor(((k + 0.5) * room) / count))
+      fill(lowIndex + 1, highIndex, (k, n) => low + Math.floor(((k + 0.5) * room) / n))
     }
     const end = anchors[anchors.length - 1]
     fill(end + 1, list.length, (k) => Math.floor(current[end]!) + 1 + k)
