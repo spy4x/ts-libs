@@ -4,6 +4,7 @@
   "exports": {
     ".": "./client.ts",
     "./xml": "./xml.ts",
-    "./url": "./url.ts"
+    "./url": "./url.ts",
+    "./sync": "./sync.ts"
   }
 }

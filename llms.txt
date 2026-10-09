@@ -67,6 +67,23 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `NewCalendar` (interface), `jsr:@spy4x/caldav`: Properties of a new calendar.
 - `createCalDavClient` (function), `jsr:@spy4x/caldav`: Create a client for one CalDAV server and one user.
 
+### `jsr:@spy4x/caldav/sync`
+
+- `CalDavSync` (interface), `jsr:@spy4x/caldav/sync`: The engine made by createCalDavSync.
+- `CalDavSyncStore` (interface), `jsr:@spy4x/caldav/sync`: Where the copy lives.
+- `CalDavSyncTransport` (interface), `jsr:@spy4x/caldav/sync`: How the server is reached.
+- `ClientTransportOptions` (interface), `jsr:@spy4x/caldav/sync`: Options of createClientTransport.
+- `StoredCalendar` (type), `jsr:@spy4x/caldav/sync`: A calendar as the store keeps it: what the server listed, plus how far the copy is in step.
+- `SyncCalendar` (interface), `jsr:@spy4x/caldav/sync`: The part of a calendar the engine reads.
+- `SyncChanges` (interface), `jsr:@spy4x/caldav/sync`: What a run changes in one calendar.
+- `SyncListOptions` (interface), `jsr:@spy4x/caldav/sync`: Options of the transport's object calls.
+- `SyncObject` (interface), `jsr:@spy4x/caldav/sync`: One calendar object: the raw iCalendar text and the version it came from.
+- `SyncObjectVersion` (interface), `jsr:@spy4x/caldav/sync`: An object's address and version, without its body.
+- `SyncOutcome` (interface), `jsr:@spy4x/caldav/sync`: What one CalDavSync.refresh found.
+- `SyncTransportResult` (type), `jsr:@spy4x/caldav/sync`: What a transport call reports.
+- `createCalDavSync` (function), `jsr:@spy4x/caldav/sync`: Builds the engine over a transport and a store.
+- `createClientTransport` (function), `jsr:@spy4x/caldav/sync`: A transport over a CalDavClient, for code that talks CalDAV directly (a server).
+
 ### `jsr:@spy4x/caldav/url`
 
 - `childUrl` (function), `jsr:@spy4x/caldav/url`: The URL of a new member of `collectionUrl`, named `segment` encoded with `encodeURIComponent`.
@@ -1925,6 +1942,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createSameOriginMutationGuard` (function), `jsr:@spy4x/server/http/same-origin`: Build a Hono middleware that refuses cross-site mutations.
 - `createSameOriginUpgradeGuard` (function), `jsr:@spy4x/server/http/same-origin`: Build a Hono middleware that refuses a WebSocket upgrade from another site.
 
+### `jsr:@spy4x/server/http/security-headers`
+
+- `ExtraSources` (type), `jsr:@spy4x/server/http/security-headers`: CSP directives a consumer may widen.
+- `SecurityHeadersOptions` (interface), `jsr:@spy4x/server/http/security-headers`: Options of securityHeaders.
+- `inlineBlockHashes` (function), `jsr:@spy4x/server/http/security-headers`: The base64 SHA-256 CSP source of each inline `<script>` or `<style>` block in `html`.
+- `securityHeaders` (function), `jsr:@spy4x/server/http/security-headers`: Middleware that sets the headers on every response.
+
 ### `jsr:@spy4x/server/idempotency`
 
 - `BeginOutcome` (type), `jsr:@spy4x/server/idempotency`: What IdempotencyStore.begin found for a key.
@@ -2504,4 +2528,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 69e99090d03089e92c18544738f310ce8055197fcd61f861d3a6af3a8c14d0c2 -->
+<!-- export surface: sha256 eb29bc16c60711e803179e21ba24a4f1c4d05d59180441681912d1b339292f9c -->
