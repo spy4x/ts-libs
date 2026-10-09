@@ -78,8 +78,8 @@ export interface CalDavWriteOptions<P, S> {
   urlOf(entityId: string): string
   /**
    * The etag the write is based on, from the app's copy of the server's state at
-   * `command.baseVersion`. Without one an update or delete is refused as `rejected`, never sent
-   * unguarded.
+   * `command.baseVersion`. Without one the object is read first and its current etag used; if
+   * the server gives none either, the write is refused as `rejected`, never sent unguarded.
    */
   etagOf(command: CalDavWriteCommand<P>): string | null | undefined
   /** The iCalendar text of a create or an update. */
@@ -216,7 +216,20 @@ export function createCalDavWriteTransport<P, S>(
         throw new CalDavWriteError(classifyCalDavError(created.error), created.error)
       }
       const url = options.urlOf(command.entityId)
-      const etag = options.etagOf(command)
+      let etag = options.etagOf(command)
+      if (!etag) {
+        // The app lost the etag (the server sent none on the last write and the read-back failed).
+        // Ask the server for the object's current one, so the write stays guarded.
+        const read = await writer.getObject(url)
+        if (!read.success) {
+          // Already gone is the state a delete asked for; an update then has nothing to change.
+          if (command.kind === "delete" && read.error.code === CalDavErrorCode.NotFound) {
+            return undefined
+          }
+          throw new CalDavWriteError(classifyCalDavError(read.error), read.error)
+        }
+        etag = read.output.etag
+      }
       if (!etag) {
         const error: CalDavError = {
           code: CalDavErrorCode.InvalidArgument,

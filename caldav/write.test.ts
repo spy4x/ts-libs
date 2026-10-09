@@ -238,11 +238,48 @@ describe("update", () => {
     expect(task?.etag).toBe(`"1"`)
   })
 
-  it("refuses to send without an etag instead of overwriting blind", async () => {
+  it("reports not-found for an update with no known etag when the object is not on the server", async () => {
     const { send, seen, failureOf } = setup()
-    const failure = await failureOf(send("update", "never-seen"))
-    expect(failure.kind).toBe("rejected")
-    expect(seen.length).toBe(0)
+    expect(await failureOf(send("update", "never-seen"))).toEqual({ kind: "not-found" })
+    expect(seen.map((s) => s.method)).toEqual(["GET"])
+  })
+
+  it("reads the object first when the etag is unknown and updates with the etag it returns", async () => {
+    const { send, seen, state, known } = setup()
+    state.omitEtag = true
+    await send("create", "e1", "milk", 0)
+    known.clear()
+    state.omitEtag = false
+    seen.length = 0
+    const task = await send("update", "e1", "oat milk")
+    expect(seen.map((s) => s.method)).toEqual(["GET", "PUT"])
+    expect(seen[1].headers.get("If-Match")).toBe(`"1"`)
+    expect(task?.etag).toBe(`"2"`)
+  })
+
+  it("reads the object first when the etag is unknown and deletes with the etag it returns", async () => {
+    const { send, seen, objects, known } = setup()
+    await send("create", "e1", "milk", 0)
+    known.clear()
+    seen.length = 0
+    expect(await send("delete", "e1")).toBeUndefined()
+    expect(seen.map((s) => s.method)).toEqual(["GET", "DELETE"])
+    expect(seen[1].headers.get("If-Match")).toBe(`"1"`)
+    expect(objects.size).toBe(0)
+  })
+
+  it("treats a delete with no known etag as done when the object is already gone", async () => {
+    const { send, seen } = setup()
+    expect(await send("delete", "never-seen")).toBeUndefined()
+    expect(seen.map((s) => s.method)).toEqual(["GET"])
+  })
+
+  it("keeps an update or delete queued when the read for a missing etag fails", async () => {
+    const { send, state, seen, failureOf } = setup()
+    state.down = true
+    expect(await failureOf(send("update", "e1"))).toEqual({ kind: "unreachable" })
+    expect(await failureOf(send("delete", "e1"))).toEqual({ kind: "unreachable" })
+    expect(seen.map((s) => s.method)).toEqual(["GET", "GET"])
   })
 })
 
@@ -281,8 +318,15 @@ function scriptedWriter(
 }
 
 describe("a writer that does not check anything itself", () => {
-  it("is never asked to update or delete without an etag", async () => {
-    const { transport } = scriptedWriter()
+  it("is never asked to update or delete when no etag is known and the read gives none", async () => {
+    const { transport } = scriptedWriter({
+      getObject: (url) =>
+        Promise.resolve({
+          success: true,
+          output: { url: String(url), etag: null, data: "" },
+          error: null,
+        }),
+    })
     for (const kind of ["update", "delete"] as const) {
       const error = await transport.send(
         { kind, entityId: "e1", payload: "x", baseVersion: 1 },
@@ -322,7 +366,7 @@ describe("a writer that does not check anything itself", () => {
     expect(names).toEqual(["ok-1.ics"])
   })
 
-  it("reports a repeated create as already-exists when neither text has a UID", async () => {
+  it("refuses a repeated create when neither text has a UID, as it cannot tell the objects apart", async () => {
     const noUid = "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nSUMMARY:x\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
     const { transport } = scriptedWriter({
       getObject: (url) =>
