@@ -318,7 +318,11 @@ const result = patchTodo(root, { status: TodoStatus.Completed, priority: null },
 if (!result.success) throw new Error(result.error.message) // root is unchanged
 ```
 
-A patch changes the patched fields plus DTSTAMP, LAST-MODIFIED and SEQUENCE; `null` clears a field.
+A patch changes the patched fields plus DTSTAMP and LAST-MODIFIED; `null` clears a field. SEQUENCE
+goes up by one on an event patch, and on a task patch that sets `start`, `due`, `rrule` or `status`.
+`alarms` writes reminders: a list replaces the VALARMs (an equal one stays as it is), `null` removes
+them all, and leaving it out keeps them. A reminder counted from the start or end needs that date on
+the task or event.
 Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
 task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
 `completeSeries: true`. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.

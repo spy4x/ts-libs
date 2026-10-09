@@ -14,6 +14,7 @@ import {
   serializeIcal,
 } from "./ical.ts"
 import {
+  AlarmInput,
   AlarmRelated,
   AlarmTriggerKind,
   EventStatus,
@@ -109,6 +110,7 @@ Deno.test("readTodo reads a Tasks.org repeating task with its zone, sort order a
   assertEquals(todo.alarms, [{
     action: "DISPLAY",
     trigger: { kind: AlarmTriggerKind.Relative, duration: "PT0S", related: AlarmRelated.End },
+    description: "Default Tasks.org description",
   }])
 })
 
@@ -160,25 +162,41 @@ Deno.test("readTodo skips a recurrence override and returns undefined without a 
   assertEquals(readTodo(parse("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n")), undefined)
 })
 
-Deno.test("patching a task changes only the patched lines plus DTSTAMP, LAST-MODIFIED and SEQUENCE", async () => {
+Deno.test("patching a task title and priority changes only those lines plus DTSTAMP and LAST-MODIFIED, not SEQUENCE", async () => {
   for (const name of TODO_FIXTURES) {
     const text = await fixture(name)
     const root = parse(text)
     const before = getProperty(root.components.find((c) => c.name === "VTODO")!, "SEQUENCE")
-    const sequence = Number(before?.value ?? 0)
     mustPatch(root, { summary: "Renamed, with; punctuation", priority: 3 })
     const after = serializeIcal(root)
     const names = changedNames(text, after)
-    const allowed = new Set(["SUMMARY", "PRIORITY", "DTSTAMP", "LAST-MODIFIED", "SEQUENCE"])
+    const allowed = new Set(["SUMMARY", "PRIORITY", "DTSTAMP", "LAST-MODIFIED"])
     for (const changed of names) assert(allowed.has(changed), `${name}: ${changed} changed`)
-    for (const required of ["SUMMARY", "DTSTAMP", "LAST-MODIFIED", "SEQUENCE"]) {
+    for (const required of ["SUMMARY", "DTSTAMP", "LAST-MODIFIED"]) {
       assert(names.includes(required), `${name}: ${required} not written`)
     }
     const todo = root.components.find((c) => c.name === "VTODO")!
-    assertEquals(getProperty(todo, "SEQUENCE")!.value, String(sequence + 1), name)
+    assertEquals(getProperty(todo, "SEQUENCE")?.value, before?.value, name)
     assertEquals(getProperty(todo, "DTSTAMP")!.value, NOW_STAMP, name)
     assertEquals(getProperty(todo, "LAST-MODIFIED")!.value, NOW_STAMP, name)
   }
+})
+
+Deno.test("a task patch of the start, due, rrule or status raises SEQUENCE by one", () => {
+  const patches: Parameters<typeof patchTodo>[1][] = [
+    { start: utc("2026-10-10", "08:00:00") },
+    { due: utc("2026-10-10", "08:00:00") },
+    { rrule: "FREQ=DAILY" },
+    { status: TodoStatus.InProcess },
+  ]
+  for (const patch of patches) {
+    const root = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nEND:VTODO\r\n")
+    mustPatch(root, patch)
+    assertEquals(getProperty(root, "SEQUENCE")!.value, "5", JSON.stringify(patch))
+  }
+  const none = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nEND:VTODO\r\n")
+  mustPatch(none, { due: null })
+  assertEquals(getProperty(none, "SEQUENCE")!.value, "1")
 })
 
 Deno.test("a task patch leaves reminders, X- properties, zones and the folded summary byte for byte", async () => {
@@ -328,7 +346,6 @@ Deno.test("null clears the summary and description lines and nothing else of the
   assertEquals(changedNames(text, serializeIcal(root)), [
     "DTSTAMP",
     "LAST-MODIFIED",
-    "SEQUENCE",
     "SUMMARY",
   ])
   const fresh = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nDESCRIPTION:b\r\nEND:VTODO\r\n")
@@ -717,4 +734,366 @@ Deno.test("values of the wrong type give a failed result, not a thrown error", (
   )
   assertEquals(event.error?.code, IcalErrorCode.InvalidValue)
   assertEquals(serializeIcal(root), text)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Writing reminders
+
+const TASK_WITH_ALARMS =
+  "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:t1\r\nSUMMARY:Pay rent\r\nDTSTART:20261010T100000Z\r\nDUE:20261011T100000Z\r\n" +
+  "X-KEEP:1\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nDESCRIPTION:old\r\n" +
+  "X-MOZ-LASTACK:20260101T000000Z\r\nEND:VALARM\r\nBEGIN:VALARM\r\nACTION:AUDIO\r\n" +
+  "TRIGGER;RELATED=END:PT0S\r\nEND:VALARM\r\nSTATUS:NEEDS-ACTION\r\nEND:VTODO\r\n" +
+  "END:VCALENDAR\r\n"
+
+const HOUR_BEFORE: AlarmInput = {
+  action: "DISPLAY",
+  trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT1H" },
+}
+
+Deno.test("an alarm written to a task reads back the same and gets the summary as DESCRIPTION", () => {
+  const root = parse("BEGIN:VTODO\r\nSUMMARY:Pay rent\r\nDTSTART:20261010T100000Z\r\nEND:VTODO\r\n")
+  const todo = mustPatch(root, { alarms: [HOUR_BEFORE] })
+  assertEquals(todo.alarms, [{
+    action: "DISPLAY",
+    trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT1H", related: AlarmRelated.Start },
+    description: "Pay rent",
+  }])
+  assert(
+    serializeIcal(root).includes(
+      "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT1H\r\nDESCRIPTION:Pay rent\r\nEND:VALARM\r\n",
+    ),
+  )
+})
+
+Deno.test("an alarm written to an event reads back the same, with RELATED=END and a plain default text", () => {
+  const root = parse(
+    "BEGIN:VEVENT\r\nDTSTART:20261010T100000Z\r\nDTEND:20261010T110000Z\r\nEND:VEVENT\r\n",
+  )
+  const result = patchEvent(root, {
+    alarms: [{
+      trigger: { kind: AlarmTriggerKind.Relative, duration: "PT5M", related: AlarmRelated.End },
+    }],
+  }, { now: NOW })
+  assert(result.success)
+  assertEquals(result.output.alarms, [{
+    action: "DISPLAY",
+    trigger: { kind: AlarmTriggerKind.Relative, duration: "PT5M", related: AlarmRelated.End },
+    description: "Reminder",
+  }])
+  const out = serializeIcal(root)
+  assert(out.includes("TRIGGER;RELATED=END:PT5M\r\nDESCRIPTION:Reminder\r\n"))
+})
+
+Deno.test("an absolute alarm is written as a UTC DATE-TIME and read back as one", () => {
+  const root = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nEND:VTODO\r\n")
+  const at = utc("2026-10-09", "08:00:00")
+  const todo = mustPatch(root, { alarms: [{ trigger: { kind: AlarmTriggerKind.Absolute, at } }] })
+  assertEquals(todo.alarms[0]!.trigger, { kind: AlarmTriggerKind.Absolute, at })
+  assert(serializeIcal(root).includes("TRIGGER;VALUE=DATE-TIME:20261009T080000Z\r\n"))
+})
+
+Deno.test("alarms: null removes every VALARM and nothing else of the task", () => {
+  const root = parse(TASK_WITH_ALARMS)
+  const todo = mustPatch(root, { alarms: null })
+  assertEquals(todo.alarms, [])
+  assertEquals(todo.hasAlarms, false)
+  const out = serializeIcal(root)
+  assertEquals(out.includes("VALARM"), false)
+  assertEquals(changedNames(TASK_WITH_ALARMS, out), [
+    "ACTION",
+    "BEGIN",
+    "DESCRIPTION",
+    "DTSTAMP",
+    "END",
+    "LAST-MODIFIED",
+    "TRIGGER",
+    "X-MOZ-LASTACK",
+  ])
+  assert(out.includes("X-KEEP:1\r\n") && out.includes("STATUS:NEEDS-ACTION\r\n"))
+})
+
+Deno.test("alarms: null on an event removes every VALARM and keeps the rest", async () => {
+  const text = await fixture("stalwart-event-alarm.ics")
+  const root = parse(text)
+  const result = patchEvent(root, { alarms: null }, { now: NOW })
+  assert(result.success)
+  assertEquals(result.output.alarms, [])
+  const out = serializeIcal(root)
+  assertEquals(out.includes("VALARM"), false)
+  assert(out.includes("LOCATION") === text.includes("LOCATION"))
+})
+
+Deno.test("a patch without alarms leaves existing VALARM blocks byte for byte, on a task and an event", async () => {
+  const block = (text: string) =>
+    text.slice(text.indexOf("BEGIN:VALARM"), text.lastIndexOf("END:VALARM"))
+  const task = parse(TASK_WITH_ALARMS)
+  mustPatch(task, { summary: "Renamed", due: utc("2026-10-10", "08:00:00") })
+  assertEquals(block(serializeIcal(task)), block(TASK_WITH_ALARMS))
+  const text = await fixture("stalwart-event-alarm.ics").then((t) => t.replaceAll("\r\n", "\n"))
+  const event = parse(text)
+  assert(patchEvent(event, { summary: "Renamed", location: "Room" }, { now: NOW }).success)
+  assertEquals(block(serializeIcal(event)), block(text.replaceAll("\n", "\r\n")))
+})
+
+Deno.test("replacing alarms keeps an existing VALARM with the same action and trigger, with its X- lines", () => {
+  const root = parse(TASK_WITH_ALARMS)
+  const todo = mustPatch(root, {
+    alarms: [
+      { trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT15M" } },
+      HOUR_BEFORE,
+    ],
+  })
+  assertEquals(todo.alarms.map((a) => a.action), ["DISPLAY", "DISPLAY"])
+  const out = serializeIcal(root)
+  assert(out.includes("DESCRIPTION:old\r\nX-MOZ-LASTACK:20260101T000000Z\r\nEND:VALARM\r\n"))
+  assertEquals(out.includes("ACTION:AUDIO"), false)
+  assertEquals((out.match(/BEGIN:VALARM/g) ?? []).length, 2)
+  assert(out.includes("TRIGGER:-PT1H\r\nDESCRIPTION:Pay rent\r\n"))
+})
+
+Deno.test("replacing alarms writes a new VALARM when the description differs from the kept one", () => {
+  const root = parse(TASK_WITH_ALARMS)
+  mustPatch(root, {
+    alarms: [{
+      trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT15M" },
+      description: "new text",
+    }],
+  })
+  const out = serializeIcal(root)
+  assertEquals(out.includes("X-MOZ-LASTACK"), false)
+  assert(out.includes("DESCRIPTION:new text\r\n"))
+})
+
+Deno.test("an alarm patch alone stamps DTSTAMP and LAST-MODIFIED but does not raise SEQUENCE", () => {
+  const root = parse(
+    "BEGIN:VTODO\r\nSEQUENCE:2\r\nSUMMARY:a\r\nDTSTART:20261010T100000Z\r\nEND:VTODO\r\n",
+  )
+  mustPatch(root, { alarms: [HOUR_BEFORE] })
+  assertEquals(getProperty(root, "SEQUENCE")!.value, "2")
+  assertEquals(getProperty(root, "DTSTAMP")!.value, NOW_STAMP)
+})
+
+Deno.test("a long alarm description is folded to 75 octets and reads back whole", () => {
+  const long = "Ünïcode reminder, with; punctuation — ".repeat(8).trim()
+  const root = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nDTSTART:20261010T100000Z\r\nEND:VTODO\r\n")
+  mustPatch(root, { alarms: [{ ...HOUR_BEFORE, description: long }] })
+  const out = serializeIcal(root)
+  const encoder = new TextEncoder()
+  for (const line of out.split("\r\n")) assert(encoder.encode(line).length <= 75, line)
+  assert(out.includes("\r\n "))
+  const back = parse(out)
+  const alarm = back.components[0]!
+  const description = getProperty(alarm, "DESCRIPTION")!
+  assertEquals(
+    description.value.replaceAll("\\,", ",").replaceAll("\\;", ";"),
+    long,
+  )
+})
+
+Deno.test("bad alarms are refused with InvalidValue and leave the document as it was", () => {
+  const abs = { kind: AlarmTriggerKind.Absolute } as const
+  const bad = [
+    { trigger: { kind: AlarmTriggerKind.Relative, duration: "1H" } },
+    { trigger: { kind: AlarmTriggerKind.Relative, duration: "-P" } },
+    { trigger: { kind: AlarmTriggerKind.Relative, duration: "PT" } },
+    { trigger: { kind: AlarmTriggerKind.Relative, duration: "-pt1h" } },
+    { trigger: { kind: AlarmTriggerKind.Relative, duration: "PT1H\r\nX:y" } },
+    { trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT1H", related: 9 } },
+    { trigger: { ...abs, at: { kind: IcalDateKind.Date, date: "2026-10-09" } } },
+    {
+      trigger: {
+        ...abs,
+        at: { kind: IcalDateKind.Floating, date: "2026-10-09", time: "08:00:00" },
+      },
+    },
+    { trigger: { ...abs, at: utc("2026-13-09", "08:00:00") } },
+    { action: "EMAIL", trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT1H" } },
+    { trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT1H" }, description: 5 },
+    { trigger: { kind: 7 } },
+    {},
+    null,
+  ]
+  for (const alarm of bad) {
+    const root = parse(TASK_WITH_ALARMS)
+    const result = patchTodo(
+      root,
+      { alarms: [alarm] } as unknown as Parameters<typeof patchTodo>[1],
+      {
+        now: NOW,
+      },
+    )
+    assertEquals(result.error?.code, IcalErrorCode.InvalidValue, JSON.stringify(alarm))
+    assertEquals(serializeIcal(root), TASK_WITH_ALARMS)
+  }
+  const notList = patchTodo(parse(TASK_WITH_ALARMS), { alarms: "x" } as never, { now: NOW })
+  assertEquals(notList.error?.code, IcalErrorCode.InvalidValue)
+})
+
+Deno.test("valid durations in weeks, days, and mixed forms are accepted", () => {
+  for (const duration of ["P1W", "-P2D", "P1DT2H30M10S", "PT30S", "+PT5M", "-PT1H30M", "PT0S"]) {
+    const root = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nDTSTART:20261010T100000Z\r\nEND:VTODO\r\n")
+    const result = patchTodo(root, {
+      alarms: [{ trigger: { kind: AlarmTriggerKind.Relative, duration } }],
+    }, { now: NOW })
+    assert(result.success, duration)
+  }
+})
+
+Deno.test("newTodo and newEvent write alarms and a new object reads them back", () => {
+  const options = { now: NOW, uid: "u1", prodid: "-//Test//EN" }
+  const todo = newTodo({
+    summary: "Call",
+    start: utc("2026-10-10", "09:00:00"),
+    alarms: [HOUR_BEFORE],
+  }, options)
+  assert(todo.success)
+  assertEquals(readTodo(todo.output)!.alarms.length, 1)
+  assert(serializeIcal(todo.output).includes("DESCRIPTION:Call\r\n"))
+  const event = newEvent({ start: utc("2026-10-10", "18:00:00"), alarms: [HOUR_BEFORE] }, options)
+  assert(event.success)
+  assertEquals(readEvent(event.output)!.alarms.length, 1)
+  assert(serializeIcal(event.output).includes("DESCRIPTION:Reminder\r\n"))
+  const none = newTodo({ summary: "x", alarms: null }, options)
+  assert(none.success)
+  assertEquals(serializeIcal(none.output).includes("VALARM"), false)
+})
+
+Deno.test("an existing reminder with the same trigger but another action is replaced, not kept", () => {
+  const root = parse(
+    "BEGIN:VTODO\r\nSUMMARY:a\r\nDTSTART:20261010T100000Z\r\nBEGIN:VALARM\r\nACTION:AUDIO\r\nTRIGGER:-PT15M\r\n" +
+      "X-MOZ-LASTACK:20260101T000000Z\r\nEND:VALARM\r\nEND:VTODO\r\n",
+  )
+  const todo = mustPatch(root, {
+    alarms: [{ trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT15M" } }],
+  })
+  assertEquals(todo.alarms.map((alarm) => alarm.action), ["DISPLAY"])
+  assertEquals(serializeIcal(root).includes("X-MOZ-LASTACK"), false)
+})
+
+const ALARM_STARTING = (related?: AlarmRelated): AlarmInput => ({
+  trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT1H", related },
+})
+
+Deno.test("a reminder counted from the start is refused on a task without DTSTART, and written when DUE is the anchor for RELATED=END", () => {
+  const options = { now: NOW, uid: "u1", prodid: "-//Test//EN" }
+  const refused = newTodo({
+    summary: "Call",
+    due: utc("2026-10-10", "09:00:00"),
+    alarms: [HOUR_BEFORE],
+  }, options)
+  assertEquals(refused.error?.code, IcalErrorCode.InvalidValue)
+  assert(refused.error!.message.includes("DTSTART"))
+  const tasksOrg = newTodo({
+    summary: "Call",
+    due: utc("2026-10-10", "09:00:00"),
+    alarms: [ALARM_STARTING(AlarmRelated.End)],
+  }, options)
+  assert(tasksOrg.success)
+  assert(serializeIcal(tasksOrg.output).includes("TRIGGER;RELATED=END:-PT1H\r\n"))
+})
+
+Deno.test("a reminder counted from the end needs DUE or DTSTART with DURATION on a task", () => {
+  const end = [ALARM_STARTING(AlarmRelated.End)]
+  const noDue = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nDTSTART:20261010T100000Z\r\nEND:VTODO\r\n")
+  const refused = patchTodo(noDue, { alarms: end }, { now: NOW })
+  assertEquals(refused.error?.code, IcalErrorCode.InvalidValue)
+  assert(refused.error!.message.includes("DUE"))
+  const withDuration = parse(
+    "BEGIN:VTODO\r\nSUMMARY:a\r\nDTSTART:20261010T100000Z\r\nDURATION:PT1H\r\nEND:VTODO\r\n",
+  )
+  assert(patchTodo(withDuration, { alarms: end }, { now: NOW }).success)
+  const dueGoesAway = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nDUE:20261010T100000Z\r\nEND:VTODO\r\n")
+  assertEquals(
+    patchTodo(dueGoesAway, { due: null, alarms: end }, { now: NOW }).error?.code,
+    IcalErrorCode.InvalidValue,
+  )
+  assert(patchTodo(dueGoesAway, { alarms: end }, { now: NOW }).success)
+})
+
+Deno.test("a reminder on an event needs DTSTART for the start and DTEND or DURATION for the end", () => {
+  const bare = "BEGIN:VEVENT\r\nDTSTART:20261010T100000Z\r\nEND:VEVENT\r\n"
+  const end = patchEvent(parse(bare), { alarms: [ALARM_STARTING(AlarmRelated.End)] }, { now: NOW })
+  assertEquals(end.error?.code, IcalErrorCode.InvalidValue)
+  assert(end.error!.message.includes("DTEND or DURATION"))
+  const duration = parse(
+    "BEGIN:VEVENT\r\nDTSTART:20261010T100000Z\r\nDURATION:PT1H\r\nEND:VEVENT\r\n",
+  )
+  assert(patchEvent(duration, { alarms: [ALARM_STARTING(AlarmRelated.End)] }, { now: NOW }).success)
+  const noStart = patchEvent(parse("BEGIN:VEVENT\r\nEND:VEVENT\r\n"), { alarms: [HOUR_BEFORE] }, {
+    now: NOW,
+  })
+  assertEquals(noStart.error?.code, IcalErrorCode.InvalidValue)
+})
+
+Deno.test("an absolute reminder needs no DTSTART", () => {
+  const root = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nEND:VTODO\r\n")
+  const at = utc("2026-10-09", "08:00:00")
+  assert(
+    patchTodo(root, { alarms: [{ trigger: { kind: AlarmTriggerKind.Absolute, at } }] }, {
+      now: NOW,
+    })
+      .success,
+  )
+})
+
+Deno.test("an existing reminder counted from the other end is not kept for a new one", () => {
+  const root = parse(TASK_WITH_ALARMS)
+  mustPatch(root, {
+    alarms: [{
+      trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT15M", related: AlarmRelated.End },
+    }],
+  })
+  const out = serializeIcal(root)
+  assertEquals(out.includes("X-MOZ-LASTACK"), false)
+  assert(out.includes("TRIGGER;RELATED=END:-PT15M\r\n"))
+})
+
+Deno.test("an existing absolute reminder at another time is not kept for a new one", () => {
+  const text = "BEGIN:VTODO\r\nSUMMARY:a\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\n" +
+    "TRIGGER;VALUE=DATE-TIME:20261009T080000Z\r\nDESCRIPTION:a\r\nX-KEEP:1\r\nEND:VALARM\r\n" +
+    "END:VTODO\r\n"
+  const same = utc("2026-10-09", "08:00:00")
+  const kept = parse(text)
+  mustPatch(kept, { alarms: [{ trigger: { kind: AlarmTriggerKind.Absolute, at: same } }] })
+  assert(serializeIcal(kept).includes("X-KEEP:1"))
+  const moved = parse(text)
+  mustPatch(moved, {
+    alarms: [{ trigger: { kind: AlarmTriggerKind.Absolute, at: utc("2026-10-09", "09:00:00") } }],
+  })
+  const out = serializeIcal(moved)
+  assertEquals(out.includes("X-KEEP"), false)
+  assert(out.includes("TRIGGER;VALUE=DATE-TIME:20261009T090000Z\r\n"))
+})
+
+Deno.test("two equal entries keep one existing reminder and write one more, not two kept copies", () => {
+  const root = parse(TASK_WITH_ALARMS)
+  const same: AlarmInput = { trigger: { kind: AlarmTriggerKind.Relative, duration: "-PT15M" } }
+  const todo = mustPatch(root, { alarms: [same, same] })
+  assertEquals(todo.alarms.length, 2)
+  const out = serializeIcal(root)
+  assertEquals((out.match(/X-MOZ-LASTACK/g) ?? []).length, 1)
+  assertEquals((out.match(/BEGIN:VALARM/g) ?? []).length, 2)
+})
+
+Deno.test("a duration with seconds straight after hours is refused, as the RFC grammar has minutes between", () => {
+  for (const duration of ["PT1H30S", "P1DT1H30S", "PT1M1H"]) {
+    const root = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nDTSTART:20261010T100000Z\r\nEND:VTODO\r\n")
+    const result = patchTodo(root, {
+      alarms: [{ trigger: { kind: AlarmTriggerKind.Relative, duration } }],
+    }, { now: NOW })
+    assertEquals(result.error?.code, IcalErrorCode.InvalidValue, duration)
+  }
+})
+
+Deno.test("an AUDIO reminder is written without DESCRIPTION, refuses one, and readTodo reads a DESCRIPTION", () => {
+  const root = parse("BEGIN:VTODO\r\nSUMMARY:a\r\nDTSTART:20261010T100000Z\r\nEND:VTODO\r\n")
+  const audio: AlarmInput = { action: "AUDIO", trigger: HOUR_BEFORE.trigger }
+  const todo = mustPatch(root, { alarms: [audio] })
+  assertEquals(todo.alarms[0]!.description, undefined)
+  assertEquals(serializeIcal(root).includes("DESCRIPTION"), false)
+  const refused = patchTodo(root, { alarms: [{ ...audio, description: "x" }] }, { now: NOW })
+  assertEquals(refused.error?.code, IcalErrorCode.InvalidValue)
+  const display = parse(TASK_WITH_ALARMS)
+  assertEquals(readTodo(display)!.alarms.map((a) => a.description), ["old", undefined])
 })
