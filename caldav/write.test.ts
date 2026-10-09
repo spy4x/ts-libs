@@ -186,10 +186,14 @@ describe("create", () => {
     expect(objects.size).toBe(1)
   })
 
-  it("reports an address held by an object with another UID as already-exists", async () => {
-    const { send, objects, failureOf } = setup()
-    objects.set(new URL(`${CALENDAR}e1.ics`).pathname, { ics: ics("milk", "other"), etag: 7 })
-    expect(await failureOf(send("create", "e1", "milk", 0))).toEqual({ kind: "already-exists" })
+  it("refuses a create whose file name is held by an object with another UID, leaving it untouched", async () => {
+    const { send, objects, seen, failureOf } = setup()
+    const path = new URL(`${CALENDAR}e1.ics`).pathname
+    objects.set(path, { ics: ics("milk", "other"), etag: 7 })
+    const failure = await failureOf(send("create", "e1", "milk", 0))
+    expect(failure.kind).toBe("rejected")
+    expect(objects.get(path)).toEqual({ ics: ics("milk", "other"), etag: 7 })
+    expect(seen.map((s) => s.method)).toEqual(["PUT", "GET"])
   })
 })
 
@@ -332,7 +336,7 @@ describe("a writer that does not check anything itself", () => {
       { kind: "create", entityId: "e1", payload: "x", baseVersion: 0 },
       "k",
     ).catch((caught) => caught)
-    expect(transport.classify(error)).toEqual({ kind: "already-exists" })
+    expect(transport.classify(error).kind).toBe("rejected")
   })
 
   it("reads a repeated create whose follow-up read lost the connection as unreachable", async () => {
@@ -502,4 +506,70 @@ describe("with the outbox", () => {
       expect(await outbox.entries()).toEqual([])
     })
   }
+})
+
+describe("a path-only calendar address", () => {
+  it("objectUrl keeps a path-only address path-only and encodes the file name", () => {
+    expect(objectUrl("/dav/cal/me/tasks/", "e1")).toBe("/dav/cal/me/tasks/e1.ics")
+    expect(objectUrl("/dav/cal/me/tasks", "a b")).toBe("/dav/cal/me/tasks/a%20b.ics")
+  })
+
+  it("objectUrl still resolves an absolute address against its host", () => {
+    expect(objectUrl(CALENDAR, "e1")).toBe(`${CALENDAR}e1.ics`)
+    expect(objectUrl(new URL(CALENDAR), "e1")).toBe(`${CALENDAR}e1.ics`)
+  })
+
+  it("hands the writer only paths for a create, a repeated create, an update and a delete", async () => {
+    const urls: string[] = []
+    const stored = new Map<string, string>()
+    const ok = <T>(output: T) => Promise.resolve({ success: true as const, output, error: null })
+    const writer: CalDavWriter = {
+      createObject: (calendar, text, options) => {
+        urls.push(String(calendar))
+        const url = `${calendar}${options?.name}`
+        if (stored.has(url)) {
+          return Promise.resolve({
+            success: false as const,
+            output: null,
+            error: { code: CalDavErrorCode.AlreadyExists, message: "taken" },
+          })
+        }
+        stored.set(url, text)
+        return ok({ url, etag: `"1"`, data: text })
+      },
+      getObject: (url) => {
+        urls.push(String(url))
+        return ok({ url: String(url), etag: `"1"`, data: stored.get(String(url)) ?? "" })
+      },
+      updateObject: (url, text) => {
+        urls.push(String(url))
+        return ok({ url: String(url), etag: `"2"`, data: text })
+      },
+      deleteObject: (url) => {
+        urls.push(String(url))
+        return ok(null)
+      },
+    }
+    const calendar = "/dav/cal/me/tasks/"
+    const transport = createCalDavWriteTransport<string, Task>({
+      writer,
+      calendarUrl: () => calendar,
+      urlOf: (id) => objectUrl(calendar, id),
+      etagOf: () => `"1"`,
+      toIcs: (command) => ics(command.payload, command.entityId),
+      toEntity: (object) => ({ version: 1, url: object.url, etag: object.etag, ics: object.data }),
+    })
+    const command = (kind: CalDavWriteCommand<string>["kind"]) => ({
+      kind,
+      entityId: "e1",
+      payload: "milk",
+      baseVersion: 1,
+    })
+    await transport.send(command("create"), "k")
+    await transport.send(command("create"), "k")
+    await transport.send(command("update"), "k")
+    await transport.send(command("delete"), "k")
+    expect(urls.length).toBe(5)
+    expect(urls.every((url) => url.startsWith("/dav/cal/me/tasks/"))).toBe(true)
+  })
 })

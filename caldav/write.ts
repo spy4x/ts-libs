@@ -199,6 +199,15 @@ export function createCalDavWriteTransport<P, S>(
             if (uid !== null && uid === uidOf(existing.output.data)) {
               return options.toEntity(existing.output, command.entityId)
             }
+            // Another task holds the name. `already-exists` would let the outbox offer "Keep
+            // mine" as an update with the etag of that task, overwriting it; a refusal cannot be
+            // turned into one. A fresh file name is not used: a repeat after a lost answer
+            // would take the name again and leave a duplicate.
+            const error: CalDavError = {
+              code: CalDavErrorCode.InvalidArgument,
+              message: "the file name is held by an object with another UID",
+            }
+            throw new CalDavWriteError(classifyCalDavError(error), error)
           } else if (existing.error.code !== CalDavErrorCode.NotFound) {
             // The answer is unknown, not a taken address: try again later.
             throw new CalDavWriteError(classifyCalDavError(existing.error), existing.error)
