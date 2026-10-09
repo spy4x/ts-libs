@@ -252,12 +252,14 @@ An unknown status is refused as `malformed_payload` rather than guessed.
 
 # `@spy4x/caldav`
 
-CalDAV building blocks: a safe reader for WebDAV multistatus XML, request bodies that escape what
-they write, and the URL rules a CalDAV client needs (resolving hrefs, comparing resources, sending
-credentials only to the configured server). A CalDAV client built on them is planned.
+A CalDAV client that finds the user's calendars and changes tasks and events without overwriting
+someone else's edit, plus the building blocks it uses: a safe reader for WebDAV multistatus XML,
+request bodies that escape what they write, and the URL rules a CalDAV client needs (resolving
+hrefs, comparing resources, sending credentials only to the configured server).
 
 | Module       | Exports                                                                                                                                                                                                    |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `caldav`     | `createCalDavClient`, `CalDavErrorCode`, `CalDavClient`, `CalDavCalendar`, `CalDavObject`, …                                                                                                               |
 | `caldav/xml` | `parseMultistatus`, `getProp`, `getPropText`, `parseXml`, `childElement`, `textContent`, `serializeXml`, `propfindBody`, `calendarQueryBody`, `calendarMultigetBody`, `mkcalendarBody`, `proppatchBody`, … |
 | `caldav/url` | `resolveHref`, `sameResource`, `childUrl`, `isSameOrigin`                                                                                                                                                  |
 
@@ -268,6 +270,57 @@ deno add jsr:@spy4x/caldav
 ```
 
 Runs on: shared — both the server and a browser bundle. Its sources use no `Deno.*` API.
+
+## The client
+
+```ts
+import { CalDavErrorCode, createCalDavClient } from "@spy4x/caldav"
+
+const client = createCalDavClient({
+  serverUrl: "https://dav.example.com/", // the bare host or `…/dav/cal/` both work
+  auth: { username: "user@example.com", password: "…" },
+})
+
+const found = await client.discover() // .well-known → current-user-principal → calendar-home-set
+if (!found.success) throw new Error(found.error.message)
+const calendars = await client.listCalendars(found.output.homeUrls[0])
+// Each: url, displayName, components, color?, ctag?, syncToken?
+
+const inbox = "https://dav.example.com/dav/cal/user%40example.com/inbox/"
+const open = await client.listObjects(inbox, { component: "VTODO" }) // completed tasks left out
+const all = await client.listObjects(inbox, { component: "VTODO", includeCompleted: true })
+
+const created = await client.createObject(inbox, ics) // a UUID name, `If-None-Match: *`
+if (!created.success) throw new Error(created.error.message)
+// A server may answer a PUT without an ETag (`etag: null`); then read the object to get one.
+const current = await client.getObject(created.output.url)
+if (!current.success || current.output.etag === null) throw new Error("no etag to update with")
+const updated = await client.updateObject(current.output.url, changed, current.output.etag)
+if (!updated.success && updated.error.code === CalDavErrorCode.Conflict) {
+  // Someone changed it since it was read: read it again, merge, retry with the new etag.
+}
+```
+
+What the client guarantees:
+
+- **Credentials stay on the server.** `Authorization` goes only to the configured origin. A URL
+  argument or a server href on another host, port or scheme is refused with `OutsideServer` before
+  any request. Redirects are followed by hand: on the same origin up to `maxRedirects` (default 5),
+  to another origin never, failing with `CrossOriginRedirect` and the target in `error.target`.
+- **No blind writes.** `createObject` sends `If-None-Match: *` and names the object with a UUID,
+  never the UID. `updateObject` and `deleteObject` need the etag, sent exactly as received, and
+  without one are refused with `InvalidArgument` before any request. The etag must be one quoted
+  entity tag: `*` or a list would match any version, so both are refused, and a server etag of
+  that kind reads as `null`. A stale etag fails with
+  `Conflict`, a code no other failure uses; a UID clash fails with `UidConflict`.
+- **Failures are not empty lists.** A missing calendar is `NotFound`, never `[]`, including when
+  the server answers 207 with only the calendar's own entry at 404.
+  `deleteCalendar` checks the collection is a calendar first, so it cannot delete the home.
+- **Bounded.** One `timeoutMs` (default 30 s) covers a whole call; no body is read past
+  `maxResponseBytes` (default 10 MiB).
+
+Every method returns `{ success, output, error }` and never throws for a server or network failure.
+In a browser, `fetch` hides redirect targets, so a redirect fails with `Server`.
 
 ## Reading a multistatus response
 

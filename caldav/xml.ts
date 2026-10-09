@@ -692,6 +692,11 @@ export interface CalendarQueryOptions {
   props?: XmlName[]
   /** Only components overlapping this range (RFC 4791 §9.9), sent as UTC. */
   timeRange?: { start?: Date; end?: Date }
+  /**
+   * Only components that have none of these properties (RFC 4791 §9.7.1 `is-not-defined`), such
+   * as `["COMPLETED"]` for open tasks.
+   */
+  withoutProperties?: string[]
 }
 
 const OBJECT_PROPS: XmlName[] = [
@@ -717,10 +722,21 @@ export function calendarQueryBody(options: CalendarQueryOptions): string {
       value: formatIcsUtc(range.end),
     })
   }
+  const conditions: XmlElement[] = []
+  if (rangeAttributes.length > 0) {
+    conditions.push(xmlElement(CALDAV_NS, "time-range", [], rangeAttributes))
+  }
+  for (const property of options.withoutProperties ?? []) {
+    conditions.push(
+      xmlElement(CALDAV_NS, "prop-filter", [xmlElement(CALDAV_NS, "is-not-defined")], [
+        { namespace: "", name: "name", value: property },
+      ]),
+    )
+  }
   const inner = xmlElement(
     CALDAV_NS,
     "comp-filter",
-    rangeAttributes.length === 0 ? [] : [xmlElement(CALDAV_NS, "time-range", [], rangeAttributes)],
+    conditions,
     [{ namespace: "", name: "name", value: options.component }],
   )
   const filter = xmlElement(CALDAV_NS, "filter", [
