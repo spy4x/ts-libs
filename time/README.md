@@ -331,7 +331,8 @@ task keeps its RRULE and reads `repeats: true`; completing one is refused unless
 `15 minutes before due`, `1 hour after start`, `at end`, or for an absolute trigger the date in the
 given zone and locale. `owner` (`AlarmOwner.Task` by default, or `AlarmOwner.Event`) decides whether
 an end-related trigger says `due` or `end`. A trigger it cannot describe, or a VALARM with none,
-gives `undefined`: show the raw value. The words are English; only the date of an absolute trigger follows `locale`.
+gives `undefined`: show the raw value. The words are English; only the date of an absolute
+trigger follows `locale`.
 
 `completeTodo` completes a task the way Tasks.org does. A plain task is completed; a repeating task
 moves to its next occurrence and stays open. The next date is the first occurrence after DUE (never
