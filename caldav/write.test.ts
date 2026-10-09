@@ -616,4 +616,34 @@ describe("a path-only calendar address", () => {
   it("objectUrl normalises dot segments inside a path and never starts with //", () => {
     expect(objectUrl("/a/../b/./c/", "e1")).toBe("/b/c/e1.ics")
   })
+
+  for (const address of ["/a/..//other.example/x/", "/\\other.example/x/", "not a url"]) {
+    it(`a create with the address ${address} sends no request and is rejected, not left pending`, async () => {
+      const calls: string[] = []
+      const record = (name: string) => () => {
+        calls.push(name)
+        return Promise.reject(new Error("must not be called"))
+      }
+      const transport = createCalDavWriteTransport<string, Task>({
+        writer: {
+          createObject: record("createObject"),
+          getObject: record("getObject"),
+          updateObject: record("updateObject"),
+          deleteObject: record("deleteObject"),
+        },
+        calendarUrl: () => address,
+        urlOf: (id) => id,
+        etagOf: () => `"1"`,
+        toIcs: (command) => ics(command.payload, command.entityId),
+        toEntity: () => {
+          throw new Error("unused")
+        },
+      })
+      const error = await transport
+        .send({ kind: "create", entityId: "e1", payload: "milk", baseVersion: 0 }, "k")
+        .catch((caught) => caught)
+      expect(transport.classify(error).kind).toBe("rejected")
+      expect(calls).toEqual([])
+    })
+  }
 })
