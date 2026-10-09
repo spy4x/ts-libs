@@ -420,18 +420,20 @@ generated name to `childUrl` and resolve only hrefs the server sent.
 `caldav/write` fills the `send`, `fetchServer` and `classify` ports of the outbox in
 `@spy4x/realtime/outbox`, so a queue of offline edits reaches a CalDAV server without overwriting
 anyone's change. A create is `PUT` with `If-None-Match: *` to `<entityId>.ics` (a repeat after a
-lost answer finds its own object, by its UID, and succeeds even if the server reordered the text); an update is `PUT` with `If-Match: <etag>`; a
-delete is `DELETE` with `If-Match`. The app supplies the calendar, the object's address, the etag a
-write is based on, the iCalendar text, and how to turn an object into its entity.
+lost answer finds its own object, by its UID, and succeeds even if the server reordered the text);
+an update is `PUT` with `If-Match: <etag>`; a delete is `DELETE` with `If-Match`. Only a create
+needs the entity id to be a plain file name: an update or delete goes to the address `urlOf` gives.
+The app supplies the calendar, the object's address, the etag a write is based on, the iCalendar
+text, and how to turn an object into its entity.
 
-| Server answer                                               | The queue sees                                 |
-| ----------------------------------------------------------- | ---------------------------------------------- |
-| 412 on an update or delete                                  | `version`; the outbox then calls `fetchServer` |
-| 412 on a create (address taken, different content)          | `already-exists`                               |
-| 404 or 410 on an update                                     | `not-found`                                    |
-| 404 or 410 on a delete                                      | success                                        |
-| network error, timeout, 5xx, 408, 429                       | `unreachable`: keep the entry, retry later     |
-| any other 4xx, a UID clash, a bad entity id, a missing etag | `rejected`, with the message                   |
+| Server answer                                                                         | The queue sees                                 |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 412 on an update or delete                                                            | `version`; the outbox then calls `fetchServer` |
+| 412 on a create (address taken, different content)                                    | `already-exists`                               |
+| 404 or 410 on an update                                                               | `not-found`                                    |
+| 404 or 410 on a delete                                                                | success                                        |
+| network error, timeout, 5xx, 401, 403, 408, 429                                       | `unreachable`: keep the entry, retry later     |
+| other 4xx (not 401, 403, 408, 429), a UID clash, a bad entity id on a create, no etag | `rejected`, with the message                   |
 
 ```ts
 const writer = createCalDavClient({ serverUrl, auth }) // or an adapter with the same results
