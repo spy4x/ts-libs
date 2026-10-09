@@ -186,6 +186,44 @@ describe("createTokenVerifier", () => {
   })
 })
 
+describe("createTokenVerifier verifySync", () => {
+  it("accepts the exact configured token", () => {
+    assertEquals(createTokenVerifier(FAKE_TOKEN).verifySync(FAKE_TOKEN), true)
+  })
+
+  it("refuses an equal-length wrong token", () => {
+    assertEquals(createTokenVerifier(FAKE_TOKEN).verifySync(FAKE_TOKEN_WRONG), false)
+  })
+
+  it("refuses every prefix of the configured token", () => {
+    const verifier = createTokenVerifier(FAKE_TOKEN)
+    for (let length = 1; length < FAKE_TOKEN.length; length += 1) {
+      assertEquals(verifier.verifySync(FAKE_TOKEN.slice(0, length)), false)
+    }
+  })
+
+  it("refuses a token that extends the configured one", () => {
+    assertEquals(createTokenVerifier(FAKE_TOKEN).verifySync(`${FAKE_TOKEN}x`), false)
+  })
+
+  it("refuses the empty token", () => {
+    assertEquals(createTokenVerifier(FAKE_TOKEN).verifySync(""), false)
+  })
+
+  it("returns a plain boolean, not a promise", () => {
+    const verifier = createTokenVerifier(FAKE_TOKEN)
+    assertEquals(typeof verifier.verifySync(FAKE_TOKEN), "boolean")
+    assertEquals(typeof verifier.verifySync(FAKE_TOKEN_WRONG), "boolean")
+  })
+
+  it("agrees with the async verify on every input", async () => {
+    const verifier = createTokenVerifier(FAKE_TOKEN)
+    for (const presented of ["", "ab", FAKE_TOKEN, FAKE_TOKEN_WRONG, `${FAKE_TOKEN}x`]) {
+      assertEquals(verifier.verifySync(presented), await verifier.verify(presented), presented)
+    }
+  })
+})
+
 describe("bearerTokenFromHeaders", () => {
   it("reads a Bearer token", () => {
     const headers = new Headers({ Authorization: `Bearer ${FAKE_TOKEN}` })
