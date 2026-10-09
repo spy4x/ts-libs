@@ -6142,15 +6142,15 @@ goes up by one on an event patch, and on a task patch that sets `start`, `due`, 
 `alarms` writes reminders: a list replaces the VALARMs (an equal one stays as it is), `null` removes
 them all, and leaving it out keeps them. A reminder counted from the start or end needs that date on
 the task or event.
+Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
+task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
+`completeSeries: true`. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
 
 `describeAlarmTrigger(alarm.trigger, { owner, locale, timeZone })` words a reminder for a list:
 `15 minutes before due`, `1 hour after start`, `at end`, or for an absolute trigger the date in the
 given zone and locale. `owner` (`AlarmOwner.Task` by default, or `AlarmOwner.Event`) decides whether
-an end-related trigger says `due` or `end`. A trigger it cannot describe gives `undefined`: show the
+an end-related trigger says `due` or `end`. A trigger it cannot describe, or a VALARM with none, gives `undefined`: show the
 raw value. The words are English; only the date of an absolute trigger follows `locale`.
-Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
-task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
-`completeSeries: true`. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
 
 `completeTodo` completes a task the way Tasks.org does. A plain task is completed; a repeating task
 moves to its next occurrence and stays open. The next date is the first occurrence after DUE (never

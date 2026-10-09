@@ -135,15 +135,16 @@ const TRIGGER_UNITS = ["week", "day", "hour", "minute", "second"]
  * a moment, shown in `options.timeZone` and `options.locale` as `formatInstantLong` writes it.
  *
  * Like {@link readTodo}, it answers `undefined` for what it cannot describe instead of throwing:
- * a duration outside the RFC 5545 grammar (including one with no unit), an absolute trigger with
+ * a duration the lenient reading of the grammar refuses (one with no unit, a month, a decimal), an absolute trigger with
  * no instant, an unknown zone or an unreadable locale. Show the raw value then.
  *
- * @param trigger A trigger as read, from `Alarm.trigger`.
+ * @param trigger A trigger as read, from `Alarm.trigger`; a VALARM with none gives `undefined`.
  */
 export function describeAlarmTrigger(
-  trigger: AlarmTrigger,
+  trigger: AlarmTrigger | undefined,
   options: DescribeAlarmTriggerOptions = {},
 ): string | undefined {
+  if (!trigger) return undefined
   if (trigger.kind === AlarmTriggerKind.Absolute) {
     const zone = options.timeZone ?? "UTC"
     const instant = resolveInstant(trigger.at, { zone })

@@ -14,6 +14,7 @@ import {
   serializeIcal,
 } from "./ical.ts"
 import {
+  Alarm,
   AlarmInput,
   AlarmOwner,
   AlarmRelated,
@@ -1173,4 +1174,12 @@ Deno.test("describeAlarmTrigger answers undefined for a trigger it cannot descri
     }),
     undefined,
   )
+})
+
+Deno.test("describeAlarmTrigger takes the trigger of a read alarm, which may be missing", () => {
+  const alarms: Alarm[] = [{ trigger: relative("-PT10M") }, { action: "DISPLAY" }]
+  assertEquals(alarms.map((alarm) => describeAlarmTrigger(alarm.trigger)), [
+    "10 minutes before start",
+    undefined,
+  ])
 })
