@@ -1260,6 +1260,19 @@ describe("outbox with two overlapping submits for one entity", () => {
     expect(a).toEqual({ kind: "conflict", reason: "version" })
     expect(b).toEqual({ kind: "conflict", reason: "version" })
   })
+
+  it("answers queued to the caller whose send was lost and sent to the one whose retry landed", async () => {
+    const h = harness()
+    let calls = 0
+    h.state.server = () => {
+      if (++calls === 1) throw new ConnectionLostError("the socket dropped")
+      return item("n", 2)
+    }
+    const [a, b] = await Promise.all(edits(h))
+    expect(a.kind).toBe("queued")
+    expect(b.kind).toBe("sent")
+    expect(h.outbox.entries()).toEqual([])
+  })
 })
 
 describeOutboxStoreContract("createMemoryOutboxStore", () => createMemoryOutboxStore())
