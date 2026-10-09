@@ -2477,10 +2477,35 @@ Without `clientAddress`, every request shares one address, so a single guesser l
 out. Change the caps with `maxFailures` and `windowMs` per address, and `maxTotalFailures` (ten
 times `maxFailures` by default, and always more) and `totalWindowMs` for the server.
 
-The trade-off: someone with enough addresses can keep the owner from approving new clients for up
-to a day, by sending wrong passwords. Clients that already have tokens are not affected. A rate
-limiter per address in front of `POST /authorize` (`@spy4x/platform/rate-limit/hono`) makes that
-harder, as "What it does not do" below says for every route.
+When a burst of parallel guesses keeps rewriting the server-wide count, `KvOAuthStore` gives up
+after 32 conflicting writes. The approval then answers `429` with `Retry-After: 1`, the consent
+stays usable, and the attempt is not counted against the address.
+
+The trade-off: anyone who can reach `POST /authorize` can keep every approval refused. The
+server-wide ceiling is 100 wrong passwords a day by default, and one address may send 10 every 15
+minutes, so one address reaches it in two and a half hours and ten addresses in a minute. After
+that, about 100 wrong passwords a day keep it reached, for as long as the sender keeps going. With
+`KvOAuthStore` a restart does not end it. Clients that already have tokens are not affected; only
+new approvals are refused.
+
+No design avoids this without a cost: the ceiling exists to cap guesses that come from many
+addresses, so lifting it for an unknown address would hand every new address a free guess. To make
+it harder, put a rate limiter per address in front of `POST /authorize`
+(`@spy4x/platform/rate-limit/hono`), block the sending addresses at the proxy, or raise
+`maxTotalFailures`.
+
+To let the owner in while it lasts, delete the server-wide count. It is the key
+`[...prefix, "attempts", "total"]` (`["mcp-oauth", "attempts", "total"]` with the default prefix).
+The store reads it on every approval, so no restart is needed. `MemoryOAuthStore` starts empty on
+every restart.
+
+```ts
+const kv = await Deno.openKv(path) // the database the app's KvOAuthStore uses
+await kv.delete(["mcp-oauth", "attempts", "total"])
+kv.close()
+```
+
+The sender's next wrong passwords count again, so block them first.
 
 ### Listing and revoking grants
 
