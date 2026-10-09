@@ -1183,6 +1183,17 @@ describe("createAuthorizationServer", () => {
       )
     })
 
+    it("with a rotated-out refresh token: the whole grant ends, newer tokens included", async () => {
+      const t = setup()
+      const first = await signedIn(t)
+      const second = await (await refreshWith(t, first.refresh_token)).json()
+      expect((await revoke(t, { token: first.refresh_token })).status).toBe(200)
+      expect((await t.callMcp(second.access_token)).status).toBe(401)
+      expect((await (await refreshWith(t, second.refresh_token)).json()).error).toBe(
+        "invalid_grant",
+      )
+    })
+
     it("answers an unknown or already revoked token exactly as a live one", async () => {
       const t = setup()
       const tokens = await signedIn(t)
