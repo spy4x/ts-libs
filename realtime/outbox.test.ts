@@ -982,6 +982,50 @@ describe("outbox withdraw", () => {
     })
   }
 
+  it("takes back one change per withdraw, so edit, edit, delete and two withdraws send the first edit", async () => {
+    const h = harness()
+    h.offline()
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("E1"), version: 3 })
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("E2"), version: 3 })
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("E2"), version: 3 })
+
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(h.outbox.entries().map((e) => [e.kind, e.payload.title])).toEqual([["update", "E2"]])
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(h.outbox.entries().map((e) => [e.kind, e.payload.title])).toEqual([["update", "E1"]])
+
+    h.state.online = true
+    h.state.server = () => item("n", 4, "E1")
+    await h.outbox.flush()
+    expect(h.sent.map((s) => [s.command.kind, s.command.payload.title, s.key])).toEqual([
+      ["update", "E1", "key-1"],
+    ])
+  })
+
+  it("never drops an update whose send was lost, however many withdraws follow an edit and a delete", async () => {
+    const { h, original } = await lostSend("update")
+    await h.outbox.submit({ kind: "update", entityId: "n", payload: text("U2"), version: 1 })
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("U2"), version: 1 })
+
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(await h.outbox.withdraw("n")).toBe(true)
+    expect(await h.outbox.withdraw("n")).toBe(false)
+    const [kept] = await h.store.readOutbox()
+    expect([kept.kind, kept.key, kept.attempted, kept.payload.title]).toEqual([
+      "update",
+      original.key,
+      true,
+      "Sent, answer lost",
+    ])
+
+    h.state.online = true
+    h.state.server = () => item("n", 2)
+    await h.outbox.flush()
+    expect(h.sent.slice(1).map((s) => [s.command.kind, s.command.payload.title, s.key])).toEqual([
+      ["update", "Sent, answer lost", original.key],
+    ])
+  })
+
   it("answers false for a conflict that waits for a person", async () => {
     const h = harness()
     h.offline()

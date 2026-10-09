@@ -41,6 +41,8 @@ export interface OutboxEntrySnapshot<P> {
   payload: P
   baseVersion: number
   attempted: boolean
+  /** The snapshot's own step back, so `withdraw` walks back one merged edit at a time. */
+  before?: OutboxEntrySnapshot<P>
 }
 
 /**
@@ -63,7 +65,8 @@ export interface OutboxEntry<P, S> {
   status: "pending" | "conflict"
   /**
    * What the entry was just before the latest edit was merged into it, so `withdraw` can take that
-   * edit back and keep the write before it. Absent on an entry no edit was merged into.
+   * edit back and keep the write before it. Each snapshot carries its own `before`, a chain back to
+   * the first write. Absent on an entry no edit was merged into.
    */
   before?: OutboxEntrySnapshot<P>
   conflict?: { reason: ConflictReason; message: string; server: S | null }
@@ -238,7 +241,8 @@ export interface Outbox<P, S extends { version: number }> {
    * Takes back the waiting write of an entity, for example an "Undo" of a delete made offline.
    * Takes back the latest change and resolves `true`. When that change was merged into an earlier
    * waiting write (an edit, then a delete), only the delete is taken back and the edit stays
-   * queued, as it was, key included. Otherwise the entry is removed and will never be sent.
+   * queued, as it was, key included. Each call takes back one more merged change. Otherwise the
+   * entry is removed and will never be sent.
    * Resolves `false`, changing nothing, when there is nothing to take back or it cannot be: the
    * entry's send was started (its outcome may be unknown, so the server may have it) or it is a
    * conflict (settle it with `keepMine` or `useTheirs`). A create that was deleted before any send
@@ -324,6 +328,7 @@ export function createOutbox<P, S extends { version: number }>(
       payload: existing.payload,
       baseVersion: existing.baseVersion,
       attempted: existing.attempted,
+      before: existing.before,
     }
     const renewed = existing.attempted
       ? { key: newKey(), attempted: false }
@@ -524,7 +529,8 @@ export function createOutbox<P, S extends { version: number }>(
       }
       // An edit was merged into the entry: take back that edit only, and keep the write before it
       // (with its key and `attempted`, so a send that may have happened is repeated idempotently).
-      await save({ ...entry, ...entry.before, before: undefined })
+      // The restored write keeps its own step back, so the next withdraw takes back one more edit.
+      await save({ ...entry, ...entry.before, before: entry.before.before })
       return true
     })
   }
