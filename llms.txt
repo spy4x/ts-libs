@@ -51,6 +51,22 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ## @spy4x/caldav
 
+### `jsr:@spy4x/caldav`
+
+- `CalDavCalendar` (interface), `jsr:@spy4x/caldav`: A calendar collection.
+- `CalDavClient` (interface), `jsr:@spy4x/caldav`: A CalDAV client bound to one server and one user.
+- `CalDavClientOptions` (interface), `jsr:@spy4x/caldav`: Options of createCalDavClient.
+- `CalDavDiscovery` (interface), `jsr:@spy4x/caldav`: Where the user's calendars live, found by CalDavClient.discover.
+- `CalDavError` (interface), `jsr:@spy4x/caldav`: A failed call: the code to branch on, a message for logs and, when there was one, the status.
+- `CalDavErrorCode` (enum), `jsr:@spy4x/caldav`: Why a call failed.
+- `CalDavMultiget` (interface), `jsr:@spy4x/caldav`: The outcome of CalDavClient.getObjects.
+- `CalDavObject` (interface), `jsr:@spy4x/caldav`: One calendar object resource: an iCalendar document and the etag it was read with.
+- `CalDavResult` (type), `jsr:@spy4x/caldav`: The outcome of a call: the value, or why it failed.
+- `CalDavWrite` (interface), `jsr:@spy4x/caldav`: The outcome of a write: where the object is and its new etag.
+- `ListObjectsOptions` (interface), `jsr:@spy4x/caldav`: Options of CalDavClient.listObjects.
+- `NewCalendar` (interface), `jsr:@spy4x/caldav`: Properties of a new calendar.
+- `createCalDavClient` (function), `jsr:@spy4x/caldav`: Create a client for one CalDAV server and one user.
+
 ### `jsr:@spy4x/caldav/url`
 
 - `childUrl` (function), `jsr:@spy4x/caldav/url`: The URL of a new member of `collectionUrl`, named `segment` encoded with `encodeURIComponent`.
@@ -2434,4 +2450,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 0ad79d3735e42c88ff912306b454e9972878d62989cf8cab138203f3977ddb74 -->
+<!-- export surface: sha256 2c7f48ceff9a9c5e12cf897703a45f938641d572f4cab85656b61b6a1094e9e7 -->

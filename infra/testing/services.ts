@@ -26,6 +26,8 @@ export enum IntegrationEnvName {
   RedisPort = "TS_LIBS_IT_REDIS_PORT",
   RedisAuthHost = "TS_LIBS_IT_REDIS_AUTH_HOST",
   RedisAuthPort = "TS_LIBS_IT_REDIS_AUTH_PORT",
+  RadicaleUrl = "TS_LIBS_IT_RADICALE_URL",
+  StalwartUrl = "TS_LIBS_IT_STALWART_URL",
 }
 
 /**
@@ -50,6 +52,8 @@ export const LOCAL_DEFAULTS = {
   redisPort: 56379,
   redisAuthHost: "127.0.0.1",
   redisAuthPort: 56380,
+  radicaleUrl: "http://127.0.0.1:55232",
+  stalwartUrl: "http://127.0.0.1:58080",
 } as const
 
 /** One TCP endpoint, named well enough for a failure message to be actionable. */
@@ -96,6 +100,13 @@ export interface SmtpSettings {
 /** Mailpit's HTTP API — how a test reads back the mail it sent. */
 export interface MailpitSettings {
   /** Origin with no trailing slash, e.g. `http://127.0.0.1:58025`. */
+  baseUrl: string
+  address: ServiceAddress
+}
+
+/** A CalDAV server container: its origin, plus the address to probe. */
+export interface CalDavServerSettings {
+  /** Origin with no trailing slash, e.g. `http://127.0.0.1:55232`. */
   baseUrl: string
   address: ServiceAddress
 }
@@ -274,6 +285,44 @@ export function redisAuthSettings(): RedisAuthSettings {
       envName: IntegrationEnvName.RedisAuthHost,
     },
   }
+}
+
+/** Origin and probe address of an HTTP service whose URL comes from `envName`. */
+function httpService(service: string, envName: IntegrationEnvName, fallback: string) {
+  const url = new URL(readEnv(envName) ?? fallback)
+  return {
+    baseUrl: url.origin,
+    address: {
+      service,
+      hostname: url.hostname,
+      port: url.port === "" ? (url.protocol === "https:" ? 443 : 80) : Number(url.port),
+      envName,
+    },
+  }
+}
+
+/**
+ * The Radicale container. Its default config accepts any login and gives every username its own
+ * principal at `/<username>/`, so a test isolates itself by picking a unique username.
+ */
+export function radicaleSettings(): CalDavServerSettings {
+  return httpService(
+    "Radicale (CalDAV)",
+    IntegrationEnvName.RadicaleUrl,
+    LOCAL_DEFAULTS.radicaleUrl,
+  )
+}
+
+/**
+ * The Stalwart container: DAV under `/dav/`, and JMAP for the recovery admin `admin`, whose
+ * password is {@link THROWAWAY_CREDENTIAL}. Users are created per run, see `stalwart.ts`.
+ */
+export function stalwartSettings(): CalDavServerSettings {
+  return httpService(
+    "Stalwart (CalDAV)",
+    IntegrationEnvName.StalwartUrl,
+    LOCAL_DEFAULTS.stalwartUrl,
+  )
 }
 
 /**

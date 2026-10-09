@@ -119,6 +119,60 @@ services:
       retries: 30
       start_period: 3s
 
+  # CalDAV servers for `@spy4x/caldav` (#417). Radicale runs its default config,
+  # which accepts any login and gives every username its own principal, so each
+  # run picks a fresh username. No volume: throw-away calendars.
+  # `pids_limit` and `mem_limit` cap a runaway server; the older services predate the rule.
+  radicale:
+    image: tomsquest/docker-radicale:3.8.3.0
+    ports:
+      - "127.0.0.1:55232:5232"
+    pids_limit: 500
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:5232/"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+  # Stalwart 0.16 has no config file until its setup runs, so the entrypoint runs
+  # it headless once: start in recovery mode on 8081, finish the setup over JMAP
+  # with the recovery admin (`x:Bootstrap/set`, domain `example.com`, no TLS
+  # certificate, no DKIM), stop, then start for real with DAV on 8080. Tests create
+  # their own user per run through JMAP (`infra/testing/stalwart.ts`).
+  # `HTTPS_PROXY` points at a closed port so the web admin download fails at once
+  # instead of holding up the start for a minute; the tests need no web admin.
+  # `$$` is compose's escape for a literal `$` in the script.
+  stalwart:
+    image: stalwartlabs/stalwart:v0.16.25
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+          set -eu
+          if [ ! -f /etc/stalwart/config.json ]; then
+            STALWART_RECOVERY_MODE_PORT=8081 stalwart --config /etc/stalwart/config.json &
+            pid=$$!
+            until curl -fsS -o /dev/null -u "$$STALWART_RECOVERY_ADMIN" http://127.0.0.1:8081/jmap/session; do sleep 0.5; done
+            curl -fsS -o /dev/null -u "$$STALWART_RECOVERY_ADMIN" -H 'Content-Type: application/json' -d '{"using":["urn:ietf:params:jmap:core","urn:stalwart:jmap"],"methodCalls":[["x:Bootstrap/set",{"update":{"singleton":{"serverHostname":"localhost","defaultDomain":"example.com","requestTlsCertificate":false,"generateDkimKeys":false}}},"0"]]}' http://127.0.0.1:8081/jmap/
+            kill "$$pid"
+            wait "$$pid" || true
+          fi
+          exec stalwart --config /etc/stalwart/config.json
+    environment:
+      STALWART_RECOVERY_ADMIN: admin:integration-test-only
+      HTTPS_PROXY: http://127.0.0.1:9
+    ports:
+      - "127.0.0.1:58080:8080"
+    pids_limit: 500
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/healthz/live"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
 volumes:
   postgres-data:
   minio-data:

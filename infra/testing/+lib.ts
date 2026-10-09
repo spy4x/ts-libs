@@ -3,8 +3,9 @@
  *
  * Four jobs, and nothing else belongs here:
  *
- * 1. **Addresses.** Where Postgres, MinIO, Mailpit and the two Redis servers are, from one
- *    environment variable each, defaulting to `infra/compose.integration.yml`.
+ * 1. **Addresses.** Where Postgres, MinIO, Mailpit, the two Redis servers, Radicale and
+ *    Stalwart are, from one environment variable each, defaulting to
+ *    `infra/compose.integration.yml`. `createStalwartUser` adds a per-run Stalwart login.
  * 2. **Failing loudly.** `requireReachable` turns a missing container into a red
  *    test that names the service, the address and the command that starts it.
  * 3. **Isolation.** Unique schema names, key prefixes and recipients, so several
@@ -17,12 +18,14 @@
  */
 
 export {
+  type CalDavServerSettings,
   IntegrationEnvName,
   LOCAL_DEFAULTS,
   type MailpitSettings,
   mailpitSettings,
   type PostgresSettings,
   postgresSettings,
+  radicaleSettings,
   type RedisAuthSettings,
   redisAuthSettings,
   type RedisSettings,
@@ -33,6 +36,7 @@ export {
   type ServiceAddress,
   type SmtpSettings,
   smtpSettings,
+  stalwartSettings,
   THROWAWAY_CREDENTIAL,
 } from "./services.ts"
 
@@ -55,5 +59,12 @@ export {
 } from "./mailpit.ts"
 
 export { deleteObject, ensureBucket } from "./s3.ts"
+
+export {
+  createStalwartUser,
+  deleteStalwartUser,
+  type StalwartUser,
+  waitForStalwart,
+} from "./stalwart.ts"
 
 export { createScratchFolder, removeScratchFolder } from "./scratch.ts"
