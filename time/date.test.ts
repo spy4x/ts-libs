@@ -333,4 +333,9 @@ describe("startOfWeek", () => {
   it("rejects a date the calendar does not have", () => {
     expect(() => startOfWeek("2026-02-30")).toThrow()
   })
+
+  it("answers a year-0000 date for a week that opens before 0001-01-01", () => {
+    expect(startOfWeek("0001-01-02", 7)).toBe("0000-12-31")
+    expect(() => startOfWeek("0000-01-01")).toThrow()
+  })
 })

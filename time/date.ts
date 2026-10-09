@@ -173,7 +173,8 @@ export function monthFirstWeekday(date: string, firstWeekday = 1): number {
  * @param date An existing `YYYY-MM-DD` date.
  * @param firstWeekday The week's first day, `1` = Monday … `7` = Sunday, as `Intl` numbers them.
  * `localeFirstWeekday` in `./locale.ts` reads it from a locale. Default: Monday, the ISO week.
- * @throws When `date` is not a `YYYY-MM-DD` date, and when the week opens before `0001-01-01`.
+ * @throws When `date` is not a `YYYY-MM-DD` date, and when the week opens before `0000-01-01`. A
+ * week that opens in year 0000 is answered with a year-0000 date, as the module header allows.
  */
 export function startOfWeek(date: string, firstWeekday = 1): string {
   const ms = parseIsoDate(date)
