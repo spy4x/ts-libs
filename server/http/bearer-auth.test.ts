@@ -3,6 +3,7 @@
 
 import { assert, assertEquals, assertNotMatch, assertThrows } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
+import { crypto as stdCrypto } from "@std/crypto/crypto"
 import { constantTimeEqualsText } from "@spy4x/platform/tokens"
 import {
   bearerTokenFromEnv,
@@ -127,6 +128,8 @@ describe("createTokenVerifier", () => {
     // presented one, which made the number of digest calls depend on the secret rather
     // than on the request. Both sides are now hashed per call, so this counts 2 per
     // verification and a short presented token cannot skip the digest.
+    // `verifySync` does precompute, safely: its per-call work depends only on the presented
+    // token, so the count no longer follows the secret.
     //
     // What this establishes, exactly: **which** values reach `crypto.subtle.digest` and how
     // many times — the presented value and the configured token, always both, whatever the
@@ -220,6 +223,27 @@ describe("createTokenVerifier verifySync", () => {
     const verifier = createTokenVerifier(FAKE_TOKEN)
     for (const presented of ["", "ab", FAKE_TOKEN, FAKE_TOKEN_WRONG, `${FAKE_TOKEN}x`]) {
       assertEquals(verifier.verifySync(presented), await verifier.verify(presented), presented)
+    }
+  })
+
+  it("digests the configured token once and each presented token once", () => {
+    // The work per call depends only on the presented token, which the client already knows,
+    // so precomputing the configured digest is safe. A raw `===` would skip every digest.
+    const realDigestSync = stdCrypto.subtle.digestSync
+    const inputs: number[] = []
+    stdCrypto.subtle.digestSync = ((algorithm, data) => {
+      inputs.push(new Uint8Array(data as ArrayBuffer).byteLength)
+      return realDigestSync.call(stdCrypto.subtle, algorithm, data)
+    }) as typeof realDigestSync
+    try {
+      const verifier = createTokenVerifier(FAKE_TOKEN)
+      assertEquals(inputs, [FAKE_TOKEN.length])
+      for (const presented of ["ab", FAKE_TOKEN, `${FAKE_TOKEN}x`, ""]) {
+        verifier.verifySync(presented)
+      }
+      assertEquals(inputs, [FAKE_TOKEN.length, 2, FAKE_TOKEN.length, FAKE_TOKEN.length + 1])
+    } finally {
+      stdCrypto.subtle.digestSync = realDigestSync
     }
   })
 })
