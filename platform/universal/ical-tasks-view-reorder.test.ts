@@ -133,3 +133,9 @@ Deno.test("applying the changes and sorting again gives the intended order, for 
     }
   }
 })
+
+Deno.test("a list where no task has a position gets values for every task it reorders", () => {
+  const tasks = [bare(`a`), bare(`b`), bare(`c`)]
+  const changes = reorderTask(tasks, `c`, 0, UTC)
+  expect(apply(tasks, changes)).toEqual([`c`, `a`, `b`])
+})
