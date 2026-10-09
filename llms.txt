@@ -575,7 +575,6 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `QuickAddResult` (interface), `jsr:@spy4x/platform`: The result of parseQuickAdd.
 - `QuickAddSpan` (interface), `jsr:@spy4x/platform`: One recognised token, as a half-open range of UTF-16 offsets into the original line.
 - `QuickAddSpanKind` (enum), `jsr:@spy4x/platform`: What a recognised token is.
-- `QuickAddWords` (interface), `jsr:@spy4x/platform`: The words a locale uses for date and priority tokens, all lower case.
 - `RandomSource` (type), `jsr:@spy4x/platform`: A source of numbers in `[0, 1)`, the shape `Math.random` has.
 - `RequestError` (type), `jsr:@spy4x/platform`: Errors a request itself can produce.
 - `ResponseError` (type), `jsr:@spy4x/platform`: Errors from a response that never reached a usable body.
@@ -621,7 +620,6 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `parseQuickAdd` (function), `jsr:@spy4x/platform`: Read the tokens out of a quick-add line.
 - `parseSort` (function), `jsr:@spy4x/platform`: Read sort rules out of a URL parameter.
 - `pluralize` (function), `jsr:@spy4x/platform`: Naive English pluraliser for UI copy.
-- `quickAddWords` (constant), `jsr:@spy4x/platform`: The word tables by lower-case language subtag.
 - `removeSortRule` (function), `jsr:@spy4x/platform`: Removes one sort priority while preserving all remaining priorities.
 - `responseError` (function), `jsr:@spy4x/platform`: Turn a failed response into a structured error.
 - `round` (function), `jsr:@spy4x/platform`: Round to the nearest 10^-`decimals`.
@@ -1177,9 +1175,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `QuickAddResult` (interface), `jsr:@spy4x/platform/universal/quick-add`: The result of parseQuickAdd.
 - `QuickAddSpan` (interface), `jsr:@spy4x/platform/universal/quick-add`: One recognised token, as a half-open range of UTF-16 offsets into the original line.
 - `QuickAddSpanKind` (enum), `jsr:@spy4x/platform/universal/quick-add`: What a recognised token is.
-- `QuickAddWords` (interface), `jsr:@spy4x/platform/universal/quick-add`: The words a locale uses for date and priority tokens, all lower case.
 - `parseQuickAdd` (function), `jsr:@spy4x/platform/universal/quick-add`: Read the tokens out of a quick-add line.
-- `quickAddWords` (constant), `jsr:@spy4x/platform/universal/quick-add`: The word tables by lower-case language subtag.
 
 ### `jsr:@spy4x/platform/universal/result`
 
@@ -2455,4 +2451,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 3df4e792f5909708a3cd621b19194c2998d82187f748ea62955678266f799020 -->
+<!-- export surface: sha256 5a90a68433d3836e6267d0e1e558029f610ab89586e0024f2547500d2de5b23d -->
