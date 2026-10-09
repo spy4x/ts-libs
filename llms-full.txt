@@ -3214,7 +3214,8 @@ await outbox.flush() // after a reconnect and after a pushed hint
 The rules it keeps, each one a lost edit found in a product that wrote the queue by hand:
 
 - **One entry per entity.** A later edit replaces the waiting one; create then delete before any
-  send sends nothing.
+  send sends nothing. Once a send of the create was started, even before a later edit, the delete
+  is sent.
 - **A fresh key after an unknown outcome.** An entry whose send may have reached the server gets a
   new idempotency key when it is edited again, so the server does not answer the old key and drop
   the new text.
@@ -3237,8 +3238,9 @@ version. `send` runs under the lock, so it must settle or time out.
 `withdraw(entityId)` takes back the latest change to an entity, for example the "Undo" of a delete
 made offline. When that change was merged into an earlier waiting write (an edit, then a delete),
 only the delete is taken back: the edit stays queued, with its key and its `attempted` flag as they
-were, so a send that may already have happened is repeated idempotently. Otherwise the entry is
-removed and never sent. It answers `false`, changing nothing, when there is nothing to take back or
+were, so a send that may already have happened is repeated idempotently. Each withdraw takes back
+one more change (edit, edit, delete, then two withdraws leave the first edit queued), and a write
+whose send was started is never taken back. Otherwise the entry is removed and never sent. It answers `false`, changing nothing, when there is nothing to take back or
 it cannot be: the entry's send was already started (the server may have it, so only an online
 restore is safe) or it is a conflict (use `keepMine` or `useTheirs`). A withdraw asked during a send
 waits for it. A create that was deleted before any send leaves nothing queued, so there is nothing
