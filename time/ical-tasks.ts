@@ -37,7 +37,7 @@ import {
   writeText,
 } from "./ical.ts"
 import { icsEscape } from "./ics-core.ts"
-import { formatInstantLong, isValidTimeZone } from "./tz.ts"
+import { formatInstantLong } from "./tz.ts"
 
 /** The STATUS of a task. */
 export enum TodoStatus {
@@ -146,7 +146,7 @@ export function describeAlarmTrigger(
 ): string | undefined {
   if (trigger.kind === AlarmTriggerKind.Absolute) {
     const zone = options.timeZone ?? "UTC"
-    const instant = isValidTimeZone(zone) ? resolveInstant(trigger.at, { zone }) : undefined
+    const instant = resolveInstant(trigger.at, { zone })
     if (!instant) return undefined
     try {
       return formatInstantLong(instant, zone, options.locale)
