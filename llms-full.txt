@@ -5592,7 +5592,11 @@ bearer token and no browser session.
 
 ```ts
 import { Hono } from "hono"
-import { createAuthorizationServer, createResourceServer } from "@spy4x/server/mcp-oauth"
+import {
+  createAuthorizationServer,
+  createClientMetadataFetcher,
+  createResourceServer,
+} from "@spy4x/server/mcp-oauth"
 import { MemoryOAuthStore } from "@spy4x/server/mcp-oauth/memory-store"
 
 const issuer = "https://auth.example.com"
@@ -5601,6 +5605,8 @@ const as = createAuthorizationServer({
   issuer,
   resources: [resource],
   store: new MemoryOAuthStore(),
+  // Fetch client documents only from Claude's host; see "Trust only the clients you use" below.
+  clients: createClientMetadataFetcher({ trustedHosts: ["claude.ai"] }),
   // Trustworthy only because every route to auth.example.com passes forward-auth,
   // which strips a Remote-User header the client sent.
   confirmOwner: (c) => c.req.header("remote-user") === "owner",
@@ -5617,6 +5623,15 @@ Forward-auth on the MCP host would break Claude, so `as.app` must not be reachab
 were, anyone could send `Remote-User: owner` and approve themselves. As a second line,
 `/authorize` answers `403` to any request whose host is not the issuer's. In a real deployment the
 two hosts share one store: one process serving both, or a shared `OAuthStore`.
+
+**Trust only the clients you use.** Anyone can call `GET /authorize`, and the `client_id` they name
+is a URL the server fetches. The default fetcher fetches any public URL, through the SSRF guard
+below, so an anonymous caller chooses where your server sends requests. In production, pass
+`createClientMetadataFetcher({ trustedHosts: ["claude.ai"] })` as `clients`, as the example does.
+Claude's documents are `https://claude.ai/oauth/mcp-oauth-client-metadata` (claude.ai and the
+Claude apps) and `https://claude.ai/oauth/claude-code-client-metadata` (Claude Code), so that one
+host covers all of them. The default stays open because narrowing it would break every app that
+serves another client today.
 
 **Pending consents are capped.** Each `GET /authorize` stores a pending consent of up to about
 5 KB for 10 minutes, for anyone who calls it. `MemoryOAuthStore` keeps at most `maxPending` of them
