@@ -53,6 +53,52 @@ export function eraseLastCharacter(bytes: number[]): void {
   bytes.pop()
 }
 
+/** What one byte typed at the hidden prompt does. */
+export enum KeyResult {
+  /** Keep reading. */
+  Continue = 1,
+  /** Enter: the line is complete. */
+  Submit,
+  /** Ctrl-C or Ctrl-D: give up. */
+  Cancel,
+}
+
+/**
+ * A line typed at the hidden prompt, fed one byte at a time. Enter submits, Ctrl-C and Ctrl-D
+ * cancel, Backspace erases a character. Escape sequences, such as the ones arrow and function keys
+ * send, are dropped from their `ESC` byte (0x1b) to their last byte, so they never end up inside
+ * the password. A sequence split across two reads is still dropped whole.
+ */
+export class HiddenLine {
+  /** The UTF-8 bytes typed so far. */
+  readonly bytes: number[] = []
+  #escape: "none" | "start" | "csi" | "ss3" = "none"
+
+  /** Applies one typed byte. */
+  type(byte: number): KeyResult {
+    switch (this.#escape) {
+      case "start":
+        // `ESC [` starts a control sequence and `ESC O` a single-character one; any other byte
+        // after `ESC` ends the sequence.
+        this.#escape = byte === 0x5b ? "csi" : byte === 0x4f ? "ss3" : "none"
+        return KeyResult.Continue
+      case "csi":
+        // Parameter and intermediate bytes go on until a final byte from `@` to `~`.
+        if (byte >= 0x40 && byte <= 0x7e) this.#escape = "none"
+        return KeyResult.Continue
+      case "ss3":
+        this.#escape = "none"
+        return KeyResult.Continue
+    }
+    if (byte === 0x03 || byte === 0x04) return KeyResult.Cancel
+    if (byte === 0x0d || byte === 0x0a) return KeyResult.Submit
+    if (byte === 0x1b) this.#escape = "start"
+    else if (byte === 0x7f || byte === 0x08) eraseLastCharacter(this.bytes)
+    else this.bytes.push(byte)
+    return KeyResult.Continue
+  }
+}
+
 /**
  * Hashes the password `input` reads under its pepper. The pepper is checked before the password is
  * asked for, so a missing one costs no typing. Never throws, and no message names the password or
@@ -80,22 +126,23 @@ async function readHidden(): Promise<string | null> {
   const encoder = new TextEncoder()
   await Deno.stderr.write(encoder.encode("Password (not shown): "))
   Deno.stdin.setRaw(true)
-  const bytes: number[] = []
+  const line = new HiddenLine()
   const buffer = new Uint8Array(64)
   try {
     while (true) {
       const read = await Deno.stdin.read(buffer)
       if (read === null) return null
       for (const byte of buffer.subarray(0, read)) {
-        if (byte === 0x03 || byte === 0x04) return null
-        if (byte === 0x0d || byte === 0x0a) return new TextDecoder().decode(new Uint8Array(bytes))
-        if (byte === 0x7f || byte === 0x08) eraseLastCharacter(bytes)
-        else bytes.push(byte)
+        const result = line.type(byte)
+        if (result === KeyResult.Cancel) return null
+        if (result === KeyResult.Submit) {
+          return new TextDecoder().decode(new Uint8Array(line.bytes))
+        }
       }
     }
   } finally {
     buffer.fill(0)
-    bytes.fill(0)
+    line.bytes.fill(0)
     Deno.stdin.setRaw(false)
     await Deno.stderr.write(encoder.encode("\n"))
   }

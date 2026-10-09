@@ -1,7 +1,13 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { createPasswordHasher } from "./password.ts"
-import { eraseLastCharacter, passwordFromInput, runPasswordHash } from "./password-hash.ts"
+import {
+  eraseLastCharacter,
+  HiddenLine,
+  KeyResult,
+  passwordFromInput,
+  runPasswordHash,
+} from "./password-hash.ts"
 
 const PEPPER = "an-invented-test-pepper-0123456789abcdef"
 const PASSWORD = "an invented test password"
@@ -75,5 +81,38 @@ describe("eraseLastCharacter", () => {
     eraseLastCharacter(bytes)
     eraseLastCharacter(bytes)
     expect(bytes).toEqual([])
+  })
+})
+
+describe("HiddenLine", () => {
+  /** Types `keys` and returns the line and the result of the last byte. */
+  function typed(...keys: string[]) {
+    const line = new HiddenLine()
+    let result = KeyResult.Continue
+    for (const key of keys) {
+      for (const byte of new TextEncoder().encode(key)) result = line.type(byte)
+    }
+    return { text: new TextDecoder().decode(new Uint8Array(line.bytes)), result }
+  }
+
+  it("keeps typed characters and erases one with Backspace", () => {
+    expect(typed("pa", "\x7f", "é")).toEqual({ text: "pé", result: KeyResult.Continue })
+  })
+
+  it("drops arrow, function-key and Alt escape sequences instead of adding them", () => {
+    // Left arrow, Delete, F1 and Alt+x, each between two typed letters.
+    expect(typed("a", "\x1b[D", "b", "\x1b[3~", "c", "\x1bOP", "d", "\x1bx", "e").text)
+      .toBe("abcde")
+  })
+
+  it("drops an escape sequence split across two reads", () => {
+    expect(typed("a", "\x1b", "[1;5", "C", "b").text).toBe("ab")
+  })
+
+  it("submits on Enter and cancels on Ctrl-C or Ctrl-D", () => {
+    expect(typed("pw", "\r").result).toBe(KeyResult.Submit)
+    expect(typed("pw", "\n").result).toBe(KeyResult.Submit)
+    expect(typed("pw", "\x03").result).toBe(KeyResult.Cancel)
+    expect(typed("pw", "\x04").result).toBe(KeyResult.Cancel)
   })
 })

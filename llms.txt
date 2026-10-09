@@ -2128,6 +2128,8 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/server/sign-in/password-hash`
 
+- `HiddenLine` (class), `jsr:@spy4x/server/sign-in/password-hash`: A line typed at the hidden prompt, fed one byte at a time.
+- `KeyResult` (enum), `jsr:@spy4x/server/sign-in/password-hash`: What one byte typed at the hidden prompt does.
 - `PasswordHashInput` (interface), `jsr:@spy4x/server/sign-in/password-hash`: Where runPasswordHash gets its two inputs.
 - `PasswordHashResult` (interface), `jsr:@spy4x/server/sign-in/password-hash`: What runPasswordHash prints: the hash on success, otherwise a message without secrets.
 - `eraseLastCharacter` (function), `jsr:@spy4x/server/sign-in/password-hash`: Removes the last character from UTF-8 `bytes`, however many bytes it takes: the continuation bytes (`10xxxxxx`) and the byte that starts it.
@@ -2502,4 +2504,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 de0003b3b6471f6281b2c93c09c806af52e2bfac171da239f49162fd5818d85f -->
+<!-- export surface: sha256 69e99090d03089e92c18544738f310ce8055197fcd61f861d3a6af3a8c14d0c2 -->
