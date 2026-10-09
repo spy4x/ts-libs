@@ -20,9 +20,10 @@ interface FakeEntry {
  * every write, atomic operations that apply all mutations or none when a check fails, and values
  * copied in and out the way Deno KV serializes them.
  *
- * Deno KV itself cannot run here: `Deno.openKv` needs `--unstable-kv`, which the root `test` task
- * does not pass and a workspace member cannot set for itself. Reads resolve on a later microtask,
- * so two concurrent callers both read before either commits, the race a real database allows.
+ * `kv-store-deno.test.ts` runs the store contract on real Deno KV. This fake covers what real Deno
+ * KV cannot show in a fast test: the `expireIn` each write carries, failed commits on demand, and
+ * a race where both readers read before either commits. Reads resolve on a later microtask for
+ * that race.
  */
 function fakeKv() {
   const entries = new Map<string, FakeEntry & { key: readonly string[] }>()
