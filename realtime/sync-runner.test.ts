@@ -651,11 +651,19 @@ describe("createSyncRunner polling", () => {
   })
 
   it("rejects an interval that is not a positive finite number", () => {
-    for (const pollIntervalMs of [0, -1, NaN, Infinity]) {
+    for (const pollIntervalMs of [0, -1, NaN, Infinity, 2_147_483_648]) {
       expect(() => createSyncRunner({ flush: () => Promise.resolve(), pollIntervalMs })).toThrow(
         RangeError,
       )
     }
+  })
+})
+
+describe("createSyncRunner poll limit", () => {
+  it("accepts the longest interval a timer keeps", () => {
+    expect(() =>
+      createSyncRunner({ flush: () => Promise.resolve(), pollIntervalMs: 2_147_483_647 })
+    ).not.toThrow()
   })
 })
 

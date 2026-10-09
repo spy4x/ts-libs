@@ -21,7 +21,7 @@
  *   that long after it ended, but only while the page is visible and online; a page that is hidden
  *   or offline waits for the wake-up that brings it back. Every run restarts the interval, and a
  *   failing run uses the backoff instead, so polling resumes only after a run completes. Off by
- *   default.
+ *   default. `pollIntervalMs` is at most 2 147 483 647 ms, the longest delay a timer keeps.
  * - **`stop()` leaves nothing behind**: every listener removed, the retry and poll timers cleared.
  *   A run in flight finishes, and schedules nothing.
  *
@@ -79,7 +79,8 @@ export interface SyncRunnerOptions {
   maxDelayMs?: number
   /**
    * When set, a visible, online page runs `flush` again this long after the last run ended, with
-   * no event. A positive, finite number of milliseconds. Default: no polling.
+   * no event. A positive, finite number of milliseconds, at most 2 147 483 647 (about 24.8 days; timers
+   * cannot wait longer). Default: no polling.
    */
   pollIntervalMs?: number
   /** Whether the network is up. Defaults to `navigator.onLine`, or `true` without `navigator`. */
@@ -120,6 +121,9 @@ export function flushOutbox(
   }
 }
 
+/** The longest timer delay a browser keeps; a larger one fires after 1 ms, which would loop. */
+const MAX_POLL_INTERVAL_MS = 2_147_483_647
+
 /** The runner: see the module documentation for the rules it keeps. */
 export function createSyncRunner(options: SyncRunnerOptions): SyncRunner {
   const clock = options.clock ?? createSystemClock()
@@ -128,9 +132,13 @@ export function createSyncRunner(options: SyncRunnerOptions): SyncRunner {
   const pollIntervalMs = options.pollIntervalMs
   if (
     pollIntervalMs !== undefined &&
-    (typeof pollIntervalMs !== "number" || !Number.isFinite(pollIntervalMs) || pollIntervalMs <= 0)
+    (typeof pollIntervalMs !== "number" || !Number.isFinite(pollIntervalMs) ||
+      pollIntervalMs <= 0 ||
+      pollIntervalMs > MAX_POLL_INTERVAL_MS)
   ) {
-    throw new RangeError(`pollIntervalMs must be a positive finite number, got ${pollIntervalMs}`)
+    throw new RangeError(
+      `pollIntervalMs must be a positive finite number of at most ${MAX_POLL_INTERVAL_MS} ms, got ${pollIntervalMs}`,
+    )
   }
   const isOnline = options.isOnline ?? (() => globalThis.navigator?.onLine !== false)
   const listeners = new Set<(state: SyncRunnerState) => void>()

@@ -3315,7 +3315,7 @@ queued while the app is closed is sent the next time the app opens.
   changes. A hidden or offline page does not poll; the wake-up that returns the person runs at
   once and restarts the interval. A failing run keeps its backoff, and polling resumes after the
   next success. `isOnline` defaults to `navigator.onLine`. A value that is not a positive, finite
-  number throws a `RangeError`.
+  number of at most 2 147 483 647 ms (the longest timer delay) throws a `RangeError`.
 - `stop()` removes every listener and timer.
 - `getState()` and `subscribe()` give `{ running, lastError, failures, nextRetryAt }` for a UI. No
   Preact in this package: bind it to a signal in the app.
