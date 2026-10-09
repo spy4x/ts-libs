@@ -332,7 +332,7 @@ already are — by where the code can run:
 | `api/`          | `ApiError` (`status`, `message`, optional `code`), `ApiResult<T>`, `apiFetch` — browser-only, needs `fetch`                                                                     |
 | `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                               |
 
-`apiFetch` reads an error body in either common shape: `{ error }` or `{ code, message }`. The
+`apiFetch` reads an error body in two shapes: `{ error }` or `{ code, message }`. The
 message is the string `error`, else the string `message`, else `"Request failed"`; `error.code` is
 the body's string `code` when it has one, so a client can branch on `caldav_unreachable` instead of
 on wording. Only HTTP answers resolve: a network failure still rejects, so wrap the call in

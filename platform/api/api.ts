@@ -6,7 +6,7 @@
  * server type, and this file must stay that way so a server bundle never pulls in `fetch`-shaped
  * browser code it does not need. {@link ApiError} and {@link ApiResult} are moved from
  * `template/libs/platform/types/+index.ts`; `ApiError` is now an `interface` with the same two
- * fields, `ApiResult` is unchanged.
+ * fields plus an optional `code`, `ApiResult` is unchanged.
  *
  * **Bug fixed at extraction time.** The source built the request as
  * `{ credentials: "include", headers: { "content-type": "application/json", ...init?.headers },
