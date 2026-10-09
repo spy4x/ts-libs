@@ -41,6 +41,7 @@ Runs on: server (Deno).
 | `@spy4x/server/auth/oauth-google`      | Google's provider configuration for `@spy4x/server/auth/oauth`                        |
 | `@spy4x/server/auth/oauth-github`      | GitHub's provider configuration for `@spy4x/server/auth/oauth`                        |
 | `@spy4x/server/sign-in`                | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP       |
+| `@spy4x/server/sign-in/password-hash`  | CLI: prints a password's hash under `AUTH_PEPPER`, reading the password from stdin    |
 | `@spy4x/server/crypto`                 | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                   |
 | `@spy4x/server/user-secrets`           | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert             |
 | `@spy4x/server/quota`                  | Usage metering with an atomic reserve and 429/503 — not a rate limiter                |
@@ -1442,6 +1443,20 @@ The building blocks a sign-in method stands on, extracted from the template's AP
 | `middleware.ts` | `createAuth`: Hono `parseAuth`, the guards, `startSession` and `endSession`         |
 | `password.ts`   | `createPasswordHasher`: PBKDF2-HMAC-SHA-256 with a pepper, parameters in the value  |
 | `totp.ts`       | Authenticator-app codes: random secret, enrolment URI and QR code, `verifyTotp`     |
+
+To make a hash for an app's config, such as one owner's password, run the `password-hash` CLI with
+the pepper the app runs with. It reads the password from standard input, typed without echo at a
+terminal, so the password stays out of the shell history and the process list:
+
+```jsonc
+// deno.json
+"password:hash": "deno run --allow-env=AUTH_PEPPER jsr:@spy4x/server/sign-in/password-hash"
+```
+
+```sh
+deno task password:hash                        # type it, then Enter
+printf %s "$PASSWORD" | deno task password:hash
+```
 
 ### What it does
 

@@ -2124,6 +2124,14 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `totpEnrolment` (function), `jsr:@spy4x/server/sign-in`: The enrolment link and QR code for a secret.
 - `verifyTotp` (function), `jsr:@spy4x/server/sign-in`: Checks a code against a secret at the current time.
 
+### `jsr:@spy4x/server/sign-in/password-hash`
+
+- `PasswordHashInput` (interface), `jsr:@spy4x/server/sign-in/password-hash`: Where runPasswordHash gets its two inputs.
+- `PasswordHashResult` (interface), `jsr:@spy4x/server/sign-in/password-hash`: What runPasswordHash prints: the hash on success, otherwise a message without secrets.
+- `eraseLastCharacter` (function), `jsr:@spy4x/server/sign-in/password-hash`: Removes the last character from UTF-8 `bytes`, however many bytes it takes: the continuation bytes (`10xxxxxx`) and the byte that starts it.
+- `passwordFromInput` (function), `jsr:@spy4x/server/sign-in/password-hash`: The password in piped input: everything but one trailing `\n` or `\r\n`.
+- `runPasswordHash` (function), `jsr:@spy4x/server/sign-in/password-hash`: Hashes the password `input` reads under its pepper.
+
 ### `jsr:@spy4x/server/static`
 
 - `KNOWN_EXTENSIONS` (constant), `jsr:@spy4x/server/static`: Every extension the MIME table knows, for docs and for tests.
@@ -2492,4 +2500,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 03f6c98b3906065e5322452304f89f6f82fb6cbb90d260cc035bb1b624b3d025 -->
+<!-- export surface: sha256 b0dacab3d5ed6f507438c99e0e25389f7b758952749178fe2f79d902c1ffcbd5 -->
