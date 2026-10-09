@@ -81,8 +81,8 @@ export interface CalDavWriteOptions<P, S> {
   urlOf(entityId: string): string
   /**
    * The etag the write is based on, from the app's copy of the server's state at
-   * `command.baseVersion`. Without one the object is read first and its current etag used; if
-   * the server gives none either, the write is refused as `rejected`, never sent unguarded.
+   * `command.baseVersion`. Without one nothing is sent: the write is a `version` conflict, so the
+   * queue fetches the server's copy and the person chooses, and nothing is overwritten unseen.
    */
   etagOf(command: CalDavWriteCommand<P>): string | null | undefined
   /** The iCalendar text of a create or an update. */
@@ -119,14 +119,23 @@ function uidOf(ics: string): string | null {
   return null
 }
 
+const PLACEHOLDER = "http://path.invalid"
+
 /** The address {@link createCalDavWriteTransport} gives a created entity's object. */
 export function objectUrl(calendarUrl: string | URL, entityId: string): string {
   // A path-only address (`/dav/cal/me/tasks/`) stays path-only, for apps whose server relay owns
-  // the origin. `//host/...` is not a path and is handled as before.
+  // the origin. The address is resolved against a placeholder origin to normalise dot segments,
+  // backslashes and percent-encoded dots; anything that leaves the placeholder host or turns into a
+  // `//` prefix (a protocol-relative address) is refused. `//host/...` itself is not a path and is
+  // handled as before.
   if (typeof calendarUrl === "string" && /^\/(?!\/)/.test(calendarUrl)) {
-    const base = new URL(calendarUrl, "http://path.invalid")
+    const base = new URL(calendarUrl, PLACEHOLDER)
     const child = childUrl(base, `${entityId}.ics`)
-    return `${child.pathname}${child.search}`
+    const origin = new URL(PLACEHOLDER).origin
+    if (base.origin !== origin || child.origin !== origin || child.pathname.startsWith("//")) {
+      throw new RangeError("the calendar address is not a plain path")
+    }
+    return child.pathname
   }
   return childUrl(calendarUrl, `${entityId}.ics`).href
 }
@@ -215,7 +224,8 @@ export function createCalDavWriteTransport<P, S>(
             // would take the name again and leave a duplicate.
             const error: CalDavError = {
               code: CalDavErrorCode.InvalidArgument,
-              message: "the file name is held by an object with another UID",
+              message:
+                "This task cannot be saved: its file name is already used by a different task.",
             }
             throw new CalDavWriteError(classifyCalDavError(error), error)
           } else if (existing.error.code !== CalDavErrorCode.NotFound) {
@@ -226,24 +236,14 @@ export function createCalDavWriteTransport<P, S>(
         throw new CalDavWriteError(classifyCalDavError(created.error), created.error)
       }
       const url = options.urlOf(command.entityId)
-      let etag = options.etagOf(command)
+      const etag = options.etagOf(command)
       if (!etag) {
-        // The app lost the etag (the server sent none on the last write and the read-back failed).
-        // Ask the server for the object's current one, so the write stays guarded.
-        const read = await writer.getObject(url)
-        if (!read.success) {
-          // Already gone is the state a delete asked for; an update then has nothing to change.
-          if (command.kind === "delete" && read.error.code === CalDavErrorCode.NotFound) {
-            return undefined
-          }
-          throw new CalDavWriteError(classifyCalDavError(read.error), read.error)
-        }
-        etag = read.output.etag
-      }
-      if (!etag) {
+        // Nothing says which version of the object the person edited. Writing with an etag read
+        // now would overwrite what another device changed since, so no request goes out: the
+        // queue sees a version conflict, fetches the server's copy and lets the person choose.
         const error: CalDavError = {
-          code: CalDavErrorCode.InvalidArgument,
-          message: "the write has no etag to guard it with",
+          code: CalDavErrorCode.Conflict,
+          message: "This item may have changed on the server, and the app cannot tell how.",
         }
         throw new CalDavWriteError(classifyCalDavError(error), error)
       }

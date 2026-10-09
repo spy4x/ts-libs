@@ -238,49 +238,19 @@ describe("update", () => {
     expect(task?.etag).toBe(`"1"`)
   })
 
-  it("reports not-found for an update with no known etag when the object is not on the server", async () => {
-    const { send, seen, failureOf } = setup()
-    expect(await failureOf(send("update", "never-seen"))).toEqual({ kind: "not-found" })
-    expect(seen.map((s) => s.method)).toEqual(["GET"])
-  })
-
-  it("reads the object first when the etag is unknown and updates with the etag it returns", async () => {
-    const { send, seen, state, known } = setup()
-    state.omitEtag = true
-    await send("create", "e1", "milk", 0)
-    known.clear()
-    state.omitEtag = false
-    seen.length = 0
-    const task = await send("update", "e1", "oat milk")
-    expect(seen.map((s) => s.method)).toEqual(["GET", "PUT"])
-    expect(seen[1].headers.get("If-Match")).toBe(`"1"`)
-    expect(task?.etag).toBe(`"2"`)
-  })
-
-  it("reads the object first when the etag is unknown and deletes with the etag it returns", async () => {
-    const { send, seen, objects, known } = setup()
-    await send("create", "e1", "milk", 0)
-    known.clear()
-    seen.length = 0
-    expect(await send("delete", "e1")).toBeUndefined()
-    expect(seen.map((s) => s.method)).toEqual(["GET", "DELETE"])
-    expect(seen[1].headers.get("If-Match")).toBe(`"1"`)
-    expect(objects.size).toBe(0)
-  })
-
-  it("treats a delete with no known etag as done when the object is already gone", async () => {
-    const { send, seen } = setup()
-    expect(await send("delete", "never-seen")).toBeUndefined()
-    expect(seen.map((s) => s.method)).toEqual(["GET"])
-  })
-
-  it("keeps an update or delete queued when the read for a missing etag fails", async () => {
-    const { send, state, seen, failureOf } = setup()
-    state.down = true
-    expect(await failureOf(send("update", "e1"))).toEqual({ kind: "unreachable" })
-    expect(await failureOf(send("delete", "e1"))).toEqual({ kind: "unreachable" })
-    expect(seen.map((s) => s.method)).toEqual(["GET", "GET"])
-  })
+  for (const kind of ["update", "delete"] as const) {
+    it(`answers version and sends nothing for a ${kind} with no known etag, leaving another device's edit untouched`, async () => {
+      const { send, seen, objects, known, failureOf } = setup()
+      await send("create", "e1", "milk", 0)
+      known.clear()
+      const path = new URL(`${CALENDAR}e1.ics`).pathname
+      objects.set(path, { ics: ics("edited on the phone", "e1"), etag: 50 })
+      seen.length = 0
+      expect(await failureOf(send(kind, "e1", "oat milk"))).toEqual({ kind: "version" })
+      expect(seen).toEqual([])
+      expect(objects.get(path)).toEqual({ ics: ics("edited on the phone", "e1"), etag: 50 })
+    })
+  }
 })
 
 /** A writer that records the names it is given and answers as scripted. */
@@ -318,14 +288,9 @@ function scriptedWriter(
 }
 
 describe("a writer that does not check anything itself", () => {
-  it("is never asked to update or delete when no etag is known and the read gives none", async () => {
+  it("is never asked to read, update or delete when no etag is known: the answer is version", async () => {
     const { transport } = scriptedWriter({
-      getObject: (url) =>
-        Promise.resolve({
-          success: true,
-          output: { url: String(url), etag: null, data: "" },
-          error: null,
-        }),
+      getObject: () => Promise.reject(new Error("must not be called")),
     })
     for (const kind of ["update", "delete"] as const) {
       const error = await transport.send(
@@ -333,7 +298,7 @@ describe("a writer that does not check anything itself", () => {
         "k",
       )
         .catch((caught) => caught)
-      expect(transport.classify(error).kind).toBe("rejected")
+      expect(transport.classify(error).kind).toBe("version")
     }
   })
 
@@ -534,6 +499,23 @@ describe("with the outbox", () => {
     expect(objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!.ics).toContain("oat milk")
   })
 
+  it("shows an edit with no known etag as a conflict with the server's copy and does not overwrite it", async () => {
+    const { outbox, objects, known, state } = queue()
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    known.clear()
+    const path = new URL(`${CALENDAR}e1.ics`).pathname
+    objects.set(path, { ics: ics("edited on the phone", "e1"), etag: 50 })
+    state.down = true
+    await outbox.submit({ kind: "update", entityId: "e1", payload: "oat milk", version: 1 })
+    state.down = false
+    await outbox.flush()
+    const [entry] = await outbox.entries()
+    expect(entry.status).toBe("conflict")
+    expect(entry.conflict?.reason).toBe("version")
+    expect(entry.conflict?.server?.ics).toContain("edited on the phone")
+    expect(objects.get(path)!.ics).toContain("edited on the phone")
+  })
+
   for (const status of [401, 403]) {
     it(`keeps an offline edit pending when the server answers ${status}`, async () => {
       const { outbox, state } = queue()
@@ -615,5 +597,23 @@ describe("a path-only calendar address", () => {
     await transport.send(command("delete"), "k")
     expect(urls.length).toBe(5)
     expect(urls.every((url) => url.startsWith("/dav/cal/me/tasks/"))).toBe(true)
+  })
+
+  for (
+    const address of [
+      "/.//h/",
+      "/a/..//h/",
+      "/a/%2e%2e/%2e%2e//h/",
+      "/\\h/x/",
+      "//h/x/",
+    ]
+  ) {
+    it(`objectUrl refuses ${address} instead of returning an address on another host`, () => {
+      expect(() => objectUrl(address, "e1")).toThrow()
+    })
+  }
+
+  it("objectUrl normalises dot segments inside a path and never starts with //", () => {
+    expect(objectUrl("/a/../b/./c/", "e1")).toBe("/b/c/e1.ics")
   })
 })
