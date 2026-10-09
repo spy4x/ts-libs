@@ -383,3 +383,17 @@ Deno.test(`the client transport maps calendars and objects, and reads a lost net
 function never(): never {
   throw new Error(`unreachable`)
 }
+
+Deno.test(`loading completed tasks resolves false when the multiget leaves one out`, async () => {
+  const { server, withVersions } = fakeServer()
+  const { store } = fakeStore()
+  server.completed.set(A, [obj(`${A}done`, `"d"`)])
+  const sync = createCalDavSync(withVersions, store)
+  await sync.refresh()
+  const getObjects = withVersions.getObjects!
+  withVersions.getObjects = async (calendar, hrefs) => {
+    const result = await getObjects(calendar, hrefs)
+    return result.ok ? { ok: true, data: result.data.filter((o) => o.href !== `${A}done`) } : result
+  }
+  expect(await sync.loadCompleted(A)).toBe(false)
+})
