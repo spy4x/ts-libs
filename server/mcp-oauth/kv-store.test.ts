@@ -110,6 +110,7 @@ describe("KvOAuthStore", () => {
     await store.saveGrant(grant)
     await store.takeAttempt("t", 1_000, 5, 300)
     await store.takeAttempt("t", 1_100, 5, 300)
+    await store.saveApprovalCode("o", { expiresAt: 1_300 })
     const expireIn = (...key: string[]) => kv.entries.get(JSON.stringify(key))?.expireIn
     expect(expireIn("mcp-oauth", "pending", "p")).toBe(1_000)
     expect(expireIn("mcp-oauth", "code", "c")).toBe(1_000)
@@ -120,6 +121,7 @@ describe("KvOAuthStore", () => {
     expect(expireIn("mcp-oauth", "revoked", "g2")).toBe(6_000)
     expect(expireIn("mcp-oauth", "grants", "g1")).toBe(4_000)
     expect(expireIn("mcp-oauth", "attempts", "t")).toBe(400)
+    expect(expireIn("mcp-oauth", "approval", "o")).toBe(300)
   })
 
   it("keeps an attempt list's expiry when one attempt is released", async () => {
@@ -176,6 +178,18 @@ describe("KvOAuthStore", () => {
     await store.revokeGrant(refresh.grantId, 3_000)
     expect([...kv.entries.values()].map((entry) => entry.key)).toEqual([
       ["mcp-oauth", "revoked", refresh.grantId],
+    ])
+  })
+
+  it("removes a deleted access token's index key along with the token", async () => {
+    const kv = fakeKv()
+    const store = new KvOAuthStore(kv, { clock: manualClock() })
+    await store.saveAccessToken("a", { ...refresh })
+    await store.saveRefreshToken("r", refresh)
+    await store.deleteAccessToken("a")
+    expect([...kv.entries.values()].map((entry) => entry.key)).toEqual([
+      ["mcp-oauth", "refresh", "r"],
+      ["mcp-oauth", "grant", refresh.grantId, "refresh", "r"],
     ])
   })
 

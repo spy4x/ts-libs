@@ -5925,6 +5925,13 @@ that.
   wider scope is refused without spending the token; one from another client spends it. The PKCE
   verifier is compared in constant time. `offline_access` is accepted but not advertised, since
   refresh tokens are always issued.
+- **Revocation.** `POST /revoke` (RFC 7009) lets a client sign itself out. It takes `token` and
+  an optional `token_type_hint`, which is ignored: both kinds are looked up. A refresh token
+  revokes its whole grant, as a reused one does, and an access token only itself. The answer is
+  `200` with an empty body whether the token was live, unknown, expired or already revoked, so the
+  endpoint cannot be used to find out which tokens exist. Like `/token`, it takes public clients
+  only: client authentication answers `401 invalid_client`. The metadata advertises it as
+  `revocation_endpoint`.
 - **Errors.** RFC 6749 codes: `invalid_grant` for every bad code or refresh token, `invalid_target`
   for a foreign resource, `invalid_client` for any client authentication.
 
@@ -6005,7 +6012,39 @@ it harder, put a rate limiter per address in front of `POST /authorize`
 instead of `ownerPassword`: the owner then signs in at the proxy, and wrong passwords sent to the app
 cannot block that.
 
-To let the owner in while it lasts, delete the server-wide count. It is the key
+### Approving while the limit is reached
+
+Two ways let the owner approve while wrong passwords keep every approval refused.
+
+**A. Forward-auth, where a proxy exists: preferred.** Put `/authorize` behind an identity-aware
+proxy such as Authelia and pass `confirmOwner` instead of `ownerPassword`, as the first example
+does. The owner signs in at the proxy, so wrong passwords sent to the app cannot lock them out, and
+there is no lockout to work around.
+
+**B. A one-time approval code, from a shell.** For an app without a proxy, `createApprovalCode`
+makes a code the owner types into the consent page's password input instead of the password. It
+approves one pending consent, and neither the password check nor the lockout applies to it. Wrap it
+in the app's command-line interface, run where the app's store lives:
+
+```ts
+import { createApprovalCode } from "@spy4x/server/mcp-oauth"
+import { KvOAuthStore } from "@spy4x/server/mcp-oauth/kv-store"
+
+const kv = await Deno.openKv(path) // the database the app's KvOAuthStore uses
+const { code, expiresAt } = await createApprovalCode(new KvOAuthStore(kv))
+console.log(`Type this into the password field before ${new Date(expiresAt)}: ${code}`)
+kv.close()
+```
+
+A code is `approve_` followed by 43 base64url characters (256 random bits; `APPROVAL_CODE_SHAPE`),
+and the store keeps only its SHA-256 digest. The server looks a typed value up as a code only when
+it has that shape, so a typed password never reaches the store, not even as a digest. The first
+approval spends it, atomically, so two parallel approvals cannot both use it; a denial does not
+spend it. It stops working after 5 minutes (`ttlMs`, at most 15 minutes). No route of the
+authorization server makes one, so only someone with a shell on the server can. A code needs the
+same store the server uses, so it cannot work with `MemoryOAuthStore` from another process.
+
+To let the owner in another way while it lasts, delete the server-wide count. It is the key
 `[...prefix, "attempts", "total"]` (`["mcp-oauth", "attempts", "total"]` with the default prefix).
 The store reads it on every approval, so no restart is needed. `MemoryOAuthStore` starts empty on
 every restart.
@@ -6055,7 +6094,8 @@ concurrent redemptions only one succeeds. Each record is written with `expireIn`
 `expiresAt`, so Deno KV deletes it once it has expired. A token is saved with a check on its
 grant's revocation key, and `revokeGrant` finds a grant's tokens through an index
 `[...prefix, "grant", grantId, kind, key]`. Grant records sit under `[...prefix, "grants", grantId]`
-and password attempt counts under `[...prefix, "attempts", key]`. Another process can open the same
+password attempt counts under `[...prefix, "attempts", key]`, and approval codes under
+`[...prefix, "approval", key]`. Another process can open the same
 file to list or revoke grants while the app runs. The store does not close the handle.
 
 ### What it does not do
@@ -6069,7 +6109,7 @@ file to list or revoke grants while the app runs. The store does not close the h
 - No store over another database. `MemoryOAuthStore` loses every grant on restart, after which
   Claude asks the owner to connect again; `KvOAuthStore` keeps them. For anything else, implement
   `OAuthStore` and run it through the same rules; `consumeCode`, `consumeRefreshToken`,
-  `takePending` and `takeAttempt` must be atomic.
+  `takePending`, `takeApprovalCode` and `takeAttempt` must be atomic.
 - No issuer with a path: the issuer is a bare origin, and the endpoints sit at its root.
 
 # server/env-age64/README.md

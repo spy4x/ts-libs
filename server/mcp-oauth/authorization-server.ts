@@ -16,6 +16,7 @@ import { constantTimeEqualsText, randomBase64Url, sha256Hex } from "@spy4x/platf
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import { createSameOriginCheck } from "../http/same-origin.ts"
 import type { PasswordHasher } from "../sign-in/password.ts"
+import { APPROVAL_CODE_SHAPE } from "./approval-code.ts"
 import { type ClientMetadataSource, createClientMetadataFetcher } from "./client-metadata.ts"
 import {
   type CodeRecord,
@@ -43,6 +44,8 @@ export const AUTHORIZATION_SERVER_METADATA_PATH = "/.well-known/oauth-authorizat
 export const AUTHORIZE_PATH = "/authorize"
 /** Path of the token endpoint. */
 export const TOKEN_PATH = "/token"
+/** Path of the token revocation endpoint (RFC 7009). */
+export const REVOKE_PATH = "/revoke"
 
 /** Name of the password input the consent page sends when `ownerPassword` is set. */
 export const OWNER_PASSWORD_FIELD = "owner_password"
@@ -159,7 +162,8 @@ export interface AuthorizationServerOptions {
    * default), every approval does. Denials and issued tokens are unaffected. When the store gives up
    * counting under a burst, the approval answers `429` too. The trade-off: anyone who can reach
    * `/authorize` can keep sending wrong passwords and so keep every approval refused for as long as
-   * they keep it up, across restarts with a persistent store. The README says how to lift it.
+   * they keep it up, across restarts with a persistent store. The README says how to lift it. A
+   * one-time code from `createApprovalCode`, typed in place of the password, approves anyway.
    */
   ownerPassword?: OwnerPassword
   /**
@@ -199,6 +203,10 @@ export interface AuthorizationServerMetadata {
   issuer: string
   authorization_endpoint: string
   token_endpoint: string
+  /** The RFC 7009 revocation endpoint, {@link REVOKE_PATH}. */
+  revocation_endpoint: string
+  /** `["none"]`: only public clients revoke, with no client authentication. */
+  revocation_endpoint_auth_methods_supported: string[]
   response_types_supported: string[]
   grant_types_supported: string[]
   code_challenge_methods_supported: string[]
@@ -210,7 +218,10 @@ export interface AuthorizationServerMetadata {
 
 /** What {@link createAuthorizationServer} returns. */
 export interface AuthorizationServer {
-  /** Routes for the metadata document, `GET`/`POST /authorize` and `POST /token`. Mount at `/`. */
+  /**
+   * Routes for the metadata document, `GET`/`POST /authorize`, `POST /token` and `POST /revoke`.
+   * Mount at `/`.
+   */
   app: Hono
   /** The metadata document. */
   metadata: AuthorizationServerMetadata
@@ -379,6 +390,8 @@ export function createAuthorizationServer(
     issuer,
     authorization_endpoint: issuer + AUTHORIZE_PATH,
     token_endpoint: issuer + TOKEN_PATH,
+    revocation_endpoint: issuer + REVOKE_PATH,
+    revocation_endpoint_auth_methods_supported: ["none"],
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
@@ -521,6 +534,7 @@ export function createAuthorizationServer(
   ): Promise<{ status: 400 | 403; message: string } | number | undefined> {
     if (ownerPassword === undefined) return undefined
     if (password === undefined) return { status: 400, message: "Enter the owner password." }
+    if (await approvalCodeAccepted(password)) return undefined
     const at = clock.now()
     const address = await sha256Hex(`address ${ownerPassword.clientAddress?.(c) ?? ""}`)
     let addressTaken = false
@@ -551,6 +565,18 @@ export function createAuthorizationServer(
     await releaseAttempt(address, at)
     await releaseAttempt(TOTAL_ATTEMPTS, at)
     return undefined
+  }
+
+  /**
+   * Spends a one-time approval code (`createApprovalCode`) typed in place of the password. True
+   * when it was one and has not expired. Only a value shaped like a code reaches the store, so a
+   * fast digest of the owner password never does. The store keys codes by their digest, so the
+   * lookup compares digests, never the code, and its timing tells a guesser nothing about a code.
+   */
+  async function approvalCodeAccepted(typed: string): Promise<boolean> {
+    if (!APPROVAL_CODE_SHAPE.test(typed)) return false
+    const record = await store.takeApprovalCode(await sha256Hex(typed))
+    return record !== undefined && record.expiresAt > clock.now()
   }
 
   /**
@@ -680,7 +706,11 @@ export function createAuthorizationServer(
     return redirect(c, pending.redirectUri, { code, state: pending.state })
   })
 
-  app.post(TOKEN_PATH, async (c) => {
+  /**
+   * The form parameters of a `/token` or `/revoke` request, or the error response that refuses it:
+   * any client authentication (public clients only), another content type, or a malformed body.
+   */
+  async function clientRequestParams(c: Context): Promise<Params | Response> {
     const authorization = c.req.header("authorization")
     if (authorization !== undefined) {
       // RFC 6749 section 5.2: a 401 names the scheme the client tried. Echo it only when it is a
@@ -699,7 +729,12 @@ export function createAuthorizationServer(
     } catch {
       params = undefined
     }
-    if (params === undefined) return tokenError(c, "invalid_request", "malformed request")
+    return params ?? tokenError(c, "invalid_request", "malformed request")
+  }
+
+  app.post(TOKEN_PATH, async (c) => {
+    const params = await clientRequestParams(c)
+    if (params instanceof Response) return params
     const clientId = params.get("client_id")
     if (clientId === undefined) return tokenError(c, "invalid_request", "client_id is required")
     const rawResource = params.get("resource")
@@ -782,6 +817,26 @@ export function createAuthorizationServer(
     }
 
     return tokenError(c, "unsupported_grant_type", "grant_type is not supported")
+  })
+
+  // RFC 7009. The token itself is the credential: whoever holds it could use it, so whoever holds
+  // it may end it. `token_type_hint` is ignored, as section 2.1 allows: both kinds are looked up.
+  // An unknown, expired or already revoked token answers 200 like a live one, so the endpoint
+  // cannot tell a caller whether a token exists.
+  app.post(REVOKE_PATH, async (c) => {
+    const params = await clientRequestParams(c)
+    if (params instanceof Response) return params
+    const token = params.get("token")
+    if (token === undefined) return tokenError(c, "invalid_request", "token is required")
+    const key = await sha256Hex(token)
+    // A refresh token stands for the whole grant: ending only it would leave the grant's access
+    // token working, so it revokes the grant, as a reused one does.
+    const refresh = await store.findRefreshToken(key)
+    if (refresh !== undefined) await store.revokeGrant(refresh.grantId, clock.now() + revokeTtl)
+    else await store.deleteAccessToken(key)
+    c.header("Cache-Control", "no-store")
+    c.header("Pragma", "no-cache")
+    return c.body(null, 200)
   })
 
   return { app, metadata, verifier: createAccessTokenVerifier(store, clock) }

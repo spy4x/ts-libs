@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd"
 import { Hono } from "hono"
 import { encodeBase64Url } from "@std/encoding/base64url"
 import { randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
+import { createApprovalCode } from "./approval-code.ts"
 import {
   type AuthorizationServerOptions,
   createAuthorizationServer,
@@ -180,6 +181,7 @@ function setup(overrides: Partial<AuthorizationServerOptions> = {}) {
     server,
     store,
     verifier,
+    clock,
     advance: (ms: number) => (now += ms),
     authorizeParams,
     getAuthorize,
@@ -269,6 +271,8 @@ describe("createAuthorizationServer", () => {
       issuer: ISSUER,
       authorization_endpoint: `${ISSUER}/authorize`,
       token_endpoint: `${ISSUER}/token`,
+      revocation_endpoint: `${ISSUER}/revoke`,
+      revocation_endpoint_auth_methods_supported: ["none"],
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
@@ -732,6 +736,102 @@ describe("createAuthorizationServer", () => {
           expect(locked.headers.get("retry-after")).toBe(String(24 * 60 * 60))
         })
 
+        describe("with a one-time approval code", () => {
+          /** A server whose server-wide ceiling is reached, a consent, and the hasher's count. */
+          async function lockedOut() {
+            const { counter, ownerPassword: counted } = countingHasher()
+            const t = setup({
+              confirmOwner: undefined,
+              ownerPassword: {
+                ...counted,
+                maxFailures: 2,
+                maxTotalFailures: 3,
+                clientAddress: (c) => c.req.header("x-test-address"),
+              },
+            })
+            const id = await newConsent(t)
+            for (let i = 0; i < 3; i++) {
+              expect((await fromAddress(t, id, WRONG, `198.51.100.${i}`)).status).toBe(403)
+            }
+            expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(429)
+            counter.verifies = 0
+            return { t, id, counter }
+          }
+
+          it("approves while the server-wide limit is reached, without running the hasher", async () => {
+            const { t, id, counter } = await lockedOut()
+            const { code } = await createApprovalCode(t.store, { clock: t.clock })
+            const approved = await fromAddress(t, id, code, "203.0.113.9")
+            expect(approved.status).toBe(302)
+            const location = new URL(approved.headers.get("location")!)
+            expect((await t.redeem(location.searchParams.get("code")!)).status).toBe(200)
+            expect(counter.verifies).toBe(0)
+            const next = await newConsent(t)
+            expect((await fromAddress(t, next, OWNER_PASSWORD, "203.0.113.9")).status).toBe(429)
+          })
+
+          it("never hands the store a typed value that is not shaped like a code", async () => {
+            const t = withPassword()
+            const taken: string[] = []
+            const take = t.store.takeApprovalCode.bind(t.store)
+            t.store.takeApprovalCode = (key) => {
+              taken.push(key)
+              return take(key)
+            }
+            const { code } = await createApprovalCode(t.store, { clock: t.clock })
+            for (const typed of [OWNER_PASSWORD, WRONG, code.slice("approve_".length)]) {
+              await approve(t, await newConsent(t), typed)
+            }
+            expect(taken).toEqual([])
+            expect((await approve(t, await newConsent(t), code)).status).toBe(302)
+            expect(taken).toEqual([await sha256Hex(code)])
+          })
+
+          it("counts a wrong code-shaped value as a wrong password, up to the lockout", async () => {
+            const t = setup({
+              confirmOwner: undefined,
+              ownerPassword: { ...ownerPassword, maxFailures: 3, windowMs: 60_000 },
+            })
+            const fake = `approve_${`A`.repeat(43)}`
+            for (let i = 0; i < 3; i++) {
+              expect((await approve(t, await newConsent(t), fake)).status).toBe(403)
+            }
+            expect((await approve(t, await newConsent(t), OWNER_PASSWORD)).status).toBe(429)
+          })
+
+          it("works once: a second approval with the same code is refused", async () => {
+            const { t, id } = await lockedOut()
+            const { code } = await createApprovalCode(t.store, { clock: t.clock })
+            expect((await fromAddress(t, id, code, "203.0.113.9")).status).toBe(302)
+            const next = await newConsent(t)
+            expect((await fromAddress(t, next, code, "203.0.113.9")).status).toBe(429)
+          })
+
+          it("stops working once its lifetime has passed", async () => {
+            const { t, id } = await lockedOut()
+            const { code, expiresAt } = await createApprovalCode(t.store, {
+              clock: t.clock,
+              ttlMs: 60_000,
+            })
+            expect(expiresAt).toBe(t.clock.now() + 60_000)
+            t.advance(60_000)
+            expect((await fromAddress(t, id, code, "203.0.113.9")).status).toBe(429)
+          })
+
+          it("is spent only by an approval, not by a denial", async () => {
+            const { t, id } = await lockedOut()
+            const { code } = await createApprovalCode(t.store, { clock: t.clock })
+            const denied = await t.postConsent({
+              consent_id: id,
+              decision: "deny",
+              [OWNER_PASSWORD_FIELD]: code,
+            })
+            expect(denied.status).toBe(302)
+            const next = await newConsent(t)
+            expect((await fromAddress(t, next, code, "203.0.113.9")).status).toBe(302)
+          })
+        })
+
         it("does not count an address's refused attempts toward the server-wide ceiling", async () => {
           const t = perAddress({ maxFailures: 1, maxTotalFailures: 2 })
           const id = await newConsent(t)
@@ -1035,6 +1135,107 @@ describe("createAuthorizationServer", () => {
       const t = setup()
       const response = await t.token({ grant_type: "client_credentials", client_id: CLAUDE })
       expect((await response.json()).error).toBe("unsupported_grant_type")
+    })
+  })
+
+  describe("revokes a token (RFC 7009)", () => {
+    async function signedIn(t: ReturnType<typeof setup>) {
+      const code = (await t.approve()).searchParams.get("code")!
+      return await (await t.redeem(code)).json()
+    }
+
+    function revoke(
+      t: ReturnType<typeof setup>,
+      body: Record<string, string>,
+      headers: Record<string, string> = {},
+    ) {
+      return t.app.request(`${ISSUER}/revoke`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+        body: new URLSearchParams(body).toString(),
+      })
+    }
+
+    const refreshWith = (t: ReturnType<typeof setup>, refreshToken: string) =>
+      t.token({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: CLAUDE })
+
+    it("with a refresh token: the next refresh fails with invalid_grant and the access token stops", async () => {
+      const t = setup()
+      const tokens = await signedIn(t)
+      const response = await revoke(t, { token: tokens.refresh_token, client_id: CLAUDE })
+      expect(response.status).toBe(200)
+      expect(response.headers.get("cache-control")).toBe("no-store")
+      const refreshed = await refreshWith(t, tokens.refresh_token)
+      expect(refreshed.status).toBe(400)
+      expect((await refreshed.json()).error).toBe("invalid_grant")
+      expect((await t.callMcp(tokens.access_token)).status).toBe(401)
+      expect(await t.store.listGrants()).toEqual([])
+    })
+
+    it("with an access token: only that token stops, and the refresh token still refreshes", async () => {
+      const t = setup()
+      const tokens = await signedIn(t)
+      expect((await revoke(t, { token: tokens.access_token })).status).toBe(200)
+      expect((await t.callMcp(tokens.access_token)).status).toBe(401)
+      const refreshed = await refreshWith(t, tokens.refresh_token)
+      expect(refreshed.status).toBe(200)
+      expect((await t.callMcp((await refreshed.json()).access_token)).status).toBe(200)
+    })
+
+    it("revokes a refresh token sent with an access_token hint, since the hint is only a hint", async () => {
+      const t = setup()
+      const tokens = await signedIn(t)
+      const response = await revoke(t, {
+        token: tokens.refresh_token,
+        token_type_hint: "access_token",
+      })
+      expect(response.status).toBe(200)
+      expect((await (await refreshWith(t, tokens.refresh_token)).json()).error).toBe(
+        "invalid_grant",
+      )
+    })
+
+    it("with a rotated-out refresh token: the whole grant ends, newer tokens included", async () => {
+      const t = setup()
+      const first = await signedIn(t)
+      const second = await (await refreshWith(t, first.refresh_token)).json()
+      expect((await revoke(t, { token: first.refresh_token })).status).toBe(200)
+      expect((await t.callMcp(second.access_token)).status).toBe(401)
+      expect((await (await refreshWith(t, second.refresh_token)).json()).error).toBe(
+        "invalid_grant",
+      )
+    })
+
+    it("answers an unknown or already revoked token exactly as a live one", async () => {
+      const t = setup()
+      const tokens = await signedIn(t)
+      const answers = []
+      for (const token of [tokens.refresh_token, tokens.refresh_token, randomBase64Url(32)]) {
+        const response = await revoke(t, { token })
+        answers.push([response.status, await response.text()])
+      }
+      expect(answers).toEqual([[200, ""], [200, ""], [200, ""]])
+    })
+
+    it("refuses client authentication, a missing token and a JSON body without revoking", async () => {
+      const t = setup()
+      const tokens = await signedIn(t)
+      const authenticated = await revoke(t, { token: tokens.refresh_token }, {
+        authorization: "Basic Y2xpZW50OnNlY3JldA==",
+      })
+      expect(authenticated.status).toBe(401)
+      expect((await authenticated.json()).error).toBe("invalid_client")
+      const missing = await revoke(t, { token_type_hint: "refresh_token" })
+      expect(missing.status).toBe(400)
+      expect((await missing.json()).error).toBe("invalid_request")
+      const json = await t.app.request(`${ISSUER}/revoke`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: tokens.refresh_token }),
+      })
+      expect(json.status).toBe(400)
+      expect((await json.json()).error).toBe("invalid_request")
+      expect((await refreshWith(t, tokens.refresh_token)).status).toBe(200)
     })
   })
 
