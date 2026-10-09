@@ -373,7 +373,8 @@ interface Progress<Id> {
  *   When two bindings have the same keys, the earlier one in the table wins.
  * - **Ignored presses.** A press while typing ({@link isTypingTarget}), while composing, or when
  *   `ignore` returns `true` never matches, and it drops a waiting key. A lone modifier press
- *   (`Shift`, `Control`, `Alt`, `Meta`, `CapsLock` and the like) is skipped without dropping it, so `g` then `shift+t` works.
+ *   (`Shift`, `Control`, `Alt`, `Meta`, `CapsLock` and the like) is skipped without dropping it,
+ *   so `g` then `shift+t` works.
  * - **Modifiers** follow {@link matchesHotkey}: a key with Control, Alt or Meta held matches only a
  *   combination that names them.
  *
