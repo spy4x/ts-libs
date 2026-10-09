@@ -12,7 +12,11 @@
  * and error codes.
  *
  * Retrying a create is safe: the object is named after the entity (`<entityId>.ics`), so a repeat
- * after a lost answer finds its own object and counts it as done.
+ * after a lost answer finds its own object. It counts as done when that object has the same UID as
+ * the text being sent; the text itself may differ, as some servers reorder properties.
+ *
+ * A 401 or 403 is not a refusal of the write: the session may need signing in again, so the write
+ * stays queued (`unreachable`). Entity ids must be plain file names (see {@link isSafeEntityId}).
  *
  * @module
  */
@@ -93,6 +97,24 @@ export interface CalDavWriteTransport<P, S> {
   classify(error: unknown): CalDavSendFailure
 }
 
+/**
+ * Whether an entity id can name an object: letters, digits, `.`, `_`, `~` and `-`, and not `.` or
+ * `..`. The same rule as the `name` of `CalDavClient.createObject`.
+ */
+export function isSafeEntityId(entityId: string): boolean {
+  return /^[A-Za-z0-9._~-]+$/.test(entityId) && entityId !== "." && entityId !== ".."
+}
+
+/** The UID of an iCalendar text (lines unfolded, parameters ignored), or `null` when it has none. */
+function uidOf(ics: string): string | null {
+  const lines = ics.replace(/\r?\n[ \t]/g, "").split(/\r?\n/)
+  for (const line of lines) {
+    const match = /^UID(?:;[^:]*)?:(.*)$/i.exec(line)
+    if (match) return match[1].trim()
+  }
+  return null
+}
+
 /** The address {@link createCalDavWriteTransport} gives a created entity's object. */
 export function objectUrl(calendarUrl: string | URL, entityId: string): string {
   return childUrl(calendarUrl, `${entityId}.ics`).href
@@ -107,15 +129,18 @@ export function classifyCalDavError(error: CalDavError): CalDavSendFailure {
       return { kind: "not-found" }
     case CalDavErrorCode.AlreadyExists:
       return { kind: "already-exists" }
+    // The session may need signing in again; the write waits and nothing is lost.
+    case CalDavErrorCode.Unauthorized:
+    case CalDavErrorCode.Forbidden:
     case CalDavErrorCode.Network:
     case CalDavErrorCode.Timeout:
     case CalDavErrorCode.TooManyRedirects:
       return { kind: "unreachable" }
     case CalDavErrorCode.Server: {
-      // 408 and 429 ask for a later try; any other 4xx is a refusal, a 5xx is a busy server.
+      // 401, 403, 408 and 429 ask for a later try; any other 4xx is a refusal, a 5xx a busy server.
       const status = error.status
       const refused = status !== undefined && status >= 400 && status < 500 &&
-        status !== 408 && status !== 429
+        status !== 401 && status !== 403 && status !== 408 && status !== 429
       return refused ? { kind: "rejected", message: error.message } : { kind: "unreachable" }
     }
     default:
@@ -147,6 +172,13 @@ export function createCalDavWriteTransport<P, S>(
 
   return {
     async send(command) {
+      if (!isSafeEntityId(command.entityId)) {
+        const error: CalDavError = {
+          code: CalDavErrorCode.InvalidArgument,
+          message: "the entity id is not a plain file name",
+        }
+        throw new CalDavWriteError(classifyCalDavError(error), error)
+      }
       if (command.kind === "create") {
         const ics = options.toIcs(command)
         const calendar = options.calendarUrl(command)
@@ -157,10 +189,17 @@ export function createCalDavWriteTransport<P, S>(
         }
         if (created.error.code === CalDavErrorCode.AlreadyExists) {
           // A repeat of a create whose answer was lost finds its own object: that is success.
+          // Compared by UID, because a server may store the text with its properties reordered.
           const url = objectUrl(calendar, command.entityId)
           const existing = await writer.getObject(url)
-          if (existing.success && existing.output.data === ics) {
-            return options.toEntity(existing.output, command.entityId)
+          if (existing.success) {
+            const uid = uidOf(ics)
+            if (uid !== null && uid === uidOf(existing.output.data)) {
+              return options.toEntity(existing.output, command.entityId)
+            }
+          } else if (existing.error.code !== CalDavErrorCode.NotFound) {
+            // The answer is unknown, not a taken address: try again later.
+            throw new CalDavWriteError(classifyCalDavError(existing.error), existing.error)
           }
         }
         throw new CalDavWriteError(classifyCalDavError(created.error), created.error)

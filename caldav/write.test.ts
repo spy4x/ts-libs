@@ -14,6 +14,7 @@ import { type CalDavObject, createCalDavClient } from "./client.ts"
 import {
   type CalDavSendFailure,
   type CalDavWriteCommand,
+  type CalDavWriter,
   classifyCalDavError,
   createCalDavWriteTransport,
   objectUrl,
@@ -97,8 +98,8 @@ function fakeServer() {
   return { client, objects, seen, state }
 }
 
-const ics = (title: string) =>
-  `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:a\r\nSUMMARY:${title}\r\nEND:VTODO\r\nEND:VCALENDAR\r\n`
+const ics = (title: string, uid = "a") =>
+  `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:${uid}\r\nSUMMARY:${title}\r\nEND:VTODO\r\nEND:VCALENDAR\r\n`
 
 /** Wires the transport the way an app would: the app's cache is a map of entity to last etag. */
 function setup() {
@@ -118,7 +119,7 @@ function setup() {
     calendarUrl: () => CALENDAR,
     urlOf: (id) => known.get(id)?.url ?? objectUrl(CALENDAR, id),
     etagOf: (command) => known.get(command.entityId)?.etag,
-    toIcs: (command) => ics(command.payload),
+    toIcs: (command) => ics(command.payload, command.entityId),
     toEntity,
   })
   const send = (kind: CalDavWriteCommand<string>["kind"], id: string, title = "t", base = 1) =>
@@ -162,10 +163,22 @@ describe("create", () => {
     expect(task?.etag).toBe(`"1"`)
   })
 
-  it("reports an address taken by different content as already-exists", async () => {
-    const { send, failureOf } = setup()
-    await send("create", "e1", "milk", 0)
-    expect(await failureOf(send("create", "e1", "bread", 0))).toEqual({ kind: "already-exists" })
+  it("counts a repeated create as done when the server stored the text with properties reordered", async () => {
+    const { send, state, objects, failureOf } = setup()
+    state.dropAnswerOnce = true
+    await failureOf(send("create", "e1", "milk", 0))
+    const stored = objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!
+    stored.ics = stored.ics.replace("UID:e1\r\nSUMMARY:milk", "SUMMARY:milk\r\nUID;X-A=b:e1")
+    expect(stored.ics).not.toBe(ics("milk", "e1"))
+    const task = await send("create", "e1", "milk", 0)
+    expect(task?.etag).toBe(`"1"`)
+    expect(objects.size).toBe(1)
+  })
+
+  it("reports an address held by an object with another UID as already-exists", async () => {
+    const { send, objects, failureOf } = setup()
+    objects.set(new URL(`${CALENDAR}e1.ics`).pathname, { ics: ics("milk", "other"), etag: 7 })
+    expect(await failureOf(send("create", "e1", "milk", 0))).toEqual({ kind: "already-exists" })
   })
 })
 
@@ -201,31 +214,40 @@ describe("update", () => {
   })
 })
 
-describe("a writer that does not check etags itself", () => {
+/** A writer that records the names it is given and answers as scripted. */
+function scriptedWriter(answers: Partial<CalDavWriter> = {}) {
+  const names: string[] = []
+  const fail = (code: CalDavErrorCode) => ({
+    success: false as const,
+    output: null,
+    error: { code, message: "scripted" },
+  })
+  const writer: CalDavWriter = {
+    createObject: (_calendar, _ics, options) => {
+      names.push(options?.name ?? "")
+      return Promise.resolve(fail(CalDavErrorCode.AlreadyExists))
+    },
+    getObject: () => Promise.resolve(fail(CalDavErrorCode.Network)),
+    updateObject: () => Promise.reject(new Error("must not be called")),
+    deleteObject: () => Promise.reject(new Error("must not be called")),
+    ...answers,
+  }
+  const transport = createCalDavWriteTransport<string, Task>({
+    writer,
+    calendarUrl: () => CALENDAR,
+    urlOf: (id) => objectUrl(CALENDAR, id),
+    etagOf: () => null,
+    toIcs: (command) => ics(command.payload, command.entityId),
+    toEntity: () => {
+      throw new Error("unused")
+    },
+  })
+  return { transport, names }
+}
+
+describe("a writer that does not check anything itself", () => {
   it("is never asked to update or delete without an etag", async () => {
-    const calls: string[] = []
-    const writer = {
-      createObject: () => Promise.reject(new Error("unused")),
-      getObject: () => Promise.reject(new Error("unused")),
-      updateObject: (url: string | URL) => {
-        calls.push(`update ${url}`)
-        return Promise.reject(new Error("must not be called"))
-      },
-      deleteObject: (url: string | URL) => {
-        calls.push(`delete ${url}`)
-        return Promise.reject(new Error("must not be called"))
-      },
-    }
-    const transport = createCalDavWriteTransport<string, Task>({
-      writer,
-      calendarUrl: () => CALENDAR,
-      urlOf: (id) => objectUrl(CALENDAR, id),
-      etagOf: () => null,
-      toIcs: (command) => ics(command.payload),
-      toEntity: () => {
-        throw new Error("unused")
-      },
-    })
+    const { transport } = scriptedWriter()
     for (const kind of ["update", "delete"] as const) {
       const error = await transport.send(
         { kind, entityId: "e1", payload: "x", baseVersion: 1 },
@@ -234,7 +256,32 @@ describe("a writer that does not check etags itself", () => {
         .catch((caught) => caught)
       expect(transport.classify(error).kind).toBe("rejected")
     }
-    expect(calls).toEqual([])
+  })
+
+  it("never receives an entity id that is not a plain file name", async () => {
+    const { transport, names } = scriptedWriter()
+    const bad = ["../x", "a/b", "..", ".", "", "%2e%2e", "é", "a b", "x?y", "a\\b"]
+    for (const kind of ["create", "update", "delete"] as const) {
+      for (const entityId of bad) {
+        const error = await transport.send({ kind, entityId, payload: "x", baseVersion: 1 }, "k")
+          .catch((caught) => caught)
+        expect(transport.classify(error).kind, `${kind} ${entityId}`).toBe("rejected")
+      }
+    }
+    expect(names).toEqual([])
+    // A plain name does reach the writer.
+    await transport.send({ kind: "create", entityId: "ok-1", payload: "x", baseVersion: 0 }, "k")
+      .catch(() => {})
+    expect(names).toEqual(["ok-1.ics"])
+  })
+
+  it("reads a repeated create whose follow-up read lost the connection as unreachable", async () => {
+    const { transport } = scriptedWriter()
+    const error = await transport.send(
+      { kind: "create", entityId: "e1", payload: "x", baseVersion: 0 },
+      "k",
+    ).catch((caught) => caught)
+    expect(transport.classify(error)).toEqual({ kind: "unreachable" })
   })
 })
 
@@ -270,7 +317,10 @@ describe("answers", () => {
     [503, "unreachable"],
     [408, "unreachable"],
     [429, "unreachable"],
-    [403, "rejected"],
+    [401, "unreachable"],
+    [403, "unreachable"],
+    [404, "not-found"],
+    [400, "rejected"],
     [413, "rejected"],
     [422, "rejected"],
   ]
@@ -368,4 +418,21 @@ describe("with the outbox", () => {
     await outbox.keepMine(entry)
     expect(objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!.ics).toContain("oat milk")
   })
+
+  for (const status of [401, 403]) {
+    it(`keeps an offline edit pending when the server answers ${status}`, async () => {
+      const { outbox, state } = queue()
+      await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+      state.down = true
+      await outbox.submit({ kind: "update", entityId: "e1", payload: "oat milk", version: 1 })
+      state.down = false
+      state.status = status
+      await outbox.flush()
+      const [entry] = await outbox.entries()
+      expect(entry.status).toBe("pending")
+      state.status = 0
+      await outbox.flush()
+      expect(await outbox.entries()).toEqual([])
+    })
+  }
 })

@@ -63,6 +63,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `CalDavObject` (interface), `jsr:@spy4x/caldav`: One calendar object resource: an iCalendar document and the etag it was read with.
 - `CalDavResult` (type), `jsr:@spy4x/caldav`: The outcome of a call: the value, or why it failed.
 - `CalDavWrite` (interface), `jsr:@spy4x/caldav`: The outcome of a write: where the object is and its new etag.
+- `CreateObjectOptions` (interface), `jsr:@spy4x/caldav`: Options of CalDavClient.createObject.
 - `ListObjectsOptions` (interface), `jsr:@spy4x/caldav`: Options of CalDavClient.listObjects.
 - `NewCalendar` (interface), `jsr:@spy4x/caldav`: Properties of a new calendar.
 - `createCalDavClient` (function), `jsr:@spy4x/caldav`: Create a client for one CalDAV server and one user.
@@ -90,6 +91,19 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `isSameOrigin` (function), `jsr:@spy4x/caldav/url`: Whether `target` is on the same origin as `serverUrl`: the same scheme, host and port.
 - `resolveHref` (function), `jsr:@spy4x/caldav/url`: Resolve an `href` from a multistatus body against the URL of the request that returned it.
 - `sameResource` (function), `jsr:@spy4x/caldav/url`: Whether two absolute URLs name the same resource: same origin, same query and the same path segments once each segment is percent-decoded.
+
+### `jsr:@spy4x/caldav/write`
+
+- `CalDavSendFailure` (type), `jsr:@spy4x/caldav/write`: How the queue reads a failed send.
+- `CalDavWriteCommand` (interface), `jsr:@spy4x/caldav/write`: What the queue sends for one entry.
+- `CalDavWriteError` (class), `jsr:@spy4x/caldav/write`: The error CalDavWriteTransport.send throws; carries what the server answered.
+- `CalDavWriteOptions` (interface), `jsr:@spy4x/caldav/write`: What an app supplies to turn a queue entry into a CalDAV request.
+- `CalDavWriteTransport` (interface), `jsr:@spy4x/caldav/write`: The three outbox ports this module fills.
+- `CalDavWriter` (type), `jsr:@spy4x/caldav/write`: The object calls a write transport needs.
+- `classifyCalDavError` (function), `jsr:@spy4x/caldav/write`: Reads a failed CalDAV call as the queue needs it.
+- `createCalDavWriteTransport` (function), `jsr:@spy4x/caldav/write`: Builds the `send`, `fetchServer` and `classify` ports of an outbox over CalDAV.
+- `isSafeEntityId` (function), `jsr:@spy4x/caldav/write`: Whether an entity id can name an object: letters, digits, `.`, `_`, `~` and `-`, and not `.` or `..`.
+- `objectUrl` (function), `jsr:@spy4x/caldav/write`: The address createCalDavWriteTransport gives a created entity's object.
 
 ### `jsr:@spy4x/caldav/xml`
 
@@ -2632,4 +2646,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 7b336d65af0a6a8dcc87b3839e76bcfe23d1e147e50e221785f4e673e51c1ba4 -->
+<!-- export surface: sha256 468174a92f1ebf355a978d215c29218e3531f81e59e90ae9662358ef6ab1ef41 -->
