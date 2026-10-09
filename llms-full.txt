@@ -5831,7 +5831,9 @@ that.
 - **Tokens.** Opaque 256-bit random strings; the store keeps only their SHA-256 digest. Access
   tokens last 15 minutes and are bound to one resource: the guard refuses a token issued for
   another MCP server. Refresh tokens last 30 days and rotate on every use; a reused one revokes the
-  whole grant. A revoked grant also refuses tokens saved after the revocation, so a replay that
+  whole grant. A grant ends 90 days after the owner approved it (`grantTtlMs`): rotation never
+  moves that end, and no token outlives it, so the owner approves each client again at least that
+  often. A revoked grant also refuses tokens saved after the revocation, so a replay that
   races the first redemption leaves no working token. A refresh that names another resource or a
   wider scope is refused without spending the token; one from another client spends it. The PKCE
   verifier is compared in constant time. `offline_access` is accepted but not advertised, since
@@ -5868,18 +5870,86 @@ input, and the same consent can still be approved. With both `confirmOwner` and 
 set, both must pass: `confirmOwner` on every request, the password on an approval. At least one of
 them is required.
 
-**Wrong passwords are capped.** After 10 wrong passwords within 15 minutes, every approval answers
-`429` with a `Retry-After` header until the oldest of them is 15 minutes old. A locked-out approval
-is refused before the hasher runs, so a flood of guesses costs no PBKDF2 work. The count is kept in
-memory for the whole server, since there is one owner, and starts again on a restart. Only wrong
-passwords count: a missing one and the right one do not. Denials and tokens already issued keep
-working. Change the cap with `ownerPassword: { hash, hasher, maxFailures, windowMs }`.
+**Wrong passwords are capped per address.** After 10 wrong passwords from one client address within
+15 minutes, that address's approvals answer `429` with a `Retry-After` header until the oldest of
+them is 15 minutes old; the owner can still approve from another address. After 100 wrong
+passwords from all addresses together within 24 hours, every approval answers `429`: that ceiling
+stops guessing spread over many addresses. A locked-out approval is refused before the hasher runs,
+so a flood of guesses costs no PBKDF2 work. The counts live in the store, so `KvOAuthStore` keeps
+them across a restart. Only wrong passwords count: a missing one and the right one do not. Denials
+and tokens already issued keep working.
 
-The trade-off: anyone who can reach the consent page can lock the owner out of approving new
-clients for the window, by sending wrong passwords. Clients that already have tokens are not
-affected. A rate limiter per address in front of `POST /authorize`
-(`@spy4x/platform/rate-limit/hono`) makes that harder, as "What it does not do" below says for
-every route.
+Pass `clientAddress` so the server knows the address. Use the same one the app's rate limiter
+uses, read through the same trusted proxies, or a client can pick its own by sending a forged
+`X-Forwarded-For`:
+
+```ts
+import { clientIp, clientIpBucket } from "@spy4x/platform/rate-limit/client-ip"
+
+ownerPassword: {
+  hash,
+  hasher,
+  // One IPv6 /64 counts as one address, as it does for the rate limiter.
+  clientAddress: (c) =>
+    clientIpBucket(clientIp(c.req.raw, peerAddress, "x-forwarded-for", { trustedProxies })),
+}
+```
+
+Without `clientAddress`, every request shares one address, so a single guesser locks the owner
+out. Change the caps with `maxFailures` and `windowMs` per address, and `maxTotalFailures` (ten
+times `maxFailures` by default, and always more) and `totalWindowMs` for the server.
+
+When a burst of parallel guesses keeps rewriting the server-wide count, `KvOAuthStore` gives up
+after 32 conflicting writes. The approval then answers `429` with `Retry-After: 1`, the consent
+stays usable, and the attempt is not counted against the address.
+
+The trade-off: anyone who can reach `POST /authorize` can keep every approval refused. The
+server-wide ceiling is 100 wrong passwords a day by default, and one address may send 10 every 15
+minutes, so one address reaches it in two and a half hours and ten addresses in a minute. After
+that, about 100 wrong passwords a day keep it reached, for as long as the sender keeps going. With
+`KvOAuthStore` a restart does not end it. Clients that already have tokens are not affected; only
+new approvals are refused.
+
+No design avoids this without a cost: the ceiling exists to cap guesses that come from many
+addresses, so lifting it for an unknown address would hand every new address a free guess. To make
+it harder, put a rate limiter per address in front of `POST /authorize`
+(`@spy4x/platform/rate-limit/hono`), block the sending addresses at the proxy, or raise
+`maxTotalFailures`. To take it away, put `/authorize` behind forward-auth and pass `confirmOwner`
+instead of `ownerPassword`: the owner then signs in at the proxy, and wrong passwords sent to the app
+cannot block that.
+
+To let the owner in while it lasts, delete the server-wide count. It is the key
+`[...prefix, "attempts", "total"]` (`["mcp-oauth", "attempts", "total"]` with the default prefix).
+The store reads it on every approval, so no restart is needed. `MemoryOAuthStore` starts empty on
+every restart.
+
+```ts
+const kv = await Deno.openKv(path) // the database the app's KvOAuthStore uses
+await kv.delete(["mcp-oauth", "attempts", "total"])
+kv.close()
+```
+
+The sender's next wrong passwords count again, so block them first.
+
+### Listing and revoking grants
+
+Each redeemed code saves a `GrantRecord`: the client, the resource, the scope, when it started and
+when it ends. `store.listGrants()` returns the grants that have not ended, oldest first, so the
+owner can see which clients are connected. `store.revokeGrant(grant.grantId, grant.expiresAt)`
+signs one client out: it deletes the grant's tokens and record and refuses new tokens for it until
+the grant would have ended anyway. Every other client stays signed in.
+
+```ts
+const grants = await store.listGrants()
+for (const grant of grants) {
+  console.log(grant.grantId, new URL(grant.clientId).host, new Date(grant.createdAt))
+}
+const grant = grants[0] // the one to sign out
+await store.revokeGrant(grant.grantId, grant.expiresAt)
+```
+
+A grant issued before this release has no record until its client next refreshes, at most an
+access-token lifetime after the client is next used. Its 90 days start from that refresh.
 
 `MemoryOAuthStore` signs every client out on a restart or deploy. `KvOAuthStore` keeps the same
 records in Deno KV, which needs no service beside the app: open the database on a mounted volume
@@ -5897,7 +5967,9 @@ token read the record and commit with a versionstamp check, retrying on a confli
 concurrent redemptions only one succeeds. Each record is written with `expireIn` set from its
 `expiresAt`, so Deno KV deletes it once it has expired. A token is saved with a check on its
 grant's revocation key, and `revokeGrant` finds a grant's tokens through an index
-`[...prefix, "grant", grantId, kind, key]`. The store does not close the handle.
+`[...prefix, "grant", grantId, kind, key]`. Grant records sit under `[...prefix, "grants", grantId]`
+and password attempt counts under `[...prefix, "attempts", key]`. Another process can open the same
+file to list or revoke grants while the app runs. The store does not close the handle.
 
 ### What it does not do
 
@@ -5909,8 +5981,8 @@ grant's revocation key, and `revokeGrant` finds a grant's tokens through an inde
   `@spy4x/platform/rate-limit/hono` in front of `/authorize` and `/token`.
 - No store over another database. `MemoryOAuthStore` loses every grant on restart, after which
   Claude asks the owner to connect again; `KvOAuthStore` keeps them. For anything else, implement
-  `OAuthStore` and run it through the same rules; `consumeCode`, `consumeRefreshToken` and
-  `takePending` must be atomic.
+  `OAuthStore` and run it through the same rules; `consumeCode`, `consumeRefreshToken`,
+  `takePending` and `takeAttempt` must be atomic.
 - No issuer with a path: the issuer is a bare origin, and the endpoints sit at its root.
 
 # server/env-age64/README.md

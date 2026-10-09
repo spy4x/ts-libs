@@ -1,8 +1,9 @@
+/// <reference lib="deno.unstable" />
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { Hono } from "hono"
 import { encodeBase64Url } from "@std/encoding/base64url"
-import { randomBase64Url } from "@spy4x/platform/tokens"
+import { randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import {
   type AuthorizationServerOptions,
   createAuthorizationServer,
@@ -15,7 +16,9 @@ import {
   type PasswordHasher,
 } from "../sign-in/password.ts"
 import type { ClientMetadataSource } from "./client-metadata.ts"
+import { KvOAuthStore } from "./kv-store.ts"
 import { MemoryOAuthStore } from "./memory-store.ts"
+import { OAuthStoreContentionError } from "./model.ts"
 import { CLAUDE_REDIRECT_URI } from "./redirect-uri.ts"
 import { createResourceServer, type ResourceGuardEnv } from "./resource-server.ts"
 
@@ -685,6 +688,208 @@ describe("createAuthorizationServer", () => {
         expect((await approve(t, id, OWNER_PASSWORD)).status).toBe(429)
       })
 
+      describe("per client address", () => {
+        const fromAddress = (
+          t: ReturnType<typeof setup>,
+          id: string,
+          password: string,
+          ip: string,
+        ) =>
+          t.postConsent(
+            { consent_id: id, decision: "approve", [OWNER_PASSWORD_FIELD]: password },
+            { origin: ISSUER, "sec-fetch-site": "same-origin", "x-test-address": ip },
+          )
+        const perAddress = (
+          cap: { maxFailures?: number; maxTotalFailures?: number; totalWindowMs?: number },
+        ) =>
+          setup({
+            confirmOwner: undefined,
+            ownerPassword: {
+              ...ownerPassword,
+              ...cap,
+              clientAddress: (c) => c.req.header("x-test-address"),
+            },
+          })
+
+        it("lets the owner approve from another address while one address is locked out", async () => {
+          const t = perAddress({ maxFailures: 2 })
+          const id = await newConsent(t)
+          for (let i = 0; i < 2; i++) {
+            expect((await fromAddress(t, id, WRONG, "198.51.100.7")).status).toBe(403)
+          }
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "198.51.100.7")).status).toBe(429)
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        it("locks every address out once maxTotalFailures wrong passwords come from many", async () => {
+          const t = perAddress({ maxFailures: 2, maxTotalFailures: 5 })
+          const id = await newConsent(t)
+          for (let i = 0; i < 5; i++) {
+            expect((await fromAddress(t, id, WRONG, `198.51.100.${i}`)).status).toBe(403)
+          }
+          const locked = await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")
+          expect(locked.status).toBe(429)
+          expect(locked.headers.get("retry-after")).toBe(String(24 * 60 * 60))
+        })
+
+        it("does not count an address's refused attempts toward the server-wide ceiling", async () => {
+          const t = perAddress({ maxFailures: 1, maxTotalFailures: 2 })
+          const id = await newConsent(t)
+          expect((await fromAddress(t, id, WRONG, "198.51.100.7")).status).toBe(403)
+          for (let i = 0; i < 3; i++) {
+            expect((await fromAddress(t, id, WRONG, "198.51.100.7")).status).toBe(429)
+          }
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        it("does not count against an address an attempt the server-wide ceiling refused", async () => {
+          const t = perAddress({ maxFailures: 1, maxTotalFailures: 2, totalWindowMs: 60_000 })
+          const id = await newConsent(t)
+          for (const ip of ["198.51.100.1", "198.51.100.2"]) {
+            expect((await fromAddress(t, id, WRONG, ip)).status).toBe(403)
+          }
+          expect((await fromAddress(t, id, WRONG, "203.0.113.9")).status).toBe(429)
+          t.advance(60_000)
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        it("does not count right passwords toward the server-wide ceiling", async () => {
+          const t = perAddress({ maxFailures: 1, maxTotalFailures: 2 })
+          for (let i = 0; i < 3; i++) {
+            const id = await newConsent(t)
+            expect((await fromAddress(t, id, OWNER_PASSWORD, `203.0.113.${i}`)).status).toBe(302)
+          }
+        })
+
+        /**
+         * A server whose store throws `fail.error` from `fail.method` for the server-wide count
+         * while `fail.error` is set, and otherwise behaves as `MemoryOAuthStore`.
+         */
+        const failingStore = (fail: {
+          method: "takeAttempt" | "releaseAttempt"
+          error?: Error
+        }) => {
+          const shared = perAddress({ maxFailures: 1 })
+          const store = new Proxy(shared.store, {
+            get(target, name) {
+              if (name === fail.method) {
+                return (key: string, ...rest: number[]) =>
+                  fail.error !== undefined && key === "total"
+                    ? Promise.reject(fail.error)
+                    : (target[fail.method] as (key: string, ...rest: number[]) => Promise<unknown>)
+                      .call(target, key, ...rest)
+              }
+              const value = Reflect.get(target, name, target)
+              return typeof value === "function" ? value.bind(target) : value
+            },
+          })
+          return setup({
+            confirmOwner: undefined,
+            store,
+            ownerPassword: {
+              ...ownerPassword,
+              maxFailures: 1,
+              clientAddress: (c) => c.req.header("x-test-address"),
+            },
+          })
+        }
+
+        it("answers 429, keeps the consent and uncounts the address when the store gives up", async () => {
+          const fail: { method: "takeAttempt"; error?: Error } = {
+            method: "takeAttempt",
+            error: new OAuthStoreContentionError("gave up after conflicting writes"),
+          }
+          const t = failingStore(fail)
+          const id = await newConsent(t)
+          const refused = await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")
+          expect(refused.status).toBe(429)
+          expect(refused.headers.get("retry-after")).toBe("1")
+          fail.error = undefined
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        it("approves when the store gives up releasing the server-wide count", async () => {
+          const t = failingStore({
+            method: "releaseAttempt",
+            error: new OAuthStoreContentionError("gave up after conflicting writes"),
+          })
+          const id = await newConsent(t)
+          expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+        })
+
+        it("answers 500 when the store fails for any reason other than giving up", async () => {
+          for (const method of ["takeAttempt", "releaseAttempt"] as const) {
+            const t = failingStore({ method, error: new Error("disk I/O error") })
+            const id = await newConsent(t)
+            expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(500)
+          }
+        })
+
+        describe("on Deno KV", () => {
+          const START = 1_000_000
+          const onKv = async (cap: { maxFailures?: number; maxTotalFailures?: number }) => {
+            const kv = await Deno.openKv(":memory:")
+            const t = setup({
+              confirmOwner: undefined,
+              store: new KvOAuthStore(kv, { clock: { now: () => START } }),
+              ownerPassword: {
+                ...ownerPassword,
+                ...cap,
+                clientAddress: (c) => c.req.header("x-test-address"),
+              },
+            })
+            return { kv, t }
+          }
+
+          it("never answers 500 to a parallel burst of wrong passwords, and the owner still gets in", async () => {
+            const { kv, t } = await onKv({ maxTotalFailures: 1_000 })
+            try {
+              const ids = await Promise.all(Array.from({ length: 100 }, () => newConsent(t)))
+              const ownerId = await newConsent(t)
+              const [owner, ...attackers] = await Promise.all([
+                fromAddress(t, ownerId, OWNER_PASSWORD, "203.0.113.9"),
+                ...ids.map((id, i) => fromAddress(t, id, WRONG, `198.51.${i >> 8}.${i & 255}`)),
+              ])
+              const statuses = attackers.map((r) => r.status)
+              expect(statuses.filter((s) => s !== 403 && s !== 429)).toEqual([])
+              expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0)
+              if (owner.status === 429) {
+                const retry = await fromAddress(t, ownerId, OWNER_PASSWORD, "203.0.113.9")
+                expect(retry.status).toBe(302)
+              } else {
+                expect(owner.status).toBe(302)
+              }
+            } finally {
+              kv.close()
+            }
+          })
+
+          it("lets the owner in again once the documented server-wide count key is deleted", async () => {
+            const { kv, t } = await onKv({ maxFailures: 2, maxTotalFailures: 3 })
+            try {
+              const id = await newConsent(t)
+              for (let i = 0; i < 3; i++) {
+                expect((await fromAddress(t, id, WRONG, `198.51.100.${i}`)).status).toBe(403)
+              }
+              expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(429)
+              await kv.delete(["mcp-oauth", "attempts", "total"])
+              expect((await fromAddress(t, id, OWNER_PASSWORD, "203.0.113.9")).status).toBe(302)
+            } finally {
+              kv.close()
+            }
+          })
+        })
+      })
+
+      it("keeps counting wrong passwords across a restart that keeps the store", async () => {
+        const first = setup({ confirmOwner: undefined, ownerPassword })
+        const id = await newConsent(first)
+        for (let i = 0; i < 10; i++) expect((await approve(first, id, WRONG)).status).toBe(403)
+        const restarted = setup({ confirmOwner: undefined, ownerPassword, store: first.store })
+        const locked = await approve(restarted, await newConsent(restarted), OWNER_PASSWORD)
+        expect(locked.status).toBe(429)
+      })
+
       it("still denies, and keeps issued tokens working, while locked out", async () => {
         const t = setup({
           confirmOwner: undefined,
@@ -924,6 +1129,120 @@ describe("createAuthorizationServer", () => {
     })
   })
 
+  describe("ends every grant", () => {
+    const DAY = 24 * 60 * 60_000
+    async function signedIn(t: ReturnType<typeof setup>) {
+      const code = (await t.approve()).searchParams.get("code")!
+      return await (await t.redeem(code)).json()
+    }
+    const refreshWith = (t: ReturnType<typeof setup>, refreshToken: string) =>
+      t.token({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: CLAUDE })
+
+    it("at grantTtlMs after approval, however often the client refreshes", async () => {
+      const t = setup({ grantTtlMs: 3 * DAY, refreshTokenTtlMs: 2 * DAY })
+      let tokens = await signedIn(t)
+      for (let day = 1; day < 3; day++) {
+        t.advance(DAY)
+        const response = await refreshWith(t, tokens.refresh_token)
+        expect(response.status).toBe(200)
+        tokens = await response.json()
+      }
+      t.advance(DAY - 1)
+      const last = await refreshWith(t, tokens.refresh_token)
+      expect(last.status).toBe(200)
+      const lastTokens = await last.json()
+      expect(lastTokens.expires_in).toBe(0)
+      t.advance(1)
+      expect((await t.callMcp(lastTokens.access_token)).status).toBe(401)
+      const after = await refreshWith(t, lastTokens.refresh_token)
+      expect((await after.json()).error).toBe("invalid_grant")
+    })
+
+    it("cuts the access token short when the grant ends first", async () => {
+      const t = setup({ grantTtlMs: 10 * 60_000 })
+      const tokens = await signedIn(t)
+      expect(tokens.expires_in).toBe(10 * 60)
+      t.advance(10 * 60_000)
+      expect((await t.callMcp(tokens.access_token)).status).toBe(401)
+    })
+
+    it("after 90 days by default", async () => {
+      const t = setup({ refreshTokenTtlMs: 100 * DAY })
+      const tokens = await signedIn(t)
+      t.advance(90 * DAY - 1)
+      const before = await refreshWith(t, tokens.refresh_token)
+      expect(before.status).toBe(200)
+      t.advance(1)
+      const after = await refreshWith(t, (await before.json()).refresh_token)
+      expect((await after.json()).error).toBe("invalid_grant")
+    })
+
+    it("and gives a grant issued before grants had an end one at its first refresh", async () => {
+      const t = setup({ grantTtlMs: 3 * DAY })
+      const legacy = randomBase64Url(32)
+      await t.store.saveRefreshToken(await sha256Hex(legacy), {
+        grantId: "legacy",
+        clientId: CLAUDE,
+        resource: RESOURCE,
+        scope: "tasks",
+        expiresAt: 1_000_000 + 30 * DAY,
+      })
+      const rotated = await refreshWith(t, legacy)
+      expect(rotated.status).toBe(200)
+      expect(await t.store.listGrants()).toEqual([{
+        grantId: "legacy",
+        clientId: CLAUDE,
+        resource: RESOURCE,
+        scope: "tasks",
+        createdAt: 1_000_000,
+        expiresAt: 1_000_000 + 3 * DAY,
+      }])
+      t.advance(3 * DAY)
+      const after = await refreshWith(t, (await rotated.json()).refresh_token)
+      expect((await after.json()).error).toBe("invalid_grant")
+    })
+  })
+
+  describe("lists grants", () => {
+    it("one per approved client, and revoking one signs out that client only", async () => {
+      const t = setup()
+      const first = await (await t.redeem((await t.approve()).searchParams.get("code")!)).json()
+      t.advance(1_000)
+      const second = await (await t.redeem((await t.approve()).searchParams.get("code")!)).json()
+      const grants = await t.store.listGrants()
+      expect(grants.map((g) => [g.clientId, g.resource, g.scope, g.createdAt])).toEqual([
+        [CLAUDE, RESOURCE, "tasks", 1_000_000],
+        [CLAUDE, RESOURCE, "tasks", 1_001_000],
+      ])
+      expect(grants[0].expiresAt).toBe(1_000_000 + 90 * 24 * 60 * 60_000)
+      await t.store.revokeGrant(grants[0].grantId, grants[0].expiresAt)
+      expect((await t.callMcp(first.access_token)).status).toBe(401)
+      const refreshed = await t.token({
+        grant_type: "refresh_token",
+        refresh_token: first.refresh_token,
+        client_id: CLAUDE,
+      })
+      expect((await refreshed.json()).error).toBe("invalid_grant")
+      expect((await t.callMcp(second.access_token)).status).toBe(200)
+      expect((await t.store.listGrants()).map((g) => g.grantId)).toEqual([grants[1].grantId])
+    })
+
+    it("keeps the grant's start and scope when the client refreshes with a narrower scope", async () => {
+      const t = setup()
+      const tokens = await (await t.redeem((await t.approve()).searchParams.get("code")!)).json()
+      t.advance(1_000)
+      const response = await t.token({
+        grant_type: "refresh_token",
+        refresh_token: tokens.refresh_token,
+        client_id: CLAUDE,
+        scope: "",
+      })
+      expect(response.status).toBe(200)
+      const [grant] = await t.store.listGrants()
+      expect([grant.createdAt, grant.scope]).toEqual([1_000_000, "tasks"])
+    })
+  })
+
   describe("binds tokens to their resource", () => {
     it("so a token for one MCP server is refused by another", async () => {
       const t = setup()
@@ -1001,6 +1320,32 @@ describe("createAuthorizationServer", () => {
       }
       for (const windowMs of [0, -1, Number.POSITIVE_INFINITY]) {
         expect(server({ windowMs })).toThrow("ownerPassword.windowMs must be positive")
+      }
+    })
+
+    it("refuses a server-wide cap that does not exceed the per-address one, or an empty window", () => {
+      const server = (cap: { maxTotalFailures?: number; totalWindowMs?: number }) => () =>
+        createAuthorizationServer({
+          ...base,
+          issuer: ISSUER,
+          ownerPassword: { ...ownerPassword, maxFailures: 5, ...cap },
+        })
+      for (const maxTotalFailures of [5, 4, 5.5, Number.NaN]) {
+        expect(server({ maxTotalFailures })).toThrow(
+          "ownerPassword.maxTotalFailures must be an integer above maxFailures",
+        )
+      }
+      expect(server({ maxTotalFailures: 6 })).not.toThrow()
+      for (const totalWindowMs of [0, -1, Number.POSITIVE_INFINITY]) {
+        expect(server({ totalWindowMs })).toThrow("ownerPassword.totalWindowMs must be positive")
+      }
+    })
+
+    it("refuses a grant lifetime that is not positive", () => {
+      for (const grantTtlMs of [0, -1, Number.NaN]) {
+        expect(() => createAuthorizationServer({ ...base, issuer: ISSUER, grantTtlMs })).toThrow(
+          "grantTtlMs must be positive",
+        )
       }
     })
 

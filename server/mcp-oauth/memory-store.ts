@@ -8,6 +8,7 @@ import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import type {
   AccessTokenRecord,
   CodeRecord,
+  GrantRecord,
   OAuthStore,
   PendingAuthorization,
   RefreshTokenRecord,
@@ -39,7 +40,8 @@ interface Expiring {
  * `takePending` are atomic. Records are copied in and out, so a caller cannot edit a stored one.
  * Expired records are dropped whenever a new one is saved. A revoked grant id is kept until its
  * `until`, so a token saved late for it is refused. Pending consents are capped at `maxPending`,
- * dropping the oldest first.
+ * dropping the oldest first. Password attempts live in memory too, so a restart forgets them: use
+ * `KvOAuthStore` where a restart must not reset the owner-password lockout.
  */
 export class MemoryOAuthStore implements OAuthStore {
   readonly #clock: Clock
@@ -48,8 +50,11 @@ export class MemoryOAuthStore implements OAuthStore {
   readonly #codes = new Map<string, CodeRecord>()
   readonly #access = new Map<string, AccessTokenRecord>()
   readonly #refresh = new Map<string, RefreshTokenRecord>()
+  readonly #grants = new Map<string, GrantRecord>()
   /** Revoked grant ids, each mapped to the epoch milliseconds its refusal lasts until. */
   readonly #revoked = new Map<string, number>()
+  /** Counted password attempts per key, oldest first, and when the newest leaves its window. */
+  readonly #attempts = new Map<string, { at: number[]; expiresAt: number }>()
 
   /** @throws {RangeError} When `maxPending` is not a positive integer. */
   constructor(options: MemoryOAuthStoreOptions = {}) {
@@ -111,10 +116,44 @@ export class MemoryOAuthStore implements OAuthStore {
 
   revokeGrant(grantId: string, until: number): Promise<void> {
     this.#revoked.set(grantId, Math.max(until, this.#revoked.get(grantId) ?? 0))
+    this.#grants.delete(grantId)
     for (const map of [this.#access, this.#refresh]) {
       for (const [key, record] of map) {
         if (record.grantId === grantId) map.delete(key)
       }
+    }
+    return Promise.resolve()
+  }
+
+  saveGrant(record: GrantRecord): Promise<boolean> {
+    return this.#saveToken(this.#grants, record.grantId, record)
+  }
+
+  listGrants(): Promise<GrantRecord[]> {
+    const now = this.#clock.now()
+    const grants = [...this.#grants.values()].filter((grant) => grant.expiresAt > now)
+    grants.sort((a, b) => a.createdAt - b.createdAt)
+    return Promise.resolve(grants.map((grant) => structuredClone(grant)))
+  }
+
+  takeAttempt(key: string, at: number, limit: number, windowMs: number): Promise<number> {
+    this.#prune()
+    const recent = (this.#attempts.get(key)?.at ?? []).filter((time) => time + windowMs > at)
+    if (recent.length >= limit) {
+      return Promise.resolve(recent[recent.length - limit] + windowMs - at)
+    }
+    recent.push(at)
+    recent.sort((a, b) => a - b)
+    this.#attempts.set(key, { at: recent, expiresAt: recent[recent.length - 1] + windowMs })
+    return Promise.resolve(0)
+  }
+
+  releaseAttempt(key: string, at: number): Promise<void> {
+    const entry = this.#attempts.get(key)
+    const index = entry?.at.indexOf(at) ?? -1
+    if (entry !== undefined && index !== -1) {
+      entry.at.splice(index, 1)
+      if (entry.at.length === 0) this.#attempts.delete(key)
     }
     return Promise.resolve()
   }
@@ -151,7 +190,15 @@ export class MemoryOAuthStore implements OAuthStore {
 
   #prune(): void {
     const now = this.#clock.now()
-    for (const map of [this.#pending, this.#codes, this.#access, this.#refresh]) {
+    const maps = [
+      this.#pending,
+      this.#codes,
+      this.#access,
+      this.#refresh,
+      this.#grants,
+      this.#attempts,
+    ]
+    for (const map of maps) {
       for (const [key, record] of map as Map<string, Expiring>) {
         if (record.expiresAt <= now) map.delete(key)
       }
