@@ -1,6 +1,6 @@
 import { expect } from "@std/expect"
 import { IcalDateKind } from "./ical.ts"
-import { AlarmRelated, AlarmTriggerKind } from "./ical-tasks.ts"
+import { type AlarmInput, AlarmRelated, AlarmTriggerKind } from "./ical-tasks.ts"
 import {
   EditField,
   editTask,
@@ -291,4 +291,145 @@ Deno.test(`keep mine applies my repeat rule and reminders over the server's`, ()
   if (!kept.success) throw new Error(kept.error)
   expect(kept.output.task.repeatRule).toBe(`FREQ=DAILY;INTERVAL=3`)
   expect(kept.output.task.reminders).toEqual([])
+})
+
+/** A task with two reminders on one trigger (DISPLAY and AUDIO), an EMAIL one and one without trigger. */
+const MIXED = fixtureTask(
+  [
+    `BEGIN:VCALENDAR`,
+    `VERSION:2.0`,
+    `PRODID:+//IDN tasks.org//android-150904//EN`,
+    `BEGIN:VTODO`,
+    `DTSTAMP:20261001T080000Z`,
+    `UID:m1`,
+    `SUMMARY:Mixed`,
+    `DUE;VALUE=DATE:20261009`,
+    `BEGIN:VALARM`,
+    `TRIGGER;RELATED=END:-PT1H`,
+    `ACTION:DISPLAY`,
+    `DESCRIPTION:shown`,
+    `X-SHOWN:1`,
+    `END:VALARM`,
+    `BEGIN:VALARM`,
+    `TRIGGER;RELATED=END:-PT1H`,
+    `ACTION:AUDIO`,
+    `X-SOUND:1`,
+    `END:VALARM`,
+    `BEGIN:VALARM`,
+    `TRIGGER;RELATED=END:-P1D`,
+    `ACTION:EMAIL`,
+    `ATTENDEE:mailto:a@example.com`,
+    `SUMMARY:mail`,
+    `DESCRIPTION:body`,
+    `END:VALARM`,
+    `BEGIN:VALARM`,
+    `ACTION:DISPLAY`,
+    `DESCRIPTION:no trigger`,
+    `END:VALARM`,
+    `END:VTODO`,
+    `END:VCALENDAR`,
+    ``,
+  ].join(`\r\n`),
+)
+
+const end = (duration: string, action?: `DISPLAY` | `AUDIO`, description?: string) => {
+  const reminder: AlarmInput = {
+    trigger: { kind: AlarmTriggerKind.Relative, duration, related: AlarmRelated.End },
+  }
+  if (action) reminder.action = action
+  if (description) reminder.description = description
+  return reminder
+}
+
+const block = (ics: string, marker: string) =>
+  ics.match(
+    new RegExp(`BEGIN:VALARM\\r\\n(?:(?!END:VALARM)[\\s\\S])*${marker}[\\s\\S]*?END:VALARM\\r\\n`),
+  )
+    ?.[0]
+
+Deno.test(`two reminders on one trigger both survive adding a third, vendor lines included`, () => {
+  const out = edit(MIXED, { reminders: [end(`-PT1H`), end(`-PT1H`), end(`PT0S`)] })
+  for (const kept of [`X-SHOWN:1`, `X-SOUND:1`]) {
+    expect(block(out.ics, kept)).toBe(block(MIXED.ics, kept))
+  }
+  expect(out.ics.match(/ACTION:AUDIO/g)).toHaveLength(1)
+  expect(out.ics).toContain(`TRIGGER;RELATED=END:PT0S`)
+  // The order they were sent in is the order they are paired in.
+  const swapped = edit(MIXED, { reminders: [end(`-PT1H`, `AUDIO`), end(`-PT1H`), end(`PT0S`)] })
+  expect(block(swapped.ics, `X-SHOWN:1`)).toBe(block(MIXED.ics, `X-SHOWN:1`))
+  expect(block(swapped.ics, `X-SOUND:1`)).toBe(block(MIXED.ics, `X-SOUND:1`))
+})
+
+Deno.test(`a reminder the editor cannot write (EMAIL, no trigger) stays as it was`, () => {
+  const out = edit(MIXED, { reminders: [end(`-PT1H`), end(`-PT1H`), end(`PT0S`)] })
+  expect(block(out.ics, `ACTION:EMAIL`)).toBe(block(MIXED.ics, `ACTION:EMAIL`))
+  expect(block(out.ics, `no trigger`)).toBe(block(MIXED.ics, `no trigger`))
+  const cleared = edit(MIXED, { reminders: [] })
+  expect(cleared.ics).toContain(`ACTION:EMAIL`)
+  expect(cleared.ics).toContain(`DESCRIPTION:no trigger`)
+  expect(cleared.ics).not.toContain(`X-SHOWN`)
+  expect(cleared.ics).not.toContain(`X-SOUND`)
+})
+
+Deno.test(`the list read from a task, sent back, does not duplicate an EMAIL reminder`, () => {
+  const sameList = MIXED.reminders.map((r) => ({ trigger: r.alarm }))
+  expect(edit(MIXED, { reminders: sameList }).ics).toBe(MIXED.ics)
+  const more = edit(MIXED, { reminders: [...sameList, end(`PT0S`)] })
+  expect(more.ics.match(/ACTION:EMAIL/g)).toHaveLength(1)
+  expect(more.ics.match(/-P1D/g)).toHaveLength(1)
+})
+
+Deno.test(`an action or description sent for a reminder is written, not ignored`, () => {
+  const toDisplay = edit(MIXED, { reminders: [end(`-PT1H`, `DISPLAY`), end(`-PT1H`, `DISPLAY`)] })
+  expect(toDisplay.ics).not.toContain(`ACTION:AUDIO`)
+  expect(toDisplay.ics).not.toContain(`X-SOUND`)
+  const described = edit(MIXED, {
+    reminders: [end(`-PT1H`, undefined, `new words`), end(`-PT1H`, `AUDIO`)],
+  })
+  expect(described.ics).toContain(`DESCRIPTION:new words`)
+  expect(described.ics).not.toContain(`DESCRIPTION:shown`)
+  expect(described.ics).toContain(`X-SOUND:1`)
+})
+
+Deno.test(`a reminder before the start is not the same as one before the due date`, () => {
+  const fromStart: AlarmInput = {
+    trigger: { kind: AlarmTriggerKind.Relative, duration: `-PT1H`, related: AlarmRelated.Start },
+  }
+  const dated = fixtureTask(
+    NAKED.ics.replace(
+      `DUE;VALUE=DATE:20261009`,
+      `DTSTART:20261009T080000Z\r\nDUE:20261009T090000Z`,
+    ),
+  )
+  const before = edit(dated, { reminders: [end(`-PT1H`)] })
+  const after = edit(fixtureTask(before.ics), { reminders: [fromStart] })
+  expect(before.task.reminders[0]!.alarm).toMatchObject({ related: AlarmRelated.End })
+  expect(after.task.reminders).toHaveLength(1)
+  expect(after.task.reminders[0]!.alarm).toMatchObject({ related: AlarmRelated.Start })
+  expect(after.ics).not.toContain(`RELATED=END`)
+})
+
+Deno.test(`a repeat rule is written in the formatRrule spelling, not the caller's`, () => {
+  const out = edit(PLAIN, { repeatRule: `freq=daily;interval=2` })
+  expect(out.ics).toContain(`\r\nRRULE:FREQ=DAILY;INTERVAL=2\r\n`)
+  expect(out.ics).not.toContain(`freq=daily`)
+})
+
+Deno.test(`a repeat rule needs a start or due date, and clearing one never does`, () => {
+  const bare = fixtureTask(task(`b2`, `No dates`))
+  const refused = editTask(bare, { repeatRule: `FREQ=DAILY;INTERVAL=1` }, NOW)
+  expect(refused.success).toBe(false)
+  expect(refused.error).toContain(`start or due`)
+  // The same edit may bring the date.
+  const together = edit(bare, {
+    repeatRule: `FREQ=DAILY;INTERVAL=1`,
+    due: { kind: IcalDateKind.Date, date: `2026-10-09` },
+  })
+  expect(together.task.repeatRule).toBe(`FREQ=DAILY;INTERVAL=1`)
+  // Removing the due date in the same edit leaves nothing to repeat from.
+  expect(editTask(PLAIN, { repeatRule: `FREQ=DAILY;INTERVAL=1`, due: null }, NOW).success)
+    .toBe(false)
+  // A task that repeats and has lost its date can still stop repeating.
+  const dateless = fixtureTask(BASE.ics.replace(`DUE;VALUE=DATE:20261009\r\n`, ``))
+  expect(edit(dateless, { repeatRule: null }).task.repeatRule).toBeUndefined()
 })

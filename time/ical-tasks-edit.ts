@@ -11,6 +11,7 @@
 
 import { type IcalComponent, parseIcal, serializeIcal } from "./ical.ts"
 import {
+  type Alarm,
   type AlarmInput,
   AlarmRelated,
   type AlarmTrigger,
@@ -18,6 +19,7 @@ import {
   completeTodo,
   CompleteTodoErrorCode,
   CompleteTodoKind,
+  findMaster,
   newTodo,
   patchTodo,
   readTodo,
@@ -126,12 +128,14 @@ export interface TaskEdit {
    */
   repeatRule?: string | null
   /**
-   * The reminders the task has afterwards; an empty list removes them all. A reminder that is
-   * already there (same trigger and, when given, same action and description) keeps its
-   * `VALARM` as it is, vendor lines included. Reminders read from a task have no action, so one
-   * without `action` matches an existing reminder with the same trigger whatever its action. Two
-   * lists with the same triggers in the same order count as the same reminders, whatever their
-   * descriptions.
+   * The reminders the task has afterwards; an empty list removes them all. Each is paired with
+   * one existing `VALARM`, one to one and in order: same trigger, same `RELATED` and, when given,
+   * the same action and description. A paired `VALARM` keeps its lines, vendor lines included;
+   * an `action` or `description` that differs is a change and is written. Reminders read from a
+   * task have no action, so one without `action` matches an existing reminder whatever its
+   * action. A `VALARM` the editor cannot write (`EMAIL`, or no `TRIGGER`) is never touched, and
+   * does not count as a reminder; a reminder without `action` or `description` and with the
+   * trigger of such a `VALARM` stands for it, so a list read from the task does not duplicate it.
    */
   reminders?: AlarmInput[]
 }
@@ -163,13 +167,52 @@ export interface EditOutput {
 export function editTask(task: Task, edit: TaskEdit, now: Date): EditResult {
   const parsed = parseIcal(task.ics)
   if (!parsed.success) return { success: false, output: null, error: parsed.error.message }
-  const patch = toPatch(task, edit, parsed.output)
-  if (typeof patch.rrule === `string`) {
-    const rule = parseRrule(patch.rrule)
+  const patch = toPatch(task, edit)
+  const root = parsed.output
+  if (typeof edit.repeatRule === `string` && patch.rrule !== undefined) {
+    const rule = parseRrule(edit.repeatRule)
     if (!rule.success) return { success: false, output: null, error: rule.error.message }
+    // Written in one spelling, so Tasks.org reads the same text whatever the caller typed.
+    const written = formatRrule(rule.output)
+    if (!written.success) return { success: false, output: null, error: written.error.message }
+    patch.rrule = written.output
+    const start = edit.start === undefined ? task.start : edit.start
+    const due = edit.due === undefined ? task.due : edit.due
+    if (!start && !due) {
+      return {
+        success: false,
+        output: null,
+        error: `A task needs a start or due date to repeat from`,
+      }
+    }
   }
-  const patched = patchTodo(parsed.output, patch, { now })
+  // A VALARM the editor cannot represent (EMAIL, no trigger) is set aside and put back as it was.
+  const master = findMaster(root, `VTODO`)
+  let setAside: IcalComponent[] = []
+  if (edit.reminders !== undefined && master) {
+    const alarms = alarmsOf(root)
+    const paired = pairReminders(alarms, edit.reminders)
+    if (!paired.unchanged) {
+      const children = master.components.filter((child) => child.name.toUpperCase() === `VALARM`)
+      setAside = children.filter((_, at) => !isEditable(alarms[at]!))
+      master.components = master.components.filter((child) => !setAside.includes(child))
+      const wanted = paired.entries.flatMap(({ entry, at, foreign }): AlarmInput[] => {
+        if (foreign) return []
+        if (at === undefined) return [entry]
+        const found = alarms[at]!
+        const action = found.action!.toUpperCase() as `DISPLAY` | `AUDIO`
+        const adopted: AlarmInput = { ...entry, action }
+        if (action === `DISPLAY` && found.description !== undefined) {
+          adopted.description = found.description
+        }
+        return [adopted]
+      })
+      patch.alarms = wanted.length ? wanted : null
+    }
+  }
+  const patched = patchTodo(root, patch, { now })
   if (!patched.success) return { success: false, output: null, error: patched.error.message }
+  if (setAside.length) findMaster(root, `VTODO`)!.components.push(...setAside)
   const ics = serializeIcal(parsed.output)
   // The list is where the task lives, not a property of the text, so it is carried over as given.
   const listHref = edit.listHref ?? task.listHref
@@ -187,7 +230,7 @@ export function editTask(task: Task, edit: TaskEdit, now: Date): EditResult {
   return { success: true, output, error: null }
 }
 
-function toPatch(task: Task, edit: TaskEdit, root: IcalComponent): TodoPatch {
+function toPatch(task: Task, edit: TaskEdit): TodoPatch {
   const patch: TodoPatch = {}
   // Unchanged fields stay out of the patch, so lines another client wrote keep their bytes.
   if (edit.title !== undefined) patch.summary = edit.title
@@ -206,28 +249,23 @@ function toPatch(task: Task, edit: TaskEdit, root: IcalComponent): TodoPatch {
   if (edit.repeatRule !== undefined && !same(ruleOf(task.repeatRule), ruleOf(edit.repeatRule))) {
     patch.rrule = edit.repeatRule
   }
-  if (
-    edit.reminders !== undefined &&
-    !same(taskReminderKeys(task), reminderKeys(edit.reminders))
-  ) {
-    patch.alarms = edit.reminders.length ? withKnownActions(edit.reminders, root) : null
-  }
   return patch
 }
 
-/**
- * A reminder that names no action takes the action of the existing VALARM with the same trigger,
- * so the one the editor sent back keeps its lines whether it is a DISPLAY or an AUDIO reminder.
- */
-function withKnownActions(reminders: AlarmInput[], root: IcalComponent): AlarmInput[] {
-  const existing = readTodo(root)?.alarms ?? []
-  return reminders.map((reminder) => {
-    if (reminder.action !== undefined) return reminder
-    const key = triggerKey(reminder.trigger)
-    const action = existing.find((alarm) => alarm.trigger && triggerKey(alarm.trigger) === key)
-      ?.action?.toUpperCase()
-    return action === `AUDIO` ? { ...reminder, action } : reminder
-  })
+/** The reminders of a task text, in order, as written (not only the ones the editor can write). */
+function alarmsOf(root: IcalComponent): Alarm[] {
+  return readTodo(root)?.alarms ?? []
+}
+
+function alarmsOfTask(task: Task): Alarm[] {
+  const parsed = parseIcal(task.ics)
+  return parsed.success ? alarmsOf(parsed.output) : []
+}
+
+/** A reminder the editor can write: DISPLAY or AUDIO, with a trigger. */
+function isEditable(alarm: Alarm): boolean {
+  const action = alarm.action?.toUpperCase()
+  return alarm.trigger !== undefined && (action === `DISPLAY` || action === `AUDIO`)
 }
 
 type TriggerLike = AlarmTrigger | AlarmInput[`trigger`]
@@ -240,12 +278,53 @@ function triggerKey(trigger: TriggerLike): string {
   return `${trigger.related ?? AlarmRelated.Start} ${trigger.duration.toUpperCase()}`
 }
 
-function reminderKeys(reminders: AlarmInput[]): string[] {
-  return reminders.map((reminder) => triggerKey(reminder.trigger))
+interface Pairing {
+  entries: { entry: AlarmInput; at?: number; foreign?: boolean }[]
+  /** Every sent reminder is one the text has and the text has no other reminder the editor can write. */
+  unchanged: boolean
 }
 
-function taskReminderKeys(task: Task): string[] {
-  return task.reminders.map((reminder) => triggerKey(reminder.alarm))
+/**
+ * Pairs the reminders the editor sent with the VALARMs the text has, one to one and in order. A
+ * reminder matches a VALARM with its trigger (and `RELATED`) and, when it names them, its action
+ * and description. One that names neither and matches only a VALARM the editor cannot write
+ * (EMAIL) stands for that VALARM, which stays as it is.
+ */
+function pairReminders(alarms: Alarm[], list: AlarmInput[]): Pairing {
+  const used = new Set<number>()
+  const entries = list.map((entry): Pairing[`entries`][number] => {
+    const key = triggerKey(entry.trigger)
+    const at = alarms.findIndex((alarm, index) =>
+      !used.has(index) && isEditable(alarm) && triggerKey(alarm.trigger!) === key &&
+      (entry.action === undefined || entry.action === alarm.action!.toUpperCase()) &&
+      (entry.description === undefined || entry.description === alarm.description)
+    )
+    if (at >= 0) {
+      used.add(at)
+      return { entry, at }
+    }
+    if (entry.action === undefined && entry.description === undefined) {
+      const foreign = alarms.findIndex((alarm, index) =>
+        !used.has(index) && !isEditable(alarm) && alarm.trigger !== undefined &&
+        triggerKey(alarm.trigger) === key
+      )
+      if (foreign >= 0) {
+        used.add(foreign)
+        return { entry, at: foreign, foreign: true }
+      }
+    }
+    return { entry }
+  })
+  const unchanged = entries.every((item) => item.at !== undefined) &&
+    alarms.every((alarm, index) => !isEditable(alarm) || used.has(index))
+  return { entries, unchanged }
+}
+
+/** The reminders a task has that the editor can write, with action and description. */
+function reminderSignature(task: Task): string[] {
+  return alarmsOfTask(task).filter(isEditable).map((alarm) =>
+    `${alarm.action!.toUpperCase()} ${triggerKey(alarm.trigger!)} ${alarm.description ?? ``}`
+  )
 }
 
 /** A rule in one spelling, or the text itself when `parseRrule` does not read it. */
@@ -306,9 +385,9 @@ export function keepMine(base: Task, edit: TaskEdit, theirs: Task, now: Date): E
  */
 function changesOf(base: Task, edit: TaskEdit): TaskEdit {
   const changes: Record<string, unknown> = {}
-  for (const { key, read, mine } of FIELDS) {
-    const wanted = mine ? mine(edit) : edit[key]
-    if (wanted !== undefined && !same(read(base), wanted)) changes[key] = edit[key]
+  for (const { key, read, equals } of FIELDS) {
+    if (edit[key] === undefined) continue
+    if (!(equals ? equals(base, edit) : same(read(base), edit[key]))) changes[key] = edit[key]
   }
   return changes as TaskEdit
 }
@@ -316,12 +395,10 @@ function changesOf(base: Task, edit: TaskEdit): TaskEdit {
 /** The fields both sides changed, to different values. */
 export function collisions(base: Task, edit: TaskEdit, theirs: Task): EditField[] {
   const out: EditField[] = []
-  for (const { field, key, read, mine: mineOf } of FIELDS) {
-    const mine = mineOf ? mineOf(edit) : edit[key]
-    if (mine === undefined) continue
-    const original = read(base)
-    const remote = read(theirs)
-    if (!same(original, mine) && !same(original, remote) && !same(remote, mine)) out.push(field)
+  for (const { field, key, read, equals } of FIELDS) {
+    if (edit[key] === undefined) continue
+    const is = (task: Task) => equals ? equals(task, edit) : same(read(task), edit[key])
+    if (!is(base) && !same(read(base), read(theirs)) && !is(theirs)) out.push(field)
   }
   return out
 }
@@ -330,8 +407,8 @@ const FIELDS: {
   field: EditField
   key: keyof TaskEdit
   read: (task: Task) => unknown
-  /** The edit's value in the form `read` gives, when the edit holds another shape. */
-  mine?: (edit: TaskEdit) => unknown
+  /** Whether the edit's value for this field is what `task` has. Default: `read` against the edit. */
+  equals?: (task: Task, edit: TaskEdit) => boolean
 }[] = [
   { field: EditField.Title, key: `title`, read: (t) => t.title },
   { field: EditField.Notes, key: `notes`, read: (t) => t.notes },
@@ -345,13 +422,13 @@ const FIELDS: {
     field: EditField.Repeat,
     key: `repeatRule`,
     read: (t) => ruleOf(t.repeatRule),
-    mine: (e) => e.repeatRule === undefined ? undefined : ruleOf(e.repeatRule),
+    equals: (t, e) => same(ruleOf(t.repeatRule), ruleOf(e.repeatRule)),
   },
   {
     field: EditField.Reminders,
     key: `reminders`,
-    read: (t) => taskReminderKeys(t),
-    mine: (e) => e.reminders && reminderKeys(e.reminders),
+    read: reminderSignature,
+    equals: (t, e) => pairReminders(alarmsOfTask(t), e.reminders ?? []).unchanged,
   },
 ]
 

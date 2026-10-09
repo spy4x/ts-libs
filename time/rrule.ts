@@ -240,10 +240,11 @@ const FREQ_NAMES = [``, `DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`]
 
 /**
  * Write `rule` as the value of an `RRULE` property (no `RRULE:` prefix), so that
- * {@link parseRrule} reads it back to an equal rule. The parts come in the order Tasks.org writes
- * them: `FREQ`, `WKST`, `UNTIL`, `COUNT`, `INTERVAL`, `BYDAY`, `BYMONTHDAY`, `BYMONTH`. `INTERVAL`
- * is always written, as Tasks.org does (`FREQ=DAILY;INTERVAL=1`); `WKST` only when the week does
- * not start on Monday. The lists keep the order they have in `rule`.
+ * {@link parseRrule} reads it back to an equal rule. The parts come in this order: `FREQ`, `WKST`,
+ * `UNTIL`, `COUNT`, `INTERVAL`, `BYDAY`, `BYMONTHDAY`, `BYMONTH`. Tasks.org captures confirm only
+ * `INTERVAL` right after `FREQ` and `COUNT` before `INTERVAL`; the place of the `BY*` parts is
+ * assumed from ical4j. `INTERVAL` is always written, as Tasks.org does (`FREQ=DAILY;INTERVAL=1`);
+ * `WKST` only when the week does not start on Monday. The lists keep the order they have in `rule`.
  *
  * The text is run through {@link parseRrule}, so a rule outside the subset (`BYDAY` on a daily
  * rule, `COUNT` together with `UNTIL`, an interval of 0, a zoned `UNTIL`) is a failure with the
