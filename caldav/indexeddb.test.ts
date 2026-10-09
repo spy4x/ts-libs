@@ -139,7 +139,7 @@ describe(`createIndexedDbCalDavCache`, () => {
     const watching = {
       open(name: string, version?: number) {
         const request = real.open(name, version)
-        request.addEventListener("success", () => opened.push(request.result as IDBDatabase))
+        request.addEventListener(`success`, () => opened.push(request.result as IDBDatabase))
         return request
       },
     } as unknown as IDBFactory
