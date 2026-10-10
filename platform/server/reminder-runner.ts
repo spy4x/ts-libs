@@ -173,8 +173,9 @@ export function createReminderRunner(options: ReminderRunnerOptions): ReminderRu
 
     const now = clock.now()
     const floor = now - catchUpMs
-    // No state yet: start from now. A clock that moved back never opens a window in the future.
-    const after = Math.max(Math.min(memory.lastRunAt ?? now, now), floor)
+    // No state yet: start from now. After a clock that moved back, `after` is later than `now`:
+    // that window is empty, and the next one starts at `now`.
+    const after = Math.max(memory.lastRunAt ?? now, floor)
     // Kept even when this tick fails, so a first run that cannot read the tasks still starts here.
     memory.lastRunAt = after
     // A key at or before the floor can never be in a later window, so it is forgotten.

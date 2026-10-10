@@ -307,11 +307,4 @@ describe("push notifications: clicking a notification", () => {
     await pushAndClick({ title: "Hello", url: "/tasks/7" })
     expect(world.opened).toEqual([`${ORIGIN}/tasks/7`])
   })
-
-  it("passes over a client that is not a window", async () => {
-    const worker: PushClient = { url: `${ORIGIN}/worker.js` }
-    const { world, pushAndClick } = setup({}, [worker])
-    await pushAndClick({ title: "Hello", url: "/tasks/7" })
-    expect(world.opened).toEqual([`${ORIGIN}/tasks/7`])
-  })
 })

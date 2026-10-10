@@ -450,7 +450,7 @@ describe("reminder runner: failures", () => {
 })
 
 describe("reminder runner: the timer", () => {
-  it("ticks at once on start, then once per interval after the tick before has finished", async () => {
+  it("ticks at once on start, then once per interval", async () => {
     expect(DEFAULT_REMINDER_INTERVAL_MS).toBe(MINUTE)
     const { world, runner } = setup("2026-10-12T10:00:00Z")
     runner.start()
@@ -464,6 +464,21 @@ describe("reminder runner: the timer", () => {
     await Promise.resolve()
     expect(world.listed).toBe(2)
     expect(world.timers.scheduled).toEqual([MINUTE, MINUTE])
+    expect(world.timers.pending).toBe(1)
+    await runner.stop()
+  })
+
+  it("schedules the next tick only when the running one has finished", async () => {
+    const waiting: (() => void)[] = []
+    const { world, runner } = setup("2026-10-12T10:00:00Z", {
+      listTasks: () => new Promise<string[]>((resolve) => waiting.push(() => resolve([]))),
+    })
+    runner.start()
+    for (let turn = 0; turn < 5; turn++) await Promise.resolve()
+    expect(world.timers.pending).toBe(0)
+    waiting.splice(0).forEach((open) => open())
+    await runner.tick()
+    await Promise.resolve()
     expect(world.timers.pending).toBe(1)
     await runner.stop()
   })
@@ -485,6 +500,11 @@ describe("reminder runner: the timer", () => {
     await Promise.resolve()
     expect(world.listed).toBe(1)
     expect(world.timers.pending).toBe(1)
+    // Again while the timer of the next tick is pending: no second tick, no second timer.
+    runner.start()
+    for (let turn = 0; turn < 5; turn++) await Promise.resolve()
+    expect(world.listed).toBe(1)
+    expect(world.timers.scheduled).toEqual([MINUTE])
     await runner.stop()
   })
 
@@ -539,9 +559,13 @@ describe("reminder runner: the timer", () => {
     runner.start()
     await Promise.resolve()
     await Promise.resolve()
-    const stopped = runner.stop().then(() => finished)
+    let stopped = false
+    const stopping = runner.stop().then(() => (stopped = true))
+    for (let turn = 0; turn < 5; turn++) await Promise.resolve()
+    expect(stopped).toBe(false)
     waiting.splice(0).forEach((open) => open())
-    expect(await stopped).toBe(true)
+    await stopping
+    expect(finished).toBe(true)
     await Promise.resolve()
     await Promise.resolve()
     expect(world.timers.pending).toBe(0)

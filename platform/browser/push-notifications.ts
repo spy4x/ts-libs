@@ -133,8 +133,7 @@ export function installPushNotifications(
 
   /** Focus a window of the app and send it to `url`, or open a new one there. */
   async function open(url: string): Promise<void> {
-    const windows = (await scope.clients.matchAll({ type: "window", includeUncontrolled: true }))
-      .filter((client) => client.focus !== undefined)
+    const windows = await scope.clients.matchAll({ type: "window", includeUncontrolled: true })
     const client = windows.find((candidate) => candidate.url === url) ?? windows[0]
     if (!client) {
       await scope.clients.openWindow(url)
