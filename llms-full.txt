@@ -3461,6 +3461,36 @@ idempotency key. A command without a key is not: the socket may have delivered i
 dropped. A server answer (`unauthorized`, `conflict`, a socket `RequestTimeoutError`) is never
 asked again over the other module; `sendCommand` decides whether to try again.
 
+#### Waiting for the first open
+
+When a page starts, the socket is still opening, so its first calls would go over HTTP although the
+socket is about to be there. The option `firstOpenWait` makes them wait for it:
+
+```ts
+createComposedCallPort({
+  socket,
+  http,
+  firstOpenWait: {
+    // The promise of the first open, or null when it has ended (opened, closed or failed).
+    pending: () => firstOpen,
+    maxMs: 3_000, // optional; the default
+    clock, // optional; a FakeClock in a test
+  },
+})
+```
+
+A call made while `pending()` returns a promise waits for it, then goes over the socket if it
+opened and over HTTP if not. The bound is shared: it starts at the first call that waits, and all
+calls made during the wait end together. Only the first open waits. Once the socket has been open,
+has closed or failed, or the bound has passed, a call never waits again: a reconnecting socket
+means HTTP at once. A call whose `signal` aborts stops waiting and rejects with the reason.
+Without the option nothing changes.
+
+Three things to know. Once `pending()` has returned `null`, the port never waits again, so create
+the port after the socket has started connecting, or return a promise from the start. A promise
+that rejects counts as the end of the first open, but a `pending()` that throws rejects the call
+that asked. The bound counts from the first call that waits, not from the port's creation.
+
 `sendCommand` makes one key per command and sends every try with it. Tries: `attempts` (default 4);
 the wait before repeat `n` is `delayMs * 2 ** (n - 1)` (default 1 s), capped at `maxDelayMs` and
 jittered by `backoffDelay`. `unauthorized` is never retried.

@@ -1594,6 +1594,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `CallPortCommandOptions` (interface), `jsr:@spy4x/realtime/calls`: Options for one CallPort.command.
 - `CallPortOptions` (interface), `jsr:@spy4x/realtime/calls`: Options for one CallPort.query.
 - `ComposedCallPortOptions` (interface), `jsr:@spy4x/realtime/calls`: Options of createComposedCallPort.
+- `FirstOpenWait` (interface), `jsr:@spy4x/realtime/calls`: Makes the first calls of a page wait for a socket that is still opening, so they travel over it and not over HTTP beside it.
 - `HttpCallPortOptions` (interface), `jsr:@spy4x/realtime/calls`: Options of createHttpCallPort.
 - `RetryOptions` (interface), `jsr:@spy4x/realtime/calls`: Options of sendCommand and sendQuery.
 - `SocketCallTransport` (interface), `jsr:@spy4x/realtime/calls`: The part of ClientTransport the socket port needs.
@@ -2852,4 +2853,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 e0688646128fc639df6d34ef265c6cfa1c97102d70f871189ae85dae2cdcb99e -->
+<!-- export surface: sha256 a92c9bdbeef6a18d0c9bc1b83a313f41c642d297d6548ffeaade6a070019377a -->
