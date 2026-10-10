@@ -86,6 +86,12 @@ export interface AppliedHint {
   sequence: number
 }
 
+/** Delivered to `onHandshakeAcknowledged` listeners. */
+export interface HandshakeAcknowledgedEvent {
+  /** `false` for the transport's first acknowledgement, `true` for every one after a reconnect. */
+  reconnect: boolean
+}
+
 /** Snapshot of transport state, delivered to `onStatus` listeners. */
 export interface TransportStatusSnapshot {
   status: TransportStatus
@@ -342,6 +348,7 @@ export class ClientTransport {
   >()
   readonly #errorHandlers = new Set<(error: Error) => void>()
   readonly #degradedHandlers = new Set<(error: Error) => void>()
+  readonly #acknowledgedHandlers = new Set<(event: HandshakeAcknowledgedEvent) => void>()
 
   #socket: ManagedSocket | null = null
   #unsubscribes: Unsubscribe[] = []
@@ -581,6 +588,20 @@ export class ClientTransport {
   }
 
   /**
+   * The server acknowledged the sync handshake: from this moment it is known to send this socket
+   * hints. Fires after the first acknowledgement (`reconnect: false`) and after each later
+   * reconnect's (`reconnect: true`); never when the handshake fails or the transport was stopped.
+   *
+   * An app that needs a full read at exactly this moment (for example a page with no cursor yet,
+   * which the transport's own pull of held cursors cannot cover) calls its pull here. Returns an
+   * unsubscribe.
+   */
+  onHandshakeAcknowledged(handler: (event: HandshakeAcknowledgedEvent) => void): Unsubscribe {
+    this.#acknowledgedHandlers.add(handler)
+    return () => this.#acknowledgedHandlers.delete(handler)
+  }
+
+  /**
    * The sync handshake failed.
    *
    * A host that keeps a polling pull loop running against REST needs this signal to know the hint
@@ -805,8 +826,10 @@ export class ClientTransport {
 
   /**
    * Pull every group the client already holds a cursor for: after a reconnect (issue #65, finding
-   * 2) and after the first handshake acknowledgement (issue #399). A cold client — no cursors yet — has nothing to pull; its first fetch is the app's own
-   * bootstrap, which this package does not own (see README, "Explicitly not implemented").
+   * 2) and after the first handshake (issue #399). A cold client — no cursors yet — has nothing to
+   * pull; its first fetch is the app's own bootstrap, which this package does not own (see README,
+   * "Explicitly not implemented"). The app pulls at the right moment through
+   * {@link ClientTransport.onHandshakeAcknowledged}.
    */
   async #pullHeldCursors(): Promise<void> {
     const request = await this.#options.cursors.syncRequest()
@@ -841,11 +864,13 @@ export class ClientTransport {
    * throw into the void: a socket that cannot handshake can still receive hints, and the REST pull
    * path is correct on its own.
    *
-   * On the first open (`isReconnect` false) the acknowledgement also starts one pull of every held
-   * cursor. The server only sends hints to a socket it has adopted, so a change made after the
-   * app's start-up read and before the acknowledgement would never reach the page (issue #399). A
-   * reconnect pulls straight away in {@link #handleOpen} instead. The transport does not
-   * de-duplicate: an app that also pulls on its own first open simply pulls twice.
+   * On the first open (`isReconnect` false) the handshake's outcome also starts one pull of every
+   * held cursor, whether it was acknowledged or not. The server only sends hints to a socket it has
+   * adopted, so a change made after the app's start-up read and before the adoption would never
+   * reach the page (issue #399). A lost acknowledgement does not mean the socket was not adopted:
+   * such a socket still receives hints, so the pull runs then too. A reconnect pulls straight away
+   * in {@link #handleOpen} instead. The transport does not de-duplicate: an app that also pulls on
+   * its own first open simply pulls twice.
    */
   async #handshake(isReconnect: boolean): Promise<void> {
     const request = await this.#options.cursors.syncRequest()
@@ -854,16 +879,20 @@ export class ClientTransport {
       cursors: toWireCursors(request.cursors),
       fromStart: request.fromStart,
     }
+    let acknowledged = false
     try {
       await this.request(frame, {
         timeoutMs: this.#handshakeAckTimeoutMs,
         maxAttempts: this.#handshakeAttempts,
       })
+      acknowledged = true
     } catch (error) {
       const failure = toError(error)
       this.#report(failure)
       for (const handler of this.#degradedHandlers) handler(failure)
-      return
+    }
+    if (acknowledged && !this.#stopped) {
+      for (const handler of this.#acknowledgedHandlers) handler({ reconnect: isReconnect })
     }
     if (!isReconnect && !this.#stopped) this.#enqueue(() => this.#pullHeldCursors())
   }
