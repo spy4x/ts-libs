@@ -915,6 +915,7 @@ describe("the composed port waiting for the first open", () => {
 
     expect(await Promise.all(calls)).toEqual(["from socket", "from socket", "from socket"])
     expect(socketServer.seen.map((call) => call.name)).toEqual(["a", "b", "c"])
+    expect(socketServer.seen[2]?.key).toBe("k")
   })
 
   it("sends every call made during one wait over HTTP when the bound passes", async () => {
@@ -953,8 +954,34 @@ describe("the composed port waiting for the first open", () => {
   it("uses HTTP at once while the socket is not open, without the option", async () => {
     const { port, socketServer, httpServer } = setup({ withWait: false })
 
-    expect(await port.query("x")).toBe("from http")
-    expect(socketServer.seen).toHaveLength(0)
+    const call = port.query("x")
+    for (let i = 0; i < 10; i++) await Promise.resolve()
     expect(httpServer.seen).toHaveLength(1)
+
+    expect(await call).toBe("from http")
+    expect(socketServer.seen).toHaveLength(0)
+  })
+
+  it("uses HTTP at once when the promise of the first open rejects", async () => {
+    const clock = new FakeClock()
+    const httpServer = fakeServer(["from http"])
+    const port = createComposedCallPort({
+      socket: createSocketCallPort(socketTransport(fakeServer(), TransportStatus.Connecting)),
+      http: createHttpCallPort({ baseUrl: "/api", userId: "u", fetch: serverFetch(httpServer) }),
+      firstOpenWait: { pending: () => Promise.reject(new Error("first open failed")), clock },
+    })
+
+    expect(await port.query("x")).toBe("from http")
+    expect(clock.pendingTimers).toBe(0)
+  })
+
+  it("sends a keyed command over HTTP with its key after the bound passes", async () => {
+    const { port, clock, httpServer } = setup({ maxMs: 500 })
+
+    const call = port.command("c", { n: 1 }, { idempotencyKey: "k-http" })
+    await clock.advance(500)
+
+    expect(await call).toBe("from http")
+    expect(httpServer.seen).toEqual([{ name: "c", payload: { n: 1 }, key: "k-http", user: "u" }])
   })
 })

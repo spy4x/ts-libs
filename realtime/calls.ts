@@ -308,13 +308,17 @@ const DEFAULT_FIRST_OPEN_WAIT_MS = 3_000
 export interface FirstOpenWait {
   /**
    * The promise of the socket's first open, or `null` when there is nothing to wait for. It
-   * resolves when that first attempt has ended, whether the socket opened, closed or failed, and
-   * it never rejects. Return `null` once the socket has opened or failed for the first time: a
-   * reconnecting socket never makes a call wait.
+   * resolves when that first attempt has ended, whether the socket opened, closed or failed; a
+   * rejection counts as the end too. Return `null` once the socket has opened or failed for the
+   * first time: a reconnecting socket never makes a call wait.
+   *
+   * Once `pending()` has returned `null`, the port never waits again. So create the port after the
+   * socket has started connecting, or return a promise from the start. A `pending()` that throws
+   * rejects the call that asked.
    */
   pending(): Promise<void> | null
   /**
-   * The longest the first calls wait together, counted from the first call that waits, in
+   * The longest the first calls wait together, counted from the first call that waits (not from the port's creation), in
    * milliseconds. Default 3 000. After it has passed, no call waits again.
    */
   maxMs?: number
@@ -351,8 +355,8 @@ export interface ComposedCallPortOptions {
 export function createComposedCallPort(options: ComposedCallPortOptions): CallPort {
   const { socket, http, firstOpenWait } = options
   const clock = firstOpenWait?.clock ?? createSystemClock()
-  // One wait, shared by every call made during it. `settled` ends all waiting for good: the first
-  // open happened, failed, or the bound passed.
+  // One wait, shared by every call made during it; once `gate` has resolved it costs no time.
+  // `settled` ends all waiting for good: the socket was seen open, or `pending()` said `null`.
   let settled = false
   let gate: Promise<void> | null = null
 
@@ -360,12 +364,12 @@ export function createComposedCallPort(options: ComposedCallPortOptions): CallPo
     if (gate !== null) return gate
     gate = new Promise<void>((resolve) => {
       const timer = clock.setTimeout(resolve, firstOpenWait?.maxMs ?? DEFAULT_FIRST_OPEN_WAIT_MS)
-      pending.then(() => {
+      const end = () => {
         clock.clearTimeout(timer)
         resolve()
-      })
-    }).then(() => {
-      settled = true
+      }
+      // A first open that rejects has ended too: never leave the rejection unhandled.
+      pending.then(end, end)
     })
     return gate
   }
