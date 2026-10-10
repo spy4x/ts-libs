@@ -325,6 +325,49 @@ describe("reminder runner: restarts and long stops", () => {
   })
 })
 
+describe("reminder runner: ticks that take time", () => {
+  it("sends 200 of 200 reminders, one a minute, with the shortest catch-up it accepts when every tick takes two seconds", async () => {
+    const TICK = 2_000
+    const start = at("2026-10-12T10:00:00Z")
+    const clock = fakeClock(start)
+    const stamp = (ms: number) => new Date(ms).toISOString().replace(/[-:]|\.\d{3}/g, "")
+    const tasks = Array.from(
+      { length: 200 },
+      (_, index) => task(`r${index}`, stamp(start + (index + 1) * MINUTE)),
+    )
+    // A tick may take as long as its deadline, and here every tick does.
+    const slow = {
+      clock,
+      intervalMs: MINUTE,
+      tickTimeoutMs: TICK,
+      listTasks: () => {
+        clock.advance(TICK)
+        return tasks
+      },
+    }
+    // The shortest catch-up the runner accepts, to the second.
+    let catchUpMs = MINUTE
+    const build = () => setup("2026-10-12T10:00:00Z", { ...slow, catchUpMs })
+    let built: ReturnType<typeof build> | undefined
+    while (!built) {
+      try {
+        built = build()
+      } catch {
+        catchUpMs += 1_000
+        if (catchUpMs > 10 * MINUTE) throw new Error("no catch-up up to ten minutes is accepted")
+      }
+    }
+    const { world, runner } = built
+    while (clock.now() < start + 202 * MINUTE) {
+      await runner.tick()
+      clock.advance(MINUTE)
+    }
+    expect(new Set(world.sent).size).toBe(200)
+    expect(world.sent).toHaveLength(200)
+    expect(world.errors).toEqual([])
+  })
+})
+
 describe("reminder runner: failures", () => {
   it("reports a failed task read and covers the missed stretch on the next tick", async () => {
     let failing = false
@@ -746,14 +789,29 @@ describe("reminder runner: options it refuses", () => {
     }
   })
 
-  it("refuses a catch-up shorter than the interval, and accepts one equal to it", () => {
-    for (const catchUpMs of [0, -1, MINUTE - 1, Number.NaN, Number.POSITIVE_INFINITY]) {
+  it("refuses a catch-up shorter than the interval plus the tick deadline, and accepts one equal to it", () => {
+    const least = MINUTE + TICK_TIMEOUT
+    for (const catchUpMs of [0, -1, MINUTE, least - 1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => setup("2026-10-12T10:00:00Z", { catchUpMs })).toThrow(RangeError)
     }
-    expect(() => setup("2026-10-12T10:00:00Z", { intervalMs: 5 * MINUTE, catchUpMs: 4 * MINUTE }))
+    setup("2026-10-12T10:00:00Z", { catchUpMs: least })
+    // Each of the two parts counts: a longer interval or a longer deadline raises the least value.
+    expect(() => setup("2026-10-12T10:00:00Z", { intervalMs: 5 * MINUTE, catchUpMs: 6 * MINUTE }))
       .toThrow(RangeError)
-    setup("2026-10-12T10:00:00Z", { catchUpMs: MINUTE })
-    setup("2026-10-12T10:00:00Z", { intervalMs: 1_000, catchUpMs: 1_000 })
+    expect(() =>
+      setup("2026-10-12T10:00:00Z", { tickTimeoutMs: 5 * MINUTE, catchUpMs: 5 * MINUTE })
+    )
+      .toThrow(RangeError)
+    setup("2026-10-12T10:00:00Z", { intervalMs: 1_000, tickTimeoutMs: 500, catchUpMs: 1_500 })
+  })
+
+  it("refuses a catch-up of one minute with the default interval and deadline", () => {
+    const defaults = { tickTimeoutMs: undefined }
+    expect(() => setup("2026-10-12T10:00:00Z", { ...defaults, catchUpMs: MINUTE }))
+      .toThrow("catchUpMs must be a number of at least intervalMs + tickTimeoutMs")
+    expect(() => setup("2026-10-12T10:00:00Z", { ...defaults, catchUpMs: 3 * MINUTE - 1 }))
+      .toThrow(RangeError)
+    setup("2026-10-12T10:00:00Z", { ...defaults, catchUpMs: 3 * MINUTE })
   })
 
   it("refuses a zone this runtime does not know, before any tick", () => {

@@ -10,7 +10,9 @@
  *    caller supplies. A restart therefore neither repeats a reminder nor skips one that came due
  *    while the server was down.
  *  - After a long stop it catches up at most `catchUpMs` (an hour by default). A reminder older
- *    than that is dropped: a notification hours late is noise.
+ *    than that is dropped: a notification hours late is noise. While it runs it skips nothing,
+ *    however long a tick takes: `catchUpMs` is never less than `intervalMs + tickTimeoutMs`, the
+ *    longest two ticks can be apart.
  *  - Ticks never overlap. The next one is scheduled when the current one has finished, and a
  *    `tick()` called while one runs joins it.
  *  - A failure is reported through `onError` and never stops the next tick. When the tasks cannot
@@ -117,8 +119,12 @@ export interface ReminderRunnerOptions {
   /** Milliseconds between the end of one tick and the start of the next. Default one minute. */
   intervalMs?: number
   /**
-   * The longest stretch a tick looks back over, in milliseconds. Default one hour. Never less
-   * than `intervalMs`: a tick would then skip part of the time since the tick before.
+   * The longest stretch a tick looks back over, in milliseconds: a reminder older than this when
+   * a tick runs is not sent. Default one hour. Never less than `intervalMs + tickTimeoutMs`. A
+   * tick ends within its deadline and the next one starts an interval later, so two ticks are at
+   * most that far apart, and a shorter stretch would skip the reminders that came due at the
+   * start of it. A reminder whose `notify` failed is tried again only while it is younger than
+   * this, so the least value leaves a slow or failed tick no second try.
    */
   catchUpMs?: number
   /**
@@ -153,7 +159,7 @@ const stateSchema = type({
  * Builds a runner; nothing runs until {@link ReminderRunner.start} or {@link ReminderRunner.tick}.
  *
  * @throws {RangeError} when `intervalMs` or `tickTimeoutMs` is not positive, `catchUpMs` is less
- * than `intervalMs`, or `zone` is not a time zone this runtime knows.
+ * than `intervalMs + tickTimeoutMs`, or `zone` is not a time zone this runtime knows.
  * @throws {TypeError} when `dateOnlyTime` is not a time of day.
  */
 export function createReminderRunner(options: ReminderRunnerOptions): ReminderRunner {
@@ -165,12 +171,14 @@ export function createReminderRunner(options: ReminderRunnerOptions): ReminderRu
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
     throw new RangeError("intervalMs must be a positive number")
   }
-  if (!Number.isFinite(catchUpMs) || catchUpMs < intervalMs) {
-    throw new RangeError("catchUpMs must be a number of at least intervalMs")
-  }
   const tickTimeoutMs = options.tickTimeoutMs ?? DEFAULT_REMINDER_TICK_TIMEOUT_MS
   if (!Number.isFinite(tickTimeoutMs) || tickTimeoutMs <= 0) {
     throw new RangeError("tickTimeoutMs must be a positive number")
+  }
+  // Two ticks read the clock at most `intervalMs + tickTimeoutMs` apart: a tick ends within its
+  // deadline and the next starts one interval later. A window shorter than that would leave a gap.
+  if (!Number.isFinite(catchUpMs) || catchUpMs < intervalMs + tickTimeoutMs) {
+    throw new RangeError("catchUpMs must be a number of at least intervalMs + tickTimeoutMs")
   }
   // With a zone it does not know, every date-only and floating task would silently never remind.
   if (!isValidTimeZone(options.zone)) {
