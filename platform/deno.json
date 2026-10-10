@@ -42,6 +42,7 @@
     "./universal/concurrency": "./universal/concurrency.ts",
     "./universal/constants": "./universal/constants.ts",
     "./universal/csv": "./universal/csv.ts",
+    "./universal/error-reporter": "./universal/error-reporter.ts",
     "./universal/errors": "./universal/errors.ts",
     "./universal/format-number": "./universal/format-number.ts",
     "./universal/honeypot": "./universal/honeypot.ts",

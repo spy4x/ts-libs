@@ -599,6 +599,9 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ERR_MESSAGE` (constant), `jsr:@spy4x/platform`: Canonical copy for each category, so the same failure reads the same in every product.
 - `Err` (interface), `jsr:@spy4x/platform`: Base shape every error shares: a category and human-readable copy.
 - `ErrType` (enum), `jsr:@spy4x/platform`: Kind of a failed operation.
+- `ErrorEventTarget` (interface), `jsr:@spy4x/platform`: The target of `install`: `window`, or anything with `addEventListener`.
+- `ErrorReporter` (interface), `jsr:@spy4x/platform`: What `createErrorReporter` returns.
+- `ErrorReporterOptions` (interface), `jsr:@spy4x/platform`: What the reporter needs; only `dsn` is required, and an empty one turns the reporter off.
 - `FormatTimeOptions` (interface), `jsr:@spy4x/platform`: Options for formatTime.
 - `HONEYPOT_FIELD_NAME` (constant), `jsr:@spy4x/platform`: Default `name` of the honeypot field.
 - `HOURS_IN_DAY` (constant), `jsr:@spy4x/platform`: Hours in one day.
@@ -624,6 +627,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `OperationResult` (type), `jsr:@spy4x/platform`: Result of an operation that can fail: exactly one of `result` / `error` is non-null.
 - `OperationState` (interface), `jsr:@spy4x/platform`: In-flight state of an operation, for a store or a form to render.
 - `OtherError` (interface), `jsr:@spy4x/platform`: An error this package has no category for.
+- `ParsedDsn` (interface), `jsr:@spy4x/platform`: Where a report goes: the envelope URL and the public key a DSN carries.
 - `PayloadError` (interface), `jsr:@spy4x/platform`: A payload a schema rejected: a response body, or a remote feed item.
 - `QuickAddDue` (interface), `jsr:@spy4x/platform`: When the task is due: a calendar date in the given time zone, and a wall-clock time if typed.
 - `QuickAddOptions` (interface), `jsr:@spy4x/platform`: Options of parseQuickAdd.
@@ -632,6 +636,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `QuickAddSpan` (interface), `jsr:@spy4x/platform`: One recognised token, as a half-open range of UTF-16 offsets into the original line.
 - `QuickAddSpanKind` (enum), `jsr:@spy4x/platform`: What a recognised token is.
 - `RandomSource` (type), `jsr:@spy4x/platform`: A source of numbers in `[0, 1)`, the shape `Math.random` has.
+- `ReportContext` (interface), `jsr:@spy4x/platform`: Extra facts one report may carry.
 - `RequestError` (type), `jsr:@spy4x/platform`: Errors a request itself can produce.
 - `ResponseError` (type), `jsr:@spy4x/platform`: Errors from a response that never reached a usable body.
 - `Result` (type), `jsr:@spy4x/platform`: A value or an error, as a discriminated union on `ok`.
@@ -653,6 +658,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `commandOk` (function), `jsr:@spy4x/platform`: Build the success arm of a CommandEnvelope.
 - `connectionError` (function), `jsr:@spy4x/platform`: Wrap a message the caller already has into a ConnectionError.
 - `convertToKebabCase` (function), `jsr:@spy4x/platform`: Convert a free-form identifier to kebab-case.
+- `createErrorReporter` (function), `jsr:@spy4x/platform`: Creates the reporter.
 - `debounce` (function), `jsr:@spy4x/platform`: Wrap `fn` in a trailing-edge debounce.
 - `err` (function), `jsr:@spy4x/platform`: Wrap a failure.
 - `filterRows` (function), `jsr:@spy4x/platform`: Keep the rows that every word of the query matches.
@@ -673,12 +679,15 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `normalizeCalendarDate` (function), `jsr:@spy4x/platform`: Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
 - `normalizeCanonical` (function), `jsr:@spy4x/platform`: The canonical address as it should be published: one clean `http`/`https` address.
 - `ok` (function), `jsr:@spy4x/platform`: Wrap a success.
+- `parseDsn` (function), `jsr:@spy4x/platform`: The DSN's endpoint and key, or `null` when `dsn` is not a valid `https://key@host/project`.
 - `parseQuickAdd` (function), `jsr:@spy4x/platform`: Read the tokens out of a quick-add line.
 - `parseSort` (function), `jsr:@spy4x/platform`: Read sort rules out of a URL parameter.
 - `pluralize` (function), `jsr:@spy4x/platform`: Naive English pluraliser for UI copy.
 - `removeSortRule` (function), `jsr:@spy4x/platform`: Removes one sort priority while preserving all remaining priorities.
 - `responseError` (function), `jsr:@spy4x/platform`: Turn a failed response into a structured error.
 - `round` (function), `jsr:@spy4x/platform`: Round to the nearest 10^-`decimals`.
+- `scrubText` (function), `jsr:@spy4x/platform`: Free text with the secrets it may carry masked: URLs lose their query, `Bearer` values, and the value of anything named like a password, token, cookie or key.
+- `scrubUrl` (function), `jsr:@spy4x/platform`: `url` as origin and path only, with credentials, query and fragment dropped.
 - `search` (function), `jsr:@spy4x/platform`: Whether one search word occurs in one value.
 - `searchWords` (function), `jsr:@spy4x/platform`: Split a search box's value into words.
 - `serializeSort` (function), `jsr:@spy4x/platform`: Write sort rules into a URL parameter.
@@ -1205,6 +1214,18 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `csvRow` (function), `jsr:@spy4x/platform/universal/csv`: One data row, rendered and escaped, comma-joined.
 - `toCsvBytes` (function), `jsr:@spy4x/platform/universal/csv`: toCsvText, encoded as UTF-8 bytes with a leading CSV_BYTE_ORDER_MARK.
 - `toCsvText` (function), `jsr:@spy4x/platform/universal/csv`: Render every row as RFC 4180 CSV text: a header row, one line per row of `rows`, each terminated by LINE_ENDING — including the last line, which the RFC leaves optional but which every row here carries for one uniform rule instead of a special case for the final row.
+
+### `jsr:@spy4x/platform/universal/error-reporter`
+
+- `ErrorEventTarget` (interface), `jsr:@spy4x/platform/universal/error-reporter`: The target of `install`: `window`, or anything with `addEventListener`.
+- `ErrorReporter` (interface), `jsr:@spy4x/platform/universal/error-reporter`: What `createErrorReporter` returns.
+- `ErrorReporterOptions` (interface), `jsr:@spy4x/platform/universal/error-reporter`: What the reporter needs; only `dsn` is required, and an empty one turns the reporter off.
+- `ParsedDsn` (interface), `jsr:@spy4x/platform/universal/error-reporter`: Where a report goes: the envelope URL and the public key a DSN carries.
+- `ReportContext` (interface), `jsr:@spy4x/platform/universal/error-reporter`: Extra facts one report may carry.
+- `createErrorReporter` (function), `jsr:@spy4x/platform/universal/error-reporter`: Creates the reporter.
+- `parseDsn` (function), `jsr:@spy4x/platform/universal/error-reporter`: The DSN's endpoint and key, or `null` when `dsn` is not a valid `https://key@host/project`.
+- `scrubText` (function), `jsr:@spy4x/platform/universal/error-reporter`: Free text with the secrets it may carry masked: URLs lose their query, `Bearer` values, and the value of anything named like a password, token, cookie or key.
+- `scrubUrl` (function), `jsr:@spy4x/platform/universal/error-reporter`: `url` as origin and path only, with credentials, query and fragment dropped.
 
 ### `jsr:@spy4x/platform/universal/errors`
 
@@ -2675,4 +2696,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 f7953334c4a7db640a1bb257e278e948f25909e638f91dcb4b9e95ad1e2dfeeb -->
+<!-- export surface: sha256 c55275b3bef3abafd3c23f6a5f68ec100cd80976ba3535ea842a6d13ab29fb20 -->
