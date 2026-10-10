@@ -13,7 +13,7 @@
  * single-connection `Sql` clients at it with `search_path`, and drops the schema in a
  * `finally`. Nothing shared is touched.
  */
-import { assert, assertEquals } from "@std/assert"
+import { assert, assertEquals, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import { createSql, type Sql } from "../db/index.ts"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
@@ -358,6 +358,44 @@ describe("delayed and repeating jobs against a real server", () => {
       await sql`UPDATE outbox_events SET available_at = available_at - INTERVAL '61 minutes'`
       const claimed = await repository.claimBatch(10, 5, 60)
       assertEquals(claimed.map((row) => row.eventKind), ["account.delete"])
+    })
+  })
+
+  it("leaves no scheduled job when the transaction that scheduled it rolls back", async () => {
+    await withOutboxSchema(async (sql) => {
+      await assertRejects(
+        () =>
+          sql.begin(async (tx) => {
+            await scheduleOutboxEvent(
+              tx,
+              { eventKind: "account.delete", aggregateType: "user", aggregateId: JOB_SUBJECT },
+              { inMs: 0 },
+            )
+            throw new Error("the change around the job failed")
+          }),
+        Error,
+        "the change around the job failed",
+      )
+      const [{ count }] = await sql<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM outbox_events
+      `
+      assertEquals(count, 0)
+    })
+  })
+
+  it("leaves exactly one scheduled job when the transaction that scheduled it commits", async () => {
+    await withOutboxSchema(async (sql) => {
+      const id = await sql.begin((tx) =>
+        scheduleOutboxEvent(
+          tx,
+          { eventKind: "account.delete", aggregateType: "user", aggregateId: JOB_SUBJECT },
+          { inMs: 0 },
+        )
+      )
+      const rows = await sql<{ id: string; eventKind: string }[]>`
+        SELECT id, event_kind AS "eventKind" FROM outbox_events
+      `
+      assertEquals([...rows], [{ id, eventKind: "account.delete" }])
     })
   })
 

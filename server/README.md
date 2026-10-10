@@ -1889,8 +1889,8 @@ without blocking the rest of the batch. Consumers use a drained row to learn tha
 and pull the authoritative state, which is what keeps the outbox itself out of the correctness path.
 
 **Delayed and repeating jobs are the same rows with a later `available_at`.**
-`scheduleOutboxEvent(sql, { eventKind, aggregateType, aggregateId }, { at } | { inMs })` writes a
-row that no drain claims before its time; pass the transaction of the change that needs it. Like
+`scheduleOutboxEvent(sql | tx, { eventKind, aggregateType, aggregateId }, { at } | { inMs })` writes a
+row that no drain claims before its time; pass the `sql.begin` transaction of the change that needs it, and a rollback takes the job with it. Like
 every outbox row it carries no payload: the publisher reads what it needs from the aggregate.
 Failures already back off exponentially and stop at `maxAttempts` with the last error name in
 `last_error_code`. A repeating job lists its kind in `OutboxProcessorOptions.repeatEveryMs`; once a
