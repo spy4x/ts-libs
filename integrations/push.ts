@@ -126,8 +126,11 @@ export const vapidPublicKey = async (keys: VapidKeys): Promise<string> =>
 
 const GONE_STATUSES = new Set([404, 410])
 const MAX_PAYLOAD_ERROR_CHARS = 200
-/** 4096-byte push body minus the 86-byte header, 16-byte tag and 1-byte padding delimiter. */
-const MAX_PAYLOAD_BYTES = 3993
+/**
+ * The most bytes a message may take as JSON text in UTF-8; `send` refuses a longer one. It is the
+ * 4096-byte push body minus the 86-byte header, 16-byte tag and 1-byte padding delimiter.
+ */
+export const MAX_PUSH_PAYLOAD_BYTES = 3993
 const encoder = new TextEncoder()
 
 /**
@@ -299,8 +302,10 @@ export const createWebPushSender = async (
       return failure(`invalid push payload: ${parsed.summary.slice(0, MAX_PAYLOAD_ERROR_CHARS)}`)
     }
     const bytes = encoder.encode(JSON.stringify(parsed))
-    if (bytes.length > MAX_PAYLOAD_BYTES) {
-      return failure(`push payload is ${bytes.length} bytes; the limit is ${MAX_PAYLOAD_BYTES}`)
+    if (bytes.length > MAX_PUSH_PAYLOAD_BYTES) {
+      return failure(
+        `push payload is ${bytes.length} bytes; the limit is ${MAX_PUSH_PAYLOAD_BYTES}`,
+      )
     }
     return bytes
   }
