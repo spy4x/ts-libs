@@ -23,7 +23,7 @@ import {
   REALTIME_USER_HEADER,
 } from "./operations.ts"
 import { ConnectionRegistry } from "./registry.ts"
-import { drainMicrotasks, FakeClock, FakeSocketFactory } from "./testing.ts"
+import { drainMicrotasks, FakeClock, type FakeSocket, FakeSocketFactory } from "./testing.ts"
 
 interface Actor {
   userId: number
@@ -86,6 +86,34 @@ function createTable(): { operations: Operations<Actor>; calls: OperationCall<Ac
       handle: (call) => {
         record(call)
         throw new RealtimeRequestError("internal", "password=hunter2 in SQL", { dsn: "hunter2" })
+      },
+    },
+    "note.teapot": {
+      kind: "query",
+      handle: (call) => {
+        record(call)
+        throw new RealtimeRequestError("teapot" as RealtimeErrorCode, "short and stout", { a: 1 })
+      },
+    },
+    "note.inheritedCode": {
+      kind: "query",
+      handle: (call) => {
+        record(call)
+        throw new RealtimeRequestError("constructor" as RealtimeErrorCode, "short and stout")
+      },
+    },
+    "note.wait": {
+      kind: "query",
+      handle: (call) => {
+        record(call)
+        return new Promise(() => {})
+      },
+    },
+    "note.render": {
+      kind: "query",
+      handle: (call) => {
+        record(call)
+        return call.payload === "symbol" ? Symbol("note") : () => "note"
       },
     },
     "note.count": {
@@ -172,6 +200,8 @@ interface SocketHarness {
   errors: unknown[]
   /** Sends one request frame and returns the server's answer frame. */
   send(frame: Record<string, unknown>): Promise<Record<string, unknown>>
+  /** The server's end of the one attached socket, for a test that drives it by hand. */
+  socket(): FakeSocket
 }
 
 function createSocket(
@@ -197,6 +227,7 @@ function createSocket(
   return {
     calls,
     errors,
+    socket: () => factory.latest,
     async send(frame) {
       const id = `r${++next}`
       const before = factory.latest.sent.length
@@ -302,6 +333,20 @@ const SCENARIOS: readonly Scenario[] = [
     title: "a typed error that names itself internal",
     kind: "query",
     name: "note.secret",
+    expected: { code: "internal" },
+    handled: true,
+  },
+  {
+    title: "a typed error whose code is not one of the closed set",
+    kind: "query",
+    name: "note.teapot",
+    expected: { code: "internal" },
+    handled: true,
+  },
+  {
+    title: "a typed error whose code is a name every object inherits",
+    kind: "query",
+    name: "note.inheritedCode",
     expected: { code: "internal" },
     handled: true,
   },
@@ -483,7 +528,8 @@ describe("createCallHandler", () => {
     const { status, body } = await http.call({ payload: {}, key: "k1", user: null })
 
     expect(status).toBe(401)
-    expect((body as { error: { code: string } }).error.code).toBe("unauthorized")
+    expect(body).toEqual(errorBody("unauthorized", "the call does not say which user it is for"))
+    expect((await http.call({ payload: {}, key: "k1", user: "" })).body).toEqual(body)
     expect(http.calls).toHaveLength(0)
   })
 
@@ -591,6 +637,70 @@ describe("createCallHandler", () => {
     expect(status).toBe(400)
     expect(body).toEqual(errorBody("bad_request", "a command needs an idempotency key"))
     expect(http.calls).toHaveLength(0)
+  })
+
+  it("refuses a command whose idempotency key header is empty", async () => {
+    const http = createHttp()
+
+    const { status, body } = await http.call({ payload: { text: "milk" }, key: "" })
+
+    expect(status).toBe(400)
+    expect(body).toEqual(errorBody("bad_request", "a command needs an idempotency key"))
+    expect(http.calls).toHaveLength(0)
+  })
+
+  it("hands the operation undefined, not null, for an empty body", async () => {
+    const http = createHttp()
+
+    const { status } = await http.call({ name: "note.list", body: "" })
+
+    expect(status).toBe(200)
+    expect(http.calls).toHaveLength(1)
+    expect(http.calls[0].payload).toBeUndefined()
+  })
+
+  it("hands the operation null for a body that is the JSON null", async () => {
+    const http = createHttp()
+
+    await http.call({ name: "note.list", body: "null" })
+
+    expect(http.calls[0].payload).toBeNull()
+  })
+
+  it("refuses a body of only whitespace as not JSON", async () => {
+    const http = createHttp()
+
+    const { status, body } = await http.call({ name: "note.list", body: " \n\t" })
+
+    expect(status).toBe(400)
+    expect(body).toEqual(errorBody("bad_request", "the body is not valid JSON"))
+    expect(http.calls).toHaveLength(0)
+  })
+
+  it("hands the operation the caller's own abort signal", async () => {
+    const { operations, calls } = createTable()
+    const handler = createCallHandler(operations, {
+      basePath: "/api/call",
+      authenticate: () => ALICE,
+      userIdOf: (actor) => actor.userId,
+    })
+    const request = callRequest({ name: "note.list" })
+
+    await handler(request)
+
+    expect(calls[0].signal).toBe(request.signal)
+  })
+
+  it("answers result null for a result JSON has no value for", async () => {
+    const http = createHttp()
+
+    const fn = await http.call({ name: "note.render", payload: "function" })
+    const symbol = await http.call({ name: "note.render", payload: "symbol" })
+
+    expect([fn.status, symbol.status]).toEqual([200, 200])
+    expect(fn.body).toEqual({ result: null })
+    expect(symbol.body).toEqual({ result: null })
+    expect(Object.keys(symbol.body as object)).toEqual(["result"])
   })
 
   it("refuses an idempotency key longer than 256 characters", async () => {
@@ -881,6 +991,46 @@ describe("createOperationDispatcher", () => {
       message: "the session belongs to another user",
     })
     expect(socket.calls).toHaveLength(0)
+  })
+
+  it("answers internal, and reports the error, when authentication throws an internal error", async () => {
+    const socket = createSocket(() => {
+      throw new RealtimeRequestError("internal", "password=hunter2", { dsn: "hunter2" })
+    })
+
+    const frame = await socket.send(command)
+
+    expect(frame).toEqual({
+      kind: "server.error",
+      requestId: frame.requestId,
+      code: "internal",
+      message: "internal error",
+    })
+    expect(socket.errors).toHaveLength(1)
+    expect(socket.calls).toHaveLength(0)
+  })
+
+  it("answers an app error authentication throws through the mapper", async () => {
+    const socket = createSocket(() => {
+      throw new AppError("the account is frozen")
+    })
+
+    const frame = await socket.send(command)
+
+    expect(frame).toMatchObject({ code: "forbidden", message: "the account is frozen" })
+    expect(socket.calls).toHaveLength(0)
+  })
+
+  it("aborts the operation's signal when the connection closes", async () => {
+    const socket = createSocket()
+
+    socket.socket().receive(JSON.stringify({ kind: "client.query", id: "r1", name: "note.wait" }))
+    await drainMicrotasks(64)
+    expect(socket.calls).toHaveLength(1)
+    expect(socket.calls[0].signal.aborted).toBe(false)
+    socket.socket().dropFromPeer()
+
+    expect(socket.calls[0].signal.aborted).toBe(true)
   })
 
   it("refuses a query frame that names a command", async () => {

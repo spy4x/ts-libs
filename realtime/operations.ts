@@ -28,7 +28,7 @@ import {
   readBoundedText,
 } from "@spy4x/net/bounded-body"
 
-import { type RealtimeErrorCode, RealtimeRequestError } from "./errors.ts"
+import { isRealtimeErrorCode, type RealtimeErrorCode, RealtimeRequestError } from "./errors.ts"
 import type { RequestContext, RequestDispatcher } from "./registry.ts"
 
 /** The header that carries the id of the user the page was started for. */
@@ -145,7 +145,11 @@ function admit<TActor>(input: GateInput<TActor>): GateOutput<TActor> {
   if (actor === null || actor === undefined) {
     throw new RealtimeRequestError("unauthorized", "not signed in")
   }
-  if (!isBoundToUser(input.claimedUserId, input.userIdOf(actor))) {
+  const claimed = input.claimedUserId
+  if (claimed === null || claimed === undefined || claimed === "") {
+    throw new RealtimeRequestError("unauthorized", "the call does not say which user it is for")
+  }
+  if (!isBoundToUser(claimed, input.userIdOf(actor))) {
     throw new RealtimeRequestError("unauthorized", "the session belongs to another user")
   }
   // An own-property read: `constructor` and `__proto__` are not operations.
@@ -188,7 +192,9 @@ function toClientError(
       mapped = null
     }
   }
-  if (!(mapped instanceof RealtimeRequestError) || mapped.code === "internal") return null
+  if (!(mapped instanceof RealtimeRequestError)) return null
+  // A code outside the closed set (a cast, a mapper written in JavaScript) is a server bug.
+  if (!isRealtimeErrorCode(mapped.code) || mapped.code === "internal") return null
   return mapped
 }
 
@@ -221,17 +227,18 @@ export function createOperationDispatcher<TActor>(
   options: OperationDispatcherOptions<TActor>,
 ): RequestDispatcher {
   return async (context) => {
-    const actor = await options.authenticate(context)
-    const admitted = admit({
-      operations,
-      actor,
-      userIdOf: options.userIdOf,
-      claimedUserId: context.userId,
-      name: context.name,
-      kind: context.kind,
-      idempotencyKey: context.idempotencyKey,
-    })
+    // One `try` over authentication, the gate and the operation: whatever throws, only a typed
+    // error of a known code other than `internal` reaches the client as it is.
     try {
+      const admitted = admit({
+        operations,
+        actor: await options.authenticate(context),
+        userIdOf: options.userIdOf,
+        claimedUserId: context.userId,
+        name: context.name,
+        kind: context.kind,
+        idempotencyKey: context.idempotencyKey,
+      })
       return await admitted.operation.handle({
         actor: admitted.actor,
         requestId: context.requestId,
@@ -244,10 +251,10 @@ export function createOperationDispatcher<TActor>(
     } catch (error) {
       const typed = toClientError(error, options.mapError)
       if (typed) throw typed
-      // The registry sends any `RealtimeRequestError` as it is, so one that names itself `internal`
-      // is wrapped: its message and details reach `onRequestError`, never the client.
+      // The registry sends any `RealtimeRequestError` as it is, so one the client must not read is
+      // wrapped: its message and details reach `onRequestError`, never the client.
       throw error instanceof RealtimeRequestError
-        ? new Error("an operation failed with an internal error", { cause: error })
+        ? new Error("a request failed with an internal error", { cause: error })
         : error
     }
   }
@@ -266,7 +273,8 @@ export interface CallHandlerOptions<TActor> {
   basePath: string
   /**
    * The actor for this request, or `null` when nobody is signed in. The handler reads no cookie and
-   * checks no `Origin` itself: the app's session gate and origin check live here or in front.
+   * checks no `Origin` itself: the app's session gate and origin check live here or in front. It
+   * must not read the request's body: the handler reads it afterwards, once the call is admitted.
    */
   authenticate(request: Request): TActor | null | Promise<TActor | null>
   /** The id of the user an actor is. Compared with the {@link REALTIME_USER_HEADER} header. */
@@ -342,10 +350,12 @@ function readOperationName(url: string, basePath: string): string | null {
  * The wire contract, shared with the client's HTTP calls module:
  *
  * - the body is the payload as JSON (`Content-Type: application/json`); an empty body is a call
- *   with no payload;
+ *   with no payload, and the operation gets `undefined`, as over the socket. A body of only
+ *   whitespace is not empty and not JSON, so it is refused;
  * - `Idempotency-Key` is required on a command and ignored on a query;
  * - {@link REALTIME_USER_HEADER} is required on every call;
- * - success is `200` with `{ "result": <value> }` (`null` when the operation returned nothing);
+ * - success is `200` with `{ "result": <value> }`, always with the key: `null` when the operation
+ *   returned nothing or something JSON has no value for;
  * - failure is `{ "error": { "code", "message", "details"? } }` with the socket's code and the
  *   status in {@link CALL_ERROR_STATUS}. Three refusals use a more exact status with the code
  *   `bad_request`: `405` for a method that is not `POST`, `413` for a body over the cap and `415`
@@ -413,7 +423,7 @@ export function createCallHandler<TActor>(
       let payload: unknown
       try {
         const text = await readBoundedText(request, bodyOptions)
-        payload = text.trim() === "" ? undefined : JSON.parse(text)
+        payload = text === "" ? undefined : JSON.parse(text)
       } catch (error) {
         if (error instanceof PayloadTooLargeError) {
           return refuse("bad_request", "the body is too large", undefined, 413)
@@ -434,8 +444,9 @@ export function createCallHandler<TActor>(
           : {}),
         signal: request.signal,
       })
-      // A result that cannot be encoded throws here and is answered `internal` below.
-      return respond(200, JSON.stringify({ result: result === undefined ? null : result }))
+      // A result that cannot be encoded throws here and is answered `internal` below. One that JSON
+      // has no value for (`undefined`, a function, a symbol) is `null`: the key is always there.
+      return respond(200, `{"result":${JSON.stringify(result) ?? "null"}}`)
     } catch (error) {
       return answerThrown(error, { name, requestId })
     }
