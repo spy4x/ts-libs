@@ -219,7 +219,34 @@ export interface OutboxPorts<P, S extends { version: number }> {
   now?(): string
   /** Replaces the default English wording of a conflict. */
   messages?: Partial<Record<ConflictReason, string>>
+  /**
+   * Whether a waiting write may be sent now. A write for which it answers `false` is skipped, not
+   * failed: it keeps its place, nothing is marked, and the writes after it are still sent. It runs
+   * under the lock, so it must not wait on the outbox. A group of outboxes uses it to hold back a
+   * write until the writes it depends on have gone (see `@spy4x/realtime/collections`).
+   */
+  ready?(entry: OutboxEntry<P, S>): boolean | Promise<boolean>
+  /**
+   * Told, after the lock is released, that a queued create is gone without having been sent, so
+   * the entity will never exist on the server. The caller removes what refers to it.
+   */
+  onAbandoned?(entry: OutboxEntry<P, S>, reason: AbandonReason): void | Promise<void>
+  /**
+   * What `submit` and `keepMine` run to send after queuing. Defaults to this outbox's `flush`. A
+   * group of outboxes sets it to flush the whole group in order, so a write made online goes
+   * through the same flush as the queue.
+   */
+  flushQueues?(): Promise<void>
 }
+
+/**
+ * How a queued create left the queue unsent:
+ * - `withdrawn`: the person took it back (`withdraw`);
+ * - `dropped`: the entity was deleted before any send, so the two cancelled out;
+ * - `discarded`: the server refused it and the person chose the server's side (`useTheirs`), or a
+ *   change that stood alone was refused (`submit` answered `failed`).
+ */
+export type AbandonReason = "withdrawn" | "dropped" | "discarded"
 
 const DEFAULT_MESSAGES: Record<ConflictReason, string> = {
   version: "This item changed on the server while you were offline.",
@@ -323,6 +350,21 @@ export function createOutbox<P, S extends { version: number }>(
   const interactive = new Map<number, boolean>()
   /** The `submit` calls waiting on each entry; a send settles all of them with its outcome. */
   const waiters = new Map<number, Set<{ outcome?: Outcome<S> }>>()
+  /** Creates that left the queue unsent during the current step; announced after the lock. */
+  const abandoned: { entry: Entry; reason: AbandonReason }[] = []
+
+  /** `locked`, then the news of creates that left the queue, which the caller may act on. */
+  async function stepped<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await locked(work)
+    } finally {
+      for (let next = abandoned.shift(); next; next = abandoned.shift()) {
+        await ports.onAbandoned?.(next.entry, next.reason)
+      }
+    }
+  }
+
+  const sendQueued = () => ports.flushQueues ? ports.flushQueues() : flush()
 
   function settle(seq: number, outcome: Outcome<S>): void {
     for (const waiter of waiters.get(seq) ?? []) waiter.outcome = outcome
@@ -398,6 +440,7 @@ export function createOutbox<P, S extends { version: number }>(
       // A create is on the server only if a send of it, before or after a merged edit, was started.
       if (!mayHaveReachedServer(existing)) {
         await drop(existing.seq!)
+        abandoned.push({ entry: existing, reason: "dropped" })
         return null
       }
       // The create may have reached the server, so the entity may exist there: delete version 1.
@@ -437,6 +480,7 @@ export function createOutbox<P, S extends { version: number }>(
     const entry = await find(seq)
     if (!entry || entry.status !== "pending") return true
     if (!ports.canSend()) return false
+    if (ports.ready && !await ports.ready(entry)) return true
     const watched = interactive.get(seq)
     const wants = watched !== undefined
     // An edit merged in after the submit (another tab) also counts as more than the watched write.
@@ -488,6 +532,7 @@ export function createOutbox<P, S extends { version: number }>(
     if (wants && alone) {
       // The person is looking at the screen: the app shows the refusal itself.
       await drop(entry.seq!)
+      if (entry.kind === "create") abandoned.push({ entry, reason: "discarded" })
       settle(entry.seq!, { kind: "failed", error })
       return true
     }
@@ -521,8 +566,8 @@ export function createOutbox<P, S extends { version: number }>(
    */
   async function flush(): Promise<void> {
     // `sendOne` skips an entry that is not pending, as the queue stands when its turn comes.
-    for (const entry of await locked(reload)) {
-      const goOn = await locked(() => sendOne(entry.seq!))
+    for (const entry of await stepped(reload)) {
+      const goOn = await stepped(() => sendOne(entry.seq!))
       if (!goOn) return
     }
   }
@@ -530,7 +575,7 @@ export function createOutbox<P, S extends { version: number }>(
   /** Records a change and sends it when the connection allows. */
   async function submit(change: Change<P>): Promise<Outcome<S>> {
     const waiter: { outcome?: Outcome<S> } = {}
-    const entry = await locked(async () => {
+    const entry = await stepped(async () => {
       const earlier = (await store.readOutbox()).some((e) => e.entityId === change.entityId)
       const queued = await enqueue(change)
       // Marked inside the same step, so no send can settle the entry before it is watched.
@@ -544,7 +589,7 @@ export function createOutbox<P, S extends { version: number }>(
     })
     if (!entry) return { kind: "dropped" }
     try {
-      await flush()
+      await sendQueued()
       return waiter.outcome ?? { kind: "queued" }
     } finally {
       // Callers that merged into one entry share it: the last one to leave clears the marks.
@@ -564,7 +609,7 @@ export function createOutbox<P, S extends { version: number }>(
    * `rejected` conflict, which has no server entity to build on: use `useTheirs` there.
    */
   async function keepMine(shown: ConflictRef): Promise<void> {
-    await locked(async () => {
+    await stepped(async () => {
       const entry = await findConflict(shown)
       const server = entry?.conflict?.server
       if (!entry || !server) return
@@ -581,7 +626,7 @@ export function createOutbox<P, S extends { version: number }>(
         truncated: undefined,
       })
     })
-    await flush()
+    await sendQueued()
   }
 
   /**
@@ -590,23 +635,25 @@ export function createOutbox<P, S extends { version: number }>(
    * cannot delete a newer edit.
    */
   async function useTheirs(shown: ConflictRef): Promise<void> {
-    await locked(async () => {
+    await stepped(async () => {
       const entry = await findConflict(shown)
       if (!entry) return
       const server = entry.conflict?.server
       if (server) await cache?.put(server)
       else if (entry.conflict?.reason === "gone") await cache?.remove(entry.entityId)
       await drop(entry.seq!)
+      if (entry.kind === "create") abandoned.push({ entry, reason: "discarded" })
     })
   }
 
   async function withdraw(entityId: string): Promise<boolean> {
-    return await locked(async () => {
+    return await stepped(async () => {
       const entry = (await store.readOutbox()).find((e) => e.entityId === entityId)
       if (!entry || entry.attempted || entry.status !== "pending") return false
       if (!entry.before) {
         if (entry.truncated) return false
         await drop(entry.seq!)
+        if (entry.kind === "create") abandoned.push({ entry, reason: "withdrawn" })
         return true
       }
       // An edit was merged into the entry: take back that edit only, and keep the write before it
@@ -626,7 +673,7 @@ export function createOutbox<P, S extends { version: number }>(
       return () => listeners.delete(listener)
     },
     /** Reads the queue from the store, for example after a restart. */
-    reload: () => locked(reload),
+    reload: () => stepped(reload),
     submit,
     flush,
     withdraw,

@@ -1609,6 +1609,21 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `TransportStatus` (enum), `jsr:@spy4x/realtime/client`: Where the transport is in its lifecycle.
 - `TransportStatusSnapshot` (interface), `jsr:@spy4x/realtime/client`: Snapshot of transport state, delivered to `onStatus` listeners.
 
+### `jsr:@spy4x/realtime/collections`
+
+- `Collection` (interface), `jsr:@spy4x/realtime/collections`: A collection as the app uses it.
+- `CollectionCall` (interface), `jsr:@spy4x/realtime/collections`: A call to make: the name and payload the calls port is given.
+- `CollectionDefinition` (interface), `jsr:@spy4x/realtime/collections`: How one aggregate becomes an offline-writable collection.
+- `Collections` (interface), `jsr:@spy4x/realtime/collections`: Several collections behind one ordered flush.
+- `CollectionsOptions` (interface), `jsr:@spy4x/realtime/collections`: Options of createCollections.
+- `EntityRef` (interface), `jsr:@spy4x/realtime/collections`: An entity of a registered collection: what a child entry refers to.
+- `ErrorCodes` (interface), `jsr:@spy4x/realtime/collections`: Options of classifyByCode: the `details.code` of each refusal the server makes.
+- `ReferenceRemoved` (interface), `jsr:@spy4x/realtime/collections`: What the layer tells the app when it removed a reference to a parent that will never exist.
+- `WaitingEntry` (interface), `jsr:@spy4x/realtime/collections`: A queued entry that is not sent because a parent entry is still ahead of it.
+- `classifyByCode` (function), `jsr:@spy4x/realtime/collections`: A `classify` for the common case: an error that is not a server answer, or that is worth a retry (`isRetryable`), means unreachable; a RealtimeRequestError whose `details.code` is one of `codes` is that kind of refusal; any other refusal is `rejected` with its message.
+- `createCollections` (function), `jsr:@spy4x/realtime/collections`: Puts the collections behind one flush.
+- `defineCollection` (function), `jsr:@spy4x/realtime/collections`: Gives a definition its types.
+
 ### `jsr:@spy4x/realtime/cursor`
 
 - `ApplyOutcome` (type), `jsr:@spy4x/realtime/cursor`: Outcome of applying one pushed sequence.
@@ -1652,6 +1667,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/realtime/outbox`
 
+- `AbandonReason` (type), `jsr:@spy4x/realtime/outbox`: How a queued create left the queue unsent: - `withdrawn`: the person took it back (`withdraw`); - `dropped`: the entity was deleted before any send, so the two cancelled out; - `discarded`: the server refused it and the person chose the server's side (`useTheirs`), or a change that stood alone was refused (`submit` answered `failed`).
 - `Change` (type), `jsr:@spy4x/realtime/outbox`: What a person did to an entity.
 - `ConflictReason` (type), `jsr:@spy4x/realtime/outbox`: Why a write stopped the queue for its entity and now waits for a person: - `version`: the entity changed on the server since this write was based on it; - `gone`: the entity was deleted on the server; - `rejected`: the server refused the write (for example the role no longer allows it).
 - `ConflictRef` (interface), `jsr:@spy4x/realtime/outbox`: The conflict a person was shown: an OutboxEntry from `entries()` fits.
@@ -2817,4 +2833,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 c84cf698d4dd3ac67902cc13645ea35715df31bbe86583c9160ce8686f1c00ae -->
+<!-- export surface: sha256 1797619f11a1cdb7125283bb2581a3d927531e5120aea8c3627ab18e1f90d704 -->
