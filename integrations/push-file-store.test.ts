@@ -268,6 +268,7 @@ describe("file push store: what save refuses", () => {
       const error = await failure(() => store.save(USER, value as PushSubscriptionJson))
       expect(error.code).toBe("invalid-subscription")
       expect(error.message).not.toContain("capability-path")
+      expect(error.message).not.toContain("alert(1)")
       expect(error.message).not.toContain("push.example.com")
       expect(error.message).not.toContain("auth-secret")
       expect(fs.files.size).toBe(0)
