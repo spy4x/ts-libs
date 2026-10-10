@@ -22,8 +22,8 @@
  * `"drop"`: how many, and with which HTTP status.
  *
  * The message is always one the sender accepts: {@link reminderPushMessage} cuts a long title and
- * derives a tag of fixed length, and a URL that cannot be sent is refused when the notify
- * function is built, not an hour of failed ticks later.
+ * derives a tag of fixed length, and a URL that cannot be sent beside the longest title is
+ * refused when the notify function is built, not an hour of failed ticks later.
  *
  * Web standards only: nothing here touches `Deno.*`.
  *
@@ -41,11 +41,24 @@
  */
 import { type } from "arktype"
 import { type PushNotificationMessage, pushNotificationMessageSchema } from "@spy4x/platform/model"
-import type { PushDelivery, PushOptions, PushSendResult, WebPushSender } from "./push.ts"
+import {
+  MAX_PUSH_PAYLOAD_BYTES,
+  type PushDelivery,
+  type PushOptions,
+  type PushSendResult,
+  type WebPushSender,
+} from "./push.ts"
 
 /** The longest title `pushNotificationMessageSchema` takes, in UTF-16 code units. */
 const MAX_TITLE_CHARS = 120
 const ELLIPSIS = "…"
+/** The length of a tag: a SHA-256 in hex. */
+const TAG_CHARS = 64
+/**
+ * A title that takes the most bytes a title can: JSON writes a control character as six bytes
+ * (`\u0000`), and no code unit takes more. A URL that fits beside it fits beside any title.
+ */
+const LONGEST_TITLE = "\u0000".repeat(MAX_TITLE_CHARS)
 
 /** The parts of a `DueReminder` (`@spy4x/time/ical-tasks-reminders`) a push message is made of. */
 export interface ReminderForPush {
@@ -89,6 +102,15 @@ function checked(
     throw new RangeError("the url or the untitled text cannot be part of a push message")
   }
   return parsed
+}
+
+/** Throws unless a message with this URL fits in one push beside any title. */
+function checkSize(url: string | null): void {
+  const longest = checked({ title: LONGEST_TITLE, url, tag: "0".repeat(TAG_CHARS) })
+  // Counted as the sender counts: the JSON text of the checked message, in UTF-8.
+  if (new TextEncoder().encode(JSON.stringify(longest)).length > MAX_PUSH_PAYLOAD_BYTES) {
+    throw new RangeError("the url takes too many bytes for a push message")
+  }
 }
 
 /**
@@ -171,7 +193,8 @@ export interface ReminderNotifyOptions extends ReminderPushMessageOptions {
  * It resolves with `"delivered"` or `"drop"`, or rejects when the reminder should be tried again;
  * see the module documentation for which is which.
  *
- * @throws {RangeError} when `url` or `untitled` cannot be part of a message.
+ * @throws {RangeError} when `url` or `untitled` cannot be part of a message, or `url` takes too
+ * many bytes to be pushed beside the longest title.
  */
 export function createReminderNotify(
   options: ReminderNotifyOptions,
@@ -179,6 +202,7 @@ export function createReminderNotify(
   const { sender, userId, push, onDeviceFailure, ...message } = options
   // Checked once, here: a URL the sender refuses would otherwise fail on every tick.
   checked({ title: titleOf("", message), url: message.url ?? null })
+  checkSize(message.url ?? null)
   return async (reminder) => {
     const result = await sender.send(userId, await reminderPushMessage(reminder, message), push)
     const outcome = reminderDeliveryOutcome(result)

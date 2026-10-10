@@ -13,6 +13,7 @@ import { fakeClock, fakeTimers } from "../platform/server/_fake-fs.ts"
 import {
   createWebPushSender,
   generateVapidKeyPair,
+  MAX_PUSH_PAYLOAD_BYTES,
   type PushDelivery,
   type PushSendResult,
 } from "./push.ts"
@@ -92,6 +93,39 @@ async function realSender(devices: number, status: number) {
   })
   return { sender, world }
 }
+
+/** A URL of exactly `bytes` bytes in UTF-8 and about half as many characters. */
+const urlOf = (bytes: number) =>
+  `/${"é".repeat(Math.floor((bytes - 1) / 2))}${"x".repeat((bytes - 1) % 2)}`
+
+/** The byte length of the longest URL `createReminderNotify` takes for this sender. */
+function longestUrlItBuilds(sender: Parameters<typeof createReminderNotify>[0]["sender"]): number {
+  const builds = (bytes: number) => {
+    try {
+      createReminderNotify({ sender, userId: "owner", url: urlOf(bytes) })
+      return true
+    } catch {
+      return false
+    }
+  }
+  // A URL of 4096 bytes has 2049 characters, more than any message takes.
+  let [fits, tooLong] = [1, 4096]
+  while (tooLong - fits > 1) {
+    const middle = Math.floor((fits + tooLong) / 2)
+    if (builds(middle)) fits = middle
+    else tooLong = middle
+  }
+  return fits
+}
+
+/** Titles of 120 characters that take the most room: JSON writes the first two as six bytes each. */
+const WIDE_TITLES: [string, string][] = [
+  ["control characters", "\u0001".repeat(120)],
+  ["halves of an emoji", "\ud83d".repeat(120)],
+  ["quotation marks", '"'.repeat(120)],
+  ["Chinese characters", "界".repeat(120)],
+  ["emoji", "😀".repeat(60)],
+]
 
 describe("reminder push message", () => {
   it("carries the task's title, the URL it was given and a tag", async () => {
@@ -389,6 +423,45 @@ describe("reminder notify", () => {
       .toThrow(RangeError)
     expect(sender.sent).toEqual([])
   })
+
+  it("refuses a URL short enough in characters but too long in bytes when it is built", () => {
+    const sender = fakeSender(() => result([]))
+    const url = `/${"é".repeat(2047)}`
+    expect(pushNotificationMessageSchema({ title: "a", url }) instanceof type.errors).toBe(false)
+    let thrown: unknown
+    try {
+      createReminderNotify({ sender, userId: "owner", url })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(RangeError)
+    expect((thrown as Error).message).toBe("the url takes too many bytes for a push message")
+    expect(sender.sent).toEqual([])
+  })
+
+  it("takes at build the longest URL the sender can push beside the widest title, and not a byte more", async () => {
+    const { sender, world } = await realSender(1, 201)
+    const longest = longestUrlItBuilds(sender)
+    const widest = await reminderPushMessage(reminder(WIDE_TITLES[0][1]))
+    const fits = await sender.send("owner", { ...widest, url: urlOf(longest) })
+    expect(fits.error).toBe("")
+    expect(world.requests).toBe(1)
+    const over = await sender.send("owner", { ...widest, url: urlOf(longest + 1) })
+    expect(over.error).toBe(
+      `push payload is ${MAX_PUSH_PAYLOAD_BYTES + 1} bytes; the limit is ${MAX_PUSH_PAYLOAD_BYTES}`,
+    )
+    expect(world.requests).toBe(1)
+  })
+
+  for (const [label, title] of WIDE_TITLES) {
+    it(`pushes a title of ${label} with the longest URL it takes at build`, async () => {
+      const { sender, world } = await realSender(1, 201)
+      const url = urlOf(longestUrlItBuilds(sender))
+      const notify = createReminderNotify({ sender, userId: "owner", url })
+      expect(await notify(reminder(title))).toBe("delivered")
+      expect(world.requests).toBe(1)
+    })
+  }
 
   for (const status of [400, 401, 403, 413]) {
     it(`pushes once and reports once when the push service refuses every device with ${status}`, async () => {
