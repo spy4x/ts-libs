@@ -270,6 +270,7 @@ describe("sampling and the session cap", () => {
     await reporter.report(new Error("dropped"))
 
     expect(sent).toHaveLength(1)
+    expect(eventOf(sent[0]).exception.values[0].value).toBe("kept")
   })
 
   it("stops after the cap", async () => {
