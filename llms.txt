@@ -2198,8 +2198,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/server/http/security-headers`
 
 - `ExtraSources` (type), `jsr:@spy4x/server/http/security-headers`: CSP directives a consumer may widen.
-- `SecurityHeadersOptions` (interface), `jsr:@spy4x/server/http/security-headers`: Options of securityHeaders.
+- `NginxAddHeadersOptions` (interface), `jsr:@spy4x/server/http/security-headers`: Options of nginxAddHeaders.
+- `SecurityHeadersOptions` (interface), `jsr:@spy4x/server/http/security-headers`: Options of securityHeaders and securityHeaderList.
 - `inlineBlockHashes` (function), `jsr:@spy4x/server/http/security-headers`: The base64 SHA-256 CSP source of each inline `<script>` or `<style>` block in `html`.
+- `nginxAddHeaders` (function), `jsr:@spy4x/server/http/security-headers`: Renders headers as nginx configuration for an `include` file: one `add_header <name> "<value>" always;` line each, every line ended by a newline, so nginx sends them with error pages too.
+- `securityHeaderList` (function), `jsr:@spy4x/server/http/security-headers`: The headers securityHeaders sets, as `[name, value]` pairs with the names in lower case, for a server the middleware cannot run in: pass the list to `new Headers(list)`, set each pair on a response, or render it with nginxAddHeaders.
 - `securityHeaders` (function), `jsr:@spy4x/server/http/security-headers`: Middleware that sets the headers on every response.
 
 ### `jsr:@spy4x/server/idempotency`
@@ -2849,4 +2852,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 0033212d0ea1f0ebc6a82d5c6ad7a9c65ffbeeb4d1413dd0c6898178749a477b -->
+<!-- export surface: sha256 e0688646128fc639df6d34ef265c6cfa1c97102d70f871189ae85dae2cdcb99e -->
