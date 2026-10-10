@@ -3372,7 +3372,10 @@ await cache.clear() // sign-out, or a start that finds no session: every copy of
 
 - Every answer replaces the copy under its key. A read that cannot reach the server
   (`ConnectionLostError`, or the `TypeError` a failed `fetch` rejects with) answers from the copy,
-  or throws the connection error when there is none.
+  or throws the connection error when there is none. A `TypeError` thrown by your own `read`
+  function counts as unreachable too.
+- `clear()` finishes the instance: it stores nothing more, so a read still in flight at sign-out
+  cannot write its answer back. A new user needs a new cache.
 - Any other error is thrown and the copy stays. `unauthorized` and `forbidden` therefore neither
   return nor replace it.
 - A device that cannot save does not fail the read; the answer is returned and the copy is not
