@@ -50,8 +50,12 @@ export const denoFileSystem: FileSystemPort = {
     }
   },
 
-  writeText(path, content) {
-    return Deno.writeTextFile(path, content)
+  writeText(path, content, options) {
+    return Deno.writeTextFile(
+      path,
+      content,
+      options?.mode === undefined ? {} : { mode: options.mode },
+    )
   },
 
   appendText(path, content) {

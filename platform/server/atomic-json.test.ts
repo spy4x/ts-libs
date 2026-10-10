@@ -97,6 +97,21 @@ describe("atomicWriteJson", () => {
     expect(fs.files.get("/s.json")).toBe(`{"a":1}`)
   })
 
+  it("gives the document the permission bits asked for, on the first write and on a later one", async () => {
+    const fs = fakeFs()
+    await atomicWriteJson(fs, "/s.json", { a: 1 }, options, 2, { mode: 0o600 })
+    expect(fs.modes.get("/s.json")).toBe(0o600)
+    await atomicWriteJson(fs, "/s.json", { a: 2 }, { pid: 1234, sequence: 1 }, 2, { mode: 0o600 })
+    expect(fs.modes.get("/s.json")).toBe(0o600)
+    expect(fs.files.get("/s.json")).toContain(`"a": 2`)
+  })
+
+  it("asks for no permission bits when none are given", async () => {
+    const fs = fakeFs()
+    await atomicWriteJson(fs, "/s.json", { a: 1 }, options)
+    expect(fs.modes.has("/s.json")).toBe(false)
+  })
+
   it("round-trips through readJsonFile", async () => {
     const fs = fakeFs()
     await atomicWriteJson(fs, "/s.json", { version: 2, entries: {} }, options)

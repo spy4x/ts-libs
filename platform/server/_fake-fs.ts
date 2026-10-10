@@ -20,6 +20,8 @@ export type FsCall = { op: string; path: string; extra?: string }
 export interface FakeFs extends FileSystemPort {
   /** Current file contents, keyed by path. Directories are tracked separately. */
   readonly files: Map<string, string>
+  /** Permission bits of the files that were created with a `mode`, keyed by path. */
+  readonly modes: Map<string, number>
   /** Paths known to be directories. */
   readonly dirs: Set<string>
   /** Every call, in order. */
@@ -62,6 +64,7 @@ function parentOf(path: string): string | null {
 export function fakeFs(initial: Record<string, string> = {}): FakeFs {
   const files = new Map<string, string>(Object.entries(initial))
   const dirs = new Set<string>(Object.keys(initial).flatMap((path) => withAncestors(path).slice(1)))
+  const modes = new Map<string, number>()
   const calls: FsCall[] = []
   const locks = new Set<string>()
   /** A rejection like the real one when the folder for `path` is missing, otherwise `null`. */
@@ -72,6 +75,7 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
   }
   const fake: FakeFs = {
     files,
+    modes,
     dirs,
     calls,
     locks,
@@ -88,11 +92,13 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       return Promise.resolve(files.get(path) ?? null)
     },
 
-    writeText(path, content) {
+    writeText(path, content, options) {
       calls.push({ op: "writeText", path, extra: content })
       if (fake.failWrites.has(path)) return Promise.reject(new Error(`write refused: ${path}`))
       const missing = missingParent(path)
       if (missing) return missing
+      // Like the real disk, a mode applies only to a file this call creates.
+      if (!files.has(path) && options?.mode !== undefined) modes.set(path, options.mode)
       files.set(path, content)
       return Promise.resolve()
     },
@@ -115,12 +121,18 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       if (missing) return missing
       files.delete(from)
       files.set(to, content)
+      // A rename carries the source's permissions over the target's.
+      const mode = modes.get(from)
+      modes.delete(from)
+      if (mode === undefined) modes.delete(to)
+      else modes.set(to, mode)
       return Promise.resolve()
     },
 
     remove(path) {
       calls.push({ op: "remove", path })
       files.delete(path)
+      modes.delete(path)
       return Promise.resolve()
     },
 

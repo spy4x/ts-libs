@@ -39,14 +39,24 @@ export type ClockPort = Clock
  */
 export const systemClockPort: ClockPort = systemClock
 
+/** Options of {@link FileSystemPort.writeText}. */
+export interface WriteTextOptions {
+  /**
+   * Permission bits for a file this call creates, such as `0o600` for a file only its owner may
+   * read. An existing file keeps the permissions it has, and a platform without POSIX permissions
+   * ignores the value.
+   */
+  mode?: number
+}
+
 /** Storage primitives a server helper needs. No method here reads `Deno.*` by itself. */
 export interface FileSystemPort {
   /** `false` rather than a throw when the path is absent. */
   exists(path: string): Promise<boolean>
   /** Raw text, or `null` when the path is absent. */
   readText(path: string): Promise<string | null>
-  /** Write text, replacing any existing content. */
-  writeText(path: string, content: string): Promise<void>
+  /** Write text, replacing any existing content. `options.mode` applies when the file is new. */
+  writeText(path: string, content: string, options?: WriteTextOptions): Promise<void>
   /**
    * Append text to the end of the file, creating it first if it does not exist. One call is one
    * write at the filesystem level — never a read-modify-write of the whole file — so a caller
