@@ -12,6 +12,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { STORE_METHODS } from "./fake-store.test.ts"
 import {
+  type NewSessionDevice,
   SecondFactorStatus,
   type SessionRecord,
   SessionStatus,
@@ -40,6 +41,18 @@ interface Overrides {
   status?: SessionStatus
   secondFactor?: SecondFactorStatus
   expiresAt?: Date
+  /** Creates the session with this device and time; without it `create` gets one argument. */
+  device?: NewSessionDevice
+}
+
+/** A device whose session was created, and so last used, `minutes` after NOW. */
+function deviceAt(minutes: number, deviceName = "Firefox on Linux"): NewSessionDevice {
+  return { deviceName, ipHint: "203.0.113.*", at: new Date(NOW.getTime() + minutes * MINUTE) }
+}
+
+/** A time `minutes` after NOW. */
+function after(minutes: number): Date {
+  return new Date(NOW.getTime() + minutes * MINUTE)
 }
 
 /**
@@ -57,17 +70,20 @@ export function describeSessionStoreContract<S extends SessionRecord>(
   ): Promise<void> {
     const fixture = await open()
     try {
-      const create: Create<S> = (user, overrides = {}) =>
-        fixture.store.create(
-          {
-            ...user.columns,
-            userId: user.userId,
-            tokenHash: HASH,
-            status: overrides.status ?? SessionStatus.Active,
-            secondFactor: overrides.secondFactor ?? SecondFactorStatus.NotRequired,
-            expiresAt: overrides.expiresAt ?? new Date(NOW.getTime() + 60 * MINUTE),
-          } as Omit<S, "id">,
-        )
+      const create: Create<S> = (user, overrides = {}) => {
+        const session = {
+          ...user.columns,
+          userId: user.userId,
+          tokenHash: HASH,
+          status: overrides.status ?? SessionStatus.Active,
+          secondFactor: overrides.secondFactor ?? SecondFactorStatus.NotRequired,
+          expiresAt: overrides.expiresAt ?? new Date(NOW.getTime() + 60 * MINUTE),
+        } as Omit<S, "id">
+        // One argument unless the test names a device, as the manager calls it.
+        return overrides.device
+          ? fixture.store.create(session, overrides.device)
+          : fixture.store.create(session)
+      }
       await body(fixture, create)
     } finally {
       await fixture.close()
@@ -82,7 +98,7 @@ export function describeSessionStoreContract<S extends SessionRecord>(
   }
 
   describe(`${label}: shape`, () => {
-    it("has exactly the SessionStore methods, clearPendingSecondFactors included", () =>
+    it("has exactly the SessionStore methods, the optional ones included", () =>
       withStore(({ store }) => {
         expect(Object.keys(store).sort()).toEqual(STORE_METHODS)
         return Promise.resolve()
@@ -266,6 +282,234 @@ export function describeSessionStoreContract<S extends SessionRecord>(
         expect((await stored(store, before.id)).status).toBe(SessionStatus.Expired)
         expect(await store.findById(after.id)).toEqual(after)
         expect(await store.findById(signedOut.id)).toEqual(signedOut)
+      }))
+  })
+
+  describe(`${label}: create with a device, and listForUser`, () => {
+    it("lists a session with the device and the time it was created with", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const session = await create(user, { device: deviceAt(3, "Safari on iPhone") })
+        expect(await store.listForUser!(user.userId, after(4))).toEqual([{
+          id: session.id,
+          deviceName: "Safari on iPhone",
+          ipHint: "203.0.113.*",
+          createdAt: after(3),
+          lastUsedAt: after(3),
+        }])
+      }))
+
+    it("returns the same record from create with a device as without one", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const session = await create(user, { device: deviceAt(0) })
+        expect(Object.keys(session).sort()).toEqual(Object.keys(await create(user)).sort())
+        expect(await store.findById(session.id)).toEqual(session)
+      }))
+
+    it("stores a device with no address, and a name with control characters removed", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        await create(user, {
+          device: { deviceName: "Fire\u0000fox\n on Linux", ipHint: null, at: NOW },
+        })
+        const [entry] = await store.listForUser!(user.userId, NOW)
+        expect(entry.deviceName).toBe("Firefox on Linux")
+        expect(entry.ipHint).toBeNull()
+      }))
+
+    it("lists a session created without a device with an empty name and no address", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const session = await create(user)
+        const entries = await store.listForUser!(user.userId, NOW)
+        expect(entries.map(({ id, deviceName, ipHint }) => ({ id, deviceName, ipHint }))).toEqual([
+          { id: session.id, deviceName: "", ipHint: null },
+        ])
+        expect(entries[0].createdAt).toBeInstanceOf(Date)
+        expect(entries[0].lastUsedAt.getTime()).toBe(entries[0].createdAt.getTime())
+      }))
+
+    it("lists only live sessions: active, and not at or past expiresAt", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const live = await create(user, { device: deviceAt(0), expiresAt: after(10) })
+        await create(user, { device: deviceAt(0), status: SessionStatus.SignedOut })
+        await create(user, { device: deviceAt(0), status: SessionStatus.Expired })
+        // Still marked active: the periodic `expire` has not run yet.
+        await create(user, { device: deviceAt(0), expiresAt: after(5) })
+        const listed = await store.listForUser!(user.userId, after(5))
+        expect(listed.map((entry) => entry.id)).toEqual([live.id])
+      }))
+
+    it("lists the last used session first, and the newer of two used at the same time first", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const oldest = await create(user, { device: deviceAt(1) })
+        const newest = await create(user, { device: deviceAt(3) })
+        const middle = await create(user, { device: deviceAt(2) })
+        const twin = await create(user, { device: deviceAt(2) })
+        const listed = await store.listForUser!(user.userId, after(4))
+        expect(listed.map((entry) => entry.id)).toEqual([newest.id, twin.id, middle.id, oldest.id])
+      }))
+
+    it("lists none of another user's sessions", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const ann = await addUser()
+        const bob = await addUser()
+        const anns = await create(ann, { device: deviceAt(0) })
+        await create(bob, { device: deviceAt(0) })
+        const listed = await store.listForUser!(ann.userId, after(1))
+        expect(listed.map((entry) => entry.id)).toEqual([anns.id])
+        expect(await store.listForUser!(ann.userId + bob.userId + 1000, after(1))).toEqual([])
+      }))
+  })
+
+  describe(`${label}: deleteForUser`, () => {
+    it("deletes the user's own session, whatever its status, and says so", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const active = await create(user)
+        const signedOut = await create(user, { status: SessionStatus.SignedOut })
+        const kept = await create(user)
+        expect(await store.deleteForUser!(user.userId, active.id)).toBe(true)
+        expect(await store.deleteForUser!(user.userId, signedOut.id)).toBe(true)
+        expect(await store.findById(active.id)).toBeNull()
+        expect(await store.findById(signedOut.id)).toBeNull()
+        expect(await store.findById(kept.id)).toEqual(kept)
+      }))
+
+    it("leaves another user's session untouched and answers false, as for a missing one", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const ann = await addUser()
+        const bob = await addUser()
+        const bobs = await create(bob, { device: deviceAt(0) })
+        expect(await store.deleteForUser!(ann.userId, bobs.id)).toBe(false)
+        expect(await store.deleteForUser!(ann.userId, bobs.id + 1000)).toBe(false)
+        expect(await store.findById(bobs.id)).toEqual(bobs)
+        expect((await store.listForUser!(bob.userId, after(1))).map((e) => e.id)).toEqual([bobs.id])
+      }))
+  })
+
+  describe(`${label}: deleteOthers`, () => {
+    it("deletes every other live session of the user, keeps the named one, and counts", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const kept = await create(user)
+        const first = await create(user)
+        const second = await create(user)
+        expect(await store.deleteOthers!(user.userId, kept.id, NOW)).toBe(2)
+        expect(await store.findById(kept.id)).toEqual(kept)
+        expect(await store.findById(first.id)).toBeNull()
+        expect(await store.findById(second.id)).toBeNull()
+      }))
+
+    it("leaves the user's signed-out and expired sessions in place and does not count them", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const kept = await create(user)
+        const signedOut = await create(user, { status: SessionStatus.SignedOut })
+        const expired = await create(user, { status: SessionStatus.Expired })
+        const pastExpiry = await create(user, { expiresAt: after(5) })
+        expect(await store.deleteOthers!(user.userId, kept.id, after(5))).toBe(0)
+        expect(await store.findById(signedOut.id)).toEqual(signedOut)
+        expect(await store.findById(expired.id)).toEqual(expired)
+        expect(await store.findById(pastExpiry.id)).toEqual(pastExpiry)
+      }))
+
+    it("leaves another user's sessions untouched", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const ann = await addUser()
+        const bob = await addUser()
+        const kept = await create(ann)
+        await create(ann)
+        const bobs = await create(bob)
+        expect(await store.deleteOthers!(ann.userId, kept.id, NOW)).toBe(1)
+        expect(await store.findById(bobs.id)).toEqual(bobs)
+      }))
+
+    it("deletes nothing when the session to keep is another user's, or no session", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const ann = await addUser()
+        const bob = await addUser()
+        const anns = await create(ann)
+        const bobs = await create(bob)
+        expect(await store.deleteOthers!(ann.userId, bobs.id, NOW)).toBe(0)
+        expect(await store.deleteOthers!(ann.userId, anns.id + bobs.id + 1000, NOW)).toBe(0)
+        expect(await store.findById(anns.id)).toEqual(anns)
+        expect(await store.findById(bobs.id)).toEqual(bobs)
+      }))
+
+    it("deletes nothing when the session to keep is signed out, or at its expiry", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const live = await create(user)
+        const signedOut = await create(user, { status: SessionStatus.SignedOut })
+        const ending = await create(user, { expiresAt: after(5) })
+        expect(await store.deleteOthers!(user.userId, signedOut.id, NOW)).toBe(0)
+        expect(await store.deleteOthers!(user.userId, ending.id, after(5))).toBe(0)
+        expect(await store.findById(live.id)).toEqual(live)
+        // One millisecond earlier the kept session is live, and the other one goes.
+        const early = new Date(after(5).getTime() - 1)
+        expect(await store.deleteOthers!(user.userId, ending.id, early)).toBe(1)
+        expect(await store.findById(live.id)).toBeNull()
+      }))
+
+    it("deletes nothing when the session to keep is not an id", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const session = await create(user)
+        for (const keep of [0, -1, 1.5, Number.NaN]) {
+          expect(await store.deleteOthers!(user.userId, keep, NOW)).toBe(0)
+        }
+        expect(await store.findById(session.id)).toEqual(session)
+      }))
+  })
+
+  describe(`${label}: touch`, () => {
+    /** The last-used time of the user's only listed session. */
+    async function lastUsed(store: SessionStore<S>, userId: number, now: Date): Promise<number> {
+      const [entry] = await store.listForUser!(userId, now)
+      return entry.lastUsedAt.getTime()
+    }
+
+    it("records the time once the interval has passed", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const session = await create(user, { device: deviceAt(0) })
+        expect(await store.touch!(user.userId, session.id, after(5), 5 * MINUTE)).toBe(true)
+        expect(await lastUsed(store, user.userId, after(5))).toBe(after(5).getTime())
+      }))
+
+    it("writes nothing inside the interval", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const session = await create(user, { device: deviceAt(0) })
+        const early = new Date(after(5).getTime() - 1)
+        expect(await store.touch!(user.userId, session.id, early, 5 * MINUTE)).toBe(false)
+        expect(await lastUsed(store, user.userId, early)).toBe(NOW.getTime())
+      }))
+
+    it("does not touch a session that is signed out, or at its expiry", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const signedOut = await create(user, {
+          device: deviceAt(0),
+          status: SessionStatus.SignedOut,
+        })
+        const ending = await create(user, { device: deviceAt(0), expiresAt: after(30) })
+        expect(await store.touch!(user.userId, signedOut.id, after(10), MINUTE)).toBe(false)
+        expect(await store.touch!(user.userId, ending.id, after(30), MINUTE)).toBe(false)
+        expect(await lastUsed(store, user.userId, after(29))).toBe(NOW.getTime())
+      }))
+
+    it("leaves another user's session untouched and answers false", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const ann = await addUser()
+        const bob = await addUser()
+        const bobs = await create(bob, { device: deviceAt(0) })
+        expect(await store.touch!(ann.userId, bobs.id, after(10), MINUTE)).toBe(false)
+        expect(await lastUsed(store, bob.userId, after(10))).toBe(NOW.getTime())
       }))
   })
 }

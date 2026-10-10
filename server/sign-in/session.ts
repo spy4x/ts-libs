@@ -60,13 +60,60 @@ export interface SessionRecord {
 }
 
 /**
+ * What a session remembers about the device that signed in, for a "signed-in devices" list. Both
+ * are display labels, worked out once at sign-in: `deviceName` and `ipHint` of `@spy4x/net` make
+ * them from the request. Never the full user agent or the full address.
+ */
+export interface SessionDevice {
+  /** A short name such as "Firefox on Linux". At most {@link MAX_DEVICE_NAME_LENGTH} characters. */
+  deviceName: string
+  /**
+   * The address with its last part hidden, such as `203.0.113.*`, or `null` when the request had
+   * none. At most {@link MAX_IP_HINT_LENGTH} characters.
+   */
+  ipHint: string | null
+}
+
+/** A {@link SessionDevice} and the moment its session was created, as the store receives them. */
+export interface NewSessionDevice extends SessionDevice {
+  /** When the session was created. The store records it as created and as last used. */
+  at: Date
+}
+
+/** One live session of a user, as {@link SessionManager.listForUser} returns it. */
+export interface SessionListEntry extends SessionDevice {
+  id: number
+  createdAt: Date
+  /** Created, or last recorded by {@link SessionManager.touch}, whichever is later. */
+  lastUsedAt: Date
+}
+
+/** Longest stored device name, in UTF-16 units. */
+export const MAX_DEVICE_NAME_LENGTH = 100
+
+/** Longest stored address hint: the longest spelling of an IP address. */
+export const MAX_IP_HINT_LENGTH = 45
+
+/**
+ * How stale a session's `lastUsedAt` may get before {@link SessionManager.touch} writes it again:
+ * five minutes. Most requests therefore write nothing.
+ */
+export const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000
+
+/**
  * Persistence for sessions, implemented by the app. These are exactly the operations the manager
  * calls. Every conditional operation must be a single conditional write (for SQL, one `UPDATE …
  * WHERE status = active`), so a concurrent sign-out cannot be overwritten.
  */
 export interface SessionStore<S extends SessionRecord = SessionRecord> {
-  /** Inserts a session and returns it with the id the store assigned. */
-  create(session: Omit<S, "id">): Promise<S>
+  /**
+   * Inserts a session and returns it with the id the store assigned.
+   *
+   * `device` is given only when the app passed one to {@link SessionManager.create}. A store that
+   * keeps devices records its name and hint, and `device.at` as the session's created and last-used
+   * time. A store written before the parameter existed ignores it, and still type-checks.
+   */
+  create(session: Omit<S, "id">, device?: NewSessionDevice): Promise<S>
   /** The session with this id, or `null`. Must not answer from a cache that sign-out bypasses. */
   findById(id: number): Promise<S | null>
   /**
@@ -97,6 +144,41 @@ export interface SessionStore<S extends SessionRecord = SessionRecord> {
   signOutUser(userId: number, exceptId: number | null): Promise<void>
   /** Sets every `Active` session whose `expiresAt` is at or before `now` to `Expired`. */
   expire(now: Date): Promise<void>
+  /**
+   * The sessions of this user that are live at `now` (status `Active` and `expiresAt` after `now`),
+   * last used first, then highest id first. Never another user's. A session created without a
+   * device has an empty `deviceName` and a `null` `ipHint`.
+   *
+   * Optional, like the three methods below, so a store written before they existed still
+   * type-checks; without one, the {@link SessionManager} method of the same name throws.
+   */
+  listForUser?(userId: number, now: Date): Promise<SessionListEntry[]>
+  /**
+   * Deletes session `sessionId` only when it belongs to `userId`, whatever its status, as one
+   * statement that names both (for SQL, `DELETE … WHERE id = … AND user_id = …`).
+   *
+   * @returns `true` when a session was deleted. `false` for a missing session and for another
+   *     user's session alike, so the answer tells nothing about other users.
+   */
+  deleteForUser?(userId: number, sessionId: number): Promise<boolean>
+  /**
+   * Deletes every session of `userId` that is live at `now` except `keepSessionId`: exactly the
+   * sessions {@link SessionStore.listForUser} would list, minus the kept one. Signed-out and
+   * expired rows stay. Deletes nothing unless `keepSessionId` is itself a session of `userId` that
+   * is live at `now`: not for another user's session, an id no session has, a signed-out or
+   * run-out one, or a value that is not an id. A wrong id must never end every session of the user.
+   *
+   * @returns How many sessions were deleted.
+   */
+  deleteOthers?(userId: number, keepSessionId: number, now: Date): Promise<number>
+  /**
+   * Sets the last-used time of session `sessionId` to `now`, only when the session belongs to
+   * `userId`, is live at `now`, and was last used at or before `now - minIntervalMs`. One
+   * conditional write, so parallel requests record one use.
+   *
+   * @returns `true` when the time was written.
+   */
+  touch?(userId: number, sessionId: number, now: Date, minIntervalMs: number): Promise<boolean>
 }
 
 /** What an app supplies to create a session: its own fields, without what the manager sets. */
@@ -193,23 +275,29 @@ export class SessionManager<S extends SessionRecord = SessionRecord> {
    * Creates an active session with a fresh token.
    *
    * @param fields The app's own fields, including `userId` and `secondFactor`.
+   * @param device What to show for this session in the user's list of signed-in devices. It is
+   *     cleaned with {@link cleanSessionDevice} first, so no label can make a sign-in fail. Left
+   *     out, the store is called exactly as before the parameter existed.
    * @throws {TypeError} When `secondFactor` is not a {@link SecondFactorStatus}, or the store
    *     returns an id that is not a positive safe integer.
    */
-  async create(fields: NewSessionFields<S>): Promise<CreatedSession<S>> {
+  async create(fields: NewSessionFields<S>, device?: SessionDevice): Promise<CreatedSession<S>> {
     if (!isSecondFactorStatus(fields.secondFactor)) {
       throw new TypeError("secondFactor must be a SecondFactorStatus")
     }
     const token = randomBase64Url(TOKEN_BYTES)
+    const now = this.#now()
     const record = {
       ...fields,
       tokenHash: await this.#hashToken(token),
       status: SessionStatus.Active,
-      expiresAt: new Date(this.#now() + this.#durationMs),
+      expiresAt: new Date(now + this.#durationMs),
     } as Omit<S, "id">
     // The store assigns the id. One passed in with the app's fields would otherwise reach the insert.
     delete (record as { id?: unknown }).id
-    const session = await this.#store.create(record)
+    const session = device === undefined
+      ? await this.#store.create(record)
+      : await this.#store.create(record, { ...cleanSessionDevice(device), at: new Date(now) })
     if (!Number.isSafeInteger(session.id) || session.id < 1) {
       throw new TypeError("the session store returned an id that is not a positive integer")
     }
@@ -292,6 +380,68 @@ export class SessionManager<S extends SessionRecord = SessionRecord> {
     await this.#store.expire(new Date(this.#now()))
   }
 
+  /**
+   * The user's sessions that can still act, last used first: what a "signed-in devices" page
+   * shows. `userId` comes from the caller's validated session, never from the request.
+   *
+   * @throws {TypeError} When the store does not implement `listForUser`.
+   */
+  async listForUser(userId: number): Promise<SessionListEntry[]> {
+    const store = this.#store
+    if (typeof store.listForUser !== "function") throw missingStoreMethod("listForUser")
+    return await store.listForUser(userId, new Date(this.#now()))
+  }
+
+  /**
+   * Ends one session of the user by deleting it, so it fails every later validation. Another
+   * user's session is never deleted: it answers `false`, exactly as a missing one does.
+   *
+   * @param userId The signed-in user, from the caller's validated session.
+   * @param sessionId The session to end, as the request named it.
+   * @returns `true` when a session of this user was deleted.
+   * @throws {TypeError} When the store does not implement `deleteForUser`.
+   */
+  async deleteForUser(userId: number, sessionId: number): Promise<boolean> {
+    const store = this.#store
+    if (typeof store.deleteForUser !== "function") throw missingStoreMethod("deleteForUser")
+    return await store.deleteForUser(userId, sessionId)
+  }
+
+  /**
+   * Ends every other live session of the user by deleting it, and keeps `keepSessionId`: "sign out
+   * everywhere else". It deletes exactly what {@link SessionManager.listForUser} lists minus the
+   * kept session, so the count matches what the person saw.
+   *
+   * It deletes nothing and answers 0 unless `keepSessionId` is a live session of `userId`: another
+   * user's session, an id no session has, a signed-out or run-out session and a value that is not
+   * an id all end no session. So a wrong id can never sign the user out everywhere, the caller's
+   * own device included.
+   *
+   * @param userId The signed-in user, from the caller's validated session.
+   * @param keepSessionId The caller's own session id, from the same validated session.
+   * @returns How many sessions were deleted.
+   * @throws {TypeError} When the store does not implement `deleteOthers`.
+   */
+  async deleteOthers(userId: number, keepSessionId: number): Promise<number> {
+    const store = this.#store
+    if (typeof store.deleteOthers !== "function") throw missingStoreMethod("deleteOthers")
+    return await store.deleteOthers(userId, keepSessionId, new Date(this.#now()))
+  }
+
+  /**
+   * Records that the session was used now, unless that was already recorded within
+   * {@link SESSION_TOUCH_INTERVAL_MS}. Call it after a successful validation, with the validated
+   * session's own `userId` and `id`; it need not be awaited before the response.
+   *
+   * @returns `true` when the time was written.
+   * @throws {TypeError} When the store does not implement `touch`.
+   */
+  async touch(userId: number, sessionId: number): Promise<boolean> {
+    const store = this.#store
+    if (typeof store.touch !== "function") throw missingStoreMethod("touch")
+    return await store.touch(userId, sessionId, new Date(this.#now()), SESSION_TOUCH_INTERVAL_MS)
+  }
+
   /** The stored session this cookie value proves, whatever its status, or `null`. */
   async #find(cookieValue: string): Promise<S | null> {
     const parsed = parseSessionCookieValue(cookieValue)
@@ -327,4 +477,32 @@ function expiryOf(session: SessionRecord): number {
 function isSecondFactorStatus(value: unknown): value is SecondFactorStatus {
   return value === SecondFactorStatus.NotRequired || value === SecondFactorStatus.Pending ||
     value === SecondFactorStatus.Completed
+}
+
+function missingStoreMethod(name: string): TypeError {
+  return new TypeError(`the session store does not implement ${name}`)
+}
+
+/** ASCII control characters, which no label needs and Postgres refuses in part (NUL). */
+// deno-lint-ignore no-control-regex
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/g
+
+/**
+ * A {@link SessionDevice} that any store can hold, from whatever the app passed: control
+ * characters removed, lone surrogates replaced, the name cut to {@link MAX_DEVICE_NAME_LENGTH}
+ * and the hint to {@link MAX_IP_HINT_LENGTH}. A name that is not a string becomes `""`; a hint
+ * that is not a string, or is empty, becomes `null`. It never throws: a display label must not be
+ * able to fail a sign-in.
+ */
+export function cleanSessionDevice(device: SessionDevice): SessionDevice {
+  const raw = (device ?? {}) as { deviceName?: unknown; ipHint?: unknown }
+  const deviceName = cleanLabel(raw.deviceName, MAX_DEVICE_NAME_LENGTH)
+  const ipHint = cleanLabel(raw.ipHint, MAX_IP_HINT_LENGTH)
+  return { deviceName, ipHint: ipHint === "" ? null : ipHint }
+}
+
+function cleanLabel(value: unknown, maxLength: number): string {
+  if (typeof value !== "string") return ""
+  // Cut first, then repair: a cut through a surrogate pair leaves a lone half to replace.
+  return value.replace(CONTROL_CHARACTERS, "").slice(0, maxLength).toWellFormed()
 }

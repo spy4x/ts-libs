@@ -44,7 +44,7 @@
 
 import { randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import { systemClock } from "@spy4x/platform/universal/time"
-import { SecondFactorStatus } from "../sign-in/mod.ts"
+import { SecondFactorStatus, type SessionDevice } from "../sign-in/mod.ts"
 import {
   AuthConflictError,
   type AuthKey,
@@ -120,6 +120,12 @@ export interface EmailCodeSignInDeps extends ProviderDeps {
   maxAttempts?: number
 }
 
+/** Options of {@link EmailCodeSignIn.verifyCode}. */
+export interface VerifyCodeOptions {
+  /** What the new session shows in the user's list of signed-in devices. */
+  device?: SessionDevice
+}
+
 /** The email-code sign-in provider. */
 export interface EmailCodeSignIn {
   /**
@@ -140,7 +146,7 @@ export interface EmailCodeSignIn {
    *     then succeeds), or an email-code key for the address carries no `email` and so cannot be
    *     evicted.
    */
-  verifyCode(email: string, code: string): Promise<SignInResult>
+  verifyCode(email: string, code: string, options?: VerifyCodeOptions): Promise<SignInResult>
   /**
    * Proves `email` for the signed-in user `userId` with a code from `requestCode`, and creates no
    * user and no session. On a match, every key of the user that carries the address is proven with
@@ -201,7 +207,11 @@ export function createEmailCodeSignIn(deps: EmailCodeSignInDeps): EmailCodeSignI
       await deps.sendCode(address, code)
     },
 
-    async verifyCode(email: string, code: string): Promise<SignInResult> {
+    async verifyCode(
+      email: string,
+      code: string,
+      options?: VerifyCodeOptions,
+    ): Promise<SignInResult> {
       const address = requireEmail(email)
       if (typeof code !== "string") throw new EmailCodeError("wrong-code")
       const now = new Date(clock.now())
@@ -218,7 +228,10 @@ export function createEmailCodeSignIn(deps: EmailCodeSignInDeps): EmailCodeSignI
       const secondFactor = deps.secondFactorFor
         ? await deps.secondFactorFor(user)
         : SecondFactorStatus.NotRequired
-      const session = await sessions.create({ userId: user.id, keyId: key.id, secondFactor })
+      const session = await sessions.create(
+        { userId: user.id, keyId: key.id, secondFactor },
+        options?.device,
+      )
       return { user, key, session }
     },
 

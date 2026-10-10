@@ -20,7 +20,14 @@
  */
 
 import type { Sql, Transaction } from "../db/index.ts"
-import { SecondFactorStatus, SessionStatus, type SessionStore } from "../sign-in/mod.ts"
+import {
+  cleanSessionDevice,
+  type NewSessionDevice,
+  SecondFactorStatus,
+  type SessionListEntry,
+  SessionStatus,
+  type SessionStore,
+} from "../sign-in/mod.ts"
 import {
   AuthConflictError,
   type AuthKey,
@@ -47,6 +54,9 @@ import {
  * to. App tables (a profile, a personal group) reference `auth_users (id)`. An app that writes them
  * in the same transaction as the sign-up hands the store its transaction handle; see
  * {@link createPostgresAuthStore}.
+ *
+ * A database created from this text before `auth_sessions` had `device_name`, `ip_hint` and
+ * `last_used_at` gets them from {@link AUTH_POSTGRES_SESSION_DEVICES_UPGRADE}.
  */
 export const AUTH_POSTGRES_SCHEMA = `
 CREATE TABLE auth_users (
@@ -93,6 +103,9 @@ CREATE INDEX auth_keys_email_idx ON auth_keys (email) WHERE email IS NOT NULL;
 
 -- Status: 1 = active, 2 = expired, 3 = signed out. Second factor: 1 = not required, 2 = pending,
 -- 3 = completed. The values of SessionStatus and SecondFactorStatus in @spy4x/server/sign-in.
+-- device_name and ip_hint are display labels for a list of signed-in devices ("Firefox on Linux",
+-- "203.0.113.*"), never the full user agent or address. last_used_at is written at most every few
+-- minutes.
 CREATE TABLE auth_sessions (
   id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id integer NOT NULL,
@@ -102,10 +115,15 @@ CREATE TABLE auth_sessions (
   second_factor smallint NOT NULL,
   expires_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
+  device_name text NOT NULL DEFAULT '',
+  ip_hint text,
+  last_used_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT auth_sessions_key_fkey FOREIGN KEY (key_id, user_id)
     REFERENCES auth_keys (id, user_id) ON DELETE CASCADE,
   CONSTRAINT auth_sessions_status_check CHECK (status IN (1, 2, 3)),
-  CONSTRAINT auth_sessions_second_factor_check CHECK (second_factor IN (1, 2, 3))
+  CONSTRAINT auth_sessions_second_factor_check CHECK (second_factor IN (1, 2, 3)),
+  CONSTRAINT auth_sessions_device_name_check CHECK (length(device_name) <= 100),
+  CONSTRAINT auth_sessions_ip_hint_check CHECK (length(ip_hint) <= 45)
 );
 
 CREATE INDEX auth_sessions_user_id_idx ON auth_sessions (user_id);
@@ -128,6 +146,38 @@ CREATE TABLE auth_challenges (
 );
 
 CREATE INDEX auth_challenges_expires_at_idx ON auth_challenges (expires_at);
+`
+
+/**
+ * Adds `device_name`, `ip_hint` and `last_used_at` to an `auth_sessions` table created from an
+ * {@link AUTH_POSTGRES_SCHEMA} that did not have them yet (`@spy4x/server` 1.55.0 and earlier).
+ * Run it once, as a migration of its own, before calling `listForUser`, `touch`, or `create` with
+ * a device. A new database needs only `AUTH_POSTGRES_SCHEMA`.
+ *
+ * It is safe on any state of the table. Each column is added only when missing, so a database
+ * that already has all three (from the app's own earlier migration, or from the current
+ * `AUTH_POSTGRES_SCHEMA`) keeps its values, and running it twice changes nothing. The two length
+ * checks are dropped and added again, so they end up as written here whatever they were. A session
+ * that existed before counts as last used when it was created. The default for `last_used_at` is
+ * set before the old rows are filled, so a session inserted by a process still running the
+ * previous code during the migration gets a time too.
+ */
+export const AUTH_POSTGRES_SESSION_DEVICES_UPGRADE = `
+ALTER TABLE auth_sessions
+  ADD COLUMN IF NOT EXISTS device_name text NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS ip_hint text,
+  ADD COLUMN IF NOT EXISTS last_used_at timestamptz;
+
+ALTER TABLE auth_sessions ALTER COLUMN last_used_at SET DEFAULT now();
+
+UPDATE auth_sessions SET last_used_at = created_at WHERE last_used_at IS NULL;
+
+ALTER TABLE auth_sessions
+  ALTER COLUMN last_used_at SET NOT NULL,
+  DROP CONSTRAINT IF EXISTS auth_sessions_device_name_check,
+  ADD CONSTRAINT auth_sessions_device_name_check CHECK (length(device_name) <= 100),
+  DROP CONSTRAINT IF EXISTS auth_sessions_ip_hint_check,
+  ADD CONSTRAINT auth_sessions_ip_hint_check CHECK (length(ip_hint) <= 45);
 `
 
 /** The Postgres error code for a unique violation. */
@@ -376,19 +426,36 @@ class PostgresAuthStore implements AuthStore {
  * It implements every optional `SessionStore` method, including `clearPendingSecondFactors`, and
  * its return type says so, so a caller can clear pending second factors through the store it built
  * on its own transaction handle.
+ *
+ * `listForUser`, `touch`, and `create` with a device read or write `device_name`, `ip_hint` and
+ * `last_used_at`; a database created before those columns existed needs
+ * {@link AUTH_POSTGRES_SESSION_DEVICES_UPGRADE} first. Every other method, and `create` without a
+ * device, names none of them and works on the earlier table as it did. Every statement of
+ * `listForUser`, `deleteForUser`, `deleteOthers` and `touch` names the user.
  */
 export function createPostgresSessionStore(sql: Sql): Required<SessionStore<AuthSessionRecord>> {
   return {
-    async create(session: Omit<AuthSessionRecord, "id">): Promise<AuthSessionRecord> {
+    async create(
+      session: Omit<AuthSessionRecord, "id">,
+      device?: NewSessionDevice,
+    ): Promise<AuthSessionRecord> {
       if (!isStoreId(session.userId) || !isStoreId(session.keyId)) {
         throw new TypeError("a session needs a userId and a keyId the auth store could assign")
       }
       checkDate(session.expiresAt, "expiresAt")
+      // Without a device the statement names no device column, so it runs on a table from before
+      // AUTH_POSTGRES_SESSION_DEVICES_UPGRADE too.
+      const label = device === undefined ? null : cleanSessionDevice(device)
+      const at = device === undefined ? null : checkDate(device.at, "device.at")
       const [row] = await sql<AuthSessionRecord[]>`
-        INSERT INTO auth_sessions (user_id, key_id, token_hash, status, second_factor, expires_at)
+        INSERT INTO auth_sessions (
+          user_id, key_id, token_hash, status, second_factor, expires_at
+          ${label ? sql`, device_name, ip_hint, created_at, last_used_at` : sql``}
+        )
         VALUES (
           ${session.userId}, ${session.keyId}, ${session.tokenHash}, ${session.status},
           ${session.secondFactor}, ${session.expiresAt}
+          ${label ? sql`, ${label.deviceName}, ${label.ipHint}, ${at}, ${at}` : sql``}
         )
         RETURNING ${sessionColumns(sql)}
       `
@@ -450,6 +517,70 @@ export function createPostgresSessionStore(sql: Sql): Required<SessionStore<Auth
         UPDATE auth_sessions SET status = ${SessionStatus.Expired}
         WHERE status = ${SessionStatus.Active} AND expires_at <= ${now}
       `
+    },
+    async listForUser(userId: number, now: Date): Promise<SessionListEntry[]> {
+      checkDate(now, "now")
+      if (!isStoreId(userId)) return []
+      const rows = await sql<SessionListEntry[]>`
+        SELECT id, device_name AS "deviceName", ip_hint AS "ipHint", created_at AS "createdAt",
+          last_used_at AS "lastUsedAt"
+        FROM auth_sessions
+        WHERE user_id = ${userId} AND status = ${SessionStatus.Active} AND expires_at > ${now}
+        ORDER BY last_used_at DESC, id DESC
+      `
+      return rows.map((row) => ({
+        id: row.id,
+        deviceName: row.deviceName,
+        ipHint: row.ipHint,
+        createdAt: row.createdAt,
+        lastUsedAt: row.lastUsedAt,
+      }))
+    },
+    async deleteForUser(userId: number, sessionId: number): Promise<boolean> {
+      if (!isStoreId(userId) || !isStoreId(sessionId)) return false
+      const rows = await sql`
+        DELETE FROM auth_sessions WHERE id = ${sessionId} AND user_id = ${userId} RETURNING id
+      `
+      return rows.length === 1
+    },
+    // Unlike `signOutUser`, this deletes nothing unless `keepSessionId` is a live session of this
+    // user: "the others" means nothing without the caller's own session, and a wrong id must not
+    // end every session of the user, the caller's included.
+    async deleteOthers(userId: number, keepSessionId: number, now: Date): Promise<number> {
+      checkDate(now, "now")
+      if (!isStoreId(userId) || !isStoreId(keepSessionId)) return 0
+      const rows = await sql`
+        DELETE FROM auth_sessions
+        WHERE user_id = ${userId} AND id <> ${keepSessionId}
+          AND status = ${SessionStatus.Active} AND expires_at > ${now}
+          AND EXISTS (
+            SELECT 1 FROM auth_sessions
+            WHERE id = ${keepSessionId} AND user_id = ${userId}
+              AND status = ${SessionStatus.Active} AND expires_at > ${now}
+          )
+        RETURNING id
+      `
+      return rows.length
+    },
+    async touch(
+      userId: number,
+      sessionId: number,
+      now: Date,
+      minIntervalMs: number,
+    ): Promise<boolean> {
+      checkDate(now, "now")
+      if (!Number.isFinite(minIntervalMs) || minIntervalMs < 0) {
+        throw new RangeError("minIntervalMs must be a finite number, zero or more")
+      }
+      if (!isStoreId(userId) || !isStoreId(sessionId)) return false
+      const rows = await sql`
+        UPDATE auth_sessions SET last_used_at = ${now}
+        WHERE id = ${sessionId} AND user_id = ${userId}
+          AND status = ${SessionStatus.Active} AND expires_at > ${now}
+          AND last_used_at <= ${new Date(now.getTime() - minIntervalMs)}
+        RETURNING id
+      `
+      return rows.length === 1
     },
   } satisfies SessionStore<AuthSessionRecord>
 }

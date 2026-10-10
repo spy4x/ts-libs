@@ -7,10 +7,17 @@
  */
 
 export {
+  cleanSessionDevice,
   type CreatedSession,
+  MAX_DEVICE_NAME_LENGTH,
+  MAX_IP_HINT_LENGTH,
   MAX_SESSION_MINUTES,
+  type NewSessionDevice,
   type NewSessionFields,
   SecondFactorStatus,
+  SESSION_TOUCH_INTERVAL_MS,
+  type SessionDevice,
+  type SessionListEntry,
   SessionManager,
   type SessionManagerOptions,
   type SessionRecord,

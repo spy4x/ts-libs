@@ -10,8 +10,12 @@ import {
   T0,
 } from "./fake-store.test.ts"
 import {
+  cleanSessionDevice,
+  MAX_DEVICE_NAME_LENGTH,
+  MAX_IP_HINT_LENGTH,
   MAX_SESSION_MINUTES,
   SecondFactorStatus,
+  SESSION_TOUCH_INTERVAL_MS,
   SessionManager,
   type SessionRecord,
   SessionStatus,
@@ -486,6 +490,161 @@ describe("SessionManager sign-out and second factor", () => {
     await sessions.expireStale()
     expect(rows.get(early.session.id)?.status).toBe(SessionStatus.Expired)
     expect(rows.get(late.session.id)?.status).toBe(SessionStatus.Active)
+  })
+})
+
+const FIELDS = { userId: 7, secondFactor: SecondFactorStatus.NotRequired }
+const LAPTOP = { deviceName: "Firefox on Linux", ipHint: "203.0.113.x" }
+
+describe("SessionManager.create with a device", () => {
+  it("hands the store the device with the injected clock's time", async () => {
+    const { sessions, clock, details } = setup()
+    clock.advance(3 * MINUTE)
+    const { session } = await sessions.create(FIELDS, LAPTOP)
+    expect(details.get(session.id)).toEqual({
+      ...LAPTOP,
+      createdAt: new Date(T0 + 3 * MINUTE),
+      lastUsedAt: new Date(T0 + 3 * MINUTE),
+    })
+  })
+
+  it("calls the store with the session alone when no device is given", async () => {
+    const { sessions, createArguments } = setup()
+    await sessions.create(FIELDS)
+    await sessions.create(FIELDS, undefined)
+    expect(createArguments.map((args) => args.length)).toEqual([1, 1])
+  })
+
+  it("hands the store a cleaned label instead of refusing the sign-in", async () => {
+    const { sessions, createArguments } = setup()
+    await sessions.create(FIELDS, {
+      deviceName: `Chrome\r\non\u0000 Windows${"x".repeat(200)}`,
+      ipHint: "",
+    })
+    // What the manager passed, before any cleaning a store does itself.
+    expect(createArguments[0][1]).toMatchObject({
+      deviceName: `Chromeon Windows${"x".repeat(84)}`,
+      ipHint: null,
+    })
+  })
+})
+
+describe("cleanSessionDevice", () => {
+  it("keeps an ordinary name and hint as they are", () => {
+    expect(cleanSessionDevice(LAPTOP)).toEqual(LAPTOP)
+  })
+
+  it("removes control characters, so a label cannot break a log line or a header", () => {
+    expect(cleanSessionDevice({ deviceName: "a\u0000b\tc\nd\u001fe\u007ff", ipHint: "1\n2" }))
+      .toEqual({ deviceName: "abcdef", ipHint: "12" })
+  })
+
+  it("cuts the name and the hint to the lengths the schema allows", () => {
+    const cleaned = cleanSessionDevice({ deviceName: "n".repeat(500), ipHint: "9".repeat(500) })
+    expect(cleaned.deviceName).toHaveLength(MAX_DEVICE_NAME_LENGTH)
+    expect(cleaned.ipHint).toHaveLength(MAX_IP_HINT_LENGTH)
+  })
+
+  it("leaves no lone surrogate when the cut falls inside an emoji", () => {
+    const { deviceName } = cleanSessionDevice({
+      deviceName: `${"n".repeat(MAX_DEVICE_NAME_LENGTH - 1)}\u{1F600}`,
+      ipHint: null,
+    })
+    expect(deviceName).toHaveLength(MAX_DEVICE_NAME_LENGTH)
+    expect(deviceName.isWellFormed()).toBe(true)
+  })
+
+  it("answers an empty name and no hint for values that are not text, and never throws", () => {
+    const junk = [null, undefined, 7, {}, { deviceName: 7, ipHint: {} }, { deviceName: null }]
+    for (const value of junk) {
+      expect(cleanSessionDevice(value as never)).toEqual({ deviceName: "", ipHint: null })
+    }
+  })
+
+  it("turns an empty hint into no hint", () => {
+    expect(cleanSessionDevice({ deviceName: "x", ipHint: "\n" }).ipHint).toBeNull()
+  })
+})
+
+describe("SessionManager session lists", () => {
+  it("lists by the injected clock, so a session that ran out is not shown", async () => {
+    const { sessions, clock } = setup()
+    const early = await sessions.create(FIELDS, LAPTOP)
+    clock.advance(30 * MINUTE)
+    const late = await sessions.create(FIELDS, LAPTOP)
+    clock.set(early.session.expiresAt.getTime())
+    expect((await sessions.listForUser(7)).map((entry) => entry.id)).toEqual([late.session.id])
+  })
+
+  it("deletes one session of the user, and it then fails validation", async () => {
+    const { sessions } = setup()
+    const mine = await sessions.create(FIELDS)
+    const other = await sessions.create({ ...FIELDS, userId: 8 })
+    expect(await sessions.deleteForUser(7, other.session.id)).toBe(false)
+    expect(await sessions.deleteForUser(7, mine.session.id)).toBe(true)
+    expect(await sessions.validate(mine.cookieValue)).toBeNull()
+    expect(await sessions.validate(other.cookieValue)).not.toBeNull()
+  })
+
+  it("deletes the user's other sessions and keeps the named one and other users'", async () => {
+    const { sessions } = setup()
+    const kept = await sessions.create(FIELDS)
+    const second = await sessions.create(FIELDS)
+    const other = await sessions.create({ ...FIELDS, userId: 8 })
+    expect(await sessions.deleteOthers(7, kept.session.id)).toBe(1)
+    expect(await sessions.validate(kept.cookieValue)).not.toBeNull()
+    expect(await sessions.validate(second.cookieValue)).toBeNull()
+    expect(await sessions.validate(other.cookieValue)).not.toBeNull()
+  })
+
+  it("counts only live sessions as deleted, by the injected clock", async () => {
+    const { sessions, clock } = setup()
+    const early = await sessions.create(FIELDS)
+    clock.advance(30 * MINUTE)
+    const kept = await sessions.create(FIELDS)
+    await sessions.create(FIELDS)
+    clock.set(early.session.expiresAt.getTime())
+    expect(await sessions.deleteOthers(7, kept.session.id)).toBe(1)
+  })
+
+  it("records a use once per SESSION_TOUCH_INTERVAL_MS, by the injected clock", async () => {
+    const { sessions, clock, details } = setup()
+    const { session } = await sessions.create(FIELDS, LAPTOP)
+    clock.advance(SESSION_TOUCH_INTERVAL_MS - 1)
+    expect(await sessions.touch(7, session.id)).toBe(false)
+    clock.advance(1)
+    expect(await sessions.touch(7, session.id)).toBe(true)
+    expect(details.get(session.id)?.lastUsedAt.getTime()).toBe(T0 + SESSION_TOUCH_INTERVAL_MS)
+    expect(await sessions.touch(7, session.id)).toBe(false)
+  })
+
+  it("does not record a use of another user's session", async () => {
+    const { sessions, clock, details } = setup()
+    const { session } = await sessions.create(FIELDS, LAPTOP)
+    clock.advance(SESSION_TOUCH_INTERVAL_MS)
+    expect(await sessions.touch(8, session.id)).toBe(false)
+    expect(details.get(session.id)?.lastUsedAt.getTime()).toBe(T0)
+  })
+
+  for (const name of ["listForUser", "deleteForUser", "deleteOthers", "touch"] as const) {
+    it(`refuses ${name} through a store without the method`, async () => {
+      const { [name]: _omitted, ...rest } = createFakeStore().store
+      const store: SessionStore = rest
+      const sessions = new SessionManager({ store, pepper: PEPPER, durationMinutes: 60 })
+      await expect(sessions[name](7, 1)).rejects.toThrow(
+        new TypeError(`the session store does not implement ${name}`),
+      )
+    })
+  }
+
+  it("still creates, validates and signs out through a store without the four methods", async () => {
+    const { listForUser: _l, deleteForUser: _d, deleteOthers: _o, touch: _t, ...rest } =
+      createFakeStore().store
+    const store: SessionStore = rest
+    const sessions = new SessionManager({ store, pepper: PEPPER, durationMinutes: 60 })
+    const created = await sessions.create(FIELDS, LAPTOP)
+    expect((await sessions.validate(created.cookieValue))?.session.id).toBe(created.session.id)
+    expect(await sessions.signOut(created.cookieValue)).toBe(true)
   })
 })
 

@@ -6,16 +6,32 @@
 // SessionStore<S>`, which rejects a missing and an extra key alike, and `session.test.ts` asserts
 // the runtime keys. Test-only access (the rows and a call log) sits beside the store, never on it.
 
-import type { SessionRecord, SessionStore } from "./session.ts"
-import { SecondFactorStatus, SessionStatus } from "./session.ts"
+import type {
+  NewSessionDevice,
+  SessionDevice,
+  SessionListEntry,
+  SessionRecord,
+  SessionStore,
+} from "./session.ts"
+import { cleanSessionDevice, SecondFactorStatus, SessionStatus } from "./session.ts"
+
+/** What the fake keeps beside a row: the `auth_sessions` columns that are not on the record. */
+export interface FakeSessionDetails extends SessionDevice {
+  createdAt: Date
+  lastUsedAt: Date
+}
 
 /** A fake store plus the handles a test inspects it through. */
 export interface FakeStore<S extends SessionRecord> {
   store: SessionStore<S>
   /** The stored rows by id. Tests may read and edit them directly. */
   rows: Map<number, S>
+  /** The device and times of each stored row, by id. */
+  details: Map<number, FakeSessionDetails>
   /** Every store method called, in order, by name. */
   calls: string[]
+  /** The arguments `create` received, call by call: one when no device was passed, else two. */
+  createArguments: unknown[][]
 }
 
 /** The method names of `SessionStore`, sorted. */
@@ -23,11 +39,15 @@ export const STORE_METHODS = [
   "clearPendingSecondFactors",
   "completeSecondFactor",
   "create",
+  "deleteForUser",
+  "deleteOthers",
   "expire",
   "extend",
   "findById",
+  "listForUser",
   "signOut",
   "signOutUser",
+  "touch",
 ]
 
 /**
@@ -36,15 +56,29 @@ export const STORE_METHODS = [
  */
 export function createFakeStore<S extends SessionRecord = SessionRecord>(): FakeStore<S> {
   const rows = new Map<number, S>()
+  const details = new Map<number, FakeSessionDetails>()
   const calls: string[] = []
+  const createArguments: unknown[][] = []
   let nextId = 1
 
+  /** Live at `now`, as `listForUser` and `deleteOthers` mean it. */
+  function isLive(row: S, now: Date): boolean {
+    return row.status === SessionStatus.Active && row.expiresAt.getTime() > now.getTime()
+  }
+
   const store = {
-    create(session: Omit<S, "id">): Promise<S> {
+    // The rest parameter records how many arguments the caller really passed.
+    create(...args: [session: Omit<S, "id">, device?: NewSessionDevice]): Promise<S> {
       calls.push("create")
+      createArguments.push(structuredClone(args))
+      const [session, device] = args
       const row = { ...structuredClone(session), id: nextId } as S
       nextId += 1
       rows.set(row.id, row)
+      // Without a device the columns take their defaults: no name, no hint, the host's time.
+      const at = device ? new Date(device.at.getTime()) : new Date()
+      const label = device ? cleanSessionDevice(device) : { deviceName: "", ipHint: null }
+      details.set(row.id, { ...label, createdAt: at, lastUsedAt: new Date(at.getTime()) })
       return Promise.resolve(structuredClone(row))
     },
     findById(id: number): Promise<S | null> {
@@ -102,9 +136,52 @@ export function createFakeStore<S extends SessionRecord = SessionRecord>(): Fake
       }
       return Promise.resolve()
     },
+    listForUser(userId: number, now: Date): Promise<SessionListEntry[]> {
+      calls.push("listForUser")
+      const entries: SessionListEntry[] = []
+      for (const row of rows.values()) {
+        const detail = details.get(row.id)
+        if (row.userId !== userId || !isLive(row, now) || !detail) continue
+        entries.push({ id: row.id, ...structuredClone(detail) })
+      }
+      entries.sort((a, b) => b.lastUsedAt.getTime() - a.lastUsedAt.getTime() || b.id - a.id)
+      return Promise.resolve(entries)
+    },
+    deleteForUser(userId: number, sessionId: number): Promise<boolean> {
+      calls.push("deleteForUser")
+      const row = rows.get(sessionId)
+      if (!row || row.userId !== userId) return Promise.resolve(false)
+      rows.delete(sessionId)
+      details.delete(sessionId)
+      return Promise.resolve(true)
+    },
+    deleteOthers(userId: number, keepSessionId: number, now: Date): Promise<number> {
+      calls.push("deleteOthers")
+      const kept = rows.get(keepSessionId)
+      if (!kept || kept.userId !== userId || !isLive(kept, now)) return Promise.resolve(0)
+      let deleted = 0
+      for (const row of [...rows.values()]) {
+        if (row.userId !== userId || row.id === keepSessionId || !isLive(row, now)) continue
+        rows.delete(row.id)
+        details.delete(row.id)
+        deleted += 1
+      }
+      return Promise.resolve(deleted)
+    },
+    touch(userId: number, sessionId: number, now: Date, minIntervalMs: number): Promise<boolean> {
+      calls.push("touch")
+      const row = rows.get(sessionId)
+      const detail = details.get(sessionId)
+      if (!row || !detail || row.userId !== userId || !isLive(row, now)) {
+        return Promise.resolve(false)
+      }
+      if (detail.lastUsedAt.getTime() > now.getTime() - minIntervalMs) return Promise.resolve(false)
+      detail.lastUsedAt = new Date(now.getTime())
+      return Promise.resolve(true)
+    },
   } satisfies SessionStore<S>
 
-  return { store, rows, calls }
+  return { store, rows, details, calls, createArguments }
 }
 
 /** A clock the test moves by hand. Starts in 2001, far from the host's clock. */

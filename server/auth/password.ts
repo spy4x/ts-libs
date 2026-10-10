@@ -31,7 +31,7 @@
 
 import { randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import { systemClock } from "@spy4x/platform/universal/time"
-import { type PasswordHasher, SecondFactorStatus } from "../sign-in/mod.ts"
+import { type PasswordHasher, SecondFactorStatus, type SessionDevice } from "../sign-in/mod.ts"
 import {
   AuthConflictError,
   type AuthKey,
@@ -161,6 +161,11 @@ export interface PasswordCredentials {
    */
   email: string
   password: string
+  /**
+   * What the new session shows in the user's list of signed-in devices. `checkCredentials` creates
+   * no session and ignores it.
+   */
+  device?: SessionDevice
 }
 
 /** What {@link PasswordSignIn.checkCredentials} returns: whose password matched, and its key. */
@@ -175,6 +180,27 @@ export interface ChangePasswordInput {
   userId: number
   currentPassword: string
   newPassword: string
+  /** What the new session shows in the user's list of signed-in devices. */
+  device?: SessionDevice
+  /** Leave it out, or pass `false`: every other session is signed out. */
+  keepSessions?: false
+}
+
+/**
+ * Input of {@link PasswordSignIn.changePassword} for a person who chose to stay signed in on their
+ * other devices.
+ */
+export interface ChangePasswordKeepingSessionsInput {
+  /** The signed-in user, from a validated session. */
+  userId: number
+  currentPassword: string
+  newPassword: string
+  /**
+   * Replaces the password and touches no session: the caller's and every other one stay as they
+   * are, and none is created. Offer it only as the person's explicit choice. Whoever holds a
+   * session of this user keeps it, which is what signing the others out is there to prevent.
+   */
+  keepSessions: true
 }
 
 /** Input of {@link PasswordSignIn.completeReset}. */
@@ -183,6 +209,8 @@ export interface CompleteResetInput {
   /** The code {@link PasswordSignIn.requestReset} returned, as the person entered it. */
   code: string
   newPassword: string
+  /** What the new session shows in the user's list of signed-in devices. */
+  device?: SessionDevice
 }
 
 /** A reset code for the app to deliver to `email`. */
@@ -251,6 +279,16 @@ export interface PasswordSignIn {
    * @throws {PasswordSignInError} `invalid-credentials`, exactly as `signIn`.
    */
   checkCredentials(input: PasswordCredentials): Promise<CheckedCredentials>
+  /**
+   * With `keepSessions: true`: replaces the password after the same two checks as below, in the
+   * same order (the new password's length, then the current password), and leaves every session of
+   * the user as it is. No session is created, so there is no cookie to replace.
+   *
+   * @returns The user and the password key with its new secret. The key carries `secret` (the
+   *     password hash): keep it on the server, never in a response body.
+   * @throws {PasswordSignInError} `invalid-password`, `invalid-credentials`.
+   */
+  changePassword(input: ChangePasswordKeepingSessionsInput): Promise<CheckedCredentials>
   /**
    * Replaces the password after checking the current one, creates a new session, then signs out
    * every other session of the user. The caller replaces its cookie with the returned one.
@@ -409,15 +447,23 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
   }
 
   /** Creates a session for `key`. The second-factor status is the app's, or NotRequired. */
-  async function signInWith(user: AuthUser, key: AuthKey): Promise<SignInResult> {
+  async function signInWith(
+    user: AuthUser,
+    key: AuthKey,
+    device: SessionDevice | undefined,
+  ): Promise<SignInResult> {
     const secondFactor = await options.secondFactorFor?.(user) ?? SecondFactorStatus.NotRequired
-    const session = await sessions.create({ userId: user.id, keyId: key.id, secondFactor })
+    const session = await sessions.create({ userId: user.id, keyId: key.id, secondFactor }, device)
     return { user, key, session }
   }
 
   /** Create before revoke: the new session exists before every other session is signed out. */
-  async function replaceSessions(user: AuthUser, key: AuthKey): Promise<SignInResult> {
-    const result = await signInWith(user, key)
+  async function replaceSessions(
+    user: AuthUser,
+    key: AuthKey,
+    device: SessionDevice | undefined,
+  ): Promise<SignInResult> {
+    const result = await signInWith(user, key, device)
     await sessions.signOutUser(user.id, { except: result.session.session.id })
     return result
   }
@@ -486,7 +532,7 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
   }
 
   return {
-    async signUp({ email: rawEmail, password }) {
+    async signUp({ email: rawEmail, password, device }) {
       const subject = toSubject(rawEmail)
       if (subject === null) throw new PasswordSignInError("invalid-email")
       const secret = await hashNewPassword(password)
@@ -501,17 +547,22 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
         if (error instanceof AuthConflictError) throw new PasswordSignInError("email-taken")
         throw error
       }
-      return await signInWith(created.user, created.key)
+      return await signInWith(created.user, created.key, device)
     },
 
     async signIn(input) {
       const { user, key } = await checkCredentials(input)
-      return await signInWith(user, key)
+      return await signInWith(user, key, input.device)
     },
 
     checkCredentials,
 
-    async changePassword({ userId, currentPassword, newPassword }) {
+    // One implementation for both overloads. `SignInResult` has every field of
+    // `CheckedCredentials`, so the declared return type covers the keeping-sessions answer too.
+    async changePassword(
+      input: ChangePasswordInput | ChangePasswordKeepingSessionsInput,
+    ): Promise<SignInResult> {
+      const { userId, currentPassword, newPassword } = input
       const secret = await hashNewPassword(newPassword)
       const user = await liveUser(userId)
       const keys = user ? await store.listKeys(user.id) : []
@@ -527,7 +578,10 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
       if (!(await store.updateKeySecret(matched.id, secret))) {
         throw new PasswordSignInError("invalid-credentials")
       }
-      return await replaceSessions(user, await reloadKey(matched.id))
+      const key = await reloadKey(matched.id)
+      // Only the literal `true` keeps the sessions: any other value signs the others out.
+      if (input.keepSessions === true) return { user, key } as SignInResult
+      return await replaceSessions(user, key, input.device)
     },
 
     async requestReset({ email: rawEmail }) {
@@ -546,7 +600,7 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
       return { email, code, expiresAt }
     },
 
-    async completeReset({ email: rawEmail, code, newPassword }) {
+    async completeReset({ email: rawEmail, code, newPassword, device }) {
       requireAddressSubjects("completeReset")
       const email = requireEmail(rawEmail)
       // Checked before the guess is spent, so a refused password does not consume a matching code.
@@ -576,7 +630,7 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
           if (!user) throw new PasswordSignInError("no-account")
           if (key.provenAt === null) await store.proveKey(key.id, at)
           await store.updateKeySecret(key.id, secret)
-          return await replaceSessions(user, await reloadKey(key.id))
+          return await replaceSessions(user, await reloadKey(key.id), device)
         }
         // The key is an unproven claim by someone who does not own the address. A proven insert
         // deletes it in the same write and puts the password on the owner's account, or on a new
@@ -585,10 +639,10 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
           const user = await liveUser(owner)
           if (!user) throw new PasswordSignInError("no-account")
           const added = await store.addKey(owner, passwordKey(email, secret, at))
-          return await replaceSessions(user, added)
+          return await replaceSessions(user, added, device)
         }
         const created = await store.createUserWithKey(passwordKey(email, secret, at))
-        return await replaceSessions(created.user, created.key)
+        return await replaceSessions(created.user, created.key, device)
       } catch (error) {
         if (error instanceof AuthConflictError) throw new PasswordSignInError("conflict")
         throw error

@@ -32,6 +32,7 @@ interface Harness {
   /** A password provider over the same store and sessions. */
   passwords: PasswordSignIn
   store: MemoryAuthStore
+  sessions: SessionManager<AuthSessionRecord>
   clock: ManualClock
   /** Every code sent, in order. */
   sent: { email: string; code: string }[]
@@ -69,7 +70,7 @@ function setup(overrides: Partial<EmailCodeSignInDeps> = {}): Harness {
     await provider.requestCode(email)
     return sent[sent.length - 1].code
   }
-  return { provider, passwords, store, clock, sent, codeFor }
+  return { provider, passwords, store, sessions, clock, sent, codeFor }
 }
 
 async function expectRefusal(
@@ -108,6 +109,17 @@ describe("createEmailCodeSignIn: requestCode", () => {
 })
 
 describe("createEmailCodeSignIn: verifyCode", () => {
+  it("records the device it is given on the new session, and none when it is given none", async () => {
+    const { provider, sessions, codeFor } = setup()
+    const device = { deviceName: "Firefox on Linux", ipHint: "203.0.113.x" }
+    const first = await provider.verifyCode(ADDRESS, await codeFor(), { device })
+    const second = await provider.verifyCode(ADDRESS, await codeFor())
+    const listed = await sessions.listForUser(first.user.id)
+    expect(listed.find((entry) => entry.id === first.session.session.id)).toMatchObject(device)
+    expect(listed.find((entry) => entry.id === second.session.session.id))
+      .toMatchObject({ deviceName: "", ipHint: null })
+  })
+
   it("signs up with a new user and one proven email-code key whose email is the address", async () => {
     const { provider, store, clock, codeFor } = setup()
     const result = await provider.verifyCode(ADDRESS, await codeFor())
