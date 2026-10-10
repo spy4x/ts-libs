@@ -3232,6 +3232,81 @@ try {
 15 s) sets the default timeout; `send` and `request` remain liveness and
 handshake only.
 
+## Calls port (`@spy4x/realtime/calls`)
+
+A store should not know whether its calls travel over the socket or over HTTP. It takes a
+`CallPort`: `command(name, payload, { idempotencyKey, signal? })` and
+`query(name, payload, { signal? })`. Every module throws the same two errors:
+`RealtimeRequestError` (the server answered; `code` is one of the closed set, `details` is what
+the server sent) and `ConnectionLostError` (the server could not be reached, so a command may or
+may not have run).
+
+| Piece                                          | Does                                                                                             |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `createHttpCallPort({ baseUrl, userId, ... })` | `POST <baseUrl>/<name>` with `fetch`. Always works.                                              |
+| `createSocketCallPort(transport)`              | Adapts a `ClientTransport`; `isAvailable()` is true while the socket is open.                    |
+| `createComposedCallPort({ socket, http })`     | Socket while it is open, HTTP otherwise and after a lost socket (see below).                     |
+| `withUnauthorizedHook(port, hook)`             | Calls `hook` once when a call is answered `unauthorized`. The HTTP port takes it as an option.   |
+| `sendCommand`, `sendQuery`, `isRetryable`      | Send a call again when the outcome is unknown: one idempotency key per command, waits that grow. |
+
+### HTTP wire contract
+
+- Request: `POST <baseUrl>/<name>`, `Content-Type: application/json`, body = the payload as JSON
+  (no body at all when there is none; the handler passes `undefined` to the operation, as the
+  socket does), header `Idempotency-Key` on commands, header `X-Realtime-User` with the id of the
+  user the page was started for. The name is one path segment (URL-encoded). The HTTP handler
+  refuses a command without `Idempotency-Key` with `bad_request`, so a keyless command only works
+  over the socket.
+- Success: every 2xx carries `{ "result": <value> }`; `null` for an operation that returns nothing.
+- Failure: a non-2xx with `{ "error": { "code", "message", "details"? } }`; `code` is the same
+  string the socket uses.
+- `ConnectionLostError`: `fetch` failed, no answer within `timeoutMs` (default 15 s), a 5xx with no
+  readable error body, a bare 404 or 429 (a proxy answers them while a container is replaced; a
+  real not-found or rate limit of ours carries the error body), or a 2xx that is not `{ result }`.
+- Any other 4xx with no readable error body gets the code of its status: 401 `unauthorized`, 403
+  `forbidden`, 408 `timeout`, 409 `conflict`, else `bad_request`.
+
+### An app with HTTP only
+
+```ts
+import { createHttpCallPort, sendCommand, sendQuery } from "@spy4x/realtime/calls"
+
+const calls = createHttpCallPort({
+  baseUrl: "/api/call",
+  userId: session.userId, // the user this page was started for
+  onUnauthorized: () => signOut(),
+})
+
+const group = await sendCommand<{ id: string }>(calls, "group.create", { name: "Home" })
+const list = await sendQuery<{ groups: unknown[] }>(calls, "group.list")
+```
+
+### An app with both
+
+```ts
+import {
+  createComposedCallPort,
+  createHttpCallPort,
+  createSocketCallPort,
+  withUnauthorizedHook,
+} from "@spy4x/realtime/calls"
+
+const http = createHttpCallPort({ baseUrl: "/api/call", userId: session.userId })
+const calls = withUnauthorizedHook(
+  createComposedCallPort({ socket: createSocketCallPort(transport), http }),
+  () => signOut(), // one hook for both modules
+)
+```
+
+A socket call that fails with `ConnectionLostError` is sent again over HTTP with the same
+idempotency key. A command without a key is not: the socket may have delivered it before it
+dropped. A server answer (`unauthorized`, `conflict`, a socket `RequestTimeoutError`) is never
+asked again over the other module; `sendCommand` decides whether to try again.
+
+`sendCommand` makes one key per command and sends every try with it. Tries: `attempts` (default 4);
+the wait before repeat `n` is `delayMs * 2 ** (n - 1)` (default 1 s), capped at `maxDelayMs` and
+jittered by `backoffDelay`. `unauthorized` is never retried.
+
 ## Fixed at port time
 
 Each row is a bug in the source this package redesigns, with the test that now
