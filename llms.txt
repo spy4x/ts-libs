@@ -1478,6 +1478,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `FrameHandler` (type), `jsr:@spy4x/realtime`
 - `GapReport` (interface), `jsr:@spy4x/realtime`: A non-contiguous sequence, with the cursor a pull must resume from.
 - `GateResult` (interface), `jsr:@spy4x/realtime`: Outcome of the reconnect gate — typically `GET /api/auth/me`.
+- `HandshakeAcknowledgedEvent` (interface), `jsr:@spy4x/realtime`: Delivered to `onHandshakeAcknowledged` listeners.
 - `KeyValueStore` (type), `jsr:@spy4x/realtime`: Minimal synchronous key/value store.
 - `MalformedFrame` (interface), `jsr:@spy4x/realtime`: A frame that could not be decoded, or arrived in the wrong direction.
 - `MalformedFrameHandler` (type), `jsr:@spy4x/realtime`
@@ -1544,6 +1545,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ConnectionLostError` (class), `jsr:@spy4x/realtime/client`: The socket closed while a request was outstanding, or a send was attempted while closed.
 - `CursorPort` (interface), `jsr:@spy4x/realtime/client`: Durable cursors: what to advertise on connect, and where a hint lands.
 - `GateResult` (interface), `jsr:@spy4x/realtime/client`: Outcome of the reconnect gate — typically `GET /api/auth/me`.
+- `HandshakeAcknowledgedEvent` (interface), `jsr:@spy4x/realtime/client`: Delivered to `onHandshakeAcknowledged` listeners.
 - `PongTimeoutError` (class), `jsr:@spy4x/realtime/client`: The peer stopped answering pings.
 - `RequestOptions` (interface), `jsr:@spy4x/realtime/client`: Options for one ack-tracked ClientTransport.request.
 - `RequestTimeoutError` (class), `jsr:@spy4x/realtime/client`: No answer to a command or query arrived in time.
@@ -2705,4 +2707,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 c2fdd59ffb152e43a20cf2e065dc0645c4907fec23fb1d3133a9135127400ae9 -->
+<!-- export surface: sha256 a58f422319c50ce3265db5b8466cbbaf263e26dc42044add85872ad68ee26601 -->
