@@ -10,3 +10,10 @@
  */
 
 export { type ApiError, apiFetch, type ApiResult } from "./api.ts"
+export {
+  createOfflineFetch,
+  INVALID_REPLY_CODE,
+  type OfflineApiResult,
+  type OfflineFetch,
+  type OfflineFetchOptions,
+} from "./offline-fetch.ts"
