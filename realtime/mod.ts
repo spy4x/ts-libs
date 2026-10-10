@@ -131,3 +131,21 @@ export {
   mapReadyState,
   type NativeSocketLike,
 } from "./web-socket-adapter.ts"
+
+export {
+  type AvailableCallPort,
+  type CallPort,
+  type CallPortCommandOptions,
+  type CallPortOptions,
+  type ComposedCallPortOptions,
+  createComposedCallPort,
+  createHttpCallPort,
+  createSocketCallPort,
+  type HttpCallPortOptions,
+  isRetryable,
+  type RetryOptions,
+  sendCommand,
+  sendQuery,
+  type SocketCallTransport,
+  withUnauthorizedHook,
+} from "./calls.ts"
