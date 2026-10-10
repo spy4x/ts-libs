@@ -113,7 +113,8 @@ error is rethrown unchanged.
 
 ## `server/http/security-headers`
 
-`securityHeaders`, `inlineBlockHashes` and the types `SecurityHeadersOptions` and `ExtraSources`.
+`securityHeaders`, `securityHeaderList`, `nginxAddHeaders`, `inlineBlockHashes` and the types
+`SecurityHeadersOptions`, `ExtraSources` and `NginxAddHeadersOptions`.
 
 `await securityHeaders({ shellHtml, extraSources })` returns Hono middleware over `secureHeaders`:
 a Content-Security-Policy that allows only the app's own origin (`'self'`; images also `data:`;
@@ -122,7 +123,29 @@ no objects; `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `Referrer-Policy
 `<script>` and `<style>` block in it is allowed, so the policy needs no `unsafe-inline`. A service
 worker from the app's own origin needs nothing extra. `extraSources` appends sources per directive
 (`scriptSrc`, `styleSrc`, `imgSrc`, `connectSrc`, `fontSrc`, `mediaSrc`, `workerSrc`,
-`manifestSrc`) and never replaces the defaults.
+`manifestSrc`, `formAction`) and never replaces the defaults. `formAction` also limits where a
+form's post may be redirected, so a page whose form ends on another origin names that origin there.
+Each value is one source: an empty value, or one with whitespace, `;`, `,` or a character outside
+printable ASCII, throws, because it would add a source or a whole directive. The error names the
+key and the position, never the value.
+
+`await securityHeaderList(options)` returns the same headers as `[name, value]` pairs with
+lower-case names, for a server that is not Hono. The middleware sets exactly this list.
+
+```ts
+const headers = await securityHeaderList({
+  extraSources: { formAction: ["https://app.example.com"] },
+})
+for (const [name, value] of headers) response.headers.set(name, value)
+```
+
+`nginxAddHeaders(headers, { allowedVariables })` renders a header list as text for an nginx
+`include` file, one `add_header <name> "<value>" always;` line each, for a page nginx serves. It
+writes no file. The value sits in a quoted string where nginx expands `$name`, so the function
+throws, naming the header and never the value, on a double quote, a backslash, a newline or any
+other control character, and on a `$` that does not start exactly one of `allowedVariables` (such
+as `["$csp_error_tracker"]`, a variable the container sets when it starts). A header name that is
+not letters, digits, `-` and `_` throws too.
 
 ## `server/http/same-origin`
 
