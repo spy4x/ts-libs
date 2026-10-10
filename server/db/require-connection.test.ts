@@ -48,12 +48,12 @@ Deno.test("requireDbConnection reads DB_PORT when it is set", () => {
 })
 
 Deno.test("requireDbConnection reads the process environment by default", () => {
-  const names = ["DB_HOST", "DB_USER", "DB_PASS", "DB_NAME"]
+  const names = ["DB_HOST", "DB_USER", "DB_PASS", "DB_NAME", "DB_PORT"]
   const saved = names.map((name) => Deno.env.get(name))
   try {
     for (const name of names) Deno.env.delete(name)
     assertThrows(() => requireDbConnection(), Error, "DB_HOST, DB_USER, DB_PASS, DB_NAME")
-    for (const name of names) Deno.env.set(name, "x")
+    for (const name of names) Deno.env.set(name, name === "DB_PORT" ? "5432" : "x")
     assertEquals(requireDbConnection().connection.host, "x")
   } finally {
     names.forEach((name, i) => {

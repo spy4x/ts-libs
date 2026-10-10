@@ -76,8 +76,13 @@ export class UnsupportedEnvSyntaxError extends Error {
   constructor(
     line: number,
     reason: "no '=' found" | "unterminated quote" | "invalid key name" | "carriage return",
+    path?: string,
   ) {
-    super(`unsupported env syntax at line ${line}: ${reason}. ${SUPPORTED_FORMS}`)
+    super(
+      `${
+        path ? `${path}: ` : ""
+      }unsupported env syntax at line ${line}: ${reason}. ${SUPPORTED_FORMS}`,
+    )
     this.name = "UnsupportedEnvSyntaxError"
   }
 }
@@ -132,14 +137,14 @@ export function parseEnvFile(content: string, path?: string): EnvEntry[] {
   const lines = content.split("\n")
   const entries: EnvEntry[] = []
   lines.forEach((line, index) => {
-    if (line.includes("\r")) throw new UnsupportedEnvSyntaxError(index + 1, "carriage return")
+    if (line.includes("\r")) throw new UnsupportedEnvSyntaxError(index + 1, "carriage return", path)
     const trimmed = line.trim()
     if (trimmed === "" || trimmed.startsWith("#")) {
       entries.push({ raw: line })
       return
     }
     const eqIndex = line.indexOf("=")
-    if (eqIndex === -1) throw new UnsupportedEnvSyntaxError(index + 1, "no '=' found")
+    if (eqIndex === -1) throw new UnsupportedEnvSyntaxError(index + 1, "no '=' found", path)
     const prefix = line.slice(0, eqIndex + 1)
     const value = line.slice(eqIndex + 1)
 
@@ -149,11 +154,13 @@ export function parseEnvFile(content: string, path?: string): EnvEntry[] {
       (quote === `"` || quote === "'") &&
       (quoted.length < 2 || !(quoted.endsWith(quote) || commentAfterQuote(quoted)))
     ) {
-      throw new UnsupportedEnvSyntaxError(index + 1, "unterminated quote")
+      throw new UnsupportedEnvSyntaxError(index + 1, "unterminated quote", path)
     }
 
     const key = prefix.slice(0, -1).replace(EXPORT_PREFIX, "").trim()
-    if (!KEY_PATTERN.test(key)) throw new UnsupportedEnvSyntaxError(index + 1, "invalid key name")
+    if (!KEY_PATTERN.test(key)) {
+      throw new UnsupportedEnvSyntaxError(index + 1, "invalid key name", path)
+    }
 
     entries.push({ raw: line, assignment: { prefix, key, value } })
   })

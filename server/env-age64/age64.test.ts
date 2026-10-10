@@ -361,3 +361,21 @@ Deno.test("decodeEnvValue: keeps a value whose quotes are not followed by a comm
   assertEquals(decodeEnvValue(`"a" "b"`), `a" "b`)
   assertEquals(decodeEnvValue(`  plain  `), `plain`)
 })
+
+Deno.test("parseEnvValues: the syntax error names the file and the line, never the text", () => {
+  const error = assertThrows(
+    () => parseEnvValues(`OK=1\nTOKEN="sk_live_hidden\n`, "infra/envs/.env.prod"),
+    UnsupportedEnvSyntaxError,
+  )
+  assertEquals(error.message.startsWith("infra/envs/.env.prod: "), true)
+  assertEquals(error.message.includes("line 2"), true)
+  assertEquals(error.message.includes("sk_live_hidden"), false)
+})
+
+Deno.test("parseEnvValues: a quoted value ends at its first closing quote", () => {
+  assertEquals(parseEnvValues(`KEY="a" # say "hi"\n`), { KEY: "a" })
+})
+
+Deno.test("parseEnvFile: rejects a # right after a closing quote, with no space", () => {
+  assertThrows(() => parseEnvFile(`KEY="a"#note\n`), UnsupportedEnvSyntaxError)
+})
