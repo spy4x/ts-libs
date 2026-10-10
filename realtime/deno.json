@@ -10,6 +10,7 @@
     "./cursor": "./cursor.ts",
     "./outbox": "./outbox.ts",
     "./outbox-indexeddb": "./outbox-indexeddb.ts",
+    "./read-cache": "./read-cache.ts",
     "./sync-runner": "./sync-runner.ts",
     "./protocol": "./codec.ts",
     "./web-socket": "./web-socket-adapter.ts",

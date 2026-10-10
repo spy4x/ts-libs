@@ -488,6 +488,36 @@ servers; one contract suite runs against both, so they behave alike. Name the da
 user (`outbox:${userId}`), as the lock is named. Ask the browser not to evict it with
 `requestPersistentStorage` from `@spy4x/platform/browser/persistent-storage`.
 
+## Read cache (`@spy4x/realtime/read-cache`)
+
+The offline-readable level of ADR 003: a copy of a list read, kept on the device, that answers when
+the server cannot be reached. One cache per signed-in user, over `createDataCache`.
+
+```ts
+import { cachedRead, createReadCache, readCopy } from "@spy4x/realtime/read-cache"
+
+const cache = createReadCache({ name: `reads:${userId}` }) // or undefined: no local data
+
+const copy = await readCopy<Group[]>(cache, `groups`) // paint at once; undefined when none
+const { value, fresh, savedAt } = await cachedRead(cache, `groups`, () => fetchGroups())
+// fresh: the server answered now. Not fresh: a copy taken at `savedAt` (epoch ms).
+
+await cache.clear() // sign-out, or a start that finds no session: every copy of this user
+```
+
+- Every answer replaces the copy under its key. A read that cannot reach the server
+  (`ConnectionLostError`, or the `TypeError` a failed `fetch` rejects with) answers from the copy,
+  or throws the connection error when there is none.
+- Any other error is thrown and the copy stays. `unauthorized` and `forbidden` therefore neither
+  return nor replace it.
+- A device that cannot save does not fail the read; the answer is returned and the copy is not
+  updated. `readCopy` never rejects.
+- `cachedRead(undefined, key, read)` only calls `read`, so a store has one code path and an app
+  without local data touches no IndexedDB.
+- Run the full read inside `read` (all pages), so the copy is the whole list. Search and filters
+  then run over the list the store holds. `cache.get` / `cache.set` let a layer on top (the
+  offline-writable collection) read and update a copy directly.
+
 ## Sync runner (`@spy4x/realtime/sync-runner`)
 
 Sends the outbox at the moments a browser gives a page: on start, when the browser goes online,
