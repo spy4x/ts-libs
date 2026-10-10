@@ -442,6 +442,31 @@ describe("apiFetch — error body shapes", () => {
     expect("code" in error).toBe(false)
   })
 
+  it("reads code and message from a { error: { code, message } } body", async () => {
+    expect(await errorFor({ error: { code: "x", message: "y", requestId: "r1" } }, 403))
+      .toEqual({ status: 403, message: "y", code: "x" })
+  })
+
+  it("prefers the nested code and message over the top-level ones", async () => {
+    expect(await errorFor({ error: { code: "inner", message: "inner msg" }, code: "outer" }))
+      .toEqual({ status: 502, message: "inner msg", code: "inner" })
+  })
+
+  it("falls back to the top-level message and code when the nested ones are missing", async () => {
+    expect(await errorFor({ error: { requestId: "r1" }, message: "outer msg", code: "outer" }))
+      .toEqual({ status: 502, message: "outer msg", code: "outer" })
+  })
+
+  it("ignores non-string nested fields", async () => {
+    const error = await errorFor({ error: { code: 42, message: { text: "deep" } } })
+    expect(error).toEqual({ status: 502, message: "Request failed" })
+    expect("code" in error).toBe(false)
+  })
+
+  it("ignores an error that is null", async () => {
+    expect(await errorFor({ error: null })).toEqual({ status: 502, message: "Request failed" })
+  })
+
   it("leaves code absent when the body has none", async () => {
     const error = await errorFor({ error: "not found" }, 404)
     expect("code" in error).toBe(false)
