@@ -439,6 +439,15 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `PushFileStoreErrorCode` (type), `jsr:@spy4x/integrations/push-file-store`: Why a call on the store failed: the file cannot be read as this module's document (`corrupt`), or an argument was refused (`invalid-subscription`, `invalid-user`, `invalid-name`).
 - `createFilePushSubscriptionStore` (function), `jsr:@spy4x/integrations/push-file-store`: Builds the store.
 
+### `jsr:@spy4x/integrations/push-reminders`
+
+- `ReminderForPush` (interface), `jsr:@spy4x/integrations/push-reminders`: The parts of a `DueReminder` (`@spy4x/time/ical-tasks-reminders`) a push message is made of.
+- `ReminderNotifyOptions` (interface), `jsr:@spy4x/integrations/push-reminders`: Options of createReminderNotify.
+- `ReminderPushMessageOptions` (interface), `jsr:@spy4x/integrations/push-reminders`: Options of reminderPushMessage.
+- `createReminderNotify` (function), `jsr:@spy4x/integrations/push-reminders`: Builds the `notify` of a reminder runner: it pushes each reminder to every device of `userId`.
+- `reminderDeliveryOutcome` (function), `jsr:@spy4x/integrations/push-reminders`: What a sender's result means for a reminder runner: `"delivered"` when a device got the push, when there was no device, or when nothing that failed can pass later; otherwise `"retry"`.
+- `reminderPushMessage` (function), `jsr:@spy4x/integrations/push-reminders`: The push message of one reminder.
+
 ### `jsr:@spy4x/integrations/webhooks`
 
 - `CombinedSignatureHeader` (interface), `jsr:@spy4x/integrations/webhooks`: One header that carries the timestamp and the signatures together, as a list of `key=value` pairs: Stripe's `Stripe-Signature: t=1492774577,v1=5257…,v0=6ffb…` is `{ name: "Stripe-Signature", pairSeparator: ",", timestampKey: "t", signatureKey: "v1" }`.
@@ -1119,6 +1128,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `DEFAULT_FILE_LOCK_WAIT_MS` (constant), `jsr:@spy4x/platform/server`: How long a FileLock.runExclusive call waits for an earlier one on the same instance.
 - `DEFAULT_REMINDER_CATCH_UP_MS` (constant), `jsr:@spy4x/platform/server`: How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
 - `DEFAULT_REMINDER_INTERVAL_MS` (constant), `jsr:@spy4x/platform/server`: How often the runner ticks unless `intervalMs` says otherwise: once a minute.
+- `DEFAULT_REMINDER_TICK_TIMEOUT_MS` (constant), `jsr:@spy4x/platform/server`: How long one tick may take unless `tickTimeoutMs` says otherwise: two minutes.
 - `FileLock` (class), `jsr:@spy4x/platform/server`: One held lock.
 - `FileLockOptions` (interface), `jsr:@spy4x/platform/server`: Options for FileLock.
 - `FileLockWaitError` (class), `jsr:@spy4x/platform/server`: Raised when a FileLock.runExclusive call waited FileLockOptions.waitMs for an earlier `runExclusive` on the same instance and gave up.
@@ -1129,6 +1139,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `LockUnavailableError` (class), `jsr:@spy4x/platform/server`: Raised when another holder owns the lock.
 - `LogRecord` (type), `jsr:@spy4x/platform/server`: One log record: the caller's event plus a timestamp.
 - `ReadJsonResult` (type), `jsr:@spy4x/platform/server`: Result of reading a JSON document.
+- `ReminderNotifyResult` (type), `jsr:@spy4x/platform/server`: What `notify` says about one reminder:
 - `ReminderRunner` (interface), `jsr:@spy4x/platform/server`: A runner built by createReminderRunner.
 - `ReminderRunnerOptions` (interface), `jsr:@spy4x/platform/server`: Options of createReminderRunner.
 - `ReminderRunnerState` (interface), `jsr:@spy4x/platform/server`: What the runner remembers between ticks and across restarts.
@@ -1203,6 +1214,8 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `DEFAULT_REMINDER_CATCH_UP_MS` (constant), `jsr:@spy4x/platform/server/reminder-runner`: How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
 - `DEFAULT_REMINDER_INTERVAL_MS` (constant), `jsr:@spy4x/platform/server/reminder-runner`: How often the runner ticks unless `intervalMs` says otherwise: once a minute.
+- `DEFAULT_REMINDER_TICK_TIMEOUT_MS` (constant), `jsr:@spy4x/platform/server/reminder-runner`: How long one tick may take unless `tickTimeoutMs` says otherwise: two minutes.
+- `ReminderNotifyResult` (type), `jsr:@spy4x/platform/server/reminder-runner`: What `notify` says about one reminder:
 - `ReminderRunner` (interface), `jsr:@spy4x/platform/server/reminder-runner`: A runner built by createReminderRunner.
 - `ReminderRunnerOptions` (interface), `jsr:@spy4x/platform/server/reminder-runner`: Options of createReminderRunner.
 - `ReminderRunnerState` (interface), `jsr:@spy4x/platform/server/reminder-runner`: What the runner remembers between ticks and across restarts.
@@ -2910,4 +2923,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 5784df379825a0e83dd3c80b539766e2e0f812bed5e19f536329fee3a0187ba8 -->
+<!-- export surface: sha256 325ab4e312675092c587accc091d536f657176133c9eb8ca9d9bad41ee7a70cb -->

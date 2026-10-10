@@ -27,6 +27,7 @@ Runs on: server (Deno).
 | `./webhooks`        | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
 | `./push`            | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
 | `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file        |
+| `./push-reminders`  | `createReminderNotify`, `reminderPushMessage`, `reminderDeliveryOutcome`       |
 
 ## Contracts
 
@@ -65,6 +66,14 @@ from `./push-file-store`: one JSON file, written atomically and readable by its 
 20 subscriptions per user, and a corrupt file is reported, never replaced. Its `state(name)` keeps a
 small named value in the same file, such as the state of `@spy4x/platform/server/reminder-runner`.
 A message may carry a `tag`: a notification with the same tag replaces the one on screen.
+
+`./push-reminders` joins the sender to `@spy4x/platform/server/reminder-runner`:
+`createReminderNotify({ sender, userId, url })` is the runner's `notify`. It cuts a long task title
+to the 120 characters a message may have and tags the push with a hash of the reminder's key, so the
+message is always one the sender accepts. A reminder counts as delivered when at least one device
+got it, when no device is subscribed, or when every push service refused for good; it is tried again
+only when no device got it and a failure may pass (no answer, HTTP 408, 429 or 5xx, an unreadable
+store).
 
 ### `HealthchecksClient` — dead-man's switch
 
