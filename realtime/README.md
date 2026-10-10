@@ -245,6 +245,132 @@ registry.onRequest(async ({ userId, kind, name, payload, idempotencyKey, signal 
 The registry options `maxInFlightRequests`, `requestTimeoutMs` and
 `onRequestError` are described in _Divergence_ above.
 
+## Operations table and HTTP call handler (`@spy4x/realtime/operations`)
+
+An app lists what it can do once, in one table, and two adapters serve it: the socket and plain
+HTTP. A command is then reachable with or without a socket, and the two ways in cannot drift
+([ADR 003](https://github.com/spy4x/template/blob/main/docs/decisions/003-swappable-transport-and-local-data.md)).
+
+```ts
+import {
+  createCallHandler,
+  createOperationDispatcher,
+  type Operations,
+  RealtimeRequestError,
+} from "@spy4x/realtime"
+
+const operations: Operations<Actor> = {
+  "note.create": {
+    kind: "command",
+    // Validate the payload and authorize the actor here: neither adapter knows what a name means.
+    handle: ({ actor, payload, idempotencyKey, signal }) =>
+      commandBus.dispatch(new CreateNote(actor, parseNote(payload), idempotencyKey), { signal }),
+  },
+  "note.list": {
+    kind: "query",
+    handle: ({ actor, payload }) => queryBus.dispatch(new ListNotes(actor, parseFilter(payload))),
+  },
+}
+
+// Turns the app's own errors into typed ones. Anything it returns `null` for is `internal`.
+const mapError = (error: unknown) =>
+  error instanceof NoteNotFound ? new RealtimeRequestError("not_found", error.message) : null
+```
+
+Mounted in Hono, beside the socket:
+
+```ts
+const call = createCallHandler(operations, {
+  basePath: "/api/call",
+  // The handler reads no cookie and checks no `Origin`: the app's session gate does.
+  authenticate: async (request) => actorFromSession(await readSession(request)),
+  userIdOf: (actor) => actor.userId,
+  mapError,
+  onError: (error, { name, requestId }) => logger.error("call failed", { name, requestId, error }),
+})
+// After the middleware every REST route has: the session gate and the `Origin` check.
+app.post("/api/call/:name", (c) => call(c.req.raw))
+
+registry.onRequest(
+  createOperationDispatcher(operations, {
+    // Read the session again for every request, so a revoked one stops at once.
+    authenticate: async ({ socketId }) => actorFromSession(await readSessionOfSocket(socketId)),
+    userIdOf: (actor) => actor.userId,
+    mapError,
+  }),
+)
+```
+
+Both adapters pass a call through the same gate, in this order, and `handle` runs only after all
+four steps:
+
+1. `authenticate` returned an actor. `null` is answered `unauthorized`.
+2. The call is bound to that actor's user (below). Otherwise `unauthorized`.
+3. The name is an operation of the table. Over the socket it must also be of the frame's kind.
+   Otherwise `not_found`. Names every object inherits (`constructor`, `__proto__`) are not
+   operations.
+4. A command carries an idempotency key of 1 to 256 characters. Otherwise `bad_request`.
+
+Authentication comes first, so a caller who is nobody learns nothing about which names exist.
+
+### A call is bound to one user
+
+A cookie can change under a running page: another tab signs out and someone else signs in. So the
+page sends the id of the user it was started for in the `X-Realtime-User` header, and
+`createCallHandler` refuses a call whose session belongs to anyone else. Over the socket the
+registry already knows which user a socket was attached for, and `createOperationDispatcher`
+compares the actor with that.
+
+The check is exported for an app's list routes and its socket handshake:
+
+```ts
+import { isBoundToUser, REALTIME_USER_HEADER } from "@spy4x/realtime"
+
+if (!isBoundToUser(request.headers.get(REALTIME_USER_HEADER), session.userId)) {
+  return unauthorized()
+}
+```
+
+It fails closed: no id, an empty one, one over 128 characters, or `"07"` for user `7` is refused.
+
+### The HTTP wire
+
+`POST <basePath>/<name>` with `Content-Type: application/json`. The body is the payload. An empty
+body is a call with no payload: the operation gets `undefined`, the same as over the socket. A body
+of only whitespace is not empty and not JSON, so it is refused. `Idempotency-Key` is required on a command and ignored on a query.
+`X-Realtime-User` is required on every call.
+
+Success is `200` with `{ "result": <value> }`, always with the `result` key. An operation that
+returns nothing, or something JSON has no value for, answers `"result": null`. Failure is `{ "error": { "code", "message", "details"? } }`, where `code` is the
+socket's code and the status follows from it (`CALL_ERROR_STATUS`):
+
+| Code           | Status | When                                                                |
+| -------------- | ------ | ------------------------------------------------------------------- |
+| `bad_request`  | 400    | no idempotency key on a command, a body that is not valid JSON      |
+| `bad_request`  | 405    | a method other than `POST` (with `Allow: POST`)                     |
+| `bad_request`  | 408    | a body that stops arriving (`bodyTimeoutMs`, 10 seconds by default) |
+| `bad_request`  | 413    | a body over the cap (`maxBodyBytes`, 64 KiB by default)             |
+| `bad_request`  | 415    | a `Content-Type` that is not `application/json`                     |
+| `unauthorized` | 401    | nobody is signed in, or the session belongs to another user         |
+| `forbidden`    | 403    | thrown by an operation                                              |
+| `not_found`    | 404    | an unknown name, or a path that is not one name under the base path |
+| `conflict`     | 409    | thrown by an operation                                              |
+| `rate_limited` | 429    | thrown by an operation                                              |
+| `internal`     | 500    | anything unexpected; the message is always `internal error`         |
+| `timeout`      | 504    | thrown by an operation                                              |
+
+The body is read only after the call passed the gate, so a refused caller costs no parsing. The
+handler never throws: every failure is a JSON answer, sent with `Cache-Control: no-store`.
+
+An error that is not a `RealtimeRequestError`, and that `mapError` does not know, is answered
+`internal` with a generic message and handed to `onError` (HTTP) or the registry's
+`onRequestError` (socket). The same holds for a `RealtimeRequestError` whose code is `internal` or
+is not one of the socket's codes, and for an error `authenticate` throws: the message and details
+stay on the server.
+
+The handler has no timer of its own: a call lasts as long as the operation, or until the caller
+goes away (`signal`). It does no rate limiting either; put the app's limiter in front.
+
 ## Client wiring
 
 ```ts
@@ -757,7 +883,8 @@ own wiring without inventing a second set.
 
 Dependencies: arktype (the repository's only validator) for the wire schemas,
 `@spy4x/platform` (`universal/time`, `#71`) for the plain instant source
-`clock.ts`'s `Clock` extends, and `@std/*` in tests. No WebSocket library, no
+`clock.ts`'s `Clock` extends, `@spy4x/net` (`bounded-body`) for the capped body read in
+`operations.ts`, and `@std/*` in tests. No WebSocket library, no
 framework, no Preact, no signals. `web-socket-adapter.ts` is the one file that
 names the platform `WebSocket` type, and only as a type — it constructs one
 only in `createWebSocketFactory`, which a browser client calls, and in the

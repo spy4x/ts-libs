@@ -1462,6 +1462,10 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `AvailableCallPort` (interface), `jsr:@spy4x/realtime`: A CallPort that can say whether it can carry a call right now.
 - `BackoffConfig` (interface), `jsr:@spy4x/realtime`: Shape of the backoff schedule.
 - `BackoffOptions` (interface), `jsr:@spy4x/realtime`: One call's inputs.
+- `CALL_ERROR_STATUS` (constant), `jsr:@spy4x/realtime`: The HTTP status createCallHandler answers with for each error code.
+- `CallErrorContext` (interface), `jsr:@spy4x/realtime`: What CallHandlerOptions.onError is told about the call that failed.
+- `CallHandler` (type), `jsr:@spy4x/realtime`: A web-standard request handler: mount it in Hono with `(c) => handler(c.req.raw)`.
+- `CallHandlerOptions` (interface), `jsr:@spy4x/realtime`: Options of createCallHandler.
 - `CallOptions` (interface), `jsr:@spy4x/realtime`: Options for one ClientTransport.query.
 - `CallPort` (interface), `jsr:@spy4x/realtime`: The two calls a page makes.
 - `CallPortCommandOptions` (interface), `jsr:@spy4x/realtime`: Options for one CallPort.command.
@@ -1487,6 +1491,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `CursorSnapshot` (interface), `jsr:@spy4x/realtime`: One group's applied sequence.
 - `CursorTracker` (class), `jsr:@spy4x/realtime`: In-memory per-group cursor arithmetic.
 - `DEFAULT_BACKOFF` (constant), `jsr:@spy4x/realtime`: Defaults used when a caller does not override them.
+- `DEFAULT_MAX_CALL_BYTES` (constant), `jsr:@spy4x/realtime`: The default cap on a call's body, the same as the socket's default frame cap.
 - `DecodeResult` (type), `jsr:@spy4x/realtime`: Outcome of decoding one text frame.
 - `FrameContext` (interface), `jsr:@spy4x/realtime`: A client frame the registry does not own, handed to the application.
 - `FrameHandler` (type), `jsr:@spy4x/realtime`
@@ -1494,6 +1499,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `GateResult` (interface), `jsr:@spy4x/realtime`: Outcome of the reconnect gate — typically `GET /api/auth/me`.
 - `HandshakeAcknowledgedEvent` (interface), `jsr:@spy4x/realtime`: Delivered to `onHandshakeAcknowledged` listeners.
 - `HttpCallPortOptions` (interface), `jsr:@spy4x/realtime`: Options of createHttpCallPort.
+- `IDEMPOTENCY_KEY_HEADER` (constant), `jsr:@spy4x/realtime`: The header that carries a command's idempotency key.
 - `KeyValueStore` (type), `jsr:@spy4x/realtime`: Minimal synchronous key/value store.
 - `MalformedFrame` (interface), `jsr:@spy4x/realtime`: A frame that could not be decoded, or arrived in the wrong direction.
 - `MalformedFrameHandler` (type), `jsr:@spy4x/realtime`
@@ -1504,10 +1510,16 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `NotifyOutcome` (interface), `jsr:@spy4x/realtime`: Result of one AggregateNotifier.notify call.
 - `NotifyStatus` (enum), `jsr:@spy4x/realtime`: What happened to one notification.
 - `OpenHandler` (type), `jsr:@spy4x/realtime`
+- `Operation` (interface), `jsr:@spy4x/realtime`: One named operation.
+- `OperationCall` (interface), `jsr:@spy4x/realtime`: What an operation is given for one call, whichever adapter received it.
+- `OperationDispatcherOptions` (interface), `jsr:@spy4x/realtime`: Options of createOperationDispatcher.
+- `OperationErrorMapper` (type), `jsr:@spy4x/realtime`: Turns an error a handler threw into the typed error the client sees, or `null` for one the client must not be told about.
+- `Operations` (type), `jsr:@spy4x/realtime`: The operations an app serves, by name (`note.create`).
 - `PersistentCursorStore` (class), `jsr:@spy4x/realtime`: A CursorTracker whose state survives a reload.
 - `PersistentCursorStoreOptions` (interface), `jsr:@spy4x/realtime`: Options for PersistentCursorStore.
 - `PongTimeoutError` (class), `jsr:@spy4x/realtime`: The peer stopped answering pings.
 - `REALTIME_ERROR_CODES` (constant), `jsr:@spy4x/realtime`: Every error code a `server.error` frame may carry.
+- `REALTIME_USER_HEADER` (constant), `jsr:@spy4x/realtime`: The header that carries the id of the user the page was started for.
 - `RealtimeErrorCode` (type), `jsr:@spy4x/realtime`: One of REALTIME_ERROR_CODES.
 - `RealtimeRequestError` (class), `jsr:@spy4x/realtime`: A request that failed with a typed code.
 - `RecipientResolver` (type), `jsr:@spy4x/realtime`: Resolves the users entitled to see one change.
@@ -1536,16 +1548,19 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `UserFanout` (interface), `jsr:@spy4x/realtime`: The only fan-out capability the notify path is given: explicit recipients.
 - `WireMessage` (type), `jsr:@spy4x/realtime`: Any frame in either direction.
 - `adaptWebSocket` (function), `jsr:@spy4x/realtime`: Wraps a platform `WebSocket` (or anything shaped like one) so it satisfies ManagedSocket.
+- `createCallHandler` (function), `jsr:@spy4x/realtime`: The HTTP adapter: answers `POST <basePath>/<name>` from an Operations table.
 - `createComposedCallPort` (function), `jsr:@spy4x/realtime`: Prefers the socket while it is open and uses HTTP otherwise.
 - `createError` (function), `jsr:@spy4x/realtime`: Build the failure answer to request `requestId`.
 - `createHint` (function), `jsr:@spy4x/realtime`: Build the hint a committed change is announced with.
 - `createHttpCallPort` (function), `jsr:@spy4x/realtime`: Fills the port with `fetch`: `POST <baseUrl>/<name>` with the payload as JSON.
 - `createJsonCodec` (function), `jsr:@spy4x/realtime`: JSON codec over the arktype schemas above.
+- `createOperationDispatcher` (function), `jsr:@spy4x/realtime`: The socket adapter: a dispatcher for `ConnectionRegistry.onRequest` that serves an Operations table.
 - `createResult` (function), `jsr:@spy4x/realtime`: Build the success answer to request `requestId`.
 - `createSocketCallPort` (function), `jsr:@spy4x/realtime`: Fills the port with a client transport.
 - `createSystemClock` (function), `jsr:@spy4x/realtime`: Clock backed by the platform timers.
 - `createWebSocketFactory` (function), `jsr:@spy4x/realtime`: SocketFactory over the platform `WebSocket` constructor.
 - `findUndeclaredKey` (function), `jsr:@spy4x/realtime`: First own string key of `value` that `declared` does not list, or `null`.
+- `isBoundToUser` (function), `jsr:@spy4x/realtime`: Whether a call is bound to the authenticated user.
 - `isChangeHint` (function), `jsr:@spy4x/realtime`: Whether a frame is a change hint, narrowing it for a caller that has already decoded.
 - `isRealtimeErrorCode` (function), `jsr:@spy4x/realtime`: Whether an unknown value is one of the closed error codes.
 - `isRetryable` (function), `jsr:@spy4x/realtime`: Whether the outcome of a call is unknown or the server was busy, so trying again can help: the answer did not arrive in time, the connection dropped, the server gave up, or it is still running the first try of the same command.
@@ -1616,6 +1631,24 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `NotifyStatus` (enum), `jsr:@spy4x/realtime/notify`: What happened to one notification.
 - `RecipientResolver` (type), `jsr:@spy4x/realtime/notify`: Resolves the users entitled to see one change.
 - `UserFanout` (interface), `jsr:@spy4x/realtime/notify`: The only fan-out capability the notify path is given: explicit recipients.
+
+### `jsr:@spy4x/realtime/operations`
+
+- `CALL_ERROR_STATUS` (constant), `jsr:@spy4x/realtime/operations`: The HTTP status createCallHandler answers with for each error code.
+- `CallErrorContext` (interface), `jsr:@spy4x/realtime/operations`: What CallHandlerOptions.onError is told about the call that failed.
+- `CallHandler` (type), `jsr:@spy4x/realtime/operations`: A web-standard request handler: mount it in Hono with `(c) => handler(c.req.raw)`.
+- `CallHandlerOptions` (interface), `jsr:@spy4x/realtime/operations`: Options of createCallHandler.
+- `DEFAULT_MAX_CALL_BYTES` (constant), `jsr:@spy4x/realtime/operations`: The default cap on a call's body, the same as the socket's default frame cap.
+- `IDEMPOTENCY_KEY_HEADER` (constant), `jsr:@spy4x/realtime/operations`: The header that carries a command's idempotency key.
+- `Operation` (interface), `jsr:@spy4x/realtime/operations`: One named operation.
+- `OperationCall` (interface), `jsr:@spy4x/realtime/operations`: What an operation is given for one call, whichever adapter received it.
+- `OperationDispatcherOptions` (interface), `jsr:@spy4x/realtime/operations`: Options of createOperationDispatcher.
+- `OperationErrorMapper` (type), `jsr:@spy4x/realtime/operations`: Turns an error a handler threw into the typed error the client sees, or `null` for one the client must not be told about.
+- `Operations` (type), `jsr:@spy4x/realtime/operations`: The operations an app serves, by name (`note.create`).
+- `REALTIME_USER_HEADER` (constant), `jsr:@spy4x/realtime/operations`: The header that carries the id of the user the page was started for.
+- `createCallHandler` (function), `jsr:@spy4x/realtime/operations`: The HTTP adapter: answers `POST <basePath>/<name>` from an Operations table.
+- `createOperationDispatcher` (function), `jsr:@spy4x/realtime/operations`: The socket adapter: a dispatcher for `ConnectionRegistry.onRequest` that serves an Operations table.
+- `isBoundToUser` (function), `jsr:@spy4x/realtime/operations`: Whether a call is bound to the authenticated user.
 
 ### `jsr:@spy4x/realtime/outbox`
 
@@ -2767,4 +2800,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 a2cbc9d79e9190a0ebb9ec26d709bf777e22052c072c96592adf62977f298301 -->
+<!-- export surface: sha256 68c26008b630f5604cd7064223f365bef9eaafea1ecc9813dea4520f917927ae -->

@@ -7,6 +7,7 @@
     "./calls": "./calls.ts",
     "./page-lifecycle": "./page-lifecycle.ts",
     "./registry": "./registry.ts",
+    "./operations": "./operations.ts",
     "./notify": "./notify.ts",
     "./cursor": "./cursor.ts",
     "./outbox": "./outbox.ts",
