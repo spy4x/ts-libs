@@ -64,8 +64,6 @@ function fakeServer() {
       | ((name: string, payload: Record<string, unknown>) => Error | undefined),
     /** What a query for an entity answers with. */
     tags: new Map<string, Tag>(),
-    /** What a delete answers with. A real server answers with nothing an app should read. */
-    deleteAnswer: {} as unknown,
   }
   const port: CallPort = {
     command(name, payload, options) {
@@ -74,7 +72,7 @@ function fakeServer() {
       if (state.lose) return Promise.reject(new ConnectionLostError(`lost`))
       const error = state.refuse?.(name, body)
       if (error) return Promise.reject(error)
-      if (name.endsWith(`.delete`)) return Promise.resolve(state.deleteAnswer)
+      if (name.endsWith(`.delete`)) return Promise.resolve({})
       const version = (body.version as number | undefined ?? 0) + 1
       return Promise.resolve(
         name.startsWith(`tag.`) ? { tag: { ...body, version } } : { note: { ...body, version } },
@@ -853,38 +851,31 @@ describe(`answers the library reads from the server`, () => {
   })
 
   it(`does not read the answer to a delete as an entity`, async () => {
-    const put: Tag[] = []
-    const removedIds: string[] = []
+    // A strict adapter refuses any answer that is not an entity; a delete answers with none.
     const definition = {
       ...tagDefinition({ store: createMemoryOutboxStore<TagPayload, Tag>() }),
-      cache: {
-        put: (tag: Tag) => {
-          put.push(tag)
-          return Promise.resolve()
-        },
-        remove: (id: string) => {
-          removedIds.push(id)
-          return Promise.resolve()
-        },
+      entityFrom: (answer: unknown) => {
+        const tag = (answer as { tag?: Tag }).tag
+        if (!tag) throw new Error(`not an entity`)
+        return tag
       },
     }
     const server = fakeServer()
-    server.state.deleteAnswer = { tag: { id: `t1`, version: 9, name: `Stale` } }
     const layer = createCollections({
       collections: [definition],
       calls: server.port,
       canSend: () => true,
     })
 
-    await layer.get(definition).outbox.submit({
+    const outcome = await layer.get(definition).outbox.submit({
       kind: `delete`,
       entityId: `t1`,
       payload: { name: `One` },
       version: 2,
     })
 
-    expect(put).toEqual([])
-    expect(removedIds).toEqual([`t1`])
+    expect(outcome.kind).toBe(`sent`)
+    expect(layer.get(definition).outbox.entries()).toEqual([])
   })
 })
 
