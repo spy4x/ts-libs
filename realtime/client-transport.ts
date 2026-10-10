@@ -701,7 +701,9 @@ export class ClientTransport {
     )
     this.#setStatus(TransportStatus.Open)
     this.#startHeartbeat()
-    void this.#handshake(isReconnect).catch((error: unknown) => this.#report(toError(error)))
+    void this.#handshake(isReconnect, socket).catch((error: unknown) =>
+      this.#report(toError(error))
+    )
     if (isReconnect) this.#enqueue(() => this.#pullHeldCursors())
   }
 
@@ -868,11 +870,11 @@ export class ClientTransport {
    * held cursor, whether it was acknowledged or not. The server only sends hints to a socket it has
    * adopted, so a change made after the app's start-up read and before the adoption would never
    * reach the page (issue #399). A lost acknowledgement does not mean the socket was not adopted:
-   * such a socket still receives hints, so the pull runs then too. A reconnect pulls straight away
-   * in {@link #handleOpen} instead. The transport does not de-duplicate: an app that also pulls on
+   * such a socket still receives hints, so the pull runs then too. A first socket that closed before
+   * the outcome is skipped, because the reconnect pulls straight away in {@link #handleOpen}. The transport does not de-duplicate: an app that also pulls on
    * its own first open simply pulls twice.
    */
-  async #handshake(isReconnect: boolean): Promise<void> {
+  async #handshake(isReconnect: boolean, socket: ManagedSocket): Promise<void> {
     const request = await this.#options.cursors.syncRequest()
     const frame: ClientMessage = {
       kind: "client.sync",
@@ -889,8 +891,10 @@ export class ClientTransport {
       failure = toError(error)
       this.#report(failure)
     }
-    // Queued before any listener runs, so a listener that throws cannot cancel the pull.
-    if (!isReconnect && !this.#stopped) this.#enqueue(() => this.#pullHeldCursors())
+    // Queued before any listener runs, so a listener that throws cannot cancel the pull. A socket
+    // that is gone by now is skipped: the open that replaces it is a reconnect and pulls itself.
+    const stillOpen = this.#socket === socket && socket.state === SocketState.Open
+    if (!isReconnect && !this.#stopped && stillOpen) this.#enqueue(() => this.#pullHeldCursors())
     if (failure) {
       for (const handler of this.#degradedHandlers) handler(failure)
     } else if (!this.#stopped) {
