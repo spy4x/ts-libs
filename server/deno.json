@@ -24,6 +24,7 @@
     "./config": "./config/index.ts",
     "./config/env": "./config/env.ts",
     "./request-log": "./request-log/log.ts",
+    "./request-log/base-middleware": "./request-log/base-middleware.ts",
     "./kv": "./kv/mod.ts",
     "./outbox": "./outbox/mod.ts",
     "./idempotency": "./idempotency/mod.ts",
