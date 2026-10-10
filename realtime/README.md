@@ -335,12 +335,13 @@ It fails closed: no id, an empty one, one over 128 characters, or `"07"` for use
 
 ### The HTTP wire
 
-`POST <basePath>/<name>` with `Content-Type: application/json`. The body is the payload; an empty
-body is a call with no payload. `Idempotency-Key` is required on a command and ignored on a query.
+`POST <basePath>/<name>` with `Content-Type: application/json`. The body is the payload. An empty
+body is a call with no payload: the operation gets `undefined`, the same as over the socket. A body
+of only whitespace is not empty and not JSON, so it is refused. `Idempotency-Key` is required on a command and ignored on a query.
 `X-Realtime-User` is required on every call.
 
-Success is `200` with `{ "result": <value> }`. An operation that returns nothing answers
-`"result": null`. Failure is `{ "error": { "code", "message", "details"? } }`, where `code` is the
+Success is `200` with `{ "result": <value> }`, always with the `result` key. An operation that
+returns nothing, or something JSON has no value for, answers `"result": null`. Failure is `{ "error": { "code", "message", "details"? } }`, where `code` is the
 socket's code and the status follows from it (`CALL_ERROR_STATUS`):
 
 | Code           | Status | When                                                                |
@@ -363,8 +364,9 @@ handler never throws: every failure is a JSON answer, sent with `Cache-Control: 
 
 An error that is not a `RealtimeRequestError`, and that `mapError` does not know, is answered
 `internal` with a generic message and handed to `onError` (HTTP) or the registry's
-`onRequestError` (socket). The same holds for a `RealtimeRequestError` whose code is `internal`:
-its message and details stay on the server.
+`onRequestError` (socket). The same holds for a `RealtimeRequestError` whose code is `internal` or
+is not one of the socket's codes, and for an error `authenticate` throws: the message and details
+stay on the server.
 
 The handler has no timer of its own: a call lasts as long as the operation, or until the caller
 goes away (`signal`). It does no rate limiting either; put the app's limiter in front.
