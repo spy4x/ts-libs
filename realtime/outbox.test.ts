@@ -1477,6 +1477,107 @@ describe("outbox ports for a group of outboxes", () => {
 
     expect(told).toEqual([])
   })
+
+  it("does not tell about an edit the server refused to the person who made it", async () => {
+    const told: string[] = []
+    const { outbox } = grouped({
+      onAbandoned: (entry, reason) => {
+        told.push(`${entry.entityId}:${reason}`)
+      },
+      server: (command) => {
+        if (command.kind === "update") throw refused("ROLE_INSUFFICIENT")
+        return item(command.entityId)
+      },
+    })
+    await outbox.submit(create("a"))
+
+    const outcome = await outbox.submit({
+      kind: "update",
+      entityId: "a",
+      payload: text("a2"),
+      version: 1,
+    })
+
+    expect(outcome.kind).toBe("failed")
+    expect(told).toEqual([])
+  })
+
+  it("does not tell about an edit when the person chose the server's side", async () => {
+    const told: string[] = []
+    let held = false
+    const { outbox } = grouped({
+      ready: () => !held,
+      onAbandoned: (entry, reason) => {
+        told.push(`${entry.entityId}:${reason}`)
+      },
+      server: (command) => {
+        if (command.kind === "update") throw refused("ROLE_INSUFFICIENT")
+        return item(command.entityId)
+      },
+    })
+    await outbox.submit(create("a"))
+    held = true
+    await outbox.submit({ kind: "update", entityId: "a", payload: text("a2"), version: 1 })
+    held = false
+    await outbox.flush()
+    expect(outbox.entries()[0].status).toBe("conflict")
+
+    await outbox.useTheirs(outbox.entries()[0])
+
+    expect(told).toEqual([])
+  })
+
+  it("does not tell about a create when the person takes the server's entity that holds its id", async () => {
+    const told: string[] = []
+    let held = true
+    const { outbox } = grouped({
+      ready: () => !held,
+      onAbandoned: (entry, reason) => {
+        told.push(`${entry.entityId}:${reason}`)
+      },
+      server: () => {
+        throw refused("ID_ALREADY_EXISTS")
+      },
+      fetched: item("a"),
+    })
+    await outbox.submit(create("a"))
+    held = false
+    await outbox.flush()
+    expect(outbox.entries()[0].status).toBe("conflict")
+
+    await outbox.useTheirs(outbox.entries()[0])
+
+    expect(told).toEqual([])
+  })
+
+  it("still answers withdraw when the listener that is told about it throws", async () => {
+    const { outbox } = grouped({
+      ready: () => false,
+      onAbandoned: () => Promise.reject(new Error("disk full")),
+    })
+    await outbox.submit(create("a"))
+
+    expect(await outbox.withdraw("a")).toBe(true)
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("still settles useTheirs when the listener that is told about it throws", async () => {
+    let held = true
+    const { outbox } = grouped({
+      ready: () => !held,
+      onAbandoned: () => Promise.reject(new Error("disk full")),
+      server: () => {
+        throw refused("ROLE_INSUFFICIENT")
+      },
+    })
+    await outbox.submit(create("a"))
+    held = false
+    await outbox.flush()
+
+    await outbox.useTheirs(outbox.entries()[0])
+
+    expect(outbox.entries()).toEqual([])
+  })
 })
 
 describeOutboxStoreContract("createMemoryOutboxStore", () => createMemoryOutboxStore())

@@ -243,8 +243,10 @@ export interface OutboxPorts<P, S extends { version: number }> {
  * How a queued create left the queue unsent:
  * - `withdrawn`: the person took it back (`withdraw`);
  * - `dropped`: the entity was deleted before any send, so the two cancelled out;
- * - `discarded`: the server refused it and the person chose the server's side (`useTheirs`), or a
- *   change that stood alone was refused (`submit` answered `failed`).
+ * - `discarded`: the server refused it and the person chose the server's side (`useTheirs`) while
+ *   the server holds no such entity, or a change that stood alone was refused (`submit` answered
+ *   `failed`). When the refusal carried the server's entity (the id is taken), the entity exists
+ *   and nothing is reported.
  */
 export type AbandonReason = "withdrawn" | "dropped" | "discarded"
 
@@ -359,7 +361,12 @@ export function createOutbox<P, S extends { version: number }>(
       return await locked(work)
     } finally {
       for (let next = abandoned.shift(); next; next = abandoned.shift()) {
-        await ports.onAbandoned?.(next.entry, next.reason)
+        // The caller's own change is done: a failing listener must not turn it into a rejection.
+        try {
+          await ports.onAbandoned?.(next.entry, next.reason)
+        } catch (_listenerFailed) {
+          // The listener owns its recovery; the queue itself is consistent.
+        }
       }
     }
   }
@@ -642,7 +649,7 @@ export function createOutbox<P, S extends { version: number }>(
       if (server) await cache?.put(server)
       else if (entry.conflict?.reason === "gone") await cache?.remove(entry.entityId)
       await drop(entry.seq!)
-      if (entry.kind === "create") abandoned.push({ entry, reason: "discarded" })
+      if (entry.kind === "create" && !server) abandoned.push({ entry, reason: "discarded" })
     })
   }
 
