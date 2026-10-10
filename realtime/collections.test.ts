@@ -488,6 +488,26 @@ describe(`a child waiting for its parent`, () => {
     expect(layer.waiting().map((w) => w.entityId)).toEqual([`n-waits`])
   })
 
+  it(`does not list a note that is itself in conflict as waiting`, async () => {
+    const { server, tags, stores, layer } = setup()
+    server.state.offline = true
+    await tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
+    await stores.notes.putEntry({
+      key: `k`,
+      entityId: `n1`,
+      kind: `update`,
+      payload: note(`One`, [`t-new`]),
+      baseVersion: 2,
+      attempted: true,
+      status: `conflict`,
+      conflict: { reason: `version`, message: `changed`, server: null },
+      queuedAt: `2026-10-10T00:00:00.000Z`,
+    })
+    await layer.reload()
+
+    expect(layer.waiting()).toEqual([])
+  })
+
   it(`tells subscribers when a queue changes`, async () => {
     const { server, tags, layer } = setup()
     server.state.offline = true
@@ -680,6 +700,46 @@ describe(`a parent that will never exist`, () => {
     await h.tags.outbox.withdraw(`t1`)
 
     expect(h.queuedNotes()).toEqual([[`n1`, [`t1`]]])
+  })
+})
+
+describe(`a parent that will never exist, for an adapter that keeps the reference`, () => {
+  it(`rewrites nothing and reports nothing when the adapter returns the payload as it was`, async () => {
+    const server = fakeServer()
+    const stores = {
+      tags: createMemoryOutboxStore<TagPayload, Tag>(),
+      notes: createMemoryOutboxStore<NotePayload, Note>(),
+    }
+    const notesDefinition = noteDefinition({ store: stores.notes })
+    const stubborn = {
+      ...notesDefinition,
+      dependencies: { ...notesDefinition.dependencies!, without: (p: NotePayload) => p },
+    }
+    const removed: ReferenceRemoved[] = []
+    const tagsDefinition = tagDefinition({ store: stores.tags })
+    const layer = createCollections({
+      collections: [tagsDefinition, stubborn],
+      calls: server.port,
+      canSend: () => !server.state.offline,
+      onReferenceRemoved: (event) => removed.push(event),
+    })
+    server.state.offline = true
+    await layer.get(tagsDefinition).outbox.submit({
+      kind: `create`,
+      entityId: `t-new`,
+      payload: { name: `Tag` },
+    })
+    await layer.get(stubborn).outbox.submit({
+      kind: `create`,
+      entityId: `n1`,
+      payload: note(`One`, [`t-new`]),
+    })
+    const before = await stores.notes.readOutbox()
+
+    await layer.get(tagsDefinition).outbox.withdraw(`t-new`)
+
+    expect(removed).toEqual([])
+    expect(await stores.notes.readOutbox()).toEqual(before)
   })
 })
 
