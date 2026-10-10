@@ -3655,8 +3655,14 @@ layer.waiting() // notes held back by a tag, with `onPerson` while the tag is in
 - **A parent that will never exist.** When a queued create is withdrawn, dropped (created and
   deleted before any send) or discarded after a refusal, `without` removes the reference from the
   queued entries that named it, and from the edits merged behind them. An entry that may already
-  have been sent gets a new idempotency key. The removal runs just after the lock is released;
+  have been sent keeps its key and its `attempted` mark, so the outbox still treats the entity as
+  possibly on the server. The removal runs just after the lock is released;
   have the server ignore ids it does not know, so that moment is harmless.
+  A listener that fails never makes `withdraw` or `useTheirs` reject.
+- **A flush for the sync runner.** Pass `layer.syncFlush` as `createSyncRunner`'s `flush`. It runs
+  the ordered flush and answers `"unreachable"` only when an entry that nothing holds back is still
+  queued, so the runner retries with backoff. A note that waits for a person's choice about its tag
+  is not counted: retrying cannot help it.
 - **Existing queues.** The database name and the stored entries are exactly what you pass and what
   `createOutbox` writes, so a queue an app kept before using this module is read unchanged.
 - Conflict choices (`keepMine`, `useTheirs`), `withdraw` and the entries for a "queued" badge are on
