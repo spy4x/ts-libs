@@ -9,8 +9,7 @@
  * @module
  */
 
-import type { Type } from "arktype"
-import { type } from "arktype"
+import { type ArkErrors, type } from "arktype"
 import { type ApiError, apiFetch } from "./api.ts"
 
 /** The `code` of the error result for a reply that does not match the schema. */
@@ -45,22 +44,28 @@ export interface OfflineFetch {
    * - **Clears** the flag: an answer of any status, including 4xx and 5xx, a reply that is not
    *   JSON and a reply that fails `schema`. The server was reached.
    * - **Leaves the flag alone** and rejects with the signal's reason: the caller aborted through
-   *   `init.signal`. An abort says nothing about the network.
+   *   `init.signal`, `AbortSignal.timeout()` included (it rejects with `TimeoutError`). An abort
+   *   says nothing about the network; an app that counts a timeout as lost connection passes its
+   *   own timer and calls `report(true)`.
    *
-   * With `schema`, a success body is checked and returned parsed. One that does not match is
-   * `ok: false` with the answer's status, `offline: false` and `error.code` {@link INVALID_REPLY_CODE}.
+   * `schema` is an arktype type (or any function that returns the value or `ArkErrors`); `data` has
+   * the type the schema returns, so a schema that converts a date string to a `Date` types it as
+   * a `Date`. With `schema`, a success body is checked and returned parsed. One that does not match is
+   * `ok: false` with the answer's status, `offline: false` and `error.code` {@link INVALID_REPLY_CODE}. A server may send that code itself, so an app that must tell
+   * the two apart also checks `status < 300`.
    * Without a schema the body is returned as `apiFetch` read it.
    */
   fetch<T = unknown>(
     path: string,
     init?: RequestInit,
-    schema?: Type<T>,
+    schema?: (data: unknown) => T | ArkErrors,
   ): Promise<OfflineApiResult<T>>
   /** True while the last request got no answer. Starts `false`. */
   readonly requestFailed: boolean
   /**
    * Calls `listener` with the new value whenever {@link requestFailed} changes, never when a
-   * request leaves it as it was. Returns the function that stops listening.
+   * request leaves it as it was. Returns the function that stops listening. A listener that throws
+   * makes the call that triggered it reject, so keep listeners from throwing.
    */
   subscribe(listener: (requestFailed: boolean) => void): () => void
   /**
@@ -98,7 +103,7 @@ export function createOfflineFetch(options: OfflineFetchOptions = {}): OfflineFe
     async fetch<T = unknown>(
       path: string,
       init: RequestInit = {},
-      schema?: Type<T>,
+      schema?: (data: unknown) => T | ArkErrors,
     ): Promise<OfflineApiResult<T>> {
       let result
       try {
@@ -131,7 +136,7 @@ export function createOfflineFetch(options: OfflineFetchOptions = {}): OfflineFe
           offline: false,
         }
       }
-      return { ok: true, status: result.status, data: parsed as T }
+      return { ok: true, status: result.status, data: parsed }
     },
     get requestFailed() {
       return failed

@@ -3,6 +3,7 @@ import { expect } from "@std/expect"
 import { type } from "arktype"
 
 import type { ApiResult } from "./api.ts"
+import { updatedAtIdPageKey } from "../keyset-cursor.ts"
 import { createOfflineFetch, INVALID_REPLY_CODE } from "./offline-fetch.ts"
 
 type Send = <T>(path: string, init?: RequestInit) => Promise<ApiResult<T>>
@@ -138,5 +139,39 @@ describe("createOfflineFetch", () => {
     } finally {
       globalThis.fetch = original
     }
+  })
+
+  it("returns the converted value, typed as the schema's output, not the raw body", async () => {
+    const id = "6f1c1b5e-8d0e-4c53-9a43-0a3f3c8f9d11"
+    const api = createOfflineFetch({
+      send: script(
+        ok({ updatedAt: "2026-01-02T03:04:05.678Z", id }),
+        ok({ id: "42" }),
+      ),
+    })
+
+    const page = await api.fetch("/a", {}, updatedAtIdPageKey)
+    const numeric = await api.fetch("/b", {}, type({ id: "string.numeric.parse" }))
+
+    if (!page.ok || !numeric.ok) throw new Error("expected both to succeed")
+    // These two assignments fail type-checking when `data` is typed as the schema's input.
+    const when: Date = page.data.updatedAt
+    const count: number = numeric.data.id
+    expect(when).toEqual(new Date("2026-01-02T03:04:05.678Z"))
+    expect(count).toBe(42)
+  })
+
+  it("hands the path and the request options to the sender", async () => {
+    const seen: Array<{ path: string; init: RequestInit | undefined }> = []
+    const send = ((path: string, init?: RequestInit) => {
+      seen.push({ path, init })
+      return Promise.resolve(ok(null))
+    }) as Send
+    const signal = new AbortController().signal
+    const api = createOfflineFetch({ send })
+
+    await api.fetch("/api/x", { method: "POST", body: `{"a":1}`, signal })
+
+    expect(seen).toEqual([{ path: "/api/x", init: { method: "POST", body: `{"a":1}`, signal } }])
   })
 })

@@ -104,5 +104,42 @@ describe("requestPersistentStorage", () => {
 
       expect(fake.asked).toBe(2)
     })
+
+    it("keeps the note in globalThis.localStorage when no store is given", async () => {
+      const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
+      const notes = memoryStorage()
+      try {
+        Object.defineProperty(globalThis, "localStorage", { configurable: true, value: notes })
+        const fake = storage(false, false)
+
+        await requestPersistentStorage(fake, { key: KEY })
+        await requestPersistentStorage(fake, { key: KEY })
+
+        expect(fake.asked).toBe(1)
+        expect(notes.getItem(KEY)).toBe("1")
+      } finally {
+        if (original) Object.defineProperty(globalThis, "localStorage", original)
+        else delete (globalThis as { localStorage?: unknown }).localStorage
+      }
+    })
+
+    it("asks anyway when looking up globalThis.localStorage throws", async () => {
+      const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
+      try {
+        Object.defineProperty(globalThis, "localStorage", {
+          configurable: true,
+          get: () => {
+            throw new Error("SecurityError")
+          },
+        })
+        const fake = storage(false, true)
+
+        expect(await requestPersistentStorage(fake, { key: KEY })).toBe(true)
+        expect(fake.asked).toBe(1)
+      } finally {
+        if (original) Object.defineProperty(globalThis, "localStorage", original)
+        else delete (globalThis as { localStorage?: unknown }).localStorage
+      }
+    })
   })
 })
