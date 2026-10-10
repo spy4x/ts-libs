@@ -599,6 +599,9 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ERR_MESSAGE` (constant), `jsr:@spy4x/platform`: Canonical copy for each category, so the same failure reads the same in every product.
 - `Err` (interface), `jsr:@spy4x/platform`: Base shape every error shares: a category and human-readable copy.
 - `ErrType` (enum), `jsr:@spy4x/platform`: Kind of a failed operation.
+- `ErrorEventTarget` (interface), `jsr:@spy4x/platform`: The target of `install`: `window`, or anything with `addEventListener`.
+- `ErrorReporter` (interface), `jsr:@spy4x/platform`: What `createErrorReporter` returns.
+- `ErrorReporterOptions` (interface), `jsr:@spy4x/platform`: What the reporter needs; only `dsn` is required, and an empty one turns the reporter off.
 - `FormatTimeOptions` (interface), `jsr:@spy4x/platform`: Options for formatTime.
 - `HONEYPOT_FIELD_NAME` (constant), `jsr:@spy4x/platform`: Default `name` of the honeypot field.
 - `HOURS_IN_DAY` (constant), `jsr:@spy4x/platform`: Hours in one day.
@@ -624,6 +627,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `OperationResult` (type), `jsr:@spy4x/platform`: Result of an operation that can fail: exactly one of `result` / `error` is non-null.
 - `OperationState` (interface), `jsr:@spy4x/platform`: In-flight state of an operation, for a store or a form to render.
 - `OtherError` (interface), `jsr:@spy4x/platform`: An error this package has no category for.
+- `ParsedDsn` (interface), `jsr:@spy4x/platform`: Where a report goes: the envelope URL and the public key a DSN carries.
 - `PayloadError` (interface), `jsr:@spy4x/platform`: A payload a schema rejected: a response body, or a remote feed item.
 - `QuickAddDue` (interface), `jsr:@spy4x/platform`: When the task is due: a calendar date in the given time zone, and a wall-clock time if typed.
 - `QuickAddOptions` (interface), `jsr:@spy4x/platform`: Options of parseQuickAdd.
@@ -632,6 +636,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `QuickAddSpan` (interface), `jsr:@spy4x/platform`: One recognised token, as a half-open range of UTF-16 offsets into the original line.
 - `QuickAddSpanKind` (enum), `jsr:@spy4x/platform`: What a recognised token is.
 - `RandomSource` (type), `jsr:@spy4x/platform`: A source of numbers in `[0, 1)`, the shape `Math.random` has.
+- `ReportContext` (interface), `jsr:@spy4x/platform`: Extra facts one report may carry.
 - `RequestError` (type), `jsr:@spy4x/platform`: Errors a request itself can produce.
 - `ResponseError` (type), `jsr:@spy4x/platform`: Errors from a response that never reached a usable body.
 - `Result` (type), `jsr:@spy4x/platform`: A value or an error, as a discriminated union on `ok`.
@@ -653,6 +658,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `commandOk` (function), `jsr:@spy4x/platform`: Build the success arm of a CommandEnvelope.
 - `connectionError` (function), `jsr:@spy4x/platform`: Wrap a message the caller already has into a ConnectionError.
 - `convertToKebabCase` (function), `jsr:@spy4x/platform`: Convert a free-form identifier to kebab-case.
+- `createErrorReporter` (function), `jsr:@spy4x/platform`: Creates the reporter.
 - `debounce` (function), `jsr:@spy4x/platform`: Wrap `fn` in a trailing-edge debounce.
 - `err` (function), `jsr:@spy4x/platform`: Wrap a failure.
 - `filterRows` (function), `jsr:@spy4x/platform`: Keep the rows that every word of the query matches.
@@ -673,12 +679,15 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `normalizeCalendarDate` (function), `jsr:@spy4x/platform`: Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
 - `normalizeCanonical` (function), `jsr:@spy4x/platform`: The canonical address as it should be published: one clean `http`/`https` address.
 - `ok` (function), `jsr:@spy4x/platform`: Wrap a success.
+- `parseDsn` (function), `jsr:@spy4x/platform`: The DSN's endpoint and key, or `null` when `dsn` is not a valid `https://key@host/project`.
 - `parseQuickAdd` (function), `jsr:@spy4x/platform`: Read the tokens out of a quick-add line.
 - `parseSort` (function), `jsr:@spy4x/platform`: Read sort rules out of a URL parameter.
 - `pluralize` (function), `jsr:@spy4x/platform`: Naive English pluraliser for UI copy.
 - `removeSortRule` (function), `jsr:@spy4x/platform`: Removes one sort priority while preserving all remaining priorities.
 - `responseError` (function), `jsr:@spy4x/platform`: Turn a failed response into a structured error.
 - `round` (function), `jsr:@spy4x/platform`: Round to the nearest 10^-`decimals`.
+- `scrubText` (function), `jsr:@spy4x/platform`: Free text with the secrets it may carry masked: URLs lose their query, `Bearer` values, and the value of anything named like a password, token, cookie or key.
+- `scrubUrl` (function), `jsr:@spy4x/platform`: `url` as origin and path only, with credentials, query and fragment dropped.
 - `search` (function), `jsr:@spy4x/platform`: Whether one search word occurs in one value.
 - `searchWords` (function), `jsr:@spy4x/platform`: Split a search box's value into words.
 - `serializeSort` (function), `jsr:@spy4x/platform`: Write sort rules into a URL parameter.
@@ -706,6 +715,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ClipboardDocument` (interface), `jsr:@spy4x/platform/browser`: The document surface the legacy `execCommand("copy")` path needs.
 - `ClipboardWriter` (interface), `jsr:@spy4x/platform/browser`: The one clipboard method this helper calls.
 - `CopyToClipboardOptions` (interface), `jsr:@spy4x/platform/browser`: Where copyToClipboard writes.
+- `DEFAULT_RUNTIME_CONFIG_URL` (constant), `jsr:@spy4x/platform/browser`: Where loadRuntimeConfig looks when the caller names no other address.
 - `DataCache` (interface), `jsr:@spy4x/platform/browser`: The durable cache: see the module documentation.
 - `DataCacheOp` (type), `jsr:@spy4x/platform/browser`: One step of DataCache.batch.
 - `DataCacheOptions` (interface), `jsr:@spy4x/platform/browser`: Options of createDataCache.
@@ -725,6 +735,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `HotkeyEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that matchesHotkey reads.
 - `HotkeyMatcherOptions` (interface), `jsr:@spy4x/platform/browser`: Options for createHotkeyMatcher.
 - `HotkeySequenceEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that createHotkeyMatcher reads.
+- `LoadRuntimeConfigOptions` (interface), `jsr:@spy4x/platform/browser`: What loadRuntimeConfig needs besides the schema.
 - `MakeStorageOptions` (interface), `jsr:@spy4x/platform/browser`: Options for makeStorage.
 - `ObjectUrlAdapter` (interface), `jsr:@spy4x/platform/browser`: Object-URL surface, injected so a test never allocates a real blob URL.
 - `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser`: Options of installOfflineShell.
@@ -759,6 +770,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `isTypingTarget` (function), `jsr:@spy4x/platform/browser`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
 - `isUnderPath` (function), `jsr:@spy4x/platform/browser`: Whether `pathname` is `base` or below it (`/api` matches `/api` and `/api/x`, not `/apix`).
 - `linkedPaths` (function), `jsr:@spy4x/platform/browser`: Same-origin paths named by `src="..."` and `href="..."` in `html`.
+- `loadRuntimeConfig` (function), `jsr:@spy4x/platform/browser`: Fetches `url` and validates the JSON with `schema`.
 - `makeStorage` (function), `jsr:@spy4x/platform/browser`: Bind a StorageLike to one key.
 - `matchesHotkey` (function), `jsr:@spy4x/platform/browser`: Whether a key press is the combination.
 - `memoryStorage` (function), `jsr:@spy4x/platform/browser`: A `Map`-backed StorageLike.
@@ -853,6 +865,12 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `PersistentStorageManager` (interface), `jsr:@spy4x/platform/browser/persistent-storage`: The part of a browser's `StorageManager` this module uses.
 - `requestPersistentStorage` (function), `jsr:@spy4x/platform/browser/persistent-storage`: Resolves `true` when this site's storage is persistent, asking the browser if it is not yet.
+
+### `jsr:@spy4x/platform/browser/runtime-config`
+
+- `DEFAULT_RUNTIME_CONFIG_URL` (constant), `jsr:@spy4x/platform/browser/runtime-config`: Where loadRuntimeConfig looks when the caller names no other address.
+- `LoadRuntimeConfigOptions` (interface), `jsr:@spy4x/platform/browser/runtime-config`: What loadRuntimeConfig needs besides the schema.
+- `loadRuntimeConfig` (function), `jsr:@spy4x/platform/browser/runtime-config`: Fetches `url` and validates the JSON with `schema`.
 
 ### `jsr:@spy4x/platform/browser/storage`
 
@@ -1205,6 +1223,18 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `csvRow` (function), `jsr:@spy4x/platform/universal/csv`: One data row, rendered and escaped, comma-joined.
 - `toCsvBytes` (function), `jsr:@spy4x/platform/universal/csv`: toCsvText, encoded as UTF-8 bytes with a leading CSV_BYTE_ORDER_MARK.
 - `toCsvText` (function), `jsr:@spy4x/platform/universal/csv`: Render every row as RFC 4180 CSV text: a header row, one line per row of `rows`, each terminated by LINE_ENDING — including the last line, which the RFC leaves optional but which every row here carries for one uniform rule instead of a special case for the final row.
+
+### `jsr:@spy4x/platform/universal/error-reporter`
+
+- `ErrorEventTarget` (interface), `jsr:@spy4x/platform/universal/error-reporter`: The target of `install`: `window`, or anything with `addEventListener`.
+- `ErrorReporter` (interface), `jsr:@spy4x/platform/universal/error-reporter`: What `createErrorReporter` returns.
+- `ErrorReporterOptions` (interface), `jsr:@spy4x/platform/universal/error-reporter`: What the reporter needs; only `dsn` is required, and an empty one turns the reporter off.
+- `ParsedDsn` (interface), `jsr:@spy4x/platform/universal/error-reporter`: Where a report goes: the envelope URL and the public key a DSN carries.
+- `ReportContext` (interface), `jsr:@spy4x/platform/universal/error-reporter`: Extra facts one report may carry.
+- `createErrorReporter` (function), `jsr:@spy4x/platform/universal/error-reporter`: Creates the reporter.
+- `parseDsn` (function), `jsr:@spy4x/platform/universal/error-reporter`: The DSN's endpoint and key, or `null` when `dsn` is not a valid `https://key@host/project`.
+- `scrubText` (function), `jsr:@spy4x/platform/universal/error-reporter`: Free text with the secrets it may carry masked: URLs lose their query, `Bearer` values, and the value of anything named like a password, token, cookie or key.
+- `scrubUrl` (function), `jsr:@spy4x/platform/universal/error-reporter`: `url` as origin and path only, with credentials, query and fragment dropped.
 
 ### `jsr:@spy4x/platform/universal/errors`
 
@@ -2675,4 +2705,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 f7953334c4a7db640a1bb257e278e948f25909e638f91dcb4b9e95ad1e2dfeeb -->
+<!-- export surface: sha256 c2fdd59ffb152e43a20cf2e065dc0645c4907fec23fb1d3133a9135127400ae9 -->
