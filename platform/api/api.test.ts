@@ -448,8 +448,13 @@ describe("apiFetch — error body shapes", () => {
   })
 
   it("prefers the nested code and message over the top-level ones", async () => {
-    expect(await errorFor({ error: { code: "inner", message: "inner msg" }, code: "outer" }))
-      .toEqual({ status: 502, message: "inner msg", code: "inner" })
+    expect(
+      await errorFor({
+        error: { code: "inner", message: "inner msg" },
+        code: "outer",
+        message: "outer msg",
+      }),
+    ).toEqual({ status: 502, message: "inner msg", code: "inner" })
   })
 
   it("falls back to the top-level message and code when the nested ones are missing", async () => {
