@@ -31,7 +31,7 @@ import { type } from "arktype"
 import { constantTimeEquals, randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import { systemClock } from "@spy4x/platform/universal/time"
 import { readBoundedJson } from "@spy4x/net/bounded-body"
-import { SecondFactorStatus } from "../sign-in/mod.ts"
+import { SecondFactorStatus, type SessionDevice } from "../sign-in/mod.ts"
 import { validate } from "@spy4x/validation"
 
 import { isStoreText, MAX_SUBJECT_LENGTH } from "./input.ts"
@@ -166,6 +166,11 @@ export interface OAuthCallbackInput {
   query: URLSearchParams
   /** The `state` the app kept in the browser (the cookie), or null/undefined when it has none. */
   browserState: string | null | undefined
+  /**
+   * What the new session shows in the user's list of signed-in devices. A callback that only
+   * returns a sign-up token creates no session: pass the device to `confirmSignUp` then.
+   */
+  device?: SessionDevice
 }
 
 /** How a successful callback resolved the person. Numbered from 1 so no value is falsy. */
@@ -271,7 +276,7 @@ export interface ConfirmableOAuthSignIn extends Omit<OAuthSignIn, "handleCallbac
    *
    * @throws {OAuthSignInError} `invalid-sign-up` when the token is unknown, used or expired.
    */
-  confirmSignUp(token: string): Promise<OAuthSignInResult>
+  confirmSignUp(token: string, device?: SessionDevice): Promise<OAuthSignInResult>
 }
 
 const DEFAULT_FLOW_TTL_SECONDS = 600
@@ -514,17 +519,21 @@ export function createOAuthSignIn(
     const profile = await fetchProfile(accessToken)
     const resolved = await resolveKey(profile, signUp === undefined)
     if (!resolved) return await holdSignUp(profile)
-    return await startSession(resolved, profile)
+    return await startSession(resolved, profile, input.device)
   }
 
   async function startSession(
     { user, key, outcome }: Resolved,
     profile: OAuthProfile,
+    device: SessionDevice | undefined,
   ): Promise<OAuthSignInResult> {
     const secondFactor = options.secondFactorFor
       ? await options.secondFactorFor(user)
       : SecondFactorStatus.NotRequired
-    const session = await sessions.create({ userId: user.id, keyId: key.id, secondFactor })
+    const session = await sessions.create(
+      { userId: user.id, keyId: key.id, secondFactor },
+      device,
+    )
     return { user, key, session, outcome, profile }
   }
 
@@ -546,14 +555,17 @@ export function createOAuthSignIn(
     return { outcome: OAuthOutcome.PendingSignUp, profile, token, expiresAt }
   }
 
-  async function confirmSignUp(token: string): Promise<OAuthSignInResult> {
+  async function confirmSignUp(
+    token: string,
+    device?: SessionDevice,
+  ): Promise<OAuthSignInResult> {
     if (typeof token !== "string" || token === "") throw new OAuthSignInError("invalid-sign-up")
     const entry = await flows.take(await signUpKey(token))
     // Checked here too, so a store that ignores `expiresAt` still cannot confirm a stale sign-up.
     const live = entry?.expiresAt instanceof Date && entry.expiresAt.getTime() > clock.now()
     const profile = live ? keyable(entry.signUp ?? null) : null
     if (!profile) throw new OAuthSignInError("invalid-sign-up")
-    return await startSession(await resolveKey(profile, true), profile)
+    return await startSession(await resolveKey(profile, true), profile, device)
   }
 
   async function disconnect(userId: number, keyId: number): Promise<boolean> {

@@ -22,6 +22,8 @@ const ITERATIONS = 100_000
 const MINUTE = 60_000
 const ANN = "ann@example.com"
 const MALLORY_PASSWORD = "mallory-secret-1"
+const LAPTOP = { deviceName: "Firefox on Linux", ipHint: "203.0.113.x" }
+const PHONE = { deviceName: "Safari on iOS", ipHint: "2001:db8:1:2::x" }
 
 interface HasherCall {
   name: "hash" | "verify"
@@ -308,6 +310,189 @@ describe("createPasswordSignIn: changePassword", () => {
       newPassword: "battery staple",
     })
     expect(sessionStore.calls).toEqual(["create", "signOutUser"])
+  })
+})
+
+describe("createPasswordSignIn: changePassword with keepSessions", () => {
+  it("refuses a wrong current password, keeps the old one and every session", async () => {
+    const { provider, sessions } = setup()
+    const first = await provider.signUp({ email: ANN, password: "correct horse" })
+    const error = await refusal(provider.changePassword({
+      userId: first.user.id,
+      currentPassword: "wrong horse",
+      newPassword: "battery staple",
+      keepSessions: true,
+    }))
+    expect(error.reason).toBe("invalid-credentials")
+    expect(await sessions.validate(first.session.cookieValue)).not.toBeNull()
+    await provider.signIn({ email: ANN, password: "correct horse" })
+    expect((await refusal(provider.signIn({ email: ANN, password: "battery staple" }))).reason)
+      .toBe("invalid-credentials")
+  })
+
+  it("refuses a new password shorter than the minimum and keeps the old one", async () => {
+    const { provider } = setup()
+    const { user } = await provider.signUp({ email: ANN, password: "correct horse" })
+    const error = await refusal(provider.changePassword({
+      userId: user.id,
+      currentPassword: "correct horse",
+      newPassword: "1234567",
+      keepSessions: true,
+    }))
+    expect(error.reason).toBe("invalid-password")
+    await provider.signIn({ email: ANN, password: "correct horse" })
+    expect((await refusal(provider.signIn({ email: ANN, password: "1234567" }))).reason)
+      .toBe("invalid-credentials")
+  })
+
+  it("refuses a user who does not exist", async () => {
+    const { provider } = setup()
+    const error = await refusal(provider.changePassword({
+      userId: 999,
+      currentPassword: "correct horse",
+      newPassword: "battery staple",
+      keepSessions: true,
+    }))
+    expect(error.reason).toBe("invalid-credentials")
+  })
+
+  it("replaces the password and leaves every session signed in", async () => {
+    const { provider, sessions } = setup()
+    const first = await provider.signUp({ email: ANN, password: "correct horse" })
+    const second = await provider.signIn({ email: ANN, password: "correct horse" })
+    await provider.changePassword({
+      userId: first.user.id,
+      currentPassword: "correct horse",
+      newPassword: "battery staple",
+      keepSessions: true,
+    })
+    expect(await sessions.validate(first.session.cookieValue)).not.toBeNull()
+    expect(await sessions.validate(second.session.cookieValue)).not.toBeNull()
+    expect((await refusal(provider.signIn({ email: ANN, password: "correct horse" }))).reason)
+      .toBe("invalid-credentials")
+    await provider.signIn({ email: ANN, password: "battery staple" })
+  })
+
+  it("touches the session store not at all, and returns the user and key without a session", async () => {
+    const { provider, sessionStore } = setup()
+    const { user, key } = await provider.signUp({ email: ANN, password: "correct horse" })
+    sessionStore.calls.length = 0
+    const changed = await provider.changePassword({
+      userId: user.id,
+      currentPassword: "correct horse",
+      newPassword: "battery staple",
+      keepSessions: true,
+    })
+    expect(sessionStore.calls).toEqual([])
+    expect(Object.keys(changed).sort()).toEqual(["key", "user"])
+    expect(changed.user.id).toBe(user.id)
+    expect(changed.key.id).toBe(key.id)
+    expect(changed.key.secret).not.toBe(key.secret)
+  })
+
+  it("signs the other sessions out for any keepSessions value but true", async () => {
+    const { provider, sessions } = setup()
+    const first = await provider.signUp({ email: ANN, password: "correct horse" })
+    for (const keepSessions of [false, undefined, "true", 1]) {
+      const other = await provider.signIn({ email: ANN, password: "correct horse" })
+      const changed = await provider.changePassword({
+        userId: first.user.id,
+        currentPassword: "correct horse",
+        newPassword: "correct horse",
+        keepSessions: keepSessions as false,
+      })
+      expect(await sessions.validate(other.session.cookieValue)).toBeNull()
+      expect(await sessions.validate(changed.session.cookieValue)).not.toBeNull()
+    }
+  })
+})
+
+describe("createPasswordSignIn: the device of a new session", () => {
+  it("records the device given to signUp and signIn", async () => {
+    const { provider, sessions } = setup()
+    const { user } = await provider.signUp({
+      email: ANN,
+      password: "correct horse",
+      device: LAPTOP,
+    })
+    await provider.signIn({ email: ANN, password: "correct horse", device: PHONE })
+    const listed = (await sessions.listForUser(user.id)).map((entry) => entry.deviceName).sort()
+    expect(listed).toEqual([LAPTOP.deviceName, PHONE.deviceName])
+  })
+
+  it("records the device given to changePassword on the session it creates", async () => {
+    const { provider, sessions } = setup()
+    const { user } = await provider.signUp({
+      email: ANN,
+      password: "correct horse",
+      device: LAPTOP,
+    })
+    const changed = await provider.changePassword({
+      userId: user.id,
+      currentPassword: "correct horse",
+      newPassword: "battery staple",
+      device: PHONE,
+    })
+    expect(await sessions.listForUser(user.id)).toMatchObject([
+      { id: changed.session.session.id, ...PHONE },
+    ])
+  })
+
+  it("records the device given to completeReset on the session it creates", async () => {
+    const { provider, sessions, store } = setup()
+    const signedUp = await provider.signUp({ email: ANN, password: "correct horse" })
+    await store.proveKey(signedUp.key.id, new Date(0))
+    const { code } = await provider.requestReset({ email: ANN })
+    const reset = await provider.completeReset({
+      email: ANN,
+      code,
+      newPassword: "battery staple",
+      device: PHONE,
+    })
+    expect(await sessions.listForUser(signedUp.user.id)).toMatchObject([
+      { id: reset.session.session.id, ...PHONE },
+    ])
+  })
+
+  it("records the device when a reset creates the account for the address", async () => {
+    const { provider, sessions } = setup()
+    await provider.signUp({ email: ANN, password: MALLORY_PASSWORD })
+    const { code } = await provider.requestReset({ email: ANN })
+    const ann = await provider.completeReset({
+      email: ANN,
+      code,
+      newPassword: "ann-password",
+      device: PHONE,
+    })
+    expect(await sessions.listForUser(ann.user.id)).toMatchObject([PHONE])
+  })
+
+  it("records the device when a reset adds the password to the address's owner", async () => {
+    const { provider, sessions, store } = setup()
+    const owner = await store.createUserWithKey({
+      method: "email-code",
+      subject: ANN,
+      email: ANN,
+      secret: null,
+      provenAt: new Date(0),
+    })
+    await store.createUserWithKey({
+      method: PASSWORD_METHOD,
+      subject: ANN,
+      email: ANN,
+      secret: "unused",
+      provenAt: null,
+    })
+    const { code } = await provider.requestReset({ email: ANN })
+    await provider.completeReset({ email: ANN, code, newPassword: "ann-password", device: PHONE })
+    expect(await sessions.listForUser(owner.user.id)).toMatchObject([PHONE])
+  })
+
+  it("creates the session with no device when none is given", async () => {
+    const { provider, sessionStore } = setup()
+    await provider.signUp({ email: ANN, password: "correct horse" })
+    await provider.signIn({ email: ANN, password: "correct horse" })
+    expect(sessionStore.createArguments.map((args) => args.length)).toEqual([1, 1])
   })
 })
 

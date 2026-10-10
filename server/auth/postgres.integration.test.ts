@@ -20,7 +20,11 @@ import { SecondFactorStatus, SessionManager, SessionStatus } from "../sign-in/mo
 import { postgresSettings, requireReachable } from "@integration-testing"
 import { openAuthSchema } from "./postgres-schema-fixture.test.ts"
 import { AuthConflictError, type AuthSessionRecord } from "./model.ts"
-import { createPostgresAuthStore, createPostgresSessionStore } from "./postgres.ts"
+import {
+  AUTH_POSTGRES_SESSION_DEVICES_UPGRADE,
+  createPostgresAuthStore,
+  createPostgresSessionStore,
+} from "./postgres.ts"
 import {
   describeAuthStoreContract,
   emailKey,
@@ -380,6 +384,137 @@ describe("createPostgresSessionStore driven by SessionManager", () => {
         secondFactor: SecondFactorStatus.NotRequired,
       }).then(() => null, (caught: unknown) => caught)
       expect((error as { code?: string } | null)?.code).toBe("23503")
+    }))
+})
+
+describe("AUTH_POSTGRES_SESSION_DEVICES_UPGRADE", () => {
+  /** Turns the fresh table back into the one `AUTH_POSTGRES_SCHEMA` created before the devices. */
+  const DOWNGRADE = `ALTER TABLE auth_sessions
+    DROP COLUMN device_name, DROP COLUMN ip_hint, DROP COLUMN last_used_at`
+  /** What the template's own migration ran before the library had the columns. */
+  const TEMPLATE_MIGRATION = `
+    ALTER TABLE auth_sessions
+      ADD COLUMN device_name text NOT NULL DEFAULT '',
+      ADD COLUMN ip_hint text,
+      ADD COLUMN last_used_at timestamptz NOT NULL DEFAULT now(),
+      ADD CONSTRAINT auth_sessions_device_name_check CHECK (length(device_name) <= 100),
+      ADD CONSTRAINT auth_sessions_ip_hint_check CHECK (length(ip_hint) <= 45);
+    UPDATE auth_sessions SET last_used_at = created_at;`
+  const CREATED = new Date("2026-01-02T03:04:05.000Z")
+  const DEVICE = { deviceName: "Firefox on Linux", ipHint: "203.0.113.x" }
+
+  async function setup(sql: Sql) {
+    const clock = { now: () => NOW.getTime() }
+    const store = createPostgresSessionStore(sql)
+    const sessions = new SessionManager<AuthSessionRecord>({
+      store,
+      pepper: PEPPER,
+      durationMinutes: 60,
+      clock,
+    })
+    const ann = await createPostgresAuthStore(sql).createUserWithKey(
+      emailKey("password", "ann@example.com"),
+    )
+    const fields = {
+      userId: ann.user.id,
+      keyId: ann.key.id,
+      secondFactor: SecondFactorStatus.NotRequired,
+    }
+    return { sessions, ann, fields }
+  }
+
+  /** The columns and check constraints of `auth_sessions`, in a form two schemas can be compared by. */
+  async function shape(sql: Sql) {
+    const columns = await sql`
+      SELECT column_name, data_type, is_nullable, column_default
+        FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'auth_sessions'
+       ORDER BY column_name`
+    const checks = await sql`
+      SELECT conname, pg_get_constraintdef(oid) AS definition
+        FROM pg_constraint
+       WHERE conrelid = 'auth_sessions'::regclass
+       ORDER BY conname`
+    return { columns: [...columns], checks: [...checks] }
+  }
+
+  it("still creates, validates and signs out on a table that has not been upgraded", () =>
+    withDatabase(async ({ sql }) => {
+      await sql.unsafe(DOWNGRADE)
+      const { sessions, fields } = await setup(sql)
+      const created = await sessions.create(fields)
+      expect((await sessions.validate(created.cookieValue))?.session.id).toBe(created.session.id)
+      expect(await sessions.signOut(created.cookieValue)).toBe(true)
+    }))
+
+  it("gives an older table the columns and checks of a fresh one", () =>
+    withDatabase(async ({ sql }) => {
+      const fresh = await shape(sql)
+      await sql.unsafe(DOWNGRADE)
+      expect(await shape(sql)).not.toEqual(fresh)
+      await sql.unsafe(AUTH_POSTGRES_SESSION_DEVICES_UPGRADE)
+      expect(await shape(sql)).toEqual(fresh)
+    }))
+
+  it("shows a session that existed before as last used when it was created, with no device", () =>
+    withDatabase(async ({ sql }) => {
+      await sql.unsafe(DOWNGRADE)
+      const { sessions, ann, fields } = await setup(sql)
+      const { session } = await sessions.create(fields)
+      await sql`UPDATE auth_sessions SET created_at = ${CREATED} WHERE id = ${session.id}`
+      await sql.unsafe(AUTH_POSTGRES_SESSION_DEVICES_UPGRADE)
+      expect(await sessions.listForUser(ann.user.id)).toEqual([
+        { id: session.id, deviceName: "", ipHint: null, createdAt: CREATED, lastUsedAt: CREATED },
+      ])
+    }))
+
+  it("keeps the devices and times of a table the template's migration already changed", () =>
+    withDatabase(async ({ sql }) => {
+      await sql.unsafe(DOWNGRADE)
+      const { sessions, ann, fields } = await setup(sql)
+      await sql.unsafe(TEMPLATE_MIGRATION)
+      const before = await shape(sql)
+      const { session } = await sessions.create(fields, DEVICE)
+      const used = new Date(NOW.getTime() + 10 * MINUTE)
+      await sql`UPDATE auth_sessions SET last_used_at = ${used} WHERE id = ${session.id}`
+
+      await sql.unsafe(AUTH_POSTGRES_SESSION_DEVICES_UPGRADE)
+
+      expect(await shape(sql)).toEqual(before)
+      expect(await sessions.listForUser(ann.user.id)).toEqual([
+        { id: session.id, ...DEVICE, createdAt: NOW, lastUsedAt: used },
+      ])
+    }))
+
+  it("changes nothing when it runs on a fresh table, or a second time", () =>
+    withDatabase(async ({ sql }) => {
+      const fresh = await shape(sql)
+      const { sessions, ann, fields } = await setup(sql)
+      const { session } = await sessions.create(fields, DEVICE)
+      await sql.unsafe(AUTH_POSTGRES_SESSION_DEVICES_UPGRADE)
+      await sql.unsafe(AUTH_POSTGRES_SESSION_DEVICES_UPGRADE)
+      expect(await shape(sql)).toEqual(fresh)
+      expect(await sessions.listForUser(ann.user.id)).toEqual([
+        { id: session.id, ...DEVICE, createdAt: NOW, lastUsedAt: NOW },
+      ])
+    }))
+
+  it("refuses a device name or an IP hint longer than the manager would store, written around it", () =>
+    withDatabase(async ({ sql }) => {
+      await sql.unsafe(DOWNGRADE)
+      const { sessions, fields } = await setup(sql)
+      const { session } = await sessions.create(fields)
+      await sql.unsafe(AUTH_POSTGRES_SESSION_DEVICES_UPGRADE)
+      const refused = async (column: string, length: number) => {
+        const error = await sql`
+          UPDATE auth_sessions SET ${sql(column)} = ${"x".repeat(length)} WHERE id = ${session.id}
+        `.then(() => null, (caught: unknown) => caught)
+        return (error as { code?: string } | null)?.code ?? null
+      }
+      expect(await refused("device_name", 100)).toBeNull()
+      expect(await refused("device_name", 101)).toBe("23514")
+      expect(await refused("ip_hint", 45)).toBeNull()
+      expect(await refused("ip_hint", 46)).toBe("23514")
     }))
 })
 

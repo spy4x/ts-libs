@@ -484,7 +484,23 @@ describe("createOAuthSignIn: parallel first sign-ins", () => {
   }
 })
 
+const DEVICE = { deviceName: "Firefox on Linux", ipHint: "203.0.113.x" }
+
 describe("createOAuthSignIn: deleted users and the session", () => {
+  it("records the device given to the callback on the new session", async () => {
+    const { oauth, provider, fixture } = setup()
+    const started = await oauth.authorizationUrl()
+    const query = await provider.approve(started.url, ANN)
+    const result = await oauth.handleCallback({
+      query,
+      browserState: started.state,
+      device: DEVICE,
+    })
+    expect(await fixture.sessions.listForUser(result.user.id)).toMatchObject([
+      { id: result.session.session.id, ...DEVICE },
+    ])
+  })
+
   it("refuses to sign a deleted user in by their sub", async () => {
     const store = new SoftDeletingStore()
     const { oauth, provider } = setup({}, store)
@@ -583,7 +599,7 @@ describe("createOAuthSignIn: signUp confirm", () => {
       signUp: "confirm",
       ...(flows ? { flows } : {}),
     })
-    return { store, provider, clock, oauth }
+    return { store, provider, clock, oauth, sessions: fixture.sessions }
   }
 
   async function pending(
@@ -597,6 +613,15 @@ describe("createOAuthSignIn: signUp confirm", () => {
     if (result.outcome !== OAuthOutcome.PendingSignUp) throw new Error("expected a pending sign-up")
     return result
   }
+
+  it("records the device given to confirmSignUp on the new session", async () => {
+    const { provider, oauth, sessions } = confirming()
+    const { token } = await pending(oauth, provider, ANN)
+    const result = await oauth.confirmSignUp(token, DEVICE)
+    expect(await sessions.listForUser(result.user.id)).toMatchObject([
+      { id: result.session.session.id, ...DEVICE },
+    ])
+  })
 
   it("returns a pending sign-up for a new sub and creates no user", async () => {
     const { store, provider, oauth } = confirming()

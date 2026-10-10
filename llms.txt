@@ -1794,10 +1794,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `EMAIL_PROOF_PURPOSE` (constant), `jsr:@spy4x/server/auth/email-code`: The challenge purpose createEmailProof issues and checks.
 - `EmailCodeError` (class), `jsr:@spy4x/server/auth/email-code`: Thrown by EmailCodeSignIn.
 - `EmailCodeErrorReason` (type), `jsr:@spy4x/server/auth/email-code`: Why EmailCodeSignIn refused a request.
-- `EmailCodeSignIn` (interface), `jsr:@spy4x/server/auth/email-code`: The email-code sign-in provider.
+- `EmailCodeSignIn` (interface), `jsr:@spy4x/server/auth/email-code`
 - `EmailCodeSignInDeps` (interface), `jsr:@spy4x/server/auth/email-code`: What createEmailCodeSignIn needs from the app, on top of ProviderDeps.
 - `EmailProof` (interface), `jsr:@spy4x/server/auth/email-code`: Codes a signed-in user proves an address with, for their own account.
 - `EmailProofDeps` (interface), `jsr:@spy4x/server/auth/email-code`: What createEmailProof needs from the app.
+- `VerifyCodeOptions` (interface), `jsr:@spy4x/server/auth/email-code`: Options of EmailCodeSignIn.verifyCode.
 - `createEmailCodeSignIn` (function), `jsr:@spy4x/server/auth/email-code`: Creates the email-code sign-in provider.
 - `createEmailProof` (function), `jsr:@spy4x/server/auth/email-code`: Creates the codes a signed-in user proves an address with.
 
@@ -1860,6 +1861,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/server/auth/password`
 
 - `ChangePasswordInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.changePassword.
+- `ChangePasswordKeepingSessionsInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.changePassword for a person who chose to stay signed in on their other devices.
 - `CheckedCredentials` (interface), `jsr:@spy4x/server/auth/password`: What PasswordSignIn.checkCredentials returns: whose password matched, and its key.
 - `CompleteResetInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.completeReset.
 - `CompleteVerificationInput` (interface), `jsr:@spy4x/server/auth/password`: Input of PasswordSignIn.completeVerification.
@@ -1882,6 +1884,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/server/auth/postgres`
 
 - `AUTH_POSTGRES_SCHEMA` (constant), `jsr:@spy4x/server/auth/postgres`: The tables, constraints and indexes, as SQL text the app runs as a migration.
+- `AUTH_POSTGRES_SESSION_DEVICES_UPGRADE` (constant), `jsr:@spy4x/server/auth/postgres`: Adds `device_name`, `ip_hint` and `last_used_at` to an `auth_sessions` table created from an AUTH_POSTGRES_SCHEMA that did not have them yet (`@spy4x/server` 1.55.0 and earlier).
 - `createPostgresAuthStore` (function), `jsr:@spy4x/server/auth/postgres`: Creates an AuthStore over the `AUTH_POSTGRES_SCHEMA` tables.
 - `createPostgresSessionStore` (function), `jsr:@spy4x/server/auth/postgres`: Creates a `SessionStore` over the `auth_sessions` table of `AUTH_POSTGRES_SCHEMA`.
 
@@ -2346,19 +2349,25 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `AuthState` (interface), `jsr:@spy4x/server/sign-in`: What `parseAuth` stores under `c.get("auth")` for a valid session.
 - `CreatedSession` (interface), `jsr:@spy4x/server/sign-in`: A newly created session and the cookie value that proves it.
 - `DEFAULT_PASSWORD_ITERATIONS` (constant), `jsr:@spy4x/server/sign-in`: Default PBKDF2-HMAC-SHA-256 iteration count: 600 000, the figure the OWASP Password Storage Cheat Sheet gives for this function.
+- `MAX_DEVICE_NAME_LENGTH` (constant), `jsr:@spy4x/server/sign-in`: Longest stored device name, in UTF-16 units.
+- `MAX_IP_HINT_LENGTH` (constant), `jsr:@spy4x/server/sign-in`: Longest stored address hint: the longest spelling of an IP address.
 - `MAX_PASSWORD_BYTES` (constant), `jsr:@spy4x/server/sign-in`: Longest password accepted, in UTF-8 bytes.
 - `MAX_SESSION_MINUTES` (constant), `jsr:@spy4x/server/sign-in`: Longest session: 400 days, the most a browser keeps a cookie and the most Hono's cookie helper accepts.
 - `NOT_AUTHENTICATED` (constant), `jsr:@spy4x/server/sign-in`: Body of the 401 response when there is no valid session.
 - `NOT_AUTHORIZED` (constant), `jsr:@spy4x/server/sign-in`: Body of the 403 response when the app's check refuses.
+- `NewSessionDevice` (interface), `jsr:@spy4x/server/sign-in`: A SessionDevice and the moment its session was created, as the store receives them.
 - `NewSessionFields` (type), `jsr:@spy4x/server/sign-in`: What an app supplies to create a session: its own fields, without what the manager sets.
 - `PasswordCheck` (interface), `jsr:@spy4x/server/sign-in`: Outcome of PasswordHasher.verify.
 - `PasswordHasher` (interface), `jsr:@spy4x/server/sign-in`: Hashes and verifies passwords under one pepper and iteration count.
 - `PasswordHasherOptions` (interface), `jsr:@spy4x/server/sign-in`: Options for createPasswordHasher.
 - `SECOND_FACTOR_REQUIRED` (constant), `jsr:@spy4x/server/sign-in`: Body of the 401 response when the second factor is still owed.
 - `SESSION_COOKIE_NAME` (constant), `jsr:@spy4x/server/sign-in`: Default name of the signed session cookie, as in the template.
+- `SESSION_TOUCH_INTERVAL_MS` (constant), `jsr:@spy4x/server/sign-in`: How stale a session's `lastUsedAt` may get before SessionManager.touch writes it again: five minutes.
 - `SecondFactorStatus` (enum), `jsr:@spy4x/server/sign-in`: Second-factor state of a session.
 - `SessionCookie` (class), `jsr:@spy4x/server/sign-in`: Reads, writes and clears the session cookie on a Hono context.
 - `SessionCookieOptions` (interface), `jsr:@spy4x/server/sign-in`: Options for SessionCookie.
+- `SessionDevice` (interface), `jsr:@spy4x/server/sign-in`: What a session remembers about the device that signed in, for a "signed-in devices" list.
+- `SessionListEntry` (interface), `jsr:@spy4x/server/sign-in`: One live session of a user, as SessionManager.listForUser returns it.
 - `SessionManager` (class), `jsr:@spy4x/server/sign-in`: Creates, validates, extends and ends sessions over an app-supplied SessionStore.
 - `SessionManagerOptions` (interface), `jsr:@spy4x/server/sign-in`: Options for SessionManager.
 - `SessionRecord` (interface), `jsr:@spy4x/server/sign-in`: The fields the session logic reads.
@@ -2372,6 +2381,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `TotpVerifyOptions` (interface), `jsr:@spy4x/server/sign-in`: Options for verifyTotp.
 - `USER_ID_COOKIE_NAME` (constant), `jsr:@spy4x/server/sign-in`: Default name of the readable user-id cookie, as in the template.
 - `ValidSession` (interface), `jsr:@spy4x/server/sign-in`: A session that passed SessionManager.validate.
+- `cleanSessionDevice` (function), `jsr:@spy4x/server/sign-in`: A SessionDevice that any store can hold, from whatever the app passed: control characters removed, lone surrogates replaced, the name cut to MAX_DEVICE_NAME_LENGTH and the hint to MAX_IP_HINT_LENGTH.
 - `createAuth` (function), `jsr:@spy4x/server/sign-in`: Builds the session middleware and guards over one SessionManager and SessionCookie.
 - `createPasswordHasher` (function), `jsr:@spy4x/server/sign-in`: Creates a PasswordHasher.
 - `generateTotpSecret` (function), `jsr:@spy4x/server/sign-in`: A new random secret: 20 bytes, base32 without padding (32 characters).
@@ -2800,4 +2810,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 68c26008b630f5604cd7064223f365bef9eaafea1ecc9813dea4520f917927ae -->
+<!-- export surface: sha256 876d2e6695a692bc3c17b034df59f3c9afee089a20f6e9745ea13b3334d0ef0c -->

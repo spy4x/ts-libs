@@ -4355,6 +4355,22 @@ rows are harmless; delete them whenever convenient.
 
 Ids are Postgres `integer`s, so every id fits in a JavaScript number.
 
+**A database created before session devices** lacks three columns of `auth_sessions`:
+`device_name`, `ip_hint` and `last_used_at`. `AUTH_POSTGRES_SCHEMA` creates them on a new database;
+on an existing one run `AUTH_POSTGRES_SESSION_DEVICES_UPGRADE` once, as a migration:
+
+```ts
+import { AUTH_POSTGRES_SESSION_DEVICES_UPGRADE } from "@spy4x/server/auth/postgres"
+
+await sql.unsafe(AUTH_POSTGRES_SESSION_DEVICES_UPGRADE)
+```
+
+It adds what is missing and keeps what is there, so it is safe on a table that already has some or
+all of the columns, and safe to run twice. A session that existed before shows as last used when it
+was created, with an empty device name. Until it has run, creating a session without a device,
+validating and signing out work as before; `listForUser`, `touch` and creating a session with a
+device need the columns.
+
 ### What it does not do
 
 - **It does not sign anyone in.** The providers decide when to create a user, add a key, prove it or
@@ -4478,6 +4494,18 @@ await passwords.signIn({ email: username, password })
 store the new secret, then create the new session, and only then sign out the user's other sessions.
 A failure part-way never leaves the person signed out while the old password still works. The
 caller replaces its cookie with the returned session's.
+
+**Changing the password without signing anyone out.** `changePassword({ ..., keepSessions: true })`
+runs the same two checks in the same order (the new password's length, then the current password),
+stores the new secret and touches no session: none is created and none is signed out, and it
+returns `{ user, key }` with no session. It is for a person who chose to stay signed in on their
+other devices. Whoever holds a session of that user keeps it, so offer it only as an explicit
+choice and keep the default for a password changed because it may have leaked. Only the literal
+`true` keeps the sessions.
+
+**The device of a new session.** `signUp`, `signIn`, `changePassword` and `completeReset` take an
+optional `device: { deviceName, ipHint }` and record it on the session they create, for the list of
+signed-in devices (see `server/sign-in`).
 
 **A reset hands the address to whoever receives the code.** `requestReset` issues a code for every
 valid address, whether or not an account uses it, and returns it for the app to deliver: 32 random
@@ -5281,7 +5309,7 @@ printf %s "$PASSWORD" | deno task password:hash
 ### What it does
 
 **Sessions live in the app's database.** The app implements `SessionStore`: seven operations, and
-an optional eighth, `clearPendingSecondFactors`. `SessionRecord` holds only what the session logic
+five optional ones: `clearPendingSecondFactors`, and the four behind the list of signed-in devices. `SessionRecord` holds only what the session logic
 reads (id, user id, token hash, status, second-factor state, expiry); an app's own columns ride along
 through the type parameter. The store's writes (`extend`, `completeSecondFactor`,
 `clearPendingSecondFactors`, the sign-outs, `expire`) must only touch a session whose status is
@@ -5311,6 +5339,37 @@ inside the caller's `sql.begin` commits or rolls back with the secret's removal.
 active `Pending` session of that user into `NotRequired` in one write, and leaves `Completed`,
 signed-out and expired sessions as they are. On a store that does not implement it, the manager
 throws a `TypeError` rather than leaving those sessions locked out without a sign.
+
+**The list of signed-in devices.** `sessions.create(fields, device)` takes an optional second
+argument, `{ deviceName, ipHint }`: two labels the app made from the request, such as
+`deviceName(userAgent)` from `@spy4x/net/user-agent` and `ipHint(address)` from `@spy4x/net/ip`.
+The manager strips control characters, cuts the name to 100 characters and the hint to 45
+(`cleanSessionDevice`), and never refuses a label, so a strange header cannot fail a sign-in. Store
+a hint, not the address: the list is shown back to the user and the row outlives the request. The
+providers in `server/auth` pass it on: `device` in the input of the password operations that create
+a session and of the OAuth `handleCallback`, `verifyCode(email, code, { device })`, and
+`confirmSignUp(token, device)`. Four
+more operations work on one user's sessions, and every one of them takes the user's id from the
+caller's validated session and touches no other user's rows:
+
+```ts
+const { session } = (await sessions.validate(cookieValue))!
+void sessions.touch(session.userId, session.id) // at most one write per 5 minutes
+const devices = await sessions.listForUser(session.userId) // most recently used first
+await sessions.deleteForUser(session.userId, idFromTheRequest) // false for someone else's id
+await sessions.deleteOthers(session.userId, session.id) // "sign out everywhere else"
+```
+
+`listForUser` returns `{ id, deviceName, ipHint, createdAt, lastUsedAt }` for each session that is
+active and not run out, and never the token hash; mark the caller's own by comparing `id`.
+`deleteForUser` and `deleteOthers` delete the rows, so the sessions fail every later validation.
+`deleteOthers` deletes exactly the listed sessions minus the one it keeps, and nothing when the id
+to keep is not a session id. `touch` writes `lastUsedAt` only when the stored time is at least
+`SESSION_TOUCH_INTERVAL_MS` (5 minutes) old, so calling it on every request costs one write per
+session per interval. In a `SessionStore` the four are optional, like
+`clearPendingSecondFactors`: an app's own store keeps compiling, and the manager throws a
+`TypeError` for the one that is missing. `createPostgresSessionStore` implements all of them; a
+database created before this needs `AUTH_POSTGRES_SESSION_DEVICES_UPGRADE` (see `server/auth`).
 `isAuthorized(check)` applies the same two rules and then answers 403 unless `check` returns `true`.
 A route that never passed through `parseAuth` is refused by every guard.
 
