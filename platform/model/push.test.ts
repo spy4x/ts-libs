@@ -154,6 +154,19 @@ describe("push schema: length limits", () => {
     expect(tooLong.error).not.toBeNull()
   })
 
+  it("accepts a notification tag of 1 to 256 characters and leaves it out when none is given", () => {
+    const ok = validate(pushNotificationMessageSchema, { title: "t", tag: "a".repeat(256) })
+    expect(ok.error).toBeNull()
+    expect(ok.data).toEqual({ title: "t", body: null, url: null, tag: "a".repeat(256) })
+
+    const none = validate(pushNotificationMessageSchema, { title: "t" })
+    expect(none.data).toEqual({ title: "t", body: null, url: null })
+
+    for (const tag of ["", "a".repeat(257), null, 7]) {
+      expect(validate(pushNotificationMessageSchema, { title: "t", tag }).error).not.toBeNull()
+    }
+  })
+
   it("accepts a notification url of exactly 2048 characters and rejects 2049, and accepts null", () => {
     const withNull = validate(pushNotificationMessageSchema, { title: "t", url: null })
     expect(withNull.error).toBeNull()

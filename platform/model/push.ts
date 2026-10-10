@@ -67,16 +67,25 @@ export const pushUnsubscribeRequestSchema: Type<{ deviceId: string }> = type({
 /** Value {@link pushUnsubscribeRequestSchema} produces. */
 export type PushUnsubscribeRequest = typeof pushUnsubscribeRequestSchema.infer
 
-/** A notification the server sends through a push subscription. */
+/**
+ * A notification the server sends through a push subscription.
+ *
+ * `url` is where a click on the notification leads. `tag` names the notification: a later one with
+ * the same tag replaces it instead of stacking, so the same reminder sent twice shows once. It is
+ * an optional key rather than a nullable one with a default, so a message written before the field
+ * existed still has this type.
+ */
 export const pushNotificationMessageSchema: Type<{
   title: string
   body: Default<string | null, null>
   url: Default<string | null, null>
+  tag?: string
 }> = type({
   "+": "reject",
   title: "1 <= string <= 120",
   body: "string <= 500 | null = null",
   url: "string <= 2048 | null = null",
+  "tag?": "1 <= string <= 256",
 })
 /** Value {@link pushNotificationMessageSchema} produces. */
 export type PushNotificationMessage = typeof pushNotificationMessageSchema.infer

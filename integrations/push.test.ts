@@ -321,6 +321,13 @@ describe("web push sender", () => {
     expect(cancelled).toBe(true)
   })
 
+  it("sends a message that carries a tag", async () => {
+    const { sender, requests } = await build([await subscription("a")], answering(201))
+    const result = await sender.send(USER, { ...MESSAGE, tag: "task-1|2026-10-12T10:00:00.000Z" })
+    expect(result.success).toBe(true)
+    expect(requests).toHaveLength(1)
+  })
+
   it("rejects an invalid payload without sending", async () => {
     const { sender, requests } = await build([await subscription("a")], answering(201))
     const result = await sender.send(USER, { title: "", body: null, url: null })
