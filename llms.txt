@@ -1634,6 +1634,16 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `serverMessageSchema` (constant), `jsr:@spy4x/realtime/protocol`: Server half of the protocol.
 - `toWireCursors` (function), `jsr:@spy4x/realtime/protocol`: Snapshot of the cursors a handshake advertises, in wire form.
 
+### `jsr:@spy4x/realtime/read-cache`
+
+- `ReadCache` (interface), `jsr:@spy4x/realtime/read-cache`: The copies of one user: see the module documentation.
+- `ReadCacheOptions` (interface), `jsr:@spy4x/realtime/read-cache`: Options of createReadCache.
+- `ReadResult` (interface), `jsr:@spy4x/realtime/read-cache`: What a read answered, and how old it is.
+- `cachedRead` (function), `jsr:@spy4x/realtime/read-cache`: Asks the server with `read`, keeps the answer under `key` and returns it as fresh.
+- `createReadCache` (function), `jsr:@spy4x/realtime/read-cache`: A read cache over IndexedDB (`createDataCache`), one entry per key.
+- `isUnreachable` (function), `jsr:@spy4x/realtime/read-cache`: Whether a failure means the server could not be reached, as opposed to it having answered.
+- `readCopy` (function), `jsr:@spy4x/realtime/read-cache`: Returns the saved copy under `key`, or `undefined` when there is none, the cache is `undefined` or the device cannot read it.
+
 ### `jsr:@spy4x/realtime/registry`
 
 - `CloseHandler` (type), `jsr:@spy4x/realtime/registry`
@@ -2707,4 +2717,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 a58f422319c50ce3265db5b8466cbbaf263e26dc42044add85872ad68ee26601 -->
+<!-- export surface: sha256 e096c00a1c3a9aa4eb6a68a2735202fcd3c24e773de0e1ba09d287d0a4e3d6c0 -->
