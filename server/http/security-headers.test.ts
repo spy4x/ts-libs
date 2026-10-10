@@ -151,11 +151,11 @@ Deno.test(`forms may post to the app's own origin only, unless formAction adds a
 })
 
 const NOT_ONE_SOURCE: [why: string, value: string][] = [
-  [`a second directive`, `https://a.example.com; script-src *`],
-  [`a second policy`, `https://a.example.com, default-src *`],
+  [`a second directive`, `https://a.example.com;script-src`],
+  [`a second policy`, `https://a.example.com,default-src`],
   [`a second source`, `https://a.example.com 'unsafe-inline'`],
   [`a tab`, `https://a.example.com\t*`],
-  [`a newline`, `https://a.example.com\nx-injected: 1`],
+  [`a newline`, `https://a.example.com\nx`],
   [`a carriage return`, `https://a.example.com\rx`],
   [`a character outside ASCII`, `https://é.example.com`],
   [`nothing`, ``],
@@ -185,7 +185,7 @@ Deno.test(`refuses a value that is not one source in every directive, in the lis
     `formAction`,
   ] as const
   for (const key of keys) {
-    const options = { extraSources: { [key]: [`https://a.example.com; script-src *`] } }
+    const options = { extraSources: { [key]: [`https://a.example.com;script-src`] } }
     await expect(securityHeaderList(options)).rejects.toThrow(`extraSources.${key}[0]`)
     await expect(securityHeaders(options)).rejects.toThrow(`extraSources.${key}[0]`)
   }
