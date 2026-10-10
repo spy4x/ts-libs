@@ -28,7 +28,7 @@ export interface AskOnce {
    * Where to remember. Defaults to `globalThis.localStorage`, treated as missing when the lookup
    * throws.
    */
-  store?: KeyValueStore | null
+  store?: Pick<KeyValueStore, "getItem" | "setItem"> | null
 }
 
 /**
@@ -59,7 +59,7 @@ export async function requestPersistentStorage(
 
 /** True when the browser may be asked now; records that it was. */
 function markAsked({ key, store }: AskOnce): boolean {
-  let notes: KeyValueStore | null
+  let notes: Pick<KeyValueStore, "getItem" | "setItem"> | null
   try {
     notes = store === undefined ? globalThis.localStorage ?? null : store
   } catch (_blocked) {
