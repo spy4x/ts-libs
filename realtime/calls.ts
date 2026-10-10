@@ -34,6 +34,7 @@ import {
   RequestTimeoutError,
   TransportStatus,
 } from "./client-transport.ts"
+import { type Clock, createSystemClock } from "./clock.ts"
 import { isRealtimeErrorCode, type RealtimeErrorCode, RealtimeRequestError } from "./errors.ts"
 
 /** Options for one {@link CallPort.query}. */
@@ -297,12 +298,42 @@ export function withUnauthorizedHook<P extends CallPort>(port: P, onUnauthorized
   }
 }
 
+/** Default for {@link FirstOpenWait.maxMs}. */
+const DEFAULT_FIRST_OPEN_WAIT_MS = 3_000
+
+/**
+ * Makes the first calls of a page wait for a socket that is still opening, so they travel over it
+ * and not over HTTP beside it.
+ */
+export interface FirstOpenWait {
+  /**
+   * The promise of the socket's first open, or `null` when there is nothing to wait for. It
+   * resolves when that first attempt has ended, whether the socket opened, closed or failed, and
+   * it never rejects. Return `null` once the socket has opened or failed for the first time: a
+   * reconnecting socket never makes a call wait.
+   */
+  pending(): Promise<void> | null
+  /**
+   * The longest the first calls wait together, counted from the first call that waits, in
+   * milliseconds. Default 3 000. After it has passed, no call waits again.
+   */
+  maxMs?: number
+  /** Schedules the bound. Defaults to the platform timers; a test passes a `FakeClock`. */
+  clock?: Clock
+}
+
 /** Options of {@link createComposedCallPort}. */
 export interface ComposedCallPortOptions {
   /** Preferred while {@link AvailableCallPort.isAvailable} says so. */
   socket: AvailableCallPort
   /** Used while the socket is not available, and when a socket call loses its connection. */
   http: CallPort
+  /**
+   * Lets a call made while the socket's first open is pending wait for it (see
+   * {@link FirstOpenWait}), then use the socket if it opened and HTTP if not. Absent: a call made
+   * while the socket is not open goes over HTTP at once.
+   */
+  firstOpenWait?: FirstOpenWait
 }
 
 /**
@@ -311,14 +342,55 @@ export interface ComposedCallPortOptions {
  * safe: a query, or a command that carries a key. A command without a key is not sent again,
  * since the socket may have delivered it before it dropped.
  *
+ * With `firstOpenWait`, the calls made while the first open is pending wait for it, at most
+ * `maxMs` in all. A call whose `signal` aborts stops waiting at once and rejects with the reason.
+ *
  * Any other error is the server's answer and is thrown as it is: an `unauthorized` or `conflict`
  * over the socket is not asked again over HTTP.
  */
 export function createComposedCallPort(options: ComposedCallPortOptions): CallPort {
-  const { socket, http } = options
+  const { socket, http, firstOpenWait } = options
+  const clock = firstOpenWait?.clock ?? createSystemClock()
+  // One wait, shared by every call made during it. `settled` ends all waiting for good: the first
+  // open happened, failed, or the bound passed.
+  let settled = firstOpenWait === undefined
+  let gate: Promise<void> | null = null
+
+  function waitForGate(pending: Promise<void>): Promise<void> {
+    if (gate !== null) return gate
+    gate = new Promise<void>((resolve) => {
+      const timer = clock.setTimeout(resolve, firstOpenWait?.maxMs ?? DEFAULT_FIRST_OPEN_WAIT_MS)
+      pending.then(() => {
+        clock.clearTimeout(timer)
+        resolve()
+      })
+    }).then(() => {
+      settled = true
+    })
+    return gate
+  }
+
+  /** Whether the socket should carry a call made now, waiting for its first open when pending. */
+  async function useSocket(signal: AbortSignal | undefined): Promise<boolean> {
+    if (socket.isAvailable()) {
+      settled = true
+      return true
+    }
+    if (settled) return false
+    const pending = firstOpenWait?.pending() ?? null
+    if (pending === null) {
+      settled = true
+      return false
+    }
+    await raceAbort(waitForGate(pending), signal)
+    return socket.isAvailable()
+  }
+
   return {
     async command(name, payload, callOptions = {}) {
-      if (!socket.isAvailable()) return await http.command(name, payload, callOptions)
+      if (!await useSocket(callOptions.signal)) {
+        return await http.command(name, payload, callOptions)
+      }
       try {
         return await socket.command(name, payload, callOptions)
       } catch (error) {
@@ -329,7 +401,9 @@ export function createComposedCallPort(options: ComposedCallPortOptions): CallPo
       }
     },
     async query(name, payload, callOptions = {}) {
-      if (!socket.isAvailable()) return await http.query(name, payload, callOptions)
+      if (!await useSocket(callOptions.signal)) {
+        return await http.query(name, payload, callOptions)
+      }
       try {
         return await socket.query(name, payload, callOptions)
       } catch (error) {

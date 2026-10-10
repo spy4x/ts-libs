@@ -19,6 +19,7 @@ import {
   type SocketCallTransport,
   withUnauthorizedHook,
 } from "./calls.ts"
+import { FakeClock } from "./testing.ts"
 
 /** Compile-time check: a real `ClientTransport` fills the socket port. */
 export const asSocketTransport = (transport: ClientTransport): SocketCallTransport => transport
@@ -781,5 +782,165 @@ describe("sendQuery", () => {
       { name: "group.list", payload: { limit: 5 } },
       { name: "group.list", payload: { limit: 5 } },
     ])
+  })
+})
+
+describe("the composed port waiting for the first open", () => {
+  function setup(options: { maxMs?: number; withWait?: boolean } = {}) {
+    const clock = new FakeClock()
+    const socketServer = fakeServer(["from socket", "from socket", "from socket", "from socket"])
+    const httpServer = fakeServer(["from http", "from http", "from http", "from http"])
+    const state = { status: TransportStatus.Connecting }
+    const transport = socketTransport(socketServer)
+    Object.defineProperty(transport, "status", { get: () => state.status })
+    let settleOpen = () => {}
+    // `pending` is what the host answers: a promise while the first open has not ended.
+    let firstOpen: Promise<void> | null = new Promise<void>((resolve) => settleOpen = resolve)
+    const endFirstOpen = (status: TransportStatus) => {
+      state.status = status
+      firstOpen = null
+      settleOpen()
+    }
+    // A host that wrongly reports a new pending open after the first one has ended.
+    const offerPending = () => firstOpen = new Promise<void>(() => {})
+    const port = createComposedCallPort({
+      socket: createSocketCallPort(transport),
+      http: createHttpCallPort({ baseUrl: "/api", userId: "u", fetch: serverFetch(httpServer) }),
+      ...(options.withWait === false ? {} : {
+        firstOpenWait: {
+          pending: () => firstOpen,
+          clock,
+          ...(options.maxMs === undefined ? {} : { maxMs: options.maxMs }),
+        },
+      }),
+    })
+    return { port, clock, socketServer, httpServer, state, endFirstOpen, offerPending }
+  }
+
+  it("waits for the first open, then uses the socket", async () => {
+    const { port, socketServer, httpServer, endFirstOpen } = setup()
+
+    const call = port.query("x")
+    await Promise.resolve()
+    expect(socketServer.seen).toHaveLength(0)
+    endFirstOpen(TransportStatus.Open)
+
+    expect(await call).toBe("from socket")
+    expect(httpServer.seen).toHaveLength(0)
+  })
+
+  it("uses HTTP once the bound passes and the socket has not opened", async () => {
+    const { port, clock, socketServer, httpServer } = setup({ maxMs: 2_000 })
+
+    const call = port.query("x")
+    await clock.advance(1_999)
+    expect(httpServer.seen).toHaveLength(0)
+    await clock.advance(1)
+
+    expect(await call).toBe("from http")
+    expect(socketServer.seen).toHaveLength(0)
+  })
+
+  it("waits at most 3 000 ms when no bound is given", async () => {
+    const { port, clock } = setup()
+
+    const call = port.query("x")
+    await clock.advance(3_000)
+
+    expect(await call).toBe("from http")
+  })
+
+  it("does not make a later call wait again after the bound has passed", async () => {
+    const { port, clock, httpServer } = setup({ maxMs: 1_000 })
+    const first = port.query("x")
+    await clock.advance(1_000)
+    await first
+
+    expect(await port.query("y")).toBe("from http")
+    expect(clock.pendingTimers).toBe(0)
+    expect(httpServer.seen).toHaveLength(2)
+  })
+
+  it("does not wait for a socket that closed or failed its first open", async () => {
+    const { port, socketServer, httpServer, endFirstOpen } = setup()
+    endFirstOpen(TransportStatus.Reconnecting)
+
+    expect(await port.query("x")).toBe("from http")
+    expect(socketServer.seen).toHaveLength(0)
+    expect(httpServer.seen).toHaveLength(1)
+  })
+
+  it("does not wait again after the socket opened once and then dropped", async () => {
+    const { port, state, socketServer, httpServer, endFirstOpen, offerPending } = setup()
+    endFirstOpen(TransportStatus.Open)
+    expect(await port.query("x")).toBe("from socket")
+
+    state.status = TransportStatus.Reconnecting
+    offerPending()
+    expect(await port.query("y")).toBe("from http")
+    expect(socketServer.seen).toHaveLength(1)
+    expect(httpServer.seen).toHaveLength(1)
+  })
+
+  it("stops waiting when the call is aborted", async () => {
+    const { port, clock, socketServer, httpServer } = setup()
+    const controller = new AbortController()
+
+    const call = port.query("x", undefined, { signal: controller.signal })
+    const failure = call.then(() => "resolved", (error: unknown) => error)
+    controller.abort(new Error("gave up"))
+
+    expect(await failure).toEqual(new Error("gave up"))
+    expect(socketServer.seen).toHaveLength(0)
+    expect(httpServer.seen).toHaveLength(0)
+    expect(clock.pendingTimers).toBe(1)
+  })
+
+  it("rejects at once for a call whose signal is already aborted", async () => {
+    const { port } = setup()
+    const signal = AbortSignal.abort(new Error("already"))
+
+    const failure = await port.command("x", {}, { idempotencyKey: "k", signal }).catch((e) => e)
+
+    expect(failure).toEqual(new Error("already"))
+  })
+
+  it("resolves every call made during one wait", async () => {
+    const { port, socketServer, endFirstOpen } = setup()
+
+    const calls = [port.query("a"), port.query("b"), port.command("c", {}, { idempotencyKey: "k" })]
+    endFirstOpen(TransportStatus.Open)
+
+    expect(await Promise.all(calls)).toEqual(["from socket", "from socket", "from socket"])
+    expect(socketServer.seen.map((call) => call.name)).toEqual(["a", "b", "c"])
+  })
+
+  it("sends every call made during one wait over HTTP when the bound passes", async () => {
+    const { port, clock, httpServer } = setup({ maxMs: 500 })
+
+    const calls = [port.query("a"), port.query("b")]
+    await clock.advance(500)
+
+    expect(await Promise.all(calls)).toEqual(["from http", "from http"])
+    expect(httpServer.seen).toHaveLength(2)
+    expect(clock.pendingTimers).toBe(0)
+  })
+
+  it("leaves no timer behind when the socket opens", async () => {
+    const { port, clock, endFirstOpen } = setup()
+
+    const call = port.query("x")
+    endFirstOpen(TransportStatus.Open)
+    await call
+
+    expect(clock.pendingTimers).toBe(0)
+  })
+
+  it("uses HTTP at once while the socket is not open, without the option", async () => {
+    const { port, socketServer, httpServer } = setup({ withWait: false })
+
+    expect(await port.query("x")).toBe("from http")
+    expect(socketServer.seen).toHaveLength(0)
+    expect(httpServer.seen).toHaveLength(1)
   })
 })
