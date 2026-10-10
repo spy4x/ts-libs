@@ -119,8 +119,9 @@ export function scrubUrl(url: string, redactPathAfter: string[] = []): string {
       : `${parsed.protocol}${/^[^:]+:\/\//.test(url) ? `//${parsed.host}` : ""}`
     return `${origin}${segments.join("/")}`
   } catch {
-    // Not an absolute URL, such as a relative script path: cut it at the query or fragment.
-    return url.split(/[?#]/)[0]
+    // Not a URL the platform can parse: a relative script path, or an address an error quotes
+    // because it is malformed. Drop everything up to the last `@` after `://`, then the query.
+    return url.replace(/^([a-z][a-z\d+.-]*:\/\/)\S*@/i, "$1").split(/[?#]/)[0]
   }
 }
 

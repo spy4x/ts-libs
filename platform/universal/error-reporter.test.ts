@@ -405,6 +405,12 @@ describe("install", () => {
 })
 
 describe("scrubUrl", () => {
+  it("drops the credentials of an address that does not parse", () => {
+    expect(scrubUrl("postgres://user:PASSX@host:port/db")).toBe("postgres://host:port/db")
+    expect(scrubUrl("postgres://user:pa/SSX@host/db")).toBe("postgres://host/db")
+    expect(scrubUrl("https://user:p#HASHX@host/x")).toBe("https://host/x")
+  })
+
   it("cuts a relative address at its query or fragment", () => {
     expect(scrubUrl("/assets/a.js?v=SECRETX")).toBe("/assets/a.js")
     expect(scrubUrl("a.js#SECRETX")).toBe("a.js")
