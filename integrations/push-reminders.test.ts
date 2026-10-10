@@ -1,10 +1,21 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { type PushNotificationMessage, pushNotificationMessageSchema } from "@spy4x/platform/model"
+import { encodeBase64Url } from "@std/encoding"
+import type { DnsResolver } from "@spy4x/net/url-policy"
+import {
+  type PushNotificationMessage,
+  pushNotificationMessageSchema,
+  type PushSubscriptionJson,
+} from "@spy4x/platform/model"
 import { createReminderRunner } from "@spy4x/platform/server/reminder-runner"
 import { type } from "arktype"
 import { fakeClock, fakeTimers } from "../platform/server/_fake-fs.ts"
-import type { PushDelivery, PushSendResult } from "./push.ts"
+import {
+  createWebPushSender,
+  generateVapidKeyPair,
+  type PushDelivery,
+  type PushSendResult,
+} from "./push.ts"
 import {
   createReminderNotify,
   reminderDeliveryOutcome,
@@ -39,6 +50,47 @@ function fakeSender(answer: () => PushSendResult) {
       return Promise.resolve(answer())
     },
   }
+}
+
+const TASK = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:task-1\r\n" +
+  "SUMMARY:Water the plants\r\nDUE:20261012T100000Z\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\n" +
+  "TRIGGER;RELATED=END:PT0S\r\nEND:VALARM\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+
+/**
+ * The real sender with throwaway keys, `devices` subscribed devices of user `owner`, and a push
+ * service that answers every request with `status`. `requests` counts what reached the service.
+ */
+async function realSender(devices: number, status: number) {
+  const subscriptions: PushSubscriptionJson[] = []
+  for (let device = 0; device < devices; device++) {
+    const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, [
+      "deriveKey",
+    ])
+    subscriptions.push({
+      endpoint: `https://push.example.com/send/device-${device}`,
+      expirationTime: null,
+      keys: {
+        p256dh: encodeBase64Url(await crypto.subtle.exportKey("raw", pair.publicKey)),
+        auth: encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+      },
+    })
+  }
+  const world = { requests: 0 }
+  const resolver: DnsResolver = { resolve: () => Promise.resolve(["93.184.216.34"]) }
+  const sender = await createWebPushSender({
+    vapidKeys: (await generateVapidKeyPair()).keys,
+    subject: "mailto:ops@example.com",
+    store: {
+      listByUser: (userId) => Promise.resolve(userId === "owner" ? subscriptions : []),
+      deleteByEndpoint: () => Promise.resolve(),
+    },
+    fetch: (() => {
+      world.requests++
+      return Promise.resolve(new Response("", { status }))
+    }) as typeof fetch,
+    resolver,
+  })
+  return { sender, world }
 }
 
 describe("reminder push message", () => {
@@ -114,7 +166,7 @@ describe("reminder push message", () => {
 })
 
 describe("reminder delivery outcome", () => {
-  const outcomes: [string, PushSendResult, "delivered" | "retry"][] = [
+  const outcomes: [string, PushSendResult, "delivered" | "retry" | "drop"][] = [
     ["every device got it", result([delivery("sent"), delivery("sent")]), "delivered"],
     [
       "one device got it and one failed with 503",
@@ -129,9 +181,31 @@ describe("reminder delivery outcome", () => {
     ["no device is subscribed", result([]), "delivered"],
     ["the only device was gone and removed", result([delivery("gone", 410)]), "delivered"],
     [
+      "every device was gone and removed",
+      result([delivery("gone", 410), delivery("gone", 404)]),
+      "delivered",
+    ],
+    [
+      "one device got it and one was refused for good (403)",
+      result([delivery("failed", 403), delivery("sent")]),
+      "delivered",
+    ],
+    [
       "every device was refused for good (403, 400)",
       result([delivery("failed", 403), delivery("failed", 400)]),
-      "delivered",
+      "drop",
+    ],
+    ["the only device was refused with 401", result([delivery("failed", 401)]), "drop"],
+    ["the only device was refused with 413", result([delivery("failed", 413)]), "drop"],
+    [
+      "one was gone and removed and one was refused for good (403)",
+      result([delivery("gone", 410), delivery("failed", 403)]),
+      "drop",
+    ],
+    [
+      "the only device was gone but could not be removed",
+      result([delivery("failed", 410)]),
+      "drop",
     ],
     ["the only device failed with 503", result([delivery("failed", 503)]), "retry"],
     ["the only device failed with 500", result([delivery("failed", 500)]), "retry"],
@@ -175,6 +249,121 @@ describe("reminder notify", () => {
     expect(await notify(reminder("a"))).toBe("delivered")
   })
 
+  it("answers drop when every device was refused for good", async () => {
+    const sender = fakeSender(() => result([delivery("failed", 403), delivery("failed", 401)]))
+    const notify = createReminderNotify({ sender, userId: "owner" })
+    expect(await notify(reminder("a"))).toBe("drop")
+  })
+
+  it("tells onDeviceFailure how many devices failed, with which status, when another got it", async () => {
+    const sender = fakeSender(() =>
+      result([
+        delivery("failed", 403),
+        delivery("sent"),
+        delivery("failed"),
+        delivery("gone", 410),
+        delivery("failed", 403),
+      ])
+    )
+    const told: unknown[] = []
+    const notify = createReminderNotify({
+      sender,
+      userId: "owner",
+      onDeviceFailure: (error) => told.push(error),
+    })
+    expect(await notify(reminder("a"))).toBe("delivered")
+    expect(told).toHaveLength(1)
+    expect(told[0]).toBeInstanceOf(Error)
+    expect((told[0] as Error).message)
+      .toBe("3 of 5 devices did not get a reminder: HTTP 403 (2), no HTTP status (1)")
+  })
+
+  it("tells onDeviceFailure which status refused every device of a dropped reminder", async () => {
+    const sender = fakeSender(() => result([delivery("failed", 403), delivery("failed", 403)]))
+    const told: string[] = []
+    const notify = createReminderNotify({
+      sender,
+      userId: "owner",
+      onDeviceFailure: (error) => told.push(error.message),
+    })
+    expect(await notify(reminder("a"))).toBe("drop")
+    expect(told).toEqual(["2 of 2 devices did not get a reminder: HTTP 403 (2)"])
+  })
+
+  it("keeps the endpoint and the sender's error text out of what onDeviceFailure is told", async () => {
+    const sender = fakeSender(() =>
+      result([{
+        ...delivery("failed", 403),
+        endpoint: "https://push.example.com/send/secret-token",
+        error: "the push service said secret-answer",
+      }])
+    )
+    const told: string[] = []
+    const notify = createReminderNotify({
+      sender,
+      userId: "owner",
+      onDeviceFailure: (error) => told.push(String(error), error.stack ?? ""),
+    })
+    await notify(reminder("a"))
+    expect(told).toHaveLength(2)
+    for (const text of told) {
+      expect(text).not.toContain("secret")
+      expect(text).not.toContain("push.example.com")
+    }
+  })
+
+  it("does not call onDeviceFailure when every device got it, none is subscribed or the gone ones were removed", async () => {
+    for (
+      const deliveries of [
+        [delivery("sent"), delivery("sent")],
+        [],
+        [delivery("gone", 410)],
+        [delivery("sent"), delivery("gone", 404)],
+      ]
+    ) {
+      const sender = fakeSender(() => result(deliveries))
+      let told = 0
+      const notify = createReminderNotify({
+        sender,
+        userId: "owner",
+        onDeviceFailure: () => told++,
+      })
+      expect(await notify(reminder("a"))).toBe("delivered")
+      expect(told).toBe(0)
+    }
+  })
+
+  it("does not call onDeviceFailure for a reminder that will be tried again", async () => {
+    const sender = fakeSender(() => result([delivery("failed", 403), delivery("failed", 503)]))
+    let told = 0
+    const notify = createReminderNotify({ sender, userId: "owner", onDeviceFailure: () => told++ })
+    let thrown: unknown
+    try {
+      await notify(reminder("a"))
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    expect(told).toBe(0)
+  })
+
+  it("still answers delivered, or drop, when onDeviceFailure throws", async () => {
+    const answers = [
+      result([delivery("sent"), delivery("failed", 403)]),
+      result([delivery("failed", 403)]),
+    ]
+    const sender = fakeSender(() => answers.shift()!)
+    const notify = createReminderNotify({
+      sender,
+      userId: "owner",
+      onDeviceFailure: () => {
+        throw new Error("the log is full")
+      },
+    })
+    expect(await notify(reminder("a"))).toBe("delivered")
+    expect(await notify(reminder("a"))).toBe("drop")
+  })
+
   it("rejects with the sender's error text when no device got it and one may get it later", async () => {
     const sender = fakeSender(() => result([delivery("failed", 503)]))
     const notify = createReminderNotify({ sender, userId: "owner" })
@@ -201,17 +390,49 @@ describe("reminder notify", () => {
     expect(sender.sent).toEqual([])
   })
 
+  for (const status of [400, 401, 403, 413]) {
+    it(`pushes once and reports once when the push service refuses every device with ${status}`, async () => {
+      const { sender, world } = await realSender(2, status)
+      const clock = fakeClock(Date.parse("2026-10-12T09:59:30Z"))
+      const errors: string[] = []
+      const failures: string[] = []
+      let stored: unknown = null
+      const runner = createReminderRunner({
+        listTasks: () => [TASK],
+        notify: createReminderNotify({
+          sender,
+          userId: "owner",
+          onDeviceFailure: (error) => failures.push(error.message),
+        }),
+        state: {
+          load: () => Promise.resolve(stored),
+          save: (state) => {
+            stored = state
+            return Promise.resolve()
+          },
+        },
+        zone: "UTC",
+        onError: (error, step) => errors.push(`${step}: ${(error as Error).message}`),
+        clock,
+        timers: fakeTimers(),
+      })
+      for (let tick = 0; tick < 71; tick++) {
+        await runner.tick()
+        clock.advance(60_000)
+      }
+      expect(world.requests).toBe(2)
+      expect(errors).toEqual(["notify: a reminder can never be delivered and was dropped"])
+      expect(failures).toEqual([`2 of 2 devices did not get a reminder: HTTP ${status} (2)`])
+    })
+  }
+
   it("pushes a reminder once through a runner while one of two devices keeps failing", async () => {
     const sender = fakeSender(() => result([delivery("sent"), delivery("failed", 503)]))
     const clock = fakeClock(Date.parse("2026-10-12T09:59:30Z"))
     const errors: string[] = []
     let stored: unknown = null
     const runner = createReminderRunner({
-      listTasks: () => [
-        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:task-1\r\nSUMMARY:Water the plants\r\n" +
-        "DUE:20261012T100000Z\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER;RELATED=END:PT0S\r\n" +
-        "END:VALARM\r\nEND:VTODO\r\nEND:VCALENDAR\r\n",
-      ],
+      listTasks: () => [TASK],
       notify: createReminderNotify({ sender, userId: "owner", url: "/" }),
       state: {
         load: () => Promise.resolve(stored),
