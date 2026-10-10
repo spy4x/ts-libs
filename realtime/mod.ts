@@ -86,6 +86,24 @@ export {
 } from "./registry.ts"
 
 export {
+  CALL_ERROR_STATUS,
+  type CallErrorContext,
+  type CallHandler,
+  type CallHandlerOptions,
+  createCallHandler,
+  createOperationDispatcher,
+  DEFAULT_MAX_CALL_BYTES,
+  IDEMPOTENCY_KEY_HEADER,
+  isBoundToUser,
+  type Operation,
+  type OperationCall,
+  type OperationDispatcherOptions,
+  type OperationErrorMapper,
+  type Operations,
+  REALTIME_USER_HEADER,
+} from "./operations.ts"
+
+export {
   type AggregateChange,
   AggregateNotifier,
   type AggregateNotifierOptions,
