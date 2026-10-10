@@ -515,15 +515,17 @@ describe("SessionManager.create with a device", () => {
     expect(createArguments.map((args) => args.length)).toEqual([1, 1])
   })
 
-  it("stores a cleaned label instead of refusing the sign-in", async () => {
-    const { sessions, details } = setup()
-    const { session } = await sessions.create(FIELDS, {
+  it("hands the store a cleaned label instead of refusing the sign-in", async () => {
+    const { sessions, createArguments } = setup()
+    await sessions.create(FIELDS, {
       deviceName: `Chrome\r\non\u0000 Windows${"x".repeat(200)}`,
       ipHint: "",
     })
-    const stored = details.get(session.id)
-    expect(stored?.deviceName).toBe(`Chromeon Windows${"x".repeat(84)}`)
-    expect(stored?.ipHint).toBeNull()
+    // What the manager passed, before any cleaning a store does itself.
+    expect(createArguments[0][1]).toMatchObject({
+      deviceName: `Chromeon Windows${"x".repeat(84)}`,
+      ipHint: null,
+    })
   })
 })
 
