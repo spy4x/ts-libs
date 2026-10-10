@@ -56,9 +56,11 @@ export type ApiResult<T> =
  * one who passes `FormData`, not the same behaviour as one who passes no `body` at all.
  * The response body is read as JSON regardless of status; a body that is not valid JSON (including
  * an empty body) is treated as `null` rather than failing the call. On a non-2xx response, the
- * error message is the body's string `error` field, else its string `message` field, else the
- * fallback `"Request failed"`; `error.code` is set from the body's string `code` field and is
- * absent otherwise, so a server answering `{ code, message }` needs no wrapper of its own.
+ * error message is the body's string `error` field, else the string `message` of an `error`
+ * object, else the body's string `message` field, else the fallback `"Request failed"`; `error.code`
+ * is set from the string `code` of an `error` object, else the body's string `code` field, and is
+ * absent otherwise. So a server answering `{ error }`, `{ code, message }` or
+ * `{ error: { code, message } }` needs no wrapper of its own; non-string nested fields are ignored.
  *
  * Only an HTTP answer resolves. A network failure (no connection, DNS, CORS, an aborted `signal`)
  * still rejects with whatever `fetch` threw, so a caller that must not throw wraps the call in
@@ -104,13 +106,24 @@ export async function apiFetch<T>(
     const fields: Record<string, unknown> = data !== null && typeof data === "object"
       ? data as Record<string, unknown>
       : {}
+    const nested: Record<string, unknown> =
+      fields.error !== null && typeof fields.error === "object"
+        ? fields.error as Record<string, unknown>
+        : {}
     const message = typeof fields.error === "string"
       ? fields.error
+      : typeof nested.message === "string"
+      ? nested.message
       : typeof fields.message === "string"
       ? fields.message
       : "Request failed"
     const error: ApiError = { status: response.status, message }
-    if (typeof fields.code === "string") error.code = fields.code
+    const code = typeof nested.code === "string"
+      ? nested.code
+      : typeof fields.code === "string"
+      ? fields.code
+      : undefined
+    if (code !== undefined) error.code = code
     return { ok: false, status: response.status, error }
   }
   return { ok: true, status: response.status, data: data as T }
