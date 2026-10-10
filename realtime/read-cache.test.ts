@@ -47,6 +47,16 @@ describe("cachedRead", () => {
     await expect(cachedRead(cache, "groups", lost)).rejects.toBeInstanceOf(ConnectionLostError)
   })
 
+  it("throws the connection error when the server is unreachable and the copy cannot be read", async () => {
+    const broken = {
+      get: () => Promise.reject(new Error("blocked")),
+      set: () => Promise.resolve(0),
+      clear: () => Promise.resolve(),
+    }
+
+    await expect(cachedRead(broken, "groups", lost)).rejects.toBeInstanceOf(ConnectionLostError)
+  })
+
   it("keeps a copy per key", async () => {
     const cache = createReadCache({ name: "reads:u1", indexedDB: freshFactory() })
     await cachedRead(cache, "groups", answer(["g"]))
@@ -163,6 +173,21 @@ describe("ReadCache.clear", () => {
     expect(await readCopy(alice, "groups")).toBeUndefined()
     expect(await readCopy(alice, "members")).toBeUndefined()
     expect((await readCopy(bob, "groups"))?.value).toEqual(["b1"])
+  })
+
+  it("keeps nothing from a read that answers after the copies were deleted", async () => {
+    const indexedDB = freshFactory()
+    const cache = createReadCache({ name: "reads:u1", indexedDB })
+    let answerLate!: (value: string[]) => void
+    const slow = new Promise<string[]>((resolve) => answerLate = resolve)
+    const pending = cachedRead(cache, "groups", () => slow)
+
+    await cache.clear()
+    answerLate(["late"])
+    await pending
+
+    expect(await readCopy(createReadCache({ name: "reads:u1", indexedDB }), "groups"))
+      .toBeUndefined()
   })
 
   it("survives a restart: a cache opened again reads the saved copy", async () => {

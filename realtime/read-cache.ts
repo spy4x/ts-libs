@@ -49,7 +49,11 @@ export interface ReadCache {
   get<T>(key: string): Promise<{ value: T; savedAt: number } | undefined>
   /** Keeps `value` as the copy under `key`, replacing the one there, taken now. Returns the time. */
   set<T>(key: string, value: T): Promise<number>
-  /** Deletes every copy of this user. Another user's database is not touched. */
+  /**
+   * Deletes every copy of this user. Another user's database is not touched. The instance is
+   * finished after this: `set` stores nothing more, so a read still in flight cannot write its
+   * answer back. A new user needs a new cache.
+   */
   clear(): Promise<void>
 }
 
@@ -69,6 +73,7 @@ export function createReadCache(options: ReadCacheOptions): ReadCache {
     getId: (entry) => entry.key,
     indexedDB: options.indexedDB,
   })
+  let cleared = false
   return {
     async get<T>(key: string) {
       const entry = await store.get(SCOPE, key)
@@ -76,10 +81,14 @@ export function createReadCache(options: ReadCacheOptions): ReadCache {
     },
     async set(key, value) {
       const savedAt = clock.now()
+      if (cleared) return savedAt
       await store.put(SCOPE, { key, savedAt, value })
       return savedAt
     },
-    clear: () => store.clearAll(),
+    clear() {
+      cleared = true
+      return store.clearAll()
+    },
   }
 }
 
