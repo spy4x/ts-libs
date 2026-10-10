@@ -275,10 +275,11 @@ describe("file push store: what save refuses", () => {
   }
 
   it("fills in the expiration time a browser left out", async () => {
-    const { store } = setup()
+    const { fs, store } = setup()
     const { expirationTime: _, ...bare } = subscription("phone")
     await store.save(USER, bare as PushSubscriptionJson)
     expect(await store.listByUser(USER)).toEqual([subscription("phone")])
+    expect(JSON.parse(fs.files.get(PATH)!).users[USER]).toEqual([subscription("phone")])
   })
 
   it("refuses a user id that is empty, too long or not an id", async () => {
