@@ -32,6 +32,7 @@
  */
 
 import type { CallPort } from "./calls.ts"
+import type { SyncFlushResult } from "./sync-runner.ts"
 import { isRetryable } from "./calls.ts"
 import { RealtimeRequestError } from "./errors.ts"
 import { createIndexedDbOutboxStore } from "./outbox-indexeddb.ts"
@@ -220,6 +221,13 @@ export interface Collections {
   reload(): Promise<void>
   /** Sends every queue in registration order, parents first. */
   flush(): Promise<void>
+  /**
+   * A flush for `createSyncRunner` (`@spy4x/realtime/sync-runner`): sends every queue in order,
+   * then answers `"unreachable"` when an entry that is not held back by a parent is still pending,
+   * so the runner retries with backoff. An entry waiting for a parent, or in conflict, waits for
+   * the person or for that parent and does not count.
+   */
+  syncFlush(): Promise<SyncFlushResult>
   /** The entries held back by a parent, as of the last change to the queues. */
   waiting(): readonly WaitingEntry[]
   /** Calls `listener` after every change to any queue. Returns the way to stop. */
@@ -258,7 +266,6 @@ function mapChain<P>(
 export function createCollections(options: CollectionsOptions): Collections {
   const { calls } = options
   const lock = options.lock ?? createPromiseLock()
-  const newKey = options.newKey ?? (() => crypto.randomUUID())
   const definitions = options.collections as readonly unknown[] as readonly AnyDefinition[]
   const runtimes: Runtime[] = []
   const byName = new Map<string, Runtime>()
@@ -406,9 +413,10 @@ export function createCollections(options: CollectionsOptions): Collections {
             ...queued,
             payload,
             before: mapChain(queued.before, (p) => dependencies.without(p, parent)),
-            // A send of the old text may have reached the server, which would answer the old key
-            // with the first result and drop the change: the new text needs a new key.
-            ...(queued.attempted ? { key: newKey(), attempted: false } : {}),
+            // `key` and `attempted` stay: a send of this entry may have reached the server, and the
+            // outbox must go on treating the entity as possibly there (a delete is queued, a
+            // withdraw refused). The server ignores ids it does not know, so a repeat of the old
+            // key answers as the stripped write would.
           })
           changed.push({ collection: runtime.name, entityId: queued.entityId })
         }
@@ -421,6 +429,36 @@ export function createCollections(options: CollectionsOptions): Collections {
 
   async function flush(): Promise<void> {
     for (const runtime of runtimes) await runtime.outbox.flush()
+  }
+
+  function waiting(): WaitingEntry[] {
+    const cached = (collection: string) => byName.get(collection)!.outbox.entries()
+    const waiting: WaitingEntry[] = []
+    for (const runtime of runtimes) {
+      for (const entry of runtime.outbox.entries()) {
+        if (entry.status !== "pending") continue
+        const blockedBy = blockersFrom(runtime.definition, entry, cached)
+        if (blockedBy.length === 0) continue
+        waiting.push({
+          collection: runtime.name,
+          entityId: entry.entityId,
+          blockedBy,
+          onPerson: blockedBy.some((blocker) => blocker.status === "conflict"),
+        })
+      }
+    }
+    return waiting
+  }
+
+  async function syncFlush(): Promise<SyncFlushResult> {
+    await flush()
+    const held = new Set(waiting().map((w) => `${w.collection}\0${w.entityId}`))
+    const stuck = runtimes.some((runtime) =>
+      runtime.outbox.entries().some((entry) =>
+        entry.status === "pending" && !held.has(`${runtime.name}\0${entry.entityId}`)
+      )
+    )
+    return stuck ? "unreachable" : undefined
   }
 
   function get<P, S extends { version: number }, Item>(
@@ -437,24 +475,8 @@ export function createCollections(options: CollectionsOptions): Collections {
       for (const runtime of runtimes) await runtime.outbox.reload()
     },
     flush,
-    waiting() {
-      const cached = (collection: string) => byName.get(collection)!.outbox.entries()
-      const waiting: WaitingEntry[] = []
-      for (const runtime of runtimes) {
-        for (const entry of runtime.outbox.entries()) {
-          if (entry.status !== "pending") continue
-          const blockedBy = blockersFrom(runtime.definition, entry, cached)
-          if (blockedBy.length === 0) continue
-          waiting.push({
-            collection: runtime.name,
-            entityId: entry.entityId,
-            blockedBy,
-            onPerson: blockedBy.some((blocker) => blocker.status === "conflict"),
-          })
-        }
-      }
-      return waiting
-    },
+    syncFlush,
+    waiting,
     subscribe(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)

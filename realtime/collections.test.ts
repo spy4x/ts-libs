@@ -64,6 +64,8 @@ function fakeServer() {
       | ((name: string, payload: Record<string, unknown>) => Error | undefined),
     /** What a query for an entity answers with. */
     tags: new Map<string, Tag>(),
+    /** What a delete answers with. A real server answers with nothing an app should read. */
+    deleteAnswer: {} as unknown,
   }
   const port: CallPort = {
     command(name, payload, options) {
@@ -72,7 +74,7 @@ function fakeServer() {
       if (state.lose) return Promise.reject(new ConnectionLostError(`lost`))
       const error = state.refuse?.(name, body)
       if (error) return Promise.reject(error)
-      if (name.endsWith(`.delete`)) return Promise.resolve({})
+      if (name.endsWith(`.delete`)) return Promise.resolve(state.deleteAnswer)
       const version = (body.version as number | undefined ?? 0) + 1
       return Promise.resolve(
         name.startsWith(`tag.`) ? { tag: { ...body, version } } : { note: { ...body, version } },
@@ -622,11 +624,12 @@ describe(`a parent that will never exist`, () => {
     ])
   })
 
-  it(`gives a note whose send may have reached the server a new key when its text changes`, async () => {
+  /** A note whose create was sent once and may have arrived, queued behind a tag. */
+  async function attemptedNote() {
     const h = setup()
     h.server.state.offline = true
     await h.tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
-    const seeded = await h.stores.notes.putEntry({
+    await h.stores.notes.putEntry({
       key: `old-key`,
       entityId: `n1`,
       kind: `create`,
@@ -637,23 +640,39 @@ describe(`a parent that will never exist`, () => {
       queuedAt: `2026-10-10T00:00:00.000Z`,
     })
     await h.layer.reload()
-
     await h.tags.outbox.withdraw(`t-new`)
+    return h
+  }
+
+  it(`keeps the key and the attempted mark of a note whose send may have reached the server`, async () => {
+    const h = await attemptedNote()
 
     const [entry] = await h.stores.notes.readOutbox()
-    expect(entry.seq).toBe(seeded.seq)
+
     expect(entry.payload.tagIds).toEqual([])
-    expect(entry.key).not.toBe(`old-key`)
-    expect(entry.attempted).toBe(false)
+    expect(entry.key).toBe(`old-key`)
+    expect(entry.attempted).toBe(true)
   })
 
-  it(`keeps the key of a note that was never sent`, async () => {
-    const h = await queued()
-    const before = h.notes.outbox.entries().map((e) => e.key)
+  it(`still queues a delete, not a drop, for a stripped note whose send may have arrived`, async () => {
+    const h = await attemptedNote()
 
-    await h.tags.outbox.withdraw(`t-new`)
+    const outcome = await h.notes.outbox.submit({
+      kind: `delete`,
+      entityId: `n1`,
+      payload: note(`One`),
+      version: 1,
+    })
 
-    expect(h.notes.outbox.entries().map((e) => e.key)).toEqual(before)
+    expect(outcome.kind).not.toBe(`dropped`)
+    expect(h.notes.outbox.entries().map((e) => [e.entityId, e.kind])).toEqual([[`n1`, `delete`]])
+  })
+
+  it(`still refuses to withdraw a stripped note whose send may have arrived`, async () => {
+    const h = await attemptedNote()
+
+    expect(await h.notes.outbox.withdraw(`n1`)).toBe(false)
+    expect(h.notes.outbox.entries().length).toBe(1)
   })
 
   it(`also removes the tag from the earlier text of an edited note, so withdrawing the edit does not bring it back`, async () => {
@@ -740,6 +759,284 @@ describe(`a parent that will never exist, for an adapter that keeps the referenc
 
     expect(removed).toEqual([])
     expect(await stores.notes.readOutbox()).toEqual(before)
+  })
+})
+
+describe(`a refused write that is not a create`, () => {
+  it(`keeps the tag in the notes when a tag edit is refused to the person who made it`, async () => {
+    const h = setup()
+    h.server.state.offline = true
+    await h.notes.outbox.submit({ kind: `create`, entityId: `n1`, payload: note(`One`, [`t1`]) })
+    h.server.state.offline = false
+    h.server.state.refuse = (name) => name === `tag.update` ? refusal(REFUSED) : undefined
+
+    const outcome = await h.tags.outbox.submit({
+      kind: `update`,
+      entityId: `t1`,
+      payload: { name: `Mine` },
+      version: 2,
+    })
+
+    expect(outcome.kind).toBe(`failed`)
+    expect(h.removed).toEqual([])
+    expect(h.queuedNotes()).toEqual([])
+    expect(h.server.calls.find((c) => c.name === `note.create`)?.payload.tagIds).toEqual([`t1`])
+  })
+
+  it(`keeps the tag in the notes when the person discards a refused tag edit`, async () => {
+    const h = setup()
+    h.server.state.offline = true
+    await h.tags.outbox.submit({
+      kind: `update`,
+      entityId: `t1`,
+      payload: { name: `Mine` },
+      version: 2,
+    })
+    await h.notes.outbox.submit({ kind: `create`, entityId: `n1`, payload: note(`One`, [`t1`]) })
+    h.server.state.offline = false
+    h.server.state.refuse = (name) => name === `tag.update` ? refusal(REFUSED) : undefined
+    await h.layer.flush()
+    expect(h.tags.outbox.entries()[0].status).toBe(`conflict`)
+    h.server.state.refuse = undefined
+
+    await h.tags.outbox.useTheirs(h.tags.outbox.entries()[0])
+    await h.layer.flush()
+
+    expect(h.removed).toEqual([])
+    expect(h.server.calls.find((c) => c.name === `note.create`)?.payload.tagIds).toEqual([`t1`])
+  })
+
+  it(`keeps the tag in the notes when the person takes the server's tag over a lost create`, async () => {
+    const h = setup()
+    h.server.state.lose = true
+    await h.tags.outbox.submit({ kind: `create`, entityId: `t`, payload: { name: `First` } })
+    h.server.state.lose = false
+    h.server.state.tags.set(`t`, { id: `t`, version: 1, name: `First` })
+    h.server.state.offline = true
+    await h.tags.outbox.submit({
+      kind: `update`,
+      entityId: `t`,
+      payload: { name: `Renamed` },
+      version: 0,
+    })
+    await h.notes.outbox.submit({ kind: `create`, entityId: `n`, payload: note(`Note`, [`t`]) })
+    h.server.state.offline = false
+    h.server.state.refuse = (name) => name === `tag.create` ? refusal(`ID_TAKEN`) : undefined
+    await h.layer.flush()
+    expect(h.tags.outbox.entries()[0].conflict?.reason).toBe(`version`)
+
+    await h.tags.outbox.useTheirs(h.tags.outbox.entries()[0])
+    h.server.state.refuse = undefined
+    await h.layer.flush()
+
+    expect(h.removed).toEqual([])
+    expect(h.server.calls.find((c) => c.name === `note.create`)?.payload.tagIds).toEqual([`t`])
+  })
+})
+
+describe(`answers the library reads from the server`, () => {
+  it(`shows a note the server no longer has as gone, not as an error`, async () => {
+    const h = setup()
+    h.server.state.offline = true
+    await h.notes.outbox.submit({
+      kind: `update`,
+      entityId: `n1`,
+      payload: note(`Mine`),
+      version: 2,
+    })
+    h.server.state.offline = false
+    h.server.state.refuse = (name) => name === `note.update` ? refusal(`NOT_FOUND`) : undefined
+
+    await h.layer.flush()
+
+    expect(h.notes.outbox.entries()[0].conflict?.reason).toBe(`gone`)
+  })
+
+  it(`does not read the answer to a delete as an entity`, async () => {
+    const put: Tag[] = []
+    const removedIds: string[] = []
+    const definition = {
+      ...tagDefinition({ store: createMemoryOutboxStore<TagPayload, Tag>() }),
+      cache: {
+        put: (tag: Tag) => {
+          put.push(tag)
+          return Promise.resolve()
+        },
+        remove: (id: string) => {
+          removedIds.push(id)
+          return Promise.resolve()
+        },
+      },
+    }
+    const server = fakeServer()
+    server.state.deleteAnswer = { tag: { id: `t1`, version: 9, name: `Stale` } }
+    const layer = createCollections({
+      collections: [definition],
+      calls: server.port,
+      canSend: () => true,
+    })
+
+    await layer.get(definition).outbox.submit({
+      kind: `delete`,
+      entityId: `t1`,
+      payload: { name: `One` },
+      version: 2,
+    })
+
+    expect(put).toEqual([])
+    expect(removedIds).toEqual([`t1`])
+  })
+})
+
+describe(`two tabs of one browser`, () => {
+  /** Two layers over the same queues and the same lock, as two tabs share IndexedDB and Web Locks. */
+  function twoTabs() {
+    const server = fakeServer()
+    const stores = {
+      tags: createMemoryOutboxStore<TagPayload, Tag>(),
+      notes: createMemoryOutboxStore<NotePayload, Note>(),
+    }
+    const lock = createPromiseLock()
+    const tab = () => {
+      const tags = tagDefinition({ store: stores.tags })
+      const notes = noteDefinition({ store: stores.notes })
+      let keys = 0
+      const layer = createCollections({
+        collections: [tags, notes],
+        calls: server.port,
+        canSend: () => !server.state.offline,
+        lock,
+        newKey: () => `key-${++keys}`,
+      })
+      return { layer, tags: layer.get(tags), notes: layer.get(notes) }
+    }
+    return { server, a: tab(), b: tab() }
+  }
+
+  it(`does not let one tab send a note before a tag the other tab queued`, async () => {
+    const { server, a, b } = twoTabs()
+    server.state.offline = true
+    await a.tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
+    await a.notes.outbox.submit({
+      kind: `create`,
+      entityId: `n1`,
+      payload: note(`Note`, [`t-new`]),
+    })
+    server.state.offline = false
+
+    // Tab B never saw the tag queue; its own copy of it is empty.
+    await b.notes.outbox.flush()
+
+    expect(server.names()).toEqual([])
+    await b.layer.flush()
+    expect(server.names()).toEqual([`tag.create`, `note.create`])
+  })
+
+  it(`sends each entry once, parents first, when both tabs flush at the same time`, async () => {
+    const { server, a, b } = twoTabs()
+    server.state.offline = true
+    await a.notes.outbox.submit({
+      kind: `create`,
+      entityId: `n1`,
+      payload: note(`Note`, [`t-new`]),
+    })
+    await a.tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
+    server.state.offline = false
+
+    await Promise.all([a.layer.flush(), b.layer.flush(), b.notes.outbox.flush()])
+
+    expect(server.names()).toEqual([`tag.create`, `note.create`])
+  })
+})
+
+describe(`a flush for the sync runner`, () => {
+  it(`answers nothing once every queue is sent`, async () => {
+    const { server, tags, layer } = setup()
+    server.state.offline = true
+    await tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
+    server.state.offline = false
+    const flush = layer.syncFlush
+
+    expect(await flush()).toBeUndefined()
+    expect(server.names()).toEqual([`tag.create`])
+  })
+
+  it(`answers unreachable while an entry that nothing holds back is still pending`, async () => {
+    const { server, tags, notes, layer } = setup()
+    server.state.lose = true
+    await tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
+    await notes.outbox.submit({ kind: `create`, entityId: `n1`, payload: note(`Note`, [`t-new`]) })
+
+    expect(await layer.syncFlush()).toBe(`unreachable`)
+  })
+
+  it(`answers unreachable for a free entry even while another is held back`, async () => {
+    const { server, tags, notes, layer } = setup()
+    server.state.tags.set(`t1`, { id: `t1`, version: 5, name: `Theirs` })
+    server.state.offline = true
+    await tags.outbox.submit({
+      kind: `update`,
+      entityId: `t1`,
+      payload: { name: `Mine` },
+      version: 2,
+    })
+    await notes.outbox.submit({ kind: `create`, entityId: `n-waits`, payload: note(`W`, [`t1`]) })
+    server.state.offline = false
+    server.state.refuse = (name) => name === `tag.update` ? refusal(VERSION_CONFLICT) : undefined
+    await layer.flush()
+    server.state.lose = true
+    server.state.refuse = undefined
+    await notes.outbox.submit({ kind: `create`, entityId: `n-free`, payload: note(`F`) })
+
+    expect(await layer.syncFlush()).toBe(`unreachable`)
+  })
+
+  it(`does not answer unreachable for a note that waits for the person's choice about a tag`, async () => {
+    const { server, tags, notes, layer } = setup()
+    server.state.tags.set(`t1`, { id: `t1`, version: 5, name: `Theirs` })
+    server.state.offline = true
+    await tags.outbox.submit({
+      kind: `update`,
+      entityId: `t1`,
+      payload: { name: `Mine` },
+      version: 2,
+    })
+    await notes.outbox.submit({ kind: `create`, entityId: `n1`, payload: note(`Note`, [`t1`]) })
+    server.state.offline = false
+    server.state.refuse = (name) => name === `tag.update` ? refusal(VERSION_CONFLICT) : undefined
+
+    expect(await layer.syncFlush()).toBeUndefined()
+    expect(layer.waiting().map((w) => w.onPerson)).toEqual([true])
+  })
+})
+
+describe(`a cleanup that fails`, () => {
+  it(`still answers withdraw, and leaves the failure to the next flush`, async () => {
+    const h = setup()
+    h.server.state.offline = true
+    await h.tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
+    await h.notes.outbox.submit({ kind: `create`, entityId: `n1`, payload: note(`One`, [`t-new`]) })
+    h.stores.notes.putEntry = () => Promise.reject(new Error(`disk full`))
+
+    const withdrawn = await h.tags.outbox.withdraw(`t-new`)
+
+    expect(withdrawn).toBe(true)
+    expect(h.tags.outbox.entries()).toEqual([])
+  })
+
+  it(`still settles useTheirs when the cleanup fails`, async () => {
+    const h = setup()
+    h.server.state.offline = true
+    await h.tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
+    await h.notes.outbox.submit({ kind: `create`, entityId: `n1`, payload: note(`One`, [`t-new`]) })
+    h.server.state.offline = false
+    refuseTagCreates(h.server)
+    await h.layer.flush()
+    h.stores.notes.putEntry = () => Promise.reject(new Error(`disk full`))
+
+    await h.tags.outbox.useTheirs(h.tags.outbox.entries()[0])
+
+    expect(h.tags.outbox.entries()).toEqual([])
   })
 })
 
