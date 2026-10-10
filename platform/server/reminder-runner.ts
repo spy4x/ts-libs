@@ -20,10 +20,11 @@
  *    sent twice. A reminder that keeps failing is dropped once it is older than `catchUpMs`.
  *  - A tick has a deadline (`tickTimeoutMs`, two minutes by default). A `listTasks`, `notify` or
  *    state call that has not settled by then is abandoned and reported, its abort signal fires,
- *    and the next tick runs as usual. So a call that never settles cannot stop the runner or
- *    hang `stop()`.
+ *    and the next tick runs as usual. So a call that never settles cannot stop the runner.
  *  - The very first run, with no stored state, starts from "now" and sends nothing older.
- *  - `stop()` clears the timer and waits for a running tick.
+ *  - `stop()` clears the timer and ends a running tick: the tick's abort signal fires, the
+ *    `listTasks` or `notify` in flight is no longer waited for, and nothing more is started. A
+ *    read or write of the state that is in flight is finished first, so what was sent is saved.
  *
  * The clock and the timer are parameters, so a test needs no real time. Runs on any runtime:
  * nothing here touches `Deno.*`.
@@ -92,7 +93,7 @@ export type ReminderNotifyResult = "delivered" | "retry" | "drop"
 export interface ReminderRunnerOptions {
   /**
    * The iCalendar text of every task that may carry a reminder, read fresh on each call. The
-   * signal aborts when the tick's deadline passes: hand it to `fetch`.
+   * signal aborts when the tick's deadline passes or the runner is stopped: hand it to `fetch`.
    */
   listTasks: (signal: AbortSignal) => Promise<readonly string[]> | readonly string[]
   /**
@@ -103,7 +104,7 @@ export interface ReminderRunnerOptions {
    * when no device is subscribed: otherwise the devices that work get it again each minute while
    * one keeps failing. Answer `"retry"` only when every device failed for a reason that may pass.
    * `createReminderNotify` in `@spy4x/integrations/push-reminders` does exactly this for a Web
-   * Push sender. The signal aborts when the tick's deadline passes.
+   * Push sender. The signal aborts when the tick's deadline passes or the runner is stopped.
    */
   notify: (
     reminder: DueReminder,
@@ -142,7 +143,13 @@ export interface ReminderRunnerOptions {
 export interface ReminderRunner {
   /** Runs a tick now and then one every interval. A second call while started does nothing. */
   start(): void
-  /** Clears the timer and resolves when a running tick has finished. Never rejects. */
+  /**
+   * Clears the timer and ends a running tick: its abort signal fires, the `listTasks` or `notify`
+   * in flight is no longer waited for, and nothing more is started. A tick that was cut short
+   * tells `onError` once; its reminders are sent by the next tick or after a restart. A read or
+   * write of the state that is in flight is finished first, within the tick's deadline. Resolves
+   * when the tick has ended and no timer is left. Never rejects.
+   */
   stop(): Promise<void>
   /**
    * Runs one tick now, or joins the one that is running. Never rejects: failures go to `onError`.
@@ -201,9 +208,22 @@ export function createReminderRunner(options: ReminderRunnerOptions): ReminderRu
   let running: Promise<void> | undefined
   let handle: number | undefined
   let started = false
+  /** Fires the signal of the running tick, for `stop()`. */
+  let cutShort: (() => void) | undefined
 
-  /** Runs `work`, giving up when the tick's deadline passes. */
+  /** Starts `work` and waits for it, or rejects with the signal's reason once the signal fired. */
   type Within = <T>(work: () => Promise<T> | T) => Promise<T>
+
+  function until(signal: AbortSignal): Within {
+    const fired = new Promise<never>((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+    })
+    // Nothing may be waiting on it when the signal fires.
+    fired.catch(() => {})
+    // `work` starts in this very turn or never, so nothing begins after the signal fired.
+    return <T>(work: () => Promise<T> | T): Promise<T> =>
+      signal.aborted ? fired : Promise.race([new Promise<T>((resolve) => resolve(work())), fired])
+  }
 
   async function save(within: Within, lastRunAt: number, sent: Map<string, number>): Promise<void> {
     try {
@@ -214,28 +234,33 @@ export function createReminderRunner(options: ReminderRunnerOptions): ReminderRu
   }
 
   async function runTick(): Promise<void> {
-    const controller = new AbortController()
-    const expired = new Promise<never>((_, reject) => {
-      controller.signal.addEventListener("abort", () => {
-        reject(new Error(`the tick took longer than ${tickTimeoutMs} ms and was abandoned`))
-      })
-    })
-    // Nothing may be waiting on it when the deadline passes.
-    expired.catch(() => {})
-    const deadline = timers.set(() => controller.abort(), tickTimeoutMs)
-    const within: Within = (work) => Promise.race([Promise.resolve().then(work), expired])
+    // `late` fires at the tick's deadline. `calls` is the signal of `listTasks` and `notify`: it
+    // fires at the deadline too, and on `stop()`.
+    const late = new AbortController()
+    const calls = new AbortController()
+    const deadline = timers.set(() => {
+      const error = new Error(`the tick took longer than ${tickTimeoutMs} ms and was abandoned`)
+      late.abort(error)
+      calls.abort(error)
+    }, tickTimeoutMs)
+    cutShort = () => calls.abort(new Error("the runner was stopped before the tick finished"))
     try {
-      await runSteps(within, controller.signal)
+      await runSteps(calls.signal, late.signal)
     } finally {
+      cutShort = undefined
       timers.clear(deadline)
     }
   }
 
-  async function runSteps(within: Within, signal: AbortSignal): Promise<void> {
+  async function runSteps(signal: AbortSignal, late: AbortSignal): Promise<void> {
+    // A call of the caller's ends with its signal. The state is the runner's own record, so a
+    // read or write of it is given up at the deadline only: a stop waits for it.
+    const within = until(signal)
+    const state = until(late)
     if (!memory) {
       let loaded: unknown
       try {
-        loaded = await within(() => port.load())
+        loaded = await state(() => port.load())
       } catch (error) {
         return report(error, "load-state")
       }
@@ -277,7 +302,7 @@ export function createReminderRunner(options: ReminderRunnerOptions): ReminderRu
         result = await within(() => notify(reminder, signal))
       } catch (error) {
         report(error, "notify")
-        // Past the deadline nothing more is started: the window stays open for the next tick.
+        // Past the deadline, or after a stop, nothing more is started: the window stays open.
         if (signal.aborted) return
         delivered = false
         continue
@@ -292,12 +317,12 @@ export function createReminderRunner(options: ReminderRunnerOptions): ReminderRu
       }
       memory.sent.set(reminder.key, reminder.at.getTime())
       // Saved at once, so a crash later in this tick does not send it again.
-      await save(within, after, memory.sent)
-      if (signal.aborted) return
+      await save(state, after, memory.sent)
+      if (late.aborted) return
     }
     // The window is closed only when everything in it was delivered.
     memory.lastRunAt = delivered ? now : after
-    await save(within, memory.lastRunAt, memory.sent)
+    await save(state, memory.lastRunAt, memory.sent)
   }
 
   function tick(): Promise<void> {
@@ -328,6 +353,7 @@ export function createReminderRunner(options: ReminderRunnerOptions): ReminderRu
       started = false
       if (handle !== undefined) timers.clear(handle)
       handle = undefined
+      cutShort?.()
       await running
     },
   }

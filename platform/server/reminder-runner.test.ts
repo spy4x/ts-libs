@@ -620,16 +620,21 @@ describe("reminder runner: a call that never settles", () => {
     expect(calls).toEqual(["a false", "a false", "b false"])
   })
 
-  it("does not hang stop on a call that never settles", async () => {
-    const { world, runner } = setup("2026-10-12T10:00:00Z", { listTasks: never })
+  it("waits on stop for a state save that never settles, but only until the tick's deadline", async () => {
+    const { world, runner } = setup("2026-10-12T10:00:00Z")
+    world.state.save = never
     runner.start()
     await flush()
     let stopped = false
-    const stopping = runner.stop().then(() => (stopped = true))
+    void runner.stop().then(() => (stopped = true))
     await flush()
     expect(stopped).toBe(false)
     world.deadlines.runAll()
-    await stopping
+    await flush()
+    expect(stopped).toBe(true)
+    expect(world.errors).toEqual([
+      `save-state: the tick took longer than ${TICK_TIMEOUT} ms and was abandoned`,
+    ])
     expect(world.timers.pending).toBe(0)
     expect(world.deadlines.pending).toBe(0)
   })
@@ -643,6 +648,151 @@ describe("reminder runner: a call that never settles", () => {
 
   it("gives a tick two minutes by default", () => {
     expect(DEFAULT_REMINDER_TICK_TIMEOUT_MS).toBe(2 * MINUTE)
+  })
+})
+
+describe("reminder runner: stop during a tick", () => {
+  const never = () => new Promise<never>(() => {})
+  const STOPPED = "the runner was stopped before the tick finished"
+
+  it("ends a task read that never settles: its signal fires and stop resolves without the deadline", async () => {
+    const signals: AbortSignal[] = []
+    const { world, runner } = setup("2026-10-12T10:00:00Z", {
+      listTasks: (signal) => {
+        signals.push(signal)
+        return never()
+      },
+    })
+    runner.start()
+    await flush()
+    expect(signals.map((signal) => signal.aborted)).toEqual([false])
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(true)
+    expect(signals.map((signal) => signal.aborted)).toEqual([true])
+    expect(world.errors).toEqual([`list-tasks: ${STOPPED}`])
+    expect(world.timers.pending).toBe(0)
+    expect(world.deadlines.pending).toBe(0)
+  })
+
+  it("ends a notify that never settles, starts no other, and sends both after a restart", async () => {
+    let hang = true
+    const calls: string[] = []
+    const signals: AbortSignal[] = []
+    const { world, runner, again } = setup("2026-10-12T09:59:30Z", {
+      notify: (reminder, signal) => {
+        calls.push(reminder.uid)
+        signals.push(signal)
+        return hang ? never() : undefined
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z"), task("b", "20261012T100010Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    void runner.tick()
+    await flush()
+    expect(calls).toEqual(["a"])
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(true)
+    expect(signals[0].aborted).toBe(true)
+    expect(calls).toEqual(["a"])
+    expect(world.errors).toEqual([`notify: ${STOPPED}`])
+    expect(world.deadlines.pending).toBe(0)
+    hang = false
+    await again().tick()
+    expect(calls).toEqual(["a", "a", "b"])
+  })
+
+  it("finishes a state save in flight, then starts no other notify and schedules nothing", async () => {
+    const landing: (() => void)[] = []
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z"), task("b", "20261012T100010Z")]
+    await runner.tick()
+    // From here a save lands only when the test lets it.
+    const save = world.state.save
+    world.state.save = (state) =>
+      new Promise<void>((resolve) => landing.push(() => resolve(save(state))))
+    world.clock.advance(MINUTE)
+    runner.start()
+    await flush()
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(false)
+    landing.splice(0).forEach((land) => land())
+    await flush()
+    expect(stopped).toBe(true)
+    expect((world.state.stored as ReminderRunnerState).sent).toEqual({
+      "a|2026-10-12T10:00:00.000Z": at("2026-10-12T10:00:00Z"),
+    })
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+    expect(world.errors).toEqual([`notify: ${STOPPED}`])
+    expect(world.timers.pending).toBe(0)
+    expect(world.deadlines.pending).toBe(0)
+  })
+
+  it("finishes a state load in flight, then starts no task read", async () => {
+    const landing: (() => void)[] = []
+    const { world, runner } = setup("2026-10-12T10:00:00Z")
+    world.state.load = () => new Promise<unknown>((resolve) => landing.push(() => resolve(null)))
+    runner.start()
+    await flush()
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(false)
+    landing.splice(0).forEach((land) => land())
+    await flush()
+    expect(stopped).toBe(true)
+    expect(world.listed).toBe(0)
+    expect(world.errors).toEqual([`list-tasks: ${STOPPED}`])
+  })
+
+  it("starts a call before the stop or never: a tick and a stop in the same turn", async () => {
+    const seen: boolean[] = []
+    let hang = false
+    const { runner } = setup("2026-10-12T10:00:00Z", {
+      listTasks: (signal) => {
+        seen.push(signal.aborted)
+        return hang ? never() : []
+      },
+    })
+    await runner.tick()
+    hang = true
+    void runner.tick()
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(true)
+    expect(seen).toEqual([false, false])
+  })
+
+  it("reports nothing when the tick had nothing left to start", async () => {
+    const landing: (() => void)[] = []
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    const save = world.state.save
+    world.state.save = (state) =>
+      new Promise<void>((resolve) => landing.push(() => resolve(save(state))))
+    world.clock.advance(MINUTE)
+    void runner.tick()
+    await flush()
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    // Two saves are left: the one of the reminder, then the one that closes the window.
+    for (let saves = 0; saves < 2; saves++) {
+      await flush()
+      landing.splice(0).forEach((land) => land())
+    }
+    await flush()
+    expect(stopped).toBe(true)
+    expect(world.errors).toEqual([])
+    expect((world.state.stored as ReminderRunnerState).lastRunAt).toBe(at("2026-10-12T10:00:30Z"))
   })
 })
 
@@ -740,27 +890,16 @@ describe("reminder runner: the timer", () => {
     expect(world.listed).toBe(1)
   })
 
-  it("waits for a running tick on stop and schedules nothing after it", async () => {
-    const waiting: (() => void)[] = []
-    let finished = false
+  it("resolves stop only when the running tick has ended, and schedules nothing after it", async () => {
+    const order: string[] = []
     const { world, runner } = setup("2026-10-12T10:00:00Z", {
-      listTasks: () =>
-        new Promise<string[]>((resolve) =>
-          waiting.push(() => {
-            finished = true
-            resolve([])
-          })
-        ),
+      listTasks: () => new Promise<string[]>(() => {}),
+      onError: () => order.push("tick ended"),
     })
     runner.start()
     await flush()
-    let stopped = false
-    const stopping = runner.stop().then(() => (stopped = true))
-    await flush()
-    expect(stopped).toBe(false)
-    waiting.splice(0).forEach((open) => open())
-    await stopping
-    expect(finished).toBe(true)
+    await runner.stop().then(() => order.push("stop resolved"))
+    expect(order).toEqual(["tick ended", "stop resolved"])
     await flush()
     expect(world.timers.pending).toBe(0)
   })
@@ -768,8 +907,8 @@ describe("reminder runner: the timer", () => {
   it("can be started again after a stop", async () => {
     const { world, runner } = setup("2026-10-12T10:00:00Z")
     runner.start()
-    await runner.stop()
     await flush()
+    await runner.stop()
     expect(world.listed).toBe(1)
     expect(world.timers.pending).toBe(0)
     runner.start()
