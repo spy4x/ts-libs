@@ -15,6 +15,7 @@
     "./browser/indexeddb": "./browser/indexeddb.ts",
     "./browser/offline-shell": "./browser/offline-shell.ts",
     "./browser/persistent-storage": "./browser/persistent-storage.ts",
+    "./browser/runtime-config": "./browser/runtime-config.ts",
     "./browser/storage": "./browser/storage.ts",
     "./cache": "./cache/mod.ts",
     "./cqrs": "./cqrs/mod.ts",

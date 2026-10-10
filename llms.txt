@@ -715,6 +715,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ClipboardDocument` (interface), `jsr:@spy4x/platform/browser`: The document surface the legacy `execCommand("copy")` path needs.
 - `ClipboardWriter` (interface), `jsr:@spy4x/platform/browser`: The one clipboard method this helper calls.
 - `CopyToClipboardOptions` (interface), `jsr:@spy4x/platform/browser`: Where copyToClipboard writes.
+- `DEFAULT_RUNTIME_CONFIG_URL` (constant), `jsr:@spy4x/platform/browser`: Where loadRuntimeConfig looks when the caller names no other address.
 - `DataCache` (interface), `jsr:@spy4x/platform/browser`: The durable cache: see the module documentation.
 - `DataCacheOp` (type), `jsr:@spy4x/platform/browser`: One step of DataCache.batch.
 - `DataCacheOptions` (interface), `jsr:@spy4x/platform/browser`: Options of createDataCache.
@@ -734,6 +735,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `HotkeyEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that matchesHotkey reads.
 - `HotkeyMatcherOptions` (interface), `jsr:@spy4x/platform/browser`: Options for createHotkeyMatcher.
 - `HotkeySequenceEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that createHotkeyMatcher reads.
+- `LoadRuntimeConfigOptions` (interface), `jsr:@spy4x/platform/browser`: What loadRuntimeConfig needs besides the schema.
 - `MakeStorageOptions` (interface), `jsr:@spy4x/platform/browser`: Options for makeStorage.
 - `ObjectUrlAdapter` (interface), `jsr:@spy4x/platform/browser`: Object-URL surface, injected so a test never allocates a real blob URL.
 - `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser`: Options of installOfflineShell.
@@ -768,6 +770,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `isTypingTarget` (function), `jsr:@spy4x/platform/browser`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
 - `isUnderPath` (function), `jsr:@spy4x/platform/browser`: Whether `pathname` is `base` or below it (`/api` matches `/api` and `/api/x`, not `/apix`).
 - `linkedPaths` (function), `jsr:@spy4x/platform/browser`: Same-origin paths named by `src="..."` and `href="..."` in `html`.
+- `loadRuntimeConfig` (function), `jsr:@spy4x/platform/browser`: Fetches `url` and validates the JSON with `schema`.
 - `makeStorage` (function), `jsr:@spy4x/platform/browser`: Bind a StorageLike to one key.
 - `matchesHotkey` (function), `jsr:@spy4x/platform/browser`: Whether a key press is the combination.
 - `memoryStorage` (function), `jsr:@spy4x/platform/browser`: A `Map`-backed StorageLike.
@@ -862,6 +865,12 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `PersistentStorageManager` (interface), `jsr:@spy4x/platform/browser/persistent-storage`: The part of a browser's `StorageManager` this module uses.
 - `requestPersistentStorage` (function), `jsr:@spy4x/platform/browser/persistent-storage`: Resolves `true` when this site's storage is persistent, asking the browser if it is not yet.
+
+### `jsr:@spy4x/platform/browser/runtime-config`
+
+- `DEFAULT_RUNTIME_CONFIG_URL` (constant), `jsr:@spy4x/platform/browser/runtime-config`: Where loadRuntimeConfig looks when the caller names no other address.
+- `LoadRuntimeConfigOptions` (interface), `jsr:@spy4x/platform/browser/runtime-config`: What loadRuntimeConfig needs besides the schema.
+- `loadRuntimeConfig` (function), `jsr:@spy4x/platform/browser/runtime-config`: Fetches `url` and validates the JSON with `schema`.
 
 ### `jsr:@spy4x/platform/browser/storage`
 
@@ -2696,4 +2705,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 c55275b3bef3abafd3c23f6a5f68ec100cd80976ba3535ea842a6d13ab29fb20 -->
+<!-- export surface: sha256 56cfe420232cfe1f345dff402458b99d003f48fab10ab2e82f685ef39e0af2d5 -->
