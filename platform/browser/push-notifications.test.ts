@@ -130,6 +130,18 @@ describe("push notifications: showing a push", () => {
     ])
   })
 
+  it("ignores a key it does not know and shows the rest, still checking the keys it knows", async () => {
+    const { world, push } = setup()
+    await push({ title: "Hello", tag: "t", image: "/x.png", actions: [{ action: "x" }] })
+    expect(world.shown).toEqual([{
+      title: "Hello",
+      options: { tag: "t", data: { url: `${ORIGIN}/` } },
+    }])
+    await push({ title: "Hello", tag: "", image: "/x.png" })
+    await push({ title: 7, image: "/x.png" })
+    expect(world.shown).toHaveLength(1)
+  })
+
   it("adds the icon and the badge it was installed with", async () => {
     const { world, push } = setup({ icon: "/icon-192.png", badge: "/badge.png" })
     await push({ title: "Hello" })
@@ -168,7 +180,6 @@ describe("push notifications: showing a push", () => {
     ["no title", { body: "Due now" }],
     ["an empty title", { title: "" }],
     ["a title that is not text", { title: { toString: () => "x" } }],
-    ["an unknown field", { title: "Hello", actions: [{ action: "x", title: "y" }] }],
     ["a title over 120 characters", { title: "a".repeat(121) }],
     ["a tag over 256 characters", { title: "Hello", tag: "a".repeat(257) }],
     ["a URL that is not text", { title: "Hello", url: { href: "/x" } }],
@@ -263,6 +274,33 @@ describe("push notifications: clicking a notification", () => {
     const { world, pushAndClick } = setup()
     await pushAndClick({ title: "Hello", url: "/tasks/7" })
     expect(world.closed).toBe(1)
+  })
+
+  it("holds the click event open until the window is open", async () => {
+    const listeners = new Map<string, (event: PushClickEvent) => void>()
+    let opened: () => void = () => {}
+    const scope: PushScope = {
+      location: { origin: ORIGIN },
+      registration: { showNotification: () => Promise.resolve() },
+      clients: {
+        matchAll: () => Promise.resolve([]),
+        openWindow: () => new Promise<null>((resolve) => (opened = () => resolve(null))),
+      },
+      addEventListener: (type, listener) => void listeners.set(type, listener),
+    }
+    installPushNotifications(scope)
+    const waited: Promise<unknown>[] = []
+    listeners.get("notificationclick")!({
+      notification: { close: () => {}, data: { url: `${ORIGIN}/tasks/7` } },
+      waitUntil: (promise) => void waited.push(promise),
+    })
+    expect(waited).toHaveLength(1)
+    let settled = false
+    void waited[0].then(() => (settled = true))
+    for (let turn = 0; turn < 5; turn++) await Promise.resolve()
+    expect(settled).toBe(false)
+    opened()
+    await waited[0]
   })
 
   it("opens a new window at the URL when the app has none open", async () => {
