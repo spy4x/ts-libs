@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/caldav",
-  "version": "1.56.0",
+  "version": "1.57.0",
   "exports": {
     ".": "./client.ts",
     "./xml": "./xml.ts",
