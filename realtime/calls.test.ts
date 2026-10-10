@@ -273,6 +273,12 @@ describe("the HTTP port", () => {
     await expect(port(fetcher).query("x")).rejects.toBeInstanceOf(ConnectionLostError)
   })
 
+  it("treats a 2xx JSON body without a result key as a lost connection", async () => {
+    const { fetcher } = recordingFetch(Response.json({ ok: true }))
+
+    await expect(port(fetcher).query("x")).rejects.toBeInstanceOf(ConnectionLostError)
+  })
+
   it("gives a 4xx without an error body the code its status stands for", async () => {
     const codes: Record<number, string> = {
       400: "bad_request",
@@ -567,7 +573,7 @@ describe("sendCommand", () => {
     expect(sent).toHaveLength(3)
   })
 
-  it("waits longer before each further try, from backoffDelay", async () => {
+  it("doubles the wait before each further try, from backoffDelay", async () => {
     const { port } = scriptedPort([
       new ConnectionLostError("a"),
       new ConnectionLostError("b"),
@@ -578,7 +584,6 @@ describe("sendCommand", () => {
 
     await sendCommand(port, "x", {}, {
       delayMs: 100,
-      maxDelayMs: 300,
       random: () => 1,
       sleep: (ms) => {
         waits.push(ms)
@@ -586,7 +591,29 @@ describe("sendCommand", () => {
       },
     })
 
-    expect(waits).toEqual([100, 200, 300])
+    expect(waits).toEqual([100, 200, 400])
+  })
+
+  it("never waits longer than maxDelayMs", async () => {
+    const { port } = scriptedPort([
+      new ConnectionLostError("a"),
+      new ConnectionLostError("b"),
+      new ConnectionLostError("c"),
+      { ok: 1 },
+    ])
+    const waits: number[] = []
+
+    await sendCommand(port, "x", {}, {
+      delayMs: 100,
+      maxDelayMs: 150,
+      random: () => 1,
+      sleep: (ms) => {
+        waits.push(ms)
+        return Promise.resolve()
+      },
+    })
+
+    expect(waits).toEqual([100, 150, 150])
   })
 
   it("takes the jitter from the random source, never above the plain wait", async () => {
