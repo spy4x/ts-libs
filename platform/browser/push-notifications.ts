@@ -128,7 +128,7 @@ export function installPushNotifications(
     } catch {
       return
     }
-    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return
+    if (typeof payload !== "object" || payload === null) return
     const message = pushNotificationMessageSchema(
       Object.fromEntries(
         KNOWN_KEYS.filter((key) => key in payload).map((key) => [key, payload[key]]),
