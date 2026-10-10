@@ -1,6 +1,11 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { createErrorReporter, type ErrorReporterOptions, parseDsn } from "./error-reporter.ts"
+import {
+  createErrorReporter,
+  type ErrorReporterOptions,
+  parseDsn,
+  scrubUrl,
+} from "./error-reporter.ts"
 
 const DSN = "https://abc123@errors.example.com/7"
 
@@ -220,6 +225,51 @@ describe("a report's free text", () => {
     expect(event.exception.values[0].value).toContain("wss://app.example.com/socket")
   })
 
+  it("masks a lone Bearer value, a URL's credentials and a secret path segment", async () => {
+    const { sent, reporter } = setup({ redactPathAfter: ["invite"] })
+    const error = new Error(
+      [
+        "Bearer BEARERX",
+        "GET https://user:PASSX@app.example.com/x failed",
+        "open https://app.example.com/invite/INVX failed",
+        "connect postgres://app:PGX@db:5432/app failed",
+      ].join("\n"),
+    )
+
+    await reporter.report(error)
+
+    const body = String(sent[0].init.body)
+    for (const secret of ["BEARERX", "PASSX", "INVX", "PGX"]) {
+      expect(body, secret).not.toContain(secret)
+    }
+    expect(eventOf(sent[0]).exception.values[0].value).toContain("postgres://db:5432/app")
+  })
+
+  it("keeps the scheme of a server's stack frame", async () => {
+    const { sent, reporter } = setup()
+    const error = new Error("x")
+    error.stack = "Error: x\n    at f (file:///app/main.ts:3:5)\n" +
+      "    at node:internal/process/task_queues:95:5"
+
+    await reporter.report(error)
+
+    const frames = eventOf(sent[0]).exception.values[0].stacktrace.frames
+    expect(frames.map((f: { filename: string }) => f.filename)).toEqual([
+      "node:internal/process/task_queues",
+      "file:///app/main.ts",
+    ])
+  })
+
+  it("masks a secret in the name of the thrown error type", async () => {
+    const { sent, reporter } = setup()
+    const error = new Error("x")
+    error.name = "Failed token=TYPEX"
+
+    await reporter.report(error)
+
+    expect(String(sent[0].init.body)).not.toContain("TYPEX")
+  })
+
   it("masks a 100,000-character message in under a second, cut to a fixed length", async () => {
     const { sent, reporter } = setup()
     const error = new Error("a-".repeat(50_000))
@@ -351,5 +401,12 @@ describe("install", () => {
       "from error",
       "from promise",
     ])
+  })
+})
+
+describe("scrubUrl", () => {
+  it("cuts a relative address at its query or fragment", () => {
+    expect(scrubUrl("/assets/a.js?v=SECRETX")).toBe("/assets/a.js")
+    expect(scrubUrl("a.js#SECRETX")).toBe("a.js")
   })
 })

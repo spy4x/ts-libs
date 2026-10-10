@@ -113,7 +113,11 @@ export function scrubUrl(url: string, redactPathAfter: string[] = []): string {
     for (let i = 1; i < segments.length; i++) {
       if (redactPathAfter.includes(segments[i - 1]) && segments[i]) segments[i] = MASK
     }
-    return `${parsed.origin}${segments.join("/")}`
+    // `origin` is "null" for every scheme but http(s) and ws(s), such as `file:` or `postgres:`.
+    const origin = parsed.origin !== "null"
+      ? parsed.origin
+      : `${parsed.protocol}${/^[^:]+:\/\//.test(url) ? `//${parsed.host}` : ""}`
+    return `${origin}${segments.join("/")}`
   } catch {
     // Not an absolute URL, such as a relative script path: cut it at the query or fragment.
     return url.split(/[?#]/)[0]
@@ -128,7 +132,7 @@ export function scrubText(text: string, redactPathAfter: string[] = []): string 
   return text.slice(0, MAX_TEXT)
     // A header line is secret to its end: `Cookie: a=1; b=2`, `Authorization: Basic …`.
     .replace(/\b(authorization|proxy-authorization|set-cookie|cookie)\s*:[^\n]*/gi, `$1: ${MASK}`)
-    .replace(/(?:https?|wss?):\/\/[^\s"'<>)]+/gi, (url) => scrubUrl(url, redactPathAfter))
+    .replace(/\b[a-z][a-z\d+.-]{0,30}:\/\/[^\s"'<>)]+/gi, (url) => scrubUrl(url, redactPathAfter))
     // A relative path loses its query and fragment: `GET /reset?code=…`.
     .replace(/(^|[\s"'(=:[])(\/[^\s"'<>)?#]*)[?#][^\s"'<>)]*/g, "$1$2")
     .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]*/g, MASK)
