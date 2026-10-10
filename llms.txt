@@ -1450,9 +1450,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ApplyOutcome` (type), `jsr:@spy4x/realtime`: Outcome of applying one pushed sequence.
 - `ApplyStatus` (enum), `jsr:@spy4x/realtime`: What the cursor tracker decided about one pushed sequence.
 - `AuthGateError` (class), `jsr:@spy4x/realtime`: The reconnect gate refused.
+- `AvailableCallPort` (interface), `jsr:@spy4x/realtime`: A CallPort that can say whether it can carry a call right now.
 - `BackoffConfig` (interface), `jsr:@spy4x/realtime`: Shape of the backoff schedule.
 - `BackoffOptions` (interface), `jsr:@spy4x/realtime`: One call's inputs.
 - `CallOptions` (interface), `jsr:@spy4x/realtime`: Options for one ClientTransport.query.
+- `CallPort` (interface), `jsr:@spy4x/realtime`: The two calls a page makes.
+- `CallPortCommandOptions` (interface), `jsr:@spy4x/realtime`: Options for one CallPort.command.
+- `CallPortOptions` (interface), `jsr:@spy4x/realtime`: Options for one CallPort.query.
 - `ChangeHint` (interface), `jsr:@spy4x/realtime`: A hint that a group moved to `sequence`.
 - `ClientCommandMessage` (interface), `jsr:@spy4x/realtime`: A request for the server to do something: change state.
 - `ClientMessage` (type), `jsr:@spy4x/realtime`: Frames a client sends: liveness, the sync handshake, and requests.
@@ -1464,6 +1468,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `CloseHandler` (type), `jsr:@spy4x/realtime`
 - `CloseReason` (enum), `jsr:@spy4x/realtime`: Why a connection left the registry.
 - `CommandOptions` (interface), `jsr:@spy4x/realtime`: Options for one ClientTransport.command.
+- `ComposedCallPortOptions` (interface), `jsr:@spy4x/realtime`: Options of createComposedCallPort.
 - `ConnectTimeoutError` (class), `jsr:@spy4x/realtime`: A socket did not open inside the connect-attempt timeout.
 - `ConnectionHandle` (interface), `jsr:@spy4x/realtime`: Identifies one socket of one user.
 - `ConnectionLostError` (class), `jsr:@spy4x/realtime`: The socket closed while a request was outstanding, or a send was attempted while closed.
@@ -1479,6 +1484,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `GapReport` (interface), `jsr:@spy4x/realtime`: A non-contiguous sequence, with the cursor a pull must resume from.
 - `GateResult` (interface), `jsr:@spy4x/realtime`: Outcome of the reconnect gate — typically `GET /api/auth/me`.
 - `HandshakeAcknowledgedEvent` (interface), `jsr:@spy4x/realtime`: Delivered to `onHandshakeAcknowledged` listeners.
+- `HttpCallPortOptions` (interface), `jsr:@spy4x/realtime`: Options of createHttpCallPort.
 - `KeyValueStore` (type), `jsr:@spy4x/realtime`: Minimal synchronous key/value store.
 - `MalformedFrame` (interface), `jsr:@spy4x/realtime`: A frame that could not be decoded, or arrived in the wrong direction.
 - `MalformedFrameHandler` (type), `jsr:@spy4x/realtime`
@@ -1501,11 +1507,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `RequestDispatcher` (type), `jsr:@spy4x/realtime`: Answers one request.
 - `RequestOptions` (interface), `jsr:@spy4x/realtime`: Options for one ack-tracked ClientTransport.request.
 - `RequestTimeoutError` (class), `jsr:@spy4x/realtime`: No answer to a command or query arrived in time.
+- `RetryOptions` (interface), `jsr:@spy4x/realtime`: Options of sendCommand and sendQuery.
 - `SEQUENCE_START` (constant), `jsr:@spy4x/realtime`: The empty cursor, and the "from the beginning" floor.
 - `SequenceChange` (interface), `jsr:@spy4x/realtime`: A pushed change, reduced to the only fields correctness depends on.
 - `ServerErrorMessage` (interface), `jsr:@spy4x/realtime`: A failed answer to a request, correlated by `requestId`.
 - `ServerMessage` (type), `jsr:@spy4x/realtime`: Frames a server sends.
 - `ServerResultMessage` (interface), `jsr:@spy4x/realtime`: A successful answer to a request, correlated by `requestId`.
+- `SocketCallTransport` (interface), `jsr:@spy4x/realtime`: The part of ClientTransport the socket port needs.
 - `SocketCloseInfo` (interface), `jsr:@spy4x/realtime`: Why and how a socket stopped.
 - `SocketFactory` (type), `jsr:@spy4x/realtime`: Creates a socket for a URL.
 - `SocketObserverPort` (interface), `jsr:@spy4x/realtime`: The inbound half of a socket, as a subscription API rather than `on*` properties.
@@ -1519,18 +1527,43 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `UserFanout` (interface), `jsr:@spy4x/realtime`: The only fan-out capability the notify path is given: explicit recipients.
 - `WireMessage` (type), `jsr:@spy4x/realtime`: Any frame in either direction.
 - `adaptWebSocket` (function), `jsr:@spy4x/realtime`: Wraps a platform `WebSocket` (or anything shaped like one) so it satisfies ManagedSocket.
+- `createComposedCallPort` (function), `jsr:@spy4x/realtime`: Prefers the socket while it is open and uses HTTP otherwise.
 - `createError` (function), `jsr:@spy4x/realtime`: Build the failure answer to request `requestId`.
 - `createHint` (function), `jsr:@spy4x/realtime`: Build the hint a committed change is announced with.
+- `createHttpCallPort` (function), `jsr:@spy4x/realtime`: Fills the port with `fetch`: `POST <baseUrl>/<name>` with the payload as JSON.
 - `createJsonCodec` (function), `jsr:@spy4x/realtime`: JSON codec over the arktype schemas above.
 - `createResult` (function), `jsr:@spy4x/realtime`: Build the success answer to request `requestId`.
+- `createSocketCallPort` (function), `jsr:@spy4x/realtime`: Fills the port with a client transport.
 - `createSystemClock` (function), `jsr:@spy4x/realtime`: Clock backed by the platform timers.
 - `createWebSocketFactory` (function), `jsr:@spy4x/realtime`: SocketFactory over the platform `WebSocket` constructor.
 - `findUndeclaredKey` (function), `jsr:@spy4x/realtime`: First own string key of `value` that `declared` does not list, or `null`.
 - `isChangeHint` (function), `jsr:@spy4x/realtime`: Whether a frame is a change hint, narrowing it for a caller that has already decoded.
 - `isRealtimeErrorCode` (function), `jsr:@spy4x/realtime`: Whether an unknown value is one of the closed error codes.
+- `isRetryable` (function), `jsr:@spy4x/realtime`: Whether the outcome of a call is unknown or the server was busy, so trying again can help: the answer did not arrive in time, the connection dropped, the server gave up, or it is still running the first try of the same command.
 - `mapReadyState` (function), `jsr:@spy4x/realtime`: Maps one native `readyState` value to this package's SocketState.
 - `nextBackoffDelay` (function), `jsr:@spy4x/realtime`: Delay before retry `attempt`, in milliseconds.
+- `sendCommand` (function), `jsr:@spy4x/realtime`: Sends a command with a fresh idempotency key and, when the outcome is unknown, sends it again with the same key.
+- `sendQuery` (function), `jsr:@spy4x/realtime`: Sends a query, trying again when the connection is down or the answer is late.
 - `toWireCursors` (function), `jsr:@spy4x/realtime`: Snapshot of the cursors a handshake advertises, in wire form.
+- `withUnauthorizedHook` (function), `jsr:@spy4x/realtime`: Wraps any port so that a call answered with `unauthorized` calls `onUnauthorized` once, then rejects with the same error.
+
+### `jsr:@spy4x/realtime/calls`
+
+- `AvailableCallPort` (interface), `jsr:@spy4x/realtime/calls`: A CallPort that can say whether it can carry a call right now.
+- `CallPort` (interface), `jsr:@spy4x/realtime/calls`: The two calls a page makes.
+- `CallPortCommandOptions` (interface), `jsr:@spy4x/realtime/calls`: Options for one CallPort.command.
+- `CallPortOptions` (interface), `jsr:@spy4x/realtime/calls`: Options for one CallPort.query.
+- `ComposedCallPortOptions` (interface), `jsr:@spy4x/realtime/calls`: Options of createComposedCallPort.
+- `HttpCallPortOptions` (interface), `jsr:@spy4x/realtime/calls`: Options of createHttpCallPort.
+- `RetryOptions` (interface), `jsr:@spy4x/realtime/calls`: Options of sendCommand and sendQuery.
+- `SocketCallTransport` (interface), `jsr:@spy4x/realtime/calls`: The part of ClientTransport the socket port needs.
+- `createComposedCallPort` (function), `jsr:@spy4x/realtime/calls`: Prefers the socket while it is open and uses HTTP otherwise.
+- `createHttpCallPort` (function), `jsr:@spy4x/realtime/calls`: Fills the port with `fetch`: `POST <baseUrl>/<name>` with the payload as JSON.
+- `createSocketCallPort` (function), `jsr:@spy4x/realtime/calls`: Fills the port with a client transport.
+- `isRetryable` (function), `jsr:@spy4x/realtime/calls`: Whether the outcome of a call is unknown or the server was busy, so trying again can help: the answer did not arrive in time, the connection dropped, the server gave up, or it is still running the first try of the same command.
+- `sendCommand` (function), `jsr:@spy4x/realtime/calls`: Sends a command with a fresh idempotency key and, when the outcome is unknown, sends it again with the same key.
+- `sendQuery` (function), `jsr:@spy4x/realtime/calls`: Sends a query, trying again when the connection is down or the answer is late.
+- `withUnauthorizedHook` (function), `jsr:@spy4x/realtime/calls`: Wraps any port so that a call answered with `unauthorized` calls `onUnauthorized` once, then rejects with the same error.
 
 ### `jsr:@spy4x/realtime/client`
 
@@ -2717,4 +2750,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 e096c00a1c3a9aa4eb6a68a2735202fcd3c24e773de0e1ba09d287d0a4e3d6c0 -->
+<!-- export surface: sha256 db8850d431dfe9ed774384430442fa26af3cdbb8d62fb29cb2d5e9fe4faec30e -->
