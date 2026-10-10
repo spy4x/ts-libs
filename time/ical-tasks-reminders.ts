@@ -174,7 +174,7 @@ function taskReminders(ics: string, options: DueRemindersOptions): DueReminder[]
 
   const uid = todo.uid
   return [...moments]
-    // Outside what a `Date` can hold: a corrupt date, which `dateInstant` puts at the far end.
+    // Outside what a `Date` can hold, such as a trigger of millions of weeks: its ISO text would throw.
     .filter((moment) => Math.abs(moment) < 8.64e15)
     .sort((left, right) => left - right)
     .map((moment) => {

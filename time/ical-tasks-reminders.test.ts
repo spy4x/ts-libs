@@ -216,6 +216,13 @@ describe("dueReminders: what has no reminder", () => {
       .toEqual([])
   })
 
+  it("returns nothing, without throwing, for a trigger further away than a date can hold", () => {
+    const far = task(["DUE:20261012T100000Z", ...alarm("TRIGGER;RELATED=END:P99999999W")])
+    const everything = { after: new Date(-8.64e15), upTo: new Date(8.64e15) }
+    expect(moments(far, BERLIN, everything)).toEqual([])
+    expect(moments(far.replace(":P9", ":-P9"), BERLIN, everything)).toEqual([])
+  })
+
   it("refuses a dateOnlyTime that is not a time of day", () => {
     const ics = task(live)
     for (const dateOnlyTime of ["9", "24:00", "09:60", "09:00:61", "0900", ""]) {
