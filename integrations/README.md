@@ -18,14 +18,16 @@ Runs on: server (Deno).
 
 ## Entry points
 
-| Export           | What it is                                                                     |
-| ---------------- | ------------------------------------------------------------------------------ |
-| `.` (`mod.ts`)   | Barrel.                                                                        |
-| `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`      |
-| `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`       |
-| `./cloudflare`   | `purgeUrls` — Cloudflare cache purge by URL                                    |
-| `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
-| `./push`         | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
+| Export              | What it is                                                                     |
+| ------------------- | ------------------------------------------------------------------------------ |
+| `.` (`mod.ts`)      | Barrel.                                                                        |
+| `./ntfy`            | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`      |
+| `./healthchecks`    | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`       |
+| `./cloudflare`      | `purgeUrls` — Cloudflare cache purge by URL                                    |
+| `./webhooks`        | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
+| `./push`            | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
+| `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file        |
+| `./push-reminders`  | `createReminderNotify`, `reminderPushMessage`, `reminderDeliveryOutcome`       |
 
 ## Contracts
 
@@ -58,6 +60,24 @@ redirects and takes no signal. A 3xx answer is a failure and is never followed, 
 cannot send the payload to a private address. `safeFetch` was not used because it cannot carry a
 request body. Endpoints must be public HTTPS addresses; the DNS check and the connection resolve
 separately, so a DNS-rebinding race remains.
+
+An app with no database keeps its subscriptions with `createFilePushSubscriptionStore({ fs, path })`
+from `./push-file-store`: one JSON file, written atomically and readable by its owner only, at most
+20 subscriptions per user, and a corrupt file is reported, never replaced. Its `state(name)` keeps a
+small named value in the same file, such as the state of `@spy4x/platform/server/reminder-runner`.
+A message may carry a `tag`: a notification with the same tag replaces the one on screen.
+
+`./push-reminders` joins the sender to `@spy4x/platform/server/reminder-runner`:
+`createReminderNotify({ sender, userId, url })` is the runner's `notify`. It cuts a long task title
+to the 120 characters a message may have and tags the push with a hash of the reminder's key, so the
+message is always one the sender accepts; a `url` too long to be pushed beside the longest title is
+refused when the function is built. A reminder counts as delivered when at least one device got it,
+when no device is subscribed, or when every device was gone and removed. It is tried again when no
+device got it and a failure may pass (no answer, HTTP 408, 429 or 5xx, an unreadable store). When no
+device got it and every push service refused for good (HTTP 400, 401, 403, 413, as after a change of
+VAPID keys), the answer is `"drop"`: the runner reports the reminder once through its `onError` and
+leaves it. `onDeviceFailure` is told how many devices of a reminder that is not tried again failed,
+and with which HTTP status, never an endpoint or a push service's answer.
 
 ### `HealthchecksClient` — dead-man's switch
 

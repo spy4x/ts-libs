@@ -1,0 +1,966 @@
+import { expect } from "@std/expect"
+import { describe, it } from "@std/testing/bdd"
+import { fakeClock, fakeTimers } from "./_fake-fs.ts"
+import {
+  createReminderRunner,
+  DEFAULT_REMINDER_CATCH_UP_MS,
+  DEFAULT_REMINDER_INTERVAL_MS,
+  DEFAULT_REMINDER_TICK_TIMEOUT_MS,
+  type ReminderRunnerOptions,
+  type ReminderRunnerState,
+  type ReminderStatePort,
+} from "./reminder-runner.ts"
+
+const at = (iso: string) => new Date(iso).getTime()
+const MINUTE = 60_000
+
+/** A task due at `due` (UTC, `YYYYMMDDTHHMMSSZ`) with a reminder at that moment. */
+function task(uid: string, due: string, extra: string[] = []): string {
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "BEGIN:VTODO",
+    `UID:${uid}`,
+    `SUMMARY:Task ${uid}`,
+    `DUE:${due}`,
+    ...extra,
+    "BEGIN:VALARM",
+    "TRIGGER;RELATED=END:PT0S",
+    "ACTION:DISPLAY",
+    "DESCRIPTION:Reminder",
+    "END:VALARM",
+    "END:VTODO",
+    "END:VCALENDAR",
+    "",
+  ].join("\r\n")
+}
+
+/** A state port in memory that keeps a copy, as a file would, and can be told to fail. */
+function memoryState(initial: unknown = null) {
+  const port = {
+    stored: initial,
+    saves: 0,
+    failLoad: false,
+    failSave: false,
+    load(): Promise<unknown> {
+      if (port.failLoad) return Promise.reject(new Error("state unreadable"))
+      return Promise.resolve(structuredClone(port.stored))
+    },
+    save(state: ReminderRunnerState): Promise<void> {
+      if (port.failSave) return Promise.reject(new Error("disk full"))
+      port.saves++
+      port.stored = structuredClone(state)
+      return Promise.resolve()
+    },
+  }
+  return port satisfies ReminderStatePort
+}
+
+/** Lets every promise chain that is ready run on: enough turns for a whole tick over the fakes. */
+async function flush(): Promise<void> {
+  for (let turn = 0; turn < 50; turn++) await Promise.resolve()
+}
+
+/** A tick deadline no test uses as an interval, so the fake can tell the two timers apart. */
+const TICK_TIMEOUT = 90_000
+
+/** A runner over fakes, with what it was asked and what it reported. */
+function setup(start: string, overrides: Partial<ReminderRunnerOptions> = {}) {
+  const world = {
+    clock: fakeClock(at(start)),
+    timers: fakeTimers(),
+    /** The per-tick deadlines, kept apart so `timers` shows the interval timers alone. */
+    deadlines: fakeTimers(),
+    state: memoryState(),
+    tasks: [] as string[],
+    listed: 0,
+    sent: [] as string[],
+    errors: [] as string[],
+  }
+  const options = (): ReminderRunnerOptions => ({
+    listTasks: () => {
+      world.listed++
+      return world.tasks
+    },
+    notify: (reminder) => {
+      world.sent.push(reminder.key)
+    },
+    state: world.state,
+    onError: (error, step) => {
+      world.errors.push(`${step}: ${error instanceof Error ? error.message : String(error)}`)
+    },
+    zone: "UTC",
+    clock: world.clock,
+    timers: {
+      set: (fn, ms) =>
+        ms === TICK_TIMEOUT ? -world.deadlines.set(fn, ms) : world.timers.set(fn, ms),
+      clear: (handle) => handle < 0 ? world.deadlines.clear(-handle) : world.timers.clear(handle),
+    },
+    tickTimeoutMs: TICK_TIMEOUT,
+    ...overrides,
+  })
+  return {
+    world,
+    runner: createReminderRunner(options()),
+    again: () => createReminderRunner(options()),
+  }
+}
+
+describe("reminder runner: what a tick sends", () => {
+  it("sends a reminder that came due since the last tick, once", async () => {
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    expect(world.sent).toEqual([])
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toHaveLength(1)
+    expect(world.errors).toEqual([])
+  })
+
+  it("hands notify the task's UID, summary and moment", async () => {
+    const seen: unknown[] = []
+    const { world, runner } = setup("2026-10-12T09:59:30Z", {
+      notify: (reminder) => {
+        seen.push(reminder)
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(seen).toEqual([{
+      uid: "a",
+      summary: "Task a",
+      at: new Date("2026-10-12T10:00:00Z"),
+      key: "a|2026-10-12T10:00:00.000Z",
+    }])
+  })
+
+  it("sends nothing older than now on the very first run", async () => {
+    const { world, runner } = setup("2026-10-12T10:00:30Z")
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual([])
+    expect(world.state.stored).toEqual({ lastRunAt: at("2026-10-12T10:01:30Z"), sent: {} })
+  })
+
+  it("sends the reminders of one tick earliest first, across tasks", async () => {
+    const { world, runner } = setup("2026-10-12T09:00:00Z")
+    await runner.tick()
+    world.tasks = [task("late", "20261012T093000Z"), task("early", "20261012T091500Z")]
+    world.clock.set(at("2026-10-12T09:45:00Z"))
+    await runner.tick()
+    expect(world.sent).toEqual(["early|2026-10-12T09:15:00.000Z", "late|2026-10-12T09:30:00.000Z"])
+  })
+
+  it("reads date-only due dates in the given zone and at the given time of day", async () => {
+    const { world, runner } = setup("2026-10-12T06:59:00Z", {
+      zone: "Europe/Berlin",
+      dateOnlyTime: "09:00",
+    })
+    world.tasks = [task("a", "20261012").replace("DUE:", "DUE;VALUE=DATE:")]
+    await runner.tick()
+    world.clock.advance(2 * MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T07:00:00.000Z"])
+  })
+})
+
+describe("reminder runner: tasks changed elsewhere before the moment", () => {
+  it("does not remind for a task that was completed before its moment", async () => {
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    world.tasks = [task("a", "20261012T100000Z", ["STATUS:COMPLETED"])]
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual([])
+  })
+
+  it("does not remind for a task that was deleted before its moment", async () => {
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    world.tasks = []
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual([])
+  })
+
+  it("reminds at the new time of a task that was moved before its moment", async () => {
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    world.tasks = [task("a", "20261012T100200Z")]
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual([])
+    world.clock.advance(2 * MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T10:02:00.000Z"])
+  })
+
+  it("reminds at the snooze, not at the moment, of a task snoozed on another device", async () => {
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    // The phone rang at 10:00:00 and the reminder was snoozed there for 15 minutes at 10:00:10.
+    world.tasks = [
+      task("a", "20261012T100000Z", [
+        "X-MOZ-LASTACK:20261012T100010Z",
+        "X-MOZ-SNOOZE-TIME:20261012T101510Z",
+      ]),
+    ]
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual([])
+    world.clock.set(at("2026-10-12T10:15:30Z"))
+    await runner.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T10:15:10.000Z"])
+  })
+})
+
+describe("reminder runner: restarts and long stops", () => {
+  it("sends what came due while the server was down, and does not repeat what it sent", async () => {
+    const { world, runner, again } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z"), task("b", "20261012T100500Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+    await runner.stop()
+
+    world.clock.set(at("2026-10-12T10:10:00Z"))
+    const second = again()
+    await second.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z", "b|2026-10-12T10:05:00.000Z"])
+
+    world.clock.advance(MINUTE)
+    await again().tick()
+    expect(world.sent).toHaveLength(2)
+  })
+
+  it("does not repeat a sent reminder after a restart when its window stayed open", async () => {
+    let failing = true
+    const delivered: string[] = []
+    const { world, runner, again } = setup("2026-10-12T09:59:30Z", {
+      notify: (reminder) => {
+        if (reminder.uid === "b" && failing) throw new Error("push service down")
+        delivered.push(reminder.uid)
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z"), task("b", "20261012T100010Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(delivered).toEqual(["a"])
+    // The window is still open: the stored last run did not move past the failed reminder.
+    expect((world.state.stored as ReminderRunnerState).lastRunAt).toBe(at("2026-10-12T09:59:30Z"))
+
+    failing = false
+    world.clock.advance(MINUTE)
+    await again().tick()
+    expect(delivered).toEqual(["a", "b"])
+  })
+
+  it("catches up one hour by default after a long stop and drops older reminders", async () => {
+    expect(DEFAULT_REMINDER_CATCH_UP_MS).toBe(60 * MINUTE)
+    const { world, runner, again } = setup("2026-10-12T10:00:00Z")
+    await runner.tick()
+    await runner.stop()
+    world.tasks = [
+      task("old", "20261012T103000Z"),
+      task("edge", "20261012T120000Z"),
+      task("recent", "20261012T120001Z"),
+    ]
+    world.clock.set(at("2026-10-12T13:00:00Z"))
+    await again().tick()
+    expect(world.sent).toEqual(["recent|2026-10-12T12:00:01.000Z"])
+  })
+
+  it("catches up the stretch catchUpMs names", async () => {
+    const { world, runner, again } = setup("2026-10-12T10:00:00Z", { catchUpMs: 10 * MINUTE })
+    await runner.tick()
+    await runner.stop()
+    world.tasks = [task("old", "20261012T124000Z"), task("recent", "20261012T125500Z")]
+    world.clock.set(at("2026-10-12T13:00:00Z"))
+    await again().tick()
+    expect(world.sent).toEqual(["recent|2026-10-12T12:55:00.000Z"])
+  })
+
+  it("forgets a sent reminder once it is older than the catch-up stretch", async () => {
+    const { world, runner } = setup("2026-10-12T09:59:30Z", { catchUpMs: 10 * MINUTE })
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(Object.keys((world.state.stored as ReminderRunnerState).sent)).toHaveLength(1)
+    world.clock.set(at("2026-10-12T10:09:59Z"))
+    await runner.tick()
+    expect(Object.keys((world.state.stored as ReminderRunnerState).sent)).toHaveLength(1)
+    world.clock.set(at("2026-10-12T10:10:00Z"))
+    await runner.tick()
+    expect((world.state.stored as ReminderRunnerState).sent).toEqual({})
+    expect(world.sent).toHaveLength(1)
+  })
+
+  it("does not send again when the clock moves back", async () => {
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    world.clock.set(at("2026-10-12T09:58:00Z"))
+    await runner.tick()
+    world.clock.set(at("2026-10-12T10:01:00Z"))
+    await runner.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+    expect(world.errors).toEqual([])
+  })
+})
+
+describe("reminder runner: ticks that take time", () => {
+  it("sends 200 of 200 reminders, one a minute, with the shortest catch-up it accepts when every tick takes two seconds", async () => {
+    const TICK = 2_000
+    const start = at("2026-10-12T10:00:00Z")
+    const clock = fakeClock(start)
+    const stamp = (ms: number) => new Date(ms).toISOString().replace(/[-:]|\.\d{3}/g, "")
+    const tasks = Array.from(
+      { length: 200 },
+      (_, index) => task(`r${index}`, stamp(start + (index + 1) * MINUTE)),
+    )
+    // A tick may take as long as its deadline, and here every tick does.
+    const slow = {
+      clock,
+      intervalMs: MINUTE,
+      tickTimeoutMs: TICK,
+      listTasks: () => {
+        clock.advance(TICK)
+        return tasks
+      },
+    }
+    // The shortest catch-up the runner accepts, to the second.
+    let catchUpMs = MINUTE
+    const build = () => setup("2026-10-12T10:00:00Z", { ...slow, catchUpMs })
+    let built: ReturnType<typeof build> | undefined
+    while (!built) {
+      try {
+        built = build()
+      } catch {
+        catchUpMs += 1_000
+        if (catchUpMs > 10 * MINUTE) throw new Error("no catch-up up to ten minutes is accepted")
+      }
+    }
+    const { world, runner } = built
+    while (clock.now() < start + 202 * MINUTE) {
+      await runner.tick()
+      clock.advance(MINUTE)
+    }
+    expect(new Set(world.sent).size).toBe(200)
+    expect(world.sent).toHaveLength(200)
+    expect(world.errors).toEqual([])
+  })
+})
+
+describe("reminder runner: failures", () => {
+  it("reports a failed task read and covers the missed stretch on the next tick", async () => {
+    let failing = false
+    const { world, runner } = setup("2026-10-12T09:59:30Z", {
+      listTasks: () => {
+        if (failing) throw new Error("caldav down")
+        return world.tasks
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    failing = true
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.errors).toEqual(["list-tasks: caldav down"])
+    expect(world.sent).toEqual([])
+    failing = false
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+  })
+
+  it("reports a failed notify, still sends the others, and tries the failed one again", async () => {
+    let failing = true
+    const delivered: string[] = []
+    const { world, runner } = setup("2026-10-12T09:59:30Z", {
+      notify: (reminder) => {
+        if (reminder.uid === "a" && failing) return Promise.reject(new Error("push service down"))
+        delivered.push(reminder.uid)
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z"), task("b", "20261012T100010Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(delivered).toEqual(["b"])
+    expect(world.errors).toEqual(["notify: push service down"])
+    failing = false
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(delivered).toEqual(["b", "a"])
+  })
+
+  it("drops a reminder that keeps failing once it is older than the catch-up stretch", async () => {
+    let attempts = 0
+    const { world, runner } = setup("2026-10-12T09:59:30Z", {
+      catchUpMs: 5 * MINUTE,
+      notify: () => {
+        attempts++
+        throw new Error("push service down")
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    for (let minute = 0; minute < 10; minute++) {
+      world.clock.advance(MINUTE)
+      await runner.tick()
+    }
+    // 10:00:30 to 10:04:30: the tick at 10:05:30 looks back to 10:00:30 and no longer sees it.
+    expect(attempts).toBe(5)
+  })
+
+  it("reports a failed state save and does not send the reminder again", async () => {
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    world.state.failSave = true
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toHaveLength(1)
+    expect(world.errors).toEqual(["save-state: disk full", "save-state: disk full"])
+    world.state.failSave = false
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toHaveLength(1)
+    expect((world.state.stored as ReminderRunnerState).sent).toEqual({
+      "a|2026-10-12T10:00:00.000Z": at("2026-10-12T10:00:00Z"),
+    })
+  })
+
+  it("sends nothing while the state cannot be read, and reports it on every tick", async () => {
+    const { world, runner } = setup("2026-10-12T10:00:30Z")
+    world.state.stored = { lastRunAt: at("2026-10-12T09:59:30Z"), sent: {} }
+    world.state.failLoad = true
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    await runner.tick()
+    expect(world.errors).toEqual(["load-state: state unreadable", "load-state: state unreadable"])
+    expect(world.sent).toEqual([])
+    expect(world.state.saves).toBe(0)
+    world.state.failLoad = false
+    await runner.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+  })
+
+  it("reports stored state of another shape and starts over from now", async () => {
+    for (const stored of [{ lastRunAt: "yesterday", sent: {} }, { sent: {} }, [], "state"]) {
+      const { world, runner } = setup("2026-10-12T10:00:30Z")
+      world.state.stored = stored
+      world.tasks = [task("a", "20261012T100000Z"), task("b", "20261012T100100Z")]
+      await runner.tick()
+      expect(world.errors).toHaveLength(1)
+      expect(world.errors[0]).toContain("load-state:")
+      world.clock.advance(MINUTE)
+      await runner.tick()
+      expect(world.sent).toEqual(["b|2026-10-12T10:01:00.000Z"])
+      expect(world.errors).toHaveLength(1)
+    }
+  })
+
+  it("carries on when onError itself throws", async () => {
+    const { world, runner } = setup("2026-10-12T09:59:30Z", {
+      listTasks: () => {
+        world.listed++
+        if (world.listed === 1) throw new Error("caldav down")
+        return world.tasks
+      },
+      onError: () => {
+        throw new Error("logger down")
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+  })
+
+  it("reports a task list that is not a list instead of rejecting", async () => {
+    const { world, runner } = setup("2026-10-12T09:59:30Z", {
+      listTasks: () => null as unknown as string[],
+    })
+    await runner.tick()
+    expect(world.errors).toHaveLength(1)
+    expect(world.errors[0]).toContain("list-tasks:")
+  })
+})
+
+describe("reminder runner: what notify answers", () => {
+  it("does not hand a reminder to notify again after it answered delivered", async () => {
+    const calls: string[] = []
+    const { world, runner } = setup("2026-10-12T09:59:30Z", {
+      notify: (reminder) => {
+        calls.push(reminder.key)
+        return "delivered"
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z")]
+    for (let tick = 0; tick < 3; tick++) {
+      await runner.tick()
+      world.clock.advance(MINUTE)
+    }
+    expect(calls).toEqual(["a|2026-10-12T10:00:00.000Z"])
+    expect(world.errors).toEqual([])
+  })
+
+  it("repeats a reminder that notify answered retry on the next tick, and reports each try", async () => {
+    const answers: ("retry" | "delivered")[] = ["retry", "retry", "delivered"]
+    let calls = 0
+    const { world, runner } = setup("2026-10-12T09:59:30Z", { notify: () => answers[calls++] })
+    world.tasks = [task("a", "20261012T100000Z")]
+    for (let tick = 0; tick < 6; tick++) {
+      await runner.tick()
+      world.clock.advance(MINUTE)
+    }
+    expect(calls).toBe(3)
+    expect(world.errors).toEqual([
+      "notify: a reminder was not delivered and will be tried again",
+      "notify: a reminder was not delivered and will be tried again",
+    ])
+  })
+
+  it("never tries a reminder again that notify answered drop, and reports it once", async () => {
+    let calls = 0
+    const { world, runner, again } = setup("2026-10-12T09:59:30Z", {
+      notify: () => {
+        calls++
+        return "drop"
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z")]
+    for (let tick = 0; tick < 3; tick++) {
+      await runner.tick()
+      world.clock.advance(MINUTE)
+    }
+    await again().tick()
+    expect(calls).toBe(1)
+    expect(world.errors).toEqual(["notify: a reminder can never be delivered and was dropped"])
+  })
+})
+
+describe("reminder runner: a call that never settles", () => {
+  const never = () => new Promise<never>(() => {})
+
+  it("abandons a task read at the tick deadline, reports it, aborts its signal and ticks on", async () => {
+    let hang = false
+    const signals: AbortSignal[] = []
+    const { world, runner } = setup("2026-10-12T09:59:30Z", {
+      listTasks: (signal) => {
+        signals.push(signal)
+        return hang ? never() : world.tasks
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick() // the state is loaded and the first window starts here
+    hang = true
+    world.clock.advance(MINUTE)
+    const stuck = runner.tick()
+    await flush()
+    expect(world.deadlines.scheduled.at(-1)).toBe(TICK_TIMEOUT)
+    expect(signals.at(-1)!.aborted).toBe(false)
+    world.deadlines.runAll()
+    await stuck
+    expect(signals.at(-1)!.aborted).toBe(true)
+    expect(world.errors.at(-1)).toBe(
+      `list-tasks: the tick took longer than ${TICK_TIMEOUT} ms and was abandoned`,
+    )
+    hang = false
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+    expect(world.deadlines.pending).toBe(0)
+  })
+
+  it("abandons a notify at the tick deadline, starts no other, and tries the reminder again", async () => {
+    let hang = true
+    const calls: string[] = []
+    const { world, runner } = setup("2026-10-12T09:59:30Z", {
+      notify: (reminder, signal) => {
+        calls.push(`${reminder.uid} ${signal.aborted}`)
+        return hang ? never() : undefined
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z"), task("b", "20261012T100010Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    const stuck = runner.tick()
+    await flush()
+    world.deadlines.runAll()
+    await stuck
+    expect(calls).toEqual(["a false"])
+    expect(world.errors).toEqual([
+      `notify: the tick took longer than ${TICK_TIMEOUT} ms and was abandoned`,
+    ])
+    hang = false
+    world.clock.advance(MINUTE)
+    await runner.tick()
+    expect(calls).toEqual(["a false", "a false", "b false"])
+  })
+
+  it("waits on stop for a state save that never settles, but only until the tick's deadline", async () => {
+    const { world, runner } = setup("2026-10-12T10:00:00Z")
+    world.state.save = never
+    runner.start()
+    await flush()
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(false)
+    world.deadlines.runAll()
+    await flush()
+    expect(stopped).toBe(true)
+    expect(world.errors).toEqual([
+      `save-state: the tick took longer than ${TICK_TIMEOUT} ms and was abandoned`,
+    ])
+    expect(world.timers.pending).toBe(0)
+    expect(world.deadlines.pending).toBe(0)
+  })
+
+  it("clears the deadline of a tick that finished in time", async () => {
+    const { world, runner } = setup("2026-10-12T10:00:00Z")
+    await runner.tick()
+    expect(world.deadlines.scheduled).toEqual([TICK_TIMEOUT])
+    expect(world.deadlines.pending).toBe(0)
+  })
+
+  it("gives a tick two minutes by default", () => {
+    expect(DEFAULT_REMINDER_TICK_TIMEOUT_MS).toBe(2 * MINUTE)
+  })
+})
+
+describe("reminder runner: stop during a tick", () => {
+  const never = () => new Promise<never>(() => {})
+  const STOPPED = "the runner was stopped before the tick finished"
+
+  it("ends a task read that never settles: its signal fires and stop resolves without the deadline", async () => {
+    const signals: AbortSignal[] = []
+    const { world, runner } = setup("2026-10-12T10:00:00Z", {
+      listTasks: (signal) => {
+        signals.push(signal)
+        return never()
+      },
+    })
+    runner.start()
+    await flush()
+    expect(signals.map((signal) => signal.aborted)).toEqual([false])
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(true)
+    expect(signals.map((signal) => signal.aborted)).toEqual([true])
+    expect(world.errors).toEqual([`list-tasks: ${STOPPED}`])
+    expect(world.timers.pending).toBe(0)
+    expect(world.deadlines.pending).toBe(0)
+  })
+
+  it("ends a notify that never settles, starts no other, and sends both after a restart", async () => {
+    let hang = true
+    const calls: string[] = []
+    const signals: AbortSignal[] = []
+    const { world, runner, again } = setup("2026-10-12T09:59:30Z", {
+      notify: (reminder, signal) => {
+        calls.push(reminder.uid)
+        signals.push(signal)
+        return hang ? never() : undefined
+      },
+    })
+    world.tasks = [task("a", "20261012T100000Z"), task("b", "20261012T100010Z")]
+    await runner.tick()
+    world.clock.advance(MINUTE)
+    void runner.tick()
+    await flush()
+    expect(calls).toEqual(["a"])
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(true)
+    expect(signals[0].aborted).toBe(true)
+    expect(calls).toEqual(["a"])
+    expect(world.errors).toEqual([`notify: ${STOPPED}`])
+    expect(world.deadlines.pending).toBe(0)
+    hang = false
+    await again().tick()
+    expect(calls).toEqual(["a", "a", "b"])
+  })
+
+  it("finishes a state save in flight, then starts no other notify and schedules nothing", async () => {
+    const landing: (() => void)[] = []
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z"), task("b", "20261012T100010Z")]
+    await runner.tick()
+    // From here a save lands only when the test lets it.
+    const save = world.state.save
+    world.state.save = (state) =>
+      new Promise<void>((resolve) => landing.push(() => resolve(save(state))))
+    world.clock.advance(MINUTE)
+    runner.start()
+    await flush()
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(false)
+    landing.splice(0).forEach((land) => land())
+    await flush()
+    expect(stopped).toBe(true)
+    expect((world.state.stored as ReminderRunnerState).sent).toEqual({
+      "a|2026-10-12T10:00:00.000Z": at("2026-10-12T10:00:00Z"),
+    })
+    expect(world.sent).toEqual(["a|2026-10-12T10:00:00.000Z"])
+    expect(world.errors).toEqual([`notify: ${STOPPED}`])
+    expect(world.timers.pending).toBe(0)
+    expect(world.deadlines.pending).toBe(0)
+  })
+
+  it("finishes a state load in flight, then starts no task read", async () => {
+    const landing: (() => void)[] = []
+    const { world, runner } = setup("2026-10-12T10:00:00Z")
+    world.state.load = () => new Promise<unknown>((resolve) => landing.push(() => resolve(null)))
+    runner.start()
+    await flush()
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(false)
+    landing.splice(0).forEach((land) => land())
+    await flush()
+    expect(stopped).toBe(true)
+    expect(world.listed).toBe(0)
+    expect(world.errors).toEqual([`list-tasks: ${STOPPED}`])
+  })
+
+  it("starts a call before the stop or never: a tick and a stop in the same turn", async () => {
+    const seen: boolean[] = []
+    let hang = false
+    const { runner } = setup("2026-10-12T10:00:00Z", {
+      listTasks: (signal) => {
+        seen.push(signal.aborted)
+        return hang ? never() : []
+      },
+    })
+    await runner.tick()
+    hang = true
+    void runner.tick()
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    await flush()
+    expect(stopped).toBe(true)
+    expect(seen).toEqual([false, false])
+  })
+
+  it("reports nothing when the tick had nothing left to start", async () => {
+    const landing: (() => void)[] = []
+    const { world, runner } = setup("2026-10-12T09:59:30Z")
+    world.tasks = [task("a", "20261012T100000Z")]
+    await runner.tick()
+    const save = world.state.save
+    world.state.save = (state) =>
+      new Promise<void>((resolve) => landing.push(() => resolve(save(state))))
+    world.clock.advance(MINUTE)
+    void runner.tick()
+    await flush()
+    let stopped = false
+    void runner.stop().then(() => (stopped = true))
+    // Two saves are left: the one of the reminder, then the one that closes the window.
+    for (let saves = 0; saves < 2; saves++) {
+      await flush()
+      landing.splice(0).forEach((land) => land())
+    }
+    await flush()
+    expect(stopped).toBe(true)
+    expect(world.errors).toEqual([])
+    expect((world.state.stored as ReminderRunnerState).lastRunAt).toBe(at("2026-10-12T10:00:30Z"))
+  })
+})
+
+describe("reminder runner: the timer", () => {
+  it("ticks at once on start, then once per interval", async () => {
+    expect(DEFAULT_REMINDER_INTERVAL_MS).toBe(MINUTE)
+    const { world, runner } = setup("2026-10-12T10:00:00Z")
+    runner.start()
+    await runner.tick()
+    expect(world.listed).toBe(1)
+    await flush()
+    expect(world.timers.scheduled).toEqual([MINUTE])
+    expect(world.timers.pending).toBe(1)
+    world.timers.runAll()
+    await runner.tick()
+    await flush()
+    expect(world.listed).toBe(2)
+    expect(world.timers.scheduled).toEqual([MINUTE, MINUTE])
+    expect(world.timers.pending).toBe(1)
+    await runner.stop()
+  })
+
+  it("schedules the next tick only when the running one has finished", async () => {
+    const waiting: (() => void)[] = []
+    const { world, runner } = setup("2026-10-12T10:00:00Z", {
+      listTasks: () => new Promise<string[]>((resolve) => waiting.push(() => resolve([]))),
+    })
+    runner.start()
+    await flush()
+    expect(world.timers.pending).toBe(0)
+    waiting.splice(0).forEach((open) => open())
+    await runner.tick()
+    await flush()
+    expect(world.timers.pending).toBe(1)
+    await runner.stop()
+  })
+
+  it("waits the interval it was given", async () => {
+    const { world, runner } = setup("2026-10-12T10:00:00Z", { intervalMs: 5_000 })
+    runner.start()
+    await runner.tick()
+    await flush()
+    expect(world.timers.scheduled).toEqual([5_000])
+    await runner.stop()
+  })
+
+  it("starts once, however often start is called", async () => {
+    const { world, runner } = setup("2026-10-12T10:00:00Z")
+    runner.start()
+    runner.start()
+    await runner.tick()
+    await flush()
+    expect(world.listed).toBe(1)
+    expect(world.timers.pending).toBe(1)
+    // Again while the timer of the next tick is pending: no second tick, no second timer.
+    runner.start()
+    await flush()
+    expect(world.listed).toBe(1)
+    expect(world.timers.scheduled).toEqual([MINUTE])
+    await runner.stop()
+  })
+
+  it("never runs two ticks at once: a tick asked for while one runs joins it", async () => {
+    let calls = 0
+    const waiting: (() => void)[] = []
+    const { world, runner } = setup("2026-10-12T10:00:00Z", {
+      listTasks: () => {
+        calls++
+        return new Promise<string[]>((resolve) => waiting.push(() => resolve([])))
+      },
+    })
+    runner.start()
+    const first = runner.tick()
+    const second = runner.tick()
+    await flush()
+    expect(calls).toBe(1)
+    // Nothing is scheduled while a tick runs, so the timer cannot start a second one either.
+    expect(world.timers.pending).toBe(0)
+    waiting.splice(0).forEach((open) => open())
+    await Promise.all([first, second])
+    expect(calls).toBe(1)
+    await runner.stop()
+  })
+
+  it("leaves no timer behind after stop, and ticks no more", async () => {
+    const { world, runner } = setup("2026-10-12T10:00:00Z")
+    runner.start()
+    await runner.tick()
+    await flush()
+    expect(world.timers.pending).toBe(1)
+    await runner.stop()
+    expect(world.timers.pending).toBe(0)
+    world.timers.runAll()
+    await flush()
+    expect(world.listed).toBe(1)
+  })
+
+  it("resolves stop only when the running tick has ended, and schedules nothing after it", async () => {
+    const order: string[] = []
+    const { world, runner } = setup("2026-10-12T10:00:00Z", {
+      listTasks: () => new Promise<string[]>(() => {}),
+      onError: () => order.push("tick ended"),
+    })
+    runner.start()
+    await flush()
+    await runner.stop().then(() => order.push("stop resolved"))
+    expect(order).toEqual(["tick ended", "stop resolved"])
+    await flush()
+    expect(world.timers.pending).toBe(0)
+  })
+
+  it("can be started again after a stop", async () => {
+    const { world, runner } = setup("2026-10-12T10:00:00Z")
+    runner.start()
+    await flush()
+    await runner.stop()
+    expect(world.listed).toBe(1)
+    expect(world.timers.pending).toBe(0)
+    runner.start()
+    await flush()
+    expect(world.listed).toBe(2)
+    expect(world.timers.pending).toBe(1)
+    await runner.stop()
+    expect(world.timers.pending).toBe(0)
+  })
+})
+
+describe("reminder runner: options it refuses", () => {
+  it("refuses an interval or a tick deadline that is not positive", () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => setup("2026-10-12T10:00:00Z", { intervalMs: bad })).toThrow(RangeError)
+      expect(() => setup("2026-10-12T10:00:00Z", { tickTimeoutMs: bad })).toThrow(RangeError)
+    }
+  })
+
+  it("refuses a catch-up shorter than the interval plus the tick deadline, and accepts one equal to it", () => {
+    const least = MINUTE + TICK_TIMEOUT
+    for (const catchUpMs of [0, -1, MINUTE, least - 1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => setup("2026-10-12T10:00:00Z", { catchUpMs })).toThrow(RangeError)
+    }
+    setup("2026-10-12T10:00:00Z", { catchUpMs: least })
+    // Each of the two parts counts: a longer interval or a longer deadline raises the least value.
+    expect(() => setup("2026-10-12T10:00:00Z", { intervalMs: 5 * MINUTE, catchUpMs: 6 * MINUTE }))
+      .toThrow(RangeError)
+    expect(() =>
+      setup("2026-10-12T10:00:00Z", { tickTimeoutMs: 5 * MINUTE, catchUpMs: 5 * MINUTE })
+    )
+      .toThrow(RangeError)
+    setup("2026-10-12T10:00:00Z", { intervalMs: 1_000, tickTimeoutMs: 500, catchUpMs: 1_500 })
+  })
+
+  it("refuses a catch-up of one minute with the default interval and deadline", () => {
+    const defaults = { tickTimeoutMs: undefined }
+    expect(() => setup("2026-10-12T10:00:00Z", { ...defaults, catchUpMs: MINUTE }))
+      .toThrow("catchUpMs must be a number of at least intervalMs + tickTimeoutMs")
+    expect(() => setup("2026-10-12T10:00:00Z", { ...defaults, catchUpMs: 3 * MINUTE - 1 }))
+      .toThrow(RangeError)
+    setup("2026-10-12T10:00:00Z", { ...defaults, catchUpMs: 3 * MINUTE })
+  })
+
+  it("refuses a zone this runtime does not know, before any tick", () => {
+    for (const zone of ["Europe/Berln", "Not/AZone", ""]) {
+      expect(() => setup("2026-10-12T10:00:00Z", { zone })).toThrow(RangeError)
+    }
+    setup("2026-10-12T10:00:00Z", { zone: "Europe/Berlin" })
+  })
+
+  it("refuses a dateOnlyTime that is not a time of day, before any tick", () => {
+    expect(() => setup("2026-10-12T10:00:00Z", { dateOnlyTime: "9am" })).toThrow(TypeError)
+  })
+})

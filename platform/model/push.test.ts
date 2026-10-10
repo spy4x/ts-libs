@@ -109,13 +109,25 @@ describe("push schema: length limits", () => {
     expect(tooLong.error).not.toBeNull()
   })
 
-  it("accepts an endpoint of exactly 256 characters and rejects 257", () => {
+  it("accepts an endpoint of exactly 2048 characters and rejects 2049", () => {
     const base = { expirationTime: null, keys: { auth: "auth", p256dh: "p256dh" } }
-    const ok = validate(pushSubscriptionSchema, { ...base, endpoint: "a".repeat(256) })
+    const ok = validate(pushSubscriptionSchema, { ...base, endpoint: "a".repeat(2048) })
     expect(ok.error).toBeNull()
 
-    const tooLong = validate(pushSubscriptionSchema, { ...base, endpoint: "a".repeat(257) })
+    const tooLong = validate(pushSubscriptionSchema, { ...base, endpoint: "a".repeat(2049) })
     expect(tooLong.error).not.toBeNull()
+  })
+
+  it("accepts an endpoint as long as Edge on Windows issues, in a subscribe request too", () => {
+    const endpoint = `https://wns2-par02p.notify.windows.com/w/?token=${"A".repeat(374)}`
+    expect(endpoint).toHaveLength(422)
+    const subscription = {
+      endpoint,
+      expirationTime: null,
+      keys: { auth: "auth", p256dh: "p256dh" },
+    }
+    expect(validate(pushSubscriptionSchema, subscription).error).toBeNull()
+    expect(validate(pushSubscribeRequestSchema, { deviceId: "d", subscription }).error).toBeNull()
   })
 
   it("accepts auth/p256dh of exactly 256 characters and rejects 257", () => {
@@ -152,6 +164,19 @@ describe("push schema: length limits", () => {
 
     const tooLong = validate(pushNotificationMessageSchema, { title: "t", body: "a".repeat(501) })
     expect(tooLong.error).not.toBeNull()
+  })
+
+  it("accepts a notification tag of 1 to 256 characters and leaves it out when none is given", () => {
+    const ok = validate(pushNotificationMessageSchema, { title: "t", tag: "a".repeat(256) })
+    expect(ok.error).toBeNull()
+    expect(ok.data).toEqual({ title: "t", body: null, url: null, tag: "a".repeat(256) })
+
+    const none = validate(pushNotificationMessageSchema, { title: "t" })
+    expect(none.data).toEqual({ title: "t", body: null, url: null })
+
+    for (const tag of ["", "a".repeat(257), null, 7]) {
+      expect(validate(pushNotificationMessageSchema, { title: "t", tag }).error).not.toBeNull()
+    }
   })
 
   it("accepts a notification url of exactly 2048 characters and rejects 2049, and accepts null", () => {

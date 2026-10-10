@@ -116,6 +116,7 @@ when the caller passes none.
 | `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget`                     |
 | `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                                                   |
 | `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                   |
+| `browser/push-notifications` | `installPushNotifications`, `sameOriginUrl` — the `push` and `notificationclick` handlers of a service worker                                                                                                                                |
 | `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure |
 | `browser/storage`            | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage`                                                                                                            |
 | `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                       |
@@ -197,16 +198,36 @@ and the unit tier runs the same contract on the in-memory fake. Like the real di
 to write into a folder that does not exist, `mkdirp` creates the parents, and `lock` leaves an empty
 lock file behind.
 
-| Module                   | Contents                                                                                          |
-| ------------------------ | ------------------------------------------------------------------------------------------------- |
-| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                                                  |
-| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                                            |
-| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS` |
-| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                   |
-| `server/ports`           | the port interfaces, `systemClockPort`                                                            |
-| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`        |
-| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                           |
-| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                              |
+| Module                   | Contents                                                                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                                                                                                       |
+| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                                                                                                 |
+| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS`                                                      |
+| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                                                                        |
+| `server/ports`           | the port interfaces, `systemClockPort`                                                                                                                 |
+| `server/reminder-runner` | `createReminderRunner`, `ReminderStatePort`, `ReminderRunnerState`, `ReminderNotifyResult` — sends the task reminders that came due since the last run |
+| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`                                                             |
+| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                                                                                |
+| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                                                                                   |
+
+`writeText` and `atomicWriteJson` take an optional `mode` (such as `0o600`): the permission bits a
+file is created with, for one that holds keys. An existing file keeps its bits.
+
+`server/reminder-runner` ticks once a minute, reads the tasks again each time, and hands every
+reminder that came due since its last run to `notify`. It keeps its last run and what it sent in a
+state port, so a restart neither repeats nor skips one; after a long stop it catches up one hour at
+most. `notify` answers `"delivered"` (also by returning nothing), `"retry"` (also by throwing) or
+`"drop"` for a reminder that can never be sent, which is reported once and not tried again;
+`createReminderNotify` in `@spy4x/integrations/push-reminders` is a ready `notify` for Web Push. One
+tick has a deadline (`tickTimeoutMs`, two minutes by default): a `listTasks` or `notify` that never
+settles gets its abort signal fired, the tick is abandoned and reported, and the next one runs.
+`stop()` fires the same signal, so it does not wait for a call that hangs; it resolves once the tick
+has ended. A mistyped `zone` and a `catchUpMs` shorter than `intervalMs + tickTimeoutMs` are refused
+when the runner is built: with a shorter one, a tick that takes time would skip reminders.
+`browser/push-notifications` is the other end: in a service worker, `installPushNotifications(self)`
+shows the pushed message and, on a click, focuses or opens the app at the message's URL, which must
+be of the worker's own origin. The worker ignores keys of a message it does not know, so a field
+added later does not silence a worker cached from an older build.
 
 `server/shutdown-signal` turns `SIGINT` and `SIGTERM` into one `AbortSignal` for a worker loop
 (#187). It aborts once, on the first signal, with a `ShutdownSignalError` whose `signal` names it,

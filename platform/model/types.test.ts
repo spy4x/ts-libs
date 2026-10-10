@@ -90,8 +90,14 @@ describe("platform/model exported types", () => {
     >()
     assertType<Equal<PushUnsubscribeRequest, { deviceId: string }>>()
     assertType<
-      Equal<PushNotificationMessage, { title: string; body: string | null; url: string | null }>
+      Equal<
+        PushNotificationMessage,
+        { title: string; body: string | null; url: string | null; tag?: string }
+      >
     >()
+    // A message written before `tag` existed still type-checks.
+    const withoutTag: PushNotificationMessage = { title: "t", body: null, url: null }
+    void withoutTag
   })
 
   it("the push schemas still take their defaulted fields as optional input", () => {
@@ -114,6 +120,7 @@ describe("platform/model exported types", () => {
         title: string
         body?: string | null
         url?: string | null
+        tag?: string
       }>
     >()
   })

@@ -14,7 +14,7 @@
 
 import { dirname } from "@std/path"
 
-import type { FileSystemPort } from "./ports.ts"
+import type { FileSystemPort, WriteTextOptions } from "./ports.ts"
 
 /** Result of reading a JSON document. */
 export type ReadJsonResult<T> =
@@ -68,7 +68,9 @@ export function tempPathFor(path: string, options: TempPathOptions): string {
  * Serialise `value` and replace `path` with it atomically.
  *
  * Write-temp-then-rename, with the temp removed if either step throws so a failed write does not
- * leave litter next to the real document.
+ * leave litter next to the real document. With `write.mode`, the document ends up with those
+ * permission bits on every write, because each write creates a new temporary file and the rename
+ * carries its permissions over: pass `{ mode: 0o600 }` for a document only its owner may read.
  *
  * @returns the temp path that was renamed away.
  */
@@ -79,11 +81,13 @@ export async function atomicWriteJson(
   options: TempPathOptions,
   /** Indentation passed to `JSON.stringify`. `0` for compact. */
   space = 2,
+  /** Options for the write of the temporary file, such as its permission bits. */
+  write?: WriteTextOptions,
 ): Promise<string> {
   const temp = tempPathFor(path, options)
   try {
     await fs.mkdirp(dirname(path))
-    await fs.writeText(temp, JSON.stringify(value, null, space))
+    await fs.writeText(temp, JSON.stringify(value, null, space), write)
     await fs.rename(temp, path)
   } catch (error) {
     await fs.remove(temp).catch(() => {})

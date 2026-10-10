@@ -1331,14 +1331,16 @@ Runs on: server (Deno).
 
 ## Entry points
 
-| Export           | What it is                                                                     |
-| ---------------- | ------------------------------------------------------------------------------ |
-| `.` (`mod.ts`)   | Barrel.                                                                        |
-| `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`      |
-| `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`       |
-| `./cloudflare`   | `purgeUrls` — Cloudflare cache purge by URL                                    |
-| `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
-| `./push`         | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
+| Export              | What it is                                                                     |
+| ------------------- | ------------------------------------------------------------------------------ |
+| `.` (`mod.ts`)      | Barrel.                                                                        |
+| `./ntfy`            | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`      |
+| `./healthchecks`    | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`       |
+| `./cloudflare`      | `purgeUrls` — Cloudflare cache purge by URL                                    |
+| `./webhooks`        | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
+| `./push`            | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
+| `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file        |
+| `./push-reminders`  | `createReminderNotify`, `reminderPushMessage`, `reminderDeliveryOutcome`       |
 
 ## Contracts
 
@@ -1371,6 +1373,24 @@ redirects and takes no signal. A 3xx answer is a failure and is never followed, 
 cannot send the payload to a private address. `safeFetch` was not used because it cannot carry a
 request body. Endpoints must be public HTTPS addresses; the DNS check and the connection resolve
 separately, so a DNS-rebinding race remains.
+
+An app with no database keeps its subscriptions with `createFilePushSubscriptionStore({ fs, path })`
+from `./push-file-store`: one JSON file, written atomically and readable by its owner only, at most
+20 subscriptions per user, and a corrupt file is reported, never replaced. Its `state(name)` keeps a
+small named value in the same file, such as the state of `@spy4x/platform/server/reminder-runner`.
+A message may carry a `tag`: a notification with the same tag replaces the one on screen.
+
+`./push-reminders` joins the sender to `@spy4x/platform/server/reminder-runner`:
+`createReminderNotify({ sender, userId, url })` is the runner's `notify`. It cuts a long task title
+to the 120 characters a message may have and tags the push with a hash of the reminder's key, so the
+message is always one the sender accepts; a `url` too long to be pushed beside the longest title is
+refused when the function is built. A reminder counts as delivered when at least one device got it,
+when no device is subscribed, or when every device was gone and removed. It is tried again when no
+device got it and a failure may pass (no answer, HTTP 408, 429 or 5xx, an unreadable store). When no
+device got it and every push service refused for good (HTTP 400, 401, 403, 413, as after a change of
+VAPID keys), the answer is `"drop"`: the runner reports the reminder once through its `onError` and
+leaves it. `onDeviceFailure` is told how many devices of a reminder that is not tried again failed,
+and with which HTTP status, never an endpoint or a push service's answer.
 
 ### `HealthchecksClient` — dead-man's switch
 
@@ -2126,6 +2146,7 @@ when the caller passes none.
 | `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget`                     |
 | `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                                                   |
 | `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                   |
+| `browser/push-notifications` | `installPushNotifications`, `sameOriginUrl` — the `push` and `notificationclick` handlers of a service worker                                                                                                                                |
 | `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure |
 | `browser/storage`            | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage`                                                                                                            |
 | `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                       |
@@ -2207,16 +2228,36 @@ and the unit tier runs the same contract on the in-memory fake. Like the real di
 to write into a folder that does not exist, `mkdirp` creates the parents, and `lock` leaves an empty
 lock file behind.
 
-| Module                   | Contents                                                                                          |
-| ------------------------ | ------------------------------------------------------------------------------------------------- |
-| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                                                  |
-| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                                            |
-| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS` |
-| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                   |
-| `server/ports`           | the port interfaces, `systemClockPort`                                                            |
-| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`        |
-| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                           |
-| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                              |
+| Module                   | Contents                                                                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                                                                                                       |
+| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                                                                                                 |
+| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS`                                                      |
+| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                                                                        |
+| `server/ports`           | the port interfaces, `systemClockPort`                                                                                                                 |
+| `server/reminder-runner` | `createReminderRunner`, `ReminderStatePort`, `ReminderRunnerState`, `ReminderNotifyResult` — sends the task reminders that came due since the last run |
+| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`                                                             |
+| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                                                                                |
+| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                                                                                   |
+
+`writeText` and `atomicWriteJson` take an optional `mode` (such as `0o600`): the permission bits a
+file is created with, for one that holds keys. An existing file keeps its bits.
+
+`server/reminder-runner` ticks once a minute, reads the tasks again each time, and hands every
+reminder that came due since its last run to `notify`. It keeps its last run and what it sent in a
+state port, so a restart neither repeats nor skips one; after a long stop it catches up one hour at
+most. `notify` answers `"delivered"` (also by returning nothing), `"retry"` (also by throwing) or
+`"drop"` for a reminder that can never be sent, which is reported once and not tried again;
+`createReminderNotify` in `@spy4x/integrations/push-reminders` is a ready `notify` for Web Push. One
+tick has a deadline (`tickTimeoutMs`, two minutes by default): a `listTasks` or `notify` that never
+settles gets its abort signal fired, the tick is abandoned and reported, and the next one runs.
+`stop()` fires the same signal, so it does not wait for a call that hangs; it resolves once the tick
+has ended. A mistyped `zone` and a `catchUpMs` shorter than `intervalMs + tickTimeoutMs` are refused
+when the runner is built: with a shorter one, a tick that takes time would skip reminders.
+`browser/push-notifications` is the other end: in a service worker, `installPushNotifications(self)`
+shows the pushed message and, on a click, focuses or opens the app at the message's URL, which must
+be of the worker's own origin. The worker ignores keys of a message it does not know, so a field
+added later does not silence a worker cached from an older build.
 
 `server/shutdown-signal` turns `SIGINT` and `SIGTERM` into one `AbortSignal` for a worker loop
 (#187). It aborts once, on the first signal, with a `ShutdownSignalError` whose `signal` names it,
@@ -6787,18 +6828,19 @@ was rewritten, and every bug fixed over either source.
 Time and calendar primitives with no application domain attached. IANA timezone math on `Intl`,
 plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime dependencies.
 
-| Module                  | Exports                                                                                                                                                                                                                                                   |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `time/date`             | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, `startOfWeek`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
-| `time/locale`           | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `shortDayLabel`, `relativeDayLabel`, `weekdayLabels`, `WeekdayLabel`                                                                                                         |
-| `time/tz`               | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, …                                                                                             |
-| `time/ics`              | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                                          |
-| `time/ics-core`         | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                                       |
-| `time/ical`             | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                                      |
-| `time/ical-tasks`       | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`, `describeAlarmTrigger`                                                                                       |
-| `time/ical-tasks-model` | The `Task` a screen shows, read from a CalDAV resource: `parseTask`, `priorityBand`, `isOpen`, `dateInstant`, `dateDay`                                                                                                                                   |
-| `time/ical-tasks-edit`  | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `completeTask`, `reopenTask`                                                                                                                                                   |
-| `time/rrule`            | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
+| Module                      | Exports                                                                                                                                                                                                                                                   |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `time/date`                 | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, `startOfWeek`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
+| `time/locale`               | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `shortDayLabel`, `relativeDayLabel`, `weekdayLabels`, `WeekdayLabel`                                                                                                         |
+| `time/tz`                   | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, …                                                                                             |
+| `time/ics`                  | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                                          |
+| `time/ics-core`             | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                                       |
+| `time/ical`                 | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                                      |
+| `time/ical-tasks`           | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`, `describeAlarmTrigger`                                                                                       |
+| `time/ical-tasks-model`     | The `Task` a screen shows, read from a CalDAV resource: `parseTask`, `priorityBand`, `isOpen`, `dateInstant`, `dateDay`                                                                                                                                   |
+| `time/ical-tasks-edit`      | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `completeTask`, `reopenTask`                                                                                                                                                   |
+| `time/ical-tasks-reminders` | Which reminders of a task fall in a time window: `dueReminders` (alarms relative to start or due, absolute ones, a Tasks.org snooze; nothing for a completed task)                                                                                        |
+| `time/rrule`                | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"

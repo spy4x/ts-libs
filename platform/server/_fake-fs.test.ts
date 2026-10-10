@@ -18,3 +18,14 @@ Deno.test("fakeFs treats the folders of seeded files as existing", async () => {
   await fs.writeText("/data/state/next.json", "{}")
   expect(await fs.readText("/data/state/next.json")).toBe("{}")
 })
+
+Deno.test("fakeFs gives a mode to a file it creates, keeps an existing file's, and renames carry it", async () => {
+  const fs = fakeFs({ "/data/old.json": "{}" })
+  await fs.writeText("/data/new.json", "{}", { mode: 0o600 })
+  await fs.writeText("/data/old.json", "{}", { mode: 0o600 })
+  expect(fs.modes.get("/data/new.json")).toBe(0o600)
+  expect(fs.modes.has("/data/old.json")).toBe(false)
+  await fs.rename("/data/new.json", "/data/old.json")
+  expect(fs.modes.get("/data/old.json")).toBe(0o600)
+  expect(fs.modes.has("/data/new.json")).toBe(false)
+})
