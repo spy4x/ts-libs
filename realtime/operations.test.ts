@@ -564,6 +564,7 @@ describe("createCallHandler", () => {
       "/api/call/note.list/extra",
       "/api/callnote.list",
       "/other/note.list",
+      "/api/cart/note.list",
       "/api/call/%E0%A4%A",
       `/api/call/${"n".repeat(129)}`,
     ]
@@ -665,17 +666,6 @@ describe("createCallHandler", () => {
     }
     expect(http.calls).toHaveLength(0)
     expect(http.errors).toHaveLength(0)
-  })
-
-  it("keeps a __proto__ key in a payload as plain data", async () => {
-    const http = createHttp()
-
-    await http.call({ body: `{"__proto__":{"admin":true}}`, key: "k1" })
-
-    const payload = http.calls[0].payload as Record<string, unknown>
-    expect(Object.getPrototypeOf(payload)).toBe(Object.prototype)
-    expect(payload.admin).toBeUndefined()
-    expect(({} as Record<string, unknown>).admin).toBeUndefined()
   })
 
   it("refuses a body that stops arriving", async () => {

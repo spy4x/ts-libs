@@ -40,8 +40,7 @@ export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 /** The default cap on a call's body, the same as the socket's default frame cap. */
 export const DEFAULT_MAX_CALL_BYTES: number = 64 * 1024
 
-// The same bounds the socket's codec puts on a frame's `name` and `idempotencyKey`.
-const MAX_NAME_LENGTH = 128
+// The same bound the socket's codec puts on a frame's `idempotencyKey`.
 const MAX_IDEMPOTENCY_KEY_LENGTH = 256
 const MAX_USER_ID_LENGTH = 128
 
@@ -323,27 +322,18 @@ function isJsonContentType(value: string | null): boolean {
 }
 
 /**
- * The operation name in a request's path, or `null` when the path is not `<basePath>/<name>` with
- * one non-empty segment of at most 128 characters.
+ * The operation name in a request's path: what follows `<basePath>/`, decoded. `null` when the path
+ * is not under the base path or is badly encoded. A path with a further segment is a name with a
+ * `/` in it, which is unknown unless the table has it.
  */
 function readOperationName(url: string, basePath: string): string | null {
-  let pathname: string
-  try {
-    pathname = new URL(url).pathname
-  } catch {
-    return null
-  }
   const prefix = `${basePath}/`
-  if (!pathname.startsWith(prefix)) return null
-  const segment = pathname.slice(prefix.length)
-  if (segment.length < 1 || segment.includes("/")) return null
-  let name: string
   try {
-    name = decodeURIComponent(segment)
+    const { pathname } = new URL(url)
+    return pathname.startsWith(prefix) ? decodeURIComponent(pathname.slice(prefix.length)) : null
   } catch {
     return null
   }
-  return name.length >= 1 && name.length <= MAX_NAME_LENGTH ? name : null
 }
 
 /**
