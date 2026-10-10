@@ -15,6 +15,7 @@
     "./browser/indexeddb": "./browser/indexeddb.ts",
     "./browser/offline-shell": "./browser/offline-shell.ts",
     "./browser/persistent-storage": "./browser/persistent-storage.ts",
+    "./browser/push-notifications": "./browser/push-notifications.ts",
     "./browser/runtime-config": "./browser/runtime-config.ts",
     "./browser/signed-in-hint": "./browser/signed-in-hint.ts",
     "./browser/storage": "./browser/storage.ts",
