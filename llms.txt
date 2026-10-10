@@ -717,10 +717,16 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `ApiError` (interface), `jsr:@spy4x/platform/api`: One failure `apiFetch` can report: an HTTP status, a message meant to be shown as-is, and the server's machine-readable `code` when the error body carried one.
 - `ApiResult` (type), `jsr:@spy4x/platform/api`: Outcome of apiFetch: the parsed body on success, or a typed error on failure.
+- `INVALID_REPLY_CODE` (constant), `jsr:@spy4x/platform/api`: The `code` of the error result for a reply that does not match the schema.
+- `OfflineApiResult` (type), `jsr:@spy4x/platform/api`: Outcome of OfflineFetch.fetch.
+- `OfflineFetch` (interface), `jsr:@spy4x/platform/api`: What createOfflineFetch returns.
+- `OfflineFetchOptions` (interface), `jsr:@spy4x/platform/api`: Options for createOfflineFetch.
 - `apiFetch` (function), `jsr:@spy4x/platform/api`: `fetch` a JSON API and report the outcome as an ApiResult instead of throwing.
+- `createOfflineFetch` (function), `jsr:@spy4x/platform/api`: Creates one offline-aware fetch with its own "last request failed" flag.
 
 ### `jsr:@spy4x/platform/browser`
 
+- `AskOnce` (interface), `jsr:@spy4x/platform/browser`: Where requestPersistentStorage remembers that it has asked, so it asks once per device.
 - `ClipboardDocument` (interface), `jsr:@spy4x/platform/browser`: The document surface the legacy `execCommand("copy")` path needs.
 - `ClipboardWriter` (interface), `jsr:@spy4x/platform/browser`: The one clipboard method this helper calls.
 - `CopyToClipboardOptions` (interface), `jsr:@spy4x/platform/browser`: Where copyToClipboard writes.
@@ -758,6 +764,8 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ShellFetchEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of a `FetchEvent` this module uses.
 - `ShellMessageEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of a `message` event this module uses.
 - `ShellScope` (interface), `jsr:@spy4x/platform/browser`: The parts of the service-worker global scope this module uses; `self` fits.
+- `SignedInHint` (interface), `jsr:@spy4x/platform/browser`: A handle over one hint key.
+- `SignedInHintOptions` (interface), `jsr:@spy4x/platform/browser`: Options for createSignedInHint.
 - `StorageLike` (type), `jsr:@spy4x/platform/browser`: The subset of the DOM `Storage` interface this module uses.
 - `StorageRead` (type), `jsr:@spy4x/platform/browser`: Outcome of a write or a read, so a caller can tell "absent" from "present but rejected".
 - `TimerAdapter` (interface), `jsr:@spy4x/platform/browser`: Timer surface, injected so a test never waits on a real delay.
@@ -768,6 +776,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createDataCache` (function), `jsr:@spy4x/platform/browser`: A data cache over IndexedDB.
 - `createDatabaseOpener` (function), `jsr:@spy4x/platform/browser`: Returns a function that opens the database on first use and returns the same connection after.
 - `createHotkeyMatcher` (function), `jsr:@spy4x/platform/browser`: Build a matcher for a table of bindings, each one or more key presses (`["g", "t"]`).
+- `createSignedInHint` (function), `jsr:@spy4x/platform/browser`: Creates the hint for one `key`.
 - `downloadCsv` (function), `jsr:@spy4x/platform/browser`: Write rows as a CSV file and save it: toCsvBytes handed to downloadResponseAsFile.
 - `downloadResponseAsFile` (function), `jsr:@spy4x/platform/browser`: Save a response body to disk under `filename`.
 - `fillEmptyTimeZoneField` (function), `jsr:@spy4x/platform/browser`: Put the visitor's time zone into a form field, only when the field is still empty — a zone the page already filled in (from a link's `tz` parameter, say) is what the visitor saw on screen, and overwriting it would submit a different one.
@@ -872,6 +881,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/platform/browser/persistent-storage`
 
+- `AskOnce` (interface), `jsr:@spy4x/platform/browser/persistent-storage`: Where requestPersistentStorage remembers that it has asked, so it asks once per device.
 - `PersistentStorageManager` (interface), `jsr:@spy4x/platform/browser/persistent-storage`: The part of a browser's `StorageManager` this module uses.
 - `requestPersistentStorage` (function), `jsr:@spy4x/platform/browser/persistent-storage`: Resolves `true` when this site's storage is persistent, asking the browser if it is not yet.
 
@@ -880,6 +890,12 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `DEFAULT_RUNTIME_CONFIG_URL` (constant), `jsr:@spy4x/platform/browser/runtime-config`: Where loadRuntimeConfig looks when the caller names no other address.
 - `LoadRuntimeConfigOptions` (interface), `jsr:@spy4x/platform/browser/runtime-config`: What loadRuntimeConfig needs besides the schema.
 - `loadRuntimeConfig` (function), `jsr:@spy4x/platform/browser/runtime-config`: Fetches `url` and validates the JSON with `schema`.
+
+### `jsr:@spy4x/platform/browser/signed-in-hint`
+
+- `SignedInHint` (interface), `jsr:@spy4x/platform/browser/signed-in-hint`: A handle over one hint key.
+- `SignedInHintOptions` (interface), `jsr:@spy4x/platform/browser/signed-in-hint`: Options for createSignedInHint.
+- `createSignedInHint` (function), `jsr:@spy4x/platform/browser/signed-in-hint`: Creates the hint for one `key`.
 
 ### `jsr:@spy4x/platform/browser/storage`
 
@@ -2833,4 +2849,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 0c481cd58cd4dc41e96b72d9d1b661923883ef0508f1ba9e7f11f817e8e93594 -->
+<!-- export surface: sha256 0033212d0ea1f0ebc6a82d5c6ad7a9c65ffbeeb4d1413dd0c6898178749a477b -->

@@ -115,9 +115,10 @@ when the caller passes none.
 | `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                                                                                                                                      |
 | `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget`                     |
 | `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                                                   |
-| `browser/persistent-storage` | `requestPersistentStorage`, `PersistentStorageManager`                                                                                                                                                                                       |
+| `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                   |
 | `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure |
 | `browser/storage`            | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage`                                                                                                            |
+| `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                       |
 
 `browser/data-cache` keeps the last data the server sent, in IndexedDB, so a page opens with it and
 shows it with no network. Items live in scopes (a user, a calendar); a full server answer replaces a
@@ -367,11 +368,11 @@ template's shared surface the 2026-09-23 decision in issue #77 moved into this p
 recopying it into every product. Three directories, split the same way `./browser` and `./server`
 already are — by where the code can run:
 
-| Directory       | Contents                                                                                                                                                                        |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model/`        | `dateSchema`/`DateNullableSchema`, the `ImmutableBaseModelSchema`/`UndeletableBaseModelSchema`/`BaseModelSchema` tiers, and the Web Push wire schemas — universal, arktype only |
-| `api/`          | `ApiError` (`status`, `message`, optional `code`), `ApiResult<T>`, `apiFetch` — browser-only, needs `fetch`                                                                     |
-| `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                               |
+| Directory       | Contents                                                                                                                                                                                                                                                                                                                          |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model/`        | `dateSchema`/`DateNullableSchema`, the `ImmutableBaseModelSchema`/`UndeletableBaseModelSchema`/`BaseModelSchema` tiers, and the Web Push wire schemas — universal, arktype only                                                                                                                                                   |
+| `api/`          | `ApiError` (`status`, `message`, optional `code`), `ApiResult<T>`, `apiFetch`, `createOfflineFetch` (reports `offline: true` when nothing answered, checks a reply against a schema, keeps a "last request failed" flag with `subscribe`), `OfflineFetch`, `OfflineApiResult`, `INVALID_REPLY_CODE` — browser-only, needs `fetch` |
+| `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                                                                                                                                                                                 |
 
 `apiFetch` reads an error body in three shapes: `{ error }` (a string), `{ code, message }`, or
 `{ error: { code, message } }`. The message is the string `error`, else the string `message` of an
