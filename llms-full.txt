@@ -3486,6 +3486,11 @@ has closed or failed, or the bound has passed, a call never waits again: a recon
 means HTTP at once. A call whose `signal` aborts stops waiting and rejects with the reason.
 Without the option nothing changes.
 
+Three things to know. Once `pending()` has returned `null`, the port never waits again, so create
+the port after the socket has started connecting, or return a promise from the start. A promise
+that rejects counts as the end of the first open, but a `pending()` that throws rejects the call
+that asked. The bound counts from the first call that waits, not from the port's creation.
+
 `sendCommand` makes one key per command and sends every try with it. Tries: `attempts` (default 4);
 the wait before repeat `n` is `delayMs * 2 ** (n - 1)` (default 1 s), capped at `maxDelayMs` and
 jittered by `backoffDelay`. `unauthorized` is never retried.
