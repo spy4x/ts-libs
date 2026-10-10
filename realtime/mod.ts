@@ -107,6 +107,7 @@ export {
   ConnectTimeoutError,
   type CursorPort,
   type GateResult,
+  type HandshakeAcknowledgedEvent,
   PongTimeoutError,
   type RequestOptions,
   RequestTimeoutError,
