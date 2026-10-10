@@ -1101,6 +1101,37 @@ describe("ClientTransport reconnect fetches what was missed", () => {
 })
 
 describe("ClientTransport onHandshakeAcknowledged", () => {
+  it("pulls held cursors on the first open even when a listener throws", async () => {
+    const harness = createHarness({ cursors: { "group-1": 4 } })
+    harness.transport.onHandshakeAcknowledged(() => {
+      throw new Error("listener failed")
+    })
+    harness.transport.connect()
+    await drainMicrotasks()
+    harness.settleHandshake()
+    await drainMicrotasks()
+
+    expect(harness.errors.at(-1)?.message).toBe("listener failed")
+    expect(harness.gaps).toEqual([{ groupId: "group-1", since: 4, received: 4 }])
+  })
+
+  it("pulls held cursors on the first open even when a degraded listener throws", async () => {
+    const harness = createHarness({
+      cursors: { "group-1": 4 },
+      handshakeAckTimeoutMs: 100,
+      handshakeAttempts: 1,
+    })
+    harness.transport.onSyncDegraded(() => {
+      throw new Error("listener failed")
+    })
+    harness.transport.connect()
+    await drainMicrotasks()
+    await harness.clock.advance(150)
+    await drainMicrotasks()
+
+    expect(harness.gaps).toEqual([{ groupId: "group-1", since: 4, received: 4 }])
+  })
+
   it("tells a client with no cursor on the first acknowledgement, not before", async () => {
     const harness = createHarness()
     const events: boolean[] = []

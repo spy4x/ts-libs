@@ -879,22 +879,23 @@ export class ClientTransport {
       cursors: toWireCursors(request.cursors),
       fromStart: request.fromStart,
     }
-    let acknowledged = false
+    let failure: Error | null = null
     try {
       await this.request(frame, {
         timeoutMs: this.#handshakeAckTimeoutMs,
         maxAttempts: this.#handshakeAttempts,
       })
-      acknowledged = true
     } catch (error) {
-      const failure = toError(error)
+      failure = toError(error)
       this.#report(failure)
-      for (const handler of this.#degradedHandlers) handler(failure)
     }
-    if (acknowledged && !this.#stopped) {
+    // Queued before any listener runs, so a listener that throws cannot cancel the pull.
+    if (!isReconnect && !this.#stopped) this.#enqueue(() => this.#pullHeldCursors())
+    if (failure) {
+      for (const handler of this.#degradedHandlers) handler(failure)
+    } else if (!this.#stopped) {
       for (const handler of this.#acknowledgedHandlers) handler({ reconnect: isReconnect })
     }
-    if (!isReconnect && !this.#stopped) this.#enqueue(() => this.#pullHeldCursors())
   }
 
   /**
