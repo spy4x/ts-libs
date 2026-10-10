@@ -13,10 +13,9 @@ Deno.test("requireDbConnection names every missing variable in one error", () =>
 })
 
 Deno.test("requireDbConnection treats a blank variable as missing", () => {
-  const error = assertThrows(
-    () => requireDbConnection({ env: createEnvReader({ ...FULL, DB_PASS: "" }) }),
-    Error,
-  )
+  // A reader that hands blanks through, unlike `createEnvReader`, which already hides them.
+  const env = { get: (name: string) => name === "DB_PASS" ? "" : FULL[name as keyof typeof FULL] }
+  const error = assertThrows(() => requireDbConnection({ env }), Error)
   assertEquals(error.message, "integration test needs DB_PASS")
 })
 
