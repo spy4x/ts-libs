@@ -18,14 +18,15 @@ Runs on: server (Deno).
 
 ## Entry points
 
-| Export           | What it is                                                                     |
-| ---------------- | ------------------------------------------------------------------------------ |
-| `.` (`mod.ts`)   | Barrel.                                                                        |
-| `./ntfy`         | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`      |
-| `./healthchecks` | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`       |
-| `./cloudflare`   | `purgeUrls` — Cloudflare cache purge by URL                                    |
-| `./webhooks`     | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
-| `./push`         | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
+| Export              | What it is                                                                     |
+| ------------------- | ------------------------------------------------------------------------------ |
+| `.` (`mod.ts`)      | Barrel.                                                                        |
+| `./ntfy`            | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`      |
+| `./healthchecks`    | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`       |
+| `./cloudflare`      | `purgeUrls` — Cloudflare cache purge by URL                                    |
+| `./webhooks`        | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
+| `./push`            | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
+| `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file        |
 
 ## Contracts
 
@@ -58,6 +59,12 @@ redirects and takes no signal. A 3xx answer is a failure and is never followed, 
 cannot send the payload to a private address. `safeFetch` was not used because it cannot carry a
 request body. Endpoints must be public HTTPS addresses; the DNS check and the connection resolve
 separately, so a DNS-rebinding race remains.
+
+An app with no database keeps its subscriptions with `createFilePushSubscriptionStore({ fs, path })`
+from `./push-file-store`: one JSON file, written atomically and readable by its owner only, at most
+20 subscriptions per user, and a corrupt file is reported, never replaced. Its `state(name)` keeps a
+small named value in the same file, such as the state of `@spy4x/platform/server/reminder-runner`.
+A message may carry a `tag`: a notification with the same tag replaces the one on screen.
 
 ### `HealthchecksClient` — dead-man's switch
 

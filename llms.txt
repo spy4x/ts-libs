@@ -429,6 +429,16 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `generateVapidKeyPair` (function), `jsr:@spy4x/integrations/push`: Generates a VAPID key pair with WebCrypto (ECDSA P-256).
 - `vapidPublicKey` (function), `jsr:@spy4x/integrations/push`: The public key of stored VAPID keys, base64url, for the endpoint that serves it to browsers.
 
+### `jsr:@spy4x/integrations/push-file-store`
+
+- `DEFAULT_MAX_PUSH_SUBSCRIPTIONS_PER_USER` (constant), `jsr:@spy4x/integrations/push-file-store`: How many subscriptions one user keeps unless `maxPerUser` says otherwise.
+- `FilePushSubscriptionStore` (interface), `jsr:@spy4x/integrations/push-file-store`: A PushSubscriptionStore kept in one JSON file.
+- `FilePushSubscriptionStoreOptions` (interface), `jsr:@spy4x/integrations/push-file-store`: Options of createFilePushSubscriptionStore.
+- `FileStateSlot` (interface), `jsr:@spy4x/integrations/push-file-store`: One named value kept in the store's file; see FilePushSubscriptionStore.state.
+- `PushFileStoreError` (class), `jsr:@spy4x/integrations/push-file-store`: A failure of FilePushSubscriptionStore, safe to log: it carries no endpoint or key.
+- `PushFileStoreErrorCode` (type), `jsr:@spy4x/integrations/push-file-store`: Why a call on the store failed: the file cannot be read as this module's document (`corrupt`), or an argument was refused (`invalid-subscription`, `invalid-user`, `invalid-name`).
+- `createFilePushSubscriptionStore` (function), `jsr:@spy4x/integrations/push-file-store`: Builds the store.
+
 ### `jsr:@spy4x/integrations/webhooks`
 
 - `CombinedSignatureHeader` (interface), `jsr:@spy4x/integrations/webhooks`: One header that carries the timestamp and the signatures together, as a list of `key=value` pairs: Stripe's `Stripe-Signature: t=1492774577,v1=5257…,v0=6ffb…` is `{ name: "Stripe-Signature", pairSeparator: ",", timestampKey: "t", signatureKey: "v1" }`.
@@ -756,6 +766,12 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser`: Options of installOfflineShell.
 - `PersistentStorageManager` (interface), `jsr:@spy4x/platform/browser`: The part of a browser's `StorageManager` this module uses.
 - `PlatformNavigator` (interface), `jsr:@spy4x/platform/browser`: The part of `navigator` that isApplePlatform reads.
+- `PushClickEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of a `NotificationEvent` this module uses.
+- `PushClient` (interface), `jsr:@spy4x/platform/browser`: The parts of a `Client` this module uses; a `WindowClient` has all three.
+- `PushNotificationOptions` (interface), `jsr:@spy4x/platform/browser`: What this module passes to `showNotification`.
+- `PushNotificationsOptions` (interface), `jsr:@spy4x/platform/browser`: Options of installPushNotifications.
+- `PushScope` (interface), `jsr:@spy4x/platform/browser`: The parts of the service-worker global scope this module uses; `self` fits.
+- `PushScopeEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of a `PushEvent` this module uses.
 - `ReportHeightOptions` (interface), `jsr:@spy4x/platform/browser`: Options for reportHeight.
 - `SKIP_WAITING_MESSAGE` (constant), `jsr:@spy4x/platform/browser`: The message `SWUpdater` posts to a waiting worker; installOfflineShell acts on it.
 - `ShellCache` (interface), `jsr:@spy4x/platform/browser`: Cache surface this module needs; a real `Cache` fits.
@@ -784,6 +800,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `idbRequest` (function), `jsr:@spy4x/platform/browser`: Resolves a request's result, or rejects with its error.
 - `idbTransactionDone` (function), `jsr:@spy4x/platform/browser`: Resolves when a transaction has committed, rejects when it aborts or fails.
 - `installOfflineShell` (function), `jsr:@spy4x/platform/browser`: Register the install, activate, fetch and message listeners that keep the app shell offline.
+- `installPushNotifications` (function), `jsr:@spy4x/platform/browser`: Register the `push` and `notificationclick` listeners of a service worker.
 - `isApplePlatform` (function), `jsr:@spy4x/platform/browser`: Whether the browser runs on macOS, iOS or iPadOS, where `mod` means Command.
 - `isTypingTarget` (function), `jsr:@spy4x/platform/browser`: Whether a key press on this element is typing: a text `<input>`, a `<textarea>`, a `<select>` or `contenteditable` content.
 - `isUnderPath` (function), `jsr:@spy4x/platform/browser`: Whether `pathname` is `base` or below it (`/api` matches `/api` and `/api/x`, not `/apix`).
@@ -796,6 +813,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `reportHeight` (function), `jsr:@spy4x/platform/browser`: Post the element's height, in whole CSS pixels, to the parent frame — once the page has loaded, and again each time the element's size changes.
 - `requestGeolocation` (function), `jsr:@spy4x/platform/browser`: Ask for the current position and report the result.
 - `requestPersistentStorage` (function), `jsr:@spy4x/platform/browser`: Resolves `true` when this site's storage is persistent, asking the browser if it is not yet.
+- `sameOriginUrl` (function), `jsr:@spy4x/platform/browser`: `raw` as an absolute URL when it belongs to `origin`, otherwise `undefined`.
 
 ### `jsr:@spy4x/platform/browser/clipboard`
 
@@ -884,6 +902,17 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `AskOnce` (interface), `jsr:@spy4x/platform/browser/persistent-storage`: Where requestPersistentStorage remembers that it has asked, so it asks once per device.
 - `PersistentStorageManager` (interface), `jsr:@spy4x/platform/browser/persistent-storage`: The part of a browser's `StorageManager` this module uses.
 - `requestPersistentStorage` (function), `jsr:@spy4x/platform/browser/persistent-storage`: Resolves `true` when this site's storage is persistent, asking the browser if it is not yet.
+
+### `jsr:@spy4x/platform/browser/push-notifications`
+
+- `PushClickEvent` (interface), `jsr:@spy4x/platform/browser/push-notifications`: The parts of a `NotificationEvent` this module uses.
+- `PushClient` (interface), `jsr:@spy4x/platform/browser/push-notifications`: The parts of a `Client` this module uses; a `WindowClient` has all three.
+- `PushNotificationOptions` (interface), `jsr:@spy4x/platform/browser/push-notifications`: What this module passes to `showNotification`.
+- `PushNotificationsOptions` (interface), `jsr:@spy4x/platform/browser/push-notifications`: Options of installPushNotifications.
+- `PushScope` (interface), `jsr:@spy4x/platform/browser/push-notifications`: The parts of the service-worker global scope this module uses; `self` fits.
+- `PushScopeEvent` (interface), `jsr:@spy4x/platform/browser/push-notifications`: The parts of a `PushEvent` this module uses.
+- `installPushNotifications` (function), `jsr:@spy4x/platform/browser/push-notifications`: Register the `push` and `notificationclick` listeners of a service worker.
+- `sameOriginUrl` (function), `jsr:@spy4x/platform/browser/push-notifications`: `raw` as an absolute URL when it belongs to `origin`, otherwise `undefined`.
 
 ### `jsr:@spy4x/platform/browser/runtime-config`
 
@@ -1088,6 +1117,8 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ClockPort` (type), `jsr:@spy4x/platform/server`: Clock injection point, so throttling is testable without sleeping.
 - `CommandSpawner` (type), `jsr:@spy4x/platform/server`: A `Deno.Command`-shaped factory: builds a command whose `output()` runs it to completion.
 - `DEFAULT_FILE_LOCK_WAIT_MS` (constant), `jsr:@spy4x/platform/server`: How long a FileLock.runExclusive call waits for an earlier one on the same instance.
+- `DEFAULT_REMINDER_CATCH_UP_MS` (constant), `jsr:@spy4x/platform/server`: How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
+- `DEFAULT_REMINDER_INTERVAL_MS` (constant), `jsr:@spy4x/platform/server`: How often the runner ticks unless `intervalMs` says otherwise: once a minute.
 - `FileLock` (class), `jsr:@spy4x/platform/server`: One held lock.
 - `FileLockOptions` (interface), `jsr:@spy4x/platform/server`: Options for FileLock.
 - `FileLockWaitError` (class), `jsr:@spy4x/platform/server`: Raised when a FileLock.runExclusive call waited FileLockOptions.waitMs for an earlier `runExclusive` on the same instance and gave up.
@@ -1098,6 +1129,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `LockUnavailableError` (class), `jsr:@spy4x/platform/server`: Raised when another holder owns the lock.
 - `LogRecord` (type), `jsr:@spy4x/platform/server`: One log record: the caller's event plus a timestamp.
 - `ReadJsonResult` (type), `jsr:@spy4x/platform/server`: Result of reading a JSON document.
+- `ReminderRunner` (interface), `jsr:@spy4x/platform/server`: A runner built by createReminderRunner.
+- `ReminderRunnerOptions` (interface), `jsr:@spy4x/platform/server`: Options of createReminderRunner.
+- `ReminderRunnerState` (interface), `jsr:@spy4x/platform/server`: What the runner remembers between ticks and across restarts.
+- `ReminderRunnerStep` (type), `jsr:@spy4x/platform/server`: Which part of a tick failed, as ReminderRunnerOptions.onError is told.
+- `ReminderStatePort` (interface), `jsr:@spy4x/platform/server`: Where the runner keeps its ReminderRunnerState.
 - `RunCommandOptions` (interface), `jsr:@spy4x/platform/server`: Options for runCommand.
 - `RunCommandOutput` (interface), `jsr:@spy4x/platform/server`: What a finished child process reports; the subset of `Deno.CommandOutput` this module reads.
 - `RunCommandResult` (interface), `jsr:@spy4x/platform/server`: The outcome of runCommand.
@@ -1110,7 +1146,9 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ThrottledJsonSaverOptions` (interface), `jsr:@spy4x/platform/server`: Options for ThrottledJsonSaver.
 - `TimerPort` (interface), `jsr:@spy4x/platform/server`: Scheduling primitives a ThrottledJsonSaver needs.
 - `WalkEntry` (interface), `jsr:@spy4x/platform/server`: A single directory entry, as returned by a directory listing.
+- `WriteTextOptions` (interface), `jsr:@spy4x/platform/server`: Options of FileSystemPort.writeText.
 - `atomicWriteJson` (function), `jsr:@spy4x/platform/server`: Serialise `value` and replace `path` with it atomically.
+- `createReminderRunner` (function), `jsr:@spy4x/platform/server`: Builds a runner; nothing runs until ReminderRunner.start or ReminderRunner.tick.
 - `denoByteReader` (function), `jsr:@spy4x/platform/server`: ByteReader over one file, read in chunks so a large file never lands in memory at once.
 - `denoFileSystem` (constant), `jsr:@spy4x/platform/server`: FileSystemPort backed by Deno's filesystem APIs.
 - `formatLogLine` (function), `jsr:@spy4x/platform/server`: Serialise a log record to one line, stamped with the clock at append time.
@@ -1158,7 +1196,19 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `FileSystemPort` (interface), `jsr:@spy4x/platform/server/ports`: Storage primitives a server helper needs.
 - `LockHandle` (interface), `jsr:@spy4x/platform/server/ports`: A held file lock.
 - `WalkEntry` (interface), `jsr:@spy4x/platform/server/ports`: A single directory entry, as returned by a directory listing.
+- `WriteTextOptions` (interface), `jsr:@spy4x/platform/server/ports`: Options of FileSystemPort.writeText.
 - `systemClockPort` (constant), `jsr:@spy4x/platform/server/ports`: The host clock.
+
+### `jsr:@spy4x/platform/server/reminder-runner`
+
+- `DEFAULT_REMINDER_CATCH_UP_MS` (constant), `jsr:@spy4x/platform/server/reminder-runner`: How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
+- `DEFAULT_REMINDER_INTERVAL_MS` (constant), `jsr:@spy4x/platform/server/reminder-runner`: How often the runner ticks unless `intervalMs` says otherwise: once a minute.
+- `ReminderRunner` (interface), `jsr:@spy4x/platform/server/reminder-runner`: A runner built by createReminderRunner.
+- `ReminderRunnerOptions` (interface), `jsr:@spy4x/platform/server/reminder-runner`: Options of createReminderRunner.
+- `ReminderRunnerState` (interface), `jsr:@spy4x/platform/server/reminder-runner`: What the runner remembers between ticks and across restarts.
+- `ReminderRunnerStep` (type), `jsr:@spy4x/platform/server/reminder-runner`: Which part of a tick failed, as ReminderRunnerOptions.onError is told.
+- `ReminderStatePort` (interface), `jsr:@spy4x/platform/server/reminder-runner`: Where the runner keeps its ReminderRunnerState.
+- `createReminderRunner` (function), `jsr:@spy4x/platform/server/reminder-runner`: Builds a runner; nothing runs until ReminderRunner.start or ReminderRunner.tick.
 
 ### `jsr:@spy4x/platform/server/run-command`
 
@@ -2714,6 +2764,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `parseTask` (function), `jsr:@spy4x/time/ical-tasks-model`: Reads one task.
 - `priorityBand` (function), `jsr:@spy4x/time/ical-tasks-model`: Tasks.org's grouping of the iCalendar priority: 1 to 4 high, 5 medium, 6 to 9 low, 0 none.
 
+### `jsr:@spy4x/time/ical-tasks-reminders`
+
+- `DueReminder` (interface), `jsr:@spy4x/time/ical-tasks-reminders`: One reminder of one task, placed in time.
+- `DueRemindersOptions` (interface), `jsr:@spy4x/time/ical-tasks-reminders`: Options of dueReminders.
+- `ReminderWindow` (interface), `jsr:@spy4x/time/ical-tasks-reminders`: A half-open stretch of time: after `after`, up to and including `upTo`.
+- `dueReminders` (function), `jsr:@spy4x/time/ical-tasks-reminders`: The reminders of the task in `ics` whose moment falls in `window`: after `window.after`, up to and including `window.upTo`, earliest first.
+
 ### `jsr:@spy4x/time/ics`
 
 - `IcsAddress` (interface), `jsr:@spy4x/time/ics`: A calendar address: a bare mailbox address, e.g. `jane@example.com`.
@@ -2853,4 +2910,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 a92c9bdbeef6a18d0c9bc1b83a313f41c642d297d6548ffeaade6a070019377a -->
+<!-- export surface: sha256 5784df379825a0e83dd3c80b539766e2e0f812bed5e19f536329fee3a0187ba8 -->
