@@ -1383,10 +1383,14 @@ A message may carry a `tag`: a notification with the same tag replaces the one o
 `./push-reminders` joins the sender to `@spy4x/platform/server/reminder-runner`:
 `createReminderNotify({ sender, userId, url })` is the runner's `notify`. It cuts a long task title
 to the 120 characters a message may have and tags the push with a hash of the reminder's key, so the
-message is always one the sender accepts. A reminder counts as delivered when at least one device
-got it, when no device is subscribed, or when every push service refused for good; it is tried again
-only when no device got it and a failure may pass (no answer, HTTP 408, 429 or 5xx, an unreadable
-store).
+message is always one the sender accepts; a `url` too long to be pushed beside the longest title is
+refused when the function is built. A reminder counts as delivered when at least one device got it,
+when no device is subscribed, or when every device was gone and removed. It is tried again when no
+device got it and a failure may pass (no answer, HTTP 408, 429 or 5xx, an unreadable store). When no
+device got it and every push service refused for good (HTTP 400, 401, 403, 413, as after a change of
+VAPID keys), the answer is `"drop"`: the runner reports the reminder once through its `onError` and
+leaves it. `onDeviceFailure` is told how many devices of a reminder that is not tried again failed,
+and with which HTTP status, never an endpoint or a push service's answer.
 
 ### `HealthchecksClient` — dead-man's switch
 
@@ -2246,8 +2250,10 @@ most. `notify` answers `"delivered"` (also by returning nothing), `"retry"` (als
 `"drop"` for a reminder that can never be sent, which is reported once and not tried again;
 `createReminderNotify` in `@spy4x/integrations/push-reminders` is a ready `notify` for Web Push. One
 tick has a deadline (`tickTimeoutMs`, two minutes by default): a `listTasks` or `notify` that never
-settles gets its abort signal fired, the tick is abandoned and reported, and the next one runs. A
-mistyped `zone` and a `catchUpMs` shorter than the interval are refused when the runner is built.
+settles gets its abort signal fired, the tick is abandoned and reported, and the next one runs.
+`stop()` fires the same signal, so it does not wait for a call that hangs; it resolves once the tick
+has ended. A mistyped `zone` and a `catchUpMs` shorter than `intervalMs + tickTimeoutMs` are refused
+when the runner is built: with a shorter one, a tick that takes time would skip reminders.
 `browser/push-notifications` is the other end: in a service worker, `installPushNotifications(self)`
 shows the pushed message and, on a click, focuses or opens the app at the message's URL, which must
 be of the worker's own origin. The worker ignores keys of a message it does not know, so a field

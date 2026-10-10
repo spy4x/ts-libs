@@ -220,8 +220,10 @@ most. `notify` answers `"delivered"` (also by returning nothing), `"retry"` (als
 `"drop"` for a reminder that can never be sent, which is reported once and not tried again;
 `createReminderNotify` in `@spy4x/integrations/push-reminders` is a ready `notify` for Web Push. One
 tick has a deadline (`tickTimeoutMs`, two minutes by default): a `listTasks` or `notify` that never
-settles gets its abort signal fired, the tick is abandoned and reported, and the next one runs. A
-mistyped `zone` and a `catchUpMs` shorter than the interval are refused when the runner is built.
+settles gets its abort signal fired, the tick is abandoned and reported, and the next one runs.
+`stop()` fires the same signal, so it does not wait for a call that hangs; it resolves once the tick
+has ended. A mistyped `zone` and a `catchUpMs` shorter than `intervalMs + tickTimeoutMs` are refused
+when the runner is built: with a shorter one, a tick that takes time would skip reminders.
 `browser/push-notifications` is the other end: in a service worker, `installPushNotifications(self)`
 shows the pushed message and, on a click, focuses or opens the app at the message's URL, which must
 be of the worker's own origin. The worker ignores keys of a message it does not know, so a field

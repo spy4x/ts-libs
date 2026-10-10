@@ -416,6 +416,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/integrations/push`
 
+- `MAX_PUSH_PAYLOAD_BYTES` (constant), `jsr:@spy4x/integrations/push`: The most bytes a message may take as JSON text in UTF-8; `send` refuses a longer one.
 - `PushDelivery` (interface), `jsr:@spy4x/integrations/push`: Outcome for one subscription.
 - `PushOptions` (interface), `jsr:@spy4x/integrations/push`: Delivery options of one send.
 - `PushSendResult` (interface), `jsr:@spy4x/integrations/push`: Outcome of WebPushSender.send; `success` is false when any delivery `failed`.
@@ -445,7 +446,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ReminderNotifyOptions` (interface), `jsr:@spy4x/integrations/push-reminders`: Options of createReminderNotify.
 - `ReminderPushMessageOptions` (interface), `jsr:@spy4x/integrations/push-reminders`: Options of reminderPushMessage.
 - `createReminderNotify` (function), `jsr:@spy4x/integrations/push-reminders`: Builds the `notify` of a reminder runner: it pushes each reminder to every device of `userId`.
-- `reminderDeliveryOutcome` (function), `jsr:@spy4x/integrations/push-reminders`: What a sender's result means for a reminder runner: `"delivered"` when a device got the push, when there was no device, or when nothing that failed can pass later; otherwise `"retry"`.
+- `reminderDeliveryOutcome` (function), `jsr:@spy4x/integrations/push-reminders`: What a sender's result means for a reminder runner: `"delivered"` when a device got the push, when there was no device, or when every device was gone and removed; `"retry"` when no device got it and a failure may pass later; `"drop"` when no device got it and every failure is for good.
 - `reminderPushMessage` (function), `jsr:@spy4x/integrations/push-reminders`: The push message of one reminder.
 
 ### `jsr:@spy4x/integrations/webhooks`
@@ -2923,4 +2924,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 325ab4e312675092c587accc091d536f657176133c9eb8ca9d9bad41ee7a70cb -->
+<!-- export surface: sha256 fef0ae768e0390f93abc1a77dde88a2609ed53d37bea26c965dc75b0744fa0ae -->
