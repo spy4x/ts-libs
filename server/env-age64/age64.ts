@@ -60,6 +60,11 @@ const EXPORT_PREFIX = /^\s*export\s+/
 // is exactly the ciphertext fragment that used to be part of a secret.
 const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]*$/
 
+/** Appended to every {@link UnsupportedEnvSyntaxError}: the lines a caller may write instead. */
+const SUPPORTED_FORMS =
+  `Supported: KEY=value, KEY="value" or KEY='value', each optionally followed by " # comment", ` +
+  `and whole-line # comments`
+
 /**
  * Thrown by {@link parseEnvFile} on anything it can't safely round-trip. `reason` is always one
  * of a FIXED set of phrases below, never the line's own text — a rejected line is exactly the
@@ -71,8 +76,13 @@ export class UnsupportedEnvSyntaxError extends Error {
   constructor(
     line: number,
     reason: "no '=' found" | "unterminated quote" | "invalid key name" | "carriage return",
+    path?: string,
   ) {
-    super(`unsupported env syntax at line ${line}: ${reason}`)
+    super(
+      `${
+        path ? `${path}: ` : ""
+      }unsupported env syntax at line ${line}: ${reason}. ${SUPPORTED_FORMS}`,
+    )
     this.name = "UnsupportedEnvSyntaxError"
   }
 }
@@ -127,29 +137,77 @@ export function parseEnvFile(content: string, path?: string): EnvEntry[] {
   const lines = content.split("\n")
   const entries: EnvEntry[] = []
   lines.forEach((line, index) => {
-    if (line.includes("\r")) throw new UnsupportedEnvSyntaxError(index + 1, "carriage return")
+    if (line.includes("\r")) throw new UnsupportedEnvSyntaxError(index + 1, "carriage return", path)
     const trimmed = line.trim()
     if (trimmed === "" || trimmed.startsWith("#")) {
       entries.push({ raw: line })
       return
     }
     const eqIndex = line.indexOf("=")
-    if (eqIndex === -1) throw new UnsupportedEnvSyntaxError(index + 1, "no '=' found")
+    if (eqIndex === -1) throw new UnsupportedEnvSyntaxError(index + 1, "no '=' found", path)
     const prefix = line.slice(0, eqIndex + 1)
     const value = line.slice(eqIndex + 1)
 
     const quoted = value.trim()
     const quote = quoted[0]
-    if ((quote === `"` || quote === "'") && (quoted.length < 2 || !quoted.endsWith(quote))) {
-      throw new UnsupportedEnvSyntaxError(index + 1, "unterminated quote")
+    if (
+      (quote === `"` || quote === "'") &&
+      (quoted.length < 2 || !(quoted.endsWith(quote) || commentAfterQuote(quoted)))
+    ) {
+      throw new UnsupportedEnvSyntaxError(index + 1, "unterminated quote", path)
     }
 
     const key = prefix.slice(0, -1).replace(EXPORT_PREFIX, "").trim()
-    if (!KEY_PATTERN.test(key)) throw new UnsupportedEnvSyntaxError(index + 1, "invalid key name")
+    if (!KEY_PATTERN.test(key)) {
+      throw new UnsupportedEnvSyntaxError(index + 1, "invalid key name", path)
+    }
 
     entries.push({ raw: line, assignment: { prefix, key, value } })
   })
   return entries
+}
+
+/**
+ * For a trimmed value that opens a quote: the text after the FIRST closing quote of the same kind,
+ * when it is only whitespace and a `# comment` (Docker Compose accepts `KEY="a # b" # note`);
+ * otherwise `undefined`.
+ */
+function commentAfterQuote(quoted: string): string | undefined {
+  const close = quoted.indexOf(quoted[0], 1)
+  if (close === -1) return undefined
+  const rest = quoted.slice(close + 1)
+  return /^\s+#/.test(rest) ? rest : undefined
+}
+
+/**
+ * Applies Docker Compose's value rules to the raw text after `=` (an {@link EnvAssignment}'s
+ * `value`): surrounding quotes are removed and a ` # comment` after a closing quote is dropped;
+ * an unquoted value ends before ` #` (a space, then `#`), while a `#` after anything else stays
+ * (`abc#def`). Escape sequences and `${VAR}` expansion are NOT applied: the text is kept as written.
+ */
+export function decodeEnvValue(raw: string): string {
+  const value = raw.trim()
+  const quote = value[0]
+  if (quote === `"` || quote === "'") {
+    if (commentAfterQuote(value) !== undefined) return value.slice(1, value.indexOf(quote, 1))
+    if (value.length >= 2 && value.endsWith(quote)) return value.slice(1, -1)
+  }
+  const comment = value.indexOf(" #")
+  return comment === -1 ? value : value.slice(0, comment).trimEnd()
+}
+
+/**
+ * Parses env-file content into `{ KEY: value }` with {@link decodeEnvValue} applied; a later line
+ * wins over an earlier one. `path` only names the file in an error.
+ *
+ * @throws {UnsupportedEnvSyntaxError} On a line outside the supported forms.
+ */
+export function parseEnvValues(content: string, path?: string): Record<string, string> {
+  const values: Record<string, string> = {}
+  for (const entry of parseEnvFile(content, path)) {
+    if (entry.assignment) values[entry.assignment.key] = decodeEnvValue(entry.assignment.value)
+  }
+  return values
 }
 
 /** Encrypt one value for `recipient` (an `age1...` string). Returns `age64:<base64>`. */

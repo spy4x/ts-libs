@@ -8,12 +8,14 @@
 export {
   AGE64_PREFIX,
   CrlfNotSupportedError,
+  decodeEnvValue,
   decryptValue,
   encryptValue,
   type EnvAssignment,
   type EnvEntry,
   isAge64Value,
   parseEnvFile,
+  parseEnvValues,
   UnsupportedEnvSyntaxError,
 } from "./age64.ts"
 

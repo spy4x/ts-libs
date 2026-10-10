@@ -15,7 +15,18 @@ export type OutboxSchedule = { at: Date } | { inMs: number }
 
 /**
  * Writes one outbox row that becomes claimable at the given time and returns its id. Pass the
- * transaction of the change that needs the job, so both commit together or neither does.
+ * transaction of the change that needs the job, so both commit together or neither does:
+ *
+ * ```ts
+ * await sql.begin(async (tx) => {
+ *   await tx`INSERT INTO password_resets (id, user_id) VALUES (${resetId}, ${userId})`
+ *   await scheduleOutboxEvent(
+ *     tx,
+ *     { eventKind: "password.reset-mail", aggregateType: "password_reset", aggregateId: resetId },
+ *     { inMs: 0 },
+ *   )
+ * })
+ * ```
  *
  * `aggregateVersion` is the run time in epoch milliseconds: the same job for the same thing at
  * the same moment is the unique-index conflict a caller who wants it once should expect.
@@ -26,7 +37,7 @@ export type OutboxSchedule = { at: Date } | { inMs: number }
  * @throws RangeError when `inMs` is not a finite number of at least 0, or `at` is not a date.
  */
 export async function scheduleOutboxEvent(
-  sql: Sql,
+  sql: Sql | Transaction,
   event: ScheduledOutboxEvent,
   when: OutboxSchedule,
 ): Promise<string> {

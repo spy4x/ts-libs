@@ -2008,6 +2008,12 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `removeSqliteFiles` (function), `jsr:@spy4x/server/db/sqlite`: Delete a database file and its `-wal`/`-shm` sidecars.
 - `resolveSqlitePath` (function), `jsr:@spy4x/server/db/sqlite`: Resolve the database path.
 
+### `jsr:@spy4x/server/db/testing`
+
+- `RequireDbConnectionOptions` (interface), `jsr:@spy4x/server/db/testing`: What requireDbConnection reads from and says.
+- `TEST_CONNECT_TIMEOUT_SECONDS` (constant), `jsr:@spy4x/server/db/testing`: Seconds a test waits for the database; the driver's own default made a dead host look hung.
+- `requireDbConnection` (function), `jsr:@spy4x/server/db/testing`: Postgres connection settings for an integration test, read from `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS` and `DB_NAME`.
+
 ### `jsr:@spy4x/server/env-age64`
 
 - `AGE64_PREFIX` (constant), `jsr:@spy4x/server/env-age64`: Prefix every encrypted value carries: `KEY=age64:<base64>`.
@@ -2019,6 +2025,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `GenerateAgeKeyResult` (interface), `jsr:@spy4x/server/env-age64`: Result of generateAgeKey: where the key landed, and its recipient (safe to share).
 - `UnsupportedEnvSyntaxError` (class), `jsr:@spy4x/server/env-age64`: Thrown by parseEnvFile on anything it can't safely round-trip.
 - `ageStatus` (function), `jsr:@spy4x/server/env-age64`: Inspect `root`'s env files and key, without decrypting anything.
+- `decodeEnvValue` (function), `jsr:@spy4x/server/env-age64`: Applies Docker Compose's value rules to the raw text after `=` (an EnvAssignment's `value`): surrounding quotes are removed and a ` # comment` after a closing quote is dropped; an unquoted value ends before ` #` (a space, then `#`), while a `#` after anything else stays (`abc#def`).
 - `decryptEnvFiles` (function), `jsr:@spy4x/server/env-age64`: Decrypt every `.env*.age` file under `root` to its plaintext sibling, mode `0600`.
 - `decryptValue` (function), `jsr:@spy4x/server/env-age64`: Decrypt an `age64:<base64>` value with `identity` (an `AGE-SECRET-KEY-1...` string).
 - `encryptEnvFiles` (function), `jsr:@spy4x/server/env-age64`: Re-encrypt every `.env*` file under `root` to its `.env.age` sibling, mode `0644`, reusing unchanged ciphertext byte-for-byte.
@@ -2026,6 +2033,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `generateAgeKey` (function), `jsr:@spy4x/server/env-age64`: Generate a fresh identity and write it to `<root>/.age/key.txt`, mode `0600`.
 - `isAge64Value` (function), `jsr:@spy4x/server/env-age64`: True when `value` is an `age64:...` ciphertext rather than plaintext.
 - `parseEnvFile` (function), `jsr:@spy4x/server/env-age64`: Parse an env file's content into entries.
+- `parseEnvValues` (function), `jsr:@spy4x/server/env-age64`: Parses env-file content into `{ KEY: value }` with decodeEnvValue applied; a later line wins over an earlier one.
 - `readAgeKey` (function), `jsr:@spy4x/server/env-age64`: Read and parse the `.age/key.txt` that applies to `root` (see resolveKeyFile).
 
 ### `jsr:@spy4x/server/env-age64/cli`
@@ -2750,4 +2758,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 72fd78735770d84edd195394d6f1de2e288b8705124480f650a932491cf49fc8 -->
+<!-- export surface: sha256 640487247807fd2458abb9ffd1fbe7d18039f277ab47bc9a9aa80f38c1a20576 -->

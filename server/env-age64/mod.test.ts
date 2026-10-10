@@ -8,6 +8,7 @@ it("exports exactly the runtime names 1.x freezes", () => {
     "CrlfNotSupportedError",
     "UnsupportedEnvSyntaxError",
     "ageStatus",
+    "decodeEnvValue",
     "decryptEnvFiles",
     "decryptValue",
     "encryptEnvFiles",
@@ -15,6 +16,7 @@ it("exports exactly the runtime names 1.x freezes", () => {
     "generateAgeKey",
     "isAge64Value",
     "parseEnvFile",
+    "parseEnvValues",
     "readAgeKey",
   ])
 })
