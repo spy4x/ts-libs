@@ -29,7 +29,7 @@ export interface LoadRuntimeConfigOptions<S extends Type> {
 /**
  * Fetches `url` and validates the JSON with `schema`. The request skips the browser's HTTP cache:
  * the file changes with the container, and a service worker may keep its own copy for an offline
- * start. Any failure (network, a status other than 2xx, bad JSON, a value the schema rejects)
+ * start. Any failure (network, a status other than 2xx, bad JSON, a body that is not a JSON object, a value the schema rejects)
  * logs one `console.warn` and resolves to `defaults`; it never throws.
  *
  * Keys the schema does not name are kept, as arktype does by default. Pass
@@ -51,7 +51,12 @@ export async function loadRuntimeConfig<S extends Type>(
       { cache: "no-store" },
     )
     if (!response.ok) throw new Error(`status ${response.status}`)
-    const result = validate(schema, await response.json())
+    const json: unknown = await response.json()
+    // A schema whose keys are all optional accepts an array; a config file is always an object.
+    if (typeof json !== "object" || json === null || Array.isArray(json)) {
+      throw new Error("not a JSON object")
+    }
+    const result = validate(schema, json)
     if (result.error) throw new Error(result.error.description)
     return result.data as InferSchema<S>
   } catch (error) {

@@ -133,4 +133,25 @@ describe("loadRuntimeConfig", () => {
     expect(ok.apiUrl).toBe("https://api.example")
     expect(missing.apiUrl).toBe("http://localhost")
   })
+
+  it("keeps keys a plain schema does not name, as arktype does by default", async () => {
+    const plain = type({ "env?": "string" })
+    const { fetcher } = serving(`{"env":"prod","extra":"x"}`)
+
+    expect(await loadRuntimeConfig(plain, { fetcher, defaults: {} })).toEqual({
+      env: "prod",
+      extra: "x",
+    })
+  })
+
+  it("returns the defaults for a body that is an array", async () => {
+    const { fetcher } = serving(`[1]`)
+
+    const { result, warnings } = await warned(() =>
+      loadRuntimeConfig(schema, { fetcher, defaults: { env: "dev" } })
+    )
+
+    expect(result).toEqual({ env: "dev" })
+    expect(warnings.length).toBe(1)
+  })
 })
