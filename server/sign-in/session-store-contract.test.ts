@@ -428,6 +428,33 @@ export function describeSessionStoreContract<S extends SessionRecord>(
         expect(await store.findById(bobs.id)).toEqual(bobs)
       }))
 
+    it("deletes nothing when the session to keep is another user's, or no session", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const ann = await addUser()
+        const bob = await addUser()
+        const anns = await create(ann)
+        const bobs = await create(bob)
+        expect(await store.deleteOthers!(ann.userId, bobs.id, NOW)).toBe(0)
+        expect(await store.deleteOthers!(ann.userId, anns.id + bobs.id + 1000, NOW)).toBe(0)
+        expect(await store.findById(anns.id)).toEqual(anns)
+        expect(await store.findById(bobs.id)).toEqual(bobs)
+      }))
+
+    it("deletes nothing when the session to keep is signed out, or at its expiry", () =>
+      withStore(async ({ store, addUser }, create) => {
+        const user = await addUser()
+        const live = await create(user)
+        const signedOut = await create(user, { status: SessionStatus.SignedOut })
+        const ending = await create(user, { expiresAt: after(5) })
+        expect(await store.deleteOthers!(user.userId, signedOut.id, NOW)).toBe(0)
+        expect(await store.deleteOthers!(user.userId, ending.id, after(5))).toBe(0)
+        expect(await store.findById(live.id)).toEqual(live)
+        // One millisecond earlier the kept session is live, and the other one goes.
+        const early = new Date(after(5).getTime() - 1)
+        expect(await store.deleteOthers!(user.userId, ending.id, early)).toBe(1)
+        expect(await store.findById(live.id)).toBeNull()
+      }))
+
     it("deletes nothing when the session to keep is not an id", () =>
       withStore(async ({ store, addUser }, create) => {
         const user = await addUser()

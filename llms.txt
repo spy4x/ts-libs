@@ -1794,7 +1794,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `EMAIL_PROOF_PURPOSE` (constant), `jsr:@spy4x/server/auth/email-code`: The challenge purpose createEmailProof issues and checks.
 - `EmailCodeError` (class), `jsr:@spy4x/server/auth/email-code`: Thrown by EmailCodeSignIn.
 - `EmailCodeErrorReason` (type), `jsr:@spy4x/server/auth/email-code`: Why EmailCodeSignIn refused a request.
-- `EmailCodeSignIn` (interface), `jsr:@spy4x/server/auth/email-code`
+- `EmailCodeSignIn` (interface), `jsr:@spy4x/server/auth/email-code`: The email-code sign-in provider.
 - `EmailCodeSignInDeps` (interface), `jsr:@spy4x/server/auth/email-code`: What createEmailCodeSignIn needs from the app, on top of ProviderDeps.
 - `EmailProof` (interface), `jsr:@spy4x/server/auth/email-code`: Codes a signed-in user proves an address with, for their own account.
 - `EmailProofDeps` (interface), `jsr:@spy4x/server/auth/email-code`: What createEmailProof needs from the app.
@@ -2810,4 +2810,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 876d2e6695a692bc3c17b034df59f3c9afee089a20f6e9745ea13b3334d0ef0c -->
+<!-- export surface: sha256 807016c19ceec265a7dca1b47053c6227773da6d90541ffbe6736792eae8a558 -->

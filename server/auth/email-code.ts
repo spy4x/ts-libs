@@ -120,13 +120,13 @@ export interface EmailCodeSignInDeps extends ProviderDeps {
   maxAttempts?: number
 }
 
-/** The email-code sign-in provider. */
 /** Options of {@link EmailCodeSignIn.verifyCode}. */
 export interface VerifyCodeOptions {
   /** What the new session shows in the user's list of signed-in devices. */
   device?: SessionDevice
 }
 
+/** The email-code sign-in provider. */
 export interface EmailCodeSignIn {
   /**
    * Issues a new code for the address and sends it. A code asked for while an earlier one is live

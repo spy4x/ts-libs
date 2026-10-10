@@ -1573,8 +1573,10 @@ await sessions.deleteOthers(session.userId, session.id) // "sign out everywhere 
 `listForUser` returns `{ id, deviceName, ipHint, createdAt, lastUsedAt }` for each session that is
 active and not run out, and never the token hash; mark the caller's own by comparing `id`.
 `deleteForUser` and `deleteOthers` delete the rows, so the sessions fail every later validation.
-`deleteOthers` deletes exactly the listed sessions minus the one it keeps, and nothing when the id
-to keep is not a session id. `touch` writes `lastUsedAt` only when the stored time is at least
+`deleteOthers` deletes exactly the listed sessions minus the one it keeps. It deletes nothing and
+answers 0 unless the id to keep is a live session of that same user: another user's session, an id
+no session has, a signed-out or run-out session, and a value that is not an id all end no session,
+so a wrong id never signs the person out everywhere. `touch` writes `lastUsedAt` only when the stored time is at least
 `SESSION_TOUCH_INTERVAL_MS` (5 minutes) old, so calling it on every request costs one write per
 session per interval. In a `SessionStore` the four are optional, like
 `clearPendingSecondFactors`: an app's own store keeps compiling, and the manager throws a

@@ -157,7 +157,8 @@ export function createFakeStore<S extends SessionRecord = SessionRecord>(): Fake
     },
     deleteOthers(userId: number, keepSessionId: number, now: Date): Promise<number> {
       calls.push("deleteOthers")
-      if (!Number.isSafeInteger(keepSessionId) || keepSessionId < 1) return Promise.resolve(0)
+      const kept = rows.get(keepSessionId)
+      if (!kept || kept.userId !== userId || !isLive(kept, now)) return Promise.resolve(0)
       let deleted = 0
       for (const row of [...rows.values()]) {
         if (row.userId !== userId || row.id === keepSessionId || !isLive(row, now)) continue

@@ -543,8 +543,9 @@ export function createPostgresSessionStore(sql: Sql): Required<SessionStore<Auth
       `
       return rows.length === 1
     },
-    // Unlike `signOutUser`, a `keepSessionId` no store could have assigned deletes nothing: "the
-    // others" means nothing without the caller's own session.
+    // Unlike `signOutUser`, this deletes nothing unless `keepSessionId` is a live session of this
+    // user: "the others" means nothing without the caller's own session, and a wrong id must not
+    // end every session of the user, the caller's included.
     async deleteOthers(userId: number, keepSessionId: number, now: Date): Promise<number> {
       checkDate(now, "now")
       if (!isStoreId(userId) || !isStoreId(keepSessionId)) return 0
@@ -552,6 +553,11 @@ export function createPostgresSessionStore(sql: Sql): Required<SessionStore<Auth
         DELETE FROM auth_sessions
         WHERE user_id = ${userId} AND id <> ${keepSessionId}
           AND status = ${SessionStatus.Active} AND expires_at > ${now}
+          AND EXISTS (
+            SELECT 1 FROM auth_sessions
+            WHERE id = ${keepSessionId} AND user_id = ${userId}
+              AND status = ${SessionStatus.Active} AND expires_at > ${now}
+          )
         RETURNING id
       `
       return rows.length

@@ -164,7 +164,9 @@ export interface SessionStore<S extends SessionRecord = SessionRecord> {
   /**
    * Deletes every session of `userId` that is live at `now` except `keepSessionId`: exactly the
    * sessions {@link SessionStore.listForUser} would list, minus the kept one. Signed-out and
-   * expired rows stay. Deletes nothing when `keepSessionId` is not an id a store could assign.
+   * expired rows stay. Deletes nothing unless `keepSessionId` is itself a session of `userId` that
+   * is live at `now`: not for another user's session, an id no session has, a signed-out or
+   * run-out one, or a value that is not an id. A wrong id must never end every session of the user.
    *
    * @returns How many sessions were deleted.
    */
@@ -409,6 +411,11 @@ export class SessionManager<S extends SessionRecord = SessionRecord> {
    * Ends every other live session of the user by deleting it, and keeps `keepSessionId`: "sign out
    * everywhere else". It deletes exactly what {@link SessionManager.listForUser} lists minus the
    * kept session, so the count matches what the person saw.
+   *
+   * It deletes nothing and answers 0 unless `keepSessionId` is a live session of `userId`: another
+   * user's session, an id no session has, a signed-out or run-out session and a value that is not
+   * an id all end no session. So a wrong id can never sign the user out everywhere, the caller's
+   * own device included.
    *
    * @param userId The signed-in user, from the caller's validated session.
    * @param keepSessionId The caller's own session id, from the same validated session.
