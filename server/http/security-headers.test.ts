@@ -229,6 +229,10 @@ const REFUSED_BY_NGINX: [why: string, value: string][] = [
   [`an allowed name in braces`, `default-src \${csp_error_tracker}`],
   [`a lone dollar sign`, `costs 5$ here`],
   [`a dollar sign before an allowed variable`, `default-src $$csp_error_tracker`],
+  [
+    `an allowed variable followed by one that is not`,
+    `default-src $csp_error_tracker $http_x_evil`,
+  ],
 ]
 
 for (const [why, value] of REFUSED_BY_NGINX) {
