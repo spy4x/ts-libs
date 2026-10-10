@@ -61,16 +61,23 @@ to poison.
 | `encryptValue(value, recipient)`     | Encrypt one value for an `age1...` recipient — no filesystem involved               |
 | `decryptValue(age64Value, identity)` | Decrypt one `age64:...` value with an `AGE-SECRET-KEY-1...` identity                |
 | `parseEnvFile(content)`              | Parse an env file's lines into `EnvEntry[]`; throws on anything it can't round-trip |
+| `parseEnvValues(content, path?)`     | Parse into `{ KEY: value }` with Compose's value rules; a later line wins           |
+| `decodeEnvValue(raw)`                | Apply Compose's value rules to one raw value: strip quotes, drop `# comment`        |
 
 `readAgeKey(root)` is exported too: it returns the key file's path, identity and recipient, which
 a caller of `decryptValue` or `encryptValue` needs. The entry point also exports the types
 `AgeKey`, `AgeStatus`, `GenerateAgeKeyResult`, `EnvEntry` and `EnvAssignment`,
-`AGE64_PREFIX`, `isAge64Value`, and the two parse errors. Everything else (key lookup, discovery,
+`AGE64_PREFIX`, `isAge64Value`, `parseEnvValues`, `decodeEnvValue` and the two parse errors. Everything else (key lookup, discovery,
 the atomic write, the renderers) is internal, so it can change without a 2.0.
 
 ## Parsing a line
 
-A comment or blank line passes through verbatim. Anything else is split on its FIRST `=` into a
+A comment or blank line passes through verbatim. A value may be followed by a comment, as Docker
+Compose allows: `KEY="a # b" # note` and `KEY='a # b' # note` parse, and `parseEnvFile` keeps the
+whole text after `=` as `value`, so an encrypt then decrypt returns the line unchanged.
+`decodeEnvValue` and `parseEnvValues` apply Compose's rules (the quotes and the comment go; an
+unquoted value ends before `#`, while `abc#def` stays whole; no escapes, no `${VAR}`).
+Anything else is split on its FIRST `=` into a
 key and a value. `export KEY=value` is recognised: the keyword stays in the rendered line but is
 stripped from the reported key. `UnsupportedEnvSyntaxError` naming only the line NUMBER — never its
 text — is thrown for any of three shapes:

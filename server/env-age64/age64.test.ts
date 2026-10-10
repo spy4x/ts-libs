@@ -2,6 +2,7 @@ import { assertEquals, assertRejects, assertThrows } from "@std/assert"
 import { fromFileUrl, join } from "@std/path"
 import {
   CrlfNotSupportedError,
+  decodeEnvValue,
   decryptValue,
   encryptValue,
   findGitCommonRoot,
@@ -9,6 +10,7 @@ import {
   indexEncryptedFile,
   isAge64Value,
   parseEnvFile,
+  parseEnvValues,
   parseIdentity,
   parsePublicKey,
   renderDecryptedFile,
@@ -309,4 +311,53 @@ Deno.test("resolveKeyFile: falls back to <cwd>/.age/key.txt when neither a local
 
 Deno.test("findGitCommonRoot: undefined when cwd has no .git", () => {
   assertEquals(findGitCommonRoot(join(FIXTURES, "no-such-directory")), undefined)
+})
+
+Deno.test("parseEnvFile: accepts a comment after a closing double or single quote", () => {
+  const double = parseEnvFile(`KEY="a # b" # note\n`)[0].assignment
+  assertEquals(double?.value, `"a # b" # note`)
+  const single = parseEnvFile(`KEY='a # b'   # note\n`)[0].assignment
+  assertEquals(single?.value, `'a # b'   # note`)
+})
+
+Deno.test("parseEnvFile: still rejects an unterminated quote that hides a comment", () => {
+  assertThrows(() => parseEnvFile(`KEY="a # b\n`), UnsupportedEnvSyntaxError)
+  assertThrows(() => parseEnvFile(`KEY="a"b # note\n`), UnsupportedEnvSyntaxError)
+})
+
+Deno.test("parseEnvFile: the syntax error lists the supported forms", () => {
+  const error = assertThrows(() => parseEnvFile(`KEY="oops\n`), UnsupportedEnvSyntaxError)
+  assertEquals(error.message.includes(`Supported: KEY=value, KEY="value" or KEY='value'`), true)
+  assertEquals(error.message.includes("oops"), false)
+})
+
+Deno.test("parseEnvValues: reads a quoted value followed by a comment as the quoted text", () => {
+  assertEquals(parseEnvValues(`KEY="a # b" # note\n`), { KEY: `a # b` })
+  assertEquals(parseEnvValues(`KEY='a # b' # note\n`), { KEY: `a # b` })
+})
+
+Deno.test("parseEnvValues: follows Compose for unquoted values and comments", () => {
+  const values = parseEnvValues(
+    [`A=abc#def`, `B=x # note`, `C= # note`, `# whole line`, `D="q"`, `E=one`, `E=two`].join("\n"),
+  )
+  assertEquals(values, { A: `abc#def`, B: `x`, C: `# note`, D: `q`, E: `two` })
+})
+
+Deno.test("renderEncryptedFile: a quoted value with a trailing comment survives encrypt then decrypt", async () => {
+  const source = `KEY="a # b" # note\n`
+  const encrypted = await renderEncryptedFile(
+    source,
+    new Map(),
+    (value) => Promise.resolve(`age64:${btoa(value)}`),
+  )
+  const decrypted = await renderDecryptedFile(
+    encrypted,
+    (value) => Promise.resolve(atob(value.slice(6))),
+  )
+  assertEquals(decrypted, source)
+})
+
+Deno.test("decodeEnvValue: keeps a value whose quotes are not followed by a comment", () => {
+  assertEquals(decodeEnvValue(`"a" "b"`), `a" "b`)
+  assertEquals(decodeEnvValue(`  plain  `), `plain`)
 })
