@@ -721,17 +721,35 @@ describe("sendCommand", () => {
   it("clears the wait timer when the signal aborts during the wait", async () => {
     const { port } = scriptedPort([new ConnectionLostError("a"), { ok: 1 }])
     const controller = new AbortController()
+    const realSet = globalThis.setTimeout
+    const realClear = globalThis.clearTimeout
+    const pending = new Set<unknown>()
+    globalThis.setTimeout = ((handler: TimerHandler, ms?: number, ...args: unknown[]) => {
+      const id = realSet(handler, ms, ...args)
+      if (ms === 20_000) pending.add(id)
+      return id
+    }) as typeof setTimeout
+    globalThis.clearTimeout = ((id?: number) => {
+      pending.delete(id)
+      realClear(id)
+    }) as typeof clearTimeout
+    try {
+      const call = sendCommand(port, "x", {}, {
+        signal: controller.signal,
+        delayMs: 20_000,
+        random: () => 1,
+      })
+      await new Promise((resolve) => realSet(resolve, 5))
+      expect(pending.size).toBe(1)
+      controller.abort(new Error("page closed"))
 
-    const call = sendCommand(port, "x", {}, {
-      signal: controller.signal,
-      delayMs: 60_000,
-      random: () => 1,
-    })
-    await new Promise((resolve) => setTimeout(resolve, 5))
-    controller.abort(new Error("page closed"))
-
-    // Deno's timer sanitizer fails this test if the 60 s wait timer is still pending.
-    await expect(call).rejects.toThrow("page closed")
+      await expect(call).rejects.toThrow("page closed")
+      expect(pending.size).toBe(0)
+    } finally {
+      for (const id of pending) realClear(id as number)
+      globalThis.setTimeout = realSet
+      globalThis.clearTimeout = realClear
+    }
   })
 
   it("repeats a command over HTTP with one key across every try", async () => {
