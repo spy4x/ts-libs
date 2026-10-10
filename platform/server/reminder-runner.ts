@@ -43,6 +43,7 @@
  */
 import { type } from "arktype"
 import { type DueReminder, dueReminders } from "@spy4x/time/ical-tasks-reminders"
+import { isValidTimeZone } from "@spy4x/time/tz"
 import { type Clock, systemClock } from "../universal/time.ts"
 import { systemTimerPort, type TimerPort } from "./throttled-saver.ts"
 
@@ -171,10 +172,8 @@ export function createReminderRunner(options: ReminderRunnerOptions): ReminderRu
   if (!Number.isFinite(tickTimeoutMs) || tickTimeoutMs <= 0) {
     throw new RangeError("tickTimeoutMs must be a positive number")
   }
-  try {
-    // With a zone it does not know, every date-only and floating task would silently never remind.
-    new Intl.DateTimeFormat("en", { timeZone: options.zone })
-  } catch {
+  // With a zone it does not know, every date-only and floating task would silently never remind.
+  if (!isValidTimeZone(options.zone)) {
     throw new RangeError("zone is not a time zone this runtime knows")
   }
   const reading = { zone: options.zone, dateOnlyTime: options.dateOnlyTime }
