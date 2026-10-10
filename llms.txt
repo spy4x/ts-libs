@@ -2341,6 +2341,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `RequestLogWriter` (type), `jsr:@spy4x/server/request-log`: Called once per logged line.
 - `requestLog` (function), `jsr:@spy4x/server/request-log`: Build the request-log middleware.
 
+### `jsr:@spy4x/server/request-log/base-middleware`
+
+- `BaseMiddlewareOptions` (interface), `jsr:@spy4x/server/request-log/base-middleware`: What applyBaseMiddleware needs.
+- `DEFAULT_REQUEST_ID_MAX_LENGTH` (constant), `jsr:@spy4x/server/request-log/base-middleware`: Longest `X-Request-Id` kept when BaseMiddlewareOptions.requestIdMaxLength is unset.
+- `MIN_REQUEST_ID_MAX_LENGTH` (constant), `jsr:@spy4x/server/request-log/base-middleware`: Smallest `requestIdMaxLength` allowed: the length of a generated id.
+- `applyBaseMiddleware` (function), `jsr:@spy4x/server/request-log/base-middleware`: Installs the base middleware on `app`, in this order: `contextStorage`, the request id (the caller's up to the length cap, otherwise 8 random base64url characters), failure reporting, the request log, then `parseAuth`.
+
 ### `jsr:@spy4x/server/sign-in`
 
 - `Auth` (interface), `jsr:@spy4x/server/sign-in`: The middleware and request helpers createAuth returns.
@@ -2810,4 +2817,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 807016c19ceec265a7dca1b47053c6227773da6d90541ffbe6736792eae8a558 -->
+<!-- export surface: sha256 c84cf698d4dd3ac67902cc13645ea35715df31bbe86583c9160ce8686f1c00ae -->
