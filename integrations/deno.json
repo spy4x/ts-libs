@@ -7,6 +7,7 @@
     "./ntfy": "./ntfy.ts",
     "./healthchecks": "./healthchecks.ts",
     "./cloudflare": "./cloudflare.ts",
-    "./push": "./push.ts"
+    "./push": "./push.ts",
+    "./push-file-store": "./push-file-store.ts"
   }
 }
