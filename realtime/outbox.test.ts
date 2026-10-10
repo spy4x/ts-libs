@@ -1275,4 +1275,309 @@ describe("outbox with two overlapping submits for one entity", () => {
   })
 })
 
+describe("outbox ports for a group of outboxes", () => {
+  /** An outbox with the group ports under the test's control. */
+  function grouped(ports: {
+    ready?: (entry: { entityId: string }) => boolean
+    onAbandoned?: Parameters<typeof createOutbox<Text, Item>>[0]["onAbandoned"]
+    flushQueues?: () => Promise<void>
+    server?: (command: OutboxCommand<Text>) => Item | undefined
+    fetched?: Item | null
+  } = {}) {
+    const sent: string[] = []
+    let held = false
+    const inner = createPromiseLock()
+    const outbox = createOutbox<Text, Item>({
+      store: createMemoryOutboxStore(),
+      lock: (work) =>
+        inner(async () => {
+          held = true
+          try {
+            return await work()
+          } finally {
+            held = false
+          }
+        }),
+      canSend: () => true,
+      classify,
+      newKey: (() => {
+        let n = 0
+        return () => `key-${++n}`
+      })(),
+      send(command) {
+        sent.push(`${command.kind}:${command.entityId}`)
+        if (ports.server) return Promise.resolve(ports.server(command))
+        return Promise.resolve(command.kind === "delete" ? undefined : item(command.entityId))
+      },
+      fetchServer: () => Promise.resolve(ports.fetched ?? null),
+      ready: ports.ready,
+      onAbandoned: ports.onAbandoned,
+      flushQueues: ports.flushQueues,
+    })
+    return { outbox, sent, isHeld: () => held }
+  }
+
+  const create = (entityId: string) => ({
+    kind: "create" as const,
+    entityId,
+    payload: text(entityId),
+  })
+
+  it("skips a write that is not ready and still sends the writes after it", async () => {
+    const waiting = new Set(["a"])
+    const { outbox, sent } = grouped({ ready: (entry) => !waiting.has(entry.entityId) })
+    await outbox.submit(create("a"))
+    await outbox.submit(create("b"))
+
+    expect(sent).toEqual(["create:b"])
+    expect(outbox.entries().map((e) => [e.entityId, e.status, e.attempted])).toEqual([
+      ["a", "pending", false],
+    ])
+  })
+
+  it("sends a write that was held back once it is ready", async () => {
+    const waiting = new Set(["a"])
+    const { outbox, sent } = grouped({ ready: (entry) => !waiting.has(entry.entityId) })
+    await outbox.submit(create("a"))
+    waiting.clear()
+
+    await outbox.flush()
+
+    expect(sent).toEqual(["create:a"])
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("runs the group's flush, not its own, after a submit", async () => {
+    let groupFlushes = 0
+    const { outbox, sent } = grouped({
+      flushQueues: () => {
+        groupFlushes++
+        return Promise.resolve()
+      },
+    })
+
+    const outcome = await outbox.submit(create("a"))
+
+    expect(groupFlushes).toBe(1)
+    expect(sent).toEqual([])
+    expect(outcome.kind).toBe("queued")
+  })
+
+  it("runs the group's flush after keepMine", async () => {
+    let groupFlushes = 0
+    let held = true
+    let refuse = true
+    const { outbox } = grouped({
+      ready: () => !held,
+      flushQueues: () => {
+        groupFlushes++
+        return Promise.resolve()
+      },
+      server: () => {
+        if (refuse) throw refused("VERSION_CONFLICT")
+        return item("n", 6)
+      },
+      fetched: item("n", 5),
+    })
+    await outbox.submit({ kind: "update", entityId: "n", payload: text("Mine"), version: 2 })
+    held = false
+    await outbox.flush()
+    expect(outbox.entries()[0].status).toBe("conflict")
+    refuse = false
+    groupFlushes = 0
+
+    await outbox.keepMine(outbox.entries()[0])
+
+    expect(groupFlushes).toBe(1)
+  })
+
+  it("tells that a create was withdrawn before any send, after the lock is released", async () => {
+    const told: [string, string, boolean][] = []
+    let isHeld = () => true
+    const h = grouped({
+      ready: () => false,
+      onAbandoned: (entry, reason) => {
+        told.push([entry.entityId, reason, isHeld()])
+      },
+    })
+    isHeld = h.isHeld
+    await h.outbox.submit(create("a"))
+
+    await h.outbox.withdraw("a")
+
+    expect(told).toEqual([["a", "withdrawn", false]])
+  })
+
+  it("tells that a create was dropped when it was deleted before any send", async () => {
+    const told: [string, string][] = []
+    const { outbox } = grouped({
+      ready: () => false,
+      onAbandoned: (entry, reason) => {
+        told.push([entry.entityId, reason])
+      },
+    })
+    await outbox.submit(create("a"))
+
+    await outbox.submit({ kind: "delete", entityId: "a", payload: text("a"), version: 1 })
+
+    expect(told).toEqual([["a", "dropped"]])
+  })
+
+  it("tells that a create was discarded when the server refused it to the person who made it", async () => {
+    const told: [string, string][] = []
+    const { outbox } = grouped({
+      onAbandoned: (entry, reason) => {
+        told.push([entry.entityId, reason])
+      },
+      server: () => {
+        throw refused("ROLE_INSUFFICIENT")
+      },
+    })
+
+    const outcome = await outbox.submit(create("a"))
+
+    expect(outcome.kind).toBe("failed")
+    expect(told).toEqual([["a", "discarded"]])
+  })
+
+  it("tells that a create was discarded when the person chose the server's side", async () => {
+    const told: [string, string][] = []
+    let held = true
+    const { outbox } = grouped({
+      ready: () => !held,
+      onAbandoned: (entry, reason) => {
+        told.push([entry.entityId, reason])
+      },
+      server: () => {
+        throw refused("ROLE_INSUFFICIENT")
+      },
+    })
+    await outbox.submit(create("a"))
+    held = false
+    await outbox.flush()
+    expect(outbox.entries()[0].status).toBe("conflict")
+    expect(told).toEqual([])
+
+    await outbox.useTheirs(outbox.entries()[0])
+
+    expect(told).toEqual([["a", "discarded"]])
+  })
+
+  it("does not tell about a create that was sent, or about an edit or a delete that left", async () => {
+    const told: string[] = []
+    const { outbox } = grouped({
+      onAbandoned: (entry, reason) => {
+        told.push(`${entry.entityId}:${reason}`)
+      },
+    })
+
+    await outbox.submit(create("a"))
+    await outbox.submit({ kind: "update", entityId: "a", payload: text("a2"), version: 1 })
+    await outbox.submit({ kind: "delete", entityId: "a", payload: text("a2"), version: 2 })
+
+    expect(told).toEqual([])
+  })
+
+  it("does not tell about an edit the server refused to the person who made it", async () => {
+    const told: string[] = []
+    const { outbox } = grouped({
+      onAbandoned: (entry, reason) => {
+        told.push(`${entry.entityId}:${reason}`)
+      },
+      server: (command) => {
+        if (command.kind === "update") throw refused("ROLE_INSUFFICIENT")
+        return item(command.entityId)
+      },
+    })
+    await outbox.submit(create("a"))
+
+    const outcome = await outbox.submit({
+      kind: "update",
+      entityId: "a",
+      payload: text("a2"),
+      version: 1,
+    })
+
+    expect(outcome.kind).toBe("failed")
+    expect(told).toEqual([])
+  })
+
+  it("does not tell about an edit when the person chose the server's side", async () => {
+    const told: string[] = []
+    let held = false
+    const { outbox } = grouped({
+      ready: () => !held,
+      onAbandoned: (entry, reason) => {
+        told.push(`${entry.entityId}:${reason}`)
+      },
+      server: (command) => {
+        if (command.kind === "update") throw refused("ROLE_INSUFFICIENT")
+        return item(command.entityId)
+      },
+    })
+    await outbox.submit(create("a"))
+    held = true
+    await outbox.submit({ kind: "update", entityId: "a", payload: text("a2"), version: 1 })
+    held = false
+    await outbox.flush()
+    expect(outbox.entries()[0].status).toBe("conflict")
+
+    await outbox.useTheirs(outbox.entries()[0])
+
+    expect(told).toEqual([])
+  })
+
+  it("does not tell about a create when the person takes the server's entity that holds its id", async () => {
+    const told: string[] = []
+    let held = true
+    const { outbox } = grouped({
+      ready: () => !held,
+      onAbandoned: (entry, reason) => {
+        told.push(`${entry.entityId}:${reason}`)
+      },
+      server: () => {
+        throw refused("ID_ALREADY_EXISTS")
+      },
+      fetched: item("a"),
+    })
+    await outbox.submit(create("a"))
+    held = false
+    await outbox.flush()
+    expect(outbox.entries()[0].status).toBe("conflict")
+
+    await outbox.useTheirs(outbox.entries()[0])
+
+    expect(told).toEqual([])
+  })
+
+  it("still answers withdraw when the listener that is told about it throws", async () => {
+    const { outbox } = grouped({
+      ready: () => false,
+      onAbandoned: () => Promise.reject(new Error("disk full")),
+    })
+    await outbox.submit(create("a"))
+
+    expect(await outbox.withdraw("a")).toBe(true)
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("still settles useTheirs when the listener that is told about it throws", async () => {
+    let held = true
+    const { outbox } = grouped({
+      ready: () => !held,
+      onAbandoned: () => Promise.reject(new Error("disk full")),
+      server: () => {
+        throw refused("ROLE_INSUFFICIENT")
+      },
+    })
+    await outbox.submit(create("a"))
+    held = false
+    await outbox.flush()
+
+    await outbox.useTheirs(outbox.entries()[0])
+
+    expect(outbox.entries()).toEqual([])
+  })
+})
+
 describeOutboxStoreContract("createMemoryOutboxStore", () => createMemoryOutboxStore())

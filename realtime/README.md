@@ -689,6 +689,89 @@ servers; one contract suite runs against both, so they behave alike. Name the da
 user (`outbox:${userId}`), as the lock is named. Ask the browser not to evict it with
 `requestPersistentStorage` from `@spy4x/platform/browser/persistent-storage`.
 
+## Offline-writable collections (`@spy4x/realtime/collections`)
+
+The top level of ADR 003: a collection is an outbox plus the overlay of its queued writes on a
+list, built from one adapter. `createCollections` puts several behind one ordered flush. The adapter
+holds everything that names a product (command names, error codes, wording, the shape of a row);
+calls go through a `CallPort` and sending is the app's call (`canSend`).
+
+```ts
+import { classifyByCode, createCollections, defineCollection } from "@spy4x/realtime/collections"
+import { createWebLock } from "@spy4x/realtime/outbox"
+
+const tags = defineCollection<TagPayload, Tag>({
+  name: `tags`,
+  database: `offline:user:${userId}:tags`, // used as given: an existing queue is read unchanged
+  toCall: (c) => ({
+    name: `tag.${c.kind}`,
+    payload: { id: c.entityId, ...c.payload, version: c.baseVersion },
+  }),
+  toQuery: (id) => ({ name: `tag.get`, payload: { id } }),
+  entityFrom: (answer) => (answer as { tag?: Tag }).tag,
+  classify: classifyByCode({ version: `VERSION_CONFLICT`, notFound: `TAG_NOT_FOUND` }),
+  messages: { version: `Someone renamed this tag while you were offline.` },
+  itemId: (tag) => tag.id,
+  queuedItem: (entry) => ({ id: entry.entityId, version: 0, name: entry.payload.name }),
+  applyEdit: (tag, entry) => ({ ...tag, name: entry.payload.name }),
+})
+
+const notes = defineCollection<NotePayload, Note>({
+  name: `notes`,
+  database: `offline:user:${userId}:outbox`,
+  // ...the same members as above, and:
+  dependencies: {
+    parents: [`tags`], // registered before `notes`
+    on: (entry) =>
+      entry.kind === `delete`
+        ? []
+        : entry.payload.tagIds.map((entityId) => ({ collection: `tags`, entityId })),
+    without: (payload, tag) => ({
+      ...payload,
+      tagIds: payload.tagIds.filter((id) => id !== tag.entityId),
+    }),
+  },
+})
+
+const layer = createCollections({
+  collections: [tags, notes], // parents first
+  calls, // a CallPort
+  canSend: () => callsReachableAs(userId),
+  lock: createWebLock(navigator.locks, `offline-outbox:${userId}`), // one lock for every tab
+  onReferenceRemoved: ({ parent, children }) =>
+    tell(`${parent.entityId} is gone from ${children.length} notes`),
+})
+await layer.reload() // on start; then layer.flush() on reconnect, focus and pushed hints
+
+const outcome = await layer.get(notes).outbox.submit({ kind: `create`, entityId, payload })
+const visible = await layer.get(notes).overlay(serverNotes) // queued writes applied
+layer.waiting() // notes held back by a tag, with `onPerson` while the tag is in conflict
+```
+
+- **Overlay.** A queued create shows at the top, a queued delete hides its row, a queued edit
+  replaces it. `inScope` limits an overlay to one list (a group), `applyQueued` is the pure form.
+- **One ordered flush.** `layer.flush()` sends the collections in registration order. A write made
+  with `submit` runs that same flush (also after `keepMine`), so a child never overtakes its
+  parent's queue. Every step of every outbox runs under the one `lock`.
+- **A child waits for its parent.** An entry is not sent while an entry it names is queued or in
+  conflict. It stays queued with its text safe, is not marked failed, and `waiting()` lists it;
+  `onPerson` is true while the person must choose first. Other entries keep going.
+- **A parent that will never exist.** When a queued create is withdrawn, dropped (created and
+  deleted before any send) or discarded after a refusal, `without` removes the reference from the
+  queued entries that named it, and from the edits merged behind them. An entry that may already
+  have been sent keeps its key and its `attempted` mark, so the outbox still treats the entity as
+  possibly on the server. The removal runs just after the lock is released;
+  have the server ignore ids it does not know, so that moment is harmless.
+  A listener that fails never makes `withdraw` or `useTheirs` reject.
+- **A flush for the sync runner.** Pass `layer.syncFlush` as `createSyncRunner`'s `flush`. It runs
+  the ordered flush and answers `"unreachable"` only when an entry that nothing holds back is still
+  queued, so the runner retries with backoff. A note that waits for a person's choice about its tag
+  is not counted: retrying cannot help it.
+- **Existing queues.** The database name and the stored entries are exactly what you pass and what
+  `createOutbox` writes, so a queue an app kept before using this module is read unchanged.
+- Conflict choices (`keepMine`, `useTheirs`), `withdraw` and the entries for a "queued" badge are on
+  `layer.get(collection).outbox`.
+
 ## Read cache (`@spy4x/realtime/read-cache`)
 
 The offline-readable level of ADR 003: a copy of a list read, kept on the device, that answers when
