@@ -2,7 +2,7 @@
  * `@spy4x/platform` — universal helpers only.
  *
  * Everything re-exported here runs in Deno, a browser, a worker and an SSR pass, and calls no
- * host API beyond `Date`, `Intl`, `crypto`, `TextEncoder`, `URL`, `FormData` and `Response`.
+ * host API beyond `Date`, `Intl`, `fetch`, `crypto`, `TextEncoder`, `URL`, `FormData` and `Response`.
  * Browser-only and server-only code lives behind `./browser` and `./server` so an SSR bundle
  * cannot reach it by accident.
  *
