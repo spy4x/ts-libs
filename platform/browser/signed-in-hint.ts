@@ -19,7 +19,7 @@ import type { KeyValueStore } from "../universal/key-value-store.ts"
 export interface SignedInHintOptions<T> {
   /**
    * Decides whether a stored value is the shape this app keeps. A value that fails it, like one that
-   * is not valid JSON, counts as absent. Omit it to accept any JSON value except `null`.
+   * is not valid JSON, counts as absent. Omit it to accept any stored JSON value.
    */
   validate?: (value: unknown) => value is T
   /**
@@ -87,7 +87,6 @@ export function createSignedInHint<T = true>(
         const raw = resolve()?.getItem(key)
         if (raw === null || raw === undefined) return null
         const parsed: unknown = JSON.parse(raw)
-        if (parsed === null) return null
         if (validate && !validate(parsed)) return null
         return parsed as T
       } catch (_unavailable) {
