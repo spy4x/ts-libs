@@ -534,9 +534,26 @@ describe("createCallHandler", () => {
 
     for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
       const { status } = await http.call({ name, key: "k1" })
-      expect(status).toBe(404)
+      expect([name, status]).toEqual([name, 404])
     }
     expect(http.errors).toHaveLength(0)
+  })
+
+  it("refuses an operation the table only inherits", async () => {
+    const calls: unknown[] = []
+    const inherited: Operations<Actor> = Object.create({
+      "note.inherited": { kind: "query", handle: () => calls.push(1) },
+    })
+    const handler = createCallHandler(inherited, {
+      basePath: "/api/call",
+      authenticate: () => ALICE,
+      userIdOf: (actor) => actor.userId,
+    })
+
+    const response = await handler(callRequest({ name: "note.inherited" }))
+
+    expect(response.status).toBe(404)
+    expect(calls).toHaveLength(0)
   })
 
   it("refuses a path that is not one name under the base path", async () => {

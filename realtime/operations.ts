@@ -98,9 +98,7 @@ export function isBoundToUser(
   claimed: string | null | undefined,
   userId: string | number,
 ): boolean {
-  if (typeof claimed !== "string" || claimed.length < 1 || claimed.length > MAX_USER_ID_LENGTH) {
-    return false
-  }
+  if (typeof claimed !== "string" || claimed.length > MAX_USER_ID_LENGTH) return false
   if (typeof userId === "number") return Number.isSafeInteger(userId) && String(userId) === claimed
   return typeof userId === "string" && userId.length > 0 && userId === claimed
 }
