@@ -17,9 +17,9 @@
  * The wire contract of the HTTP module (the server half is `createCallHandler`):
  *
  * - Request: `POST <baseUrl>/<name>`, `Content-Type: application/json`, the body is the payload as
- *   JSON (`null` when there is none), header `Idempotency-Key` on commands, header
+ *   JSON (no body at all when there is none), header `Idempotency-Key` on commands, header
  *   `X-Realtime-User` with the id of the user the page was started for.
- * - Success: a 2xx with the JSON body `{ "result": <value> }`.
+ * - Success: every 2xx carries the JSON body `{ "result": <value> }`.
  * - Failure: a non-2xx with the JSON body `{ "error": { "code", "message", "details"? } }`, where
  *   `code` is one of {@link REALTIME_ERROR_CODES}, the same code the socket uses.
  *
@@ -60,6 +60,9 @@ export interface CallPort {
    * Asks the server to change something and resolves with its result. Rejects with
    * {@link RealtimeRequestError} (the server's answer) or {@link ConnectionLostError} (no answer:
    * the command may or may not have run).
+   *
+   * Pass an `idempotencyKey`: the HTTP handler refuses a command without one with `bad_request`,
+   * so a keyless command only works over the socket.
    */
   command(name: string, payload?: unknown, options?: CallPortCommandOptions): Promise<unknown>
   /** Asks the server for data and resolves with the answer. Failures as {@link command}. */
@@ -130,23 +133,25 @@ export interface HttpCallPortOptions {
 
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000
 
-/** The code a status stands for when the body names none. `undefined`: not a client error. */
+/**
+ * The code a status stands for when the body names none. `undefined`: the status says nothing
+ * about the server's answer. A bare 404 or 429 is that too: a proxy answers them while a container
+ * is replaced, and a real not-found or rate limit of ours carries the error body.
+ */
 function codeForStatus(status: number): RealtimeErrorCode | undefined {
   switch (status) {
     case 401:
       return "unauthorized"
     case 403:
       return "forbidden"
-    case 404:
-      return "not_found"
     case 408:
       return "timeout"
     case 409:
       return "conflict"
-    case 429:
-      return "rate_limited"
   }
-  return status >= 400 && status < 500 ? "bad_request" : undefined
+  return status >= 400 && status < 500 && status !== 404 && status !== 429
+    ? "bad_request"
+    : undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -177,8 +182,9 @@ async function readJson(response: Response): Promise<unknown> {
  * {@link RealtimeRequestError} with that code. A `fetch` that fails, a timeout, a 5xx without a
  * readable error body and a 2xx without a `{ result }` body (a proxy's page) are
  * {@link ConnectionLostError}: the outcome is unknown. A 4xx without a readable error body gets
- * the code its status stands for (401 `unauthorized`, 403 `forbidden`, 404 `not_found`,
- * 408 `timeout`, 409 `conflict`, 429 `rate_limited`, any other `bad_request`). A call aborted by
+ * the code its status stands for (401 `unauthorized`, 403 `forbidden`, 408 `timeout`,
+ * 409 `conflict`, any other `bad_request`), except a bare 404 or 429, which a proxy answers while a
+ * container is replaced and which are a {@link ConnectionLostError}. A call aborted by
  * its `signal` rejects with the signal's reason.
  */
 export function createHttpCallPort(options: HttpCallPortOptions): CallPort {
@@ -212,7 +218,7 @@ export function createHttpCallPort(options: HttpCallPortOptions): CallPort {
               "X-Realtime-User": options.userId,
               ...extraHeaders,
             },
-            body: JSON.stringify(payload === undefined ? null : payload),
+            body: payload === undefined ? undefined : JSON.stringify(payload),
             credentials: options.credentials ?? "same-origin",
             signal: controller.signal,
           },
@@ -354,6 +360,23 @@ export interface RetryOptions {
   signal?: AbortSignal
 }
 
+/** Waits `ms`; an abort of `signal` ends the wait at once and clears its timer. */
+function cancellableSleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal === undefined) return sleep(ms)
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason)
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
 const DEFAULT_ATTEMPTS = 4
 const DEFAULT_DELAY_MS = 1_000
 const DEFAULT_MAX_DELAY_MS = 30_000
@@ -376,7 +399,7 @@ export function isRetryable(error: unknown): boolean {
 
 async function withRetry<T>(run: () => Promise<T>, options: RetryOptions): Promise<T> {
   const attempts = options.attempts ?? DEFAULT_ATTEMPTS
-  const wait = options.sleep ?? sleep
+  const wait = options.sleep ?? ((ms: number) => cancellableSleep(ms, options.signal))
   for (let attempt = 1;; attempt++) {
     try {
       return await run()

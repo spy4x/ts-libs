@@ -65,7 +65,7 @@ function serverFetch(server: Server, status?: number): typeof fetch {
     const headers = new Headers(init?.headers)
     server.seen.push({
       name: decodeURIComponent(String(input).split("/").pop()!),
-      payload: JSON.parse(String(init?.body)),
+      payload: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
       key: headers.get("Idempotency-Key") ?? undefined,
       user: headers.get("X-Realtime-User") ?? undefined,
     })
@@ -205,14 +205,15 @@ describe("the HTTP port", () => {
     expect(headers.get("Idempotency-Key")).toBe("k-9")
   })
 
-  it("sends a query without an idempotency key and a missing payload as null", async () => {
+  it("sends a query without an idempotency key and a missing payload as no body", async () => {
     const { requests, fetcher } = recordingFetch(Response.json({ result: [] }))
 
     await port(fetcher).query("group.list")
 
     const { init } = requests[0]!
     expect(new Headers(init.headers).has("Idempotency-Key")).toBe(false)
-    expect(init.body).toBe("null")
+    expect(init.body).toBeUndefined()
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json")
   })
 
   it("returns a falsy result as it is", async () => {
@@ -284,13 +285,30 @@ describe("the HTTP port", () => {
       400: "bad_request",
       401: "unauthorized",
       403: "forbidden",
-      404: "not_found",
       408: "timeout",
       409: "conflict",
-      429: "rate_limited",
     }
     for (const [status, code] of Object.entries(codes)) {
       const { fetcher } = recordingFetch(new Response("", { status: Number(status) }))
+
+      await expect(port(fetcher).query("x")).rejects.toMatchObject({ code })
+    }
+  })
+
+  it("treats a proxy's bare 404 or 429 as a lost connection", async () => {
+    for (const status of [404, 429]) {
+      const { fetcher } = recordingFetch(new Response("404 page not found", { status }))
+
+      await expect(port(fetcher).query("x")).rejects.toBeInstanceOf(ConnectionLostError)
+    }
+  })
+
+  it("keeps the code of a 404 or 429 that carries the error body", async () => {
+    const cases: [number, string][] = [[404, "not_found"], [429, "rate_limited"]]
+    for (const [status, code] of cases) {
+      const { fetcher } = recordingFetch(
+        Response.json({ error: { code, message: "m" } }, { status }),
+      )
 
       await expect(port(fetcher).query("x")).rejects.toMatchObject({ code })
     }
@@ -334,6 +352,23 @@ describe("the HTTP port", () => {
     await http.query("x").catch(() => {})
 
     expect(hooked).toBe(1)
+  })
+})
+
+describe("withUnauthorizedHook", () => {
+  it("does not fire for other server answers or for a lost connection", async () => {
+    const answers = [
+      new RealtimeRequestError("forbidden", "no"),
+      new RealtimeRequestError("conflict", "in use"),
+      new ConnectionLostError("closed"),
+    ]
+    let hooked = 0
+    const { port } = scriptedPort(answers.slice())
+    const watched = withUnauthorizedHook(port, () => hooked++)
+
+    for (let i = 0; i < answers.length; i++) await watched.query("x").catch(() => {})
+
+    expect(hooked).toBe(0)
   })
 })
 
@@ -647,6 +682,56 @@ describe("sendCommand", () => {
 
     await expect(call).rejects.toThrow("page closed")
     expect(sent).toHaveLength(1)
+  })
+
+  it("passes its signal to the port on every try", async () => {
+    const signals: (AbortSignal | undefined)[] = []
+    const port: CallPort = {
+      command: (_name, _payload, options) => {
+        signals.push(options?.signal)
+        return signals.length < 2
+          ? Promise.reject(new ConnectionLostError("a"))
+          : Promise.resolve(1)
+      },
+      query: () => Promise.resolve(1),
+    }
+    const controller = new AbortController()
+
+    await sendCommand(port, "x", {}, { signal: controller.signal, sleep: noSleep })
+
+    expect(signals).toEqual([controller.signal, controller.signal])
+  })
+
+  it("passes its signal to the port for a query", async () => {
+    let received: AbortSignal | undefined
+    const port: CallPort = {
+      command: () => Promise.resolve(1),
+      query: (_name, _payload, options) => {
+        received = options?.signal
+        return Promise.resolve(1)
+      },
+    }
+    const controller = new AbortController()
+
+    await sendQuery(port, "x", {}, { signal: controller.signal })
+
+    expect(received).toBe(controller.signal)
+  })
+
+  it("clears the wait timer when the signal aborts during the wait", async () => {
+    const { port } = scriptedPort([new ConnectionLostError("a"), { ok: 1 }])
+    const controller = new AbortController()
+
+    const call = sendCommand(port, "x", {}, {
+      signal: controller.signal,
+      delayMs: 60_000,
+      random: () => 1,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    controller.abort(new Error("page closed"))
+
+    // Deno's timer sanitizer fails this test if the 60 s wait timer is still pending.
+    await expect(call).rejects.toThrow("page closed")
   })
 
   it("repeats a command over HTTP with one key across every try", async () => {

@@ -387,16 +387,19 @@ may not have run).
 ### HTTP wire contract
 
 - Request: `POST <baseUrl>/<name>`, `Content-Type: application/json`, body = the payload as JSON
-  (`null` when there is none), header `Idempotency-Key` on commands, header `X-Realtime-User` with
-  the id of the user the page was started for. The name is one path segment (URL-encoded).
-- Success: a 2xx with `{ "result": <value> }`.
+  (no body at all when there is none; the handler passes `undefined` to the operation, as the
+  socket does), header `Idempotency-Key` on commands, header `X-Realtime-User` with the id of the
+  user the page was started for. The name is one path segment (URL-encoded). The HTTP handler
+  refuses a command without `Idempotency-Key` with `bad_request`, so a keyless command only works
+  over the socket.
+- Success: every 2xx carries `{ "result": <value> }`; `null` for an operation that returns nothing.
 - Failure: a non-2xx with `{ "error": { "code", "message", "details"? } }`; `code` is the same
   string the socket uses.
 - `ConnectionLostError`: `fetch` failed, no answer within `timeoutMs` (default 15 s), a 5xx with no
-  readable error body, or a 2xx that is not `{ result }` (a proxy's page).
-- A 4xx with no readable error body gets the code of its status: 401 `unauthorized`, 403
-  `forbidden`, 404 `not_found`, 408 `timeout`, 409 `conflict`, 429 `rate_limited`, any other
-  `bad_request`.
+  readable error body, a bare 404 or 429 (a proxy answers them while a container is replaced; a
+  real not-found or rate limit of ours carries the error body), or a 2xx that is not `{ result }`.
+- Any other 4xx with no readable error body gets the code of its status: 401 `unauthorized`, 403
+  `forbidden`, 408 `timeout`, 409 `conflict`, else `bad_request`.
 
 ### An app with HTTP only
 
