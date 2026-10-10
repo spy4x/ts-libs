@@ -862,12 +862,14 @@ describe("the composed port waiting for the first open", () => {
   })
 
   it("does not wait for a socket that closed or failed its first open", async () => {
-    const { port, socketServer, httpServer, endFirstOpen } = setup()
+    const { port, socketServer, httpServer, endFirstOpen, offerPending } = setup()
     endFirstOpen(TransportStatus.Reconnecting)
 
     expect(await port.query("x")).toBe("from http")
+    offerPending()
+    expect(await port.query("y")).toBe("from http")
     expect(socketServer.seen).toHaveLength(0)
-    expect(httpServer.seen).toHaveLength(1)
+    expect(httpServer.seen).toHaveLength(2)
   })
 
   it("does not wait again after the socket opened once and then dropped", async () => {
@@ -924,6 +926,18 @@ describe("the composed port waiting for the first open", () => {
     expect(await Promise.all(calls)).toEqual(["from http", "from http"])
     expect(httpServer.seen).toHaveLength(2)
     expect(clock.pendingTimers).toBe(0)
+  })
+
+  it("ends the wait of a later call together with the first call's bound", async () => {
+    const { port, clock, httpServer } = setup({ maxMs: 500 })
+
+    const early = port.query("a")
+    await clock.advance(300)
+    const late = port.query("b")
+    await clock.advance(200)
+
+    expect(await Promise.all([early, late])).toEqual(["from http", "from http"])
+    expect(httpServer.seen).toHaveLength(2)
   })
 
   it("leaves no timer behind when the socket opens", async () => {

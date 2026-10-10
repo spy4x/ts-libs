@@ -353,7 +353,7 @@ export function createComposedCallPort(options: ComposedCallPortOptions): CallPo
   const clock = firstOpenWait?.clock ?? createSystemClock()
   // One wait, shared by every call made during it. `settled` ends all waiting for good: the first
   // open happened, failed, or the bound passed.
-  let settled = firstOpenWait === undefined
+  let settled = false
   let gate: Promise<void> | null = null
 
   function waitForGate(pending: Promise<void>): Promise<void> {
