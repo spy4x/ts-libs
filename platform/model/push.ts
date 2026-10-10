@@ -36,7 +36,8 @@ export const pushSubscriptionSchema: Type<{
   keys: { auth: string; p256dh: string }
 }> = type({
   "+": "reject",
-  endpoint: "string <= 256",
+  // Edge on Windows issues endpoints of about 400 characters; 2048 is the bound of `url` below.
+  endpoint: "string <= 2048",
   expirationTime: "number | null = null",
   keys: pushSubscriptionKeysSchema,
 })

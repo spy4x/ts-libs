@@ -109,13 +109,25 @@ describe("push schema: length limits", () => {
     expect(tooLong.error).not.toBeNull()
   })
 
-  it("accepts an endpoint of exactly 256 characters and rejects 257", () => {
+  it("accepts an endpoint of exactly 2048 characters and rejects 2049", () => {
     const base = { expirationTime: null, keys: { auth: "auth", p256dh: "p256dh" } }
-    const ok = validate(pushSubscriptionSchema, { ...base, endpoint: "a".repeat(256) })
+    const ok = validate(pushSubscriptionSchema, { ...base, endpoint: "a".repeat(2048) })
     expect(ok.error).toBeNull()
 
-    const tooLong = validate(pushSubscriptionSchema, { ...base, endpoint: "a".repeat(257) })
+    const tooLong = validate(pushSubscriptionSchema, { ...base, endpoint: "a".repeat(2049) })
     expect(tooLong.error).not.toBeNull()
+  })
+
+  it("accepts an endpoint as long as Edge on Windows issues, in a subscribe request too", () => {
+    const endpoint = `https://wns2-par02p.notify.windows.com/w/?token=${"A".repeat(374)}`
+    expect(endpoint).toHaveLength(422)
+    const subscription = {
+      endpoint,
+      expirationTime: null,
+      keys: { auth: "auth", p256dh: "p256dh" },
+    }
+    expect(validate(pushSubscriptionSchema, subscription).error).toBeNull()
+    expect(validate(pushSubscribeRequestSchema, { deviceId: "d", subscription }).error).toBeNull()
   })
 
   it("accepts auth/p256dh of exactly 256 characters and rejects 257", () => {

@@ -253,9 +253,9 @@ describe("file push store: what save refuses", () => {
     ["an http endpoint", { ...subscription("x"), endpoint: "http://push.example.com/send/x" }],
     ["an endpoint that is not a URL", { ...subscription("x"), endpoint: "capability-path" }],
     ["a javascript: endpoint", { ...subscription("x"), endpoint: "javascript:alert(1)" }],
-    ["an endpoint longer than 256 characters", {
+    ["an endpoint longer than 2048 characters", {
       ...subscription("x"),
-      endpoint: `https://push.example.com/${"a".repeat(260)}`,
+      endpoint: `https://push.example.com/${"a".repeat(2048)}`,
     }],
     ["a subscription with no keys", { endpoint: subscription("x").endpoint }],
     ["a subscription with an extra field", { ...subscription("x"), userId: "owner" }],
@@ -274,6 +274,16 @@ describe("file push store: what save refuses", () => {
       expect(fs.files.size).toBe(0)
     })
   }
+
+  it("saves and lists an endpoint as long as Edge on Windows issues", async () => {
+    const { store } = setup()
+    const edge = {
+      ...subscription("x"),
+      endpoint: `https://wns2-par02p.notify.windows.com/w/?token=${"A".repeat(374)}`,
+    }
+    await store.save(USER, edge)
+    expect(await store.listByUser(USER)).toEqual([edge])
+  })
 
   it("fills in the expiration time a browser left out", async () => {
     const { fs, store } = setup()
