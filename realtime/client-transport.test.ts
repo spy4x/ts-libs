@@ -140,6 +140,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
       transport.connect()
       await drainMicrotasks()
       settleHandshake()
+      // The first open's own pull is covered by "pulls every held cursor once after the first
+      // handshake acknowledgement"; the other tests start from a quiet record.
+      await drainMicrotasks()
+      gaps.length = 0
     },
   }
 }
@@ -1008,12 +1012,11 @@ describe("ClientTransport reconnect", () => {
 })
 
 describe("ClientTransport reconnect fetches what was missed", () => {
-  it("pulls every held cursor once after a reconnect, not on the first connect", async () => {
+  it("pulls every held cursor once after a reconnect", async () => {
     // Issue #65, finding 2: a quiet group's gap used to surface only when a later hint happened to
     // reveal it, which in a quiet group might be never. A reconnect now pulls unconditionally.
     const harness = createHarness({ cursors: { "group-1": 4, "group-2": 7 } })
     await harness.open()
-    expect(harness.gaps).toEqual([]) // the first connect pulls nothing on its own
 
     harness.factory.latest.dropFromPeer()
     await harness.clock.advance(100)
@@ -1023,6 +1026,36 @@ describe("ClientTransport reconnect fetches what was missed", () => {
       { groupId: "group-1", since: 4, received: 4 },
       { groupId: "group-2", since: 7, received: 7 },
     ])
+  })
+
+  it("pulls every held cursor once after the first handshake acknowledgement", async () => {
+    const harness = createHarness({ cursors: { "group-1": 4, "group-2": 7 } })
+    harness.transport.connect()
+    await drainMicrotasks()
+    expect(harness.gaps).toEqual([]) // the server has not adopted the socket yet
+
+    harness.settleHandshake()
+    await drainMicrotasks()
+
+    expect(harness.gaps).toEqual([
+      { groupId: "group-1", since: 4, received: 4 },
+      { groupId: "group-2", since: 7, received: 7 },
+    ])
+  })
+
+  it("pulls nothing on the first open when the handshake is never acknowledged", async () => {
+    const harness = createHarness({
+      cursors: { "group-1": 4 },
+      handshakeAckTimeoutMs: 100,
+      handshakeAttempts: 1,
+    })
+    harness.transport.connect()
+    await drainMicrotasks()
+    await harness.clock.advance(150)
+    await drainMicrotasks()
+
+    expect(harness.degraded.length).toBe(1)
+    expect(harness.gaps).toEqual([])
   })
 
   it("triggers exactly one fetch when a single-group client reconnects once", async () => {

@@ -653,6 +653,10 @@ export class ClientTransport {
    * happen. `attempt > 0` at this point is exactly "a reconnect": `connect()` starts it at zero and
    * only `#scheduleReconnect` ever increments it, always before the attempt that follows.
    *
+   * The first open pulls too, but only once the server has acknowledged the handshake (see
+   * {@link #handshake}): hints reach this socket only after the server has adopted it, so a change
+   * made between the app's start-up read and that moment would otherwise reach the page by no hint.
+   *
    * The handshake is *not* put on {@link #enqueue}'s chain. That chain serialises cursor decisions so
    * hints are applied in arrival order; a handshake touches no cursor, and chaining it would delay
    * every inbound hint until the server acknowledged the handshake — up to
@@ -676,8 +680,8 @@ export class ClientTransport {
     )
     this.#setStatus(TransportStatus.Open)
     this.#startHeartbeat()
-    void this.#handshake().catch((error: unknown) => this.#report(toError(error)))
-    if (isReconnect) this.#enqueue(() => this.#pullAfterReconnect())
+    void this.#handshake(isReconnect).catch((error: unknown) => this.#report(toError(error)))
+    if (isReconnect) this.#enqueue(() => this.#pullHeldCursors())
   }
 
   /** The socket never opened in time. Abandon the attempt and let the close path reconnect. */
@@ -800,11 +804,11 @@ export class ClientTransport {
   }
 
   /**
-   * After a reconnect, pull every group the client already holds a cursor for (issue #65, finding
-   * 2). A cold client — no cursors yet — has nothing to pull; its first fetch is the app's own
+   * Pull every group the client already holds a cursor for: after a reconnect (issue #65, finding
+   * 2) and after the first handshake acknowledgement (issue #399). A cold client — no cursors yet — has nothing to pull; its first fetch is the app's own
    * bootstrap, which this package does not own (see README, "Explicitly not implemented").
    */
-  async #pullAfterReconnect(): Promise<void> {
+  async #pullHeldCursors(): Promise<void> {
     const request = await this.#options.cursors.syncRequest()
     for (const cursor of request.cursors) {
       const ok = await this.#runPull({
@@ -836,8 +840,14 @@ export class ClientTransport {
    * A handshake that fails is reported as degraded, never retried forever and never allowed to
    * throw into the void: a socket that cannot handshake can still receive hints, and the REST pull
    * path is correct on its own.
+   *
+   * On the first open (`isReconnect` false) the acknowledgement also starts one pull of every held
+   * cursor. The server only sends hints to a socket it has adopted, so a change made after the
+   * app's start-up read and before the acknowledgement would never reach the page (issue #399). A
+   * reconnect pulls straight away in {@link #handleOpen} instead. The transport does not
+   * de-duplicate: an app that also pulls on its own first open simply pulls twice.
    */
-  async #handshake(): Promise<void> {
+  async #handshake(isReconnect: boolean): Promise<void> {
     const request = await this.#options.cursors.syncRequest()
     const frame: ClientMessage = {
       kind: "client.sync",
@@ -853,7 +863,9 @@ export class ClientTransport {
       const failure = toError(error)
       this.#report(failure)
       for (const handler of this.#degradedHandlers) handler(failure)
+      return
     }
+    if (!isReconnect && !this.#stopped) this.#enqueue(() => this.#pullHeldCursors())
   }
 
   /**
