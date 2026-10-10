@@ -49,6 +49,7 @@ Runs on: server (Deno).
 | `@spy4x/server/db`                     | Barrel: Postgres and SQLite adapters plus the migration runner they share             |
 | `@spy4x/server/db/migrate`             | Migration runner: discovers, orders and applies `.sql` files, one port for both       |
 | `@spy4x/server/db/postgres`            | Postgres pool with sane connect/idle/statement timeout defaults                       |
+| `@spy4x/server/db/testing`             | `requireDbConnection`: integration-test Postgres settings, fails loudly when missing  |
 | `@spy4x/server/db/sqlite`              | SQLite adapter behind an injectable driver port; ships no driver                      |
 | `@spy4x/server/request-log`            | Hono request-logging middleware, method/path/status/elapsed only, injected writer     |
 | `@spy4x/server/config`                 | `EnvReader` + `loadConfig`: one arktype schema validated against the environment      |
@@ -1216,6 +1217,21 @@ Found by an audit of the extracted code, not inherited from a source.
 Two adapters, one migration runner. `@spy4x/server/db` is the barrel; `db/migrate`,
 `db/postgres` and `db/sqlite` are the subpaths. Nothing here ships a driver: `postgres` is pinned in
 the root import map and the SQLite driver is the caller's own, passed through `SqliteDriver`.
+
+### Integration-test settings: `@spy4x/server/db/testing`
+
+```ts
+import { createSql } from "@spy4x/server/db/postgres"
+import { requireDbConnection } from "@spy4x/server/db/testing"
+
+const sql = createSql(requireDbConnection({ hint: "recipe in docs/handoff.md" }))
+```
+
+`requireDbConnection({ env?, hint? })` reads `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME` and the
+optional `DB_PORT` and returns `{ connection, connectTimeout: 5 }`. When variables are missing or
+blank it throws one error naming all of them, for example `integration test needs DB_HOST, DB_PASS
+(recipe in docs/handoff.md)`, so a test fails instead of skipping. `env` is an `EnvReader`
+(`createEnvReader` makes one for a test); the default is the process environment.
 
 ### A deferred constraint's failure at implicit commit is not reported on a single statement
 

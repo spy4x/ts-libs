@@ -2008,6 +2008,12 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `removeSqliteFiles` (function), `jsr:@spy4x/server/db/sqlite`: Delete a database file and its `-wal`/`-shm` sidecars.
 - `resolveSqlitePath` (function), `jsr:@spy4x/server/db/sqlite`: Resolve the database path.
 
+### `jsr:@spy4x/server/db/testing`
+
+- `RequireDbConnectionOptions` (interface), `jsr:@spy4x/server/db/testing`: What requireDbConnection reads from and says.
+- `TEST_CONNECT_TIMEOUT_SECONDS` (constant), `jsr:@spy4x/server/db/testing`: Seconds a test waits for the database; the driver's own default made a dead host look hung.
+- `requireDbConnection` (function), `jsr:@spy4x/server/db/testing`: Postgres connection settings for an integration test, read from `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS` and `DB_NAME`.
+
 ### `jsr:@spy4x/server/env-age64`
 
 - `AGE64_PREFIX` (constant), `jsr:@spy4x/server/env-age64`: Prefix every encrypted value carries: `KEY=age64:<base64>`.
@@ -2752,4 +2758,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 7f038627b8ea32871f8b1dc0aa93a4e695bf4d85cb58a6da6909ae7db1f093bf -->
+<!-- export surface: sha256 1b263fecca7bbd5e278bcaafdb57bc9f29d71e8bafa0cff655641ca748cc464a -->
