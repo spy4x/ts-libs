@@ -4,7 +4,8 @@
  * `parseIp` accepts exactly one bare IPv4 or IPv6 address and nothing around it: no port, no
  * brackets, no zone id, no whitespace. It returns the address in one canonical spelling, so two
  * spellings of the same address compare equal as strings. `ipInRanges` tells whether an address
- * lies inside any of a list of CIDR ranges, for example a proxy's published edge ranges.
+ * lies inside any of a list of CIDR ranges, for example a proxy's published edge ranges. `ipHint`
+ * masks an address for display, keeping only its network part.
  *
  * Pure: no DNS, no I/O, no permissions.
  */
@@ -67,6 +68,25 @@ export function parseIp(input: string): ParsedIp | null {
 /** The canonical spelling of `input` ({@link parseIp}), or `null` when it is not an address. */
 export function normalizeIp(input: string): string | null {
   return parseIp(input)?.address ?? null
+}
+
+/**
+ * The address with only its network part shown, for display in a list of signed-in devices: the
+ * first three parts of an IPv4 address (`203.0.113.*`) or the first two groups of an IPv6 one
+ * (`2001:db8:*`). Not three IPv6 groups: a provider often gives one household a whole /48. Enough
+ * to tell a home network from a phone network, too little to point at one machine.
+ *
+ * `address` goes through {@link parseIp}, so an IPv4-mapped IPv6 address (`::ffff:198.51.100.7`)
+ * is shown as the IPv4 address it carries. Returns `null` for a missing value and for anything
+ * `parseIp` refuses; the input is never echoed back.
+ */
+export function ipHint(address: string | null | undefined): string | null {
+  const parsed = address ? parseIp(address) : null
+  if (!parsed) return null
+  const bytes = parsed.bytes
+  if (parsed.version === 4) return `${bytes[0]}.${bytes[1]}.${bytes[2]}.*`
+  const groups = [0, 2].map((at) => ((bytes[at] << 8) | bytes[at + 1]).toString(16))
+  return `${groups.join(":")}:*`
 }
 
 /**
