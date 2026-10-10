@@ -8,6 +8,7 @@
     "./safe-fetch": "./safe-fetch.ts",
     "./bounded-body": "./bounded-body.ts",
     "./ip": "./ip.ts",
-    "./redirect-path": "./redirect-path.ts"
+    "./redirect-path": "./redirect-path.ts",
+    "./user-agent": "./user-agent.ts"
   }
 }

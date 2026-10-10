@@ -15,8 +15,9 @@ net/url-shape.ts      normalizeUrlShape()   — shape only
 net/url-policy.ts     validatePublicUrl()   — the SSRF guard
 net/safe-fetch.ts     safeFetch()           — guard + redirect re-validation
 net/bounded-body.ts   readBoundedText/Json/Body, readContentLength, parseBoundedFormData
-net/ip.ts             parseIp(), normalizeIp(), ipInRanges(), CLOUDFLARE_IP_RANGES
+net/ip.ts             parseIp(), normalizeIp(), ipInRanges(), ipHint(), CLOUDFLARE_IP_RANGES
 net/redirect-path.ts  safeRedirectPath()    — a ?next= value that stays on the site
+net/user-agent.ts     deviceName()          — "Safari on iPhone" from a User-Agent header
 ```
 
 ## Install
@@ -25,7 +26,8 @@ net/redirect-path.ts  safeRedirectPath()    — a ?next= value that stays on the
 deno add jsr:@spy4x/net
 ```
 
-Runs on: server (Deno), with `./redirect-path` and `./url-shape` also in a browser bundle.
+Runs on: server (Deno), with `./redirect-path`, `./url-shape` and `./user-agent` also in a browser
+bundle.
 
 ```ts
 import { validatePublicUrl } from "@spy4x/net/url-policy"
@@ -286,6 +288,35 @@ that one address. A malformed range throws a `RangeError` on every call, whether
 or not an earlier range matched: a typo in a trusted-proxy list should break
 loudly, not quietly trust nobody. No provider's range list ships here; those
 change, so the caller passes its own.
+
+## Labels for a list of signed-in devices
+
+```ts
+import { ipHint } from "@spy4x/net/ip"
+import { deviceName } from "@spy4x/net/user-agent"
+
+deviceName(request.headers.get("user-agent")) // "Safari on iPhone"
+deviceName("curl/8.9.1") // "Unknown device"
+ipHint("203.0.113.42") // "203.0.113.*"
+ipHint("2001:db8:85a3::7348") // "2001:db8:*"
+ipHint("not an address") // null
+```
+
+Work both out once, when the session is created, and store the two labels
+instead of the full header and the full address.
+
+`deviceName` names the browser and the system, or only the one it recognises, or
+`UNKNOWN_DEVICE` ("Unknown device"). The answer is built from the module's own
+words, never from the header's text, and is under 30 characters long. It is a
+label, not browser detection: the client chooses the header, so never use the
+answer to decide what a client may do. An iPad that asks for the desktop site
+sends a Mac's user agent and is named "Safari on macOS". Only the first 512
+characters of the header are read.
+
+`ipHint` keeps the first three parts of an IPv4 address or the first two groups
+of an IPv6 one: enough to tell a home network from a phone network, too little
+to point at one machine. It returns `null` for a missing value and for anything
+`parseIp` refuses.
 
 ## A path to go to next
 

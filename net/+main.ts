@@ -19,7 +19,11 @@
  * sign-in, so following it cannot leave the site.
  *
  * `ip.ts` parses one IP address into a canonical spelling and checks it against
- * CIDR ranges, for example to trust a header only from a known proxy.
+ * CIDR ranges, for example to trust a header only from a known proxy, and masks
+ * one for display.
+ *
+ * `user-agent.ts` turns a `User-Agent` header into a display label such as
+ * "Safari on iPhone", for a list of signed-in devices.
  *
  * Zero runtime dependencies — `URL`, `Deno.resolveDns`, `ReadableStream`,
  * `TextDecoder` and `AbortController` only.
@@ -80,8 +84,10 @@ export {
 } from "./bounded-body.ts"
 export type { BodyReadOptions, BodySource } from "./bounded-body.ts"
 
-export { CLOUDFLARE_IP_RANGES, ipInRanges, normalizeIp, parseIp } from "./ip.ts"
+export { CLOUDFLARE_IP_RANGES, ipHint, ipInRanges, normalizeIp, parseIp } from "./ip.ts"
 export type { ParsedIp } from "./ip.ts"
 
 export { safeRedirectPath } from "./redirect-path.ts"
 export type { SafeRedirectPathOptions } from "./redirect-path.ts"
+
+export { deviceName, UNKNOWN_DEVICE } from "./user-agent.ts"

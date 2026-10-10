@@ -1,6 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { CLOUDFLARE_IP_RANGES, ipInRanges, normalizeIp, parseIp } from "./ip.ts"
+import { CLOUDFLARE_IP_RANGES, ipHint, ipInRanges, normalizeIp, parseIp } from "./ip.ts"
 
 describe("parseIp", () => {
   it("accepts a dotted-decimal IPv4 address with its bytes", () => {
@@ -254,5 +254,38 @@ describe("CLOUDFLARE_IP_RANGES", () => {
 
   it("cannot be changed at run time", () => {
     expect(Object.isFrozen(CLOUDFLARE_IP_RANGES)).toBe(true)
+  })
+})
+
+describe("ipHint", () => {
+  it("hides the last part of an IPv4 address", () => {
+    const cases: [string, string][] = [
+      ["203.0.113.42", "203.0.113.*"],
+      ["10.0.0.1", "10.0.0.*"],
+      ["255.255.255.255", "255.255.255.*"],
+    ]
+    for (const [address, hint] of cases) expect(ipHint(address), address).toBe(hint)
+  })
+
+  it("shows an IPv4-mapped IPv6 address as IPv4 with its last part hidden", () => {
+    expect(ipHint("::ffff:198.51.100.7")).toBe("198.51.100.*")
+  })
+
+  it("keeps only the first two groups of an IPv6 address, less than one household's /48", () => {
+    const cases: [string, string][] = [
+      ["2001:db8:85a3:8d3:1319:8a2e:370:7348", "2001:db8:*"],
+      ["2001:0DB8::0001", "2001:db8:*"],
+      ["2001::1", "2001:0:*"],
+      ["::1", "0:0:*"],
+    ]
+    for (const [address, hint] of cases) expect(ipHint(address), address).toBe(hint)
+  })
+
+  it("gives nothing for a missing or malformed address, and never echoes it", () => {
+    for (
+      const input of [null, undefined, "", "unknown", "300.1.1.1", "203.0.113.42:8080", "<b>1.2.3"]
+    ) {
+      expect(ipHint(input), String(input)).toBeNull()
+    }
   })
 })
