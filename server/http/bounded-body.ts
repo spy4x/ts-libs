@@ -36,7 +36,8 @@
  *
  * `readJsonBody` is this module's own addition for Hono apps: it reads a request's JSON body
  * through the canonical `readBoundedJson` and turns its failures into `HTTPException`s (413, 408
- * and 400), so every route does not repeat that mapping. `readFormBody` does the same for a form
+ * and 400), so every route does not repeat that mapping. On request it also refuses a body that is
+ * not declared as JSON (415), and throws the caller's own error class in place of `HTTPException`. `readFormBody` does the same for a form
  * post, from a plain `Request`.
  *
  * @module
@@ -98,6 +99,41 @@ export const JSON_BODY_TIMEOUT = "Request body timed out"
 /** Message of the 400 {@link readJsonBody} throws when the body is not JSON. */
 export const JSON_BODY_INVALID = "Request body is not valid JSON"
 
+/** Message of the 415 {@link readJsonBody} throws when the request is not declared as JSON. */
+export const JSON_BODY_WRONG_TYPE = "Content type must be JSON"
+
+/** One way a request's JSON body was refused, as {@link ReadJsonBodyOptions.toError} receives it. */
+export interface JsonBodyFailure {
+  /** The HTTP status that fits: 415 wrong `Content-Type`, 413 too large, 408 stalled, 400 not JSON. */
+  status: 415 | 413 | 408 | 400
+  /** The message {@link readJsonBody} would have put in its `HTTPException`. */
+  message: string
+  /** The reader's own error. Absent for 415, which is decided before the body is read. */
+  cause?: unknown
+}
+
+/** Options of {@link readJsonBody}: the reader's `maxBytes` and `timeoutMs`, plus two of its own. */
+export interface ReadJsonBodyOptions extends BodyReadOptions {
+  /**
+   * Refuse, before reading the body, a request whose `Content-Type` is not `application/json`
+   * (any letter case, parameters such as `; charset=utf-8` allowed). Off by default.
+   *
+   * A browser sends a cross-site form post as `text/plain` without asking the server first, so a
+   * route that changes data on a cookie session should turn this on.
+   */
+  requireJsonContentType?: boolean
+  /**
+   * Builds the error to throw for a refused body, in place of Hono's `HTTPException`, so that a
+   * route answers in its own error shape. Not called for an error that is not about the request.
+   */
+  toError?: (failure: JsonBodyFailure) => Error
+}
+
+/** Whether a `Content-Type` header names `application/json`, whatever its parameters and case. */
+function isJsonContentType(header: string | null): boolean {
+  return header?.split(";")[0].trim().toLowerCase() === "application/json"
+}
+
 /**
  * Read a Hono request's body as JSON under the byte cap and stall budget, and turn each way it can
  * fail into the HTTP status a client should see. Use it in place of `c.req.json()`, which buffers a
@@ -107,34 +143,54 @@ export const JSON_BODY_INVALID = "Request body is not valid JSON"
  * its own, and a route with its own error shape catches it and reads `status`. The original error
  * is kept as `cause`. An empty body is not JSON and gets 400.
  *
+ * A route whose errors have their own class passes `toError` and gets that class thrown instead:
+ *
+ * ```ts
+ * const body = await readJsonBody(c, {
+ *   maxBytes: 64 * 1024,
+ *   requireJsonContentType: true,
+ *   toError: ({ message }) => new NoteError(`INVALID_REQUEST`, message),
+ * })
+ * ```
+ *
  * The result is `unknown` by default: validate it (arktype) before using it.
  *
  * @param c The Hono context. Its raw request body is read once, so do not read it elsewhere.
- * @param options `maxBytes` (default 5 MiB) and `timeoutMs`, the per-chunk stall budget (default
- * 10 s).
+ * @param options `maxBytes` (default 5 MiB), `timeoutMs`, the per-chunk stall budget (default
+ * 10 s), `requireJsonContentType` and `toError`.
+ * @throws {HTTPException} 415 ({@link JSON_BODY_WRONG_TYPE}) when `requireJsonContentType` is set
+ * and the request is not declared as `application/json`. The body is not read.
  * @throws {HTTPException} 413 ({@link JSON_BODY_TOO_LARGE}) when the body, or its declared
  * `content-length`, is over `maxBytes`.
  * @throws {HTTPException} 408 ({@link JSON_BODY_TIMEOUT}) when no chunk arrives within
  * `timeoutMs`.
  * @throws {HTTPException} 400 ({@link JSON_BODY_INVALID}) when the body is not valid JSON.
+ * @throws The error `toError` returns, in place of each `HTTPException` above, when it is given.
  * @throws Any other error unchanged, such as the `RangeError` for a `maxBytes` that is not finite,
  * or a `TypeError` for a body that was already read.
  */
 export async function readJsonBody<T = unknown>(
   c: Context,
-  options: BodyReadOptions = {},
+  options: ReadJsonBodyOptions = {},
 ): Promise<T> {
+  const { requireJsonContentType = false, toError, ...readOptions } = options
+  const refuse = (failure: JsonBodyFailure): Error =>
+    toError?.(failure) ??
+      new HTTPException(failure.status, { message: failure.message, cause: failure.cause })
+  if (requireJsonContentType && !isJsonContentType(c.req.raw.headers.get("content-type"))) {
+    throw refuse({ status: 415, message: JSON_BODY_WRONG_TYPE })
+  }
   try {
-    return await readBoundedJson<T>(c.req.raw, options)
+    return await readBoundedJson<T>(c.req.raw, readOptions)
   } catch (error) {
     if (error instanceof PayloadTooLargeError) {
-      throw new HTTPException(413, { message: JSON_BODY_TOO_LARGE, cause: error })
+      throw refuse({ status: 413, message: JSON_BODY_TOO_LARGE, cause: error })
     }
     if (error instanceof BodyReadTimeoutError) {
-      throw new HTTPException(408, { message: JSON_BODY_TIMEOUT, cause: error })
+      throw refuse({ status: 408, message: JSON_BODY_TIMEOUT, cause: error })
     }
     if (error instanceof SyntaxError) {
-      throw new HTTPException(400, { message: JSON_BODY_INVALID, cause: error })
+      throw refuse({ status: 400, message: JSON_BODY_INVALID, cause: error })
     }
     throw error
   }
