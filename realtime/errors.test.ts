@@ -3,7 +3,12 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 
-import { isRealtimeErrorCode, REALTIME_ERROR_CODES, RealtimeRequestError } from "./errors.ts"
+import {
+  describeError,
+  isRealtimeErrorCode,
+  REALTIME_ERROR_CODES,
+  RealtimeRequestError,
+} from "./errors.ts"
 
 describe("realtime error codes", () => {
   it("names the eight codes a client can switch on", () => {
@@ -34,5 +39,19 @@ describe("realtime error codes", () => {
     expect(withDetails.code).toBe("bad_request")
     expect(withDetails.details).toEqual({ field: "title" })
     expect(without.details).toBeUndefined()
+  })
+})
+
+describe("describeError", () => {
+  it("tells the server's message when the server answered", () => {
+    const error = new RealtimeRequestError("conflict", "That name is taken")
+
+    expect(describeError(error, "Could not save")).toBe("That name is taken")
+  })
+
+  it("falls back for an error that is not a server answer", () => {
+    expect(describeError(new Error("socket closed"), "Could not save")).toBe("Could not save")
+    expect(describeError("boom", "Could not save")).toBe("Could not save")
+    expect(describeError({ message: "looks like one" }, "Could not save")).toBe("Could not save")
   })
 })

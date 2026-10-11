@@ -50,3 +50,27 @@ export class RealtimeRequestError extends Error {
     this.details = details
   }
 }
+
+/**
+ * What to tell the person about a failed request: the server's own message when it answered with
+ * one, otherwise `fallback`.
+ *
+ * Only a {@link RealtimeRequestError} carries text that is meant for a person. Anything else that
+ * a call can reject with, such as `ConnectionLostError` for a dropped socket or a bug's `TypeError`,
+ * has a technical message, so the caller's `fallback` is shown in its place.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await calls.command(`notes.create`, input)
+ * } catch (cause) {
+ *   formError.value = describeError(cause, `Could not create the note`)
+ * }
+ * ```
+ *
+ * @param error Whatever the failed call rejected with.
+ * @param fallback The text for an error that is not a server answer.
+ */
+export function describeError(error: unknown, fallback: string): string {
+  return error instanceof RealtimeRequestError ? error.message : fallback
+}

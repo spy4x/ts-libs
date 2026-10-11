@@ -74,7 +74,9 @@ application surface:
   one of `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`,
   `rate_limited`, `internal`, `timeout`. A dispatcher exception that is not a
   `RealtimeRequestError` is answered `internal` with a fixed message; its text
-  goes to `onRequestError`, never to the client.
+  goes to `onRequestError`, never to the client. On the page,
+  `describeError(error, fallback)` gives the text to show: the server's message
+  for a `RealtimeRequestError`, the caller's fallback for anything else.
 - **Bounded.** One connection may have `maxInFlightRequests` (default 16)
   unanswered requests; the next is answered `rate_limited` and takes no slot. A
   request id already in flight is answered `bad_request`, and so is a request

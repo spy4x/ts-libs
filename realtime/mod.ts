@@ -61,6 +61,7 @@ export {
 } from "./cursor.ts"
 
 export {
+  describeError,
   isRealtimeErrorCode,
   REALTIME_ERROR_CODES,
   type RealtimeErrorCode,
