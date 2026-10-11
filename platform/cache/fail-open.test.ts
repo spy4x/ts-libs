@@ -198,9 +198,9 @@ describe("failOpen", () => {
     storage.down = true
     await cache.get("user_1") // untrusted; the next attempt is due in 5 s
     storage.down = false
-    await storage.set("user_1", `{"stale":true}`)
 
     await cache.reset()
+    await storage.set("user_1", `{"stale":true}`) // written behind the wrapper's back
     advance(4_999)
 
     expect(await cache.get("user_1")).toBeNull()
