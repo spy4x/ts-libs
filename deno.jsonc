@@ -126,6 +126,8 @@
     // `platform/tokens.ts`'s ULID generator (#70): replaces a hand-written encoder that existed
     // only because this pin was missing.
     "@std/ulid": "jsr:@std/ulid@1.0.0",
+    // `platform/universal/uuid.ts`: the version 7 generator.
+    "@std/uuid/v7": "jsr:@std/uuid@1.1.2/v7",
 
     // HTTP framework. `server/http` (#9) and `platform/rate-limit` (#4)
     // middleware.

@@ -678,6 +678,9 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `StoreError` (type), `jsr:@spy4x/platform`: Every error a store operation can settle with.
 - `TimeFormatOptions` (interface), `jsr:@spy4x/platform`: Locale and zone applied by formatTime and timeAgo.
 - `TimeFormatter` (class), `jsr:@spy4x/platform`: Format an instant for display.
+- `UUID_PATTERN` (constant), `jsr:@spy4x/platform`: A lower-case UUID of any version, the form Postgres and `crypto.randomUUID` print.
+- `UUID_V7_PATTERN` (constant), `jsr:@spy4x/platform`: A lower-case UUID version 7 with the RFC 9562 variant bits.
+- `UuidVersion` (type), `jsr:@spy4x/platform`: The UUID versions RFC 9562 defines.
 - `ValidationError` (type), `jsr:@spy4x/platform`: A rejected input: its kind, one sentence for the user, the issues per field path, and arktype's own errors.
 - `backoffDelay` (function), `jsr:@spy4x/platform`: Caps a raw delay and jitters it — the exponential-backoff arithmetic that used to be implemented twice: once with symmetric jitter around the capped delay (`integrations/retry.ts`'s `createExponentialBackoff`) and once with jitter that only ever shortens the wait (`realtime/backoff.ts`'s `nextBackoffDelay`).
 - `breadcrumbItems` (function), `jsr:@spy4x/platform`: `itemListElement` for a schema.org `BreadcrumbList`, built from the crumbs the caller stated.
@@ -703,6 +706,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `initials` (function), `jsr:@spy4x/platform`: Reduce a name to one or two initials, e.g. for an avatar's fallback face.
 - `isRecord` (function), `jsr:@spy4x/platform`: True for a plain keyed object: not `null`, not an array.
 - `isSilentError` (function), `jsr:@spy4x/platform`: Whether an error should stay quiet.
+- `isUuid` (function), `jsr:@spy4x/platform`: True for a lower-case UUID.
 - `isValidDate` (function), `jsr:@spy4x/platform`: Whether the input is a usable date: a `Date` or an ISO `YYYY-MM-DD`-prefixed string that `Date` can parse.
 - `jsonLdText` (function), `jsr:@spy4x/platform`: Serialise JSON-LD for a `<script>` body.
 - `levenshtein` (function), `jsr:@spy4x/platform`: Levenshtein edit distance between two strings, computed over code points.
@@ -736,6 +740,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `unwrap` (function), `jsr:@spy4x/platform`: Narrow a Result to its value, or raise.
 - `unwrapOr` (function), `jsr:@spy4x/platform`: Narrow a Result to its value, or fall back.
 - `utf8ByteLength` (function), `jsr:@spy4x/platform`: UTF-8 byte length, i.e. what a `Content-Length` or a storage quota counts.
+- `uuidV7` (function), `jsr:@spy4x/platform`: A new lower-case UUID version 7, such as `019a2f4e-7c31-7b2d-9e4a-5c8f1d3b6a70`.
 
 ### `jsr:@spy4x/platform/api`
 
@@ -1545,6 +1550,14 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ONE_YEAR_IN_MILLISECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One year (12 nominal months), in milliseconds.
 - `ONE_YEAR_IN_SECONDS` (constant), `jsr:@spy4x/platform/universal/time-constants`: One year (12 nominal months), in seconds.
 - `SECONDS_IN_MINUTE` (constant), `jsr:@spy4x/platform/universal/time-constants`: Seconds in one minute.
+
+### `jsr:@spy4x/platform/universal/uuid`
+
+- `UUID_PATTERN` (constant), `jsr:@spy4x/platform/universal/uuid`: A lower-case UUID of any version, the form Postgres and `crypto.randomUUID` print.
+- `UUID_V7_PATTERN` (constant), `jsr:@spy4x/platform/universal/uuid`: A lower-case UUID version 7 with the RFC 9562 variant bits.
+- `UuidVersion` (type), `jsr:@spy4x/platform/universal/uuid`: The UUID versions RFC 9562 defines.
+- `isUuid` (function), `jsr:@spy4x/platform/universal/uuid`: True for a lower-case UUID.
+- `uuidV7` (function), `jsr:@spy4x/platform/universal/uuid`: A new lower-case UUID version 7, such as `019a2f4e-7c31-7b2d-9e4a-5c8f1d3b6a70`.
 
 ### `jsr:@spy4x/platform/validation/predicates`
 
@@ -2997,4 +3010,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 3e4ddae91b68b06d7308a900cf0b3936aa21417a53042f85d4cbaea78032f8a4 -->
+<!-- export surface: sha256 eb676adf41a3d9c6d8c1f8a05b2a46dd5488467400724e6fdabfa2ed09ee98c8 -->
