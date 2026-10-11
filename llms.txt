@@ -816,7 +816,6 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `getCookie` (function), `jsr:@spy4x/platform/browser`: Look up `name` in `doc.cookie`, decoding its value.
 - `idbRequest` (function), `jsr:@spy4x/platform/browser`: Resolves a request's result, or rejects with its error.
 - `idbTransactionDone` (function), `jsr:@spy4x/platform/browser`: Resolves when a transaction has committed, rejects when it aborts or fails.
-- `installLocalStorage` (function), `jsr:@spy4x/platform/browser`: Puts a memoryStorage in place of the runtime's global `localStorage`, for one test, and gives it and the way back.
 - `installOfflineShell` (function), `jsr:@spy4x/platform/browser`: Register the install, activate, fetch and message listeners that keep the app shell offline.
 - `installPushNotifications` (function), `jsr:@spy4x/platform/browser`: Register the `push` and `notificationclick` listeners of a service worker.
 - `isApplePlatform` (function), `jsr:@spy4x/platform/browser`: Whether the browser runs on macOS, iOS or iPadOS, where `mod` means Command.
@@ -958,9 +957,12 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `StorageLike` (type), `jsr:@spy4x/platform/browser/storage`: The subset of the DOM `Storage` interface this module uses.
 - `StorageRead` (type), `jsr:@spy4x/platform/browser/storage`: Outcome of a write or a read, so a caller can tell "absent" from "present but rejected".
 - `TypedStorage` (interface), `jsr:@spy4x/platform/browser/storage`: A namespaced handle over one key.
-- `installLocalStorage` (function), `jsr:@spy4x/platform/browser/storage`: Puts a memoryStorage in place of the runtime's global `localStorage`, for one test, and gives it and the way back.
 - `makeStorage` (function), `jsr:@spy4x/platform/browser/storage`: Bind a StorageLike to one key.
 - `memoryStorage` (function), `jsr:@spy4x/platform/browser/storage`: A `Map`-backed StorageLike.
+
+### `jsr:@spy4x/platform/browser/testing`
+
+- `installLocalStorage` (function), `jsr:@spy4x/platform/browser/testing`: Puts a `memoryStorage` in place of the runtime's global `localStorage`, for one test, and gives it and the way back.
 
 ### `jsr:@spy4x/platform/cache`
 
@@ -2962,4 +2964,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 8b178789cf19f60dd1cfaa823fc29b590680a2574ca05da9df304af987d40d6d -->
+<!-- export surface: sha256 fb24a62218e4a66d9f483405a83aca5d73f9d29d009b3765017f748b858bfe9f -->
