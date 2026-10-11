@@ -3552,6 +3552,11 @@ idempotency key. A command without a key is not: the socket may have delivered i
 dropped. A server answer (`unauthorized`, `conflict`, a socket `RequestTimeoutError`) is never
 asked again over the other module; `sendCommand` decides whether to try again.
 
+`isForeignAnswer(status, code)` is the rule the HTTP module uses to tell a proxy's answer from the
+API's: a status of 500 or more, a 404 or a 429 with no error code in the body. A page that reads
+with plain `fetch` asks it before it treats a 404 as "this is gone", so a deploy does not delete a
+saved copy.
+
 #### Waiting for the first open
 
 When a page starts, the socket is still opening, so its first calls would go over HTTP although the

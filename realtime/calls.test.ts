@@ -13,6 +13,7 @@ import {
   createComposedCallPort,
   createHttpCallPort,
   createSocketCallPort,
+  isForeignAnswer,
   isRetryable,
   isUnknownOutcome,
   sendCommand,
@@ -303,6 +304,15 @@ describe("the HTTP port", () => {
 
       await expect(port(fetcher).query("x")).rejects.toBeInstanceOf(ConnectionLostError)
     }
+  })
+
+  it("names a 5xx, a 404 and a 429 without a code as not the API's answer", () => {
+    for (const status of [404, 429, 500, 502, 503, 504]) {
+      expect(isForeignAnswer(status)).toBe(true)
+      expect(isForeignAnswer(status, null)).toBe(true)
+      expect(isForeignAnswer(status, "not_found")).toBe(false)
+    }
+    for (const status of [400, 401, 403, 409, 422]) expect(isForeignAnswer(status)).toBe(false)
   })
 
   it("keeps the code of a 404 or 429 that carries the error body", async () => {
