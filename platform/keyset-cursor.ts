@@ -37,6 +37,7 @@ import {
   SignedPayloadErrorCode,
 } from "./signed-payload.ts"
 import { deriveSecret } from "./tokens.ts"
+import { UUID_PATTERN } from "./universal/uuid.ts"
 
 /**
  * Why a cursor was refused. Callers map the code to their own error and never branch on a message;
@@ -69,9 +70,6 @@ const KEY_LABEL_PREFIX = "spy4x.keyset-cursor.v1:"
 
 /** Payload version handed to the signed-payload codec. Raising it voids every issued cursor. */
 const PAYLOAD_VERSION = 1
-
-/** A lower-case UUID of any version, the form Postgres and `crypto.randomUUID` print. */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * An instant exactly as `Date.prototype.toISOString` prints it, so a decoded cursor names the same
