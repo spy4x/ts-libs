@@ -151,3 +151,63 @@ export function memoryStorage(
     },
   }
 }
+
+/**
+ * The browser's `localStorage`, made safe to call: it never throws, and a value the browser
+ * refuses to keep is remembered in memory until the page closes.
+ *
+ * A browser can block storage entirely (Safari with cookies blocked, a sandboxed frame), where
+ * even reading the `localStorage` property throws, or refuse one write because the quota is full.
+ * A caller that keeps something it can rebuild, such as a sync cursor or a flag, should not need a
+ * `try`/`catch` at every call for that. With this store:
+ *
+ * - `setItem` that the browser refuses keeps the value in memory, and `getItem` returns it from
+ *   there. A later `setItem` that succeeds moves the key back to the browser.
+ * - `getItem` that the browser refuses gives `null` for a key that is not kept in memory.
+ * - `removeItem` forgets the key in both places and ignores a refusal.
+ *
+ * While storage works, every call goes to it, so another tab's write is seen as usual. A value
+ * kept in memory is gone on the next page load.
+ *
+ * @example
+ * ```ts
+ * const storage = browserStorage()
+ * storage.setItem(`sync:cursor`, cursor) // never throws
+ * ```
+ *
+ * @param open Gives the store to wrap. It is called on every operation and may throw. Defaults to
+ * reading `globalThis.localStorage`, so nothing is touched at import time or under SSR. Pass
+ * `() => sessionStorage` for a store that lasts one tab.
+ */
+export function browserStorage(
+  open: () => KeyValueStore = () => globalThis.localStorage,
+): KeyValueStore {
+  const refused = new Map<string, string>()
+  return {
+    getItem(key) {
+      const kept = refused.get(key)
+      if (kept !== undefined) return kept
+      try {
+        return open().getItem(key)
+      } catch (_error) {
+        return null
+      }
+    },
+    setItem(key, value) {
+      try {
+        open().setItem(key, value)
+        refused.delete(key)
+      } catch (_error) {
+        refused.set(key, value)
+      }
+    },
+    removeItem(key) {
+      refused.delete(key)
+      try {
+        open().removeItem(key)
+      } catch (_error) {
+        // Nothing stored that the browser lets us reach, so nothing to remove.
+      }
+    },
+  }
+}
