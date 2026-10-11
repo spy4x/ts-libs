@@ -2158,6 +2158,15 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `parseMigrationName` (function), `jsr:@spy4x/server/db/migrate`: Turn a file name into a Migration: strip the extension, then the `.no_transaction` suffix.
 - `runMigrations` (function), `jsr:@spy4x/server/db/migrate`: Apply every pending migration under `options.folder`, in sorted file-name order.
 
+### `jsr:@spy4x/server/db/notify`
+
+- `JsonListenerOptions` (interface), `jsr:@spy4x/server/db/notify`: Options of listenJson.
+- `MAX_NOTIFY_CHANNEL_BYTES` (constant), `jsr:@spy4x/server/db/notify`: The longest channel name, in UTF-8 bytes.
+- `MAX_NOTIFY_PAYLOAD_BYTES` (constant), `jsr:@spy4x/server/db/notify`: The longest payload, in UTF-8 bytes of its JSON text, announceJson sends.
+- `NotifyPayloadTooLargeError` (class), `jsr:@spy4x/server/db/notify`: The payload is over MAX_NOTIFY_PAYLOAD_BYTES.
+- `announceJson` (function), `jsr:@spy4x/server/db/notify`: Sends `payload` as JSON to everyone listening on `channel`.
+- `listenJson` (function), `jsr:@spy4x/server/db/notify`: Calls `onMessage` for every JSON payload announced on `channel` that `schema` accepts, and resolves once the channel is subscribed, with a function that stops listening.
+
 ### `jsr:@spy4x/server/db/postgres`
 
 - `CreateSqlOptions` (interface), `jsr:@spy4x/server/db/postgres`: A connection config plus the pool options and `application_name` to use.
@@ -2276,6 +2285,9 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `BodySource` (interface), `jsr:@spy4x/server/http/bounded-body`: The read surface shared by `Request` and `Response`.
 - `BoundedBodyTimeout` (type), `jsr:@spy4x/server/http/bounded-body`: The stall budget, kept under this package's historical name so an existing `import type { BoundedBodyTimeout }` keeps compiling.
+- `FORM_BODY_INVALID` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 400 readFormBody throws when the body is not a form.
+- `FORM_BODY_TIMEOUT` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 408 readFormBody throws when the body stalls.
+- `FORM_BODY_TOO_LARGE` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 413 readFormBody throws when the body is over the cap.
 - `JSON_BODY_INVALID` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 400 readJsonBody throws when the body is not JSON.
 - `JSON_BODY_TIMEOUT` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 408 readJsonBody throws when the body stalls.
 - `JSON_BODY_TOO_LARGE` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 413 readJsonBody throws when the body is over the cap.
@@ -2285,6 +2297,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `readBoundedBody` (function), `jsr:@spy4x/server/http/bounded-body`: Read a body into bytes under the hard cap and stall budget.
 - `readBoundedText` (function), `jsr:@spy4x/server/http/bounded-body`: Read a body as text, decoding incrementally so the cap is enforced before the whole payload is materialised as one string.
 - `readContentLength` (function), `jsr:@spy4x/server/http/bounded-body`: Read the declared `Content-Length`, if the sender provided a usable one.
+- `readFormBody` (function), `jsr:@spy4x/server/http/bounded-body`: Read a form post (`application/x-www-form-urlencoded` or `multipart/form-data`) under the byte cap and stall budget, and turn each way it can fail into the HTTP status a client should see.
 - `readJsonBody` (function), `jsr:@spy4x/server/http/bounded-body`: Read a Hono request's body as JSON under the byte cap and stall budget, and turn each way it can fail into the HTTP status a client should see.
 
 ### `jsr:@spy4x/server/http/cors`
@@ -2295,6 +2308,15 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `DEV_ORIGIN_HOSTS` (constant), `jsr:@spy4x/server/http/cors`: Loopback and wildcard-bind hosts accepted over plain `http` in development.
 - `createCorsOriginResolver` (function), `jsr:@spy4x/server/http/cors`: Build the origin callback `hono/cors` expects.
 - `resolveAllowedOrigin` (function), `jsr:@spy4x/server/http/cors`: Decide whether an `Origin` header value may call the API.
+
+### `jsr:@spy4x/server/http/health`
+
+- `HealthCheck` (type), `jsr:@spy4x/server/http/health`: One check: resolves `true` when the dependency works.
+- `HealthHandler` (type), `jsr:@spy4x/server/http/health`: The handler createHealthHandler returns.
+- `HealthHandlerOptions` (interface), `jsr:@spy4x/server/http/health`: Options of createHealthHandler.
+- `HealthReport` (interface), `jsr:@spy4x/server/http/health`: The JSON body of the answer.
+- `HealthStatus` (type), `jsr:@spy4x/server/http/health`: What the endpoint says about the service as a whole.
+- `createHealthHandler` (function), `jsr:@spy4x/server/http/health`: Builds the handler of a health endpoint.
 
 ### `jsr:@spy4x/server/http/same-origin`
 
@@ -2316,6 +2338,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `nginxAddHeaders` (function), `jsr:@spy4x/server/http/security-headers`: Renders headers as nginx configuration for an `include` file: one `add_header <name> "<value>" always;` line each, every line ended by a newline, so nginx sends them with error pages too.
 - `securityHeaderList` (function), `jsr:@spy4x/server/http/security-headers`: The headers securityHeaders sets, as `[name, value]` pairs with the names in lower case, for a server the middleware cannot run in: pass the list to `new Headers(list)`, set each pair on a response, or render it with nginxAddHeaders.
 - `securityHeaders` (function), `jsr:@spy4x/server/http/security-headers`: Middleware that sets the headers on every response.
+- `withSecurityHeaders` (function), `jsr:@spy4x/server/http/security-headers`: A copy of `response` that carries `headers`, for a server securityHeaders cannot run in (Fresh, `Deno.serve`, a worker).
 
 ### `jsr:@spy4x/server/idempotency`
 
@@ -2447,6 +2470,9 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/server/outbox`
 
 - `DrainResult` (interface), `jsr:@spy4x/server/outbox`: What one `drainOnce` did.
+- `JobHandler` (type), `jsr:@spy4x/server/outbox`: What runs when a job's time has come.
+- `JobPublisher` (class), `jsr:@spy4x/server/outbox`: An OutboxPublisher for an outbox that holds two kinds of rows: jobs (the delayed and repeating rows `scheduleOutboxEvent` writes) and everything else.
+- `JobPublisherOptions` (interface), `jsr:@spy4x/server/outbox`: Options of JobPublisher.
 - `LoggingOutboxPublisher` (class), `jsr:@spy4x/server/outbox`
 - `OutboxEvent` (interface), `jsr:@spy4x/server/outbox`: One outbox row.
 - `OutboxProcessor` (class), `jsr:@spy4x/server/outbox`
@@ -2971,4 +2997,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 ba32aad5cec120db7161b70da7ccf732ddae06c279f449873474afa058f9e6cf -->
+<!-- export surface: sha256 3e4ddae91b68b06d7308a900cf0b3936aa21417a53042f85d4cbaea78032f8a4 -->
