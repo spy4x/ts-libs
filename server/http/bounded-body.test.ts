@@ -15,6 +15,9 @@ import {
   // guard: unexported, they fail here as TS2305.
   type BodySource,
   type BoundedBodyTimeout,
+  FORM_BODY_INVALID,
+  FORM_BODY_TIMEOUT,
+  FORM_BODY_TOO_LARGE,
   JSON_BODY_INVALID,
   JSON_BODY_TIMEOUT,
   JSON_BODY_TOO_LARGE,
@@ -24,6 +27,7 @@ import {
   type ReadBoundedBodyOptions,
   readBoundedText,
   readContentLength,
+  readFormBody,
   readJsonBody,
 } from "./bounded-body.ts"
 
@@ -541,4 +545,86 @@ Deno.test("readJsonBody rethrows an error that is not about the body", async () 
 
   assertEquals(response.status, 500)
   assertStrictEquals(errors[0] instanceof RangeError, true)
+})
+
+const URLENCODED = { "content-type": "application/x-www-form-urlencoded" }
+
+/** The `HTTPException` `readFormBody` rejects with for `request`; fails when it resolves. */
+async function formRejection(
+  request: Request,
+  options?: ReadBoundedBodyOptions,
+): Promise<HTTPException> {
+  return await assertRejects(() => readFormBody(request, options), HTTPException)
+}
+
+Deno.test("readFormBody returns the fields of a url-encoded form", async () => {
+  const request = new Request(ORIGIN, {
+    method: "POST",
+    headers: URLENCODED,
+    body: "email=ada%40example.com&list=news",
+  })
+
+  const form = await readFormBody(request)
+
+  assertEquals(form.get("email"), "ada@example.com")
+  assertEquals(form.get("list"), "news")
+})
+
+Deno.test("readFormBody returns the fields of a multipart form", async () => {
+  const sent = new FormData()
+  sent.set("token", "abc")
+  const request = new Request(ORIGIN, { method: "POST", body: sent })
+
+  assertEquals((await readFormBody(request)).get("token"), "abc")
+})
+
+Deno.test("readFormBody answers 413 when the form is over the cap", async () => {
+  const request = new Request(ORIGIN, { method: "POST", headers: URLENCODED, body: "a=123456789" })
+
+  const error = await formRejection(request, { maxBytes: 4 })
+
+  assertEquals(error.status, 413)
+  assertEquals(error.message, FORM_BODY_TOO_LARGE)
+  assertStrictEquals(error.cause instanceof NetPayloadTooLargeError, true)
+})
+
+Deno.test("readFormBody answers 408 when the form stalls", async () => {
+  let cancelled = false
+  const request = new Request(ORIGIN, streamInit(stalledStream(() => cancelled = true), URLENCODED))
+
+  const error = await formRejection(request, { timeoutMs: 20 })
+
+  assertEquals(error.status, 408)
+  assertEquals(error.message, FORM_BODY_TIMEOUT)
+  assertEquals(cancelled, true)
+})
+
+Deno.test("readFormBody answers 400 when the body is not a form", async () => {
+  const json = new Request(ORIGIN, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: `{"email":"ada@example.com"}`,
+  })
+  const untyped = new Request(ORIGIN, streamInit(new Blob(["a=1"]).stream()))
+  const brokenMultipart = new Request(ORIGIN, {
+    method: "POST",
+    headers: { "content-type": "multipart/form-data; boundary=x" },
+    body: "not a multipart body",
+  })
+
+  for (const request of [json, untyped, brokenMultipart]) {
+    const error = await formRejection(request)
+    assertEquals(error.status, 400)
+    assertEquals(error.message, FORM_BODY_INVALID)
+  }
+})
+
+Deno.test("readFormBody rethrows an error that is not about the body", async () => {
+  const request = new Request(ORIGIN, { method: "POST", headers: URLENCODED, body: "a=1" })
+  await assertRejects(() => readFormBody(request, { maxBytes: Number.NaN }), RangeError)
+
+  const read = new Request(ORIGIN, { method: "POST", headers: URLENCODED, body: "a=1" })
+  await read.text()
+  const error = await assertRejects(() => readFormBody(read), TypeError)
+  assertStrictEquals(error instanceof HTTPException, false)
 })
