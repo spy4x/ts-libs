@@ -281,3 +281,164 @@ Deno.test(`a server copy that is completed is not completed again for a completi
   expect(theirs.status).toBe(TaskStatus.Completed)
   expect(kept(REPEATING, completed(completed(REPEATING)), theirs).ics).toBe(theirs.ics)
 })
+
+Deno.test(`a repeating task I stopped repeating and completed is completed on the server's copy`, () => {
+  const mine = completed(edited(REPEATING, { repeatRule: null }))
+  expect(mine.status).toBe(TaskStatus.Completed)
+  const output = kept(REPEATING, mine, server(edited(REPEATING, { title: `Theirs` }, ELSEWHERE)))
+  expect(output.task.status).toBe(TaskStatus.Completed)
+  expect(output.task.repeatRule).toBeUndefined()
+  expect(output.task.title).toBe(`Theirs`)
+})
+
+Deno.test(`a task I stopped repeating and completed keeps the due date the server moved it to`, () => {
+  const theirs = server(edited(REPEATING, { due: morning(`2026-10-12`) }, ELSEWHERE))
+  const output = kept(REPEATING, completed(edited(REPEATING, { repeatRule: null })), theirs)
+  expect(output.task.status).toBe(TaskStatus.Completed)
+  expect(output.task.due).toEqual(morning(`2026-10-12`))
+})
+
+const LAST = edited(REPEATING, { repeatRule: `FREQ=DAILY;COUNT=1` })
+const ENDLESS = server(edited(LAST, { repeatRule: `FREQ=DAILY;INTERVAL=1` }, ELSEWHERE))
+const STAYS_OPEN = {
+  success: false,
+  output: null,
+  error: {
+    step: KeepMineStep.Complete,
+    message: `the server's copy repeats and stays open when completed`,
+  },
+}
+
+Deno.test(`refuses when the completion that ended my series only moves the server's copy on`, () => {
+  const mine = completed(LAST)
+  expect(mine.status).toBe(TaskStatus.Completed)
+  expect(keepMineText(LAST.ics, mine.ics, ENDLESS, LATER)).toEqual(STAYS_OPEN)
+})
+
+Deno.test(`refuses when my text is completed at dates I changed and the server's copy stays open`, () => {
+  const mine = completed(edited(LAST, { due: morning(`2026-10-20`) }))
+  expect(mine.status).toBe(TaskStatus.Completed)
+  expect(keepMineText(LAST.ics, mine.ics, ENDLESS, LATER)).toEqual(STAYS_OPEN)
+})
+
+Deno.test(`a task I completed at a date I changed is completed at that date on the server's copy`, () => {
+  const mine = completed(edited(BASE, { due: day(`2026-10-20`) }))
+  const output = kept(BASE, mine, server(edited(BASE, { title: `Theirs` }, ELSEWHERE)))
+  expect(output.task.status).toBe(TaskStatus.Completed)
+  expect(output.task.due).toEqual(day(`2026-10-20`))
+  expect(output.task.title).toBe(`Theirs`)
+})
+
+Deno.test(`a date I changed on a completed task leaves it completed`, () => {
+  const theirs = server(edited(DONE, { title: `Theirs` }, ELSEWHERE))
+  const output = kept(DONE, edited(DONE, { due: day(`2026-10-20`) }), theirs)
+  expect(output.task.status).toBe(TaskStatus.Completed)
+  expect(output.task.due).toEqual(day(`2026-10-20`))
+  expect(output.task.title).toBe(`Theirs`)
+})
+
+const STARTED = fixtureTask(
+  RECURRING.replace(
+    `UID:100200320`,
+    `UID:100200320\r\nDTSTART;TZID=Asia/Ho_Chi_Minh:20261008T060000`,
+  ),
+)
+
+Deno.test(`a due date I moved to the next occurrence without the start is not a completion`, () => {
+  expect(STARTED.start).toEqual(morning(`2026-10-08`, `06:00:00`))
+  const theirs = server(edited(STARTED, { title: `Theirs` }, ELSEWHERE))
+  const output = kept(STARTED, edited(STARTED, { due: morning(`2026-10-09`) }), theirs)
+  expect(output.task.due).toEqual(morning(`2026-10-09`))
+  expect(output.task.start).toEqual(morning(`2026-10-08`, `06:00:00`))
+})
+
+Deno.test(`a due date I moved to the next occurrence with the repeat removed is not a completion`, () => {
+  const theirs = server(
+    edited(REPEATING, { due: morning(`2026-10-12`, `09:00:00`) }, ELSEWHERE),
+  )
+  const mine = edited(REPEATING, { due: morning(`2026-10-09`), repeatRule: null })
+  const output = kept(REPEATING, mine, theirs)
+  expect(output.task.due).toEqual(morning(`2026-10-09`))
+  expect(output.task.repeatRule).toBeUndefined()
+})
+
+Deno.test(`a repeating task with a count that I completed loses one from the count once`, () => {
+  const base = edited(REPEATING, { repeatRule: `FREQ=DAILY;COUNT=3` })
+  const theirs = server(edited(base, { title: `Theirs` }, ELSEWHERE))
+  const output = kept(base, completed(base), theirs)
+  expect(output.task.repeatRule).toBe(`FREQ=DAILY;COUNT=2;INTERVAL=1`)
+  expect(output.task.due).toEqual(morning(`2026-10-09`))
+  expect(output.task.title).toBe(`Theirs`)
+})
+
+Deno.test(`a reminder at a fixed time moves with the completion made again on the server's copy`, () => {
+  const base = fixtureTask(RECURRING.replace(
+    `END:VTODO`,
+    [
+      `BEGIN:VALARM`,
+      `TRIGGER;VALUE=DATE-TIME:20261008T000000Z`,
+      `ACTION:DISPLAY`,
+      `DESCRIPTION:Fixed`,
+      `END:VALARM`,
+      `END:VTODO`,
+    ].join(`\r\n`),
+  ))
+  const theirs = server(edited(base, { title: `Theirs` }, ELSEWHERE))
+  expect(theirs.ics).toContain(`TRIGGER;VALUE=DATE-TIME:20261008T000000Z`)
+  const output = kept(base, completed(base), theirs)
+  expect(output.ics).toContain(`TRIGGER;VALUE=DATE-TIME:20261009T000000Z`)
+  expect(output.ics).not.toContain(`20261008T000000Z`)
+  expect(output.task.title).toBe(`Theirs`)
+})
+
+Deno.test(`the description of a reminder I changed is written on the server's copy`, () => {
+  const mine = fixtureTask(
+    BASE.ics.replace(`DESCRIPTION:Default Tasks.org description`, `DESCRIPTION:Mine`),
+  )
+  const output = kept(BASE, mine, server(edited(BASE, { title: `Theirs` }, ELSEWHERE)))
+  expect(output.ics).toContain(`DESCRIPTION:Mine\r\nEND:VALARM`)
+  expect(output.ics).not.toContain(`Default Tasks.org description`)
+})
+
+Deno.test(`the action of a reminder I changed is written on the server's copy`, () => {
+  const mine = fixtureTask(
+    BASE.ics.replace(
+      `ACTION:DISPLAY\r\nDESCRIPTION:Default Tasks.org description`,
+      `ACTION:AUDIO`,
+    ),
+  )
+  const output = kept(BASE, mine, server(edited(BASE, { title: `Theirs` }, ELSEWHERE)))
+  expect(output.ics).toContain(`ACTION:AUDIO`)
+  expect(output.ics).not.toContain(`ACTION:DISPLAY`)
+})
+
+Deno.test(`a mail reminder stays on the server's copy when I changed another field`, () => {
+  const mail = [
+    `BEGIN:VALARM`,
+    `TRIGGER:-PT2H`,
+    `ACTION:EMAIL`,
+    `SUMMARY:Mail`,
+    `DESCRIPTION:Mail body`,
+    `ATTENDEE:mailto:someone@example.com`,
+    `END:VALARM`,
+  ]
+  const base = fixtureTask(task(`4`, `Original`, mail))
+  const theirs = server(edited(base, { notes: `Theirs` }, ELSEWHERE))
+  const output = kept(base, edited(base, { title: `Mine` }), theirs)
+  expect(output.task.title).toBe(`Mine`)
+  const alarms = (ics: string) => ics.slice(ics.indexOf(`BEGIN:VALARM`), ics.indexOf(`END:VTODO`))
+  expect(alarms(output.ics)).toBe(alarms(theirs.ics))
+  expect(output.ics).toContain(`ATTENDEE:mailto:someone@example.com`)
+})
+
+Deno.test(`reports a reopening the server's copy refuses as the reopen step`, () => {
+  const reopened = reopenTask(DONE, NOW)
+  if (!reopened.success) throw new Error(reopened.error.message)
+  // A task whose text is not the one its status was read from.
+  const theirs = { ...server(DONE), ics: BASE.ics }
+  expect(keepMineText(DONE.ics, reopened.output.task.ics, theirs, LATER).error).toEqual({
+    step: KeepMineStep.Reopen,
+    code: CompleteTodoErrorCode.NotCompleted,
+    message: `the task is not completed`,
+  })
+})

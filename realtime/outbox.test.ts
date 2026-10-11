@@ -931,6 +931,7 @@ describe("outbox conflicts settled from two tabs", () => {
       ])
     expect(queue[0].conflict).toBeUndefined()
     expect(queue[0].before).toBeUndefined()
+    expect(queue[0].attempted).toBe(false)
   })
 
   it("keeps the entry's own payload when I keep mine without a replacement", async () => {
