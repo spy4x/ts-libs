@@ -1087,4 +1087,24 @@ describe(`classifyByCode`, () => {
     expect(read(new RealtimeRequestError(`timeout`, `late`))).toEqual({ kind: `unreachable` })
     expect(read(new TypeError(`fetch failed`))).toEqual({ kind: `unreachable` })
   })
+
+  it(`keeps a write answered unauthorized pending by default`, () => {
+    const unauthorized = new RealtimeRequestError(`unauthorized`, `sign in`)
+    expect(read(unauthorized)).toEqual({ kind: `unreachable` })
+  })
+
+  it(`still files a forbidden write as rejected`, () => {
+    expect(read(new RealtimeRequestError(`forbidden`, `no`))).toEqual({
+      kind: `rejected`,
+      message: `no`,
+    })
+  })
+
+  it(`files an unauthorized write as rejected when the app asks for it`, () => {
+    const strict = classifyByCode({ unauthorized: `rejected` })
+    expect(strict(new RealtimeRequestError(`unauthorized`, `sign in`))).toEqual({
+      kind: `rejected`,
+      message: `sign in`,
+    })
+  })
 })

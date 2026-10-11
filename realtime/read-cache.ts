@@ -50,6 +50,13 @@ export interface ReadCache {
   /** Keeps `value` as the copy under `key`, replacing the one there, taken now. Returns the time. */
   set<T>(key: string, value: T): Promise<number>
   /**
+   * Deletes the copy under `key`, for example when the server refused that read and the saved
+   * list must not be shown again. Other keys stay. Does nothing when there is no copy. A
+   * `cachedRead` of the same key that is still in flight saves its answer after this delete, so a
+   * copy can come back when an earlier read answers late.
+   */
+  delete(key: string): Promise<void>
+  /**
    * Deletes every copy of this user. Another user's database is not touched. The instance is
    * finished after this: `set` stores nothing more, so a read still in flight cannot write its
    * answer back. A new user needs a new cache.
@@ -85,6 +92,7 @@ export function createReadCache(options: ReadCacheOptions): ReadCache {
       await store.put(SCOPE, { key, savedAt, value })
       return savedAt
     },
+    delete: (key) => store.delete(SCOPE, key),
     clear() {
       cleared = true
       return store.clearAll()

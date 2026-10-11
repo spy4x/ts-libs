@@ -129,16 +129,29 @@ export interface ErrorCodes {
   notFound?: string
   /** A create hit an id that is taken. */
   alreadyExists?: string
+  /**
+   * What a write answered `unauthorized` becomes. `"pending"` (the default) keeps it queued, as
+   * unreachable: the session ended, belongs to someone else or owes a second factor, so the server
+   * never judged the write and its owner can send it after signing in. `"rejected"` files it as a
+   * refusal, a conflict the person must discard.
+   */
+  unauthorized?: "pending" | "rejected"
 }
 
 /**
  * A `classify` for the common case: an error that is not a server answer, or that is worth a
  * retry (`isRetryable`), means unreachable; a {@link RealtimeRequestError} whose `details.code` is
  * one of `codes` is that kind of refusal; any other refusal is `rejected` with its message.
+ *
+ * A write answered `unauthorized` is the exception: it stays pending (`unreachable`) unless
+ * `codes.unauthorized` is `"rejected"`, so unsent work is not lost when a session ends.
  */
 export function classifyByCode(codes: ErrorCodes): (error: unknown) => SendFailure {
   return (error) => {
     if (!(error instanceof RealtimeRequestError) || isRetryable(error)) {
+      return { kind: "unreachable" }
+    }
+    if (error.code === "unauthorized" && codes.unauthorized !== "rejected") {
       return { kind: "unreachable" }
     }
     const code = (error.details as { code?: unknown } | undefined)?.code

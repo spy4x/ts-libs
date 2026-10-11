@@ -8,6 +8,7 @@
 
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
+import { type } from "arktype"
 
 import { REALTIME_ERROR_CODES, type RealtimeErrorCode, RealtimeRequestError } from "./errors.ts"
 import {
@@ -16,10 +17,12 @@ import {
   createCallHandler,
   createOperationDispatcher,
   DEFAULT_MAX_CALL_BYTES,
+  expectNoPayload,
   IDEMPOTENCY_KEY_HEADER,
   isBoundToUser,
   type OperationCall,
   type Operations,
+  parsePayload,
   REALTIME_USER_HEADER,
 } from "./operations.ts"
 import { ConnectionRegistry } from "./registry.ts"
@@ -1054,5 +1057,53 @@ describe("createOperationDispatcher", () => {
       message: "internal error",
     })
     expect((socket.errors[0] as Error).message).toContain("hunter2")
+  })
+})
+
+describe("parsePayload", () => {
+  const schema = type({ name: "string" })
+
+  it("returns the parsed payload when it matches the schema", () => {
+    expect(parsePayload(schema, { name: "a" })).toEqual({ name: "a" })
+  })
+
+  it("returns the schema's output, not the raw payload", () => {
+    const trimmed = type({ name: "string" }).pipe((value) => ({ name: value.name.trim() }))
+    expect(parsePayload(trimmed, { name: " a " })).toEqual({ name: "a" })
+  })
+
+  it("refuses a rejection that is not an instance of this copy's ArkErrors", () => {
+    const rejection = Object.assign([{ message: "name must be a string" }], {
+      summary: "name must be a string",
+      flatByPath: {},
+      throw() {},
+    })
+    const foreign = (() => rejection) as unknown as typeof schema
+    expect(() => parsePayload(foreign, { name: 1 })).toThrow(RealtimeRequestError)
+  })
+
+  it("throws bad_request naming the field when the payload does not match", () => {
+    const error = (() => {
+      try {
+        parsePayload(schema, { name: 1 })
+      } catch (error) {
+        return error
+      }
+    })()
+    expect(error).toBeInstanceOf(RealtimeRequestError)
+    expect((error as RealtimeRequestError).code).toBe("bad_request")
+    expect((error as RealtimeRequestError).message).toContain("name")
+  })
+})
+
+describe("expectNoPayload", () => {
+  it("accepts a request with no payload", () => {
+    expectNoPayload(undefined)
+    expectNoPayload(null)
+  })
+
+  it("throws bad_request when a payload is smuggled in", () => {
+    expect(() => expectNoPayload({})).toThrow(RealtimeRequestError)
+    expect(() => expectNoPayload(0)).toThrow(RealtimeRequestError)
   })
 })

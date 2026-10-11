@@ -11,6 +11,7 @@
 
 import type { Clock, TimerHandle } from "./clock.ts"
 import type { ServerMessage } from "./codec.ts"
+import type { ReadCache } from "./read-cache.ts"
 import type { UserFanout } from "./notify.ts"
 import {
   type ManagedSocket,
@@ -329,4 +330,41 @@ export class RecordingFanout implements UserFanout {
 /** Let queued microtasks run, so an awaited chain settles inside a test's own tick. */
 export async function drainMicrotasks(turns = 16): Promise<void> {
   for (let i = 0; i < turns; i++) await Promise.resolve()
+}
+
+/**
+ * A {@link ReadCache} in memory, for tests that have no IndexedDB. It keeps the rule of the real
+ * cache that nothing is saved after `clear`. `entries` is the device: a second cache over the same
+ * map finds what the first one saved. Values are cloned on the way in and on the way out, as IndexedDB does.
+ */
+export function createMemoryReadCache(
+  now: () => number = () => 0,
+  entries: Map<string, { value: unknown; savedAt: number }> = new Map(),
+): ReadCache {
+  let cleared = false
+  return {
+    get<T>(key: string) {
+      const entry = entries.get(key)
+      return Promise.resolve(
+        entry && ({ value: structuredClone(entry.value), savedAt: entry.savedAt } as {
+          value: T
+          savedAt: number
+        }),
+      )
+    },
+    set(key, value) {
+      const savedAt = now()
+      if (!cleared) entries.set(key, { value: structuredClone(value), savedAt })
+      return Promise.resolve(savedAt)
+    },
+    delete(key) {
+      entries.delete(key)
+      return Promise.resolve()
+    },
+    clear() {
+      cleared = true
+      entries.clear()
+      return Promise.resolve()
+    },
+  }
 }
