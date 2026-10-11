@@ -455,3 +455,12 @@ Deno.test(`a task both sides completed takes the date I changed and is not compl
   expect(output.task.status).toBe(TaskStatus.Completed)
   expect(output.task.due).toEqual(day(`2026-10-20`))
 })
+
+Deno.test(`a title I changed on a completed task is written when the server reopened it`, () => {
+  const mine = edited(DONE, { title: `Mine` })
+  const reopened = reopenTask(DONE, ELSEWHERE)
+  if (!reopened.success) throw new Error(reopened.error.message)
+  const output = kept(DONE, mine, server(reopened.output.task))
+  expect(output.task.status).toBe(TaskStatus.NeedsAction)
+  expect(output.task.title).toBe(`Mine`)
+})

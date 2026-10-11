@@ -674,7 +674,10 @@ export function keepMineText(
     const refused = edit()
     if (refused) return refused
   }
-  if (isDone(mine.output) && !isDone(task)) {
+  // Only a completion I made can fail to hold; a task that was completed before I touched it and
+  // that the server reopened is theirs to keep open.
+  const completedByMe = Boolean(mySteps.finished) || mySteps.count > 0
+  if (completedByMe && isDone(mine.output) && !isDone(task)) {
     return unkept(KeepMineStep.Complete, `the server's copy repeats and stays open when completed`)
   }
   return { success: true, output: { task, ics: task.ics }, error: null }
