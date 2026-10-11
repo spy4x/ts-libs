@@ -2369,7 +2369,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `BeginOutcome` (type), `jsr:@spy4x/server/idempotency`: What IdempotencyStore.begin found for a key.
 - `IDEMPOTENCY_LEASE_SECONDS` (constant), `jsr:@spy4x/server/idempotency`: Default for how long an unfinished run keeps its claim.
-- `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT` (constant), `jsr:@spy4x/server/idempotency`: The migration for a table made before 1.64.0, as SQL text: it widens `claim_token` from `uuid` to `text`, because the store's tokens are no longer UUIDs.
+- `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT` (constant), `jsr:@spy4x/server/idempotency`: The migration release 1.64.0 needed, as SQL text: it widens `claim_token` from `uuid` to `text`.
 - `IDEMPOTENCY_POSTGRES_SCHEMA` (constant), `jsr:@spy4x/server/idempotency`: The table and index, as SQL text the app runs as a migration.
 - `IDEMPOTENCY_RETENTION_DAYS` (constant), `jsr:@spy4x/server/idempotency`: Default for how long a stored key stays usable: the longest a client may be offline.
 - `IdempotencyClaim` (interface), `jsr:@spy4x/server/idempotency`: The user, key and input a command was sent with.
@@ -3023,4 +3023,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 c65a1904343d8759aaee6ecd204701a4a471aa3db36da06162635b557a680f61 -->
+<!-- export surface: sha256 7b2446060bd67ca597c7640d10debd9ce9deee404f537c1dd52c83cd26ee563c -->
