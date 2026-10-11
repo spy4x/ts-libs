@@ -481,9 +481,11 @@ const stop = watchPageResume(() => transport.resume())
 ### Commands and queries
 
 ```ts
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
+
 try {
   const group = await transport.command("group.rename", { groupId, title }, {
-    idempotencyKey: crypto.randomUUID(), // resend with the same key after a drop
+    idempotencyKey: uuidV7(), // resend with the same key after a drop
   })
   const list = await transport.query("group.list", undefined, { timeoutMs: 5_000 })
 } catch (error) {

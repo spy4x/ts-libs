@@ -9,6 +9,7 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { type } from "arktype"
+import { isUuid } from "@spy4x/platform/universal/uuid"
 
 import { REALTIME_ERROR_CODES, type RealtimeErrorCode, RealtimeRequestError } from "./errors.ts"
 import {
@@ -464,7 +465,7 @@ describe("isBoundToUser", () => {
 })
 
 describe("createCallHandler", () => {
-  it("hands the operation the actor, the parsed payload, the key, a request id and the signal", async () => {
+  it("hands the operation the actor, the parsed payload, the key, a version 7 request id and the signal", async () => {
     const http = createHttp()
 
     const { status, body } = await http.call({ payload: { text: "milk" }, key: "k1" })
@@ -473,7 +474,7 @@ describe("createCallHandler", () => {
     expect(body).toEqual({ result: { created: { text: "milk" }, by: 7, key: "k1" } })
     expect(http.calls).toHaveLength(1)
     expect(http.calls[0].actor).toBe(ALICE)
-    expect(http.calls[0].requestId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(isUuid(http.calls[0].requestId, 7)).toBe(true)
     expect(http.calls[0].signal).toBeInstanceOf(AbortSignal)
   })
 

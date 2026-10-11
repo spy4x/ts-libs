@@ -27,6 +27,7 @@
  */
 
 import { backoffDelay, sleep } from "@spy4x/platform/universal/async"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 import {
   type CallOptions,
   type CommandOptions,
@@ -541,7 +542,7 @@ export function sendCommand<T>(
   payload: unknown,
   options: RetryOptions = {},
 ): Promise<T> {
-  const idempotencyKey = (options.newKey ?? (() => crypto.randomUUID()))()
+  const idempotencyKey = (options.newKey ?? uuidV7)()
   return withRetry(
     async () =>
       await port.command(name, payload, {
