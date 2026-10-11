@@ -1,5 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
+import { isUuid } from "@spy4x/platform/universal/uuid"
 import { ConnectionLostError } from "./client-transport.ts"
 import { RealtimeRequestError } from "./errors.ts"
 import {
@@ -135,6 +136,24 @@ describe("outbox while the connection is down", () => {
     expect(outbox.entries().map((e) => [e.entityId, e.payload.title])).toEqual([
       ["n-new", "Written offline"],
     ])
+  })
+
+  it("gives a write a version 7 UUID as its key when the app passes no newKey", async () => {
+    const keys: string[] = []
+    const outbox = createOutbox<Text, Item>({
+      store: createMemoryOutboxStore(),
+      lock: createPromiseLock(),
+      canSend: () => true,
+      classify,
+      send: (_command, key) => {
+        keys.push(key)
+        return Promise.resolve(item("n-new"))
+      },
+      fetchServer: () => Promise.resolve(null),
+    })
+    await outbox.submit({ kind: "create", entityId: "n-new", payload: text("T") })
+    expect(keys).toHaveLength(1)
+    expect(isUuid(keys[0], 7)).toBe(true)
   })
 
   it("keeps a queued write across a restart of the layer", async () => {

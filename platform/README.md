@@ -26,7 +26,7 @@ the browser and the API.
 ### `.` → `universal.ts`
 
 Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched are `Date`, `Intl`,
-`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.randomUUID` (only `universal/error-reporter`), `crypto.getRandomValues` (only `universal/uuid`, through `@std/uuid`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
+`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.getRandomValues` (only `universal/uuid`, through `@std/uuid`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
 `unref`s the handle where the runtime provides one). No other `crypto` calls and no DOM global: the
 browser- and server-only halves are the other two subpaths.
 
@@ -111,9 +111,10 @@ counter. When more than the counter holds are made in one millisecond, or the cl
 id's time runs slightly ahead of the clock instead of breaking the order. Two processes or two
 browser tabs do not share the counter, so their ids sort by millisecond only.
 
-Do not use version 7 for a value that must not reveal when it was made, or that works as a secret
-(a session id, a reset or invitation token, an unguessable link): keep `crypto.randomUUID()` or a
-random token from `./tokens` there.
+Two kinds of value are never a UUID: one that works as a secret (a session id, a CSRF, lock or
+claim token, a reset or invitation token), and an id that other people see and that must not show
+when it was made (a share link, a public profile or order number). Both are `randomBase64Url()`
+from `./tokens`.
 
 `isUuid(value)` is a type guard for a lower-case UUID of any version, and `isUuid(value, 7)` for one
 version in the standard variant. `UUID_PATTERN` (any version) and `UUID_V7_PATTERN` are the regular

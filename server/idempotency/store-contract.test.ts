@@ -8,6 +8,7 @@
 
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
+import { isUuid } from "@spy4x/platform/universal/uuid"
 import {
   IDEMPOTENCY_LEASE_SECONDS,
   IDEMPOTENCY_RETENTION_DAYS,
@@ -143,6 +144,19 @@ export function describeIdempotencyStoreContract(
         expect(await store.begin(claim())).toMatchObject({ status: "claimed" })
         // The takeover restarts the lease.
         expect(await store.begin(claim())).toEqual({ status: "in_progress" })
+      })
+    })
+
+    it("fences a claim and a takeover with a random token of 128 bits, never a UUID", async () => {
+      await using(async ({ store, advance }) => {
+        const first = await claimToken(store, claim())
+        await advance((IDEMPOTENCY_LEASE_SECONDS + 5) * SECOND)
+        const takeover = await claimToken(store, claim())
+        // 16 random bytes as unpadded base64url are 22 characters; a UUID is 36 with hyphens.
+        for (const token of [first, takeover]) {
+          expect(token).toMatch(/^[A-Za-z0-9_-]{22}$/)
+          expect(isUuid(token)).toBe(false)
+        }
       })
     })
 

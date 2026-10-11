@@ -30,6 +30,7 @@ import {
 
 import type { Type } from "arktype"
 import { isArkErrors } from "@spy4x/validation"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 import { isRealtimeErrorCode, type RealtimeErrorCode, RealtimeRequestError } from "./errors.ts"
 import type { RequestContext, RequestDispatcher } from "./registry.ts"
@@ -402,7 +403,7 @@ export function createCallHandler<TActor>(
   }
 
   return async (request) => {
-    const requestId = crypto.randomUUID()
+    const requestId = uuidV7()
     let name: string | null = null
     try {
       if (request.method !== "POST") {

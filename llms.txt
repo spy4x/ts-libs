@@ -678,7 +678,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `StoreError` (type), `jsr:@spy4x/platform`: Every error a store operation can settle with.
 - `TimeFormatOptions` (interface), `jsr:@spy4x/platform`: Locale and zone applied by formatTime and timeAgo.
 - `TimeFormatter` (class), `jsr:@spy4x/platform`: Format an instant for display.
-- `UUID_PATTERN` (constant), `jsr:@spy4x/platform`: A lower-case UUID of any version, the form Postgres and `crypto.randomUUID` print.
+- `UUID_PATTERN` (constant), `jsr:@spy4x/platform`: A lower-case UUID of any version, the form Postgres and the browser's own generator print.
 - `UUID_V7_PATTERN` (constant), `jsr:@spy4x/platform`: A lower-case UUID of version 7, as uuidV7 makes it: version digit `7` and the standard variant (`8`, `9`, `a` or `b`).
 - `UuidVersion` (type), `jsr:@spy4x/platform`: The version digit of a UUID: `4` is the random one, `7` the time-ordered one.
 - `ValidationError` (type), `jsr:@spy4x/platform`: A rejected input: its kind, one sentence for the user, the issues per field path, and arktype's own errors.
@@ -1555,7 +1555,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/platform/universal/uuid`
 
-- `UUID_PATTERN` (constant), `jsr:@spy4x/platform/universal/uuid`: A lower-case UUID of any version, the form Postgres and `crypto.randomUUID` print.
+- `UUID_PATTERN` (constant), `jsr:@spy4x/platform/universal/uuid`: A lower-case UUID of any version, the form Postgres and the browser's own generator print.
 - `UUID_V7_PATTERN` (constant), `jsr:@spy4x/platform/universal/uuid`: A lower-case UUID of version 7, as uuidV7 makes it: version digit `7` and the standard variant (`8`, `9`, `a` or `b`).
 - `UuidVersion` (type), `jsr:@spy4x/platform/universal/uuid`: The version digit of a UUID: `4` is the random one, `7` the time-ordered one.
 - `isUuid` (function), `jsr:@spy4x/platform/universal/uuid`: True for a lower-case UUID string.
@@ -2365,6 +2365,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `BeginOutcome` (type), `jsr:@spy4x/server/idempotency`: What IdempotencyStore.begin found for a key.
 - `IDEMPOTENCY_LEASE_SECONDS` (constant), `jsr:@spy4x/server/idempotency`: Default for how long an unfinished run keeps its claim.
+- `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT` (constant), `jsr:@spy4x/server/idempotency`: The migration for a table made before 1.64.0, as SQL text: it widens `claim_token` from `uuid` to `text`, because the store's tokens are no longer UUIDs.
 - `IDEMPOTENCY_POSTGRES_SCHEMA` (constant), `jsr:@spy4x/server/idempotency`: The table and index, as SQL text the app runs as a migration.
 - `IDEMPOTENCY_RETENTION_DAYS` (constant), `jsr:@spy4x/server/idempotency`: Default for how long a stored key stays usable: the longest a client may be offline.
 - `IdempotencyClaim` (interface), `jsr:@spy4x/server/idempotency`: The user, key and input a command was sent with.
@@ -3018,4 +3019,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 5f10e045d4bf2af95f9fdb15efdc716c80ab5bdbec9d667187684f4b9ea8530f -->
+<!-- export surface: sha256 9065e0f4ddb71497e31eeb614fa770deebaeca70d757d90450ab564150128885 -->

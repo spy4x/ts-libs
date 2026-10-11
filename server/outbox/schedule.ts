@@ -1,4 +1,5 @@
 import type { Sql, Transaction } from "../db/index.ts"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 /** The row a job is: what it is called and what it is about. Nothing else is stored. */
 export interface ScheduledOutboxEvent {
@@ -41,7 +42,7 @@ export async function scheduleOutboxEvent(
   event: ScheduledOutboxEvent,
   when: OutboxSchedule,
 ): Promise<string> {
-  const id = crypto.randomUUID()
+  const id = uuidV7()
   const runAt = await runTime(sql, when)
   await insertEvent(sql, id, event, runAt)
   return id
@@ -75,7 +76,7 @@ export async function ensureScheduledOutboxEvent(
       LIMIT 1
     `
     if (waiting.length > 0) return null
-    const id = crypto.randomUUID()
+    const id = uuidV7()
     await insertEvent(tx, id, event, await runTime(tx, when))
     return id
   })

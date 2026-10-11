@@ -25,6 +25,7 @@
  */
 
 import { callListener } from "./listener-guard.ts"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 /** What an outgoing write does to an entity. */
 export type OutboxKind = "create" | "update" | "delete"
@@ -215,7 +216,7 @@ export interface OutboxPorts<P, S extends { version: number }> {
     put(server: S): Promise<void>
     remove(entityId: string): Promise<void>
   }
-  /** A fresh idempotency key. Defaults to `crypto.randomUUID`. */
+  /** A fresh idempotency key. Defaults to `uuidV7`, a UUID version 7. */
   newKey?(): string
   /** The current time as an ISO string. Defaults to the system clock. */
   now?(): string
@@ -340,7 +341,7 @@ export function createOutbox<P, S extends { version: number }>(
   ports: OutboxPorts<P, S>,
 ): Outbox<P, S> {
   const { store, cache } = ports
-  const newKey = ports.newKey ?? (() => crypto.randomUUID())
+  const newKey = ports.newKey ?? uuidV7
   const now = ports.now ?? (() => new Date().toISOString())
   const messages = { ...DEFAULT_MESSAGES, ...ports.messages }
   const locked = ports.lock

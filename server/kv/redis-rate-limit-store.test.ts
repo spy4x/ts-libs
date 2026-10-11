@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
+import { isUuid } from "@spy4x/platform/universal/uuid"
 import {
   CONSUME_SCRIPT,
   createRedisRateLimitStore,
@@ -49,6 +50,16 @@ describe("createRedisRateLimitStore", () => {
       args: [3000, 5000, 2000, 3, `id1`],
     })
     assertEquals(evals[1].args[4], `id2`)
+  })
+
+  it("gives each recorded event a different version 7 UUID when no newId is passed", async () => {
+    const { store, evals } = fakeStore([1, "a", "1000"])
+    const limiter = createRedisRateLimitStore(store)
+    await limiter.consume!(`ip:1`, 5000, 2000, 3)
+    await limiter.consume!(`ip:1`, 5000, 2000, 3)
+    const ids = evals.map((call) => call.args[4])
+    assertEquals(ids.map((id) => isUuid(id, 7)), [true, true])
+    assertEquals(new Set(ids).size, 2)
   })
 
   it("parses an allowed reply into the window, oldest first", async () => {

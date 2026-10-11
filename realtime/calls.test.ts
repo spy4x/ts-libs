@@ -1,5 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
+import { isUuid } from "@spy4x/platform/universal/uuid"
 import {
   type ClientTransport,
   ConnectionLostError,
@@ -585,6 +586,15 @@ describe("sendCommand", () => {
 
     expect(result).toEqual({ ok: 1 })
     expect(sent).toEqual([{ name: "group.create", payload: { name: "A" }, key: "k-1" }])
+  })
+
+  it("sends a version 7 UUID as the key when the caller passes no newKey", async () => {
+    const { port, sent } = scriptedPort([{ ok: 1 }])
+
+    await sendCommand(port, "group.create", { name: "A" })
+
+    expect(sent).toHaveLength(1)
+    expect(isUuid(sent[0].key, 7)).toBe(true)
   })
 
   it("retries a dropped connection and a timeout with the same key", async () => {

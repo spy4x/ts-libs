@@ -46,6 +46,7 @@ import {
   PayloadTooLargeError,
   readBoundedText,
 } from "@spy4x/net/bounded-body"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 import { encodeBase64 } from "@std/encoding"
 
 /** Why a call failed. A code is stable; the message is for logs. */
@@ -740,7 +741,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
           fail(CalDavErrorCode.InvalidArgument, "name cannot be . or ..")
         }
         // A fresh name, never the UID: Tasks.org and DAVx5 name resources unlike their UIDs.
-        const target = childUrl(calendar, name ?? `${crypto.randomUUID()}.ics`)
+        const target = childUrl(calendar, name ?? `${uuidV7()}.ics`)
         const reply = await send(call, {
           method: "PUT",
           url: target,
@@ -782,7 +783,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
     makeCalendar: (homeUrl, calendar) =>
       run(async (call) => {
         const home = own(homeUrl, "homeUrl")
-        const target = childUrl(home, crypto.randomUUID())
+        const target = childUrl(home, uuidV7())
         target.pathname += "/"
         let body: string
         try {

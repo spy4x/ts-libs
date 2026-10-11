@@ -515,14 +515,14 @@ describe("getObjects", () => {
 })
 
 describe("writes", () => {
-  it("creates under a fresh UUID name with If-None-Match: *", async () => {
+  it("creates under a fresh version 7 UUID name with If-None-Match: *", async () => {
     const { client, seen } = setup(() =>
       new Response(null, { status: 201, headers: { ETag: `"9"` } })
     )
     const written = output(await client.createObject(INBOX, ICS))
     assertMatch(
       written.url,
-      /^https:\/\/dav\.example\.com\/dav\/cal\/user%40example\.com\/1\.0%20%2F%20Inbox\/[0-9a-f-]{36}\.ics$/,
+      /^https:\/\/dav\.example\.com\/dav\/cal\/user%40example\.com\/1\.0%20%2F%20Inbox\/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.ics$/,
     )
     assertEquals(written.etag, `"9"`)
     assertEquals(seen[0].method, "PUT")
@@ -684,14 +684,14 @@ describe("writes", () => {
 })
 
 describe("calendars", () => {
-  it("makes a calendar under the home with a UUID segment, never the display name", async () => {
+  it("makes a calendar under the home with a version 7 UUID segment, never the display name", async () => {
     const { client, seen } = setup(() => new Response(null, { status: 201 }))
     const made = output(
       await client.makeCalendar(HOME, { displayName: "Inbox / Later", components: ["VTODO"] }),
     )
     assertMatch(
       made.url,
-      /^https:\/\/dav\.example\.com\/dav\/cal\/user%40example\.com\/[0-9a-f-]{36}\/$/,
+      /^https:\/\/dav\.example\.com\/dav\/cal\/user%40example\.com\/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/$/,
     )
     assertEquals(seen[0].method, "MKCALENDAR")
     assert(seen[0].body!.includes("Inbox / Later"))

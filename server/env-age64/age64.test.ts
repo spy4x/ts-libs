@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert"
 import { fromFileUrl, join } from "@std/path"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 import {
   CrlfNotSupportedError,
   decodeEnvValue,
@@ -199,7 +200,7 @@ Deno.test("decryptValue: decrypts a value produced by rostok's current cli/encry
 
 // ─── indexEncryptedFile / renderEncryptedFile: byte-identical re-encryption ─────────────────
 
-// Every encrypt call gets its own random UUID baked into the ciphertext — encrypting the SAME
+// Every encrypt call gets its own fresh UUID baked into the ciphertext — encrypting the SAME
 // plaintext twice produces two DIFFERENT ciphertexts, the way real age encryption does (a fresh
 // ephemeral key per call). A fake that instead derived the ciphertext deterministically from the
 // plaintext (e.g. `btoa(value)` alone) would make every "stays byte-identical" test pass even if
@@ -208,7 +209,7 @@ Deno.test("decryptValue: decrypts a value produced by rostok's current cli/encry
 function fakeCrypto() {
   return {
     encrypt(value: string): Promise<string> {
-      return Promise.resolve(`age64:${crypto.randomUUID()}:${btoa(value)}`)
+      return Promise.resolve(`age64:${uuidV7()}:${btoa(value)}`)
     },
     decrypt(value: string): Promise<string> {
       return Promise.resolve(atob(value.split(":")[2] ?? ""))

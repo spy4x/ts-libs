@@ -6,9 +6,11 @@
  * browser that creates records offline.
  *
  * **When not to use version 7.** Anyone who sees the id can read when it was made, and can guess
- * the ids made around the same time more easily than random ones. A value that must not reveal its
- * creation time, or that works as a secret (a session id, a reset or invitation token, an unguessable
- * link), keeps `crypto.randomUUID()` or a random token.
+ * the ids made around the same time more easily than random ones. Two kinds of value are therefore
+ * never a UUID: one that works as a secret (a session id, a CSRF, lock or claim token, a reset or
+ * invitation token), and an id that other people see and that must not show when it was made (a
+ * share link, a public profile or order number). Both are `randomBase64Url()` from
+ * `@spy4x/platform/tokens`.
  *
  * @example An id for a new record, and a schema that accepts one
  * ```ts
@@ -25,7 +27,7 @@
 import { generate } from "@std/uuid/v7"
 
 /**
- * A lower-case UUID of any version, the form Postgres and `crypto.randomUUID` print. It checks the
+ * A lower-case UUID of any version, the form Postgres and the browser's own generator print. It checks the
  * shape only, so the nil UUID and ids with no valid version digit match too. arktype takes it as a
  * schema: `type({ id: UUID_PATTERN })`.
  */
@@ -53,7 +55,7 @@ const VARIANT_DIGITS = "89ab"
 /**
  * True for a lower-case UUID string. Without `version` it accepts any UUID shape, as
  * {@link UUID_PATTERN} does. With `version` it accepts only that version in the standard variant,
- * so `isUuid(value, 7)` refuses a `crypto.randomUUID()` id. Upper-case input is refused in both
+ * so `isUuid(value, 7)` refuses a version 4 id. Upper-case input is refused in both
  * forms: lower-case it first if the source prints it otherwise.
  */
 export function isUuid(value: unknown, version?: UuidVersion): value is string {
@@ -87,8 +89,8 @@ let counter = 0
  * instead of the clock's, so its time can run slightly ahead of the clock. Two processes, or two
  * browser tabs, do not share the counter: their ids sort by millisecond only.
  *
- * Do not use it for a value that must hide when it was made or that works as a secret; see the
- * module documentation.
+ * Do not use it for a value that works as a secret, or for an id that other people see and that
+ * must not show when it was made: those are `randomBase64Url()` from `@spy4x/platform/tokens`.
  */
 export function uuidV7(): string {
   const now = Date.now()
