@@ -448,6 +448,17 @@ describe("hasUnsafeTextCharacters", () => {
     }
   })
 
+  it("accepts the character just past a refused range: U+00A0, U+202F and U+206A", () => {
+    // The no-break space, the narrow no-break space of French punctuation, and the first
+    // character after the isolates.
+    for (const codePoint of [0x00a0, 0x202f, 0x206a]) {
+      const text = `a${String.fromCharCode(codePoint)}b`
+      expect([label(codePoint), hasUnsafeTextCharacters(text)]).toEqual([label(codePoint), false])
+      expect([label(codePoint), hasUnsafeTextCharacters(text, { multiline: true })])
+        .toEqual([label(codePoint), false])
+    }
+  })
+
   it("accepts accented letters, composed or with combining marks", () => {
     for (const text of ["Zoë", "Đà Nẵng", "cafe\u0301", "Ångström", "naïve façade"]) {
       expect([text, hasUnsafeTextCharacters(text)]).toEqual([text, false])

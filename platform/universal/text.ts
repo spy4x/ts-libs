@@ -279,8 +279,9 @@ export interface UnsafeTextOptions {
 }
 
 /**
- * Whether text a person typed holds a character that a display name must not: one a database
- * refuses, or one nobody can see that makes two names look the same or a name read backwards.
+ * Whether text a person typed holds one of a fixed list of characters that a display name must
+ * not: control characters, which a database may refuse, and the common invisible and
+ * text-direction characters.
  *
  * True for a control character (C0 with NUL, tab and the line breaks, DEL, C1), the line and
  * paragraph separators U+2028 and U+2029, a bidirectional control (U+061C, U+200E, U+200F, U+202A
@@ -291,8 +292,15 @@ export interface UnsafeTextOptions {
  * The zero-width non-joiner and joiner (U+200C, U+200D) are allowed. Persian, Arabic and the Indic
  * scripts need them inside ordinary words, and an emoji family or a profession is several emoji
  * held together by U+200D. Variation selectors and emoji tag characters are allowed for the same
- * reason. Letters of two scripts that look alike (Latin `a`, Cyrillic `а`) are not this function's
- * job, and neither are spaces: trim and collapse those separately.
+ * reason.
+ *
+ * The list is closed, so a `false` does not mean that two names cannot look the same. Other
+ * characters with no visible glyph pass: the invisible operators U+2061 to U+2064, the Hangul
+ * fillers U+115F, U+1160, U+3164 and U+FFA0, the combining grapheme joiner U+034F, the Mongolian
+ * vowel separator U+180E, and an emoji tag character or a variation selector placed outside an
+ * emoji. Letters of two scripts that look alike (Latin `a`, Cyrillic `а`) pass too. So does every
+ * kind of space, the no-break space among them, and a name made only of spaces: trim, collapse and
+ * require a visible character separately.
  *
  * It never throws for a string and never repeats the value, so its answer is safe to log.
  *
