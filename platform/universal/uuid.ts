@@ -7,7 +7,7 @@
  *
  * **When not to use version 7.** Anyone who sees the id can read when it was made, and can guess
  * the ids made around the same time more easily than random ones. Two kinds of value are therefore
- * never a UUID: one that works as a secret (a session id, a CSRF, lock or claim token, a reset or
+ * never a UUID: one that works as a secret (a session id, a CSRF or lock token, a reset or
  * invitation token), and an id that other people see and that must not show when it was made (a
  * share link, a public profile or order number). Both are `randomBase64Url()` from
  * `@spy4x/platform/tokens`.

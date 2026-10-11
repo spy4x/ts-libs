@@ -147,16 +147,15 @@ export function describeIdempotencyStoreContract(
       })
     })
 
-    it("fences a claim and a takeover with a random token of 128 bits, never a UUID", async () => {
+    it("makes the token of a claim and of a takeover a version 7 UUID, each a different one", async () => {
       await using(async ({ store, advance }) => {
         const first = await claimToken(store, claim())
         await advance((IDEMPOTENCY_LEASE_SECONDS + 5) * SECOND)
         const takeover = await claimToken(store, claim())
-        // 16 random bytes as unpadded base64url are 22 characters; a UUID is 36 with hyphens.
-        for (const token of [first, takeover]) {
-          expect(token).toMatch(/^[A-Za-z0-9_-]{22}$/)
-          expect(isUuid(token)).toBe(false)
-        }
+        // A version 7 UUID fits a `uuid` column and a `text` column alike.
+        expect(isUuid(first, 7)).toBe(true)
+        expect(isUuid(takeover, 7)).toBe(true)
+        expect(takeover).not.toBe(first)
       })
     })
 

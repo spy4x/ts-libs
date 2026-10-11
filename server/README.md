@@ -2262,41 +2262,22 @@ table; add `REFERENCES users (id) ON DELETE CASCADE` if you want rows to go with
 **Fencing.** `begin` returns `{ status: "claimed", token }`; `complete` and `release` take that token
 and change nothing when it is not the key's current one. A run that outlives its lease and loses its
 claim to a retry therefore can neither free the new owner's claim nor store its own result over it.
-The token proves who holds the claim, so it is a random token (16 bytes as base64url, from
-`randomBase64Url()` of `@spy4x/platform/tokens`), not a UUID. Treat it as an opaque string.
+The token is a version 7 UUID from `uuidV7()` of `@spy4x/platform/universal/uuid`. It never leaves
+the server. Treat it as an opaque string.
 
-**Upgrading to 1.64.0.** Until 1.63.0 the token was a UUID and `claim_token` was a `uuid` column.
-The new token does not fit that column, so a table made before 1.64.0 needs
-`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`, which widens the column to `text`. Deploy in this order:
+**Upgrading from 1.64.0 or earlier.** Nothing to migrate. `claim_token` is a `uuid` column, as it
+was until 1.63.0, and the store works on a `text` column too.
 
-1. Run `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT` as a migration.
-2. Right after it, in the same deploy, stop every API process that was running before the
-   migration and start the API on 1.64.0.
+- Release 1.64.0 made the token a random string that did not fit a `uuid` column, so that one
+  release needed `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`, a migration that widens the column to
+  `text`. Since 1.64.1 the token is a UUID again and no app needs the migration.
+- An app that ran the migration keeps working on its `text` column, with no second migration. A
+  claim made by 1.64.0 that is still in the table is completed or released by its own token, and
+  taken over after its lease, like any other.
+- An app still on a `uuid` column needs nothing. Skip 1.64.0 and take 1.64.1 or later.
 
-**An API process that was already running when the migration ran is broken until it restarts.**
-Its database connections prepared `complete` and `release` for a `uuid` column, and on the `text`
-column Postgres refuses them (`operator does not exist: text = uuid`). `begin` still works and the
-middleware only reports a store failure, so nothing looks wrong: a command sent with a key runs
-and answers, but its result is not stored, and a command that fails cannot release its claim. A
-retry of the same key then waits out the lease (30 seconds by default) and runs the command a
-second time. This lasts on each connection until the process restarts or the pool replaces the
-connection: with the default pool settings, up to 30 minutes for a busy connection. So keep the
-time between step 1 and step 2 to seconds, and never do a slow rolling deploy across the
-migration. An app that cannot accept even that window stops the old API first, then migrates, then
-starts 1.64.0, at the price of a short downtime.
-
-Never start an API on 1.64.0 against the `uuid` column: every command sent with a key then fails
-with a Postgres error (`invalid input syntax for type uuid`) until the migration has run.
-
-A roll-back needs no second migration: an API on 1.63.0 or earlier that starts after the migration
-works on the `text` column, also beside instances on 1.64.0, because its UUID tokens fit the column
-and its fresh connections prepare their statements for `text`.
-
-The statement rewrites the table under a
-lock that blocks it for that moment; the table holds at most `retentionDays` of keys. If your own
-migration gave `claim_token` a default, the statement keeps it. Every store that knows the column
-writes its own token, so the default only serves an API from before the column existed; drop it in
-your own migration once no such API can start.
+`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT` stays exported and unchanged, marked deprecated, so an app
+that lists it among its migrations still builds.
 
 **What it does not do.** The claim and the command are not one transaction. A process that dies
 after the command committed and before its result was stored leaves a claim that expires after the

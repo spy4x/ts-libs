@@ -111,8 +111,8 @@ counter. When more than the counter holds are made in one millisecond, or the cl
 id's time runs slightly ahead of the clock instead of breaking the order. Two processes or two
 browser tabs do not share the counter, so their ids sort by millisecond only.
 
-Two kinds of value are never a UUID: one that works as a secret (a session id, a CSRF, lock or
-claim token, a reset or invitation token), and an id that other people see and that must not show
+Two kinds of value are never a UUID: one that works as a secret (a session id, a CSRF or lock
+token, a reset or invitation token), and an id that other people see and that must not show
 when it was made (a share link, a public profile or order number). Both are `randomBase64Url()`
 from `./tokens`.
 

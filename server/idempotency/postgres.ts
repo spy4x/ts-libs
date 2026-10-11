@@ -7,7 +7,7 @@ import {
   type IdempotencyClaim,
   type IdempotencyStore,
 } from "./idempotency.ts"
-import { randomBase64Url } from "@spy4x/platform/tokens"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 /**
  * The table and index, as SQL text the app runs as a migration.
@@ -16,8 +16,9 @@ import { randomBase64Url } from "@spy4x/platform/tokens"
  * in flight and 2 once its result is stored. `updated_at` is when the row was claimed or finished;
  * a claim that stays at 1 past its lease belongs to a run that died, and the next retry takes it
  * over with a new `claim_token`; `complete` and `release` change only the row whose token they hold, so a run that lost its claim changes nothing. The key is scoped to the user, so one user cannot replay or block another user's key.
- * `claim_token` is `text`: the token is 16 random bytes as base64url, not a UUID. A table made
- * before 1.64.0 has it as `uuid`; widen it with {@link IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT}.
+ * `claim_token` is `uuid`: the store makes each token as a version 7 UUID. The store also works on
+ * a table whose `claim_token` is `text`, which is what an app has after it ran
+ * {@link IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT} for 1.64.0.
  * `request_hash` fingerprints the command's input: the same key with different input is refused.
  *
  * `user_id` has no foreign key, because this library does not own your users table. Add
@@ -29,7 +30,7 @@ CREATE TABLE idempotency_keys (
   key varchar(128) NOT NULL,
   command_name varchar(100) NOT NULL,
   request_hash varchar(64) NOT NULL,
-  claim_token text NOT NULL,
+  claim_token uuid NOT NULL,
   status smallint NOT NULL,
   result jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -46,26 +47,17 @@ CREATE INDEX idx_idempotency_keys_created ON idempotency_keys (created_at);
 `
 
 /**
- * The migration for a table made before 1.64.0, as SQL text: it widens `claim_token` from `uuid`
- * to `text`, because the store's tokens are no longer UUIDs. A new table from
- * {@link IDEMPOTENCY_POSTGRES_SCHEMA} does not need it.
+ * The migration release 1.64.0 needed, as SQL text: it widens `claim_token` from `uuid` to `text`.
+ * No app needs it any more. In 1.64.0 the claim token was a random string that did not fit a `uuid`
+ * column; since 1.64.1 it is a version 7 UUID, which fits both column types.
  *
- * **Apply it before the first API instance on 1.64.0 starts.** The new store's token does not fit
- * a `uuid` column, so without the migration every keyed command fails with a Postgres error.
+ * An app that ran it keeps working: the store reads and writes a `text` column the same way, also
+ * while it still holds claims made by 1.64.0. An app whose column is still `uuid` needs nothing.
+ * The constant stays exported, and runs the same statement, so an app that lists it among its
+ * migrations still builds and still migrates.
  *
- * **Restart every older API process right after it, in the same deploy.** A process that was
- * already running when the migration ran prepared `complete` and `release` for a `uuid` column,
- * and Postgres refuses them on the `text` column (`operator does not exist: text = uuid`). Until
- * that process restarts or its pool replaces the connection (up to 30 minutes with the default
- * pool settings), a keyed command still runs, but its result is not stored and a failed one cannot
- * release its claim, so a retry waits out the lease and may run the command a second time. An app
- * that cannot accept that window stops the old API, migrates, then starts 1.64.0.
- *
- * An older API that starts after the migration (a roll-back) works on the `text` column, so a
- * roll-back needs no second migration. A column default, if your migration gave it one, is kept.
- *
- * Postgres rewrites the table under a lock that blocks reads and writes of `idempotency_keys`
- * until it is done; the table holds at most the retention's rows. Running it again changes nothing.
+ * @deprecated Not needed since 1.64.1: {@link PostgresIdempotencyStore} works on a `uuid` column
+ * and on a `text` column. Leave it in a migration that already ran; do not add it to a new one.
  */
 export const IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT = `
 ALTER TABLE idempotency_keys ALTER COLUMN claim_token TYPE text USING claim_token::text;
@@ -93,6 +85,11 @@ interface StoredKeyRow {
 /**
  * {@link IdempotencyStore} over the `idempotency_keys` table ({@link IDEMPOTENCY_POSTGRES_SCHEMA}).
  * Every comparison with time uses the database clock, so app servers need not agree on one.
+ *
+ * `claim_token` may be a `uuid` or a `text` column. `complete` and `release` compare the token as
+ * text on both sides, so the same statement runs on either type, keeps running on a connection that
+ * was open while the column changed type, and matches nothing (instead of failing) when a token
+ * that is not a UUID meets a `uuid` column.
  */
 export class PostgresIdempotencyStore implements IdempotencyStore {
   private readonly leaseSeconds: number
@@ -114,7 +111,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
         AND key = ${key}
         AND created_at < now() - (${this.retentionDays}::double precision * INTERVAL '1 day')
     `
-    const token = randomBase64Url()
+    const token = uuidV7()
     // A row released between the insert and the read is claimable again, so look twice.
     for (let attempt = 0; attempt < 3; attempt++) {
       const inserted = await this.sql`
@@ -168,7 +165,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
           result = ${JSON.stringify(result ?? null)}::text::jsonb,
           updated_at = now()
       WHERE user_id = ${userId} AND key = ${key} AND status = ${STARTED}
-        AND claim_token = ${token}
+        AND claim_token::text = ${token}::text
     `
   }
 
@@ -176,7 +173,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
     await this.sql`
       DELETE FROM idempotency_keys
       WHERE user_id = ${userId} AND key = ${key} AND status = ${STARTED}
-        AND claim_token = ${token}
+        AND claim_token::text = ${token}::text
     `
   }
 
