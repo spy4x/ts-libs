@@ -1067,6 +1067,11 @@ describe("parsePayload", () => {
     expect(parsePayload(schema, { name: "a" })).toEqual({ name: "a" })
   })
 
+  it("returns the schema's output, not the raw payload", () => {
+    const trimmed = type({ name: "string" }).pipe((value) => ({ name: value.name.trim() }))
+    expect(parsePayload(trimmed, { name: " a " })).toEqual({ name: "a" })
+  })
+
   it("throws bad_request naming the field when the payload does not match", () => {
     const error = (() => {
       try {
