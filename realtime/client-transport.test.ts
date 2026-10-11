@@ -1106,12 +1106,16 @@ describe("ClientTransport onHandshakeAcknowledged", () => {
     harness.transport.onHandshakeAcknowledged(() => {
       throw new Error("listener failed")
     })
-    harness.transport.connect()
-    await drainMicrotasks()
-    harness.settleHandshake()
-    await drainMicrotasks()
+    const logged = await withConsoleErrors(async () => {
+      harness.transport.connect()
+      await drainMicrotasks()
+      harness.settleHandshake()
+      await drainMicrotasks()
+    })
 
-    expect(harness.errors.at(-1)?.message).toBe("listener failed")
+    // Logged, not sent through `onError`: the listener that threw may be an `onError` one.
+    expect(logged.map((args) => (args[1] as Error).message)).toEqual(["listener failed"])
+    expect(harness.errors).toEqual([])
     expect(harness.gaps).toEqual([{ groupId: "group-1", since: 4, received: 4 }])
   })
 
@@ -1124,10 +1128,12 @@ describe("ClientTransport onHandshakeAcknowledged", () => {
     harness.transport.onSyncDegraded(() => {
       throw new Error("listener failed")
     })
-    harness.transport.connect()
-    await drainMicrotasks()
-    await harness.clock.advance(150)
-    await drainMicrotasks()
+    await withConsoleErrors(async () => {
+      harness.transport.connect()
+      await drainMicrotasks()
+      await harness.clock.advance(150)
+      await drainMicrotasks()
+    })
 
     expect(harness.gaps).toEqual([{ groupId: "group-1", since: 4, received: 4 }])
   })
@@ -1364,7 +1370,8 @@ describe("ClientTransport requests", () => {
   })
 
   it("waits 15 seconds by default, longer than the server's default, so the server's timeout arrives first", async () => {
-    const harness = createHarness()
+    // Wide enough that the heartbeat cannot close the socket, and fail the call, inside 15 seconds.
+    const harness = createHarness({ heartbeatIntervalMs: 60_000, pongTimeoutMs: 60_000 })
     await harness.open()
     const call = track(harness.transport.query("slow"))
 
@@ -1500,3 +1507,167 @@ async function lastFrameId(harness: Harness): Promise<string> {
   if (!id) throw new Error("the client has not sent a frame with an id")
   return id
 }
+
+/** Run `action` with `console.error` captured, so a listener's logged throw stays out of the run. */
+async function withConsoleErrors(action: () => void | Promise<void>): Promise<unknown[][]> {
+  const original = console.error
+  const logged: unknown[][] = []
+  console.error = (...args: unknown[]) => logged.push(args)
+  try {
+    await action()
+  } finally {
+    console.error = original
+  }
+  return logged
+}
+
+function listenerBug(): never {
+  throw new Error("listener bug")
+}
+
+describe("ClientTransport with a listener that throws", () => {
+  it("still calls the second frame listener and pulls the hint", async () => {
+    const harness = createHarness({ cursors: { "group-1": 4 } })
+    const seen: string[] = []
+    await harness.open()
+    harness.transport.onFrame(listenerBug)
+    harness.transport.onFrame((message) => seen.push(message.kind))
+
+    const logged = await withConsoleErrors(async () => {
+      harness.factory.latest.receive(hintFrame("group-1", 5))
+      await drainMicrotasks()
+    })
+
+    expect(seen).toEqual(["change.hint"])
+    expect(harness.gaps).toEqual([{ groupId: "group-1", since: 4, received: 5 }])
+    expect(logged.length).toBe(1)
+    expect(harness.errors).toEqual([])
+  })
+
+  it("connects, sends the handshake and pings when a status listener throws on open", async () => {
+    const harness = createHarness()
+    harness.transport.onStatus((snapshot) => {
+      if (snapshot.status === TransportStatus.Open) listenerBug()
+    })
+
+    let thrown: unknown = null
+    await withConsoleErrors(async () => {
+      try {
+        harness.transport.connect()
+      } catch (error) {
+        thrown = error
+      }
+      await drainMicrotasks()
+      harness.settleHandshake()
+      await harness.clock.advance(1_000)
+    })
+
+    expect(thrown).toBe(null)
+    expect(kinds(harness.factory.latest)).toContain("client.sync")
+    expect(kinds(harness.factory.latest)).toContain("client.ping")
+  })
+
+  it("still calls the second change listener", async () => {
+    const harness = createHarness({ cursors: { "group-1": 4 } })
+    const applied: number[] = []
+    harness.transport.onChange(listenerBug)
+    harness.transport.onChange((hint) => applied.push(hint.sequence))
+    await harness.open()
+
+    await withConsoleErrors(async () => {
+      harness.factory.latest.receive(hintFrame("group-1", 5))
+      await drainMicrotasks()
+    })
+
+    expect(applied).toEqual([5])
+  })
+
+  it("still calls the second error listener and reconnects", async () => {
+    const harness = createHarness()
+    const seen: Error[] = []
+    harness.transport.onError(listenerBug)
+    harness.transport.onError((error) => seen.push(error))
+    await harness.open()
+
+    const logged = await withConsoleErrors(() => harness.clock.advance(1_500))
+
+    expect(seen.at(-1)).toBeInstanceOf(PongTimeoutError)
+    expect(harness.transport.status).toBe(TransportStatus.Reconnecting)
+    expect(logged.length).toBeGreaterThan(0)
+  })
+
+  it("still calls the second degraded listener", async () => {
+    const harness = createHarness({
+      handshakeAttempts: 1,
+      handshakeAckTimeoutMs: 1_000,
+      heartbeatIntervalMs: 60_000,
+      pongTimeoutMs: 60_000,
+    })
+    const seen: Error[] = []
+    harness.transport.onSyncDegraded(listenerBug)
+    harness.transport.onSyncDegraded((error) => seen.push(error))
+    harness.transport.connect()
+    await drainMicrotasks()
+
+    await withConsoleErrors(() => harness.clock.advance(1_000))
+
+    expect(seen.length).toBe(1)
+    expect(seen[0]).toBeInstanceOf(AckTimeoutError)
+  })
+
+  it("still calls the second handshake-acknowledged listener", async () => {
+    const harness = createHarness()
+    const seen: boolean[] = []
+    harness.transport.onHandshakeAcknowledged(listenerBug)
+    harness.transport.onHandshakeAcknowledged((event) => seen.push(event.reconnect))
+
+    await withConsoleErrors(() => harness.open())
+
+    expect(seen).toEqual([false])
+  })
+})
+
+describe("ClientTransport calls on a dead socket", () => {
+  it("fails a waiting command with ConnectionLostError the moment the pong deadline passes", async () => {
+    const harness = createHarness({ heartbeatIntervalMs: 1_000, pongTimeoutMs: 500 })
+    await harness.open()
+    const call = track(harness.transport.command("group.rename", { title: "Trip" }))
+
+    await harness.clock.advance(1_499)
+    expect(call.settled).toBe(false)
+    await harness.clock.advance(1)
+    await drainMicrotasks()
+
+    expect(call.error).toBeInstanceOf(ConnectionLostError)
+    expect(harness.transport.pendingCalls).toBe(0)
+  })
+})
+
+describe("ClientTransport stopped during the first handshake", () => {
+  it("calls no degraded listener and no error listener", async () => {
+    const harness = createHarness()
+    harness.transport.connect()
+    await drainMicrotasks()
+    expect(harness.transport.pendingRequests).toBe(1)
+
+    harness.transport.stop()
+    await drainMicrotasks()
+
+    expect(harness.transport.status).toBe(TransportStatus.Stopped)
+    expect(harness.degraded).toEqual([])
+    expect(harness.errors).toEqual([])
+  })
+
+  it("stays silent when connect() follows the stop in the same tick", async () => {
+    const harness = createHarness()
+    harness.transport.connect()
+    await drainMicrotasks()
+
+    harness.transport.stop()
+    harness.transport.connect()
+    await drainMicrotasks()
+
+    expect(harness.degraded).toEqual([])
+    expect(harness.errors).toEqual([])
+  })
+})

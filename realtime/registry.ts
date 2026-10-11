@@ -46,6 +46,7 @@ import {
   type MessageCodec,
   type ServerMessage,
 } from "./codec.ts"
+import { callListener } from "./listener-guard.ts"
 import { RealtimeRequestError } from "./errors.ts"
 import type { Clock, TimerHandle } from "./clock.ts"
 import { type ManagedSocket, SocketState, type Unsubscribe } from "./socket-port.ts"
@@ -421,7 +422,7 @@ export class ConnectionRegistry {
     connection.announced = true
     connection.lastSeenAt = this.#clock.now()
     for (const handler of this.#openHandlers) {
-      handler({ id: connection.id, userId: connection.userId })
+      callListener(`an onOpen`, handler, { id: connection.id, userId: connection.userId })
     }
   }
 
@@ -468,7 +469,7 @@ export class ConnectionRegistry {
         userId: connection.userId,
         message,
       }
-      for (const handler of this.#frameHandlers) handler(context)
+      for (const handler of this.#frameHandlers) callListener(`an onFrame`, handler, context)
       return
     }
     if (message.kind === "client.command" || message.kind === "client.query") {
@@ -666,7 +667,7 @@ export class ConnectionRegistry {
 
     const code = peerCode ?? closeCodeFor(reason)
     for (const handler of this.#closeHandlers) {
-      handler({ id: connection.id, userId: connection.userId }, {
+      callListener(`an onClose`, handler, { id: connection.id, userId: connection.userId }, {
         reason,
         code,
         ...(detail !== undefined ? { detail } : {}),
@@ -694,7 +695,9 @@ export class ConnectionRegistry {
       userId: connection.userId,
       reason,
     }
-    for (const handler of this.#malformedHandlers) handler(frame)
+    for (const handler of this.#malformedHandlers) {
+      callListener(`an onMalformedFrame`, handler, frame)
+    }
   }
 
   #startHeartbeat(): void {

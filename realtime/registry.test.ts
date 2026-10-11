@@ -819,3 +819,75 @@ function isKind(frame: unknown, kind: string): boolean {
   return typeof frame === "object" && frame !== null &&
     (frame as ServerMessage).kind === kind
 }
+
+/** Run `action` with `console.error` captured, so a handler's logged throw stays out of the run. */
+function withConsoleErrors(action: () => void): unknown[][] {
+  const original = console.error
+  const logged: unknown[][] = []
+  console.error = (...args: unknown[]) => logged.push(args)
+  try {
+    action()
+  } finally {
+    console.error = original
+  }
+  return logged
+}
+
+function handlerBug(): never {
+  throw new Error("handler bug")
+}
+
+describe("ConnectionRegistry with a handler that throws", () => {
+  it("still calls the second open handler", () => {
+    const { registry, factory } = createHarness()
+    const opened: string[] = []
+    registry.onOpen(handlerBug)
+    registry.onOpen((handle) => opened.push(handle.userId))
+
+    const logged = withConsoleErrors(() => {
+      registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+    })
+
+    expect(opened).toEqual(["user-1"])
+    expect(logged.length).toBe(1)
+  })
+
+  it("still calls the second frame handler", () => {
+    const { registry, factory } = createHarness()
+    const seen: string[] = []
+    registry.onFrame(handlerBug)
+    registry.onFrame((context) => seen.push(context.message.kind))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    withConsoleErrors(() => {
+      factory.latest.receive(JSON.stringify({ kind: "client.sync", cursors: [], fromStart: true }))
+    })
+
+    expect(seen).toEqual(["client.sync"])
+  })
+
+  it("still calls the second malformed-frame handler", () => {
+    const { registry, factory } = createHarness()
+    const malformed: string[] = []
+    registry.onMalformedFrame(handlerBug)
+    registry.onMalformedFrame((frame) => malformed.push(frame.reason))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    withConsoleErrors(() => factory.latest.receive("not json at all"))
+
+    expect(malformed.length).toBe(1)
+  })
+
+  it("still calls the second close handler and stops the heartbeat", () => {
+    const { clock, registry, factory } = createHarness()
+    const closed: RegistryCloseInfo[] = []
+    registry.onClose(handlerBug)
+    registry.onClose((_handle, info) => closed.push(info))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    withConsoleErrors(() => factory.latest.dropFromPeer(1006, "network lost"))
+
+    expect(closed.map((info) => info.reason)).toEqual([CloseReason.Remote])
+    expect(clock.pendingTimers).toBe(0)
+  })
+})
