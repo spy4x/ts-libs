@@ -48,13 +48,49 @@ export async function scheduleOutboxEvent(
   return id
 }
 
+/** A row {@link ensureScheduledOutboxEvent} closed because it had used up its attempts. */
+export interface ReplacedOutboxEvent {
+  id: string
+  attemptCount: number
+  /** The error name stored by its last reported failure, or `null` when none was stored. */
+  lastErrorCode: string | null
+}
+
+/** Options of {@link ensureScheduledOutboxEvent}. */
+export interface EnsureScheduledOptions {
+  /**
+   * The processor's `maxAttempts`. A waiting row that has been tried this many times is one the
+   * processor gave up and will never claim again, so it is closed (marked processed, its error
+   * code kept) and no longer counts as waiting: a chain whose only row was given up starts again.
+   * Absent by default, and then a given-up row keeps the chain stopped.
+   *
+   * A processor with `onAttemptFailed` or `repeatAfterGiveUp` closes the rows it gives up by
+   * itself, and the chain then starts again without this option. Set it for a processor that runs
+   * without them, and for rows given up before they were set.
+   *
+   * A row on its last attempt counts as given up while that attempt still runs. If the attempt then
+   * succeeds, it writes no next run of its own, so the chain is still one row.
+   *
+   * @throws RangeError when it is not an integer of at least 1.
+   */
+  replaceGivenUpAfter?: number
+  /**
+   * Called once for each row closed, after the transaction has committed. What it throws rejects
+   * the call, with the rows already closed and the new one written.
+   */
+  onReplaced?: (row: ReplacedOutboxEvent) => void
+}
+
 /**
  * Starts a repeating job, once. Writes the row only when no unprocessed row exists for the same
  * kind, aggregate type and aggregate id, so a worker may call it at every start-up, and two
  * workers starting together still leave one chain: the check runs in a transaction this function
- * opens, under an advisory lock on those three values. A row that gave up after `maxAttempts`
- * still counts as waiting: the chain stays stopped, with its error visible in `last_error_code`,
- * until someone deals with it. Returns the new id, or `null` when a row already existed.
+ * opens, under an advisory lock on those three values. A row that gave up after `maxAttempts` and
+ * was left unprocessed still counts as waiting: the chain stays stopped, with its error visible in
+ * `last_error_code`, until someone deals with it, or until a call with
+ * `options.replaceGivenUpAfter` closes it in that same transaction. A processor with
+ * `onAttemptFailed` or `repeatAfterGiveUp` closes the rows it gives up, and those do not count as
+ * waiting. Returns the new id, or `null` when a row already existed.
  *
  * Any extra column in the caller's table must be nullable or have a default, as for
  * {@link scheduleOutboxEvent}. Pass the pool, not a transaction handle.
@@ -63,10 +99,30 @@ export async function ensureScheduledOutboxEvent(
   sql: Sql,
   event: ScheduledOutboxEvent,
   when: OutboxSchedule,
+  options: EnsureScheduledOptions = {},
 ): Promise<string | null> {
+  const givenUpAfter = options.replaceGivenUpAfter
+  if (givenUpAfter !== undefined && (!Number.isInteger(givenUpAfter) || givenUpAfter < 1)) {
+    throw new RangeError(
+      `replaceGivenUpAfter must be an integer of at least 1, got ${givenUpAfter}`,
+    )
+  }
   const key = `${event.eventKind}/${event.aggregateType}/${event.aggregateId}`
-  return await sql.begin(async (tx) => {
+  let replaced: ReplacedOutboxEvent[] = []
+  const id = await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`
+    if (givenUpAfter !== undefined) {
+      replaced = await tx<ReplacedOutboxEvent[]>`
+        UPDATE outbox_events
+        SET processed_at = now()
+        WHERE event_kind = ${event.eventKind}
+          AND aggregate_type = ${event.aggregateType}
+          AND aggregate_id = ${event.aggregateId}
+          AND processed_at IS NULL
+          AND attempt_count >= ${givenUpAfter}
+        RETURNING id AS "id", attempt_count AS "attemptCount", last_error_code AS "lastErrorCode"
+      `
+    }
     const waiting = await tx`
       SELECT 1 FROM outbox_events
       WHERE event_kind = ${event.eventKind}
@@ -80,6 +136,8 @@ export async function ensureScheduledOutboxEvent(
     await insertEvent(tx, id, event, await runTime(tx, when))
     return id
   })
+  for (const row of replaced) options.onReplaced?.(row)
+  return id
 }
 
 /** The moment a job first runs, read from the database clock for `{ inMs }`. */

@@ -7,7 +7,11 @@
 export {
   type DrainResult,
   errorCodeOf,
+  type LostOutboxEvent,
+  type OutboxAttemptFailure,
   type OutboxEvent,
+  type OutboxFailureStage,
+  OutboxLeaseExpiredError,
   OutboxProcessor,
   type OutboxProcessorOptions,
   type OutboxPublisher,
@@ -18,8 +22,10 @@ export { LoggingOutboxPublisher } from "./logging-publisher.ts"
 export { type JobHandler, JobPublisher, type JobPublisherOptions } from "./job-publisher.ts"
 export { PostgresOutboxRepository } from "./postgres-repository.ts"
 export {
+  type EnsureScheduledOptions,
   ensureScheduledOutboxEvent,
   type OutboxSchedule,
+  type ReplacedOutboxEvent,
   type ScheduledOutboxEvent,
   scheduleOutboxEvent,
 } from "./schedule.ts"
