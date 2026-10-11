@@ -2,7 +2,7 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 import { type } from "arktype"
 
-import { makeStorage, memoryStorage, type StorageLike } from "./storage.ts"
+import { browserStorage, makeStorage, memoryStorage, type StorageLike } from "./storage.ts"
 import { describeStorageContract } from "./storage-contract.test.ts"
 
 const themeSchema = type("'light'|'dark'")
@@ -193,5 +193,92 @@ describe("makeStorage storage port", () => {
     // with plain `makeStorage(memoryStorage(), …)` calls and no global present in between.
     const store = makeStorage<number>(memoryStorage({ n: "1" }), "n")
     expect(store.get()).toEqual({ status: "ok", value: 1 })
+  })
+})
+
+const blocked: StorageLike = {
+  getItem: () => {
+    throw new Error("blocked")
+  },
+  setItem: () => {
+    throw new Error("blocked")
+  },
+  removeItem: () => {
+    throw new Error("blocked")
+  },
+}
+
+describeStorageContract("browserStorage", () => {
+  const browser = memoryStorage()
+  return { storage: browserStorage(() => browser), prefix: "", close: () => {} }
+})
+
+describe("browserStorage", () => {
+  it("writes through to the browser's storage and reads from it", () => {
+    const browser = memoryStorage()
+    const storage = browserStorage(() => browser)
+
+    storage.setItem("a", "1")
+
+    expect(browser.getItem("a")).toBe("1")
+    expect(storage.getItem("a")).toBe("1")
+    storage.removeItem("a")
+    expect(browser.getItem("a")).toBeNull()
+  })
+
+  it("keeps values in memory when the browser blocks storage", () => {
+    const storage = browserStorage(() => blocked)
+
+    storage.setItem("a", "1")
+    expect(storage.getItem("a")).toBe("1")
+    storage.removeItem("a")
+    expect(storage.getItem("a")).toBeNull()
+  })
+
+  it("keeps values in memory when the lookup itself throws", () => {
+    const storage = browserStorage(() => {
+      throw new DOMException("denied", "SecurityError")
+    })
+
+    storage.setItem("a", "1")
+
+    expect(storage.getItem("a")).toBe("1")
+  })
+
+  it("keeps values in memory when there is no storage", () => {
+    const storage = browserStorage(() => undefined)
+
+    storage.setItem("a", "1")
+
+    expect(storage.getItem("a")).toBe("1")
+  })
+
+  it("does not bring back a key another tab removed from the browser", () => {
+    const browser = memoryStorage()
+    const storage = browserStorage(() => browser)
+    storage.setItem("a", "1")
+
+    browser.removeItem("a")
+
+    expect(storage.getItem("a")).toBeNull()
+  })
+
+  it("answers from memory for a key the browser lost only while it is blocked", () => {
+    let storageOn = true
+    const browser = memoryStorage()
+    const storage = browserStorage(() => storageOn ? browser : blocked)
+    storage.setItem("a", "1")
+
+    storageOn = false
+
+    expect(storage.getItem("a")).toBe("1")
+  })
+
+  it("defaults to the page's localStorage and survives its absence", () => {
+    const storage = browserStorage()
+
+    storage.setItem("a", "1")
+
+    expect(storage.getItem("a")).toBe("1")
   })
 })

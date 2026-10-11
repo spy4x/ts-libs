@@ -151,3 +151,49 @@ export function memoryStorage(
     },
   }
 }
+
+/**
+ * `localStorage` that keeps working when the browser blocks it: a private window, blocked site
+ * data, a full quota, or no `localStorage` at all (a prerender pass, a worker).
+ *
+ * A write goes to a memory copy first and then to the browser, so the value survives until the
+ * page closes even when the browser refuses it. A read asks the browser and trusts its answer, a
+ * missing key included, so a key another tab removed stays removed; only when the browser cannot be
+ * asked (it throws, or there is none) does the memory copy answer. A removal clears both. Nothing here
+ * throws, so a caller never needs its own `try`.
+ *
+ * @param area Where the browser keeps the data, looked up on every call because merely reading
+ * `localStorage` throws when it is blocked. Defaults to `globalThis.localStorage`.
+ */
+export function browserStorage(
+  area: () => KeyValueStore | null | undefined = () => globalThis.localStorage,
+): KeyValueStore {
+  const memory = new Map<string, string>()
+  return {
+    getItem(key) {
+      try {
+        const browser = area()
+        if (browser) return browser.getItem(key)
+      } catch (_blocked) {
+        // Answer from memory.
+      }
+      return memory.get(key) ?? null
+    },
+    setItem(key, value) {
+      memory.set(key, value)
+      try {
+        area()?.setItem(key, value)
+      } catch (_blocked) {
+        // Kept in memory until the page closes.
+      }
+    },
+    removeItem(key) {
+      memory.delete(key)
+      try {
+        area()?.removeItem(key)
+      } catch (_blocked) {
+        // Nothing stored, nothing to remove.
+      }
+    },
+  }
+}
