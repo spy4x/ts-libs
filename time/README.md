@@ -13,7 +13,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/ical`                 | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                                      |
 | `time/ical-tasks`           | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`, `describeAlarmTrigger`                                                                                       |
 | `time/ical-tasks-model`     | The `Task` a screen shows, read from a CalDAV resource: `parseTask`, `priorityBand`, `isOpen`, `dateInstant`, `dateDay`                                                                                                                                   |
-| `time/ical-tasks-edit`      | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `completeTask`, `reopenTask`                                                                                                                                                   |
+| `time/ical-tasks-edit`      | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `keepMineText`, `completeTask`, `reopenTask`                                                                                                                                   |
 | `time/ical-tasks-reminders` | Which reminders of a task fall in a time window: `dueReminders` (alarms relative to start or due, absolute ones, a Tasks.org snooze; nothing for a completed task)                                                                                        |
 | `time/rrule`                | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
 
@@ -407,6 +407,15 @@ removes them all). Both go through the lossless patch: a rule that means what th
 reminders with the triggers it has, leave their lines as they are, and a reminder that stays keeps
 its vendor lines. `rebaseEdit`, `keepMine` and `collisions` know both fields (`EditField.Repeat`,
 `EditField.Reminders`). A rule `parseRrule` does not read is refused.
+
+`keepMineText(baseIcs, mineIcs, theirs, now)` is "keep mine" for a change stored as whole text, such
+as a write that waited in a queue while the server's copy changed. It returns the server's text with
+only what differs between the base text and mine on it: every `TaskEdit` field except the list, and
+a completion or a reopening I made, unless the server's copy already has it. A repeating task I
+completed is recognised by its dates and rule, and the server's copy moves on from its own dates.
+It refuses with a `KeepMineStep` (and the `CompleteTodoErrorCode` for a completion) when a text does
+not read, the server's copy cannot take the completion, or `editTask` refuses a field; never send my
+whole text then, which would undo every change of the other side.
 
 ## Not in scope
 
