@@ -19,7 +19,11 @@ import { createSql, type Sql } from "../db/index.ts"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { PostgresOutboxRepository } from "./postgres-repository.ts"
 import { type OutboxAttemptFailure, OutboxProcessor } from "./processor.ts"
-import { ensureScheduledOutboxEvent, scheduleOutboxEvent } from "./schedule.ts"
+import {
+  ensureScheduledOutboxEvent,
+  type ReplacedOutboxEvent,
+  scheduleOutboxEvent,
+} from "./schedule.ts"
 import { isUuid } from "@spy4x/platform/universal/uuid"
 
 const OUTBOX_EVENTS_TABLE = `
@@ -845,6 +849,143 @@ describe("given-up events against a real server", () => {
       } finally {
         await other.end()
       }
+    })
+  })
+})
+
+describe("ensureScheduledOutboxEvent with replaceGivenUpAfter against a real server", () => {
+  it("closes the row that used up its attempts and starts the chain again", async () => {
+    await withOutboxSchema(async (sql) => {
+      const old = await ensureScheduledOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+      await sql`UPDATE outbox_events SET attempt_count = 5, last_error_code = 'TypeError'`
+      const replaced: ReplacedOutboxEvent[] = []
+
+      const fresh = await ensureScheduledOutboxEvent(sql, NIGHTLY, { inMs: DAY_MS }, {
+        replaceGivenUpAfter: 5,
+        onReplaced: (row) => void replaced.push(row),
+      })
+
+      assert(isUuid(fresh, 7), `returned ${fresh}`)
+      assertEquals(
+        replaced.map((row) => [row.id, row.attemptCount, row.lastErrorCode]),
+        [[old, 5, "TypeError"]],
+      )
+      const rows = await rowStates(sql)
+      assertEquals(
+        rows.map((row) => [row.attempts, row.done, row.error, row.hours]),
+        [[5, true, "TypeError", 0], [0, false, null, 24]],
+      )
+      const [{ id }] = await sql<{ id: string }[]>`
+        SELECT id FROM outbox_events WHERE processed_at IS NULL
+      `
+      assertEquals(id, fresh)
+    })
+  })
+
+  it("leaves a row that still has attempts left, and starts nothing", async () => {
+    await withOutboxSchema(async (sql) => {
+      await ensureScheduledOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+      await sql`UPDATE outbox_events SET attempt_count = 4, last_error_code = 'TypeError'`
+      const replaced: ReplacedOutboxEvent[] = []
+
+      const result = await ensureScheduledOutboxEvent(sql, NIGHTLY, { inMs: 0 }, {
+        replaceGivenUpAfter: 5,
+        onReplaced: (row) => void replaced.push(row),
+      })
+
+      assertEquals(result, null)
+      assertEquals(replaced, [])
+      const rows = await rowStates(sql)
+      assertEquals(rows.map((row) => [row.attempts, row.done]), [[4, false]])
+    })
+  })
+
+  it("closes a given-up row but starts no second chain when a later run already waits", async () => {
+    await withOutboxSchema(async (sql) => {
+      await scheduleOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+      await sql`UPDATE outbox_events SET attempt_count = 5`
+      await scheduleOutboxEvent(sql, NIGHTLY, { inMs: DAY_MS })
+
+      const result = await ensureScheduledOutboxEvent(sql, NIGHTLY, { inMs: 0 }, {
+        replaceGivenUpAfter: 5,
+      })
+
+      assertEquals(result, null)
+      const rows = await rowStates(sql)
+      assertEquals(rows.map((row) => [row.attempts, row.done]), [[5, true], [0, false]])
+    })
+  })
+
+  it("leaves the given-up row of another aggregate alone", async () => {
+    await withOutboxSchema(async (sql) => {
+      const other = { ...NIGHTLY, aggregateId: ROW_A }
+      await ensureScheduledOutboxEvent(sql, other, { inMs: 0 })
+      await sql`UPDATE outbox_events SET attempt_count = 5`
+
+      await ensureScheduledOutboxEvent(sql, NIGHTLY, { inMs: 0 }, { replaceGivenUpAfter: 5 })
+
+      const rows = await sql<{ aggregate: string; done: boolean }[]>`
+        SELECT aggregate_id AS aggregate, processed_at IS NOT NULL AS done
+        FROM outbox_events WHERE attempt_count = 5
+      `
+      assertEquals(rows.map((row) => ({ ...row })), [{ aggregate: ROW_A, done: false }])
+    })
+  })
+
+  it("leaves one chain when two workers replace the same given-up row at once", async () => {
+    await withOutboxSchema(async (sql, schema) => {
+      const other = await openSecondClient(schema)
+      try {
+        for (let round = 0; round < 10; round++) {
+          await sql`DELETE FROM outbox_events`
+          await scheduleOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+          await sql`UPDATE outbox_events SET attempt_count = 5`
+          const replaced: ReplacedOutboxEvent[] = []
+          const options = {
+            replaceGivenUpAfter: 5,
+            onReplaced: (row: ReplacedOutboxEvent) => void replaced.push(row),
+          }
+
+          const results = await Promise.all([
+            ensureScheduledOutboxEvent(sql, NIGHTLY, { inMs: DAY_MS }, options),
+            ensureScheduledOutboxEvent(other, NIGHTLY, { inMs: DAY_MS }, options),
+          ])
+
+          assertEquals(results.filter((id) => id !== null).length, 1)
+          assertEquals(replaced.length, 1)
+          const rows = await rowStates(sql)
+          assertEquals(rows.map((row) => [row.attempts, row.done]), [[5, true], [0, false]])
+        }
+      } finally {
+        await other.end()
+      }
+    })
+  })
+
+  it("a last attempt that succeeds after its row was replaced writes no second next run", async () => {
+    await withOutboxSchema(async (sql) => {
+      const old = await scheduleOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+      const repository = new PostgresOutboxRepository(sql)
+      // The last attempt is running when another worker starts up and replaces the row.
+      await repository.claimBatch(10, 1, 60)
+      await ensureScheduledOutboxEvent(sql, NIGHTLY, { inMs: DAY_MS }, { replaceGivenUpAfter: 1 })
+
+      await repository.markProcessed(old, 86_400)
+
+      const rows = await rowStates(sql)
+      assertEquals(rows.map((row) => [row.attempts, row.done]), [[1, true], [0, false]])
+    })
+  })
+
+  it("refuses a ceiling that is not an integer of at least 1", async () => {
+    await withOutboxSchema(async (sql) => {
+      for (const replaceGivenUpAfter of [0, -1, 1.5, NaN]) {
+        await assertRejects(
+          () => ensureScheduledOutboxEvent(sql, NIGHTLY, { inMs: 0 }, { replaceGivenUpAfter }),
+          RangeError,
+        )
+      }
+      assertEquals((await rowStates(sql)).length, 0)
     })
   })
 })

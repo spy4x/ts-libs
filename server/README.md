@@ -2098,7 +2098,7 @@ next `get` returning the stored value on a new connection.
 
 `OutboxProcessor`, `OutboxEvent`, `OutboxPublisher`, `OutboxRepository`, `PostgresOutboxRepository`,
 `LoggingOutboxPublisher`, `JobPublisher`, `retryDelayMs`, `errorCodeOf`, `scheduleOutboxEvent`,
-`ensureScheduledOutboxEvent`. Extracted from
+`ensureScheduledOutboxEvent`, `OutboxAttemptFailure`, `OutboxLeaseExpiredError`. Extracted from
 `template/libs/server/outbox/+index.ts` (#75) — the template is the only source of an outbox in this
 wave's source repositories.
 
@@ -2117,11 +2117,40 @@ Failures already back off exponentially and stop at `maxAttempts` with the last 
 run succeeds, `markProcessed(id, repeatInSeconds)` writes the next run in the same statement, so the
 chain is one row at a time, never two (a redelivery of a finished run writes nothing). A chain whose
 run gives up stops, and `ensureScheduledOutboxEvent` at start-up does not restart it while that row
-is unprocessed: the stored error is the signal. Both functions write only the library's columns, so
+is unprocessed: the stored error is the signal. Two options change that, see "Failed attempts and
+given-up rows" below. Both functions write only the library's columns, so
 any extra column in an app's `outbox_events` (the template's `group_id`) must be nullable or have a
 default. `ensureScheduledOutboxEvent` takes an advisory lock on kind, aggregate type and aggregate
 id inside its own transaction, so two workers starting together leave one chain; give it the pool,
 not a transaction. The repeat interval counts from the end of a run, not from a fixed clock time.
+
+**Failed attempts and given-up rows.** By default a row that fails says nothing: the processor
+stores the error name on it and retries, and after `maxAttempts` never claims it again. Three
+options, all off by default, make that visible and recoverable:
+
+- `OutboxProcessorOptions.onAttemptFailed` is called for every failed attempt with
+  `{ event, error, attempt, maxAttempts, lastAttempt, stage }`. `stage` is `publish` when the
+  publisher threw, `markProcessed` when the publish worked and writing the "processed" mark failed
+  (the event is then delivered again), and `lease` when the last attempt ended with no outcome,
+  because its worker died or outlived its lease; `error` is then an `OutboxLeaseExpiredError`.
+  `lastAttempt: true` means the row is given up. A callback that throws or rejects is written to
+  `console.error` and the drain goes on. Only a lost last attempt is reported; an earlier one that
+  was lost is simply tried again.
+- `OutboxProcessorOptions.repeatAfterGiveUp: true` writes the next run of a repeating job when a run
+  is given up, one interval later, so one bad night costs one run and not the chain. The given-up
+  row stays unprocessed with its error stored.
+- `ensureScheduledOutboxEvent(sql, event, when, { replaceGivenUpAfter: maxAttempts, onReplaced })`
+  closes a waiting row that has been tried `maxAttempts` times and starts the chain again, in the
+  same transaction and under the same advisory lock, so two workers starting together still leave
+  one chain. `onReplaced` gets each closed row's `id`, `attemptCount` and `lastErrorCode`.
+
+The first two need to tell a given-up row that was reported from one that was not, without a new
+column: `PostgresOutboxRepository.giveUp` sets `claimed_at` to `NULL` on a row it gives up (a claim
+always sets it), and `findLost` returns the rows out of attempts whose lease is over and whose
+`claimed_at` is still set. Both are optional members of `OutboxRepository`; a repository without
+them still gets `onAttemptFailed` for the `publish` and `markProcessed` stages, and
+`repeatAfterGiveUp` refuses it at construction. Turning `onAttemptFailed` on for a table that
+already holds given-up rows reports each of them once, as stage `lease`.
 
 **The row this library defines is smaller than the template's.** The ported original's row also
 carried `groupId` and `actorUserId` — the template's own data model, not something a generic outbox

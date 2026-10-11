@@ -2496,6 +2496,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/server/outbox`
 
 - `DrainResult` (interface), `jsr:@spy4x/server/outbox`: What one `drainOnce` did.
+- `EnsureScheduledOptions` (interface), `jsr:@spy4x/server/outbox`: Options of ensureScheduledOutboxEvent.
 - `JobHandler` (type), `jsr:@spy4x/server/outbox`: What runs when a job's time has come.
 - `JobPublisher` (class), `jsr:@spy4x/server/outbox`: An OutboxPublisher for an outbox that holds two kinds of rows: jobs (the delayed and repeating rows `scheduleOutboxEvent` writes) and everything else.
 - `JobPublisherOptions` (interface), `jsr:@spy4x/server/outbox`: Options of JobPublisher.
@@ -2510,6 +2511,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `OutboxRepository` (interface), `jsr:@spy4x/server/outbox`
 - `OutboxSchedule` (type), `jsr:@spy4x/server/outbox`: When the job first runs: at a moment, or a number of milliseconds from now.
 - `PostgresOutboxRepository` (class), `jsr:@spy4x/server/outbox`
+- `ReplacedOutboxEvent` (interface), `jsr:@spy4x/server/outbox`: A row ensureScheduledOutboxEvent closed because it had used up its attempts.
 - `ScheduledOutboxEvent` (interface), `jsr:@spy4x/server/outbox`: The row a job is: what it is called and what it is about.
 - `ensureScheduledOutboxEvent` (function), `jsr:@spy4x/server/outbox`: Starts a repeating job, once.
 - `errorCodeOf` (function), `jsr:@spy4x/server/outbox`: Short, stable label recorded on the row so failures are greppable.
@@ -3031,4 +3033,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 c027a68a9d45efa0ab35931fec47e89d63486e4fdc5d7b35af3397c174129b4f -->
+<!-- export surface: sha256 37599b404586658cb4ac969f3fd4cab94428c04fa4a6b40806d416a41d124ef7 -->
