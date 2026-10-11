@@ -135,9 +135,33 @@ export interface HttpCallPortOptions {
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000
 
 /**
+ * Whether an answer that is not `ok` was written by something in front of the API, not by the API:
+ * a status of 500 or more, a 404 or a 429, with no error code in the body. A proxy answers 502,
+ * 503, 504 or a bare 404 while the API's container is replaced, and an API that answers
+ * `{ error: { code, message } }` names a code for its own not-found, rate limit and failures.
+ *
+ * Treat such an answer as "out of reach", like a failed `fetch`: keep what the page holds and try
+ * again later. {@link createHttpCallPort} does that with `ConnectionLostError`; a page that reads
+ * with plain `fetch` asks this function, so both follow one rule for a 4xx and a 5xx. A status
+ * below 400 is not covered: this answers `false`, and the port, which expects a result, treats a
+ * redirect it is handed as a lost connection.
+ *
+ * `code` is a code you know to be your API's. Pass none for a body whose code is not on your list:
+ * a proxy can answer JSON with a code of its own, and any code given here counts as the API's.
+ *
+ * @example
+ * ```ts
+ * if (!response.ok && isForeignAnswer(response.status, body?.error?.code)) return savedCopy
+ * ```
+ */
+export function isForeignAnswer(status: number, code?: string | null): boolean {
+  if (code) return false
+  return status >= 500 || status === 404 || status === 429
+}
+
+/**
  * The code a status stands for when the body names none. `undefined`: the status says nothing
- * about the server's answer. A bare 404 or 429 is that too: a proxy answers them while a container
- * is replaced, and a real not-found or rate limit of ours carries the error body.
+ * about the server's answer ({@link isForeignAnswer}).
  */
 function codeForStatus(status: number): RealtimeErrorCode | undefined {
   switch (status) {
@@ -150,9 +174,7 @@ function codeForStatus(status: number): RealtimeErrorCode | undefined {
     case 409:
       return "conflict"
   }
-  return status >= 400 && status < 500 && status !== 404 && status !== 429
-    ? "bad_request"
-    : undefined
+  return status >= 400 && !isForeignAnswer(status) ? "bad_request" : undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

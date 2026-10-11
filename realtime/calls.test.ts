@@ -13,6 +13,7 @@ import {
   createComposedCallPort,
   createHttpCallPort,
   createSocketCallPort,
+  isForeignAnswer,
   isRetryable,
   isUnknownOutcome,
   sendCommand,
@@ -297,11 +298,30 @@ describe("the HTTP port", () => {
     }
   })
 
+  it("treats a redirect it is handed as a lost connection", async () => {
+    for (const status of [302, 304]) {
+      const { fetcher } = recordingFetch(new Response(null, { status }))
+
+      await expect(port(fetcher).query("x")).rejects.toBeInstanceOf(ConnectionLostError)
+    }
+  })
+
   it("treats a proxy's bare 404 or 429 as a lost connection", async () => {
     for (const status of [404, 429]) {
       const { fetcher } = recordingFetch(new Response("404 page not found", { status }))
 
       await expect(port(fetcher).query("x")).rejects.toBeInstanceOf(ConnectionLostError)
+    }
+  })
+
+  it("names a 5xx, a 404 and a 429 without a code as not the API's answer", () => {
+    for (const status of [404, 429, 500, 502, 503, 504]) {
+      expect(isForeignAnswer(status)).toBe(true)
+      expect(isForeignAnswer(status, null)).toBe(true)
+      expect(isForeignAnswer(status, "not_found")).toBe(false)
+    }
+    for (const status of [302, 400, 401, 403, 409, 422]) {
+      expect(isForeignAnswer(status)).toBe(false)
     }
   })
 

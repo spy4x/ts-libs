@@ -518,6 +518,7 @@ may not have run).
 | `createComposedCallPort({ socket, http })`                    | Socket while it is open, HTTP otherwise and after a lost socket (see below).                     |
 | `withUnauthorizedHook(port, hook)`                            | Calls `hook` once when a call is answered `unauthorized`. The HTTP port takes it as an option.   |
 | `sendCommand`, `sendQuery`, `isRetryable`, `isUnknownOutcome` | Send a call again when the outcome is unknown: one idempotency key per command, waits that grow. |
+| `isForeignAnswer(status, code)`                               | Whether a proxy, not the API, wrote an answer that is not `ok` (see below).                      |
 
 ### HTTP wire contract
 
@@ -572,6 +573,12 @@ A socket call that fails with `ConnectionLostError` is sent again over HTTP with
 idempotency key. A command without a key is not: the socket may have delivered it before it
 dropped. A server answer (`unauthorized`, `conflict`, a socket `RequestTimeoutError`) is never
 asked again over the other module; `sendCommand` decides whether to try again.
+
+`isForeignAnswer(status, code)` is the rule the HTTP module uses to tell a proxy's answer from the
+API's: a status of 500 or more, a 404 or a 429 with no error code of the API's in the body (a
+status below 400 is not covered and answers `false`). A page that reads
+with plain `fetch` asks it before it treats a 404 as "this is gone", so a deploy does not delete a
+saved copy.
 
 #### Waiting for the first open
 
