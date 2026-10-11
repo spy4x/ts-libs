@@ -2151,7 +2151,7 @@ when the caller passes none.
 | `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                   |
 | `browser/push-notifications` | `installPushNotifications`, `sameOriginUrl` — the `push` and `notificationclick` handlers of a service worker                                                                                                                                |
 | `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure |
-| `browser/storage`            | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage`                                                                                                            |
+| `browser/storage`            | `makeStorage`, `memoryStorage`, `browserStorage` (`localStorage` that falls back to memory when the browser blocks it), `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage`                    |
 | `browser/testing`            | `installLocalStorage` — a test helper: puts an in-memory `localStorage` in place of the global one and gives the way back. Import it from tests only; it is not in the `@spy4x/platform/browser` barrel                                      |
 | `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                       |
 
@@ -3024,7 +3024,9 @@ application surface:
   one of `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`,
   `rate_limited`, `internal`, `timeout`. A dispatcher exception that is not a
   `RealtimeRequestError` is answered `internal` with a fixed message; its text
-  goes to `onRequestError`, never to the client.
+  goes to `onRequestError`, never to the client. `describeError(error, fallback)`
+  gives the person the server's message for a `RealtimeRequestError` and the
+  `fallback` text for anything else (a dropped socket, a bug).
 - **Bounded.** One connection may have `maxInFlightRequests` (default 16)
   unanswered requests; the next is answered `rate_limited` and takes no slot. A
   request id already in flight is answered `bad_request`, and so is a request
@@ -4062,8 +4064,8 @@ the sibling `time/` package. Every entry in this package's `exports` must resolv
 ## `server/http/bounded-body`
 
 `readBoundedBody`, `readBoundedText`, `parseBoundedFormData`, `readContentLength`,
-`PayloadTooLargeError`, `readJsonBody` with its messages `JSON_BODY_TOO_LARGE`, `JSON_BODY_TIMEOUT`
-and `JSON_BODY_INVALID`, `readFormBody` with its messages `FORM_BODY_TOO_LARGE`, `FORM_BODY_TIMEOUT`
+`PayloadTooLargeError`, `readJsonBody` with its messages `JSON_BODY_TOO_LARGE`, `JSON_BODY_TIMEOUT`,
+`JSON_BODY_INVALID` and `JSON_BODY_CONTENT_TYPE`, `readFormBody` with its messages `FORM_BODY_TOO_LARGE`, `FORM_BODY_TIMEOUT`
 and `FORM_BODY_INVALID`, and the types `ReadBoundedBodyOptions` and `BodySource`.
 
 **Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This module is a named
@@ -4088,6 +4090,12 @@ body over the cap, 408 for a stalled body and 400 for a body that is not JSON, t
 included. A route without `onError` answers with that status on its own; a route with its own error
 shape catches the exception and reads `status`, and the reader's error is kept as `cause`. Any other
 error is rethrown unchanged.
+
+Two options serve a route with its own error shape. `requireJsonContentType: true` refuses a request
+whose `content-type` does not contain `application/json` (any case) with 415 before the body is
+read. `fail(message, status)` returns the error to throw in place of each `HTTPException` (415, 413,
+408 and 400), so the route answers in its feature's shape without a `try`; it does not keep the
+reader's error as `cause`.
 
 `readFormBody(request, options?)` is the same for a form post (`application/x-www-form-urlencoded`
 or `multipart/form-data`). It takes a plain `Request`, so a server that is not Hono can use it; a

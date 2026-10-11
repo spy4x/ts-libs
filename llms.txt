@@ -804,6 +804,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `TimerAdapter` (interface), `jsr:@spy4x/platform/browser`: Timer surface, injected so a test never waits on a real delay.
 - `TypedStorage` (interface), `jsr:@spy4x/platform/browser`: A namespaced handle over one key.
 - `TypingTarget` (interface), `jsr:@spy4x/platform/browser`: The part of an element that isTypingTarget reads.
+- `browserStorage` (function), `jsr:@spy4x/platform/browser`: `localStorage` that keeps working when the browser blocks it: a private window, blocked site data, a full quota, or no `localStorage` at all (a prerender pass, a worker).
 - `captureTimeZone` (function), `jsr:@spy4x/platform/browser`: The visitor's IANA time zone (`Europe/Berlin`), or `undefined` when the runtime reports none.
 - `copyToClipboard` (function), `jsr:@spy4x/platform/browser`: Write `text` to the clipboard, and say whether it got there.
 - `createDataCache` (function), `jsr:@spy4x/platform/browser`: A data cache over IndexedDB.
@@ -957,6 +958,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `StorageLike` (type), `jsr:@spy4x/platform/browser/storage`: The subset of the DOM `Storage` interface this module uses.
 - `StorageRead` (type), `jsr:@spy4x/platform/browser/storage`: Outcome of a write or a read, so a caller can tell "absent" from "present but rejected".
 - `TypedStorage` (interface), `jsr:@spy4x/platform/browser/storage`: A namespaced handle over one key.
+- `browserStorage` (function), `jsr:@spy4x/platform/browser/storage`: `localStorage` that keeps working when the browser blocks it: a private window, blocked site data, a full quota, or no `localStorage` at all (a prerender pass, a worker).
 - `makeStorage` (function), `jsr:@spy4x/platform/browser/storage`: Bind a StorageLike to one key.
 - `memoryStorage` (function), `jsr:@spy4x/platform/browser/storage`: A `Map`-backed StorageLike.
 
@@ -1679,6 +1681,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createSocketCallPort` (function), `jsr:@spy4x/realtime`: Fills the port with a client transport.
 - `createSystemClock` (function), `jsr:@spy4x/realtime`: Clock backed by the platform timers.
 - `createWebSocketFactory` (function), `jsr:@spy4x/realtime`: SocketFactory over the platform `WebSocket` constructor.
+- `describeError` (function), `jsr:@spy4x/realtime`: What to tell the person about a failed call: the server's own message when it answered with one (a RealtimeRequestError, which a client transport raises for a `server.error` frame or a `timeout`), otherwise `fallback`, for an error that is not a server answer, such as a dropped socket (`ConnectionLostError`) or a bug.
 - `expectNoPayload` (function), `jsr:@spy4x/realtime`: Refuses a payload on a request that takes none, so a client cannot smuggle fields past it.
 - `findUndeclaredKey` (function), `jsr:@spy4x/realtime`: First own string key of `value` that `declared` does not list, or `null`.
 - `isBoundToUser` (function), `jsr:@spy4x/realtime`: Whether a call is bound to the authenticated user.
@@ -2288,11 +2291,13 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `FORM_BODY_INVALID` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 400 readFormBody throws when the body is not a form.
 - `FORM_BODY_TIMEOUT` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 408 readFormBody throws when the body stalls.
 - `FORM_BODY_TOO_LARGE` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 413 readFormBody throws when the body is over the cap.
+- `JSON_BODY_CONTENT_TYPE` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 415 readJsonBody throws when `requireJsonContentType` is set and the request is not declared as JSON.
 - `JSON_BODY_INVALID` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 400 readJsonBody throws when the body is not JSON.
 - `JSON_BODY_TIMEOUT` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 408 readJsonBody throws when the body stalls.
 - `JSON_BODY_TOO_LARGE` (constant), `jsr:@spy4x/server/http/bounded-body`: Message of the 413 readJsonBody throws when the body is over the cap.
 - `PayloadTooLargeError` (class), `jsr:@spy4x/server/http/bounded-body`: Body exceeded the byte cap.
 - `ReadBoundedBodyOptions` (interface), `jsr:@spy4x/server/http/bounded-body`: Per-call overrides for a bounded body read.
+- `ReadJsonBodyOptions` (interface), `jsr:@spy4x/server/http/bounded-body`: Options of readJsonBody: the reader's own, and how a failure is reported.
 - `parseBoundedFormData` (function), `jsr:@spy4x/server/http/bounded-body`: Parse a `multipart/form-data` (or url-encoded) request body under the same cap and stall budget as `readBoundedBody`.
 - `readBoundedBody` (function), `jsr:@spy4x/server/http/bounded-body`: Read a body into bytes under the hard cap and stall budget.
 - `readBoundedText` (function), `jsr:@spy4x/server/http/bounded-body`: Read a body as text, decoding incrementally so the cap is enforced before the whole payload is materialised as one string.
@@ -2997,4 +3002,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 3e4ddae91b68b06d7308a900cf0b3936aa21417a53042f85d4cbaea78032f8a4 -->
+<!-- export surface: sha256 144c7d2b54ceb07a9c81c1b14ee62991770a2a86c45f2a90ce0df93d7552e615 -->
