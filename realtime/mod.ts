@@ -163,6 +163,7 @@ export {
   createHttpCallPort,
   createSocketCallPort,
   type HttpCallPortOptions,
+  isForeignAnswer,
   isRetryable,
   isUnknownOutcome,
   type RetryOptions,

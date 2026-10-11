@@ -142,7 +142,12 @@ const DEFAULT_HTTP_TIMEOUT_MS = 15_000
  *
  * Treat such an answer as "out of reach", like a failed `fetch`: keep what the page holds and try
  * again later. {@link createHttpCallPort} does that with `ConnectionLostError`; a page that reads
- * with plain `fetch` asks this function, so both follow one rule.
+ * with plain `fetch` asks this function, so both follow one rule for a 4xx and a 5xx. A status
+ * below 400 is not covered: this answers `false`, and the port, which expects a result, treats a
+ * redirect it is handed as a lost connection.
+ *
+ * `code` is a code you know to be your API's. Pass none for a body whose code is not on your list:
+ * a proxy can answer JSON with a code of its own, and any code given here counts as the API's.
  *
  * @example
  * ```ts

@@ -1699,6 +1699,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `findUndeclaredKey` (function), `jsr:@spy4x/realtime`: First own string key of `value` that `declared` does not list, or `null`.
 - `isBoundToUser` (function), `jsr:@spy4x/realtime`: Whether a call is bound to the authenticated user.
 - `isChangeHint` (function), `jsr:@spy4x/realtime`: Whether a frame is a change hint, narrowing it for a caller that has already decoded.
+- `isForeignAnswer` (function), `jsr:@spy4x/realtime`: Whether an answer that is not `ok` was written by something in front of the API, not by the API: a status of 500 or more, a 404 or a 429, with no error code in the body.
 - `isRealtimeErrorCode` (function), `jsr:@spy4x/realtime`: Whether an unknown value is one of the closed error codes.
 - `isRetryable` (function), `jsr:@spy4x/realtime`: Whether the outcome of a call is unknown or the server was busy, so trying again can help: the answer did not arrive in time, the connection dropped, the server gave up, or it is still running the first try of the same command.
 - `isUnknownOutcome` (function), `jsr:@spy4x/realtime`: Whether the outcome of a call is unknown: the network is down (`fetch` rejects with a `TypeError`) or the call is isRetryable.
@@ -3017,4 +3018,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 b35f47d5e5eb2c310e7588716f28b79f32c9581c0d73980c49f48e68dc20ad07 -->
+<!-- export surface: sha256 5f10e045d4bf2af95f9fdb15efdc716c80ab5bdbec9d667187684f4b9ea8530f -->
