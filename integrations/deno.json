@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/integrations",
-  "version": "1.65.0",
+  "version": "1.66.0",
   "exports": {
     ".": "./mod.ts",
     "./webhooks": "./webhooks.ts",
