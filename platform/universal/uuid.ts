@@ -13,7 +13,6 @@
  * @example An id for a new record, and a schema that accepts one
  * ```ts
  * import { type } from "arktype"
- * import { isUuid, UUID_V7_PATTERN, uuidV7 } from "@spy4x/platform/universal/uuid"
  *
  * const note = { id: uuidV7(), text: "milk" }
  * const noteSchema = type({ id: UUID_V7_PATTERN, text: "string" })
