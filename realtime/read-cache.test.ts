@@ -4,6 +4,7 @@ import { IDBFactory } from "npm:fake-indexeddb@6.2.5"
 import { ConnectionLostError } from "./client-transport.ts"
 import { RealtimeRequestError } from "./errors.ts"
 import { cachedRead, createReadCache, readCopy } from "./read-cache.ts"
+import { createMemoryReadCache } from "./testing.ts"
 
 /** A browser's IndexedDB with nothing in it, so each case starts clean. */
 function freshFactory(): IDBFactory {
@@ -51,6 +52,7 @@ describe("cachedRead", () => {
     const broken = {
       get: () => Promise.reject(new Error("blocked")),
       set: () => Promise.resolve(0),
+      delete: () => Promise.resolve(),
       clear: () => Promise.resolve(),
     }
 
@@ -102,6 +104,7 @@ describe("cachedRead", () => {
     const cache = {
       get: () => Promise.resolve(undefined),
       set: () => Promise.reject(new Error("disk full")),
+      delete: () => Promise.resolve(),
       clear: () => Promise.resolve(),
     }
 
@@ -152,6 +155,7 @@ describe("readCopy", () => {
     const broken = {
       get: () => Promise.reject(new Error("blocked")),
       set: () => Promise.resolve(0),
+      delete: () => Promise.resolve(),
       clear: () => Promise.resolve(),
     }
 
@@ -197,5 +201,66 @@ describe("ReadCache.clear", () => {
     const after = createReadCache({ name: "reads:u1", indexedDB })
 
     expect((await readCopy(after, "groups"))?.value).toEqual(["a"])
+  })
+})
+
+describe("ReadCache.delete", () => {
+  it("drops one key and leaves the others", async () => {
+    const cache = createReadCache({ name: "reads:u1", indexedDB: freshFactory() })
+    await cachedRead(cache, "groups", answer([1]))
+    await cachedRead(cache, "notes", answer([2]))
+
+    await cache.delete("groups")
+
+    expect(await readCopy(cache, "groups")).toBeUndefined()
+    expect((await readCopy(cache, "notes"))?.value).toEqual([2])
+  })
+
+  it("does nothing for a key with no copy", async () => {
+    const cache = createReadCache({ name: "reads:u1", indexedDB: freshFactory() })
+
+    await cache.delete("missing")
+
+    expect(await readCopy(cache, "missing")).toBeUndefined()
+  })
+})
+
+describe("createMemoryReadCache", () => {
+  it("keeps a copy with its time, and a second cache over the same map finds it", async () => {
+    const entries = new Map()
+    await cachedRead(createMemoryReadCache(() => 7, entries), "groups", answer(["a"]))
+
+    const found = await readCopy(createMemoryReadCache(() => 9, entries), "groups")
+
+    expect(found).toEqual({ value: ["a"], fresh: false, savedAt: 7 })
+  })
+
+  it("deletes one key", async () => {
+    const cache = createMemoryReadCache()
+    await cache.set("a", 1)
+    await cache.set("b", 2)
+
+    await cache.delete("a")
+
+    expect(await cache.get("a")).toBeUndefined()
+    expect((await cache.get("b"))?.value).toBe(2)
+  })
+
+  it("stores nothing after clear, so a late answer cannot come back", async () => {
+    const cache = createMemoryReadCache()
+    await cache.clear()
+
+    await cache.set("a", 1)
+
+    expect(await cache.get("a")).toBeUndefined()
+  })
+
+  it("stores a copy, so a later change to the value does not alter it", async () => {
+    const cache = createMemoryReadCache()
+    const list = [1]
+    await cache.set("a", list)
+    list.push(2)
+
+    expect((await cache.get("a"))?.value).toEqual([1])
   })
 })
