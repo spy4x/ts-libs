@@ -14,6 +14,7 @@ import {
   createHttpCallPort,
   createSocketCallPort,
   isRetryable,
+  isUnknownOutcome,
   sendCommand,
   sendQuery,
   type SocketCallTransport,
@@ -546,6 +547,15 @@ function scriptedPort(answers: unknown[]): { port: CallPort; sent: Sent[] } {
     },
   }
 }
+
+describe("isUnknownOutcome", () => {
+  it("counts a failed fetch and a retryable call as unknown, a server answer as final", () => {
+    expect(isUnknownOutcome(new TypeError("fetch failed"))).toBe(true)
+    expect(isUnknownOutcome(new RealtimeRequestError("timeout", "late"))).toBe(true)
+    expect(isUnknownOutcome(new RealtimeRequestError("not_found", "gone"))).toBe(false)
+    expect(isUnknownOutcome(new Error("boom"))).toBe(false)
+  })
+})
 
 describe("sendCommand", () => {
   it("sends the command with a key and returns the result", async () => {

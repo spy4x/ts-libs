@@ -1639,13 +1639,16 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createSocketCallPort` (function), `jsr:@spy4x/realtime`: Fills the port with a client transport.
 - `createSystemClock` (function), `jsr:@spy4x/realtime`: Clock backed by the platform timers.
 - `createWebSocketFactory` (function), `jsr:@spy4x/realtime`: SocketFactory over the platform `WebSocket` constructor.
+- `expectNoPayload` (function), `jsr:@spy4x/realtime`: Refuses a payload on a request that takes none, so a client cannot smuggle fields past it.
 - `findUndeclaredKey` (function), `jsr:@spy4x/realtime`: First own string key of `value` that `declared` does not list, or `null`.
 - `isBoundToUser` (function), `jsr:@spy4x/realtime`: Whether a call is bound to the authenticated user.
 - `isChangeHint` (function), `jsr:@spy4x/realtime`: Whether a frame is a change hint, narrowing it for a caller that has already decoded.
 - `isRealtimeErrorCode` (function), `jsr:@spy4x/realtime`: Whether an unknown value is one of the closed error codes.
 - `isRetryable` (function), `jsr:@spy4x/realtime`: Whether the outcome of a call is unknown or the server was busy, so trying again can help: the answer did not arrive in time, the connection dropped, the server gave up, or it is still running the first try of the same command.
+- `isUnknownOutcome` (function), `jsr:@spy4x/realtime`: Whether the outcome of a call is unknown: the network is down (`fetch` rejects with a `TypeError`) or the call is isRetryable.
 - `mapReadyState` (function), `jsr:@spy4x/realtime`: Maps one native `readyState` value to this package's SocketState.
 - `nextBackoffDelay` (function), `jsr:@spy4x/realtime`: Delay before retry `attempt`, in milliseconds.
+- `parsePayload` (function), `jsr:@spy4x/realtime`: Checks a request payload with an arktype schema and returns the parsed value.
 - `sendCommand` (function), `jsr:@spy4x/realtime`: Sends a command with a fresh idempotency key and, when the outcome is unknown, sends it again with the same key.
 - `sendQuery` (function), `jsr:@spy4x/realtime`: Sends a query, trying again when the connection is down or the answer is late.
 - `toWireCursors` (function), `jsr:@spy4x/realtime`: Snapshot of the cursors a handshake advertises, in wire form.
@@ -1666,6 +1669,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createHttpCallPort` (function), `jsr:@spy4x/realtime/calls`: Fills the port with `fetch`: `POST <baseUrl>/<name>` with the payload as JSON.
 - `createSocketCallPort` (function), `jsr:@spy4x/realtime/calls`: Fills the port with a client transport.
 - `isRetryable` (function), `jsr:@spy4x/realtime/calls`: Whether the outcome of a call is unknown or the server was busy, so trying again can help: the answer did not arrive in time, the connection dropped, the server gave up, or it is still running the first try of the same command.
+- `isUnknownOutcome` (function), `jsr:@spy4x/realtime/calls`: Whether the outcome of a call is unknown: the network is down (`fetch` rejects with a `TypeError`) or the call is isRetryable.
 - `sendCommand` (function), `jsr:@spy4x/realtime/calls`: Sends a command with a fresh idempotency key and, when the outcome is unknown, sends it again with the same key.
 - `sendQuery` (function), `jsr:@spy4x/realtime/calls`: Sends a query, trying again when the connection is down or the answer is late.
 - `withUnauthorizedHook` (function), `jsr:@spy4x/realtime/calls`: Wraps any port so that a call answered with `unauthorized` calls `onUnauthorized` once, then rejects with the same error.
@@ -1744,7 +1748,9 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `REALTIME_USER_HEADER` (constant), `jsr:@spy4x/realtime/operations`: The header that carries the id of the user the page was started for.
 - `createCallHandler` (function), `jsr:@spy4x/realtime/operations`: The HTTP adapter: answers `POST <basePath>/<name>` from an Operations table.
 - `createOperationDispatcher` (function), `jsr:@spy4x/realtime/operations`: The socket adapter: a dispatcher for `ConnectionRegistry.onRequest` that serves an Operations table.
+- `expectNoPayload` (function), `jsr:@spy4x/realtime/operations`: Refuses a payload on a request that takes none, so a client cannot smuggle fields past it.
 - `isBoundToUser` (function), `jsr:@spy4x/realtime/operations`: Whether a call is bound to the authenticated user.
+- `parsePayload` (function), `jsr:@spy4x/realtime/operations`: Checks a request payload with an arktype schema and returns the parsed value.
 
 ### `jsr:@spy4x/realtime/outbox`
 
@@ -1851,6 +1857,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `KeyValueStore` (type), `jsr:@spy4x/realtime/testing`: Minimal synchronous key/value store.
 - `MemoryKeyValueStore` (class), `jsr:@spy4x/realtime/testing`: In-memory KeyValueStore.
 - `RecordingFanout` (class), `jsr:@spy4x/realtime/testing`: Fan-out that records what it was asked to deliver.
+- `createMemoryReadCache` (function), `jsr:@spy4x/realtime/testing`: A ReadCache in memory, for tests that have no IndexedDB.
 - `drainMicrotasks` (function), `jsr:@spy4x/realtime/testing`: Let queued microtasks run, so an awaited chain settles inside a test's own tick.
 - `sequenceRandom` (function), `jsr:@spy4x/realtime/testing`: Uniform source in `[0, 1)` that replays fixed values.
 
@@ -2924,4 +2931,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 fef0ae768e0390f93abc1a77dde88a2609ed53d37bea26c965dc75b0744fa0ae -->
+<!-- export surface: sha256 a07b39abe6207dfbb2ada01b8ab02dea2fa214ed4315a5c7211f802b8c0265c5 -->

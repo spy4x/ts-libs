@@ -93,6 +93,7 @@ export {
   createCallHandler,
   createOperationDispatcher,
   DEFAULT_MAX_CALL_BYTES,
+  expectNoPayload,
   IDEMPOTENCY_KEY_HEADER,
   isBoundToUser,
   type Operation,
@@ -100,6 +101,7 @@ export {
   type OperationDispatcherOptions,
   type OperationErrorMapper,
   type Operations,
+  parsePayload,
   REALTIME_USER_HEADER,
 } from "./operations.ts"
 
@@ -161,6 +163,7 @@ export {
   createSocketCallPort,
   type HttpCallPortOptions,
   isRetryable,
+  isUnknownOutcome,
   type RetryOptions,
   sendCommand,
   sendQuery,

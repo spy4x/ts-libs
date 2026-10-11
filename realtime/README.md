@@ -371,6 +371,13 @@ stay on the server.
 The handler has no timer of its own: a call lasts as long as the operation, or until the caller
 goes away (`signal`). It does no rate limiting either; put the app's limiter in front.
 
+### Checking a payload
+
+`parsePayload(schema, payload)` checks a socket payload with an arktype schema, the one the REST
+route checks the same body with, and returns the parsed value. A mismatch throws
+`RealtimeRequestError("bad_request", summary)`. `expectNoPayload(payload)` throws the same for a
+request that takes none and was sent one.
+
 ## Client wiring
 
 ```ts
@@ -502,13 +509,13 @@ A store should not know whether its calls travel over the socket or over HTTP. I
 the server sent) and `ConnectionLostError` (the server could not be reached, so a command may or
 may not have run).
 
-| Piece                                          | Does                                                                                             |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `createHttpCallPort({ baseUrl, userId, ... })` | `POST <baseUrl>/<name>` with `fetch`. Always works.                                              |
-| `createSocketCallPort(transport)`              | Adapts a `ClientTransport`; `isAvailable()` is true while the socket is open.                    |
-| `createComposedCallPort({ socket, http })`     | Socket while it is open, HTTP otherwise and after a lost socket (see below).                     |
-| `withUnauthorizedHook(port, hook)`             | Calls `hook` once when a call is answered `unauthorized`. The HTTP port takes it as an option.   |
-| `sendCommand`, `sendQuery`, `isRetryable`      | Send a call again when the outcome is unknown: one idempotency key per command, waits that grow. |
+| Piece                                                         | Does                                                                                             |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `createHttpCallPort({ baseUrl, userId, ... })`                | `POST <baseUrl>/<name>` with `fetch`. Always works.                                              |
+| `createSocketCallPort(transport)`                             | Adapts a `ClientTransport`; `isAvailable()` is true while the socket is open.                    |
+| `createComposedCallPort({ socket, http })`                    | Socket while it is open, HTTP otherwise and after a lost socket (see below).                     |
+| `withUnauthorizedHook(port, hook)`                            | Calls `hook` once when a call is answered `unauthorized`. The HTTP port takes it as an option.   |
+| `sendCommand`, `sendQuery`, `isRetryable`, `isUnknownOutcome` | Send a call again when the outcome is unknown: one idempotency key per command, waits that grow. |
 
 ### HTTP wire contract
 
@@ -802,6 +809,12 @@ layer.waiting() // notes held back by a tag, with `onPerson` while the tag is in
 - Conflict choices (`keepMine`, `useTheirs`), `withdraw` and the entries for a "queued" badge are on
   `layer.get(collection).outbox`.
 
+**Default changed: a write answered `unauthorized` stays pending.** `classifyByCode` used to file
+it as `rejected`, a conflict the person could only discard. The session ended, belongs to someone
+else or owes a second factor, so the server never judged the write: it now stays queued
+(`unreachable`) until its owner signs in. Pass `classifyByCode({ unauthorized: "rejected" })` to
+keep the old reading.
+
 ## Read cache (`@spy4x/realtime/read-cache`)
 
 The offline-readable level of ADR 003: a copy of a list read, kept on the device, that answers when
@@ -816,6 +829,7 @@ const copy = await readCopy<Group[]>(cache, `groups`) // paint at once; undefine
 const { value, fresh, savedAt } = await cachedRead(cache, `groups`, () => fetchGroups())
 // fresh: the server answered now. Not fresh: a copy taken at `savedAt` (epoch ms).
 
+await cache.delete(`groups`) // the server refused this read: drop only that list's copy
 await cache.clear() // sign-out, or a start that finds no session: every copy of this user
 ```
 
@@ -823,6 +837,10 @@ await cache.clear() // sign-out, or a start that finds no session: every copy of
   (`ConnectionLostError`, or the `TypeError` a failed `fetch` rejects with) answers from the copy,
   or throws the connection error when there is none. A `TypeError` thrown by your own `read`
   function counts as unreachable too.
+- `delete(key)` removes one copy and leaves the rest; it does nothing when there is none.
+  `createMemoryReadCache()` from `@spy4x/realtime/testing` is an in-memory `ReadCache` for tests
+  (no IndexedDB); it keeps the same rule that nothing is saved after `clear`. A custom `ReadCache`
+  must now implement `delete`.
 - `clear()` finishes the instance: it stores nothing more, so a read still in flight at sign-out
   cannot write its answer back. A new user needs a new cache.
 - Any other error is thrown and the copy stays. `unauthorized` and `forbidden` therefore neither

@@ -475,6 +475,16 @@ export function isRetryable(error: unknown): boolean {
   return false
 }
 
+/**
+ * Whether the outcome of a call is unknown: the network is down (`fetch` rejects with a
+ * `TypeError`) or the call is {@link isRetryable}. A write is then kept and sent when the server is
+ * reachable again. An answer from the server, such as "that group is gone", is final and is not
+ * kept; an answer with an error status never rejects `fetch`.
+ */
+export function isUnknownOutcome(error: unknown): boolean {
+  return error instanceof TypeError || isRetryable(error)
+}
+
 async function withRetry<T>(run: () => Promise<T>, options: RetryOptions): Promise<T> {
   const attempts = options.attempts ?? DEFAULT_ATTEMPTS
   const wait = options.sleep ?? ((ms: number) => cancellableSleep(ms, options.signal))
