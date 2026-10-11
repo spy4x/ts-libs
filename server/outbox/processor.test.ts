@@ -2,7 +2,9 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import {
   errorCodeOf,
+  type OutboxAttemptFailure,
   type OutboxEvent,
+  OutboxLeaseExpiredError,
   OutboxProcessor,
   type OutboxRepository,
   retryDelayMs,
@@ -589,5 +591,295 @@ describe("OutboxProcessor repeatEveryMs", () => {
       expect(() => new OutboxProcessor(new FakeRepository([]), ok, { repeatEveryMs: { k: ms } }))
         .toThrow(RangeError)
     }
+  })
+})
+
+/** A repository that can also give events up and find lost ones, as the Postgres one can. */
+class GivingUpRepository extends FakeRepository {
+  givenUp: { id: string; errorCode: string; repeatInSeconds?: number }[] = []
+  lostQueries: { maxAttempts: number; limit: number }[] = []
+  /** What the next `findLost` returns. */
+  lost: OutboxEvent[] = []
+  /** What `giveUp` answers: `false` plays another worker having given the event up first. */
+  marks = true
+
+  giveUp(id: string, errorCode: string, repeatInSeconds?: number): Promise<boolean> {
+    this.givenUp.push({ id, errorCode, repeatInSeconds })
+    return Promise.resolve(this.marks)
+  }
+  findLost(maxAttempts: number, limit: number): Promise<OutboxEvent[]> {
+    this.lostQueries.push({ maxAttempts, limit })
+    const lost = this.lost
+    this.lost = []
+    return Promise.resolve(lost)
+  }
+}
+
+/** Runs `body` with `console.error` collected instead of printed. */
+async function withSilencedConsoleError(body: (logged: unknown[][]) => Promise<void>) {
+  const original = console.error
+  const logged: unknown[][] = []
+  console.error = (...args: unknown[]) => void logged.push(args)
+  try {
+    await body(logged)
+  } finally {
+    console.error = original
+  }
+}
+
+describe("OutboxProcessor onAttemptFailed", () => {
+  const down = new TypeError("down")
+  const failing = { publish: () => Promise.reject(down) }
+
+  it("tells every failed attempt with its event, error, attempt number and ceiling", async () => {
+    const first = event({ id: "a", attemptCount: 1 })
+    const second = event({ id: "b", attemptCount: 2 })
+    const repository = new FakeRepository([[first, second]])
+    const failures: OutboxAttemptFailure[] = []
+    const processor = new OutboxProcessor(repository, failing, {
+      maxAttempts: 3,
+      onAttemptFailed: (failure) => void failures.push(failure),
+    })
+
+    await processor.drainOnce()
+
+    expect(failures).toEqual([
+      {
+        event: first,
+        error: down,
+        attempt: 1,
+        maxAttempts: 3,
+        lastAttempt: false,
+        stage: "publish",
+      },
+      {
+        event: second,
+        error: down,
+        attempt: 2,
+        maxAttempts: 3,
+        lastAttempt: false,
+        stage: "publish",
+      },
+    ])
+    expect(repository.retries.map((retry) => retry.id)).toEqual(["a", "b"])
+  })
+
+  it("says so when the failed attempt was the last one", async () => {
+    const repository = new FakeRepository([[event({ attemptCount: 3 })]])
+    const failures: OutboxAttemptFailure[] = []
+    const processor = new OutboxProcessor(repository, failing, {
+      maxAttempts: 3,
+      onAttemptFailed: (failure) => void failures.push(failure),
+    })
+
+    await processor.drainOnce()
+
+    expect(failures.map((failure) => failure.lastAttempt)).toEqual([true])
+    expect(failures[0].attempt).toBe(3)
+  })
+
+  it("tells nothing about an event that was published", async () => {
+    const repository = new FakeRepository([[event()]])
+    const failures: OutboxAttemptFailure[] = []
+    const processor = new OutboxProcessor(repository, { publish: () => Promise.resolve() }, {
+      onAttemptFailed: (failure) => void failures.push(failure),
+    })
+
+    expect(await processor.drainOnce()).toEqual({ claimed: 1, published: 1, failed: 0 })
+    expect(failures).toEqual([])
+  })
+
+  it("tells a failure to write the processed mark apart from a failed publish", async () => {
+    const lost = new Error("connection lost")
+    class UnmarkableRepository extends FakeRepository {
+      override markProcessed(): Promise<void> {
+        return Promise.reject(lost)
+      }
+    }
+    const repository = new UnmarkableRepository([[event()]])
+    const failures: OutboxAttemptFailure[] = []
+    const processor = new OutboxProcessor(repository, { publish: () => Promise.resolve() }, {
+      onAttemptFailed: (failure) => void failures.push(failure),
+    })
+
+    await processor.drainOnce()
+
+    expect(failures.map((failure) => [failure.stage, failure.error])).toEqual([[
+      "markProcessed",
+      lost,
+    ]])
+    expect(repository.retries.length).toBe(1)
+  })
+
+  it("keeps draining and still writes the retry when the callback throws or rejects", async () => {
+    await withSilencedConsoleError(async (logged) => {
+      const repository = new FakeRepository([[event({ id: "a" }), event({ id: "b" })]])
+      let calls = 0
+      const processor = new OutboxProcessor(repository, failing, {
+        onAttemptFailed: () => {
+          if (++calls === 1) throw new Error("logger broke")
+          return Promise.reject(new Error("logger broke again"))
+        },
+      })
+
+      expect(await processor.drainOnce()).toEqual({ claimed: 2, published: 0, failed: 2 })
+      expect(repository.retries.map((retry) => retry.id)).toEqual(["a", "b"])
+      expect(logged.length).toBe(2)
+    })
+  })
+
+  it("waits for an asynchronous callback before it writes the retry", async () => {
+    const repository = new FakeRepository([[event()]])
+    const order: string[] = []
+    const processor = new OutboxProcessor(repository, failing, {
+      onAttemptFailed: async () => {
+        // A timer, not a microtask: a processor that did not wait would be long past the retry.
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        order.push(`told, ${repository.retries.length} retries written`)
+      },
+    })
+
+    await processor.drainOnce()
+
+    expect(order).toEqual(["told, 0 retries written"])
+    expect(repository.retries.length).toBe(1)
+  })
+
+  it("gives a last attempt up instead of scheduling a retry, when the repository can", async () => {
+    const repository = new GivingUpRepository([[
+      event({ id: "early", attemptCount: 2 }),
+      event({ id: "last", attemptCount: 3, eventKind: "nightly.cleanup" }),
+    ]])
+    const processor = new OutboxProcessor(repository, failing, {
+      maxAttempts: 3,
+      repeatEveryMs: { "nightly.cleanup": 86_400_000 },
+      onAttemptFailed: () => {},
+    })
+
+    await processor.drainOnce()
+
+    expect(repository.retries.map((retry) => retry.id)).toEqual(["early"])
+    // No next run: `repeatAfterGiveUp` is off.
+    expect(repository.givenUp).toEqual([{
+      id: "last",
+      errorCode: "TypeError",
+      repeatInSeconds: undefined,
+    }])
+  })
+
+  it("tells an event whose last attempt was lost, as the lease stage", async () => {
+    const repository = new GivingUpRepository([])
+    const lost = event({ id: "lost", attemptCount: 3 })
+    repository.lost = [lost]
+    const failures: OutboxAttemptFailure[] = []
+    const processor = new OutboxProcessor(repository, failing, {
+      maxAttempts: 3,
+      batchSize: 7,
+      onAttemptFailed: (failure) => void failures.push(failure),
+    })
+
+    expect(await processor.drainOnce()).toEqual({ claimed: 0, published: 0, failed: 0 })
+
+    expect(repository.lostQueries).toEqual([{ maxAttempts: 3, limit: 7 }])
+    expect(repository.givenUp).toEqual([{
+      id: "lost",
+      errorCode: "OutboxLeaseExpired",
+      repeatInSeconds: undefined,
+    }])
+    expect(failures.length).toBe(1)
+    expect(failures[0]).toMatchObject({
+      event: lost,
+      attempt: 3,
+      maxAttempts: 3,
+      lastAttempt: true,
+      stage: "lease",
+    })
+    expect(failures[0].error).toBeInstanceOf(OutboxLeaseExpiredError)
+  })
+
+  it("does not tell a lost event that another worker gave up first", async () => {
+    const repository = new GivingUpRepository([])
+    repository.lost = [event({ attemptCount: 3 })]
+    repository.marks = false
+    const failures: OutboxAttemptFailure[] = []
+    const processor = new OutboxProcessor(repository, failing, {
+      maxAttempts: 3,
+      onAttemptFailed: (failure) => void failures.push(failure),
+    })
+
+    await processor.drainOnce()
+
+    expect(repository.givenUp.length).toBe(1)
+    expect(failures).toEqual([])
+  })
+
+  it("neither gives up nor looks for lost events without the callback", async () => {
+    const repository = new GivingUpRepository([[event({ attemptCount: 3 })]])
+    repository.lost = [event({ id: "lost", attemptCount: 3 })]
+    const processor = new OutboxProcessor(repository, failing, { maxAttempts: 3 })
+
+    await processor.drainOnce()
+
+    expect(repository.retries.length).toBe(1)
+    expect(repository.givenUp).toEqual([])
+    expect(repository.lostQueries).toEqual([])
+  })
+})
+
+describe("OutboxProcessor repeatAfterGiveUp", () => {
+  const failing = { publish: () => Promise.reject(new TypeError("down")) }
+  const options = {
+    maxAttempts: 3,
+    repeatEveryMs: { "nightly.cleanup": 86_400_000 },
+    repeatAfterGiveUp: true,
+  }
+
+  it("asks for the next run of a repeating job that fails its last attempt", async () => {
+    const repository = new GivingUpRepository([[
+      event({ id: "nightly", eventKind: "nightly.cleanup", attemptCount: 3 }),
+      event({ id: "plain", eventKind: "group.created", attemptCount: 3 }),
+    ]])
+
+    await new OutboxProcessor(repository, failing, options).drainOnce()
+
+    expect(repository.givenUp).toEqual([
+      { id: "nightly", errorCode: "TypeError", repeatInSeconds: 86_400 },
+      { id: "plain", errorCode: "TypeError", repeatInSeconds: undefined },
+    ])
+    expect(repository.retries).toEqual([])
+  })
+
+  it("asks for no next run while the job still has attempts left", async () => {
+    const repository = new GivingUpRepository([[
+      event({ eventKind: "nightly.cleanup", attemptCount: 2 }),
+    ]])
+
+    await new OutboxProcessor(repository, failing, options).drainOnce()
+
+    expect(repository.givenUp).toEqual([])
+    expect(repository.retries.length).toBe(1)
+  })
+
+  it("asks for the next run of a repeating job whose last attempt was lost", async () => {
+    const repository = new GivingUpRepository([])
+    repository.lost = [event({ id: "nightly", eventKind: "nightly.cleanup", attemptCount: 3 })]
+
+    await new OutboxProcessor(repository, failing, options).drainOnce()
+
+    expect(repository.givenUp).toEqual([
+      { id: "nightly", errorCode: "OutboxLeaseExpired", repeatInSeconds: 86_400 },
+    ])
+  })
+
+  it("refuses a repository that cannot give up or cannot find lost events", () => {
+    class OnlyGivingUp extends FakeRepository {
+      giveUp(): Promise<boolean> {
+        return Promise.resolve(true)
+      }
+    }
+    for (const repository of [new FakeRepository([]), new OnlyGivingUp([])]) {
+      expect(() => new OutboxProcessor(repository, failing, options)).toThrow(TypeError)
+    }
+    expect(() => new OutboxProcessor(new GivingUpRepository([]), failing, options)).not.toThrow()
   })
 })

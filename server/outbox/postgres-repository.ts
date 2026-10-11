@@ -154,6 +154,75 @@ export class PostgresOutboxRepository implements OutboxRepository {
   }
 
   /**
+   * The mark of a given-up row is `claimed_at IS NULL`: a claim always sets `claimed_at`, so no
+   * other row that used up its attempts has it, and the table needs no extra column. Raising
+   * `maxAttempts` later makes the row claimable again, and that claim sets `claimed_at` anew.
+   *
+   * One statement, so the mark and the next run are written together or not at all, and a second
+   * call for the same row (another worker found it lost too) matches nothing and writes no second
+   * next run. The next row is shaped as in `markProcessed`.
+   */
+  async giveUp(id: string, errorCode: string, repeatInSeconds?: number): Promise<boolean> {
+    if (repeatInSeconds === undefined) {
+      const marked = await this.sql`
+        UPDATE outbox_events
+        SET claimed_at = NULL,
+            last_error_code = ${errorCode}
+        WHERE id = ${id}
+          AND processed_at IS NULL
+          AND claimed_at IS NOT NULL
+        RETURNING 1
+      `
+      return marked.length > 0
+    }
+    const next = await this.sql`
+      WITH gone AS (
+        UPDATE outbox_events
+        SET claimed_at = NULL,
+            last_error_code = ${errorCode}
+        WHERE id = ${id}
+          AND processed_at IS NULL
+          AND claimed_at IS NOT NULL
+        RETURNING event_kind, aggregate_type, aggregate_id,
+          now() + (${repeatInSeconds}::double precision * INTERVAL '1 second') AS next_at
+      )
+      INSERT INTO outbox_events (
+        id, event_kind, aggregate_type, aggregate_id, aggregate_version, available_at
+      )
+      SELECT ${uuidV7()}::uuid, event_kind, aggregate_type, aggregate_id,
+        (extract(epoch FROM next_at) * 1000)::bigint, next_at
+      FROM gone
+      RETURNING 1
+    `
+    return next.length > 0
+  }
+
+  /**
+   * `available_at <= now()` is the lease of the last claim having run out: until then its worker
+   * may still report. A row whose last attempt failed in a processor that does not call `giveUp`
+   * (one without `onAttemptFailed` or `repeatAfterGiveUp`) matches too, once its retry delay has
+   * passed, because nothing marked it.
+   */
+  async findLost(maxAttempts: number, limit: number): Promise<OutboxEvent[]> {
+    return await this.sql<OutboxEvent[]>`
+      SELECT
+        id AS "id",
+        event_kind AS "eventKind",
+        aggregate_type AS "aggregateType",
+        aggregate_id AS "aggregateId",
+        aggregate_version::text AS "aggregateVersion",
+        attempt_count AS "attemptCount"
+      FROM outbox_events
+      WHERE processed_at IS NULL
+        AND available_at <= now()
+        AND attempt_count >= ${maxAttempts}
+        AND claimed_at IS NOT NULL
+      ORDER BY available_at, created_at
+      LIMIT ${limit}
+    `
+  }
+
+  /**
    * Undoes the claim on events the processor never tried. `attempt_count` goes back
    * down by one and `available_at` goes back to the claim time, so the event keeps its
    * place in the queue and is claimable at once.

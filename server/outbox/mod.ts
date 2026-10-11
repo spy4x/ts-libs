@@ -7,7 +7,10 @@
 export {
   type DrainResult,
   errorCodeOf,
+  type OutboxAttemptFailure,
   type OutboxEvent,
+  type OutboxFailureStage,
+  OutboxLeaseExpiredError,
   OutboxProcessor,
   type OutboxProcessorOptions,
   type OutboxPublisher,

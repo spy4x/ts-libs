@@ -18,7 +18,7 @@ import { describe, it } from "@std/testing/bdd"
 import { createSql, type Sql } from "../db/index.ts"
 import { postgresSettings, requireReachable, uniqueIdentifier } from "@integration-testing"
 import { PostgresOutboxRepository } from "./postgres-repository.ts"
-import { OutboxProcessor } from "./processor.ts"
+import { type OutboxAttemptFailure, OutboxProcessor } from "./processor.ts"
 import { ensureScheduledOutboxEvent, scheduleOutboxEvent } from "./schedule.ts"
 import { isUuid } from "@spy4x/platform/universal/uuid"
 
@@ -589,6 +589,262 @@ describe("delayed and repeating jobs against a real server", () => {
         error = caught
       }
       assertEquals(error instanceof RangeError, true)
+    })
+  })
+})
+
+/** What the tests below read back of every row, oldest first. */
+interface RowState {
+  kind: string
+  attempts: number
+  done: boolean
+  marked: boolean
+  error: string | null
+  hours: number
+}
+
+async function rowStates(sql: Sql): Promise<RowState[]> {
+  return await sql<RowState[]>`
+    SELECT event_kind AS kind, attempt_count AS attempts, processed_at IS NOT NULL AS done,
+      claimed_at IS NULL AS marked, last_error_code AS error,
+      round(extract(epoch FROM available_at - now()) / 3600)::int AS hours
+    FROM outbox_events ORDER BY available_at, created_at
+  `
+}
+
+const NIGHTLY = { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT }
+const DAY_MS = 24 * 60 * 60_000
+
+describe("given-up events against a real server", () => {
+  it("giveUp marks a claimed row once and stores its error code", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertRow(sql, ROW_A, "group.created", ROW_A)
+      const repository = new PostgresOutboxRepository(sql)
+      await repository.claimBatch(10, 1, 60)
+
+      assertEquals(await repository.giveUp(ROW_A, "TypeError"), true)
+      assertEquals(await repository.giveUp(ROW_A, "RangeError"), false)
+
+      const rows = await rowStates(sql)
+      assertEquals(rows.length, 1)
+      assertEquals(
+        { marked: rows[0].marked, error: rows[0].error, done: rows[0].done },
+        { marked: true, error: "TypeError", done: false },
+      )
+    })
+  })
+
+  it("giveUp writes the next run with the mark, and no second one when asked again", async () => {
+    await withOutboxSchema(async (sql) => {
+      const first = await scheduleOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+      const repository = new PostgresOutboxRepository(sql)
+      await repository.claimBatch(10, 1, 60)
+
+      assertEquals(await repository.giveUp(first, "TypeError", 86_400), true)
+      assertEquals(await repository.giveUp(first, "TypeError", 86_400), false)
+
+      const rows = await sql<{ id: string; attempts: number; hours: number }[]>`
+        SELECT id, attempt_count AS attempts,
+          round(extract(epoch FROM available_at - now()) / 3600)::int AS hours
+        FROM outbox_events WHERE id <> ${first}
+      `
+      assertEquals(rows.length, 1)
+      assertEquals({ attempts: rows[0].attempts, hours: rows[0].hours }, { attempts: 0, hours: 24 })
+      assert(isUuid(rows[0].id, 7), `next run id ${rows[0].id}`)
+    })
+  })
+
+  it("giveUp leaves a processed row alone and writes it no next run", async () => {
+    await withOutboxSchema(async (sql) => {
+      const first = await scheduleOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+      const repository = new PostgresOutboxRepository(sql)
+      await repository.claimBatch(10, 1, 60)
+      await repository.markProcessed(first)
+
+      assertEquals(await repository.giveUp(first, "TypeError", 86_400), false)
+
+      const rows = await rowStates(sql)
+      assertEquals(rows.map((row) => [row.done, row.marked, row.error]), [[true, false, null]])
+    })
+  })
+
+  it("findLost returns only a row out of attempts whose lease ran out and nobody gave up", async () => {
+    await withOutboxSchema(async (sql) => {
+      const ids = {
+        lost: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        attemptsLeft: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        leaseRunning: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        processed: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        givenUp: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      }
+      for (const id of Object.values(ids)) await insertRow(sql, id, "group.created", ROW_A)
+      const repository = new PostgresOutboxRepository(sql)
+      // Every row is claimed for the second time, with a lease that is over at once.
+      await repository.claimBatch(10, 2, 0)
+      await repository.claimBatch(10, 2, 0)
+      await sql`UPDATE outbox_events SET attempt_count = 1 WHERE id = ${ids.attemptsLeft}`
+      await sql`
+        UPDATE outbox_events SET available_at = now() + INTERVAL '1 minute'
+        WHERE id = ${ids.leaseRunning}
+      `
+      await repository.markProcessed(ids.processed)
+      await repository.giveUp(ids.givenUp, "TypeError")
+
+      const lost = await repository.findLost(2, 10)
+
+      assertEquals([...lost], [{
+        id: ids.lost,
+        eventKind: "group.created",
+        aggregateType: "group",
+        aggregateId: ROW_A,
+        aggregateVersion: "1",
+        attemptCount: 2,
+      }])
+      assertEquals((await repository.findLost(2, 0)).length, 0)
+    })
+  })
+
+  it("tells each failed attempt of a job, the last one as last, and never again as lost", async () => {
+    await withOutboxSchema(async (sql) => {
+      await scheduleOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+      const failures: OutboxAttemptFailure[] = []
+      const processor = new OutboxProcessor(
+        new PostgresOutboxRepository(sql),
+        { publish: () => Promise.reject(new TypeError("boom")) },
+        { maxAttempts: 3, onAttemptFailed: (failure) => void failures.push(failure) },
+      )
+
+      for (let drain = 0; drain < 5; drain++) {
+        await processor.drainOnce()
+        // Lets every retry time and lease pass.
+        await sql`UPDATE outbox_events SET available_at = now() - INTERVAL '1 second'`
+      }
+
+      assertEquals(
+        failures.map((failure) => [failure.attempt, failure.lastAttempt, failure.stage]),
+        [[1, false, "publish"], [2, false, "publish"], [3, true, "publish"]],
+      )
+      const rows = await rowStates(sql)
+      assertEquals(rows.length, 1)
+      assertEquals(
+        { attempts: rows[0].attempts, done: rows[0].done, error: rows[0].error },
+        { attempts: 3, done: false, error: "TypeError" },
+      )
+    })
+  })
+
+  it("tells a row whose worker died on its last attempt, once, and stores why", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertRow(sql, ROW_A, "group.created", ROW_A)
+      await sql`UPDATE outbox_events SET last_error_code = 'TypeError'`
+      const repository = new PostgresOutboxRepository(sql)
+      // The worker that claimed the last attempt never reported back; its lease is over.
+      await repository.claimBatch(10, 1, 0)
+      const failures: OutboxAttemptFailure[] = []
+      const processor = new OutboxProcessor(repository, { publish: () => Promise.resolve() }, {
+        maxAttempts: 1,
+        onAttemptFailed: (failure) => void failures.push(failure),
+      })
+
+      assertEquals(await processor.drainOnce(), { claimed: 0, published: 0, failed: 0 })
+      await processor.drainOnce()
+
+      assertEquals(
+        failures.map((failure) => [failure.event.id, failure.stage, failure.lastAttempt]),
+        [[ROW_A, "lease", true]],
+      )
+      const rows = await rowStates(sql)
+      assertEquals(rows.map((row) => [row.error, row.done]), [["OutboxLeaseExpired", false]])
+    })
+  })
+
+  it("leaves a lost row untold and untouched without the callback", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertRow(sql, ROW_A, "group.created", ROW_A)
+      const repository = new PostgresOutboxRepository(sql)
+      await repository.claimBatch(10, 1, 0)
+      const before = await rowStates(sql)
+
+      await new OutboxProcessor(repository, { publish: () => Promise.resolve() }, {
+        maxAttempts: 1,
+      })
+        .drainOnce()
+
+      const after = await rowStates(sql)
+      assertEquals(
+        { marked: after[0].marked, error: after[0].error },
+        { marked: false, error: null },
+      )
+      assertEquals(after.length, before.length)
+    })
+  })
+
+  it("ends the chain of a repeating job that fails its last attempt, by default", async () => {
+    await withOutboxSchema(async (sql) => {
+      await scheduleOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+      const processor = new OutboxProcessor(
+        new PostgresOutboxRepository(sql),
+        { publish: () => Promise.reject(new TypeError("boom")) },
+        { maxAttempts: 1, repeatEveryMs: { "nightly.cleanup": DAY_MS }, onAttemptFailed: () => {} },
+      )
+
+      assertEquals((await processor.drainOnce()).failed, 1)
+
+      assertEquals((await rowStates(sql)).length, 1)
+    })
+  })
+
+  it("with repeatAfterGiveUp, a repeating job that fails its last attempt runs again a day later", async () => {
+    await withOutboxSchema(async (sql) => {
+      await scheduleOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+      const processor = new OutboxProcessor(
+        new PostgresOutboxRepository(sql),
+        { publish: () => Promise.reject(new TypeError("boom")) },
+        { maxAttempts: 2, repeatEveryMs: { "nightly.cleanup": DAY_MS }, repeatAfterGiveUp: true },
+      )
+
+      assertEquals((await processor.drainOnce()).failed, 1)
+      // An attempt is left: no next run yet.
+      assertEquals((await rowStates(sql)).length, 1)
+      await sql`UPDATE outbox_events SET available_at = now() - INTERVAL '1 second'`
+      assertEquals((await processor.drainOnce()).failed, 1)
+      await processor.drainOnce()
+
+      const rows = await rowStates(sql)
+      assertEquals(
+        rows.map((row) => [row.attempts, row.done, row.error, row.hours]),
+        [[2, false, "TypeError", 0], [0, false, null, 24]],
+      )
+    })
+  })
+
+  it("with repeatAfterGiveUp, a repeating job whose worker died on its last attempt runs again, once", async () => {
+    await withOutboxSchema(async (sql, schema) => {
+      const other = await openSecondClient(schema)
+      try {
+        await scheduleOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+        await new PostgresOutboxRepository(sql).claimBatch(10, 1, 0)
+        const options = {
+          maxAttempts: 1,
+          repeatEveryMs: { "nightly.cleanup": DAY_MS },
+          repeatAfterGiveUp: true,
+        }
+        const ok = { publish: () => Promise.resolve() }
+
+        // Two workers find the lost row in the same moment.
+        await Promise.all([
+          new OutboxProcessor(new PostgresOutboxRepository(sql), ok, options).drainOnce(),
+          new OutboxProcessor(new PostgresOutboxRepository(other), ok, options).drainOnce(),
+        ])
+
+        const rows = await rowStates(sql)
+        assertEquals(
+          rows.map((row) => [row.attempts, row.error, row.hours]),
+          [[1, "OutboxLeaseExpired", 0], [0, null, 24]],
+        )
+      } finally {
+        await other.end()
+      }
     })
   })
 })
