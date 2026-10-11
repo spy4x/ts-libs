@@ -26,7 +26,7 @@ the browser and the API.
 ### `.` → `universal.ts`
 
 Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched are `Date`, `Intl`,
-`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.randomUUID` (only `universal/error-reporter`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
+`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.randomUUID` (only `universal/error-reporter`), `crypto.getRandomValues` (only `universal/uuid`, through `@std/uuid`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
 `unref`s the handle where the runtime provides one). No other `crypto` calls and no DOM global: the
 browser- and server-only halves are the other two subpaths.
 
@@ -56,6 +56,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`, `initials`                                                                                                                                                                                                                                                                     |
 | `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`, `nextUtcHour`                                                                                                                                                                                                                                                                                        |
 | `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                                                                                                                                                                                                                                                 |
+| `universal/uuid`            | `uuidV7`, `isUuid`, `UUID_PATTERN`, `UUID_V7_PATTERN`, `UuidVersion` — time-ordered ids for stored records and UUID validators; see below                                                                                                                                                                                                                                                               |
 
 The old one-line CSV splitter and `mapConcurrent` (formerly in `universal/concurrency`) were
 removed in 1.0: `@std/csv` and `@std/async`'s `pooledMap` already cover them. `universal/csv` is now
@@ -100,6 +101,34 @@ same rule, so the first and last tick are exactly the bounds. It exists so `prea
 a step with more than one significant digit: `ticks(0, 10, 4)` returned `[0, 3, 5, 8, 10]` and now
 returns `[0, 2.5, 5, 7.5, 10]`.
 
+#### `universal/uuid` — version 7 ids and UUID validators
+
+`uuidV7()` returns a lower-case UUID version 7 for the id of a stored record. The id starts with the
+millisecond it was made in, so new rows land next to each other in a database index and ids sort by
+age. `@std/uuid` builds the id; this module adds the order inside one millisecond: ids made by one
+process always sort in the order they were made, because the 12 bits after the version digit hold a
+counter. When more than the counter holds are made in one millisecond, or the clock steps back, the
+id's time runs slightly ahead of the clock instead of breaking the order. Two processes or two
+browser tabs do not share the counter, so their ids sort by millisecond only.
+
+Do not use version 7 for a value that must not reveal when it was made, or that works as a secret
+(a session id, a reset or invitation token, an unguessable link): keep `crypto.randomUUID()` or a
+random token from `./tokens` there.
+
+`isUuid(value)` is a type guard for a lower-case UUID of any version, and `isUuid(value, 7)` for one
+version in the standard variant. `UUID_PATTERN` (any version) and `UUID_V7_PATTERN` are the regular
+expressions behind them; arktype takes either as a schema, so no app writes its own:
+
+```ts
+import { type } from "arktype"
+import { UUID_V7_PATTERN, uuidV7 } from "@spy4x/platform/universal/uuid"
+
+const noteSchema = type({ id: UUID_V7_PATTERN, text: "string" })
+const note = noteSchema.assert({ id: uuidV7(), text: "milk" })
+```
+
+Upper-case input is refused. `./keyset-cursor` checks its page key's id with `UUID_PATTERN`.
+
 ### `./browser` → `browser.ts`
 
 Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `getCookie`, `makeStorage`,
@@ -107,23 +136,23 @@ Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `get
 factory, a timer, a clipboard, a `Geolocation`) as a parameter, defaulting to the real global only
 when the caller passes none.
 
-| Module                       | Contents                                                                                                                                                                                                                                     |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                                                                                                                                          |
-| `browser/cookie`             | `getCookie`                                                                                                                                                                                                                                  |
-| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                                                                                                                            |
-| `browser/build-env`          | `readBuildEnvVar`, `MissingBuildEnvError`, `BuildEnv` — required or optional values of a bundler's build-time env object, passed in                                                                                                          |
-| `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                                                                                                                           |
-| `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                                                                                                                                      |
-| `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                                                                                                                                      |
-| `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget`                     |
-| `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                                                   |
-| `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                   |
-| `browser/push-notifications` | `installPushNotifications`, `sameOriginUrl` — the `push` and `notificationclick` handlers of a service worker                                                                                                                                |
-| `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure |
-| `browser/storage`            | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage`                                                                                                            |
-| `browser/testing`            | `installLocalStorage` — a test helper: puts an in-memory `localStorage` in place of the global one and gives the way back. Import it from tests only; it is not in the `@spy4x/platform/browser` barrel                                      |
-| `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                       |
+| Module                       | Contents                                                                                                                                                                                                                                                    |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                                                                                                                                                         |
+| `browser/cookie`             | `getCookie`                                                                                                                                                                                                                                                 |
+| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                                                                                                                                           |
+| `browser/build-env`          | `readBuildEnvVar`, `MissingBuildEnvError`, `BuildEnv` — required or optional values of a bundler's build-time env object, passed in                                                                                                                         |
+| `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                                                                                                                                          |
+| `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                                                                                                                                                     |
+| `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                                                                                                                                                     |
+| `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget`                                    |
+| `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                                                                  |
+| `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                                  |
+| `browser/push-notifications` | `installPushNotifications`, `sameOriginUrl` — the `push` and `notificationclick` handlers of a service worker                                                                                                                                               |
+| `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure                |
+| `browser/storage`            | `makeStorage`, `memoryStorage`, `browserStorage` (`localStorage` that never throws: a value the browser refuses is kept in memory until the page closes), `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
+| `browser/testing`            | `installLocalStorage` — a test helper: puts an in-memory `localStorage` in place of the global one and gives the way back. Import it from tests only; it is not in the `@spy4x/platform/browser` barrel                                                     |
+| `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                                      |
 
 `browser/data-cache` keeps the last data the server sent, in IndexedDB, so a page opens with it and
 shows it with no network. Items live in scopes (a user, a calendar); a full server answer replaces a

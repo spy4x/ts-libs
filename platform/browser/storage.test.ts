@@ -2,7 +2,8 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 import { type } from "arktype"
 
-import { makeStorage, memoryStorage, type StorageLike } from "./storage.ts"
+import { browserStorage, makeStorage, memoryStorage, type StorageLike } from "./storage.ts"
+import { installLocalStorage } from "./testing.ts"
 import { describeStorageContract } from "./storage-contract.test.ts"
 
 const themeSchema = type("'light'|'dark'")
@@ -193,5 +194,128 @@ describe("makeStorage storage port", () => {
     // with plain `makeStorage(memoryStorage(), …)` calls and no global present in between.
     const store = makeStorage<number>(memoryStorage({ n: "1" }), "n")
     expect(store.get()).toEqual({ status: "ok", value: 1 })
+  })
+})
+
+/** What a browser throws from every storage call, and from `localStorage` itself, when blocked. */
+function blocked(): never {
+  throw new DOMException("The operation is insecure.", "SecurityError")
+}
+
+/** A store whose `setItem` fails as on a full quota while reads and removals work. */
+function fullStorage(initial: Record<string, string> = {}): StorageLike & { full: boolean } {
+  const inner = memoryStorage(initial)
+  return {
+    full: true,
+    getItem: (key) => inner.getItem(key),
+    setItem(key, value) {
+      if (this.full) throw new DOMException("Quota exceeded.", "QuotaExceededError")
+      inner.setItem(key, value)
+    },
+    removeItem: (key) => inner.removeItem(key),
+  }
+}
+
+describeStorageContract("browserStorage over a working store", () => {
+  const inner = memoryStorage()
+  return { storage: browserStorage(() => inner), prefix: "", close: () => {} }
+})
+
+describeStorageContract("browserStorage over a blocked store", () => ({
+  storage: browserStorage(blocked),
+  prefix: "",
+  close: () => {},
+}))
+
+describeStorageContract("browserStorage over a full store", () => {
+  const inner = fullStorage()
+  return { storage: browserStorage(() => inner), prefix: "", close: () => {} }
+})
+
+describe("browserStorage", () => {
+  it("reads and writes the global localStorage by default", () => {
+    const { kept, restore } = installLocalStorage({ old: "1" })
+    try {
+      const storage = browserStorage()
+
+      expect(storage.getItem("old")).toBe("1")
+      storage.setItem("new", "2")
+      expect(kept.getItem("new")).toBe("2")
+      storage.removeItem("old")
+      expect(kept.getItem("old")).toBeNull()
+    } finally {
+      restore()
+    }
+  })
+
+  it("looks the store up on every call, so it is safe to create before storage exists", () => {
+    let inner: StorageLike | undefined = undefined
+    const storage = browserStorage(() => inner as StorageLike)
+
+    expect(storage.getItem("a")).toBeNull()
+    inner = memoryStorage({ a: "1" })
+    expect(storage.getItem("a")).toBe("1")
+  })
+
+  it("sees a value another writer put in the store after its own write", () => {
+    const inner = memoryStorage()
+    const storage = browserStorage(() => inner)
+
+    storage.setItem("a", "mine")
+    inner.setItem("a", "other tab")
+
+    expect(storage.getItem("a")).toBe("other tab")
+  })
+
+  it("never throws when the store is blocked, and remembers what was set", () => {
+    const storage = browserStorage(blocked)
+
+    expect(storage.getItem("a")).toBeNull()
+    storage.setItem("a", "1")
+    expect(storage.getItem("a")).toBe("1")
+    storage.removeItem("a")
+    expect(storage.getItem("a")).toBeNull()
+  })
+
+  it("returns the value a full store refused, not the older one it still holds", () => {
+    const inner = fullStorage({ cursor: "old" })
+    const storage = browserStorage(() => inner)
+
+    storage.setItem("cursor", "new")
+
+    expect(storage.getItem("cursor")).toBe("new")
+    expect(inner.getItem("cursor")).toBe("old")
+  })
+
+  it("moves a remembered value back to the store once a write succeeds", () => {
+    const inner = fullStorage()
+    const storage = browserStorage(() => inner)
+    storage.setItem("a", "1")
+
+    inner.full = false
+    storage.setItem("a", "2")
+    inner.setItem("a", "other tab")
+
+    expect(storage.getItem("a")).toBe("other tab")
+  })
+
+  it("removes a key from the store as well as a remembered value", () => {
+    const inner = fullStorage({ a: "old" })
+    const storage = browserStorage(() => inner)
+    storage.setItem("a", "new")
+
+    storage.removeItem("a")
+
+    expect(storage.getItem("a")).toBeNull()
+    expect(inner.getItem("a")).toBeNull()
+  })
+
+  it("keeps separate memory for each store it creates", () => {
+    const first = browserStorage(blocked)
+    const second = browserStorage(blocked)
+
+    first.setItem("a", "1")
+
+    expect(second.getItem("a")).toBeNull()
   })
 })
