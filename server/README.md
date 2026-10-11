@@ -87,8 +87,8 @@ the sibling `time/` package. Every entry in this package's `exports` must resolv
 ## `server/http/bounded-body`
 
 `readBoundedBody`, `readBoundedText`, `parseBoundedFormData`, `readContentLength`,
-`PayloadTooLargeError`, `readJsonBody` with its messages `JSON_BODY_TOO_LARGE`, `JSON_BODY_TIMEOUT`
-and `JSON_BODY_INVALID`, `readFormBody` with its messages `FORM_BODY_TOO_LARGE`, `FORM_BODY_TIMEOUT`
+`PayloadTooLargeError`, `readJsonBody` with its messages `JSON_BODY_TOO_LARGE`, `JSON_BODY_TIMEOUT`,
+`JSON_BODY_INVALID` and `JSON_BODY_CONTENT_TYPE`, `readFormBody` with its messages `FORM_BODY_TOO_LARGE`, `FORM_BODY_TIMEOUT`
 and `FORM_BODY_INVALID`, and the types `ReadBoundedBodyOptions` and `BodySource`.
 
 **Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This module is a named
@@ -113,6 +113,12 @@ body over the cap, 408 for a stalled body and 400 for a body that is not JSON, t
 included. A route without `onError` answers with that status on its own; a route with its own error
 shape catches the exception and reads `status`, and the reader's error is kept as `cause`. Any other
 error is rethrown unchanged.
+
+Two options serve a route with its own error shape. `requireJsonContentType: true` refuses a request
+whose `content-type` does not contain `application/json` (any case) with 415 before the body is
+read. `fail(message, status)` returns the error to throw in place of each `HTTPException` (415, 413,
+408 and 400), so the route answers in its feature's shape without a `try`; it does not keep the
+reader's error as `cause`.
 
 `readFormBody(request, options?)` is the same for a form post (`application/x-www-form-urlencoded`
 or `multipart/form-data`). It takes a plain `Request`, so a server that is not Hono can use it; a

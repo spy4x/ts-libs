@@ -98,44 +98,73 @@ export const JSON_BODY_TIMEOUT = "Request body timed out"
 /** Message of the 400 {@link readJsonBody} throws when the body is not JSON. */
 export const JSON_BODY_INVALID = "Request body is not valid JSON"
 
+/** Message of the 415 {@link readJsonBody} throws when `requireJsonContentType` is set and the request is not declared as JSON. */
+export const JSON_BODY_CONTENT_TYPE = "Content type must be JSON"
+
+/** Options of {@link readJsonBody}: the reader's own, and how a failure is reported. */
+export interface ReadJsonBodyOptions extends BodyReadOptions {
+  /**
+   * Refuse a request whose `content-type` does not contain `application/json` (any case) before
+   * reading the body. Off by default.
+   */
+  requireJsonContentType?: boolean
+  /**
+   * Builds the error to throw instead of the `HTTPException`, so a route answers in its own error
+   * shape. It gets the message ({@link JSON_BODY_CONTENT_TYPE}, {@link JSON_BODY_TOO_LARGE},
+   * {@link JSON_BODY_TIMEOUT} or {@link JSON_BODY_INVALID}) and the status the `HTTPException`
+   * would have carried (415, 413, 408 or 400). The reader's error is not kept, so set `cause`
+   * yourself if you need it. Other errors, such as the `RangeError` for a bad `maxBytes`, still
+   * pass through unchanged.
+   */
+  fail?: (message: string, status: 400 | 408 | 413 | 415) => Error
+}
+
 /**
  * Read a Hono request's body as JSON under the byte cap and stall budget, and turn each way it can
  * fail into the HTTP status a client should see. Use it in place of `c.req.json()`, which buffers a
  * body of any size and throws a plain `SyntaxError` that Hono answers with 500.
  *
  * It throws Hono's `HTTPException`, so a route with no `onError` answers with the right status on
- * its own, and a route with its own error shape catches it and reads `status`. The original error
- * is kept as `cause`. An empty body is not JSON and gets 400.
+ * its own, and a route with its own error shape catches it and reads `status`, or passes
+ * `options.fail` to have its own error thrown instead. The original error is kept as `cause` on
+ * the `HTTPException`. An empty body is not JSON and gets 400.
  *
  * The result is `unknown` by default: validate it (arktype) before using it.
  *
  * @param c The Hono context. Its raw request body is read once, so do not read it elsewhere.
  * @param options `maxBytes` (default 5 MiB) and `timeoutMs`, the per-chunk stall budget (default
- * 10 s).
+ * 10 s); `requireJsonContentType` and `fail`, see {@link ReadJsonBodyOptions}.
+ * @throws {HTTPException} 415 ({@link JSON_BODY_CONTENT_TYPE}) when `requireJsonContentType` is
+ * set and the request is not declared as JSON.
  * @throws {HTTPException} 413 ({@link JSON_BODY_TOO_LARGE}) when the body, or its declared
  * `content-length`, is over `maxBytes`.
  * @throws {HTTPException} 408 ({@link JSON_BODY_TIMEOUT}) when no chunk arrives within
  * `timeoutMs`.
  * @throws {HTTPException} 400 ({@link JSON_BODY_INVALID}) when the body is not valid JSON.
+ * @throws The error `options.fail` returns, in place of each `HTTPException` above.
  * @throws Any other error unchanged, such as the `RangeError` for a `maxBytes` that is not finite,
  * or a `TypeError` for a body that was already read.
  */
 export async function readJsonBody<T = unknown>(
   c: Context,
-  options: BodyReadOptions = {},
+  options: ReadJsonBodyOptions = {},
 ): Promise<T> {
+  const { requireJsonContentType, fail, ...reader } = options
+  const refuse = (message: string, status: 400 | 408 | 413 | 415, cause?: unknown): never => {
+    throw fail ? fail(message, status) : new HTTPException(status, { message, cause })
+  }
+  if (
+    requireJsonContentType &&
+    !c.req.header("content-type")?.toLowerCase().includes("application/json")
+  ) {
+    return refuse(JSON_BODY_CONTENT_TYPE, 415)
+  }
   try {
-    return await readBoundedJson<T>(c.req.raw, options)
+    return await readBoundedJson<T>(c.req.raw, reader)
   } catch (error) {
-    if (error instanceof PayloadTooLargeError) {
-      throw new HTTPException(413, { message: JSON_BODY_TOO_LARGE, cause: error })
-    }
-    if (error instanceof BodyReadTimeoutError) {
-      throw new HTTPException(408, { message: JSON_BODY_TIMEOUT, cause: error })
-    }
-    if (error instanceof SyntaxError) {
-      throw new HTTPException(400, { message: JSON_BODY_INVALID, cause: error })
-    }
+    if (error instanceof PayloadTooLargeError) return refuse(JSON_BODY_TOO_LARGE, 413, error)
+    if (error instanceof BodyReadTimeoutError) return refuse(JSON_BODY_TIMEOUT, 408, error)
+    if (error instanceof SyntaxError) return refuse(JSON_BODY_INVALID, 400, error)
     throw error
   }
 }

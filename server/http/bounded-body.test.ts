@@ -18,6 +18,7 @@ import {
   FORM_BODY_INVALID,
   FORM_BODY_TIMEOUT,
   FORM_BODY_TOO_LARGE,
+  JSON_BODY_CONTENT_TYPE,
   JSON_BODY_INVALID,
   JSON_BODY_TIMEOUT,
   JSON_BODY_TOO_LARGE,
@@ -29,6 +30,7 @@ import {
   readContentLength,
   readFormBody,
   readJsonBody,
+  type ReadJsonBodyOptions,
 } from "./bounded-body.ts"
 
 const ORIGIN = "http://example.test"
@@ -411,6 +413,7 @@ Deno.test("the entry point republishes the promised surface and nothing else", a
       "JSON_BODY_TOO_LARGE",
       "JSON_BODY_TIMEOUT",
       "JSON_BODY_INVALID",
+      "JSON_BODY_CONTENT_TYPE",
     ]
   ) {
     assertStrictEquals(name in surface, true, `${name} disappeared from the surface`)
@@ -454,7 +457,7 @@ Deno.test("BoundedBodyTimeout still types the stall budget", async () => {
  * A real Hono app with one route that reads its body with `readJsonBody` and echoes it. No
  * `onError`, so Hono's default handler turns the thrown `HTTPException` into the response.
  */
-function jsonApp(options?: ReadBoundedBodyOptions): Hono {
+function jsonApp(options?: ReadJsonBodyOptions): Hono {
   const app = new Hono()
   app.post("/echo", async (c) => c.json({ body: await readJsonBody(c, options) }))
   return app
@@ -627,4 +630,105 @@ Deno.test("readFormBody rethrows an error that is not about the body", async () 
   await read.text()
   const error = await assertRejects(() => readFormBody(read), TypeError)
   assertStrictEquals(error instanceof HTTPException, false)
+})
+
+/** A failure of the route's own: what a feature with its own error shape throws. */
+class FeatureError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
+/** Like {@link jsonApp}, but the app answers a `FeatureError` as 422 with its message. */
+function featureApp(options: ReadJsonBodyOptions = {}): Hono {
+  const app = jsonApp({
+    requireJsonContentType: true,
+    fail: (message, status) => new FeatureError(message, status),
+    ...options,
+  })
+  app.onError((error, c) =>
+    error instanceof FeatureError
+      ? c.text(`${error.status}:${error.message}`, 422)
+      : c.text("?", 500)
+  )
+  return app
+}
+
+const asJson = { "content-type": "application/json; charset=utf-8" }
+
+Deno.test("readJsonBody reads a body declared as JSON when the type is required, in any case", async () => {
+  for (const type of ["application/json", "Application/JSON", asJson["content-type"]]) {
+    const response = await featureApp().request(`${ORIGIN}/echo`, {
+      method: "POST",
+      body: `{"a":1}`,
+      headers: { "content-type": type },
+    })
+
+    assertEquals(response.status, 200)
+    assertEquals(await response.json(), { body: { a: 1 } })
+  }
+})
+
+Deno.test("readJsonBody refuses a body not declared as JSON when the type is required", async () => {
+  for (const headers of [{ "content-type": "text/plain" }, undefined]) {
+    const response = await featureApp().request(`${ORIGIN}/echo`, {
+      method: "POST",
+      body: `{"a":1}`,
+      headers,
+    })
+
+    assertEquals(response.status, 422)
+    assertEquals(await response.text(), `415:${JSON_BODY_CONTENT_TYPE}`)
+  }
+})
+
+Deno.test("readJsonBody answers 415 for a wrong type when no fail callback is given", async () => {
+  const response = await jsonApp({ requireJsonContentType: true }).request(`${ORIGIN}/echo`, {
+    method: "POST",
+    body: `{"a":1}`,
+    headers: { "content-type": "text/plain" },
+  })
+
+  assertEquals(response.status, 415)
+  assertEquals(await response.text(), JSON_BODY_CONTENT_TYPE)
+})
+
+Deno.test("readJsonBody does not look at the type unless it is required", async () => {
+  const response = await jsonApp().request(`${ORIGIN}/echo`, {
+    method: "POST",
+    body: `{"a":1}`,
+    headers: { "content-type": "text/plain" },
+  })
+
+  assertEquals(response.status, 200)
+})
+
+Deno.test("readJsonBody builds the caller's error for a body over the cap, a stall and bad JSON", async () => {
+  const headers = asJson
+  const tooLarge = await featureApp({ maxBytes: 4 }).request(
+    `${ORIGIN}/echo`,
+    streamInit(new Blob([`{"name":"too long"}`]).stream(), headers),
+  )
+  const stalled = await featureApp({ timeoutMs: 20 }).request(
+    `${ORIGIN}/echo`,
+    streamInit(stalledStream(), headers),
+  )
+  const invalid = await featureApp().request(`${ORIGIN}/echo`, {
+    method: "POST",
+    body: `{"a":`,
+    headers,
+  })
+
+  assertEquals(await tooLarge.text(), `413:${JSON_BODY_TOO_LARGE}`)
+  assertEquals(await stalled.text(), `408:${JSON_BODY_TIMEOUT}`)
+  assertEquals(await invalid.text(), `400:${JSON_BODY_INVALID}`)
+})
+
+Deno.test("readJsonBody lets an error that is not a body failure pass through the fail callback", async () => {
+  const app = jsonApp({ maxBytes: Infinity, fail: () => new FeatureError("wrong", 400) })
+
+  const response = await app.request(`${ORIGIN}/echo`, { method: "POST", body: `{}` })
+
+  assertEquals(response.status, 500)
+  assertEquals(await response.text(), "Internal Server Error")
 })
