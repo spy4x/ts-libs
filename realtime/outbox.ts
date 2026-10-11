@@ -24,6 +24,8 @@
  * @module
  */
 
+import { callListener } from "./listener-guard.ts"
+
 /** What an outgoing write does to an entity. */
 export type OutboxKind = "create" | "update" | "delete"
 
@@ -396,7 +398,7 @@ export function createOutbox<P, S extends { version: number }>(
   async function reload(): Promise<Entry[]> {
     const all = await store.readOutbox()
     current = all
-    for (const listener of listeners) listener(all)
+    for (const listener of listeners) callListener(`an outbox subscribe`, listener, all)
     return all
   }
 

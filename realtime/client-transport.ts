@@ -53,6 +53,7 @@ import {
   type ServerMessage,
   toWireCursors,
 } from "./codec.ts"
+import { callListener } from "./listener-guard.ts"
 import { RealtimeRequestError } from "./errors.ts"
 import type { ApplyOutcome, GapReport, SequenceChange, SyncRequest } from "./cursor.ts"
 import { ApplyStatus } from "./cursor.ts"
@@ -321,7 +322,8 @@ const DEFAULT_HANDSHAKE_ATTEMPTS = 2
  * One instance per client. `connect()` starts the state machine; `stop()` ends it and leaves no
  * pending timer. Listeners are registered per concern (`onFrame`, `onChange`, `onStatus`,
  * `onError`, `onSyncDegraded`) and each registration returns its own unsubscribe, so no listener
- * set can outlive the component that added it.
+ * set can outlive the component that added it. A listener that throws is logged with
+ * `console.error` and costs only itself: the later listeners still run, and so does the transport.
  */
 export class ClientTransport {
   readonly #options: ClientTransportOptions
@@ -822,7 +824,9 @@ export class ClientTransport {
     const outcome = await this.#options.cursors.apply(hint)
     this.#options.cursors.markSynced?.()
     if (outcome.status === ApplyStatus.Applied) {
-      for (const handler of this.#changeHandlers) handler(hint, outcome)
+      for (const handler of this.#changeHandlers) {
+        callListener(`an onChange`, handler, hint, outcome)
+      }
     }
   }
 
@@ -888,6 +892,9 @@ export class ClientTransport {
         maxAttempts: this.#handshakeAttempts,
       })
     } catch (error) {
+      // A deliberate stop rejects the unanswered handshake. That is not a degraded sync, and
+      // nothing is left to pull or announce.
+      if (this.#stopped) return
       failure = toError(error)
       this.#report(failure)
     }
@@ -896,9 +903,13 @@ export class ClientTransport {
     const stillOpen = this.#socket === socket && socket.state === SocketState.Open
     if (!isReconnect && !this.#stopped && stillOpen) this.#enqueue(() => this.#pullHeldCursors())
     if (failure) {
-      for (const handler of this.#degradedHandlers) handler(failure)
+      for (const handler of this.#degradedHandlers) {
+        callListener(`an onSyncDegraded`, handler, failure)
+      }
     } else if (!this.#stopped) {
-      for (const handler of this.#acknowledgedHandlers) handler({ reconnect: isReconnect })
+      for (const handler of this.#acknowledgedHandlers) {
+        callListener(`an onHandshakeAcknowledged`, handler, { reconnect: isReconnect })
+      }
     }
   }
 
@@ -1031,6 +1042,9 @@ export class ClientTransport {
     if (this.#socket === socket) {
       this.#forgetSocket()
       this.#clearTimers()
+      // The socket's handlers are gone with it, so its close event will not reach `#handleClose`:
+      // the waiting requests and calls are failed here, or they would hang until their timeout.
+      this.#rejectAllPending(new ConnectionLostError(`no pong within ${this.#pongTimeoutMs}ms`))
       this.#scheduleReconnect()
     }
   }
@@ -1072,7 +1086,8 @@ export class ClientTransport {
   #settleError(pending: PendingRequest, error: Error): void {
     if (!this.#pending.delete(pending.id)) return
     if (pending.timer) this.#clock.clearTimeout(pending.timer)
-    this.#report(error)
+    // A deliberate stop is not an error: the caller still gets the rejection.
+    if (!this.#stopped) this.#report(error)
     pending.deferred.reject(error)
   }
 
@@ -1160,13 +1175,13 @@ export class ClientTransport {
   }
 
   #emitFrame(message: ServerMessage): void {
-    for (const handler of this.#frameHandlers) handler(message)
+    for (const handler of this.#frameHandlers) callListener(`an onFrame`, handler, message)
   }
 
   #report(error: Error): void {
     this.#lastError = error
-    for (const handler of this.#errorHandlers) handler(error)
-    this.#options.onError?.(error)
+    for (const handler of this.#errorHandlers) callListener(`an onError`, handler, error)
+    if (this.#options.onError) callListener(`the onError option`, this.#options.onError, error)
     this.#emitStatus()
   }
 
@@ -1177,7 +1192,7 @@ export class ClientTransport {
 
   #emitStatus(): void {
     const snapshot = this.statusSnapshot
-    for (const handler of this.#statusHandlers) handler(snapshot)
+    for (const handler of this.#statusHandlers) callListener(`an onStatus`, handler, snapshot)
   }
 
   #nextFrameId(): string {

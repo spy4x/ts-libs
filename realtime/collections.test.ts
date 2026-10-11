@@ -522,6 +522,28 @@ describe(`a child waiting for its parent`, () => {
     expect(afterSubmit).toBeGreaterThan(0)
     expect(told).toBe(afterSubmit)
   })
+
+  it(`still tells the second subscriber when the first throws`, async () => {
+    const { server, tags, layer } = setup()
+    server.state.offline = true
+    let told = 0
+    layer.subscribe(() => {
+      throw new Error(`subscriber bug`)
+    })
+    layer.subscribe(() => told++)
+    const original = console.error
+    const logged: unknown[][] = []
+    console.error = (...args: unknown[]) => logged.push(args)
+    try {
+      await tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
+    } finally {
+      console.error = original
+    }
+
+    expect(told).toBeGreaterThan(0)
+    expect(logged.length).toBeGreaterThan(0)
+    expect(String(logged[0][0])).toContain(`collections`)
+  })
 })
 
 describe(`a parent that will never exist`, () => {

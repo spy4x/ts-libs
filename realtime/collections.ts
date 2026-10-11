@@ -34,6 +34,7 @@
 import type { CallPort } from "./calls.ts"
 import type { SyncFlushResult } from "./sync-runner.ts"
 import { isRetryable } from "./calls.ts"
+import { callListener } from "./listener-guard.ts"
 import { RealtimeRequestError } from "./errors.ts"
 import { createIndexedDbOutboxStore } from "./outbox-indexeddb.ts"
 import {
@@ -338,7 +339,7 @@ export function createCollections(options: CollectionsOptions): Collections {
       flushQueues: flush,
     })
     outbox.subscribe(() => {
-      for (const listener of [...listeners]) listener()
+      for (const listener of [...listeners]) callListener(`a collections subscribe`, listener)
     })
     const applyQueued = (
       base: readonly unknown[],
