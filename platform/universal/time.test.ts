@@ -7,6 +7,7 @@ import {
   formatTime,
   getDaysOfWeek,
   isValidDate,
+  nextUtcHour,
   normalizeCalendarDate,
   systemClock,
   systemNow,
@@ -229,6 +230,44 @@ describe("systemNow", () => {
     for (const reading of [systemNow(), rateLimitSystemClock()]) {
       expect(reading).toBeGreaterThanOrEqual(before)
       expect(reading).toBeLessThanOrEqual(Date.now())
+    }
+  })
+})
+
+describe("nextUtcHour", () => {
+  it("picks later today when the hour has not come yet", () => {
+    expect(nextUtcHour(new Date("2026-10-03T01:00:00Z"), 3).toISOString()).toBe(
+      "2026-10-03T03:00:00.000Z",
+    )
+  })
+
+  it("picks tomorrow when the hour is now or past", () => {
+    expect(nextUtcHour(new Date("2026-10-03T03:00:00Z"), 3).toISOString()).toBe(
+      "2026-10-04T03:00:00.000Z",
+    )
+    expect(nextUtcHour(new Date("2026-10-03T14:30:00Z"), 3).toISOString()).toBe(
+      "2026-10-04T03:00:00.000Z",
+    )
+  })
+
+  it("rolls over the end of a month and a year", () => {
+    expect(nextUtcHour(new Date("2026-10-31T23:59:00Z"), 3).toISOString()).toBe(
+      "2026-11-01T03:00:00.000Z",
+    )
+    expect(nextUtcHour(new Date("2026-12-31T23:59:00Z"), 0).toISOString()).toBe(
+      "2027-01-01T00:00:00.000Z",
+    )
+  })
+
+  it("does not change the date it is given", () => {
+    const now = new Date("2026-10-03T14:30:00Z")
+    nextUtcHour(now, 3)
+    expect(now.toISOString()).toBe("2026-10-03T14:30:00.000Z")
+  })
+
+  it("refuses an hour that is not a whole number from 0 to 23", () => {
+    for (const hour of [-1, 24, 1.5, Number.NaN]) {
+      expect(() => nextUtcHour(new Date("2026-10-03T01:00:00Z"), hour)).toThrow(RangeError)
     }
   })
 })

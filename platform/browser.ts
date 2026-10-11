@@ -9,6 +9,7 @@
  * and testable with fakes.
  */
 
+export * from "./browser/build-env.ts"
 export * from "./browser/clipboard.ts"
 export * from "./browser/cookie.ts"
 export * from "./browser/data-cache.ts"

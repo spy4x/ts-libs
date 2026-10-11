@@ -4,6 +4,8 @@
  * - {@link CacheService} — `get`/`set`/`delete`/`wrap`/`reset` over one `ICacheStorage`.
  * - {@link buildMethods} — a namespaced, optionally schema-validated view for one record type.
  * - {@link ICacheStorage} — the storage contract `server/kv` implements over Redis.
+ * - {@link failOpen} — wraps a storage so an outage never fails a request and a stale row is never
+ *   served after one.
  * - {@link reviveIsoDatesEndingInAt} — opt-in `JSON.parse` reviver; see `cache.ts` for why it is
  *   opt-in rather than the default.
  *
@@ -23,3 +25,10 @@ export {
   type PublicAPICacheModel,
   reviveIsoDatesEndingInAt,
 } from "./cache.ts"
+
+export {
+  type CacheErrorReporter,
+  type CacheOperation,
+  DEFAULT_CACHE_RECOVERY_MS,
+  failOpen,
+} from "./fail-open.ts"
