@@ -33,6 +33,13 @@ describe("parseBoundedInteger", () => {
     expect(parseBoundedInteger("4", { fallback: 5, min: 5, max: 9 })).toBeNull()
   })
 
+  it("gives null for a signed number even when the bounds include negatives", () => {
+    const signed = { fallback: 0, min: -5, max: 5 }
+    expect(parseBoundedInteger("-3", signed)).toBeNull()
+    expect(parseBoundedInteger("+3", signed)).toBeNull()
+    expect(parseBoundedInteger("3", signed)).toBe(3)
+  })
+
   it("refuses options that cannot hold a value", () => {
     expect(() => parseBoundedInteger("1", { fallback: 1, min: 9, max: 5 })).toThrow(RangeError)
     expect(() => parseBoundedInteger("1", { fallback: 60, max: 50 })).toThrow(RangeError)
