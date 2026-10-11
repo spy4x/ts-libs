@@ -5,6 +5,7 @@ import {
   convertToKebabCase,
   filterRows,
   fold,
+  hasUnsafeTextCharacters,
   initials,
   levenshtein,
   pluralize,
@@ -397,5 +398,112 @@ describe("initials with nothing usable", () => {
   it("skips leading punctuation instead of using it", () => {
     expect(initials("-John Smith")).toBe("JS")
     expect(initials("(Ada) Lovelace")).toBe("AL")
+  })
+})
+
+describe("hasUnsafeTextCharacters", () => {
+  /** `U+0041` style label, so a failing case names its character without printing it. */
+  const label = (codePoint: number) => `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`
+  const range = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, index) => from + index)
+  const refusesEach = (codePoints: number[]) => {
+    for (const codePoint of codePoints) {
+      const text = `ab${String.fromCharCode(codePoint)}cd`
+      expect([label(codePoint), hasUnsafeTextCharacters(text)]).toEqual([label(codePoint), true])
+    }
+  }
+
+  it("refuses every C0 control character, NUL, tab and the line breaks included", () => {
+    refusesEach(range(0x00, 0x1f))
+  })
+
+  it("refuses DEL and every C1 control character", () => {
+    refusesEach(range(0x7f, 0x9f))
+  })
+
+  it("refuses the line and paragraph separators", () => {
+    refusesEach([0x2028, 0x2029])
+  })
+
+  it("refuses every bidirectional control", () => {
+    refusesEach([0x061c, 0x200e, 0x200f, ...range(0x202a, 0x202e), ...range(0x2066, 0x2069)])
+  })
+
+  it("refuses the zero-width space, the word joiner, U+FEFF and the soft hyphen", () => {
+    refusesEach([0x200b, 0x2060, 0xfeff, 0x00ad])
+  })
+
+  it("refuses a lone surrogate, high or low", () => {
+    refusesEach([0xd83d, 0xdc68, 0xd800, 0xdfff])
+  })
+
+  it("refuses an unsafe character at the start and at the end of the text", () => {
+    expect(hasUnsafeTextCharacters("\u0000work")).toBe(true)
+    expect(hasUnsafeTextCharacters("work\u202e")).toBe(true)
+  })
+
+  it("accepts plain names, punctuation and the empty string", () => {
+    for (const text of ["", "Work", "Q3 plans (draft) #2", "it's 100% done, ok?", "a  b"]) {
+      expect([text, hasUnsafeTextCharacters(text)]).toEqual([text, false])
+    }
+  })
+
+  it("accepts the character just past a refused range: U+00A0, U+202F and U+206A", () => {
+    // The no-break space, the narrow no-break space of French punctuation, and the first
+    // character after the isolates.
+    for (const codePoint of [0x00a0, 0x202f, 0x206a]) {
+      const text = `a${String.fromCharCode(codePoint)}b`
+      expect([label(codePoint), hasUnsafeTextCharacters(text)]).toEqual([label(codePoint), false])
+      expect([label(codePoint), hasUnsafeTextCharacters(text, { multiline: true })])
+        .toEqual([label(codePoint), false])
+    }
+  })
+
+  it("accepts accented letters, composed or with combining marks", () => {
+    for (const text of ["Zoë", "Đà Nẵng", "cafe\u0301", "Ångström", "naïve façade"]) {
+      expect([text, hasUnsafeTextCharacters(text)]).toEqual([text, false])
+    }
+  })
+
+  it("accepts Chinese, Japanese, Korean, Cyrillic, Hebrew and Hindi", () => {
+    for (
+      const text of ["工作笔记", "しごと メモ", "업무 노트", "Рабочие заметки", "עבודה", "काम"]
+    ) {
+      expect([text, hasUnsafeTextCharacters(text)]).toEqual([text, false])
+    }
+  })
+
+  it("accepts the zero-width non-joiner and joiner that Persian and Indic words need", () => {
+    // Persian "mi-khaham" with U+200C, and Sinhala "Sri" with U+200D.
+    for (const text of ["می\u200cخواهم", "ශ්\u200dරී"]) {
+      expect([text, hasUnsafeTextCharacters(text)]).toEqual([text, false])
+    }
+  })
+
+  it("accepts an emoji family, a flag, a subdivision flag and a variation selector", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}"
+    const flag = "\u{1F1FA}\u{1F1E6}"
+    const scotland = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}"
+    for (const text of [family, flag, scotland, "\u2764\uFE0F", "notes \u{1F4DD}"]) {
+      expect([text, hasUnsafeTextCharacters(text)]).toEqual([text, false])
+    }
+  })
+
+  it("accepts tab, line feed and carriage return only when multiline is set", () => {
+    for (const text of ["a\tb", "a\nb", "a\r\nb"]) {
+      expect([text, hasUnsafeTextCharacters(text, { multiline: true })]).toEqual([text, false])
+      expect([text, hasUnsafeTextCharacters(text, { multiline: false })]).toEqual([text, true])
+    }
+  })
+
+  it("still refuses every other class when multiline is set", () => {
+    for (
+      const codePoint of [0x00, 0x08, 0x0b, 0x0c, 0x0e, 0x1b, 0x7f, 0x85, 0xad, 0x2028, 0x2029]
+        .concat([0x202e, 0x2066, 0x200b, 0x2060, 0xfeff, 0xd83d])
+    ) {
+      const text = `a\n${String.fromCharCode(codePoint)}b`
+      expect([label(codePoint), hasUnsafeTextCharacters(text, { multiline: true })])
+        .toEqual([label(codePoint), true])
+    }
   })
 })
