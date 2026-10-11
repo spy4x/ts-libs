@@ -5,6 +5,7 @@ import {
   nginxAddHeaders,
   securityHeaderList,
   securityHeaders,
+  withSecurityHeaders,
 } from "./security-headers.ts"
 
 const STYLE = `\nbody {\n  margin: 0;\n}\n`
@@ -282,4 +283,74 @@ Deno.test(`the nginx rendering refuses an allowed variable that is not a dollar 
   for (const variable of [`csp_error_tracker`, `$`, `$a b`, `$a;`, `\${a}`, ``]) {
     expect(() => nginxAddHeaders([], { allowedVariables: [variable] })).toThrow(`allowedVariables`)
   }
+})
+
+Deno.test(`a copied response carries the list, its own other headers, its status and its body`, async () => {
+  const list = await securityHeaderList()
+  const original = new Response(`gone`, {
+    status: 410,
+    statusText: `Gone for good`,
+    headers: { "content-type": `text/plain`, "x-request-id": `r1` },
+  })
+
+  const copy = withSecurityHeaders(original, list)
+
+  expect(copy).not.toBe(original)
+  for (const [name, value] of list) expect(copy.headers.get(name)).toBe(value)
+  expect(copy.headers.get(`content-type`)).toBe(`text/plain`)
+  expect(copy.headers.get(`x-request-id`)).toBe(`r1`)
+  expect(copy.status).toBe(410)
+  expect(copy.statusText).toBe(`Gone for good`)
+  expect(await copy.text()).toBe(`gone`)
+})
+
+Deno.test(`a copied response has the same headers as the middleware sends for the same route`, async () => {
+  const route = () =>
+    new Response(`ok`, {
+      headers: { "X-Frame-Options": `ALLOWALL`, "X-Powered-By": `Hono`, "x-own": `kept` },
+    })
+  const app = new Hono()
+  app.use(await securityHeaders())
+  app.get(`/`, route)
+  const sent = await app.request(`/`)
+  await sent.body?.cancel()
+
+  const copy = withSecurityHeaders(route(), await securityHeaderList())
+  await copy.body?.cancel()
+
+  expect([...copy.headers].sort()).toEqual([...sent.headers].sort())
+  expect(copy.headers.get(`x-frame-options`)).toBe(`DENY`)
+  expect(copy.headers.has(`x-powered-by`)).toBe(false)
+  expect(copy.headers.get(`x-own`)).toBe(`kept`)
+})
+
+Deno.test(`a response with immutable headers is copied, not changed`, async () => {
+  const redirect = Response.redirect(`https://example.com/next`, 303)
+  expect(() => redirect.headers.set(`x-frame-options`, `DENY`)).toThrow(TypeError)
+
+  const copy = withSecurityHeaders(redirect, await securityHeaderList())
+
+  expect(copy.status).toBe(303)
+  expect(copy.headers.get(`location`)).toBe(`https://example.com/next`)
+  expect(copy.headers.get(`x-frame-options`)).toBe(`DENY`)
+  expect(redirect.headers.has(`x-frame-options`)).toBe(false)
+})
+
+Deno.test(`a response without a body is copied without one`, async () => {
+  const copy = withSecurityHeaders(new Response(null, { status: 204 }), await securityHeaderList())
+
+  expect(copy.status).toBe(204)
+  expect(copy.body).toBe(null)
+  expect(copy.headers.get(`referrer-policy`)).toBe(`no-referrer`)
+})
+
+Deno.test(`a response that cannot be rebuilt is returned as it is`, async () => {
+  const list = await securityHeaderList()
+  // A WebSocket upgrade answers 101, which `new Response` refuses to build; a stand-in with that
+  // status is all the helper reads.
+  const upgrade = { status: 101, headers: new Headers({ upgrade: `websocket` }) } as Response
+  const failed = Response.error()
+
+  expect(withSecurityHeaders(upgrade, list)).toBe(upgrade)
+  expect(withSecurityHeaders(failed, list)).toBe(failed)
 })
