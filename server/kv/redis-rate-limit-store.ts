@@ -13,6 +13,7 @@
  * @module
  */
 import type { RateLimitConsumeResult, RateLimitStore } from "@spy4x/platform/rate-limit"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 /** The part of {@link RedisKvStore} the store needs. A fake satisfies it in tests. */
 export interface RateLimitRedisScriptStore {
@@ -30,7 +31,7 @@ export interface RedisRateLimitStoreOptions {
   keyPrefix?: string
   /**
    * Makes the unique member of each recorded event; two requests in the same millisecond need
-   * different members. Defaults to `crypto.randomUUID`. Tests inject a counter.
+   * different members. Defaults to `uuidV7`. Tests inject a counter.
    */
   newId?: () => string
 }
@@ -130,7 +131,7 @@ export function createRedisRateLimitStore(
   options: RedisRateLimitStoreOptions = {},
 ): RateLimitStore {
   const keyPrefix = options.keyPrefix ?? "ratelimit-atomic"
-  const newId = options.newId ?? (() => crypto.randomUUID())
+  const newId = options.newId ?? uuidV7
   const keyFor = (key: string): string => `${keyPrefix}:${key}`
 
   return {
