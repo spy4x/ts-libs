@@ -10,6 +10,8 @@
  * DSN it is off and makes no request.
  */
 
+import { uuidV7 } from "./uuid.ts"
+
 /** Where a report goes: the envelope URL and the public key a DSN carries. */
 export interface ParsedDsn {
   /** `https://host/api/<project>/envelope/`, with any path prefix of the DSN kept. */
@@ -179,7 +181,7 @@ function parseFrames(stack: string, redactPathAfter: string[]): Frame[] {
 }
 
 function hex32(): string {
-  return crypto.randomUUID().replace(/-/g, "")
+  return uuidV7().replace(/-/g, "")
 }
 
 function asError(value: unknown): { type: string; message: string; stack?: string } {

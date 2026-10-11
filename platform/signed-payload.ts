@@ -20,13 +20,14 @@
  *
  * @example Pagination cursor bound to the signed-in user
  * ```ts
+ * // `uuidV7` is the id generator of `./universal/uuid`.
  * const cursors = createSignedPayloadCodec({
  *   secret: "example-secret-at-least-32-characters",
  *   purpose: "groups.list",
  *   version: 1,
  *   schema: type({ updatedAt: "string.date.iso", id: "string.uuid", "+": "reject" }),
  * })
- * const pageKey = { updatedAt: "2026-09-25T00:00:00.000Z", id: crypto.randomUUID() }
+ * const pageKey = { updatedAt: "2026-09-25T00:00:00.000Z", id: uuidV7() }
  * const cursor = await cursors.sign(pageKey, { context: String(userId) })
  * const page = await cursors.verify(cursor, { context: String(userId) })
  * if (!page.ok) throw new Error(`invalid cursor: ${page.error}`)

@@ -91,7 +91,8 @@ describe("an error report", () => {
     const event = eventOf(sent[0])
     expect(header.event_id).toBe(event.event_id)
     expect(item).toEqual({ type: "event" })
-    expect(event.event_id).toMatch(/^[0-9a-f]{32}$/)
+    // A UUID version 7 without its hyphens: 32 hex digits, version digit 7, standard variant.
+    expect(event.event_id).toMatch(/^[0-9a-f]{12}7[0-9a-f]{3}[89ab][0-9a-f]{15}$/)
     expect(event.timestamp).toBe(5)
     expect(event.environment).toBe("prod")
     expect(event.release).toBe("r1")
