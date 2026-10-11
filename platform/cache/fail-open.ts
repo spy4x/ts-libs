@@ -8,7 +8,7 @@
 import type { ICacheStorage } from "./cache.ts"
 
 /** A cache operation {@link failOpen} reports on. */
-export type CacheOperation = `get` | `set` | `del` | `reset`
+export type CacheOperation = "get" | "set" | "del" | "reset"
 
 /** Called with the operation and the error whenever a cache operation fails. */
 export type CacheErrorReporter = (operation: CacheOperation, error: unknown) => void
@@ -56,11 +56,12 @@ export function failOpen(
   /** Tries to clear the cache when untrusted and due; resolves when the attempt is over. */
   const tryRecover = async (): Promise<void> => {
     if (trusted || now() < nextAttemptAt) return
-    recovery ??= storage.reset().then(
+    // A storage whose reset() throws instead of rejecting must not fail the request either.
+    recovery ??= Promise.resolve().then(() => storage.reset()).then(
       () => {
         trusted = true
       },
-      (error) => distrust(`reset`, error),
+      (error) => distrust("reset", error),
     ).finally(() => {
       recovery = null
     })
@@ -74,7 +75,7 @@ export function failOpen(
       try {
         return await storage.get(key)
       } catch (error) {
-        distrust(`get`, error)
+        distrust("get", error)
         return null
       }
     },
@@ -84,7 +85,7 @@ export function failOpen(
       try {
         await storage.set(key, value, ttlSec)
       } catch (error) {
-        distrust(`set`, error)
+        distrust("set", error)
       }
     },
     async del(key) {
@@ -93,7 +94,7 @@ export function failOpen(
       try {
         await storage.del(key)
       } catch (error) {
-        distrust(`del`, error)
+        distrust("del", error)
       }
     },
     reset: () => storage.reset(),

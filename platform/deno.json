@@ -20,6 +20,7 @@
     "./browser/runtime-config": "./browser/runtime-config.ts",
     "./browser/signed-in-hint": "./browser/signed-in-hint.ts",
     "./browser/storage": "./browser/storage.ts",
+    "./browser/testing": "./browser/testing.ts",
     "./cache": "./cache/mod.ts",
     "./cqrs": "./cqrs/mod.ts",
     "./keyset-cursor": "./keyset-cursor.ts",

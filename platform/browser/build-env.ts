@@ -29,7 +29,7 @@ export class MissingBuildEnvError extends Error {
 
   constructor(variable: string) {
     super(`Environment variable ${variable} is required but not set.`)
-    this.name = `MissingBuildEnvError`
+    this.name = "MissingBuildEnvError"
     this.variable = variable
   }
 }
@@ -41,8 +41,8 @@ export class MissingBuildEnvError extends Error {
  *
  * @example
  * ```ts
- * const apiUrl = readBuildEnvVar(import.meta.env, `API_URL`, { prefix: `VITE_` })
- * const sentry = readBuildEnvVar(import.meta.env, `SENTRY_DSN`, { optional: true })
+ * const apiUrl = readBuildEnvVar(import.meta.env, "API_URL", { prefix: "VITE_" })
+ * const sentry = readBuildEnvVar(import.meta.env, "SENTRY_DSN", { optional: true })
  * ```
  *
  * @throws {MissingBuildEnvError} When the value is missing and `options.optional` is not set.
@@ -54,13 +54,13 @@ export function readBuildEnvVar(
 ): string {
   const direct = env[name]
   const prefixed = options.prefix === undefined ? undefined : env[`${options.prefix}${name}`]
-  const value = typeof direct === `string` && direct !== ``
+  const value = typeof direct === "string" && direct !== ""
     ? direct
-    : typeof prefixed === `string`
+    : typeof prefixed === "string"
     ? prefixed
-    : ``
-  if (value === ``) {
-    if (options.optional) return ``
+    : ""
+  if (value === "") {
+    if (options.optional) return ""
     throw new MissingBuildEnvError(name)
   }
   return value

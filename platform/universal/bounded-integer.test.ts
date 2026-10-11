@@ -45,4 +45,18 @@ describe("parseBoundedInteger", () => {
     expect(() => parseBoundedInteger("1", { fallback: 60, max: 50 })).toThrow(RangeError)
     expect(() => parseBoundedInteger("1", { fallback: 0, max: 50 })).toThrow(RangeError)
   })
+
+  it("refuses options that are not safe integers", () => {
+    const bad = [
+      { fallback: 20, max: Infinity },
+      { fallback: 20, max: Number.MAX_VALUE },
+      { fallback: Number.NaN, max: 50 },
+      { fallback: 2.5, max: 50 },
+      { fallback: 20, min: 0.5, max: 50 },
+      { fallback: 20, min: Number.NaN, max: 50 },
+    ]
+    for (const options of bad) {
+      expect(() => parseBoundedInteger("5", options)).toThrow(RangeError)
+    }
+  })
 })

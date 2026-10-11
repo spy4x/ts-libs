@@ -3,7 +3,7 @@ import { expect } from "@std/expect"
 
 import type { ICacheStorage } from "./cache.ts"
 import { CacheService } from "./cache.ts"
-import { failOpen } from "./fail-open.ts"
+import { DEFAULT_CACHE_RECOVERY_MS, failOpen } from "./fail-open.ts"
 
 class MemoryCacheStorage implements ICacheStorage {
   protected values = new Map<string, string>()
@@ -179,5 +179,48 @@ describe("failOpen", () => {
     storage.down = true
 
     await expect(cache.reset()).rejects.toThrow("cache down")
+  })
+
+  it("treats a reset that throws instead of rejecting as a failed attempt", async () => {
+    const storage = new FlakyCacheStorage()
+    storage.reset = () => {
+      throw new Error("client closed")
+    }
+    const reports: string[] = []
+    const cache = failOpen(storage, (operation) => reports.push(operation))
+
+    expect(await cache.get("user_1")).toBeNull()
+    expect(reports).toEqual(["reset"])
+  })
+
+  it("does not trust the cache after a reset the caller made through the wrapper", async () => {
+    const { storage, cache, advance } = fixture()
+    storage.down = true
+    await cache.get("user_1") // untrusted; the next attempt is due in 5 s
+    storage.down = false
+    await storage.set("user_1", `{"stale":true}`)
+
+    await cache.reset()
+    advance(4_999)
+
+    expect(await cache.get("user_1")).toBeNull()
+  })
+
+  it("waits 5 seconds by default before the next attempt to clear the cache", async () => {
+    const storage = new FlakyCacheStorage()
+    let time = 0
+    const cache = failOpen(storage, () => {}, undefined, () => time)
+    storage.down = true
+    await cache.get("user_1")
+    const callsAfterFailure = storage.calls
+
+    time = 4_999
+    await cache.get("user_1")
+    expect(storage.calls).toBe(callsAfterFailure)
+
+    time = 5_000
+    await cache.get("user_1")
+    expect(storage.calls).toBe(callsAfterFailure + 1)
+    expect(DEFAULT_CACHE_RECOVERY_MS).toBe(5_000)
   })
 })

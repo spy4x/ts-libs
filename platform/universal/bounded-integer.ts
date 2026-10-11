@@ -31,7 +31,8 @@ export interface BoundedIntegerOptions {
  * if (limit === null) return new Response(`Invalid limit`, { status: 400 })
  * ```
  *
- * @throws {RangeError} When the options are inconsistent: `min` above `max`, or `fallback`
+ * @throws {RangeError} When the options are inconsistent: `fallback`, `min` or `max` is not a safe
+ * integer (`Infinity`, `NaN`, `2.5`, `Number.MAX_VALUE`), `min` is above `max`, or `fallback` is
  * outside them.
  */
 export function parseBoundedInteger(
@@ -39,6 +40,11 @@ export function parseBoundedInteger(
   options: BoundedIntegerOptions,
 ): number | null {
   const { fallback, min = 1, max } = options
+  for (const [name, option] of [["fallback", fallback], ["min", min], ["max", max]] as const) {
+    if (!Number.isSafeInteger(option)) {
+      throw new RangeError(`${name} must be a safe integer, got ${option}`)
+    }
+  }
   if (min > max || fallback < min || fallback > max) {
     throw new RangeError(`fallback ${fallback} must lie within min ${min} and max ${max}`)
   }
