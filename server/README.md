@@ -2200,8 +2200,9 @@ CREATE INDEX ON outbox_events (available_at, created_at) WHERE processed_at IS N
 `aggregate_id` only needs to be a type Postgres returns as a string through this driver — `UUID`
 fits the template's own aggregates, but the repository never assumes it. An app may keep extra
 columns the repository neither reads nor returns, such as the template's own `group_id` and
-`actor_user_id`: the app's own `INSERT` still fills them, in the same transaction as the state
-change it records, which is the one line of SQL this package does not own. Recommended but not
+`actor_user_id`. They must be nullable or have a default, because the library inserts rows itself
+(`scheduleOutboxEvent`, `ensureScheduledOutboxEvent` and the next run of a repeating job) and
+writes only its own columns. Recommended but not
 required: a unique index on `(aggregate_type, aggregate_id, aggregate_version, event_kind)`, which is
 what makes a retried `INSERT` (after a crash between the state change and the outbox row) idempotent
 instead of writing the event twice — the template had this index; it is not enforced here because
