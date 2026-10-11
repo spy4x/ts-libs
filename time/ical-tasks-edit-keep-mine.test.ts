@@ -340,7 +340,11 @@ Deno.test(`a date I changed on a completed task leaves it completed`, () => {
 const STARTED = fixtureTask(
   RECURRING.replace(
     `UID:100200320`,
-    `UID:100200320\r\nDTSTART;TZID=Asia/Ho_Chi_Minh:20261008T060000`,
+    [
+      `UID:100200320`,
+      `DTSTART;TZID=Asia/Ho_Chi_Minh:20261008T060000`,
+      `X-MOZ-SNOOZE-TIME:20261008T010000Z`,
+    ].join(`\r\n`),
   ),
 )
 
@@ -350,6 +354,8 @@ Deno.test(`a due date I moved to the next occurrence without the start is not a 
   const output = kept(STARTED, edited(STARTED, { due: morning(`2026-10-09`) }), theirs)
   expect(output.task.due).toEqual(morning(`2026-10-09`))
   expect(output.task.start).toEqual(morning(`2026-10-08`, `06:00:00`))
+  // A completion drops the snooze; a change of the due date does not.
+  expect(output.ics).toContain(`X-MOZ-SNOOZE-TIME:20261008T010000Z`)
 })
 
 Deno.test(`a due date I moved to the next occurrence with the repeat removed is not a completion`, () => {
