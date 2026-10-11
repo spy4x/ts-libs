@@ -1,7 +1,8 @@
 /**
  * Writes a task back to CalDAV: a new task or subtask, an editor change applied as a lossless
  * patch of the original text, completing and reopening, and re-applying an edit to a fresh copy
- * after the server's version changed (a 412 on `If-Match`). The writing is {@link newTodo},
+ * after the server's version changed (a 412 on `If-Match`), from an edit ({@link keepMine}) or from
+ * the text a change left behind ({@link keepMineText}). The writing is {@link newTodo},
  * {@link patchTodo}, {@link completeTodo} and {@link reopenTodo}; this file adds the resource side
  * (`href`, `etag`, moving between lists, the undo text) on top. Nothing here reads the clock or
  * the network: the caller passes `now` and the new `UID`.
@@ -25,6 +26,7 @@ import {
   readTodo,
   reopenTodo,
   type TodoPatch,
+  TodoStatus,
 } from "./ical-tasks.ts"
 import { parseTask, type Task, type TaskDate } from "./ical-tasks-model.ts"
 import { formatRrule, parseRrule } from "./rrule.ts"
@@ -544,4 +546,209 @@ function change(task: Task, run: (root: IcalComponent) => Step): CompleteResult 
 
 function fail(code: CompleteTodoErrorCode, message: string): CompleteResult {
   return { success: false, output: null, error: { code, message } }
+}
+
+/** The step of {@link keepMineText} that refused. */
+export enum KeepMineStep {
+  /** The base text or my text does not read as a task. */
+  Read = 1,
+  /** The completion I made cannot be made on the server's copy; `code` says why. */
+  Complete,
+  /** The reopening I made cannot be made on the server's copy; `code` says why. */
+  Reopen,
+  /** A field I changed cannot be written to the server's copy. */
+  Edit,
+}
+
+export interface KeepMineError {
+  step: KeepMineStep
+  /** Set for {@link KeepMineStep.Complete} and {@link KeepMineStep.Reopen}. */
+  code?: CompleteTodoErrorCode
+  /** The library's message, for a log or a fallback; an app words its own text from the rest. */
+  message: string
+}
+
+export interface KeepMineOutput {
+  /** The server's task with my changes on it. `etag` is the server's. */
+  task: Task
+  /** The text to send. */
+  ics: string
+}
+
+/** The result of {@link keepMineText}. */
+export type KeepMineResult =
+  | { success: true; output: KeepMineOutput; error: null }
+  | { success: false; output: null; error: KeepMineError }
+
+/** How many completions made in a row {@link keepMineText} recognises in a repeating task. */
+const MAX_COMPLETIONS = 30
+
+/**
+ * "Keep mine" for a change that is stored as whole text: a write that waited in a queue while the
+ * server's copy changed. `baseIcs` is the text my change started from, `mineIcs` the text it left,
+ * `theirs` the server's task now. The result is the server's text with only what I changed on it:
+ *
+ * - Every {@link TaskEdit} field except the list (title, notes, due, start, priority, tags, sort
+ *   order, repeat rule, reminders) that differs between `baseIcs` and `mineIcs` is written with
+ *   {@link editTask}. Fields I left alone keep the server's value, and so does every line the model
+ *   does not read.
+ * - A completion I made is made again with {@link completeTask}, a reopening with
+ *   {@link reopenTask}, unless the server's copy already had it. A repeating task that I completed
+ *   moved to its next occurrence and is still open; that is recognised by its dates and rule (up to
+ *   30 completions in a row), and the server's copy moves on by as many occurrences as it is
+ *   behind mine, from its own dates. The dates that move wrote are not taken as fields I changed.
+ *   A server copy whose dates are a later occurrence of the base counts as completed that many
+ *   times, whoever moved it: a task left one occurrence behind is seen and completed again, one
+ *   moved too far skips work nobody did.
+ * - When my text is completed, the result is completed or the call refuses. A completed text whose
+ *   dates or rule no run of completions gives (I removed the repeat, then completed) has its
+ *   fields written first, each compared with the base itself, and is completed after that.
+ *
+ * What it does not do:
+ *
+ * - Reminders are one field. If I changed any, my list replaces the server's whole list, and a
+ *   reminder the other side added is removed.
+ * - A repeating task whose dates I changed before completing it, and one I completed more than 30
+ *   times in a row, are not recognised as completed: the task is still open in my text, so its
+ *   dates, rule and reminders are written as fields I changed and the result has the dates of my
+ *   text. A reminder at an absolute time has moved in my text then, so the reminders count as
+ *   changed and the point above applies.
+ * - It does not move a task to another list: a text does not say where it lives.
+ *
+ * Nothing is written when a step refuses: a text that does not read, a completion the server's
+ * copy does not allow (it now repeats with no due date, say, or still repeats after a completion
+ * that ended the series in my text), a field {@link editTask} refuses. A refused reopening needs a
+ * `theirs` whose `ics` is not the text its `status` was read from. Never send `mineIcs` whole
+ * then: that would undo every change of the other side.
+ */
+export function keepMineText(
+  baseIcs: string,
+  mineIcs: string,
+  theirs: Task,
+  now: Date,
+): KeepMineResult {
+  const read = (ics: string) =>
+    parseTask({ href: theirs.href, etag: theirs.etag, listHref: theirs.listHref, ics })
+  const base = read(baseIcs)
+  if (!base.success) return unkept(KeepMineStep.Read, `the base text: ${base.error}`)
+  const mine = read(mineIcs)
+  if (!mine.success) return unkept(KeepMineStep.Read, `my text: ${mine.error}`)
+
+  const mySteps = stepsBetween(base.output, mine.output, now)
+  const theirSteps = stepsBetween(base.output, theirs, now)
+  let task = theirs
+  const edit = (): KeepMineResult | undefined => {
+    // With no change left, the patch is empty and the text comes back byte for byte.
+    const edited = editTask(task, changesOf(mySteps.after, fieldsOf(mine.output)), now)
+    if (!edited.success) return unkept(KeepMineStep.Edit, edited.error)
+    task = edited.output.task
+  }
+  const complete = (): KeepMineResult | undefined => {
+    const completed = completeTask(task, now)
+    if (!completed.success) {
+      return unkept(KeepMineStep.Complete, completed.error.message, completed.error.code)
+    }
+    task = completed.output.task
+  }
+
+  if (mySteps.finished) {
+    // My fields first: the rule I removed must be gone before the completion, or it only moves on.
+    const refused = edit() ?? (isDone(task) ? undefined : complete())
+    if (refused) return refused
+  } else {
+    if (mySteps.count < 0) {
+      if (isDone(task)) {
+        const reopened = reopenTask(task, now)
+        if (!reopened.success) {
+          return unkept(KeepMineStep.Reopen, reopened.error.message, reopened.error.code)
+        }
+        task = reopened.output.task
+      }
+    } else {
+      const from = Math.max(theirSteps.count, 0)
+      for (let made = from; made < mySteps.count && !isDone(task); made++) {
+        const refused = complete()
+        if (refused) return refused
+      }
+    }
+    const refused = edit()
+    if (refused) return refused
+  }
+  // Only a completion I made can fail to hold; a task that was completed before I touched it and
+  // that the server reopened is theirs to keep open.
+  const completedByMe = Boolean(mySteps.finished) || mySteps.count > 0
+  if (completedByMe && isDone(mine.output) && !isDone(task)) {
+    return unkept(KeepMineStep.Complete, `the server's copy repeats and stays open when completed`)
+  }
+  return { success: true, output: { task, ics: task.ics }, error: null }
+}
+
+function unkept(step: KeepMineStep, message: string, code?: CompleteTodoErrorCode): KeepMineResult {
+  const error: KeepMineError = { step, message }
+  if (code !== undefined) error.code = code
+  return { success: false, output: null, error }
+}
+
+function isDone(task: Task): boolean {
+  return task.status === TodoStatus.Completed
+}
+
+/** Whether two copies of a task are at the same occurrence: done or not, dates and rule. */
+function sameOccurrence(a: Task, b: Task): boolean {
+  return isDone(a) === isDone(b) && same(a.due, b.due) && same(a.start, b.start) &&
+    same(ruleOf(a.repeatRule), ruleOf(b.repeatRule))
+}
+
+interface Steps {
+  /** Completions made (above 0), or -1 for a reopening. */
+  count: number
+  /** `base` with those made: what the other fields of the copy are compared with. */
+  after: Task
+  /** The copy is completed in a way no run of completions of `base` gives. */
+  finished?: boolean
+}
+
+/** The completions or the reopening that lead from `base` to `to`. */
+function stepsBetween(base: Task, to: Task, now: Date): Steps {
+  const none: Steps = { count: 0, after: base }
+  if (sameOccurrence(base, to)) return none
+  if (isDone(base)) {
+    // Both completed: the dates differ, which is a change of fields and not a reopening.
+    if (isDone(to)) return none
+    const reopened = reopenTask(base, now)
+    return { count: -1, after: reopened.success ? reopened.output.task : base }
+  }
+  let after = base
+  for (let count = 1; count <= MAX_COMPLETIONS; count++) {
+    const completed = completeTask(after, now)
+    if (!completed.success) break
+    after = completed.output.task
+    if (sameOccurrence(after, to)) return { count, after }
+    if (isDone(after)) break
+  }
+  return isDone(to) ? { ...none, finished: true } : none
+}
+
+/** Every field of `task` an edit can carry, the list apart: a text does not say where it lives. */
+function fieldsOf(task: Task): TaskEdit {
+  return {
+    title: task.title,
+    notes: task.notes,
+    due: task.due ?? null,
+    start: task.start ?? null,
+    priority: task.priority,
+    tags: task.tags,
+    sortOrder: task.sortOrder ?? null,
+    repeatRule: task.repeatRule ?? null,
+    reminders: alarmsOfTask(task).flatMap((alarm): AlarmInput[] => {
+      if (!alarm.trigger) return []
+      if (!isEditable(alarm)) return [{ trigger: alarm.trigger }]
+      const reminder: AlarmInput = {
+        trigger: alarm.trigger,
+        action: alarm.action!.toUpperCase() as `DISPLAY` | `AUDIO`,
+      }
+      if (alarm.description !== undefined) reminder.description = alarm.description
+      return [reminder]
+    }),
+  }
 }

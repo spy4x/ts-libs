@@ -701,7 +701,11 @@ The rules it keeps, each one a lost edit found in a product that wrote the queue
   the other side; `keepMine(entry)` sends it again on the server's version (only for a stale
   write: a gone or refused one has no server version), `useTheirs(entry)` drops it. Both take the
   entry the person saw and do nothing once the queue holds a different one, so a stale screen in
-  another tab cannot delete a newer edit.
+  another tab cannot delete a newer edit. `keepMine(entry, payload)` sends `payload` instead of the
+  entry's own: pass the person's change merged into `entry.conflict.server`, so what the other
+  side changed elsewhere in the entity is kept. The payload is stored in the same locked step that
+  checks the entry, so a stale screen stores and sends nothing; never `submit` the merged payload
+  first, because `submit` queues a new write when the entry is gone.
 
 A created entity starts at version one: after an attempted create, a delete is sent against that
 version. `send` runs under the lock, so it must settle or time out.

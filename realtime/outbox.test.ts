@@ -878,6 +878,97 @@ describe("outbox conflicts settled from two tabs", () => {
     expect(cache.items.get("n")).toEqual(item("n", 2, "Theirs"))
   })
 
+  /** An outbox that is online and records every send; `sent` is what reached the server. */
+  function online(store: Store) {
+    const sent: Sent[] = []
+    const cache = fakeCache()
+    const outbox = createOutbox<Text, Item>({
+      store,
+      lock: createPromiseLock(),
+      canSend: () => true,
+      classify,
+      cache: cache.port,
+      send: (command, key) => {
+        sent.push({ command, key })
+        return Promise.resolve(item(command.entityId, command.baseVersion + 1))
+      },
+      fetchServer: () => Promise.resolve(null),
+    })
+    return { outbox, sent, cache }
+  }
+
+  it("sends the replacement payload on the server's version when I keep mine with one", async () => {
+    const store: Store = createMemoryOutboxStore()
+    const { outbox, sent, cache } = online(store)
+    const saved = await store.putEntry(conflicted)
+    await outbox.keepMine(saved, text("Theirs", "My body"))
+    expect(sent.map((s) => [s.command.kind, s.command.payload, s.command.baseVersion])).toEqual([
+      ["update", text("Theirs", "My body"), 2],
+    ])
+    expect(sent[0].key).not.toBe("k-conflict")
+    expect(await store.readOutbox()).toEqual([])
+    expect(cache.items.get("n")).toEqual(item("n", 3))
+  })
+
+  it("stores the replacement payload on the server's version, in the entry's place, while offline", async () => {
+    const store: Store = createMemoryOutboxStore()
+    const outbox = createOutbox<Text, Item>({
+      store,
+      lock: createPromiseLock(),
+      canSend: () => false,
+      classify,
+      send: () => Promise.reject(new ConnectionLostError("down")),
+      fetchServer: () => Promise.resolve(null),
+    })
+    const first = await store.putEntry({ ...conflicted, before: { ...conflicted, key: "k-old" } })
+    await store.putEntry({ ...conflicted, key: "k-other", entityId: "o", status: "pending" })
+    await outbox.keepMine(first, text("Merged"))
+    const queue = await store.readOutbox()
+    expect(queue.map((e) => [e.seq, e.entityId, e.payload.title, e.status, e.baseVersion]))
+      .toEqual([
+        [first.seq, "n", "Merged", "pending", 2],
+        [first.seq! + 1, "o", "Mine", "pending", 1],
+      ])
+    expect(queue[0].conflict).toBeUndefined()
+    expect(queue[0].before).toBeUndefined()
+    expect(queue[0].attempted).toBe(false)
+  })
+
+  it("keeps the entry's own payload when I keep mine without a replacement", async () => {
+    const store: Store = createMemoryOutboxStore()
+    const { outbox, sent } = online(store)
+    const saved = await store.putEntry(conflicted)
+    await outbox.keepMine(saved)
+    expect(sent.map((s) => [s.command.payload, s.command.baseVersion])).toEqual([
+      [text("Mine"), 2],
+    ])
+  })
+
+  it("stores and sends nothing when I keep mine with a replacement after another tab used theirs", async () => {
+    const store: Store = createMemoryOutboxStore()
+    const tabA = online(store)
+    const tabB = online(store)
+    const saved = await store.putEntry(conflicted)
+    await tabB.outbox.useTheirs(saved)
+    await tabA.outbox.keepMine(saved, text("Merged"))
+    expect(tabA.sent).toEqual([])
+    expect(tabB.sent).toEqual([])
+    expect(await store.readOutbox()).toEqual([])
+    expect(tabA.cache.items.size).toBe(0)
+  })
+
+  it("does not put a replacement payload into a newer conflict of the same entry", async () => {
+    const store: Store = createMemoryOutboxStore()
+    const { outbox, sent } = online(store)
+    const saved = await store.putEntry(conflicted)
+    await store.putEntry({ ...saved, key: "k-newer", payload: text("Newer") })
+    await outbox.keepMine(saved, text("Merged"))
+    expect(sent).toEqual([])
+    expect((await store.readOutbox()).map((e) => [e.key, e.status, e.payload.title])).toEqual([
+      ["k-newer", "conflict", "Newer"],
+    ])
+  })
+
   it("ignores a stale conflict card when the entry has since become a newer conflict", async () => {
     const store: Store = createMemoryOutboxStore()
     const sent: string[] = []
