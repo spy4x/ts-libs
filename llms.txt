@@ -680,6 +680,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `TimeFormatter` (class), `jsr:@spy4x/platform`: Format an instant for display.
 - `UUID_PATTERN` (constant), `jsr:@spy4x/platform`: A lower-case UUID of any version, the form Postgres and the browser's own generator print.
 - `UUID_V7_PATTERN` (constant), `jsr:@spy4x/platform`: A lower-case UUID of version 7, as uuidV7 makes it: version digit `7` and the standard variant (`8`, `9`, `a` or `b`).
+- `UnsafeTextOptions` (interface), `jsr:@spy4x/platform`: Options of hasUnsafeTextCharacters.
 - `UuidVersion` (type), `jsr:@spy4x/platform`: The version digit of a UUID: `4` is the random one, `7` the time-ordered one.
 - `ValidationError` (type), `jsr:@spy4x/platform`: A rejected input: its kind, one sentence for the user, the issues per field path, and arktype's own errors.
 - `backoffDelay` (function), `jsr:@spy4x/platform`: Caps a raw delay and jitters it — the exponential-backoff arithmetic that used to be implemented twice: once with symmetric jitter around the capped delay (`integrations/retry.ts`'s `createExponentialBackoff`) and once with jitter that only ever shortens the wait (`realtime/backoff.ts`'s `nextBackoffDelay`).
@@ -701,6 +702,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `formatPct` (function), `jsr:@spy4x/platform`: Format a fraction in `0..1` as a percentage string with two decimals.
 - `formatTime` (function), `jsr:@spy4x/platform`: One-off TimeFormatter#format on the host clock.
 - `getDaysOfWeek` (function), `jsr:@spy4x/platform`: Read a weekday bitmask into day names.
+- `hasUnsafeTextCharacters` (function), `jsr:@spy4x/platform`: Whether text a person typed holds a character that a display name must not: one a database refuses, or one nobody can see that makes two names look the same or a name read backwards.
 - `honeypotFilled` (function), `jsr:@spy4x/platform`: Whether a submitted honeypot field carries a value — a person never types into a field they cannot see, so any value here means whatever posted the form was not one.
 - `idleOperationState` (function), `jsr:@spy4x/platform`: Idle state of an operation.
 - `initials` (function), `jsr:@spy4x/platform`: Reduce a name to one or two initials, e.g. for an avatar's fallback face.
@@ -1503,9 +1505,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/platform/universal/text`
 
+- `UnsafeTextOptions` (interface), `jsr:@spy4x/platform/universal/text`: Options of hasUnsafeTextCharacters.
 - `convertToKebabCase` (function), `jsr:@spy4x/platform/universal/text`: Convert a free-form identifier to kebab-case.
 - `filterRows` (function), `jsr:@spy4x/platform/universal/text`: Keep the rows that every word of the query matches.
 - `fold` (function), `jsr:@spy4x/platform/universal/text`: Fold text for matching: accents removed and lower-cased.
+- `hasUnsafeTextCharacters` (function), `jsr:@spy4x/platform/universal/text`: Whether text a person typed holds a character that a display name must not: one a database refuses, or one nobody can see that makes two names look the same or a name read backwards.
 - `initials` (function), `jsr:@spy4x/platform/universal/text`: Reduce a name to one or two initials, e.g. for an avatar's fallback face.
 - `levenshtein` (function), `jsr:@spy4x/platform/universal/text`: Levenshtein edit distance between two strings, computed over code points.
 - `pluralize` (function), `jsr:@spy4x/platform/universal/text`: Naive English pluraliser for UI copy.
@@ -3019,4 +3023,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 9065e0f4ddb71497e31eeb614fa770deebaeca70d757d90450ab564150128885 -->
+<!-- export surface: sha256 519ae51f05aa19ca898f2179c3b4f6a4d3c31ea2949345faaa456aee492c8141 -->

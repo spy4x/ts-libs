@@ -2,8 +2,9 @@
  * Small, dependency-free text helpers: accent and case folding (`fold`), a list filter
  * (`searchWords`, `search`, `filterRows`), a naive English pluraliser (`pluralize`), a
  * kebab-case converter (`convertToKebabCase`), edit distance and a normalised similarity score
- * (`levenshtein`, `similarity`), a UTF-8 byte-length count (`utf8ByteLength`), and a name's
- * initials in any script (`initials`).
+ * (`levenshtein`, `similarity`), a UTF-8 byte-length count (`utf8ByteLength`), a name's
+ * initials in any script (`initials`), and a check for control and invisible characters in typed
+ * text (`hasUnsafeTextCharacters`).
  *
  * @module
  */
@@ -245,4 +246,65 @@ export function initials(name?: string | null): string {
   }
 
   return found.join("").toUpperCase()
+}
+
+/**
+ * The characters {@link hasUnsafeTextCharacters} refuses besides tab, line feed and carriage
+ * return, as the inside of a character class:
+ *
+ * - `\u0000-\u0008`, `\u000b`, `\u000c`, `\u000e-\u001f`: the C0 controls, NUL among them, which
+ *   Postgres `text` cannot store;
+ * - `\u007f-\u009f`: DEL and the C1 controls (NEL, U+0085, is a line break to some readers);
+ * - `\u00ad`: the soft hyphen, invisible inside a word;
+ * - `\u061c`, `\u200e`, `\u200f`, `\u202a-\u202e`, `\u2066-\u2069`: the bidirectional controls,
+ *   which can make text render in another order than it is stored;
+ * - `\u2028`, `\u2029`: the line and paragraph separators (one range with the five after them);
+ * - `\u200b`, `\u2060`, `\ufeff`: zero-width space, word joiner and the byte-order mark;
+ * - `\p{Cs}`: a lone surrogate, which is all a `u`-flag pattern can match there, since a valid
+ *   pair is read as one character.
+ */
+const UNSAFE_IN_ANY_TEXT =
+  "\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u200b\\u200e\\u200f" +
+  "\\u2028-\\u202e\\u2060\\u2066-\\u2069\\ufeff\\p{Cs}"
+const UNSAFE_IN_MULTILINE_TEXT = new RegExp(`[${UNSAFE_IN_ANY_TEXT}]`, "u")
+const UNSAFE_IN_SINGLE_LINE_TEXT = new RegExp(`[\\t\\n\\r${UNSAFE_IN_ANY_TEXT}]`, "u")
+
+/** Options of {@link hasUnsafeTextCharacters}. */
+export interface UnsafeTextOptions {
+  /**
+   * Allow tab, line feed and carriage return, for text typed into a multi-line field such as a
+   * note body. Default `false`: a name or a title is one line.
+   */
+  multiline?: boolean
+}
+
+/**
+ * Whether text a person typed holds a character that a display name must not: one a database
+ * refuses, or one nobody can see that makes two names look the same or a name read backwards.
+ *
+ * True for a control character (C0 with NUL, tab and the line breaks, DEL, C1), the line and
+ * paragraph separators U+2028 and U+2029, a bidirectional control (U+061C, U+200E, U+200F, U+202A
+ * to U+202E, U+2066 to U+2069), an invisible character (zero-width space U+200B, word joiner
+ * U+2060, U+FEFF, soft hyphen U+00AD) and a lone surrogate. Check a name with it before storing
+ * it, and answer a validation error instead of letting the database fail.
+ *
+ * The zero-width non-joiner and joiner (U+200C, U+200D) are allowed. Persian, Arabic and the Indic
+ * scripts need them inside ordinary words, and an emoji family or a profession is several emoji
+ * held together by U+200D. Variation selectors and emoji tag characters are allowed for the same
+ * reason. Letters of two scripts that look alike (Latin `a`, Cyrillic `а`) are not this function's
+ * job, and neither are spaces: trim and collapse those separately.
+ *
+ * It never throws for a string and never repeats the value, so its answer is safe to log.
+ *
+ * @example
+ * ```ts
+ * hasUnsafeTextCharacters("Zoë's notes") // false
+ * hasUnsafeTextCharacters("work\u0000") // true: NUL
+ * hasUnsafeTextCharacters("line one\nline two") // true: a name is one line
+ * hasUnsafeTextCharacters("line one\nline two", { multiline: true }) // false
+ * ```
+ */
+export function hasUnsafeTextCharacters(value: string, options?: UnsafeTextOptions): boolean {
+  const pattern = options?.multiline ? UNSAFE_IN_MULTILINE_TEXT : UNSAFE_IN_SINGLE_LINE_TEXT
+  return pattern.test(value)
 }
