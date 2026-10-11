@@ -24,11 +24,12 @@ Runs on: server (Deno).
 
 | Export                                      | What it is                                                                                                                                                                                                                                                    |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@spy4x/server/http/bounded-body`           | Byte-capped, stall-budgeted request body reading; `readJsonBody` for Hono routes                                                                                                                                                                              |
+| `@spy4x/server/http/bounded-body`           | Byte-capped, stall-budgeted request body reading; `readJsonBody` and `readFormBody` with HTTP statuses                                                                                                                                                        |
 | `@spy4x/server/http/cors`                   | Exact-match origin allowlist and the `hono/cors` origin resolver                                                                                                                                                                                              |
 | `@spy4x/server/http/bearer-auth`            | Bearer token extraction and constant-time verification (moved from `mcp/auth.ts`)                                                                                                                                                                             |
 | `@spy4x/server/http/same-origin`            | Hono middleware that refuses cross-site mutations and cross-site WebSocket upgrades                                                                                                                                                                           |
 | `@spy4x/server/http/security-headers`       | CSP and framing headers for a same-origin single-page app, with inline-block hashes                                                                                                                                                                           |
+| `@spy4x/server/http/health`                 | A health endpoint over named checks: 503 when a required one fails, 200 `degraded` when only an optional one does                                                                                                                                             |
 | `@spy4x/server/export`                      | Versioned export envelope and `Content-Disposition` download response                                                                                                                                                                                         |
 | `@spy4x/server/static`                      | Static-file serving with a MIME table and path-traversal protection                                                                                                                                                                                           |
 | `@spy4x/server/healthcheck`                 | Loopback TCP probe, exit 0/1, for distroless images                                                                                                                                                                                                           |
@@ -49,6 +50,7 @@ Runs on: server (Deno).
 | `@spy4x/server/db`                          | Barrel: Postgres and SQLite adapters plus the migration runner they share                                                                                                                                                                                     |
 | `@spy4x/server/db/migrate`                  | Migration runner: discovers, orders and applies `.sql` files, one port for both                                                                                                                                                                               |
 | `@spy4x/server/db/postgres`                 | Postgres pool with sane connect/idle/statement timeout defaults                                                                                                                                                                                               |
+| `@spy4x/server/db/notify`                   | Postgres `LISTEN`/`NOTIFY` with JSON payloads: `announceJson` in a transaction, `listenJson` with an arktype schema                                                                                                                                           |
 | `@spy4x/server/db/testing`                  | `requireDbConnection`: integration-test Postgres settings, fails loudly when missing                                                                                                                                                                          |
 | `@spy4x/server/db/sqlite`                   | SQLite adapter behind an injectable driver port; ships no driver                                                                                                                                                                                              |
 | `@spy4x/server/request-log`                 | Hono request-logging middleware, method/path/status/elapsed only, injected writer                                                                                                                                                                             |
@@ -86,7 +88,8 @@ the sibling `time/` package. Every entry in this package's `exports` must resolv
 
 `readBoundedBody`, `readBoundedText`, `parseBoundedFormData`, `readContentLength`,
 `PayloadTooLargeError`, `readJsonBody` with its messages `JSON_BODY_TOO_LARGE`, `JSON_BODY_TIMEOUT`
-and `JSON_BODY_INVALID`, and the types `ReadBoundedBodyOptions` and `BodySource`.
+and `JSON_BODY_INVALID`, `readFormBody` with its messages `FORM_BODY_TOO_LARGE`, `FORM_BODY_TIMEOUT`
+and `FORM_BODY_INVALID`, and the types `ReadBoundedBodyOptions` and `BodySource`.
 
 **Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This module is a named
 re-export of it: `PayloadTooLargeError`, `readBoundedBody`, `readBoundedText` and
@@ -111,9 +114,27 @@ included. A route without `onError` answers with that status on its own; a route
 shape catches the exception and reads `status`, and the reader's error is kept as `cause`. Any other
 error is rethrown unchanged.
 
+`readFormBody(request, options?)` is the same for a form post (`application/x-www-form-urlencoded`
+or `multipart/form-data`). It takes a plain `Request`, so a server that is not Hono can use it; a
+Hono route passes `c.req.raw`. It throws the same `HTTPException`: 413 for a body over the cap, 408
+for a stalled body, and 400 for a request with no `content-type`, a type that is not a form, or a
+body that does not parse as that form. A body that was already read is a mistake in the server, not
+in the request, so it stays a plain `TypeError`. Every value in the returned `FormData` is what the
+client sent: validate it before use.
+
+```ts
+try {
+  const form = await readFormBody(request, { maxBytes: 256 * 1024 })
+} catch (error) {
+  if (error instanceof HTTPException) return new Response(error.message, { status: error.status })
+  throw error
+}
+```
+
 ## `server/http/security-headers`
 
-`securityHeaders`, `securityHeaderList`, `nginxAddHeaders`, `inlineBlockHashes` and the types
+`securityHeaders`, `securityHeaderList`, `withSecurityHeaders`, `nginxAddHeaders`,
+`inlineBlockHashes` and the types
 `SecurityHeadersOptions`, `ExtraSources` and `NginxAddHeadersOptions`.
 
 `await securityHeaders({ shellHtml, extraSources })` returns Hono middleware over `secureHeaders`:
@@ -132,11 +153,18 @@ key and the position, never the value.
 `await securityHeaderList(options)` returns the same headers as `[name, value]` pairs with
 lower-case names, for a server that is not Hono. The middleware sets exactly this list.
 
+`withSecurityHeaders(response, headers)` puts that list on a `Response` by the middleware's rules:
+a header of the list replaces the response's own, every other header is kept, and `X-Powered-By`
+is removed. It returns a copy, because a response from `fetch` or `Response.redirect` throws when a
+header is set on it; the copy takes over the body, status and status text. A WebSocket upgrade
+(status 101), or any other status outside 200 to 599, cannot be rebuilt and is returned unchanged,
+without the headers.
+
 ```ts
 const headers = await securityHeaderList({
   extraSources: { formAction: ["https://app.example.com"] },
 })
-for (const [name, value] of headers) response.headers.set(name, value)
+Deno.serve(async (request) => withSecurityHeaders(await handle(request), headers))
 ```
 
 `nginxAddHeaders(headers, { allowedVariables })` renders a header list as text for an nginx
@@ -146,6 +174,34 @@ throws, naming the header and never the value, on a double quote, a backslash, a
 other control character, and on a `$` that does not start exactly one of `allowedVariables` (such
 as `["$csp_error_tracker"]`, a variable the container sets when it starts). A header name that is
 not letters, digits, `-` and `_` throws too.
+
+## `server/http/health`
+
+`createHealthHandler` and the types `HealthHandlerOptions`, `HealthHandler`, `HealthCheck`,
+`HealthReport` and `HealthStatus`.
+
+A health endpoint over named checks. A **required** check that fails means nothing works: the
+answer is 503 with `status: "down"`, so a load balancer or a container probe takes the instance
+out. An **optional** check that fails means the service still works, only worse: the answer stays
+200 with `status: "degraded"`, because restarting the instance would not bring that dependency
+back.
+
+```ts
+const health = createHealthHandler({
+  required: { database: () => isDbConnected() },
+  optional: { cache: () => isCacheConnected() },
+})
+app.get("/health", () => health()) // Hono; or Deno.serve(health)
+// 200 {"status":"degraded","checks":{"database":true,"cache":false},"date":1700000000000}
+```
+
+All checks run at once on every call. A check passes only when it resolves exactly `true`; one
+that throws, rejects or takes longer than `timeoutMs` (default two seconds) has failed, so a hung
+dependency cannot hang the endpoint. The body names each check and whether it passed, never why it
+failed: the endpoint is usually public, and an error message can carry a host name or a
+credential. The answer is marked `cache-control: no-store`. A name in both lists, a check that is
+not a function, or a `timeoutMs` that is not a finite number above 0 throws when the handler is
+built. This is the HTTP side; the probe a container runs against itself is `server/healthcheck`.
 
 ## `server/http/same-origin`
 
@@ -1513,6 +1569,51 @@ Like the migration driver, the table listing it purges from is read through `.va
 `tablename` alias written in the query, so it survives any column-name transform the caller's client
 carries — including a custom one that maps two different columns to the same name (`#137`).
 
+### Notifications: `@spy4x/server/db/notify`
+
+`announceJson`, `listenJson`, `NotifyPayloadTooLargeError`, `MAX_NOTIFY_PAYLOAD_BYTES`,
+`MAX_NOTIFY_CHANNEL_BYTES` and the type `JsonListenerOptions`.
+
+Postgres `LISTEN`/`NOTIFY` with JSON payloads: one process announces that something changed, and
+every process listening on the channel hears it. It is how a worker without sockets tells the API
+process that holds them.
+
+```ts
+await sql.begin(async (tx) => {
+  await tx`UPDATE inboxes SET unread = unread + 1 WHERE user_id = ${userId}`
+  await announceJson(tx, "inbox_changed", { userId })
+})
+
+const stop = await listenJson(sql, "inbox_changed", {
+  schema: type({ userId: "number.integer > 0", "+": "reject" }),
+  onMessage: ({ userId }) => tellSocketsOf(userId),
+  onListen: () => resyncEveryone(),
+})
+```
+
+- **Announce inside the transaction of the change.** Postgres holds the notification until the
+  transaction commits and drops it on a rollback. Two identical notifications in one transaction
+  arrive once.
+- **It is a wake-up, not a queue.** A notification sent while a listener is down or reconnecting
+  is lost. Send a hint, keep the truth in a table, and read the table on a hint, at start and in
+  `onListen`, which runs at the first subscription and after every reconnect.
+- **The payload is a hint, at most `MAX_NOTIFY_PAYLOAD_BYTES` (7999) bytes of JSON text.** Postgres
+  refuses 8000 bytes or more, and its refusal aborts the transaction, so `announceJson` throws
+  `NotifyPayloadTooLargeError` before it sends anything. A value with no JSON form throws a
+  `TypeError`.
+- **A channel name is 1 to 63 bytes.** Postgres cuts a longer name short in `LISTEN` and refuses it
+  in `pg_notify`, so both functions throw a `RangeError` for one.
+- **The listener trusts nothing.** Anyone who can reach the database can send on a channel. A
+  payload that is not JSON, or that the arktype `schema` refuses, is dropped, and `onMessage` gets
+  the schema's output.
+- **A failing handler does not end the process.** An error `onMessage` throws, or a promise it
+  rejects, goes to `onError` (default `console.error`): thrown further, it would surface in the
+  client's socket handler.
+- **Reconnecting is postgres.js's.** The client keeps one connection of its own for listening and
+  subscribes again when it drops. After such a reconnect its own `unlisten` no longer removes the
+  handler, so the returned stop function also switches the handler off itself. The listening
+  connection closes with `sql.end()`.
+
 ## `server/sign-in`
 
 The building blocks a sign-in method stands on, extracted from the template's API (#75). Entry point:
@@ -1982,7 +2083,7 @@ next `get` returning the stored value on a new connection.
 ## `server/outbox`
 
 `OutboxProcessor`, `OutboxEvent`, `OutboxPublisher`, `OutboxRepository`, `PostgresOutboxRepository`,
-`LoggingOutboxPublisher`, `retryDelayMs`, `errorCodeOf`, `scheduleOutboxEvent`,
+`LoggingOutboxPublisher`, `JobPublisher`, `retryDelayMs`, `errorCodeOf`, `scheduleOutboxEvent`,
 `ensureScheduledOutboxEvent`. Extracted from
 `template/libs/server/outbox/+index.ts` (#75) — the template is the only source of an outbox in this
 wave's source repositories.
@@ -2091,6 +2192,22 @@ required: a unique index on `(aggregate_type, aggregate_id, aggregate_version, e
 what makes a retried `INSERT` (after a crash between the state change and the outbox row) idempotent
 instead of writing the event twice — the template had this index; it is not enforced here because
 the repository reads and updates rows but never creates or migrates the table.
+
+**Jobs next to other rows: `JobPublisher`.** An outbox that holds both jobs and change rows needs
+one publisher that tells them apart. `new JobPublisher({ aggregateType, handlers, fallback })` runs
+the handler keyed by `eventKind` for a row whose `aggregateType` is the job type, and passes every
+other row to `fallback`. A job with no handler throws a `RangeError`, so it is retried and then
+stops with the error stored on the row, instead of vanishing into the fallback. Only the object's
+own keys count as handlers, so a row whose kind is `toString` has none.
+
+```ts
+const publisher = new JobPublisher({
+  aggregateType: "job",
+  handlers: { "outbox.cleanup": () => removeOldRows(sql) },
+  fallback: changeNotifier,
+})
+new OutboxProcessor(repository, publisher, { repeatEveryMs: { "outbox.cleanup": 86_400_000 } })
+```
 
 ## `server/idempotency`
 

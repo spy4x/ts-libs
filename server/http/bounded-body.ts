@@ -36,7 +36,8 @@
  *
  * `readJsonBody` is this module's own addition for Hono apps: it reads a request's JSON body
  * through the canonical `readBoundedJson` and turns its failures into `HTTPException`s (413, 408
- * and 400), so every route does not repeat that mapping.
+ * and 400), so every route does not repeat that mapping. `readFormBody` does the same for a form
+ * post, from a plain `Request`.
  *
  * @module
  */
@@ -134,6 +135,61 @@ export async function readJsonBody<T = unknown>(
     }
     if (error instanceof SyntaxError) {
       throw new HTTPException(400, { message: JSON_BODY_INVALID, cause: error })
+    }
+    throw error
+  }
+}
+
+/** Message of the 413 {@link readFormBody} throws when the body is over the cap. */
+export const FORM_BODY_TOO_LARGE = "Request body too large"
+
+/** Message of the 408 {@link readFormBody} throws when the body stalls. */
+export const FORM_BODY_TIMEOUT = "Request body timed out"
+
+/** Message of the 400 {@link readFormBody} throws when the body is not a form. */
+export const FORM_BODY_INVALID = "Request body is not a form"
+
+/**
+ * Read a form post (`application/x-www-form-urlencoded` or `multipart/form-data`) under the byte
+ * cap and stall budget, and turn each way it can fail into the HTTP status a client should see.
+ * The form twin of {@link readJsonBody}. It takes a plain `Request`, so it also serves a server
+ * that is not Hono; a Hono route passes `c.req.raw`.
+ *
+ * It throws Hono's `HTTPException`: a Hono route with no `onError` answers with the right status
+ * on its own, and any other server catches it and reads `status` and `message`. The original
+ * error is kept as `cause`.
+ *
+ * Every value in the result is what the client sent: validate it (arktype) before using it.
+ *
+ * @param request The request. Its body is read once, so do not read it elsewhere.
+ * @param options `maxBytes` (default 5 MiB) and `timeoutMs`, the per-chunk stall budget (default
+ * 10 s).
+ * @throws {HTTPException} 413 ({@link FORM_BODY_TOO_LARGE}) when the body, or its declared
+ * `content-length`, is over `maxBytes`.
+ * @throws {HTTPException} 408 ({@link FORM_BODY_TIMEOUT}) when no chunk arrives within
+ * `timeoutMs`.
+ * @throws {HTTPException} 400 ({@link FORM_BODY_INVALID}) when the request has no `content-type`,
+ * names a type that is not a form, or its body does not parse as that form.
+ * @throws TypeError when the body was already read: that is a mistake in the server, not in the
+ * request, so it is not turned into a 400.
+ * @throws Any other error unchanged, such as the `RangeError` for a `maxBytes` that is not finite.
+ */
+export async function readFormBody(
+  request: Request,
+  options: BodyReadOptions = {},
+): Promise<FormData> {
+  if (request.bodyUsed) throw new TypeError("readFormBody: the request body was already read")
+  try {
+    return await parseBoundedFormData(request, options)
+  } catch (error) {
+    if (error instanceof PayloadTooLargeError) {
+      throw new HTTPException(413, { message: FORM_BODY_TOO_LARGE, cause: error })
+    }
+    if (error instanceof BodyReadTimeoutError) {
+      throw new HTTPException(408, { message: FORM_BODY_TIMEOUT, cause: error })
+    }
+    if (error instanceof TypeError) {
+      throw new HTTPException(400, { message: FORM_BODY_INVALID, cause: error })
     }
     throw error
   }

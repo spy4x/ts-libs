@@ -5,7 +5,8 @@
  * inline blocks in the built page, so the policy needs no `unsafe-inline`.
  *
  * The same headers are available as data ({@link securityHeaderList}) for a server that is not
- * Hono, and as nginx configuration ({@link nginxAddHeaders}) for a page nginx serves.
+ * Hono, where {@link withSecurityHeaders} puts them on a `Response`, and as nginx configuration
+ * ({@link nginxAddHeaders}) for a page nginx serves.
  *
  * @module
  */
@@ -154,6 +155,43 @@ export async function securityHeaders(
     for (const [name, value] of headers) c.res.headers.set(name, value)
     c.res.headers.delete(`X-Powered-By`)
   }
+}
+
+/**
+ * A copy of `response` that carries `headers`, for a server {@link securityHeaders} cannot run in
+ * (Fresh, `Deno.serve`, a worker). It follows the middleware's rules: each header of the list
+ * replaces the response's own header of that name, every other header is kept, and `X-Powered-By`
+ * is removed.
+ *
+ * It returns a copy because a response may refuse a change to its headers: one from `fetch` or
+ * `Response.redirect` throws when a header is set on it. The copy takes over the body, so use the
+ * copy and drop the original. The status and status text are kept.
+ *
+ * A response that cannot be rebuilt is returned as it is, without the headers: a WebSocket
+ * upgrade (status 101), and any other status outside 200 to 599. Copying an upgrade response would
+ * break the upgrade, and it carries no page for the policy to protect.
+ *
+ * @throws TypeError when the body of `response` was already read.
+ *
+ * @example
+ * ```ts
+ * const headers = await securityHeaderList()
+ * Deno.serve(async (request) => withSecurityHeaders(await handle(request), headers))
+ * ```
+ */
+export function withSecurityHeaders(
+  response: Response,
+  headers: Iterable<readonly [name: string, value: string]>,
+): Response {
+  if (response.status < 200 || response.status > 599) return response
+  const merged = new Headers(response.headers)
+  for (const [name, value] of headers) merged.set(name, value)
+  merged.delete(`X-Powered-By`)
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: merged,
+  })
 }
 
 /** Options of {@link nginxAddHeaders}. */
