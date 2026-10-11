@@ -330,8 +330,14 @@ export interface Outbox<P, S extends { version: number }> {
    * server, for example an online restore.
    */
   withdraw(entityId: string): Promise<boolean>
-  /** Sends the person's version again on the server's: see `ConflictRef`. Stale cards do nothing. */
-  keepMine(shown: ConflictRef): Promise<void>
+  /**
+   * Sends the person's version again on the server's: see `ConflictRef`. Stale cards do nothing.
+   * `payload`, when given, replaces what the entry sends: for example the person's change merged
+   * into the server's entity (`conflict.server`), so the other side's other fields are kept. It is
+   * stored in the same step that checks the card is not stale, so a stale card stores and sends
+   * nothing.
+   */
+  keepMine(shown: ConflictRef, payload?: P): Promise<void>
   /** Drops the person's version and shows the server's. Stale cards do nothing. */
   useTheirs(shown: ConflictRef): Promise<void>
 }
@@ -616,9 +622,10 @@ export function createOutbox<P, S extends { version: number }>(
    * Sends the person's version again, on top of the server's current one. `shown` is the conflict
    * the person saw; nothing happens unless the queue still holds that conflict under that key
    * (another tab may have settled it, or the person edited again). Does nothing for a `gone` or
-   * `rejected` conflict, which has no server entity to build on: use `useTheirs` there.
+   * `rejected` conflict, which has no server entity to build on: use `useTheirs` there. `payload`
+   * replaces the entry's payload in the same step, so it is never stored for a stale card.
    */
-  async function keepMine(shown: ConflictRef): Promise<void> {
+  async function keepMine(shown: ConflictRef, payload?: P): Promise<void> {
     await stepped(async () => {
       const entry = await findConflict(shown)
       const server = entry?.conflict?.server
@@ -626,6 +633,7 @@ export function createOutbox<P, S extends { version: number }>(
       await cache?.put(server)
       await save({
         ...entry,
+        ...(payload === undefined ? {} : { payload }),
         kind: entry.kind === "delete" ? "delete" : "update",
         baseVersion: server.version,
         key: newKey(),
