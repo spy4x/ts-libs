@@ -6,7 +6,8 @@
  * It holds server state only. Writes made offline wait in the outbox
  * (`@spy4x/realtime/outbox-indexeddb`) and the app layers them on top of what this cache returns.
  *
- * One database per signed-in user: name it for the user, and `clearAll` at sign-out.
+ * One database per signed-in user: name it for the user, and `finish` it at sign-out, so an answer
+ * that was still on its way cannot put that person's data back on the device.
  *
  * Items read back in the order `replace` wrote them (the server's order). An item added later by
  * `put` follows the others, and a `put` of an item already there keeps its place.
@@ -60,8 +61,18 @@ export interface DataCache<T> {
   delete(scope: string, id: string): Promise<void>
   /** Removes every item of the scope. Other scopes stay. */
   clear(scope: string): Promise<void>
-  /** Removes every item of every scope, for example at sign-out. */
+  /** Removes every item of every scope. The cache stays usable; at sign-out use {@link finish}. */
   clearAll(): Promise<void>
+  /**
+   * Removes every item of every scope and finishes this instance, for sign-out. From the moment it
+   * is called, `batch`, `replace`, `put`, `delete` and `clear` on this instance resolve without
+   * writing anything. That includes a call made earlier whose transaction had not started yet, so
+   * a server answer that arrives after sign-out cannot put the data back. A write whose
+   * transaction was already open is removed with the rest. Reads keep working. `clearAll` on a
+   * finished instance still empties the database. Another instance on the same database is not
+   * finished: a new user needs a new cache.
+   */
+  finish(): Promise<void>
 }
 
 const ITEMS = "items"
@@ -93,13 +104,21 @@ export function createDataCache<T>(options: DataCacheOptions<T>): DataCache<T> {
     },
   })
 
+  /** Set by `finish`, synchronously: from then on `batch` and the writers over it store nothing. */
+  let finished = false
+
   /**
    * Runs `work` in a read-write transaction and resolves when it has committed. `work` may await
    * IndexedDB requests of this transaction and nothing else, or the transaction commits early. If
-   * it throws, the transaction is aborted and nothing is written.
+   * it throws, the transaction is aborted and nothing is written. When `skip` answers `true` once
+   * the database is open, no transaction is made.
    */
-  async function write(work: (items: IDBObjectStore) => Promise<void> | void): Promise<void> {
+  async function write(
+    work: (items: IDBObjectStore) => Promise<void> | void,
+    skip?: () => boolean,
+  ): Promise<void> {
     const db = await open()
+    if (skip?.()) return
     const transaction = db.transaction(ITEMS, "readwrite")
     const done = idbTransactionDone(transaction)
     try {
@@ -162,7 +181,13 @@ export function createDataCache<T>(options: DataCacheOptions<T>): DataCache<T> {
     }
   }
 
-  const batch = (ops: readonly DataCacheOp<T>[]) => write((store) => applyAll(store, ops))
+  /**
+   * Checks `finished` inside the write, after the database has opened and right before the
+   * transaction: a batch called before `finish` that was still waiting to open stores nothing.
+   */
+  const batch = (ops: readonly DataCacheOp<T>[]) =>
+    write((store) => applyAll(store, ops), () => finished)
+  const clearAll = () => write((store) => void store.clear())
 
   return {
     async read(scope) {
@@ -199,6 +224,10 @@ export function createDataCache<T>(options: DataCacheOptions<T>): DataCache<T> {
     put: (scope, item) => batch([{ op: "put", scope, item }]),
     delete: (scope, id) => batch([{ op: "delete", scope, id }]),
     clear: (scope) => batch([{ op: "clear", scope }]),
-    clearAll: () => write((store) => void store.clear()),
+    clearAll,
+    finish() {
+      finished = true
+      return clearAll()
+    },
   }
 }

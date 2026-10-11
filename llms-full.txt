@@ -2217,7 +2217,9 @@ removed") lands without a reader seeing it half applied, and an item whose id ca
 the cache as it was. A CalDAV sync store, for instance, keeps the calendar list in one scope and each
 calendar's objects in a scope of their own; `replaceCalendars` is one `batch` that replaces the list
 and `clear`s the scope of every calendar `scopes()` shows that the list no longer has. `clearAll()`
-empties every scope at sign-out. After `indexedDB.deleteDatabase(name)` at sign-out, stop whatever
+empties every scope and leaves the cache usable. At sign-out call `finish()`: it empties every
+scope too, and from then on this instance stores nothing, so a server answer that was still on its
+way cannot put the signed-out person's data back. The next user gets a new cache. After `indexedDB.deleteDatabase(name)` at sign-out, stop whatever
 still holds the cache or an outbox store: the next call on a store that is still referenced
 creates an empty database again.
 
