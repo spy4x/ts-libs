@@ -50,3 +50,14 @@ export class RealtimeRequestError extends Error {
     this.details = details
   }
 }
+
+/**
+ * What to tell the person about a failed call: the server's own message when it answered with one
+ * (a {@link RealtimeRequestError}, which a client transport raises for a `server.error` frame or a
+ * `timeout`), otherwise `fallback`, for an error that is not a server answer, such as a dropped
+ * socket (`ConnectionLostError`) or a bug. Text of an error thrown by this process never
+ * reaches the person.
+ */
+export function describeError(error: unknown, fallback: string): string {
+  return error instanceof RealtimeRequestError ? error.message : fallback
+}
