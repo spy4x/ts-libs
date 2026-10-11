@@ -216,6 +216,23 @@ describe("createDataCache", () => {
     expect(await cache.read("cal")).toEqual([])
   })
 
+  it("leaves no database behind when a write comes after finish and deleteDatabase", async () => {
+    const indexedDB = new IDBFactory()
+    const cache = open(indexedDB)
+    await cache.put("cal", task("a"))
+    await cache.finish()
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.deleteDatabase("data:u1")
+      request.onsuccess = resolve
+      request.onerror = reject
+    })
+    expect(await indexedDB.databases()).toEqual([])
+
+    await cache.put("cal", task("late"))
+
+    expect(await indexedDB.databases()).toEqual([])
+  })
+
   it("finishes one instance only: another on the same database still writes", async () => {
     const indexedDB = new IDBFactory()
     await open(indexedDB).finish()

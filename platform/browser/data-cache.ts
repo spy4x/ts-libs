@@ -66,11 +66,15 @@ export interface DataCache<T> {
   /**
    * Removes every item of every scope and finishes this instance, for sign-out. From the moment it
    * is called, `batch`, `replace`, `put`, `delete` and `clear` on this instance resolve without
-   * writing anything. That includes a call made earlier whose transaction had not started yet, so
+   * writing anything and without opening the database, so they do not create it again after
+   * `indexedDB.deleteDatabase(name)`, and resolve even when storage is blocked. That includes a call made earlier whose transaction had not started yet, so
    * a server answer that arrives after sign-out cannot put the data back. A write whose
    * transaction was already open is removed with the rest. Reads keep working. `clearAll` on a
    * finished instance still empties the database. Another instance on the same database is not
    * finished: a new user needs a new cache.
+   *
+   * Rejects when the database cannot be opened or emptied: nothing was deleted then, and the
+   * caller must handle it. The instance is finished all the same.
    */
   finish(): Promise<void>
 }
@@ -110,13 +114,16 @@ export function createDataCache<T>(options: DataCacheOptions<T>): DataCache<T> {
   /**
    * Runs `work` in a read-write transaction and resolves when it has committed. `work` may await
    * IndexedDB requests of this transaction and nothing else, or the transaction commits early. If
-   * it throws, the transaction is aborted and nothing is written. When `skip` answers `true` once
-   * the database is open, no transaction is made.
+   * it throws, the transaction is aborted and nothing is written. When `skip` answers `true`,
+   * before the database is opened or once it is open, no transaction is made.
    */
   async function write(
     work: (items: IDBObjectStore) => Promise<void> | void,
     skip?: () => boolean,
   ): Promise<void> {
+    // Before opening: a finished cache must not touch IndexedDB, or it creates a deleted database
+    // again. After opening: a write that was waiting for the database when `finish` was called.
+    if (skip?.()) return
     const db = await open()
     if (skip?.()) return
     const transaction = db.transaction(ITEMS, "readwrite")
@@ -182,7 +189,7 @@ export function createDataCache<T>(options: DataCacheOptions<T>): DataCache<T> {
   }
 
   /**
-   * Checks `finished` inside the write, after the database has opened and right before the
+   * Checks `finished` inside the write, before the database is opened and again right before the
    * transaction: a batch called before `finish` that was still waiting to open stores nothing.
    */
   const batch = (ops: readonly DataCacheOp<T>[]) =>

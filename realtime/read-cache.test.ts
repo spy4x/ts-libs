@@ -194,6 +194,18 @@ describe("ReadCache.clear", () => {
       .toBeUndefined()
   })
 
+  it("returns the time from a set after clear when storage is blocked", async () => {
+    const blocked = {
+      open() {
+        throw new Error(`storage is blocked`)
+      },
+    } as unknown as IDBFactory
+    const cache = createReadCache({ name: "reads:u1", indexedDB: blocked, clock: handClock(7000) })
+    await expect(cache.clear()).rejects.toThrow(`storage is blocked`)
+
+    expect(await cache.set("groups", ["late"])).toBe(7000)
+  })
+
   it("survives a restart: a cache opened again reads the saved copy", async () => {
     const indexedDB = freshFactory()
     await cachedRead(createReadCache({ name: "reads:u1", indexedDB }), "groups", answer(["a"]))
