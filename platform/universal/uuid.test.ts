@@ -41,8 +41,10 @@ function expectStrictlyAscending(ids: string[]): void {
 
 describe("uuidV7", () => {
   it("makes a lower-case id with version digit 7 and the standard variant", () => {
-    for (let i = 0; i < 200; i++) {
-      const id = uuidV7()
+    // A new millisecond per id, so the counter beside the version digit starts over 200 times.
+    let now = START
+    const ids = withClock(() => now++, () => Array.from({ length: 200 }, () => uuidV7()))
+    for (const id of ids) {
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
       expect(id[14]).toBe("7")
       expect("89ab").toContain(id[19])
