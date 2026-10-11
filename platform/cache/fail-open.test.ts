@@ -134,6 +134,7 @@ describe("failOpen", () => {
     advance(4_999)
     await cache.get("user_1")
     await cache.set("user_1", "{}", 60)
+    await cache.del("user_1")
 
     expect(storage.calls).toBe(callsAfterFailure)
   })
