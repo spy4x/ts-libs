@@ -1157,6 +1157,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `FileLockOptions` (interface), `jsr:@spy4x/platform/server`: Options for FileLock.
 - `FileLockWaitError` (class), `jsr:@spy4x/platform/server`: Raised when a FileLock.runExclusive call waited FileLockOptions.waitMs for an earlier `runExclusive` on the same instance and gave up.
 - `FileSystemPort` (interface), `jsr:@spy4x/platform/server`: Storage primitives a server helper needs.
+- `IntervalRunnerOptions` (interface), `jsr:@spy4x/platform/server`: Options of startIntervalRunner.
 - `JsonlLogger` (class), `jsr:@spy4x/platform/server`: Append-only JSONL writer over a FileSystemPort.
 - `LockHandle` (interface), `jsr:@spy4x/platform/server`: A held file lock.
 - `LockState` (enum), `jsr:@spy4x/platform/server`: Lock state, so a check can distinguish "held" from "held by me".
@@ -1191,6 +1192,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `readJsonFile` (function), `jsr:@spy4x/platform/server`: Read and parse a JSON document.
 - `runCommand` (function), `jsr:@spy4x/platform/server`: Run `command` (the program, then its arguments) and resolve with its outcome.
 - `shutdownSignal` (function), `jsr:@spy4x/platform/server`: Return an `AbortSignal` that aborts on the first of `options.signals` (default `SIGINT` and `SIGTERM`).
+- `startIntervalRunner` (function), `jsr:@spy4x/platform/server`: Runs `task` every `intervalMs` until the returned function is called.
 - `systemClockPort` (constant), `jsr:@spy4x/platform/server`: The host clock.
 - `systemTimerPort` (constant), `jsr:@spy4x/platform/server`: Real timers.
 - `tempPathFor` (function), `jsr:@spy4x/platform/server`: Build the temp path for an atomic write: `<path>.<pid>.<sequence>.tmp`.
@@ -1216,6 +1218,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `FileLockWaitError` (class), `jsr:@spy4x/platform/server/file-lock`: Raised when a FileLock.runExclusive call waited FileLockOptions.waitMs for an earlier `runExclusive` on the same instance and gave up.
 - `LockState` (enum), `jsr:@spy4x/platform/server/file-lock`: Lock state, so a check can distinguish "held" from "held by me".
 - `LockUnavailableError` (class), `jsr:@spy4x/platform/server/file-lock`: Raised when another holder owns the lock.
+
+### `jsr:@spy4x/platform/server/interval-runner`
+
+- `IntervalRunnerOptions` (interface), `jsr:@spy4x/platform/server/interval-runner`: Options of startIntervalRunner.
+- `startIntervalRunner` (function), `jsr:@spy4x/platform/server/interval-runner`: Runs `task` every `intervalMs` until the returned function is called.
 
 ### `jsr:@spy4x/platform/server/jsonl-logger`
 
@@ -2964,4 +2971,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 fb24a62218e4a66d9f483405a83aca5d73f9d29d009b3765017f748b858bfe9f -->
+<!-- export surface: sha256 645a45f9163924f037585cf6258b02016633dafe2e7bffdddee9cb36629badd3 -->
