@@ -87,8 +87,8 @@ the sibling `time/` package. Every entry in this package's `exports` must resolv
 ## `server/http/bounded-body`
 
 `readBoundedBody`, `readBoundedText`, `parseBoundedFormData`, `readContentLength`,
-`PayloadTooLargeError`, `readJsonBody` with its messages `JSON_BODY_TOO_LARGE`, `JSON_BODY_TIMEOUT`
-and `JSON_BODY_INVALID`, `readFormBody` with its messages `FORM_BODY_TOO_LARGE`, `FORM_BODY_TIMEOUT`
+`PayloadTooLargeError`, `readJsonBody` with its options `ReadJsonBodyOptions` and its messages `JSON_BODY_TOO_LARGE`,
+`JSON_BODY_TIMEOUT`, `JSON_BODY_INVALID` and `JSON_BODY_WRONG_TYPE`, `readFormBody` with its messages `FORM_BODY_TOO_LARGE`, `FORM_BODY_TIMEOUT`
 and `FORM_BODY_INVALID`, and the types `ReadBoundedBodyOptions` and `BodySource`.
 
 **Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This module is a named
@@ -113,6 +113,20 @@ body over the cap, 408 for a stalled body and 400 for a body that is not JSON, t
 included. A route without `onError` answers with that status on its own; a route with its own error
 shape catches the exception and reads `status`, and the reader's error is kept as `cause`. Any other
 error is rethrown unchanged.
+
+Two options go beyond the reader's `maxBytes` and `timeoutMs`. `requireJsonContentType: true`
+refuses, before the body is read, a request that is not declared as `application/json`: 415 with
+`JSON_BODY_WRONG_TYPE`. `toError` builds the error to throw for a refused body in place of
+`HTTPException`, from a `JsonBodyFailure` (`status`, `message`, `cause`), so a route answers in its
+own error shape without a `try`/`catch` of its own:
+
+```ts
+const body = await readJsonBody(c, {
+  maxBytes: 64 * 1024,
+  requireJsonContentType: true,
+  toError: ({ message }) => new NoteError("INVALID_REQUEST", message),
+})
+```
 
 `readFormBody(request, options?)` is the same for a form post (`application/x-www-form-urlencoded`
 or `multipart/form-data`). It takes a plain `Request`, so a server that is not Hono can use it; a

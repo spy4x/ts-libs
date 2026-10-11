@@ -21,6 +21,8 @@ import {
   JSON_BODY_INVALID,
   JSON_BODY_TIMEOUT,
   JSON_BODY_TOO_LARGE,
+  JSON_BODY_WRONG_TYPE,
+  type JsonBodyFailure,
   parseBoundedFormData,
   PayloadTooLargeError,
   readBoundedBody,
@@ -29,6 +31,7 @@ import {
   readContentLength,
   readFormBody,
   readJsonBody,
+  type ReadJsonBodyOptions,
 } from "./bounded-body.ts"
 
 const ORIGIN = "http://example.test"
@@ -411,6 +414,7 @@ Deno.test("the entry point republishes the promised surface and nothing else", a
       "JSON_BODY_TOO_LARGE",
       "JSON_BODY_TIMEOUT",
       "JSON_BODY_INVALID",
+      "JSON_BODY_WRONG_TYPE",
     ]
   ) {
     assertStrictEquals(name in surface, true, `${name} disappeared from the surface`)
@@ -454,7 +458,7 @@ Deno.test("BoundedBodyTimeout still types the stall budget", async () => {
  * A real Hono app with one route that reads its body with `readJsonBody` and echoes it. No
  * `onError`, so Hono's default handler turns the thrown `HTTPException` into the response.
  */
-function jsonApp(options?: ReadBoundedBodyOptions): Hono {
+function jsonApp(options?: ReadJsonBodyOptions): Hono {
   const app = new Hono()
   app.post("/echo", async (c) => c.json({ body: await readJsonBody(c, options) }))
   return app
@@ -545,6 +549,150 @@ Deno.test("readJsonBody rethrows an error that is not about the body", async () 
 
   assertEquals(response.status, 500)
   assertStrictEquals(errors[0] instanceof RangeError, true)
+})
+
+/** Posts `body` to a `jsonApp` that requires a JSON `Content-Type`, declared as `contentType`. */
+function postDeclared(body: string, contentType?: string): Promise<Response> {
+  return Promise.resolve(
+    jsonApp({ requireJsonContentType: true }).request(`${ORIGIN}/echo`, {
+      method: "POST",
+      body,
+      headers: contentType === undefined ? {} : { "content-type": contentType },
+    }),
+  )
+}
+
+Deno.test("readJsonBody reads a body of any Content-Type unless told to require JSON", async () => {
+  const response = await jsonApp().request(`${ORIGIN}/echo`, {
+    method: "POST",
+    body: '{"a":1}',
+    headers: { "content-type": "text/plain" },
+  })
+
+  assertEquals(response.status, 200)
+})
+
+Deno.test("readJsonBody, requiring JSON, accepts application/json in any case and with parameters", async () => {
+  for (
+    const contentType of [
+      "application/json",
+      "Application/JSON",
+      "application/json; charset=utf-8",
+      "application/json ;charset=utf-8",
+    ]
+  ) {
+    const response = await postDeclared('{"a":1}', contentType)
+
+    assertEquals(response.status, 200, contentType)
+    assertEquals(await response.json(), { body: { a: 1 } })
+  }
+})
+
+Deno.test("readJsonBody, requiring JSON, answers 415 to another or a missing Content-Type", async () => {
+  for (
+    const contentType of [
+      "text/plain",
+      "application/x-www-form-urlencoded",
+      "text/plain; note=application/json",
+      "application/jsonl",
+      undefined,
+    ]
+  ) {
+    const response = await postDeclared('{"a":1}', contentType)
+
+    assertEquals(response.status, 415, String(contentType))
+    assertEquals(await response.text(), JSON_BODY_WRONG_TYPE)
+  }
+})
+
+Deno.test("readJsonBody, requiring JSON, refuses a wrong Content-Type without reading the body", async () => {
+  const app = jsonApp({ requireJsonContentType: true })
+  let pulled = false
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled = true
+      controller.enqueue(new TextEncoder().encode("{}"))
+      controller.close()
+    },
+  }, { highWaterMark: 0 })
+
+  const response = await app.request(
+    `${ORIGIN}/echo`,
+    streamInit(body, { "content-type": "text/plain" }),
+  )
+
+  assertEquals(response.status, 415)
+  assertEquals(pulled, false)
+})
+
+class FeatureError extends Error {}
+
+/** A `jsonApp` whose refusals are `FeatureError`s, answered 422 with the failures it was given. */
+function featureApp(options: ReadJsonBodyOptions = {}): { app: Hono; failures: JsonBodyFailure[] } {
+  const failures: JsonBodyFailure[] = []
+  const app = jsonApp({
+    ...options,
+    toError: (failure) => {
+      failures.push(failure)
+      return new FeatureError(failure.message)
+    },
+  })
+  app.onError((error, c) => c.text(error.message, error instanceof FeatureError ? 422 : 500))
+  return { app, failures }
+}
+
+Deno.test("readJsonBody throws the caller's error for each way a body is refused", async () => {
+  const json = { "content-type": "application/json" }
+  const { app, failures } = featureApp({
+    maxBytes: 8,
+    timeoutMs: 20,
+    requireJsonContentType: true,
+  })
+
+  const wrongType = await app.request(`${ORIGIN}/echo`, { method: "POST", body: "{}" })
+  const tooLarge = await app.request(`${ORIGIN}/echo`, {
+    method: "POST",
+    body: '{"name":"too long"}',
+    headers: json,
+  })
+  const stalled = await app.request(`${ORIGIN}/echo`, streamInit(stalledStream(() => {}), json))
+  const invalid = await app.request(`${ORIGIN}/echo`, { method: "POST", body: "{", headers: json })
+
+  assertEquals(
+    [wrongType.status, tooLarge.status, stalled.status, invalid.status],
+    [422, 422, 422, 422],
+  )
+  assertEquals(await wrongType.text(), JSON_BODY_WRONG_TYPE)
+  assertEquals(await tooLarge.text(), JSON_BODY_TOO_LARGE)
+  assertEquals(await stalled.text(), JSON_BODY_TIMEOUT)
+  assertEquals(await invalid.text(), JSON_BODY_INVALID)
+  assertEquals(failures.map((failure) => failure.status), [415, 413, 408, 400])
+  assertStrictEquals(failures[0].cause, undefined)
+  assertStrictEquals(failures[1].cause instanceof NetPayloadTooLargeError, true)
+  assertStrictEquals(failures[2].cause instanceof NetBodyReadTimeoutError, true)
+  assertStrictEquals(failures[3].cause instanceof SyntaxError, true)
+})
+
+Deno.test("readJsonBody returns the body and builds no error when nothing is wrong", async () => {
+  const { app, failures } = featureApp({ requireJsonContentType: true })
+
+  const response = await app.request(`${ORIGIN}/echo`, {
+    method: "POST",
+    body: '{"a":1}',
+    headers: { "content-type": "application/json" },
+  })
+
+  assertEquals(response.status, 200)
+  assertEquals(failures, [])
+})
+
+Deno.test("readJsonBody does not pass an error that is not about the body to the caller's builder", async () => {
+  const { app, failures } = featureApp({ maxBytes: Number.NaN })
+
+  const response = await app.request(`${ORIGIN}/echo`, { method: "POST", body: "{}" })
+
+  assertEquals(response.status, 500)
+  assertEquals(failures, [])
 })
 
 const URLENCODED = { "content-type": "application/x-www-form-urlencoded" }

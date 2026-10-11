@@ -2166,23 +2166,23 @@ Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `get
 factory, a timer, a clipboard, a `Geolocation`) as a parameter, defaulting to the real global only
 when the caller passes none.
 
-| Module                       | Contents                                                                                                                                                                                                                                     |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                                                                                                                                          |
-| `browser/cookie`             | `getCookie`                                                                                                                                                                                                                                  |
-| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                                                                                                                            |
-| `browser/build-env`          | `readBuildEnvVar`, `MissingBuildEnvError`, `BuildEnv` — required or optional values of a bundler's build-time env object, passed in                                                                                                          |
-| `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                                                                                                                           |
-| `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                                                                                                                                      |
-| `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                                                                                                                                      |
-| `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget`                     |
-| `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                                                   |
-| `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                   |
-| `browser/push-notifications` | `installPushNotifications`, `sameOriginUrl` — the `push` and `notificationclick` handlers of a service worker                                                                                                                                |
-| `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure |
-| `browser/storage`            | `makeStorage`, `memoryStorage`, `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage`                                                                                                            |
-| `browser/testing`            | `installLocalStorage` — a test helper: puts an in-memory `localStorage` in place of the global one and gives the way back. Import it from tests only; it is not in the `@spy4x/platform/browser` barrel                                      |
-| `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                       |
+| Module                       | Contents                                                                                                                                                                                                                                                    |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                                                                                                                                                         |
+| `browser/cookie`             | `getCookie`                                                                                                                                                                                                                                                 |
+| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                                                                                                                                           |
+| `browser/build-env`          | `readBuildEnvVar`, `MissingBuildEnvError`, `BuildEnv` — required or optional values of a bundler's build-time env object, passed in                                                                                                                         |
+| `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                                                                                                                                          |
+| `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                                                                                                                                                     |
+| `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                                                                                                                                                     |
+| `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget`                                    |
+| `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                                                                  |
+| `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                                  |
+| `browser/push-notifications` | `installPushNotifications`, `sameOriginUrl` — the `push` and `notificationclick` handlers of a service worker                                                                                                                                               |
+| `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure                |
+| `browser/storage`            | `makeStorage`, `memoryStorage`, `browserStorage` (`localStorage` that never throws: a value the browser refuses is kept in memory until the page closes), `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
+| `browser/testing`            | `installLocalStorage` — a test helper: puts an in-memory `localStorage` in place of the global one and gives the way back. Import it from tests only; it is not in the `@spy4x/platform/browser` barrel                                                     |
+| `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                                      |
 
 `browser/data-cache` keeps the last data the server sent, in IndexedDB, so a page opens with it and
 shows it with no network. Items live in scopes (a user, a calendar); a full server answer replaces a
@@ -3053,7 +3053,9 @@ application surface:
   one of `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`,
   `rate_limited`, `internal`, `timeout`. A dispatcher exception that is not a
   `RealtimeRequestError` is answered `internal` with a fixed message; its text
-  goes to `onRequestError`, never to the client.
+  goes to `onRequestError`, never to the client. On the page,
+  `describeError(error, fallback)` gives the text to show: the server's message
+  for a `RealtimeRequestError`, the caller's fallback for anything else.
 - **Bounded.** One connection may have `maxInFlightRequests` (default 16)
   unanswered requests; the next is answered `rate_limited` and takes no slot. A
   request id already in flight is answered `bad_request`, and so is a request
@@ -4091,8 +4093,8 @@ the sibling `time/` package. Every entry in this package's `exports` must resolv
 ## `server/http/bounded-body`
 
 `readBoundedBody`, `readBoundedText`, `parseBoundedFormData`, `readContentLength`,
-`PayloadTooLargeError`, `readJsonBody` with its messages `JSON_BODY_TOO_LARGE`, `JSON_BODY_TIMEOUT`
-and `JSON_BODY_INVALID`, `readFormBody` with its messages `FORM_BODY_TOO_LARGE`, `FORM_BODY_TIMEOUT`
+`PayloadTooLargeError`, `readJsonBody` with its options `ReadJsonBodyOptions` and its messages `JSON_BODY_TOO_LARGE`,
+`JSON_BODY_TIMEOUT`, `JSON_BODY_INVALID` and `JSON_BODY_WRONG_TYPE`, `readFormBody` with its messages `FORM_BODY_TOO_LARGE`, `FORM_BODY_TIMEOUT`
 and `FORM_BODY_INVALID`, and the types `ReadBoundedBodyOptions` and `BodySource`.
 
 **Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This module is a named
@@ -4117,6 +4119,20 @@ body over the cap, 408 for a stalled body and 400 for a body that is not JSON, t
 included. A route without `onError` answers with that status on its own; a route with its own error
 shape catches the exception and reads `status`, and the reader's error is kept as `cause`. Any other
 error is rethrown unchanged.
+
+Two options go beyond the reader's `maxBytes` and `timeoutMs`. `requireJsonContentType: true`
+refuses, before the body is read, a request that is not declared as `application/json`: 415 with
+`JSON_BODY_WRONG_TYPE`. `toError` builds the error to throw for a refused body in place of
+`HTTPException`, from a `JsonBodyFailure` (`status`, `message`, `cause`), so a route answers in its
+own error shape without a `try`/`catch` of its own:
+
+```ts
+const body = await readJsonBody(c, {
+  maxBytes: 64 * 1024,
+  requireJsonContentType: true,
+  toError: ({ message }) => new NoteError("INVALID_REQUEST", message),
+})
+```
 
 `readFormBody(request, options?)` is the same for a form post (`application/x-www-form-urlencoded`
 or `multipart/form-data`). It takes a plain `Request`, so a server that is not Hono can use it; a
