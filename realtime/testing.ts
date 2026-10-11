@@ -335,7 +335,7 @@ export async function drainMicrotasks(turns = 16): Promise<void> {
 /**
  * A {@link ReadCache} in memory, for tests that have no IndexedDB. It keeps the rule of the real
  * cache that nothing is saved after `clear`. `entries` is the device: a second cache over the same
- * map finds what the first one saved. Values are cloned on the way in, as IndexedDB does.
+ * map finds what the first one saved. Values are cloned on the way in and on the way out, as IndexedDB does.
  */
 export function createMemoryReadCache(
   now: () => number = () => 0,
@@ -343,8 +343,15 @@ export function createMemoryReadCache(
 ): ReadCache {
   let cleared = false
   return {
-    get: <T>(key: string) =>
-      Promise.resolve(entries.get(key) as { value: T; savedAt: number } | undefined),
+    get<T>(key: string) {
+      const entry = entries.get(key)
+      return Promise.resolve(
+        entry && ({ value: structuredClone(entry.value), savedAt: entry.savedAt } as {
+          value: T
+          savedAt: number
+        }),
+      )
+    },
     set(key, value) {
       const savedAt = now()
       if (!cleared) entries.set(key, { value: structuredClone(value), savedAt })

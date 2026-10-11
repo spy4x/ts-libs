@@ -255,6 +255,25 @@ describe("createMemoryReadCache", () => {
     expect(await cache.get("a")).toBeUndefined()
   })
 
+  it("deletes every copy on clear", async () => {
+    const entries = new Map()
+    const cache = createMemoryReadCache(() => 1, entries)
+    await cache.set("a", 1)
+
+    await cache.clear()
+
+    expect(await cache.get("a")).toBeUndefined()
+    expect(await createMemoryReadCache(() => 1, entries).get("a")).toBeUndefined()
+  })
+
+  it("returns a clone, so changing what was read does not alter the cache", async () => {
+    const cache = createMemoryReadCache()
+    await cache.set("a", [1])
+    ;(await cache.get<number[]>("a"))!.value.push(2)
+
+    expect((await cache.get("a"))?.value).toEqual([1])
+  })
+
   it("stores a copy, so a later change to the value does not alter it", async () => {
     const cache = createMemoryReadCache()
     const list = [1]

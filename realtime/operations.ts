@@ -28,7 +28,8 @@ import {
   readBoundedText,
 } from "@spy4x/net/bounded-body"
 
-import { ArkErrors, type Type } from "arktype"
+import type { Type } from "arktype"
+import { isArkErrors } from "@spy4x/validation"
 
 import { isRealtimeErrorCode, type RealtimeErrorCode, RealtimeRequestError } from "./errors.ts"
 import type { RequestContext, RequestDispatcher } from "./registry.ts"
@@ -459,11 +460,12 @@ export function createCallHandler<TActor>(
  * Checks a request payload with an arktype schema and returns the parsed value. A payload that
  * does not match throws `RealtimeRequestError("bad_request", …)` with arktype's summary, which a
  * client may show. Use the same schema as the REST route that checks the same body, so the two
- * ways in cannot drift.
+ * ways in cannot drift. A rejection is recognised by its shape (`isArkErrors`), so a schema built by
+ * another loaded copy of arktype is still refused.
  */
 export function parsePayload<T extends Type>(schema: T, payload: unknown): T["infer"] {
   const result = schema(payload)
-  if (result instanceof ArkErrors) throw new RealtimeRequestError("bad_request", result.summary)
+  if (isArkErrors(result)) throw new RealtimeRequestError("bad_request", result.summary)
   return result as T["infer"]
 }
 

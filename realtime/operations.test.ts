@@ -1072,6 +1072,16 @@ describe("parsePayload", () => {
     expect(parsePayload(trimmed, { name: " a " })).toEqual({ name: "a" })
   })
 
+  it("refuses a rejection that is not an instance of this copy's ArkErrors", () => {
+    const rejection = Object.assign([{ message: "name must be a string" }], {
+      summary: "name must be a string",
+      flatByPath: {},
+      throw() {},
+    })
+    const foreign = (() => rejection) as unknown as typeof schema
+    expect(() => parsePayload(foreign, { name: 1 })).toThrow(RealtimeRequestError)
+  })
+
   it("throws bad_request naming the field when the payload does not match", () => {
     const error = (() => {
       try {

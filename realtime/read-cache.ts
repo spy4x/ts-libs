@@ -51,7 +51,9 @@ export interface ReadCache {
   set<T>(key: string, value: T): Promise<number>
   /**
    * Deletes the copy under `key`, for example when the server refused that read and the saved
-   * list must not be shown again. Other keys stay. Does nothing when there is no copy.
+   * list must not be shown again. Other keys stay. Does nothing when there is no copy. A
+   * `cachedRead` of the same key that is still in flight saves its answer after this delete, so a
+   * copy can come back when an earlier read answers late.
    */
   delete(key: string): Promise<void>
   /**
