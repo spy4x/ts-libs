@@ -24,6 +24,7 @@ import {
   uniqueSuffix,
   waitForStalwart,
 } from "@integration-testing"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 import { parseIcal, serializeIcal } from "@spy4x/time/ical"
 import { newTodo, patchTodo, readTodo, TodoStatus } from "@spy4x/time/ical-tasks"
 import {
@@ -154,7 +155,7 @@ for (const server of SERVERS) {
         // A task created by the client comes back with an etag and is listed as open.
         const fresh = newTodo({ summary: "created by the client" }, {
           now: NOW,
-          uid: crypto.randomUUID(),
+          uid: uuidV7(),
           prodid: PRODID,
         })
         if (!fresh.success) throw new Error(fresh.error.message)

@@ -69,7 +69,7 @@ export function sameResource(a: string | URL, b: string | URL): boolean {
 
 /**
  * The URL of a new member of `collectionUrl`, named `segment` encoded with `encodeURIComponent`.
- * Pass a generated name such as `${crypto.randomUUID()}.ics`, never a display name. Throws a
+ * Pass a generated name such as `${uuidV7()}.ics`, never a display name. Throws a
  * `RangeError` on an empty, `.` or `..` segment, which would not name a new member.
  */
 export function childUrl(collectionUrl: string | URL, segment: string): URL {

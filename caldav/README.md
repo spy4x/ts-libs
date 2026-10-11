@@ -174,6 +174,7 @@ const sync = createCalDavSync(transport, cache)
 
 ```ts
 import { childUrl, isSameOrigin, resolveHref, sameResource } from "@spy4x/caldav/url"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 const server = "https://dav.example.com/dav/"
 sameResource(
@@ -182,7 +183,7 @@ sameResource(
 ) // true: segments are compared decoded, a trailing slash is ignored
 sameResource("https://dav.example.com/a%2Fb", "https://dav.example.com/a/b") // false
 
-const newTask = childUrl("https://dav.example.com/cal/inbox/", `${crypto.randomUUID()}.ics`)
+const newTask = childUrl("https://dav.example.com/cal/inbox/", `${uuidV7()}.ics`)
 
 // Attach credentials only to the configured origin, and check every redirect target too.
 const target = resolveHref("https://elsewhere.example.org/cal/", server)
