@@ -442,3 +442,10 @@ Deno.test(`reports a reopening the server's copy refuses as the reopen step`, ()
     message: `the task is not completed`,
   })
 })
+
+Deno.test(`a task both sides completed takes the date I changed and is not completed again`, () => {
+  const mine = completed(edited(BASE, { due: day(`2026-10-20`) }))
+  const output = kept(BASE, mine, server(completed(BASE, ELSEWHERE)))
+  expect(output.task.status).toBe(TaskStatus.Completed)
+  expect(output.task.due).toEqual(day(`2026-10-20`))
+})
