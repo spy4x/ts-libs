@@ -50,6 +50,28 @@ export function isValidDate(input: unknown): boolean {
 }
 
 /**
+ * The next time the clock reads `hour`:00 UTC after `now`: later today when that hour has not come
+ * yet, tomorrow when it is now or past. Use it for the first run of a nightly job.
+ *
+ * @param now The moment to count from. It is not changed.
+ * @param hour A whole hour, 0 to 23.
+ * @throws {RangeError} When `hour` is not a whole number from 0 to 23.
+ */
+export function nextUtcHour(now: Date, hour: number): Date {
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    throw new RangeError(`hour must be a whole number from 0 to 23, got ${hour}`)
+  }
+  const next = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    hour,
+  ))
+  if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1)
+  return next
+}
+
+/**
  * Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
  *
  * Leap years are resolved properly (`2000-02-29` and `2024-02-29` pass; `1900-02-29` and
