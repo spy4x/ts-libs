@@ -16,6 +16,7 @@
 export * from "./server/atomic-json.ts"
 export * from "./server/deno-fs.ts"
 export * from "./server/file-lock.ts"
+export * from "./server/interval-runner.ts"
 export * from "./server/jsonl-logger.ts"
 export * from "./server/ports.ts"
 export * from "./server/reminder-runner.ts"

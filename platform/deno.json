@@ -35,6 +35,7 @@
     "./server/atomic-json": "./server/atomic-json.ts",
     "./server/deno-fs": "./server/deno-fs.ts",
     "./server/file-lock": "./server/file-lock.ts",
+    "./server/interval-runner": "./server/interval-runner.ts",
     "./server/jsonl-logger": "./server/jsonl-logger.ts",
     "./server/ports": "./server/ports.ts",
     "./server/reminder-runner": "./server/reminder-runner.ts",
