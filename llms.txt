@@ -2501,6 +2501,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `JobPublisher` (class), `jsr:@spy4x/server/outbox`: An OutboxPublisher for an outbox that holds two kinds of rows: jobs (the delayed and repeating rows `scheduleOutboxEvent` writes) and everything else.
 - `JobPublisherOptions` (interface), `jsr:@spy4x/server/outbox`: Options of JobPublisher.
 - `LoggingOutboxPublisher` (class), `jsr:@spy4x/server/outbox`
+- `LostOutboxEvent` (interface), `jsr:@spy4x/server/outbox`: An event OutboxRepository.findLost returns.
 - `OutboxAttemptFailure` (interface), `jsr:@spy4x/server/outbox`: One failed attempt, as `OutboxProcessorOptions.onAttemptFailed` gets it.
 - `OutboxEvent` (interface), `jsr:@spy4x/server/outbox`: One outbox row.
 - `OutboxFailureStage` (type), `jsr:@spy4x/server/outbox`: Where an attempt failed.
@@ -3033,4 +3034,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 37599b404586658cb4ac969f3fd4cab94428c04fa4a6b40806d416a41d124ef7 -->
+<!-- export surface: sha256 da8f06857f55fb7ad1052022f2a679678fade81f36cea213fdb8011cffd5e8f0 -->

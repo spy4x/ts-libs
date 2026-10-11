@@ -62,33 +62,45 @@ export interface OutboxRepository {
    */
   release?(events: OutboxEvent[]): Promise<void>
   /**
-   * Marks an unprocessed event as given up and stores `errorCode` on it, so that
-   * {@link OutboxRepository.findLost} never returns it again. With `repeatInSeconds`, also writes
-   * the event's next run, that many seconds from now, in the same atomic step. Resolves to `true`
-   * when this call set the mark, and to `false` when the event was already marked or processed;
-   * then it writes no next run either, so two workers that give the same event up leave one.
+   * Gives an unprocessed event up for good: closes it (the same mark `markProcessed` sets, so no
+   * claim, `release` or `findLost` ever returns it again) and stores `errorCode` on it. A closed
+   * event with an error code is one that was given up; `markProcessed` clears the code.
+   *
+   * With `repeatInSeconds`, also writes the event's next run, that many seconds from now, in the
+   * same atomic step, unless another unprocessed event of the same kind and aggregate already
+   * waits. Closing and a repeating `markProcessed` must exclude each other on the row, so that a
+   * worker that outlived its lease and then succeeds writes no second next run.
+   *
+   * Resolves to `true` when this call closed the event, and to `false` when it was already
+   * processed or given up; then it changes nothing.
    *
    * Optional, and called only by a processor with `onAttemptFailed` or `repeatAfterGiveUp`. Without
    * it the processor ends a last attempt with `scheduleRetry`, as it always has.
    */
   giveUp?(id: string, errorCode: string, repeatInSeconds?: number): Promise<boolean>
   /**
-   * Returns up to `limit` events that used up `maxAttempts`, whose last claim has run out, and that
-   * nobody has given up through {@link OutboxRepository.giveUp} yet: the worker of their last
-   * attempt died or outlived its lease before it could report an outcome. Read-only; the processor
-   * gives each one up, and that is what stops it from being returned again.
+   * Returns up to `limit` unprocessed events that used up `maxAttempts` and whose last claim ran
+   * out at least one more lease length ago, with the error code stored on each: nobody reported
+   * an outcome for their last attempt. Read-only; the processor gives each one up, and that is
+   * what stops it from being returned again.
    *
    * Optional, and used only together with `giveUp`. Without the pair, a processor never learns of
    * such an event.
    */
-  findLost?(maxAttempts: number, limit: number): Promise<OutboxEvent[]>
+  findLost?(maxAttempts: number, limit: number): Promise<LostOutboxEvent[]>
+}
+
+/** An event {@link OutboxRepository.findLost} returns. */
+export interface LostOutboxEvent extends OutboxEvent {
+  /** The error name an earlier failed attempt stored on the row, or `null`. */
+  lastErrorCode: string | null
 }
 
 /**
  * Where an attempt failed. `publish`: the publisher threw. `markProcessed`: the publisher
  * succeeded and writing the "processed" mark threw, so the event is delivered again on the next
- * attempt. `lease`: nobody reported an outcome for the event's last attempt before its lease ran
- * out, because its worker died or was still publishing.
+ * attempt. `lease`: nobody reported an outcome for the event's last attempt, even one whole lease
+ * length after its lease ran out.
  */
 export type OutboxFailureStage = "publish" | "markProcessed" | "lease"
 
@@ -104,14 +116,24 @@ export interface OutboxAttemptFailure {
   attempt: number
   /** The processor's `maxAttempts`. */
   maxAttempts: number
-  /** `true` when the event is now given up: no later attempt follows. */
+  /**
+   * `true` when the event is now given up. With a repository that has `giveUp`, the event is then
+   * closed, no attempt ever starts on it again, and it is reported once, by the worker that
+   * closed it.
+   */
   lastAttempt: boolean
   stage: OutboxFailureStage
+  /**
+   * Only for the `lease` stage: the error name an earlier failed attempt had stored on the row, or
+   * `null` when none was stored. The row keeps that name; `OutboxLeaseExpired` is stored only on
+   * a row that had none.
+   */
+  storedErrorCode?: string | null
 }
 
 /**
  * The `error` of a failure in the `lease` stage: the event's last attempt ended with no outcome
- * reported. Its `name`, `OutboxLeaseExpired`, is what is stored as the event's error code.
+ * reported. Its `name`, `OutboxLeaseExpired`, is stored as the error code of a row that had none.
  */
 export class OutboxLeaseExpiredError extends Error {
   override name = "OutboxLeaseExpired"
@@ -190,14 +212,13 @@ export interface OutboxProcessorOptions {
    * Keeps a repeating event's chain alive when a run is given up. Off by default: the chain ends,
    * as described under `repeatEveryMs`. With `true`, giving up an event whose kind is in
    * `repeatEveryMs` also writes its next run one interval later, in the same atomic step, whether
-   * the last attempt failed in this processor or was lost with its worker. The given-up event
-   * stays unprocessed with its error stored, so one bad night is visible and costs one run.
+   * the last attempt failed in this processor or was lost with its worker. One bad night then
+   * costs one run. The given-up event is closed with its error code kept, as described under
+   * `onAttemptFailed`.
    *
-   * The next run is written without looking for another waiting row of the same kind and
-   * aggregate. A table that already holds given-up rows from before this option was set gets a
-   * next run for each on the first drain, so a chain that was restarted by hand meanwhile would
-   * run twice: close those rows first, which `ensureScheduledOutboxEvent` does with
-   * `replaceGivenUpAfter`.
+   * Exactly one next run is written, whatever happens around it: a worker that outlived its lease
+   * and succeeds after its event was given up writes none, and no next run is written while
+   * another unprocessed event of the same kind and aggregate waits.
    *
    * Needs a repository with `giveUp` and `findLost`, such as `PostgresOutboxRepository`; any other
    * throws a `TypeError` at construction.
@@ -208,15 +229,32 @@ export interface OutboxProcessorOptions {
    * Meant for a log line or an alert. Absent by default, and then the processor behaves exactly as
    * it did before this option existed.
    *
-   * It is awaited before the retry is written, inside the event's lease, so keep it quick. Whatever
-   * it throws or rejects with is written to `console.error` and otherwise ignored: the drain goes
-   * on.
+   * It is called, never awaited: a callback that is slow or never settles holds nothing up, and
+   * the retry is written without waiting for it. Whatever it throws or rejects with is written to
+   * `console.error` and otherwise ignored.
    *
-   * With a repository that has `giveUp` and `findLost`, such as `PostgresOutboxRepository`, each
-   * drain also looks for events whose last attempt was lost with its worker and reports each once,
-   * with stage `lease`. The first drain after this option is turned on reports every event given
-   * up earlier that way too, because nothing marked them. A worker that outlives its lease on a
-   * last attempt and then fails is reported twice: once as `lease`, once with its own error.
+   * With a repository that has `giveUp` and `findLost`, such as `PostgresOutboxRepository`, this
+   * option (and `repeatAfterGiveUp`) changes what giving up does to the row. Without it, a
+   * given-up row stays unprocessed for good. With it, the row is closed: `processed_at` is set
+   * and its error code stays, so it is never claimed again, even after `maxAttempts` is raised,
+   * and `ensureScheduledOutboxEvent` no longer counts it as waiting.
+   *
+   * Each drain also looks for events whose last attempt was lost: out of attempts, with nobody
+   * having reported an outcome one whole lease length after the lease ran out. Each is given up
+   * and then reported once, with stage `lease`. Three things to know about that stage:
+   *
+   * - The library cannot tell a dead worker from one that is alive and more than twice its lease
+   *   late. For such a worker, the publish it is in may still complete after the report; a
+   *   failure of it is not reported a second time. No attempt starts after the report: an event
+   *   the slow worker had claimed in the same batch and not started yet is given up untried, and
+   *   its `release` leaves it closed.
+   * - A row given up earlier by a processor without this option (every row given up before the
+   *   option was set) is reported the same way on the first drain, although its last attempt
+   *   failed and was not lost. `storedErrorCode` carries the error name that attempt stored, and
+   *   the row keeps it.
+   * - The row is closed before the callback is called, so that two workers never both report it. A
+   *   process that dies between the two never reports that row; it stays closed with its error
+   *   code.
    */
   onAttemptFailed?: (failure: OutboxAttemptFailure) => void | Promise<void>
   /**
@@ -406,10 +444,12 @@ export class OutboxProcessor {
       } catch (error) {
         failed++
         const lastAttempt = event.attemptCount >= this.#maxAttempts
-        await this.#report(event, error, stage)
         if (lastAttempt && this.#givesUp) {
-          await this.#giveUp(event, error)
+          // Closing comes first and decides who reports: `false` means another worker found this
+          // attempt lost, gave the event up and reported it while this publish was still running.
+          if (await this.#giveUp(event, errorCodeOf(error))) this.#report(event, error, stage)
         } else {
+          this.#report(event, error, stage)
           const delayMs = retryDelayMs(
             event.attemptCount,
             this.#baseRetryDelayMs,
@@ -427,9 +467,12 @@ export class OutboxProcessor {
 
     if (this.#findsLost) {
       const error = new OutboxLeaseExpiredError()
-      for (const event of await this.repository.findLost!(this.#maxAttempts, this.#batchSize)) {
-        // `false`: another worker gave it up between the search and here, and reported it.
-        if (await this.#giveUp(event, error)) await this.#report(event, error, "lease")
+      const lost = await this.repository.findLost!(this.#maxAttempts, this.#batchSize)
+      for (const { lastErrorCode, ...event } of lost) {
+        // The row keeps the error name a failed attempt stored. `false`: another worker gave it
+        // up between the search and here, and reported it.
+        const closed = await this.#giveUp(event, lastErrorCode ?? errorCodeOf(error))
+        if (closed) this.#report(event, error, "lease", lastErrorCode)
       }
     }
 
@@ -437,27 +480,37 @@ export class OutboxProcessor {
   }
 
   /** Gives the event up and, for a repeating kind with `repeatAfterGiveUp`, writes its next run. */
-  async #giveUp(event: OutboxEvent, error: unknown): Promise<boolean> {
+  async #giveUp(event: OutboxEvent, errorCode: string): Promise<boolean> {
     const repeatMs = this.#repeatAfterGiveUp ? this.#repeatEveryMs[event.eventKind] : undefined
-    const code = errorCodeOf(error)
-    if (repeatMs === undefined) return await this.repository.giveUp!(event.id, code)
-    return await this.repository.giveUp!(event.id, code, repeatMs / 1000)
+    if (repeatMs === undefined) return await this.repository.giveUp!(event.id, errorCode)
+    return await this.repository.giveUp!(event.id, errorCode, repeatMs / 1000)
   }
 
-  /** Tells `onAttemptFailed`, and keeps whatever it throws away from the drain. */
-  async #report(event: OutboxEvent, error: unknown, stage: OutboxFailureStage): Promise<void> {
+  /**
+   * Tells `onAttemptFailed` without waiting for it, and keeps whatever it throws or rejects with
+   * away from the drain.
+   */
+  #report(
+    event: OutboxEvent,
+    error: unknown,
+    stage: OutboxFailureStage,
+    storedErrorCode?: string | null,
+  ): void {
     if (this.#onAttemptFailed === undefined) return
+    const failure: OutboxAttemptFailure = {
+      event,
+      error,
+      attempt: event.attemptCount,
+      maxAttempts: this.#maxAttempts,
+      lastAttempt: event.attemptCount >= this.#maxAttempts,
+      stage,
+    }
+    if (stage === "lease") failure.storedErrorCode = storedErrorCode ?? null
+    const log = (thrown: unknown) => console.error("outbox: onAttemptFailed threw", thrown)
     try {
-      await this.#onAttemptFailed({
-        event,
-        error,
-        attempt: event.attemptCount,
-        maxAttempts: this.#maxAttempts,
-        lastAttempt: event.attemptCount >= this.#maxAttempts,
-        stage,
-      })
+      Promise.resolve(this.#onAttemptFailed(failure)).catch(log)
     } catch (thrown) {
-      console.error("outbox: onAttemptFailed threw", thrown)
+      log(thrown)
     }
   }
 

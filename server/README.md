@@ -2131,26 +2131,55 @@ options, all off by default, make that visible and recoverable:
 - `OutboxProcessorOptions.onAttemptFailed` is called for every failed attempt with
   `{ event, error, attempt, maxAttempts, lastAttempt, stage }`. `stage` is `publish` when the
   publisher threw, `markProcessed` when the publish worked and writing the "processed" mark failed
-  (the event is then delivered again), and `lease` when the last attempt ended with no outcome,
-  because its worker died or outlived its lease; `error` is then an `OutboxLeaseExpiredError`.
-  `lastAttempt: true` means the row is given up. A callback that throws or rejects is written to
-  `console.error` and the drain goes on. Only a lost last attempt is reported; an earlier one that
-  was lost is simply tried again.
+  (the event is then delivered again), and `lease` when the last attempt ended with no outcome;
+  `error` is then an `OutboxLeaseExpiredError`. `lastAttempt: true` means the row is given up. The
+  callback is called and not awaited: one that is slow or never settles holds nothing up, and what
+  it throws or rejects with goes to `console.error`. Only a lost last attempt is reported; an
+  earlier one that was lost is simply tried again.
 - `OutboxProcessorOptions.repeatAfterGiveUp: true` writes the next run of a repeating job when a run
-  is given up, one interval later, so one bad night costs one run and not the chain. The given-up
-  row stays unprocessed with its error stored.
+  is given up, one interval later, so one bad night costs one run and not the chain.
 - `ensureScheduledOutboxEvent(sql, event, when, { replaceGivenUpAfter: maxAttempts, onReplaced })`
   closes a waiting row that has been tried `maxAttempts` times and starts the chain again, in the
   same transaction and under the same advisory lock, so two workers starting together still leave
   one chain. `onReplaced` gets each closed row's `id`, `attemptCount` and `lastErrorCode`.
 
-The first two need to tell a given-up row that was reported from one that was not, without a new
-column: `PostgresOutboxRepository.giveUp` sets `claimed_at` to `NULL` on a row it gives up (a claim
-always sets it), and `findLost` returns the rows out of attempts whose lease is over and whose
-`claimed_at` is still set. Both are optional members of `OutboxRepository`; a repository without
-them still gets `onAttemptFailed` for the `publish` and `markProcessed` stages, and
-`repeatAfterGiveUp` refuses it at construction. Turning `onAttemptFailed` on for a table that
-already holds given-up rows reports each of them once, as stage `lease`.
+**With either processor option, giving up closes the row.** `PostgresOutboxRepository.giveUp` sets
+`processed_at` and keeps the error name in `last_error_code`: a processed row with an error code is
+one that was given up. Without the options a given-up row stays unprocessed, as before. Closing is
+what the guarantees rest on, because every other statement already skips a processed row:
+
+- **Told once.** A last attempt is reported by the worker whose `giveUp` closed the row, after it
+  closed it. A second worker, or the slow worker itself when its publish fails later, closes
+  nothing and reports nothing.
+- **No attempt starts afterwards.** A closed row is never claimed again, even with a higher
+  `maxAttempts`, and `release` does not bring it back.
+- **One next run.** With `repeatAfterGiveUp`, the give-up and the repeating `markProcessed` each
+  need the row unprocessed, so whichever commits first writes the next run and the other writes
+  none. The give-up also writes none while another unprocessed run of the same kind and aggregate
+  waits.
+- **Restart at start-up works without an option.** `ensureScheduledOutboxEvent` no longer sees the
+  closed row as waiting and starts the chain again. `replaceGivenUpAfter` is for rows given up by
+  a processor that runs without these options.
+
+A `lease` report comes from `findLost`: rows out of attempts whose lease ran out at least one more
+lease length ago (`available_at + (available_at - claimed_at) <= now()`), so a worker that is alive
+gets twice its lease before its row is given up under it. What the library cannot promise:
+
+- A worker more than twice its lease late is taken for dead. The publish it is in can still
+  complete after the `lease` report. A row it claimed in the same batch and had not started is
+  given up without having been tried on that attempt.
+- A row given up before the option was set is reported once as `lease`, although its last attempt
+  failed and was not lost. The row keeps the error name that attempt stored, and the failure
+  carries it as `storedErrorCode`; `OutboxLeaseExpired` is stored only on a row that had none.
+- The `lease` stage closes the row before it calls the callback. A process that dies between the
+  two never reports that row: it stays closed with its error code, which a query for processed
+  rows with `last_error_code IS NOT NULL` finds.
+- A slow worker whose publish succeeds after its row was given up still marks it processed, which
+  clears the stored error name on a non-repeating row.
+
+`giveUp` and `findLost` are optional members of `OutboxRepository`. A repository without them still
+gets `onAttemptFailed` for the `publish` and `markProcessed` stages, with the given-up row left
+unprocessed, and `repeatAfterGiveUp` refuses it at construction.
 
 **The row this library defines is smaller than the template's.** The ported original's row also
 carried `groupId` and `actorUserId` — the template's own data model, not something a generic outbox

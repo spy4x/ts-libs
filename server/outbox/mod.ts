@@ -7,6 +7,7 @@
 export {
   type DrainResult,
   errorCodeOf,
+  type LostOutboxEvent,
   type OutboxAttemptFailure,
   type OutboxEvent,
   type OutboxFailureStage,

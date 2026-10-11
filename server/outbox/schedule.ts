@@ -64,6 +64,10 @@ export interface EnsureScheduledOptions {
    * code kept) and no longer counts as waiting: a chain whose only row was given up starts again.
    * Absent by default, and then a given-up row keeps the chain stopped.
    *
+   * A processor with `onAttemptFailed` or `repeatAfterGiveUp` closes the rows it gives up by
+   * itself, and the chain then starts again without this option. Set it for a processor that runs
+   * without them, and for rows given up before they were set.
+   *
    * A row on its last attempt counts as given up while that attempt still runs. If the attempt then
    * succeeds, it writes no next run of its own, so the chain is still one row.
    *
@@ -81,10 +85,12 @@ export interface EnsureScheduledOptions {
  * Starts a repeating job, once. Writes the row only when no unprocessed row exists for the same
  * kind, aggregate type and aggregate id, so a worker may call it at every start-up, and two
  * workers starting together still leave one chain: the check runs in a transaction this function
- * opens, under an advisory lock on those three values. A row that gave up after `maxAttempts`
- * still counts as waiting: the chain stays stopped, with its error visible in `last_error_code`,
- * until someone deals with it, or until a call with `options.replaceGivenUpAfter` closes it in
- * that same transaction. Returns the new id, or `null` when a row already existed.
+ * opens, under an advisory lock on those three values. A row that gave up after `maxAttempts` and
+ * was left unprocessed still counts as waiting: the chain stays stopped, with its error visible in
+ * `last_error_code`, until someone deals with it, or until a call with
+ * `options.replaceGivenUpAfter` closes it in that same transaction. A processor with
+ * `onAttemptFailed` or `repeatAfterGiveUp` closes the rows it gives up, and those do not count as
+ * waiting. Returns the new id, or `null` when a row already existed.
  *
  * Any extra column in the caller's table must be nullable or have a default, as for
  * {@link scheduleOutboxEvent}. Pass the pool, not a transaction handle.

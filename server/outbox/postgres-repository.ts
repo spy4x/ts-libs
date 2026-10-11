@@ -43,7 +43,7 @@
  * never creates or migrates the table.
  */
 import type { Sql } from "../db/index.ts"
-import type { OutboxEvent, OutboxRepository } from "./processor.ts"
+import type { LostOutboxEvent, OutboxEvent, OutboxRepository } from "./processor.ts"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 export class PostgresOutboxRepository implements OutboxRepository {
@@ -154,69 +154,82 @@ export class PostgresOutboxRepository implements OutboxRepository {
   }
 
   /**
-   * The mark of a given-up row is `claimed_at IS NULL`: a claim always sets `claimed_at`, so no
-   * other row that used up its attempts has it, and the table needs no extra column. Raising
-   * `maxAttempts` later makes the row claimable again, and that claim sets `claimed_at` anew.
+   * Giving up closes the row with the mark `markProcessed` sets, `processed_at`, and keeps an error
+   * code on it. That one column is what every other statement here already checks, so a given-up
+   * row is never claimed, released back or found lost again, and the repeating `markProcessed`
+   * (`AND processed_at IS NULL`) and this statement exclude each other on the row: whichever
+   * commits first, the other matches nothing, and one next run is written, never two.
    *
-   * One statement, so the mark and the next run are written together or not at all, and a second
-   * call for the same row (another worker found it lost too) matches nothing and writes no second
-   * next run. The next row is shaped as in `markProcessed`.
+   * One statement, so the row is closed and its next run written together or not at all. The
+   * next run is shaped as in `markProcessed`. It is left out while another unprocessed row of the
+   * same kind and aggregate waits, so a chain that was started again meanwhile stays one chain.
    */
   async giveUp(id: string, errorCode: string, repeatInSeconds?: number): Promise<boolean> {
     if (repeatInSeconds === undefined) {
-      const marked = await this.sql`
+      const closed = await this.sql`
         UPDATE outbox_events
-        SET claimed_at = NULL,
+        SET processed_at = now(),
             last_error_code = ${errorCode}
         WHERE id = ${id}
           AND processed_at IS NULL
-          AND claimed_at IS NOT NULL
         RETURNING 1
       `
-      return marked.length > 0
+      return closed.length > 0
     }
-    const next = await this.sql`
+    // The INSERT reads the table as it was before this statement, so the row being closed still
+    // looks unprocessed to it: `waiting.id <> gone.id` leaves it out of the search.
+    const closed = await this.sql`
       WITH gone AS (
         UPDATE outbox_events
-        SET claimed_at = NULL,
+        SET processed_at = now(),
             last_error_code = ${errorCode}
         WHERE id = ${id}
           AND processed_at IS NULL
-          AND claimed_at IS NOT NULL
-        RETURNING event_kind, aggregate_type, aggregate_id,
+        RETURNING id, event_kind, aggregate_type, aggregate_id,
           now() + (${repeatInSeconds}::double precision * INTERVAL '1 second') AS next_at
+      ), next AS (
+        INSERT INTO outbox_events (
+          id, event_kind, aggregate_type, aggregate_id, aggregate_version, available_at
+        )
+        SELECT ${uuidV7()}::uuid, event_kind, aggregate_type, aggregate_id,
+          (extract(epoch FROM next_at) * 1000)::bigint, next_at
+        FROM gone
+        WHERE NOT EXISTS (
+          SELECT 1 FROM outbox_events AS waiting
+          WHERE waiting.event_kind = gone.event_kind
+            AND waiting.aggregate_type = gone.aggregate_type
+            AND waiting.aggregate_id = gone.aggregate_id
+            AND waiting.processed_at IS NULL
+            AND waiting.id <> gone.id
+        )
       )
-      INSERT INTO outbox_events (
-        id, event_kind, aggregate_type, aggregate_id, aggregate_version, available_at
-      )
-      SELECT ${uuidV7()}::uuid, event_kind, aggregate_type, aggregate_id,
-        (extract(epoch FROM next_at) * 1000)::bigint, next_at
-      FROM gone
-      RETURNING 1
+      SELECT 1 FROM gone
     `
-    return next.length > 0
+    return closed.length > 0
   }
 
   /**
-   * `available_at <= now()` is the lease of the last claim having run out: until then its worker
-   * may still report. A row whose last attempt failed in a processor that does not call `giveUp`
-   * (one without `onAttemptFailed` or `repeatAfterGiveUp`) matches too, once its retry delay has
-   * passed, because nothing marked it.
+   * The lease of the last claim is `available_at - claimed_at`, as the claim wrote them, so the
+   * row counts as lost one more lease length after `available_at`: a worker that is alive gets
+   * that long to report before its row is given up under it. A claim never ends before it starts,
+   * so the one condition also says that the lease is over. A row whose last attempt failed in a
+   * processor that does not call `giveUp` matches too, once its retry delay and that margin have
+   * passed, because it is still unprocessed.
    */
-  async findLost(maxAttempts: number, limit: number): Promise<OutboxEvent[]> {
-    return await this.sql<OutboxEvent[]>`
+  async findLost(maxAttempts: number, limit: number): Promise<LostOutboxEvent[]> {
+    return await this.sql<LostOutboxEvent[]>`
       SELECT
         id AS "id",
         event_kind AS "eventKind",
         aggregate_type AS "aggregateType",
         aggregate_id AS "aggregateId",
         aggregate_version::text AS "aggregateVersion",
-        attempt_count AS "attemptCount"
+        attempt_count AS "attemptCount",
+        last_error_code AS "lastErrorCode"
       FROM outbox_events
       WHERE processed_at IS NULL
-        AND available_at <= now()
         AND attempt_count >= ${maxAttempts}
-        AND claimed_at IS NOT NULL
+        AND available_at + (available_at - COALESCE(claimed_at, available_at)) <= now()
       ORDER BY available_at, created_at
       LIMIT ${limit}
     `
