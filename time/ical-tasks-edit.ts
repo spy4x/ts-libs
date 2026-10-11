@@ -640,11 +640,10 @@ export function keepMineText(
   }
 
   const changes = changesOf(mySteps.after, fieldsOf(mine.output))
-  if (Object.keys(changes).length) {
-    const edited = editTask(task, changes, now)
-    if (!edited.success) return unkept(KeepMineStep.Edit, edited.error)
-    task = edited.output.task
-  }
+  // With no change left, the patch is empty and the text comes back byte for byte.
+  const edited = editTask(task, changes, now)
+  if (!edited.success) return unkept(KeepMineStep.Edit, edited.error)
+  task = edited.output.task
   return { success: true, output: { task, ics: task.ics }, error: null }
 }
 
