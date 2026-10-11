@@ -100,7 +100,7 @@ describe("widening claim_token from uuid to text", () => {
     }
   })
 
-  it("lets a run that was in flight during the migration finish with its old token", async () => {
+  it("completes and releases a claim made with an old UUID token through the new store after the migration", async () => {
     const fixture = await openSchema(undefined, SCHEMA_BEFORE_1_64)
     try {
       await claimAsOldStore(fixture.sql, "done", OLD_TOKEN)
@@ -117,12 +117,12 @@ describe("widening claim_token from uuid to text", () => {
     }
   })
 
-  it("serves the old store's UUID tokens and the new store's tokens side by side afterwards", async () => {
+  it("answers for a UUID claim written after the migration and still fences its own claims", async () => {
     const fixture = await openSchema(undefined, SCHEMA_BEFORE_1_64)
     try {
       await fixture.sql.unsafe(IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT)
 
-      // An instance still on 1.63.0 claims with a UUID; the new store answers for that key.
+      // An API on 1.63.0 that started after the migration (a roll-back) claims with a UUID.
       await claimAsOldStore(fixture.sql, "old", OLD_TOKEN)
       expect(await fixture.store.begin(claim("old"))).toEqual({ status: "in_progress" })
       // The new store's own claim is stored and fenced as before.

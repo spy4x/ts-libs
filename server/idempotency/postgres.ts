@@ -51,11 +51,18 @@ CREATE INDEX idx_idempotency_keys_created ON idempotency_keys (created_at);
  * {@link IDEMPOTENCY_POSTGRES_SCHEMA} does not need it.
  *
  * **Apply it before the first API instance on 1.64.0 starts.** The new store's token does not fit
- * a `uuid` column, so without the migration every keyed command fails with a Postgres error. The
- * migration itself is safe while the previous API still serves: stored tokens keep their printed
- * form, so a run in flight still completes or releases its claim, and the previous store's UUID
- * tokens fit the `text` column. A roll-back to the previous API therefore needs no second
- * migration. A column default, if your migration gave it one, is kept.
+ * a `uuid` column, so without the migration every keyed command fails with a Postgres error.
+ *
+ * **Restart every older API process right after it, in the same deploy.** A process that was
+ * already running when the migration ran prepared `complete` and `release` for a `uuid` column,
+ * and Postgres refuses them on the `text` column (`operator does not exist: text = uuid`). Until
+ * that process restarts or its pool replaces the connection (up to 30 minutes with the default
+ * pool settings), a keyed command still runs, but its result is not stored and a failed one cannot
+ * release its claim, so a retry waits out the lease and may run the command a second time. An app
+ * that cannot accept that window stops the old API, migrates, then starts 1.64.0.
+ *
+ * An older API that starts after the migration (a roll-back) works on the `text` column, so a
+ * roll-back needs no second migration. A column default, if your migration gave it one, is kept.
  *
  * Postgres rewrites the table under a lock that blocks reads and writes of `idempotency_keys`
  * until it is done; the table holds at most the retention's rows. Running it again changes nothing.

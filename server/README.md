@@ -2269,14 +2269,30 @@ The token proves who holds the claim, so it is a random token (16 bytes as base6
 The new token does not fit that column, so a table made before 1.64.0 needs
 `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`, which widens the column to `text`. Deploy in this order:
 
-1. Run `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT` as a migration while the previous API still serves.
-   That is safe: stored tokens keep their printed form, so a run in flight still completes or
-   releases its claim, and the previous store's UUID tokens fit a `text` column.
-2. Start the API on 1.64.0. Old and new instances may run side by side on the widened column.
+1. Run `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT` as a migration.
+2. Right after it, in the same deploy, stop every API process that was running before the
+   migration and start the API on 1.64.0.
+
+**An API process that was already running when the migration ran is broken until it restarts.**
+Its database connections prepared `complete` and `release` for a `uuid` column, and on the `text`
+column Postgres refuses them (`operator does not exist: text = uuid`). `begin` still works and the
+middleware only reports a store failure, so nothing looks wrong: a command sent with a key runs
+and answers, but its result is not stored, and a command that fails cannot release its claim. A
+retry of the same key then waits out the lease (30 seconds by default) and runs the command a
+second time. This lasts on each connection until the process restarts or the pool replaces the
+connection: with the default pool settings, up to 30 minutes for a busy connection. So keep the
+time between step 1 and step 2 to seconds, and never do a slow rolling deploy across the
+migration. An app that cannot accept even that window stops the old API first, then migrates, then
+starts 1.64.0, at the price of a short downtime.
 
 Never start an API on 1.64.0 against the `uuid` column: every command sent with a key then fails
-with a Postgres error (`invalid input syntax for type uuid`) until the migration has run. A
-roll-back to the previous API needs no second migration. The statement rewrites the table under a
+with a Postgres error (`invalid input syntax for type uuid`) until the migration has run.
+
+A roll-back needs no second migration: an API on 1.63.0 or earlier that starts after the migration
+works on the `text` column, also beside instances on 1.64.0, because its UUID tokens fit the column
+and its fresh connections prepare their statements for `text`.
+
+The statement rewrites the table under a
 lock that blocks it for that moment; the table holds at most `retentionDays` of keys. If your own
 migration gave `claim_token` a default, the statement keeps it. Every store that knows the column
 writes its own token, so the default only serves an API from before the column existed; drop it in
