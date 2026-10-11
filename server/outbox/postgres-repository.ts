@@ -44,6 +44,7 @@
  */
 import type { Sql } from "../db/index.ts"
 import type { OutboxEvent, OutboxRepository } from "./processor.ts"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 export class PostgresOutboxRepository implements OutboxRepository {
   constructor(private readonly sql: Sql) {}
@@ -118,7 +119,8 @@ export class PostgresOutboxRepository implements OutboxRepository {
     // One statement, so the row is finished and its successor written, or neither. A row that
     // was already processed (a redelivery) writes no second successor. The next row copies
     // only the library's own columns; its version is the run time in epoch milliseconds, so it
-    // stays unique per aggregate and kind.
+    // stays unique per aggregate and kind. Its id is made here, a UUID version 7 like every other
+    // outbox id: Postgres before 18 has no function for one.
     await this.sql`
       WITH done AS (
         UPDATE outbox_events
@@ -132,7 +134,7 @@ export class PostgresOutboxRepository implements OutboxRepository {
       INSERT INTO outbox_events (
         id, event_kind, aggregate_type, aggregate_id, aggregate_version, available_at
       )
-      SELECT gen_random_uuid(), event_kind, aggregate_type, aggregate_id,
+      SELECT ${uuidV7()}::uuid, event_kind, aggregate_type, aggregate_id,
         (extract(epoch FROM next_at) * 1000)::bigint, next_at
       FROM done
     `

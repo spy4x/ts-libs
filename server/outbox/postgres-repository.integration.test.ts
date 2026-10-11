@@ -20,6 +20,7 @@ import { postgresSettings, requireReachable, uniqueIdentifier } from "@integrati
 import { PostgresOutboxRepository } from "./postgres-repository.ts"
 import { OutboxProcessor } from "./processor.ts"
 import { ensureScheduledOutboxEvent, scheduleOutboxEvent } from "./schedule.ts"
+import { isUuid } from "@spy4x/platform/universal/uuid"
 
 const OUTBOX_EVENTS_TABLE = `
   CREATE TABLE outbox_events (
@@ -475,6 +476,30 @@ describe("delayed and repeating jobs against a real server", () => {
       const job = { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT }
       assertEquals(typeof await ensureScheduledOutboxEvent(sql, job, { inMs: 1000 }), "string")
       assertEquals(await ensureScheduledOutboxEvent(sql, job, { inMs: 1000 }), null)
+    })
+  })
+
+  it("gives every job it writes a version 7 UUID: scheduled, started once, and repeated", async () => {
+    await withOutboxSchema(async (sql) => {
+      const scheduled = await scheduleOutboxEvent(
+        sql,
+        { eventKind: "account.delete", aggregateType: "user", aggregateId: JOB_SUBJECT },
+        { inMs: 60 * 60_000 },
+      )
+      const started = await ensureScheduledOutboxEvent(
+        sql,
+        { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT },
+        { inMs: 0 },
+      )
+      assert(isUuid(scheduled, 7), `scheduleOutboxEvent returned ${scheduled}`)
+      assert(isUuid(started, 7), `ensureScheduledOutboxEvent returned ${started}`)
+
+      // Finishing the repeating job writes its next run; that row's id is made by the library too.
+      await new PostgresOutboxRepository(sql).markProcessed(started, 86_400)
+      const rows = await sql<{ id: string }[]>`SELECT id FROM outbox_events`
+      assertEquals(rows.length, 3)
+      for (const row of rows) assert(isUuid(row.id, 7), `row id ${row.id}`)
+      assertEquals(rows.map((row) => row.id).includes(scheduled), true)
     })
   })
 
