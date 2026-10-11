@@ -166,8 +166,9 @@ export function memoryStorage(
  * - `getItem` that the browser refuses gives `null` for a key that is not kept in memory.
  * - `removeItem` forgets the key in both places and ignores a refusal.
  *
- * While storage works, every call goes to it, so another tab's write is seen as usual. A value
- * kept in memory is gone on the next page load.
+ * While storage works, every call goes to it, so another tab's write is seen as usual. A key
+ * whose write was refused is answered from memory until this page writes it again, so another
+ * tab's later write to that key is not seen. A value kept in memory is gone on the next page load.
  *
  * @example
  * ```ts

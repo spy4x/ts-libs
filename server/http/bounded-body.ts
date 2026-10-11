@@ -37,8 +37,8 @@
  * `readJsonBody` is this module's own addition for Hono apps: it reads a request's JSON body
  * through the canonical `readBoundedJson` and turns its failures into `HTTPException`s (413, 408
  * and 400), so every route does not repeat that mapping. On request it also refuses a body that is
- * not declared as JSON (415), and throws the caller's own error class in place of `HTTPException`. `readFormBody` does the same for a form
- * post, from a plain `Request`.
+ * not declared as JSON (415), and throws the caller's own error class in place of `HTTPException`.
+ * `readFormBody` does the same for a form post, from a plain `Request`.
  *
  * @module
  */

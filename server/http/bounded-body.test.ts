@@ -574,7 +574,12 @@ Deno.test("readJsonBody reads a body of any Content-Type unless told to require 
 
 Deno.test("readJsonBody, requiring JSON, accepts application/json in any case and with parameters", async () => {
   for (
-    const contentType of ["application/json", "Application/JSON", "application/json; charset=utf-8"]
+    const contentType of [
+      "application/json",
+      "Application/JSON",
+      "application/json; charset=utf-8",
+      "application/json ;charset=utf-8",
+    ]
   ) {
     const response = await postDeclared('{"a":1}', contentType)
 
