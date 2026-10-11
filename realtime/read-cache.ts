@@ -80,7 +80,6 @@ export function createReadCache(options: ReadCacheOptions): ReadCache {
     getId: (entry) => entry.key,
     indexedDB: options.indexedDB,
   })
-  let cleared = false
   return {
     async get<T>(key: string) {
       const entry = await store.get(SCOPE, key)
@@ -88,15 +87,11 @@ export function createReadCache(options: ReadCacheOptions): ReadCache {
     },
     async set(key, value) {
       const savedAt = clock.now()
-      if (cleared) return savedAt
       await store.put(SCOPE, { key, savedAt, value })
       return savedAt
     },
     delete: (key) => store.delete(SCOPE, key),
-    clear() {
-      cleared = true
-      return store.clearAll()
-    },
+    clear: () => store.finish(),
   }
 }
 

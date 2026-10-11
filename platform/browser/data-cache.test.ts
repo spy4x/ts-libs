@@ -141,6 +141,108 @@ describe("createDataCache", () => {
     expect(await cache.read("one")).toEqual([])
   })
 
+  it("stays usable after clearAll", async () => {
+    const cache = open()
+    await cache.clearAll()
+
+    await cache.put("cal", task("a"))
+
+    expect(await cache.read("cal")).toEqual([task("a")])
+  })
+
+  it("removes every item of every scope on finish", async () => {
+    const cache = open()
+    await cache.replace("one", [task("a")])
+    await cache.replace("two", [task("b")])
+
+    await cache.finish()
+
+    expect(await cache.scopes()).toEqual([])
+    expect(await cache.read("one")).toEqual([])
+    expect(await cache.get("two", "b")).toBeUndefined()
+  })
+
+  const writers: Record<string, (cache: DataCache<Task>) => Promise<void>> = {
+    batch: (cache) => cache.batch([{ op: "put", scope: "cal", item: task("late") }]),
+    replace: (cache) => cache.replace("cal", [task("late")]),
+    put: (cache) => cache.put("cal", task("late")),
+    delete: (cache) => cache.delete("cal", "a"),
+    clear: (cache) => cache.clear("cal"),
+  }
+  for (const [name, call] of Object.entries(writers)) {
+    it(`writes nothing with ${name} after finish`, async () => {
+      const indexedDB = new IDBFactory()
+      const finished = open(indexedDB)
+      await finished.finish()
+      // The next user's cache, here on the same database, shows what the finished one changes.
+      const other = open(indexedDB)
+      await other.replace("cal", [task("a"), task("b")])
+
+      await call(finished)
+
+      expect(await other.read("cal")).toEqual([task("a"), task("b")])
+    })
+  }
+
+  it("does not start a write that was waiting for the database when finish was called", async () => {
+    const read: string[] = []
+    const cache = createDataCache<Task>({
+      name: "data:u1",
+      getId: (t) => (read.push(t.id), t.id),
+      indexedDB: new IDBFactory() as unknown as globalThis.IDBFactory,
+    })
+
+    const put = cache.put("cal", task("late"))
+    const finish = cache.finish()
+    await Promise.all([put, finish])
+
+    expect(read).toEqual([])
+    expect(await cache.read("cal")).toEqual([])
+  })
+
+  it("removes a write whose transaction was already open when finish was called", async () => {
+    let finish: Promise<void> | undefined
+    const cache: DataCache<Task> = createDataCache<Task>({
+      name: "data:u1",
+      // The cache reads the id inside the put's transaction, so finish is called while it is open.
+      getId: (t) => (finish ??= cache.finish(), t.id),
+      indexedDB: new IDBFactory() as unknown as globalThis.IDBFactory,
+    })
+
+    await cache.put("cal", task("late"))
+    await finish
+
+    expect(finish).toBeDefined()
+    expect(await cache.read("cal")).toEqual([])
+  })
+
+  it("leaves no database behind when a write comes after finish and deleteDatabase", async () => {
+    const indexedDB = new IDBFactory()
+    const cache = open(indexedDB)
+    await cache.put("cal", task("a"))
+    await cache.finish()
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.deleteDatabase("data:u1")
+      request.onsuccess = resolve
+      request.onerror = reject
+    })
+    expect(await indexedDB.databases()).toEqual([])
+
+    await cache.put("cal", task("late"))
+
+    expect(await indexedDB.databases()).toEqual([])
+  })
+
+  it("finishes one instance only: another on the same database still writes", async () => {
+    const indexedDB = new IDBFactory()
+    await open(indexedDB).finish()
+
+    const next = open(indexedDB)
+    await next.put("cal", task("a"))
+
+    expect(await next.read("cal")).toEqual([task("a")])
+  })
+
   it("applies puts, deletes and replaces across scopes in one batch, in order", async () => {
     const cache = open()
     await cache.replace("cal-1", [task("a"), task("b")])
