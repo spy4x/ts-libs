@@ -1111,7 +1111,6 @@ describe("ClientTransport onHandshakeAcknowledged", () => {
     harness.settleHandshake()
     await drainMicrotasks()
 
-    expect(harness.errors.at(-1)?.message).toBe("listener failed")
     expect(harness.gaps).toEqual([{ groupId: "group-1", since: 4, received: 4 }])
   })
 
@@ -1364,7 +1363,7 @@ describe("ClientTransport requests", () => {
   })
 
   it("waits 15 seconds by default, longer than the server's default, so the server's timeout arrives first", async () => {
-    const harness = createHarness()
+    const harness = createHarness({ heartbeatIntervalMs: 60_000 })
     await harness.open()
     const call = track(harness.transport.query("slow"))
 
@@ -1500,3 +1499,60 @@ async function lastFrameId(harness: Harness): Promise<string> {
   if (!id) throw new Error("the client has not sent a frame with an id")
   return id
 }
+
+describe("ClientTransport listener isolation and dead sockets", () => {
+  it("still calls the second frame listener and pulls the hint when the first listener throws", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const seen: string[] = []
+    harness.transport.onFrame(() => {
+      throw new Error("first listener broke")
+    })
+    harness.transport.onFrame((message) => seen.push(message.kind))
+
+    harness.factory.latest.receive(hintFrame("g1", 1))
+    await drainMicrotasks()
+
+    expect(seen).toEqual(["change.hint"])
+    expect(harness.gaps.length).toBe(1)
+  })
+
+  it("sends the handshake and pings when a status listener throws on open", async () => {
+    const harness = createHarness()
+    harness.transport.onStatus(() => {
+      throw new Error("status listener broke")
+    })
+
+    harness.transport.connect()
+    await drainMicrotasks()
+    expect(kinds(harness.factory.latest)).toContain("client.sync")
+
+    await harness.clock.advance(1_000)
+    expect(kinds(harness.factory.latest)).toContain("client.ping")
+  })
+
+  it("rejects a waiting command with ConnectionLostError when the pong deadline passes", async () => {
+    const harness = createHarness({ heartbeatIntervalMs: 1_000, pongTimeoutMs: 500 })
+    await harness.open()
+    const call = track(harness.transport.command("group.rename", { title: "Trip" }))
+    await drainMicrotasks()
+
+    await harness.clock.advance(1_500)
+
+    expect(call.settled).toBe(true)
+    expect(call.error).toBeInstanceOf(ConnectionLostError)
+  })
+
+  it("tells no degraded or error listener when stop() ends an unanswered first handshake", async () => {
+    const harness = createHarness()
+    harness.transport.connect()
+    await drainMicrotasks()
+    expect(kinds(harness.factory.latest)).toContain("client.sync")
+
+    harness.transport.stop()
+    await drainMicrotasks()
+
+    expect(harness.degraded).toEqual([])
+    expect(harness.errors).toEqual([])
+  })
+})

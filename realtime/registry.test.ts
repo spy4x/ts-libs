@@ -72,6 +72,29 @@ describe("ConnectionRegistry", () => {
     expect(opened).toEqual(["user-1:socket-1", "user-1:socket-2"])
   })
 
+  it("still calls later open and frame handlers when an earlier one throws", () => {
+    const { registry, factory } = createHarness()
+    const log: string[] = []
+    const original = console.error
+    console.error = () => {}
+    try {
+      registry.onOpen(() => {
+        throw new Error("open broke")
+      })
+      registry.onOpen(() => log.push("open"))
+      registry.onFrame(() => {
+        throw new Error("frame broke")
+      })
+      registry.onFrame((context) => log.push(context.message.kind))
+      registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+      factory.latest.receive(JSON.stringify({ kind: "client.sync", cursors: [], fromStart: true }))
+    } finally {
+      console.error = original
+    }
+
+    expect(log).toEqual(["open", "client.sync"])
+  })
+
   it("fires the open handler once when the socket is still connecting", () => {
     const { registry, factory } = createHarness(false)
     let opens = 0

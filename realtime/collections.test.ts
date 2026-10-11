@@ -524,6 +524,26 @@ describe(`a child waiting for its parent`, () => {
   })
 })
 
+describe(`a throwing queue subscriber`, () => {
+  it(`does not stop the later subscribers from hearing about a change`, async () => {
+    const { server, tags, layer } = setup()
+    server.state.offline = true
+    let told = 0
+    const original = console.error
+    console.error = () => {}
+    try {
+      layer.subscribe(() => {
+        throw new Error(`subscriber broke`)
+      })
+      layer.subscribe(() => told++)
+      await tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
+    } finally {
+      console.error = original
+    }
+    expect(told).toBeGreaterThan(0)
+  })
+})
+
 describe(`a parent that will never exist`, () => {
   /** A tag create and two notes naming it, queued offline. */
   async function queued() {

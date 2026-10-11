@@ -193,6 +193,24 @@ describe("outbox while the connection is down", () => {
     expect(lengths[lengths.length - 1]).toBe(1)
   })
 
+  it("still tells the second subscriber, and finishes the change, when the first one throws", async () => {
+    const { outbox, offline } = harness()
+    offline()
+    const lengths: number[] = []
+    const original = console.error
+    console.error = () => {}
+    try {
+      outbox.subscribe(() => {
+        throw new Error("subscriber broke")
+      })
+      outbox.subscribe((entries) => lengths.push(entries.length))
+      await outbox.submit({ kind: "create", entityId: "a", payload: text("A") })
+    } finally {
+      console.error = original
+    }
+    expect(lengths[lengths.length - 1]).toBe(1)
+  })
+
   it("saves an entry as attempted before the server answers, so a closed page cannot resend it under a new key", async () => {
     const { store, outbox, state } = harness()
     let during: boolean | undefined
