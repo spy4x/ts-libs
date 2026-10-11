@@ -26,7 +26,7 @@ the browser and the API.
 ### `.` → `universal.ts`
 
 Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched are `Date`, `Intl`,
-`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.randomUUID` (only `universal/error-reporter`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
+`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.randomUUID` (only `universal/error-reporter`), `crypto.getRandomValues` (only `universal/uuid`, through `@std/uuid`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
 `unref`s the handle where the runtime provides one). No other `crypto` calls and no DOM global: the
 browser- and server-only halves are the other two subpaths.
 
