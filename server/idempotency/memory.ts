@@ -6,6 +6,7 @@ import {
   type IdempotencyClaim,
   type IdempotencyStore,
 } from "./idempotency.ts"
+import { randomBase64Url } from "@spy4x/platform/tokens"
 
 /** What {@link MemoryIdempotencyStore} reads from outside. */
 export interface MemoryIdempotencyStoreOptions {
@@ -56,7 +57,7 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
       row = undefined
     }
     if (!row) {
-      const token = crypto.randomUUID()
+      const token = randomBase64Url()
       this.rows.set(id, { token, claim, done: false, result: null, createdAt: now, updatedAt: now })
       return Promise.resolve({ status: "claimed", token })
     }
@@ -68,7 +69,7 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     if (row.done) return Promise.resolve({ status: "replay", result: clone(row.result) })
     if (row.updatedAt >= now - this.leaseMs) return Promise.resolve({ status: "in_progress" })
     row.updatedAt = now
-    row.token = crypto.randomUUID()
+    row.token = randomBase64Url()
     return Promise.resolve({ status: "claimed", token: row.token })
   }
 

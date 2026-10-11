@@ -2227,6 +2227,7 @@ new OutboxProcessor(repository, publisher, { repeatEveryMs: { "outbox.cleanup": 
 
 `createIdempotencyMiddleware`, `fingerprint`, `isIdempotencyKey`, `IdempotencyError`,
 `IdempotencyStore`, `PostgresIdempotencyStore`, `IDEMPOTENCY_POSTGRES_SCHEMA`,
+`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`,
 `MemoryIdempotencyStore`, `IDEMPOTENCY_LEASE_SECONDS`, `IDEMPOTENCY_RETENTION_DAYS`. Extracted from
 `template/libs/server/idempotency/` (#313).
 
@@ -2261,6 +2262,25 @@ table; add `REFERENCES users (id) ON DELETE CASCADE` if you want rows to go with
 **Fencing.** `begin` returns `{ status: "claimed", token }`; `complete` and `release` take that token
 and change nothing when it is not the key's current one. A run that outlives its lease and loses its
 claim to a retry therefore can neither free the new owner's claim nor store its own result over it.
+The token proves who holds the claim, so it is a random token (16 bytes as base64url, from
+`randomBase64Url()` of `@spy4x/platform/tokens`), not a UUID. Treat it as an opaque string.
+
+**Upgrading to 1.64.0.** Until 1.63.0 the token was a UUID and `claim_token` was a `uuid` column.
+The new token does not fit that column, so a table made before 1.64.0 needs
+`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`, which widens the column to `text`. Deploy in this order:
+
+1. Run `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT` as a migration while the previous API still serves.
+   That is safe: stored tokens keep their printed form, so a run in flight still completes or
+   releases its claim, and the previous store's UUID tokens fit a `text` column.
+2. Start the API on 1.64.0. Old and new instances may run side by side on the widened column.
+
+Never start an API on 1.64.0 against the `uuid` column: every command sent with a key then fails
+with a Postgres error (`invalid input syntax for type uuid`) until the migration has run. A
+roll-back to the previous API needs no second migration. The statement rewrites the table under a
+lock that blocks it for that moment; the table holds at most `retentionDays` of keys. If your own
+migration gave `claim_token` a default, the statement keeps it. Every store that knows the column
+writes its own token, so the default only serves an API from before the column existed; drop it in
+your own migration once no such API can start.
 
 **What it does not do.** The claim and the command are not one transaction. A process that dies
 after the command committed and before its result was stored leaves a claim that expires after the

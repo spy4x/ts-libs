@@ -22,6 +22,7 @@ export {
 } from "./idempotency.ts"
 export { MemoryIdempotencyStore, type MemoryIdempotencyStoreOptions } from "./memory.ts"
 export {
+  IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT,
   IDEMPOTENCY_POSTGRES_SCHEMA,
   PostgresIdempotencyStore,
   type PostgresIdempotencyStoreOptions,

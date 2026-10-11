@@ -7,6 +7,7 @@ import {
   type IdempotencyClaim,
   type IdempotencyStore,
 } from "./idempotency.ts"
+import { randomBase64Url } from "@spy4x/platform/tokens"
 
 /**
  * The table and index, as SQL text the app runs as a migration.
@@ -15,6 +16,8 @@ import {
  * in flight and 2 once its result is stored. `updated_at` is when the row was claimed or finished;
  * a claim that stays at 1 past its lease belongs to a run that died, and the next retry takes it
  * over with a new `claim_token`; `complete` and `release` change only the row whose token they hold, so a run that lost its claim changes nothing. The key is scoped to the user, so one user cannot replay or block another user's key.
+ * `claim_token` is `text`: the token is 16 random bytes as base64url, not a UUID. A table made
+ * before 1.64.0 has it as `uuid`; widen it with {@link IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT}.
  * `request_hash` fingerprints the command's input: the same key with different input is refused.
  *
  * `user_id` has no foreign key, because this library does not own your users table. Add
@@ -26,7 +29,7 @@ CREATE TABLE idempotency_keys (
   key varchar(128) NOT NULL,
   command_name varchar(100) NOT NULL,
   request_hash varchar(64) NOT NULL,
-  claim_token uuid NOT NULL,
+  claim_token text NOT NULL,
   status smallint NOT NULL,
   result jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -40,6 +43,25 @@ CREATE TABLE idempotency_keys (
 COMMENT ON COLUMN idempotency_keys.status IS '1=started, 2=done';
 
 CREATE INDEX idx_idempotency_keys_created ON idempotency_keys (created_at);
+`
+
+/**
+ * The migration for a table made before 1.64.0, as SQL text: it widens `claim_token` from `uuid`
+ * to `text`, because the store's tokens are no longer UUIDs. A new table from
+ * {@link IDEMPOTENCY_POSTGRES_SCHEMA} does not need it.
+ *
+ * **Apply it before the first API instance on 1.64.0 starts.** The new store's token does not fit
+ * a `uuid` column, so without the migration every keyed command fails with a Postgres error. The
+ * migration itself is safe while the previous API still serves: stored tokens keep their printed
+ * form, so a run in flight still completes or releases its claim, and the previous store's UUID
+ * tokens fit the `text` column. A roll-back to the previous API therefore needs no second
+ * migration. A column default, if your migration gave it one, is kept.
+ *
+ * Postgres rewrites the table under a lock that blocks reads and writes of `idempotency_keys`
+ * until it is done; the table holds at most the retention's rows. Running it again changes nothing.
+ */
+export const IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT = `
+ALTER TABLE idempotency_keys ALTER COLUMN claim_token TYPE text USING claim_token::text;
 `
 
 /** What {@link PostgresIdempotencyStore} reads from outside. */
@@ -85,7 +107,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
         AND key = ${key}
         AND created_at < now() - (${this.retentionDays}::double precision * INTERVAL '1 day')
     `
-    const token = crypto.randomUUID()
+    const token = randomBase64Url()
     // A row released between the insert and the read is claimable again, so look twice.
     for (let attempt = 0; attempt < 3; attempt++) {
       const inserted = await this.sql`
