@@ -1657,4 +1657,17 @@ describe("ClientTransport stopped during the first handshake", () => {
     expect(harness.degraded).toEqual([])
     expect(harness.errors).toEqual([])
   })
+
+  it("stays silent when connect() follows the stop in the same tick", async () => {
+    const harness = createHarness()
+    harness.transport.connect()
+    await drainMicrotasks()
+
+    harness.transport.stop()
+    harness.transport.connect()
+    await drainMicrotasks()
+
+    expect(harness.degraded).toEqual([])
+    expect(harness.errors).toEqual([])
+  })
 })

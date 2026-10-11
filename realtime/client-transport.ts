@@ -358,6 +358,8 @@ export class ClientTransport {
   #lastError: Error | null = null
   #attempt = 0
   #stopped = false
+  /** How many times `stop()` ran. `connect()` resets `#stopped`, so a handshake compares this. */
+  #stops = 0
   #frameCounter = 0
   /** Whether the current socket has produced any inbound message yet. */
   #messageReceived = false
@@ -470,6 +472,7 @@ export class ClientTransport {
   /** Stop for good: clear every timer, close the socket, fail outstanding requests. */
   stop(): void {
     this.#stopped = true
+    this.#stops += 1
     this.#clearTimers()
     const socket = this.#socket
     this.#rejectAllPending(new ConnectionLostError("transport stopped"))
@@ -886,6 +889,7 @@ export class ClientTransport {
       fromStart: request.fromStart,
     }
     let failure: Error | null = null
+    const stops = this.#stops
     try {
       await this.request(frame, {
         timeoutMs: this.#handshakeAckTimeoutMs,
@@ -893,8 +897,9 @@ export class ClientTransport {
       })
     } catch (error) {
       // A deliberate stop rejects the unanswered handshake. That is not a degraded sync, and
-      // nothing is left to pull or announce.
-      if (this.#stopped) return
+      // nothing is left to pull or announce. A `connect()` in the same tick has already cleared
+      // `#stopped`, so the count of stops decides.
+      if (this.#stops !== stops) return
       failure = toError(error)
       this.#report(failure)
     }
