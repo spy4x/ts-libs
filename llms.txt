@@ -2847,6 +2847,10 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `EditField` (enum), `jsr:@spy4x/time/ical-tasks-edit`: The task fields the editor changes.
 - `EditOutput` (interface), `jsr:@spy4x/time/ical-tasks-edit`
 - `EditResult` (type), `jsr:@spy4x/time/ical-tasks-edit`: The result of editTask.
+- `KeepMineError` (interface), `jsr:@spy4x/time/ical-tasks-edit`
+- `KeepMineOutput` (interface), `jsr:@spy4x/time/ical-tasks-edit`
+- `KeepMineResult` (type), `jsr:@spy4x/time/ical-tasks-edit`: The result of keepMineText.
+- `KeepMineStep` (enum), `jsr:@spy4x/time/ical-tasks-edit`: The step of keepMineText that refused.
 - `NewTaskContext` (interface), `jsr:@spy4x/time/ical-tasks-edit`
 - `NewTaskFields` (interface), `jsr:@spy4x/time/ical-tasks-edit`: The fields a new task can start with.
 - `RebaseKind` (enum), `jsr:@spy4x/time/ical-tasks-edit`
@@ -2857,6 +2861,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createTask` (function), `jsr:@spy4x/time/ical-tasks-edit`: Builds the text for a new task.
 - `editTask` (function), `jsr:@spy4x/time/ical-tasks-edit`: Patches `task.ics` with `edit`.
 - `keepMine` (function), `jsr:@spy4x/time/ical-tasks-edit`: "Keep mine": applies the fields `edit` really changed (against `base`) to `theirs`, overwriting the server's value where both changed the same field and leaving every other server change alone.
+- `keepMineText` (function), `jsr:@spy4x/time/ical-tasks-edit`: "Keep mine" for a change that is stored as whole text: a write that waited in a queue while the server's copy changed.
 - `rebaseEdit` (function), `jsr:@spy4x/time/ical-tasks-edit`: Re-applies `edit`, made on `base`, to `theirs`, the fresh copy from the server.
 - `reopenTask` (function), `jsr:@spy4x/time/ical-tasks-edit`: Reopens a completed task.
 
@@ -3023,4 +3028,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 7b2446060bd67ca597c7640d10debd9ce9deee404f537c1dd52c83cd26ee563c -->
+<!-- export surface: sha256 235ae5c80d74cf276f803398bd532b1dfa3e0c5f3c02a808f15ac86f13a9ff91 -->
