@@ -612,6 +612,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `AsyncMutex` (class), `jsr:@spy4x/platform`: A fair mutual-exclusion lock for async critical sections.
 - `BackoffDelayOptions` (interface), `jsr:@spy4x/platform`
 - `BackoffJitterMode` (type), `jsr:@spy4x/platform`: How backoffDelay spreads a capped delay.
+- `BoundedIntegerOptions` (interface), `jsr:@spy4x/platform`: Options of parseBoundedInteger.
 - `BreadcrumbListItem` (interface), `jsr:@spy4x/platform`: A schema.org `ListItem` as it appears inside a `BreadcrumbList`.
 - `BreadcrumbListJsonLd` (interface), `jsr:@spy4x/platform`: A schema.org `BreadcrumbList` node.
 - `Clock` (interface), `jsr:@spy4x/platform`: Injectable time source, so formatting and relative times are testable without a frozen host.
@@ -700,14 +701,17 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `honeypotFilled` (function), `jsr:@spy4x/platform`: Whether a submitted honeypot field carries a value — a person never types into a field they cannot see, so any value here means whatever posted the form was not one.
 - `idleOperationState` (function), `jsr:@spy4x/platform`: Idle state of an operation.
 - `initials` (function), `jsr:@spy4x/platform`: Reduce a name to one or two initials, e.g. for an avatar's fallback face.
+- `isRecord` (function), `jsr:@spy4x/platform`: True for a plain keyed object: not `null`, not an array.
 - `isSilentError` (function), `jsr:@spy4x/platform`: Whether an error should stay quiet.
 - `isValidDate` (function), `jsr:@spy4x/platform`: Whether the input is a usable date: a `Date` or an ISO `YYYY-MM-DD`-prefixed string that `Date` can parse.
 - `jsonLdText` (function), `jsr:@spy4x/platform`: Serialise JSON-LD for a `<script>` body.
 - `levenshtein` (function), `jsr:@spy4x/platform`: Levenshtein edit distance between two strings, computed over code points.
+- `nextUtcHour` (function), `jsr:@spy4x/platform`: The next time the clock reads `hour`:00 UTC after `now`: later today when that hour has not come yet, tomorrow when it is now or past.
 - `niceStep` (function), `jsr:@spy4x/platform`: Round a span up to a sensible tick step at roughly `target` ticks.
 - `normalizeCalendarDate` (function), `jsr:@spy4x/platform`: Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
 - `normalizeCanonical` (function), `jsr:@spy4x/platform`: The canonical address as it should be published: one clean `http`/`https` address.
 - `ok` (function), `jsr:@spy4x/platform`: Wrap a success.
+- `parseBoundedInteger` (function), `jsr:@spy4x/platform`: The whole number `value` spells, or `options.fallback` when `value` is `undefined`, or `null` when it is anything else that is not an integer in `min` to `max`.
 - `parseDsn` (function), `jsr:@spy4x/platform`: The DSN's endpoint and key, or `null` when `dsn` is not a valid `https://key@host/project`.
 - `parseQuickAdd` (function), `jsr:@spy4x/platform`: Read the tokens out of a quick-add line.
 - `parseSort` (function), `jsr:@spy4x/platform`: Read sort rules out of a URL parameter.
@@ -747,6 +751,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 ### `jsr:@spy4x/platform/browser`
 
 - `AskOnce` (interface), `jsr:@spy4x/platform/browser`: Where requestPersistentStorage remembers that it has asked, so it asks once per device.
+- `BuildEnv` (type), `jsr:@spy4x/platform/browser`: The values of a build, as a bundler exposes them.
 - `ClipboardDocument` (interface), `jsr:@spy4x/platform/browser`: The document surface the legacy `execCommand("copy")` path needs.
 - `ClipboardWriter` (interface), `jsr:@spy4x/platform/browser`: The one clipboard method this helper calls.
 - `CopyToClipboardOptions` (interface), `jsr:@spy4x/platform/browser`: Where copyToClipboard writes.
@@ -772,6 +777,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `HotkeySequenceEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that createHotkeyMatcher reads.
 - `LoadRuntimeConfigOptions` (interface), `jsr:@spy4x/platform/browser`: What loadRuntimeConfig needs besides the schema.
 - `MakeStorageOptions` (interface), `jsr:@spy4x/platform/browser`: Options for makeStorage.
+- `MissingBuildEnvError` (class), `jsr:@spy4x/platform/browser`: Thrown by readBuildEnvVar for a required variable that is missing or empty.
 - `ObjectUrlAdapter` (interface), `jsr:@spy4x/platform/browser`: Object-URL surface, injected so a test never allocates a real blob URL.
 - `OfflineShellOptions` (interface), `jsr:@spy4x/platform/browser`: Options of installOfflineShell.
 - `PersistentStorageManager` (interface), `jsr:@spy4x/platform/browser`: The part of a browser's `StorageManager` this module uses.
@@ -782,6 +788,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `PushNotificationsOptions` (interface), `jsr:@spy4x/platform/browser`: Options of installPushNotifications.
 - `PushScope` (interface), `jsr:@spy4x/platform/browser`: The parts of the service-worker global scope this module uses; `self` fits.
 - `PushScopeEvent` (interface), `jsr:@spy4x/platform/browser`: The parts of a `PushEvent` this module uses.
+- `ReadBuildEnvVarOptions` (interface), `jsr:@spy4x/platform/browser`: Options of readBuildEnvVar.
 - `ReportHeightOptions` (interface), `jsr:@spy4x/platform/browser`: Options for reportHeight.
 - `SKIP_WAITING_MESSAGE` (constant), `jsr:@spy4x/platform/browser`: The message `SWUpdater` posts to a waiting worker; installOfflineShell acts on it.
 - `ShellCache` (interface), `jsr:@spy4x/platform/browser`: Cache surface this module needs; a real `Cache` fits.
@@ -809,6 +816,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `getCookie` (function), `jsr:@spy4x/platform/browser`: Look up `name` in `doc.cookie`, decoding its value.
 - `idbRequest` (function), `jsr:@spy4x/platform/browser`: Resolves a request's result, or rejects with its error.
 - `idbTransactionDone` (function), `jsr:@spy4x/platform/browser`: Resolves when a transaction has committed, rejects when it aborts or fails.
+- `installLocalStorage` (function), `jsr:@spy4x/platform/browser`: Puts a memoryStorage in place of the runtime's global `localStorage`, for one test, and gives it and the way back.
 - `installOfflineShell` (function), `jsr:@spy4x/platform/browser`: Register the install, activate, fetch and message listeners that keep the app shell offline.
 - `installPushNotifications` (function), `jsr:@spy4x/platform/browser`: Register the `push` and `notificationclick` listeners of a service worker.
 - `isApplePlatform` (function), `jsr:@spy4x/platform/browser`: Whether the browser runs on macOS, iOS or iPadOS, where `mod` means Command.
@@ -820,10 +828,18 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `matchesHotkey` (function), `jsr:@spy4x/platform/browser`: Whether a key press is the combination.
 - `memoryStorage` (function), `jsr:@spy4x/platform/browser`: A `Map`-backed StorageLike.
 - `parseHotkey` (function), `jsr:@spy4x/platform/browser`: Parse a combination such as `"mod+k"`, `"shift+n"`, `"?"` or `"ctrl+alt+delete"`.
+- `readBuildEnvVar` (function), `jsr:@spy4x/platform/browser`: One value of the build's environment: `env[name]`, else `env[prefix + name]`.
 - `reportHeight` (function), `jsr:@spy4x/platform/browser`: Post the element's height, in whole CSS pixels, to the parent frame — once the page has loaded, and again each time the element's size changes.
 - `requestGeolocation` (function), `jsr:@spy4x/platform/browser`: Ask for the current position and report the result.
 - `requestPersistentStorage` (function), `jsr:@spy4x/platform/browser`: Resolves `true` when this site's storage is persistent, asking the browser if it is not yet.
 - `sameOriginUrl` (function), `jsr:@spy4x/platform/browser`: `raw` as an absolute URL when it belongs to `origin`, otherwise `undefined`.
+
+### `jsr:@spy4x/platform/browser/build-env`
+
+- `BuildEnv` (type), `jsr:@spy4x/platform/browser/build-env`: The values of a build, as a bundler exposes them.
+- `MissingBuildEnvError` (class), `jsr:@spy4x/platform/browser/build-env`: Thrown by readBuildEnvVar for a required variable that is missing or empty.
+- `ReadBuildEnvVarOptions` (interface), `jsr:@spy4x/platform/browser/build-env`: Options of readBuildEnvVar.
+- `readBuildEnvVar` (function), `jsr:@spy4x/platform/browser/build-env`: One value of the build's environment: `env[name]`, else `env[prefix + name]`.
 
 ### `jsr:@spy4x/platform/browser/clipboard`
 
@@ -942,18 +958,23 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `StorageLike` (type), `jsr:@spy4x/platform/browser/storage`: The subset of the DOM `Storage` interface this module uses.
 - `StorageRead` (type), `jsr:@spy4x/platform/browser/storage`: Outcome of a write or a read, so a caller can tell "absent" from "present but rejected".
 - `TypedStorage` (interface), `jsr:@spy4x/platform/browser/storage`: A namespaced handle over one key.
+- `installLocalStorage` (function), `jsr:@spy4x/platform/browser/storage`: Puts a memoryStorage in place of the runtime's global `localStorage`, for one test, and gives it and the way back.
 - `makeStorage` (function), `jsr:@spy4x/platform/browser/storage`: Bind a StorageLike to one key.
 - `memoryStorage` (function), `jsr:@spy4x/platform/browser/storage`: A `Map`-backed StorageLike.
 
 ### `jsr:@spy4x/platform/cache`
 
+- `CacheErrorReporter` (type), `jsr:@spy4x/platform/cache`: Called with the operation and the error whenever a cache operation fails.
+- `CacheOperation` (type), `jsr:@spy4x/platform/cache`: A cache operation failOpen reports on.
 - `CacheService` (class), `jsr:@spy4x/platform/cache`
 - `CacheServiceOptions` (interface), `jsr:@spy4x/platform/cache`: CacheService constructor options.
 - `CacheWrapOptions` (interface), `jsr:@spy4x/platform/cache`: Options accepted by CacheService.wrap.
+- `DEFAULT_CACHE_RECOVERY_MS` (constant), `jsr:@spy4x/platform/cache`: How long an untrusted cache waits before the next attempt to clear itself.
 - `ICacheService` (interface), `jsr:@spy4x/platform/cache`: A JSON cache in front of an ICacheStorage.
 - `ICacheStorage` (interface), `jsr:@spy4x/platform/cache`: Storage backing a CacheService.
 - `PublicAPICacheModel` (interface), `jsr:@spy4x/platform/cache`: A namespaced, optionally schema-validated view over one `CacheService`, keyed by `id`.
 - `buildMethods` (function), `jsr:@spy4x/platform/cache`: Build a `${prefix}_${id}`-keyed view over `cacheService`, with a fixed TTL and an optional arktype schema that `get` and `wrap` validate a cache hit against before returning it — so a value another version of this code wrote, in a shape the current schema no longer accepts, surfaces as a thrown validation error instead of a silently wrong read.
+- `failOpen` (function), `jsr:@spy4x/platform/cache`: Wraps `storage` so an outage of the cache server never fails a request: while it is down every read is a miss (the database answers) and every write is skipped.
 - `reviveIsoDatesEndingInAt` (function), `jsr:@spy4x/platform/cache`: `JSON.parse` reviver that turns a string property whose key ends in `At` into a `Date`, when the string looks like an ISO-8601 UTC timestamp.
 
 ### `jsr:@spy4x/platform/cqrs`
@@ -1292,6 +1313,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `stepAxis` (function), `jsr:@spy4x/platform/universal/axis`: Round `[min, max]` outward to multiples of `step` and return the new bounds with the ticks between them.
 - `ticks` (function), `jsr:@spy4x/platform/universal/axis`: Tick values at multiples of a nice step, kept within half a step of `[min, max]`.
 
+### `jsr:@spy4x/platform/universal/bounded-integer`
+
+- `BoundedIntegerOptions` (interface), `jsr:@spy4x/platform/universal/bounded-integer`: Options of parseBoundedInteger.
+- `parseBoundedInteger` (function), `jsr:@spy4x/platform/universal/bounded-integer`: The whole number `value` spells, or `options.fallback` when `value` is `undefined`, or `null` when it is anything else that is not an integer in `min` to `max`.
+
 ### `jsr:@spy4x/platform/universal/concurrency`
 
 - `AsyncMutex` (class), `jsr:@spy4x/platform/universal/concurrency`: A fair mutual-exclusion lock for async critical sections.
@@ -1374,6 +1400,10 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `sortTasks` (function), `jsr:@spy4x/platform/universal/ical-tasks-view`: The tasks in the order `mode` names, as a viewer in `zone` sees them.
 - `todayView` (function), `jsr:@spy4x/platform/universal/ical-tasks-view`: Overdue above today.
 - `upcomingView` (function), `jsr:@spy4x/platform/universal/ical-tasks-view`: Tomorrow through UPCOMING_DAYS days after today, one entry per day that has tasks, in date order.
+
+### `jsr:@spy4x/platform/universal/is-record`
+
+- `isRecord` (function), `jsr:@spy4x/platform/universal/is-record`: True for a plain keyed object: not `null`, not an array.
 
 ### `jsr:@spy4x/platform/universal/key-value-store`
 
@@ -1480,6 +1510,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `formatTime` (function), `jsr:@spy4x/platform/universal/time`: One-off TimeFormatter#format on the host clock.
 - `getDaysOfWeek` (function), `jsr:@spy4x/platform/universal/time`: Read a weekday bitmask into day names.
 - `isValidDate` (function), `jsr:@spy4x/platform/universal/time`: Whether the input is a usable date: a `Date` or an ISO `YYYY-MM-DD`-prefixed string that `Date` can parse.
+- `nextUtcHour` (function), `jsr:@spy4x/platform/universal/time`: The next time the clock reads `hour`:00 UTC after `now`: later today when that hour has not come yet, tomorrow when it is now or past.
 - `normalizeCalendarDate` (function), `jsr:@spy4x/platform/universal/time`: Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
 - `systemClock` (constant), `jsr:@spy4x/platform/universal/time`: The host clock.
 - `systemNow` (function), `jsr:@spy4x/platform/universal/time`: The host clock, function-shaped.
@@ -2931,4 +2962,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 5c9cb864a5880fd34d22db849e8f7af45a77cd8b2ed8636e23eac18e12046c00 -->
+<!-- export surface: sha256 8b178789cf19f60dd1cfaa823fc29b590680a2574ca05da9df304af987d40d6d -->
