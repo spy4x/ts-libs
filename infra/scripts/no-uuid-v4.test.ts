@@ -9,8 +9,11 @@ import { fromFileUrl, join, relative } from "@std/path"
 
 const root = fromFileUrl(new URL("../../", import.meta.url))
 
-/** What makes a version 4 id: the Web Crypto call, the two Postgres functions, the npm helper. */
-const FORBIDDEN = /randomUUID|gen_random_uuid|uuid_generate_v4|uuidv4\s*\(/gi
+/**
+ * What makes a version 4 id: the Web Crypto call, the two Postgres functions, and the npm and
+ * `@std/uuid` helpers under their usual names (`uuidv4()`, an imported `v4()`, a `uuid/v4` path).
+ */
+const FORBIDDEN = /randomUUID|gen_random_uuid|uuid_generate_v4|uuidv4\s*\(|uuid\/v4|\bv4\s*\(/gi
 
 /**
  * The only files that may name them: the UUID module's test, which feeds version 4 ids to the
@@ -88,6 +91,8 @@ Deno.test("the UUID version 4 guard sees each way of making one", () => {
     "SELECT uuid_generate_v4()",
     "const id = uuidv4()",
     "const id = uuidV4 ()",
+    "const id = v4()",
+    `import { generate } from "@std/uuid/v4"`,
   ]
   for (const sample of samples) {
     assertEquals(findUuidV4("sample.ts", sample).length, 1, sample)
@@ -96,7 +101,14 @@ Deno.test("the UUID version 4 guard sees each way of making one", () => {
 })
 
 Deno.test("the UUID version 4 guard lets version 7 ids and random tokens through", () => {
-  for (const sample of ["const id = uuidV7()", "randomBase64Url()", "id uuid PRIMARY KEY"]) {
+  for (
+    const sample of [
+      "const id = uuidV7()",
+      "randomBase64Url()",
+      "id uuid PRIMARY KEY",
+      "ipv4(address)",
+    ]
+  ) {
     assertEquals(findUuidV4("sample.ts", sample), [], sample)
   }
 })
