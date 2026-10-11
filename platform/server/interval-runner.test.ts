@@ -147,8 +147,8 @@ describe("startIntervalRunner", () => {
     expect(timers.pending).toBe(0)
   })
 
-  it("refuses an interval that is not a positive finite number", () => {
-    for (const intervalMs of [0, -1, Number.NaN, Infinity]) {
+  it("refuses an interval that is not positive or does not fit a timer", () => {
+    for (const intervalMs of [0, -1, Number.NaN, Infinity, 2_147_483_648]) {
       expect(() =>
         startIntervalRunner({ task: () => {}, intervalMs, onError: () => {}, timers: fakeTimers() })
       ).toThrow(RangeError)

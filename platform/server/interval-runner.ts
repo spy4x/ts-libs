@@ -44,13 +44,15 @@ export interface IntervalRunnerOptions {
  * stop()
  * ```
  *
- * @throws {RangeError} When `intervalMs` is not a positive finite number.
+ * @throws {RangeError} When `intervalMs` is not positive or is above 2 147 483 647 (about 24.8
+ *   days), the longest delay a timer takes.
  */
 export function startIntervalRunner(options: IntervalRunnerOptions): () => void {
   const { task, intervalMs, onError } = options
   const timers = options.timers ?? systemTimerPort
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
-    throw new RangeError("intervalMs must be a positive number")
+  // A longer delay does not fit a timer: runtimes fire it after 1 ms instead.
+  if (!(intervalMs > 0 && intervalMs <= 2_147_483_647)) {
+    throw new RangeError("intervalMs must be from 1 to 2147483647 (about 24.8 days)")
   }
   let stopped = false
   let handle: number | undefined
