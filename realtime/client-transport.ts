@@ -53,6 +53,7 @@ import {
   type ServerMessage,
   toWireCursors,
 } from "./codec.ts"
+import { notifyListeners } from "./listeners.ts"
 import { RealtimeRequestError } from "./errors.ts"
 import type { ApplyOutcome, GapReport, SequenceChange, SyncRequest } from "./cursor.ts"
 import { ApplyStatus } from "./cursor.ts"
@@ -822,7 +823,13 @@ export class ClientTransport {
     const outcome = await this.#options.cursors.apply(hint)
     this.#options.cursors.markSynced?.()
     if (outcome.status === ApplyStatus.Applied) {
-      for (const handler of this.#changeHandlers) handler(hint, outcome)
+      for (const handler of [...this.#changeHandlers]) {
+        try {
+          handler(hint, outcome)
+        } catch (error) {
+          console.error(`realtime: a change listener threw`, error)
+        }
+      }
     }
   }
 
@@ -889,16 +896,18 @@ export class ClientTransport {
       })
     } catch (error) {
       failure = toError(error)
-      this.#report(failure)
+      if (!this.#stopped) this.#report(failure)
     }
     // Queued before any listener runs, so a listener that throws cannot cancel the pull. A socket
     // that is gone by now is skipped: the open that replaces it is a reconnect and pulls itself.
     const stillOpen = this.#socket === socket && socket.state === SocketState.Open
     if (!isReconnect && !this.#stopped && stillOpen) this.#enqueue(() => this.#pullHeldCursors())
+    // A deliberate stop rejected the handshake itself: nobody should hear about it.
+    if (this.#stopped) return
     if (failure) {
-      for (const handler of this.#degradedHandlers) handler(failure)
-    } else if (!this.#stopped) {
-      for (const handler of this.#acknowledgedHandlers) handler({ reconnect: isReconnect })
+      notifyListeners(this.#degradedHandlers, failure, `sync degraded`)
+    } else {
+      notifyListeners(this.#acknowledgedHandlers, { reconnect: isReconnect }, `handshake`)
     }
   }
 
@@ -1031,6 +1040,7 @@ export class ClientTransport {
     if (this.#socket === socket) {
       this.#forgetSocket()
       this.#clearTimers()
+      this.#rejectAllPending(new ConnectionLostError(`pong timeout`))
       this.#scheduleReconnect()
     }
   }
@@ -1072,7 +1082,8 @@ export class ClientTransport {
   #settleError(pending: PendingRequest, error: Error): void {
     if (!this.#pending.delete(pending.id)) return
     if (pending.timer) this.#clock.clearTimeout(pending.timer)
-    this.#report(error)
+    // The caller of a deliberate stop already knows; the failure reaches the waiting promise only.
+    if (!this.#stopped) this.#report(error)
     pending.deferred.reject(error)
   }
 
@@ -1160,13 +1171,17 @@ export class ClientTransport {
   }
 
   #emitFrame(message: ServerMessage): void {
-    for (const handler of this.#frameHandlers) handler(message)
+    notifyListeners(this.#frameHandlers, message, `frame`)
   }
 
   #report(error: Error): void {
     this.#lastError = error
-    for (const handler of this.#errorHandlers) handler(error)
-    this.#options.onError?.(error)
+    notifyListeners(this.#errorHandlers, error, `error`)
+    try {
+      this.#options.onError?.(error)
+    } catch (thrown) {
+      console.error(`realtime: the onError option threw`, thrown)
+    }
     this.#emitStatus()
   }
 
@@ -1177,7 +1192,7 @@ export class ClientTransport {
 
   #emitStatus(): void {
     const snapshot = this.statusSnapshot
-    for (const handler of this.#statusHandlers) handler(snapshot)
+    notifyListeners(this.#statusHandlers, snapshot, `status`)
   }
 
   #nextFrameId(): string {

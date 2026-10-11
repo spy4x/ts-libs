@@ -47,6 +47,7 @@ import {
   type ServerMessage,
 } from "./codec.ts"
 import { RealtimeRequestError } from "./errors.ts"
+import { notifyListeners } from "./listeners.ts"
 import type { Clock, TimerHandle } from "./clock.ts"
 import { type ManagedSocket, SocketState, type Unsubscribe } from "./socket-port.ts"
 
@@ -420,9 +421,7 @@ export class ConnectionRegistry {
     if (!this.#connections.has(connection.id)) return
     connection.announced = true
     connection.lastSeenAt = this.#clock.now()
-    for (const handler of this.#openHandlers) {
-      handler({ id: connection.id, userId: connection.userId })
-    }
+    notifyListeners(this.#openHandlers, { id: connection.id, userId: connection.userId }, `open`)
   }
 
   /**
@@ -468,7 +467,7 @@ export class ConnectionRegistry {
         userId: connection.userId,
         message,
       }
-      for (const handler of this.#frameHandlers) handler(context)
+      notifyListeners(this.#frameHandlers, context, `frame`)
       return
     }
     if (message.kind === "client.command" || message.kind === "client.query") {
@@ -665,12 +664,16 @@ export class ConnectionRegistry {
     }
 
     const code = peerCode ?? closeCodeFor(reason)
-    for (const handler of this.#closeHandlers) {
-      handler({ id: connection.id, userId: connection.userId }, {
-        reason,
-        code,
-        ...(detail !== undefined ? { detail } : {}),
-      })
+    for (const handler of [...this.#closeHandlers]) {
+      try {
+        handler({ id: connection.id, userId: connection.userId }, {
+          reason,
+          code,
+          ...(detail !== undefined ? { detail } : {}),
+        })
+      } catch (error) {
+        console.error(`realtime: a close listener threw`, error)
+      }
     }
 
     if (this.#connections.size === 0) this.#stopHeartbeat()
@@ -694,7 +697,7 @@ export class ConnectionRegistry {
       userId: connection.userId,
       reason,
     }
-    for (const handler of this.#malformedHandlers) handler(frame)
+    notifyListeners(this.#malformedHandlers, frame, `malformed frame`)
   }
 
   #startHeartbeat(): void {

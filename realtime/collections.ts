@@ -35,6 +35,7 @@ import type { CallPort } from "./calls.ts"
 import type { SyncFlushResult } from "./sync-runner.ts"
 import { isRetryable } from "./calls.ts"
 import { RealtimeRequestError } from "./errors.ts"
+import { notifyListeners } from "./listeners.ts"
 import { createIndexedDbOutboxStore } from "./outbox-indexeddb.ts"
 import {
   type AbandonReason,
@@ -338,7 +339,7 @@ export function createCollections(options: CollectionsOptions): Collections {
       flushQueues: flush,
     })
     outbox.subscribe(() => {
-      for (const listener of [...listeners]) listener()
+      notifyListeners(listeners, undefined, `queue`)
     })
     const applyQueued = (
       base: readonly unknown[],
