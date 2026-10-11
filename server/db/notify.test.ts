@@ -206,3 +206,23 @@ Deno.test("after stop it unsubscribes and calls nothing, even if the client stil
   assertEquals(heard, [])
   assertEquals(subscribed, 1)
 })
+
+Deno.test("reports a schema that throws and keeps listening", async () => {
+  const db = fakeSql()
+  const heard: unknown[] = []
+  const errors: unknown[] = []
+  const failure = new Error("morph failed")
+  await listenJson(db.sql, "inbox_changed", {
+    schema: type({ userId: "number" }).pipe((value) => {
+      if (value.userId === 13) throw failure
+      return value
+    }),
+    onMessage: (message) => void heard.push(message),
+    onError: (error) => void errors.push(error),
+  })
+  db.notify(`{"userId":13}`)
+  db.notify(`{"userId":1}`)
+
+  assertEquals(errors, [failure])
+  assertEquals(heard, [{ userId: 1 }])
+})

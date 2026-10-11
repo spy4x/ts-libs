@@ -157,9 +157,9 @@ export async function listenJson<S extends Type>(
     } catch {
       return
     }
-    const message = schema(value)
-    if (isArkErrors(message)) return
     try {
+      const message = schema(value)
+      if (isArkErrors(message)) return
       const done = onMessage(message as S["infer"])
       if (done instanceof Promise) done.catch(onError)
     } catch (error) {

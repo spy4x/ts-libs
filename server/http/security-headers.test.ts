@@ -346,11 +346,19 @@ Deno.test(`a response without a body is copied without one`, async () => {
 
 Deno.test(`a response that cannot be rebuilt is returned as it is`, async () => {
   const list = await securityHeaderList()
-  // A WebSocket upgrade answers 101, which `new Response` refuses to build; a stand-in with that
-  // status is all the helper reads.
+  // A WebSocket upgrade answers 101, which `new Response` refuses to build on Node; a stand-in
+  // with that status is all the helper reads.
   const upgrade = { status: 101, headers: new Headers({ upgrade: `websocket` }) } as Response
   const failed = Response.error()
 
   expect(withSecurityHeaders(upgrade, list)).toBe(upgrade)
   expect(withSecurityHeaders(failed, list)).toBe(failed)
+})
+
+Deno.test(`a copied response keeps every Set-Cookie header`, async () => {
+  const headers = new Headers()
+  headers.append(`set-cookie`, `session=1; Path=/; HttpOnly`)
+  headers.append(`set-cookie`, `theme=dark; Path=/`)
+  const copy = withSecurityHeaders(new Response(`ok`, { headers }), await securityHeaderList())
+  expect(copy.headers.getSetCookie()).toEqual([`session=1; Path=/; HttpOnly`, `theme=dark; Path=/`])
 })
