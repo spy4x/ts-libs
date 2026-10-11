@@ -426,6 +426,7 @@ const sync = createCalDavSync(transport, cache)
 
 ```ts
 import { childUrl, isSameOrigin, resolveHref, sameResource } from "@spy4x/caldav/url"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 const server = "https://dav.example.com/dav/"
 sameResource(
@@ -434,7 +435,7 @@ sameResource(
 ) // true: segments are compared decoded, a trailing slash is ignored
 sameResource("https://dav.example.com/a%2Fb", "https://dav.example.com/a/b") // false
 
-const newTask = childUrl("https://dav.example.com/cal/inbox/", `${crypto.randomUUID()}.ics`)
+const newTask = childUrl("https://dav.example.com/cal/inbox/", `${uuidV7()}.ics`)
 
 // Attach credentials only to the configured origin, and check every redirect target too.
 const target = resolveHref("https://elsewhere.example.org/cal/", server)
@@ -2056,7 +2057,7 @@ the browser and the API.
 ### `.` → `universal.ts`
 
 Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched are `Date`, `Intl`,
-`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.randomUUID` (only `universal/error-reporter`), `crypto.getRandomValues` (only `universal/uuid`, through `@std/uuid`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
+`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.getRandomValues` (only `universal/uuid`, through `@std/uuid`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
 `unref`s the handle where the runtime provides one). No other `crypto` calls and no DOM global: the
 browser- and server-only halves are the other two subpaths.
 
@@ -2141,9 +2142,10 @@ counter. When more than the counter holds are made in one millisecond, or the cl
 id's time runs slightly ahead of the clock instead of breaking the order. Two processes or two
 browser tabs do not share the counter, so their ids sort by millisecond only.
 
-Do not use version 7 for a value that must not reveal when it was made, or that works as a secret
-(a session id, a reset or invitation token, an unguessable link): keep `crypto.randomUUID()` or a
-random token from `./tokens` there.
+Two kinds of value are never a UUID: one that works as a secret (a session id, a CSRF, lock or
+claim token, a reset or invitation token), and an id that other people see and that must not show
+when it was made (a share link, a public profile or order number). Both are `randomBase64Url()`
+from `./tokens`.
 
 `isUuid(value)` is a type guard for a lower-case UUID of any version, and `isUuid(value, 7)` for one
 version in the standard variant. `UUID_PATTERN` (any version) and `UUID_V7_PATTERN` are the regular
@@ -3460,9 +3462,11 @@ const stop = watchPageResume(() => transport.resume())
 ### Commands and queries
 
 ```ts
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
+
 try {
   const group = await transport.command("group.rename", { groupId, title }, {
-    idempotencyKey: crypto.randomUUID(), // resend with the same key after a drop
+    idempotencyKey: uuidV7(), // resend with the same key after a drop
   })
   const list = await transport.query("group.list", undefined, { timeoutMs: 5_000 })
 } catch (error) {
@@ -6240,6 +6244,7 @@ new OutboxProcessor(repository, publisher, { repeatEveryMs: { "outbox.cleanup": 
 
 `createIdempotencyMiddleware`, `fingerprint`, `isIdempotencyKey`, `IdempotencyError`,
 `IdempotencyStore`, `PostgresIdempotencyStore`, `IDEMPOTENCY_POSTGRES_SCHEMA`,
+`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`,
 `MemoryIdempotencyStore`, `IDEMPOTENCY_LEASE_SECONDS`, `IDEMPOTENCY_RETENTION_DAYS`. Extracted from
 `template/libs/server/idempotency/` (#313).
 
@@ -6274,6 +6279,25 @@ table; add `REFERENCES users (id) ON DELETE CASCADE` if you want rows to go with
 **Fencing.** `begin` returns `{ status: "claimed", token }`; `complete` and `release` take that token
 and change nothing when it is not the key's current one. A run that outlives its lease and loses its
 claim to a retry therefore can neither free the new owner's claim nor store its own result over it.
+The token proves who holds the claim, so it is a random token (16 bytes as base64url, from
+`randomBase64Url()` of `@spy4x/platform/tokens`), not a UUID. Treat it as an opaque string.
+
+**Upgrading to 1.64.0.** Until 1.63.0 the token was a UUID and `claim_token` was a `uuid` column.
+The new token does not fit that column, so a table made before 1.64.0 needs
+`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`, which widens the column to `text`. Deploy in this order:
+
+1. Run `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT` as a migration while the previous API still serves.
+   That is safe: stored tokens keep their printed form, so a run in flight still completes or
+   releases its claim, and the previous store's UUID tokens fit a `text` column.
+2. Start the API on 1.64.0. Old and new instances may run side by side on the widened column.
+
+Never start an API on 1.64.0 against the `uuid` column: every command sent with a key then fails
+with a Postgres error (`invalid input syntax for type uuid`) until the migration has run. A
+roll-back to the previous API needs no second migration. The statement rewrites the table under a
+lock that blocks it for that moment; the table holds at most `retentionDays` of keys. If your own
+migration gave `claim_token` a default, the statement keeps it. Every store that knows the column
+writes its own token, so the default only serves an API from before the column existed; drop it in
+your own migration once no such API can start.
 
 **What it does not do.** The claim and the command are not one transaction. A process that dies
 after the command committed and before its result was stored leaves a claim that expires after the
