@@ -275,3 +275,9 @@ Deno.test(`a server copy already at a later occurrence than mine does not move o
   const theirs = server(edited(REPEATING, { due: morning(`2026-10-12`) }, ELSEWHERE))
   expect(kept(REPEATING, completed(REPEATING), theirs).ics).toBe(theirs.ics)
 })
+
+Deno.test(`a server copy that is completed is not completed again for a completion of mine it lacks`, () => {
+  const theirs = server(completed(edited(REPEATING, { repeatRule: null }, ELSEWHERE), ELSEWHERE))
+  expect(theirs.status).toBe(TaskStatus.Completed)
+  expect(kept(REPEATING, completed(completed(REPEATING)), theirs).ics).toBe(theirs.ics)
+})
