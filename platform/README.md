@@ -56,6 +56,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`, `initials`                                                                                                                                                                                                                                                                     |
 | `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`, `nextUtcHour`                                                                                                                                                                                                                                                                                        |
 | `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                                                                                                                                                                                                                                                 |
+| `universal/uuid`            | `uuidV7`, `isUuid`, `UUID_PATTERN`, `UUID_V7_PATTERN`, `UuidVersion` — time-ordered ids for stored records and UUID validators; see below                                                                                                                                                                                                                                                               |
 
 The old one-line CSV splitter and `mapConcurrent` (formerly in `universal/concurrency`) were
 removed in 1.0: `@std/csv` and `@std/async`'s `pooledMap` already cover them. `universal/csv` is now
@@ -99,6 +100,34 @@ same rule, so the first and last tick are exactly the bounds. It exists so `prea
 `niceScale` can drop its own copy of the tick loop (#201). The same release fixed tick rounding for
 a step with more than one significant digit: `ticks(0, 10, 4)` returned `[0, 3, 5, 8, 10]` and now
 returns `[0, 2.5, 5, 7.5, 10]`.
+
+#### `universal/uuid` — version 7 ids and UUID validators
+
+`uuidV7()` returns a lower-case UUID version 7 for the id of a stored record. The id starts with the
+millisecond it was made in, so new rows land next to each other in a database index and ids sort by
+age. `@std/uuid` builds the id; this module adds the order inside one millisecond: ids made by one
+process always sort in the order they were made, because the 12 bits after the version digit hold a
+counter. When more than the counter holds are made in one millisecond, or the clock steps back, the
+id's time runs slightly ahead of the clock instead of breaking the order. Two processes or two
+browser tabs do not share the counter, so their ids sort by millisecond only.
+
+Do not use version 7 for a value that must not reveal when it was made, or that works as a secret
+(a session id, a reset or invitation token, an unguessable link): keep `crypto.randomUUID()` or a
+random token from `./tokens` there.
+
+`isUuid(value)` is a type guard for a lower-case UUID of any version, and `isUuid(value, 7)` for one
+version in the standard variant. `UUID_PATTERN` (any version) and `UUID_V7_PATTERN` are the regular
+expressions behind them; arktype takes either as a schema, so no app writes its own:
+
+```ts
+import { type } from "arktype"
+import { UUID_V7_PATTERN, uuidV7 } from "@spy4x/platform/universal/uuid"
+
+const noteSchema = type({ id: UUID_V7_PATTERN, text: "string" })
+const note = noteSchema.assert({ id: uuidV7(), text: "milk" })
+```
+
+Upper-case input is refused. `./keyset-cursor` checks its page key's id with `UUID_PATTERN`.
 
 ### `./browser` → `browser.ts`
 
