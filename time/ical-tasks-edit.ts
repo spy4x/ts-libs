@@ -600,10 +600,26 @@ const MAX_COMPLETIONS = 30
  *   A server copy whose dates are a later occurrence of the base counts as completed that many
  *   times, whoever moved it: a task left one occurrence behind is seen and completed again, one
  *   moved too far skips work nobody did.
+ * - When my text is completed, the result is completed or the call refuses. A completed text whose
+ *   dates or rule no run of completions gives (I removed the repeat, then completed) has its
+ *   fields written first, each compared with the base itself, and is completed after that.
+ *
+ * What it does not do:
+ *
+ * - Reminders are one field. If I changed any, my list replaces the server's whole list, and a
+ *   reminder the other side added is removed.
+ * - A repeating task whose dates I changed before completing it, and one I completed more than 30
+ *   times in a row, are not recognised as completed: the task is still open in my text, so its
+ *   dates, rule and reminders are written as fields I changed and the result has the dates of my
+ *   text. A reminder at an absolute time has moved in my text then, so the reminders count as
+ *   changed and the point above applies.
+ * - It does not move a task to another list: a text does not say where it lives.
  *
  * Nothing is written when a step refuses: a text that does not read, a completion the server's
- * copy does not allow (it now repeats with no due date, say), a field {@link editTask} refuses.
- * Never send `mineIcs` whole then: that would undo every change of the other side.
+ * copy does not allow (it now repeats with no due date, say, or still repeats after a completion
+ * that ended the series in my text), a field {@link editTask} refuses. A refused reopening needs a
+ * `theirs` whose `ics` is not the text its `status` was read from. Never send `mineIcs` whole
+ * then: that would undo every change of the other side.
  */
 export function keepMineText(
   baseIcs: string,
@@ -621,29 +637,46 @@ export function keepMineText(
   const mySteps = stepsBetween(base.output, mine.output, now)
   const theirSteps = stepsBetween(base.output, theirs, now)
   let task = theirs
-  if (mySteps.count < 0) {
-    if (isDone(task)) {
-      const reopened = reopenTask(task, now)
-      if (!reopened.success) {
-        return unkept(KeepMineStep.Reopen, reopened.error.message, reopened.error.code)
-      }
-      task = reopened.output.task
+  const edit = (): KeepMineResult | undefined => {
+    // With no change left, the patch is empty and the text comes back byte for byte.
+    const edited = editTask(task, changesOf(mySteps.after, fieldsOf(mine.output)), now)
+    if (!edited.success) return unkept(KeepMineStep.Edit, edited.error)
+    task = edited.output.task
+  }
+  const complete = (): KeepMineResult | undefined => {
+    const completed = completeTask(task, now)
+    if (!completed.success) {
+      return unkept(KeepMineStep.Complete, completed.error.message, completed.error.code)
     }
-  } else {
-    for (let made = Math.max(theirSteps.count, 0); made < mySteps.count && !isDone(task); made++) {
-      const completed = completeTask(task, now)
-      if (!completed.success) {
-        return unkept(KeepMineStep.Complete, completed.error.message, completed.error.code)
-      }
-      task = completed.output.task
-    }
+    task = completed.output.task
   }
 
-  const changes = changesOf(mySteps.after, fieldsOf(mine.output))
-  // With no change left, the patch is empty and the text comes back byte for byte.
-  const edited = editTask(task, changes, now)
-  if (!edited.success) return unkept(KeepMineStep.Edit, edited.error)
-  task = edited.output.task
+  if (mySteps.finished) {
+    // My fields first: the rule I removed must be gone before the completion, or it only moves on.
+    const refused = edit() ?? (isDone(task) ? undefined : complete())
+    if (refused) return refused
+  } else {
+    if (mySteps.count < 0) {
+      if (isDone(task)) {
+        const reopened = reopenTask(task, now)
+        if (!reopened.success) {
+          return unkept(KeepMineStep.Reopen, reopened.error.message, reopened.error.code)
+        }
+        task = reopened.output.task
+      }
+    } else {
+      const from = Math.max(theirSteps.count, 0)
+      for (let made = from; made < mySteps.count && !isDone(task); made++) {
+        const refused = complete()
+        if (refused) return refused
+      }
+    }
+    const refused = edit()
+    if (refused) return refused
+  }
+  if (isDone(mine.output) && !isDone(task)) {
+    return unkept(KeepMineStep.Complete, `the server's copy repeats and stays open when completed`)
+  }
   return { success: true, output: { task, ics: task.ics }, error: null }
 }
 
@@ -663,30 +696,34 @@ function sameOccurrence(a: Task, b: Task): boolean {
     same(ruleOf(a.repeatRule), ruleOf(b.repeatRule))
 }
 
-/**
- * The completions (`count` above 0) or the reopening (`count` -1) that lead from `base` to `to`,
- * and `after`: `base` with those made, which is what the other fields of `to` are compared with.
- */
-function stepsBetween(base: Task, to: Task, now: Date): { count: number; after: Task } {
-  const none = { count: 0, after: base }
+interface Steps {
+  /** Completions made (above 0), or -1 for a reopening. */
+  count: number
+  /** `base` with those made: what the other fields of the copy are compared with. */
+  after: Task
+  /** The copy is completed in a way no run of completions of `base` gives. */
+  finished?: boolean
+}
+
+/** The completions or the reopening that lead from `base` to `to`. */
+function stepsBetween(base: Task, to: Task, now: Date): Steps {
+  const none: Steps = { count: 0, after: base }
   if (sameOccurrence(base, to)) return none
   if (isDone(base)) {
+    // Both completed: the dates differ, which is a change of fields and not a reopening.
     if (isDone(to)) return none
     const reopened = reopenTask(base, now)
     return { count: -1, after: reopened.success ? reopened.output.task : base }
   }
   let after = base
-  let first: Task | undefined
   for (let count = 1; count <= MAX_COMPLETIONS; count++) {
     const completed = completeTask(after, now)
     if (!completed.success) break
     after = completed.output.task
-    first ??= after
     if (sameOccurrence(after, to)) return { count, after }
     if (isDone(after)) break
   }
-  // Completed, at dates no run of completions gives: one completion and a change of dates.
-  return isDone(to) ? { count: 1, after: first ?? base } : none
+  return isDone(to) ? { ...none, finished: true } : none
 }
 
 /** Every field of `task` an edit can carry, the list apart: a text does not say where it lives. */
