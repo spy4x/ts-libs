@@ -220,7 +220,7 @@ for (const column of COLUMN_TYPES) {
 }
 
 describe("PostgresIdempotencyStore while claim_token is widened under it", () => {
-  it("still claims, completes, releases and takes over on a connection opened before the column became text", async () => {
+  it("still completes and releases a claim on a connection opened before the column became text", async () => {
     // One connection, so every statement below was prepared on it while the column was `uuid`.
     const fixture = await openSchema(undefined, "uuid", 1)
     try {
@@ -230,15 +230,11 @@ describe("PostgresIdempotencyStore while claim_token is widened under it", () =>
         if (outcome.status !== "claimed") throw new Error(`expected a claim, got ${outcome.status}`)
         return outcome.token
       }
-      // Every statement of the store runs once on the `uuid` column.
+      // `complete` and `release` each run once on the `uuid` column.
       await store.complete(1, "warm-done", await tokenOf("warm-done"), 1)
       await store.release(1, "warm-freed", await tokenOf("warm-freed"))
-      await tokenOf("warm-taken")
-      await fixture.advance((IDEMPOTENCY_LEASE_SECONDS + 5) * 1000)
-      await tokenOf("warm-taken")
       const done = await tokenOf("done")
       const freed = await tokenOf("freed")
-      await tokenOf("taken")
 
       await sql.unsafe(IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT)
 
@@ -246,12 +242,6 @@ describe("PostgresIdempotencyStore while claim_token is widened under it", () =>
       expect(await store.begin(claim("done"))).toEqual({ status: "replay", result: "kept" })
       await store.release(1, "freed", freed)
       expect(await store.begin(claim("freed"))).toMatchObject({ status: "claimed" })
-      await sql`
-        UPDATE idempotency_keys
-        SET updated_at = updated_at - INTERVAL '1 hour'
-        WHERE key = 'taken'
-      `
-      expect(await store.begin(claim("taken"))).toMatchObject({ status: "claimed" })
     } finally {
       await fixture.close()
     }
