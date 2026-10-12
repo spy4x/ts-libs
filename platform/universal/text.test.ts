@@ -9,6 +9,8 @@ import {
   hasUnstorableTextCharacters,
   initials,
   levenshtein,
+  maskEmail,
+  MAX_MASKED_EMAIL_LENGTH,
   pluralize,
   search,
   searchWords,
@@ -580,5 +582,99 @@ describe("hasUnstorableTextCharacters", () => {
 
   it("accepts ordinary Hebrew and Arabic text", () => {
     acceptsEach(["שלום עולם", "مرحبا بالعالم", "\u200fשלום (draft)", "می\u200cخواهم"])
+  })
+})
+
+describe("maskEmail", () => {
+  it("keeps the first character of the local part and the whole domain", () => {
+    expect(maskEmail("jane.doe@example.com")).toBe("j***@example.com")
+  })
+
+  it("never returns more of the local part than its first character", () => {
+    for (const local of ["jane.doe", "ab", "a.b+tag", "jane@doe", "j***", "  spaced"]) {
+      const masked = maskEmail(`${local}@example.com`)
+      expect(masked).toBe(`${local.trim()[0]}***@example.com`)
+    }
+  })
+
+  it("masks a one-letter local part like a longer one, so the length does not show", () => {
+    expect(maskEmail("j@example.com")).toBe("j***@example.com")
+    expect(maskEmail("jo@example.com")).toBe(maskEmail("j@example.com"))
+  })
+
+  it("returns a masked address unchanged", () => {
+    expect(maskEmail(maskEmail("jane.doe@example.com"))).toBe("j***@example.com")
+  })
+
+  it("returns its own output unchanged for every kind of input", () => {
+    const inputs = [
+      "@example.com",
+      "@",
+      "***@example.com",
+      "**@example.com",
+      "*@example.com",
+      "j@example.com",
+      "jane@doe@example.com",
+      "  spaced @ example.com ",
+      "no at sign",
+      "",
+      "\u{1F600}smile@example.com",
+      `a@${"d".repeat(253)}`,
+      `a@${"d".repeat(254)}`,
+    ]
+    for (const input of inputs) {
+      const once = maskEmail(input)
+      expect(maskEmail(once)).toBe(once)
+    }
+    expect(maskEmail("@example.com")).toBe("***@example.com")
+    expect(maskEmail("***@example.com")).toBe("***@example.com")
+  })
+
+  it("shows nothing of an address whose domain is longer than 253 characters", () => {
+    expect(maskEmail(`jane@${"d".repeat(253)}`)).toBe(`j***@${"d".repeat(253)}`)
+    expect(maskEmail(`jane@${"d".repeat(254)}`)).toBe("***")
+    expect(maskEmail(`jane@${"d".repeat(2_000_000)}`)).toBe("***")
+  })
+
+  it("never returns more than MAX_MASKED_EMAIL_LENGTH code units", () => {
+    const longest = maskEmail(`\u{1F600}${"x".repeat(1000)}@${"d".repeat(253)}`)
+    expect(longest).toHaveLength(MAX_MASKED_EMAIL_LENGTH)
+    expect(maskEmail(`${"x".repeat(100_000)}@example.com`)).toBe("x***@example.com")
+    for (const domainLength of [254, 300, 1000]) {
+      const masked = maskEmail(`\u{1F600}jane@${"d".repeat(domainLength)}`)
+      expect(masked.length).toBeLessThanOrEqual(MAX_MASKED_EMAIL_LENGTH)
+    }
+  })
+
+  it("shows nothing of a value with no @", () => {
+    expect(maskEmail("jane.doe")).toBe("***")
+    expect(maskEmail("")).toBe("***")
+    expect(maskEmail("   ")).toBe("***")
+    expect(maskEmail(undefined as unknown as string)).toBe("***")
+  })
+
+  it("masks an empty local part and keeps an empty domain empty", () => {
+    expect(maskEmail("@example.com")).toBe("***@example.com")
+    expect(maskEmail("jane@")).toBe("j***@")
+  })
+
+  it("splits at the last @", () => {
+    expect(maskEmail("jane@doe@example.com")).toBe("j***@example.com")
+  })
+
+  it("drops surrounding white space and keeps the domain's case", () => {
+    expect(maskEmail("  Jane@Example.COM \n")).toBe("J***@Example.COM")
+  })
+
+  it("keeps a non-ASCII first letter and a non-ASCII domain", () => {
+    expect(maskEmail("Ünal@пример.рф")).toBe("Ü***@пример.рф")
+  })
+
+  it("keeps a first character outside the basic plane whole", () => {
+    expect(maskEmail("\u{1F600}smile@example.com")).toBe("\u{1F600}***@example.com")
+  })
+
+  it("keeps only the base letter of a first letter written with a combining accent", () => {
+    expect(maskEmail("e\u0301ric@example.com")).toBe("e***@example.com")
   })
 })

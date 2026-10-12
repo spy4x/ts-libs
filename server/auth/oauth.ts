@@ -10,7 +10,8 @@
  *   (`emailVerified`) and a user already owns that address as a proven one.
  * - An address the provider does not vouch for is not stored on the key at all.
  * - Every flow uses PKCE (S256) and a single-use, expiring `state`, which must also match the value
- *   the app kept in the browser that started the flow.
+ *   the app kept in the browser that started the flow. A callback `state` that is not 43 base64url
+ *   characters is refused before the flow store is asked.
  * - The pending flow is deleted before anything else happens in the callback, so it is gone on
  *   every exit, including a token or profile request that throws.
  * - `disconnect` deletes one key by id, and only when it is this provider's key of this user.
@@ -18,6 +19,10 @@
  *   single-use token, kept in the flow store under the key method and the token's SHA-256 hash for
  *   10 minutes, so only the sign-in that issued it can redeem it;
  *   `confirmSignUp(token)` creates the user. Signing in and linking stay automatic.
+ * - `connectUrl(userId)` starts a flow bound to a signed-in user, and `handleConnectCallback` adds
+ *   the provider identity to exactly that user, whatever its address. It creates no user and no
+ *   session. A connect flow is kept under its own key and carries the user id, so it cannot be
+ *   completed as a sign-in, nor a sign-in flow as a connect.
  *
  * Pending flows live in an {@link OAuthFlowStore}. The default keeps them in memory inside the
  * object {@link createOAuthSignIn} returns, so a callback must reach the same process that built
@@ -183,6 +188,10 @@ export enum OAuthOutcome {
   Linked = 3,
   /** Nobody was created yet: the callback returned a token for `confirmSignUp` (`signUp: "confirm"`). */
   PendingSignUp = 4,
+  /** `handleConnectCallback` added the key to the signed-in user who started the flow. */
+  Connected = 5,
+  /** `handleConnectCallback` found the key already on that user, and wrote nothing. */
+  AlreadyConnected = 6,
 }
 
 /** A successful callback: the session, plus how the person was resolved and what the provider said. */
@@ -208,6 +217,32 @@ export interface OAuthPendingSignUp {
   expiresAt: Date
 }
 
+/** What the app passes from the callback request of a flow started with `connectUrl`. */
+export interface OAuthConnectCallbackInput {
+  /** The callback URL's query: `code` and `state`, or `error`. */
+  query: URLSearchParams
+  /** The `state` the app kept in the browser (the cookie), or null/undefined when it has none. */
+  browserState: string | null | undefined
+  /**
+   * The id of the user signed in on the callback request, read from the session. It must be the
+   * user the flow was started for; any other is refused as `invalid-state`.
+   */
+  userId: number
+}
+
+/**
+ * A successful connect callback: the user the flow was started for and this provider's key on it.
+ * There is no session: the person stays signed in as they were.
+ */
+export interface OAuthConnectResult {
+  user: AuthUser
+  key: AuthKey
+  /** `Connected` when the key was added now, `AlreadyConnected` when this user already had it. */
+  outcome: OAuthOutcome.Connected | OAuthOutcome.AlreadyConnected
+  /** What the provider said about the person. */
+  profile: OAuthProfile
+}
+
 /** Why a callback was refused. */
 export type OAuthFailure =
   /** The query has no `code` or no `state`. */
@@ -226,8 +261,13 @@ export type OAuthFailure =
   | "user-deleted"
   /** `confirmSignUp` got a token that is unknown, already used or expired. */
   | "invalid-sign-up"
+  /** `handleConnectCallback`: this provider identity already belongs to another user. */
+  | "identity-taken"
 
-/** Thrown by {@link OAuthSignIn.handleCallback}. `reason` says why; the message is not an API. */
+/**
+ * Thrown by {@link OAuthSignIn.handleCallback}, `confirmSignUp`, `connectUrl` and
+ * `handleConnectCallback`. `reason` says why; the message is not an API.
+ */
 export class OAuthSignInError extends Error {
   readonly reason: OAuthFailure
 
@@ -257,6 +297,27 @@ export interface OAuthSignIn {
    * delete; the in-memory store has no sessions to cascade.
    */
   disconnect(userId: number, keyId: number): Promise<boolean>
+  /**
+   * Starts a flow that connects this provider to the signed-in user `userId`, instead of signing
+   * anyone in: a fresh `state` and PKCE pair, as {@link OAuthSignIn.authorizationUrl} makes. Keep
+   * `state` in an HttpOnly cookie of its own, so the callback route can tell which of
+   * `handleCallback` and `handleConnectCallback` the flow belongs to.
+   *
+   * @throws {TypeError} When `userId` is not a positive integer.
+   * @throws {OAuthSignInError} `user-deleted` when there is no such user, or it is deleted.
+   */
+  connectUrl(userId: number): Promise<OAuthAuthorization>
+  /**
+   * Completes a flow started with `connectUrl`: checks `state` and that `input.userId` is the user
+   * the flow was started for, exchanges the code with the PKCE verifier, reads the profile, then
+   * adds the provider identity to that user, whatever its address. Never creates a user or a
+   * session. The identity already on this user succeeds as `AlreadyConnected` and writes nothing.
+   *
+   * @throws {OAuthSignInError} When the callback is refused: `identity-taken` when the identity
+   * belongs to another user, `invalid-state` for a flow that was not started with `connectUrl` for
+   * this user. The flow is consumed either way.
+   */
+  handleConnectCallback(input: OAuthConnectCallbackInput): Promise<OAuthConnectResult>
 }
 
 /** Sign-in with one provider, created with `signUp: "confirm"`. */
@@ -289,6 +350,12 @@ const MAX_RESPONSE_BYTES = 64 * 1024
 /** 256 bits each; base64url renders them as 43 characters, the PKCE verifier's minimum length. */
 const STATE_BYTES = 32
 const VERIFIER_BYTES = 32
+/**
+ * What `randomBase64Url(STATE_BYTES)` gives: 43 base64url characters. A callback's `state` of any
+ * other shape was not made here and is refused before the flow store is asked, so a crafted
+ * `connect:…` or `sign-up:…` store key cannot be taken as a `state`.
+ */
+const STATE_SHAPE = /^[A-Za-z0-9_-]{43}$/
 const PROVIDER_ID = /^[a-z0-9][a-z0-9-]{0,57}$/
 /** Tries of the account resolution when a parallel write changed what it read. */
 const RESOLVE_ATTEMPTS = 2
@@ -299,6 +366,13 @@ const SIGN_UP_TTL_MS = 600_000
  * binds a token to the sign-in that issued it, so a sign-in sharing the store cannot redeem it.
  */
 const SIGN_UP_KEY_PREFIX = "sign-up:"
+/**
+ * Flow-store key prefix of connect flows, before the key method and the `state`. A sign-in callback
+ * looks its `state` up without the prefix, and a `state` that is not of the shape {@link STATE_SHAPE}
+ * never reaches the store, so no `state` a sign-in callback accepts can name a connect flow's key,
+ * even in a store that drops the flow's `connect` field.
+ */
+const CONNECT_KEY_PREFIX = "connect:"
 
 const tokenResponse = type({
   access_token: "0 < string <= 4096",
@@ -339,11 +413,33 @@ export function createOAuthSignIn(
     throw new TypeError(`signUp must be "confirm" or left out`)
   }
 
-  async function authorizationUrl(): Promise<OAuthAuthorization> {
+  /** Where the flow of `state` is kept: under the state itself, or under the connect prefix. */
+  function flowKey(state: string, connect: boolean): string {
+    return connect ? `${CONNECT_KEY_PREFIX}${method}:${state}` : state
+  }
+
+  function authorizationUrl(): Promise<OAuthAuthorization> {
+    return startFlow(undefined)
+  }
+
+  async function connectUrl(userId: number): Promise<OAuthAuthorization> {
+    if (!Number.isSafeInteger(userId) || userId < 1) {
+      throw new TypeError("userId must be a positive integer")
+    }
+    await liveUser(userId)
+    return await startFlow(userId)
+  }
+
+  /** Keeps a fresh flow, bound to the user `connect` when given, and builds its URL. */
+  async function startFlow(connect: number | undefined): Promise<OAuthAuthorization> {
     const state = randomBase64Url(STATE_BYTES)
     const verifier = randomBase64Url(VERIFIER_BYTES)
     const expiresAt = clock.now() + ttlMs
-    await flows.put(state, { verifier }, new Date(expiresAt))
+    await flows.put(
+      flowKey(state, connect !== undefined),
+      connect === undefined ? { verifier } : { verifier, connect },
+      new Date(expiresAt),
+    )
 
     const url = new URL(authorizationEndpoint)
     for (const [name, value] of Object.entries(provider.authorizationParams ?? {})) {
@@ -361,11 +457,18 @@ export function createOAuthSignIn(
 
   /**
    * Removes the flow for `state` and returns it when it is live and the browser holds the same state.
-   * The store's `take` deletes it first, so it is gone on every exit.
+   * The store's `take` deletes it first, so it is gone on every exit. With `connect` it must be a
+   * flow `connectUrl` started, and without it one that `authorizationUrl` started.
    */
-  async function takeFlow(state: string, browserState: unknown): Promise<OAuthTakenFlow> {
-    const flow = await flows.take(state)
-    if (!flow || flow.signUp || typeof browserState !== "string") {
+  async function takeFlow(
+    state: string,
+    browserState: unknown,
+    connect: boolean,
+  ): Promise<OAuthTakenFlow> {
+    if (!STATE_SHAPE.test(state)) throw new OAuthSignInError("invalid-state")
+    const flow = await flows.take(flowKey(state, connect))
+    const rightKind = connect ? flow?.connect !== undefined : flow?.connect === undefined
+    if (!flow || flow.signUp || !rightKind || typeof browserState !== "string") {
       throw new OAuthSignInError("invalid-state")
     }
     const same = await constantTimeEquals(await sha256Hex(state), await sha256Hex(browserState))
@@ -510,16 +613,65 @@ export function createOAuthSignIn(
   ): Promise<OAuthSignInResult | OAuthPendingSignUp> {
     const state = input.query.get("state")
     if (state === null || state === "") throw new OAuthSignInError("invalid-request")
-    const flow = await takeFlow(state, input.browserState)
-    if (input.query.has("error")) throw new OAuthSignInError("provider-error")
-    const code = input.query.get("code")
-    if (code === null || code === "") throw new OAuthSignInError("invalid-request")
-
-    const accessToken = await exchangeCode(code, flow.verifier)
-    const profile = await fetchProfile(accessToken)
+    const profile = await redeem(input.query, await takeFlow(state, input.browserState, false))
     const resolved = await resolveKey(profile, signUp === undefined)
     if (!resolved) return await holdSignUp(profile)
     return await startSession(resolved, profile, input.device)
+  }
+
+  /** Reads the profile the callback's code stands for, once its flow was taken. */
+  async function redeem(query: URLSearchParams, flow: OAuthTakenFlow): Promise<OAuthProfile> {
+    if (query.has("error")) throw new OAuthSignInError("provider-error")
+    const code = query.get("code")
+    if (code === null || code === "") throw new OAuthSignInError("invalid-request")
+    return await fetchProfile(await exchangeCode(code, flow.verifier))
+  }
+
+  async function handleConnectCallback(
+    input: OAuthConnectCallbackInput,
+  ): Promise<OAuthConnectResult> {
+    const state = input.query.get("state")
+    if (state === null || state === "") throw new OAuthSignInError("invalid-request")
+    const flow = await takeFlow(state, input.browserState, true)
+    // The flow is bound to the user who started it: another user's session cannot complete it.
+    if (flow.connect !== input.userId) throw new OAuthSignInError("invalid-state")
+    return await connectKey(flow.connect, await redeem(input.query, flow))
+  }
+
+  /**
+   * Puts the key for this `sub` on the user `userId`, and on nobody else:
+   *
+   * 1. A key with this method and `sub` exists on this user → nothing is written.
+   * 2. It exists on another user → refused as `identity-taken`.
+   * 3. Otherwise → the key is added to this user. It carries the address, proven, only when the
+   *    provider vouches for it and no other user owns it proven; otherwise it carries none.
+   */
+  async function connectKey(userId: number, profile: OAuthProfile): Promise<OAuthConnectResult> {
+    const vouched = profile.emailVerified === true ? normalizeEmail(profile.email) : null
+    for (let attempt = 1;; attempt++) {
+      try {
+        const user = await liveUser(userId)
+        const existing = await store.findKey(method, profile.subject)
+        if (existing) {
+          if (existing.userId !== user.id) throw new OAuthSignInError("identity-taken")
+          return { user, key: existing, outcome: OAuthOutcome.AlreadyConnected, profile }
+        }
+        const ownerId = vouched === null ? null : await store.findUserIdByProvenEmail(vouched)
+        const email = ownerId === null || ownerId === user.id ? vouched : null
+        const key = await store.addKey(user.id, {
+          method,
+          subject: profile.subject,
+          email,
+          secret: null,
+          provenAt: email === null ? null : new Date(clock.now()),
+        })
+        return { user, key, outcome: OAuthOutcome.Connected, profile }
+      } catch (error) {
+        // A parallel callback added this key, or someone proved the address, between the reads and
+        // the write. Reading again resolves it.
+        if (!(error instanceof AuthConflictError) || attempt >= RESOLVE_ATTEMPTS) throw error
+      }
+    }
   }
 
   async function startSession(
@@ -580,6 +732,8 @@ export function createOAuthSignIn(
     handleCallback,
     confirmSignUp,
     disconnect,
+    connectUrl,
+    handleConnectCallback,
   }
   return signIn
 }

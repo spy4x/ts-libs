@@ -955,7 +955,7 @@ rejects, the rejection reaches the caller and the code is already issued.
 
 `createOAuthSignIn`, `OAuthSignInError`, `OAuthFailure`, `OAuthOutcome`, `OAuthProviderConfig`,
 `OAuthProfile`, `OAuthProfileContext`, `ConfirmableOAuthSignIn`, `ConfirmableOAuthSignInOptions`,
-`OAuthPendingSignUp`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, the flow stores
+`OAuthPendingSignUp`, `OAuthConnectCallbackInput`, `OAuthConnectResult`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, the flow stores
 (`createMemoryOAuthFlowStore`, `createKvOAuthFlowStore`, `OAuthFlowStore`, `OAuthFlowKv`,
 `OAuthPendingFlow`, `OAuthTakenFlow`, `DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and
 result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
@@ -1072,6 +1072,49 @@ const google = createOAuthSignIn({
 })
 ```
 
+**Connect a provider to the signed-in user: `connectUrl` and `handleConnectCallback`.** Signing in
+links a provider to an account only when the provider vouches for an address the account has
+proven. A person whose Google address is not their account's address connects it from their
+settings instead. `connectUrl(userId)` starts a flow bound to that user, with the same PKCE pair and
+single-use, expiring `state` as a sign-in. `handleConnectCallback({ query, browserState, userId })`
+completes it, where `userId` is the user signed in on the callback request:
+
+- The provider identity is new: its key is added to that user (`Connected`), whatever its address.
+  The key carries the address, proven, only when the provider vouches for it and no other user
+  owns it proven; otherwise it carries none. A proven address is exclusive, as it is for a
+  provider sign-up: when another user holds that address on an unproven key, connecting deletes
+  that user's key, and a user whose only key it was is left with none.
+- This user already has it: nothing is written (`AlreadyConnected`).
+- Another user has it: refused as `identity-taken`, so the app can say "this Google account is
+  already connected to another account". Nothing is written.
+
+It never creates a user and never creates a session: the person stays signed in as they were. A
+callback whose `userId` is not the user the flow was started for is refused as `invalid-state`, and
+a deleted or unknown user as `user-deleted`. The two kinds of flow do not mix: a connect flow is
+kept under `connect:<method>:<state>` and carries the user id, so `handleCallback` refuses its
+`state`, and `handleConnectCallback` refuses the `state` of a flow `authorizationUrl()` started,
+both as `invalid-state`. Either callback also refuses, before it asks the flow store, a `state`
+that is not the 43 base64url characters this module makes, so a crafted `connect:…` or `sign-up:…`
+store key is never looked up, whatever fields a third-party store keeps. Both callbacks arrive at the one `redirectUri`, so keep the connect flow's
+`state` in a cookie of its own and call the handler whose cookie holds the query's `state`.
+
+```ts
+// Settings, signed in as `session.userId`:
+const { url, state } = await google.connectUrl(session.userId) // `state` → the connect cookie
+// …in the callback route, when the connect cookie holds the query's state:
+try {
+  const { outcome } = await google.handleConnectCallback({
+    query,
+    browserState: connectCookie,
+    userId: session.userId,
+  })
+} catch (error) {
+  if (error instanceof OAuthSignInError && error.reason === "identity-taken") {
+    // show "already connected to another account"
+  }
+}
+```
+
 **`disconnect(userId, keyId)` deletes one key.** Only when the key exists, belongs to `userId`, and
 has this provider's method; any other id returns `false` and deletes nothing. On the Postgres store
 the key's sessions end with it, through the cascade.
@@ -1093,8 +1136,6 @@ as given, because providers compare it character by character.
 - **It does not verify an ID token or send a `nonce`.** The profile comes from the user-info
   endpoint, called with the access token the token endpoint returned over TLS.
 - **It does not update a key's address** when the provider later reports a different one.
-- **It does not connect a provider to the signed-in user.** Only sign-in, sign-up and linking by a
-  vouched-for address.
 - **It does not refuse to disconnect a user's last key.** The app decides whether that is allowed.
 
 ## `server/crypto`
