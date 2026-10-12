@@ -9,6 +9,7 @@ import {
   hasUnstorableTextCharacters,
   initials,
   levenshtein,
+  maskEmail,
   pluralize,
   search,
   searchWords,
@@ -580,5 +581,59 @@ describe("hasUnstorableTextCharacters", () => {
 
   it("accepts ordinary Hebrew and Arabic text", () => {
     acceptsEach(["שלום עולם", "مرحبا بالعالم", "\u200fשלום (draft)", "می\u200cخواهم"])
+  })
+})
+
+describe("maskEmail", () => {
+  it("keeps the first character of the local part and the whole domain", () => {
+    expect(maskEmail("jane.doe@example.com")).toBe("j***@example.com")
+  })
+
+  it("never returns more of the local part than its first character", () => {
+    for (const local of ["jane.doe", "ab", "a.b+tag", "jane@doe", "j***", "  spaced"]) {
+      const masked = maskEmail(`${local}@example.com`)
+      expect(masked).toBe(`${local.trim()[0]}***@example.com`)
+    }
+  })
+
+  it("masks a one-letter local part like a longer one, so the length does not show", () => {
+    expect(maskEmail("j@example.com")).toBe("j***@example.com")
+    expect(maskEmail("jo@example.com")).toBe(maskEmail("j@example.com"))
+  })
+
+  it("returns a masked address unchanged", () => {
+    expect(maskEmail(maskEmail("jane.doe@example.com"))).toBe("j***@example.com")
+  })
+
+  it("shows nothing of a value with no @", () => {
+    expect(maskEmail("jane.doe")).toBe("***")
+    expect(maskEmail("")).toBe("***")
+    expect(maskEmail("   ")).toBe("***")
+    expect(maskEmail(undefined as unknown as string)).toBe("***")
+  })
+
+  it("masks an empty local part and keeps an empty domain empty", () => {
+    expect(maskEmail("@example.com")).toBe("***@example.com")
+    expect(maskEmail("jane@")).toBe("j***@")
+  })
+
+  it("splits at the last @", () => {
+    expect(maskEmail("jane@doe@example.com")).toBe("j***@example.com")
+  })
+
+  it("drops surrounding white space and keeps the domain's case", () => {
+    expect(maskEmail("  Jane@Example.COM \n")).toBe("J***@Example.COM")
+  })
+
+  it("keeps a non-ASCII first letter and a non-ASCII domain", () => {
+    expect(maskEmail("Ünal@пример.рф")).toBe("Ü***@пример.рф")
+  })
+
+  it("keeps a first character outside the basic plane whole", () => {
+    expect(maskEmail("\u{1F600}smile@example.com")).toBe("\u{1F600}***@example.com")
+  })
+
+  it("keeps only the base letter of a first letter written with a combining accent", () => {
+    expect(maskEmail("e\u0301ric@example.com")).toBe("e***@example.com")
   })
 })

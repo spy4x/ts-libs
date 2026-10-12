@@ -355,3 +355,33 @@ export function hasUnstorableTextCharacters(value: string): boolean {
   // `isWellFormed`, not `\p{Cs}` in a pattern: Bun's engine misses some lone surrogates there.
   return value.includes("\u0000") || !value.isWellFormed()
 }
+
+/** What {@link maskEmail} writes in place of the hidden part of an address, whatever its length. */
+const EMAIL_MASK = "***"
+
+/**
+ * An email address with its local part hidden behind its first character, for showing a person
+ * which address they used without spelling it out: `jane.doe@example.com` gives
+ * `j***@example.com`. The domain is returned as it was given.
+ *
+ * - The mask is always three stars, so the result does not tell how long the local part is. A
+ *   one-letter local part reads the same way: `j@example.com` gives `j***@example.com`.
+ * - The address is split at its last `@`. An empty local part gives `***@example.com`.
+ * - A value with no `@`, an empty one, or one that is not a string gives `***`: it is not an
+ *   address, so nothing of it is shown.
+ * - Surrounding white space is dropped first.
+ * - Non-ASCII input is kept: the first character is one whole code point, so an emoji or a letter
+ *   outside the basic plane is never cut in half (`Ünal@пример.рф` gives `Ü***@пример.рф`). A first
+ *   letter written as a base letter plus a combining accent keeps only the base letter.
+ *
+ * Never returns more of the local part than its first code point. Masking a masked address returns
+ * it unchanged.
+ */
+export function maskEmail(email: string): string {
+  if (typeof email !== "string") return EMAIL_MASK
+  const text = email.trim()
+  const at = text.lastIndexOf("@")
+  if (at < 0) return EMAIL_MASK
+  const first = text.slice(0, at).codePointAt(0)
+  return `${first === undefined ? "" : String.fromCodePoint(first)}${EMAIL_MASK}${text.slice(at)}`
+}
