@@ -176,8 +176,8 @@ for (const [label, flows] of FLOW_STORES) {
       const ann = await s.user("ann@example.com")
       const claimant = await s.store.createUserWithKey(emailKey("password", WORK.email))
       const result = await connectAs(s, ann.id, WORK)
-      expect(result.key).toMatchObject({ userId: ann.id, email: WORK.email, provenAt: NOW })
       expect(await s.store.listKeys(claimant.user.id)).toEqual([])
+      expect(result.key).toMatchObject({ userId: ann.id, email: WORK.email, provenAt: NOW })
     })
 
     it("keeps no address on the key when the provider does not vouch for it", async () => {
