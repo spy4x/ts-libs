@@ -703,6 +703,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `formatTime` (function), `jsr:@spy4x/platform`: One-off TimeFormatter#format on the host clock.
 - `getDaysOfWeek` (function), `jsr:@spy4x/platform`: Read a weekday bitmask into day names.
 - `hasUnsafeTextCharacters` (function), `jsr:@spy4x/platform`: Whether text a person typed holds one of a fixed list of characters that a display name must not: control characters, which a database may refuse, and the common invisible and text-direction characters.
+- `hasUnstorableTextCharacters` (function), `jsr:@spy4x/platform`: Whether text holds a character that no database text column can store and give back unchanged: NUL (U+0000) or a lone surrogate, which is half of a surrogate pair without its other half.
 - `honeypotFilled` (function), `jsr:@spy4x/platform`: Whether a submitted honeypot field carries a value — a person never types into a field they cannot see, so any value here means whatever posted the form was not one.
 - `idleOperationState` (function), `jsr:@spy4x/platform`: Idle state of an operation.
 - `initials` (function), `jsr:@spy4x/platform`: Reduce a name to one or two initials, e.g. for an avatar's fallback face.
@@ -1510,6 +1511,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `filterRows` (function), `jsr:@spy4x/platform/universal/text`: Keep the rows that every word of the query matches.
 - `fold` (function), `jsr:@spy4x/platform/universal/text`: Fold text for matching: accents removed and lower-cased.
 - `hasUnsafeTextCharacters` (function), `jsr:@spy4x/platform/universal/text`: Whether text a person typed holds one of a fixed list of characters that a display name must not: control characters, which a database may refuse, and the common invisible and text-direction characters.
+- `hasUnstorableTextCharacters` (function), `jsr:@spy4x/platform/universal/text`: Whether text holds a character that no database text column can store and give back unchanged: NUL (U+0000) or a lone surrogate, which is half of a surrogate pair without its other half.
 - `initials` (function), `jsr:@spy4x/platform/universal/text`: Reduce a name to one or two initials, e.g. for an avatar's fallback face.
 - `levenshtein` (function), `jsr:@spy4x/platform/universal/text`: Levenshtein edit distance between two strings, computed over code points.
 - `pluralize` (function), `jsr:@spy4x/platform/universal/text`: Naive English pluraliser for UI copy.
@@ -3034,4 +3036,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 da8f06857f55fb7ad1052022f2a679678fade81f36cea213fdb8011cffd5e8f0 -->
+<!-- export surface: sha256 965edf71d6bccc53790364ea96b378880689bfde17fffc8012be40d8ceeb07b5 -->
