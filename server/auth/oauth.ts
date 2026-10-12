@@ -10,7 +10,8 @@
  *   (`emailVerified`) and a user already owns that address as a proven one.
  * - An address the provider does not vouch for is not stored on the key at all.
  * - Every flow uses PKCE (S256) and a single-use, expiring `state`, which must also match the value
- *   the app kept in the browser that started the flow.
+ *   the app kept in the browser that started the flow. A callback `state` that is not 43 base64url
+ *   characters is refused before the flow store is asked.
  * - The pending flow is deleted before anything else happens in the callback, so it is gone on
  *   every exit, including a token or profile request that throws.
  * - `disconnect` deletes one key by id, and only when it is this provider's key of this user.
@@ -349,6 +350,12 @@ const MAX_RESPONSE_BYTES = 64 * 1024
 /** 256 bits each; base64url renders them as 43 characters, the PKCE verifier's minimum length. */
 const STATE_BYTES = 32
 const VERIFIER_BYTES = 32
+/**
+ * What `randomBase64Url(STATE_BYTES)` gives: 43 base64url characters. A callback's `state` of any
+ * other shape was not made here and is refused before the flow store is asked, so a crafted
+ * `connect:…` or `sign-up:…` store key cannot be taken as a `state`.
+ */
+const STATE_SHAPE = /^[A-Za-z0-9_-]{43}$/
 const PROVIDER_ID = /^[a-z0-9][a-z0-9-]{0,57}$/
 /** Tries of the account resolution when a parallel write changed what it read. */
 const RESOLVE_ATTEMPTS = 2
@@ -361,8 +368,9 @@ const SIGN_UP_TTL_MS = 600_000
 const SIGN_UP_KEY_PREFIX = "sign-up:"
 /**
  * Flow-store key prefix of connect flows, before the key method and the `state`. A sign-in callback
- * looks a `state` up without it, so it never finds a connect flow, even in a store that drops the
- * flow's `connect` field.
+ * looks its `state` up without the prefix, and a `state` that is not of the shape {@link STATE_SHAPE}
+ * never reaches the store, so no `state` a sign-in callback accepts can name a connect flow's key,
+ * even in a store that drops the flow's `connect` field.
  */
 const CONNECT_KEY_PREFIX = "connect:"
 
@@ -457,6 +465,7 @@ export function createOAuthSignIn(
     browserState: unknown,
     connect: boolean,
   ): Promise<OAuthTakenFlow> {
+    if (!STATE_SHAPE.test(state)) throw new OAuthSignInError("invalid-state")
     const flow = await flows.take(flowKey(state, connect))
     const rightKind = connect ? flow?.connect !== undefined : flow?.connect === undefined
     if (!flow || flow.signUp || !rightKind || typeof browserState !== "string") {

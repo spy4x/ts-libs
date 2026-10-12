@@ -10,6 +10,7 @@ import {
   initials,
   levenshtein,
   maskEmail,
+  MAX_MASKED_EMAIL_LENGTH,
   pluralize,
   search,
   searchWords,
@@ -603,6 +604,46 @@ describe("maskEmail", () => {
 
   it("returns a masked address unchanged", () => {
     expect(maskEmail(maskEmail("jane.doe@example.com"))).toBe("j***@example.com")
+  })
+
+  it("returns its own output unchanged for every kind of input", () => {
+    const inputs = [
+      "@example.com",
+      "@",
+      "***@example.com",
+      "**@example.com",
+      "*@example.com",
+      "j@example.com",
+      "jane@doe@example.com",
+      "  spaced @ example.com ",
+      "no at sign",
+      "",
+      "\u{1F600}smile@example.com",
+      `a@${"d".repeat(253)}`,
+      `a@${"d".repeat(254)}`,
+    ]
+    for (const input of inputs) {
+      const once = maskEmail(input)
+      expect(maskEmail(once)).toBe(once)
+    }
+    expect(maskEmail("@example.com")).toBe("***@example.com")
+    expect(maskEmail("***@example.com")).toBe("***@example.com")
+  })
+
+  it("shows nothing of an address whose domain is longer than 253 characters", () => {
+    expect(maskEmail(`jane@${"d".repeat(253)}`)).toBe(`j***@${"d".repeat(253)}`)
+    expect(maskEmail(`jane@${"d".repeat(254)}`)).toBe("***")
+    expect(maskEmail(`jane@${"d".repeat(2_000_000)}`)).toBe("***")
+  })
+
+  it("never returns more than MAX_MASKED_EMAIL_LENGTH code units", () => {
+    const longest = maskEmail(`\u{1F600}${"x".repeat(1000)}@${"d".repeat(253)}`)
+    expect(longest).toHaveLength(MAX_MASKED_EMAIL_LENGTH)
+    expect(maskEmail(`${"x".repeat(100_000)}@example.com`)).toBe("x***@example.com")
+    for (const domainLength of [254, 300, 1000]) {
+      const masked = maskEmail(`\u{1F600}jane@${"d".repeat(domainLength)}`)
+      expect(masked.length).toBeLessThanOrEqual(MAX_MASKED_EMAIL_LENGTH)
+    }
   })
 
   it("shows nothing of a value with no @", () => {

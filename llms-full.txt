@@ -5106,7 +5106,9 @@ completes it, where `userId` is the user signed in on the callback request:
 
 - The provider identity is new: its key is added to that user (`Connected`), whatever its address.
   The key carries the address, proven, only when the provider vouches for it and no other user
-  owns it proven; otherwise it carries none.
+  owns it proven; otherwise it carries none. A proven address is exclusive, as it is for a
+  provider sign-up: when another user holds that address on an unproven key, connecting deletes
+  that user's key, and a user whose only key it was is left with none.
 - This user already has it: nothing is written (`AlreadyConnected`).
 - Another user has it: refused as `identity-taken`, so the app can say "this Google account is
   already connected to another account". Nothing is written.
@@ -5116,7 +5118,9 @@ callback whose `userId` is not the user the flow was started for is refused as `
 a deleted or unknown user as `user-deleted`. The two kinds of flow do not mix: a connect flow is
 kept under `connect:<method>:<state>` and carries the user id, so `handleCallback` refuses its
 `state`, and `handleConnectCallback` refuses the `state` of a flow `authorizationUrl()` started,
-both as `invalid-state`. Both callbacks arrive at the one `redirectUri`, so keep the connect flow's
+both as `invalid-state`. Either callback also refuses, before it asks the flow store, a `state`
+that is not the 43 base64url characters this module makes, so a crafted `connect:…` or `sign-up:…`
+store key is never looked up, whatever fields a third-party store keeps. Both callbacks arrive at the one `redirectUri`, so keep the connect flow's
 `state` in a cookie of its own and call the handler whose cookie holds the query's `state`.
 
 ```ts

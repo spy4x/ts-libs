@@ -637,6 +637,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `HOURS_IN_DAY` (constant), `jsr:@spy4x/platform`: Hours in one day.
 - `InferSchema` (type), `jsr:@spy4x/platform`: Value a schema accepts and produces.
 - `KeyValueStore` (interface), `jsr:@spy4x/platform`: Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias (#71).
+- `MAX_MASKED_EMAIL_LENGTH` (constant), `jsr:@spy4x/platform`: Longest text maskEmail returns, in UTF-16 code units: one code point (at most two units), the three stars, `@`, and a domain of at most 253.
 - `MAX_TICKS` (constant), `jsr:@spy4x/platform`: Hard ceiling on generated ticks, and on the iterations the tick loop may spend producing them — see the doc of `ticksForStep` (the private loop behind ticks and stepAxis) for why the loop needs its own bound, not just the output's.
 - `MILLISECONDS_IN_SECOND` (constant), `jsr:@spy4x/platform`: Milliseconds in one second.
 - `MINUTES_IN_HOUR` (constant), `jsr:@spy4x/platform`: Minutes in one hour.
@@ -1520,6 +1521,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 ### `jsr:@spy4x/platform/universal/text`
 
+- `MAX_MASKED_EMAIL_LENGTH` (constant), `jsr:@spy4x/platform/universal/text`: Longest text maskEmail returns, in UTF-16 code units: one code point (at most two units), the three stars, `@`, and a domain of at most 253.
 - `UnsafeTextOptions` (interface), `jsr:@spy4x/platform/universal/text`: Options of hasUnsafeTextCharacters.
 - `convertToKebabCase` (function), `jsr:@spy4x/platform/universal/text`: Convert a free-form identifier to kebab-case.
 - `filterRows` (function), `jsr:@spy4x/platform/universal/text`: Keep the rows that every word of the query matches.
@@ -3053,4 +3055,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 7f32b9ab0203e1e49cc0350a8724f0990cc5146482b678f8a2969825e24a1e1f -->
+<!-- export surface: sha256 cabfc28bb33ca138e60b7366b7d5d9bd1ea8da8bc85d1ddcef0d4520b7b1941f -->

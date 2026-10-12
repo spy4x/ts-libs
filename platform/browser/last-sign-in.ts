@@ -23,7 +23,10 @@ export const MAX_LAST_SIGN_IN_METHOD_LENGTH = 64
 
 /** How a person last signed in on this browser. */
 export interface LastSignIn {
-  /** The app's name for the method, such as `"password"`, `"google"` or `"oauth:github"`. */
+  /**
+   * The app's name for the method, such as `"password"`, `"google"` or `"oauth:github"`. It is kept
+   * and returned as given, so it must be a fixed name, never an address or anything else personal.
+   */
   method: string
   /** The address they signed in with, masked (`j***@example.com`), or null when none was given. */
   email: string | null
@@ -42,11 +45,16 @@ export interface LastSignInOptions {
 export interface LastSignInStore {
   /** The storage key the app chose. */
   readonly key: string
-  /** The remembered sign-in, or null when none was kept or the stored value is not one. */
+  /**
+   * The remembered sign-in, or null when none was kept or the stored value is not one. A stored
+   * method longer than {@link MAX_LAST_SIGN_IN_METHOD_LENGTH} is not one; a stored address that is
+   * too long reads as no address.
+   */
   read(): LastSignIn | null
   /**
    * Keeps `method` and the masked form of `email`. `email` may be the full address or an already
-   * masked one; a value with no `@`, null or nothing keeps no address. A `method` that is empty
+   * masked one; a value with no `@`, one whose domain is longer than `maskEmail` returns (253
+   * characters), null or nothing keeps no address. A `method` that is empty
    * or longer than {@link MAX_LAST_SIGN_IN_METHOD_LENGTH} keeps nothing and leaves the earlier
    * value in place.
    */
@@ -104,7 +112,13 @@ function isMethod(value: unknown): value is string {
     value.length <= MAX_LAST_SIGN_IN_METHOD_LENGTH
 }
 
-/** The masked form of an address, or null for anything that is not one. */
+/**
+ * The masked form of an address, or null for anything `maskEmail` does not read as one: not a
+ * string, no `@`, or a domain longer than it returns. So an address is never longer than
+ * `MAX_MASKED_EMAIL_LENGTH`, written or read.
+ */
 function masked(email: unknown): string | null {
-  return typeof email === "string" && email.includes("@") ? maskEmail(email) : null
+  if (typeof email !== "string") return null
+  const mask = maskEmail(email)
+  return mask.includes("@") ? mask : null
 }

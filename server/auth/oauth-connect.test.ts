@@ -162,6 +162,24 @@ for (const [label, flows] of FLOW_STORES) {
       expect(await s.store.findUserIdByProvenEmail("bob@example.com")).toBe(bob.id)
     })
 
+    it("keeps the address, proven, when the user connecting already owns it proven", async () => {
+      const s = setup(flows)
+      const ann = await s.user("ann@example.com")
+      const result = await connectAs(s, ann.id, { ...WORK, email: "ann@example.com" })
+      expect(result.outcome).toBe(OAuthOutcome.Connected)
+      expect(result.key).toMatchObject({ userId: ann.id, email: "ann@example.com", provenAt: NOW })
+      expect(await s.store.findUserIdByProvenEmail("ann@example.com")).toBe(ann.id)
+    })
+
+    it("deletes another user's unproven key for the address the connected identity vouches for", async () => {
+      const s = setup(flows)
+      const ann = await s.user("ann@example.com")
+      const claimant = await s.store.createUserWithKey(emailKey("password", WORK.email))
+      const result = await connectAs(s, ann.id, WORK)
+      expect(result.key).toMatchObject({ userId: ann.id, email: WORK.email, provenAt: NOW })
+      expect(await s.store.listKeys(claimant.user.id)).toEqual([])
+    })
+
     it("keeps no address on the key when the provider does not vouch for it", async () => {
       const s = setup(flows)
       const ann = await s.user("ann@example.com")
@@ -312,7 +330,7 @@ for (const [label, flows] of FLOW_STORES) {
       expect(await s.store.findKey("oauth:fake", WORK.sub)).toBeNull()
     })
 
-    it("refuses a connect flow's store key used as a sign-in callback state, and consumes it", async () => {
+    it("refuses a connect flow's store key used as a sign-in callback state, without asking the store", async () => {
       const s = setup(flows)
       const ann = await s.user("ann@example.com")
       const started = await s.oauth.connectUrl(ann.id)
@@ -324,16 +342,13 @@ for (const [label, flows] of FLOW_STORES) {
       )
       expect(s.store.usersCreated).toBe(1)
       expect(s.sessionsCreated()).toBe(0)
-      // The flow was found under that key, so the real connect callback no longer finds it.
-      expect(
-        await failure(
-          s.oauth.handleConnectCallback({
-            query: approved,
-            browserState: started.state,
-            userId: ann.id,
-          }),
-        ),
-      ).toBe("invalid-state")
+      // The crafted key never reached the store, so the flow is still there for its own callback.
+      const result = await s.oauth.handleConnectCallback({
+        query: approved,
+        browserState: started.state,
+        userId: ann.id,
+      })
+      expect(result.outcome).toBe(OAuthOutcome.Connected)
     })
 
     it("refuses a sign-in flow at the connect callback, and links nothing", async () => {
@@ -423,6 +438,62 @@ describe("createOAuthSignIn: connect, a flow store that drops the connect field"
         s.oauth.handleConnectCallback({ query, browserState: started.state, userId: ann.id }),
       ),
     ).toBe("invalid-state")
+  })
+
+  it("refuses the connect flow's store key used as a sign-in callback state", async () => {
+    const s = setup(droppingStore)
+    const ann = await s.user("ann@example.com")
+    const started = await s.oauth.connectUrl(ann.id)
+    const approved = await s.provider.approve(started.url, WORK)
+    const key = `connect:oauth:fake:${started.state}`
+    const query = new URLSearchParams({ code: approved.get("code") ?? "", state: key })
+    expect(await failure(s.oauth.handleCallback({ query, browserState: key }))).toBe(
+      "invalid-state",
+    )
+    expect(s.store.usersCreated).toBe(1)
+    expect(s.sessionsCreated()).toBe(0)
+    expect(s.provider.tokenStatuses).toEqual([])
+  })
+
+  it("never asks the store about a state that is not 43 base64url characters, at either callback", async () => {
+    const taken: string[] = []
+    const s = setup((clock) => {
+      const inner = createMemoryOAuthFlowStore({ clock })
+      return {
+        put: inner.put,
+        take: (key) => {
+          taken.push(key)
+          return inner.take(key)
+        },
+      }
+    })
+    const ann = await s.user("ann@example.com")
+    const shapes = [
+      "connect:oauth:fake:not-a-state",
+      "sign-up:oauth:fake:0123",
+      "a".repeat(42),
+      "a".repeat(44),
+      `${"a".repeat(42)}:`,
+    ]
+    for (const state of shapes) {
+      const query = new URLSearchParams({ code: "any", state })
+      expect(await failure(s.oauth.handleCallback({ query, browserState: state }))).toBe(
+        "invalid-state",
+      )
+      expect(
+        await failure(
+          s.oauth.handleConnectCallback({ query, browserState: state, userId: ann.id }),
+        ),
+      ).toBe("invalid-state")
+    }
+    expect(taken).toEqual([])
+    // A state of the right shape is looked up, at the sign-in key and at the connect key.
+    const query = new URLSearchParams({ code: "any", state: "a".repeat(43) })
+    await failure(s.oauth.handleCallback({ query, browserState: "a".repeat(43) }))
+    await failure(
+      s.oauth.handleConnectCallback({ query, browserState: "a".repeat(43), userId: ann.id }),
+    )
+    expect(taken).toEqual(["a".repeat(43), `connect:oauth:fake:${"a".repeat(43)}`])
   })
 
   it("still refuses the connect flow at the sign-in callback", async () => {

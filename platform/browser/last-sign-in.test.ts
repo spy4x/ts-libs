@@ -50,6 +50,44 @@ describe("createLastSignIn", () => {
     }
   })
 
+  it("reads back exactly what it stored for an address with an empty local part", () => {
+    const storage = memoryStorage()
+    const store = createLastSignIn(KEY, { storage })
+    store.remember("password", "@example.com")
+    expect(JSON.parse(storage.getItem(KEY) ?? "")).toEqual({
+      method: "password",
+      email: "***@example.com",
+    })
+    expect(store.read()).toEqual({ method: "password", email: "***@example.com" })
+  })
+
+  it("keeps no address whose domain is longer than 253 characters", () => {
+    const storage = memoryStorage()
+    const store = createLastSignIn(KEY, { storage })
+    store.remember("google", `jane@${"d".repeat(100_000)}`)
+    expect(storage.getItem(KEY)).toBe(`{"method":"google","email":null}`)
+    expect(store.read()).toEqual({ method: "google", email: null })
+    store.remember("google", `jane@${"d".repeat(253)}`)
+    expect(store.read()?.email).toBe(`j***@${"d".repeat(253)}`)
+  })
+
+  it("reads an over-long address another script stored as no address", () => {
+    const storage = memoryStorage({
+      [KEY]: JSON.stringify({ method: "google", email: `a@${"d".repeat(2_000_000)}` }),
+    })
+    expect(createLastSignIn(KEY, { storage }).read()).toEqual({ method: "google", email: null })
+  })
+
+  it("reads a stored method longer than the limit as none, and one at the limit as it is", () => {
+    const atLimit = "m".repeat(MAX_LAST_SIGN_IN_METHOD_LENGTH)
+    const read = (method: string) =>
+      createLastSignIn(KEY, {
+        storage: memoryStorage({ [KEY]: JSON.stringify({ method, email: null }) }),
+      }).read()
+    expect(read(atLimit)).toEqual({ method: atLimit, email: null })
+    expect(read(`${atLimit}m`)).toBeNull()
+  })
+
   it("replaces the earlier value with the latest one", () => {
     const store = createLastSignIn(KEY, { storage: memoryStorage() })
     store.remember("google", "jane@example.com")
