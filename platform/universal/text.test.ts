@@ -6,6 +6,7 @@ import {
   filterRows,
   fold,
   hasUnsafeTextCharacters,
+  hasUnstorableTextCharacters,
   initials,
   levenshtein,
   pluralize,
@@ -505,5 +506,79 @@ describe("hasUnsafeTextCharacters", () => {
       expect([label(codePoint), hasUnsafeTextCharacters(text, { multiline: true })])
         .toEqual([label(codePoint), true])
     }
+  })
+})
+
+describe("hasUnstorableTextCharacters", () => {
+  const acceptsEach = (texts: string[]) => {
+    for (const text of texts) {
+      expect([JSON.stringify(text), hasUnstorableTextCharacters(text)])
+        .toEqual([JSON.stringify(text), false])
+    }
+  }
+
+  it("refuses a NUL at the start, in the middle and at the end of the text", () => {
+    for (const text of ["\u0000work", "wo\u0000rk", "work\u0000", "\u0000"]) {
+      expect([JSON.stringify(text), hasUnstorableTextCharacters(text)])
+        .toEqual([JSON.stringify(text), true])
+    }
+  })
+
+  it("refuses a lone high surrogate", () => {
+    for (const text of ["ab\ud83dcd", "ab\ud800", "\udbffab"]) {
+      expect([JSON.stringify(text), hasUnstorableTextCharacters(text)])
+        .toEqual([JSON.stringify(text), true])
+    }
+  })
+
+  it("refuses a lone low surrogate", () => {
+    for (const text of ["ab\udc68cd", "ab\udfff", "\udc00ab"]) {
+      expect([JSON.stringify(text), hasUnstorableTextCharacters(text)])
+        .toEqual([JSON.stringify(text), true])
+    }
+  })
+
+  it("refuses a surrogate pair in the wrong order, and a lone surrogate after a whole pair", () => {
+    expect(hasUnstorableTextCharacters("ab\udcdd\ud83dcd")).toBe(true)
+    expect(hasUnstorableTextCharacters("\u{1F4DD}\ud83d")).toBe(true)
+  })
+
+  // Deno and Node agree on these with a `\p{Cs}` pattern too; Bun 1.3.6 missed them with one.
+  it("refuses a lone surrogate next to a character from U+F800 to U+FFFF", () => {
+    for (const text of ["a\ud83d\ufffd", "a\ud83d\ufeff", "\ufb1d\udc68", "\uf900\udc00"]) {
+      expect([JSON.stringify(text), hasUnstorableTextCharacters(text)])
+        .toEqual([JSON.stringify(text), true])
+    }
+  })
+
+  it("accepts the empty string and plain text", () => {
+    acceptsEach(["", "Work", "it's 100% done, ok?"])
+  })
+
+  it("accepts a tab and the line breaks", () => {
+    acceptsEach(["a\tb", "a\nb", "a\r\nb", "a\u2028b", "a\u2029b"])
+  })
+
+  it("accepts every control character except NUL", () => {
+    for (let codePoint = 0x01; codePoint <= 0x9f; codePoint++) {
+      const text = `ab${String.fromCharCode(codePoint)}cd`
+      expect([codePoint, hasUnstorableTextCharacters(text)]).toEqual([codePoint, false])
+    }
+  })
+
+  it("accepts a soft hyphen, a zero-width space, a zero-width joiner and a byte-order mark", () => {
+    acceptsEach(["co\u00adoperate", "a\u200bb", "ශ්\u200dරී", "\ufeffpasted", "a\u2060b"])
+  })
+
+  it("accepts the left-to-right and right-to-left marks and the other direction controls", () => {
+    acceptsEach(["a\u200eb", "a\u200fb", "a\u061cb", "a\u202eb\u202c", "a\u2066b\u2069"])
+  })
+
+  it("accepts an emoji made of a surrogate pair, alone or joined into a family", () => {
+    acceptsEach(["notes \ud83d\udcdd", "\u{1F4DD}", "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}"])
+  })
+
+  it("accepts ordinary Hebrew and Arabic text", () => {
+    acceptsEach(["שלום עולם", "مرحبا بالعالم", "\u200fשלום (draft)", "می\u200cخواهم"])
   })
 })

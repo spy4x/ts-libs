@@ -3,8 +3,9 @@
  * (`searchWords`, `search`, `filterRows`), a naive English pluraliser (`pluralize`), a
  * kebab-case converter (`convertToKebabCase`), edit distance and a normalised similarity score
  * (`levenshtein`, `similarity`), a UTF-8 byte-length count (`utf8ByteLength`), a name's
- * initials in any script (`initials`), and a check for control and invisible characters in typed
- * text (`hasUnsafeTextCharacters`).
+ * initials in any script (`initials`), a check for control and invisible characters in typed
+ * text (`hasUnsafeTextCharacters`), and a check for the characters no database text column can
+ * store (`hasUnstorableTextCharacters`).
  *
  * @module
  */
@@ -304,6 +305,11 @@ export interface UnsafeTextOptions {
  *
  * It never throws for a string and never repeats the value, so its answer is safe to log.
  *
+ * Use it for a one-line name shown in lists and mails. It is too strict for prose, even with
+ * `multiline`: pasted text holds soft hyphens and zero-width spaces, and Hebrew or Arabic text
+ * holds direction marks. For anything a person writes as prose, use
+ * {@link hasUnstorableTextCharacters}.
+ *
  * @example
  * ```ts
  * hasUnsafeTextCharacters("Zoë's notes") // false
@@ -315,4 +321,37 @@ export interface UnsafeTextOptions {
 export function hasUnsafeTextCharacters(value: string, options?: UnsafeTextOptions): boolean {
   const pattern = options?.multiline ? UNSAFE_IN_MULTILINE_TEXT : UNSAFE_IN_SINGLE_LINE_TEXT
   return pattern.test(value)
+}
+
+/**
+ * Whether text holds a character that no database text column can store and give back unchanged:
+ * NUL (U+0000) or a lone surrogate, which is half of a surrogate pair without its other half.
+ *
+ * Postgres refuses a NUL in `text` and in `jsonb` with an error. A lone surrogate cannot be written
+ * as UTF-8: a `text` column stores U+FFFD in its place without an error, and `jsonb` refuses it.
+ * Check a value with it before storing it, and answer a validation error instead of letting the
+ * database fail.
+ *
+ * Everything else passes: tab and the line breaks, every other control character, the soft
+ * hyphen, the zero-width characters, the byte-order mark, the direction marks, and an emoji, which
+ * is a complete surrogate pair. So a `false` says nothing about how the text looks.
+ *
+ * Use it for anything a person writes as prose: a note body, a description, a comment, pasted
+ * text. For a one-line name shown in lists and mails, use the strict
+ * {@link hasUnsafeTextCharacters}, which also refuses invisible and text-direction characters.
+ *
+ * It never throws for a string and never repeats the value, so its answer is safe to log.
+ *
+ * @example
+ * ```ts
+ * hasUnstorableTextCharacters("line one\n\tline two") // false
+ * hasUnstorableTextCharacters("soft\u00adhyphen, \u200fשלום") // false
+ * hasUnstorableTextCharacters("notes \u{1F4DD}") // false: a whole surrogate pair
+ * hasUnstorableTextCharacters("work\u0000") // true: NUL
+ * hasUnstorableTextCharacters("half \ud83d") // true: a lone surrogate
+ * ```
+ */
+export function hasUnstorableTextCharacters(value: string): boolean {
+  // `isWellFormed`, not `\p{Cs}` in a pattern: Bun's engine misses some lone surrogates there.
+  return value.includes("\u0000") || !value.isWellFormed()
 }
