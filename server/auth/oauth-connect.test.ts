@@ -496,6 +496,27 @@ describe("createOAuthSignIn: connect, a flow store that drops the connect field"
     expect(taken).toEqual(["a".repeat(43), `connect:oauth:fake:${"a".repeat(43)}`])
   })
 
+  it("refuses a connect flow at the sign-in callback on a store that ignores the key prefix", async () => {
+    // A store that keys every flow by the bare state: only the flow's own `connect` field tells the
+    // two kinds apart.
+    const s = setup((clock) => {
+      const inner = createMemoryOAuthFlowStore({ clock })
+      const bare = (key: string) => key.slice(key.lastIndexOf(":") + 1)
+      return {
+        put: (key, flow, expiresAt) => inner.put(bare(key), flow, expiresAt),
+        take: (key) => inner.take(bare(key)),
+      }
+    })
+    const ann = await s.user("ann@example.com")
+    const started = await s.oauth.connectUrl(ann.id)
+    const query = await s.provider.approve(started.url, WORK)
+    expect(await failure(s.oauth.handleCallback({ query, browserState: started.state }))).toBe(
+      "invalid-state",
+    )
+    expect(s.store.usersCreated).toBe(1)
+    expect(s.sessionsCreated()).toBe(0)
+  })
+
   it("still refuses the connect flow at the sign-in callback", async () => {
     const s = setup(droppingStore)
     const ann = await s.user("ann@example.com")
