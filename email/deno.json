@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/email",
-  "version": "1.67.0",
+  "version": "1.68.0",
   "exports": {
     ".": "./mod.ts",
     "./address": "./address.ts",
