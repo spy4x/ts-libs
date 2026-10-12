@@ -324,19 +324,13 @@ export function hasUnsafeTextCharacters(value: string, options?: UnsafeTextOptio
 }
 
 /**
- * NUL and a lone surrogate. With the `u` flag a valid surrogate pair is read as one character, so
- * `\p{Cs}` matches only a surrogate that has no partner.
- */
-// deno-lint-ignore no-control-regex -- the point is to refuse NUL
-const UNSTORABLE_IN_TEXT = /[\u0000\p{Cs}]/u
-
-/**
  * Whether text holds a character that no database text column can store and give back unchanged:
  * NUL (U+0000) or a lone surrogate, which is half of a surrogate pair without its other half.
  *
- * Postgres refuses a NUL in `text` with an error, and a lone surrogate cannot be written as UTF-8,
- * so it is refused or comes back as U+FFFD. Check a value with it before storing it, and answer a
- * validation error instead of letting the database fail.
+ * Postgres refuses a NUL in `text` and in `jsonb` with an error. A lone surrogate cannot be written
+ * as UTF-8: a `text` column stores U+FFFD in its place without an error, and `jsonb` refuses it.
+ * Check a value with it before storing it, and answer a validation error instead of letting the
+ * database fail.
  *
  * Everything else passes: tab and the line breaks, every other control character, the soft
  * hyphen, the zero-width characters, the byte-order mark, the direction marks, and an emoji, which
@@ -358,5 +352,6 @@ const UNSTORABLE_IN_TEXT = /[\u0000\p{Cs}]/u
  * ```
  */
 export function hasUnstorableTextCharacters(value: string): boolean {
-  return UNSTORABLE_IN_TEXT.test(value)
+  // `isWellFormed`, not `\p{Cs}` in a pattern: Bun's engine misses some lone surrogates there.
+  return value.includes("\u0000") || !value.isWellFormed()
 }

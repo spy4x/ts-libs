@@ -543,6 +543,14 @@ describe("hasUnstorableTextCharacters", () => {
     expect(hasUnstorableTextCharacters("\u{1F4DD}\ud83d")).toBe(true)
   })
 
+  // Deno and Node agree on these with a `\p{Cs}` pattern too; Bun 1.3.6 missed them with one.
+  it("refuses a lone surrogate next to a character from U+F800 to U+FFFF", () => {
+    for (const text of ["a\ud83d\ufffd", "a\ud83d\ufeff", "\ufb1d\udc68", "\uf900\udc00"]) {
+      expect([JSON.stringify(text), hasUnstorableTextCharacters(text)])
+        .toEqual([JSON.stringify(text), true])
+    }
+  })
+
   it("accepts the empty string and plain text", () => {
     acceptsEach(["", "Work", "it's 100% done, ok?"])
   })
