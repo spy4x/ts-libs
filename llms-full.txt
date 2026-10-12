@@ -2084,7 +2084,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/seo`             | `canonicalUrl`, `normalizeCanonical`, `breadcrumbItems`, `breadcrumbListJsonLd`, `jsonLdText`, `Crumb`, `BreadcrumbListItem`, `BreadcrumbListJsonLd` — the canonical address and JSON-LD a server-rendered page publishes                                                                                                                                                                               |
 | `universal/sort`            | `SortDirection`, `SortRule`, `toggleSort`, `removeSortRule`, `sortRows`, `parseSort`, `serializeSort` — multi-column sort rules and the `?sort=` parameter a page writes and an API reads                                                                                                                                                                                                               |
 | `universal/statistics`      | `median`, `mean`, `quantileSorted`, `seededRandom`, `bootstrap`, `bootstrapDifference`, `crossesZero`, `Interval`, `BootstrapOptions` — small statistics and a seeded percentile bootstrap                                                                                                                                                                                                              |
-| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`, `initials`, `hasUnsafeTextCharacters`, `UnsafeTextOptions`, `hasUnstorableTextCharacters`                                                                                                                                                                                      |
+| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `levenshtein`, `similarity`, `utf8ByteLength`, `initials`, `maskEmail` (`jane.doe@example.com` → `j***@example.com`), `hasUnsafeTextCharacters`, `UnsafeTextOptions`, `hasUnstorableTextCharacters`                                                                                                                           |
 | `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`, `nextUtcHour`                                                                                                                                                                                                                                                                                        |
 | `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                                                                                                                                                                                                                                                 |
 | `universal/uuid`            | `uuidV7`, `isUuid`, `UUID_PATTERN`, `UUID_V7_PATTERN`, `UuidVersion` — time-ordered ids for stored records and UUID validators; see below                                                                                                                                                                                                                                                               |
@@ -2168,23 +2168,24 @@ Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `get
 factory, a timer, a clipboard, a `Geolocation`) as a parameter, defaulting to the real global only
 when the caller passes none.
 
-| Module                       | Contents                                                                                                                                                                                                                                                    |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                                                                                                                                                         |
-| `browser/cookie`             | `getCookie`                                                                                                                                                                                                                                                 |
-| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                                                                                                                                           |
-| `browser/build-env`          | `readBuildEnvVar`, `MissingBuildEnvError`, `BuildEnv` — required or optional values of a bundler's build-time env object, passed in                                                                                                                         |
-| `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                                                                                                                                          |
-| `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                                                                                                                                                     |
-| `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                                                                                                                                                     |
-| `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget`                                    |
-| `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                                                                  |
-| `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                                  |
-| `browser/push-notifications` | `installPushNotifications`, `sameOriginUrl` — the `push` and `notificationclick` handlers of a service worker                                                                                                                                               |
-| `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure                |
-| `browser/storage`            | `makeStorage`, `memoryStorage`, `browserStorage` (`localStorage` that never throws: a value the browser refuses is kept in memory until the page closes), `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage` |
-| `browser/testing`            | `installLocalStorage` — a test helper: puts an in-memory `localStorage` in place of the global one and gives the way back. Import it from tests only; it is not in the `@spy4x/platform/browser` barrel                                                     |
-| `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                                      |
+| Module                       | Contents                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                                                                                                                                                                                                                              |
+| `browser/cookie`             | `getCookie`                                                                                                                                                                                                                                                                                                                      |
+| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                                                                                                                                                                                                                |
+| `browser/build-env`          | `readBuildEnvVar`, `MissingBuildEnvError`, `BuildEnv` — required or optional values of a bundler's build-time env object, passed in                                                                                                                                                                                              |
+| `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                                                                                                                                                                                                               |
+| `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                                                                                                                                                                                                                          |
+| `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                                                                                                                                                                                                                          |
+| `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget`                                                                                                         |
+| `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                                                                                                                                       |
+| `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                                                                                                       |
+| `browser/push-notifications` | `installPushNotifications`, `sameOriginUrl` — the `push` and `notificationclick` handlers of a service worker                                                                                                                                                                                                                    |
+| `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure                                                                                     |
+| `browser/storage`            | `makeStorage`, `memoryStorage`, `browserStorage` (`localStorage` that never throws: a value the browser refuses is kept in memory until the page closes), `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage`                                                                      |
+| `browser/testing`            | `installLocalStorage` — a test helper: puts an in-memory `localStorage` in place of the global one and gives the way back. Import it from tests only; it is not in the `@spy4x/platform/browser` barrel                                                                                                                          |
+| `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                                                                                                           |
+| `browser/last-sign-in`       | `createLastSignIn`, `LastSignInStore`, `LastSignIn`, `LastSignInOptions`, `MAX_LAST_SIGN_IN_METHOD_LENGTH` — how a person last signed in on this browser: the method name and the address masked by `maskEmail`, never the full address; `read()`, `remember(method, email)`, `forget()`; safe when storage is missing or throws |
 
 `browser/data-cache` keeps the last data the server sent, in IndexedDB, so a page opens with it and
 shows it with no network. Items live in scopes (a user, a calendar); a full server answer replaces a
@@ -4979,7 +4980,7 @@ rejects, the rejection reaches the caller and the code is already issued.
 
 `createOAuthSignIn`, `OAuthSignInError`, `OAuthFailure`, `OAuthOutcome`, `OAuthProviderConfig`,
 `OAuthProfile`, `OAuthProfileContext`, `ConfirmableOAuthSignIn`, `ConfirmableOAuthSignInOptions`,
-`OAuthPendingSignUp`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, the flow stores
+`OAuthPendingSignUp`, `OAuthConnectCallbackInput`, `OAuthConnectResult`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, the flow stores
 (`createMemoryOAuthFlowStore`, `createKvOAuthFlowStore`, `OAuthFlowStore`, `OAuthFlowKv`,
 `OAuthPendingFlow`, `OAuthTakenFlow`, `DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and
 result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
@@ -5096,6 +5097,45 @@ const google = createOAuthSignIn({
 })
 ```
 
+**Connect a provider to the signed-in user: `connectUrl` and `handleConnectCallback`.** Signing in
+links a provider to an account only when the provider vouches for an address the account has
+proven. A person whose Google address is not their account's address connects it from their
+settings instead. `connectUrl(userId)` starts a flow bound to that user, with the same PKCE pair and
+single-use, expiring `state` as a sign-in. `handleConnectCallback({ query, browserState, userId })`
+completes it, where `userId` is the user signed in on the callback request:
+
+- The provider identity is new: its key is added to that user (`Connected`), whatever its address.
+  The key carries the address, proven, only when the provider vouches for it and no other user
+  owns it proven; otherwise it carries none.
+- This user already has it: nothing is written (`AlreadyConnected`).
+- Another user has it: refused as `identity-taken`, so the app can say "this Google account is
+  already connected to another account". Nothing is written.
+
+It never creates a user and never creates a session: the person stays signed in as they were. A
+callback whose `userId` is not the user the flow was started for is refused as `invalid-state`, and
+a deleted or unknown user as `user-deleted`. The two kinds of flow do not mix: a connect flow is
+kept under `connect:<method>:<state>` and carries the user id, so `handleCallback` refuses its
+`state`, and `handleConnectCallback` refuses the `state` of a flow `authorizationUrl()` started,
+both as `invalid-state`. Both callbacks arrive at the one `redirectUri`, so keep the connect flow's
+`state` in a cookie of its own and call the handler whose cookie holds the query's `state`.
+
+```ts
+// Settings, signed in as `session.userId`:
+const { url, state } = await google.connectUrl(session.userId) // `state` → the connect cookie
+// …in the callback route, when the connect cookie holds the query's state:
+try {
+  const { outcome } = await google.handleConnectCallback({
+    query,
+    browserState: connectCookie,
+    userId: session.userId,
+  })
+} catch (error) {
+  if (error instanceof OAuthSignInError && error.reason === "identity-taken") {
+    // show "already connected to another account"
+  }
+}
+```
+
 **`disconnect(userId, keyId)` deletes one key.** Only when the key exists, belongs to `userId`, and
 has this provider's method; any other id returns `false` and deletes nothing. On the Postgres store
 the key's sessions end with it, through the cascade.
@@ -5117,8 +5157,6 @@ as given, because providers compare it character by character.
 - **It does not verify an ID token or send a `nonce`.** The profile comes from the user-info
   endpoint, called with the access token the token endpoint returned over TLS.
 - **It does not update a key's address** when the provider later reports a different one.
-- **It does not connect a provider to the signed-in user.** Only sign-in, sign-up and linking by a
-  vouched-for address.
 - **It does not refuse to disconnect a user's last key.** The app decides whether that is allowed.
 
 ## `server/crypto`

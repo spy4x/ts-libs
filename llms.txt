@@ -713,6 +713,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `isValidDate` (function), `jsr:@spy4x/platform`: Whether the input is a usable date: a `Date` or an ISO `YYYY-MM-DD`-prefixed string that `Date` can parse.
 - `jsonLdText` (function), `jsr:@spy4x/platform`: Serialise JSON-LD for a `<script>` body.
 - `levenshtein` (function), `jsr:@spy4x/platform`: Levenshtein edit distance between two strings, computed over code points.
+- `maskEmail` (function), `jsr:@spy4x/platform`: An email address with its local part hidden behind its first character, for showing a person which address they used without spelling it out: `jane.doe@example.com` gives `j***@example.com`.
 - `nextUtcHour` (function), `jsr:@spy4x/platform`: The next time the clock reads `hour`:00 UTC after `now`: later today when that hour has not come yet, tomorrow when it is now or past.
 - `niceStep` (function), `jsr:@spy4x/platform`: Round a span up to a sensible tick step at roughly `target` ticks.
 - `normalizeCalendarDate` (function), `jsr:@spy4x/platform`: Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
@@ -783,7 +784,11 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `HotkeyEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that matchesHotkey reads.
 - `HotkeyMatcherOptions` (interface), `jsr:@spy4x/platform/browser`: Options for createHotkeyMatcher.
 - `HotkeySequenceEvent` (interface), `jsr:@spy4x/platform/browser`: The part of a `KeyboardEvent` that createHotkeyMatcher reads.
+- `LastSignIn` (interface), `jsr:@spy4x/platform/browser`: How a person last signed in on this browser.
+- `LastSignInOptions` (interface), `jsr:@spy4x/platform/browser`: Options for createLastSignIn.
+- `LastSignInStore` (interface), `jsr:@spy4x/platform/browser`: A handle over one storage key.
 - `LoadRuntimeConfigOptions` (interface), `jsr:@spy4x/platform/browser`: What loadRuntimeConfig needs besides the schema.
+- `MAX_LAST_SIGN_IN_METHOD_LENGTH` (constant), `jsr:@spy4x/platform/browser`: Longest method name LastSignInStore.remember keeps.
 - `MakeStorageOptions` (interface), `jsr:@spy4x/platform/browser`: Options for makeStorage.
 - `MissingBuildEnvError` (class), `jsr:@spy4x/platform/browser`: Thrown by readBuildEnvVar for a required variable that is missing or empty.
 - `ObjectUrlAdapter` (interface), `jsr:@spy4x/platform/browser`: Object-URL surface, injected so a test never allocates a real blob URL.
@@ -818,6 +823,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createDataCache` (function), `jsr:@spy4x/platform/browser`: A data cache over IndexedDB.
 - `createDatabaseOpener` (function), `jsr:@spy4x/platform/browser`: Returns a function that opens the database on first use and returns the same connection after.
 - `createHotkeyMatcher` (function), `jsr:@spy4x/platform/browser`: Build a matcher for a table of bindings, each one or more key presses (`["g", "t"]`).
+- `createLastSignIn` (function), `jsr:@spy4x/platform/browser`: Creates the store for one `key`.
 - `createSignedInHint` (function), `jsr:@spy4x/platform/browser`: Creates the hint for one `key`.
 - `downloadCsv` (function), `jsr:@spy4x/platform/browser`: Write rows as a CSV file and save it: toCsvBytes handed to downloadResponseAsFile.
 - `downloadResponseAsFile` (function), `jsr:@spy4x/platform/browser`: Save a response body to disk under `filename`.
@@ -916,6 +922,14 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createDatabaseOpener` (function), `jsr:@spy4x/platform/browser/indexeddb`: Returns a function that opens the database on first use and returns the same connection after.
 - `idbRequest` (function), `jsr:@spy4x/platform/browser/indexeddb`: Resolves a request's result, or rejects with its error.
 - `idbTransactionDone` (function), `jsr:@spy4x/platform/browser/indexeddb`: Resolves when a transaction has committed, rejects when it aborts or fails.
+
+### `jsr:@spy4x/platform/browser/last-sign-in`
+
+- `LastSignIn` (interface), `jsr:@spy4x/platform/browser/last-sign-in`: How a person last signed in on this browser.
+- `LastSignInOptions` (interface), `jsr:@spy4x/platform/browser/last-sign-in`: Options for createLastSignIn.
+- `LastSignInStore` (interface), `jsr:@spy4x/platform/browser/last-sign-in`: A handle over one storage key.
+- `MAX_LAST_SIGN_IN_METHOD_LENGTH` (constant), `jsr:@spy4x/platform/browser/last-sign-in`: Longest method name LastSignInStore.remember keeps.
+- `createLastSignIn` (function), `jsr:@spy4x/platform/browser/last-sign-in`: Creates the store for one `key`.
 
 ### `jsr:@spy4x/platform/browser/offline-shell`
 
@@ -1514,6 +1528,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `hasUnstorableTextCharacters` (function), `jsr:@spy4x/platform/universal/text`: Whether text holds a character that no database text column can store and give back unchanged: NUL (U+0000) or a lone surrogate, which is half of a surrogate pair without its other half.
 - `initials` (function), `jsr:@spy4x/platform/universal/text`: Reduce a name to one or two initials, e.g. for an avatar's fallback face.
 - `levenshtein` (function), `jsr:@spy4x/platform/universal/text`: Levenshtein edit distance between two strings, computed over code points.
+- `maskEmail` (function), `jsr:@spy4x/platform/universal/text`: An email address with its local part hidden behind its first character, for showing a person which address they used without spelling it out: `jane.doe@example.com` gives `j***@example.com`.
 - `pluralize` (function), `jsr:@spy4x/platform/universal/text`: Naive English pluraliser for UI copy.
 - `search` (function), `jsr:@spy4x/platform/universal/text`: Whether one search word occurs in one value.
 - `searchWords` (function), `jsr:@spy4x/platform/universal/text`: Split a search box's value into words.
@@ -1985,6 +2000,8 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `MemoryOAuthFlowStoreOptions` (interface), `jsr:@spy4x/server/auth/oauth`: Options of createMemoryOAuthFlowStore.
 - `OAuthAuthorization` (interface), `jsr:@spy4x/server/auth/oauth`: A started flow: send the browser to `url`, and keep `state` in an HttpOnly cookie until the callback.
 - `OAuthCallbackInput` (interface), `jsr:@spy4x/server/auth/oauth`: What the app passes from the callback request.
+- `OAuthConnectCallbackInput` (interface), `jsr:@spy4x/server/auth/oauth`: What the app passes from the callback request of a flow started with `connectUrl`.
+- `OAuthConnectResult` (interface), `jsr:@spy4x/server/auth/oauth`: A successful connect callback: the user the flow was started for and this provider's key on it.
 - `OAuthFailure` (type), `jsr:@spy4x/server/auth/oauth`: Why a callback was refused.
 - `OAuthFlowKv` (interface), `jsr:@spy4x/server/auth/oauth`: The key-value client createKvOAuthFlowStore needs.
 - `OAuthFlowStore` (interface), `jsr:@spy4x/server/auth/oauth`: Keeps started flows until their callback.
@@ -1995,7 +2012,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `OAuthProfileContext` (interface), `jsr:@spy4x/server/auth/oauth`: What OAuthProviderConfig.completeProfile may use.
 - `OAuthProviderConfig` (interface), `jsr:@spy4x/server/auth/oauth`: One provider, supplied by the app.
 - `OAuthSignIn` (interface), `jsr:@spy4x/server/auth/oauth`: Sign-in with one provider.
-- `OAuthSignInError` (class), `jsr:@spy4x/server/auth/oauth`: Thrown by OAuthSignIn.handleCallback.
+- `OAuthSignInError` (class), `jsr:@spy4x/server/auth/oauth`: Thrown by OAuthSignIn.handleCallback, `confirmSignUp`, `connectUrl` and `handleConnectCallback`.
 - `OAuthSignInOptions` (interface), `jsr:@spy4x/server/auth/oauth`: Options of createOAuthSignIn.
 - `OAuthSignInResult` (interface), `jsr:@spy4x/server/auth/oauth`: A successful callback: the session, plus how the person was resolved and what the provider said.
 - `OAuthTakenFlow` (interface), `jsr:@spy4x/server/auth/oauth`: A flow OAuthFlowStore.take returns: the flow as it was put, and its expiry.
@@ -3036,4 +3053,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 e934b5c1780d48e72046dcfaa8b584e151d03aa8a82ff2139221c0814f2829d4 -->
+<!-- export surface: sha256 7f32b9ab0203e1e49cc0350a8724f0990cc5146482b678f8a2969825e24a1e1f -->
