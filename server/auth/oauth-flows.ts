@@ -33,6 +33,12 @@ export interface OAuthPendingFlow {
    * filler that nobody redeems. A store must return it as it was put.
    */
   signUp?: OAuthProfile
+  /**
+   * Set only on a flow started with `connectUrl(userId)`: the id of the signed-in user the provider
+   * identity is linked to. Such an entry is kept under `connect:<method>:<state>`. A store must
+   * return it as it was put: a connect flow that comes back without it is refused.
+   */
+  connect?: number
 }
 
 /** A flow {@link OAuthFlowStore.take} returns: the flow as it was put, and its expiry. */
@@ -166,20 +172,25 @@ export function createKvOAuthFlowStore(
  * fields it was not given.
  */
 function copyFlow(flow: OAuthPendingFlow): OAuthPendingFlow {
-  if (!flow.signUp) return { verifier: flow.verifier }
-  const { subject, email, emailVerified } = flow.signUp
-  return { verifier: flow.verifier, signUp: { subject, email, emailVerified } }
+  const copy: OAuthPendingFlow = { verifier: flow.verifier }
+  if (flow.connect !== undefined) copy.connect = flow.connect
+  if (flow.signUp) {
+    const { subject, email, emailVerified } = flow.signUp
+    copy.signUp = { subject, email, emailVerified }
+  }
+  return copy
 }
 
 /**
  * A value {@link createKvOAuthFlowStore} wrote, as JSON: a PKCE verifier (RFC 7636: 43 to 128
- * unreserved characters; this module writes 43 base64url ones), the expiry in milliseconds, and a
- * pending sign-up's profile when there is one.
+ * unreserved characters; this module writes 43 base64url ones), the expiry in milliseconds, a
+ * pending sign-up's profile when there is one, and a connect flow's user id when it is one.
  */
 const storedFlow = type("string.json.parse").to({
   verifier: /^[A-Za-z0-9._~-]{43,128}$/,
   expiresAt: type("number").narrow((value) => Number.isFinite(value)),
   "signUp?": { subject: "string", email: "string | null", emailVerified: "boolean" },
+  "connect?": "number.integer",
 })
 
 function parseEntry(value: string): OAuthPendingFlow & { expiresAt: number } | null {

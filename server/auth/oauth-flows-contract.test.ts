@@ -111,5 +111,19 @@ export function describeOAuthFlowStoreContract(
         })
         expect(await store.take("sign-up:a")).toBeNull()
       }))
+
+    it("returns a connect flow's user id as it was put, and none for a flow put without one", () =>
+      withStore(async ({ store, now }) => {
+        const expiresAt = new Date(now() + TEN_MINUTES)
+        await store.put("connect:a", { verifier: VERIFIER_A, connect: 7 }, expiresAt)
+        await store.put("state-b", { verifier: VERIFIER_B }, expiresAt)
+        expect(await store.take("connect:a")).toEqual({
+          verifier: VERIFIER_A,
+          connect: 7,
+          expiresAt,
+        })
+        expect((await store.take("state-b"))?.connect).toBeUndefined()
+        expect(await store.take("connect:a")).toBeNull()
+      }))
   })
 }
