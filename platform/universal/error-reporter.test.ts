@@ -486,6 +486,12 @@ describe("scrubText", () => {
     ["is followed by a closing parenthesis", "db)"],
     ["is followed by a closing square bracket", "db]"],
     ["is followed by a closing brace", "db}"],
+    ["is followed by an ampersand", "db&retries=3"],
+    ["is followed by an exclamation mark", "db!"],
+    ["is followed by an opening parenthesis", "db(primary)"],
+    ["is followed by a vertical bar", "db|replica"],
+    ["has a port and is followed by a colon", "db:5432:"],
+    ["has a port and is followed by a full stop", "db:5432."],
   ]
 
   for (const [name, host] of hosts) {
@@ -518,6 +524,12 @@ describe("scrubText", () => {
 
   it("leaves a URL as it was when e-mail addresses stand in other words", () => {
     const text = "mail a@example.com about https://example.com/a/b, then b@example.com"
+
+    expect(scrubText(text)).toBe(text)
+  })
+
+  it("leaves a URL as it was when the only at sign of its word comes before it", () => {
+    const text = "from=a@example.com&url=https://app.example.com/x"
 
     expect(scrubText(text)).toBe(text)
   })
@@ -591,56 +603,56 @@ describe("scrubText", () => {
     )
   })
 
-  // An e-mail address followed by a code is the ordinary shape of a reset or invite link.
+  // An e-mail address in a link reads like the end of a password, so nothing of the link is kept.
   const links: [string, string][] = [
-    ["a query", "/reset?email=user@example.com&code=123456"],
-    ["a fragment", "/reset#email=user@example.com&code=123456"],
-    ["a query with an encoded parameter", "/reset?email=user@example.com&next=%2Fhome&code=123456"],
+    ["a query that holds an at sign before a code", "/reset?email=user@example.com&code=123456"],
+    ["a fragment that holds an at sign before a code", "/reset#email=user@example.com&code=123456"],
+    [
+      "a query with an encoded parameter that holds an at sign before a code",
+      "/reset?email=user@example.com&next=%2Fhome&code=123456",
+    ],
+    ["a query that ends in an e-mail address", "/reset?code=123456&email=user@example.com"],
+    [
+      "no path and a query that holds an at sign before a code",
+      "?email=user@example.com&code=123456",
+    ],
   ]
 
   for (const [name, link] of links) {
-    it(`drops ${name} that holds an at sign before a code`, () => {
+    it(`shows nothing of a link with ${name}`, () => {
       expect(scrubText(`GET https://app.example.com${link} failed`)).toBe(
-        "GET https://app.example.com/reset failed",
+        "GET https://<REDACTED> failed",
       )
     })
   }
 
-  it("drops a query that holds an at sign before a code when no path comes first", () => {
-    expect(scrubText("GET https://app.example.com?email=user@example.com&code=123456 failed")).toBe(
-      "GET https://app.example.com/ failed",
-    )
-  })
-
-  it("cuts each address to its path when the last holds an e-mail address before a code", () => {
+  it("shows nothing of a reset code when its link shares a word with another address", () => {
     expect(
       scrubText(
         '{"a":"https://a.example/x","link":"https://b.example/reset?email=u@e.com&code=123456"}',
       ),
-    ).toBe('{"a":"https://a.example/x","link":"https://b.example/reset"}')
+    ).toBe('{"a":"https://<REDACTED>')
     expect(
       scrubText(
         'config: {"a":"https://a.example/x","link":"https://b.example/reset?email=u@e.com&code=123456"}',
       ),
-    ).toBe('config: {"a":"https://a.example/x","link":"https://b.example/reset"}')
+    ).toBe('config: {"a":"https://<REDACTED>')
     expect(
       scrubText(
         '<a href="https://a.example/reset?email=u@e.com&code=123456">https://a.example/reset?email=u@e.com&code=123456</a>',
       ),
-    ).toBe('<a href="https://a.example/reset">https://a.example/reset</a>')
+    ).toBe('<a href="https://<REDACTED>')
     expect(scrubText('["https://a.example/x","/reset?email=u@e.com&code=123456"]')).toBe(
-      '["https://a.example/x","/reset"]',
+      '["https://<REDACTED>',
     )
   })
 
-  // Either a password with a slash and a question mark, or a query that ends in an e-mail
-  // address: the two cannot be told apart, so nothing of the address is kept.
-  it("masks the whole address when a host name follows an at sign in its query", () => {
+  // Either a password with a slash and a question mark, or a query with an at sign in it: the two
+  // cannot be told apart, so nothing of the address is kept.
+  it("masks the whole address when an at sign stands in its query", () => {
     expect(scrubText("connect postgres://app:12/RE?ST@db.example.com:5432/app failed")).toBe(
       "connect postgres://<REDACTED> failed",
     )
-    expect(scrubText("GET https://app.example.com/reset?code=123456&email=user@example.com failed"))
-      .toBe("GET https://<REDACTED> failed")
     expect(scrubText("https://app.example.com?next=a@b.example/SECRET")).toBe("https://<REDACTED>")
   })
 
@@ -724,6 +736,7 @@ describe("scrubText on generated messages", () => {
     ',"password": "zqfa@zqfb"',
     "&password=zqfa@zqfb",
     ", password: zqfa@zqfb",
+    "&retries=3",
   ]
   const AROUND = [
     ["", ""],
@@ -734,6 +747,7 @@ describe("scrubText on generated messages", () => {
     ["<", ">"],
     ['{"url":"', '"'],
     ["{url:", "}"],
+    ["", ":"],
   ]
   /** What may stand between two addresses. */
   const BETWEEN = [" ", "\n", " and ", ",", ";", "&", "=", "|", '","', ")(", "][", "><"]
@@ -790,19 +804,6 @@ describe("scrubText on generated messages", () => {
       shape: /app:40917 zqpwtail@/,
       shows: ["40917", "zqpwtail", "zqinva", "zqinvb", "zqcode", "zqmail", "zqdom"],
     },
-    {
-      why: "`&`, `=` and `|` end no host name, as after the e-mail address of a reset link, " +
-        "and no host name comes later in the word",
-      shape:
-        /^postgres:\/\/app:40917\?zqpwtail@db\.example\.com[&=|](postgres:\/\/db\.example\.com$|https:\/\/db\.example\.com(\/reset|:5432))/,
-      shows: ["40917"],
-    },
-    {
-      why: "`|` or `]` in the host: the platform cannot parse the address, and `scrubUrl` then " +
-        "keeps what follows the last `@`",
-      shape: /^postgres:\/\/db\.example\.com(\||\]\[)https:\/\/db\.example\.com\/reset\?/,
-      shows: ["zqcode", "zqdom"],
-    },
   ]
 
   it("shows no marker of a secret position, but in the shapes listed as still shown", () => {
@@ -819,7 +820,7 @@ describe("scrubText on generated messages", () => {
       }
     }
 
-    expect(messages.length).toBe(7668)
+    expect(messages.length).toBe(9600)
     expect({ count: shown.length, first: shown.slice(0, 5) }).toEqual({ count: 0, first: [] })
     expect(STILL_SHOWN.filter((s) => !used.has(s.why)).map((s) => s.why)).toEqual([])
   })
