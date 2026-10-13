@@ -2,13 +2,16 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 import { fromFileUrl } from "@std/path"
 
-import { loadEntries } from "./contract.ts"
+import { loadEntries, resolveEntry } from "./contract.ts"
 import {
+  deprecatedSummary,
+  describesParameters,
+  exportLine,
   exportsFromDocJson,
   exportSurface,
   FINGERPRINT_PREFIX,
   firstSentence,
-  importSpecifier,
+  HEADER,
   loadReadmes,
   renderLlms,
   renderLlmsFull,
@@ -76,31 +79,182 @@ describe("exportsFromDocJson", () => {
     }
     expect(exportsFromDocJson(json)[0].summary).toBe("Docs.")
   })
+
+  it("marks an export deprecated by its own tag or by its module's, the own tag first", () => {
+    const deprecated = (doc: string) => ({
+      tags: [{ kind: "deprecated", doc }, { kind: "module" }],
+    })
+    const json = {
+      nodes: {
+        "file:///old.ts": {
+          module_doc: deprecated("Import from `@spy4x/tasks/model`. It stays until 2.0."),
+          symbols: [
+            { name: "a", declarations: [{ kind: "function", jsDoc: { doc: "Does A." } }] },
+            {
+              name: "b",
+              declarations: [{
+                kind: "function",
+                jsDoc: { doc: "Does B.", ...deprecated("Use `c`") },
+              }],
+            },
+          ],
+        },
+        "file:///new.ts": {
+          module_doc: { tags: [{ kind: "module" }] },
+          symbols: [{ name: "c", declarations: [{ kind: "function", jsDoc: { doc: "Does C." } }] }],
+        },
+      },
+    }
+    expect(exportsFromDocJson(json).map((item) => item.summary)).toEqual([
+      "Deprecated: Import from `@spy4x/tasks/model`. Does A.",
+      "Deprecated: Use `c`. Does B.",
+      "Does C.",
+    ])
+  })
+})
+
+describe("deprecatedSummary", () => {
+  it("says only Deprecated when the tag has no text and the export no summary", () => {
+    expect(deprecatedSummary("", [{ kind: "deprecated" }])).toBe("Deprecated.")
+  })
+
+  it("leaves the summary alone without the tag", () => {
+    expect(deprecatedSummary("Does A.", [{ kind: "example", doc: "a()" }])).toBe("Does A.")
+    expect(deprecatedSummary("Does A.", undefined)).toBe("Does A.")
+  })
+})
+
+describe("describesParameters", () => {
+  const named = (name: string, kind: string) => ({ name, kind, summary: "" })
+  const dropped = (...exports: { name: string; kind: string; summary: string }[]) =>
+    [...describesParameters(exports)].sort()
+
+  it("leaves out a type named after a listed export plus a parameter suffix", () => {
+    expect(dropped(
+      named("Notice", "function"),
+      named("NoticeProps", "interface"),
+      named("NoticeLabels", "type"),
+      named("NoticeOptions", "interface"),
+      named("NoticeConfig", "interface"),
+      named("NoticeDeps", "interface"),
+      named("NoticeInput", "type"),
+    )).toEqual([
+      "NoticeConfig",
+      "NoticeDeps",
+      "NoticeInput",
+      "NoticeLabels",
+      "NoticeOptions",
+      "NoticeProps",
+    ])
+  })
+
+  it("matches a function that starts in lower case or with create", () => {
+    expect(dropped(
+      named("safeFetch", "function"),
+      named("SafeFetchOptions", "interface"),
+      named("createStorage", "function"),
+      named("StorageConfig", "type"),
+    )).toEqual(["SafeFetchOptions", "StorageConfig"])
+  })
+
+  it("keeps a type whose name follows no listed export", () => {
+    expect(dropped(named("parseIcal", "function"), named("IcalParseOptions", "interface")))
+      .toEqual([])
+    expect(dropped(named("Options", "interface"), named("Props", "type"))).toEqual([])
+  })
+
+  it("keeps a type with another ending, such as a result or a store", () => {
+    expect(dropped(
+      named("safeFetch", "function"),
+      named("SafeFetchResult", "type"),
+      named("Billing", "interface"),
+      named("BillingProvider", "interface"),
+      named("BillingStore", "interface"),
+    )).toEqual([])
+  })
+
+  it("keeps a function, class, constant or enum whatever its name", () => {
+    expect(dropped(
+      named("Notice", "function"),
+      named("NoticeOptions", "function"),
+      named("NoticeConfig", "class"),
+      named("NoticeInput", "constant"),
+      named("NoticeLabels", "enum"),
+    )).toEqual([])
+  })
+
+  it("keeps a type named after an interface, a type, an enum or a constant", () => {
+    expect(dropped(
+      named("Alarm", "interface"),
+      named("AlarmInput", "interface"),
+      named("AlarmTrigger", "type"),
+      named("AlarmTriggerInput", "type"),
+      named("Status", "enum"),
+      named("StatusLabels", "type"),
+      named("LIMIT", "constant"),
+      named("LIMITOptions", "interface"),
+    )).toEqual([])
+  })
+
+  it("leaves out a type named after a class", () => {
+    expect(dropped(named("NtfyClient", "class"), named("NtfyClientConfig", "interface")))
+      .toEqual(["NtfyClientConfig"])
+  })
+})
+
+describe("exportLine", () => {
+  it("joins name, kind, import specifier and summary with one tab each", () => {
+    const item = { name: "parseIp", kind: "function", summary: "Parse one address." }
+    expect(exportLine(item, "@spy4x/net/ip")).toBe(
+      "parseIp\tfunction\t@spy4x/net/ip\tParse one address.",
+    )
+  })
+
+  it("keeps three tabs when there is no summary", () => {
+    expect(exportLine({ name: "Bare", kind: "interface", summary: "" }, "@spy4x/net/ip")).toBe(
+      "Bare\tinterface\t@spy4x/net/ip\t",
+    )
+  })
+
+  it("turns a tab or a line break inside a summary into one space", () => {
+    const item = { name: "f", kind: "function", summary: "One\ttwo\r\nthree. " }
+    expect(exportLine(item, "@spy4x/net")).toBe("f\tfunction\t@spy4x/net\tOne two three.")
+  })
 })
 
 describe("renderLlms", () => {
   const entry = { specifier: "@spy4x/net/ip", pkg: "net" }
-  const exports = [{ name: "parseIp", kind: "function", summary: "Parse one address." }, {
-    name: "Bare",
-    kind: "interface",
-    summary: "",
-  }]
+  const exports = [
+    { name: "ParseIpOptions", kind: "interface", summary: "What parseIp takes." },
+    { name: "ParseIpResult", kind: "type", summary: "" },
+    { name: "parseIp", kind: "function", summary: "Parse one address." },
+  ]
 
-  it("lists each export with its kind, import specifier and summary", () => {
-    const text = renderLlms([{ entry, exports }], "abc")
-    expect(text).toContain("## @spy4x/net\n\n### `jsr:@spy4x/net/ip`")
-    expect(text).toContain("- `parseIp` (function), `jsr:@spy4x/net/ip`: Parse one address.\n")
-    expect(text).toContain("- `Bare` (interface), `jsr:@spy4x/net/ip`\n")
+  it("writes the header, one line per export and the fingerprint, and nothing else", () => {
+    expect(renderLlms([{ entry, exports }], "abc").split("\n")).toEqual([
+      ...HEADER,
+      "ParseIpResult\ttype\t@spy4x/net/ip\t",
+      "parseIp\tfunction\t@spy4x/net/ip\tParse one address.",
+      `${FINGERPRINT_PREFIX}abc`,
+      "",
+    ])
   })
 
-  it("is byte-stable and ends with the fingerprint", () => {
-    const one = renderLlms([{ entry, exports }], "abc")
-    expect(renderLlms([{ entry, exports }], "abc")).toBe(one)
-    expect(one.endsWith(`${FINGERPRINT_PREFIX}abc -->\n`)).toBe(true)
+  it("starts every header line and the fingerprint line with #, so none reads as an export", () => {
+    for (const line of [...HEADER, FINGERPRINT_PREFIX]) {
+      expect(line.startsWith("# ")).toBe(true)
+      expect(line).not.toContain("\t")
+    }
   })
 
-  it("prefixes the import specifier with jsr:", () => {
-    expect(importSpecifier(entry)).toBe("jsr:@spy4x/net/ip")
+  it("leaves a parameter type out only in the entry point that lists its namesake", () => {
+    const other = { specifier: "@spy4x/net/types", pkg: "net" }
+    const text = renderLlms([
+      { entry, exports },
+      { entry: other, exports: [exports[0]] },
+    ], "abc")
+    expect(text).not.toContain("ParseIpOptions\tinterface\t@spy4x/net/ip\t")
+    expect(text).toContain("ParseIpOptions\tinterface\t@spy4x/net/types\tWhat parseIp takes.\n")
   })
 })
 
@@ -113,6 +267,15 @@ describe("exportSurface", () => {
     expect(exportSurface(base.replace("Adds.", "Adds one."))).not.toBe(surface)
   })
 
+  it("changes when a module's own JSDoc gains or loses @deprecated", () => {
+    const module = (tag: string) =>
+      `/**\n * Old home.\n *${tag}\n * @module\n */\n\nimport "./a.ts"\n`
+    const plain = exportSurface(module(""))
+    const deprecated = exportSurface(module(" @deprecated Import from `@spy4x/tasks`."))
+    expect(deprecated).not.toBe(plain)
+    expect(exportSurface(module(" @deprecated Import from `@spy4x/time`."))).not.toBe(deprecated)
+  })
+
   it("reads a multi-line braced re-export in full", () => {
     const text = `export {\n  a,\n  b,\n} from "./x.ts"\n`
     expect(exportSurface(text)).toContain("b,")
@@ -123,16 +286,26 @@ describe("generated files", () => {
   const root = fromFileUrl(import.meta.resolve("../../"))
   const fix = "Run `deno task llms` and commit llms.txt and llms-full.txt."
 
-  it("llms.txt lists every entry point and matches the current export surface", async () => {
+  it("llms.txt has a four-field line for every entry point and matches the export surface", async () => {
     const text = await Deno.readTextFile(`${root}/llms.txt`)
     const entries = await loadEntries(root)
-    for (const entry of entries) {
-      if (!text.includes(`### \`${importSpecifier(entry)}\`\n`)) {
-        throw new Error(`llms.txt has no section for ${entry.specifier}. ${fix}`)
+    const lines = text.split("\n").filter((line) => line !== "" && !line.startsWith("#"))
+    for (const line of lines) {
+      if (line.split("\t").length !== 4) {
+        throw new Error(`llms.txt: not four fields: ${line}. ${fix}`)
       }
     }
+    const listed = new Set(lines.map((line) => line.split("\t")[2]))
+    for (const entry of entries) {
+      // An entry point that exports nothing (a command-line script) has no line.
+      const source = await Deno.readTextFile(`${root}/${await resolveEntry(entry.specifier, root)}`)
+      if (exportSurface(source) !== "" && !listed.has(entry.specifier)) {
+        throw new Error(`llms.txt has no line for ${entry.specifier}. ${fix}`)
+      }
+    }
+    expect(text.startsWith(`${HEADER.join("\n")}\n`)).toBe(true)
     const fingerprint = await surfaceFingerprint(root, entries)
-    if (!text.endsWith(`${FINGERPRINT_PREFIX}${fingerprint} -->\n`)) {
+    if (!text.endsWith(`\n${FINGERPRINT_PREFIX}${fingerprint}\n`)) {
       throw new Error(
         `llms.txt is out of date: an export, its JSDoc or an entry point changed. ${fix}`,
       )
