@@ -98,7 +98,7 @@ Deno.test("a zoned due with a zone name the runtime does not know is read in the
     kind: IcalDateKind.Zoned,
     date: `2026-10-08`,
     time: `10:00:00`,
-    tzid: `W. Europe Standard Time`,
+    tzid: `Head Office Time`,
   }
   expect(dateDay(due, UTC)).toBe(`2026-10-08`)
   expect(isOverdue(due, new Date(`2026-10-08T09:00:00Z`), UTC)).toBe(false)

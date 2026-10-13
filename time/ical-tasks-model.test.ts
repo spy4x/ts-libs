@@ -156,7 +156,7 @@ Deno.test("a zoned value with a zone name the runtime does not know is read in t
     kind: IcalDateKind.Zoned,
     date: `2026-10-08`,
     time: `10:00:00`,
-    tzid: `W. Europe Standard Time`,
+    tzid: `Head Office Time`,
   }
   expect(dateDay(due, UTC)).toBe(`2026-10-08`)
   expect(dateInstant(due, UTC).toISOString()).toBe(`2026-10-08T10:00:00.000Z`)

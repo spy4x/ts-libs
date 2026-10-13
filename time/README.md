@@ -299,9 +299,13 @@ const ics = serializeIcal(root) // every other line byte-identical to icsFromSer
 - **Dates keep their kind.** `readDate` returns a date, a floating time, a UTC time or a time with
   a `TZID`, and `writeDate` writes the same kind back. It refuses a DUE or DTEND whose value type
   would differ from DTSTART's, a non-UTC COMPLETED, DTSTAMP, CREATED or LAST-MODIFIED, a second
-  CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE.
-- **Instants.** `resolveInstant` resolves UTC values and IANA `TZID`s through `time/tz`. A vendor
-  zone such as Outlook's `W. Europe Standard Time` stays unresolved (`undefined`), never guessed.
+  CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE. A date
+  that keeps the `TZID` its property already carries is written even without one.
+- **Instants.** `resolveInstant` resolves UTC values and IANA `TZID`s through `time/tz`. Any other
+  `TZID` resolves through the VTIMEZONE of that name in the document passed as `root` (its
+  STANDARD and DAYLIGHT parts with yearly rules or `RDATE`s), and failing that as a Windows zone
+  name such as Outlook's `W. Europe Standard Time`, through the Unicode CLDR table. A `TZID` that
+  is none of these stays unresolved (`undefined`), never guessed.
 - **Not here.** No recurrence expansion (see `time/rrule`), no VTIMEZONE generation, no
   networking. Task and event semantics (status, `RELATED-TO`, `SEQUENCE` bumps) live in
   `time/ical-tasks`. Runs in a browser: the module and its imports use no `Deno.*` API, and a test
