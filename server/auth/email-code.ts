@@ -270,7 +270,6 @@ export function createEmailCodeSignIn(deps: EmailCodeSignInDeps): Required<Email
       const address = requireEmail(email)
       if (typeof code !== "string") throw new EmailCodeError("wrong-code")
       const binding = options?.binding
-      if (binding !== undefined && !isBinding(binding)) throw new EmailCodeError("no-code")
       const now = new Date(clock.now())
       const outcome = await store.attemptChallenge({
         purpose: EMAIL_CODE_PURPOSE,
@@ -493,21 +492,13 @@ async function signInKey(
 /** Random bytes in a binding: 256 bits, so a binding cannot be guessed. */
 const EMAIL_CODE_BINDING_BYTES = 32
 
-/** The length of a binding: {@link EMAIL_CODE_BINDING_BYTES} bytes as unpadded base64url. */
-const EMAIL_CODE_BINDING_LENGTH = 43
-
-/** True for a string with the shape of a binding `requestBoundCode` returns. */
-function isBinding(value: unknown): value is string {
-  return typeof value === "string" && value.length === EMAIL_CODE_BINDING_LENGTH &&
-    /^[A-Za-z0-9_-]+$/.test(value)
-}
-
 /**
  * The challenge subject of a bound code: a digest of the address and the binding. The store finds
  * a challenge by its subject, so a guess reaches a bound challenge only with its binding, and the
  * binding itself is neither stored nor compared: a lookup by digest tells a caller nothing about a
  * binding they do not hold. 64 hex characters, so it never equals an address, the subject of an
- * unbound code.
+ * unbound code. A `binding` that is not one, the empty string included, gives a subject no
+ * challenge has.
  */
 function boundSubject(address: string, binding: string): Promise<string> {
   return sha256Hex(`${EMAIL_CODE_PURPOSE}\nbinding\n${address}\n${binding}`)
