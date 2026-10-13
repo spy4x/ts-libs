@@ -5935,6 +5935,12 @@ read at all. The original had the same property already (it built its path with
 `log.test.ts` now asserts it directly (`never logs the query string`, `does not read or log any
 request header`) instead of leaving it incidental.
 
+**One request, one line each way.** Hono decodes the pathname, so `%0A` arrives as a real line
+break. A line break or any other control character in the method or the path is written escaped
+(`\n`, `\r`, `\t`, `\x1b`, `\u2028`), so a caller cannot start a second, forged log line or send a
+terminal an escape sequence. The `error: unhandled exception on …` line of `applyBaseMiddleware`
+is escaped the same way. A backslash is kept as it is.
+
 **Arrows: `<--` on the way in, `-->` on the way out**, matching both the source and Hono's own
 built-in `hono/logger`. `log.test.ts` pins the direction by name (`logs incoming then outgoing, in
 the source's own arrow direction`) instead of only checking each line's other fields.

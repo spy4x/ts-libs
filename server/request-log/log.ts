@@ -18,10 +18,15 @@
  * `getPath(c.req.raw)`, which stops at the first `?`) — nothing was leaking here, and this port
  * keeps that guarantee explicit and tested rather than incidental.
  *
+ * **One request, one line each way.** Hono decodes the pathname, so `%0A` arrives as a real line
+ * break. A line break or any other control character in the path is written escaped, as `\n` or
+ * `\x1b`, so a caller cannot start a second, forged log line.
+ *
  * @module
  */
 import { getColorEnabled } from "hono/utils/color"
 import type { Env, MiddlewareHandler } from "hono/types"
+import { escapeControlCharacters } from "./escape.ts"
 
 /** Called once per logged line. The line carries no newline of its own. */
 export type RequestLogWriter = (line: string) => void
@@ -95,9 +100,11 @@ function formatLine(
   status?: number,
   elapsed?: string,
 ): string {
+  // Hono decodes the path, so `%0A` arrives here as a real line break.
+  const request = `${escapeControlCharacters(method)} ${escapeControlCharacters(path)}`
   return prefix === RequestLogPrefix.Incoming
-    ? `${prefix} ${method} ${path}`
-    : `${prefix} ${method} ${path} ${colorStatus(status ?? 0)} ${elapsed}`
+    ? `${prefix} ${request}`
+    : `${prefix} ${request} ${colorStatus(status ?? 0)} ${elapsed}`
 }
 
 /**

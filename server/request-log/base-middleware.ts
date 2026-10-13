@@ -13,6 +13,7 @@ import { HTTPException } from "hono/http-exception"
 import { requestId } from "hono/request-id"
 import type { ReportContext } from "@spy4x/platform"
 import { randomBase64Url } from "@spy4x/platform/tokens"
+import { escapeControlCharacters } from "./escape.ts"
 import { requestLog } from "./log.ts"
 
 /** Longest `X-Request-Id` kept when {@link BaseMiddlewareOptions.requestIdMaxLength} is unset. */
@@ -78,7 +79,13 @@ export function applyBaseMiddleware<E extends Env>(
     await next()
     const error = c.error
     if (!error || c.res.status < 500) return
-    write(`error: unhandled exception on ${c.req.method} ${c.req.path}`, error)
+    // The decoded path may hold a line break; escaped, it cannot forge a second line.
+    write(
+      `error: unhandled exception on ${escapeControlCharacters(c.req.method)} ${
+        escapeControlCharacters(c.req.path)
+      }`,
+      error,
+    )
     try {
       const reported = reportError?.(error, {
         tags: { request_id: c.get("requestId") ?? "" },

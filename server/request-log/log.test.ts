@@ -25,6 +25,32 @@ describe("requestLog", () => {
     expect(lines[1]).toMatch(/\dm?s$/)
   })
 
+  it("writes a path with an encoded line break as one line each way, the break escaped", async () => {
+    const lines: string[] = []
+    const app = new Hono()
+    app.use(requestLog({ write: (line) => lines.push(line) }))
+    app.get("/api/:id", (c) => c.text("ok"))
+
+    await app.request("/api/x%0Afake%20line")
+
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toBe(String.raw`<-- GET /api/x\nfake line`)
+    expect(lines[1].startsWith(String.raw`--> GET /api/x\nfake line `)).toBe(true)
+  })
+
+  it("escapes every other control character of a path, the escape character included", async () => {
+    const lines: string[] = []
+    const app = new Hono()
+    app.use(requestLog({ write: (line) => lines.push(line) }))
+    app.get("/api/:id", (c) => c.text("ok"))
+
+    await app.request("/api/a%0Db%09c%1B%5B2Jd%00e%7Ff%C2%85g%E2%80%A8h%E2%80%A9i")
+
+    expect(lines[0]).toBe(
+      String.raw`<-- GET /api/a\rb\tc\x1b[2Jd\x00e\x7ff\x85g\u2028h\u2029i`,
+    )
+  })
+
   it("reports the response status the handler actually returned", async () => {
     const { app, lines } = appWithLog()
 
