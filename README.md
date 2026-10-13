@@ -58,15 +58,14 @@ Deno.serve(async (request) => {
 | [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | WebDAV multistatus reader, escaped request bodies, href and origin rules   | shared                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
-`ai/` (chat completion, JSON recovery) is planned, not built (#11, #76).
 
 The example above validates a booking request, formats its time in Berlin and sends a confirmation
 by SMTP: three packages, no framework. `Deno.serve` hands in a standard `Request`, and each package
 returns a plain value you check.
 
-No Preact, no app shells, no product domain. Everything here is a technical primitive or adapter
-that is useful to more than one product, extracted from my own apps, with their bugs fixed on the
-way in.
+No Preact, no app shells, no single product's domain. Everything here is a technical primitive or
+adapter that is useful to more than one product, extracted from my own apps, with their bugs fixed
+on the way in.
 
 ## Why ts-libs
 
