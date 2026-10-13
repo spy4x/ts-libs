@@ -187,6 +187,14 @@ Deno.test(`a repeating task with no DUE is refused`, async () => {
   assertRefused(text, CompleteTodoErrorCode.NoDueDate)
 })
 
+Deno.test(`a repeating task whose due zone has no VTIMEZONE in the document is completed and keeps its TZID`, async () => {
+  const text = await withLine(`daily-overdue`, /BEGIN:VTIMEZONE[\s\S]*END:VTIMEZONE\r\n/, ``)
+  const { result, text: after } = complete(text)
+  assert(result.success, result.error?.message)
+  assertEquals(result.output.kind, CompleteTodoKind.Advanced)
+  assert(after.includes(`\r\nDUE;TZID=Asia/Ho_Chi_Minh:20260815T110001\r\n`), after)
+})
+
 Deno.test(`a due date in a vendor time zone is refused as unusable`, async () => {
   const text = await withLine(`daily-overdue`, /DUE;TZID=[^:]*:/, `DUE;TZID=Vendor Standard Time:`)
   assertRefused(text, CompleteTodoErrorCode.UnusableDate)
