@@ -83,6 +83,16 @@ function mayHaveReachedServer<P>(entry: OutboxEntrySnapshot<P>): boolean {
   return false
 }
 
+/** The payloads of the create sends started before `entry` became a delete, oldest first. */
+function startedCreates<P>(entry: OutboxEntrySnapshot<P>): P[] {
+  const payloads: P[] = []
+  for (let step = entry.before; step; step = step.before) {
+    // A truncated step is marked attempted for a send it forgot, with a payload that was not sent.
+    if (step.kind === "create" && step.attempted && !step.truncated) payloads.unshift(step.payload)
+  }
+  return payloads
+}
+
 /**
  * One write made while offline, waiting to be sent. `P` is the caller's payload (what the person
  * wrote), `S` the server's snapshot of the entity.
@@ -162,6 +172,14 @@ export interface OutboxCommand<P> {
   payload: P
   /** The version the write is based on; `0` for a create. */
   baseVersion: number
+  /**
+   * Only on a delete of an entity that was created on this device and never confirmed by the
+   * server: the payload of every send of that create that was started, oldest first. The entity is
+   * on the server only if one of those sends arrived, so a transport that has no version to delete
+   * against can tell this device's own create from a write made elsewhere. A payload whose send
+   * fell out of the last 20 steps is not listed.
+   */
+  ownCreates?: P[]
 }
 
 /** What a person did to an entity. A change to an existing entity names the version it saw. */
@@ -503,12 +521,14 @@ export function createOutbox<P, S extends { version: number }>(
     const alone = watched === true && !entry.before
     // Saved before the send: a page closed mid-send must not repeat it under a new key.
     const sending = await save({ ...entry, attempted: true })
+    const ownCreates = sending.kind === "delete" ? startedCreates(sending) : []
     try {
       const server = await ports.send({
         kind: sending.kind,
         entityId: sending.entityId,
         payload: sending.payload,
         baseVersion: sending.baseVersion,
+        ...(ownCreates.length > 0 ? { ownCreates } : {}),
       }, sending.key) ?? undefined
       if (sending.kind === "delete") await cache?.remove(sending.entityId)
       else if (server) await cache?.put(server)
