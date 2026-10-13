@@ -5,12 +5,13 @@
  * The rows are the default mappings (`territory="001"`) of Unicode CLDR release 47,
  * `common/supplemental/windowsZones.xml`, in that file's order.
  * Copyright © 1991-2013 Unicode, Inc. Used under the Unicode License
- * (https://www.unicode.org/copyright.html). To refresh, replace the rows with the same lines of
- * a newer release.
+ * (https://www.unicode.org/copyright.html); its copyright and permission notice is in
+ * `./windows-zones.LICENSE.txt`, which is published with this file. To refresh, replace the rows
+ * with the same lines of a newer release.
  * @module
  */
 
-/** IANA zone by Windows zone name. Read it with `Object.hasOwn`: a `TZID` is untrusted text. */
+/** IANA zone by Windows zone name. */
 export const WINDOWS_ZONES: Readonly<Record<string, string>> = {
   "Dateline Standard Time": "Etc/GMT+12",
   "UTC-11": "Etc/GMT+11",

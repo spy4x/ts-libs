@@ -661,7 +661,7 @@ export function resolveInstant(
     const defined = options.root &&
       vtimezoneInstant(options.root, zone, value.date, value.time ?? "00:00:00")
     if (defined !== undefined) return new Date(defined)
-    zone = Object.hasOwn(WINDOWS_ZONES, zone) ? WINDOWS_ZONES[zone] : undefined
+    zone = WINDOWS_ZONES[zone]
   }
   if (!zone || !isValidTimeZone(zone)) return undefined
   try {
