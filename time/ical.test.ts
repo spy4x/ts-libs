@@ -37,7 +37,7 @@ async function fixtures(): Promise<Map<string, string>> {
       out.set(entry.name, await Deno.readTextFile(new URL(entry.name, FIXTURES)))
     }
   }
-  assertEquals(out.size, 11, "expected 11 recorded and hand-written fixtures")
+  assertEquals(out.size, 12, "expected 12 recorded and hand-written fixtures")
   return out
 }
 
@@ -364,7 +364,7 @@ Deno.test("writeDate rejects a malformed date or time", () => {
   assertEquals(getProperty(root, "DUE"), undefined)
 })
 
-Deno.test("resolveInstant resolves UTC and IANA zones, never a vendor TZID", async () => {
+Deno.test("resolveInstant resolves UTC and IANA zones", async () => {
   const recurring = child(parse(await fixture("stalwart-tasksorg-recurring.ics")), "VTODO")
   assertEquals(
     resolveInstant(readDate(getProperty(recurring, "DUE")!)!)?.toISOString(),
@@ -379,11 +379,208 @@ Deno.test("resolveInstant resolves UTC and IANA zones, never a vendor TZID", asy
     resolveInstant(readDate(getProperty(alias, "DTSTART")!)!)?.toISOString(),
     "2026-07-10T07:00:00.000Z",
   )
-  const outlook = child(parse(await fixture("outlook-sample.ics")), "VEVENT")
-  const windows = readDate(getProperty(outlook, "DTSTART")!)!
-  assertEquals(windows.tzid, "W. Europe Standard Time")
-  assertEquals(resolveInstant(windows, { zone: "Europe/Berlin" }), undefined)
 })
+
+/** A zoned value; the tests below resolve it against a document's VTIMEZONE or an IANA zone. */
+function zoned(tzid: string, date: string, time: string) {
+  return { kind: IcalDateKind.Zoned, date, time, tzid }
+}
+
+/** A document that defines `tzid` with the given STANDARD and DAYLIGHT parts. */
+function zoneDocument(tzid: string, parts: string[][]): IcalComponent {
+  const body = parts.flatMap(([kind, ...lines]) => [`BEGIN:${kind}`, ...lines, `END:${kind}`])
+  return parse(
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VTIMEZONE",
+      `TZID:${tzid}`,
+      ...body,
+      "END:VTIMEZONE",
+      "END:VCALENDAR",
+    ]
+      .map((line) => `${line}\r\n`).join(""),
+  )
+}
+
+Deno.test("resolveInstant resolves Outlook's Windows TZID when the document has no VTIMEZONE for it", async () => {
+  const outlook = child(parse(await fixture("outlook-sample.ics")), "VEVENT")
+  const start = readDate(getProperty(outlook, "DTSTART")!)!
+  assertEquals(start.tzid, "W. Europe Standard Time")
+  assertEquals(resolveInstant(start)?.toISOString(), "2026-10-13T08:00:00.000Z")
+  // The viewer's zone plays no part.
+  assertEquals(
+    resolveInstant(start, { zone: "Asia/Tokyo" })?.toISOString(),
+    "2026-10-13T08:00:00.000Z",
+  )
+  assertEquals(
+    resolveInstant(zoned("SE Asia Standard Time", "2026-10-13", "10:00:00"))?.toISOString(),
+    "2026-10-13T03:00:00.000Z",
+  )
+})
+
+Deno.test("resolveInstant resolves Thunderbird's legacy TZID through the document's VTIMEZONE, in summer and in winter", async () => {
+  const root = parse(await fixture("thunderbird-legacy-tzid.ics"))
+  const todo = child(root, "VTODO")
+  const start = readDate(getProperty(todo, "DTSTART")!)!
+  const due = readDate(getProperty(todo, "DUE")!)!
+  assertEquals(start.tzid, "/mozilla.org/20070129_1/America/New_York")
+  assertEquals(resolveInstant(start, { root })?.toISOString(), "2026-10-20T13:00:00.000Z")
+  assertEquals(resolveInstant(due, { root })?.toISOString(), "2026-12-15T22:00:00.000Z")
+})
+
+Deno.test("resolveInstant leaves a TZID with no VTIMEZONE and no Windows name unresolved, whatever the viewer's zone", async () => {
+  const root = parse(await fixture("thunderbird-legacy-tzid.ics"))
+  const due = readDate(getProperty(child(root, "VTODO"), "DUE")!)!
+  assertEquals(resolveInstant(due), undefined)
+  assertEquals(resolveInstant(due, { zone: "America/New_York" }), undefined)
+  const other = parse(await fixture("outlook-sample.ics"))
+  assertEquals(resolveInstant(due, { root: other, zone: "America/New_York" }), undefined)
+  // A name every object has is not a Windows zone.
+  assertEquals(resolveInstant(zoned("constructor", "2026-10-13", "10:00:00")), undefined)
+})
+
+Deno.test("resolveInstant reads the document's VTIMEZONE before the Windows table", async () => {
+  const text = (await fixture("outlook-sample.ics"))
+    .replaceAll("+0100", "+0300").replaceAll("+0200", "+0400")
+  const root = parse(text)
+  const start = readDate(getProperty(child(root, "VEVENT"), "DTSTART")!)!
+  assertEquals(resolveInstant(start, { root })?.toISOString(), "2026-10-13T06:00:00.000Z")
+})
+
+Deno.test("resolveInstant falls back to the Windows table when the VTIMEZONE has a rule it cannot read", () => {
+  const parts = [
+    ["STANDARD", "DTSTART:16010101T000000", "TZOFFSETFROM:+0300", "TZOFFSETTO:+0300"],
+    [
+      "DAYLIGHT",
+      "DTSTART:16010101T000000",
+      "RRULE:FREQ=MONTHLY;BYDAY=1SU",
+      "TZOFFSETFROM:+0300",
+      "TZOFFSETTO:+0400",
+    ],
+  ]
+  const value = zoned("W. Europe Standard Time", "2026-10-13", "10:00:00")
+  const root = zoneDocument("W. Europe Standard Time", parts)
+  assertEquals(resolveInstant(value, { root })?.toISOString(), "2026-10-13T08:00:00.000Z")
+  const custom = zoneDocument("Head Office", parts)
+  assertEquals(resolveInstant({ ...value, tzid: "Head Office" }, { root: custom }), undefined)
+})
+
+const BERLIN_CLOCKS = [
+  ["2026-01-13", "10:00:00"],
+  ["2026-07-13", "10:00:00"],
+  ["2026-03-29", "01:59:59"],
+  ["2026-03-29", "02:30:00"], // skipped
+  ["2026-03-29", "03:00:00"],
+  ["2026-10-25", "01:59:59"],
+  ["2026-10-25", "02:30:00"], // repeated
+  ["2026-10-25", "03:00:00"],
+  ["2031-12-31", "23:59:59"],
+]
+const NEW_YORK_CLOCKS = [
+  ["2005-04-03", "03:00:00"],
+  ["2006-03-20", "12:00:00"],
+  ["2006-10-29", "01:30:00"], // repeated
+  ["2006-12-25", "12:00:00"],
+  ["2007-03-11", "02:30:00"], // skipped
+  ["2007-03-20", "12:00:00"],
+  ["2007-11-04", "03:00:00"],
+  ["2026-07-04", "12:00:00"],
+  ["2026-12-25", "12:00:00"],
+]
+const DEFINED_ZONES: [string, string, string[][], string[][]][] = [
+  ["a numbered BYDAY rule, as Outlook writes it", "Europe/Berlin", [
+    [
+      "STANDARD",
+      "DTSTART:16011028T030000",
+      "RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10",
+      "TZOFFSETFROM:+0200",
+      "TZOFFSETTO:+0100",
+    ],
+    [
+      "DAYLIGHT",
+      "DTSTART:16010325T020000",
+      "RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3",
+      "TZOFFSETFROM:+0100",
+      "TZOFFSETTO:+0200",
+    ],
+  ], BERLIN_CLOCKS],
+  ["a BYMONTHDAY list with a plain BYDAY", "Europe/Berlin", [
+    [
+      "STANDARD",
+      "DTSTART:19961027T030000",
+      "RRULE:FREQ=YEARLY;BYMONTH=10;BYMONTHDAY=25,26,27,28,29,30,31;BYDAY=SU",
+      "TZOFFSETFROM:+0200",
+      "TZOFFSETTO:+0100",
+    ],
+    [
+      "DAYLIGHT",
+      "DTSTART:19810329T020000",
+      "RRULE:FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=-7,-6,-5,-4,-3,-2,-1;BYDAY=SU",
+      "TZOFFSETFROM:+0100",
+      "TZOFFSETTO:+0200",
+    ],
+  ], BERLIN_CLOCKS],
+  ["rules that end with UNTIL and start again", "America/New_York", [
+    [
+      "DAYLIGHT",
+      "DTSTART:19870405T020000",
+      "RRULE:FREQ=YEARLY;BYMONTH=4;BYDAY=1SU;UNTIL=20060402T070000Z",
+      "TZOFFSETFROM:-0500",
+      "TZOFFSETTO:-0400",
+    ],
+    [
+      "STANDARD",
+      "DTSTART:19671029T020000",
+      "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU;UNTIL=20061029T060000Z",
+      "TZOFFSETFROM:-0400",
+      "TZOFFSETTO:-0500",
+    ],
+    [
+      "DAYLIGHT",
+      "DTSTART:20070311T020000",
+      "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU",
+      "TZOFFSETFROM:-0500",
+      "TZOFFSETTO:-0400",
+    ],
+    [
+      "STANDARD",
+      "DTSTART:20071104T020000",
+      "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU",
+      "TZOFFSETFROM:-0400",
+      "TZOFFSETTO:-0500",
+    ],
+  ], NEW_YORK_CLOCKS],
+  ["one-off changes listed in RDATE", "America/New_York", [
+    [
+      "DAYLIGHT",
+      "DTSTART:20060402T020000",
+      "RDATE:20070311T020000,20260308T020000",
+      "TZOFFSETFROM:-0500",
+      "TZOFFSETTO:-0400",
+    ],
+    [
+      "STANDARD",
+      "DTSTART:20061029T020000",
+      "RDATE:20071104T020000",
+      "RDATE:20261101T020000",
+      "TZOFFSETFROM:-0400",
+      "TZOFFSETTO:-0500",
+    ],
+  ], NEW_YORK_CLOCKS.filter(([date]) => date! >= "2006-03-01")],
+]
+
+for (const [name, iana, parts, clocks] of DEFINED_ZONES) {
+  Deno.test(`a VTIMEZONE with ${name} resolves every wall clock as ${iana} does, skipped and repeated ones included`, () => {
+    const root = zoneDocument("Head Office", parts)
+    for (const [date, time] of clocks) {
+      assertEquals(
+        resolveInstant(zoned("Head Office", date!, time!), { root })?.toISOString(),
+        resolveInstant(zoned(iana, date!, time!))!.toISOString(),
+        `${date} ${time}`,
+      )
+    }
+  })
+}
 
 Deno.test("resolveInstant resolves floating times and dates only with a zone", async () => {
   const todo = child(parse(await fixture("nextcloud-sample.ics")), "VTODO")
@@ -466,7 +663,7 @@ Deno.test("parseIcal names a continuation line that has no line to continue", ()
 
 Deno.test("time/ical and time/ical-tasks and their local imports use web-platform APIs only", async () => {
   // ical-tasks.ts adds itself, ical-tasks-complete.ts and rrule.ts to the files ical.ts reaches.
-  for (const [entry, count] of [["./ical.ts", 4], ["./ical-tasks.ts", 7]] as const) {
+  for (const [entry, count] of [["./ical.ts", 6], ["./ical-tasks.ts", 9]] as const) {
     const seen = new Set<string>()
     const queue = [new URL(entry, import.meta.url)]
     while (queue.length > 0) {

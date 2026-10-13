@@ -829,7 +829,11 @@ Deno.test(`time/rrule and its local imports use web-platform APIs only`, async (
       queue.push(new URL(specifier!, url))
     }
   }
-  assertEquals(seen.size, 5, `rrule.ts, ical.ts, ics-core.ts, tz.ts and date.ts`)
+  assertEquals(
+    seen.size,
+    7,
+    `rrule.ts, ical.ts, ical-timezone.ts, windows-zones.ts, ics-core.ts, tz.ts and date.ts`,
+  )
 })
 
 // ---- formatRrule -------------------------------------------------------------------------------
