@@ -501,6 +501,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ipHint` (function), `jsr:@spy4x/net`: The address with only its network part shown, for display in a list of signed-in devices: the first three parts of an IPv4 address (`203.0.113.*`) or the first two groups of an IPv6 one (`2001:db8:*`).
 - `ipInRanges` (function), `jsr:@spy4x/net`: True when `ip` lies inside at least one of `cidrs`.
 - `isLocalHostname` (function), `jsr:@spy4x/net`: True if the hostname is a special-use name that resolves locally.
+- `isLoopbackHost` (function), `jsr:@spy4x/net`: True when `host` names the machine itself the way a browser decides it: `localhost`, any name under `.localhost`, an address in `127.0.0.0/8`, or `::1`.
 - `isPublicAddress` (function), `jsr:@spy4x/net`: True if `addr` (with or without surrounding brackets) is a globally routable IPv6.
 - `isPublicIpv4` (function), `jsr:@spy4x/net`: True if `addr` is a globally routable IPv4 address.
 - `isPublicIpv6` (function), `jsr:@spy4x/net`: True if the IPv6 address (with optional embedded IPv4) is globally routable.
@@ -539,6 +540,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `ParsedIp` (interface), `jsr:@spy4x/net/ip`: An address that parseIp accepted.
 - `ipHint` (function), `jsr:@spy4x/net/ip`: The address with only its network part shown, for display in a list of signed-in devices: the first three parts of an IPv4 address (`203.0.113.*`) or the first two groups of an IPv6 one (`2001:db8:*`).
 - `ipInRanges` (function), `jsr:@spy4x/net/ip`: True when `ip` lies inside at least one of `cidrs`.
+- `isLoopbackHost` (function), `jsr:@spy4x/net/ip`: True when `host` names the machine itself the way a browser decides it: `localhost`, any name under `.localhost`, an address in `127.0.0.0/8`, or `::1`.
 - `normalizeIp` (function), `jsr:@spy4x/net/ip`: The canonical spelling of `input` (parseIp), or `null` when it is not an address.
 - `parseIp` (function), `jsr:@spy4x/net/ip`: Parse one IPv4 or IPv6 address.
 
@@ -3056,4 +3058,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 9cfd52a1b5ca8b7a7d744c777a9647b8fad182c979a1e68c07a51c21d74e8843 -->
+<!-- export surface: sha256 8fef041787c1773a4c93c6c95fe7c862bc605285677f1871e863d6c37d2bc95f -->

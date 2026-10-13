@@ -84,7 +84,14 @@ export {
 } from "./bounded-body.ts"
 export type { BodyReadOptions, BodySource } from "./bounded-body.ts"
 
-export { CLOUDFLARE_IP_RANGES, ipHint, ipInRanges, normalizeIp, parseIp } from "./ip.ts"
+export {
+  CLOUDFLARE_IP_RANGES,
+  ipHint,
+  ipInRanges,
+  isLoopbackHost,
+  normalizeIp,
+  parseIp,
+} from "./ip.ts"
 export type { ParsedIp } from "./ip.ts"
 
 export { safeRedirectPath } from "./redirect-path.ts"

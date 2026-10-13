@@ -1,6 +1,13 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { CLOUDFLARE_IP_RANGES, ipHint, ipInRanges, normalizeIp, parseIp } from "./ip.ts"
+import {
+  CLOUDFLARE_IP_RANGES,
+  ipHint,
+  ipInRanges,
+  isLoopbackHost,
+  normalizeIp,
+  parseIp,
+} from "./ip.ts"
 
 describe("parseIp", () => {
   it("accepts a dotted-decimal IPv4 address with its bytes", () => {
@@ -286,6 +293,67 @@ describe("ipHint", () => {
       const input of [null, undefined, "", "unknown", "300.1.1.1", "203.0.113.42:8080", "<b>1.2.3"]
     ) {
       expect(ipHint(input), String(input)).toBeNull()
+    }
+  })
+})
+
+describe("isLoopbackHost", () => {
+  it("is true for localhost, a name under it, 127.0.0.0/8 and ::1, as a URL spells them", () => {
+    const urls = [
+      "http://localhost:8080",
+      "http://LOCALHOST",
+      "http://localhost.",
+      "http://tasks.localhost:8080",
+      "http://a.b.localhost.",
+      "http://127.0.0.1:8080",
+      "http://127.0.0.2",
+      "http://127.255.255.255",
+      // Other spellings of 127.0.0.1, which `URL` writes out as the dotted quad.
+      "http://127.1",
+      "http://2130706433",
+      "http://[::1]:8080",
+      "http://[0:0:0:0:0:0:0:1]",
+    ]
+    for (const url of urls) expect(isLoopbackHost(new URL(url).hostname), url).toBe(true)
+    for (const host of ["::1", "[::1]", "127.0.0.1", "Tasks.Localhost"]) {
+      expect(isLoopbackHost(host), host).toBe(true)
+    }
+  })
+
+  it("is false for every other host, also one that only looks like the machine", () => {
+    const urls = [
+      "http://localhost.example.com",
+      "http://notlocalhost",
+      "http://mylocalhost",
+      "http://localhost.localdomain",
+      "http://127.0.0.1.example.com",
+      "http://printer.local",
+      "http://nas",
+      "http://0.0.0.0",
+      "http://128.0.0.1",
+      "http://126.255.255.255",
+      "http://10.0.0.1",
+      "http://192.168.1.10",
+      "http://169.254.0.1",
+      "http://[::]",
+      "http://[::2]",
+      "http://[fe80::1]",
+      "http://[::ffff:127.0.0.1]",
+      "http://[::127.0.0.1]",
+      "https://tasks.example.com",
+    ]
+    for (const url of urls) expect(isLoopbackHost(new URL(url).hostname), url).toBe(false)
+    for (
+      const host of [
+        "",
+        ".",
+        ".localhost.example",
+        "localhost..",
+        "::ffff:127.0.0.1",
+        "[127.0.0.1]",
+      ]
+    ) {
+      expect(isLoopbackHost(host), host).toBe(false)
     }
   })
 })
