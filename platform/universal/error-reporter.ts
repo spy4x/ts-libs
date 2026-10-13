@@ -130,11 +130,18 @@ export function scrubUrl(url: string, redactPathAfter: string[] = []): string {
 /**
  * Free text with the secrets it may carry masked: URLs lose their query, `Bearer` values, and the
  * value of anything named like a password, token, cookie or key.
+ *
+ * A URL loses its credentials too. After `://`, everything up to the last `@` before the next
+ * whitespace counts as credentials, so a URL whose path or query holds an `@` loses the text before
+ * it as well.
  */
 export function scrubText(text: string, redactPathAfter: string[] = []): string {
   return text.slice(0, MAX_TEXT)
     // A header line is secret to its end: `Cookie: a=1; b=2`, `Authorization: Basic …`.
     .replace(/\b(authorization|proxy-authorization|set-cookie|cookie)\s*:[^\n]*/gi, `$1: ${MASK}`)
+    // A URL's credentials end at the last `@` before the next whitespace, whatever the password
+    // holds: a `/`, `?`, `)` or quote in it would otherwise end the URL below before its `@`.
+    .replace(/\b([a-z][a-z\d+.-]{0,30}:\/\/)\S*@/gi, "$1")
     .replace(/\b[a-z][a-z\d+.-]{0,30}:\/\/[^\s"'<>)]+/gi, (url) => scrubUrl(url, redactPathAfter))
     // A relative path loses its query and fragment: `GET /reset?code=…`.
     .replace(/(^|[\s"'(=:[])(\/[^\s"'<>)?#]*)[?#][^\s"'<>)]*/g, "$1$2")

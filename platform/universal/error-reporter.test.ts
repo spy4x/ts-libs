@@ -4,6 +4,7 @@ import {
   createErrorReporter,
   type ErrorReporterOptions,
   parseDsn,
+  scrubText,
   scrubUrl,
 } from "./error-reporter.ts"
 
@@ -415,5 +416,42 @@ describe("scrubUrl", () => {
   it("cuts a relative address at its query or fragment", () => {
     expect(scrubUrl("/assets/a.js?v=SECRETX")).toBe("/assets/a.js")
     expect(scrubUrl("a.js#SECRETX")).toBe("a.js")
+  })
+})
+
+describe("scrubText", () => {
+  // Every password here is made up. Before the slash comes a valid port number where it can, so
+  // that the text up to it parses as a URL of its own (`postgres://app:12`).
+  const passwords: [string, string][] = [
+    ["a slash", "12/REST"],
+    ["a colon", "12:REST"],
+    ["a question mark", "12?REST"],
+    ["a hash", "12#REST"],
+    ["an encoded at sign", "12%40REST"],
+    ["a raw at sign and a slash", "p@ss/W0RD"],
+    ["a closing bracket", "Xy)9zQ"],
+    ["a double quote", 'pa"SS'],
+    ["a single quote", "pa'SS"],
+    ["an angle bracket", "pa<SS"],
+  ]
+
+  for (const [name, password] of passwords) {
+    it(`drops a URL password that holds ${name}`, () => {
+      const text = `connect postgres://app:${password}@db.example.com:5432/app failed`
+
+      expect(scrubText(text)).toBe("connect postgres://db.example.com:5432/app failed")
+    })
+  }
+
+  it("leaves a URL without credentials as it was", () => {
+    const text = "connect postgres://db.example.com:5432/app and https://example.com/a/b failed"
+
+    expect(scrubText(text)).toBe(text)
+  })
+
+  it("keeps the text around a URL whose credentials it drops", () => {
+    expect(scrubText("a@example.com saw redis://:12/REST@cache:6379/0, then b@example.com")).toBe(
+      "a@example.com saw redis://cache:6379/0, then b@example.com",
+    )
   })
 })
