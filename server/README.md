@@ -2533,10 +2533,12 @@ const store = new MemoryLockoutStore({ quietResetMs: 7 * 24 * 60 * 60_000, maxEn
 A full store first drops what a sweep would drop. If nothing can go, a new subject is refused:
 `begin` rejects, and no counter is created. A counter with a running lock, or with a failure inside
 the quiet period, is never evicted to make room, so filling the store clears nobody's lock or
-count. The cost is that checks for new subjects fail until a held counter goes quiet, up to
-`quietResetMs` later. There is no timer: sweeps run inside `update`, at most once per `quietResetMs`
-or every 512 calls. Neither option works with `createMissing: false`, where a dropped subject would
-stop being counted.
+count. The cost is that checks for new subjects fail for as long as the held counters keep being
+written, and for up to `quietResetMs` after the last write. One request per held subject per quiet
+period keeps the store full, and an ordinary successful check holds its slot for `quietResetMs`
+too, so size the cap well above the subjects you expect in one quiet period. There is no timer:
+sweeps run inside `update`, at most once per `quietResetMs` or every 512 calls. Neither option works
+with `createMissing: false`, where a dropped subject would stop being counted.
 
 **Fixes applied at extraction time.**
 

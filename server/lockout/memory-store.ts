@@ -46,8 +46,11 @@ export interface MemoryLockoutStoreOptions {
    * When a new subject arrives and the store is full, it first drops what a sweep would drop. If
    * it is still full, the new subject is **refused**: `update` rejects and `track` throws, and no
    * counter is created. A counter that still decides something is never evicted to make room, so
-   * a flood of new subjects cannot clear a running lock or a count. The cost is that during such a
-   * flood, and for up to `quietResetMs` after it, checks for new subjects fail.
+   * a flood of new subjects cannot clear a running lock or a count. The cost is that checks for
+   * new subjects fail for as long as the held counters keep being written, and for up to
+   * `quietResetMs` after the last write. One request per held subject per quiet period is enough
+   * to keep the store full, and an ordinary successful check holds its slot for `quietResetMs`
+   * too. Size the cap well above the subjects the app expects in one quiet period.
    */
   maxEntries?: number
   /** The clock the sweep reads; give it the lockout's own. Defaults to the host clock. */
