@@ -107,7 +107,8 @@ export type LockoutSubject = string | number
 
 /**
  * Where counters live: `@spy4x/server/lockout/memory-store` and `@spy4x/server/lockout/postgres`.
- * Neither deletes a counter; see the Postgres store for a safe cleanup.
+ * The Postgres one never deletes a counter (it documents a safe cleanup); the memory one drops the
+ * ones that decide nothing any more when given its `quietResetMs` option.
  */
 export interface LockoutStore {
   /**
