@@ -144,10 +144,11 @@ Deno.test("COUNT is lowered by one however late the task was completed", () => {
 })
 
 Deno.test("COUNT=1 ends the series: the task is completed where it stands", () => {
-  const last = water([`DUE;VALUE=DATE:20261011`, `RRULE:FREQ=DAILY;COUNT=1`, LINE])
+  // Completed on a Wednesday, so a Friday is still ahead; the last completion must not take it.
+  const last = water([`DUE;VALUE=DATE:20261009`, `RRULE:FREQ=WEEKLY;COUNT=1;BYDAY=FR`, LINE])
   expect(lines(complete(last, BERLIN), `DUE`, `RRULE`, `STATUS`, `X-REPEAT`)).toEqual([
-    `DUE;VALUE=DATE:20261011`,
-    `RRULE:FREQ=DAILY;COUNT=1`,
+    `DUE;VALUE=DATE:20261009`,
+    `RRULE:FREQ=WEEKLY;COUNT=1;BYDAY=FR`,
     LINE,
     `STATUS:COMPLETED`,
   ])
