@@ -192,9 +192,9 @@ export function isOpen(task: Task): boolean {
 /**
  * The instant a due or start value denotes for a viewer in `zone`. A date is midnight of that day
  * and a floating time is that wall clock, both in `zone`; a UTC time is itself; a zoned time keeps
- * its own zone. A zoned value whose `TZID` this runtime does not know (a vendor name such as
- * `W. Europe Standard Time`) is read as a wall clock in `zone`, so it still lands on a day and
- * never disappears from a view.
+ * its own zone. A zoned value whose `TZID` is neither an IANA zone this runtime knows nor a
+ * Windows zone name (a name a client made up) is read as a wall clock in `zone`, so it still
+ * lands on a day and never disappears from a view.
  */
 export function dateInstant(value: TaskDate, zone: string): Date {
   const exact = resolveInstant(value, { zone })

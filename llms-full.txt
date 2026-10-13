@@ -7584,9 +7584,13 @@ const ics = serializeIcal(root) // every other line byte-identical to icsFromSer
 - **Dates keep their kind.** `readDate` returns a date, a floating time, a UTC time or a time with
   a `TZID`, and `writeDate` writes the same kind back. It refuses a DUE or DTEND whose value type
   would differ from DTSTART's, a non-UTC COMPLETED, DTSTAMP, CREATED or LAST-MODIFIED, a second
-  CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE.
-- **Instants.** `resolveInstant` resolves UTC values and IANA `TZID`s through `time/tz`. A vendor
-  zone such as Outlook's `W. Europe Standard Time` stays unresolved (`undefined`), never guessed.
+  CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE. A date
+  that keeps the `TZID` its property already carries is written even without one.
+- **Instants.** `resolveInstant` resolves UTC values and IANA `TZID`s through `time/tz`. Any other
+  `TZID` resolves through the VTIMEZONE of that name in the document passed as `root` (its
+  STANDARD and DAYLIGHT parts with yearly rules or `RDATE`s), and failing that as a Windows zone
+  name such as Outlook's `W. Europe Standard Time`, through the Unicode CLDR table. A `TZID` that
+  is none of these stays unresolved (`undefined`), never guessed.
 - **Not here.** No recurrence expansion (see `time/rrule`), no VTIMEZONE generation, no
   networking. Task and event semantics (status, `RELATED-TO`, `SEQUENCE` bumps) live in
   `time/ical-tasks`. Runs in a browser: the module and its imports use no `Deno.*` API, and a test
@@ -7612,6 +7616,8 @@ goes up by one on an event patch, and on a task patch that changes `start`, `due
 `alarms` writes reminders: a list replaces the VALARMs (an equal one stays as it is), `null` removes
 them all, and leaving it out keeps them. A reminder counted from the start or end needs that date on
 the task or event.
+A patch that clears that date while such a reminder stays is refused and names the
+date and the reminder; pass `alarms` in the same patch to change or remove it.
 Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
 task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
 `completeSeries: true`. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
