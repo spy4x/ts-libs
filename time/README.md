@@ -373,9 +373,10 @@ is refused with `NoDueDate` as before.
 The line is this library's own. Tasks.org has the same switch ("repeat after completion") but keeps
 it in the phone's database and writes nothing about it to the VTODO, so the phone and this library
 can be set differently for one task. Each app then follows its own setting: the app the task is
-completed in decides the next date. Tasks.org keeps the line when it saves the task. The old
-`FROM=COMPLETION` part inside an `RRULE` is not this setting: a rule with it is refused as an
-unsupported part, and it is never written.
+completed in decides the next date. Tasks.org's source keeps a line it does not know when it saves
+the task; that has not been checked on a phone yet. The old `FROM=COMPLETION` part inside an
+`RRULE` is not this setting: a rule with it is refused as an unsupported part, and it is never
+written.
 
 ```ts
 import { completeTodo, CompleteTodoKind } from "@spy4x/time/ical-tasks"
