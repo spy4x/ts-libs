@@ -246,17 +246,15 @@ function completionAnchor(
 }
 
 /**
- * The rule and the start that give the next date of a series counted from completion. `COUNT` is
- * dropped: it counts completions, which the caller lowers, not occurrences since `anchor`. A
- * weekly rule with BYDAY skips `INTERVAL - 1` weeks and then takes the next listed weekday, as
- * Tasks.org does (`RepeatTaskHelper.handleWeeklyRepeatAfterComplete`), not the weeks RFC 5545
- * would count from the start.
+ * The rule and the start that give the next date of a series counted from completion. A weekly
+ * rule with BYDAY skips `INTERVAL - 1` weeks and then takes the next listed weekday, as Tasks.org
+ * does (`RepeatTaskHelper.handleWeeklyRepeatAfterComplete`), not the weeks RFC 5545 would count
+ * from the start. `COUNT` needs no care: it is 2 or more here, and the caller lowers it.
  */
 function fromCompletion(rule: Rrule, anchor: IcalDateValue): [Rrule, IcalDateValue] {
-  const { count: _count, ...rest } = rule
-  if (rule.freq !== RruleFreq.Weekly || rule.byDay.length === 0) return [rest, anchor]
+  if (rule.freq !== RruleFreq.Weekly || rule.byDay.length === 0) return [rule, anchor]
   const date = isoFromDays(isoDays(anchor.date) + 7 * (rule.interval - 1))
-  return [{ ...rest, interval: 1 }, { ...anchor, date }]
+  return [{ ...rule, interval: 1 }, { ...anchor, date }]
 }
 
 function isCompleted(todo: Todo): boolean {

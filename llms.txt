@@ -2851,6 +2851,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `NewOptions` (interface), `jsr:@spy4x/time/ical-tasks`: Caller-supplied inputs for a new object.
 - `PatchOptions` (interface), `jsr:@spy4x/time/ical-tasks`: Caller-supplied inputs: the clock is never read here.
 - `RelatedTo` (interface), `jsr:@spy4x/time/ical-tasks`: A link to another task (RELATED-TO).
+- `RepeatFrom` (enum), `jsr:@spy4x/time/ical-tasks`: Which date the next occurrence of a repeating task is counted from when it is completed.
 - `Todo` (interface), `jsr:@spy4x/time/ical-tasks`: The fields of a task that apps read.
 - `TodoPatch` (interface), `jsr:@spy4x/time/ical-tasks`: Changes to a task.
 - `TodoStatus` (enum), `jsr:@spy4x/time/ical-tasks`: The STATUS of a task.
@@ -2872,6 +2873,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `CompleteKind` (enum), `jsr:@spy4x/time/ical-tasks-edit`: What a successful change did to the task.
 - `CompleteOutput` (interface), `jsr:@spy4x/time/ical-tasks-edit`
 - `CompleteResult` (type), `jsr:@spy4x/time/ical-tasks-edit`
+- `CompleteTaskOptions` (type), `jsr:@spy4x/time/ical-tasks-edit`: The part of CompleteTodoOptions an app passes besides the moment.
 - `CreateOutput` (interface), `jsr:@spy4x/time/ical-tasks-edit`
 - `CreateResult` (type), `jsr:@spy4x/time/ical-tasks-edit`
 - `EditField` (enum), `jsr:@spy4x/time/ical-tasks-edit`: The task fields the editor changes.
@@ -2899,6 +2901,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 
 - `ParseTaskResult` (type), `jsr:@spy4x/time/ical-tasks-model`: The result of parseTask: the task, or a message that says why there is none.
 - `PriorityBand` (enum), `jsr:@spy4x/time/ical-tasks-model`: How Tasks.org groups the iCalendar priority numbers 1 to 9 (0 is none).
+- `RepeatFrom` (enum), `jsr:@spy4x/time/ical-tasks-model`: Which date the next occurrence of a repeating task is counted from when it is completed.
 - `Task` (interface), `jsr:@spy4x/time/ical-tasks-model`: One task as a screen shows it.
 - `TaskDate` (type), `jsr:@spy4x/time/ical-tasks-model`: A due or start value.
 - `TaskList` (interface), `jsr:@spy4x/time/ical-tasks-model`: A task list: a CalDAV calendar that holds tasks.
@@ -3058,4 +3061,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 12367c9c96c36c5ffdab09581fd06f8993392be766475ac79b79cf3b5b60b7b6 -->
+<!-- export surface: sha256 3c9583c628629ce4cd40d4352b9ecee787dbb849ea14ce675256a40989bfc2ec -->

@@ -104,7 +104,10 @@ export enum EditField {
   Repeat,
   /** The reminders ({@link TaskEdit.reminders}). */
   Reminders,
-  /** What the next date is counted from ({@link TaskEdit.repeatFrom}). */
+  /**
+   * What the next date is counted from ({@link TaskEdit.repeatFrom}). {@link collisions} never
+   * reports it: the choice has two values, so two sides that both changed it agree.
+   */
   RepeatFrom,
 }
 

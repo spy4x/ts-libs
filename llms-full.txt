@@ -7639,13 +7639,33 @@ moves to its next occurrence and stays open. The next date is the first occurren
 DTSTART, never "now": an overdue task moves one step), DTSTART moves by the same offset, `COUNT`
 goes down by one, and the series ends in a completed task at `COUNT=1` or after `UNTIL`. A rule
 outside `time/rrule`, or one Tasks.org reads differently, is refused with a code and the document
-untouched. Tasks.org's "repeat after completion" switch is not in the VTODO, so it cannot be seen.
-`reopenTodo` undoes a completion.
+untouched. `reopenTodo` undoes a completion.
+
+A task counts its next date from the day it was completed, not from its due date, when its VTODO
+has the line `X-REPEAT-FROM:COMPLETION` (`Todo.repeatFrom` and `Task.repeatFrom` then read
+`RepeatFrom.Completion`; no line means from the due date). The series starts again at the
+completion day: a weekly task due on the 11th and completed on the 14th is due on the 21st, not the
+18th. The due date keeps its time of day, DTSTART and the reminders at a fixed time move as far as
+the due date did, and `COUNT` goes down by one however late the task was. A weekly rule with `BYDAY`
+moves to the next listed weekday after the completion day, after skipping `INTERVAL - 1` weeks, as
+Tasks.org does. `UNTIL` ends the series when the next date would pass it. Which day "the day it was
+completed" is depends on the zone: a due time with a `TZID` uses that zone, and every other due
+date uses `options.timeZone`, the zone of the person completing the task. Without that option such
+a task is refused with `UnusableDate`. A task with this line, a rule and no DUE gets a date-only
+DUE counted the same way, unless its DTSTART has a time or it has a `DURATION`; without the line it
+is refused with `NoDueDate` as before.
+
+The line is this library's own. Tasks.org has the same switch ("repeat after completion") but keeps
+it in the phone's database and writes nothing about it to the VTODO, so the phone and this library
+can be set differently for one task. Each app then follows its own setting: the app the task is
+completed in decides the next date. Tasks.org keeps the line when it saves the task. The old
+`FROM=COMPLETION` part inside an `RRULE` is not this setting: a rule with it is refused as an
+unsupported part, and it is never written.
 
 ```ts
 import { completeTodo, CompleteTodoKind } from "@spy4x/time/ical-tasks"
 
-const done = completeTodo(root, { now: new Date() })
+const done = completeTodo(root, { now: new Date(), timeZone: "Europe/Berlin" })
 if (!done.success) throw new Error(done.error.message) // root is unchanged
 done.output.kind === CompleteTodoKind.Advanced // the repeating task is open on its next date
 ```
@@ -7680,8 +7700,8 @@ const next = nextOccurrence(parsed.output, { start: due, after: new Date("2026-0
   `FREQ=HOURLY`, `X-` parts) is `RruleErrorCode.Unsupported` with `error.part` naming it.
 - **Completing a task as Tasks.org does.** Pass the task's due date as both `start` and `after`,
   even when the task is overdue; DTSTART is ignored. The caller lowers `COUNT` by one per
-  completion and the series stops at 1. "Repeat after completion" is stored only on the phone and
-  never appears in the VTODO, so it cannot be honoured.
+  completion and the series stops at 1. For a task that counts from completion, `completeTodo`
+  passes the completion day in place of the due date.
 - **Month ends.** A plain monthly rule (no `BYDAY`, no `BYMONTH`, no `BYMONTHDAY` or one positive
   day) is anchored on that day, or on the start's day, and uses the month's last day when a month
   is shorter than the anchor, as Tasks.org does: 31 January is followed by 28 February. Like
@@ -7704,6 +7724,13 @@ reminders with the triggers it has, leave their lines as they are, and a reminde
 its vendor lines. `rebaseEdit`, `keepMine` and `collisions` know both fields (`EditField.Repeat`,
 `EditField.Reminders`). A rule `parseRrule` does not read is refused.
 
+`TaskEdit.repeatFrom` sets what the next date is counted from: `RepeatFrom.Completion` adds the line
+`X-REPEAT-FROM:COMPLETION`, `RepeatFrom.DueDate` removes it, and the value the task already has
+leaves the text byte for byte. Removing the repeat rule removes the line too, and on a task that
+does not repeat after the edit nothing is written. `rebaseEdit`, `keepMine` and `keepMineText` carry
+the choice like any other field. `completeTask(task, now, { timeZone })` and
+`keepMineText(baseIcs, mineIcs, theirs, now, { timeZone })` take the person's zone for such a task.
+
 A repeat rule needs a due date, because `completeTask` moves a repeating task from its due date and
 refuses one that has none. `editTask` (and `rebaseEdit`, `keepMine` and `keepMineText`, which write
 through it) refuses an edit that would leave a rule on a task with no due date, and the message
@@ -7718,6 +7745,8 @@ as a write that waited in a queue while the server's copy changed. It returns th
 only what differs between the base text and mine on it: every `TaskEdit` field except the list, and
 a completion or a reopening I made, unless the server's copy already has it. A repeating task I
 completed is recognised by its dates and rule, and the server's copy moves on from its own dates.
+A task that counts from completion is recognised only when `now` is the day I completed it; on a
+later day the result keeps the dates my completion gave.
 It refuses with a `KeepMineStep` (and the `CompleteTodoErrorCode` for a completion) when a text does
 not read, the server's copy cannot take the completion, or `editTask` refuses a field; never send my
 whole text then, which would undo every change of the other side.
