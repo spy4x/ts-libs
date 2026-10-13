@@ -144,14 +144,16 @@ export interface ErrorCodes {
  * retry (`isRetryable`), means unreachable; a {@link RealtimeRequestError} whose `details.code` is
  * one of `codes` is that kind of refusal; any other refusal is `rejected` with its message.
  *
- * A write answered `unauthorized` is the exception: it stays pending (`unreachable`) unless
- * `codes.unauthorized` is `"rejected"`, so unsent work is not lost when a session ends.
+ * Two answers are exceptions. A write answered `unauthorized` stays pending (`unreachable`) unless
+ * `codes.unauthorized` is `"rejected"`, so unsent work is not lost when a session ends. A write
+ * answered `internal` stays pending too: an unexpected server error says nothing about the write.
  */
 export function classifyByCode(codes: ErrorCodes): (error: unknown) => SendFailure {
   return (error) => {
     if (!(error instanceof RealtimeRequestError) || isRetryable(error)) {
       return { kind: "unreachable" }
     }
+    if (error.code === "internal") return { kind: "unreachable" }
     if (error.code === "unauthorized" && codes.unauthorized !== "rejected") {
       return { kind: "unreachable" }
     }

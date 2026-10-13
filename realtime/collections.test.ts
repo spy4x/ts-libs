@@ -983,7 +983,7 @@ describe(`a flush for the sync runner`, () => {
     expect(await layer.syncFlush()).toBe(`unreachable`)
   })
 
-  for (const code of [`rate_limited`] as const) {
+  for (const code of [`rate_limited`, `internal`] as const) {
     it(`keeps a queued write pending when its send is answered ${code}`, async () => {
       const { server, tags, layer } = setup()
       server.state.offline = true
@@ -1129,6 +1129,12 @@ describe(`classifyByCode`, () => {
 
   it(`reads a rate limit as unreachable`, () => {
     expect(classifyByCode({})(new RealtimeRequestError(`rate_limited`, `slow down`))).toEqual({
+      kind: `unreachable`,
+    })
+  })
+
+  it(`reads an unexpected server error as unreachable`, () => {
+    expect(read(new RealtimeRequestError(`internal`, `internal error`))).toEqual({
       kind: `unreachable`,
     })
   })

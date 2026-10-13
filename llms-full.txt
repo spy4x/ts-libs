@@ -3844,6 +3844,9 @@ else or owes a second factor, so the server never judged the write: it now stays
 (`unreachable`) until its owner signs in. Pass `classifyByCode({ unauthorized: "rejected" })` to
 keep the old reading.
 
+A write answered `rate_limited` or `internal` stays pending as well. The server was busy, or failed
+in a way that says nothing about the write, so the sync runner sends it again with backoff.
+
 ## Read cache (`@spy4x/realtime/read-cache`)
 
 The offline-readable level of ADR 003: a copy of a list read, kept on the device, that answers when
