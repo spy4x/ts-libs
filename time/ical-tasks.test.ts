@@ -658,7 +658,8 @@ Deno.test("an RRULE outside the RFC 5545 shape is refused", () => {
       "",
     ]
   ) {
-    const root = parse("BEGIN:VTODO\r\nEND:VTODO\r\n")
+    // With a due date, so the rule is refused for its shape and not for the missing date.
+    const root = parse("BEGIN:VTODO\r\nDUE:20261009T080000Z\r\nEND:VTODO\r\n")
     assertEquals(
       patchTodo(root, { rrule: bad }, { now: NOW }).error?.code,
       IcalErrorCode.InvalidValue,
