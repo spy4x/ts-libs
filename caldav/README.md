@@ -213,11 +213,12 @@ The app supplies the calendar, the object's address, the etag a write is based o
 text, and how to turn an object into its entity.
 
 A repeat of a create after a lost answer finds its own object, by its UID. When that object holds
-exactly the text being sent, the create is done. When the text differs, the repeat may carry an
-edit made since the first try (the outbox merges an edit into a create that is still queued), so
-the text is written as an update with the etag just read. A server that stores the text reordered
-gets that one extra update. If the object has no etag, nothing is written and the queue sees
-`version`.
+the same content lines as the text being sent, in any order (Radicale stores the properties
+reordered), the create is done. When the lines differ, the repeat may carry an edit made since the
+first try (the outbox merges an edit into a create that is still queued), or another device may have
+changed the task after the create arrived. Nothing tells the two apart, so nothing is written and
+the queue sees `version`: the outbox fetches the server's copy, keeps the local text in the entry,
+and the person chooses.
 
 An update or delete whose `etagOf` gives no etag sends nothing and answers `version`: the queue then
 fetches the server's copy and the person chooses, so a change made on another device is never
@@ -235,8 +236,8 @@ backslashes or encoded dots would turn into another host or a `//` prefix throws
 | network error, timeout, 5xx, 401, 408, 429, a 403 without a `DAV:error` condition   | `unreachable`: keep the entry, retry later     |
 | a 403 with a `DAV:error` condition (no privilege, data the calendar does not take)  | `rejected`: the writes behind it are sent      |
 | other 4xx (not 401, 403, 408, 429), a bad entity id on a create                     | `rejected`, with the message                   |
-| 412 on a create, and the object there has the same UID and the same text            | success, nothing written                       |
-| 412 on a create, and the object there has the same UID and other text               | an update with the etag just read              |
+| 412 on a create, and the object there has the same UID and the same content lines   | success, nothing written                       |
+| 412 on a create, and the object there has the same UID and other content            | `version`, nothing written                     |
 | 412 on a create, and the object there has another UID (or none)                     | `rejected`: no "Keep mine" can overwrite it    |
 | an update or delete with no etag known (`etagOf`)                                   | `version`, no request sent                     |
 
