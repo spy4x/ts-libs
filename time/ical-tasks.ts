@@ -238,7 +238,8 @@ export interface CalendarEvent {
  * - `status: Completed` also sets COMPLETED (to `now`, UTC) and PERCENT-COMPLETE:100.
  *   `status` set to anything else, or cleared, removes COMPLETED and a PERCENT-COMPLETE of 100.
  * - A task with an RRULE keeps it; set `rrule: null` to end the series.
- * - A zoned `start` or `due` needs its VTIMEZONE in the document already.
+ * - A zoned `start` or `due` needs its VTIMEZONE in the document already, unless it keeps the
+ *   `TZID` the stored date has.
  */
 export interface TodoPatch {
   summary?: string | null

@@ -299,7 +299,8 @@ const ics = serializeIcal(root) // every other line byte-identical to icsFromSer
 - **Dates keep their kind.** `readDate` returns a date, a floating time, a UTC time or a time with
   a `TZID`, and `writeDate` writes the same kind back. It refuses a DUE or DTEND whose value type
   would differ from DTSTART's, a non-UTC COMPLETED, DTSTAMP, CREATED or LAST-MODIFIED, a second
-  CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE.
+  CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE. A date
+  that keeps the `TZID` its property already carries is written even without one.
 - **Instants.** `resolveInstant` resolves UTC values and IANA `TZID`s through `time/tz`. Any other
   `TZID` resolves through the VTIMEZONE of that name in the document passed as `root` (its
   STANDARD and DAYLIGHT parts with yearly rules or `RDATE`s), and failing that as a Windows zone

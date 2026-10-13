@@ -104,7 +104,7 @@ export enum IcalErrorCode {
   InvalidValue,
   /** The edit would give DUE or DTEND a different value type than DTSTART (RFC 5545). */
   ValueTypeMismatch,
-  /** A `TZID` is not defined by a VTIMEZONE in the document. */
+  /** A `TZID` is not defined by a VTIMEZONE in the document, nor already on the property. */
   UnknownTzid,
 }
 
@@ -536,7 +536,7 @@ const PAIRED: Record<string, string[]> = {
 
 /** Options for {@link writeDate}. */
 export interface IcalWriteDateOptions {
-  /** The document root; needed to check that a zoned value's TZID has a VTIMEZONE. */
+  /** The document root; needed to check that a zoned value's new TZID has a VTIMEZONE. */
   root?: IcalComponent
 }
 
@@ -554,7 +554,9 @@ export interface IcalWriteDateOptions {
  * - a DUE, DTEND or DTSTART whose value type (date versus date-time) would differ from its
  *   partner's ({@link IcalErrorCode.ValueTypeMismatch}); to switch both, remove one first;
  * - a zoned value whose TZID has no VTIMEZONE in `options.root` ({@link IcalErrorCode.UnknownTzid}):
- *   this module never invents a VTIMEZONE.
+ *   this module never invents a VTIMEZONE. A value that keeps the TZID the property already
+ *   carries is written all the same: servers and clients often leave the VTIMEZONE of an IANA
+ *   name out, and such a date must stay movable.
  */
 export function writeDate(
   component: IcalComponent,
@@ -598,7 +600,9 @@ export function writeDate(
     }
   }
   if (value.kind === IcalDateKind.Zoned) {
-    if (!value.tzid || !options.root || !hasTimezone(options.root, value.tzid)) {
+    const carried = existing && getParameter(existing, "TZID")?.values[0]
+    const defined = options.root && value.tzid && hasTimezone(options.root, value.tzid)
+    if (!value.tzid || (value.tzid !== carried && !defined)) {
       return fail(IcalErrorCode.UnknownTzid, `no VTIMEZONE defines ${JSON.stringify(value.tzid)}`)
     }
   }

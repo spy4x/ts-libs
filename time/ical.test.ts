@@ -322,10 +322,24 @@ Deno.test("a DUE with TZID keeps its zone when its VTIMEZONE is in the document"
 Deno.test("writeDate refuses a TZID that no VTIMEZONE in the document defines", async () => {
   const root = parse(await fixture("stalwart-event-alarm.ics"))
   const event = child(root, "VEVENT")
-  const start = readDate(getProperty(event, "DTSTART")!)!
-  assertEquals(start.tzid, "Asia/Saigon")
+  const start = { ...readDate(getProperty(event, "DTSTART")!)!, tzid: "Europe/Berlin" }
   assertEquals(writeDate(event, "DTSTART", start, { root }).error?.code, IcalErrorCode.UnknownTzid)
   assertEquals(writeDate(event, "DTSTART", start).error?.code, IcalErrorCode.UnknownTzid)
+  // DTEND carries Asia/Saigon; that does not let a property with no TZID take it.
+  const stamp = { ...start, tzid: "Asia/Saigon" }
+  assertEquals(
+    writeDate(event, "RECURRENCE-ID", stamp, { root }).error?.code,
+    IcalErrorCode.UnknownTzid,
+  )
+})
+
+Deno.test("writeDate moves a date that keeps the TZID its property already carries, with no VTIMEZONE in the document", async () => {
+  const root = parse(await fixture("stalwart-event-alarm.ics"))
+  const event = child(root, "VEVENT")
+  const start = readDate(getProperty(event, "DTSTART")!)!
+  assertEquals(start.tzid, "Asia/Saigon")
+  assert(writeDate(event, "DTSTART", { ...start, date: "2026-07-09" }, { root }).success)
+  assert(serializeIcal(root).includes("\r\nDTSTART;TZID=Asia/Saigon:20260709T140000\r\n"))
 })
 
 Deno.test("writeDate refuses to make DUE and DTSTART value types differ", async () => {
