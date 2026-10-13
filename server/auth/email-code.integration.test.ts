@@ -37,10 +37,12 @@ interface Harness {
   sql: Sql
   store: AuthStore
   sessions: SessionManager<AuthSessionRecord>
-  provider: EmailCodeSignIn
+  provider: Required<EmailCodeSignIn>
   /** A password provider over the same store and sessions. */
   passwords: PasswordSignIn
   codeFor(email?: string): Promise<string>
+  /** Asks for a bound code for `email` and returns the code that was sent and its binding. */
+  boundCodeFor(email?: string): Promise<{ code: string; binding: string }>
 }
 
 /** Runs `body` on a fresh schema holding the auth tables, and drops the schema afterwards. */
@@ -78,7 +80,11 @@ async function withProvider(body: (harness: Harness) => Promise<void>): Promise<
       sessions,
       hasher: createPasswordHasher({ pepper: PEPPER, iterations: 100_000 }),
     })
-    await body({ sql, store, sessions, provider, passwords, codeFor })
+    const boundCodeFor = async (email = ADDRESS) => {
+      const binding = await provider.requestBoundCode(email)
+      return { code: sent[sent.length - 1], binding }
+    }
+    await body({ sql, store, sessions, provider, passwords, codeFor, boundCodeFor })
   } finally {
     await close()
   }
@@ -161,6 +167,52 @@ describe("createEmailCodeSignIn on Postgres", () => {
       const fresh = await codeFor()
       expect(await refusalOf(provider.verifyCode(ADDRESS, "wrong-00"))).toBe("wrong-code")
       expect(await refusalOf(provider.verifyCode(ADDRESS, fresh))).toBe("locked-out")
+    }))
+
+  it("keeps wrong codes from another browser off the person's bound code, and locks it on the person's own", () =>
+    withProvider(async ({ provider, boundCodeFor }) => {
+      const person = await boundCodeFor()
+      const stranger = await boundCodeFor()
+      for (let guess = 0; guess < 6; guess++) {
+        expect(await refusalOf(provider.verifyCode(ADDRESS, "wrong-00"))).toBe("no-code")
+      }
+      for (let guess = 0; guess < 5; guess++) {
+        expect(
+          await refusalOf(provider.verifyCode(ADDRESS, "wrong-00", { binding: stranger.binding })),
+        ).toBe("wrong-code")
+      }
+      expect(
+        await refusalOf(provider.verifyCode(ADDRESS, stranger.code, { binding: stranger.binding })),
+      ).toBe("locked-out")
+      for (let guess = 0; guess < 4; guess++) {
+        expect(
+          await refusalOf(provider.verifyCode(ADDRESS, "wrong-00", { binding: person.binding })),
+        ).toBe("wrong-code")
+      }
+      const { key } = await provider.verifyCode(ADDRESS, person.code, { binding: person.binding })
+      expect(key.subject).toBe(ADDRESS)
+
+      const again = await boundCodeFor()
+      for (let guess = 0; guess < 5; guess++) {
+        expect(
+          await refusalOf(provider.verifyCode(ADDRESS, "wrong-00", { binding: again.binding })),
+        ).toBe("wrong-code")
+      }
+      expect(
+        await refusalOf(provider.verifyCode(ADDRESS, again.code, { binding: again.binding })),
+      ).toBe("locked-out")
+    }))
+
+  it("stores neither the binding nor the address of a bound code", () =>
+    withProvider(async ({ sql, boundCodeFor }) => {
+      const { code, binding } = await boundCodeFor()
+      const rows = await sql<{ subject: string; secret_hash: string }[]>`
+        SELECT subject, secret_hash FROM auth_challenges`
+      expect(rows.length).toBe(1)
+      expect(rows[0].subject).toMatch(/^[0-9a-f]{64}$/)
+      expect(JSON.stringify(rows)).not.toContain(binding)
+      expect(JSON.stringify(rows)).not.toContain(code)
+      expect(JSON.stringify(rows)).not.toContain(ADDRESS)
     }))
 
   it("refuses a code for a deleted account and adds no key", () =>
