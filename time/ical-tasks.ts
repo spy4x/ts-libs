@@ -789,6 +789,57 @@ function writeAlarms(
   return undefined
 }
 
+/** The dates of `component` a relative trigger can count from, taken before a patch is written. */
+interface Anchors {
+  /** The ends a relative trigger could count from. */
+  related: AlarmRelated[]
+  /** The date properties present. */
+  names: string[]
+}
+
+function anchorsOf(component: IcalComponent): Anchors {
+  return {
+    related: [AlarmRelated.Start, AlarmRelated.End].filter((related) =>
+      !missingAnchor(component, related)
+    ),
+    names: ["DTSTART", "DUE", "DTEND", "DURATION"].filter((name) =>
+      getProperty(component, name) !== undefined
+    ),
+  }
+}
+
+/**
+ * Refuse a patch that took away the date a remaining relative trigger counts from: `before` is
+ * {@link anchorsOf} the component before the patch. Call it after the dates and the VALARMs are
+ * written. A trigger that had no date before the patch is left alone, so a document another
+ * client wrote that way can still be changed; an absolute trigger counts from nothing.
+ */
+function orphanedAlarm(
+  component: IcalComponent,
+  before: Anchors,
+): IcalResult<never> | undefined {
+  for (const alarm of readAlarms(component)) {
+    const trigger = alarm.trigger
+    if (trigger?.kind !== AlarmTriggerKind.Relative) continue
+    if (!before.related.includes(trigger.related)) continue
+    const missing = missingAnchor(component, trigger.related)
+    if (!missing) continue
+    const end = trigger.related === AlarmRelated.End
+    const removed = before.names.filter((name) =>
+      (end || name === "DTSTART") && getProperty(component, name) === undefined
+    )
+    return fail(
+      IcalErrorCode.InvalidValue,
+      `a reminder counted from the ${
+        end ? "end" : "start"
+      } (${trigger.duration}) needs ${missing} on the ${
+        component.name.toLowerCase().slice(1)
+      }; to clear ${removed.join(" and ")}, change or remove the reminder in the same patch`,
+    )
+  }
+  return undefined
+}
+
 /** DTSTAMP and LAST-MODIFIED to `now`; SEQUENCE up by one when `bump`. */
 function stamp(
   component: IcalComponent,
@@ -877,6 +928,7 @@ function applyTodo(
     return fail(IcalErrorCode.InvalidValue, `unknown task status ${String(patch.status)}`)
   }
   const changed = scheduleChanges(todo, patch)
+  const anchors = anchorsOf(todo)
   return firstFailure(
     () => writeOptionalText(todo, "SUMMARY", patch.summary),
     () => writeOptionalText(todo, "DESCRIPTION", patch.description),
@@ -897,6 +949,7 @@ function applyTodo(
     () => writeRrule(todo, changed.rrule ? patch.rrule : undefined),
     () => changed.writeStatus ? applyStatus(todo, root, patch, now) : undefined,
     () => writeAlarms(todo, patch.alarms),
+    () => orphanedAlarm(todo, anchors),
     () => stamp(todo, root, now, !fresh && changed.revision),
   )
 }
@@ -1014,7 +1067,9 @@ function transaction(
  * Refuses, leaving `root` untouched: no VTODO ({@link IcalErrorCode.Malformed}); a DUE and
  * DTSTART that would differ in value type ({@link IcalErrorCode.ValueTypeMismatch}); a zoned
  * date with no VTIMEZONE ({@link IcalErrorCode.UnknownTzid}); a bad priority, percent, status,
- * date, RRULE or RELATED-TO ({@link IcalErrorCode.InvalidValue}).
+ * date, RRULE or RELATED-TO ({@link IcalErrorCode.InvalidValue}); clearing `start` or `due`
+ * while a reminder left after the patch counts from it (the same code: pass `alarms` in the same
+ * patch to change or remove the reminder).
  *
  * A repeating task stays repeating, and `status: Completed` on one is refused unless
  * `options.completeSeries` is true, which ends the series as written. To move a series to its
@@ -1047,7 +1102,8 @@ export function patchTodo(
 /**
  * Patch the first VEVENT of `root` in place and return the event as it now reads. Changes only
  * the patched fields plus DTSTAMP, LAST-MODIFIED and SEQUENCE (+1); recurrence overrides are
- * untouched. Refusals are those of {@link patchTodo}, with DTEND in place of DUE.
+ * untouched. Refusals are those of {@link patchTodo}, with DTEND in place of DUE; a reminder
+ * counted from the end has its date while the event keeps DTEND, or DTSTART with DURATION.
  */
 export function patchEvent(
   root: IcalComponent,
@@ -1097,6 +1153,7 @@ function applyEvent(
     "DTEND",
   ])
   if (mismatch) return mismatch as IcalResult<never>
+  const anchors = anchorsOf(event)
   return firstFailure(
     () => writeOptionalText(event, "SUMMARY", patch.summary),
     () => writeOptionalText(event, "DESCRIPTION", patch.description),
@@ -1117,6 +1174,7 @@ function applyEvent(
     () => writeCategories(event, patch.categories),
     () => writeRrule(event, patch.rrule),
     () => writeAlarms(event, patch.alarms),
+    () => orphanedAlarm(event, anchors),
     () => stamp(event, root, now, !fresh),
   )
 }
