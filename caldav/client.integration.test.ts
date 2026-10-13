@@ -123,6 +123,8 @@ for (const server of SERVERS) {
           serverUrl,
           auth: { username: login.username, password: login.password },
           fetch: recording,
+          // The test containers answer on plain http: on this machine.
+          allowHttp: new URL(serverUrl).protocol === "http:",
         })
       const client = connect(settings.baseUrl)
       let calendarUrl: string | undefined
