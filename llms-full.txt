@@ -7645,6 +7645,11 @@ them all, and leaving it out keeps them. A reminder counted from the start or en
 the task or event.
 A patch that clears that date while such a reminder stays is refused and names the
 date and the reminder; pass `alarms` in the same patch to change or remove it.
+A repeat rule on a task needs DUE, the date `completeTodo` moves the task from: `patchTodo` and
+`newTodo` refuse a new or changed `rrule` when the task has no DUE after the patch, and `due: null`
+on a task whose rule stays, naming the rule; the same patch may set DUE or pass `rrule: null`. A
+task that already repeats without DUE (another app wrote it) takes any patch that does not write a
+rule.
 Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
 task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
 `completeSeries: true`. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.
@@ -7725,6 +7730,15 @@ removes them all). Both go through the lossless patch: a rule that means what th
 reminders with the triggers it has, leave their lines as they are, and a reminder that stays keeps
 its vendor lines. `rebaseEdit`, `keepMine` and `collisions` know both fields (`EditField.Repeat`,
 `EditField.Reminders`). A rule `parseRrule` does not read is refused.
+
+A repeat rule needs a due date, because `completeTask` moves a repeating task from its due date and
+refuses one that has none. `editTask` (and `rebaseEdit`, `keepMine` and `keepMineText`, which write
+through it) refuses an edit that would leave a rule on a task with no due date, and the message
+names the rule: a new or changed `repeatRule` on a task without a due date, and `due: null` on a
+task that repeats. The same edit goes through when it also sets `due`, or also passes
+`repeatRule: null`. A task that arrives repeating without a due date, written by another app, can
+still be renamed or changed in any way that does not write a rule; `completeTask` still refuses it
+with `NoDueDate` until it gets a due date or loses the rule.
 
 `keepMineText(baseIcs, mineIcs, theirs, now)` is "keep mine" for a change stored as whole text, such
 as a write that waited in a queue while the server's copy changed. It returns the server's text with

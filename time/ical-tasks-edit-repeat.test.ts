@@ -418,21 +418,9 @@ Deno.test(`a repeat rule is written in the formatRrule spelling, not the caller'
   expect(out.ics).not.toContain(`freq=daily`)
 })
 
-Deno.test(`a repeat rule needs a start or due date, and clearing one never does`, () => {
-  const bare = fixtureTask(task(`b2`, `No dates`))
-  const refused = editTask(bare, { repeatRule: `FREQ=DAILY;INTERVAL=1` }, NOW)
-  expect(refused.success).toBe(false)
-  expect(refused.error).toContain(`start or due`)
-  // The same edit may bring the date.
-  const together = edit(bare, {
-    repeatRule: `FREQ=DAILY;INTERVAL=1`,
-    due: { kind: IcalDateKind.Date, date: `2026-10-09` },
-  })
-  expect(together.task.repeatRule).toBe(`FREQ=DAILY;INTERVAL=1`)
-  // Removing the due date in the same edit leaves nothing to repeat from.
-  expect(editTask(PLAIN, { repeatRule: `FREQ=DAILY;INTERVAL=1`, due: null }, NOW).success)
-    .toBe(false)
-  // A task that repeats and has lost its date can still stop repeating.
+// What a repeat rule needs from the due date is in ical-tasks-repeat-due.test.ts.
+Deno.test(`a task that repeats and has lost its due date can still stop repeating`, () => {
   const dateless = fixtureTask(BASE.ics.replace(`DUE;VALUE=DATE:20261009\r\n`, ``))
+  expect(dateless.due).toBeUndefined()
   expect(edit(dateless, { repeatRule: null }).task.repeatRule).toBeUndefined()
 })
