@@ -59,8 +59,10 @@ export interface CalDavWriteCommand<P> {
   baseVersion: number
   /**
    * Only on a delete of an entity that was created on this device and never confirmed by the
-   * server: the payload of every send of that create that was started. The outbox fills it. With
-   * it, a delete that has no etag can still finish when the server holds this device's own create.
+   * server: the payloads that create was sent with, as far as the outbox remembers them (it
+   * forgets sends older than its last 20 steps). The outbox fills it. With it, a delete that has
+   * no etag can still finish when the server holds this device's own create; a text missing from
+   * it only leads to the conflict such a delete raised before.
    */
   ownCreates?: P[]
 }

@@ -237,6 +237,10 @@ reads the object first:
 - Anything else (another device edited the task, or another object sits at the address): nothing
   is deleted and the queue sees `version`, as for any delete without an etag.
 
+The outbox lists the texts of the sends it still remembers: a task edited more than 20 times
+while its create waited has lost the oldest ones. A text that is missing from the list can only
+turn "mine" into "not mine", which is the conflict card of before.
+
 The comparison is the one a repeated create uses, and it answers "not mine" whenever the server
 stores other lines than it was sent. Radicale adds a `VTIMEZONE` to a task whose date has a `TZID`,
 and both Radicale and Stalwart rewrite a lower-case property name in capitals; such a task costs
