@@ -536,7 +536,8 @@ export interface NextOccurrenceOptions {
  * `after`, even when the task is overdue: DTSTART is ignored and the result is the first
  * occurrence after the due date. The caller lowers `COUNT` by one on each completion, and the
  * series stops when it reaches 1 (`output` is then `null`). Tasks.org's "repeat after completion"
- * switch lives only on the phone and never appears in the VTODO, so it cannot be honoured here.
+ * switch lives only on the phone and never appears in the VTODO; `completeTodo` counts from
+ * completion for a task that says so itself, by starting the series again at the completion day.
  *
  * A `start` that does not match the rule is not itself an
  * occurrence; the series begins at the first day the rule selects on or after it.

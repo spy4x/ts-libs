@@ -15,8 +15,29 @@
  * - Reminders: absolute alarm triggers (`TRIGGER;VALUE=DATE-TIME`) move by the same offset, and
  *   `X-MOZ-SNOOZE-TIME` is dropped. Relative triggers and every other line stay as they are.
  *
- * Tasks.org keeps its "repeat after completion" switch in its own database; it is not written to
- * the VTODO, so a task set to repeat from completion is advanced from its due date here.
+ * Tasks.org keeps its "repeat after completion" switch in its own database and writes nothing
+ * about it to the VTODO, so the choice it shows cannot be read here. This library keeps its own
+ * copy of the choice in the task, as the line `X-REPEAT-FROM:COMPLETION`
+ * ({@link RepeatFrom.Completion}), which Tasks.org keeps when it saves. A task with that line
+ * counts from the day it is completed, the way Tasks.org's `RepeatTaskHelper` does for
+ * `RepeatFrom.COMPLETION_DATE`; a task without it counts from its due date, as above. The two
+ * settings are separate, so they can differ, and then the app the task is completed in decides.
+ * Counted from completion:
+ *
+ * - The series starts again at the completion day: the next date is the first one the rule gives
+ *   after that day, at the time of day the due date has. A date-only task, a floating time and a
+ *   UTC time read the completion day in `options.timeZone`; a time with a `TZID` reads it in that
+ *   zone.
+ * - A weekly rule with `BYDAY` moves to the next listed weekday after the completion day, after
+ *   skipping `INTERVAL - 1` weeks first.
+ * - `COUNT` is lowered by one as above. `UNTIL` ends the series when the next date would pass it;
+ *   Tasks.org does not check `UNTIL` for a weekly rule with `BYDAY` counted from completion.
+ * - A task with no DUE gets one, date-only, and its DTSTART stays. One whose DTSTART has a time,
+ *   or that says when it ends with `DURATION`, is refused as before: a date-only DUE fits
+ *   neither.
+ * - The old `FROM=COMPLETION` part inside an RRULE, which Tasks.org wrote before it had the
+ *   switch, is not read as this choice and is never written: such a rule is refused, with or
+ *   without the line.
  *
  * Everything is atomic: a refusal leaves the document as it was. The clock comes from the
  * caller. Runs in the browser and on the server: web-platform APIs only, no `Deno.*`.
@@ -37,11 +58,12 @@ import {
   findMaster,
   patchTodo,
   readTodo,
+  RepeatFrom,
   type Todo,
   type TodoPatch,
   TodoStatus,
 } from "./ical-tasks.ts"
-import { nextOccurrence, parseRrule } from "./rrule.ts"
+import { nextOccurrence, parseRrule, type Rrule, RruleFreq } from "./rrule.ts"
 import { hhmmInTz, isoDateInTz, isValidTimeZone } from "./tz.ts"
 
 /** What {@link completeTodo} did. */
@@ -94,6 +116,13 @@ export interface CompleteTodoOutput {
 export interface CompleteTodoOptions {
   /** The moment of the edit: DTSTAMP, LAST-MODIFIED and, for completing, COMPLETED. */
   now: Date
+  /**
+   * The IANA zone of the person completing the task. It decides which day "the day it was
+   * completed" is for a task that counts from completion ({@link RepeatFrom.Completion}) and whose
+   * due date has no `TZID`. Without it such a task is refused with
+   * {@link CompleteTodoErrorCode.UnusableDate}; nothing else reads it.
+   */
+  timeZone?: string
 }
 
 /** Floating times and dates are read as UTC: only differences between them are used. */
@@ -184,6 +213,50 @@ function moveReminders(todo: IcalComponent, deltaMs: number) {
   }
 }
 
+/**
+ * Where a series counted from completion starts again: the day `now` falls on, at the time of day
+ * `due` has, as a value of the kind `due` is. Tasks.org does the same with the phone's zone
+ * (`RepeatTaskHelper.setUpStartDate`). A task with no due date starts at the day alone.
+ */
+function completionAnchor(
+  due: IcalDateValue | undefined,
+  now: Date,
+  timeZone: string | undefined,
+): IcalDateValue | string {
+  if (due?.kind === IcalDateKind.Zoned) {
+    const zone = zoneOf(due)
+    return zone ? { ...due, date: isoDateInTz(now, zone) } : `DUE has no usable time zone`
+  }
+  if (!timeZone || !isValidTimeZone(timeZone)) {
+    return `a task that repeats from completion needs the timeZone option to know the day`
+  }
+  const date = isoDateInTz(now, timeZone)
+  if (!due || due.kind === IcalDateKind.Date) return { kind: IcalDateKind.Date, date }
+  if (due.kind === IcalDateKind.Floating) return { ...due, date }
+  // A UTC time: its time of day as the person's clock shows it, on the day they completed it.
+  const instant = resolveInstant(due, FLOATING)
+  const at = instant && resolveInstant({
+    kind: IcalDateKind.Floating,
+    date,
+    time: `${hhmmInTz(instant, timeZone)}:${due.time?.slice(6, 8) ?? `00`}`,
+  }, { zone: timeZone })
+  if (!at) return `DUE has no usable time`
+  const iso = at.toISOString()
+  return { kind: IcalDateKind.Utc, date: iso.slice(0, 10), time: iso.slice(11, 19) }
+}
+
+/**
+ * The rule and the start that give the next date of a series counted from completion. A weekly
+ * rule with BYDAY skips `INTERVAL - 1` weeks and then takes the next listed weekday, as Tasks.org
+ * does (`RepeatTaskHelper.handleWeeklyRepeatAfterComplete`), not the weeks RFC 5545 would count
+ * from the start. `COUNT` needs no care: it is 2 or more here, and the caller lowers it.
+ */
+function fromCompletion(rule: Rrule, anchor: IcalDateValue): [Rrule, IcalDateValue] {
+  if (rule.freq !== RruleFreq.Weekly || rule.byDay.length === 0) return [rule, anchor]
+  const date = isoFromDays(isoDays(anchor.date) + 7 * (rule.interval - 1))
+  return [{ ...rule, interval: 1 }, { ...anchor, date }]
+}
+
 function isCompleted(todo: Todo): boolean {
   return todo.status === TodoStatus.Completed || todo.completed !== undefined
 }
@@ -195,7 +268,8 @@ function isCompleted(todo: Todo): boolean {
  * RRULE as written).
  *
  * Refuses with a {@link CompleteTodoError}, leaving `root` as it was: no VTODO; a task that is
- * already completed; a repeating task without DUE; a rule outside the subset of `./rrule.ts`, or
+ * already completed; a repeating task without DUE (unless it counts from completion); a task that
+ * counts from completion with no `options.timeZone` to name the day; a rule outside the subset of `./rrule.ts`, or
  * one Tasks.org reads differently (`BYDAY` on a daily or yearly rule, which it ignores; a
  * `FROM=` part); a DUE or DTSTART with no usable instant.
  */
@@ -228,13 +302,30 @@ export function completeTodo(
   const rule = parsed.output
   if (rule.count === 1) return complete(true)
   const due = todo.due
-  if (!due) return refuse(CompleteTodoErrorCode.NoDueDate, `a repeating task needs a DUE date`)
-
-  const after = resolveInstant(due, FLOATING)
+  const counted = todo.repeatFrom === RepeatFrom.Completion
+  // Without a due date only a task counted from completion has a day to count from. The new DUE
+  // is a date, which a DTSTART with a time cannot stand next to, and no DUE may join a DURATION.
+  const takesDue = (!todo.start || todo.start.kind === IcalDateKind.Date) &&
+    getProperties(target, `DURATION`).length === 0
+  if (!due && !(counted && takesDue)) {
+    return refuse(CompleteTodoErrorCode.NoDueDate, `a repeating task needs a DUE date`)
+  }
+  const before = due && resolveInstant(due, FLOATING)
+  if (due && !before) {
+    return refuse(CompleteTodoErrorCode.UnusableDate, `DUE has no usable time zone`)
+  }
+  let from: [Rrule, IcalDateValue] | undefined = due && [rule, due]
+  if (counted) {
+    const anchor = completionAnchor(due, options.now, options.timeZone)
+    if (typeof anchor === `string`) return refuse(CompleteTodoErrorCode.UnusableDate, anchor)
+    from = fromCompletion(rule, anchor)
+  }
+  const [series, start] = from!
+  const after = resolveInstant(start, FLOATING)
   if (!after) {
     return refuse(CompleteTodoErrorCode.UnusableDate, `DUE has no usable time zone`)
   }
-  const next = nextOccurrence(rule, { start: due, after })
+  const next = nextOccurrence(series, { start, after })
   if (!next.success) {
     return refuse(CompleteTodoErrorCode.UnusableDate, next.error.message)
   }
@@ -242,7 +333,7 @@ export function completeTodo(
 
   const newDue = next.output
   const patch: TodoPatch = { due: newDue }
-  if (todo.start) {
+  if (todo.start && due) {
     const start = shift(todo.start, due, newDue)
     if (!start) {
       return refuse(CompleteTodoErrorCode.UnusableDate, `DTSTART has no usable time zone`)
@@ -254,9 +345,10 @@ export function completeTodo(
   const copy = structuredClone(root)
   const result = patchTodo(copy, patch, { now: options.now })
   if (!result.success) return rejected(result)
+  // A task that had no due date has no old date to measure the move from: its reminders stay.
   moveReminders(
     findMaster(copy, `VTODO`)!,
-    resolveInstant(newDue, FLOATING)!.getTime() - after.getTime(),
+    before ? resolveInstant(newDue, FLOATING)!.getTime() - before.getTime() : 0,
   )
   commit(root, copy)
   return done({ kind: CompleteTodoKind.Advanced, todo: readTodo(root)! })

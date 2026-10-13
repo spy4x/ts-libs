@@ -20,11 +20,13 @@ import {
   completeTodo,
   CompleteTodoErrorCode,
   CompleteTodoKind,
+  type CompleteTodoOptions,
   findMaster,
   newTodo,
   patchTodo,
   readTodo,
   reopenTodo,
+  RepeatFrom,
   type TodoPatch,
   TodoStatus,
 } from "./ical-tasks.ts"
@@ -102,6 +104,11 @@ export enum EditField {
   Repeat,
   /** The reminders ({@link TaskEdit.reminders}). */
   Reminders,
+  /**
+   * What the next date is counted from ({@link TaskEdit.repeatFrom}). {@link collisions} never
+   * reports it: the choice has two values, so two sides that both changed it agree.
+   */
+  RepeatFrom,
 }
 
 /**
@@ -129,6 +136,13 @@ export interface TaskEdit {
    * unchanged, so a form that sends the rule back keeps the original line byte for byte.
    */
   repeatRule?: string | null
+  /**
+   * What the next date is counted from when the task is completed: {@link RepeatFrom.Completion}
+   * writes `X-REPEAT-FROM:COMPLETION` into the task, {@link RepeatFrom.DueDate} removes that
+   * line. The value the task already has changes nothing. On a task that does not repeat after
+   * the edit nothing is written, and removing the repeat rule removes the line.
+   */
+  repeatFrom?: RepeatFrom
   /**
    * The reminders the task has afterwards; an empty list removes them all. Each is paired with
    * one existing `VALARM`, one to one and in order: same trigger, same `RELATED` and, when given,
@@ -252,6 +266,9 @@ function toPatch(task: Task, edit: TaskEdit): TodoPatch {
   if (edit.sortOrder !== undefined) patch.sortOrder = edit.sortOrder
   if (edit.repeatRule !== undefined && !same(ruleOf(task.repeatRule), ruleOf(edit.repeatRule))) {
     patch.rrule = edit.repeatRule
+  }
+  if (edit.repeatFrom !== undefined && edit.repeatFrom !== repeatFromOf(task)) {
+    patch.repeatFrom = edit.repeatFrom
   }
   return patch
 }
@@ -434,7 +451,12 @@ const FIELDS: {
     read: reminderSignature,
     equals: (t, e) => pairReminders(alarmsOfTask(t), e.reminders ?? []).unchanged,
   },
+  { field: EditField.RepeatFrom, key: `repeatFrom`, read: repeatFromOf },
 ]
+
+function repeatFromOf(task: Task): RepeatFrom {
+  return task.repeatFrom ?? RepeatFrom.DueDate
+}
 
 function same(a: unknown, b: unknown): boolean {
   if (Array.isArray(a) && Array.isArray(b)) {
@@ -491,10 +513,21 @@ export const COMPLETE_REFUSED_BY_RULE: ReadonlySet<CompleteTodoErrorCode> = new 
   CompleteTodoErrorCode.UnusableDate,
 ])
 
-/** Completes `task`; a repeating task moves to its next occurrence instead. */
-export function completeTask(task: Task, now: Date): CompleteResult {
+/** The part of {@link CompleteTodoOptions} an app passes besides the moment. */
+export type CompleteTaskOptions = Pick<CompleteTodoOptions, `timeZone`>
+
+/**
+ * Completes `task`; a repeating task moves to its next occurrence instead. Pass the person's zone
+ * as `options.timeZone`: a task that counts from completion ({@link Task.repeatFrom}) and whose
+ * due date has no `TZID` is refused without it.
+ */
+export function completeTask(
+  task: Task,
+  now: Date,
+  options: CompleteTaskOptions = {},
+): CompleteResult {
   return change(task, (root) => {
-    const result = completeTodo(root, { now })
+    const result = completeTodo(root, { now, timeZone: options.timeZone })
     return result.success
       ? {
         success: true,
@@ -610,6 +643,10 @@ const MAX_COMPLETIONS = 30
  *   dates, rule and reminders are written as fields I changed and the result has the dates of my
  *   text. A reminder at an absolute time has moved in my text then, so the reminders count as
  *   changed and the point above applies.
+ * - A task that counts from completion ({@link Task.repeatFrom}) gets its dates from the day it
+ *   was completed, and a text does not say which day that was. My completion is recognised only
+ *   when `now` falls on the same day as it did then; on a later day the point above applies, so
+ *   the result keeps the dates my completion gave.
  * - It does not move a task to another list: a text does not say where it lives.
  *
  * Nothing is written when a step refuses: a text that does not read, a completion the server's
@@ -623,6 +660,7 @@ export function keepMineText(
   mineIcs: string,
   theirs: Task,
   now: Date,
+  options: CompleteTaskOptions = {},
 ): KeepMineResult {
   const read = (ics: string) =>
     parseTask({ href: theirs.href, etag: theirs.etag, listHref: theirs.listHref, ics })
@@ -631,8 +669,8 @@ export function keepMineText(
   const mine = read(mineIcs)
   if (!mine.success) return unkept(KeepMineStep.Read, `my text: ${mine.error}`)
 
-  const mySteps = stepsBetween(base.output, mine.output, now)
-  const theirSteps = stepsBetween(base.output, theirs, now)
+  const mySteps = stepsBetween(base.output, mine.output, now, options)
+  const theirSteps = stepsBetween(base.output, theirs, now, options)
   let task = theirs
   const edit = (): KeepMineResult | undefined => {
     // With no change left, the patch is empty and the text comes back byte for byte.
@@ -641,7 +679,7 @@ export function keepMineText(
     task = edited.output.task
   }
   const complete = (): KeepMineResult | undefined => {
-    const completed = completeTask(task, now)
+    const completed = completeTask(task, now, options)
     if (!completed.success) {
       return unkept(KeepMineStep.Complete, completed.error.message, completed.error.code)
     }
@@ -706,7 +744,7 @@ interface Steps {
 }
 
 /** The completions or the reopening that lead from `base` to `to`. */
-function stepsBetween(base: Task, to: Task, now: Date): Steps {
+function stepsBetween(base: Task, to: Task, now: Date, options: CompleteTaskOptions): Steps {
   const none: Steps = { count: 0, after: base }
   if (sameOccurrence(base, to)) return none
   if (isDone(base)) {
@@ -717,7 +755,7 @@ function stepsBetween(base: Task, to: Task, now: Date): Steps {
   }
   let after = base
   for (let count = 1; count <= MAX_COMPLETIONS; count++) {
-    const completed = completeTask(after, now)
+    const completed = completeTask(after, now, options)
     if (!completed.success) break
     after = completed.output.task
     if (sameOccurrence(after, to)) return { count, after }
@@ -737,6 +775,7 @@ function fieldsOf(task: Task): TaskEdit {
     tags: task.tags,
     sortOrder: task.sortOrder ?? null,
     repeatRule: task.repeatRule ?? null,
+    repeatFrom: repeatFromOf(task),
     reminders: alarmsOfTask(task).flatMap((alarm): AlarmInput[] => {
       if (!alarm.trigger) return []
       if (!isEditable(alarm)) return [{ trigger: alarm.trigger }]

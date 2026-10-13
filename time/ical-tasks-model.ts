@@ -23,6 +23,7 @@ import {
   type AlarmTrigger,
   AlarmTriggerKind,
   readTodo,
+  RepeatFrom,
   type Todo,
   TodoStatus,
 } from "./ical-tasks.ts"
@@ -30,6 +31,8 @@ import { isoDateInTz } from "./tz.ts"
 
 /** A task's state, as a VTODO `STATUS` says it. The same enum as {@link TodoStatus}. */
 export { TodoStatus as TaskStatus }
+
+export { RepeatFrom }
 
 /** How Tasks.org groups the iCalendar priority numbers 1 to 9 (0 is none). */
 export enum PriorityBand {
@@ -85,6 +88,11 @@ export interface Task {
   created?: TaskDate
   /** The `RRULE` as written; present when the task repeats. */
   repeatRule?: string
+  /**
+   * {@link RepeatFrom.Completion} when the task has the line `X-REPEAT-FROM:COMPLETION`:
+   * completing it counts the next date from the day it was completed. Absent: from the due date.
+   */
+  repeatFrom?: RepeatFrom
   reminders: TaskReminder[]
 }
 
@@ -158,6 +166,7 @@ function toTask(todo: Todo, uid: string, source: TaskSource, root: IcalComponent
   if (parent) task.parentUid = parent.uid
   if (todo.sortOrder !== undefined) task.sortOrder = todo.sortOrder
   if (todo.rrule) task.repeatRule = todo.rrule
+  if (todo.repeatFrom) task.repeatFrom = todo.repeatFrom
   return task
 }
 

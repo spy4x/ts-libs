@@ -181,6 +181,25 @@ export interface RelatedTo {
   type: string
 }
 
+/**
+ * Which date the next occurrence of a repeating task is counted from when it is completed. The
+ * choice is kept in the task as `X-REPEAT-FROM:COMPLETION`; a task without that line counts from
+ * its due date.
+ */
+export enum RepeatFrom {
+  /** From the due date: an overdue task moves one step from the date it was due. */
+  DueDate = 1,
+  /** From the day the task was completed. */
+  Completion,
+}
+
+/** The property that keeps {@link RepeatFrom.Completion} in a VTODO. */
+const REPEAT_FROM = "X-REPEAT-FROM"
+
+function repeatsFromCompletion(todo: IcalComponent): boolean {
+  return getProperty(todo, REPEAT_FROM)?.value.trim().toUpperCase() === "COMPLETION"
+}
+
 /** The fields of a task that apps read. A field the task does not have is absent. */
 export interface Todo {
   uid?: string
@@ -201,6 +220,11 @@ export interface Todo {
   rrule?: string
   /** Whether the task has an RRULE. The helpers never complete a series by themselves. */
   repeats: boolean
+  /**
+   * {@link RepeatFrom.Completion} when the task says `X-REPEAT-FROM:COMPLETION`; absent when it
+   * counts from its due date, which is every task without that line.
+   */
+  repeatFrom?: RepeatFrom
   /** X-APPLE-SORT-ORDER, which Tasks.org and Apple Reminders order tasks by. */
   sortOrder?: number
   alarms: Alarm[]
@@ -255,6 +279,12 @@ export interface TodoPatch {
   /** Replaces the list. An entry already present with the same uid and type keeps its line. */
   relatedTo?: { uid: string; type?: string }[] | null
   rrule?: string | null
+  /**
+   * {@link RepeatFrom.Completion} writes `X-REPEAT-FROM:COMPLETION` on a task that has a repeat
+   * rule after the patch; {@link RepeatFrom.DueDate} or `null` removes the line, and so does
+   * `rrule: null`. On a task with no rule nothing is written.
+   */
+  repeatFrom?: RepeatFrom | null
   sortOrder?: number | null
   /**
    * Reminders. A list replaces every VALARM, except that an existing VALARM with the same ACTION
@@ -429,6 +459,7 @@ export function readTodo(root: IcalComponent): Todo | undefined {
     percentComplete: integerOf(todo, "PERCENT-COMPLETE"),
     relatedTo: getProperties(todo, "RELATED-TO").map(relatedOf),
     sortOrder: integerOf(todo, "X-APPLE-SORT-ORDER"),
+    repeatFrom: repeatsFromCompletion(todo) ? RepeatFrom.Completion : undefined,
   })
 }
 
@@ -867,6 +898,29 @@ function repeatWithoutDue(
   )
 }
 
+/**
+ * Write or remove `X-REPEAT-FROM`. Call it after the rule is written: the line belongs to a rule,
+ * so it goes when the patch removes the rule and is not written on a task without one. A line
+ * that already says what the patch asks for keeps its bytes.
+ */
+function writeRepeatFrom(todo: IcalComponent, patch: TodoPatch): IcalResult<never> | undefined {
+  const wanted = patch.repeatFrom
+  if (wanted === undefined) {
+    if (patch.rrule === null) removeProperty(todo, REPEAT_FROM)
+    return undefined
+  }
+  if (wanted !== null && wanted !== RepeatFrom.DueDate && wanted !== RepeatFrom.Completion) {
+    return fail(IcalErrorCode.InvalidValue, `unknown repeatFrom ${String(wanted)}`)
+  }
+  if (wanted !== RepeatFrom.Completion || !getProperty(todo, "RRULE")) {
+    removeProperty(todo, REPEAT_FROM)
+  } else if (!repeatsFromCompletion(todo)) {
+    removeProperty(todo, REPEAT_FROM)
+    setProperty(todo, REPEAT_FROM, "COMPLETION")
+  }
+  return undefined
+}
+
 /** DTSTAMP and LAST-MODIFIED to `now`; SEQUENCE up by one when `bump`. */
 function stamp(
   component: IcalComponent,
@@ -976,6 +1030,7 @@ function applyTodo(
     () => writeRelatedTo(todo, patch.relatedTo),
     () => writeRrule(todo, changed.rrule ? patch.rrule : undefined),
     () => repeatWithoutDue(todo, hadDue, changed.rrule && typeof patch.rrule === "string"),
+    () => writeRepeatFrom(todo, patch),
     () => changed.writeStatus ? applyStatus(todo, root, patch, now) : undefined,
     () => writeAlarms(todo, patch.alarms),
     () => orphanedAlarm(todo, anchors),
