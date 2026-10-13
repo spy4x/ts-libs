@@ -1,8 +1,8 @@
-# ts-libs: every export of the @spy4x/* packages on JSR, one per line.
+# ts-libs: the exports of the @spy4x/* packages on JSR, one per line.
 # Columns, separated by one tab: name, kind, import specifier, summary.
 # Search: git grep -n -i '<word>' origin/main -- llms.txt
 # Use: deno add jsr:<package>, then import { <name> } from "<import specifier>".
-# Left out: a type or interface that only describes the parameters of a listed export Foo, foo or createFoo and is named Foo plus Props, Labels, Options, Config, Deps, Input. Its signature: https://jsr.io/<package>/doc
+# Left out: a type or interface that describes the parameters of a listed function or class Foo, foo or createFoo and is named Foo plus Props, Labels, Options, Config, Deps, Input. Its signature: https://jsr.io/<package>/doc
 # Full READMEs: https://raw.githubusercontent.com/spy4x/ts-libs/main/llms-full.txt
 BillingError	interface	@spy4x/billing	A failed request, safe to log: it never carries the secret key.
 BillingErrorCode	type	@spy4x/billing	Why a request to the provider failed.
@@ -211,6 +211,7 @@ escapeHtml	function	@spy4x/email/html	Escape a value for interpolation into HTML
 htmlWrap	function	@spy4x/email/html	Wrap a body in the shared letter-shaped shell.
 Letter	interface	@spy4x/email/letter	A finished letter: the HTML part and the plain-text part.
 LetterBlock	interface	@spy4x/email/letter	The letter's content: the same thing as HTML (already escaped) and as plain text.
+LetterInput	interface	@spy4x/email/letter	What renderLetter needs.
 UNSUBSCRIBE_PLACEHOLDER	constant	@spy4x/email/letter	Stands where a reader's own unsubscribe link goes in a letter rendered once and sent many times.
 bulletList	function	@spy4x/email/letter	A bulleted list.
 button	function	@spy4x/email/letter	A filled button.
@@ -893,6 +894,7 @@ failOpenLimiter	function	@spy4x/platform/rate-limit/memory	Wrap a limiter so tha
 rateLimitKey	function	@spy4x/platform/rate-limit/memory	Build a limiter key from an identity.
 systemClock	function	@spy4x/platform/rate-limit/memory	Deprecated: Delegates to, and should be replaced by, `systemNow` from `@spy4x/platform/universal/time`. Default: real time.
 RequestInfo	interface	@spy4x/platform/request-info	Request metadata worth attaching to a log line or an error report.
+RequestInfoOptions	interface	@spy4x/platform/request-info	Options for requestInfoFromContext.
 TrustedProxyHeader	type	@spy4x/platform/request-info	A single proxy header clientIp may be told to trust, in place of the default all-three-headers order.
 requestInfoFromContext	function	@spy4x/platform/request-info	Build a RequestInfo from a Hono request: its request id (when the app's middleware set one), its client IP (see the module doc for the trust boundary), and its user agent.
 ByteReader	interface	@spy4x/platform/server	Chunked byte source for streaming hashing.
@@ -1215,6 +1217,7 @@ CallHandler	type	@spy4x/realtime	A web-standard request handler: mount it in Hon
 CallOptions	interface	@spy4x/realtime	Options for one ClientTransport.query.
 CallPort	interface	@spy4x/realtime	The two calls a page makes.
 CallPortCommandOptions	interface	@spy4x/realtime	Options for one CallPort.command.
+CallPortOptions	interface	@spy4x/realtime	Options for one CallPort.query.
 ChangeHint	interface	@spy4x/realtime	A hint that a group moved to `sequence`.
 ClientCommandMessage	interface	@spy4x/realtime	A request for the server to do something: change state.
 ClientMessage	type	@spy4x/realtime	Frames a client sends: liveness, the sync handshake, and requests.
@@ -1317,6 +1320,7 @@ withUnauthorizedHook	function	@spy4x/realtime	Wraps any port so that a call answ
 AvailableCallPort	interface	@spy4x/realtime/calls	A CallPort that can say whether it can carry a call right now.
 CallPort	interface	@spy4x/realtime/calls	The two calls a page makes.
 CallPortCommandOptions	interface	@spy4x/realtime/calls	Options for one CallPort.command.
+CallPortOptions	interface	@spy4x/realtime/calls	Options for one CallPort.query.
 FirstOpenWait	interface	@spy4x/realtime/calls	Makes the first calls of a page wait for a socket that is still opening, so they travel over it and not over HTTP beside it.
 RetryOptions	interface	@spy4x/realtime/calls	Options of sendCommand and sendQuery.
 SocketCallTransport	interface	@spy4x/realtime/calls	The part of ClientTransport the socket port needs.
@@ -1500,6 +1504,7 @@ createEmailCodeSignIn	function	@spy4x/server/auth/email-code	Creates the email-c
 createEmailProof	function	@spy4x/server/auth/email-code	Creates the codes a signed-in user proves an address with.
 MemoryAuthStore	class	@spy4x/server/auth/memory-store	An in-memory AuthStore with the same constraints and atomicity as the Postgres store.
 ConfirmableOAuthSignIn	interface	@spy4x/server/auth/oauth	Sign-in with one provider, created with `signUp: "confirm"`.
+ConfirmableOAuthSignInOptions	interface	@spy4x/server/auth/oauth	Options of createOAuthSignIn for a sign-in that asks before it creates a user.
 DEFAULT_OAUTH_FLOW_KEY_PREFIX	constant	@spy4x/server/auth/oauth	The key prefix createKvOAuthFlowStore writes under by default.
 MAX_PENDING_OAUTH_FLOWS	constant	@spy4x/server/auth/oauth	Most flows the memory store keeps pending at once; the oldest is dropped beyond this.
 OAuthAuthorization	interface	@spy4x/server/auth/oauth	A started flow: send the browser to `url`, and keep `state` in an HttpOnly cookie until the callback.
@@ -2184,9 +2189,11 @@ writeDate	function	@spy4x/time/ical	Write `value` to the property `name` of `com
 writeList	function	@spy4x/time/ical	Replace every property named `name` with one line listing `items`, each escaped as TEXT.
 writeText	function	@spy4x/time/ical	Escape `text` as TEXT and set it with setProperty, keeping existing parameters.
 Alarm	interface	@spy4x/time/ical-tasks	A reminder (VALARM) as read.
+AlarmInput	interface	@spy4x/time/ical-tasks	A reminder (VALARM) to write.
 AlarmOwner	enum	@spy4x/time/ical-tasks	What owns a reminder.
 AlarmRelated	enum	@spy4x/time/ical-tasks	What a relative trigger is counted from (`RELATED`, default `START`).
 AlarmTrigger	type	@spy4x/time/ical-tasks	The trigger of a reminder.
+AlarmTriggerInput	type	@spy4x/time/ical-tasks	The trigger of a reminder to write: `related` defaults to AlarmRelated.Start.
 AlarmTriggerKind	enum	@spy4x/time/ical-tasks	Whether a reminder's trigger is an offset or a moment.
 CalendarEvent	interface	@spy4x/time/ical-tasks	The fields of an event that apps read.
 CompleteTodoError	interface	@spy4x/time/ical-tasks	The error half of CompleteTodoResult.

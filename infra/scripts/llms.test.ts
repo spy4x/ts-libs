@@ -183,12 +183,22 @@ describe("describesParameters", () => {
     )).toEqual([])
   })
 
-  it("keeps a type whose only namesake is itself left out", () => {
+  it("keeps a type named after an interface, a type, an enum or a constant", () => {
     expect(dropped(
-      named("Notice", "function"),
-      named("NoticeOptions", "interface"),
-      named("NoticeOptionsInput", "type"),
-    )).toEqual(["NoticeOptions"])
+      named("Alarm", "interface"),
+      named("AlarmInput", "interface"),
+      named("AlarmTrigger", "type"),
+      named("AlarmTriggerInput", "type"),
+      named("Status", "enum"),
+      named("StatusLabels", "type"),
+      named("LIMIT", "constant"),
+      named("LIMITOptions", "interface"),
+    )).toEqual([])
+  })
+
+  it("leaves out a type named after a class", () => {
+    expect(dropped(named("NtfyClient", "class"), named("NtfyClientConfig", "interface")))
+      .toEqual(["NtfyClientConfig"])
   })
 })
 

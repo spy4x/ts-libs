@@ -1,11 +1,11 @@
 // Writes `llms.txt` and `llms-full.txt` at the repository root, for an agent working in another
 // repository that uses this library. Run with `deno task llms`.
 //
-// `llms.txt` lists the exports of every published entry point, one line each, as four fields
+// `llms.txt` lists what every published entry point exports, one line each, as four fields
 // separated by tabs: name, kind, import specifier and the first sentence of its JSDoc
 // (`exportLine`). Agents in other repositories search it with `grep`, so every line stands alone;
-// the lines that are not exports (the header and the fingerprint) start with `#`. A type that only
-// describes another export's parameters is left out (`describesParameters`). The names, kinds and
+// the lines that are not exports (the header and the fingerprint) start with `#`. A type named
+// after a function or class whose parameters it describes is left out (`describesParameters`). The names, kinds and
 // JSDoc come from `deno doc --json`; the entry points come from the same `exports` maps
 // `contract.ts` reads. `llms-full.txt` joins the root README and every package README.
 //
@@ -111,32 +111,28 @@ export function exportsFromDocJson(json: DocJson): ExportedName[] {
   return found.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }
 
-/** The endings of a type that only describes another export's parameters. */
+/** The endings of a type that describes the parameters of the function or class it is named after. */
 export const PARAMETER_SUFFIXES = [`Props`, `Labels`, `Options`, `Config`, `Deps`, `Input`]
 
 /**
  * The exports of one entry point that `llms.txt` leaves out: a `type` or `interface` named after
- * another listed export of the same entry point plus one of `PARAMETER_SUFFIXES`. For
- * `FooOptions` that export is `Foo`, `foo` or `createFoo`, of any kind, and it must itself be
- * listed. Such a type is only ever written next to the export it describes, whose line a search
- * for either name still finds.
+ * a function or class of the same entry point plus one of `PARAMETER_SUFFIXES`. For `FooOptions`
+ * that owner is `Foo`, `foo` or `createFoo`. An interface or a type is never an owner: a type named
+ * after one (`AlarmInput` next to the interface `Alarm`) is a shape of its own, not a parameter.
  */
 export function describesParameters(exports: ExportedName[]): Set<string> {
   const kinds = new Map(exports.map((item) => [item.name, item.kind]))
+  const takesParameters = (name: string) =>
+    kinds.get(name) === `function` || kinds.get(name) === `class`
   const dropped = new Set<string>()
-  const isDropped = (name: string): boolean => {
-    if (dropped.has(name)) return true
-    const kind = kinds.get(name)
-    if (kind !== `type` && kind !== `interface`) return false
+  for (const { name, kind } of exports) {
+    if (kind !== `type` && kind !== `interface`) continue
     const suffix = PARAMETER_SUFFIXES.find((item) => name.endsWith(item) && name !== item)
-    if (suffix === undefined) return false
+    if (suffix === undefined) continue
     const base = name.slice(0, -suffix.length)
     const owners = [base, base[0].toLowerCase() + base.slice(1), `create${base}`]
-    if (!owners.some((owner) => kinds.has(owner) && !isDropped(owner))) return false
-    dropped.add(name)
-    return true
+    if (owners.some(takesParameters)) dropped.add(name)
   }
-  for (const item of exports) isDropped(item.name)
   return dropped
 }
 
@@ -152,11 +148,11 @@ export function exportLine(item: ExportedName, specifier: string): string {
 
 /** The first lines of `llms.txt`. Each starts with `#`, as every line that is not an export does. */
 export const HEADER = [
-  `# ts-libs: every export of the @spy4x/* packages on JSR, one per line.`,
+  `# ts-libs: the exports of the @spy4x/* packages on JSR, one per line.`,
   `# Columns, separated by one tab: name, kind, import specifier, summary.`,
   `# Search: git grep -n -i '<word>' origin/main -- llms.txt`,
   `# Use: deno add jsr:<package>, then import { <name> } from "<import specifier>".`,
-  `# Left out: a type or interface that only describes the parameters of a listed export Foo, foo or createFoo and is named Foo plus ${
+  `# Left out: a type or interface that describes the parameters of a listed function or class Foo, foo or createFoo and is named Foo plus ${
     PARAMETER_SUFFIXES.join(`, `)
   }. Its signature: https://jsr.io/<package>/doc`,
   `# Full READMEs: https://raw.githubusercontent.com/spy4x/ts-libs/main/llms-full.txt`,
