@@ -88,6 +88,23 @@ export interface PasswordHasher {
 const NO_MATCH: PasswordCheck = Object.freeze({ valid: false, needsRehash: false })
 
 /**
+ * True when `stored` is a value {@link PasswordHasher.verify} can match: exactly one of the two
+ * formats, with an iteration count in the accepted range. It says nothing about which password or
+ * pepper made the hash.
+ *
+ * For a hash that comes from configuration and not from this module, such as an owner password in
+ * an environment variable: a `.env` loader or a Compose file that expands `$` cuts the value short,
+ * and `verify` then answers "no" to the right password. Check the value at start-up and refuse to
+ * run instead.
+ */
+export function isPasswordHash(stored: unknown): stored is string {
+  if (typeof stored !== "string") return false
+  const current = CURRENT_FORMAT.exec(stored)
+  if (current) return isIterationCount(Number(current[1]))
+  return LEGACY_FORMAT.test(stored)
+}
+
+/**
  * Creates a {@link PasswordHasher}.
  *
  * The construction for new hashes: the password's UTF-8 bytes are first run through HMAC-SHA-256

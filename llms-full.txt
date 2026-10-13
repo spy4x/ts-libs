@@ -5721,6 +5721,18 @@ deno task password:hash                        # type it, then Enter
 printf %s "$PASSWORD" | deno task password:hash
 ```
 
+The hash contains `$`, and a `.env` loader or a Compose file that expands `$` cuts it short; `verify`
+then answers "no" to the right password. Check the configured value with `isPasswordHash` at
+start-up, and refuse to run when it is false:
+
+```ts
+import { isPasswordHash } from "@spy4x/server/sign-in"
+
+if (!isPasswordHash(Deno.env.get("OWNER_PASSWORD_HASH"))) {
+  throw new Error("OWNER_PASSWORD_HASH is not a hash made by password:hash")
+}
+```
+
 ### What it does
 
 **Sessions live in the app's database.** The app implements `SessionStore`: seven operations, and

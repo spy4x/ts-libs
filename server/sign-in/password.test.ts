@@ -5,6 +5,7 @@ import { OTHER_PEPPER, PEPPER } from "./fake-store.test.ts"
 import {
   createPasswordHasher,
   DEFAULT_PASSWORD_ITERATIONS,
+  isPasswordHash,
   MAX_PASSWORD_BYTES,
   MAX_PASSWORD_ITERATIONS,
   MIN_PASSWORD_ITERATIONS,
@@ -146,6 +147,7 @@ describe("createPasswordHasher", () => {
         value,
         result: NO_MATCH,
       })
+      expect({ value, isHash: isPasswordHash(value) }).toEqual({ value, isHash: false })
     }
 
     // Plain garbage, including what made the template's `checkHash` throw.
@@ -171,6 +173,7 @@ describe("createPasswordHasher", () => {
         value,
         result: NO_MATCH,
       })
+      expect({ value, isHash: isPasswordHash(value) }).toEqual({ value, isHash: false })
     }
   })
 
@@ -218,6 +221,32 @@ describe("createPasswordHasher", () => {
   it("refuses an iteration count outside the accepted range", () => {
     for (const iterations of [0, 99_999, MAX_PASSWORD_ITERATIONS + 1, 100_000.5, Number.NaN]) {
       expect(() => createPasswordHasher({ pepper: PEPPER, iterations })).toThrow(RangeError)
+    }
+  })
+})
+
+describe("isPasswordHash", () => {
+  it("accepts what the hasher writes, at every accepted iteration count, and the template's format", async () => {
+    expect(isPasswordHash(await createPasswordHasher(FAST).hash(PASSWORD))).toBe(true)
+    const salt = "0".repeat(32)
+    const key = "f".repeat(64)
+    for (
+      const rounds of [
+        MIN_PASSWORD_ITERATIONS,
+        DEFAULT_PASSWORD_ITERATIONS,
+        MAX_PASSWORD_ITERATIONS,
+      ]
+    ) {
+      expect(isPasswordHash(`pbkdf2-sha256$${rounds}$${salt}$${key}`)).toBe(true)
+    }
+    expect(isPasswordHash(await templateHash(PASSWORD, PEPPER))).toBe(true)
+  })
+
+  it("refuses a hash cut short at a $, as a .env loader or a Compose file leaves it", async () => {
+    const stored = await createPasswordHasher(FAST).hash(PASSWORD)
+    const parts = stored.split("$")
+    for (let kept = 1; kept < parts.length; kept++) {
+      expect(isPasswordHash(parts.slice(0, kept).join("$"))).toBe(false)
     }
   })
 })
