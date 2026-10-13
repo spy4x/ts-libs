@@ -615,6 +615,11 @@ describe("scrubText", () => {
   it("cuts each address to its path when the last holds an e-mail address before a code", () => {
     expect(
       scrubText(
+        '{"a":"https://a.example/x","link":"https://b.example/reset?email=u@e.com&code=123456"}',
+      ),
+    ).toBe('{"a":"https://a.example/x","link":"https://b.example/reset"}')
+    expect(
+      scrubText(
         'config: {"a":"https://a.example/x","link":"https://b.example/reset?email=u@e.com&code=123456"}',
       ),
     ).toBe('config: {"a":"https://a.example/x","link":"https://b.example/reset"}')
