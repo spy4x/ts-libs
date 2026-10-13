@@ -2518,8 +2518,27 @@ WHERE (last_failure_at IS NULL OR last_failure_at < now() - interval '7 days')
 
 A row past its quiet reset with no running lock would be reset by the next check anyway, and a row
 whose `last_failure_at` is `NULL` was never counted. On a table that holds enrolled secrets, never
-delete rows for this. `MemoryLockoutStore` keeps every subject for as long as it lives, and compares
-subjects as strings, as a `TEXT` column does: `1` and `"1"` are one subject.
+delete rows for this. `MemoryLockoutStore` compares subjects as strings, as a `TEXT` column does:
+`1` and `"1"` are one subject.
+
+**The memory store sweeps when told the quiet period.** Left alone, `MemoryLockoutStore` keeps
+every subject for as long as it lives. Give it the lockout's `quietResetMs` and its clock, and it
+drops a counter once no lock is running and neither a failure nor a write happened for that long:
+the same rows the `DELETE` above removes. Add `maxEntries` for a hard bound:
+
+```ts
+const store = new MemoryLockoutStore({ quietResetMs: 7 * 24 * 60 * 60_000, maxEntries: 100_000 })
+```
+
+A full store first drops what a sweep would drop. If nothing can go, a new subject is refused:
+`begin` rejects, and no counter is created. A counter with a running lock, or with a failure inside
+the quiet period, is never evicted to make room, so filling the store clears nobody's lock or
+count. The cost is that checks for new subjects fail for as long as the held counters keep being
+written, and for up to `quietResetMs` after the last write. One request per held subject per quiet
+period keeps the store full, and an ordinary successful check holds its slot for `quietResetMs`
+too, so size the cap well above the subjects you expect in one quiet period. There is no timer:
+sweeps run inside `update`, at most once per `quietResetMs` or every 512 calls. Neither option works
+with `createMissing: false`, where a dropped subject would stop being counted.
 
 **Fixes applied at extraction time.**
 
