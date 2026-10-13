@@ -420,23 +420,90 @@ describe("scrubUrl", () => {
 })
 
 describe("scrubText", () => {
-  // Every password here is made up. Before the slash comes a valid port number where it can, so
-  // that the text up to it parses as a URL of its own (`postgres://app:12`).
-  const passwords: [string, string][] = [
+  // Every password here is made up. Before the character comes a valid port number, so that the
+  // platform reads the text up to a `/`, `?` or `#` as a host and its port (`postgres://app:12`).
+  const unsure: [string, string][] = [
     ["a slash", "12/REST"],
-    ["a colon", "12:REST"],
     ["a question mark", "12?REST"],
     ["a hash", "12#REST"],
-    ["an encoded at sign", "12%40REST"],
+    ["an ampersand", "12&REST"],
+    ["an equals sign", "12=REST"],
+    ["a comma", "12,REST"],
+    ["a semicolon", "12;REST"],
+    ["a backslash", "12\\REST"],
+    ["a double quote", '12"REST'],
+    ["a single quote", "12'REST"],
+    ["an opening angle bracket", "12<REST"],
+    ["a closing angle bracket", "12>REST"],
+    ["an opening parenthesis", "12(REST"],
+    ["a closing parenthesis", "12)REST"],
+    ["an opening square bracket", "12[REST"],
+    ["a closing square bracket", "12]REST"],
+    ["an opening brace", "12{REST"],
+    ["a closing brace", "12}REST"],
     ["a raw at sign and a slash", "p@ss/W0RD"],
-    ["a closing bracket", "Xy)9zQ"],
-    ["a double quote", 'pa"SS'],
-    ["a single quote", "pa'SS"],
-    ["an angle bracket", "pa<SS"],
   ]
 
-  for (const [name, password] of passwords) {
-    it(`drops a URL password that holds ${name}`, () => {
+  for (const [name, password] of unsure) {
+    it(`shows nothing of an address whose password holds ${name}`, () => {
+      const text = `connect postgres://app:${password}@db.example.com:5432/app failed`
+
+      expect(scrubText(text)).toBe("connect postgres://<REDACTED> failed")
+    })
+  }
+
+  it("shows nothing of the address in the issue, with a slash in its password", () => {
+    expect(scrubText("postgres://app:12/rest@db.example.com:5432/app")).toBe(
+      "postgres://<REDACTED>",
+    )
+  })
+
+  // In an `https` address the platform reads a backslash as a slash.
+  it("shows nothing of an https address whose password holds a backslash", () => {
+    expect(scrubText("connect https://app:12\\REST@db.example.com/app failed")).toBe(
+      "connect https://<REDACTED> failed",
+    )
+  })
+
+  const hosts: [string, string][] = [
+    ["ends its word", "db"],
+    ["has a path", "db/app"],
+    ["has a query", "db?ssl=1"],
+    ["has a fragment", "db#main"],
+    ["has a port", "db:5432"],
+    ["has a port and a path", "db:5432/app"],
+    ["is an IPv6 address", "[::FFFF:10.0.0.1]:5432/app"],
+    ["is not in ASCII", "бд.example.com/app"],
+    ["holds a hyphen, an underscore, a tilde and an encoded character", "my-db_1~a%2Db/app"],
+    ["is followed by a comma", "db,"],
+    ["is followed by a semicolon", "db;"],
+    ["is followed by a colon", "db:"],
+    ["is followed by a full stop", "db."],
+    ["is followed by a double quote", 'db"'],
+    ["is followed by a single quote", "db'"],
+    ["is followed by a tag", "db<br>"],
+    ["is followed by a closing angle bracket", "db>"],
+    ["is followed by a closing parenthesis", "db)"],
+    ["is followed by a closing square bracket", "db]"],
+    ["is followed by a closing brace", "db}"],
+  ]
+
+  for (const [name, host] of hosts) {
+    it(`shows nothing of a password with a slash when the host ${name}`, () => {
+      expect(scrubText(`connect postgres://app:12/REST@${host} failed`)).toBe(
+        "connect postgres://<REDACTED> failed",
+      )
+    })
+  }
+
+  const clean: [string, string][] = [
+    ["a colon", "12:REST"],
+    ["an encoded at sign", "12%40REST"],
+    ["a raw at sign", "p@ssW0RD"],
+  ]
+
+  for (const [name, password] of clean) {
+    it(`drops a password that holds ${name} and keeps the rest of the address`, () => {
       const text = `connect postgres://app:${password}@db.example.com:5432/app failed`
 
       expect(scrubText(text)).toBe("connect postgres://db.example.com:5432/app failed")
@@ -449,9 +516,78 @@ describe("scrubText", () => {
     expect(scrubText(text)).toBe(text)
   })
 
-  it("keeps the text around a URL whose credentials it drops", () => {
+  it("leaves a URL as it was when e-mail addresses stand in other words", () => {
+    const text = "mail a@example.com about https://example.com/a/b, then b@example.com"
+
+    expect(scrubText(text)).toBe(text)
+  })
+
+  it("keeps the other words around an address it masks", () => {
     expect(scrubText("a@example.com saw redis://:12/REST@cache:6379/0, then b@example.com")).toBe(
-      "a@example.com saw redis://cache:6379/0, then b@example.com",
+      "a@example.com saw redis://<REDACTED> then b@example.com",
+    )
+  })
+
+  it("shows nothing of a password with a slash when an e-mail address comes first in its word", () => {
+    const text = "owner=ops@corp.example,dsn=postgres://app:12/REST@db.example.com:5432/app"
+
+    expect(scrubText(text)).toBe("owner=ops@corp.example,dsn=postgres://<REDACTED>")
+  })
+
+  it("shows nothing of a password with a slash when the query holds an at sign too", () => {
+    const text = "postgres://app:12/REST@db.example.com:5432/app?sslkey=a@b&code=77"
+
+    expect(scrubText(text)).toBe("postgres://<REDACTED>")
+  })
+
+  it("shows nothing of a password with a question mark when a comma follows the host", () => {
+    expect(scrubText("postgres://app:12?REST@db, retrying")).toBe("postgres://<REDACTED> retrying")
+  })
+
+  // The field after the address holds an `@`, so the platform reads the text before it as the
+  // address's credentials and the rest of the field's value as its host.
+  it("shows nothing of a secret field that follows an address in a JSON body", () => {
+    expect(scrubText('{"url":"https://db.example.com/","password":"p@ssw0rd"}')).toBe(
+      '{"url":"https://<REDACTED>',
+    )
+    expect(
+      scrubText(
+        '{"callbackUrl":"https://app.example.com/cb","user":"app","password":"S3cr@tTAIL"}',
+      ),
+    ).toBe('{"callbackUrl":"https://<REDACTED>')
+    expect(scrubText('{"host":"https://api.example.com","api_key":"ab@cdEFG"}')).toBe(
+      '{"host":"https://<REDACTED>',
+    )
+  })
+
+  for (const separator of ["&", ";", ","]) {
+    it(`shows nothing of a password field that follows an address after "${separator}"`, () => {
+      expect(scrubText(`url=https://a.example/x${separator}password=p@ssTAIL`)).toBe(
+        "url=https://<REDACTED>",
+      )
+      expect(scrubText(`url=https://a.example${separator}password=p@ssTAIL`)).toBe(
+        "url=https://<REDACTED>",
+      )
+    })
+  }
+
+  it("shows nothing of a key that follows an address in braces", () => {
+    expect(scrubText("{host:https://api.example.com}{api_key:ab@cdEFG}")).toBe(
+      "{host:https://<REDACTED>",
+    )
+  })
+
+  // The mask comes after every other pattern: the name of the secret sits in the masked text, and
+  // its value in the next word.
+  it("masks a secret whose name sits in the text that an address mask covers", () => {
+    expect(scrubText("see https://a.example/x@b.example/password: VALUE")).toBe(
+      "see https://<REDACTED> <REDACTED>",
+    )
+    expect(
+      scrubText('connect postgres://app:12/REST@db.example.com,"password": "p@ssTAIL" failed'),
+    ).toBe("connect postgres://<REDACTED> <REDACTED> failed")
+    expect(scrubText("GET https://a.example/x@h.example/,Bearer abc123def failed")).toBe(
+      "GET https://<REDACTED> <REDACTED> failed",
     )
   })
 
@@ -476,19 +612,210 @@ describe("scrubText", () => {
     )
   })
 
-  it("masks a secret path segment that holds an at sign", () => {
-    expect(scrubText("https://app.example.com/invite/abc@def", ["invite"])).toBe(
-      "https://app.example.com/invite/<REDACTED>",
+  it("cuts each address to its path when the last holds an e-mail address before a code", () => {
+    expect(
+      scrubText(
+        'config: {"a":"https://a.example/x","link":"https://b.example/reset?email=u@e.com&code=123456"}',
+      ),
+    ).toBe('config: {"a":"https://a.example/x","link":"https://b.example/reset"}')
+    expect(
+      scrubText(
+        '<a href="https://a.example/reset?email=u@e.com&code=123456">https://a.example/reset?email=u@e.com&code=123456</a>',
+      ),
+    ).toBe('<a href="https://a.example/reset">https://a.example/reset</a>')
+    expect(scrubText('["https://a.example/x","/reset?email=u@e.com&code=123456"]')).toBe(
+      '["https://a.example/x","/reset"]',
     )
   })
 
   // Either a password with a slash and a question mark, or a query that ends in an e-mail
   // address: the two cannot be told apart, so nothing of the address is kept.
-  it("masks the whole address when a host name follows an at sign in a query after a path", () => {
+  it("masks the whole address when a host name follows an at sign in its query", () => {
     expect(scrubText("connect postgres://app:12/RE?ST@db.example.com:5432/app failed")).toBe(
       "connect postgres://<REDACTED> failed",
     )
     expect(scrubText("GET https://app.example.com/reset?code=123456&email=user@example.com failed"))
       .toBe("GET https://<REDACTED> failed")
+    expect(scrubText("https://app.example.com?next=a@b.example/SECRET")).toBe("https://<REDACTED>")
+  })
+
+  it("masks the whole address when a secret path segment holds an at sign", () => {
+    expect(scrubText("https://app.example.com/invite/abc@def", ["invite"])).toBe(
+      "https://<REDACTED>",
+    )
+    expect(scrubText("(https://a.example/x)(https://b.example/invite/abc@def)", ["invite"])).toBe(
+      "(https://<REDACTED>",
+    )
+  })
+
+  // The price of the rule: such an address reads like one with a slash in its password.
+  it("masks the whole address of a module with an at sign after a slash", () => {
+    expect(scrubText("import https://jsr.io/@std/expect/1.0.0/mod.ts failed")).toBe(
+      "import https://<REDACTED> failed",
+    )
+  })
+})
+
+describe("scrubText on generated messages", () => {
+  /** Path names whose next segment is a secret in the generated messages. */
+  const REDACT_AFTER = ["invite"]
+  /** One word per secret position, in lower case: the platform lower-cases a host name. */
+  const MARKERS = [
+    "40917",
+    "zqpwhead",
+    "zqpwtail",
+    "zqpwplain",
+    "zqinva",
+    "zqinvb",
+    "zqcode",
+    "zqmail",
+    "zqdom",
+    "zqtoken",
+    "zqfa",
+    "zqfb",
+  ]
+  const SCHEMES = ["postgres://", "https://"]
+  /** What a password may hold without being encoded. */
+  const IN_PASSWORD = [
+    "/",
+    "?",
+    "#",
+    "&",
+    "=",
+    ",",
+    ";",
+    "@",
+    " ",
+    ":",
+    "%40",
+    "\\",
+    "(",
+    ")",
+    "[",
+    '"',
+    "'",
+    "<",
+  ]
+  const CREDENTIALS = [
+    "",
+    "app:zqpwplain@",
+    // Digits first: before a `/`, `?` or `#` the platform reads `app:40917` as a host and its port.
+    ...IN_PASSWORD.map((c) => `app:40917${c}zqpwtail@`),
+    ...["/", "?", "#"].map((c) => `app:zqpwhead${c}zqpwtail@`),
+  ]
+  const HOSTS = ["db.example.com", "db.example.com:5432"]
+  const PATHS = ["", "/app", "/invite/zqinva@zqinvb"]
+  const QUERIES = [
+    "",
+    "?email=zqmail@zqdom.example&code=zqcode",
+    "?code=zqcode&email=zqmail@zqdom.example",
+    "?token=zqtoken",
+    "#email=zqmail@zqdom.example&code=zqcode",
+  ]
+  /** A field after the address, as in a logged body, a form or a `key: value` line. */
+  const FOLLOWING = [
+    "",
+    ',"password":"zqfa@zqfb"',
+    ',"password": "zqfa@zqfb"',
+    "&password=zqfa@zqfb",
+    ", password: zqfa@zqfb",
+  ]
+  const AROUND = [
+    ["", ""],
+    ['"', '"'],
+    ["'", "'"],
+    ["(", ")"],
+    ["[", "]"],
+    ["<", ">"],
+    ['{"url":"', '"'],
+    ["{url:", "}"],
+  ]
+  /** What may stand between two addresses. */
+  const BETWEEN = [" ", "\n", " and ", ",", ";", "&", "=", "|", '","', ")(", "][", "><"]
+  /** The addresses put side by side, each with each. */
+  const PAIRED = [
+    "postgres://db.example.com",
+    "postgres://app:zqpwplain@db.example.com:5432/app",
+    "postgres://app:40917/zqpwtail@db.example.com:5432/app",
+    "postgres://app:40917?zqpwtail@db.example.com",
+    'https://app:40917"zqpwtail@db.example.com/app',
+    "https://db.example.com/reset?email=zqmail@zqdom.example&code=zqcode",
+    "https://db.example.com/invite/zqinva@zqinvb",
+    "https://db.example.com:5432/app?token=zqtoken",
+  ]
+
+  /** Every generated message: each address alone, in each surrounding, and each pair. */
+  function generatedMessages(): string[] {
+    const messages: string[] = []
+    for (const scheme of SCHEMES) {
+      for (const credentials of CREDENTIALS) {
+        const start = `${scheme}${credentials}`
+        for (const host of HOSTS) {
+          for (const path of PATHS) {
+            for (const query of QUERIES) {
+              messages.push(`connect ${start}${host}${path}${query} failed`)
+            }
+          }
+        }
+        const tails = [HOSTS[0], `${HOSTS[1]}${PATHS[1]}`, `${HOSTS[0]}${PATHS[2]}${QUERIES[1]}`]
+        for (const tail of tails) {
+          for (const following of FOLLOWING) {
+            for (const [open, close] of AROUND) {
+              messages.push(`connect ${open}${start}${tail}${close}${following} failed`)
+            }
+          }
+        }
+      }
+    }
+    for (const first of PAIRED) {
+      for (const second of PAIRED) {
+        for (const between of BETWEEN) messages.push(`${first}${between}${second}`)
+      }
+    }
+    return messages
+  }
+
+  /**
+   * The shapes in which a marker is shown, on `main` as well as here. `shape` is matched against
+   * the message, and `shows` lists the markers that message may show.
+   */
+  const STILL_SHOWN: { why: string; shape: RegExp; shows: string[] }[] = [
+    {
+      why: "a space in the password ends the address, and no pattern takes the next word for one",
+      shape: /app:40917 zqpwtail@/,
+      shows: ["40917", "zqpwtail", "zqinva", "zqinvb", "zqcode", "zqmail", "zqdom"],
+    },
+    {
+      why: "`&`, `=` and `|` end no host name, as after the e-mail address of a reset link, " +
+        "and no host name comes later in the word",
+      shape:
+        /^postgres:\/\/app:40917\?zqpwtail@db\.example\.com[&=|](postgres:\/\/db\.example\.com$|https:\/\/db\.example\.com(\/reset|:5432))/,
+      shows: ["40917"],
+    },
+    {
+      why: "`|` or `]` in the host: the platform cannot parse the address, and `scrubUrl` then " +
+        "keeps what follows the last `@`",
+      shape: /^postgres:\/\/db\.example\.com(\||\]\[)https:\/\/db\.example\.com\/reset\?/,
+      shows: ["zqcode", "zqdom"],
+    },
+  ]
+
+  it("shows no marker of a secret position, but in the shapes listed as still shown", () => {
+    const messages = generatedMessages()
+    const shown: string[] = []
+    const used = new Set<string>()
+    for (const message of messages) {
+      const output = scrubText(message, REDACT_AFTER).toLowerCase()
+      for (const marker of MARKERS) {
+        if (!message.includes(marker) || !output.includes(marker)) continue
+        const known = STILL_SHOWN.find((s) => s.shape.test(message) && s.shows.includes(marker))
+        if (known) used.add(known.why)
+        else shown.push(`${marker} in ${JSON.stringify(output)} from ${JSON.stringify(message)}`)
+      }
+    }
+
+    expect(messages.length).toBe(7668)
+    expect({ count: shown.length, first: shown.slice(0, 5) }).toEqual({ count: 0, first: [] })
+    expect(STILL_SHOWN.filter((s) => !used.has(s.why)).map((s) => s.why)).toEqual([])
   })
 })

@@ -127,63 +127,64 @@ export function scrubUrl(url: string, redactPathAfter: string[] = []): string {
   }
 }
 
-/** What may follow the `@` of a URL's credentials: a host, an optional port, then the URL's end. */
-const HOST_AHEAD = /^(?:\[[\da-f:.]+\]|[\w.%~-]+)(?::\d*)?(?=$|[/?#"'<>)])/i
+/** An address in free text: its scheme and `://`, then all up to a space, quote or bracket. */
+const ADDRESS = /\b([a-z][a-z\d+.-]{0,30}:\/\/)[^\s"'<>)]+/gi
+/**
+ * A word up to its last `@` that a host follows: a name or an IPv6 address, perhaps a port, then
+ * the end of the word or a character that ends a host, in an address or in the text around one.
+ */
+const UP_TO_HOST = /^\S*@(?=(?:\[[\da-f:.]+\]|[\p{L}\p{N}_.%~-]+)(?::\d*)?(?:$|[/?#"'<>)\]},;]))/iu
+/**
+ * Text up to its last character that may end an address or its host: the start of a path, query or
+ * fragment, a separator between fields, a quote or a bracket.
+ */
+const UP_TO_BREAK = /^\S*[/?#&=,;\\"'<>()[\]{}]/
+/**
+ * The `://` of an unsure address, marked: an empty user name, which `scrubUrl` never keeps. Text
+ * that arrives with one is masked the same way.
+ */
+const UNSURE = "://@"
+/** An address marked `UNSURE`, with the rest of its word. */
+const UNSURE_TO_END = /:\/\/@\S*/g
 
 /**
- * One address of free text, cut at its last `@`, without the credentials that `@` may end.
+ * One word of free text with its addresses scrubbed by `scrubUrl`, and the unsure ones marked.
  *
- * A password is not always encoded, so the last `@` ends the credentials even after a `/`, `?`,
- * quote or bracket. The same `@` may instead belong to the path or the query, as in a reset link
- * with an e-mail address. The answer keeps only what is safe under both readings:
- *
- * - an `@` in the query or fragment that no host name follows: nothing is dropped here, and
- *   `scrubUrl` drops the query;
- * - a host name follows it and a path came first: the whole address is masked;
- * - an `@` in a path segment that `redactPathAfter` masks: nothing is dropped here, and `scrubUrl`
- *   masks the segment;
- * - anything else: the text up to the `@` goes.
+ * A password that was not encoded may hold a `/`, `?`, `#`, quote or bracket. The platform ends the
+ * host there, or `scrubText` ends the address there, so `scrubUrl` alone would keep a part of the
+ * password. The same text may also be an address followed by something else that holds an `@`: a
+ * field of a logged body, a second address, a query that ends in an e-mail address. The two cannot
+ * be told apart. So an address is unsure when such a character stands after its `://` and, later
+ * in the word, an `@` is followed by a host. It gets an `@` after its `://` here, and `scrubText`
+ * masks it with the rest of its word once every other pattern has run.
  */
-function dropCredentials(
-  scheme: string,
-  credentials: string,
-  rest: string,
-  redactPathAfter: string[],
-): string {
-  const whole = `${scheme}${credentials}${rest}`
-  const dropped = `${scheme}${rest}`
-  const at = credentials.length - 1
-  // The URL pattern of `scrubText` ends an address at these, so what follows is sent as it is.
-  const end = credentials.search(/["'<>)]/)
-  if (end !== -1) return dropped
-  const slash = credentials.indexOf("/")
-  const query = credentials.search(/[?#]/)
-  if (query !== -1) {
-    if (!HOST_AHEAD.test(rest)) return whole
-    return slash !== -1 && slash < query ? `${scheme}${MASK}` : dropped
-  }
-  if (slash === -1) return dropped
-  const segments = credentials.slice(slash, at).split("/")
-  return redactPathAfter.includes(segments[segments.length - 2]) ? whole : dropped
+function scrubAddresses(word: string, redactPathAfter: string[]): string {
+  const upToHost = UP_TO_HOST.exec(word)?.[0] ?? ""
+  // Where the last such character before that `@` ends, or 0 without one.
+  const unsureBefore = UP_TO_BREAK.exec(upToHost)?.[0].length ?? 0
+  return word.replace(ADDRESS, (url: string, scheme: string, offset: number) => {
+    const clean = scrubUrl(url, redactPathAfter)
+    // An address's own `://` ends where its credentials start, so its slashes do not count.
+    return offset + scheme.length < unsureBefore ? clean.replace("://", UNSURE) : clean
+  })
 }
 
 /**
  * Free text with the secrets it may carry masked: URLs lose their query, `Bearer` values, and the
  * value of anything named like a password, token, cookie or key.
  *
- * A URL loses its credentials too, also when the password holds a `/`, `?`, quote or bracket. So a
- * URL with an `@` in its path loses the text before it, and one whose query ends in `@` and a host
- * name is masked whole.
+ * A URL's credentials go too. Where they end cannot always be told, so a URL is masked with the
+ * rest of its word, as `scheme://<REDACTED>`, when a `/`, `?`, `#`, `&`, `=`, `,`, `;`, `\`, quote
+ * or bracket stands after its `://` and, later in the same word, an `@` is followed by a host. That
+ * is a password that holds such a character, and also a URL with an `@` in its path, or one
+ * followed without a space by text that holds an `@`. A password with a space in it is not found:
+ * the address ends at the space.
  */
 export function scrubText(text: string, redactPathAfter: string[] = []): string {
   return text.slice(0, MAX_TEXT)
     // A header line is secret to its end: `Cookie: a=1; b=2`, `Authorization: Basic …`.
     .replace(/\b(authorization|proxy-authorization|set-cookie|cookie)\s*:[^\n]*/gi, `$1: ${MASK}`)
-    .replace(
-      /\b([a-z][a-z\d+.-]{0,30}:\/\/)(\S*@)(\S*)/gi,
-      (_, scheme, credentials, rest) => dropCredentials(scheme, credentials, rest, redactPathAfter),
-    )
-    .replace(/\b[a-z][a-z\d+.-]{0,30}:\/\/[^\s"'<>)]+/gi, (url) => scrubUrl(url, redactPathAfter))
+    .replace(/\S+/g, (word) => scrubAddresses(word, redactPathAfter))
     // A relative path loses its query and fragment: `GET /reset?code=…`.
     .replace(/(^|[\s"'(=:[])(\/[^\s"'<>)?#]*)[?#][^\s"'<>)]*/g, "$1$2")
     .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]*/g, MASK)
@@ -196,6 +197,9 @@ export function scrubText(text: string, redactPathAfter: string[] = []): string 
       ),
       `$1${MASK}`,
     )
+    // Last: masked any earlier, an unsure address would take the name of a secret out of the text
+    // before the pattern above masks the value that follows the name.
+    .replace(UNSURE_TO_END, `://${MASK}`)
 }
 
 /** One frame of Sentry's stack trace. */
