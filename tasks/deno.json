@@ -1,0 +1,10 @@
+{
+  "name": "@spy4x/tasks",
+  "version": "1.72.0",
+  "exports": {
+    "./model": "./model.ts",
+    "./view": "./view.ts",
+    "./quick-add": "./quick-add.ts",
+    "./reminder-runner": "./reminder-runner.ts"
+  }
+}

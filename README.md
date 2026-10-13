@@ -44,18 +44,19 @@ Deno.serve(async (request) => {
 
 **server** means Deno on the back end, **browser** a front-end bundle, **shared** both.
 
-| Package                                                     | What it holds                                                              | Runs on                |
-| ----------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------- |
-| [`@spy4x/validation`](https://jsr.io/@spy4x/validation)     | arktype `validate` with one result shape, and form-validation state        | shared                 |
-| [`@spy4x/platform`](https://jsr.io/@spy4x/platform)         | helpers, command and event bus, cache, API result, tokens, rate limiting   | shared, split by entry |
-| [`@spy4x/server`](https://jsr.io/@spy4x/server)             | sign-in, accounts, Postgres, Redis, outbox, file storage, env encryption   | server                 |
-| [`@spy4x/net`](https://jsr.io/@spy4x/net)                   | SSRF guard, redirect-safe `fetch`, size-capped body readers, CIDR checks   | server                 |
-| [`@spy4x/integrations`](https://jsr.io/@spy4x/integrations) | ntfy and healthchecks.io clients, webhook signature check, retry backoff   | server                 |
-| [`@spy4x/time`](https://jsr.io/@spy4x/time)                 | IANA time-zone arithmetic on `Intl`, plain-date math, `.ics` writer        | shared                 |
-| [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker              | server                 |
-| [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync | both halves            |
-| [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter      | server                 |
-| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | WebDAV multistatus reader, escaped request bodies, href and origin rules   | shared                 |
+| Package                                                     | What it holds                                                                         | Runs on                |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------- |
+| [`@spy4x/validation`](https://jsr.io/@spy4x/validation)     | arktype `validate` with one result shape, and form-validation state                   | shared                 |
+| [`@spy4x/platform`](https://jsr.io/@spy4x/platform)         | helpers, command and event bus, cache, API result, tokens, rate limiting              | shared, split by entry |
+| [`@spy4x/server`](https://jsr.io/@spy4x/server)             | sign-in, accounts, Postgres, Redis, outbox, file storage, env encryption              | server                 |
+| [`@spy4x/net`](https://jsr.io/@spy4x/net)                   | SSRF guard, redirect-safe `fetch`, size-capped body readers, CIDR checks              | server                 |
+| [`@spy4x/integrations`](https://jsr.io/@spy4x/integrations) | ntfy and healthchecks.io clients, webhook signature check, retry backoff              | server                 |
+| [`@spy4x/time`](https://jsr.io/@spy4x/time)                 | IANA time-zone arithmetic on `Intl`, plain-date math, `.ics` writer                   | shared                 |
+| [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker                         | server                 |
+| [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync            | both halves            |
+| [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter                 | server                 |
+| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | WebDAV multistatus reader, escaped request bodies, href and origin rules              | shared                 |
+| [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks)               | the to-do model of the CalDAV task apps: task, list views, quick-add, reminder runner | shared                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
 
@@ -63,9 +64,10 @@ The example above validates a booking request, formats its time in Berlin and se
 by SMTP: three packages, no framework. `Deno.serve` hands in a standard `Request`, and each package
 returns a plain value you check.
 
-No Preact, no app shells, no single product's domain. Everything here is a technical primitive or
-adapter that is useful to more than one product, extracted from my own apps, with their bugs fixed
-on the way in.
+No Preact, no app shells, no single product's domain. The one domain model is the to-do model
+that my CalDAV task apps share: `@spy4x/tasks` is its import path, and its code sits in `platform`
+and `time` until 2.0. Everything else here is a technical primitive or adapter that is useful to
+more than one product, extracted from my own apps, with their bugs fixed on the way in.
 
 ## Why ts-libs
 

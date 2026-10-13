@@ -4,6 +4,10 @@
  * file does not model. Parsing is {@link readTodo}'s job; this file maps its result and adds what
  * the resource knows (`href`, `etag`) and what a list needs (priority bands, open or not, the day a
  * due value falls on for a viewer).
+ *
+ * @deprecated Import from `@spy4x/tasks/model`. `@spy4x/time/ical-tasks-model` hands out the same
+ * names and stays until 2.0.
+ * @module
  */
 
 import {

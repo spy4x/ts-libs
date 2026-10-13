@@ -34,6 +34,10 @@
       "description": "Deno-server primitives for a small SaaS backend: sign-in, Postgres, S3-compatible storage, Redis, outbox, request logging.",
       "runtimeCompat": { "deno": true }
     },
+    "tasks": {
+      "description": "The to-do model CalDAV task apps share: the task a screen shows, list views, quick-add parsing, and a reminder runner.",
+      "runtimeCompat": { "deno": true }
+    },
     "time": {
       "description": "IANA time-zone arithmetic on Intl, and an iCalendar (.ics) writer.",
       "runtimeCompat": { "deno": true, "browser": true }

@@ -3,6 +3,10 @@
 Universal, server and browser helpers extracted from seven repositories into one cohesive package.
 No framework, no domain types, no validator.
 
+The to-do entry points that used to be listed here are published as
+[`@spy4x/tasks`](https://jsr.io/@spy4x/tasks); see "The to-do entry points are in `@spy4x/tasks`"
+below.
+
 ```bash
 deno add jsr:@spy4x/platform
 ```
@@ -43,11 +47,9 @@ browser- and server-only halves are the other two subpaths.
 | `universal/format-number`   | `round`, `formatDecimal`, `formatPct`, `formatBytes`                                                                                                                                                                                                                                                                                                                                                    |
 | `universal/honeypot`        | `HONEYPOT_FIELD_NAME`, `honeypotFilled` — the server half of a honeypot form field                                                                                                                                                                                                                                                                                                                      |
 | `universal/is-record`       | `isRecord` — type guard for a parsed JSON object (not `null`, not an array)                                                                                                                                                                                                                                                                                                                             |
-| `universal/ical-tasks-view` | `SortMode`, `sortTasks`, `reorderTask`, `buildTree`, `flattenTree`, `searchTasks`, `todayView`, `upcomingView`, `isOverdue` — list screens for the `Task` of `@spy4x/time/ical-tasks-model`                                                                                                                                                                                                             |
 | `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                                                                                                                                                                                                       |
 | `universal/metrics`         | `Counter`, `MetricLabels`, `createCounter`, `renderPrometheus` — a labelled counter and its Prometheus text exposition; no registry, no histograms                                                                                                                                                                                                                                                      |
 | `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney`, `MoneyOptions` — money as a smallest-unit integer, parsed and formatted without a float step; an optional `{ decimals }` gives the decimals of `USDT` (6) or `BTC` (8), which `Intl` rejects or gets wrong                                                                                                   |
-| `universal/quick-add`       | `parseQuickAdd` — one task line to title, tags, contexts, due date, priority and token spans                                                                                                                                                                                                                                                                                                            |
 | `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                                                                                                                                                                                          |
 | `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                                                                                                                                                                                                                                         |
 | `universal/seo`             | `canonicalUrl`, `normalizeCanonical`, `breadcrumbItems`, `breadcrumbListJsonLd`, `jsonLdText`, `Crumb`, `BreadcrumbListItem`, `BreadcrumbListJsonLd` — the canonical address and JSON-LD a server-rendered page publishes                                                                                                                                                                               |
@@ -244,7 +246,6 @@ lock file behind.
 | `server/interval-runner` | `startIntervalRunner`, `IntervalRunnerOptions` — runs a task every interval through a `TimerPort`; a failed tick is reported and never stops the next; ticks never overlap; returns a stop function |
 | `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                                                                                                                     |
 | `server/ports`           | the port interfaces, `systemClockPort`                                                                                                                                                              |
-| `server/reminder-runner` | `createReminderRunner`, `ReminderStatePort`, `ReminderRunnerState`, `ReminderNotifyResult` — sends the task reminders that came due since the last run                                              |
 | `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`                                                                                                          |
 | `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                                                                                                                             |
 | `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                                                                                                                                |
@@ -252,18 +253,7 @@ lock file behind.
 `writeText` and `atomicWriteJson` take an optional `mode` (such as `0o600`): the permission bits a
 file is created with, for one that holds keys. An existing file keeps its bits.
 
-`server/reminder-runner` ticks once a minute, reads the tasks again each time, and hands every
-reminder that came due since its last run to `notify`. It keeps its last run and what it sent in a
-state port, so a restart neither repeats nor skips one; after a long stop it catches up one hour at
-most. `notify` answers `"delivered"` (also by returning nothing), `"retry"` (also by throwing) or
-`"drop"` for a reminder that can never be sent, which is reported once and not tried again;
-`createReminderNotify` in `@spy4x/integrations/push-reminders` is a ready `notify` for Web Push. One
-tick has a deadline (`tickTimeoutMs`, two minutes by default): a `listTasks` or `notify` that never
-settles gets its abort signal fired, the tick is abandoned and reported, and the next one runs.
-`stop()` fires the same signal, so it does not wait for a call that hangs; it resolves once the tick
-has ended. A mistyped `zone` and a `catchUpMs` shorter than `intervalMs + tickTimeoutMs` are refused
-when the runner is built: with a shorter one, a tick that takes time would skip reminders.
-`browser/push-notifications` is the other end: in a service worker, `installPushNotifications(self)`
+`browser/push-notifications` is the receiving end of a Web Push: in a service worker, `installPushNotifications(self)`
 shows the pushed message and, on a click, focuses or opens the app at the message's URL, which must
 be of the worker's own origin. The worker ignores keys of a message it does not know, so a field
 added later does not silence a worker cached from an older build.
@@ -596,6 +586,24 @@ what makes it runnable under the root test task's permission grant. Two conseque
   the same fields.
 - `ThrottledJsonSaver.flush()` is the deterministic exit point. `markDirty()` may start a detached
   write, and `flush()` waits for it before deciding whether another write is needed.
+
+## The to-do entry points are in `@spy4x/tasks`
+
+A to-do app's list views, its quick-add syntax and its reminder runner are one product's domain,
+not a general helper, so they are published by [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks) and documented
+there. Import them from the new paths:
+
+| Old path, kept until 2.0                    | Import from                    |
+| ------------------------------------------- | ------------------------------ |
+| `@spy4x/platform/universal/ical-tasks-view` | `@spy4x/tasks/view`            |
+| `@spy4x/platform/universal/quick-add`       | `@spy4x/tasks/quick-add`       |
+| `@spy4x/platform/server/reminder-runner`    | `@spy4x/tasks/reminder-runner` |
+
+The old paths, and the same names on `@spy4x/platform` and `@spy4x/platform/server`, keep working
+until 2.0 and hand out the very same values. Their three files still sit in this directory until
+then: two of them use `universal/sort`, `universal/text`, `universal/time` and
+`server/throttled-saver`, and two packages that import each other cannot be published. Nothing
+else here knows about tasks.
 
 ## Out of scope
 

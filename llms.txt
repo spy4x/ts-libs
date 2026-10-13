@@ -1,7 +1,7 @@
 # ts-libs
 
 > Small TypeScript libraries on web standards, for the server and the browser, published to JSR
-> as `@spy4x/*`. 10 packages cover validation, time zones, email, networking, server
+> as `@spy4x/*`. 11 packages cover validation, time zones, email, networking, server
 > primitives, realtime and more. Each one is a Deno workspace member with no UI.
 
 ## When to use
@@ -2780,6 +2780,66 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `UserSecretSummary` (interface), `jsr:@spy4x/server/user-secrets`: What a list/UI may see: metadata plus a hint.
 - `createUserSecretStore` (function), `jsr:@spy4x/server/user-secrets`: Builds a store over an injected port and cipher.
 
+## @spy4x/tasks
+
+### `jsr:@spy4x/tasks/model`
+
+- `ParseTaskResult` (type), `jsr:@spy4x/tasks/model`: The result of parseTask: the task, or a message that says why there is none.
+- `PriorityBand` (enum), `jsr:@spy4x/tasks/model`: How Tasks.org groups the iCalendar priority numbers 1 to 9 (0 is none).
+- `RepeatFrom` (enum), `jsr:@spy4x/tasks/model`: Which date the next occurrence of a repeating task is counted from when it is completed.
+- `Task` (interface), `jsr:@spy4x/tasks/model`: One task as a screen shows it.
+- `TaskDate` (type), `jsr:@spy4x/tasks/model`: A due or start value.
+- `TaskList` (interface), `jsr:@spy4x/tasks/model`: A task list: a CalDAV calendar that holds tasks.
+- `TaskNode` (interface), `jsr:@spy4x/tasks/model`: A task with its subtasks, for the tree a list shows.
+- `TaskReminder` (interface), `jsr:@spy4x/tasks/model`: A reminder the task carries.
+- `TaskSource` (interface), `jsr:@spy4x/tasks/model`: What the CalDAV server hands over for one task.
+- `TaskStatus` (enum), `jsr:@spy4x/tasks/model`: The STATUS of a task.
+- `dateDay` (function), `jsr:@spy4x/tasks/model`: The calendar day (`YYYY-MM-DD`) on which a due or start value falls for a viewer in `zone`.
+- `dateInstant` (function), `jsr:@spy4x/tasks/model`: The instant a due or start value denotes for a viewer in `zone`.
+- `isOpen` (function), `jsr:@spy4x/tasks/model`: Whether the task still needs doing: not completed and not cancelled.
+- `parseTask` (function), `jsr:@spy4x/tasks/model`: Reads one task.
+- `priorityBand` (function), `jsr:@spy4x/tasks/model`: Tasks.org's grouping of the iCalendar priority: 1 to 4 high, 5 medium, 6 to 9 low, 0 none.
+
+### `jsr:@spy4x/tasks/quick-add`
+
+- `QuickAddDue` (interface), `jsr:@spy4x/tasks/quick-add`: When the task is due: a calendar date in the given time zone, and a wall-clock time if typed.
+- `QuickAddOptions` (interface), `jsr:@spy4x/tasks/quick-add`: Options of parseQuickAdd.
+- `QuickAddPriority` (enum), `jsr:@spy4x/tasks/quick-add`: Task priority.
+- `QuickAddResult` (interface), `jsr:@spy4x/tasks/quick-add`: The result of parseQuickAdd.
+- `QuickAddSpan` (interface), `jsr:@spy4x/tasks/quick-add`: One recognised token, as a half-open range of UTF-16 offsets into the original line.
+- `QuickAddSpanKind` (enum), `jsr:@spy4x/tasks/quick-add`: What a recognised token is.
+- `parseQuickAdd` (function), `jsr:@spy4x/tasks/quick-add`: Read the tokens out of a quick-add line.
+
+### `jsr:@spy4x/tasks/reminder-runner`
+
+- `DEFAULT_REMINDER_CATCH_UP_MS` (constant), `jsr:@spy4x/tasks/reminder-runner`: How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
+- `DEFAULT_REMINDER_INTERVAL_MS` (constant), `jsr:@spy4x/tasks/reminder-runner`: How often the runner ticks unless `intervalMs` says otherwise: once a minute.
+- `DEFAULT_REMINDER_TICK_TIMEOUT_MS` (constant), `jsr:@spy4x/tasks/reminder-runner`: How long one tick may take unless `tickTimeoutMs` says otherwise: two minutes.
+- `ReminderNotifyResult` (type), `jsr:@spy4x/tasks/reminder-runner`: What `notify` says about one reminder:
+- `ReminderRunner` (interface), `jsr:@spy4x/tasks/reminder-runner`: A runner built by createReminderRunner.
+- `ReminderRunnerOptions` (interface), `jsr:@spy4x/tasks/reminder-runner`: Options of createReminderRunner.
+- `ReminderRunnerState` (interface), `jsr:@spy4x/tasks/reminder-runner`: What the runner remembers between ticks and across restarts.
+- `ReminderRunnerStep` (type), `jsr:@spy4x/tasks/reminder-runner`: Which part of a tick failed, as ReminderRunnerOptions.onError is told.
+- `ReminderStatePort` (interface), `jsr:@spy4x/tasks/reminder-runner`: Where the runner keeps its ReminderRunnerState.
+- `createReminderRunner` (function), `jsr:@spy4x/tasks/reminder-runner`: Builds a runner; nothing runs until ReminderRunner.start or ReminderRunner.tick.
+
+### `jsr:@spy4x/tasks/view`
+
+- `SortMode` (enum), `jsr:@spy4x/tasks/view`: How a list shows its tasks.
+- `SortOrderChange` (interface), `jsr:@spy4x/tasks/view`: A new `X-APPLE-SORT-ORDER` to write for one task.
+- `TodayView` (interface), `jsr:@spy4x/tasks/view`: The Today view.
+- `TreeRow` (interface), `jsr:@spy4x/tasks/view`: A task and how deep it sits, for a screen that draws the tree as indented rows.
+- `UPCOMING_DAYS` (constant), `jsr:@spy4x/tasks/view`: How many days after today the Upcoming view reaches.
+- `UpcomingDay` (interface), `jsr:@spy4x/tasks/view`: The tasks due on one day of the Upcoming view.
+- `buildTree` (function), `jsr:@spy4x/tasks/view`: Nests each task under its parent (`parentUid`).
+- `flattenTree` (function), `jsr:@spy4x/tasks/view`: The tree as rows, parents before their children.
+- `isOverdue` (function), `jsr:@spy4x/tasks/view`: Whether a due value has passed.
+- `reorderTask` (function), `jsr:@spy4x/tasks/view`: The `X-APPLE-SORT-ORDER` values to write so that task `uid` sits at `toIndex` among its siblings, as the manual order of sortTasks shows it, without touching more tasks than needed.
+- `searchTasks` (function), `jsr:@spy4x/tasks/view`: The tasks that match `query`, in their input order.
+- `sortTasks` (function), `jsr:@spy4x/tasks/view`: The tasks in the order `mode` names, as a viewer in `zone` sees them.
+- `todayView` (function), `jsr:@spy4x/tasks/view`: Overdue above today.
+- `upcomingView` (function), `jsr:@spy4x/tasks/view`: Tomorrow through UPCOMING_DAYS days after today, one entry per day that has tasks, in date order.
+
 ## @spy4x/time
 
 ### `jsr:@spy4x/time/date`
@@ -3061,4 +3121,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 3c9583c628629ce4cd40d4352b9ecee787dbb849ea14ce675256a40989bfc2ec -->
+<!-- export surface: sha256 e40d81f2dea817739f66144781ff5e3c1c4a3e064fd677540d4a6775730ca970 -->
