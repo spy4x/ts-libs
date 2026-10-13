@@ -127,6 +127,17 @@ describe("MemoryLockoutStore sweep", () => {
     expect(store.get("ann")?.failures).toBe(3)
   })
 
+  it("keeps a counter whose failure time is newer than its last write", async () => {
+    const { clock, store } = open()
+    // As a lockout on a clock ahead of the store's would write it.
+    const lastFailureAt = T0 + 5_000
+    await store.update("ann", () => ({ failures: 1, lockedUntil: null, lastFailureAt }))
+    clock.at = T0 + QUIET_MS
+    expect(store.sweep()).toBe(0)
+    clock.at = lastFailureAt + QUIET_MS
+    expect(store.sweep()).toBe(1)
+  })
+
   it("answers every check as a store that never sweeps does", async () => {
     const swept = open()
     const kept = open({ sweep: false })
@@ -240,11 +251,33 @@ describe("MemoryLockoutStore maxEntries", () => {
     clock.at += 5_000
     await guessWrong("b")
     await expect(guessWrong("c")).rejects.toThrow("lockout store is full")
+    // A sweep just before "a" goes quiet, so none is due when "c" comes back: the full store has
+    // to make the room itself.
+    clock.at = T0 + QUIET_MS - 1
+    expect(store.sweep()).toBe(0)
     clock.at = T0 + QUIET_MS
     expect(await guessWrong("c")).toBe(0)
     expect(store.get("a")).toBeUndefined()
     expect(store.get("b")?.failures).toBe(1)
     await expect(guessWrong("d")).rejects.toThrow("lockout store is full")
+  })
+
+  it("makes room again each time another held counter goes quiet", async () => {
+    const { clock, store, guessWrong } = open({ maxEntries: 2 })
+    await guessWrong("a")
+    clock.at = T0 + 5_000
+    await guessWrong("b")
+    await expect(guessWrong("c")).rejects.toThrow("lockout store is full")
+    clock.at = T0 + QUIET_MS - 1
+    expect(store.sweep()).toBe(0)
+    await expect(guessWrong("c")).rejects.toThrow("lockout store is full")
+    clock.at = T0 + QUIET_MS
+    expect(await guessWrong("c")).toBe(0)
+    await expect(guessWrong("d")).rejects.toThrow("lockout store is full")
+    clock.at = T0 + 5_000 + QUIET_MS
+    expect(await guessWrong("d")).toBe(0)
+    expect(store.get("b")).toBeUndefined()
+    expect(store.size).toBe(2)
   })
 })
 
