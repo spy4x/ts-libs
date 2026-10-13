@@ -49,6 +49,14 @@ function fakeServer() {
     dropAnswerOnce: false, // applies the PUT, then loses the answer
     refused: new Set<string>(), // paths whose writes answer 403 with a DAV:error condition
     afterGet: undefined as undefined | (() => void), // runs once a GET has been answered
+    // Paths this user may read but not change, as on a calendar shared read-only: a write to one,
+    // or into one, answers what Stalwart 0.16 answers, a 403 with no body.
+    readOnly: new Set<string>(),
+    // What a question about privileges answers, for every path: a list of names, or `null` for a
+    // server that does not give the property. Unset, the answer follows `readOnly`.
+    privileges: undefined as undefined | null | string[],
+    // The session at a proxy in front of the server ended: it answers every request itself.
+    signedOut: false,
   }
   let counter = 0
   const fakeFetch: typeof fetch = (input, init) => {
@@ -63,7 +71,36 @@ function fakeServer() {
     })
     if (state.down) return Promise.reject(new TypeError("offline"))
     if (state.status) return Promise.resolve(new Response("no", { status: state.status }))
+    if (state.signedOut) {
+      return Promise.resolve(
+        new Response("<html>Sign in</html>", {
+          status: 403,
+          headers: { "Content-Type": "text/html" },
+        }),
+      )
+    }
     const path = url.pathname
+    const locked = state.readOnly.has(path) ||
+      state.readOnly.has(path.slice(0, path.lastIndexOf("/") + 1))
+    if (method === "PROPFIND") {
+      const held = state.privileges !== undefined
+        ? state.privileges
+        : locked
+        ? ["read", "read-current-user-privilege-set"]
+        : ["read", "write", "write-content", "bind", "unbind"]
+      const prop = held === null
+        ? "<D:propstat><D:prop><D:current-user-privilege-set/></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat>"
+        : `<D:propstat><D:prop><D:current-user-privilege-set>${
+          held.map((name) => `<D:privilege><D:${name}/></D:privilege>`).join("")
+        }</D:current-user-privilege-set></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>`
+      return Promise.resolve(
+        new Response(
+          `<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>${path}</D:href>${prop}</D:response></D:multistatus>`,
+          { status: 207, headers: { "Content-Type": "application/xml" } },
+        ),
+      )
+    }
+    if (method !== "GET" && locked) return Promise.resolve(new Response(null, { status: 403 }))
     if (method !== "GET" && state.refused.has(path)) {
       return Promise.resolve(new Response(REFUSAL, { status: 403 }))
     }
@@ -440,6 +477,18 @@ describe("delete of a task whose create the server never confirmed", () => {
     return { ...t, remove }
   }
 
+  it("deletes with the known etag, without a read, when the app has one", async () => {
+    const { send, transport, seen, objects } = setup()
+    await send("create", "e1", "milk", 0)
+    seen.length = 0
+    await transport.send(
+      { kind: "delete", entityId: "e1", payload: "milk", baseVersion: 1, ownCreates: ["milk"] },
+      "key",
+    )
+    expect(seen.map((s) => [s.method, s.headers.get("If-Match")])).toEqual([["DELETE", `"1"`]])
+    expect(objects.size).toBe(0)
+  })
+
   it("deletes the object with the etag just read when it is the text this device sent", async () => {
     const { remove, seen, objects } = await lostCreate(true)
     expect(await remove()).toBeUndefined()
@@ -625,6 +674,119 @@ describe("answers", () => {
   })
 })
 
+describe("a 403 that names no condition", () => {
+  const TASK_PATH = new URL(`${CALENDAR}e1.ics`).pathname
+  const CALENDAR_PATH = new URL(CALENDAR).pathname
+  const asked = (seen: Seen[]) => seen.filter((request) => request.method === "PROPFIND")
+
+  it("rejects a create for good when the server says this user may only read the calendar", async () => {
+    const { send, failureOf, state, seen } = setup()
+    state.readOnly.add(CALENDAR_PATH)
+    expect(await failureOf(send("create", "e1"))).toEqual({
+      kind: "rejected",
+      message: "This account may read this calendar but not change it.",
+    })
+    expect(asked(seen).map((request) => [request.url, request.headers.get("Depth")])).toEqual([
+      [CALENDAR, "0"],
+    ])
+  })
+
+  for (const kind of ["update", "delete"] as const) {
+    it(`rejects ${kind === "update" ? "an update" : "a delete"} for good when the server says this user may only read the task`, async () => {
+      const { send, failureOf, state, seen } = setup()
+      await send("create", "e1")
+      state.readOnly.add(TASK_PATH)
+      expect((await failureOf(send(kind, "e1", "oat milk"))).kind).toBe("rejected")
+      expect(asked(seen).map((request) => request.url)).toEqual([`${CALENDAR}e1.ics`])
+    })
+  }
+
+  for (const privilege of ["all", "write", "write-content", "bind", "unbind"]) {
+    it(`keeps the write queued when the server says this user holds "${privilege}"`, async () => {
+      const { send, failureOf, state } = setup()
+      state.readOnly.add(CALENDAR_PATH)
+      state.privileges = ["read", privilege]
+      expect((await failureOf(send("create", "e1"))).kind).toBe("unreachable")
+    })
+  }
+
+  it("keeps the write queued when the server does not say what this user may do", async () => {
+    const { send, failureOf, state } = setup()
+    state.readOnly.add(CALENDAR_PATH)
+    state.privileges = null
+    expect((await failureOf(send("create", "e1"))).kind).toBe("unreachable")
+  })
+
+  it("keeps the write queued when a proxy whose session ended answers the question with a 403 too", async () => {
+    const { send, failureOf, state, seen } = setup()
+    state.signedOut = true
+    expect((await failureOf(send("create", "e1"))).kind).toBe("unreachable")
+    expect(asked(seen).length).toBe(1)
+  })
+
+  it("keeps the write queued when the question cannot be asked", async () => {
+    const forbidden = {
+      success: false as const,
+      output: null,
+      error: { code: CalDavErrorCode.Forbidden, message: "no", status: 403 },
+    }
+    const offline = {
+      success: false as const,
+      output: null,
+      error: { code: CalDavErrorCode.Network, message: "offline" },
+    }
+    for (
+      const getPrivileges of [undefined, () => Promise.resolve(offline)] satisfies Array<
+        CalDavWriter["getPrivileges"]
+      >
+    ) {
+      const { transport } = scriptedWriter({
+        createObject: () => Promise.resolve(forbidden),
+        getPrivileges,
+      })
+      const failed = await transport.send(
+        { kind: "create", entityId: "e1", payload: "t", baseVersion: 0 },
+        "key",
+      ).catch((error) => transport.classify(error))
+      expect(failed).toEqual({ kind: "unreachable" })
+    }
+  })
+
+  it("asks the same question when a relay reports the 403 as a plain server error", async () => {
+    const urls: string[] = []
+    const { transport } = scriptedWriter({
+      createObject: () =>
+        Promise.resolve({
+          success: false as const,
+          output: null,
+          error: { code: CalDavErrorCode.Server, message: "upstream", status: 403 },
+        }),
+      getPrivileges: (url) => {
+        urls.push(String(url))
+        return Promise.resolve({ success: true as const, output: ["read"], error: null })
+      },
+    })
+    const failed = await transport.send(
+      { kind: "create", entityId: "e1", payload: "t", baseVersion: 0 },
+      "key",
+    ).catch((error) => transport.classify(error))
+    expect((failed as CalDavSendFailure).kind).toBe("rejected")
+    expect(urls).toEqual([CALENDAR])
+  })
+
+  it("does not ask after a 403 that names a condition, a 401 or a 507", async () => {
+    const { send, failureOf, state, seen } = setup()
+    state.refused.add(TASK_PATH)
+    expect((await failureOf(send("create", "e1"))).kind).toBe("rejected")
+    state.refused.clear()
+    for (const status of [401, 507]) {
+      state.status = status
+      expect((await failureOf(send("create", "e1"))).kind).toBe("unreachable")
+    }
+    expect(asked(seen)).toEqual([])
+  })
+})
+
 describe("fetchServer", () => {
   it("returns the server's object, or null when it is gone", async () => {
     const { transport, send, objects } = setup()
@@ -790,6 +952,46 @@ describe("with the outbox", () => {
       ["e1", "conflict", "rejected"],
     ])
     expect([...objects.keys()]).toEqual([new URL(`${CALENDAR}e2.ics`).pathname])
+  })
+
+  it("makes a write the server refuses with a bare 403 a rejected conflict and sends the writes queued behind it", async () => {
+    const { outbox, state, objects, seen } = queue()
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    const path = new URL(`${CALENDAR}e1.ics`).pathname
+    state.down = true
+    await outbox.submit({ kind: "update", entityId: "e1", payload: "oat milk", version: 1 })
+    await outbox.submit({ kind: "create", entityId: "e2", payload: "bread" })
+    state.down = false
+    state.readOnly.add(path)
+    await outbox.flush()
+    const entries = await outbox.entries()
+    expect(entries.map((entry) => [entry.entityId, entry.status, entry.conflict?.reason])).toEqual([
+      ["e1", "conflict", "rejected"],
+    ])
+    expect(objects.get(path)!.ics).toBe(ics("milk", "e1"))
+    expect(objects.has(new URL(`${CALENDAR}e2.ics`).pathname)).toBe(true)
+    // The refused write is out of the queue, so a later flush asks nothing more.
+    await outbox.flush()
+    expect(seen.filter((request) => request.method === "PROPFIND").length).toBe(1)
+  })
+
+  it("keeps every write queued, with no conflict, while a proxy whose session ended answers 403, and asks once per flush", async () => {
+    const { outbox, state, objects, seen } = queue()
+    state.down = true
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    await outbox.submit({ kind: "create", entityId: "e2", payload: "bread" })
+    state.down = false
+    state.signedOut = true
+    await outbox.flush()
+    expect((await outbox.entries()).map((entry) => [entry.entityId, entry.status])).toEqual([
+      ["e1", "pending"],
+      ["e2", "pending"],
+    ])
+    expect(seen.filter((request) => request.method === "PROPFIND").length).toBe(1)
+    state.signedOut = false
+    await outbox.flush()
+    expect(await outbox.entries()).toEqual([])
+    expect(objects.size).toBe(2)
   })
 
   for (const status of [401, 403]) {

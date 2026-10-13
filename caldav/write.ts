@@ -23,13 +23,23 @@
  * texts that create was sent with (`ownCreates`), so the object is read first: gone means the
  * create never arrived and the delete is done; the same content lines as one of those texts (so
  * the same UID too) means the object is this device's own create, and it is deleted with the etag
- * just read;
- * anything else is another device's write, so nothing is deleted and the failure is `version`.
+ * just read; anything else may be another device's write, or a copy the server stored with other
+ * lines, so nothing is deleted and the failure is `version`.
  *
- * A 401, or a 403 without a `DAV:error` condition, is not a refusal of the write: the session may
- * need signing in again, so the write stays queued (`unreachable`). A 403 that names a condition
- * (`need-privileges`, `supported-calendar-component`, `valid-calendar-data`) is the server's
- * refusal for good, so it is `rejected` and the writes queued behind it go on. A created entity's
+ * A 401 is not a refusal of the write: the session may need signing in again, so the write stays
+ * queued (`unreachable`). A 403 that names a condition (`need-privileges`,
+ * `supported-calendar-component`, `valid-calendar-data`) is the server's refusal for good, so it
+ * is `rejected` and the writes queued behind it go on.
+ *
+ * A 403 that names no condition can be either: Stalwart answers one, with no body, to a write into
+ * a calendar shared read-only, and a proxy whose session ended answers one too. So after such a
+ * 403 the transport asks the writer what this user may do at the address (`getPrivileges`: the
+ * calendar for a create, the object for an update or delete). The write is `rejected` only when
+ * the server answers with a list that holds no privilege to write (`all`, `write`,
+ * `write-content`, `bind`, `unbind`). A question that fails, a server that gives no list, a list
+ * that allows writing, or a writer without `getPrivileges` all leave the write queued. The
+ * question is asked once per write that met such a 403; a flush stops at the first write that
+ * stays queued, so that is at most once per flush. A created entity's
  * id must be a plain file name (see {@link isSafeEntityId}); an update or delete goes to the
  * address `urlOf` gives, whatever the id.
  *
@@ -47,7 +57,7 @@ import { childUrl } from "./url.ts"
 /** The object calls a write transport needs. A {@link CalDavClient} satisfies it. */
 export type CalDavWriter = Pick<
   CalDavClient,
-  "createObject" | "updateObject" | "deleteObject" | "getObject"
+  "createObject" | "updateObject" | "deleteObject" | "getObject" | "getPrivileges"
 >
 
 /** What the queue sends for one entry. Same shape as the outbox's `OutboxCommand`. */
@@ -188,6 +198,7 @@ export function classifyCalDavError(error: CalDavError): CalDavSendFailure {
     case CalDavErrorCode.Forbidden:
       // A 403 that names a condition is a refusal no retry changes (RFC 4791 answers a missing
       // privilege or unacceptable data this way); kept as `unreachable` it would block the queue.
+      // One that names nothing may come from a proxy; `send` asks the server before it gives up.
       return error.condition === undefined
         ? { kind: "unreachable" }
         : { kind: "rejected", message: error.message }
@@ -211,6 +222,16 @@ export function classifyCalDavError(error: CalDavError): CalDavSendFailure {
   }
 }
 
+/** The privileges of which one is needed to add, change or delete an object (RFC 3744 §3). */
+const WRITE_PRIVILEGES = new Set(["all", "write", "write-content", "bind", "unbind"])
+
+/** A 403 that names no `DAV:error` condition, as the client or a relay adapter reports it. */
+function isBareForbidden(error: CalDavError): boolean {
+  if (error.condition !== undefined) return false
+  return error.code === CalDavErrorCode.Forbidden ||
+    (error.code === CalDavErrorCode.Server && error.status === 403)
+}
+
 /** Builds the `send`, `fetchServer` and `classify` ports of an outbox over CalDAV. */
 export function createCalDavWriteTransport<P, S>(
   options: CalDavWriteOptions<P, S>,
@@ -231,6 +252,26 @@ export function createCalDavWriteTransport<P, S>(
       if (read.success) object = read.output
     }
     return options.toEntity(object, entityId)
+  }
+
+  /**
+   * The error for a write the server refused. A 403 without a condition does not say who refused:
+   * the server for good, or a proxy whose session ended. So the server is asked what this user may
+   * do at `url`. Only an answer that lists no write privilege makes the refusal final; a failed
+   * question, a server that does not say, or a user who may write leaves the write queued.
+   */
+  async function refused(error: CalDavError, url: string): Promise<CalDavWriteError> {
+    if (isBareForbidden(error) && writer.getPrivileges) {
+      const asked = await writer.getPrivileges(url)
+      const held = asked.success ? asked.output : null
+      if (held !== null && !held.some((privilege) => WRITE_PRIVILEGES.has(privilege))) {
+        return new CalDavWriteError({
+          kind: "rejected",
+          message: "This account may read this calendar but not change it.",
+        }, error)
+      }
+    }
+    return new CalDavWriteError(classifyCalDavError(error), error)
   }
 
   return {
@@ -297,7 +338,7 @@ export function createCalDavWriteTransport<P, S>(
             throw new CalDavWriteError(classifyCalDavError(existing.error), existing.error)
           }
         }
-        throw new CalDavWriteError(classifyCalDavError(created.error), created.error)
+        throw await refused(created.error, calendar)
       }
       const url = options.urlOf(command.entityId)
       let etag = options.etagOf(command)
@@ -336,14 +377,14 @@ export function createCalDavWriteTransport<P, S>(
         const deleted = await writer.deleteObject(url, etag)
         // Already gone is the state the person asked for.
         if (!deleted.success && deleted.error.code !== CalDavErrorCode.NotFound) {
-          throw new CalDavWriteError(classifyCalDavError(deleted.error), deleted.error)
+          throw await refused(deleted.error, url)
         }
         return undefined
       }
       const ics = options.toIcs(command)
       const updated = await writer.updateObject(url, ics, etag)
       if (!updated.success) {
-        throw new CalDavWriteError(classifyCalDavError(updated.error), updated.error)
+        throw await refused(updated.error, url)
       }
       return await settled(updated.output.url, updated.output.etag, ics, command.entityId)
     },
