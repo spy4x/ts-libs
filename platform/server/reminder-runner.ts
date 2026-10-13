@@ -42,6 +42,9 @@
  * })
  * runner.start()
  * ```
+ *
+ * @deprecated Import from `@spy4x/tasks/reminder-runner`. `@spy4x/platform/server/reminder-runner`
+ * hands out the same names and stays until 2.0.
  * @module
  */
 import { type } from "arktype"
