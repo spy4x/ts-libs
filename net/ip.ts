@@ -5,7 +5,8 @@
  * brackets, no zone id, no whitespace. It returns the address in one canonical spelling, so two
  * spellings of the same address compare equal as strings. `ipInRanges` tells whether an address
  * lies inside any of a list of CIDR ranges, for example a proxy's published edge ranges. `ipHint`
- * masks an address for display, keeping only its network part.
+ * masks an address for display, keeping only its network part. `isLoopbackHost` tells whether a
+ * URL's host is the machine itself, as a browser decides it.
  *
  * Pure: no DNS, no I/O, no permissions.
  */
@@ -63,6 +64,32 @@ export function parseIp(input: string): ParsedIp | null {
     bytes[11] === 0xff
   if (mapped) return fromIpv4(bytes.slice(12))
   return { version: 6, address: formatIpv6(groups), bytes }
+}
+
+/**
+ * True when `host` names the machine itself the way a browser decides it: `localhost`, any name
+ * under `.localhost`, an address in `127.0.0.0/8`, or `::1`. Pass a `URL`'s `hostname`; the
+ * brackets it puts around an IPv6 address and one trailing dot are accepted, and letter case is
+ * ignored.
+ *
+ * A browser treats a page on such a host as secure over plain `http:`, so it keeps a `Secure`
+ * cookie there. Use it to decide whether an `http:` address can stand where `https:` is required:
+ * an app's own public address in development, say. Every other host is `false`, among them
+ * `0.0.0.0`, a private network address, a `.local` name and an IPv4-mapped `::ffff:127.0.0.1`,
+ * none of which a browser trusts.
+ *
+ * It reads the name only and resolves nothing, so it is not an SSRF check: use `validatePublicUrl`
+ * from `./url-policy.ts` before fetching an address somebody else supplied.
+ */
+export function isLoopbackHost(host: string): boolean {
+  const name = host.toLowerCase().replace(/\.$/, "")
+  if (name === "localhost" || name.endsWith(".localhost")) return true
+  const bracketed = name.startsWith("[") && name.endsWith("]")
+  const parsed = parseIp(bracketed ? name.slice(1, -1) : name)
+  if (!parsed) return false
+  // `parseIp` hands back an IPv4-mapped IPv6 address as IPv4; a browser does not trust that form.
+  if (parsed.version === 4) return !bracketed && !name.includes(":") && parsed.bytes[0] === 127
+  return parsed.address === "::1"
 }
 
 /** The canonical spelling of `input` ({@link parseIp}), or `null` when it is not an address. */
