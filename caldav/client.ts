@@ -6,7 +6,8 @@
  * failure; the error carries a {@link CalDavErrorCode}. Safety rules the client holds:
  *
  * - **Credentials stay on the server.** `Authorization` is attached only to a request whose origin
- *   equals the configured server's. A URL argument or a server href on another origin is refused
+ *   equals the configured server's, and an `http:` server is refused unless `allowHttp` is set, so
+ *   the password never travels unencrypted by accident. A URL argument or a server href on another origin is refused
  *   before any request, and a redirect to another origin is reported, never followed.
  * - **No blind writes.** A new object is sent with `If-None-Match: *`; an update or delete needs
  *   the etag it was read with, sent exactly as received, and is refused without one.
@@ -111,8 +112,15 @@ export interface CalDavClientOptions {
   /**
    * Where the server is: the bare host (`https://dav.example.com`) or a CalDAV address on it
    * (`https://dav.example.com/dav/cal/`). Its origin is the only one that receives credentials.
+   * An `http:` address is refused unless {@link CalDavClientOptions.allowHttp} is `true`.
    */
   serverUrl: string | URL
+  /**
+   * When `true`, an `http:` `serverUrl` is accepted and the password travels unencrypted. Set it
+   * only when nobody else can read the path to the server, such as a container network or
+   * `localhost`. Default: `false`.
+   */
+  allowHttp?: boolean
   /** HTTP Basic credentials. The username may not contain `:` (RFC 7617). */
   auth: { username: string; password: string }
   /** The `fetch` to use. Default: the global `fetch`. */
@@ -333,11 +341,17 @@ interface Call {
   deadline: number
 }
 
+/** Message of the `TypeError` thrown for an `http:` `serverUrl` without `allowHttp: true`. */
+const HTTP_REFUSED_MESSAGE =
+  "serverUrl is an http: address, which would send the password unencrypted; " +
+  "use https:, or set allowHttp: true to allow it"
+
 /**
  * Create a client for one CalDAV server and one user.
  *
- * Throws a `TypeError` when `serverUrl` is not an `http:` or `https:` URL or the username contains
- * `:`; every other failure is returned, never thrown.
+ * Throws a `TypeError` when `serverUrl` is not an `http:` or `https:` URL, when it is `http:` and
+ * `allowHttp` is not `true`, or when the username contains `:`. Nothing is sent before that check.
+ * Every other failure is returned, never thrown.
  */
 export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
   let server: URL
@@ -348,6 +362,9 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
   }
   if (server.protocol !== "http:" && server.protocol !== "https:") {
     throw new TypeError("serverUrl must be an http: or https: URL")
+  }
+  if (server.protocol === "http:" && options.allowHttp !== true) {
+    throw new TypeError(HTTP_REFUSED_MESSAGE)
   }
   if (hasUserInfo(server)) {
     throw new TypeError("serverUrl must not carry credentials; pass them as auth")

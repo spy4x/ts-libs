@@ -164,6 +164,47 @@ describe("credentials", () => {
     }
   })
 
+  it("refuses an http: serverUrl before sending anything, naming the allowHttp option", () => {
+    let sent = 0
+    const counting: typeof fetch = () => {
+      sent++
+      return Promise.resolve(new Response(null, { status: 207 }))
+    }
+    for (const allowHttp of [undefined, false]) {
+      let message = ""
+      try {
+        createCalDavClient({
+          serverUrl: "http://dav.example.com/dav/",
+          auth: AUTH,
+          fetch: counting,
+          allowHttp,
+        })
+      } catch (error) {
+        assert(error instanceof TypeError)
+        message = error.message
+      }
+      assertMatch(message, /http:.*unencrypted.*allowHttp: true/)
+    }
+    assertEquals(sent, 0)
+  })
+
+  it("sends credentials to an http: serverUrl when allowHttp is true", async () => {
+    const { client, seen } = setup(() => new Response(ICS, { headers: { ETag: '"1"' } }), {
+      serverUrl: "http://dav.example.com",
+      allowHttp: true,
+    })
+    output(await client.getObject("http://dav.example.com/dav/cal/x.ics"))
+    assertEquals(seen.map((request) => request.url), ["http://dav.example.com/dav/cal/x.ics"])
+    assertEquals(seen[0].headers.get("Authorization"), BASIC)
+  })
+
+  it("never follows a redirect from https: to http: on the same host", async () => {
+    const { client, seen } = setup(() => redirect(302, "http://dav.example.com/dav/cal/x.ics"))
+    const error = failure(await client.getObject(TASK))
+    assertEquals(error.code, CalDavErrorCode.CrossOriginRedirect)
+    assertEquals(seen.map((request) => new URL(request.url).protocol), ["https:"])
+  })
+
   it("refuses a URL argument carrying a username or password before sending anything", async () => {
     const { client, seen } = setup(() => new Response(ICS))
     const url = "https://u:p@dav.example.com/dav/cal/x.ics"
