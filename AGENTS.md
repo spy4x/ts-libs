@@ -22,6 +22,7 @@ exactly one top-level directory.
 | `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync                                                                                                                                                                                                  |
 | `caldav/`       | WebDAV XML reader and request builders, CalDAV URL rules (client planned)                                                                                                                                                                                        |
 | `validation/`   | arktype validate helpers, validation model                                                                                                                                                                                                                       |
+| `tasks/`        | the to-do model the CalDAV task apps share: model, view, quick-add, reminder-runner                                                                                                                                                                              |
 
 ## Adding a package
 
