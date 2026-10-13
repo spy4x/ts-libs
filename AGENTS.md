@@ -17,7 +17,6 @@ exactly one top-level directory.
 | `net/`          | url-shape, url-policy (SSRF guard), safe-fetch, bounded-body                                                                                                                                                                                                     |
 | `integrations/` | healthchecks, ntfy, webhooks                                                                                                                                                                                                                                     |
 | `time/`         | tz, ics                                                                                                                                                                                                                                                          |
-| `ai/`           | chatCompletion, chatJson, JSON-from-fence recovery — planned, not built (#11, #76)                                                                                                                                                                               |
 | `billing/`      | provider-neutral payments (checkout, portal, webhook events), Stripe adapter                                                                                                                                                                                     |
 | `email/`        | address, html, message, sender, smtp transport, dkim-verify                                                                                                                                                                                                      |
 | `realtime/`     | hint-only websocket transport, registry, heartbeat, cursor sync                                                                                                                                                                                                  |
@@ -71,6 +70,10 @@ model, or a renamed copy of something generic that already exists. Before adding
 both libraries for one that does the same job under another name, and extend it rather than adding
 a second one.
 
+A domain model that a family of the owner's apps shares is welcome, and it lives in a package named
+for that domain, never under a general name in `platform/` or `time/`: the to-do model that the
+CalDAV task apps share goes to a `tasks` package (#600).
+
 Code flows both ways. An app feeds this library and `spy4x/preact-components` with anything a
 future project could reuse, and every app, old or new, imports from them instead of keeping its own
 copy. Each app tracks that switch in an issue of its own. Because apps import from here, removing an
@@ -94,8 +97,9 @@ before the export goes.
 
 Every package carries the same version, and all of them are released together. After 1.0.0, an
 exported name, parameter or return type changes only additively, or it waits for 2.0
-(`docs/1.0-contract.md`, #77). An interface an app implements, such as `BillingProvider`, may gain
-a required member in a minor release; the PR body names the known implementers.
+(`docs/1.0-contract.md`, #77). That covers an interface an app implements (`BillingProvider`, a
+store, the double an app writes for its tests): a new member is optional, or it waits for 2.0
+(#565).
 
 1. One PR sets `version` in every `<dir>/deno.json` to the new version, and passes
    `deno task check:cold publish:dry`.

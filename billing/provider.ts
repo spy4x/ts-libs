@@ -19,7 +19,11 @@ export enum SubscriptionStatus {
   Trialing = 1,
   /** Paid up. */
   Active,
-  /** A payment failed or is overdue; the provider is still retrying or waiting. */
+  /**
+   * A payment failed or is overdue. The provider may still be retrying, or may have given up and
+   * left the subscription open with no end (Stripe's `unpaid`), so an app that keeps the paid plan
+   * during this status must end its own grace period after a fixed time.
+   */
   PastDue,
   /** Ended. No further invoices. */
   Canceled,

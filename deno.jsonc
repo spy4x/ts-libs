@@ -5,11 +5,10 @@
   // its own `<dir>/deno.json` lands. That is what keeps this file untouched by
   // every package PR — no shared-file conflicts between parallel agents.
   //
-  // The list mirrors the package table of README.md, plus the planned `ai/`.
+  // The list mirrors the package table of README.md.
   // `infra/` is deliberately not a member: `infra/scripts/type-check.ts` is repo
   // tooling, not a package.
   "workspace": [
-    "./ai",
     "./billing",
     "./caldav",
     "./email",
@@ -111,7 +110,7 @@
     "@integration-testing": "./infra/testing/+lib.ts",
 
     // Validation — arktype only, never zod. `platform/` types (#10, #23),
-    // `ai/chatJson` schemas (#11), `server/auth` bodies (#6).
+    // `server/auth` bodies (#6).
     "arktype": "npm:arktype@2.2.3",
 
     // Stdlib. Nothing else may be added without naming the issue that needs it.

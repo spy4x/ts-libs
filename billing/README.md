@@ -117,6 +117,10 @@ return new Response(null, { status: 200 })
 | `incomplete`                     | `Incomplete`         |
 | `paused`                         | `Paused`             |
 
+`PastDue` does not mean the provider is still trying. Stripe stops retrying an `unpaid`
+subscription and leaves it open with no end, so an app that keeps the paid plan while a
+subscription is `PastDue` must end that grace period itself after a fixed number of days.
+
 An unknown status is refused as `malformed_payload` rather than guessed.
 
 ## Out of scope
