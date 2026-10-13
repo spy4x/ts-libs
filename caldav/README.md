@@ -54,6 +54,11 @@ if (!updated.success && updated.error.code === CalDavErrorCode.Conflict) {
 
 What the client guarantees:
 
+- **No password over plain `http:` by accident.** `createCalDavClient` throws a `TypeError` for an
+  `http:` `serverUrl` before any request is sent, because HTTP Basic would send the password
+  unencrypted to anyone on the path. Pass `allowHttp: true` to accept it, and only when nobody else
+  can read that path, such as a container network or `localhost`. A redirect from `https:` to
+  `http:` counts as another origin and is never followed.
 - **Credentials stay on the server.** `Authorization` goes only to the configured origin. A URL
   argument or a server href on another host, port or scheme is refused with `OutsideServer` before
   any request. Redirects are followed by hand: on the same origin up to `maxRedirects` (default 5),
