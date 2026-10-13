@@ -26,10 +26,20 @@
  * just read;
  * anything else is another device's write, so nothing is deleted and the failure is `version`.
  *
- * A 401, or a 403 without a `DAV:error` condition, is not a refusal of the write: the session may
- * need signing in again, so the write stays queued (`unreachable`). A 403 that names a condition
- * (`need-privileges`, `supported-calendar-component`, `valid-calendar-data`) is the server's
- * refusal for good, so it is `rejected` and the writes queued behind it go on. A created entity's
+ * A 401 is not a refusal of the write: the session may need signing in again, so the write stays
+ * queued (`unreachable`). A 403 that names a condition (`need-privileges`,
+ * `supported-calendar-component`, `valid-calendar-data`) is the server's refusal for good, so it
+ * is `rejected` and the writes queued behind it go on.
+ *
+ * A 403 that names no condition can be either: Stalwart answers one, with no body, to a write into
+ * a calendar shared read-only, and a proxy whose session ended answers one too. So after such a
+ * 403 the transport asks the writer what this user may do at the address (`getPrivileges`: the
+ * calendar for a create, the object for an update or delete). The write is `rejected` only when
+ * the server answers with a list that holds no privilege to write (`all`, `write`,
+ * `write-content`, `bind`, `unbind`). A question that fails, a server that gives no list, a list
+ * that allows writing, or a writer without `getPrivileges` all leave the write queued. The
+ * question is asked once per write that met such a 403; a flush stops at the first write that
+ * stays queued, so that is at most once per flush. A created entity's
  * id must be a plain file name (see {@link isSafeEntityId}); an update or delete goes to the
  * address `urlOf` gives, whatever the id.
  *
@@ -188,6 +198,7 @@ export function classifyCalDavError(error: CalDavError): CalDavSendFailure {
     case CalDavErrorCode.Forbidden:
       // A 403 that names a condition is a refusal no retry changes (RFC 4791 answers a missing
       // privilege or unacceptable data this way); kept as `unreachable` it would block the queue.
+      // One that names nothing may come from a proxy; `send` asks the server before it gives up.
       return error.condition === undefined
         ? { kind: "unreachable" }
         : { kind: "rejected", message: error.message }
