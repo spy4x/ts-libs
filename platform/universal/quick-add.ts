@@ -6,6 +6,8 @@
  * A pure function: the clock and the time zone come in as arguments, and every date is worked out
  * by `@spy4x/time/tz`, never by hand.
  *
+ * @deprecated Import from `@spy4x/tasks/quick-add`. `@spy4x/platform/universal/quick-add`
+ * hands out the same names and stays until 2.0.
  * @module
  */
 

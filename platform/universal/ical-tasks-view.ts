@@ -5,6 +5,8 @@
  * only tasks that still need doing appear in the views. A repeating task is shown where its due
  * value says; the next occurrence is not computed here.
  *
+ * @deprecated Import from `@spy4x/tasks/view`. `@spy4x/platform/universal/ical-tasks-view`
+ * hands out the same names and stays until 2.0.
  * @module
  */
 

@@ -17,6 +17,7 @@
     "./platform",
     "./realtime",
     "./server",
+    "./tasks",
     "./time",
     "./validation"
   ],

@@ -46,18 +46,19 @@ Deno.serve(async (request) => {
 
 **server** means Deno on the back end, **browser** a front-end bundle, **shared** both.
 
-| Package                                                     | What it holds                                                              | Runs on                |
-| ----------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------- |
-| [`@spy4x/validation`](https://jsr.io/@spy4x/validation)     | arktype `validate` with one result shape, and form-validation state        | shared                 |
-| [`@spy4x/platform`](https://jsr.io/@spy4x/platform)         | helpers, command and event bus, cache, API result, tokens, rate limiting   | shared, split by entry |
-| [`@spy4x/server`](https://jsr.io/@spy4x/server)             | sign-in, accounts, Postgres, Redis, outbox, file storage, env encryption   | server                 |
-| [`@spy4x/net`](https://jsr.io/@spy4x/net)                   | SSRF guard, redirect-safe `fetch`, size-capped body readers, CIDR checks   | server                 |
-| [`@spy4x/integrations`](https://jsr.io/@spy4x/integrations) | ntfy and healthchecks.io clients, webhook signature check, retry backoff   | server                 |
-| [`@spy4x/time`](https://jsr.io/@spy4x/time)                 | IANA time-zone arithmetic on `Intl`, plain-date math, `.ics` writer        | shared                 |
-| [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker              | server                 |
-| [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync | both halves            |
-| [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter      | server                 |
-| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | WebDAV multistatus reader, escaped request bodies, href and origin rules   | shared                 |
+| Package                                                     | What it holds                                                                         | Runs on                |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------- |
+| [`@spy4x/validation`](https://jsr.io/@spy4x/validation)     | arktype `validate` with one result shape, and form-validation state                   | shared                 |
+| [`@spy4x/platform`](https://jsr.io/@spy4x/platform)         | helpers, command and event bus, cache, API result, tokens, rate limiting              | shared, split by entry |
+| [`@spy4x/server`](https://jsr.io/@spy4x/server)             | sign-in, accounts, Postgres, Redis, outbox, file storage, env encryption              | server                 |
+| [`@spy4x/net`](https://jsr.io/@spy4x/net)                   | SSRF guard, redirect-safe `fetch`, size-capped body readers, CIDR checks              | server                 |
+| [`@spy4x/integrations`](https://jsr.io/@spy4x/integrations) | ntfy and healthchecks.io clients, webhook signature check, retry backoff              | server                 |
+| [`@spy4x/time`](https://jsr.io/@spy4x/time)                 | IANA time-zone arithmetic on `Intl`, plain-date math, `.ics` writer                   | shared                 |
+| [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker                         | server                 |
+| [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync            | both halves            |
+| [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter                 | server                 |
+| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | WebDAV multistatus reader, escaped request bodies, href and origin rules              | shared                 |
+| [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks)               | the to-do model of the CalDAV task apps: task, list views, quick-add, reminder runner | shared                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
 
@@ -65,9 +66,10 @@ The example above validates a booking request, formats its time in Berlin and se
 by SMTP: three packages, no framework. `Deno.serve` hands in a standard `Request`, and each package
 returns a plain value you check.
 
-No Preact, no app shells, no single product's domain. Everything here is a technical primitive or
-adapter that is useful to more than one product, extracted from my own apps, with their bugs fixed
-on the way in.
+No Preact, no app shells, no single product's domain. The one domain model is the to-do model
+that my CalDAV task apps share: `@spy4x/tasks` is its import path, and its code sits in `platform`
+and `time` until 2.0. Everything else here is a technical primitive or adapter that is useful to
+more than one product, extracted from my own apps, with their bugs fixed on the way in.
 
 ## Why ts-libs
 
@@ -2131,6 +2133,10 @@ changed in between.
 Universal, server and browser helpers extracted from seven repositories into one cohesive package.
 No framework, no domain types, no validator.
 
+The to-do entry points that used to be listed here are published as
+[`@spy4x/tasks`](https://jsr.io/@spy4x/tasks); see "The to-do entry points are in `@spy4x/tasks`"
+below.
+
 ```bash
 deno add jsr:@spy4x/platform
 ```
@@ -2171,11 +2177,9 @@ browser- and server-only halves are the other two subpaths.
 | `universal/format-number`   | `round`, `formatDecimal`, `formatPct`, `formatBytes`                                                                                                                                                                                                                                                                                                                                                    |
 | `universal/honeypot`        | `HONEYPOT_FIELD_NAME`, `honeypotFilled` — the server half of a honeypot form field                                                                                                                                                                                                                                                                                                                      |
 | `universal/is-record`       | `isRecord` — type guard for a parsed JSON object (not `null`, not an array)                                                                                                                                                                                                                                                                                                                             |
-| `universal/ical-tasks-view` | `SortMode`, `sortTasks`, `reorderTask`, `buildTree`, `flattenTree`, `searchTasks`, `todayView`, `upcomingView`, `isOverdue` — list screens for the `Task` of `@spy4x/time/ical-tasks-model`                                                                                                                                                                                                             |
 | `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                                                                                                                                                                                                       |
 | `universal/metrics`         | `Counter`, `MetricLabels`, `createCounter`, `renderPrometheus` — a labelled counter and its Prometheus text exposition; no registry, no histograms                                                                                                                                                                                                                                                      |
 | `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney`, `MoneyOptions` — money as a smallest-unit integer, parsed and formatted without a float step; an optional `{ decimals }` gives the decimals of `USDT` (6) or `BTC` (8), which `Intl` rejects or gets wrong                                                                                                   |
-| `universal/quick-add`       | `parseQuickAdd` — one task line to title, tags, contexts, due date, priority and token spans                                                                                                                                                                                                                                                                                                            |
 | `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                                                                                                                                                                                          |
 | `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                                                                                                                                                                                                                                         |
 | `universal/seo`             | `canonicalUrl`, `normalizeCanonical`, `breadcrumbItems`, `breadcrumbListJsonLd`, `jsonLdText`, `Crumb`, `BreadcrumbListItem`, `BreadcrumbListJsonLd` — the canonical address and JSON-LD a server-rendered page publishes                                                                                                                                                                               |
@@ -2372,7 +2376,6 @@ lock file behind.
 | `server/interval-runner` | `startIntervalRunner`, `IntervalRunnerOptions` — runs a task every interval through a `TimerPort`; a failed tick is reported and never stops the next; ticks never overlap; returns a stop function |
 | `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                                                                                                                     |
 | `server/ports`           | the port interfaces, `systemClockPort`                                                                                                                                                              |
-| `server/reminder-runner` | `createReminderRunner`, `ReminderStatePort`, `ReminderRunnerState`, `ReminderNotifyResult` — sends the task reminders that came due since the last run                                              |
 | `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`                                                                                                          |
 | `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                                                                                                                             |
 | `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                                                                                                                                |
@@ -2380,18 +2383,7 @@ lock file behind.
 `writeText` and `atomicWriteJson` take an optional `mode` (such as `0o600`): the permission bits a
 file is created with, for one that holds keys. An existing file keeps its bits.
 
-`server/reminder-runner` ticks once a minute, reads the tasks again each time, and hands every
-reminder that came due since its last run to `notify`. It keeps its last run and what it sent in a
-state port, so a restart neither repeats nor skips one; after a long stop it catches up one hour at
-most. `notify` answers `"delivered"` (also by returning nothing), `"retry"` (also by throwing) or
-`"drop"` for a reminder that can never be sent, which is reported once and not tried again;
-`createReminderNotify` in `@spy4x/integrations/push-reminders` is a ready `notify` for Web Push. One
-tick has a deadline (`tickTimeoutMs`, two minutes by default): a `listTasks` or `notify` that never
-settles gets its abort signal fired, the tick is abandoned and reported, and the next one runs.
-`stop()` fires the same signal, so it does not wait for a call that hangs; it resolves once the tick
-has ended. A mistyped `zone` and a `catchUpMs` shorter than `intervalMs + tickTimeoutMs` are refused
-when the runner is built: with a shorter one, a tick that takes time would skip reminders.
-`browser/push-notifications` is the other end: in a service worker, `installPushNotifications(self)`
+`browser/push-notifications` is the receiving end of a Web Push: in a service worker, `installPushNotifications(self)`
 shows the pushed message and, on a click, focuses or opens the app at the message's URL, which must
 be of the worker's own origin. The worker ignores keys of a message it does not know, so a field
 added later does not silence a worker cached from an older build.
@@ -2724,6 +2716,24 @@ what makes it runnable under the root test task's permission grant. Two conseque
   the same fields.
 - `ThrottledJsonSaver.flush()` is the deterministic exit point. `markDirty()` may start a detached
   write, and `flush()` waits for it before deciding whether another write is needed.
+
+## The to-do entry points are in `@spy4x/tasks`
+
+A to-do app's list views, its quick-add syntax and its reminder runner are one product's domain,
+not a general helper, so they are published by [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks) and documented
+there. Import them from the new paths:
+
+| Old path, kept until 2.0                    | Import from                    |
+| ------------------------------------------- | ------------------------------ |
+| `@spy4x/platform/universal/ical-tasks-view` | `@spy4x/tasks/view`            |
+| `@spy4x/platform/universal/quick-add`       | `@spy4x/tasks/quick-add`       |
+| `@spy4x/platform/server/reminder-runner`    | `@spy4x/tasks/reminder-runner` |
+
+The old paths, and the same names on `@spy4x/platform` and `@spy4x/platform/server`, keep working
+until 2.0 and hand out the very same values. Their three files still sit in this directory until
+then: two of them use `universal/sort`, `universal/text`, `universal/time` and
+`server/throttled-saver`, and two packages that import each other cannot be published. Nothing
+else here knows about tasks.
 
 ## Out of scope
 
@@ -7340,6 +7350,121 @@ the symlink/non-regular refusal, `export KEY=` support, and rejecting unsupporte
 silently mangling it. See the PR that added this module for the full list of what was moved, what
 was rewritten, and every bug fixed over either source.
 
+# tasks/README.md
+
+# `@spy4x/tasks`
+
+The to-do model that the CalDAV task apps share: the task a screen shows, the list views, the
+quick-add syntax and the runner that sends reminders. A domain model, not a general helper, which
+is why it has a package of its own instead of a general name in `@spy4x/platform` or `@spy4x/time`.
+
+| Entry point                    | Exports                                                                                                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@spy4x/tasks/model`           | The `Task` a screen shows, read from a CalDAV resource: `parseTask`, `priorityBand`, `PriorityBand`, `TaskStatus`, `isOpen`, `dateInstant`, `dateDay`     |
+| `@spy4x/tasks/view`            | List screens for that `Task`: `SortMode`, `sortTasks`, `reorderTask`, `buildTree`, `flattenTree`, `searchTasks`, `todayView`, `upcomingView`, `isOverdue` |
+| `@spy4x/tasks/quick-add`       | `parseQuickAdd`: one task line to title, tags, contexts, due date, priority and token spans                                                               |
+| `@spy4x/tasks/reminder-runner` | `createReminderRunner`, `ReminderStatePort`, `ReminderRunnerState`, `ReminderNotifyResult`: sends the task reminders that came due since the last run     |
+
+Reading, patching and completing the iCalendar text of a task stays in `@spy4x/time`
+(`time/ical-tasks`, `time/ical-tasks-edit`, `time/ical-tasks-reminders`), and talking to the server
+in `@spy4x/caldav`.
+
+## Install
+
+```bash
+deno add jsr:@spy4x/tasks
+```
+
+Runs on: shared. `./model`, `./view` and `./quick-add` are pure functions for the server and a
+browser bundle. `./reminder-runner` belongs on a server; it touches no `Deno.*` API, and its clock
+and timer are parameters.
+
+```ts
+import { parseTask } from "@spy4x/tasks/model"
+import { SortMode, sortTasks, todayView } from "@spy4x/tasks/view"
+import { parseQuickAdd } from "@spy4x/tasks/quick-add"
+
+const zone = "Europe/Berlin"
+const tasks = resources.map(parseTask).flatMap((result) => result.success ? [result.output] : [])
+
+const byDue = sortTasks(tasks, SortMode.Due, zone)
+const { overdue, today } = todayView(tasks, new Date(), zone)
+
+const typed = parseQuickAdd("Call Anna @phone #work tomorrow 3pm !high", {
+  now: new Date(),
+  timeZone: zone,
+})
+typed.title // "Call Anna"
+```
+
+## The model
+
+`parseTask` reads one CalDAV resource (`href`, `etag`, `listHref` and the iCalendar text) into a
+`Task`. A resource with no VTODO, or with one that has no `UID`, is a failure with a message, never
+a throw: one odd resource must not take the whole list down. `priorityBand` turns the iCalendar
+`PRIORITY` (0 to 9) into the band a screen shows, `isOpen` says whether a task still needs doing,
+and `dateInstant` and `dateDay` turn a task's date into a moment or a `YYYY-MM-DD` day in the
+viewer's time zone.
+
+## The views
+
+Everything in `./view` is a pure function of the tasks, the current moment and the viewer's time
+zone; nothing reads the clock. Days are the viewer's, and only tasks that still need doing appear
+in the Today and Upcoming views. A repeating task is shown where its due value says; the next
+occurrence is not computed here.
+
+## Quick add
+
+`parseQuickAdd` takes the line a person types and the current moment and time zone. It returns the
+title without its tokens, the `#tags`, the `@contexts`, a due date, a priority, and the position of
+every recognised token, so a field can highlight them as the person types.
+
+## The reminder runner
+
+`createReminderRunner` ticks once a minute, reads the tasks again each time, and hands every
+reminder that came due since its last run to `notify`. It keeps its last run and what it sent in a
+state port, so a restart neither repeats nor skips one; after a long stop it catches up one hour at
+most. `notify` answers `"delivered"` (also by returning nothing), `"retry"` (also by throwing) or
+`"drop"` for a reminder that can never be sent, which is reported once and not tried again;
+`createReminderNotify` in `@spy4x/integrations/push-reminders` is a ready `notify` for Web Push. One
+tick has a deadline (`tickTimeoutMs`, two minutes by default): a `listTasks` or `notify` that never
+settles gets its abort signal fired, the tick is abandoned and reported, and the next one runs.
+`stop()` fires the same signal, so it does not wait for a call that hangs; it resolves once the tick
+has ended. A mistyped `zone` and a `catchUpMs` shorter than `intervalMs + tickTimeoutMs` are refused
+when the runner is built: with a shorter one, a tick that takes time would skip reminders.
+
+```ts
+import { createReminderRunner } from "@spy4x/tasks/reminder-runner"
+import { createReminderNotify } from "@spy4x/integrations/push-reminders"
+
+const runner = createReminderRunner({
+  listTasks: () => fetchTaskIcsTexts(),
+  notify: createReminderNotify({ sender, userId: "owner", url: "/" }),
+  state: store.state("reminders"),
+  zone: "Europe/Berlin",
+  onError: (error, step) => console.error(`reminders: ${step} failed`, error),
+})
+runner.start()
+```
+
+## The old import paths
+
+Before this package, the four entry points had general names. Those paths keep working until 2.0
+and hand out the very same values, so an app can move one import at a time:
+
+| Old path, kept until 2.0                    | Import from                    |
+| ------------------------------------------- | ------------------------------ |
+| `@spy4x/time/ical-tasks-model`              | `@spy4x/tasks/model`           |
+| `@spy4x/platform/universal/ical-tasks-view` | `@spy4x/tasks/view`            |
+| `@spy4x/platform/universal/quick-add`       | `@spy4x/tasks/quick-add`       |
+| `@spy4x/platform/server/reminder-runner`    | `@spy4x/tasks/reminder-runner` |
+
+Until 2.0 the code itself still sits in `platform/` and `time/`, and this package re-exports it.
+JSR refuses two packages that depend on each other, and each file is needed where it is: the views
+and the runner use `@spy4x/platform`'s sort, text search, clock and timer helpers, and the modules
+of `@spy4x/time` that write a task back import the model. At 2.0 the old paths go and the files
+move here.
+
 # time/README.md
 
 # `@spy4x/time`
@@ -7356,7 +7481,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/ics-core`             | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                                       |
 | `time/ical`                 | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                                      |
 | `time/ical-tasks`           | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`, `describeAlarmTrigger`                                                                                       |
-| `time/ical-tasks-model`     | The `Task` a screen shows, read from a CalDAV resource: `parseTask`, `priorityBand`, `isOpen`, `dateInstant`, `dateDay`                                                                                                                                   |
+| `time/ical-tasks-model`     | Import it as [`@spy4x/tasks/model`](https://jsr.io/@spy4x/tasks), which documents it. The code sits here until 2.0                                                                                                                                        |
 | `time/ical-tasks-edit`      | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `keepMineText`, `completeTask`, `reopenTask`                                                                                                                                   |
 | `time/ical-tasks-reminders` | Which reminders of a task fall in a time window: `dueReminders` (alarms relative to start or due, absolute ones, a Tasks.org snooze; nothing for a completed task)                                                                                        |
 | `time/rrule`                | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
