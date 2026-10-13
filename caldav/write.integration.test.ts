@@ -272,3 +272,127 @@ for (const server of SERVERS) {
     })
   })
 }
+
+/**
+ * A calendar shared read-only, on Stalwart 0.16: it answers a guest's write with a 403 that has no
+ * body and no header but `Date`, which is also what a proxy whose session ended may send. Radicale
+ * is left out: the test container lets every login write everywhere, so it never refuses.
+ */
+describe("caldav write transport against Stalwart, on a calendar shared read-only", () => {
+  it("makes a guest's refused write a rejected conflict, sends the write behind it, and keeps the owner's task", async () => {
+    const settings = stalwartSettings()
+    await waitForStalwart(settings)
+    await requireReachable(settings.address)
+    const users: Awaited<ReturnType<typeof createStalwartUser>>[] = []
+    const allowHttp = new URL(settings.baseUrl).protocol === "http:"
+    const clientOf = (user: { username: string; password: string }) =>
+      createCalDavClient({ serverUrl: settings.baseUrl, auth: user, allowHttp })
+    const homeOf = (username: string) =>
+      `${settings.baseUrl}/dav/cal/${encodeURIComponent(username)}/`
+    let cleanup: undefined | (() => Promise<unknown>)
+    try {
+      const owner = await createStalwartUser(settings, `itcaldavowner${uniqueSuffix()}`)
+      users.push(owner)
+      const guest = await createStalwartUser(settings, `itcaldavguest${uniqueSuffix()}`)
+      users.push(guest)
+      const asOwner = clientOf(owner)
+      const asGuest = clientOf(guest)
+      const calendarOf = async (client: CalDavClient, username: string) =>
+        output(
+          await client.makeCalendar(homeOf(username), {
+            displayName: `zz caldav share ${uniqueSuffix()}`,
+            components: ["VTODO"],
+          }),
+          "makeCalendar",
+        ).url
+      const shared = await calendarOf(asOwner, owner.username)
+      const own = await calendarOf(asGuest, guest.username)
+      cleanup = () => Promise.all([asOwner.deleteCalendar(shared), asGuest.deleteCalendar(own)])
+
+      // The owner lets the guest read the calendar, and nothing else.
+      const basic = btoa(
+        String.fromCharCode(...new TextEncoder().encode(`${owner.username}:${owner.password}`)),
+      )
+      const acl = await fetch(shared, {
+        method: "ACL",
+        headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/xml" },
+        body:
+          `<?xml version="1.0" encoding="utf-8"?><D:acl xmlns:D="DAV:"><D:ace><D:principal><D:href>/dav/pal/${
+            encodeURIComponent(guest.username)
+          }/</D:href></D:principal><D:grant><D:privilege><D:read/></D:privilege></D:grant></D:ace></D:acl>`,
+      })
+      await acl.body?.cancel()
+      assert(acl.ok, `sharing the calendar failed with ${acl.status}`)
+
+      const text = todo("shared-task", "the owner's task")
+      output(await asOwner.createObject(shared, text, { name: "shared-task.ics" }), "owner's task")
+      const taskUrl = objectUrl(shared, "shared-task")
+      const stored = output(await asGuest.getObject(taskUrl), "the guest's read")
+      assert(stored.etag, "the server gave no etag")
+
+      // What the transport has to tell apart: the refusal names nothing.
+      const refused = await asGuest.updateObject(taskUrl, renamed(text, "guest"), stored.etag)
+      assert(!refused.success, "the guest's write was accepted")
+      assertEquals(
+        [refused.error.code, refused.error.status, refused.error.condition],
+        [CalDavErrorCode.Forbidden, 403, undefined],
+      )
+      const held = output(await asGuest.getPrivileges!(taskUrl), "the guest's privileges")
+      assert(held !== null && held.includes("read"), JSON.stringify(held))
+      assert(!held.some((name) => ["all", "write", "write-content"].includes(name)), `${held}`)
+      const full = output(await asOwner.getPrivileges!(taskUrl), "the owner's privileges")
+      assert(full?.includes("write-content"), JSON.stringify(full))
+
+      // The guest's queue: an edit of the owner's task, a new task in the shared calendar,
+      // and behind them a new task in the guest's own calendar.
+      const known = new Map([["shared-task", stored.etag]])
+      const mineId = uuidV7()
+      const urlOf = (id: string) => objectUrl(id === mineId ? own : shared, id)
+      const transport = createCalDavWriteTransport<string, Task>({
+        writer: asGuest,
+        calendarUrl: (command) => command.entityId === mineId ? own : shared,
+        urlOf,
+        etagOf: (command) => known.get(command.entityId),
+        toIcs: (command) => command.payload,
+        toEntity: (object) => ({
+          version: 2,
+          url: object.url,
+          etag: object.etag,
+          ics: object.data,
+        }),
+      })
+      let online = false
+      const outbox = createOutbox<string, Task>({
+        store: createMemoryOutboxStore(),
+        ...transport,
+        lock: createPromiseLock(),
+        canSend: () => online,
+      })
+      await outbox.submit({
+        kind: "update",
+        entityId: "shared-task",
+        payload: renamed(text, "the guest's edit"),
+        version: 1,
+      })
+      const addedId = uuidV7()
+      await outbox.submit({ kind: "create", entityId: addedId, payload: todo(uuidV7(), "added") })
+      await outbox.submit({ kind: "create", entityId: mineId, payload: todo(uuidV7(), "mine") })
+      online = true
+      await outbox.flush()
+
+      assertEquals(
+        outbox.entries().map((entry) => [entry.entityId, entry.status, entry.conflict?.reason]),
+        [["shared-task", "conflict", "rejected"], [addedId, "conflict", "rejected"]],
+      )
+      output(await asGuest.getObject(urlOf(mineId)), "the write queued behind the refused ones")
+      const kept = output(await asOwner.getObject(taskUrl), "the owner's task")
+      assert(kept.data.includes("the owner's task"), kept.data)
+    } finally {
+      try {
+        await cleanup?.()
+      } finally {
+        for (const user of users) await deleteStalwartUser(settings, user)
+      }
+    }
+  })
+})
