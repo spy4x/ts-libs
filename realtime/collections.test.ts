@@ -983,6 +983,23 @@ describe(`a flush for the sync runner`, () => {
     expect(await layer.syncFlush()).toBe(`unreachable`)
   })
 
+  for (const code of [`rate_limited`] as const) {
+    it(`keeps a queued write pending when its send is answered ${code}`, async () => {
+      const { server, tags, layer } = setup()
+      server.state.offline = true
+      await tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `Tag` } })
+      server.state.offline = false
+      server.state.refuse = () => new RealtimeRequestError(code, `not now`)
+
+      expect(await layer.syncFlush()).toBe(`unreachable`)
+      expect(tags.outbox.entries().map((entry) => entry.status)).toEqual([`pending`])
+
+      server.state.refuse = undefined
+      expect(await layer.syncFlush()).toBeUndefined()
+      expect(tags.outbox.entries()).toEqual([])
+    })
+  }
+
   it(`answers unreachable for a free entry even while another is held back`, async () => {
     const { server, tags, notes, layer } = setup()
     server.state.tags.set(`t1`, { id: `t1`, version: 5, name: `Theirs` })
@@ -1108,6 +1125,12 @@ describe(`classifyByCode`, () => {
     expect(read(new ConnectionLostError(`lost`))).toEqual({ kind: `unreachable` })
     expect(read(new RealtimeRequestError(`timeout`, `late`))).toEqual({ kind: `unreachable` })
     expect(read(new TypeError(`fetch failed`))).toEqual({ kind: `unreachable` })
+  })
+
+  it(`reads a rate limit as unreachable`, () => {
+    expect(classifyByCode({})(new RealtimeRequestError(`rate_limited`, `slow down`))).toEqual({
+      kind: `unreachable`,
+    })
   })
 
   it(`keeps a write answered unauthorized pending by default`, () => {

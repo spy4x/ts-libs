@@ -3626,7 +3626,9 @@ that asked. The bound counts from the first call that waits, not from the port's
 
 `sendCommand` makes one key per command and sends every try with it. Tries: `attempts` (default 4);
 the wait before repeat `n` is `delayMs * 2 ** (n - 1)` (default 1 s), capped at `maxDelayMs` and
-jittered by `backoffDelay`. `unauthorized` is never retried.
+jittered by `backoffDelay`. Tried again: a lost connection, an answer that did not arrive in time,
+and the server's `timeout`, `rate_limited` (it refused the call before running it) and `conflict`
+with `details.code` `IN_PROGRESS`. Every other answer is final; `unauthorized` is never retried.
 
 ## Fixed at port time
 
