@@ -3641,7 +3641,9 @@ that asked. The bound counts from the first call that waits, not from the port's
 
 `sendCommand` makes one key per command and sends every try with it. Tries: `attempts` (default 4);
 the wait before repeat `n` is `delayMs * 2 ** (n - 1)` (default 1 s), capped at `maxDelayMs` and
-jittered by `backoffDelay`. `unauthorized` is never retried.
+jittered by `backoffDelay`. Tried again: a lost connection, an answer that did not arrive in time,
+and the server's `timeout`, `rate_limited` (it refused the call before running it) and `conflict`
+with `details.code` `IN_PROGRESS`. Every other answer is final; `unauthorized` is never retried.
 
 ## Fixed at port time
 
@@ -3856,6 +3858,9 @@ it as `rejected`, a conflict the person could only discard. The session ended, b
 else or owes a second factor, so the server never judged the write: it now stays queued
 (`unreachable`) until its owner signs in. Pass `classifyByCode({ unauthorized: "rejected" })` to
 keep the old reading.
+
+A write answered `rate_limited` or `internal` stays pending as well. The server was busy, or failed
+in a way that says nothing about the write, so the sync runner sends it again with backoff.
 
 ## Read cache (`@spy4x/realtime/read-cache`)
 
@@ -6600,10 +6605,12 @@ const store = new MemoryLockoutStore({ quietResetMs: 7 * 24 * 60 * 60_000, maxEn
 A full store first drops what a sweep would drop. If nothing can go, a new subject is refused:
 `begin` rejects, and no counter is created. A counter with a running lock, or with a failure inside
 the quiet period, is never evicted to make room, so filling the store clears nobody's lock or
-count. The cost is that checks for new subjects fail until a held counter goes quiet, up to
-`quietResetMs` later. There is no timer: sweeps run inside `update`, at most once per `quietResetMs`
-or every 512 calls. Neither option works with `createMissing: false`, where a dropped subject would
-stop being counted.
+count. The cost is that checks for new subjects fail for as long as the held counters keep being
+written, and for up to `quietResetMs` after the last write. One request per held subject per quiet
+period keeps the store full, and an ordinary successful check holds its slot for `quietResetMs`
+too, so size the cap well above the subjects you expect in one quiet period. There is no timer:
+sweeps run inside `update`, at most once per `quietResetMs` or every 512 calls. Neither option works
+with `createMissing: false`, where a dropped subject would stop being counted.
 
 **Fixes applied at extraction time.**
 
