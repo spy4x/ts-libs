@@ -893,3 +893,56 @@ describe("limits", () => {
     assertEquals(failure(await client.getObject(TASK)).code, CalDavErrorCode.Network)
   })
 })
+
+describe("getPrivileges", () => {
+  const set = (inner: string, href = "/dav/cal/user%40example.com/1.0%20%2F%20Inbox/") =>
+    multistatus(
+      `<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>${href}</D:href>${inner}</D:response></D:multistatus>`,
+    )
+  const OK = "<D:status>HTTP/1.1 200 OK</D:status>"
+
+  it("returns the names of the DAV privileges the server lists for this user, from one PROPFIND of depth 0", async () => {
+    // What Stalwart 0.16 answers the user a calendar is shared with for reading.
+    const { client, seen } = setup(() =>
+      set(
+        `<D:propstat><D:prop><D:current-user-privilege-set><D:privilege><D:read/></D:privilege><D:privilege><D:read-current-user-privilege-set/></D:privilege><D:privilege><X:other xmlns:X="urn:x"/></D:privilege></D:current-user-privilege-set></D:prop>${OK}</D:propstat>`,
+      )
+    )
+    assertEquals(output(await client.getPrivileges!(INBOX)), [
+      "read",
+      "read-current-user-privilege-set",
+    ])
+    assertEquals(
+      seen.map((request) => [request.method, request.url, request.headers.get("Depth")]),
+      [
+        ["PROPFIND", INBOX, "0"],
+      ],
+    )
+    assertMatch(seen[0].body ?? "", /current-user-privilege-set/)
+  })
+
+  it("returns an empty list when the server lists no privilege", async () => {
+    const { client } = setup(() =>
+      set(`<D:propstat><D:prop><D:current-user-privilege-set/></D:prop>${OK}</D:propstat>`)
+    )
+    assertEquals(output(await client.getPrivileges!(INBOX)), [])
+  })
+
+  it("returns null when the server does not give the property, or answers for another address", async () => {
+    const missing =
+      "<D:propstat><D:prop><D:current-user-privilege-set/></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat>"
+    const listed =
+      `<D:propstat><D:prop><D:current-user-privilege-set><D:privilege><D:read/></D:privilege></D:current-user-privilege-set></D:prop>${OK}</D:propstat>`
+    for (const answer of [set(missing), set(listed, "/dav/cal/other/")]) {
+      const { client } = setup(() => answer)
+      assertEquals(output(await client.getPrivileges!(INBOX)), null)
+    }
+  })
+
+  it("fails when the answer is not a multistatus, as from a proxy that answers 403 or shows a sign-in page", async () => {
+    for (const status of [403, 200]) {
+      const { client } = setup(() => new Response("<html>Sign in</html>", { status }))
+      assert(!(await client.getPrivileges!(INBOX)).success)
+    }
+  })
+})
