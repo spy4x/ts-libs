@@ -269,6 +269,14 @@ export interface CalDavClient {
   ): Promise<CalDavResult<null>>
   /** Delete a calendar and everything in it. Refuses anything that is not a calendar collection. */
   deleteCalendar(url: string | URL): Promise<CalDavResult<null>>
+  /**
+   * What the signed-in user may do with a calendar or an object: the names of the `DAV:`
+   * privileges in its `current-user-privilege-set` (RFC 3744), such as `read`, `write`,
+   * `write-content`, `bind` and `unbind`. `null` when the server does not give the property. One
+   * `PROPFIND` of depth 0. The client {@link createCalDavClient} returns always has it; it is
+   * optional so that a hand-written stand-in for the client stays valid.
+   */
+  getPrivileges?(url: string | URL): Promise<CalDavResult<string[] | null>>
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -279,6 +287,7 @@ const XML_TYPE = "application/xml; charset=utf-8"
 
 const PRINCIPAL_PROPS: XmlName[] = [{ namespace: DAV_NS, name: "current-user-principal" }]
 const HOME_PROPS: XmlName[] = [{ namespace: CALDAV_NS, name: "calendar-home-set" }]
+const PRIVILEGE_PROPS: XmlName[] = [{ namespace: DAV_NS, name: "current-user-privilege-set" }]
 const RESOURCE_TYPE_PROPS: XmlName[] = [{ namespace: DAV_NS, name: "resourcetype" }]
 const CALENDAR_PROPS: XmlName[] = [
   { namespace: DAV_NS, name: "resourcetype" },
@@ -875,6 +884,22 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
         }
         expectStatus(await send(call, { method: "DELETE", url: target }), [200, 204])
         return null
+      }),
+
+    getPrivileges: (url) =>
+      run(async (call) => {
+        const target = own(url, "url")
+        const { responses } = await propfind(call, target, "0", PRIVILEGE_PROPS)
+        const self = responses.find((response) =>
+          sameResource(ownHref(response.href, target), target)
+        )
+        const set = self && getProp(self, DAV_NS, "current-user-privilege-set")
+        if (set === undefined) return null
+        return childElements(set, DAV_NS, "privilege").flatMap((privilege) =>
+          privilege.children.flatMap((child) =>
+            typeof child !== "string" && child.namespace === DAV_NS ? [child.name] : []
+          )
+        )
       }),
   }
 }

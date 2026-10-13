@@ -48,6 +48,15 @@ function fakeServer() {
     omitEtag: false,
     dropAnswerOnce: false, // applies the PUT, then loses the answer
     refused: new Set<string>(), // paths whose writes answer 403 with a DAV:error condition
+    afterGet: undefined as undefined | (() => void), // runs once a GET has been answered
+    // Paths this user may read but not change, as on a calendar shared read-only: a write to one,
+    // or into one, answers what Stalwart 0.16 answers, a 403 with no body.
+    readOnly: new Set<string>(),
+    // What a question about privileges answers, for every path: a list of names, or `null` for a
+    // server that does not give the property. Unset, the answer follows `readOnly`.
+    privileges: undefined as undefined | null | string[],
+    // The session at a proxy in front of the server ended: it answers every request itself.
+    signedOut: false,
   }
   let counter = 0
   const fakeFetch: typeof fetch = (input, init) => {
@@ -62,17 +71,46 @@ function fakeServer() {
     })
     if (state.down) return Promise.reject(new TypeError("offline"))
     if (state.status) return Promise.resolve(new Response("no", { status: state.status }))
+    if (state.signedOut) {
+      return Promise.resolve(
+        new Response("<html>Sign in</html>", {
+          status: 403,
+          headers: { "Content-Type": "text/html" },
+        }),
+      )
+    }
     const path = url.pathname
+    const locked = state.readOnly.has(path) ||
+      state.readOnly.has(path.slice(0, path.lastIndexOf("/") + 1))
+    if (method === "PROPFIND") {
+      const held = state.privileges !== undefined
+        ? state.privileges
+        : locked
+        ? ["read", "read-current-user-privilege-set"]
+        : ["read", "write", "write-content", "bind", "unbind"]
+      const prop = held === null
+        ? "<D:propstat><D:prop><D:current-user-privilege-set/></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat>"
+        : `<D:propstat><D:prop><D:current-user-privilege-set>${
+          held.map((name) => `<D:privilege><D:${name}/></D:privilege>`).join("")
+        }</D:current-user-privilege-set></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>`
+      return Promise.resolve(
+        new Response(
+          `<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>${path}</D:href>${prop}</D:response></D:multistatus>`,
+          { status: 207, headers: { "Content-Type": "application/xml" } },
+        ),
+      )
+    }
+    if (method !== "GET" && locked) return Promise.resolve(new Response(null, { status: 403 }))
     if (method !== "GET" && state.refused.has(path)) {
       return Promise.resolve(new Response(REFUSAL, { status: 403 }))
     }
     const found = objects.get(path)
     if (method === "GET") {
-      return Promise.resolve(
-        found
-          ? new Response(found.ics, { headers: { ETag: `"${found.etag}"` } })
-          : new Response(null, { status: 404 }),
-      )
+      const answer = found
+        ? new Response(found.ics, { headers: { ETag: `"${found.etag}"` } })
+        : new Response(null, { status: 404 })
+      state.afterGet?.()
+      return Promise.resolve(answer)
     }
     const ifMatch = headers.get("If-Match")
     const ifNoneMatch = headers.get("If-None-Match")
@@ -420,6 +458,152 @@ describe("delete", () => {
   })
 })
 
+describe("delete of a task whose create the server never confirmed", () => {
+  const PATH = new URL(`${CALENDAR}e1.ics`).pathname
+
+  /** A transport whose create of `e1` was sent as "milk"; `arrived` says whether it got there. */
+  async function lostCreate(arrived: boolean) {
+    const t = setup()
+    if (arrived) t.state.dropAnswerOnce = true
+    else t.state.status = 503
+    expect(await t.failureOf(t.send("create", "e1", "milk", 0))).toEqual({ kind: "unreachable" })
+    t.state.status = 0
+    t.seen.length = 0
+    const remove = (ownCreates: string[] = ["milk"]) =>
+      t.transport.send(
+        { kind: "delete", entityId: "e1", payload: "milk", baseVersion: 1, ownCreates },
+        "key",
+      )
+    return { ...t, remove }
+  }
+
+  it("deletes with the known etag, without a read, when the app has one", async () => {
+    const { send, transport, seen, objects } = setup()
+    await send("create", "e1", "milk", 0)
+    seen.length = 0
+    await transport.send(
+      { kind: "delete", entityId: "e1", payload: "milk", baseVersion: 1, ownCreates: ["milk"] },
+      "key",
+    )
+    expect(seen.map((s) => [s.method, s.headers.get("If-Match")])).toEqual([["DELETE", `"1"`]])
+    expect(objects.size).toBe(0)
+  })
+
+  it("deletes the object with the etag just read when it is the text this device sent", async () => {
+    const { remove, seen, objects } = await lostCreate(true)
+    expect(await remove()).toBeUndefined()
+    expect(seen.map((s) => s.method)).toEqual(["GET", "DELETE"])
+    expect(seen[1].headers.get("If-Match")).toBe(`"1"`)
+    expect(objects.size).toBe(0)
+  })
+
+  it("is done, sending nothing that changes the server, when the create never arrived", async () => {
+    const { remove, seen, objects } = await lostCreate(false)
+    expect(await remove()).toBeUndefined()
+    expect(seen.map((s) => s.method)).toEqual(["GET"])
+    expect(objects.size).toBe(0)
+  })
+
+  it("reports a version conflict and deletes nothing when another device edited the task", async () => {
+    const { remove, seen, objects, failureOf } = await lostCreate(true)
+    objects.set(PATH, { ics: ics("rival", "e1"), etag: 2 })
+    expect(await failureOf(remove())).toEqual({ kind: "version" })
+    expect(seen.map((s) => s.method)).toEqual(["GET"])
+    expect(objects.get(PATH)?.ics).toContain("rival")
+  })
+
+  it("reports a version conflict and deletes nothing when a different task sits at the address", async () => {
+    const { remove, seen, objects, failureOf } = await lostCreate(false)
+    objects.set(PATH, { ics: ics("milk", "someone-else"), etag: 2 })
+    expect(await failureOf(remove())).toEqual({ kind: "version" })
+    expect(seen.map((s) => s.method)).toEqual(["GET"])
+    expect(objects.size).toBe(1)
+  })
+
+  it("deletes the object when it is any one of the texts the create was sent with", async () => {
+    const { remove, objects } = await lostCreate(false)
+    objects.set(PATH, { ics: ics("oat milk", "e1"), etag: 3 })
+    expect(await remove(["milk", "oat milk"])).toBeUndefined()
+    expect(objects.size).toBe(0)
+  })
+
+  it("deletes the object when the server stored the sent lines in another order", async () => {
+    const { remove, objects } = await lostCreate(true)
+    objects.get(PATH)!.ics =
+      "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nSUMMARY:milk\r\nUID:e1\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+    expect(await remove()).toBeUndefined()
+    expect(objects.size).toBe(0)
+  })
+
+  it("goes by the server's text as it is now: changed onwards is a conflict, changed back is deleted with the new etag", async () => {
+    const { remove, seen, objects, failureOf } = await lostCreate(true)
+    // Another device changed the task since: the older text this device sent no longer counts.
+    objects.set(PATH, { ics: ics("rival", "e1"), etag: 4 })
+    expect(await failureOf(remove(["milk", "oat milk"]))).toEqual({ kind: "version" })
+    expect(objects.size).toBe(1)
+    // It changed the task back: the copy is the sent text again, under an etag of its own.
+    objects.set(PATH, { ics: ics("milk", "e1"), etag: 5 })
+    expect(await remove(["milk", "oat milk"])).toBeUndefined()
+    expect(seen[seen.length - 1].headers.get("If-Match")).toBe(`"5"`)
+    expect(objects.size).toBe(0)
+  })
+
+  it("reports a version conflict and deletes nothing when the task changes between the read and the delete", async () => {
+    const { remove, seen, objects, state, failureOf } = await lostCreate(true)
+    state.afterGet = () => {
+      state.afterGet = undefined
+      objects.set(PATH, { ics: ics("rival", "e1"), etag: 6 })
+    }
+    expect(await failureOf(remove())).toEqual({ kind: "version" })
+    expect(seen.map((s) => s.method)).toEqual(["GET", "DELETE"])
+    expect(seen[1].headers.get("If-Match")).toBe(`"1"`)
+    expect(objects.get(PATH)?.ics).toContain("rival")
+  })
+
+  it("stays queued when the server cannot be read", async () => {
+    const { remove, objects, state, failureOf } = await lostCreate(true)
+    state.down = true
+    expect(await failureOf(remove())).toEqual({ kind: "unreachable" })
+    expect(objects.size).toBe(1)
+  })
+
+  it("reports a version conflict and sends no delete when the read gives no etag", async () => {
+    const calls: string[] = []
+    const never = () => Promise.reject(new Error("not expected"))
+    const transport = createCalDavWriteTransport<string, Task>({
+      writer: {
+        createObject: never,
+        updateObject: never,
+        deleteObject: () => {
+          calls.push("delete")
+          return never()
+        },
+        getObject: (url) => {
+          calls.push("get")
+          const object: CalDavObject = { url: String(url), etag: null, data: ics("milk", "e1") }
+          return Promise.resolve({ success: true, output: object, error: null })
+        },
+      },
+      calendarUrl: () => CALENDAR,
+      urlOf: (id) => objectUrl(CALENDAR, id),
+      etagOf: () => undefined,
+      toIcs: (command) => ics(command.payload, command.entityId),
+      toEntity: (object) => ({ version: 1, url: object.url, etag: object.etag, ics: object.data }),
+    })
+    let failure: CalDavSendFailure | undefined
+    try {
+      await transport.send(
+        { kind: "delete", entityId: "e1", payload: "milk", baseVersion: 1, ownCreates: ["milk"] },
+        "key",
+      )
+    } catch (error) {
+      failure = transport.classify(error)
+    }
+    expect(failure).toEqual({ kind: "version" })
+    expect(calls).toEqual(["get"])
+  })
+})
+
 describe("answers", () => {
   const statuses: [number, SendFailure["kind"]][] = [
     [500, "unreachable"],
@@ -490,6 +674,119 @@ describe("answers", () => {
   })
 })
 
+describe("a 403 that names no condition", () => {
+  const TASK_PATH = new URL(`${CALENDAR}e1.ics`).pathname
+  const CALENDAR_PATH = new URL(CALENDAR).pathname
+  const asked = (seen: Seen[]) => seen.filter((request) => request.method === "PROPFIND")
+
+  it("rejects a create for good when the server says this user may only read the calendar", async () => {
+    const { send, failureOf, state, seen } = setup()
+    state.readOnly.add(CALENDAR_PATH)
+    expect(await failureOf(send("create", "e1"))).toEqual({
+      kind: "rejected",
+      message: "This account may read this calendar but not change it.",
+    })
+    expect(asked(seen).map((request) => [request.url, request.headers.get("Depth")])).toEqual([
+      [CALENDAR, "0"],
+    ])
+  })
+
+  for (const kind of ["update", "delete"] as const) {
+    it(`rejects ${kind === "update" ? "an update" : "a delete"} for good when the server says this user may only read the task`, async () => {
+      const { send, failureOf, state, seen } = setup()
+      await send("create", "e1")
+      state.readOnly.add(TASK_PATH)
+      expect((await failureOf(send(kind, "e1", "oat milk"))).kind).toBe("rejected")
+      expect(asked(seen).map((request) => request.url)).toEqual([`${CALENDAR}e1.ics`])
+    })
+  }
+
+  for (const privilege of ["all", "write", "write-content", "bind", "unbind"]) {
+    it(`keeps the write queued when the server says this user holds "${privilege}"`, async () => {
+      const { send, failureOf, state } = setup()
+      state.readOnly.add(CALENDAR_PATH)
+      state.privileges = ["read", privilege]
+      expect((await failureOf(send("create", "e1"))).kind).toBe("unreachable")
+    })
+  }
+
+  it("keeps the write queued when the server does not say what this user may do", async () => {
+    const { send, failureOf, state } = setup()
+    state.readOnly.add(CALENDAR_PATH)
+    state.privileges = null
+    expect((await failureOf(send("create", "e1"))).kind).toBe("unreachable")
+  })
+
+  it("keeps the write queued when a proxy whose session ended answers the question with a 403 too", async () => {
+    const { send, failureOf, state, seen } = setup()
+    state.signedOut = true
+    expect((await failureOf(send("create", "e1"))).kind).toBe("unreachable")
+    expect(asked(seen).length).toBe(1)
+  })
+
+  it("keeps the write queued when the question cannot be asked", async () => {
+    const forbidden = {
+      success: false as const,
+      output: null,
+      error: { code: CalDavErrorCode.Forbidden, message: "no", status: 403 },
+    }
+    const offline = {
+      success: false as const,
+      output: null,
+      error: { code: CalDavErrorCode.Network, message: "offline" },
+    }
+    for (
+      const getPrivileges of [undefined, () => Promise.resolve(offline)] satisfies Array<
+        CalDavWriter["getPrivileges"]
+      >
+    ) {
+      const { transport } = scriptedWriter({
+        createObject: () => Promise.resolve(forbidden),
+        getPrivileges,
+      })
+      const failed = await transport.send(
+        { kind: "create", entityId: "e1", payload: "t", baseVersion: 0 },
+        "key",
+      ).catch((error) => transport.classify(error))
+      expect(failed).toEqual({ kind: "unreachable" })
+    }
+  })
+
+  it("asks the same question when a relay reports the 403 as a plain server error", async () => {
+    const urls: string[] = []
+    const { transport } = scriptedWriter({
+      createObject: () =>
+        Promise.resolve({
+          success: false as const,
+          output: null,
+          error: { code: CalDavErrorCode.Server, message: "upstream", status: 403 },
+        }),
+      getPrivileges: (url) => {
+        urls.push(String(url))
+        return Promise.resolve({ success: true as const, output: ["read"], error: null })
+      },
+    })
+    const failed = await transport.send(
+      { kind: "create", entityId: "e1", payload: "t", baseVersion: 0 },
+      "key",
+    ).catch((error) => transport.classify(error))
+    expect((failed as CalDavSendFailure).kind).toBe("rejected")
+    expect(urls).toEqual([CALENDAR])
+  })
+
+  it("does not ask after a 403 that names a condition, a 401 or a 507", async () => {
+    const { send, failureOf, state, seen } = setup()
+    state.refused.add(TASK_PATH)
+    expect((await failureOf(send("create", "e1"))).kind).toBe("rejected")
+    state.refused.clear()
+    for (const status of [401, 507]) {
+      state.status = status
+      expect((await failureOf(send("create", "e1"))).kind).toBe("unreachable")
+    }
+    expect(asked(seen)).toEqual([])
+  })
+})
+
 describe("fetchServer", () => {
   it("returns the server's object, or null when it is gone", async () => {
     const { transport, send, objects } = setup()
@@ -530,6 +827,53 @@ describe("with the outbox", () => {
     state.down = false
     await outbox.flush()
     expect(objects.size).toBe(1)
+  })
+
+  it("deletes a task whose create's answer was lost, with no conflict, once the connection is back", async () => {
+    const { outbox, state, objects } = queue()
+    state.dropAnswerOnce = true
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    expect(objects.size).toBe(1)
+    state.down = true
+    await outbox.submit({ kind: "delete", entityId: "e1", payload: "milk", version: 0 })
+    expect(outbox.entries().map((entry) => entry.kind)).toEqual(["delete"])
+    state.down = false
+    await outbox.flush()
+    expect(objects.size).toBe(0)
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("empties the queue, changing nothing on the server, for a deleted task whose create never arrived", async () => {
+    const { outbox, state, objects, seen } = queue()
+    state.status = 503
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    state.status = 0
+    state.down = true
+    await outbox.submit({ kind: "delete", entityId: "e1", payload: "milk", version: 0 })
+    expect(outbox.entries().map((entry) => entry.kind)).toEqual(["delete"])
+    state.down = false
+    seen.length = 0
+    await outbox.flush()
+    expect(seen.map((s) => s.method)).toEqual(["GET"])
+    expect(objects.size).toBe(0)
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("shows a deleted task that another device edited after the lost create as a conflict, and deletes nothing", async () => {
+    const { outbox, state, objects } = queue()
+    state.dropAnswerOnce = true
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    const path = new URL(`${CALENDAR}e1.ics`).pathname
+    objects.set(path, { ics: ics("rival", "e1"), etag: 9 })
+    await outbox.submit({ kind: "delete", entityId: "e1", payload: "milk", version: 0 })
+    const [entry] = outbox.entries()
+    expect([entry.kind, entry.status, entry.conflict?.reason]).toEqual([
+      "delete",
+      "conflict",
+      "version",
+    ])
+    expect(entry.conflict?.server?.ics).toContain("rival")
+    expect(objects.get(path)?.ics).toContain("rival")
   })
 
   it("shows a task changed elsewhere as a conflict with the server's copy, and keepMine wins", async () => {
@@ -608,6 +952,46 @@ describe("with the outbox", () => {
       ["e1", "conflict", "rejected"],
     ])
     expect([...objects.keys()]).toEqual([new URL(`${CALENDAR}e2.ics`).pathname])
+  })
+
+  it("makes a write the server refuses with a bare 403 a rejected conflict and sends the writes queued behind it", async () => {
+    const { outbox, state, objects, seen } = queue()
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    const path = new URL(`${CALENDAR}e1.ics`).pathname
+    state.down = true
+    await outbox.submit({ kind: "update", entityId: "e1", payload: "oat milk", version: 1 })
+    await outbox.submit({ kind: "create", entityId: "e2", payload: "bread" })
+    state.down = false
+    state.readOnly.add(path)
+    await outbox.flush()
+    const entries = await outbox.entries()
+    expect(entries.map((entry) => [entry.entityId, entry.status, entry.conflict?.reason])).toEqual([
+      ["e1", "conflict", "rejected"],
+    ])
+    expect(objects.get(path)!.ics).toBe(ics("milk", "e1"))
+    expect(objects.has(new URL(`${CALENDAR}e2.ics`).pathname)).toBe(true)
+    // The refused write is out of the queue, so a later flush asks nothing more.
+    await outbox.flush()
+    expect(seen.filter((request) => request.method === "PROPFIND").length).toBe(1)
+  })
+
+  it("keeps every write queued, with no conflict, while a proxy whose session ended answers 403, and asks once per flush", async () => {
+    const { outbox, state, objects, seen } = queue()
+    state.down = true
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    await outbox.submit({ kind: "create", entityId: "e2", payload: "bread" })
+    state.down = false
+    state.signedOut = true
+    await outbox.flush()
+    expect((await outbox.entries()).map((entry) => [entry.entityId, entry.status])).toEqual([
+      ["e1", "pending"],
+      ["e2", "pending"],
+    ])
+    expect(seen.filter((request) => request.method === "PROPFIND").length).toBe(1)
+    state.signedOut = false
+    await outbox.flush()
+    expect(await outbox.entries()).toEqual([])
+    expect(objects.size).toBe(2)
   })
 
   for (const status of [401, 403]) {

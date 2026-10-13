@@ -19,10 +19,27 @@
  * is written and the failure is `version`: the queue fetches the server's copy and the person
  * chooses, with both texts kept.
  *
- * A 401, or a 403 without a `DAV:error` condition, is not a refusal of the write: the session may
- * need signing in again, so the write stays queued (`unreachable`). A 403 that names a condition
- * (`need-privileges`, `supported-calendar-component`, `valid-calendar-data`) is the server's
- * refusal for good, so it is `rejected` and the writes queued behind it go on. A created entity's
+ * Deleting an entity whose create was never confirmed has no etag to go by. The outbox names the
+ * texts that create was sent with (`ownCreates`), so the object is read first: gone means the
+ * create never arrived and the delete is done; the same content lines as one of those texts (so
+ * the same UID too) means the object is this device's own create, and it is deleted with the etag
+ * just read; anything else may be another device's write, or a copy the server stored with other
+ * lines, so nothing is deleted and the failure is `version`.
+ *
+ * A 401 is not a refusal of the write: the session may need signing in again, so the write stays
+ * queued (`unreachable`). A 403 that names a condition (`need-privileges`,
+ * `supported-calendar-component`, `valid-calendar-data`) is the server's refusal for good, so it
+ * is `rejected` and the writes queued behind it go on.
+ *
+ * A 403 that names no condition can be either: Stalwart answers one, with no body, to a write into
+ * a calendar shared read-only, and a proxy whose session ended answers one too. So after such a
+ * 403 the transport asks the writer what this user may do at the address (`getPrivileges`: the
+ * calendar for a create, the object for an update or delete). The write is `rejected` only when
+ * the server answers with a list that holds no privilege to write (`all`, `write`,
+ * `write-content`, `bind`, `unbind`). A question that fails, a server that gives no list, a list
+ * that allows writing, or a writer without `getPrivileges` all leave the write queued. The
+ * question is asked once per write that met such a 403; a flush stops at the first write that
+ * stays queued, so that is at most once per flush. A created entity's
  * id must be a plain file name (see {@link isSafeEntityId}); an update or delete goes to the
  * address `urlOf` gives, whatever the id.
  *
@@ -40,7 +57,7 @@ import { childUrl } from "./url.ts"
 /** The object calls a write transport needs. A {@link CalDavClient} satisfies it. */
 export type CalDavWriter = Pick<
   CalDavClient,
-  "createObject" | "updateObject" | "deleteObject" | "getObject"
+  "createObject" | "updateObject" | "deleteObject" | "getObject" | "getPrivileges"
 >
 
 /** What the queue sends for one entry. Same shape as the outbox's `OutboxCommand`. */
@@ -50,6 +67,14 @@ export interface CalDavWriteCommand<P> {
   payload: P
   /** The version the write is based on; `0` for a create. */
   baseVersion: number
+  /**
+   * Only on a delete of an entity that was created on this device and never confirmed by the
+   * server: the payloads that create was sent with, as far as the outbox remembers them (it
+   * forgets sends older than its last 20 steps). The outbox fills it. With it, a delete that has
+   * no etag can still finish when the server holds this device's own create; a text missing from
+   * it only leads to the conflict such a delete raised before.
+   */
+  ownCreates?: P[]
 }
 
 /**
@@ -90,6 +115,8 @@ export interface CalDavWriteOptions<P, S> {
    * The etag the write is based on, from the app's copy of the server's state at
    * `command.baseVersion`. Without one nothing is sent: the write is a `version` conflict, so the
    * queue fetches the server's copy and the person chooses, and nothing is overwritten unseen.
+   * The one exception is a delete that carries `ownCreates`: answer no etag for it, and the
+   * object is deleted when it is still this device's own create.
    */
   etagOf(command: CalDavWriteCommand<P>): string | null | undefined
   /** The iCalendar text of a create or an update. */
@@ -100,7 +127,10 @@ export interface CalDavWriteOptions<P, S> {
 
 /** The three outbox ports this module fills. */
 export interface CalDavWriteTransport<P, S> {
-  /** Sends one command. Throws {@link CalDavWriteError}. A delete of a missing object succeeds. */
+  /**
+   * Sends one command. Throws {@link CalDavWriteError}. A delete of a missing object succeeds,
+   * also when the object is missing because the create never reached the server.
+   */
   send(command: CalDavWriteCommand<P>, idempotencyKey: string): Promise<S | undefined>
   /** The server's object as it is now, or `null` when it is gone. Rejects when unreachable. */
   fetchServer(entityId: string): Promise<S | null>
@@ -168,6 +198,7 @@ export function classifyCalDavError(error: CalDavError): CalDavSendFailure {
     case CalDavErrorCode.Forbidden:
       // A 403 that names a condition is a refusal no retry changes (RFC 4791 answers a missing
       // privilege or unacceptable data this way); kept as `unreachable` it would block the queue.
+      // One that names nothing may come from a proxy; `send` asks the server before it gives up.
       return error.condition === undefined
         ? { kind: "unreachable" }
         : { kind: "rejected", message: error.message }
@@ -191,6 +222,16 @@ export function classifyCalDavError(error: CalDavError): CalDavSendFailure {
   }
 }
 
+/** The privileges of which one is needed to add, change or delete an object (RFC 3744 §3). */
+const WRITE_PRIVILEGES = new Set(["all", "write", "write-content", "bind", "unbind"])
+
+/** A 403 that names no `DAV:error` condition, as the client or a relay adapter reports it. */
+function isBareForbidden(error: CalDavError): boolean {
+  if (error.condition !== undefined) return false
+  return error.code === CalDavErrorCode.Forbidden ||
+    (error.code === CalDavErrorCode.Server && error.status === 403)
+}
+
 /** Builds the `send`, `fetchServer` and `classify` ports of an outbox over CalDAV. */
 export function createCalDavWriteTransport<P, S>(
   options: CalDavWriteOptions<P, S>,
@@ -211,6 +252,26 @@ export function createCalDavWriteTransport<P, S>(
       if (read.success) object = read.output
     }
     return options.toEntity(object, entityId)
+  }
+
+  /**
+   * The error for a write the server refused. A 403 without a condition does not say who refused:
+   * the server for good, or a proxy whose session ended. So the server is asked what this user may
+   * do at `url`. Only an answer that lists no write privilege makes the refusal final; a failed
+   * question, a server that does not say, or a user who may write leaves the write queued.
+   */
+  async function refused(error: CalDavError, url: string): Promise<CalDavWriteError> {
+    if (isBareForbidden(error) && writer.getPrivileges) {
+      const asked = await writer.getPrivileges(url)
+      const held = asked.success ? asked.output : null
+      if (held !== null && !held.some((privilege) => WRITE_PRIVILEGES.has(privilege))) {
+        return new CalDavWriteError({
+          kind: "rejected",
+          message: "This account may read this calendar but not change it.",
+        }, error)
+      }
+    }
+    return new CalDavWriteError(classifyCalDavError(error), error)
   }
 
   return {
@@ -277,10 +338,31 @@ export function createCalDavWriteTransport<P, S>(
             throw new CalDavWriteError(classifyCalDavError(existing.error), existing.error)
           }
         }
-        throw new CalDavWriteError(classifyCalDavError(created.error), created.error)
+        throw await refused(created.error, calendar)
       }
       const url = options.urlOf(command.entityId)
-      const etag = options.etagOf(command)
+      let etag = options.etagOf(command)
+      if (!etag && command.kind === "delete" && command.ownCreates?.length) {
+        // The create was never confirmed, so no etag is known; the server's copy says what to do.
+        const existing = await writer.getObject(url)
+        if (!existing.success) {
+          // The create never arrived: nothing to delete, and nothing was changed on the server.
+          if (existing.error.code === CalDavErrorCode.NotFound) return undefined
+          throw new CalDavWriteError(classifyCalDavError(existing.error), existing.error)
+        }
+        const theirs = existing.output
+        // The same content lines include the same UID line.
+        const own = command.ownCreates.some((payload) =>
+          sameLines(
+            options.toIcs({ ...command, kind: "create", payload, baseVersion: 0 }),
+            theirs.data,
+          )
+        )
+        // Only the copy just read counts, and it is deleted with its own etag: a change made
+        // between this read and the delete is refused by the server (`If-Match`). A copy that is
+        // not this device's create, or that came without an etag, falls through to the conflict.
+        if (own) etag = theirs.etag
+      }
       if (!etag) {
         // Nothing says which version of the object the person edited. Writing with an etag read
         // now would overwrite what another device changed since, so no request goes out: the
@@ -295,14 +377,14 @@ export function createCalDavWriteTransport<P, S>(
         const deleted = await writer.deleteObject(url, etag)
         // Already gone is the state the person asked for.
         if (!deleted.success && deleted.error.code !== CalDavErrorCode.NotFound) {
-          throw new CalDavWriteError(classifyCalDavError(deleted.error), deleted.error)
+          throw await refused(deleted.error, url)
         }
         return undefined
       }
       const ics = options.toIcs(command)
       const updated = await writer.updateObject(url, ics, etag)
       if (!updated.success) {
-        throw new CalDavWriteError(classifyCalDavError(updated.error), updated.error)
+        throw await refused(updated.error, url)
       }
       return await settled(updated.output.url, updated.output.etag, ics, command.entityId)
     },
