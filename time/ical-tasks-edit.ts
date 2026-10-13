@@ -166,6 +166,12 @@ export interface EditOutput {
 /**
  * Patches `task.ics` with `edit`. A refusal (a zoned date with no `VTIMEZONE`, a bad priority) is a
  * failure with a message and leaves the task as it was.
+ *
+ * An edit that would leave a repeat rule on a task with no due date is refused, because
+ * {@link completeTask} could never complete such a task: a new or changed `repeatRule` needs a due
+ * date, on the task or in the same edit, and `due: null` on a repeating task needs
+ * `repeatRule: null` in the same edit. A task that arrives with a rule and no due date (another app
+ * wrote it) can still be edited, as long as the edit does not write a rule.
  */
 export function editTask(task: Task, edit: TaskEdit, now: Date): EditResult {
   const parsed = parseIcal(task.ics)
@@ -179,15 +185,6 @@ export function editTask(task: Task, edit: TaskEdit, now: Date): EditResult {
     const written = formatRrule(rule.output)
     if (!written.success) return { success: false, output: null, error: written.error.message }
     patch.rrule = written.output
-    const start = edit.start === undefined ? task.start : edit.start
-    const due = edit.due === undefined ? task.due : edit.due
-    if (!start && !due) {
-      return {
-        success: false,
-        output: null,
-        error: `A task needs a start or due date to repeat from`,
-      }
-    }
   }
   // A VALARM the editor cannot write is set aside and put back as it was: one without a trigger
   // always (the task's reminders do not list it), an EMAIL one while a sent reminder stands for it.

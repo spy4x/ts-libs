@@ -123,7 +123,10 @@ const CLEARED: { name: string; mine: TaskEdit; read: (task: Task) => unknown }[]
 
 for (const field of CLEARED) {
   Deno.test(`the ${field.name} I removed is removed from the server's copy`, () => {
-    const base = edited(BASE, { repeatRule: `FREQ=WEEKLY;INTERVAL=1` })
+    // A repeating task keeps its due date, so the due date is removed from a task that does not repeat.
+    const base = field.name === `due date`
+      ? BASE
+      : edited(BASE, { repeatRule: `FREQ=WEEKLY;INTERVAL=1` })
     const theirs = server(edited(base, { title: `Theirs` }, ELSEWHERE))
     expect(field.read(theirs)).toBeDefined()
     const output = kept(base, edited(base, field.mine), theirs)
@@ -223,9 +226,10 @@ Deno.test(`a repeating task I completed twice moves a server copy completed once
 
 Deno.test(`refuses when the server's copy cannot take the completion I made`, () => {
   const base = fixtureTask(task(`2`, `Plain`, [`DTSTART;VALUE=DATE:20261009`]))
-  const theirs = server(
-    edited(base, { title: `Theirs`, repeatRule: `FREQ=WEEKLY;INTERVAL=1` }, ELSEWHERE),
-  )
+  // Another app made the server's copy repeat without a due date; editTask would refuse that.
+  const theirs = server(fixtureTask(
+    task(`2`, `Theirs`, [`DTSTART;VALUE=DATE:20261009`, `RRULE:FREQ=WEEKLY;INTERVAL=1`]),
+  ))
   expect(keepMineText(base.ics, completed(base).ics, theirs, LATER)).toEqual({
     success: false,
     output: null,

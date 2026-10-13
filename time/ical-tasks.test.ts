@@ -193,7 +193,10 @@ Deno.test("a task patch of the start, due, rrule or status raises SEQUENCE by on
     { status: TodoStatus.InProcess },
   ]
   for (const patch of patches) {
-    const root = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nEND:VTODO\r\n")
+    // The task has a due date, which a repeat rule needs.
+    const root = parse(
+      "BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nDUE:20261009T080000Z\r\nEND:VTODO\r\n",
+    )
     mustPatch(root, patch)
     assertEquals(getProperty(root, "SEQUENCE")!.value, "5", JSON.stringify(patch))
   }
@@ -663,7 +666,7 @@ Deno.test("an RRULE outside the RFC 5545 shape is refused", () => {
     )
     assertEquals(getProperty(root, "RRULE"), undefined)
   }
-  const root = parse("BEGIN:VTODO\r\nEND:VTODO\r\n")
+  const root = parse("BEGIN:VTODO\r\nDUE:20261009T080000Z\r\nEND:VTODO\r\n")
   for (const good of ["FREQ=WEEKLY;BYDAY=MO,WE;COUNT=3", "INTERVAL=2;FREQ=YEARLY", "freq=daily"]) {
     assert(patchTodo(root, { rrule: good }, { now: NOW }).success, good)
   }
@@ -1153,7 +1156,8 @@ Deno.test("a due date that differs only in TZID counts as a change", () => {
 })
 
 Deno.test("removing a present due raises SEQUENCE and removing an absent one does not", () => {
-  const present = savedTask()
+  // The saved task repeats, and a repeat rule needs its due date, so the rule is taken out first.
+  const present = parse(serializeIcal(savedTask()).replace("RRULE:FREQ=DAILY\r\n", ""))
   mustPatch(present, { due: null })
   assertEquals(lineOf(present, "SEQUENCE"), "SEQUENCE:5")
   const absent = parse("BEGIN:VTODO\r\nSEQUENCE:4\r\nSUMMARY:a\r\nEND:VTODO\r\n")
