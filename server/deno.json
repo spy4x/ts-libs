@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/server",
-  "version": "1.72.0",
+  "version": "1.73.0",
   "exports": {
     "./http/bounded-body": "./http/bounded-body.ts",
     "./http/cors": "./http/cors.ts",
