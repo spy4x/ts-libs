@@ -47,6 +47,7 @@ function fakeServer() {
     status: 0, // when set, every request answers with it
     omitEtag: false,
     dropAnswerOnce: false, // applies the PUT, then loses the answer
+    refused: new Set<string>(), // paths whose writes answer 403 with a DAV:error condition
   }
   let counter = 0
   const fakeFetch: typeof fetch = (input, init) => {
@@ -62,6 +63,9 @@ function fakeServer() {
     if (state.down) return Promise.reject(new TypeError("offline"))
     if (state.status) return Promise.resolve(new Response("no", { status: state.status }))
     const path = url.pathname
+    if (method !== "GET" && state.refused.has(path)) {
+      return Promise.resolve(new Response(REFUSAL, { status: 403 }))
+    }
     const found = objects.get(path)
     if (method === "GET") {
       return Promise.resolve(
@@ -97,6 +101,10 @@ function fakeServer() {
   })
   return { client, objects, seen, state }
 }
+
+/** What RFC 4791 answers a write the calendar will never take: a 403 that names the condition. */
+const REFUSAL =
+  '<?xml version="1.0" encoding="utf-8"?><D:error xmlns:D="DAV:"><C:supported-calendar-component xmlns:C="urn:ietf:params:xml:ns:caldav"/></D:error>'
 
 const ics = (title: string, uid = "a") =>
   `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:${uid}\r\nSUMMARY:${title}\r\nEND:VTODO\r\nEND:VCALENDAR\r\n`
@@ -154,25 +162,53 @@ describe("create", () => {
     expect(task?.etag).toBe(`"1"`)
   })
 
-  it("counts a repeated create as done when the object is the one it sent", async () => {
-    const { send, state, objects, failureOf } = setup()
+  it("counts a repeated create as done, without writing again, when the server holds the text it sent", async () => {
+    const { send, state, objects, seen, failureOf } = setup()
     state.dropAnswerOnce = true
     expect(await failureOf(send("create", "e1", "milk", 0))).toEqual({ kind: "unreachable" })
     const task = await send("create", "e1", "milk", 0)
     expect(objects.size).toBe(1)
     expect(task?.etag).toBe(`"1"`)
+    expect(seen.map((s) => s.method)).toEqual(["PUT", "PUT", "GET"])
   })
 
-  it("counts a repeated create as done when the server stored the text with properties reordered", async () => {
-    const { send, state, objects, failureOf } = setup()
+  it("reports a version conflict and writes nothing when a repeated create carries an edit made since the first try", async () => {
+    const { send, state, objects, seen, failureOf } = setup()
+    state.dropAnswerOnce = true
+    // The server stored "milk", but the answer was lost; the retry carries the corrected title.
+    expect(await failureOf(send("create", "e1", "milk", 0))).toEqual({ kind: "unreachable" })
+    expect(await failureOf(send("create", "e1", "bread", 0))).toEqual({ kind: "version" })
+    expect(objects.get(new URL(`${CALENDAR}e1.ics`).pathname)).toEqual({
+      ics: ics("milk", "e1"),
+      etag: 1,
+    })
+    expect(seen.map((s) => s.method)).toEqual(["PUT", "PUT", "GET"])
+  })
+
+  it("reports a version conflict and keeps the server's copy when another device edited the task before the retry", async () => {
+    const { send, state, objects, seen, failureOf } = setup()
+    state.dropAnswerOnce = true
+    await failureOf(send("create", "e1", "milk", 0))
+    const path = new URL(`${CALENDAR}e1.ics`).pathname
+    const elsewhere = ics("milk", "e1").replace("SUMMARY:milk", "SUMMARY:milk\r\nSTATUS:COMPLETED")
+    objects.set(path, { ics: elsewhere, etag: 77 })
+    // No edit on this device: the retry carries the text it first sent.
+    expect(await failureOf(send("create", "e1", "milk", 0))).toEqual({ kind: "version" })
+    expect(objects.get(path)).toEqual({ ics: elsewhere, etag: 77 })
+    expect(seen.map((s) => s.method)).toEqual(["PUT", "PUT", "GET"])
+  })
+
+  it("counts a repeated create as done when the server stored the same lines in another order", async () => {
+    const { send, state, objects, seen, failureOf } = setup()
     state.dropAnswerOnce = true
     await failureOf(send("create", "e1", "milk", 0))
     const stored = objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!
-    stored.ics = stored.ics.replace("UID:e1\r\nSUMMARY:milk", "SUMMARY:milk\r\nUID;X-A=b:e1")
+    stored.ics = stored.ics.replace("UID:e1\r\nSUMMARY:milk", "SUMMARY:milk\r\nUID:e1")
     expect(stored.ics).not.toBe(ics("milk", "e1"))
     const task = await send("create", "e1", "milk", 0)
     expect(task?.etag).toBe(`"1"`)
-    expect(objects.size).toBe(1)
+    expect(task?.ics).toBe(stored.ics)
+    expect(seen.map((s) => s.method)).toEqual(["PUT", "PUT", "GET"])
   })
 
   it("counts a repeated create as done when the server folded the UID line", async () => {
@@ -421,6 +457,26 @@ describe("answers", () => {
     expect(failure).toEqual({ kind: "rejected", message: "another object has this UID" })
   })
 
+  it("reads a 403 that names a DAV:error condition on an update as rejected", async () => {
+    const { send, state, failureOf } = setup()
+    await send("create", "e1", "milk", 0)
+    state.refused.add(new URL(`${CALENDAR}e1.ics`).pathname)
+    expect(await failureOf(send("update", "e1", "x"))).toEqual({
+      kind: "rejected",
+      message: "the server forbids this",
+    })
+  })
+
+  it("reads a 403 with a condition that a relay reports as a plain server error as rejected", () => {
+    const failure = classifyCalDavError({
+      code: CalDavErrorCode.Server,
+      message: "x",
+      status: 403,
+      condition: "need-privileges",
+    })
+    expect(failure).toEqual({ kind: "rejected", message: "x" })
+  })
+
   it("reads a 401 or 403 that a relay reports as a plain server error as unreachable", () => {
     for (const status of [401, 403]) {
       const failure = classifyCalDavError({ code: CalDavErrorCode.Server, message: "x", status })
@@ -514,6 +570,44 @@ describe("with the outbox", () => {
     expect(entry.conflict?.reason).toBe("version")
     expect(entry.conflict?.server?.ics).toContain("edited on the phone")
     expect(objects.get(path)!.ics).toContain("edited on the phone")
+  })
+
+  it("shows an edit made after a create's answer was lost as a conflict with the server's copy, and keepMine puts the edit on the server", async () => {
+    const { outbox, state, objects } = queue()
+    state.dropAnswerOnce = true
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    const path = new URL(`${CALENDAR}e1.ics`).pathname
+    expect(objects.get(path)!.ics).toBe(ics("milk", "e1"))
+    state.down = true
+    await outbox.submit({ kind: "update", entityId: "e1", payload: "bread", version: 0 })
+    state.down = false
+    await outbox.flush()
+    const [entry] = await outbox.entries()
+    expect([entry.status, entry.conflict?.reason, entry.payload]).toEqual([
+      "conflict",
+      "version",
+      "bread",
+    ])
+    expect(entry.conflict?.server?.ics).toBe(ics("milk", "e1"))
+    expect(objects.get(path)!.ics).toBe(ics("milk", "e1"))
+    await outbox.keepMine(entry)
+    expect(objects.get(path)!.ics).toBe(ics("bread", "e1"))
+    expect(await outbox.entries()).toEqual([])
+  })
+
+  it("makes a write refused with a 403 condition a rejected conflict and sends the writes queued behind it", async () => {
+    const { outbox, state, objects } = queue()
+    state.down = true
+    await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
+    await outbox.submit({ kind: "create", entityId: "e2", payload: "bread" })
+    state.down = false
+    state.refused.add(new URL(`${CALENDAR}e1.ics`).pathname)
+    await outbox.flush()
+    const entries = await outbox.entries()
+    expect(entries.map((entry) => [entry.entityId, entry.status, entry.conflict?.reason])).toEqual([
+      ["e1", "conflict", "rejected"],
+    ])
+    expect([...objects.keys()]).toEqual([new URL(`${CALENDAR}e2.ics`).pathname])
   })
 
   for (const status of [401, 403]) {
