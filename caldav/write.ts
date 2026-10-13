@@ -21,8 +21,9 @@
  *
  * Deleting an entity whose create was never confirmed has no etag to go by. The outbox names the
  * texts that create was sent with (`ownCreates`), so the object is read first: gone means the
- * create never arrived and the delete is done; the same UID and content lines as one of those texts
- * means the object is this device's own create, and it is deleted with the etag just read;
+ * create never arrived and the delete is done; the same content lines as one of those texts (so
+ * the same UID too) means the object is this device's own create, and it is deleted with the etag
+ * just read;
  * anything else is another device's write, so nothing is deleted and the failure is `version`.
  *
  * A 401, or a 403 without a `DAV:error` condition, is not a refusal of the write: the session may
@@ -307,11 +308,13 @@ export function createCalDavWriteTransport<P, S>(
           throw new CalDavWriteError(classifyCalDavError(existing.error), existing.error)
         }
         const theirs = existing.output
-        const uid = uidOf(theirs.data)
-        const own = uid !== null && command.ownCreates.some((payload) => {
-          const sent = options.toIcs({ ...command, kind: "create", payload, baseVersion: 0 })
-          return uidOf(sent) === uid && sameLines(sent, theirs.data)
-        })
+        // The same content lines include the same UID line.
+        const own = command.ownCreates.some((payload) =>
+          sameLines(
+            options.toIcs({ ...command, kind: "create", payload, baseVersion: 0 }),
+            theirs.data,
+          )
+        )
         // Only the copy just read counts, and it is deleted with its own etag: a change made
         // between this read and the delete is refused by the server (`If-Match`). A copy that is
         // not this device's create, or that came without an etag, falls through to the conflict.
