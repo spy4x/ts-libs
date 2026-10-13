@@ -487,8 +487,8 @@ reads the object first:
 
 - The address answers "not found": the create never reached the server. The delete is done, and
   no request that changes the server is sent.
-- The object has the UID and the content lines of one of those texts, in any order: it is this
-  device's own create. It is deleted with the etag just read, so a change another device makes
+- The object has the content lines of one of those texts, in any order, and so its UID too: it is
+  this device's own create. It is deleted with the etag just read, so a change another device makes
   between the read and the delete is refused by the server and becomes `version`.
 - Anything else (another device edited the task, or another object sits at the address): nothing
   is deleted and the queue sees `version`, as for any delete without an etag.
