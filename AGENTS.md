@@ -156,9 +156,11 @@ gh pr create --fill --base main
 `docs/1.0-contract.md` (`deno task contract`), `llms.txt` and `llms-full.txt` (`deno task llms`) are
 generated. Never edit them by hand. Adding, renaming or re-documenting an export, changing an
 `exports` map or editing a README makes `deno task test` fail until you run the command and commit
-the result. `llms.txt` lists every export for agents in other repositories; `llms-full.txt` joins
-every README. Parallel PRs that touch an export conflict on the last line of `llms.txt`; resolve it by
-running `deno task llms` after the rebase.
+the result. `llms.txt` lists the exports for agents in other repositories, one line each: name,
+kind, import specifier and summary, separated by tabs. A type that only describes another export's
+parameters (`FooOptions` next to `Foo` or `createFoo`) has no line, and the lines that are not
+exports start with `#`. `llms-full.txt` joins every README. Parallel PRs that touch an export
+conflict on the last line of `llms.txt`; resolve it by running `deno task llms` after the rebase.
 
 ## Pre-commit checklist
 
