@@ -24,20 +24,40 @@
  * code sign-in or password reset lands in the same user. Without it, `verifyCode` for that address
  * creates a new user and evicts the unproven password key.
  *
- * `proveAddress` on the sign-in provider uses the sign-in code, which is bound to the address alone:
- * anyone can spend that code's guesses by guessing for the address. A signed-in user who proves an
- * address for their own account should use {@link createEmailProof} instead. Its codes are bound to
- * the user and the address, each pair keeps its own guess counter, and it needs no session manager.
+ * `proveAddress` on the sign-in provider uses the sign-in code that `requestCode` sends, which is
+ * bound to the address alone: anyone can spend that code's guesses by guessing for the address. A
+ * signed-in user who proves an address for their own account should use {@link createEmailProof}
+ * instead. Its codes are bound to the user and the address, each pair keeps its own guess counter,
+ * and it needs no session manager.
  *
- * **Rate-limit the route that calls `requestCode`.** This module limits guesses per code, not how
- * often a code is asked for, and every new code moves the expiry of a locked challenge. Put
- * `createRateLimitMiddleware` from `@spy4x/platform/rate-limit` in front of that route with two
- * limiters: one keyed by the normalised address (`normalizeEmail` of the submitted value), so one
- * mailbox cannot be flooded, and one keyed by `clientIp` from `@spy4x/platform/rate-limit`, so one
- * client cannot walk through many addresses. Rate-limit the route that calls `verifyCode` by
- * `clientIp` too. For {@link createEmailProof}, key the `requestCode` limiters by the user id and by
- * the normalised target address, so a signed-in user can neither flood one mailbox nor walk
- * through many.
+ * **Bind the sign-in code to the browser that asked for it.** A code from `requestCode` is bound to
+ * the address alone, so anyone who knows the address can send five wrong codes, lock its challenge,
+ * and keep it locked by asking for a new code before it expires: the owner cannot sign in with a
+ * code for as long as that goes on. To close this, the app does three things:
+ *
+ * 1. Its route that sends a code calls `requestBoundCode` instead of `requestCode`, and never
+ *    `requestCode`.
+ * 2. It keeps the returned value in the browser that asked, in a cookie that is `HttpOnly`, `Secure`
+ *    and `SameSite=Lax` and lives as long as the code. The value never goes into the mail.
+ * 3. Its route that checks a code reads that cookie and passes it as `binding` in the options of
+ *    `verifyCode`, always: an empty string when the cookie is missing, never `undefined`.
+ *
+ * Each `requestBoundCode` then opens a challenge of its own, with its own code and guess counter,
+ * which only a caller holding its binding can reach. A stranger's wrong codes count against the
+ * challenge the stranger opened, or against none, and the owner's own five wrong codes still lock
+ * the owner's challenge. An app that keeps calling `requestCode` keeps the behaviour above.
+ *
+ * **Rate-limit the route that asks for a code.** This module limits guesses per challenge, not how
+ * often a code is asked for. With `requestCode`, every new code moves the expiry of a locked
+ * challenge; with `requestBoundCode`, every call opens a new challenge with a full set of guesses
+ * and one more row in the store until it expires. Put `createRateLimitMiddleware` from
+ * `@spy4x/platform/rate-limit` in front of that route with two limiters: one keyed by the
+ * normalised address (`normalizeEmail` of the submitted value), so one mailbox cannot be flooded
+ * and the guesses at its codes stay few, and one keyed by `clientIp` from
+ * `@spy4x/platform/rate-limit`, so one client cannot walk through many addresses. Rate-limit the
+ * route that calls `verifyCode` by `clientIp` too. For {@link createEmailProof}, key the
+ * `requestCode` limiters by the user id and by the normalised target address, so a signed-in user
+ * can neither flood one mailbox nor walk through many.
  *
  * @module
  */
@@ -83,7 +103,8 @@ export type EmailCodeErrorReason =
   | "wrong-code"
   /** The code has used up its guesses. Nothing was compared. */
   | "locked-out"
-  /** No live code for this address: never asked for, already used, or expired. */
+  /** No live code for this address, or for this address and binding: never asked for, already
+   * used, or expired. */
   | "no-code"
   /** The code matched, but the account it belongs to is deleted. */
   | "account-deleted"
@@ -124,6 +145,13 @@ export interface EmailCodeSignInDeps extends ProviderDeps {
 export interface VerifyCodeOptions {
   /** What the new session shows in the user's list of signed-in devices. */
   device?: SessionDevice
+  /**
+   * The value {@link EmailCodeSignIn.requestBoundCode} returned to this browser. With it, the guess
+   * is checked against, and counted on, the challenge that call opened and no other. Any other
+   * string, the empty one included, answers `no-code` and counts nothing. Left out, the guess goes
+   * to the challenge `requestCode` issued for the address.
+   */
+  binding?: string
 }
 
 /** The email-code sign-in provider. */
@@ -136,6 +164,20 @@ export interface EmailCodeSignIn {
    * @throws {EmailCodeError} `invalid-email` when `normalizeEmail` rejects the address.
    */
   requestCode(email: string): Promise<void>
+  /**
+   * Issues a code that only the browser that asked for it can spend, and sends it. Each call opens
+   * a challenge of its own, with its own guess counter, next to any other live code for the
+   * address, and returns the challenge's binding: 32 random bytes as base64url. Keep it in that
+   * browser (see the module documentation) and pass it to `verifyCode` as `binding`. Wrong codes
+   * sent without it, or with another one, never reach this challenge. The outcome is the same
+   * whether or not the address has an account.
+   *
+   * Optional in the interface only so that a double written against an earlier version still
+   * compiles; the provider {@link createEmailCodeSignIn} returns always has it.
+   *
+   * @throws {EmailCodeError} `invalid-email` when `normalizeEmail` rejects the address.
+   */
+  requestBoundCode?(email: string): Promise<string>
   /**
    * Checks one guess and, on a match, signs in and creates a session. Surrounding whitespace in the
    * code is ignored.
@@ -158,6 +200,7 @@ export interface EmailCodeSignIn {
    * spend its guesses by guessing for the address, so another account can lock the owner out.
    *
    * The code is the one `requestCode` sends for sign-in: it is bound to the address, not to a user.
+   * A code from `requestBoundCode` is not accepted here.
    * The session proves who asks and the code proves the mailbox, so a code only ever works for the
    * person who received it, once. Take `userId` from a validated session, never from the request.
    *
@@ -183,7 +226,7 @@ export interface EmailCodeSignIn {
  *
  * @throws {RangeError} When `codeTtlMinutes` or `maxAttempts` is not a positive integer.
  */
-export function createEmailCodeSignIn(deps: EmailCodeSignInDeps): EmailCodeSignIn {
+export function createEmailCodeSignIn(deps: EmailCodeSignInDeps): Required<EmailCodeSignIn> {
   const ttlMinutes = positiveInteger(
     "codeTtlMinutes",
     deps.codeTtlMinutes ?? DEFAULT_CODE_TTL_MINUTES,
@@ -192,19 +235,31 @@ export function createEmailCodeSignIn(deps: EmailCodeSignInDeps): EmailCodeSignI
   const clock = deps.clock ?? systemClock
   const { store, sessions } = deps
 
+  /** Issues a code for `address` under the challenge `subject`, and sends it. */
+  async function issue(address: string, subject: string): Promise<void> {
+    const now = new Date(clock.now())
+    const code = randomBase64Url(EMAIL_CODE_BYTES)
+    await store.issueChallenge({
+      purpose: EMAIL_CODE_PURPOSE,
+      subject,
+      secretHash: await hashCode(address, code),
+      expiresAt: new Date(now.getTime() + ttlMinutes * 60_000),
+      now,
+    })
+    await deps.sendCode(address, code)
+  }
+
   return {
     async requestCode(email: string): Promise<void> {
       const address = requireEmail(email)
-      const now = new Date(clock.now())
-      const code = randomBase64Url(EMAIL_CODE_BYTES)
-      await store.issueChallenge({
-        purpose: EMAIL_CODE_PURPOSE,
-        subject: address,
-        secretHash: await hashCode(address, code),
-        expiresAt: new Date(now.getTime() + ttlMinutes * 60_000),
-        now,
-      })
-      await deps.sendCode(address, code)
+      await issue(address, address)
+    },
+
+    async requestBoundCode(email: string): Promise<string> {
+      const address = requireEmail(email)
+      const binding = randomBase64Url(EMAIL_CODE_BINDING_BYTES)
+      await issue(address, await boundSubject(address, binding))
+      return binding
     },
 
     async verifyCode(
@@ -214,10 +269,11 @@ export function createEmailCodeSignIn(deps: EmailCodeSignInDeps): EmailCodeSignI
     ): Promise<SignInResult> {
       const address = requireEmail(email)
       if (typeof code !== "string") throw new EmailCodeError("wrong-code")
+      const binding = options?.binding
       const now = new Date(clock.now())
       const outcome = await store.attemptChallenge({
         purpose: EMAIL_CODE_PURPOSE,
-        subject: address,
+        subject: binding === undefined ? address : await boundSubject(address, binding),
         secretHash: await hashCode(address, code.trim()),
         maxAttempts,
         now,
@@ -431,6 +487,21 @@ async function signInKey(
     ? await store.proveKey(existing.id, now)
     : await store.addKey(owner, newKey)
   return { user, key }
+}
+
+/** Random bytes in a binding: 256 bits, so a binding cannot be guessed. */
+const EMAIL_CODE_BINDING_BYTES = 32
+
+/**
+ * The challenge subject of a bound code: a digest of the address and the binding. The store finds
+ * a challenge by its subject, so a guess reaches a bound challenge only with its binding, and the
+ * binding itself is neither stored nor compared: a lookup by digest tells a caller nothing about a
+ * binding they do not hold. 64 hex characters, so it never equals an address, the subject of an
+ * unbound code. A `binding` that is not one, the empty string included, gives a subject no
+ * challenge has.
+ */
+function boundSubject(address: string, binding: string): Promise<string> {
+  return sha256Hex(`${EMAIL_CODE_PURPOSE}\nbinding\n${address}\n${binding}`)
 }
 
 /**

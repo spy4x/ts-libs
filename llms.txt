@@ -3058,4 +3058,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 03f24cb2dcbbe044817a0d0d40e4b6853d0b1fc62f6f4d28e8ec2bffbb6c8f33 -->
+<!-- export surface: sha256 1a73f9a4d4da9506438ec7855a2a3970a44cbae59e10c375f0ca1b995811f167 -->

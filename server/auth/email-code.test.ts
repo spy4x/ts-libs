@@ -28,7 +28,7 @@ const MINUTE = 60_000
 const ADDRESS = "ann@example.com"
 
 interface Harness {
-  provider: EmailCodeSignIn
+  provider: Required<EmailCodeSignIn>
   /** A password provider over the same store and sessions. */
   passwords: PasswordSignIn
   store: MemoryAuthStore
@@ -38,6 +38,8 @@ interface Harness {
   sent: { email: string; code: string }[]
   /** Asks for a code for `email` and returns the code that was sent. */
   codeFor(email?: string): Promise<string>
+  /** Asks for a bound code for `email` and returns the code that was sent and its binding. */
+  boundCodeFor(email?: string): Promise<{ code: string; binding: string }>
 }
 
 function setup(overrides: Partial<EmailCodeSignInDeps> = {}): Harness {
@@ -70,7 +72,11 @@ function setup(overrides: Partial<EmailCodeSignInDeps> = {}): Harness {
     await provider.requestCode(email)
     return sent[sent.length - 1].code
   }
-  return { provider, passwords, store, sessions, clock, sent, codeFor }
+  const boundCodeFor = async (email = ADDRESS) => {
+    const binding = await provider.requestBoundCode(email)
+    return { code: sent[sent.length - 1].code, binding }
+  }
+  return { provider, passwords, store, sessions, clock, sent, codeFor, boundCodeFor }
 }
 
 async function expectRefusal(
@@ -669,6 +675,107 @@ describe("createEmailProof", () => {
   it("refuses a ttl or guess limit that is not a positive integer", () => {
     expect(() => proofSetup({ codeTtlMinutes: 0 })).toThrow(RangeError)
     expect(() => proofSetup({ maxAttempts: 1.5 })).toThrow(RangeError)
+  })
+})
+
+describe("createEmailCodeSignIn: a code bound to the browser that asked for it", () => {
+  it("returns a 43-character base64url binding, new each time, and sends the code to the normalised address", async () => {
+    const { provider, sent } = setup()
+    const first = await provider.requestBoundCode("  Ann@Example.COM ")
+    const second = await provider.requestBoundCode(ADDRESS)
+    expect(first).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(second).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(second).not.toBe(first)
+    expect(sent.map((mail) => mail.email)).toEqual([ADDRESS, ADDRESS])
+    expect(sent[0].code).toMatch(/^[A-Za-z0-9_-]{8}$/)
+  })
+
+  it("refuses a value that is not an address and sends nothing", async () => {
+    const { provider, sent } = setup()
+    await expectRefusal(provider.requestBoundCode("not-an-address"), "invalid-email")
+    expect(sent).toEqual([])
+  })
+
+  it("signs in with the code and the binding it was asked with, once", async () => {
+    const { provider, boundCodeFor } = setup()
+    const { code, binding } = await boundCodeFor()
+    const result = await provider.verifyCode(ADDRESS, code, { binding })
+    expect(result.key.subject).toBe(ADDRESS)
+    expect(result.key.provenAt).not.toBeNull()
+    await expectRefusal(provider.verifyCode(ADDRESS, code, { binding }), "no-code")
+  })
+
+  it("does not count wrong codes sent without the binding, or with another browser's, on the person's code", async () => {
+    const { provider, boundCodeFor } = setup({ maxAttempts: 3 })
+    const person = await boundCodeFor()
+    const stranger = await boundCodeFor()
+    for (let guess = 0; guess < 5; guess++) {
+      await expectRefusal(provider.verifyCode(ADDRESS, "wrong-00"), "no-code")
+    }
+    for (let guess = 0; guess < 3; guess++) {
+      await expectRefusal(
+        provider.verifyCode(ADDRESS, "wrong-00", { binding: stranger.binding }),
+        "wrong-code",
+      )
+    }
+    await expectRefusal(
+      provider.verifyCode(ADDRESS, stranger.code, { binding: stranger.binding }),
+      "locked-out",
+    )
+    const result = await provider.verifyCode(ADDRESS, person.code, { binding: person.binding })
+    expect(result.key.subject).toBe(ADDRESS)
+  })
+
+  it("locks a bound code after the person's own maxAttempts wrong codes, even for the right code", async () => {
+    const { provider, boundCodeFor } = setup({ maxAttempts: 3 })
+    const { code, binding } = await boundCodeFor()
+    for (let guess = 0; guess < 3; guess++) {
+      await expectRefusal(provider.verifyCode(ADDRESS, "wrong-00", { binding }), "wrong-code")
+    }
+    await expectRefusal(provider.verifyCode(ADDRESS, code, { binding }), "locked-out")
+  })
+
+  it("keeps the person's code working after a stranger asks for a code for the same address", async () => {
+    const { provider, boundCodeFor } = setup()
+    const person = await boundCodeFor()
+    const stranger = await boundCodeFor()
+    await expectRefusal(
+      provider.verifyCode(ADDRESS, stranger.code, { binding: person.binding }),
+      "wrong-code",
+    )
+    const result = await provider.verifyCode(ADDRESS, person.code, { binding: person.binding })
+    expect(result.key.subject).toBe(ADDRESS)
+  })
+
+  it("refuses a bound code sent without its binding, and an unbound code sent with one", async () => {
+    const { provider, boundCodeFor, codeFor } = setup()
+    const bound = await boundCodeFor()
+    await expectRefusal(provider.verifyCode(ADDRESS, bound.code), "no-code")
+    const unbound = await codeFor()
+    await expectRefusal(
+      provider.verifyCode(ADDRESS, unbound, { binding: bound.binding }),
+      "wrong-code",
+    )
+    const { user } = await provider.verifyCode(ADDRESS, unbound)
+    await expectRefusal(provider.proveAddress(user.id, ADDRESS, bound.code), "no-code")
+  })
+
+  it("answers no-code for a binding that is not one, the empty string included, and counts nothing", async () => {
+    const { provider, codeFor } = setup({ maxAttempts: 2 })
+    const unbound = await codeFor()
+    const notBindings = ["", "short", "x".repeat(44), `${"x".repeat(42)}!`, 7 as unknown as string]
+    for (const binding of notBindings) {
+      await expectRefusal(provider.verifyCode(ADDRESS, "wrong-00", { binding }), "no-code")
+    }
+    const result = await provider.verifyCode(ADDRESS, unbound)
+    expect(result.key.subject).toBe(ADDRESS)
+  })
+
+  it("refuses a bound code after codeTtlMinutes", async () => {
+    const { provider, clock, boundCodeFor } = setup({ codeTtlMinutes: 2 })
+    const { code, binding } = await boundCodeFor()
+    clock.advance(2 * MINUTE)
+    await expectRefusal(provider.verifyCode(ADDRESS, code, { binding }), "no-code")
   })
 })
 

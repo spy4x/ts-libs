@@ -4900,10 +4900,12 @@ used by then, so the person asks for a new one.
 
 `createEmailCodeSignIn`, `EmailCodeError`, `EmailCodeErrorReason`, `EMAIL_CODE_METHOD`,
 `EMAIL_CODE_PURPOSE`, `EMAIL_CODE_BYTES`, `DEFAULT_CODE_TTL_MINUTES`, `DEFAULT_CODE_MAX_ATTEMPTS`,
-`EmailCodeSignIn`, `EmailCodeSignInDeps`.
+`EmailCodeSignIn`, `EmailCodeSignInDeps`, `VerifyCodeOptions`.
 
 Sign-in with a one-time code sent by email (#57). `requestCode(email)` issues a guess-counted
-challenge and hands the raw code to the app's `sendCode`; `verifyCode(email, code)` checks one guess
+challenge and hands the raw code to the app's `sendCode`; `requestBoundCode(email)` does the same
+for a code only the browser that asked can spend, and is the one a sign-in page should call (see
+"Bind the code to the browser that asked for it" below); `verifyCode(email, code)` checks one guess
 and, on a match, signs the person in and creates a session; `proveAddress(userId, email, code)`
 checks one guess and proves the address for a user who is already signed in. Refusals are `EmailCodeError`s with a
 fixed message per `reason`, which never echoes the input.
@@ -4974,7 +4976,51 @@ The route that calls `proveAddress` must:
    attach any address they receive mail at as a new sign-in method. An app that means "verify the
    address on file" passes the address of the user's key instead.
 
-**Asking again never buys more guesses.** A new code replaces a live one and keeps its guess counter.
+**Bind the code to the browser that asked for it.** A code from `requestCode` is bound to the
+address alone. Anyone who knows the address can send five wrong codes, lock its challenge, and keep
+it locked by asking for a new code before it expires, so the owner cannot sign in with a code for as
+long as that goes on (#601). `requestBoundCode` closes this. The app does three things:
+
+1. Its route that sends a code calls `requestBoundCode`, and never `requestCode`.
+2. It keeps the returned binding in the browser that asked, in a cookie that is `HttpOnly`, `Secure`
+   and `SameSite=Lax` and lives as long as the code. The binding never goes into the mail. The
+   library sets no cookie: the name, the path and the framework are the app's.
+3. Its route that checks a code reads the cookie and always passes it as `binding`: an empty string
+   when the cookie is missing, never `undefined`.
+
+```ts
+const binding = await codes.requestBoundCode(email)
+setCookie(c, "code_binding", binding, {
+  httpOnly: true,
+  secure: true,
+  sameSite: "Lax",
+  maxAge: 10 * 60,
+})
+
+// Later, in the route that checks the code:
+const { session } = await codes.verifyCode(email, typedCode, {
+  binding: getCookie(c, "code_binding") ?? "",
+})
+```
+
+- Each `requestBoundCode` opens a challenge of its own, with its own code and guess counter, next to
+  any other live code for the address. A stranger's request never replaces the person's code, and a
+  stranger's wrong codes count against the challenge the stranger opened, or against none. The
+  person's own five wrong codes still lock the person's challenge; a new request from their browser
+  then gives them a new code.
+- The binding is 32 random bytes as base64url. The store keeps only a digest of the address and the
+  binding, as the challenge's subject, so neither the binding nor the address is in the row.
+- `verifyCode` with a `binding` that is not one (the empty string, a wrong length) answers `no-code`
+  and counts nothing. `verifyCode` without `binding` only ever reaches a code from `requestCode`.
+- The person must open the code in the browser they asked from. A code typed into another browser
+  or device answers `no-code`.
+- `proveAddress` on this provider does not take a bound code; a signed-in user proves an address
+  with `createEmailProof`.
+- An app that still calls `requestCode` anywhere keeps the lock-out for the codes sent there.
+
+**Asking again never buys more guesses of one challenge.** A new code from `requestCode` replaces a
+live one and keeps its guess counter. A new code from `requestBoundCode` is a new challenge with a
+full set of guesses, so the limiter on that route is what bounds the guesses at an address's codes.
 A code is 6 random bytes (8 base64url characters, case-sensitive), valid 10 minutes and for 5
 guesses by default; surrounding whitespace in the typed code is ignored. The stored hash binds the
 address, so one digest never stands for the same code at two addresses.
@@ -4989,12 +5035,14 @@ rejects, the rejection reaches the caller and the code is already issued.
 
 ### What it does not do
 
-- **It does not rate-limit, and that is the caller's job.** It limits guesses per code, not how often
-  a code is asked for, and every new code moves the expiry of a locked challenge. Put
+- **It does not rate-limit, and that is the caller's job.** It limits guesses per challenge, not how
+  often a code is asked for. Every new code from `requestCode` moves the expiry of a locked
+  challenge, and every `requestBoundCode` opens a new challenge with a full set of guesses and adds
+  one row to `auth_challenges` until it expires. Put
   `createRateLimitMiddleware` from `@spy4x/platform/rate-limit` in front of the `requestCode` route
   with two limiters, one keyed by the normalised address and one by `clientIp`, and in front of the
-  `verifyCode` and `proveAddress` routes keyed by `clientIp`. The guess counter is per address and
-  shared by `verifyCode` and `proveAddress`. No limiter is built in: the client address exists only in
+  `verifyCode` and `proveAddress` routes keyed by `clientIp`. The guess counter of a code from
+  `requestCode` is per address and shared by `verifyCode` and `proveAddress`. No limiter is built in: the client address exists only in
   the HTTP layer, and a built-in one would force a choice of store into the provider.
 - **It does not retry a race.** When another sign-in for the same address writes between the lookup
   and the write, `verifyCode` throws the store's `AuthConflictError`; the code is used by then, and a
