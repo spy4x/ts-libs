@@ -358,6 +358,68 @@ describe("outbox merging edits of one entity", () => {
     expect(sent[sent.length - 1].command).toMatchObject({ kind: "delete", baseVersion: 1 })
   })
 
+  it("gives a delete of an unconfirmed create every payload that create was sent with, oldest first", async () => {
+    const { outbox, sent, state } = harness()
+    state.server = () => {
+      throw new ConnectionLostError("closed after the send")
+    }
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("First") })
+    // Queued while the page cannot send, so this text never leaves the device.
+    state.online = false
+    await outbox.submit({ kind: "update", entityId: "n", payload: text("Unsent"), version: 0 })
+    state.online = true
+    await outbox.submit({ kind: "update", entityId: "n", payload: text("Second"), version: 0 })
+    state.server = () => undefined
+    await outbox.submit({ kind: "delete", entityId: "n", payload: text("Second"), version: 0 })
+
+    expect(sent.map((s) => [s.command.kind, s.command.payload.title])).toEqual([
+      ["create", "First"],
+      ["create", "Second"],
+      ["delete", "Second"],
+    ])
+    expect(sent[2].command.ownCreates).toEqual([text("First"), text("Second")])
+    expect(sent[0].command.ownCreates).toBeUndefined()
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("names no own create on a delete of an entity the server confirmed", async () => {
+    const { outbox, sent, state } = harness()
+    state.server = () => {
+      throw new ConnectionLostError("closed after the send")
+    }
+    await outbox.submit({ kind: "update", entityId: "n", payload: text("Edit"), version: 3 })
+    state.server = () => undefined
+    await outbox.submit({ kind: "delete", entityId: "n", payload: text("Edit"), version: 3 })
+
+    expect(sent[1].command.kind).toBe("delete")
+    expect("ownCreates" in sent[1].command).toBe(false)
+  })
+
+  it("names no own create once the person chose to delete the server's copy", async () => {
+    const { outbox, sent, state } = harness()
+    state.server = () => {
+      throw new ConnectionLostError("closed after the send")
+    }
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("Mine") })
+    state.current = item("n", 7, "Theirs")
+    state.server = () => {
+      throw refused("VERSION_CONFLICT")
+    }
+    await outbox.submit({ kind: "delete", entityId: "n", payload: text("Mine"), version: 0 })
+    const [conflict] = outbox.entries()
+    expect(conflict.status).toBe("conflict")
+    expect(sent[1].command.ownCreates).toEqual([text("Mine")])
+
+    state.server = () => undefined
+    await outbox.keepMine(conflict)
+    expect(sent[2].command).toEqual({
+      kind: "delete",
+      entityId: "n",
+      payload: text("Mine"),
+      baseVersion: 7,
+    })
+  })
+
   it("does not edit an entity again once it is queued for deletion", async () => {
     const { outbox, offline } = harness()
     offline()
@@ -1349,6 +1411,20 @@ describe("outbox withdraw", () => {
     await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("E24"), version: 1 })
 
     expect(h.outbox.entries().map((e) => [e.kind, e.baseVersion])).toEqual([["delete", 1]])
+  })
+
+  it("does not name a payload as sent when its send fell out of the last 20 steps", async () => {
+    const { h } = await lostSend("create")
+    for (let i = 0; i < 25; i++) {
+      await h.outbox.submit({ kind: "update", entityId: "n", payload: text(`E${i}`), version: 1 })
+    }
+    h.state.online = true
+    h.state.server = () => undefined
+    await h.outbox.submit({ kind: "delete", entityId: "n", payload: text("E24"), version: 1 })
+
+    const last = h.sent[h.sent.length - 1].command
+    expect(last.kind).toBe("delete")
+    expect("ownCreates" in last).toBe(false)
   })
 
   it("answers false for a conflict that waits for a person", async () => {
