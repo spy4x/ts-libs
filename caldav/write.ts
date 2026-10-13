@@ -19,6 +19,13 @@
  * is written and the failure is `version`: the queue fetches the server's copy and the person
  * chooses, with both texts kept.
  *
+ * Deleting an entity whose create was never confirmed has no etag to go by. The outbox names the
+ * texts that create was sent with (`ownCreates`), so the object is read first: gone means the
+ * create never arrived and the delete is done; the same content lines as one of those texts (so
+ * the same UID too) means the object is this device's own create, and it is deleted with the etag
+ * just read;
+ * anything else is another device's write, so nothing is deleted and the failure is `version`.
+ *
  * A 401, or a 403 without a `DAV:error` condition, is not a refusal of the write: the session may
  * need signing in again, so the write stays queued (`unreachable`). A 403 that names a condition
  * (`need-privileges`, `supported-calendar-component`, `valid-calendar-data`) is the server's
@@ -50,6 +57,14 @@ export interface CalDavWriteCommand<P> {
   payload: P
   /** The version the write is based on; `0` for a create. */
   baseVersion: number
+  /**
+   * Only on a delete of an entity that was created on this device and never confirmed by the
+   * server: the payloads that create was sent with, as far as the outbox remembers them (it
+   * forgets sends older than its last 20 steps). The outbox fills it. With it, a delete that has
+   * no etag can still finish when the server holds this device's own create; a text missing from
+   * it only leads to the conflict such a delete raised before.
+   */
+  ownCreates?: P[]
 }
 
 /**
@@ -90,6 +105,8 @@ export interface CalDavWriteOptions<P, S> {
    * The etag the write is based on, from the app's copy of the server's state at
    * `command.baseVersion`. Without one nothing is sent: the write is a `version` conflict, so the
    * queue fetches the server's copy and the person chooses, and nothing is overwritten unseen.
+   * The one exception is a delete that carries `ownCreates`: answer no etag for it, and the
+   * object is deleted when it is still this device's own create.
    */
   etagOf(command: CalDavWriteCommand<P>): string | null | undefined
   /** The iCalendar text of a create or an update. */
@@ -100,7 +117,10 @@ export interface CalDavWriteOptions<P, S> {
 
 /** The three outbox ports this module fills. */
 export interface CalDavWriteTransport<P, S> {
-  /** Sends one command. Throws {@link CalDavWriteError}. A delete of a missing object succeeds. */
+  /**
+   * Sends one command. Throws {@link CalDavWriteError}. A delete of a missing object succeeds,
+   * also when the object is missing because the create never reached the server.
+   */
   send(command: CalDavWriteCommand<P>, idempotencyKey: string): Promise<S | undefined>
   /** The server's object as it is now, or `null` when it is gone. Rejects when unreachable. */
   fetchServer(entityId: string): Promise<S | null>
@@ -280,7 +300,28 @@ export function createCalDavWriteTransport<P, S>(
         throw new CalDavWriteError(classifyCalDavError(created.error), created.error)
       }
       const url = options.urlOf(command.entityId)
-      const etag = options.etagOf(command)
+      let etag = options.etagOf(command)
+      if (!etag && command.kind === "delete" && command.ownCreates?.length) {
+        // The create was never confirmed, so no etag is known; the server's copy says what to do.
+        const existing = await writer.getObject(url)
+        if (!existing.success) {
+          // The create never arrived: nothing to delete, and nothing was changed on the server.
+          if (existing.error.code === CalDavErrorCode.NotFound) return undefined
+          throw new CalDavWriteError(classifyCalDavError(existing.error), existing.error)
+        }
+        const theirs = existing.output
+        // The same content lines include the same UID line.
+        const own = command.ownCreates.some((payload) =>
+          sameLines(
+            options.toIcs({ ...command, kind: "create", payload, baseVersion: 0 }),
+            theirs.data,
+          )
+        )
+        // Only the copy just read counts, and it is deleted with its own etag: a change made
+        // between this read and the delete is refused by the server (`If-Match`). A copy that is
+        // not this device's create, or that came without an etag, falls through to the conflict.
+        if (own) etag = theirs.etag
+      }
       if (!etag) {
         // Nothing says which version of the object the person edited. Writing with an etag read
         // now would overwrite what another device changed since, so no request goes out: the
