@@ -123,7 +123,7 @@ Deno.test("a UTC due time keeps the hour the person sees, on the day they comple
   expect(lines(complete(utc, { timeZone: `Asia/Tokyo` }), `DUE`)).toEqual([`DUE:20261017T070000Z`])
 })
 
-Deno.test("without a zone, a task counted from completion is refused and left as it was", () => {
+Deno.test("without a zone, a task counted from completion is refused", () => {
   for (const due of [`DUE;VALUE=DATE:20261011`, `DUE:20261011T090000`, `DUE:20261011T070000Z`]) {
     const from = water([due, `RRULE:FREQ=DAILY`, LINE])
     for (const options of [undefined, { timeZone: `Mars/Olympus` }]) {
