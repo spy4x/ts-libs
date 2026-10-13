@@ -479,6 +479,30 @@ Deno.test("resolveInstant falls back to the Windows table when the VTIMEZONE has
   assertEquals(resolveInstant({ ...value, tzid: "Head Office" }, { root: custom }), undefined)
 })
 
+Deno.test("resolveInstant leaves a TZID unresolved when its VTIMEZONE rule has BYDAY or BYMONTHDAY without BYMONTH, or a BYMONTHDAY that is no day of a month", () => {
+  const value = zoned("Head Office", "2026-07-13", "10:00:00")
+  const rules = [
+    "FREQ=YEARLY;BYDAY=-1SU", // the last Sunday of the year, not of March
+    "FREQ=YEARLY;BYMONTHDAY=29", // the 29th of every month, not of March only
+    "FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=0",
+    "FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=40",
+    "FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=-32",
+  ]
+  for (const rule of rules) {
+    const root = zoneDocument("Head Office", [
+      ["STANDARD", "DTSTART:19961027T030000", "TZOFFSETFROM:+0200", "TZOFFSETTO:+0100"],
+      [
+        "DAYLIGHT",
+        "DTSTART:19810329T020000",
+        `RRULE:${rule}`,
+        "TZOFFSETFROM:+0100",
+        "TZOFFSETTO:+0200",
+      ],
+    ])
+    assertEquals(resolveInstant(value, { root }), undefined, rule)
+  }
+})
+
 const BERLIN_CLOCKS = [
   ["2026-01-13", "10:00:00"],
   ["2026-07-13", "10:00:00"],
@@ -502,7 +526,44 @@ const NEW_YORK_CLOCKS = [
   ["2026-07-04", "12:00:00"],
   ["2026-12-25", "12:00:00"],
 ]
+const SYDNEY_CLOCKS = [
+  ["2007-06-15", "12:00:00"],
+  ["2007-11-15", "12:00:00"], // summer time that began at the very instant UNTIL names
+  ["2008-01-15", "12:00:00"],
+  ["2008-07-15", "12:00:00"],
+  ["2026-01-15", "12:00:00"],
+]
 const DEFINED_ZONES: [string, string, string[][], string[][]][] = [
+  ["an UNTIL in UTC that is the last change itself, east of Greenwich", "Australia/Sydney", [
+    [
+      "DAYLIGHT",
+      "DTSTART:20011028T020000",
+      "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU;UNTIL=20071027T160000Z",
+      "TZOFFSETFROM:+1000",
+      "TZOFFSETTO:+1100",
+    ],
+    [
+      "STANDARD",
+      "DTSTART:20010325T030000",
+      "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU;UNTIL=20070324T160000Z",
+      "TZOFFSETFROM:+1100",
+      "TZOFFSETTO:+1000",
+    ],
+    [
+      "STANDARD",
+      "DTSTART:20080406T030000",
+      "RRULE:FREQ=YEARLY;BYMONTH=4;BYDAY=1SU",
+      "TZOFFSETFROM:+1100",
+      "TZOFFSETTO:+1000",
+    ],
+    [
+      "DAYLIGHT",
+      "DTSTART:20081005T020000",
+      "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=1SU",
+      "TZOFFSETFROM:+1000",
+      "TZOFFSETTO:+1100",
+    ],
+  ], SYDNEY_CLOCKS],
   ["a numbered BYDAY rule, as Outlook writes it", "Europe/Berlin", [
     [
       "STANDARD",

@@ -6,8 +6,8 @@
  * one-off changes (`RDATE`), and the yearly rule every client writes: `FREQ=YEARLY` with one
  * `BYMONTH`, and either one numbered `BYDAY` (`-1SU`), a `BYMONTHDAY` list, or both a plain
  * `BYDAY` and a `BYMONTHDAY` list ("the Sunday on or after the 8th"), optionally ended by
- * `UNTIL`. A definition that uses anything else is reported as unusable instead of being read
- * approximately.
+ * `UNTIL`. A yearly rule with none of these parts repeats the day of `DTSTART`. A definition that
+ * uses anything else is reported as unusable instead of being read approximately.
  *
  * Web-platform APIs only, no `Deno.*`, no dependencies.
  * @module
@@ -98,6 +98,10 @@ function yearlyOnsets(rule: string, start: number, from: number, years: number[]
   if (parts.get("FREQ") !== "YEARLY" || (parts.get("INTERVAL") ?? "1") !== "1") {
     throw new Unusable()
   }
+  // Without BYMONTH, BYDAY counts weekdays of the whole year and BYMONTHDAY names every month.
+  if (!parts.has("BYMONTH") && (parts.has("BYDAY") || parts.has("BYMONTHDAY"))) {
+    throw new Unusable()
+  }
   const first = new Date(start)
   const months = integers(parts.get("BYMONTH") ?? String(first.getUTCMonth() + 1))
   const month = months[0]!
@@ -105,6 +109,7 @@ function yearlyOnsets(rule: string, start: number, from: number, years: number[]
   const byDay = parts.has("BYDAY") ? /^([+-]?[1-5])?([A-Z]{2})$/.exec(parts.get("BYDAY")!) : null
   if (parts.has("BYDAY") && (!byDay || !WEEKDAYS.includes(byDay[2]!))) throw new Unusable()
   const monthDays = parts.has("BYMONTHDAY") ? integers(parts.get("BYMONTHDAY")!) : undefined
+  if (monthDays?.some((day) => day === 0 || Math.abs(day) > 31)) throw new Unusable()
   // A plain BYDAY alone would change the offset every week of the month.
   if (byDay && !byDay[1] && !monthDays) throw new Unusable()
   const until = parts.has("UNTIL") ? parseDateTime(parts.get("UNTIL")!) : undefined
