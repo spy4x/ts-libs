@@ -80,7 +80,8 @@ on the way in.
 - **Few dependencies.** `@spy4x/net` and `@spy4x/time` have none. Shared
   ones (arktype, Hono, Postgres) are pinned to exact versions.
 - **Tested against the real thing.** Unit tests use fakes; an integration tier runs against a real
-  Postgres, S3-compatible store, mail server and Redis, and fails instead of skipping.
+  Postgres, S3-compatible store, mail server and Redis, and fails instead of skipping. CI runs it
+  on Postgres 18 and 17; the local containers run 18.
 
 **Use it if** you build on Deno or ship a browser bundle and want small, typed primitives without a
 framework. **Skip it if** you need tested Node.js support or UI components (those live in

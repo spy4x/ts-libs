@@ -30,15 +30,19 @@ name: ts-libs-it
 
 services:
   postgres:
-    image: postgres:17.11-alpine
+    image: postgres:18.6-alpine
     environment:
       POSTGRES_USER: integration-test-only
       POSTGRES_PASSWORD: integration-test-only
       POSTGRES_DB: integration-test-only
     ports:
       - "127.0.0.1:55432:5432"
+    # From 18 on the image keeps its data in `/var/lib/postgresql/<major>/docker`, so the
+    # volume mounts one level higher than it did for 17. The volume carries the major
+    # version in its name because the image refuses to start on a volume that an older
+    # major wrote (#556): a volume left over from 17 is then never mounted.
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-18-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U integration-test-only -d integration-test-only"]
       interval: 2s
@@ -174,5 +178,5 @@ services:
       start_period: 5s
 
 volumes:
-  postgres-data:
+  postgres-18-data:
   minio-data:
