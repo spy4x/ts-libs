@@ -172,81 +172,54 @@ describe("create", () => {
     expect(seen.map((s) => s.method)).toEqual(["PUT", "PUT", "GET"])
   })
 
-  it("sends an edit made while a create was being retried as an update of its own object", async () => {
+  it("reports a version conflict and writes nothing when a repeated create carries an edit made since the first try", async () => {
     const { send, state, objects, seen, failureOf } = setup()
     state.dropAnswerOnce = true
     // The server stored "milk", but the answer was lost; the retry carries the corrected title.
     expect(await failureOf(send("create", "e1", "milk", 0))).toEqual({ kind: "unreachable" })
-    const task = await send("create", "e1", "bread", 0)
-    expect(objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!.ics).toBe(ics("bread", "e1"))
-    expect(task?.ics).toBe(ics("bread", "e1"))
-    expect(task?.etag).toBe(`"2"`)
-    expect(seen.map((s) => s.method)).toEqual(["PUT", "PUT", "GET", "PUT"])
-    // Guarded by the etag just read, so a change made in between is not overwritten.
-    expect(seen[3].headers.get("If-Match")).toBe(`"1"`)
-    expect(seen[3].headers.get("If-None-Match")).toBeNull()
+    expect(await failureOf(send("create", "e1", "bread", 0))).toEqual({ kind: "version" })
+    expect(objects.get(new URL(`${CALENDAR}e1.ics`).pathname)).toEqual({
+      ics: ics("milk", "e1"),
+      etag: 1,
+    })
+    expect(seen.map((s) => s.method)).toEqual(["PUT", "PUT", "GET"])
   })
 
-  it("writes the text again when the server stored it with properties reordered, as that reads like an edit", async () => {
-    const { send, state, objects, failureOf } = setup()
+  it("reports a version conflict and keeps the server's copy when another device edited the task before the retry", async () => {
+    const { send, state, objects, seen, failureOf } = setup()
+    state.dropAnswerOnce = true
+    await failureOf(send("create", "e1", "milk", 0))
+    const path = new URL(`${CALENDAR}e1.ics`).pathname
+    const elsewhere = ics("milk", "e1").replace("SUMMARY:milk", "SUMMARY:milk\r\nSTATUS:COMPLETED")
+    objects.set(path, { ics: elsewhere, etag: 77 })
+    // No edit on this device: the retry carries the text it first sent.
+    expect(await failureOf(send("create", "e1", "milk", 0))).toEqual({ kind: "version" })
+    expect(objects.get(path)).toEqual({ ics: elsewhere, etag: 77 })
+    expect(seen.map((s) => s.method)).toEqual(["PUT", "PUT", "GET"])
+  })
+
+  it("counts a repeated create as done when the server stored the same lines in another order", async () => {
+    const { send, state, objects, seen, failureOf } = setup()
     state.dropAnswerOnce = true
     await failureOf(send("create", "e1", "milk", 0))
     const stored = objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!
-    stored.ics = stored.ics.replace("UID:e1\r\nSUMMARY:milk", "SUMMARY:milk\r\nUID;X-A=b:e1")
+    stored.ics = stored.ics.replace("UID:e1\r\nSUMMARY:milk", "SUMMARY:milk\r\nUID:e1")
     expect(stored.ics).not.toBe(ics("milk", "e1"))
     const task = await send("create", "e1", "milk", 0)
-    expect(task?.etag).toBe(`"2"`)
-    expect(objects.size).toBe(1)
-    expect(objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!.ics).toBe(ics("milk", "e1"))
+    expect(task?.etag).toBe(`"1"`)
+    expect(task?.ics).toBe(stored.ics)
+    expect(seen.map((s) => s.method)).toEqual(["PUT", "PUT", "GET"])
   })
 
-  it("takes an object whose UID line the server folded as its own, and updates it instead of refusing", async () => {
+  it("counts a repeated create as done when the server folded the UID line", async () => {
     const { send, state, objects, failureOf } = setup()
     state.dropAnswerOnce = true
     await failureOf(send("create", "e1", "milk", 0))
     const stored = objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!
     stored.ics = stored.ics.replace("UID:e1\r\n", "UID:e\r\n 1\r\n")
     const task = await send("create", "e1", "milk", 0)
-    expect(task?.etag).toBe(`"2"`)
+    expect(task?.etag).toBe(`"1"`)
     expect(objects.size).toBe(1)
-  })
-
-  it("reports a version conflict when a repeated create finds its object changed between the read and the update", async () => {
-    const { transport } = scriptedWriter({
-      getObject: (url) =>
-        Promise.resolve({
-          success: true as const,
-          output: { url: String(url), etag: `"3"`, data: ics("milk", "e1") },
-          error: null,
-        }),
-      updateObject: () =>
-        Promise.resolve({
-          success: false as const,
-          output: null,
-          error: { code: CalDavErrorCode.Conflict, message: "changed", status: 412 },
-        }),
-    })
-    const error = await transport.send(
-      { kind: "create", entityId: "e1", payload: "bread", baseVersion: 0 },
-      "k",
-    ).catch((caught) => caught)
-    expect(transport.classify(error)).toEqual({ kind: "version" })
-  })
-
-  it("reports a version conflict and writes nothing when a repeated create finds other text and no etag to guard an update", async () => {
-    const { transport } = scriptedWriter({
-      getObject: (url) =>
-        Promise.resolve({
-          success: true as const,
-          output: { url: String(url), etag: null, data: ics("milk", "e1") },
-          error: null,
-        }),
-    })
-    const error = await transport.send(
-      { kind: "create", entityId: "e1", payload: "bread", baseVersion: 0 },
-      "k",
-    ).catch((caught) => caught)
-    expect(transport.classify(error)).toEqual({ kind: "version" })
   })
 
   it("refuses a create whose file name is held by an object with another UID, leaving it untouched", async () => {
@@ -599,17 +572,25 @@ describe("with the outbox", () => {
     expect(objects.get(path)!.ics).toContain("edited on the phone")
   })
 
-  it("ends with the edited text on the server when a create's answer was lost and the task was then edited", async () => {
+  it("shows an edit made after a create's answer was lost as a conflict with the server's copy, and keepMine puts the edit on the server", async () => {
     const { outbox, state, objects } = queue()
     state.dropAnswerOnce = true
     await outbox.submit({ kind: "create", entityId: "e1", payload: "milk" })
     const path = new URL(`${CALENDAR}e1.ics`).pathname
     expect(objects.get(path)!.ics).toBe(ics("milk", "e1"))
-    expect((await outbox.entries()).map((entry) => entry.status)).toEqual(["pending"])
     state.down = true
     await outbox.submit({ kind: "update", entityId: "e1", payload: "bread", version: 0 })
     state.down = false
     await outbox.flush()
+    const [entry] = await outbox.entries()
+    expect([entry.status, entry.conflict?.reason, entry.payload]).toEqual([
+      "conflict",
+      "version",
+      "bread",
+    ])
+    expect(entry.conflict?.server?.ics).toBe(ics("milk", "e1"))
+    expect(objects.get(path)!.ics).toBe(ics("milk", "e1"))
+    await outbox.keepMine(entry)
     expect(objects.get(path)!.ics).toBe(ics("bread", "e1"))
     expect(await outbox.entries()).toEqual([])
   })

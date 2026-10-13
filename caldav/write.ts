@@ -13,10 +13,11 @@
  *
  * Retrying a create is safe: the object is named after the entity (`<entityId>.ics`), so a repeat
  * after a lost answer finds its own object, known by its UID. It counts as done only when that
- * object holds exactly the text being sent. Any other text is written as an update guarded by the
- * etag just read: the queue merges a later edit into a create that is still waiting, so the repeat
- * may carry newer text than the server stored. A server that stores the text reordered gets that
- * one extra update.
+ * object holds the same content lines as the text being sent, in any order (Radicale stores the
+ * properties reordered). Other text means an edit the queue merged into the waiting create, an
+ * edit another device made after the create arrived, or both; nothing tells them apart, so nothing
+ * is written and the failure is `version`: the queue fetches the server's copy and the person
+ * chooses, with both texts kept.
  *
  * A 401, or a 403 without a `DAV:error` condition, is not a refusal of the write: the session may
  * need signing in again, so the write stays queued (`unreachable`). A 403 that names a condition
@@ -123,6 +124,15 @@ function uidOf(ics: string): string | null {
     if (match) return match[1].trim()
   }
   return null
+}
+
+/** Whether two iCalendar texts hold the same content lines (unfolded, blank ones dropped), in any order. */
+function sameLines(a: string, b: string): boolean {
+  const lines = (ics: string) =>
+    ics.replace(/\r?\n[ \t]/g, "").split(/\r?\n/).filter((line) => line !== "").sort()
+  const left = lines(a)
+  const right = lines(b)
+  return left.length === right.length && left.every((line, index) => line === right[index])
 }
 
 const PLACEHOLDER = "http://path.invalid"
@@ -239,31 +249,18 @@ export function createCalDavWriteTransport<P, S>(
           if (existing.success) {
             const uid = uidOf(ics)
             if (uid !== null && uid === uidOf(existing.output.data)) {
-              // Only the same text means the create arrived as it is now.
-              if (existing.output.data === ics) {
+              // Only the same content means the create arrived as it is now.
+              if (sameLines(existing.output.data, ics)) {
                 return options.toEntity(existing.output, command.entityId)
               }
-              // The text differs: the entry may hold an edit made since the first try, so it is
-              // written over the stored copy, guarded by the etag just read.
-              const etag = existing.output.etag
-              if (etag === null) {
-                // No etag, no guarded write: the person chooses between the two texts.
-                const error: CalDavError = {
-                  code: CalDavErrorCode.Conflict,
-                  message: "This item is on the server with other text, and has no version.",
-                }
-                throw new CalDavWriteError(classifyCalDavError(error), error)
+              // The texts differ: an edit made here since the first try, one made on another
+              // device since the create arrived, or both. No etag says which, so nothing is
+              // written: the queue fetches the server's copy and the person chooses.
+              const error: CalDavError = {
+                code: CalDavErrorCode.Conflict,
+                message: "This item is already on the server with other text.",
               }
-              const updated = await writer.updateObject(existing.output.url, ics, etag)
-              if (!updated.success) {
-                throw new CalDavWriteError(classifyCalDavError(updated.error), updated.error)
-              }
-              return await settled(
-                updated.output.url,
-                updated.output.etag,
-                ics,
-                command.entityId,
-              )
+              throw new CalDavWriteError(classifyCalDavError(error), error)
             }
             // Another task holds the name. `already-exists` would let the outbox offer "Keep
             // mine" as an update with the etag of that task, overwriting it; a refusal cannot be
