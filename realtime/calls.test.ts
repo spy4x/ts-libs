@@ -532,6 +532,10 @@ describe("isRetryable", () => {
     )
   })
 
+  it("is true for a call the server refused as rate_limited before running it", () => {
+    expect(isRetryable(new RealtimeRequestError("rate_limited", "x"))).toBe(true)
+  })
+
   it("is false for an answer that will not change", () => {
     expect(isRetryable(new RealtimeRequestError("conflict", "x", { code: "ID_ALREADY_EXISTS" })))
       .toBe(false)
@@ -576,6 +580,10 @@ describe("isUnknownOutcome", () => {
     expect(isUnknownOutcome(new RealtimeRequestError("not_found", "gone"))).toBe(false)
     expect(isUnknownOutcome(new Error("boom"))).toBe(false)
   })
+
+  it("counts a call answered rate_limited as unknown, so a write is kept", () => {
+    expect(isUnknownOutcome(new RealtimeRequestError("rate_limited", "slow down"))).toBe(true)
+  })
 })
 
 describe("sendCommand", () => {
@@ -613,6 +621,22 @@ describe("sendCommand", () => {
     expect(result).toEqual({ ok: 1 })
     expect(keysMade).toBe(1)
     expect(sent.map((frame) => frame.key)).toEqual(["k-1", "k-1", "k-1"])
+  })
+
+  it("sends a command answered rate_limited again with the same key", async () => {
+    const { port, sent } = scriptedPort([
+      new RealtimeRequestError("rate_limited", "slow down"),
+      { ok: 1 },
+    ])
+    let keysMade = 0
+
+    const result = await sendCommand(port, "group.create", {}, {
+      sleep: noSleep,
+      newKey: () => `k-${++keysMade}`,
+    })
+
+    expect(result).toEqual({ ok: 1 })
+    expect(sent.map((frame) => frame.key)).toEqual(["k-1", "k-1"])
   })
 
   it("retries a server timeout and a first try that is still running", async () => {
