@@ -429,7 +429,9 @@ Deno.test("encryptEnvFiles -> decryptEnvFiles: round-trips duplicate keys and ex
     await encryptEnvFiles(root)
 
     const encrypted = await Deno.readTextFile(join(root, ".env.age"))
-    assertEquals(encrypted.includes("bar"), false) // the plaintext never appears in .env.age
+    // The plain line is not in .env.age. Compare whole lines: base64 ciphertext can hold the
+    // letters "bar" by chance, so a substring search fails at random.
+    assertEquals(encrypted.split("\n").includes("export FOO=bar"), false)
     assertEquals(encrypted.startsWith("# header\nexport FOO=age64:"), true)
 
     await Deno.remove(join(root, ".env"))
