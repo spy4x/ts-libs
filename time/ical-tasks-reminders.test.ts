@@ -114,7 +114,7 @@ describe("dueReminders: where a trigger lands", () => {
 
   it("reads a TZID this runtime does not know as a wall clock in the given zone", () => {
     const ics = task([
-      "DUE;TZID=W. Europe Standard Time:20261012T100000",
+      "DUE;TZID=Head Office Time:20261012T100000",
       ...alarm("TRIGGER;RELATED=END:PT0S"),
     ])
     expect(moments(ics, { zone: "Europe/Berlin" })).toEqual(["2026-10-12T08:00:00.000Z"])

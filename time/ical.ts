@@ -22,7 +22,9 @@ import {
   icsUnescape,
   icsUnescapeParameter,
 } from "./ics-core.ts"
+import { vtimezoneInstant } from "./ical-timezone.ts"
 import { isValidTimeZone, zonedDateTime } from "./tz.ts"
+import { WINDOWS_ZONES } from "./windows-zones.ts"
 
 /** One parameter of a property, such as `TZID=Europe/Berlin`. Values are decoded (RFC 6868). */
 export interface IcalParameter {
@@ -102,7 +104,7 @@ export enum IcalErrorCode {
   InvalidValue,
   /** The edit would give DUE or DTEND a different value type than DTSTART (RFC 5545). */
   ValueTypeMismatch,
-  /** A `TZID` is not defined by a VTIMEZONE in the document. */
+  /** A `TZID` is not defined by a VTIMEZONE in the document, nor already on the property. */
   UnknownTzid,
 }
 
@@ -534,7 +536,7 @@ const PAIRED: Record<string, string[]> = {
 
 /** Options for {@link writeDate}. */
 export interface IcalWriteDateOptions {
-  /** The document root; needed to check that a zoned value's TZID has a VTIMEZONE. */
+  /** The document root; needed to check that a zoned value's new TZID has a VTIMEZONE. */
   root?: IcalComponent
 }
 
@@ -552,7 +554,9 @@ export interface IcalWriteDateOptions {
  * - a DUE, DTEND or DTSTART whose value type (date versus date-time) would differ from its
  *   partner's ({@link IcalErrorCode.ValueTypeMismatch}); to switch both, remove one first;
  * - a zoned value whose TZID has no VTIMEZONE in `options.root` ({@link IcalErrorCode.UnknownTzid}):
- *   this module never invents a VTIMEZONE.
+ *   this module never invents a VTIMEZONE. A value that keeps the TZID the property already
+ *   carries is written all the same: servers and clients often leave the VTIMEZONE of an IANA
+ *   name out, and such a date must stay movable.
  */
 export function writeDate(
   component: IcalComponent,
@@ -596,7 +600,9 @@ export function writeDate(
     }
   }
   if (value.kind === IcalDateKind.Zoned) {
-    if (!value.tzid || !options.root || !hasTimezone(options.root, value.tzid)) {
+    const carried = existing && getParameter(existing, "TZID")?.values[0]
+    const defined = options.root && value.tzid && hasTimezone(options.root, value.tzid)
+    if (!value.tzid || (value.tzid !== carried && !defined)) {
       return fail(IcalErrorCode.UnknownTzid, `no VTIMEZONE defines ${JSON.stringify(value.tzid)}`)
     }
   }
@@ -620,13 +626,22 @@ export function writeDate(
 export interface IcalResolveOptions {
   /** IANA zone used for floating times and for dates (read as midnight). */
   zone?: string
+  /**
+   * The document the value was read from. Its VTIMEZONE components define a `TZID` that is not
+   * an IANA name.
+   */
+  root?: IcalComponent
 }
 
 /**
  * The instant a date value denotes, or `undefined` when it has none.
  *
- * UTC values resolve directly. A zoned value resolves only when its TZID is an IANA zone this
- * runtime knows; a vendor TZID such as `W. Europe Standard Time` is unresolved, never guessed.
+ * UTC values resolve directly. A zoned value resolves, in this order: as an IANA zone this
+ * runtime knows; through the VTIMEZONE of that name in `options.root`, by the offset its
+ * STANDARD and DAYLIGHT rules give for that wall clock; as a Windows zone name such as
+ * `W. Europe Standard Time`, through the table of Unicode CLDR. A `TZID` that is none of the
+ * three is unresolved, never guessed from `options.zone` or the host's zone. So is one whose
+ * VTIMEZONE uses a rule other than a yearly one, unless its name is a Windows one.
  * Floating times and dates resolve only with `options.zone`. Wall clocks skipped or repeated by
  * a clock change resolve as `time/tz`'s `zonedDateTime` does.
  */
@@ -641,7 +656,13 @@ export function resolveInstant(
     const instant = new Date(`${value.date}T${value.time}Z`)
     return Number.isNaN(instant.getTime()) ? undefined : instant
   }
-  const zone = value.kind === IcalDateKind.Zoned ? value.tzid : options.zone
+  let zone = value.kind === IcalDateKind.Zoned ? value.tzid : options.zone
+  if (value.kind === IcalDateKind.Zoned && zone && !isValidTimeZone(zone)) {
+    const defined = options.root &&
+      vtimezoneInstant(options.root, zone, value.date, value.time ?? "00:00:00")
+    if (defined !== undefined) return new Date(defined)
+    zone = WINDOWS_ZONES[zone]
+  }
   if (!zone || !isValidTimeZone(zone)) return undefined
   try {
     return new Date(zonedDateTime(value.date, hhmm, zone).getTime() + seconds * 1000)
