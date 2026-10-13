@@ -485,13 +485,14 @@ const DEFAULT_JITTER_RATIO = 0.5
 
 /**
  * Whether the outcome of a call is unknown or the server was busy, so trying again can help: the
- * answer did not arrive in time, the connection dropped, the server gave up, or it is still
- * running the first try of the same command.
+ * answer did not arrive in time, the connection dropped, the server gave up (`timeout`), it
+ * refused the call as `rate_limited` before running it, or it is still running the first try of
+ * the same command.
  */
 export function isRetryable(error: unknown): boolean {
   if (error instanceof RequestTimeoutError || error instanceof ConnectionLostError) return true
   if (error instanceof RealtimeRequestError) {
-    if (error.code === "timeout") return true
+    if (error.code === "timeout" || error.code === "rate_limited") return true
     const details = error.details as { code?: unknown } | undefined
     return error.code === "conflict" && details?.code === "IN_PROGRESS"
   }
