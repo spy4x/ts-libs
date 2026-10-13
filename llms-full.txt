@@ -66,10 +66,10 @@ The example above validates a booking request, formats its time in Berlin and se
 by SMTP: three packages, no framework. `Deno.serve` hands in a standard `Request`, and each package
 returns a plain value you check.
 
-No Preact, no app shells, no single product's domain. The one domain model is `@spy4x/tasks`: the
-to-do model that my CalDAV task apps share. Everything here is a technical primitive or
-adapter that is useful to more than one product, extracted from my own apps, with their bugs fixed
-on the way in.
+No Preact, no app shells, no single product's domain. The one domain model is the to-do model
+that my CalDAV task apps share: `@spy4x/tasks` is its import path, and its code sits in `platform`
+and `time` until 2.0. Everything else here is a technical primitive or adapter that is useful to
+more than one product, extracted from my own apps, with their bugs fixed on the way in.
 
 ## Why ts-libs
 
