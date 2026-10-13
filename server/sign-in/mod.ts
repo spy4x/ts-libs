@@ -45,6 +45,7 @@ export {
 export {
   createPasswordHasher,
   DEFAULT_PASSWORD_ITERATIONS,
+  isPasswordHash,
   MAX_PASSWORD_BYTES,
   type PasswordCheck,
   type PasswordHasher,

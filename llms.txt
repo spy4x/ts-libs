@@ -2618,6 +2618,7 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `createAuth` (function), `jsr:@spy4x/server/sign-in`: Builds the session middleware and guards over one SessionManager and SessionCookie.
 - `createPasswordHasher` (function), `jsr:@spy4x/server/sign-in`: Creates a PasswordHasher.
 - `generateTotpSecret` (function), `jsr:@spy4x/server/sign-in`: A new random secret: 20 bytes, base32 without padding (32 characters).
+- `isPasswordHash` (function), `jsr:@spy4x/server/sign-in`: True when `stored` is a value PasswordHasher.verify can match: exactly one of the two formats, with an iteration count in the accepted range.
 - `secondFactorSatisfied` (function), `jsr:@spy4x/server/sign-in`: Whether a session's second-factor status lets a request through.
 - `totpEnrolment` (function), `jsr:@spy4x/server/sign-in`: The enrolment link and QR code for a secret.
 - `verifyTotp` (function), `jsr:@spy4x/server/sign-in`: Checks a code against a secret at the current time.
@@ -3055,4 +3056,4 @@ The full READMEs are in [llms-full.txt](https://raw.githubusercontent.com/spy4x/
 - `toValidationError` (function), `jsr:@spy4x/validation/validate`: Build a ValidationError from arktype's issues.
 - `validate` (function), `jsr:@spy4x/validation/validate`: Parse `value` with an arktype schema exactly once.
 
-<!-- export surface: sha256 cabfc28bb33ca138e60b7366b7d5d9bd1ea8da8bc85d1ddcef0d4520b7b1941f -->
+<!-- export surface: sha256 9cfd52a1b5ca8b7a7d744c777a9647b8fad182c979a1e68c07a51c21d74e8843 -->
