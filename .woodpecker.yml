@@ -19,8 +19,19 @@ when:
 # differ, because Woodpecker publishes a service under its own name as hostname on
 # the container's own port. The credentials are the same obviously fake literal, and
 # these containers live for one pipeline run.
+#
+# `postgres-17` is the one service the compose file does not have (#556): the tier runs
+# on Postgres 18, the version the apps move to, and once more on 17 for as long as an
+# app that imports these libraries still runs a server older than 18.
 services:
   postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: integration-test-only
+      POSTGRES_PASSWORD: integration-test-only
+      POSTGRES_DB: integration-test-only
+
+  postgres-17:
     image: postgres:17.11-alpine
     environment:
       POSTGRES_USER: integration-test-only
@@ -95,6 +106,25 @@ steps:
     image: denoland/deno:2.9.7
     environment:
       TS_LIBS_IT_POSTGRES_URL: postgres://integration-test-only:integration-test-only@postgres:5432/integration-test-only
+      TS_LIBS_IT_S3_ENDPOINT: http://minio:9000
+      TS_LIBS_IT_SMTP_HOST: mailpit
+      TS_LIBS_IT_SMTP_PORT: "1025"
+      TS_LIBS_IT_MAILPIT_URL: http://mailpit:8025
+      TS_LIBS_IT_REDIS_HOST: redis
+      TS_LIBS_IT_REDIS_PORT: "6379"
+      TS_LIBS_IT_REDIS_AUTH_HOST: redis-auth
+      TS_LIBS_IT_REDIS_AUTH_PORT: "6379"
+      TS_LIBS_IT_RADICALE_URL: http://radicale:5232
+      TS_LIBS_IT_STALWART_URL: http://stalwart:8080
+    commands:
+      - deno task test:integration
+
+  # The same tier against Postgres 17 (#556). Only the Postgres address differs, so every
+  # test that talks to Postgres runs on both versions and no list of them has to be kept.
+  integration-postgres-17:
+    image: denoland/deno:2.9.7
+    environment:
+      TS_LIBS_IT_POSTGRES_URL: postgres://integration-test-only:integration-test-only@postgres-17:5432/integration-test-only
       TS_LIBS_IT_S3_ENDPOINT: http://minio:9000
       TS_LIBS_IT_SMTP_HOST: mailpit
       TS_LIBS_IT_SMTP_PORT: "1025"
