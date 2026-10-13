@@ -12,12 +12,19 @@
  * and error codes.
  *
  * Retrying a create is safe: the object is named after the entity (`<entityId>.ics`), so a repeat
- * after a lost answer finds its own object. It counts as done when that object has the same UID as
- * the text being sent; the text itself may differ, as some servers reorder properties.
+ * after a lost answer finds its own object, known by its UID. It counts as done only when that
+ * object holds the same content lines as the text being sent, in any order (Radicale stores the
+ * properties reordered). Other text means an edit the queue merged into the waiting create, an
+ * edit another device made after the create arrived, or both; nothing tells them apart, so nothing
+ * is written and the failure is `version`: the queue fetches the server's copy and the person
+ * chooses, with both texts kept.
  *
- * A 401 or 403 is not a refusal of the write: the session may need signing in again, so the write
- * stays queued (`unreachable`). A created entity's id must be a plain file name (see
- * {@link isSafeEntityId}); an update or delete goes to the address `urlOf` gives, whatever the id.
+ * A 401, or a 403 without a `DAV:error` condition, is not a refusal of the write: the session may
+ * need signing in again, so the write stays queued (`unreachable`). A 403 that names a condition
+ * (`need-privileges`, `supported-calendar-component`, `valid-calendar-data`) is the server's
+ * refusal for good, so it is `rejected` and the writes queued behind it go on. A created entity's
+ * id must be a plain file name (see {@link isSafeEntityId}); an update or delete goes to the
+ * address `urlOf` gives, whatever the id.
  *
  * @module
  */
@@ -119,6 +126,15 @@ function uidOf(ics: string): string | null {
   return null
 }
 
+/** Whether two iCalendar texts hold the same content lines (unfolded, blank ones dropped), in any order. */
+function sameLines(a: string, b: string): boolean {
+  const lines = (ics: string) =>
+    ics.replace(/\r?\n[ \t]/g, "").split(/\r?\n/).filter((line) => line !== "").sort()
+  const left = lines(a)
+  const right = lines(b)
+  return left.length === right.length && left.every((line, index) => line === right[index])
+}
+
 const PLACEHOLDER = "http://path.invalid"
 
 /** The address {@link createCalDavWriteTransport} gives a created entity's object. */
@@ -149,18 +165,25 @@ export function classifyCalDavError(error: CalDavError): CalDavSendFailure {
       return { kind: "not-found" }
     case CalDavErrorCode.AlreadyExists:
       return { kind: "already-exists" }
+    case CalDavErrorCode.Forbidden:
+      // A 403 that names a condition is a refusal no retry changes (RFC 4791 answers a missing
+      // privilege or unacceptable data this way); kept as `unreachable` it would block the queue.
+      return error.condition === undefined
+        ? { kind: "unreachable" }
+        : { kind: "rejected", message: error.message }
     // The session may need signing in again; the write waits and nothing is lost.
     case CalDavErrorCode.Unauthorized:
-    case CalDavErrorCode.Forbidden:
     case CalDavErrorCode.Network:
     case CalDavErrorCode.Timeout:
     case CalDavErrorCode.TooManyRedirects:
       return { kind: "unreachable" }
     case CalDavErrorCode.Server: {
-      // 401, 403, 408 and 429 ask for a later try; any other 4xx is a refusal, a 5xx a busy server.
+      // 401, 408, 429 and a 403 without a condition ask for a later try; any other 4xx is a
+      // refusal, a 5xx a busy server.
       const status = error.status
       const refused = status !== undefined && status >= 400 && status < 500 &&
-        status !== 401 && status !== 403 && status !== 408 && status !== 429
+        status !== 401 && status !== 408 && status !== 429 &&
+        (status !== 403 || error.condition !== undefined)
       return refused ? { kind: "rejected", message: error.message } : { kind: "unreachable" }
     }
     default:
@@ -221,13 +244,23 @@ export function createCalDavWriteTransport<P, S>(
           return await settled(created.output.url, created.output.etag, ics, command.entityId)
         }
         if (created.error.code === CalDavErrorCode.AlreadyExists) {
-          // A repeat of a create whose answer was lost finds its own object: that is success.
-          // Compared by UID, because a server may store the text with its properties reordered.
+          // A repeat of a create whose answer was lost finds its own object, known by its UID.
           const existing = await writer.getObject(objectAddress)
           if (existing.success) {
             const uid = uidOf(ics)
             if (uid !== null && uid === uidOf(existing.output.data)) {
-              return options.toEntity(existing.output, command.entityId)
+              // Only the same content means the create arrived as it is now.
+              if (sameLines(existing.output.data, ics)) {
+                return options.toEntity(existing.output, command.entityId)
+              }
+              // The texts differ: an edit made here since the first try, one made on another
+              // device since the create arrived, or both. No etag says which, so nothing is
+              // written: the queue fetches the server's copy and the person chooses.
+              const error: CalDavError = {
+                code: CalDavErrorCode.Conflict,
+                message: "This item is already on the server with other text.",
+              }
+              throw new CalDavWriteError(classifyCalDavError(error), error)
             }
             // Another task holds the name. `already-exists` would let the outbox offer "Keep
             // mine" as an update with the etag of that task, overwriting it; a refusal cannot be

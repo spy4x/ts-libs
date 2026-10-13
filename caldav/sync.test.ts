@@ -1,5 +1,5 @@
 import { expect } from "@std/expect"
-import { type CalDavClient, CalDavErrorCode } from "./client.ts"
+import { type CalDavClient, CalDavErrorCode, createCalDavClient } from "./client.ts"
 import {
   type CalDavSyncStore,
   type CalDavSyncTransport,
@@ -396,4 +396,77 @@ Deno.test(`loading completed tasks resolves false when the multiget leaves one o
     return result.ok ? { ok: true, data: result.data.filter((o) => o.href !== `${A}done`) } : result
   }
   expect(await sync.loadCompleted(A)).toBe(false)
+})
+
+/**
+ * A real client over a scripted server with one calendar, `/cal/a/`, whose ctag grows on every
+ * listing so each refresh asks for its objects again. `report` answers the object listing.
+ */
+function clientSync(report: (url: URL) => Response) {
+  let ctag = 0
+  const xml = (body: string, status = 207) =>
+    new Response(
+      `<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:S="http://calendarserver.org/ns/">${body}</D:multistatus>`,
+      { status },
+    )
+  const fakeFetch: typeof fetch = (input, init) => {
+    const url = new URL(String(input))
+    if (init?.method === `REPORT`) return Promise.resolve(report(url))
+    return Promise.resolve(xml(
+      `<D:response><D:href>/cal/a/</D:href><D:propstat><D:prop><D:resourcetype><D:collection/><C:calendar/></D:resourcetype><S:getctag>${++ctag}</S:getctag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`,
+    ))
+  }
+  const client = createCalDavClient({
+    serverUrl: `https://d`,
+    auth: { username: `me`, password: `pw` },
+    fetch: fakeFetch,
+  })
+  const { store, held } = fakeStore()
+  const transport = createClientTransport(client, { homeUrl: `https://d/cal/`, component: `VTODO` })
+  const entry = (name: string, status?: number) =>
+    status
+      ? `<D:response><D:href>/cal/a/${name}</D:href><D:status>HTTP/1.1 ${status} X</D:status></D:response>`
+      : `<D:response><D:href>/cal/a/${name}</D:href><D:propstat><D:prop><D:getetag>"1"</D:getetag><C:calendar-data>ics</C:calendar-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`
+  return { sync: createCalDavSync(transport, store), held, xml, entry }
+}
+
+const CAL = `https://d/cal/a/`
+
+Deno.test(`a listing with one object the server reports as failed removes nothing and reports the calendar as failed`, async () => {
+  let failing = false
+  const { sync, held, xml, entry } = clientSync(() =>
+    xml(entry(`a.ics`) + entry(`b.ics`, failing ? 500 : undefined))
+  )
+  expect(await sync.refresh()).toEqual({ answered: true, failed: [], written: 2, removed: 0 })
+  failing = true
+  expect(await sync.refresh()).toEqual({ answered: true, failed: [CAL], written: 0, removed: 0 })
+  expect(held(CAL)).toEqual([`${CAL}a.ics`, `${CAL}b.ics`])
+})
+
+Deno.test(`an object the server reports as gone inside a listing is removed, as one it no longer lists`, async () => {
+  let gone = false
+  const { sync, held, xml, entry } = clientSync(() =>
+    xml(entry(`a.ics`) + entry(`b.ics`, gone ? 404 : undefined))
+  )
+  await sync.refresh()
+  gone = true
+  expect(await sync.refresh()).toEqual({ answered: true, failed: [], written: 0, removed: 1 })
+  expect(held(CAL)).toEqual([`${CAL}a.ics`])
+})
+
+Deno.test(`a calendar that moved and then answers 404 for itself removes nothing and is reported as failed`, async () => {
+  let moved = false
+  const { sync, held, xml, entry } = clientSync((url) => {
+    if (!moved) return xml(entry(`a.ics`))
+    if (url.pathname === `/cal/a/`) {
+      return new Response(null, { status: 301, headers: { Location: `/cal/moved/` } })
+    }
+    return xml(
+      `<D:response><D:href>/cal/moved/</D:href><D:status>HTTP/1.1 404 Not Found</D:status></D:response>`,
+    )
+  })
+  expect(await sync.refresh()).toEqual({ answered: true, failed: [], written: 1, removed: 0 })
+  moved = true
+  expect(await sync.refresh()).toEqual({ answered: true, failed: [CAL], written: 0, removed: 0 })
+  expect(held(CAL)).toEqual([`${CAL}a.ics`])
 })
