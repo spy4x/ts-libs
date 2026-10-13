@@ -281,6 +281,20 @@ describe("the middleware's wiring", () => {
     expect(lines[2]).toBe("error: unhandled exception on GET /api/boom")
   })
 
+  it("writes the unhandled-exception line of a path with an encoded line break as one line", async () => {
+    const lines: string[] = []
+    const app = new Hono<APIContext>().basePath("/api")
+    applyBaseMiddleware(app, { write: (...data) => lines.push(String(data[0])) })
+    app.get("/b/:id", () => {
+      throw new Error("x")
+    })
+
+    await app.request("/api/b/a%0Afake%20line")
+
+    expect(lines).toHaveLength(3)
+    expect(lines[2]).toBe(String.raw`error: unhandled exception on GET /api/b/a\nfake line`)
+  })
+
   it("answers 500 without an unhandled rejection when an async reporter rejects", async () => {
     const app = new Hono<APIContext>().basePath("/api")
     applyBaseMiddleware(app, {
