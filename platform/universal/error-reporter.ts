@@ -127,21 +127,62 @@ export function scrubUrl(url: string, redactPathAfter: string[] = []): string {
   }
 }
 
+/** What may follow the `@` of a URL's credentials: a host, an optional port, then the URL's end. */
+const HOST_AHEAD = /^(?:\[[\da-f:.]+\]|[\w.%~-]+)(?::\d*)?(?=$|[/?#"'<>)])/i
+
+/**
+ * One address of free text, cut at its last `@`, without the credentials that `@` may end.
+ *
+ * A password is not always encoded, so the last `@` ends the credentials even after a `/`, `?`,
+ * quote or bracket. The same `@` may instead belong to the path or the query, as in a reset link
+ * with an e-mail address. The answer keeps only what is safe under both readings:
+ *
+ * - an `@` in the query or fragment that no host name follows: nothing is dropped here, and
+ *   `scrubUrl` drops the query;
+ * - a host name follows it and a path came first: the whole address is masked;
+ * - an `@` in a path segment that `redactPathAfter` masks: nothing is dropped here, and `scrubUrl`
+ *   masks the segment;
+ * - anything else: the text up to the `@` goes.
+ */
+function dropCredentials(
+  scheme: string,
+  credentials: string,
+  rest: string,
+  redactPathAfter: string[],
+): string {
+  const whole = `${scheme}${credentials}${rest}`
+  const dropped = `${scheme}${rest}`
+  const at = credentials.length - 1
+  // The URL pattern of `scrubText` ends an address at these, so what follows is sent as it is.
+  const end = credentials.search(/["'<>)]/)
+  if (end !== -1) return dropped
+  const slash = credentials.indexOf("/")
+  const query = credentials.search(/[?#]/)
+  if (query !== -1) {
+    if (!HOST_AHEAD.test(rest)) return whole
+    return slash !== -1 && slash < query ? `${scheme}${MASK}` : dropped
+  }
+  if (slash === -1) return dropped
+  const segments = credentials.slice(slash, at).split("/")
+  return redactPathAfter.includes(segments[segments.length - 2]) ? whole : dropped
+}
+
 /**
  * Free text with the secrets it may carry masked: URLs lose their query, `Bearer` values, and the
  * value of anything named like a password, token, cookie or key.
  *
- * A URL loses its credentials too. After `://`, everything up to the last `@` before the next
- * whitespace counts as credentials, so a URL whose path or query holds an `@` loses the text before
- * it as well.
+ * A URL loses its credentials too, also when the password holds a `/`, `?`, quote or bracket. So a
+ * URL with an `@` in its path loses the text before it, and one whose query ends in `@` and a host
+ * name is masked whole.
  */
 export function scrubText(text: string, redactPathAfter: string[] = []): string {
   return text.slice(0, MAX_TEXT)
     // A header line is secret to its end: `Cookie: a=1; b=2`, `Authorization: Basic …`.
     .replace(/\b(authorization|proxy-authorization|set-cookie|cookie)\s*:[^\n]*/gi, `$1: ${MASK}`)
-    // A URL's credentials end at the last `@` before the next whitespace, whatever the password
-    // holds: a `/`, `?`, `)` or quote in it would otherwise end the URL below before its `@`.
-    .replace(/\b([a-z][a-z\d+.-]{0,30}:\/\/)\S*@/gi, "$1")
+    .replace(
+      /\b([a-z][a-z\d+.-]{0,30}:\/\/)(\S*@)(\S*)/gi,
+      (_, scheme, credentials, rest) => dropCredentials(scheme, credentials, rest, redactPathAfter),
+    )
     .replace(/\b[a-z][a-z\d+.-]{0,30}:\/\/[^\s"'<>)]+/gi, (url) => scrubUrl(url, redactPathAfter))
     // A relative path loses its query and fragment: `GET /reset?code=…`.
     .replace(/(^|[\s"'(=:[])(\/[^\s"'<>)?#]*)[?#][^\s"'<>)]*/g, "$1$2")

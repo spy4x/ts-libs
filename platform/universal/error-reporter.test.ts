@@ -454,4 +454,41 @@ describe("scrubText", () => {
       "a@example.com saw redis://cache:6379/0, then b@example.com",
     )
   })
+
+  // An e-mail address followed by a code is the ordinary shape of a reset or invite link.
+  const links: [string, string][] = [
+    ["a query", "/reset?email=user@example.com&code=123456"],
+    ["a fragment", "/reset#email=user@example.com&code=123456"],
+    ["a query with an encoded parameter", "/reset?email=user@example.com&next=%2Fhome&code=123456"],
+  ]
+
+  for (const [name, link] of links) {
+    it(`drops ${name} that holds an at sign before a code`, () => {
+      expect(scrubText(`GET https://app.example.com${link} failed`)).toBe(
+        "GET https://app.example.com/reset failed",
+      )
+    })
+  }
+
+  it("drops a query that holds an at sign before a code when no path comes first", () => {
+    expect(scrubText("GET https://app.example.com?email=user@example.com&code=123456 failed")).toBe(
+      "GET https://app.example.com/ failed",
+    )
+  })
+
+  it("masks a secret path segment that holds an at sign", () => {
+    expect(scrubText("https://app.example.com/invite/abc@def", ["invite"])).toBe(
+      "https://app.example.com/invite/<REDACTED>",
+    )
+  })
+
+  // Either a password with a slash and a question mark, or a query that ends in an e-mail
+  // address: the two cannot be told apart, so nothing of the address is kept.
+  it("masks the whole address when a host name follows an at sign in a query after a path", () => {
+    expect(scrubText("connect postgres://app:12/RE?ST@db.example.com:5432/app failed")).toBe(
+      "connect postgres://<REDACTED> failed",
+    )
+    expect(scrubText("GET https://app.example.com/reset?code=123456&email=user@example.com failed"))
+      .toBe("GET https://<REDACTED> failed")
+  })
 })
