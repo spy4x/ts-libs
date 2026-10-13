@@ -249,7 +249,9 @@ The comparison is the one a repeated create uses, and it answers "not mine" when
 stores other lines than it was sent. Radicale adds a `VTIMEZONE` to a task whose date has a `TZID`,
 and both Radicale and Stalwart rewrite a lower-case property name in capitals; such a task costs
 the person one tap on the conflict, and is never deleted unseen. `etagOf` must answer no etag for
-this delete, which it does when the app only knows etags the server gave it.
+this delete, which it does when the app only knows etags the server gave it. `toIcs` must give the
+same text for the same payload each time it is called: a text that changes between calls (a fresh
+`DTSTAMP`, say) never matches what was sent.
 
 The calendar address may be path-only (`/dav/cal/me/tasks/`) for a browser app behind a relay:
 `objectUrl` then returns a path, and the writer receives paths only. An address that dot segments,

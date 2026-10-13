@@ -477,6 +477,18 @@ describe("delete of a task whose create the server never confirmed", () => {
     return { ...t, remove }
   }
 
+  it("deletes with the known etag, without a read, when the app has one", async () => {
+    const { send, transport, seen, objects } = setup()
+    await send("create", "e1", "milk", 0)
+    seen.length = 0
+    await transport.send(
+      { kind: "delete", entityId: "e1", payload: "milk", baseVersion: 1, ownCreates: ["milk"] },
+      "key",
+    )
+    expect(seen.map((s) => [s.method, s.headers.get("If-Match")])).toEqual([["DELETE", `"1"`]])
+    expect(objects.size).toBe(0)
+  })
+
   it("deletes the object with the etag just read when it is the text this device sent", async () => {
     const { remove, seen, objects } = await lostCreate(true)
     expect(await remove()).toBeUndefined()

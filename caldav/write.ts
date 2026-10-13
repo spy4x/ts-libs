@@ -23,8 +23,8 @@
  * texts that create was sent with (`ownCreates`), so the object is read first: gone means the
  * create never arrived and the delete is done; the same content lines as one of those texts (so
  * the same UID too) means the object is this device's own create, and it is deleted with the etag
- * just read;
- * anything else is another device's write, so nothing is deleted and the failure is `version`.
+ * just read; anything else may be another device's write, or a copy the server stored with other
+ * lines, so nothing is deleted and the failure is `version`.
  *
  * A 401 is not a refusal of the write: the session may need signing in again, so the write stays
  * queued (`unreachable`). A 403 that names a condition (`need-privileges`,
