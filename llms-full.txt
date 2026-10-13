@@ -80,7 +80,8 @@ on the way in.
 - **Few dependencies.** `@spy4x/net` and `@spy4x/time` have none. Shared
   ones (arktype, Hono, Postgres) are pinned to exact versions.
 - **Tested against the real thing.** Unit tests use fakes; an integration tier runs against a real
-  Postgres, S3-compatible store, mail server and Redis, and fails instead of skipping.
+  Postgres, S3-compatible store, mail server and Redis, and fails instead of skipping. CI runs it
+  on Postgres 18 and 17; the local containers run 18.
 
 **Use it if** you build on Deno or ship a browser bundle and want small, typed primitives without a
 framework. **Skip it if** you need tested Node.js support or UI components (those live in
@@ -3640,7 +3641,9 @@ that asked. The bound counts from the first call that waits, not from the port's
 
 `sendCommand` makes one key per command and sends every try with it. Tries: `attempts` (default 4);
 the wait before repeat `n` is `delayMs * 2 ** (n - 1)` (default 1 s), capped at `maxDelayMs` and
-jittered by `backoffDelay`. `unauthorized` is never retried.
+jittered by `backoffDelay`. Tried again: a lost connection, an answer that did not arrive in time,
+and the server's `timeout`, `rate_limited` (it refused the call before running it) and `conflict`
+with `details.code` `IN_PROGRESS`. Every other answer is final; `unauthorized` is never retried.
 
 ## Fixed at port time
 
@@ -3855,6 +3858,9 @@ it as `rejected`, a conflict the person could only discard. The session ended, b
 else or owes a second factor, so the server never judged the write: it now stays queued
 (`unreachable`) until its owner signs in. Pass `classifyByCode({ unauthorized: "rejected" })` to
 keep the old reading.
+
+A write answered `rate_limited` or `internal` stays pending as well. The server was busy, or failed
+in a way that says nothing about the write, so the sync runner sends it again with backoff.
 
 ## Read cache (`@spy4x/realtime/read-cache`)
 
@@ -5948,6 +5954,12 @@ read at all. The original had the same property already (it built its path with
 `getPath(c.req.raw)`, which has the same behaviour) — nothing was leaking, and
 `log.test.ts` now asserts it directly (`never logs the query string`, `does not read or log any
 request header`) instead of leaving it incidental.
+
+**One request, one line each way.** Hono decodes the pathname, so `%0A` arrives as a real line
+break. A line break or any other control character in the method or the path is written escaped
+(`\n`, `\r`, `\t`, `\x1b`, `\u2028`), so a caller cannot start a second, forged log line or send a
+terminal an escape sequence. The `error: unhandled exception on …` line of `applyBaseMiddleware`
+is escaped the same way. A backslash is kept as it is.
 
 **Arrows: `<--` on the way in, `-->` on the way out**, matching both the source and Hono's own
 built-in `hono/logger`. `log.test.ts` pins the direction by name (`logs incoming then outgoing, in
