@@ -479,6 +479,26 @@ and the person chooses.
 An update or delete whose `etagOf` gives no etag sends nothing and answers `version`: the queue then
 fetches the server's copy and the person chooses, so a change made on another device is never
 overwritten unseen.
+
+One delete finishes without an etag: the delete of a task this device created and never saw
+confirmed (the create's answer was lost, then the person deleted the task). The outbox hands such
+a delete the texts the create was sent with, as `ownCreates` on the command, and the transport
+reads the object first:
+
+- The address answers "not found": the create never reached the server. The delete is done, and
+  no request that changes the server is sent.
+- The object has the UID and the content lines of one of those texts, in any order: it is this
+  device's own create. It is deleted with the etag just read, so a change another device makes
+  between the read and the delete is refused by the server and becomes `version`.
+- Anything else (another device edited the task, or another object sits at the address): nothing
+  is deleted and the queue sees `version`, as for any delete without an etag.
+
+The comparison is the one a repeated create uses, and it answers "not mine" whenever the server
+stores other lines than it was sent. Radicale adds a `VTIMEZONE` to a task whose date has a `TZID`,
+and both Radicale and Stalwart rewrite a lower-case property name in capitals; such a task costs
+the person one tap on the conflict, and is never deleted unseen. `etagOf` must answer no etag for
+this delete, which it does when the app only knows etags the server gave it.
+
 The calendar address may be path-only (`/dav/cal/me/tasks/`) for a browser app behind a relay:
 `objectUrl` then returns a path, and the writer receives paths only. An address that dot segments,
 backslashes or encoded dots would turn into another host or a `//` prefix throws a `RangeError`.
@@ -496,6 +516,9 @@ backslashes or encoded dots would turn into another host or a `//` prefix throws
 | 412 on a create, and the object there has the same UID and other content            | `version`, nothing written                     |
 | 412 on a create, and the object there has another UID (or none)                     | `rejected`: no "Keep mine" can overwrite it    |
 | an update or delete with no etag known (`etagOf`)                                   | `version`, no request sent                     |
+| a delete with `ownCreates` and no etag: the read answers 404 or 410                 | success, nothing sent that changes the server  |
+| a delete with `ownCreates` and no etag: the object is one of the texts sent         | deleted with the etag just read                |
+| a delete with `ownCreates` and no etag: the object is anything else                 | `version`, nothing deleted                     |
 
 ```ts
 const writer = createCalDavClient({ serverUrl, auth }) // or an adapter with the same results
