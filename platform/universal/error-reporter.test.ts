@@ -589,6 +589,15 @@ describe("scrubText", () => {
     )
   })
 
+  // One character alone stands between the host and a value that holds an `@`.
+  for (const separator of ["&", "=", ",", ";", "(", "[", "]", "{", "}"]) {
+    it(`shows nothing of a value with an at sign that follows a host after "${separator}"`, () => {
+      expect(scrubText(`see https://a.example${separator}ab@cdEFG now`)).toBe(
+        "see https://<REDACTED> now",
+      )
+    })
+  }
+
   // The mask comes after every other pattern: the name of the secret sits in the masked text, and
   // its value in the next word.
   it("masks a secret whose name sits in the text that an address mask covers", () => {
