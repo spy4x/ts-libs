@@ -7,8 +7,6 @@
  *
  * @example
  * ```ts
- * import { SortMode, sortTasks } from "@spy4x/tasks/view"
- *
  * const byDue = sortTasks(tasks, SortMode.Due, "Europe/Berlin")
  * ```
  * @module

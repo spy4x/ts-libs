@@ -7,8 +7,6 @@
  *
  * @example
  * ```ts
- * import { createReminderRunner } from "@spy4x/tasks/reminder-runner"
- *
  * const runner = createReminderRunner({ listTasks, notify, state, zone: "Europe/Berlin" })
  * runner.start()
  * ```

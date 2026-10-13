@@ -7,8 +7,6 @@
  *
  * @example
  * ```ts
- * import { isOpen, parseTask } from "@spy4x/tasks/model"
- *
  * const parsed = parseTask({ href: "/dav/tasks/1.ics", etag: `"1"`, listHref: "/dav/tasks/", ics })
  * if (parsed.success && isOpen(parsed.output)) show(parsed.output)
  * ```

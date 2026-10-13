@@ -6,8 +6,6 @@
  *
  * @example
  * ```ts
- * import { parseQuickAdd } from "@spy4x/tasks/quick-add"
- *
  * const parsed = parseQuickAdd("Call Anna tomorrow 3pm !high", {
  *   now: new Date(),
  *   timeZone: "Europe/Berlin",
