@@ -327,7 +327,11 @@ What the client guarantees:
 - **Failures are not empty lists.** A missing calendar is `NotFound`, never `[]`. Stalwart
   answers a `calendar-query` on an empty calendar, and on a calendar that does not exist, with 207
   and only the calendar's own entry at 404; `listObjects` then asks the calendar's `resourcetype`
-  (`PROPFIND`, depth 0) and returns `[]` for a calendar, `NotFound` for anything else.
+  (`PROPFIND`, depth 0) and returns `[]` for a calendar, `NotFound` for anything else. The same
+  holds after a same-origin redirect: a calendar or home that moved is recognised under the address
+  the answer came from, so its own 404 is `NotFound` too. An object the server reports inside a
+  listing with an error other than 404 or 410 fails `listObjects` with the code of that status,
+  instead of being left out as if it were deleted; a 404 or 410 entry is left out.
   `deleteCalendar` checks the collection is a calendar first, so it cannot delete the home.
 - **Bounded.** One `timeoutMs` (default 30 s) covers a whole call; no body is read past
   `maxResponseBytes` (default 10 MiB).
@@ -457,12 +461,18 @@ generated name to `childUrl` and resolve only hrefs the server sent.
 
 `caldav/write` fills the `send`, `fetchServer` and `classify` ports of the outbox in
 `@spy4x/realtime/outbox`, so a queue of offline edits reaches a CalDAV server without overwriting
-anyone's change. A create is `PUT` with `If-None-Match: *` to `<entityId>.ics` (a repeat after a
-lost answer finds its own object, by its UID, and succeeds even if the server reordered the text);
-an update is `PUT` with `If-Match: <etag>`; a delete is `DELETE` with `If-Match`. Only a create
+anyone's change. A create is `PUT` with `If-None-Match: *` to `<entityId>.ics`; an update is `PUT`
+with `If-Match: <etag>`; a delete is `DELETE` with `If-Match`. Only a create
 needs the entity id to be a plain file name: an update or delete goes to the address `urlOf` gives.
 The app supplies the calendar, the object's address, the etag a write is based on, the iCalendar
 text, and how to turn an object into its entity.
+
+A repeat of a create after a lost answer finds its own object, by its UID. When that object holds
+exactly the text being sent, the create is done. When the text differs, the repeat may carry an
+edit made since the first try (the outbox merges an edit into a create that is still queued), so
+the text is written as an update with the etag just read. A server that stores the text reordered
+gets that one extra update. If the object has no etag, nothing is written and the queue sees
+`version`.
 
 An update or delete whose `etagOf` gives no etag sends nothing and answers `version`: the queue then
 fetches the server's copy and the person chooses, so a change made on another device is never
@@ -477,8 +487,11 @@ backslashes or encoded dots would turn into another host or a `//` prefix throws
 | 412 on a create, when the follow-up read finds no object (it was deleted meanwhile) | `already-exists`                               |
 | 404 or 410 on an update                                                             | `not-found`                                    |
 | 404 or 410 on a delete                                                              | success                                        |
-| network error, timeout, 5xx, 401, 403, 408, 429                                     | `unreachable`: keep the entry, retry later     |
+| network error, timeout, 5xx, 401, 408, 429, a 403 without a `DAV:error` condition   | `unreachable`: keep the entry, retry later     |
+| a 403 with a `DAV:error` condition (no privilege, data the calendar does not take)  | `rejected`: the writes behind it are sent      |
 | other 4xx (not 401, 403, 408, 429), a bad entity id on a create                     | `rejected`, with the message                   |
+| 412 on a create, and the object there has the same UID and the same text            | success, nothing written                       |
+| 412 on a create, and the object there has the same UID and other text               | an update with the etag just read              |
 | 412 on a create, and the object there has another UID (or none)                     | `rejected`: no "Keep mine" can overwrite it    |
 | an update or delete with no etag known (`etagOf`)                                   | `version`, no request sent                     |
 
