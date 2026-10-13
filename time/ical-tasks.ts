@@ -840,6 +840,33 @@ function orphanedAlarm(
   return undefined
 }
 
+/**
+ * Refuse a patch that leaves a repeat rule on a task with no DUE: `completeTodo` moves a repeating
+ * task from its DUE and refuses one that has none. Call it after the dates and the rule are
+ * written. `hadDue` is whether the task had a DUE before the patch and `ruleWritten` whether the
+ * patch wrote a rule. A task that already had a rule and no DUE, and whose rule the patch does not
+ * write, is left alone, so a document another client wrote that way can still be changed.
+ */
+function repeatWithoutDue(
+  todo: IcalComponent,
+  hadDue: boolean,
+  ruleWritten: boolean,
+): IcalResult<never> | undefined {
+  const rule = getProperty(todo, "RRULE")
+  if (!rule || getProperty(todo, "DUE")) return undefined
+  if (ruleWritten) {
+    return fail(
+      IcalErrorCode.InvalidValue,
+      `a repeat rule (${rule.value}) needs DUE on the todo; set DUE in the same patch`,
+    )
+  }
+  if (!hadDue) return undefined
+  return fail(
+    IcalErrorCode.InvalidValue,
+    `a repeat rule (${rule.value}) needs DUE on the todo; to clear DUE, remove the rule in the same patch`,
+  )
+}
+
 /** DTSTAMP and LAST-MODIFIED to `now`; SEQUENCE up by one when `bump`. */
 function stamp(
   component: IcalComponent,
@@ -929,6 +956,7 @@ function applyTodo(
   }
   const changed = scheduleChanges(todo, patch)
   const anchors = anchorsOf(todo)
+  const hadDue = getProperty(todo, "DUE") !== undefined
   return firstFailure(
     () => writeOptionalText(todo, "SUMMARY", patch.summary),
     () => writeOptionalText(todo, "DESCRIPTION", patch.description),
@@ -947,6 +975,7 @@ function applyTodo(
     () => writeCategories(todo, patch.categories),
     () => writeRelatedTo(todo, patch.relatedTo),
     () => writeRrule(todo, changed.rrule ? patch.rrule : undefined),
+    () => repeatWithoutDue(todo, hadDue, changed.rrule && typeof patch.rrule === "string"),
     () => changed.writeStatus ? applyStatus(todo, root, patch, now) : undefined,
     () => writeAlarms(todo, patch.alarms),
     () => orphanedAlarm(todo, anchors),
@@ -1069,7 +1098,10 @@ function transaction(
  * date with no VTIMEZONE ({@link IcalErrorCode.UnknownTzid}); a bad priority, percent, status,
  * date, RRULE or RELATED-TO ({@link IcalErrorCode.InvalidValue}); clearing `start` or `due`
  * while a reminder left after the patch counts from it (the same code: pass `alarms` in the same
- * patch to change or remove the reminder).
+ * patch to change or remove the reminder); a new or changed `rrule` when the task has no DUE after
+ * the patch, or clearing `due` while the rule stays (the same code, naming the rule: set `due` or
+ * pass `rrule: null` in the same patch). A task that already repeats without DUE takes any patch
+ * that does not write a rule.
  *
  * A repeating task stays repeating, and `status: Completed` on one is refused unless
  * `options.completeSeries` is true, which ends the series as written. To move a series to its
