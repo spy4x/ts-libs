@@ -327,6 +327,8 @@ goes up by one on an event patch, and on a task patch that changes `start`, `due
 `alarms` writes reminders: a list replaces the VALARMs (an equal one stays as it is), `null` removes
 them all, and leaving it out keeps them. A reminder counted from the start or end needs that date on
 the task or event.
+A patch that clears that date while such a reminder stays is refused and names the
+date and the reminder; pass `alarms` in the same patch to change or remove it.
 Completing sets STATUS, COMPLETED and PERCENT-COMPLETE together, reopening clears them. A repeating
 task keeps its RRULE and reads `repeats: true`; completing one is refused unless the options say
 `completeSeries: true`. `newTodo` and `newEvent` take `uid`, `now` and `prodid` from the caller.

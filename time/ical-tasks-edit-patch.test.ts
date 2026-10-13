@@ -158,11 +158,19 @@ Deno.test(`clearing due, start, notes and tags removes their lines`, () => {
     `DTSTART;VALUE=DATE:20261008`,
     `CATEGORIES:a,b`,
   ])
-  const { ics: after, task: read } = edited(ics, { notes: ``, due: null, start: null, tags: [] })
   // The reminder keeps its own DESCRIPTION line; the task's is gone.
-  expect(lines(after).filter((line) => line.startsWith(`DESCRIPTION:`))).toEqual([
+  const withReminder = edited(ics, { notes: ``, start: null, tags: [] })
+  expect(lines(withReminder.ics).filter((line) => line.startsWith(`DESCRIPTION:`))).toEqual([
     `DESCRIPTION:Default Tasks.org description`,
   ])
+  // The fixture's reminder counts from the due date, so it goes in the edit that clears the date.
+  const { ics: after, task: read } = edited(ics, {
+    notes: ``,
+    due: null,
+    start: null,
+    tags: [],
+    reminders: [],
+  })
   expect(after).not.toMatch(/^(DUE|DTSTART|CATEGORIES)/m)
   expect([read.notes, read.due, read.start, read.tags]).toEqual([``, undefined, undefined, []])
 })

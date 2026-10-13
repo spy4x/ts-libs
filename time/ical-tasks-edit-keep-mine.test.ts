@@ -114,7 +114,8 @@ for (const field of FIELDS) {
 
 /** One row per field a text can lose. */
 const CLEARED: { name: string; mine: TaskEdit; read: (task: Task) => unknown }[] = [
-  { name: `due date`, mine: { due: null }, read: (t) => t.due },
+  // The fixture's reminder counts from the due date, so it goes in the edit that clears the date.
+  { name: `due date`, mine: { due: null, reminders: [] }, read: (t) => t.due },
   { name: `start date`, mine: { start: null }, read: (t) => t.start },
   { name: `sort order`, mine: { sortOrder: null }, read: (t) => t.sortOrder },
   { name: `repeat rule`, mine: { repeatRule: null }, read: (t) => t.repeatRule },
