@@ -224,7 +224,10 @@ export interface CalDavClient {
   discover(): Promise<CalDavResult<CalDavDiscovery>>
   /** The calendar collections directly under a calendar home. */
   listCalendars(homeUrl: string | URL): Promise<CalDavResult<CalDavCalendar[]>>
-  /** The objects of a calendar matching a `calendar-query`. */
+  /**
+   * The objects of a calendar matching a `calendar-query`. Fails, instead of leaving the object
+   * out, when the server reports one with an error other than 404 or 410.
+   */
   listObjects(
     calendarUrl: string | URL,
     options: ListObjectsOptions,
@@ -559,6 +562,9 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
    * REPORT cannot tell them apart. A `PROPFIND` of depth 0 can: it gives 404 for an address that
    * names nothing, which fails with `NotFound`, and a `calendar` resource type for a calendar.
    * An answer with any other shape is left to {@link toObjects}.
+   *
+   * `base` is the address the answer came from. After a redirect it differs from `calendar`, the
+   * address asked for, and the entry may name either.
    */
   const isEmptyCalendarAnswer = async (
     call: Call,
@@ -568,27 +574,34 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
   ): Promise<boolean> => {
     const [only] = responses
     if (responses.length !== 1 || only.status === undefined || !isGone(only.status)) return false
-    if (!sameResource(ownHref(only.href, base), calendar)) return false
-    const probe = await propfind(call, calendar, "0", RESOURCE_TYPE_PROPS)
+    if (!isEither(ownHref(only.href, base), calendar, base)) return false
+    const probe = await propfind(call, base, "0", RESOURCE_TYPE_PROPS)
     for (const response of probe.responses) {
-      if (!sameResource(ownHref(response.href, probe.reply.url), calendar)) continue
+      if (!isEither(ownHref(response.href, probe.reply.url), base, probe.reply.url)) continue
       failIfSelfFailed(response)
       if (isCalendar(response)) return true
     }
     fail(CalDavErrorCode.NotFound, "the address is not a calendar", { status: 404 })
   }
 
-  /** Turn calendar-data responses into objects; refuse a foreign href or a missing body. */
+  /**
+   * Turn calendar-data responses into objects; refuse a foreign href or a missing body. An entry
+   * for the collection itself, under the address asked for or the one the answer came from
+   * (`base`), fails the call when it is an error. `failed` is the status of the first other entry
+   * the server reported as an error that does not mean "gone".
+   */
   const toObjects = (responses: DavResponse[], base: URL, collection: URL) => {
     const objects: CalDavObject[] = []
     const missing: string[] = []
+    let failed: number | undefined
     for (const response of responses) {
       const url = ownHref(response.href, base)
-      if (sameResource(url, collection)) {
+      if (isEither(url, collection, base)) {
         failIfSelfFailed(response)
         continue
       }
       if (response.status !== undefined && response.status >= 400) {
+        if (!isGone(response.status)) failed ??= response.status
         for (const href of response.hrefs) missing.push(ownHref(href, base).href)
         continue
       }
@@ -600,7 +613,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
       const etag = entityTag(getPropText(response, DAV_NS, "getetag"))
       objects.push({ url: url.href, etag, data })
     }
-    return { objects, missing }
+    return { objects, missing, failed }
   }
 
   /** Validate an etag before it is sent: present, and sendable as a header exactly as given. */
@@ -685,7 +698,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
         const calendars: CalDavCalendar[] = []
         for (const response of responses) {
           const url = ownHref(response.href, reply.url)
-          if (sameResource(url, home)) failIfSelfFailed(response)
+          if (isEither(url, home, reply.url)) failIfSelfFailed(response)
           if (!isCalendar(response)) continue
           const components = getProp(response, CALDAV_NS, "supported-calendar-component-set")
           const calendar: CalDavCalendar = {
@@ -723,7 +736,12 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
         }
         const { reply, responses } = await report(call, calendar, body)
         if (await isEmptyCalendarAnswer(call, responses, reply.url, calendar)) return []
-        return toObjects(responses, reply.url, calendar).objects
+        const listed = toObjects(responses, reply.url, calendar)
+        // A stored copy of an object the server could not read must not look deleted.
+        if (listed.failed !== undefined) {
+          failForStatus(listed.failed, "the server reported an error for an object of the listing")
+        }
+        return listed.objects
       }),
 
     getObjects: (calendarUrl, urls) =>
@@ -733,7 +751,8 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
         if (targets.length === 0) return { objects: [], missing: [] }
         const body = calendarMultigetBody(targets.map((url) => `${url.pathname}${url.search}`))
         const { reply, responses } = await report(call, calendar, body)
-        return toObjects(responses, reply.url, calendar)
+        const { objects, missing } = toObjects(responses, reply.url, calendar)
+        return { objects, missing }
       }),
 
     getObject: (url) =>
@@ -939,6 +958,11 @@ function failIfSelfFailed(response: DavResponse): void {
   if (response.status !== undefined && response.status >= 400) {
     failForStatus(response.status, "the collection itself answered with an error")
   }
+}
+
+/** Whether `url` is the resource asked for or the one a redirect led to. */
+function isEither(url: URL, asked: URL, answered: URL): boolean {
+  return sameResource(url, asked) || sameResource(url, answered)
 }
 
 function isGone(status: number): boolean {

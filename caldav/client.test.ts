@@ -364,6 +364,18 @@ describe("listCalendars", () => {
     assertEquals(inbox.color, "#3366FFFF")
     assertEquals(inbox.components, ["VTODO"])
   })
+
+  it("reports a home that moved and then answers 404 for itself as NotFound, never as no calendars", async () => {
+    const old = `${SERVER}/dav/cal/old/`
+    const path = new URL(HOME).pathname
+    const { client } = setup((request) =>
+      request.url === old ? redirect(301, path) : multistatus(
+        `<D:multistatus xmlns:D="DAV:"><D:response><D:href>${path}</D:href><D:status>HTTP/1.1 404 Not Found</D:status></D:response></D:multistatus>`,
+      )
+    )
+    const error = failure(await client.listCalendars(old))
+    assertEquals([error.code, error.status], [CalDavErrorCode.NotFound, 404])
+  })
 })
 
 describe("listObjects", () => {
@@ -530,6 +542,59 @@ describe("listObjects", () => {
       failure(await client.listObjects(INBOX, { component: "VTODO" })).code,
       CalDavErrorCode.Malformed,
     )
+  })
+
+  it("fails with the entry's status when the server reports one object of the listing as failed", async () => {
+    const path = new URL(INBOX).pathname
+    const { client } = setup(() =>
+      multistatus(
+        `<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:response><D:href>${path}a.ics</D:href><D:propstat><D:prop><D:getetag>&quot;1&quot;</D:getetag><C:calendar-data>${ICS}</C:calendar-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>${path}b.ics</D:href><D:status>HTTP/1.1 500 Internal Server Error</D:status></D:response></D:multistatus>`,
+      )
+    )
+    const error = failure(await client.listObjects(INBOX, { component: "VTODO" }))
+    assertEquals([error.code, error.status], [CalDavErrorCode.Server, 500])
+  })
+
+  it("reports a calendar that moved and then answers 404 for itself as NotFound, never as an empty list", async () => {
+    const old = `${HOME}old/`
+    const { client, seen } = setup(async (request) => {
+      if (request.url === old) return redirect(301, new URL(INBOX).pathname)
+      return request.method === "REPORT"
+        ? multistatus(await fixture("stalwart-calendar-query-empty.xml"))
+        : new Response(null, { status: 404 })
+    })
+    const error = failure(await client.listObjects(old, { component: "VTODO" }))
+    assertEquals([error.code, error.status], [CalDavErrorCode.NotFound, 404])
+    assertEquals(seen.map((request) => [request.method, request.url]), [
+      ["REPORT", old],
+      ["REPORT", INBOX],
+      ["PROPFIND", INBOX],
+    ])
+  })
+
+  it("lists the objects of a calendar that moved, skipping the calendar's own entry", async () => {
+    const old = `${HOME}old/`
+    const path = new URL(INBOX).pathname
+    const { client } = setup((request) =>
+      request.url === old ? redirect(301, path) : multistatus(
+        `<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:response><D:href>${path}</D:href><D:propstat><D:prop><D:getetag>&quot;c&quot;</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>${path}a.ics</D:href><D:propstat><D:prop><D:getetag>&quot;1&quot;</D:getetag><C:calendar-data>${ICS}</C:calendar-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>`,
+      )
+    )
+    const objects = output(await client.listObjects(old, { component: "VTODO" }))
+    assertEquals(objects.map((object) => object.url), [`${INBOX}a.ics`])
+  })
+
+  it("lists a calendar that moved and is empty as an empty list", async () => {
+    const old = `${HOME}old/`
+    const { client, seen } = setup(async (request) => {
+      if (request.url === old) return redirect(301, new URL(INBOX).pathname)
+      return request.method === "REPORT"
+        ? multistatus(await fixture("stalwart-calendar-query-empty.xml"))
+        : multistatus(await fixture("stalwart-propfind-calendar-depth0.xml"))
+    })
+    assertEquals(output(await client.listObjects(old, { component: "VTODO" })), [])
+    // Only after asking what the new address is.
+    assertEquals(seen.at(-1)?.method, "PROPFIND")
   })
 })
 
