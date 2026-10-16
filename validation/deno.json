@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/validation",
-  "version": "1.75.0",
+  "version": "1.75.1",
   "exports": {
     ".": "./mod.ts",
     "./validate": "./validate.ts",

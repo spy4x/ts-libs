@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/time",
-  "version": "1.75.0",
+  "version": "1.75.1",
   "exports": {
     "./date": "./date.ts",
     "./locale": "./locale.ts",
