@@ -389,14 +389,56 @@ export const MAX_MASKED_EMAIL_LENGTH = 259
  *
  * Masking is stable: `maskEmail(maskEmail(x))` equals `maskEmail(x)` for every `x`. A local part
  * that is exactly `***` is read as already masked, so `***@example.com` stays as it is.
+ *
+ * With `{ domain: true }` the domain is masked too, for a record that must not tell which
+ * organisation an address belongs to: see {@link MaskEmailOptions.domain}.
  */
-export function maskEmail(email: string): string {
+export function maskEmail(email: string, options?: MaskEmailOptions): string {
   if (typeof email !== "string") return EMAIL_MASK
   const text = email.trim()
   const at = text.lastIndexOf("@")
   if (at < 0) return EMAIL_MASK
   if (text.length - at - 1 > MAX_MASKED_DOMAIN_LENGTH) return EMAIL_MASK
-  const local = text.slice(0, at)
-  const first = local === EMAIL_MASK ? undefined : local.codePointAt(0)
-  return `${first === undefined ? "" : String.fromCodePoint(first)}${EMAIL_MASK}${text.slice(at)}`
+  const local = maskLabel(text.slice(0, at))
+  if (options?.domain !== true) return `${local}${text.slice(at)}`
+  return `${local}@${maskDomain(text.slice(at + 1))}`
+}
+
+/** Options of {@link maskEmail}. */
+export interface MaskEmailOptions {
+  /**
+   * Mask the domain as well: its first label keeps only its first character, and only its last
+   * label is kept whole, so `jane@example.com` gives `j***@e***.com`.
+   *
+   * - Every label between the first and the last is dropped: `a@mail.example.co.uk` gives
+   *   `a***@m***.uk`. Telling `co.uk` apart from `example.com` needs a list of public suffixes,
+   *   which this function does not carry, so it keeps the one label that is always public.
+   * - A domain with one label keeps only its first character: `a@localhost` gives `a***@l***`.
+   * - A last label longer than 63 characters, the limit of a DNS label, is not a real ending, so
+   *   the whole domain becomes `***`. The result therefore stays within
+   *   {@link MAX_MASKED_EMAIL_LENGTH}.
+   * - An empty domain stays empty, and masking stays stable: `j***@e***.com` is returned as it is.
+   *
+   * Off by default: the default result keeps the domain exactly as it was given.
+   */
+  domain?: boolean
+}
+
+/** Longest last label {@link maskEmail} keeps when it masks a domain: the limit of a DNS label. */
+const MAX_KEPT_DOMAIN_LABEL_LENGTH = 63
+
+/** The first code point of `label` and the mask; `***` alone when `label` is empty or `***`. */
+function maskLabel(label: string): string {
+  const first = label === EMAIL_MASK ? undefined : label.codePointAt(0)
+  return `${first === undefined ? "" : String.fromCodePoint(first)}${EMAIL_MASK}`
+}
+
+/** A domain with its first label masked by {@link maskLabel} and only its last label kept. */
+function maskDomain(domain: string): string {
+  if (domain === "") return ""
+  const firstDot = domain.indexOf(".")
+  if (firstDot < 0) return maskLabel(domain)
+  const ending = domain.slice(domain.lastIndexOf(".") + 1)
+  if (ending.length > MAX_KEPT_DOMAIN_LABEL_LENGTH) return EMAIL_MASK
+  return `${maskLabel(domain.slice(0, firstDot))}.${ending}`
 }
