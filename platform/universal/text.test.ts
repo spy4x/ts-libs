@@ -678,3 +678,71 @@ describe("maskEmail", () => {
     expect(maskEmail("e\u0301ric@example.com")).toBe("e***@example.com")
   })
 })
+
+describe("maskEmail with { domain: true }", () => {
+  const domain = { domain: true }
+
+  it("masks the domain's first label behind its first character and keeps its ending", () => {
+    expect(maskEmail("jane@example.com", domain)).toBe("j***@e***.com")
+  })
+
+  it("keeps only the last label of a domain with several labels", () => {
+    expect(maskEmail("a@mail.example.co.uk", domain)).toBe("a***@m***.uk")
+    expect(maskEmail("jane@corp.example.com", domain)).toBe("j***@c***.com")
+  })
+
+  it("masks a one-label domain like a longer label, so its length does not show", () => {
+    expect(maskEmail("a@localhost", domain)).toBe("a***@l***")
+    expect(maskEmail("a@l", domain)).toBe("a***@l***")
+  })
+
+  it("shows nothing of a domain whose last label is longer than a DNS label", () => {
+    expect(maskEmail(`a@example.${"d".repeat(63)}`, domain)).toBe(`a***@e***.${"d".repeat(63)}`)
+    expect(maskEmail(`a@example.${"d".repeat(64)}`, domain)).toBe("a***@***")
+    expect(maskEmail(`a@.${"d".repeat(252)}`, domain)).toBe("a***@***")
+  })
+
+  it("keeps an empty domain empty and shows nothing of a value with no @", () => {
+    expect(maskEmail("jane@", domain)).toBe("j***@")
+    expect(maskEmail("jane.doe", domain)).toBe("***")
+    expect(maskEmail(`jane@${"d".repeat(254)}`, domain)).toBe("***")
+  })
+
+  it("keeps a non-ASCII first letter of the domain whole", () => {
+    expect(maskEmail("Ünal@пример.рф", domain)).toBe("Ü***@п***.рф")
+    expect(maskEmail("a@\u{1F600}mail.example", domain)).toBe("a***@\u{1F600}***.example")
+  })
+
+  it("returns its own output unchanged for every kind of input", () => {
+    const inputs = [
+      "jane@example.com",
+      "a@mail.example.co.uk",
+      "a@localhost",
+      "***@***.com",
+      "a@.com",
+      "a@example.com.",
+      "a@...",
+      "jane@",
+      "@",
+      "no at sign",
+      `a@example.${"d".repeat(64)}`,
+      "a@\u{1F600}mail.example",
+    ]
+    for (const input of inputs) {
+      const once = maskEmail(input, domain)
+      expect(maskEmail(once, domain)).toBe(once)
+    }
+  })
+
+  it("never returns more than MAX_MASKED_EMAIL_LENGTH code units", () => {
+    for (const host of [`x.${"d".repeat(63)}`, `.${"d".repeat(252)}`, "d".repeat(253)]) {
+      const masked = maskEmail(`\u{1F600}jane@${host}`, domain)
+      expect(masked.length).toBeLessThanOrEqual(MAX_MASKED_EMAIL_LENGTH)
+    }
+  })
+
+  it("keeps the whole domain when the option is off or missing", () => {
+    expect(maskEmail("jane@example.com", { domain: false })).toBe("j***@example.com")
+    expect(maskEmail("jane@example.com", {})).toBe("j***@example.com")
+  })
+})
