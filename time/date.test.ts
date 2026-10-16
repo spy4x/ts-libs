@@ -11,6 +11,7 @@ import {
   isValidDateRange,
   monthFirstWeekday,
   parseIsoDate,
+  recentIsoDates,
   shiftMonth,
   startOfMonth,
   startOfQuarter,
@@ -337,5 +338,63 @@ describe("startOfWeek", () => {
   it("answers a year-0000 date for a week that opens before 0001-01-01", () => {
     expect(startOfWeek("0001-01-02", 7)).toBe("0000-12-31")
     expect(() => startOfWeek("0000-01-01")).toThrow()
+  })
+})
+
+describe("recentIsoDates", () => {
+  it("lists the days that end on today's UTC day, oldest first", () => {
+    expect(recentIsoDates(3, new Date("2026-03-01T09:00:00Z"))).toEqual([
+      "2026-02-27",
+      "2026-02-28",
+      "2026-03-01",
+    ])
+  })
+
+  it("takes the UTC day of now, at either end of it", () => {
+    expect(recentIsoDates(2, new Date("2026-01-01T00:00:00.000Z"))).toEqual([
+      "2025-12-31",
+      "2026-01-01",
+    ])
+    expect(recentIsoDates(2, new Date("2026-01-01T23:59:59.999Z"))).toEqual([
+      "2025-12-31",
+      "2026-01-01",
+    ])
+    // 01:30 in UTC+3 is still the evening before in UTC.
+    expect(recentIsoDates(1, new Date("2026-01-01T01:30:00+03:00"))).toEqual(["2025-12-31"])
+  })
+
+  it("walks back over a leap day and before 1970", () => {
+    expect(recentIsoDates(2, new Date("2024-03-01T12:00:00Z"))).toEqual([
+      "2024-02-29",
+      "2024-03-01",
+    ])
+    expect(recentIsoDates(2, new Date("1969-12-31T12:00:00Z"))).toEqual([
+      "1969-12-30",
+      "1969-12-31",
+    ])
+  })
+
+  it("gives thirty distinct consecutive days for a month-long chart", () => {
+    const days = recentIsoDates(30, new Date("2026-10-17T10:00:00Z"))
+    expect(days.length).toBe(30)
+    expect(days[0]).toBe("2026-09-18")
+    expect(days[29]).toBe("2026-10-17")
+    expect(new Set(days).size).toBe(30)
+  })
+
+  it("gives an empty list for zero days", () => {
+    expect(recentIsoDates(0, new Date("2026-10-17T10:00:00Z"))).toEqual([])
+  })
+
+  it("refuses a count that is not a whole number from 0, and an invalid date", () => {
+    const now = new Date("2026-10-17T10:00:00Z")
+    for (const count of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => recentIsoDates(count, now)).toThrow(RangeError)
+    }
+    expect(() => recentIsoDates(0, new Date("not a date"))).toThrow(RangeError)
+  })
+
+  it("throws when a day falls before the year 0001", () => {
+    expect(() => recentIsoDates(2, new Date("0000-01-01T00:00:00Z"))).toThrow()
   })
 })

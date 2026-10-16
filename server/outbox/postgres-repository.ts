@@ -260,4 +260,28 @@ export class PostgresOutboxRepository implements OutboxRepository {
       `
     }
   }
+
+  /**
+   * Deletes the rows processed more than `olderThanDays` days ago and returns how many. Every
+   * published event and every finished job leaves a processed row, so without a purge the table
+   * only grows; run this from a repeating job. A row that is not processed, such as a job waiting
+   * for its time or an event still being retried, is never touched. A row that was given up is
+   * processed too (`giveUp` closes it), so it goes after the same age.
+   *
+   * `0` removes every row processed before now. The age is measured by the database's clock.
+   *
+   * @throws {RangeError} When `olderThanDays` is not a whole number from 0, before any query.
+   */
+  async removeProcessed(olderThanDays: number): Promise<number> {
+    if (!Number.isSafeInteger(olderThanDays) || olderThanDays < 0) {
+      throw new RangeError(
+        `olderThanDays must be a whole number from 0, received: ${olderThanDays}`,
+      )
+    }
+    const removed = await this.sql`
+      DELETE FROM outbox_events
+      WHERE processed_at < now() - make_interval(days => ${olderThanDays}::int)
+    `
+    return removed.count
+  }
 }

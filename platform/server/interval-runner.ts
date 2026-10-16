@@ -19,6 +19,12 @@ export interface IntervalRunnerOptions {
   onError: (error: unknown) => void
   /** Scheduling; defaults to {@link systemTimerPort}. Inject a fake one in a test. */
   timers?: TimerPort
+  /**
+   * Run the first tick at once instead of after one interval. The second tick is then scheduled
+   * only after the first has finished, as every other tick is. A process restarted more often than
+   * `intervalMs` would otherwise never run the task. Defaults to `false`.
+   */
+  runFirstTickNow?: boolean
 }
 
 /**
@@ -29,7 +35,8 @@ export interface IntervalRunnerOptions {
  * - **Ticks never overlap.** The next tick is scheduled only after the current one has finished,
  *   so a slow task makes the period longer instead of running twice at once. The period is
  *   therefore `intervalMs` plus the time the task takes.
- * - **The first tick runs after one interval**, not at once.
+ * - **The first tick runs after one interval**, unless `runFirstTickNow` is set: then it starts
+ *   before this function returns, and the interval starts when it ends.
  * - **After the returned stop function is called, nothing new starts.** A tick that is already
  *   running is not interrupted, but it schedules no successor. Calling stop twice is harmless.
  *
@@ -74,7 +81,8 @@ export function startIntervalRunner(options: IntervalRunnerOptions): () => void 
     if (!stopped) schedule()
   }
 
-  schedule()
+  if (options.runFirstTickNow === true) void tick()
+  else schedule()
   return () => {
     stopped = true
     if (handle !== undefined) timers.clear(handle)

@@ -147,6 +147,67 @@ describe("startIntervalRunner", () => {
     expect(timers.pending).toBe(0)
   })
 
+  it("with runFirstTickNow, runs the first tick at once and the next only after it ends", async () => {
+    const timers = fakeTimers()
+    let finish = () => {}
+    let runs = 0
+    startIntervalRunner({
+      task: () => {
+        runs++
+        return new Promise<void>((resolve) => (finish = resolve))
+      },
+      intervalMs: HOUR,
+      onError: () => {},
+      timers,
+      runFirstTickNow: true,
+    })
+
+    expect(runs).toBe(1)
+    await settle()
+    expect(timers.pending).toBe(0) // the first tick and the next never overlap
+
+    finish()
+    await settle()
+    expect(timers.scheduled).toEqual([HOUR])
+    timers.runAll()
+    await settle()
+    expect(runs).toBe(2)
+  })
+
+  it("with runFirstTickNow, reports a failed first tick and schedules the next", async () => {
+    const timers = fakeTimers()
+    const reported: unknown[] = []
+    startIntervalRunner({
+      task: () => Promise.reject(new Error("connect ECONNREFUSED")),
+      intervalMs: HOUR,
+      onError: (error) => reported.push(error),
+      timers,
+      runFirstTickNow: true,
+    })
+    await settle()
+
+    expect(reported.length).toBe(1)
+    expect(timers.pending).toBe(1)
+  })
+
+  it("with runFirstTickNow, a stop during the first tick schedules nothing", async () => {
+    const timers = fakeTimers()
+    let finish = () => {}
+    const stop = startIntervalRunner({
+      task: () => new Promise<void>((resolve) => (finish = resolve)),
+      intervalMs: HOUR,
+      onError: () => {},
+      timers,
+      runFirstTickNow: true,
+    })
+
+    stop()
+    finish()
+    await settle()
+
+    expect(timers.pending).toBe(0)
+  })
+
   it("refuses an interval that is not positive or does not fit a timer", () => {
     for (const intervalMs of [0, -1, Number.NaN, Infinity, 2_147_483_648]) {
       expect(() =>

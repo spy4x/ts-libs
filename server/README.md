@@ -1441,6 +1441,13 @@ Two adapters, one migration runner. `@spy4x/server/db` is the barrel; `db/migrat
 `db/postgres` and `db/sqlite` are the subpaths. Nothing here ships a driver: `postgres` is pinned in
 the root import map and the SQLite driver is the caller's own, passed through `SqliteDriver`.
 
+### Searching text with `LIKE`: `likeContains`
+
+`likeContains(value)` escapes `\`, `%` and `_` and wraps the result in `%…%`, so a search box's text
+matches literally instead of acting as a wildcard. Postgres escapes with `\` by default:
+`` sql`… WHERE email ILIKE ${likeContains(search)}` ``. SQLite has no default escape, so name it:
+`WHERE email LIKE ? ESCAPE '\'`.
+
 ### Integration-test settings: `@spy4x/server/db/testing`
 
 ```ts
@@ -2217,7 +2224,8 @@ next `get` returning the stored value on a new connection.
 
 `OutboxProcessor`, `OutboxEvent`, `OutboxPublisher`, `OutboxRepository`, `PostgresOutboxRepository`,
 `LoggingOutboxPublisher`, `JobPublisher`, `retryDelayMs`, `errorCodeOf`, `scheduleOutboxEvent`,
-`ensureScheduledOutboxEvent`, `OutboxAttemptFailure`, `OutboxLeaseExpiredError`. Extracted from
+`ensureScheduledOutboxEvent`, `OutboxAttemptFailure`, `OutboxLeaseExpiredError`,
+`attemptFailureLine`, `stepsJob`, `JobStep`. Extracted from
 `template/libs/server/outbox/+index.ts` (#75) — the template is the only source of an outbox in this
 wave's source repositories.
 
@@ -2399,6 +2407,32 @@ const publisher = new JobPublisher({
   fallback: changeNotifier,
 })
 new OutboxProcessor(repository, publisher, { repeatEveryMs: { "outbox.cleanup": 86_400_000 } })
+```
+
+**Logging failed attempts, purging, and jobs of several steps.** `attemptFailureLine(failure)` is
+the log line for `onAttemptFailed`: a `warn:` line for an attempt that will be retried, an `error:`
+line for the last one, naming the row's kind, aggregate, attempt, stage and error name, never the
+error's message (a mail or billing error can quote an address). `repository.removeProcessed(days)`
+deletes the rows processed more than `days` days ago and returns how many; without it the table only
+grows. `stepsJob(label, steps, log)` is a job that runs every step even when an earlier one throws,
+logs each failure with the step's name and message, and then throws naming the failed steps so the
+processor retries.
+
+```ts
+const processor = new OutboxProcessor(
+  repository,
+  new JobPublisher({
+    aggregateType: "job",
+    handlers: {
+      "outbox.cleanup": stepsJob("nightly cleanup", [
+        ["outbox", () => repository.removeProcessed(7)],
+        ["sessions", () => removeExpiredSessions(sql)],
+      ], log),
+    },
+    fallback: changeNotifier,
+  }),
+  { onAttemptFailed: (failure) => log(attemptFailureLine(failure)) },
+)
 ```
 
 ## `server/idempotency`

@@ -1371,3 +1371,44 @@ describe("ensureScheduledOutboxEvent with replaceGivenUpAfter against a real ser
     })
   })
 })
+
+describe("removeProcessed against a real server", () => {
+  const ROW_C = "33333333-3333-4333-8333-333333333333"
+  const ROW_D = "44444444-4444-4444-8444-444444444444"
+
+  it("removes only rows processed longer ago than the given days, and counts them", async () => {
+    await withOutboxSchema(async (sql) => {
+      for (const id of [ROW_A, ROW_B, ROW_C, ROW_D]) await insertRow(sql, id, "group.created", id)
+      // A: processed 8 days ago. B: processed 6 days ago. C: never processed, created 30 days
+      // ago (still being retried). D: given up 8 days ago, which also marks it processed.
+      await sql`UPDATE outbox_events SET processed_at = now() - INTERVAL '8 days' WHERE id = ${ROW_A}`
+      await sql`UPDATE outbox_events SET processed_at = now() - INTERVAL '6 days' WHERE id = ${ROW_B}`
+      await sql`UPDATE outbox_events SET created_at = now() - INTERVAL '30 days' WHERE id = ${ROW_C}`
+      await sql`
+        UPDATE outbox_events
+        SET processed_at = now() - INTERVAL '8 days', last_error_code = 'TypeError'
+        WHERE id = ${ROW_D}
+      `
+      const repository = new PostgresOutboxRepository(sql)
+
+      assertEquals(await repository.removeProcessed(7), 2)
+
+      const left = await sql<{ id: string }[]>`SELECT id FROM outbox_events ORDER BY id`
+      assertEquals(left.map((row) => row.id), [ROW_B, ROW_C])
+      assertEquals(await repository.removeProcessed(7), 0)
+    })
+  })
+
+  it("refuses an age that is not a whole number of days from 0, before any query", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertRow(sql, ROW_A, "group.created", ROW_A)
+      await sql`UPDATE outbox_events SET processed_at = now() - INTERVAL '8 days'`
+      const repository = new PostgresOutboxRepository(sql)
+
+      for (const days of [-1, 1.5, Number.NaN]) {
+        await assertRejects(() => repository.removeProcessed(days), RangeError)
+      }
+      assertEquals((await sql`SELECT id FROM outbox_events`).length, 1)
+    })
+  })
+})

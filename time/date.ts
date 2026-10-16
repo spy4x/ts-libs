@@ -222,3 +222,29 @@ export function isValidDateRange(range: DateRange): boolean {
     return false
   }
 }
+
+/**
+ * The `count` UTC calendar days that end on `now`'s UTC day, oldest first: a chart's x-axis of the
+ * last week or month, with today last. `recentIsoDates(3, new Date("2026-03-01T09:00:00Z"))` is
+ * `["2026-02-27", "2026-02-28", "2026-03-01"]`.
+ *
+ * The day is taken in UTC; a chart that should follow a person's own day starts from `isoDateInTz`
+ * in `./tz.ts` instead.
+ *
+ * @param count How many days, a whole number from 0 up. 0 gives an empty list.
+ * @param now The instant whose UTC day ends the list.
+ * @throws {RangeError} When `count` is not a whole number from 0, or `now` is an invalid date.
+ * @throws When a day falls outside the 0001-9999 window (see {@link formatIsoDate}).
+ */
+export function recentIsoDates(count: number, now: Date): string[] {
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new RangeError(`count must be a whole number from 0, received: ${count}`)
+  }
+  const time = now.getTime()
+  if (Number.isNaN(time)) throw new RangeError(`now must be a valid date`)
+  // Whole days back from any instant land on the same UTC dates as from its midnight.
+  return Array.from(
+    { length: count },
+    (_, index) => formatIsoDate(time - (count - 1 - index) * MS_PER_DAY),
+  )
+}
