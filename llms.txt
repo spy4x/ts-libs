@@ -2396,4 +2396,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 4f924f7c2cf446031217338a216fb8de610246b069b6df959e3f3209ed920ebf
+# export surface: sha256 2b5f68a392fe30714346215d17314ecfb3bb0a45dca419d8ad1d0ada0e753751
