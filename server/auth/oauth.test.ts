@@ -21,6 +21,7 @@ import {
   type OAuthFlowStore,
   OAuthOutcome,
   type OAuthPendingSignUp,
+  type OAuthProfile,
   type OAuthProviderConfig,
   type OAuthSignIn,
   OAuthSignInError,
@@ -38,6 +39,7 @@ import {
   fixedClock,
   type OAuthFixture,
   PEPPER,
+  readFakeProfile,
   REDIRECT_URI,
   signInAs,
 } from "./oauth-scenarios.test.ts"
@@ -746,6 +748,81 @@ describe("createOAuthSignIn: signUp confirm", () => {
     expect(result.outcome).toBe(OAuthOutcome.Linked)
     expect(result.user.id).toBe(owner.user.id)
     expect(result.session.session.userId).toBe(owner.user.id)
+  })
+
+  /**
+   * A sign-in whose provider config passes the user-info body's `name` and `picture` through raw,
+   * the way a config an app writes might, so only `createOAuthSignIn` can clean them.
+   */
+  function withDisplayFields(flows?: OAuthFlowStore) {
+    const fixture = memoryFixture()
+    const provider = createFakeProvider()
+    const config: OAuthProviderConfig = {
+      ...fakeProviderConfig(),
+      profile: (body) => {
+        const profile = readFakeProfile(body)
+        if (!profile) return null
+        const { name, picture } = body as Record<string, unknown>
+        return { ...profile, name: name as string, avatarUrl: picture as string }
+      },
+    }
+    const oauth: ConfirmableOAuthSignIn = createOAuthSignIn({
+      ...fakeOptions(fixture, provider),
+      provider: config,
+      clock: fixedClock(),
+      signUp: "confirm",
+      ...(flows ? { flows } : {}),
+    })
+    return { provider, oauth }
+  }
+
+  it("carries the provider's name and avatar URL through the pending sign-up to confirmSignUp", async () => {
+    const { provider, oauth } = withDisplayFields()
+    provider.userInfoBody = {
+      sub: "sub-ann",
+      name: "Ann Example",
+      picture: "https://avatars.test/ann.png",
+    }
+    const held = await pending(oauth, provider, BOB)
+    const shown: OAuthProfile = {
+      subject: "sub-ann",
+      email: null,
+      emailVerified: false,
+      name: "Ann Example",
+      avatarUrl: "https://avatars.test/ann.png",
+    }
+    expect(held.profile).toEqual(shown)
+    expect((await oauth.confirmSignUp(held.token)).profile).toEqual(shown)
+  })
+
+  it("cleans a name and avatar URL a provider config returns raw", async () => {
+    const { provider, oauth } = withDisplayFields()
+    provider.userInfoBody = {
+      sub: "sub-ann",
+      name: `\u0000 Ann\ud800 ${"x".repeat(300)}`,
+      picture: "http://avatars.test/ann.png",
+    }
+    const { profile } = await pending(oauth, provider, BOB)
+    expect(profile.name).toBe(`Ann ${"x".repeat(196)}`)
+    expect("avatarUrl" in profile).toBe(false)
+  })
+
+  it("cleans the name and avatar URL a flow store gives back for confirmSignUp", async () => {
+    const memory = createMemoryOAuthFlowStore({ clock: fixedClock() })
+    const flows: OAuthFlowStore = {
+      put: (key, flow, expiresAt) => memory.put(key, flow, expiresAt),
+      take: async (key) => {
+        const taken = await memory.take(key)
+        if (!taken?.signUp) return taken
+        const signUp = { ...taken.signUp, name: "Ann\u0000", avatarUrl: "javascript:alert(1)" }
+        return { ...taken, signUp }
+      },
+    }
+    const { provider, oauth } = withDisplayFields(flows)
+    provider.userInfoBody = { sub: "sub-ann", name: "Ann" }
+    const { token } = await pending(oauth, provider, BOB)
+    const { profile } = await oauth.confirmSignUp(token)
+    expect(profile).toEqual({ subject: "sub-ann", email: null, emailVerified: false, name: "Ann" })
   })
 
   it("refuses a pending sign-up's key used as a callback state", async () => {

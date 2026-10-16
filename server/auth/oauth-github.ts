@@ -5,7 +5,9 @@
  * is GitHub's stable user id; its `email` is only the address the person chose to make public, and
  * GitHub does not say whether it is verified. The address is therefore read from
  * `GET /user/emails` (scope `user:email`), and only the one marked both `primary` and `verified`
- * counts as vouched for. Every other address is ignored.
+ * counts as vouched for. Every other address is ignored. The display `name` is the person's `name`,
+ * or their `login` when they set none, and `avatar_url` becomes `avatarUrl`; both are cleaned as
+ * `OAuthProfile` describes.
  *
  * @module
  */
@@ -14,6 +16,7 @@ import { type } from "arktype"
 import { validate } from "@spy4x/validation"
 
 import type { OAuthProfile, OAuthProfileContext, OAuthProviderConfig } from "./oauth.ts"
+import { cleanOAuthName, cleanOAuthProfile } from "./oauth-profile.ts"
 
 /** GitHub's authorization endpoint. */
 export const GITHUB_AUTHORIZATION_ENDPOINT = "https://github.com/login/oauth/authorize"
@@ -38,7 +41,13 @@ export interface GitHubOAuthOptions {
   authorizationParams?: Readonly<Record<string, string>>
 }
 
-const githubUser = type({ id: "number.integer > 0" })
+const githubUser = type({
+  id: "number.integer > 0",
+  // Read as unknown: a value of another type is dropped, and the person still signs in.
+  "name?": "unknown",
+  "login?": "unknown",
+  "avatar_url?": "unknown",
+})
 
 const githubEmails = type({
   email: "string",
@@ -49,13 +58,20 @@ const githubEmails = type({
 
 /**
  * Reads GitHub's `GET /user` answer: the numeric `id` as the subject, as a decimal string. The
- * address is left out (null, not vouched for); {@link readGitHubPrimaryEmail} supplies it. Null
- * when `id` is missing or not a positive safe integer.
+ * address is left out (null, not vouched for); {@link readGitHubPrimaryEmail} supplies it. `name`,
+ * or `login` when `name` is unset or nothing of it survives cleaning, becomes `name`, and
+ * `avatar_url` becomes `avatarUrl`. Null when `id` is missing or not a positive safe integer.
  */
 export function readGitHubUser(body: unknown): OAuthProfile | null {
   const { error, data } = validate(githubUser, body)
   if (error || !Number.isSafeInteger(data.id)) return null
-  return { subject: String(data.id), email: null, emailVerified: false }
+  return cleanOAuthProfile({
+    subject: String(data.id),
+    email: null,
+    emailVerified: false,
+    name: cleanOAuthName(data.name) ?? cleanOAuthName(data.login),
+    avatarUrl: data.avatar_url,
+  })
 }
 
 /**
@@ -75,7 +91,7 @@ async function completeGitHubProfile(
   context: OAuthProfileContext,
 ): Promise<OAuthProfile> {
   const email = readGitHubPrimaryEmail(await context.getJson(GITHUB_EMAILS_ENDPOINT))
-  return { subject: profile.subject, email, emailVerified: email !== null }
+  return { ...profile, email, emailVerified: email !== null }
 }
 
 /** GitHub as an {@link OAuthProviderConfig}, method `oauth:github`. */

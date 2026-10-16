@@ -4,7 +4,8 @@
  * The endpoints are the ones Google's OpenID Connect discovery document
  * (`https://accounts.google.com/.well-known/openid-configuration`) names. The person is read from
  * the user-info endpoint: `sub` is Google's stable user id, and `email_verified` must be the boolean
- * `true` before the address counts as vouched for.
+ * `true` before the address counts as vouched for. `name` and `picture` (scope `profile`) become the
+ * profile's display `name` and `avatarUrl`, cleaned as `OAuthProfile` describes.
  *
  * @module
  */
@@ -13,6 +14,7 @@ import { type } from "arktype"
 import { validate } from "@spy4x/validation"
 
 import type { OAuthProfile, OAuthProviderConfig } from "./oauth.ts"
+import { cleanOAuthProfile } from "./oauth-profile.ts"
 
 /** Google's authorization endpoint. */
 export const GOOGLE_AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -20,8 +22,11 @@ export const GOOGLE_AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oaut
 export const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 /** Google's OpenID Connect user-info endpoint. */
 export const GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
-/** The scopes that make Google answer `sub`, `email` and `email_verified`. */
-export const GOOGLE_DEFAULT_SCOPES: readonly string[] = ["openid", "email"]
+/**
+ * The scopes that make Google answer `sub`, `email` and `email_verified` (`openid`, `email`), and
+ * the person's `name` and `picture` (`profile`).
+ */
+export const GOOGLE_DEFAULT_SCOPES: readonly string[] = ["openid", "email", "profile"]
 
 /** Options of {@link createGoogleOAuthProvider}. */
 export interface GoogleOAuthOptions {
@@ -40,17 +45,28 @@ const googleUserInfo = type({
   "email?": "string",
   // Read as unknown: only the boolean `true` vouches, and any other value still signs the person in.
   "email_verified?": "unknown",
+  // Read as unknown: a name or picture of another type is dropped, and the person still signs in.
+  "name?": "unknown",
+  "picture?": "unknown",
 })
 
 /**
  * Reads Google's user-info answer. `emailVerified` is true only for `email_verified: true` with an
- * `email` present; null when `sub` is missing or the body is not an object of the expected shape.
+ * `email` present; `name` and `picture` become `name` and `avatarUrl`, cleaned, and are left out
+ * when they do not survive. Null when `sub` is missing or the body is not an object of the expected
+ * shape.
  */
 export function readGoogleProfile(body: unknown): OAuthProfile | null {
   const { error, data } = validate(googleUserInfo, body)
   if (error) return null
   const email = data.email ?? null
-  return { subject: data.sub, email, emailVerified: email !== null && data.email_verified === true }
+  return cleanOAuthProfile({
+    subject: data.sub,
+    email,
+    emailVerified: email !== null && data.email_verified === true,
+    name: data.name,
+    avatarUrl: data.picture,
+  })
 }
 
 /** Google as an {@link OAuthProviderConfig}, method `oauth:google`. */

@@ -45,9 +45,9 @@ describe("createGoogleOAuthProvider", () => {
       authorizationEndpoint: GOOGLE_AUTHORIZATION_ENDPOINT,
       tokenEndpoint: GOOGLE_TOKEN_ENDPOINT,
       userInfoEndpoint: GOOGLE_USERINFO_ENDPOINT,
-      scopes: ["openid", "email"],
+      scopes: ["openid", "email", "profile"],
     })
-    expect(GOOGLE_DEFAULT_SCOPES).toEqual(["openid", "email"])
+    expect(GOOGLE_DEFAULT_SCOPES).toEqual(["openid", "email", "profile"])
   })
 
   it("passes the app's scopes and extra authorization parameters through", () => {
@@ -96,9 +96,45 @@ describe("readGoogleProfile", () => {
     })
   })
 
-  it("ignores the other fields Google sends, such as name and picture", () => {
-    const body = { sub: "1", email: "a@x.com", email_verified: true, name: "Ann", picture: "p" }
-    expect(readGoogleProfile(body)).toEqual({ subject: "1", email: "a@x.com", emailVerified: true })
+  it("reads name and picture as the display name and avatar URL", () => {
+    const body = {
+      sub: "1",
+      email: "a@x.com",
+      email_verified: true,
+      name: "Ann Example",
+      picture: "https://lh3.googleusercontent.com/a/ann=s96-c",
+      locale: "en",
+    }
+    expect(readGoogleProfile(body)).toEqual({
+      subject: "1",
+      email: "a@x.com",
+      emailVerified: true,
+      name: "Ann Example",
+      avatarUrl: "https://lh3.googleusercontent.com/a/ann=s96-c",
+    })
+  })
+
+  it("cleans the name and keeps the picture only as an https: URL", () => {
+    const profile = readGoogleProfile({
+      sub: "1",
+      name: " Ann\u0000 Example\ud800 ",
+      picture: "javascript:alert(1)",
+    })
+    expect(profile).toEqual({
+      subject: "1",
+      email: null,
+      emailVerified: false,
+      name: "Ann Example",
+    })
+    expect(profile && "avatarUrl" in profile).toBe(false)
+  })
+
+  it("still reads the person when name and picture are not strings", () => {
+    expect(readGoogleProfile({ sub: "1", name: 7, picture: { url: "https://x.test/a" } })).toEqual({
+      subject: "1",
+      email: null,
+      emailVerified: false,
+    })
   })
 
   for (

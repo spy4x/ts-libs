@@ -1523,6 +1523,8 @@ MemoryAuthStore	class	@spy4x/server/auth/memory-store	An in-memory AuthStore wit
 ConfirmableOAuthSignIn	interface	@spy4x/server/auth/oauth	Sign-in with one provider, created with `signUp: "confirm"`.
 ConfirmableOAuthSignInOptions	interface	@spy4x/server/auth/oauth	Options of createOAuthSignIn for a sign-in that asks before it creates a user.
 DEFAULT_OAUTH_FLOW_KEY_PREFIX	constant	@spy4x/server/auth/oauth	The key prefix createKvOAuthFlowStore writes under by default.
+MAX_OAUTH_AVATAR_URL_LENGTH	constant	@spy4x/server/auth/oauth	Longest OAuthProfile.avatarUrl kept, in characters; a longer URL is dropped.
+MAX_OAUTH_NAME_LENGTH	constant	@spy4x/server/auth/oauth	Longest OAuthProfile.name kept, in UTF-16 code units; a longer name is cut.
 MAX_PENDING_OAUTH_FLOWS	constant	@spy4x/server/auth/oauth	Most flows the memory store keeps pending at once; the oldest is dropped beyond this.
 OAuthAuthorization	interface	@spy4x/server/auth/oauth	A started flow: send the browser to `url`, and keep `state` in an HttpOnly cookie until the callback.
 OAuthCallbackInput	interface	@spy4x/server/auth/oauth	What the app passes from the callback request.
@@ -1555,7 +1557,7 @@ createGitHubOAuthProvider	function	@spy4x/server/auth/oauth-github	GitHub as an 
 readGitHubPrimaryEmail	function	@spy4x/server/auth/oauth-github	Reads GitHub's `GET /user/emails` answer: the address marked both `primary: true` and `verified: true`, or null when there is none or the body is not a list of addresses.
 readGitHubUser	function	@spy4x/server/auth/oauth-github	Reads GitHub's `GET /user` answer: the numeric `id` as the subject, as a decimal string.
 GOOGLE_AUTHORIZATION_ENDPOINT	constant	@spy4x/server/auth/oauth-google	Google's authorization endpoint.
-GOOGLE_DEFAULT_SCOPES	constant	@spy4x/server/auth/oauth-google	The scopes that make Google answer `sub`, `email` and `email_verified`.
+GOOGLE_DEFAULT_SCOPES	constant	@spy4x/server/auth/oauth-google	The scopes that make Google answer `sub`, `email` and `email_verified` (`openid`, `email`), and the person's `name` and `picture` (`profile`).
 GOOGLE_TOKEN_ENDPOINT	constant	@spy4x/server/auth/oauth-google	Google's token endpoint.
 GOOGLE_USERINFO_ENDPOINT	constant	@spy4x/server/auth/oauth-google	Google's OpenID Connect user-info endpoint.
 GoogleOAuthOptions	interface	@spy4x/server/auth/oauth-google	Options of createGoogleOAuthProvider.
@@ -2394,4 +2396,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 c5e2c03a57ab1f0e8dd3083833a0d31223ce1a7c7aa0868bcfba0f2b822d4a17
+# export surface: sha256 2b5f68a392fe30714346215d17314ecfb3bb0a45dca419d8ad1d0ada0e753751
