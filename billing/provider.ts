@@ -187,6 +187,105 @@ export interface QuantityRequest {
   idempotencyKey?: string
 }
 
+/** What {@link BillingProvider.readLastPayment} needs. */
+export interface LastPaymentRequest {
+  /** The provider's subscription ID, from a {@link Subscription}. */
+  subscriptionId: string
+}
+
+/**
+ * The newest payment that moved money for a subscription, read from the provider when asked rather
+ * than from an event, so it shows refunds made anywhere, the provider's dashboard included.
+ */
+export interface PaidPayment {
+  /**
+   * The provider's ID of the payment itself, the one {@link BillingProvider.refundPayment} takes:
+   * a Stripe payment intent (`pi_…`) or, for an older payment, a charge (`ch_…`).
+   */
+  id: string
+  /** The provider's invoice ID the payment paid. */
+  invoiceId: string
+  /** The paid amount, an integer in units of 10^-{@link decimals}, never 0. */
+  amount: number
+  /** ISO 4217 code, upper case: `"EUR"`. */
+  currency: string
+  /** How many decimals {@link amount} and {@link amountRefunded} carry; see {@link Payment.decimals}. */
+  decimals: number
+  /** When the invoice was paid. */
+  paidAt: Date
+  /** How much of {@link amount} has been refunded already, in the same unit. 0 when nothing. */
+  amountRefunded: number
+  /** `true` when the whole {@link amount} has been refunded, so nothing is left to refund. */
+  refunded: boolean
+}
+
+/** What {@link BillingProvider.refundPayment} needs to refund a payment in full. */
+export interface RefundRequest {
+  /** {@link PaidPayment.id}: the payment to refund. */
+  paymentId: string
+  /**
+   * Required. Makes a retried call safe: the provider refunds once and answers every retry with the
+   * same refund. Make one key per intended refund, such as when the operator opens the dialog.
+   */
+  idempotencyKey: string
+}
+
+/** Where a refund stands. Starts at 1, like every enum here. */
+export enum RefundStatus {
+  /** Accepted; the money is on its way back, or the provider waits for the bank. */
+  Pending = 1,
+  /** The money went back to the customer. */
+  Succeeded,
+  /** The refund failed or was cancelled; no money went back. */
+  Failed,
+}
+
+/** A refund the provider created. */
+export interface Refund {
+  /** The provider's refund ID. */
+  id: string
+  /** The refunded payment, as {@link RefundRequest.paymentId} named it. */
+  paymentId: string
+  /** The refunded amount, an integer in units of 10^-{@link decimals}. */
+  amount: number
+  /** ISO 4217 code, upper case: `"EUR"`. */
+  currency: string
+  /** How many decimals {@link amount} carries; see {@link Payment.decimals}. */
+  decimals: number
+  status: RefundStatus
+}
+
+/** What {@link BillingProvider.setTrialEnd} needs to give a subscription time at no charge. */
+export interface TrialEndRequest {
+  /** The provider's subscription ID, from a {@link Subscription}. */
+  subscriptionId: string
+  /** The new end of the trial, in the future. Nothing is charged before it. */
+  trialEnd: Date
+  /** Required. Makes a retried call safe; one key per intended change. */
+  idempotencyKey: string
+}
+
+/** What {@link BillingProvider.cancelNow} needs. */
+export interface CancelRequest {
+  /** The provider's subscription ID, from a {@link Subscription}. */
+  subscriptionId: string
+  /** Required. Makes a retried call safe; one key per intended cancellation. */
+  idempotencyKey: string
+}
+
+/** What {@link BillingProvider.setCancelAtPeriodEnd} needs. */
+export interface CancelAtPeriodEndRequest {
+  /** The provider's subscription ID, from a {@link Subscription}. */
+  subscriptionId: string
+  /**
+   * `true` ends the subscription at the end of the period already paid for instead of renewing it;
+   * `false` takes such a pending cancellation back, so it renews again.
+   */
+  cancelAtPeriodEnd: boolean
+  /** Required. Makes a retried call safe; one key per intended change. */
+  idempotencyKey: string
+}
+
 /** A hosted checkout page to send the customer to. */
 export interface CheckoutSession {
   /** The provider's checkout session ID. */
@@ -249,6 +348,38 @@ export interface BillingProvider {
   updateQuantity(request: QuantityRequest): Promise<Result<Subscription, BillingError>>
   /** Opens the provider's customer portal for one customer. */
   createPortalSession(request: PortalRequest): Promise<Result<PortalSession, BillingError>>
+  /**
+   * Reads the newest payment that moved money for a subscription, with how much of it is refunded.
+   * The answer is `null` when the subscription has no such payment yet, such as during a trial.
+   * Optional: an adapter written before it existed may lack it; `createStripeBilling` has it.
+   */
+  readLastPayment?(
+    request: LastPaymentRequest,
+  ): Promise<Result<PaidPayment | null, BillingError>>
+  /**
+   * Refunds a payment in full, to where it came from: the whole amount not refunded yet. The
+   * subscription keeps running. Optional, like {@link readLastPayment}.
+   */
+  refundPayment?(request: RefundRequest): Promise<Result<Refund, BillingError>>
+  /**
+   * Moves a subscription's trial end, which gives time at no charge: nothing is charged until
+   * then, the time already paid for is neither credited nor charged, and billing starts again at
+   * the new end. The answer is the subscription after the change. Optional, like
+   * {@link readLastPayment}.
+   */
+  setTrialEnd?(request: TrialEndRequest): Promise<Result<Subscription, BillingError>>
+  /**
+   * Ends a subscription at once. Nothing is refunded and no final invoice is made. The answer is
+   * the ended subscription. Optional, like {@link readLastPayment}.
+   */
+  cancelNow?(request: CancelRequest): Promise<Result<Subscription, BillingError>>
+  /**
+   * Schedules a subscription to end at the end of its paid period, or takes that back. The answer
+   * is the subscription after the change. Optional, like {@link readLastPayment}.
+   */
+  setCancelAtPeriodEnd?(
+    request: CancelAtPeriodEndRequest,
+  ): Promise<Result<Subscription, BillingError>>
   /**
    * Verifies a webhook delivery's signature and turns it into a {@link BillingEvent}. Pass the raw
    * body bytes exactly as received: the body is parsed only after the signature passes.

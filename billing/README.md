@@ -1,7 +1,8 @@
 # @spy4x/billing
 
 Take payments through one provider-neutral interface: start a checkout, open the customer portal,
-and turn a verified webhook into a provider-neutral event. Stripe is the first adapter, over its
+turn a verified webhook into a provider-neutral event, and act for an operator: read and refund
+the last payment, give time at no charge, and cancel now or at the period's end. Stripe is the first adapter, over its
 REST API with `fetch` and no SDK. Paddle is planned behind the same interface
 ([spy4x/ts-libs#363](https://github.com/spy4x/ts-libs/issues/363)).
 
@@ -15,10 +16,10 @@ Runs on: server (Deno).
 
 ## Entry points
 
-| Export         | What it is                                                                                 |
-| -------------- | ------------------------------------------------------------------------------------------ |
-| `.` (`mod.ts`) | `BillingProvider`, `BillingEvent`, `SubscriptionStatus`, `PlanRef`, and the Stripe adapter |
-| `./stripe`     | `createStripeBilling`, `STRIPE_API_VERSION`, `STRIPE_SIGNATURE_HEADER`                     |
+| Export         | What it is                                                                                                 |
+| -------------- | ---------------------------------------------------------------------------------------------------------- |
+| `.` (`mod.ts`) | `BillingProvider`, `BillingEvent`, `SubscriptionStatus`, `RefundStatus`, `PlanRef`, and the Stripe adapter |
+| `./stripe`     | `createStripeBilling`, `STRIPE_API_VERSION`, `STRIPE_SIGNATURE_HEADER`                                     |
 
 ## Usage
 
@@ -59,12 +60,23 @@ if (parsed.event?.type === BillingEventType.PaymentSucceeded) {
   formatMoney(amount, currency, "en", { decimals })
 }
 return new Response(null, { status: 200 })
+
+// Operator actions. Make one idempotency key per intended action, such as when the dialog opens
+// (`uuidV7()` from `@spy4x/platform/universal/uuid`), so a double click or a retry acts once.
+const last = await billing.readLastPayment({ subscriptionId })
+if (last.ok && last.value !== null && !last.value.refunded) {
+  await billing.refundPayment({ paymentId: last.value.id, idempotencyKey })
+}
+await billing.setTrialEnd({ subscriptionId, trialEnd: new Date("2027-01-31"), idempotencyKey })
+await billing.setCancelAtPeriodEnd({ subscriptionId, cancelAtPeriodEnd: true, idempotencyKey })
+await billing.cancelNow({ subscriptionId, idempotencyKey })
 ```
 
 ## Contracts
 
 - **One interface.** `BillingProvider` has `createCheckout`, `updateQuantity`,
-  `createPortalSession` and `parseEvent`. The app names plans by its own IDs; `PlanRef` maps each
+  `createPortalSession` and `parseEvent`, and the optional operator actions below, which
+  `createStripeBilling` always has (its return type is `Required<BillingProvider>`). The app names plans by its own IDs; `PlanRef` maps each
   to the provider's price. A price in no `PlanRef` comes back as `planId: null`.
 - **Seats.** `updateQuantity({ subscriptionId, quantity, idempotencyKey })` sets how many seats the
   plan's item bills, for per-seat pricing. The change adds a charge or a credit for the rest of
@@ -75,7 +87,30 @@ return new Response(null, { status: 200 })
   nothing changes.
   `Subscription.quantity` reports the seats an event's subscription bills, `null` for a metered
   price.
-- **Results, not throws.** `createCheckout`, `updateQuantity` and `createPortalSession` return
+- **Operator actions.** Each one that changes something takes a required `idempotencyKey`, sent as
+  Stripe's `Idempotency-Key`, and refuses a call without one as `invalid_request` before calling
+  Stripe. None of them changes what the app stores: the webhook that follows does.
+  - `readLastPayment({ subscriptionId })` answers the newest payment that moved money: its
+    payment intent or charge ID, invoice, amount, currency, decimals, `paidAt`, `amountRefunded`
+    and `refunded` (nothing left to refund). It reads the ten newest paid invoices and skips one
+    paid with 0, such as a trial's, or paid outside Stripe; with none left it answers `null`.
+    The refund state comes from the charge, so a refund made in Stripe's dashboard shows. Two
+    calls.
+  - `refundPayment({ paymentId, idempotencyKey })` refunds in full: it sends no amount, so Stripe
+    refunds everything not refunded yet. There are no partial refunds. The answer is the `Refund`
+    with its real amount and a `RefundStatus`; a status Stripe adds later reads as `Pending`, never
+    as a failure, because the refund exists.
+  - `setTrialEnd({ subscriptionId, trialEnd, idempotencyKey })` gives time at no charge: nothing is
+    charged before `trialEnd`, and `proration_behavior=none` neither credits nor charges the paid
+    time left. Stripe refuses a date in the past.
+  - `setCancelAtPeriodEnd({ subscriptionId, cancelAtPeriodEnd, idempotencyKey })` schedules the end
+    at the period's end with `true` and takes it back with `false`.
+  - `cancelNow({ subscriptionId, idempotencyKey })` ends the subscription at once with
+    `invoice_now=false&prorate=false`: no refund and no final invoice. Stripe ignores an
+    idempotency key on this `DELETE` and refuses to cancel twice, so when Stripe refuses with a 4xx
+    the adapter reads the subscription back and answers success if it has ended.
+- **Results, not throws.** `createCheckout`, `updateQuantity`, `createPortalSession` and the
+  operator actions return
   `{ ok: true, value }` or `{ ok: false, error: { code, message, status } }`. `code` is
   `unknown_plan`, `invalid_request` (nothing was changed), `provider_error`, `network_error` or
   `malformed_response`. The secret key is cut out of every message. Only `createStripeBilling`

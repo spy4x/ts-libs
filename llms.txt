@@ -10,8 +10,12 @@ BillingEvent	type	@spy4x/billing	A verified webhook delivery, in provider-neutra
 BillingEventRejectReason	type	@spy4x/billing	Why a delivery was refused: the signature check's reasons, or a payload it cannot read.
 BillingEventType	enum	@spy4x/billing	What happened, as the discriminant of BillingEvent.
 BillingProvider	interface	@spy4x/billing	One payment provider behind one interface.
+CancelAtPeriodEndRequest	interface	@spy4x/billing	What BillingProvider.setCancelAtPeriodEnd needs.
+CancelRequest	interface	@spy4x/billing	What BillingProvider.cancelNow needs.
 CheckoutRequest	interface	@spy4x/billing	What BillingProvider.createCheckout needs to start a subscription checkout.
 CheckoutSession	interface	@spy4x/billing	A hosted checkout page to send the customer to.
+LastPaymentRequest	interface	@spy4x/billing	What BillingProvider.readLastPayment needs.
+PaidPayment	interface	@spy4x/billing	The newest payment that moved money for a subscription, read from the provider when asked rather than from an event, so it shows refunds made anywhere, the provider's dashboard included.
 ParseEventResult	type	@spy4x/billing	Result of BillingProvider.parseEvent.
 Payment	interface	@spy4x/billing	A payment, successful or failed, as an event reports it.
 PaymentEvent	interface	@spy4x/billing	A payment that went through or failed.
@@ -19,11 +23,15 @@ PlanRef	interface	@spy4x/billing	One of the app's plans, mapped to the provider'
 PortalRequest	interface	@spy4x/billing	What BillingProvider.createPortalSession needs.
 PortalSession	interface	@spy4x/billing	A customer portal page, where the customer changes plan, card or cancels and sees invoices.
 QuantityRequest	interface	@spy4x/billing	What BillingProvider.updateQuantity needs to change how many seats a plan bills.
+Refund	interface	@spy4x/billing	A refund the provider created.
+RefundRequest	interface	@spy4x/billing	What BillingProvider.refundPayment needs to refund a payment in full.
+RefundStatus	enum	@spy4x/billing	Where a refund stands.
 STRIPE_API_VERSION	constant	@spy4x/billing	The Stripe API version every request is pinned to.
 STRIPE_SIGNATURE_HEADER	constant	@spy4x/billing	Stripe's `Stripe-Signature: t=<seconds>,v1=<hex>[,v1=<hex>][,v0=<hex>]` header layout.
 Subscription	interface	@spy4x/billing	A subscription as an event reports it.
 SubscriptionEvent	interface	@spy4x/billing	A subscription created, changed or ended.
 SubscriptionStatus	enum	@spy4x/billing	Where a subscription stands, as every provider reports it.
+TrialEndRequest	interface	@spy4x/billing	What BillingProvider.setTrialEnd needs to give a subscription time at no charge.
 createStripeBilling	function	@spy4x/billing	A Stripe BillingProvider.
 STRIPE_API_VERSION	constant	@spy4x/billing/stripe	The Stripe API version every request is pinned to.
 STRIPE_SIGNATURE_HEADER	constant	@spy4x/billing/stripe	Stripe's `Stripe-Signature: t=<seconds>,v1=<hex>[,v1=<hex>][,v0=<hex>]` header layout.
@@ -2385,4 +2393,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 32b750f89fc46f27674001c587696c5ad0a0f0964e47cf8a6e8b8b0fe9a63a13
+# export surface: sha256 e031e8268f97a7a98940298e14ccc78de0181eee6fb665fe4becb59da5416601
