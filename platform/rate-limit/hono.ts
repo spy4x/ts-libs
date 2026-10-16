@@ -143,6 +143,24 @@ export type RemoteAddrResolver<E extends Env = Record<string, never>> = (
 ) => string | undefined
 
 /**
+ * The {@link RemoteAddrResolver} for an app run by `deno serve` (or handed to `Deno.serve` as
+ * `app.fetch`): Deno passes the connection's info to Hono as `env`, and this reads its
+ * `remoteAddr.hostname`, the peer's IP address. Anything else in that place, such as a Unix socket
+ * address with no `hostname`, or no `env` at all under `app.request()` in a test, gives
+ * `undefined`.
+ *
+ * Kept here so an app holds no Deno-specific code of its own; a Node or Bun app writes the
+ * equivalent for its own server.
+ */
+export function denoServeRemoteAddr<E extends Env = Record<string, never>>(
+  context: RateLimitContext<E>,
+): string | undefined {
+  const env = context.env as { remoteAddr?: { hostname?: unknown } } | undefined
+  const hostname = env?.remoteAddr?.hostname
+  return typeof hostname === "string" ? hostname : undefined
+}
+
+/**
  * Key the current request. Receives the request and, since that carries no peer address, the
  * framework context as a second parameter — `context.remoteAddr` holds whatever
  * {@link RateLimitMiddlewareOptions.remoteAddr} resolved, which is how a deployment with no
@@ -172,7 +190,7 @@ export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never
    *
    * ```ts
    * app.use(createRateLimitMiddleware(limiter, {
-   *   remoteAddr: ({ env }) => env?.remoteAddr,
+   *   remoteAddr: denoServeRemoteAddr,
    *   keyResolver: userThenIp(() => undefined, { trustedProxy: false }),
    * }))
    * ```

@@ -45,6 +45,7 @@ export {
 export {
   createRateLimitMiddleware,
   decisionHeaders,
+  denoServeRemoteAddr,
   type KeyResolver,
   RATE_LIMIT_HEADERS,
   type RateLimitContext,
@@ -64,6 +65,7 @@ export {
   clientIp,
   clientIpBucket,
   type ClientIpOptions,
+  FORWARDED_HEADERS,
   humanRetry,
   type TrustedProxyHeader,
   UNKNOWN_CLIENT_IP,

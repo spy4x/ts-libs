@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd"
 import {
   clientIp,
   clientIpBucket,
+  FORWARDED_HEADERS,
   humanRetry,
   type TrustedProxyHeader,
   UNKNOWN_CLIENT_IP,
@@ -319,5 +320,18 @@ describe("humanRetry", () => {
 
   it("depends on no clock and no locale", () => {
     assertEquals(humanRetry(1_700_000_000_000), "28333334 minutes")
+  })
+})
+
+describe("FORWARDED_HEADERS", () => {
+  it("lists every header clientIp reads from a trusted proxy, and nothing else", () => {
+    assertEquals([...FORWARDED_HEADERS].sort(), [
+      "cf-connecting-ip",
+      "x-forwarded-for",
+      "x-real-ip",
+    ])
+    for (const name of FORWARDED_HEADERS) {
+      assertEquals(clientIp(request({ [name]: "192.0.2.1" }), "10.0.0.1", true), "192.0.2.1")
+    }
   })
 })
