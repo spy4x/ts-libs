@@ -2671,6 +2671,12 @@ object's _property_ (as `keys` sits inside `pushSubscriptionSchema`) does not ca
 as intersecting one in with `.and()` — confirmed the same way, by constructing it and reading the
 result.
 
+The push subscription schemas refuse a field a database cannot store or a push service cannot use:
+an empty device id, endpoint or key, a NUL or a lone surrogate in any of them, and an endpoint that
+is not an absolute `https:` URL. Their length limits are exported as `PUSH_SUBSCRIPTION_LIMITS`
+(`deviceId` 256, `endpoint` 2048, `auth` 256, `p256dh` 256 characters), so an app sizes its columns
+from it instead of keeping its own copy.
+
 ## The error vocabulary and the result convention
 
 Three shapes, three jobs. They are not interchangeable, and picking the wrong one is the most common
