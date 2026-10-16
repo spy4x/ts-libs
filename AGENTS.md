@@ -114,9 +114,6 @@ publishes only what is missing.
 
 ## Branches
 
-Work in a worktree under the sibling `worktrees/ts-libs/`, on a branch cut from the latest
-`origin/main` (the global Git Flow command creates both). Never commit to `main`.
-
 Types: `feat/`, `fix/`, `refactor/`, `chore/`, `docs/`, `style/`, `perf/`, `ci/`.
 
 ## Commit convention (Angular)
@@ -139,17 +136,8 @@ docs: document the workspace member rule
 
 ## PR discipline
 
-- Push and open the PR immediately after the first commit; prefix the title with `[WIP]` while
-  incomplete and drop the prefix when the work is done.
-- Base every PR on `main`. One package per PR — keep diffs disjoint from other packages.
+- One package per PR — keep diffs disjoint from other packages.
 - Update the PR body after every significant change; state the decisions you made.
-- Never self-review a diff you wrote. A passing verdict from a separate reviewer agent is the merge
-  authority — merge on it without asking. Leave the PR open instead, and say so, when the gate
-  fails or when a revert could not undo the change.
-
-```bash
-gh pr create --fill --base main
-```
 
 ## Generated files
 
@@ -173,16 +161,10 @@ deno task check:cold check:all    # the same, plus the integration tier; needs t
 
 `check:cold` runs the named tasks (default `check`) with `CI=true` and an empty `DENO_DIR` that it
 creates under `.volumes/denodir/` and removes again, pass or fail. It prints `cold <task>: exit=<n>`
-after each task. Use it instead of a hand-written `DENO_DIR=$(mktemp -d …)` block: that form left
-~2 000 files behind per run until a wave of parallel agents filled `/tmp`, and its `rm -rf -- "$D"`
-makes an agent harness stop and ask a person before every run, because the variable could be empty.
-For the same reason, never put a shell variable inside an `rm` path anywhere in this repo's
-workflows — undo a throw-away checkout with `git checkout -- .`, `git clean` and
-`git worktree remove`, or name the literal path.
-
-A warm local run is not evidence: it hides `$HOME`, `DENO_DIR` and cache assumptions. Never assert a
-path under `$HOME` in a test — resolve it through `import.meta.resolve` or an injected config. A test
-that can silently skip when its dependency is missing must fail loudly instead.
+after each task. Use it instead of a hand-written `DENO_DIR=$(mktemp -d …)` block, which leaves
+files behind and puts a variable in an `rm` path. Never put a shell variable inside an `rm` path
+anywhere in this repo's workflows — undo a throw-away checkout with `git checkout -- .`,
+`git clean` and `git worktree remove`, or name the literal path.
 
 | Task                         | Does                                                       |
 | ---------------------------- | ---------------------------------------------------------- |
@@ -301,16 +283,9 @@ string this repository commits.
 
 ## Code style
 
-- No semicolons. 2-space indent. Double quotes by default, backticks for interpolated or multi-line
-  strings (this overrides the global "backticks for strings" rule). 100 column limit. Trailing
-  commas where legal. `deno fmt` is the arbiter.
-- Files: kebab-case `.ts`, `+main.ts` / `+lib.ts` for entry points, colocated `*.test.ts`.
-- Imports: relative local first, then `jsr:` stdlib, then `npm:` only when unavoidable.
-- `interface` for extensible object shapes, `enum` for finite constants (start at 1), `type` only for
-  unions and intersections (a string-literal union of error codes is a `type`).
-- Named exports. `async`/`await`. Explicit `throw` on a missing required value.
-- JSDoc on any non-trivial function, class or interface over 10 lines.
-- Tests: colocated, deterministic, behaviour-named — `it("rejects an expired token")`.
+The global TS style applies, with one override: double quotes by default, backticks for
+interpolated or multi-line strings (this overrides the global "backticks for strings" rule).
+`deno fmt` is the arbiter.
 
 ## Validation
 
@@ -341,5 +316,3 @@ dependency in the PR body. No speculative entries.
 - Never commit a secret, token, credential, `.env` value or raw production URL.
 - One logical change per commit. Keep commits small.
 - Do not reformat or edit a directory another agent owns.
-- Never self-review. A separate reviewer's green gate is the merge authority, not the author's own
-  read of the diff.
