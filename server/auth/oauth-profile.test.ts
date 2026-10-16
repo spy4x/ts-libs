@@ -70,6 +70,7 @@ describe("cleanOAuthAvatarUrl", () => {
   it("drops a URL carrying a user name or password", () => {
     expect(cleanOAuthAvatarUrl("https://user@avatars.test/a.png")).toBeUndefined()
     expect(cleanOAuthAvatarUrl("https://user:pw@avatars.test/a.png")).toBeUndefined()
+    expect(cleanOAuthAvatarUrl("https://:pw@avatars.test/a.png")).toBeUndefined()
   })
 
   it("drops a URL longer than the limit, before or after normalising", () => {
@@ -82,6 +83,12 @@ describe("cleanOAuthAvatarUrl", () => {
       "a".repeat(MAX_OAUTH_AVATAR_URL_LENGTH - prefix.length - 10)
     expect(grows.length).toBe(MAX_OAUTH_AVATAR_URL_LENGTH)
     expect(cleanOAuthAvatarUrl(grows)).toBeUndefined()
+    // The default port is dropped when normalised, so this shrinks back under the limit; the value
+    // as given is still too long.
+    const shrinks = "https://avatars.test:443/" + "a".repeat(MAX_OAUTH_AVATAR_URL_LENGTH - 23)
+    expect(shrinks.length).toBe(MAX_OAUTH_AVATAR_URL_LENGTH + 2)
+    expect(new URL(shrinks).href.length).toBeLessThanOrEqual(MAX_OAUTH_AVATAR_URL_LENGTH)
+    expect(cleanOAuthAvatarUrl(shrinks)).toBeUndefined()
   })
 })
 
