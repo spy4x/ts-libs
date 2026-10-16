@@ -5,6 +5,7 @@ import {
   breadcrumbItems,
   breadcrumbListJsonLd,
   canonicalUrl,
+  faqPageJsonLd,
   jsonLdText,
   normalizeCanonical,
 } from "./seo.ts"
@@ -221,6 +222,31 @@ describe("breadcrumbListJsonLd", () => {
     expect(() => breadcrumbListJsonLd("javascript:alert(1)", TRAIL)).toThrow(
       "canonical must be an http or https URL",
     )
+  })
+})
+
+describe("faqPageJsonLd", () => {
+  it("lists every question with its answer, in page order", () => {
+    const node = faqPageJsonLd([
+      { question: "Is it free?", answerText: "Yes, MIT." },
+      { question: "Can I self-host?", answerText: "On one server." },
+    ])
+
+    expect(node).toEqual({
+      "@type": "FAQPage",
+      mainEntity: [
+        {
+          "@type": "Question",
+          name: "Is it free?",
+          acceptedAnswer: { "@type": "Answer", text: "Yes, MIT." },
+        },
+        {
+          "@type": "Question",
+          name: "Can I self-host?",
+          acceptedAnswer: { "@type": "Answer", text: "On one server." },
+        },
+      ],
+    })
   })
 })
 
