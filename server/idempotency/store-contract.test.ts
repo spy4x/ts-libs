@@ -222,6 +222,31 @@ export function describeIdempotencyStoreContract(
       })
     })
 
+    it("keeps a live takeover claim once the dead run it replaced is past the retention", async () => {
+      await using(async ({ store, advance }) => {
+        await store.begin(claim())
+        // The first run dies; its client retries just before the retention runs out.
+        await advance(IDEMPOTENCY_RETENTION_DAYS * DAY - 10 * SECOND)
+        await claimToken(store, claim())
+        // The retry is still inside its lease, and the first claim is now past the retention.
+        await advance(20 * SECOND)
+        expect(await store.sweep()).toBe(0)
+        expect(await store.begin(claim())).toEqual({ status: "in_progress" })
+      })
+    })
+
+    it("keeps a taken-over run's result for the retention counted from the takeover", async () => {
+      await using(async ({ store, advance }) => {
+        await store.begin(claim())
+        await advance(IDEMPOTENCY_RETENTION_DAYS * DAY - 10 * SECOND)
+        const token = await claimToken(store, claim())
+        await store.complete(7, "k1", token, `taken over`)
+        await advance(DAY)
+        expect(await store.sweep()).toBe(0)
+        expect(await store.begin(claim())).toEqual({ status: "replay", result: `taken over` })
+      })
+    })
+
     it("sweeps only the keys past the retention and counts them", async () => {
       await using(async ({ store, advance }) => {
         await store.begin(claim({ key: "old1" }))

@@ -2419,7 +2419,9 @@ bus.use(createIdempotencyMiddleware({ store: new PostgresIdempotencyStore(sql) }
 a retry may take it over, so set it above your slowest command) and `retentionDays` (default 7: how
 long the longest-offline client may still retry). `MemoryIdempotencyStore` also takes `now`. The
 Postgres store compares against the database clock. Call `store.sweep()` from a periodic job to
-delete expired rows; `begin` also forgets an expired row for its own key.
+delete expired rows; `begin` also forgets an expired row for its own key. The retention counts from
+the claim, or from the last takeover of a dead run's claim, so a retry that took over a claim keeps
+it, and its result, for the full retention.
 
 **The table.** `IDEMPOTENCY_POSTGRES_SCHEMA` is the SQL for `idempotency_keys`; run it as one of
 your migrations. It has no foreign key on `user_id`, because this library does not own your users

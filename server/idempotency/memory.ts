@@ -68,6 +68,8 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     }
     if (row.done) return Promise.resolve({ status: "replay", result: clone(row.result) })
     if (row.updatedAt >= now - this.leaseMs) return Promise.resolve({ status: "in_progress" })
+    // A takeover restarts the retention as well as the lease, as in the Postgres store.
+    row.createdAt = now
     row.updatedAt = now
     row.token = uuidV7()
     return Promise.resolve({ status: "claimed", token: row.token })
