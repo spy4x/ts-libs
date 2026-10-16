@@ -680,12 +680,9 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
       if (checked instanceof type.errors) {
         return failure("invalid_request", `trial end request: ${checked.summary}`)
       }
-      const seconds = Math.floor(checked.trialEnd.getTime() / 1000)
-      if (!Number.isFinite(seconds)) {
-        return failure("invalid_request", "trial end request: trialEnd is not a valid date")
-      }
+      // arktype's `Date` refuses an invalid date, so this is always a whole number of seconds.
       const form = new URLSearchParams()
-      form.set("trial_end", String(seconds))
+      form.set("trial_end", String(Math.floor(checked.trialEnd.getTime() / 1000)))
       // Pinned: moving the trial end neither credits the paid time left nor charges for it.
       form.set("proration_behavior", "none")
       return await postSubscription(checked.subscriptionId, form, checked.idempotencyKey)
