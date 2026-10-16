@@ -100,4 +100,6 @@ export {
   SAFE_ENV_VALUES,
 } from "./postgres-purge.ts"
 
+export { likeContains } from "./like.ts"
+
 export type { RowCache, Sql, Transaction } from "./ports.ts"
