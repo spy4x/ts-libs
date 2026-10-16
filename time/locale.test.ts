@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd"
 import {
   dayLabel,
   localeFirstWeekday,
+  localeOptions,
   monthLabel,
   relativeDayLabel,
   shortDayLabel,
@@ -113,6 +114,42 @@ describe("weekdayLabels", () => {
     for (const locale of ["ar-EG", "he-IL", "vi-VN", "en-GB"]) {
       const shorts = weekdayLabels(locale).map((weekday) => weekday.short)
       expect(new Set(shorts).size).toBe(7)
+    }
+  })
+})
+
+describe("localeOptions", () => {
+  it("names each region format in its own language, then in the display language", () => {
+    const [german] = localeOptions("en", ["de-DE"])
+    expect(german).toEqual({
+      value: "de-DE",
+      nativeName: "Deutsch (Deutschland)",
+      name: "German (Germany)",
+      label: "Deutsch (Deutschland), German (Germany)",
+      searchText: "de-de deutsch (deutschland) german (germany)",
+    })
+  })
+
+  it("writes one name when both are the same, in the standard form", () => {
+    expect(localeOptions("en", ["en-US"])[0]?.label).toBe("English (United States)")
+  })
+
+  it("sorts by the name in the display language", () => {
+    const values = localeOptions("en", ["fr-FR", "de-DE", "en-GB"]).map((option) => option.value)
+    expect(values).toEqual(["en-GB", "fr-FR", "de-DE"]) // English, French, German
+  })
+
+  it("leaves out a tag the runtime cannot format", () => {
+    expect(localeOptions("en", ["de-DE", "zz-ZZ"]).map((option) => option.value)).toEqual([
+      "de-DE",
+    ])
+  })
+
+  it("offers the default list, every tag one the runtime formats", () => {
+    const options = localeOptions()
+    expect(options.length).toBeGreaterThan(20)
+    for (const option of options) {
+      expect(Intl.DateTimeFormat.supportedLocalesOf([option.value])).toEqual([option.value])
     }
   })
 })

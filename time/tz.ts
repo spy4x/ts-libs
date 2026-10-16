@@ -690,12 +690,75 @@ export function zoneCity(tz: string): string {
  * Always signed, zero included, so every label has one shape. `at` is required because a zone's
  * offset changes with daylight saving time: `America/New_York` is `UTC-5` in January and `UTC-4`
  * in July. Minute resolution, like {@link tzOffsetMinutes}, which it reads.
+ *
+ * @param prefix What the offset is written against: `UTC` (default) or `GMT`, the word most
+ *   people recognise in a time zone picker (`GMT+2`).
  */
-export function zoneOffsetLabel(tz: string, at: Date): string {
-  const minutes = tzOffsetMinutes(at, tz)
+export function zoneOffsetLabel(tz: string, at: Date, prefix: "UTC" | "GMT" = "UTC"): string {
+  return offsetLabel(tzOffsetMinutes(at, tz), prefix)
+}
+
+function offsetLabel(minutes: number, prefix: string): string {
   const sign = minutes < 0 ? "-" : "+"
   const abs = Math.abs(minutes)
   const hours = Math.floor(abs / 60)
   const rest = abs % 60
-  return rest === 0 ? `UTC${sign}${hours}` : `UTC${sign}${hours}:${String(rest).padStart(2, "0")}`
+  return rest === 0
+    ? `${prefix}${sign}${hours}`
+    : `${prefix}${sign}${hours}:${String(rest).padStart(2, "0")}`
+}
+
+/** One entry of a time zone picker, from {@link timeZoneOptions}. */
+export interface TimeZoneOption {
+  /** The IANA name to store, e.g. `Europe/Berlin`. */
+  value: string
+  /** The city part, e.g. `Berlin` ({@link zoneCity}). */
+  city: string
+  /** The first part of the name, e.g. `Europe`; empty for `UTC`. */
+  area: string
+  /** The offset from UTC at the given instant, in minutes. */
+  offsetMinutes: number
+  /** The offset as text, e.g. `GMT+2` ({@link zoneOffsetLabel}). */
+  offset: string
+  /** What the option shows: `Berlin, GMT+2`. */
+  label: string
+  /** Lower-case text to match a search against: the name, city, area and offset. */
+  searchText: string
+}
+
+/** Options for {@link timeZoneOptions}. */
+export interface TimeZoneOptionsOptions {
+  /** The offset word, as in {@link zoneOffsetLabel}. Default `GMT`. */
+  prefix?: "UTC" | "GMT"
+  /** The zone names to list. Default: every zone the runtime knows, plus `UTC`. */
+  zones?: readonly string[]
+}
+
+/**
+ * Every time zone as an option for a searchable picker, west to east, then by city.
+ *
+ * The list comes from the runtime's own tzdata through `Intl.supportedValuesOf("timeZone")`, so it
+ * never goes stale; a runtime without that method lists only `UTC`. Offsets are read at `at`,
+ * because they move with daylight saving time: build the list with the current instant when the
+ * picker opens. A name the runtime does not know is left out.
+ */
+export function timeZoneOptions(at: Date, options: TimeZoneOptionsOptions = {}): TimeZoneOption[] {
+  const prefix = options.prefix ?? "GMT"
+  const zones = options.zones ?? runtimeTimeZones()
+  return [...new Set(zones)].filter(isValidTimeZone).map((value) => {
+    const city = zoneCity(value)
+    const slash = value.indexOf("/")
+    const area = slash === -1 ? "" : value.slice(0, slash)
+    const offsetMinutes = tzOffsetMinutes(at, value)
+    const offset = offsetLabel(offsetMinutes, prefix)
+    const searchText = [value.replaceAll("_", " "), city, area, offset].join(" ").toLowerCase()
+    return { value, city, area, offsetMinutes, offset, label: `${city}, ${offset}`, searchText }
+  }).sort((a, b) => a.offsetMinutes - b.offsetMinutes || a.city.localeCompare(b.city, "en"))
+}
+
+function runtimeTimeZones(): string[] {
+  const list = typeof Intl.supportedValuesOf === "function"
+    ? Intl.supportedValuesOf("timeZone")
+    : []
+  return list.includes("UTC") ? list : ["UTC", ...list]
 }

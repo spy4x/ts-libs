@@ -115,3 +115,154 @@ export function weekdayLabels(locale: string = DEFAULT_LOCALE): WeekdayLabel[] {
     return { short: short.format(day), long: long.format(day) }
   })
 }
+
+/**
+ * Region formats a picker offers: a language with a country, the way people choose how numbers
+ * and dates are written. `Intl` has no list of locales (`Intl.supportedValuesOf` covers zones,
+ * currencies and units, not locales), so this is the set of CLDR's widely used ones;
+ * {@link localeOptions} keeps only the tags the runtime can format.
+ */
+export const REGION_FORMAT_LOCALES: readonly string[] = [
+  "af-ZA",
+  "ar-AE",
+  "ar-EG",
+  "ar-SA",
+  "az-AZ",
+  "be-BY",
+  "bg-BG",
+  "bn-BD",
+  "bn-IN",
+  "bs-BA",
+  "ca-ES",
+  "cs-CZ",
+  "cy-GB",
+  "da-DK",
+  "de-AT",
+  "de-CH",
+  "de-DE",
+  "el-GR",
+  "en-AU",
+  "en-CA",
+  "en-GB",
+  "en-IE",
+  "en-IN",
+  "en-NG",
+  "en-NZ",
+  "en-PH",
+  "en-SG",
+  "en-US",
+  "en-ZA",
+  "es-AR",
+  "es-CL",
+  "es-CO",
+  "es-ES",
+  "es-MX",
+  "es-PE",
+  "es-US",
+  "et-EE",
+  "eu-ES",
+  "fa-IR",
+  "fi-FI",
+  "fil-PH",
+  "fr-BE",
+  "fr-CA",
+  "fr-CH",
+  "fr-FR",
+  "ga-IE",
+  "gl-ES",
+  "gu-IN",
+  "he-IL",
+  "hi-IN",
+  "hr-HR",
+  "hu-HU",
+  "hy-AM",
+  "id-ID",
+  "is-IS",
+  "it-CH",
+  "it-IT",
+  "ja-JP",
+  "ka-GE",
+  "kk-KZ",
+  "km-KH",
+  "kn-IN",
+  "ko-KR",
+  "lt-LT",
+  "lv-LV",
+  "mk-MK",
+  "ml-IN",
+  "mn-MN",
+  "mr-IN",
+  "ms-MY",
+  "my-MM",
+  "nb-NO",
+  "ne-NP",
+  "nl-BE",
+  "nl-NL",
+  "pa-IN",
+  "pl-PL",
+  "pt-BR",
+  "pt-PT",
+  "ro-RO",
+  "ru-RU",
+  "si-LK",
+  "sk-SK",
+  "sl-SI",
+  "sq-AL",
+  "sr-RS",
+  "sv-SE",
+  "sw-KE",
+  "ta-IN",
+  "te-IN",
+  "th-TH",
+  "tr-TR",
+  "uk-UA",
+  "ur-PK",
+  "uz-UZ",
+  "vi-VN",
+  "zh-CN",
+  "zh-HK",
+  "zh-TW",
+]
+
+/** One entry of a region format picker, from {@link localeOptions}. */
+export interface LocaleOption {
+  /** The BCP 47 tag to store, e.g. `de-DE`. */
+  value: string
+  /** The name in its own language, e.g. `Deutsch (Deutschland)`. */
+  nativeName: string
+  /** The name in the display language, e.g. `German (Germany)`. */
+  name: string
+  /** What the option shows: `Deutsch (Deutschland), German (Germany)`, or one name when both match. */
+  label: string
+  /** Lower-case text to match a search against: the tag and both names. */
+  searchText: string
+}
+
+/**
+ * Region formats as options for a searchable picker, sorted by their name in `displayLocale`.
+ *
+ * Names come from `Intl.DisplayNames`, so they need no translation table. A tag the runtime cannot
+ * format is left out.
+ *
+ * @param displayLocale The language of the second name, the app's own. Default `en`.
+ * @param locales The tags to list. Default {@link REGION_FORMAT_LOCALES}.
+ */
+export function localeOptions(
+  displayLocale = "en",
+  locales: readonly string[] = REGION_FORMAT_LOCALES,
+): LocaleOption[] {
+  const names = new Intl.DisplayNames([displayLocale], {
+    type: "language",
+    languageDisplay: "standard",
+  })
+  const collator = new Intl.Collator(displayLocale)
+  return Intl.DateTimeFormat.supportedLocalesOf([...locales]).map((value) => {
+    const name = names.of(value) ?? value
+    const nativeName =
+      new Intl.DisplayNames([value], { type: "language", languageDisplay: "standard" })
+        .of(value) ?? name
+    const label = nativeName === name ? name : `${nativeName}, ${name}`
+    const searchText = `${value} ${nativeName} ${name}`.toLowerCase()
+    return { value, nativeName, name, label, searchText }
+  }).sort((a, b) => collator.compare(a.name, b.name))
+}

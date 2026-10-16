@@ -2321,9 +2321,12 @@ icsUnescapeParameter	function	@spy4x/time/ics-core	Reverse icsEscapeParameter pe
 joinContentLines	function	@spy4x/time/ics-core	Fold each logical line and terminate every one with CRLF, including the last.
 stripControlCharacters	function	@spy4x/time/ics-core	Remove characters RFC 5545 does not allow in content lines: C0 controls except HTAB, LF and CR, plus DEL.
 unfoldLines	function	@spy4x/time/ics-core	Unfold every content line in an iCalendar document: a CRLF (or bare LF) followed by SPACE or HTAB continues the previous line (RFC 5545 §3.1).
+LocaleOption	interface	@spy4x/time/locale	One entry of a region format picker, from localeOptions.
+REGION_FORMAT_LOCALES	constant	@spy4x/time/locale	Region formats a picker offers: a language with a country, the way people choose how numbers and dates are written.
 WeekdayLabel	interface	@spy4x/time/locale	One weekday header: what its column shows, and what that abbreviation stands for.
 dayLabel	function	@spy4x/time/locale	Localised "23 August 2026", the date as a person reads it.
 localeFirstWeekday	function	@spy4x/time/locale	The day the locale's week starts on, `1` = Monday … `7` = Sunday.
+localeOptions	function	@spy4x/time/locale	Region formats as options for a searchable picker, sorted by their name in `displayLocale`.
 monthLabel	function	@spy4x/time/locale	Localised "August 2026" for the month `date` falls in.
 relativeDayLabel	function	@spy4x/time/locale	A day as a person says it: "Yesterday", "Today", "Tomorrow", otherwise shortDayLabel.
 shortDayLabel	function	@spy4x/time/locale	Localised "Thu 15 Oct": weekday, day and month, no year.
@@ -2339,6 +2342,7 @@ describeRrule	function	@spy4x/time/rrule	An English label for the rule, such as 
 formatRrule	function	@spy4x/time/rrule	Write `rule` as the value of an `RRULE` property (no `RRULE:` prefix), so that parseRrule reads it back to an equal rule.
 nextOccurrence	function	@spy4x/time/rrule	The first occurrence of `rule` strictly after `options.after`, as a value of the same kind (and zone) as `options.start`, with the start's time of day.
 parseRrule	function	@spy4x/time/rrule	Parse the value of an `RRULE` property (a leading `RRULE:` is accepted).
+TimeZoneOption	interface	@spy4x/time/tz	One entry of a time zone picker, from timeZoneOptions.
 WallClockKind	enum	@spy4x/time/tz	How often a wall clock occurs in a zone on its date.
 WallClockResolution	interface	@spy4x/time/tz	The answer of resolveWallClock.
 addDays	function	@spy4x/time/tz	Add `n` days to a `YYYY-MM-DD` date, in `tz` when one is given.
@@ -2357,6 +2361,7 @@ isValidTimeZone	function	@spy4x/time/tz	True when `tz` is a zone this runtime's 
 isoDateInTz	function	@spy4x/time/tz	`YYYY-MM-DD` as `tz` reads the instant `instant`.
 minToHHMM	function	@spy4x/time/tz	Minutes since midnight to a zero-padded `"HH:MM"`.
 resolveWallClock	function	@spy4x/time/tz	Tells whether `tz`'s wall clock reads `date` + `time` once, never or twice, and gives the instants.
+timeZoneOptions	function	@spy4x/time/tz	Every time zone as an option for a searchable picker, west to east, then by city.
 todayInTz	function	@spy4x/time/tz	`YYYY-MM-DD` for today in `tz`.
 tzOffsetMinutes	function	@spy4x/time/tz	Minutes east of UTC for `tz` at the instant `instant`.
 validTimeZoneOr	function	@spy4x/time/tz	`tz` when it is a real IANA zone, `fallback` otherwise.
@@ -2407,4 +2412,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 e168eabf5d5493d241dfbbd71e98073724d5ff75315a604e62086f565cf60d2e
+# export surface: sha256 0d402bdea8c3f1219313949a62952a972d7978ff800caea5d4f67abc50b96f1f
