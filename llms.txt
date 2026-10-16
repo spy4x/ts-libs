@@ -2193,6 +2193,14 @@ startOfMonth	function	@spy4x/time/date	First day of the month `date` falls in.
 startOfQuarter	function	@spy4x/time/date	First day of the calendar quarter `date` falls in.
 startOfWeek	function	@spy4x/time/date	First day of the week `date` falls in: the Monday, or whichever day the week opens on.
 startOfYear	function	@spy4x/time/date	First day of the calendar year `date` falls in.
+DateInput	type	@spy4x/time/format	A value a formatter accepts: a `Date`, epoch milliseconds or a string `Date` can parse.
+DateLength	type	@spy4x/time/format	A date's length, as `Intl.DateTimeFormat`'s `dateStyle`: `17/10/2026` … `Saturday 17 October 2026`.
+DeviceFormat	interface	@spy4x/time/format	What "automatic" resolves to.
+FormatSettings	interface	@spy4x/time/format	A person's display settings.
+Formatters	interface	@spy4x/time/format	The formatters for one person's settings.
+HourCycle	type	@spy4x/time/format	A clock: `h12` shows `3:45 PM`, `h23` shows `15:45`.
+createFormatters	function	@spy4x/time/format	Build the formatters for a person's settings.
+deviceFormat	function	@spy4x/time/format	The device's locale and zone, as this runtime's `Intl` reports them.
 IcalComponent	interface	@spy4x/time/ical	A `BEGIN:…`/`END:…` block with its properties and nested components.
 IcalDateKind	enum	@spy4x/time/ical	Whether a date value is a date, a floating time, a UTC time or a time in a named zone.
 IcalDateValue	interface	@spy4x/time/ical	A DATE or DATE-TIME value in a form that keeps its kind through a round trip.
@@ -2412,4 +2420,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 0d402bdea8c3f1219313949a62952a972d7978ff800caea5d4f67abc50b96f1f
+# export surface: sha256 7b7ab828c9d7caaa49c213c873e6905e1e0c19a89613db4976cb5b2a9dd4efb9

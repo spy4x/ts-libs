@@ -5,6 +5,7 @@
     "./date": "./date.ts",
     "./locale": "./locale.ts",
     "./tz": "./tz.ts",
+    "./format": "./format.ts",
     "./ics": "./ics.ts",
     "./ics-core": "./ics-core.ts",
     "./ical": "./ical.ts",
