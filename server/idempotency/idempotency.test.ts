@@ -22,6 +22,17 @@ class RenameCommand implements Command<RenamePayload, { name: string; at: Date }
   constructor(public data: RenamePayload) {}
 }
 
+interface SupportPayload {
+  actor: { userId: number }
+  idempotencyKey: string
+  /** Either the command's own input or, when shaped like one, the transport's `RequestInfo`. */
+  request: string | { requestId?: string; ip?: string; userAgent?: string }
+}
+
+class SupportCommand implements Command<SupportPayload, unknown> {
+  constructor(public data: SupportPayload) {}
+}
+
 /** A memory store that records the calls the middleware makes, so a test can see them. */
 class SpyStore extends MemoryIdempotencyStore {
   begun: string[] = []
@@ -140,6 +151,34 @@ describe("idempotency middleware", () => {
 
     expect(error).toBeInstanceOf(IdempotencyError)
     expect(error.code).toBe("KEY_REUSED")
+  })
+
+  it("refuses a key reused for a command whose own input differs only in a field named request", async () => {
+    const run = createIdempotencyMiddleware({ store: new SpyStore() })
+    const send = (request: string) =>
+      new SupportCommand({ actor: { userId: 7 }, idempotencyKey: "k1", request })
+    await run(send("refund order 1"), () => Promise.resolve("refunded"))
+
+    const error = await refusal(run(send("delete my account"), () => Promise.resolve("deleted")))
+
+    expect(error.code).toBe("KEY_REUSED")
+  })
+
+  it("replays a retry whose request info differs from the first send's", async () => {
+    const run = createIdempotencyMiddleware({ store: new SpyStore() })
+    const send = (requestId: string, ip: string) =>
+      new SupportCommand({
+        actor: { userId: 7 },
+        idempotencyKey: "k1",
+        request: { requestId, ip, userAgent: "app" },
+      })
+    let runs = 0
+    const next = () => Promise.resolve(++runs)
+
+    await run(send("first", "192.0.2.1"), next)
+    expect(await run(send("retry", "192.0.2.2"), next)).toBe(1)
+
+    expect(runs).toBe(1)
   })
 
   it("makes a repeat that arrives mid-run wait for the first result instead of running twice", async () => {
@@ -337,6 +376,19 @@ describe("fingerprint", () => {
     expect(one).toBe(two)
   })
 
+  it("ignores a request shaped like RequestInfo but counts a request or requestId of any other shape", async () => {
+    const info = await fingerprint("C", { request: { requestId: "a", ip: "192.0.2.1" } })
+    expect(await fingerprint("C", { request: { requestId: "b", userAgent: "x" } })).toBe(info)
+    expect(await fingerprint("C", {})).toBe(info)
+
+    expect(await fingerprint("C", { request: "refund" })).not.toBe(info)
+    expect(await fingerprint("C", { request: { requestId: "a", note: "refund" } })).not.toBe(info)
+    expect(await fingerprint("C", { request: { requestId: 5 } })).not.toBe(info)
+    expect(await fingerprint("C", { requestId: 41 })).not.toBe(
+      await fingerprint("C", { requestId: 42 }),
+    )
+  })
+
   it("counts a value with toJSON as what it returns", async () => {
     const date = await fingerprint("C", { at: new Date(0) })
     expect(await fingerprint("C", { at: `1970-01-01T00:00:00.000Z` })).toBe(date)
@@ -346,6 +398,8 @@ describe("fingerprint", () => {
   it("refuses to fingerprint a Map or a Set, which would hash as {}", async () => {
     await expect(fingerprint("C", { tags: new Map([["a", 1]]) })).rejects.toThrow(TypeError)
     await expect(fingerprint("C", { tags: new Set([1]) })).rejects.toThrow(TypeError)
+    // Even under a name the fingerprint may leave out: a Map has no fields, so it is no RequestInfo.
+    await expect(fingerprint("C", { request: new Map() })).rejects.toThrow(TypeError)
   })
 
   it("treats a property that is undefined like a missing one", async () => {

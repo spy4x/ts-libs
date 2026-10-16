@@ -80,8 +80,25 @@ export function isIdempotencyKey(key: unknown): key is string {
     /^[\x21-\x7e]+$/.test(key)
 }
 
-/** The fields of a command's data that describe who asked and how, not what was asked. */
-const NOT_INPUT = new Set(["actor", "idempotencyKey", "requestId", "request"])
+/** The fields of a `RequestInfo` (`@spy4x/platform/request-info`), each a string when set. */
+const REQUEST_INFO_FIELDS = new Set(["requestId", "ip", "userAgent"])
+
+/**
+ * Whether a top-level field of a command's data describes who asked and how, not what was asked.
+ * `actor` and `idempotencyKey` always do. `requestId` does when it is a string or `null`, the
+ * request's id; `request` does when it is shaped like a `RequestInfo`: a plain object whose only
+ * fields are `requestId`, `ip` and `userAgent`, each a string or unset. A `request` or `requestId`
+ * of any other shape is the command's own input and counts.
+ */
+function isEnvelope(name: string, value: unknown): boolean {
+  if (name === "actor" || name === "idempotencyKey") return true
+  if (name === "requestId") return typeof value === "string" || value === null
+  if (name !== "request" || value === null || typeof value !== "object") return false
+  if (Object.getPrototypeOf(value) !== Object.prototype) return false
+  return Object.entries(value).every(([field, text]) =>
+    REQUEST_INFO_FIELDS.has(field) && (text === undefined || typeof text === "string")
+  )
+}
 
 /**
  * A stable SHA-256 hex fingerprint of a command's name and input.
@@ -91,6 +108,10 @@ const NOT_INPUT = new Set(["actor", "idempotencyKey", "requestId", "request"])
  * are sorted, so the order a client wrote them in does not matter. A value with `toJSON` counts as
  * what it returns; a `Map`, `Set` or other non-plain object without one makes this throw a
  * `TypeError`, because it cannot be told apart from another one.
+ *
+ * Left out: `actor`, `idempotencyKey`, a string `requestId` and a `request` shaped like a
+ * `RequestInfo`. A command whose own input is a string must therefore not name it `requestId`:
+ * two sends that differ only there share a fingerprint.
  */
 export async function fingerprint(
   commandName: string,
@@ -98,7 +119,7 @@ export async function fingerprint(
 ): Promise<string> {
   const input: Record<string, unknown> = {}
   for (const name of Object.keys(data)) {
-    if (!NOT_INPUT.has(name)) input[name] = data[name]
+    if (!isEnvelope(name, data[name])) input[name] = data[name]
   }
   return await sha256Hex(stableStringify({ commandName, input }) as string)
 }

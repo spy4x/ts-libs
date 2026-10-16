@@ -16,6 +16,8 @@ import { uuidV7 } from "@spy4x/platform/universal/uuid"
  * in flight and 2 once its result is stored. `updated_at` is when the row was claimed or finished;
  * a claim that stays at 1 past its lease belongs to a run that died, and the next retry takes it
  * over with a new `claim_token`; `complete` and `release` change only the row whose token they hold, so a run that lost its claim changes nothing. The key is scoped to the user, so one user cannot replay or block another user's key.
+ * `created_at` is when the key was claimed or last taken over. The retention counts from it, so a
+ * retry that took over a dead run's claim keeps that claim, and its result, for the full retention.
  * `claim_token` is `uuid`: the store makes each token as a version 7 UUID. The store also works on
  * a table whose `claim_token` is `text`, which is what an app has after it ran
  * {@link IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT} for 1.64.0.
@@ -143,10 +145,12 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
       if (row.status === DONE) return { status: "replay", result: row.result }
       if (!row.leaseExpired) return { status: "in_progress" }
 
-      // The first run died. Only one retry may take its claim over.
+      // The first run died. Only one retry may take its claim over. The takeover restarts the
+      // retention too: a retention counted from the dead run would delete the live claim, and the
+      // stored result, while this retry's client may still retry.
       const taken = await this.sql`
         UPDATE idempotency_keys
-        SET updated_at = now(), claim_token = ${token}
+        SET created_at = now(), updated_at = now(), claim_token = ${token}
         WHERE user_id = ${userId}
           AND key = ${key}
           AND status = ${STARTED}

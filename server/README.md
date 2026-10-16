@@ -2412,14 +2412,19 @@ bus.use(createIdempotencyMiddleware({ store: new PostgresIdempotencyStore(sql) }
 - The same key with a different command name or different input fails with `KEY_REUSED`; a malformed
   key (1 to 128 printable ASCII characters) or one without a signed-in user fails with
   `INVALID_KEY`. The input is fingerprinted by SHA-256 over the sorted-key JSON of the data, minus
-  `actor`, `idempotencyKey`, `requestId` and `request`.
+  `actor`, `idempotencyKey`, a `requestId` that is a string or `null`, and a `request` shaped like
+  a `RequestInfo` (only `requestId`, `ip` and `userAgent`, each a string or unset). A `request` or
+  `requestId` of any other shape is the command's own input and counts. Do not give a command's
+  own string input the name `requestId`: two sends that differ only there share a fingerprint.
 - A run that throws releases its claim, so the retry runs again.
 
 **Options.** Both stores take `leaseSeconds` (default 30: how long an unfinished claim holds before
 a retry may take it over, so set it above your slowest command) and `retentionDays` (default 7: how
 long the longest-offline client may still retry). `MemoryIdempotencyStore` also takes `now`. The
 Postgres store compares against the database clock. Call `store.sweep()` from a periodic job to
-delete expired rows; `begin` also forgets an expired row for its own key.
+delete expired rows; `begin` also forgets an expired row for its own key. The retention counts from
+the claim, or from the last takeover of a dead run's claim, so a retry that took over a claim keeps
+it, and its result, for the full retention.
 
 **The table.** `IDEMPOTENCY_POSTGRES_SCHEMA` is the SQL for `idempotency_keys`; run it as one of
 your migrations. It has no foreign key on `user_id`, because this library does not own your users
