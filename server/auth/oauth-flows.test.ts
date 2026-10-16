@@ -141,6 +141,10 @@ describe("createKvOAuthFlowStore", () => {
       `{"verifier":"${VERIFIER}","expiresAt":${FAR_FUTURE},"signUp":null}`,
       `{"verifier":"${VERIFIER}","expiresAt":${FAR_FUTURE},` +
       `"signUp":{"subject":"s","email":null,"emailVerified":"true"}}`,
+      `{"verifier":"${VERIFIER}","expiresAt":${FAR_FUTURE},` +
+      `"signUp":{"subject":"s","email":null,"emailVerified":false,"name":1}}`,
+      `{"verifier":"${VERIFIER}","expiresAt":${FAR_FUTURE},` +
+      `"signUp":{"subject":"s","email":null,"emailVerified":false,"avatarUrl":{}}}`,
     ]
     // The same shape with a valid verifier and expiry is a flow, so the list above is refused for
     // what it varies, not for something they all share.
