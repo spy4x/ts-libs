@@ -65,10 +65,23 @@ export interface Formatters {
   time(value: DateInput): string
   /** Date and time, `17 Oct 2026, 15:45` at the default `medium` date length. */
   dateTime(value: DateInput, length?: DateLength): string
+  /** A day without its year, `17 Oct` or `Oct 17`: the label of a chart's axis. */
+  dayMonth(value: DateInput): string
+  /**
+   * The exact instant to the second, with the zone named as the region format writes it:
+   * `17 Oct 2026, 14:05:09 UTC` from {@link Formatters.utc}. For a log a reader matches against
+   * other logs.
+   */
+  exact(value: DateInput): string
   /** Distance from now in the largest fitting unit: `5 minutes ago`, `yesterday`, `in 2 weeks`. */
   relative(value: DateInput): string
   /** A number in the region format, `1,234.5` or `1.234,5`. */
   number(value: number, options?: Intl.NumberFormatOptions): string
+  /**
+   * The same region format and clock in UTC: a day a server counted in UTC (a chart's bucket)
+   * keeps its own date wherever the reader is.
+   */
+  utc(): Formatters
 }
 
 const EMPTY = "-"
@@ -135,6 +148,18 @@ export function createFormatters(
         : dateFormat(`dt${length}`, { dateStyle: length, timeStyle: "short", ...clock })
           .format(instant)
     },
+    dayMonth(value) {
+      const instant = toInstant(value)
+      return instant === null
+        ? EMPTY
+        : dateFormat("dm", { day: "numeric", month: "short" }).format(instant)
+    },
+    exact(value) {
+      const instant = toInstant(value)
+      return instant === null
+        ? EMPTY
+        : dateFormat("x", { dateStyle: "medium", timeStyle: "long", ...clock }).format(instant)
+    },
     relative(value) {
       const instant = toInstant(value)
       if (instant === null) return EMPTY
@@ -144,7 +169,21 @@ export function createFormatters(
     number(value, format) {
       return format ? new Intl.NumberFormat(locale, format).format(value) : numbers.format(value)
     },
+    utc() {
+      return createFormatters({ locale, timeZone: "UTC", hourCycle }, options)
+    },
   }
+}
+
+/**
+ * The clock a region format uses on its own: `h12` (`3:45 PM`) for `en-US`, `h23` (`15:45`) for
+ * `de-DE`. A settings screen shows it as what "automatic" means. A tag this runtime does not
+ * support reads as `en-GB`, like {@link createFormatters}, so the answer never depends on the host.
+ */
+export function regionHourCycle(locale: string): HourCycle {
+  const cycle = new Intl.DateTimeFormat(supportedLocale(locale) ?? "en-GB", { hour: "numeric" })
+    .resolvedOptions().hourCycle
+  return cycle === "h11" || cycle === "h12" ? "h12" : "h23"
 }
 
 /** The device's locale and zone, as this runtime's `Intl` reports them. */

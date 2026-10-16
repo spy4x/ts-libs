@@ -691,11 +691,53 @@ export function zoneCity(tz: string): string {
  * offset changes with daylight saving time: `America/New_York` is `UTC-5` in January and `UTC-4`
  * in July. Minute resolution, like {@link tzOffsetMinutes}, which it reads.
  *
+ * A name this runtime does not know comes back as it is instead of throwing, so a stored zone from
+ * another device cannot break the page that shows it.
+ *
  * @param prefix What the offset is written against: `UTC` (default) or `GMT`, the word most
  *   people recognise in a time zone picker (`GMT+2`).
  */
 export function zoneOffsetLabel(tz: string, at: Date, prefix: "UTC" | "GMT" = "UTC"): string {
-  return offsetLabel(tzOffsetMinutes(at, tz), prefix)
+  return isValidTimeZone(tz) ? offsetLabel(tzOffsetMinutes(at, tz), prefix) : tz
+}
+
+/** The parts {@link zoneLabel} joins, for a caller that writes them in another order. */
+export interface ZoneLabelParts {
+  /** The city, e.g. `New York` ({@link zoneCity}). */
+  city: string
+  /** The first part of the name with underscores as spaces, e.g. `America`; empty for `UTC`. */
+  area: string
+  /** The offset at the given instant, e.g. `GMT-4` ({@link zoneOffsetLabel}). */
+  offset: string
+}
+
+/** Options for {@link zoneLabel}. */
+export interface ZoneLabelOptions {
+  /** The offset word, as in {@link zoneOffsetLabel}. Default `GMT`. */
+  prefix?: "UTC" | "GMT"
+  /** Joins the parts. Default: `Berlin, Europe · GMT+2`, or `UTC · GMT+0` without an area. */
+  join?: (parts: ZoneLabelParts) => string
+}
+
+/**
+ * A zone as a person reads it, with the offset it has at `at`: `Berlin, Europe · GMT+2`.
+ *
+ * A name this runtime does not know comes back as it is, because a label is shown while a page
+ * renders and a stored zone from another device must not take that page down.
+ */
+export function zoneLabel(tz: string, at: Date, options: ZoneLabelOptions = {}): string {
+  if (!isValidTimeZone(tz)) return tz
+  const slash = tz.indexOf("/")
+  const parts = {
+    city: zoneCity(tz),
+    area: slash === -1 ? "" : tz.slice(0, slash).replaceAll("_", " "),
+    offset: zoneOffsetLabel(tz, at, options.prefix ?? "GMT"),
+  }
+  return (options.join ?? joinZoneLabel)(parts)
+}
+
+function joinZoneLabel({ city, area, offset }: ZoneLabelParts): string {
+  return area ? `${city}, ${area} · ${offset}` : `${city} · ${offset}`
 }
 
 function offsetLabel(minutes: number, prefix: string): string {
