@@ -17,6 +17,7 @@ import {
   isValidTimeZone,
   minToHHMM,
   resolveWallClock,
+  timeZoneOptions,
   todayInTz,
   tzOffsetMinutes,
   validTimeZoneOr,
@@ -875,5 +876,56 @@ describe("zoneOffsetLabel", () => {
 
   it("writes a negative half-hour offset with its sign once", () => {
     expect(zoneOffsetLabel("America/St_Johns", winter)).toBe("UTC-3:30")
+  })
+
+  it("writes the offset against GMT when asked", () => {
+    expect(zoneOffsetLabel("Asia/Kolkata", winter, "GMT")).toBe("GMT+5:30")
+  })
+})
+
+describe("timeZoneOptions", () => {
+  const summer = new Date("2026-07-15T12:00:00Z")
+  const winter = new Date("2026-01-15T12:00:00Z")
+
+  it("labels each zone with its city and its offset at the given instant", () => {
+    const [berlin] = timeZoneOptions(summer, { zones: [BERLIN] })
+    expect(berlin).toEqual({
+      value: BERLIN,
+      city: "Berlin",
+      area: "Europe",
+      offsetMinutes: 120,
+      offset: "GMT+2",
+      label: "Berlin, GMT+2",
+      searchText: "europe/berlin berlin europe gmt+2",
+    })
+    expect(timeZoneOptions(winter, { zones: [BERLIN] })[0]?.label).toBe("Berlin, GMT+1")
+  })
+
+  it("sorts west to east, then by city", () => {
+    const zones = [BERLIN, "Africa/Lagos", NEW_YORK, LOS_ANGELES, "Europe/Amsterdam"]
+    expect(timeZoneOptions(winter, { zones }).map((option) => option.value)).toEqual([
+      LOS_ANGELES,
+      NEW_YORK,
+      "Europe/Amsterdam",
+      BERLIN,
+      "Africa/Lagos",
+    ])
+  })
+
+  it("leaves out a name the runtime does not know, and lists a name once", () => {
+    const zones = [BERLIN, "Not/A_Zone", BERLIN]
+    expect(timeZoneOptions(winter, { zones }).map((option) => option.value)).toEqual([BERLIN])
+  })
+
+  it("writes the offset against UTC when asked", () => {
+    expect(timeZoneOptions(winter, { zones: [UTC_ZONE], prefix: "UTC" })[0]?.label)
+      .toBe("UTC, UTC+0")
+  })
+
+  it("lists every zone the runtime knows, UTC included, by default", () => {
+    const values = timeZoneOptions(winter).map((option) => option.value)
+    expect(values).toContain(UTC_ZONE)
+    expect(values).toContain(BERLIN)
+    expect(values.length).toBeGreaterThanOrEqual(Intl.supportedValuesOf("timeZone").length)
   })
 })

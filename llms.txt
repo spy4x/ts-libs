@@ -1133,6 +1133,17 @@ canonicalUrl	function	@spy4x/platform/universal/seo	Parse a canonical address in
 faqPageJsonLd	function	@spy4x/platform/universal/seo	The `FAQPage` node for the questions a page shows, in the order it shows them.
 jsonLdText	function	@spy4x/platform/universal/seo	Serialise JSON-LD for a `<script>` body.
 normalizeCanonical	function	@spy4x/platform/universal/seo	The canonical address as it should be published: one clean `http`/`https` address.
+DEFAULT_SETTINGS_MAX_BYTES	constant	@spy4x/platform/universal/settings	The default cap on a saved value: 4 KiB of UTF-8 JSON, plenty for a handful of preferences.
+SettingsDefinition	interface	@spy4x/platform/universal/settings	One app's settings: its schema, defaults and cap, with the checks built on them.
+SettingsOptions	interface	@spy4x/platform/universal/settings	Options for defineSettings.
+SettingsParseResult	type	@spy4x/platform/universal/settings	Outcome of SettingsDefinition.parse.
+SettingsRefusal	type	@spy4x/platform/universal/settings	Why a value or a save was refused.
+SettingsSaveResult	type	@spy4x/platform/universal/settings	Outcome of SettingsDefinition.save and saveSettings.
+SettingsStore	interface	@spy4x/platform/universal/settings	Where an app keeps one owner's settings record: a row, a key, a file.
+StoredSettings	interface	@spy4x/platform/universal/settings	A record as the store hands it back: the value is unchecked JSON until it is resolved.
+VersionedSettings	interface	@spy4x/platform/universal/settings	A settings value and the version it was saved as.
+defineSettings	function	@spy4x/platform/universal/settings	Define one app's settings from an arktype object schema and its defaults.
+saveSettings	function	@spy4x/platform/universal/settings	Read, check and write one save request against a store.
 SortDirection	type	@spy4x/platform/universal/sort	Sort direction of one rule.
 SortRule	interface	@spy4x/platform/universal/sort	One column in the sort order.
 parseSort	function	@spy4x/platform/universal/sort	Read sort rules out of a URL parameter.
@@ -2182,6 +2193,14 @@ startOfMonth	function	@spy4x/time/date	First day of the month `date` falls in.
 startOfQuarter	function	@spy4x/time/date	First day of the calendar quarter `date` falls in.
 startOfWeek	function	@spy4x/time/date	First day of the week `date` falls in: the Monday, or whichever day the week opens on.
 startOfYear	function	@spy4x/time/date	First day of the calendar year `date` falls in.
+DateInput	type	@spy4x/time/format	A value a formatter accepts: a `Date`, epoch milliseconds or a string `Date` can parse.
+DateLength	type	@spy4x/time/format	A date's length, as `Intl.DateTimeFormat`'s `dateStyle`: `17/10/2026` … `Saturday 17 October 2026`.
+DeviceFormat	interface	@spy4x/time/format	What "automatic" resolves to.
+FormatSettings	interface	@spy4x/time/format	A person's display settings.
+Formatters	interface	@spy4x/time/format	The formatters for one person's settings.
+HourCycle	type	@spy4x/time/format	A clock: `h12` shows `3:45 PM`, `h23` shows `15:45`.
+createFormatters	function	@spy4x/time/format	Build the formatters for a person's settings.
+deviceFormat	function	@spy4x/time/format	The device's locale and zone, as this runtime's `Intl` reports them.
 IcalComponent	interface	@spy4x/time/ical	A `BEGIN:…`/`END:…` block with its properties and nested components.
 IcalDateKind	enum	@spy4x/time/ical	Whether a date value is a date, a floating time, a UTC time or a time in a named zone.
 IcalDateValue	interface	@spy4x/time/ical	A DATE or DATE-TIME value in a form that keeps its kind through a round trip.
@@ -2310,9 +2329,12 @@ icsUnescapeParameter	function	@spy4x/time/ics-core	Reverse icsEscapeParameter pe
 joinContentLines	function	@spy4x/time/ics-core	Fold each logical line and terminate every one with CRLF, including the last.
 stripControlCharacters	function	@spy4x/time/ics-core	Remove characters RFC 5545 does not allow in content lines: C0 controls except HTAB, LF and CR, plus DEL.
 unfoldLines	function	@spy4x/time/ics-core	Unfold every content line in an iCalendar document: a CRLF (or bare LF) followed by SPACE or HTAB continues the previous line (RFC 5545 §3.1).
+LocaleOption	interface	@spy4x/time/locale	One entry of a region format picker, from localeOptions.
+REGION_FORMAT_LOCALES	constant	@spy4x/time/locale	Region formats a picker offers: a language with a country, the way people choose how numbers and dates are written.
 WeekdayLabel	interface	@spy4x/time/locale	One weekday header: what its column shows, and what that abbreviation stands for.
 dayLabel	function	@spy4x/time/locale	Localised "23 August 2026", the date as a person reads it.
 localeFirstWeekday	function	@spy4x/time/locale	The day the locale's week starts on, `1` = Monday … `7` = Sunday.
+localeOptions	function	@spy4x/time/locale	Region formats as options for a searchable picker, sorted by their name in `displayLocale`.
 monthLabel	function	@spy4x/time/locale	Localised "August 2026" for the month `date` falls in.
 relativeDayLabel	function	@spy4x/time/locale	A day as a person says it: "Yesterday", "Today", "Tomorrow", otherwise shortDayLabel.
 shortDayLabel	function	@spy4x/time/locale	Localised "Thu 15 Oct": weekday, day and month, no year.
@@ -2328,6 +2350,7 @@ describeRrule	function	@spy4x/time/rrule	An English label for the rule, such as 
 formatRrule	function	@spy4x/time/rrule	Write `rule` as the value of an `RRULE` property (no `RRULE:` prefix), so that parseRrule reads it back to an equal rule.
 nextOccurrence	function	@spy4x/time/rrule	The first occurrence of `rule` strictly after `options.after`, as a value of the same kind (and zone) as `options.start`, with the start's time of day.
 parseRrule	function	@spy4x/time/rrule	Parse the value of an `RRULE` property (a leading `RRULE:` is accepted).
+TimeZoneOption	interface	@spy4x/time/tz	One entry of a time zone picker, from timeZoneOptions.
 WallClockKind	enum	@spy4x/time/tz	How often a wall clock occurs in a zone on its date.
 WallClockResolution	interface	@spy4x/time/tz	The answer of resolveWallClock.
 addDays	function	@spy4x/time/tz	Add `n` days to a `YYYY-MM-DD` date, in `tz` when one is given.
@@ -2346,6 +2369,7 @@ isValidTimeZone	function	@spy4x/time/tz	True when `tz` is a zone this runtime's 
 isoDateInTz	function	@spy4x/time/tz	`YYYY-MM-DD` as `tz` reads the instant `instant`.
 minToHHMM	function	@spy4x/time/tz	Minutes since midnight to a zero-padded `"HH:MM"`.
 resolveWallClock	function	@spy4x/time/tz	Tells whether `tz`'s wall clock reads `date` + `time` once, never or twice, and gives the instants.
+timeZoneOptions	function	@spy4x/time/tz	Every time zone as an option for a searchable picker, west to east, then by city.
 todayInTz	function	@spy4x/time/tz	`YYYY-MM-DD` for today in `tz`.
 tzOffsetMinutes	function	@spy4x/time/tz	Minutes east of UTC for `tz` at the instant `instant`.
 validTimeZoneOr	function	@spy4x/time/tz	`tz` when it is a real IANA zone, `fallback` otherwise.
@@ -2396,4 +2420,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 2b5f68a392fe30714346215d17314ecfb3bb0a45dca419d8ad1d0ada0e753751
+# export surface: sha256 7b7ab828c9d7caaa49c213c873e6905e1e0c19a89613db4976cb5b2a9dd4efb9
