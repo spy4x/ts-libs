@@ -144,6 +144,43 @@ export function breadcrumbListJsonLd(
   }
 }
 
+/** One question and its answer, as a page shows them. */
+export interface FaqItem {
+  question: string
+  /** The answer as plain text: search engines read no markup here. */
+  answerText: string
+}
+
+/** A schema.org `Question` inside an `FAQPage`. */
+export interface FaqQuestionJsonLd {
+  "@type": "Question"
+  name: string
+  acceptedAnswer: { "@type": "Answer"; text: string }
+}
+
+/** A schema.org `FAQPage` node. */
+export interface FaqPageJsonLd {
+  "@type": "FAQPage"
+  mainEntity: FaqQuestionJsonLd[]
+}
+
+/**
+ * The `FAQPage` node for the questions a page shows, in the order it shows them.
+ *
+ * Search engines expect the same questions and answers to be visible on the page, so pass the
+ * list the page renders rather than a separate copy.
+ */
+export function faqPageJsonLd(items: readonly FaqItem[]): FaqPageJsonLd {
+  return {
+    "@type": "FAQPage",
+    mainEntity: items.map(({ question, answerText }) => ({
+      "@type": "Question",
+      name: question,
+      acceptedAnswer: { "@type": "Answer", text: answerText },
+    })),
+  }
+}
+
 /**
  * Serialise JSON-LD for a `<script>` body.
  *

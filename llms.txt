@@ -482,6 +482,9 @@ Err	interface	@spy4x/platform	Base shape every error shares: a category and huma
 ErrType	enum	@spy4x/platform	Kind of a failed operation.
 ErrorEventTarget	interface	@spy4x/platform	The target of `install`: `window`, or anything with `addEventListener`.
 ErrorReporter	interface	@spy4x/platform	What `createErrorReporter` returns.
+FaqItem	interface	@spy4x/platform	One question and its answer, as a page shows them.
+FaqPageJsonLd	interface	@spy4x/platform	A schema.org `FAQPage` node.
+FaqQuestionJsonLd	interface	@spy4x/platform	A schema.org `Question` inside an `FAQPage`.
 HONEYPOT_FIELD_NAME	constant	@spy4x/platform	Default `name` of the honeypot field.
 HOURS_IN_DAY	constant	@spy4x/platform	Hours in one day.
 InferSchema	type	@spy4x/platform	Value a schema accepts and produces.
@@ -545,6 +548,7 @@ convertToKebabCase	function	@spy4x/platform	Convert a free-form identifier to ke
 createErrorReporter	function	@spy4x/platform	Creates the reporter.
 debounce	function	@spy4x/platform	Wrap `fn` in a trailing-edge debounce.
 err	function	@spy4x/platform	Wrap a failure.
+faqPageJsonLd	function	@spy4x/platform	The `FAQPage` node for the questions a page shows, in the order it shows them.
 filterRows	function	@spy4x/platform	Keep the rows that every word of the query matches.
 fold	function	@spy4x/platform	Fold text for matching: accents removed and lower-cased.
 formatBytes	function	@spy4x/platform	A byte count for display, in binary (1024) steps: `"512 B"`, `"1.5 KB"`, `"2 MB"`.
@@ -1111,9 +1115,13 @@ InferSchema	type	@spy4x/platform/universal/schema	Value a schema accepts and pro
 BreadcrumbListItem	interface	@spy4x/platform/universal/seo	A schema.org `ListItem` as it appears inside a `BreadcrumbList`.
 BreadcrumbListJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `BreadcrumbList` node.
 Crumb	interface	@spy4x/platform/universal/seo	One entry in the breadcrumb trail a page declares.
+FaqItem	interface	@spy4x/platform/universal/seo	One question and its answer, as a page shows them.
+FaqPageJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `FAQPage` node.
+FaqQuestionJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `Question` inside an `FAQPage`.
 breadcrumbItems	function	@spy4x/platform/universal/seo	`itemListElement` for a schema.org `BreadcrumbList`, built from the crumbs the caller stated.
 breadcrumbListJsonLd	function	@spy4x/platform/universal/seo	The complete `BreadcrumbList` node, `@id`-anchored to the page it describes.
 canonicalUrl	function	@spy4x/platform/universal/seo	Parse a canonical address into the normalised `URL` that will be published.
+faqPageJsonLd	function	@spy4x/platform/universal/seo	The `FAQPage` node for the questions a page shows, in the order it shows them.
 jsonLdText	function	@spy4x/platform/universal/seo	Serialise JSON-LD for a `<script>` body.
 normalizeCanonical	function	@spy4x/platform/universal/seo	The canonical address as it should be published: one clean `http`/`https` address.
 SortDirection	type	@spy4x/platform/universal/sort	Sort direction of one rule.
@@ -2377,4 +2385,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 af294ebff8763eb89edfaa8464416953072e77fd46526788a6eec2c6737f6dbb
+# export surface: sha256 32b750f89fc46f27674001c587696c5ad0a0f0964e47cf8a6e8b8b0fe9a63a13
