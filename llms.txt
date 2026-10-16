@@ -1465,10 +1465,15 @@ findUndeclaredKey	function	@spy4x/realtime/protocol	First own string key of `val
 isChangeHint	function	@spy4x/realtime/protocol	Whether a frame is a change hint, narrowing it for a caller that has already decoded.
 serverMessageSchema	constant	@spy4x/realtime/protocol	Server half of the protocol.
 toWireCursors	function	@spy4x/realtime/protocol	Snapshot of the cursors a handshake advertises, in wire form.
+LocalReads	interface	@spy4x/realtime/read-cache	The read copies of the offline-readable lists, as a store uses them.
 ReadCache	interface	@spy4x/realtime/read-cache	The copies of one user: see the module documentation.
+ReadRefused	class	@spy4x/realtime/read-cache	Carries an answer of the server that is not the list out of a REST read, so a read through LocalReads neither keeps it nor hides it behind the copy.
 ReadResult	interface	@spy4x/realtime/read-cache	What a read answered, and how old it is.
 cachedRead	function	@spy4x/realtime/read-cache	Asks the server with `read`, keeps the answer under `key` and returns it as fresh.
+createLocalReads	function	@spy4x/realtime/read-cache	LocalReads over the cache `current` names at the moment of each read, or over none.
 createReadCache	function	@spy4x/realtime/read-cache	A read cache over IndexedDB (`createDataCache`), one entry per key.
+isProxyAnswer	function	@spy4x/realtime/read-cache	Whether a REST read's answer is taken for a proxy's, such as a 502 during a deploy: a ReadRefused that `isForeignAnswer` (`@spy4x/realtime/calls`) takes for foreign.
+isRefusal	function	@spy4x/realtime/read-cache	Whether the server answered that this person may not read the list, or that it is gone: a socket read refused with `unauthorized`, `forbidden` or `not_found`, or a REST read answered 401, 403 or 404.
 isUnreachable	function	@spy4x/realtime/read-cache	Whether a failure means the server could not be reached, as opposed to it having answered.
 readCopy	function	@spy4x/realtime/read-cache	Returns the saved copy under `key`, or `undefined` when there is none, the cache is `undefined` or the device cannot read it.
 CloseHandler	type	@spy4x/realtime/registry	
@@ -2420,4 +2425,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 7b7ab828c9d7caaa49c213c873e6905e1e0c19a89613db4976cb5b2a9dd4efb9
+# export surface: sha256 90b4ca8778435c6da5d9a6608badcba67280e5957846f830b755a7f1ec531658
