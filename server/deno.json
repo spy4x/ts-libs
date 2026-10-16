@@ -8,6 +8,7 @@
     "./http/same-origin": "./http/same-origin.ts",
     "./http/security-headers": "./http/security-headers.ts",
     "./http/health": "./http/health.ts",
+    "./http/trusted-proxy": "./http/trusted-proxy.ts",
     "./export": "./export.ts",
     "./static": "./static.ts",
     "./healthcheck": "./healthcheck.ts",
