@@ -112,6 +112,20 @@ export function describeOAuthFlowStoreContract(
         expect(await store.take("sign-up:a")).toBeNull()
       }))
 
+    it("returns a pending sign-up's name and avatar URL as they were put", () =>
+      withStore(async ({ store, now }) => {
+        const expiresAt = new Date(now() + TEN_MINUTES)
+        const signUp = {
+          subject: "sub-1",
+          email: null,
+          emailVerified: false,
+          name: "Ann Example",
+          avatarUrl: "https://avatars.test/ann.png",
+        }
+        await store.put("sign-up:a", { verifier: VERIFIER_A, signUp }, expiresAt)
+        expect(await store.take("sign-up:a")).toEqual({ verifier: VERIFIER_A, signUp, expiresAt })
+      }))
+
     it("returns a connect flow's user id as it was put, and none for a flow put without one", () =>
       withStore(async ({ store, now }) => {
         const expiresAt = new Date(now() + TEN_MINUTES)

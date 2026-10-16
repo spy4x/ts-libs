@@ -23,6 +23,9 @@
  *   the provider identity to exactly that user, whatever its address. It creates no user and no
  *   session. A connect flow is kept under its own key and carries the user id, so it cannot be
  *   completed as a sign-in, nor a sign-in flow as a connect.
+ * - A profile's `name` and `avatarUrl` are untrusted provider text. Every profile a provider config
+ *   or the flow store returns is cleaned first (`oauth-profile.ts`): the name loses NUL and lone
+ *   surrogates and is cut to a length, and the avatar is kept only as an `https:` URL.
  *
  * Pending flows live in an {@link OAuthFlowStore}. The default keeps them in memory inside the
  * object {@link createOAuthSignIn} returns, so a callback must reach the same process that built
@@ -46,8 +49,10 @@ import {
   type OAuthFlowStore,
   type OAuthTakenFlow,
 } from "./oauth-flows.ts"
+import { cleanOAuthProfile } from "./oauth-profile.ts"
 import type { ProviderDeps, SignInResult } from "./provider.ts"
 
+export { MAX_OAUTH_AVATAR_URL_LENGTH, MAX_OAUTH_NAME_LENGTH } from "./oauth-profile.ts"
 export {
   createKvOAuthFlowStore,
   createMemoryOAuthFlowStore,
@@ -73,6 +78,20 @@ export interface OAuthProfile {
    * to an existing account that owns the address.
    */
   emailVerified: boolean
+  /**
+   * The person's name as the provider gives it, for display only, such as on a "Create a new
+   * account?" page. Anyone can set it on their provider account, so it never identifies anyone.
+   * `createOAuthSignIn` drops NUL and lone surrogates from it, trims it and cuts it to
+   * {@link MAX_OAUTH_NAME_LENGTH}; it is absent when the provider gives none or nothing is left.
+   * It is still text from outside: escape it where it is shown.
+   */
+  name?: string
+  /**
+   * The provider's picture of the person, for display only. `createOAuthSignIn` keeps it only as
+   * an absolute `https:` URL without a user name or password, of at most
+   * {@link MAX_OAUTH_AVATAR_URL_LENGTH} characters; otherwise it is absent.
+   */
+  avatarUrl?: string
 }
 
 /** What {@link OAuthProviderConfig.completeProfile} may use. */
@@ -698,10 +717,13 @@ export function createOAuthSignIn(
   async function holdSignUp(profile: OAuthProfile): Promise<OAuthPendingSignUp> {
     const token = randomBase64Url(STATE_BYTES)
     const expiresAt = new Date(clock.now() + SIGN_UP_TTL_MS)
-    const { subject, email, emailVerified } = profile
+    const { subject, email, emailVerified, name, avatarUrl } = profile
+    const signUp: OAuthProfile = { subject, email, emailVerified }
+    if (name !== undefined) signUp.name = name
+    if (avatarUrl !== undefined) signUp.avatarUrl = avatarUrl
     await flows.put(
       await signUpKey(token),
-      { verifier: randomBase64Url(VERIFIER_BYTES), signUp: { subject, email, emailVerified } },
+      { verifier: randomBase64Url(VERIFIER_BYTES), signUp },
       expiresAt,
     )
     return { outcome: OAuthOutcome.PendingSignUp, profile, token, expiresAt }
@@ -745,7 +767,10 @@ interface Resolved {
   outcome: OAuthSignInResult["outcome"]
 }
 
-/** `profile` when the store can key its subject, otherwise null. */
+/**
+ * `profile` with its display fields cleaned (`cleanOAuthProfile`) when the store can key its
+ * subject, otherwise null.
+ */
 function keyable(profile: OAuthProfile | null): OAuthProfile | null {
   if (
     !profile || !isStoreText(profile.subject) || profile.subject.length === 0 ||
@@ -753,7 +778,7 @@ function keyable(profile: OAuthProfile | null): OAuthProfile | null {
   ) {
     return null
   }
-  return profile
+  return cleanOAuthProfile(profile)
 }
 
 /** The S256 code challenge: base64url (unpadded) of the SHA-256 of the verifier (RFC 7636). */

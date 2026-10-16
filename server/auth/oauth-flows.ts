@@ -30,7 +30,8 @@ export interface OAuthPendingFlow {
   /**
    * Set only on a pending sign-up (`signUp: "confirm"`): the profile `confirmSignUp` creates the
    * user from. Such an entry is kept under the hash of its token, and its `verifier` is random
-   * filler that nobody redeems. A store must return it as it was put.
+   * filler that nobody redeems. A store must return it as it was put, `name` and `avatarUrl`
+   * included when they are set.
    */
   signUp?: OAuthProfile
   /**
@@ -175,8 +176,10 @@ function copyFlow(flow: OAuthPendingFlow): OAuthPendingFlow {
   const copy: OAuthPendingFlow = { verifier: flow.verifier }
   if (flow.connect !== undefined) copy.connect = flow.connect
   if (flow.signUp) {
-    const { subject, email, emailVerified } = flow.signUp
+    const { subject, email, emailVerified, name, avatarUrl } = flow.signUp
     copy.signUp = { subject, email, emailVerified }
+    if (name !== undefined) copy.signUp.name = name
+    if (avatarUrl !== undefined) copy.signUp.avatarUrl = avatarUrl
   }
   return copy
 }
@@ -189,7 +192,13 @@ function copyFlow(flow: OAuthPendingFlow): OAuthPendingFlow {
 const storedFlow = type("string.json.parse").to({
   verifier: /^[A-Za-z0-9._~-]{43,128}$/,
   expiresAt: type("number").narrow((value) => Number.isFinite(value)),
-  "signUp?": { subject: "string", email: "string | null", emailVerified: "boolean" },
+  "signUp?": {
+    subject: "string",
+    email: "string | null",
+    emailVerified: "boolean",
+    "name?": "string",
+    "avatarUrl?": "string",
+  },
   "connect?": "number.integer",
 })
 
