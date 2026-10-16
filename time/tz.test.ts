@@ -24,6 +24,7 @@ import {
   WallClockKind,
   zoneCity,
   zonedDateTime,
+  zoneLabel,
   zoneOffsetLabel,
 } from "./tz.ts"
 
@@ -880,6 +881,42 @@ describe("zoneOffsetLabel", () => {
 
   it("writes the offset against GMT when asked", () => {
     expect(zoneOffsetLabel("Asia/Kolkata", winter, "GMT")).toBe("GMT+5:30")
+  })
+
+  it("returns a zone the runtime does not know as its name instead of throwing", () => {
+    expect(zoneOffsetLabel("Mars/Olympus_Mons", winter, "GMT")).toBe("Mars/Olympus_Mons")
+  })
+})
+
+describe("zoneLabel", () => {
+  const winter = new Date("2026-01-15T12:00:00Z")
+  const summer = new Date("2026-07-15T12:00:00Z")
+
+  it("names the city, its area and the offset at the given instant", () => {
+    expect(zoneLabel("Europe/Berlin", summer)).toBe("Berlin, Europe · GMT+2")
+    expect(zoneLabel("Europe/Berlin", winter)).toBe("Berlin, Europe · GMT+1")
+    expect(zoneLabel("America/Argentina/Buenos_Aires", winter)).toBe(
+      "Buenos Aires, America · GMT-3",
+    )
+  })
+
+  it("leaves the area out of a slash-less zone", () => {
+    expect(zoneLabel("UTC", winter)).toBe("UTC · GMT+0")
+  })
+
+  it("writes the offset against the requested word", () => {
+    expect(zoneLabel("Asia/Kolkata", winter, { prefix: "UTC" })).toBe("Kolkata, Asia · UTC+5:30")
+  })
+
+  it("lets the caller join the parts in its own order", () => {
+    const label = zoneLabel("America/New_York", summer, {
+      join: ({ city, area, offset }) => `${offset} ${area} – ${city}`,
+    })
+    expect(label).toBe("GMT-4 America – New York")
+  })
+
+  it("returns a zone the runtime does not know as its name instead of throwing", () => {
+    expect(zoneLabel("Mars/Olympus_Mons", winter)).toBe("Mars/Olympus_Mons")
   })
 })
 
