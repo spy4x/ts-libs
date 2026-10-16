@@ -829,6 +829,7 @@ pushUnsubscribeRequestSchema	constant	@spy4x/platform/model	Request body to drop
 Clock	type	@spy4x/platform/rate-limit	Deprecated: The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is now the home for this shape. Monotonic millisecond clock.
 DEFAULT_IDLE_MS	constant	@spy4x/platform/rate-limit	How long a bucket survives after it stops being active.
 DenoKvLike	interface	@spy4x/platform/rate-limit	The three `Deno.Kv` operations this adapter needs.
+FORWARDED_HEADERS	constant	@spy4x/platform/rate-limit	The three headers in which a request names the client it came from, and which clientIp reads when told to trust a proxy.
 KeyResolver	type	@spy4x/platform/rate-limit	Key the current request.
 MemoryRateLimiter	class	@spy4x/platform/rate-limit	In-process sliding-window limiter.
 RATE_LIMIT_HEADERS	constant	@spy4x/platform/rate-limit	Default draft-6 header names.
@@ -861,11 +862,13 @@ createRateLimitMiddleware	function	@spy4x/platform/rate-limit	Build the middlewa
 createStoreLimiter	function	@spy4x/platform/rate-limit	Build a limiter over a shared store.
 decisionHeaders	function	@spy4x/platform/rate-limit	Draft-6 headers for one decision.
 denoKvBackend	function	@spy4x/platform/rate-limit	Deno KV adapter.
+denoServeRemoteAddr	function	@spy4x/platform/rate-limit	The RemoteAddrResolver for an app run by `deno serve` (or handed to `Deno.serve` as `app.fetch`): Deno passes the connection's info to Hono as `env`, and this reads its `remoteAddr.hostname`, the peer's IP address.
 failOpenLimiter	function	@spy4x/platform/rate-limit	Wrap a limiter so that a failing backend lets requests through instead of failing them.
 humanRetry	function	@spy4x/platform/rate-limit	Milliseconds as a human retry hint: `"1 second"`, `"45 seconds"`, `"2 minutes"`.
 rateLimitKey	function	@spy4x/platform/rate-limit	Build a limiter key from an identity.
 systemClock	function	@spy4x/platform/rate-limit	Deprecated: Delegates to, and should be replaced by, `systemNow` from `@spy4x/platform/universal/time`. Default: real time.
 userThenIp	function	@spy4x/platform/rate-limit	Key a request on the authenticated user when the caller can find one, else on the client IP.
+FORWARDED_HEADERS	constant	@spy4x/platform/rate-limit/client-ip	The three headers in which a request names the client it came from, and which clientIp reads when told to trust a proxy.
 TrustedProxyHeader	type	@spy4x/platform/rate-limit/client-ip	A single proxy header clientIp may be told to trust, in place of the default all-three-headers order.
 UNKNOWN_CLIENT_IP	constant	@spy4x/platform/rate-limit/client-ip	Fallback when no header and no peer address is available.
 clientIp	function	@spy4x/platform/rate-limit/client-ip	Resolve the client IP for a request.
@@ -883,6 +886,7 @@ RejectionStatus	type	@spy4x/platform/rate-limit/hono	Statuses a rejection may us
 RemoteAddrResolver	type	@spy4x/platform/rate-limit/hono	Resolve a client's peer address from a runtime handle, for RateLimitMiddlewareOptions.
 createRateLimitMiddleware	function	@spy4x/platform/rate-limit/hono	Build the middleware for a limiter.
 decisionHeaders	function	@spy4x/platform/rate-limit/hono	Draft-6 headers for one decision.
+denoServeRemoteAddr	function	@spy4x/platform/rate-limit/hono	The RemoteAddrResolver for an app run by `deno serve` (or handed to `Deno.serve` as `app.fetch`): Deno passes the connection's info to Hono as `env`, and this reads its `remoteAddr.hostname`, the peer's IP address.
 userThenIp	function	@spy4x/platform/rate-limit/hono	Key a request on the authenticated user when the caller can find one, else on the client IP.
 DenoKvLike	interface	@spy4x/platform/rate-limit/kv	The three `Deno.Kv` operations this adapter needs.
 RateLimitKv	interface	@spy4x/platform/rate-limit/kv	Minimal key/value port.
@@ -1841,6 +1845,13 @@ nginxAddHeaders	function	@spy4x/server/http/security-headers	Renders headers as 
 securityHeaderList	function	@spy4x/server/http/security-headers	The headers securityHeaders sets, as `[name, value]` pairs with the names in lower case, for a server the middleware cannot run in: pass the list to `new Headers(list)`, set each pair on a response, or render it with nginxAddHeaders.
 securityHeaders	function	@spy4x/server/http/security-headers	Middleware that sets the headers on every response.
 withSecurityHeaders	function	@spy4x/server/http/security-headers	A copy of `response` that carries `headers`, for a server securityHeaders cannot run in (Fresh, `Deno.serve`, a worker).
+FORWARDED_HEADERS	constant	@spy4x/server/http/trusted-proxy	The three headers in which a request names the client it came from, and which clientIp reads when told to trust a proxy.
+IsProxyPeer	type	@spy4x/server/http/trusted-proxy	Tells whether a connection's peer address is one of the trusted proxies.
+PROXY_ADDRESS_MAX_AGE_MS	constant	@spy4x/server/http/trusted-proxy	How long a looked-up address of a proxy is trusted before a request starts a new lookup.
+PROXY_LOOKUP_RETRY_MS	constant	@spy4x/server/http/trusted-proxy	The least time between two lookups that a request from an unknown peer starts.
+RequireProxyOptions	interface	@spy4x/server/http/trusted-proxy	Options for requireProxyForForwardedHeaders.
+createProxyPeers	function	@spy4x/server/http/trusted-proxy	The trusted proxies, by address.
+requireProxyForForwardedHeaders	function	@spy4x/server/http/trusted-proxy	Hono middleware that refuses, with 403 and `{ error: message }`, a request that carries one of the FORWARDED_HEADERS and whose peer is not a trusted proxy (or is unknown).
 BeginOutcome	type	@spy4x/server/idempotency	What IdempotencyStore.begin found for a key.
 IDEMPOTENCY_LEASE_SECONDS	constant	@spy4x/server/idempotency	Default for how long an unfinished run keeps its claim.
 IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT	constant	@spy4x/server/idempotency	Deprecated: Not needed since 1.64.1: PostgresIdempotencyStore works on a `uuid` column and on a `text` column. The migration release 1.64.0 needed, as SQL text: it widens `claim_token` from `uuid` to `text`.
@@ -2431,4 +2442,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 03896f1442d9668a691e49805db3c1fd91560e64219f6d186dc32e3dc7fb5ff6
+# export surface: sha256 9c5c9bc1b66d1c1d5476d0f7c454b9a7e4ee2bb7c5c12f797831fef1b6be236a

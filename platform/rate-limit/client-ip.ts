@@ -43,11 +43,19 @@ const FORWARDED_FOR = "x-forwarded-for"
 const REAL_IP = "x-real-ip"
 
 /**
+ * The three headers in which a request names the client it came from, and which {@link clientIp}
+ * reads when told to trust a proxy. Only a proxy should send them: a server that reads any of them
+ * can refuse them from every other peer with `requireProxyForForwardedHeaders` from
+ * `@spy4x/server/http/trusted-proxy`, which checks this same list.
+ */
+export const FORWARDED_HEADERS = [REAL_IP, FORWARDED_FOR, CONNECTING_IP] as const
+
+/**
  * A single proxy header {@link clientIp} may be told to trust, in place of the default
  * all-three-headers order. Name the one header the proxy in front actually rewrites — see the
  * module doc's Traefik and Cloudflare examples.
  */
-export type TrustedProxyHeader = "cf-connecting-ip" | "x-forwarded-for" | "x-real-ip"
+export type TrustedProxyHeader = (typeof FORWARDED_HEADERS)[number]
 
 /** Options for {@link clientIp}. */
 export interface ClientIpOptions {

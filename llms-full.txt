@@ -2798,13 +2798,13 @@ Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracte
 
 ## Modules
 
-| File           | Contents                                                                                |
-| -------------- | --------------------------------------------------------------------------------------- |
-| `memory.ts`    | `MemoryRateLimiter` (in-process), `StoreRateLimiter`, the `RateLimitStore` port         |
-| `kv.ts`        | `createKvStore` over a three-method `RateLimitKv`, plus `denoKvBackend`                 |
-| `hono.ts`      | `createRateLimitMiddleware`, draft-6 `RateLimit-*` headers, `userThenIp`                |
-| `client-ip.ts` | `clientIp()` extraction order, `TrustedProxyHeader`, `clientIpBucket()`, `humanRetry()` |
-| `mod.ts`       | Barrel for every public symbol above                                                    |
+| File           | Contents                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------ |
+| `memory.ts`    | `MemoryRateLimiter` (in-process), `StoreRateLimiter`, the `RateLimitStore` port                              |
+| `kv.ts`        | `createKvStore` over a three-method `RateLimitKv`, plus `denoKvBackend`                                      |
+| `hono.ts`      | `createRateLimitMiddleware`, draft-6 `RateLimit-*` headers, `userThenIp`, `denoServeRemoteAddr`              |
+| `client-ip.ts` | `clientIp()` extraction order, `TrustedProxyHeader`, `FORWARDED_HEADERS`, `clientIpBucket()`, `humanRetry()` |
+| `mod.ts`       | Barrel for every public symbol above                                                                         |
 
 ## Usage
 
@@ -2821,7 +2821,8 @@ const app = new Hono<{ Bindings: { remoteAddr?: string } }>()
 
 // `remoteAddr` reads the connection's own peer address from whatever the runtime exposes —
 // `Deno.serve`'s `server.requestIP(req)`, `Bun.serve`'s `server.requestIP(req)`, or a value an
-// earlier middleware stored. It reaches the resolver as `context.remoteAddr`.
+// earlier middleware stored. It reaches the resolver as `context.remoteAddr`. Under `deno serve`,
+// pass `denoServeRemoteAddr`, which reads the address Deno hands to Hono.
 app.use(createRateLimitMiddleware(limiter, {
   remoteAddr: ({ env }) => env?.remoteAddr,
   keyResolver: userThenIp((req) => userIdFrom(req)),
@@ -4257,6 +4258,7 @@ Runs on: server (Deno).
 | `@spy4x/server/http/same-origin`            | Hono middleware that refuses cross-site mutations and cross-site WebSocket upgrades                                                                                                                                                                           |
 | `@spy4x/server/http/security-headers`       | CSP and framing headers for a same-origin single-page app, with inline-block hashes                                                                                                                                                                           |
 | `@spy4x/server/http/health`                 | A health endpoint over named checks: 503 when a required one fails, 200 `degraded` when only an optional one does                                                                                                                                             |
+| `@spy4x/server/http/trusted-proxy`          | Hono middleware that refuses forwarded-client headers (`X-Real-IP` and the rest) from any peer but the trusted proxies, which it follows by name                                                                                                              |
 | `@spy4x/server/export`                      | Versioned export envelope and `Content-Disposition` download response                                                                                                                                                                                         |
 | `@spy4x/server/static`                      | Static-file serving with a MIME table and path-traversal protection                                                                                                                                                                                           |
 | `@spy4x/server/healthcheck`                 | Loopback TCP probe, exit 0/1, for distroless images                                                                                                                                                                                                           |
@@ -4443,6 +4445,33 @@ failed: the endpoint is usually public, and an error message can carry a host na
 credential. The answer is marked `cache-control: no-store`. A name in both lists, a check that is
 not a function, or a `timeoutMs` that is not a finite number above 0 throws when the handler is
 built. This is the HTTP side; the probe a container runs against itself is `server/healthcheck`.
+
+## `server/http/trusted-proxy`
+
+`createProxyPeers`, `requireProxyForForwardedHeaders`, `FORWARDED_HEADERS` (re-exported from
+`@spy4x/platform/rate-limit/client-ip`), `PROXY_ADDRESS_MAX_AGE_MS`, `PROXY_LOOKUP_RETRY_MS`, and
+the types `IsProxyPeer`, `ProxyPeersOptions` and `RequireProxyOptions`.
+
+A reverse proxy names the client in `X-Real-IP`, `X-Forwarded-For` or `CF-Connecting-IP`. Any other
+peer that reaches the app directly, such as a neighbour container on a shared Docker network, can
+set them too and mint a fresh rate-limit bucket per forged address.
+`requireProxyForForwardedHeaders(isProxyPeer, { remoteAddr, message? })` answers such a request
+with 403 `{ error: message }` unless its peer is a trusted proxy. Mount it in front of every route.
+
+```ts
+import { denoServeRemoteAddr } from "@spy4x/platform/rate-limit/hono"
+import { createProxyPeers, requireProxyForForwardedHeaders } from "@spy4x/server/http/trusted-proxy"
+
+const isProxyPeer = createProxyPeers({ hosts: ["traefik", "127.0.0.1"] })
+app.use("*", requireProxyForForwardedHeaders(isProxyPeer, { remoteAddr: denoServeRemoteAddr }))
+```
+
+`createProxyPeers` trusts an IP address in `hosts` as it is and looks every other entry up by name,
+because a recreated container gets a new address. Only the first lookup is awaited; after it,
+lookups run in the background and a request is answered from the addresses already known. The
+addresses are looked up again once they are 10 s old, and a peer that is not among them starts a
+lookup at most once a second. A failed lookup keeps the last good addresses and is reported to
+`onError`.
 
 ## `server/http/same-origin`
 

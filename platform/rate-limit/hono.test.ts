@@ -5,6 +5,7 @@ import { Hono } from "hono"
 import {
   createRateLimitMiddleware,
   decisionHeaders,
+  denoServeRemoteAddr,
   type KeyResolver,
   type RejectionStatus,
   userThenIp,
@@ -735,4 +736,34 @@ describe("skipSuccessful", () => {
   function decisionFor(): RateLimitDecision {
     return { allowed: true, remaining: 1, retryAfterMs: 0, resetAfterMs: 0, limit: 1 }
   }
+})
+
+describe("denoServeRemoteAddr", () => {
+  it("keys a request on the peer address deno serve hands to Hono", async () => {
+    const seen: (string | undefined)[] = []
+    const app = new Hono()
+    app.use(createRateLimitMiddleware(createMemoryRateLimiter({ windowMs: 60_000, limit: 5 }), {
+      remoteAddr: denoServeRemoteAddr,
+      keyResolver: (_req, context) => {
+        const peer = (context as { remoteAddr?: string }).remoteAddr
+        seen.push(peer)
+        return peer ?? "none"
+      },
+    }))
+    app.get("/", (c) => c.text("ok"))
+    const env = { remoteAddr: { transport: "tcp", hostname: "192.0.2.7", port: 40000 } }
+
+    assertEquals((await app.request("/", {}, env)).status, 200)
+    assertEquals(seen, ["192.0.2.7"])
+  })
+
+  it("gives undefined when there is no address, or no hostname in it", () => {
+    const req = new Request("http://test.example/")
+    assertEquals(denoServeRemoteAddr({ req }), undefined)
+    assertEquals(denoServeRemoteAddr({ req, env: {} as never }), undefined)
+    const unix = { remoteAddr: { transport: "unix", path: "/run/app.sock" } }
+    assertEquals(denoServeRemoteAddr({ req, env: unix as never }), undefined)
+    const wrongType = { remoteAddr: { hostname: 7 } }
+    assertEquals(denoServeRemoteAddr({ req, env: wrongType as never }), undefined)
+  })
 })

@@ -7,13 +7,13 @@ Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracte
 
 ## Modules
 
-| File           | Contents                                                                                |
-| -------------- | --------------------------------------------------------------------------------------- |
-| `memory.ts`    | `MemoryRateLimiter` (in-process), `StoreRateLimiter`, the `RateLimitStore` port         |
-| `kv.ts`        | `createKvStore` over a three-method `RateLimitKv`, plus `denoKvBackend`                 |
-| `hono.ts`      | `createRateLimitMiddleware`, draft-6 `RateLimit-*` headers, `userThenIp`                |
-| `client-ip.ts` | `clientIp()` extraction order, `TrustedProxyHeader`, `clientIpBucket()`, `humanRetry()` |
-| `mod.ts`       | Barrel for every public symbol above                                                    |
+| File           | Contents                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------ |
+| `memory.ts`    | `MemoryRateLimiter` (in-process), `StoreRateLimiter`, the `RateLimitStore` port                              |
+| `kv.ts`        | `createKvStore` over a three-method `RateLimitKv`, plus `denoKvBackend`                                      |
+| `hono.ts`      | `createRateLimitMiddleware`, draft-6 `RateLimit-*` headers, `userThenIp`, `denoServeRemoteAddr`              |
+| `client-ip.ts` | `clientIp()` extraction order, `TrustedProxyHeader`, `FORWARDED_HEADERS`, `clientIpBucket()`, `humanRetry()` |
+| `mod.ts`       | Barrel for every public symbol above                                                                         |
 
 ## Usage
 
@@ -30,7 +30,8 @@ const app = new Hono<{ Bindings: { remoteAddr?: string } }>()
 
 // `remoteAddr` reads the connection's own peer address from whatever the runtime exposes —
 // `Deno.serve`'s `server.requestIP(req)`, `Bun.serve`'s `server.requestIP(req)`, or a value an
-// earlier middleware stored. It reaches the resolver as `context.remoteAddr`.
+// earlier middleware stored. It reaches the resolver as `context.remoteAddr`. Under `deno serve`,
+// pass `denoServeRemoteAddr`, which reads the address Deno hands to Hono.
 app.use(createRateLimitMiddleware(limiter, {
   remoteAddr: ({ env }) => env?.remoteAddr,
   keyResolver: userThenIp((req) => userIdFrom(req)),
