@@ -877,6 +877,47 @@ await cache.clear() // sign-out, or a start that finds no session: every copy of
   then run over the list the store holds. `cache.get` / `cache.set` let a layer on top (the
   offline-writable collection) read and update a copy directly.
 
+### Local reads: the rules a screen needs
+
+`createLocalReads` wraps `cachedRead` with the rules a store follows when a read is refused, so an
+app does not write them again:
+
+```ts
+import { createLocalReads, ReadRefused } from "@spy4x/realtime/read-cache"
+
+const reads = createLocalReads(() => currentUserCache) // undefined: no local data, nothing kept
+
+async function fetchGroups(): Promise<Group[]> {
+  const response = await fetch(`/api/groups`)
+  const body = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new ReadRefused(
+      body?.error?.message ?? `Request failed`,
+      response.status,
+      body?.error?.code,
+    )
+  }
+  return body.groups
+}
+
+const { value, fresh, savedAt } = await reads.through(`groups`, fetchGroups, (copy) => {
+  if (groups.value.length) return false // a list is on screen already: do not paint the copy
+  groups.value = copy?.value ?? [] // the copy before the answer; `undefined` takes it back
+})
+```
+
+- A REST reader throws `ReadRefused(failure, status, code)` for an answer that is not `ok`, so the
+  answer is neither kept nor hidden behind the copy.
+- `isProxyAnswer(error)`: a `ReadRefused` that `isForeignAnswer` takes for the proxy's (a 5xx, a
+  404 or a 429 without an error code). `through` answers it from the copy, as with no network.
+- `isRefusal(error)`: the server refuses this person the list. A 401 or 403, a 404 with a code, or a
+  socket read refused `unauthorized`, `forbidden` or `not_found`. `through` deletes the copy, so it
+  is not shown offline later. Any other error (a 500 with a code) is thrown and the copy stays.
+- `early` is given the copy only before the server has answered. When the read then rejects,
+  `early` is called once more with `undefined` to take back what it painted, unless it returned
+  `false` (it painted nothing).
+- `current` is asked at every read, so the reads follow the signed-in user's cache.
+
 ## Sync runner (`@spy4x/realtime/sync-runner`)
 
 Sends the outbox at the moments a browser gives a page: on start, when the browser goes online,
