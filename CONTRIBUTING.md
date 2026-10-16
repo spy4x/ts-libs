@@ -48,7 +48,7 @@ an exact version in its own manifest, so read the version there.
 - `spy4x/caldav-tasks-web` — imports `caldav`, `integrations`, `net`, `platform`, `realtime`,
   `server` and `time`.
 - `spy4x/caldav-mcp` — imports `caldav`, `net`, `platform`, `server` and `time`.
-- `spy4x/rostok` — imports `server` in its CLI, and runs its env-age64 CLI for its encrypt and
+- `spy4x/rostok` — imports `platform` and `server` in its CLI, and runs its env-age64 CLI for its encrypt and
   decrypt tasks.
 - `spy4x/dotfiles` — imports `platform`, `server` and `validation`.
 

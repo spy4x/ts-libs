@@ -283,9 +283,10 @@ string this repository commits.
 
 ## Code style
 
-The global TS style applies, with one override: double quotes by default, backticks for
-interpolated or multi-line strings (this overrides the global "backticks for strings" rule).
-`deno fmt` is the arbiter.
+The global TS style applies, with two overrides: double quotes by default, backticks for
+interpolated or multi-line strings (this overrides the global "backticks for strings" rule); and an
+explicit `throw` on any missing required value, not only a missing env value. `deno fmt` is the
+arbiter.
 
 ## Validation
 
