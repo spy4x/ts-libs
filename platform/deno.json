@@ -64,6 +64,7 @@
     "./universal/result": "./universal/result.ts",
     "./universal/schema": "./universal/schema.ts",
     "./universal/seo": "./universal/seo.ts",
+    "./universal/settings": "./universal/settings.ts",
     "./universal/sort": "./universal/sort.ts",
     "./universal/statistics": "./universal/statistics.ts",
     "./universal/text": "./universal/text.ts",

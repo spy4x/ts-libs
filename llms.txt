@@ -1133,6 +1133,17 @@ canonicalUrl	function	@spy4x/platform/universal/seo	Parse a canonical address in
 faqPageJsonLd	function	@spy4x/platform/universal/seo	The `FAQPage` node for the questions a page shows, in the order it shows them.
 jsonLdText	function	@spy4x/platform/universal/seo	Serialise JSON-LD for a `<script>` body.
 normalizeCanonical	function	@spy4x/platform/universal/seo	The canonical address as it should be published: one clean `http`/`https` address.
+DEFAULT_SETTINGS_MAX_BYTES	constant	@spy4x/platform/universal/settings	The default cap on a saved value: 4 KiB of UTF-8 JSON, plenty for a handful of preferences.
+SettingsDefinition	interface	@spy4x/platform/universal/settings	One app's settings: its schema, defaults and cap, with the checks built on them.
+SettingsOptions	interface	@spy4x/platform/universal/settings	Options for defineSettings.
+SettingsParseResult	type	@spy4x/platform/universal/settings	Outcome of SettingsDefinition.parse.
+SettingsRefusal	type	@spy4x/platform/universal/settings	Why a value or a save was refused.
+SettingsSaveResult	type	@spy4x/platform/universal/settings	Outcome of SettingsDefinition.save and saveSettings.
+SettingsStore	interface	@spy4x/platform/universal/settings	Where an app keeps one owner's settings record: a row, a key, a file.
+StoredSettings	interface	@spy4x/platform/universal/settings	A record as the store hands it back: the value is unchecked JSON until it is resolved.
+VersionedSettings	interface	@spy4x/platform/universal/settings	A settings value and the version it was saved as.
+defineSettings	function	@spy4x/platform/universal/settings	Define one app's settings from an arktype object schema and its defaults.
+saveSettings	function	@spy4x/platform/universal/settings	Read, check and write one save request against a store.
 SortDirection	type	@spy4x/platform/universal/sort	Sort direction of one rule.
 SortRule	interface	@spy4x/platform/universal/sort	One column in the sort order.
 parseSort	function	@spy4x/platform/universal/sort	Read sort rules out of a URL parameter.
@@ -2396,4 +2407,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 2b5f68a392fe30714346215d17314ecfb3bb0a45dca419d8ad1d0ada0e753751
+# export surface: sha256 e168eabf5d5493d241dfbbd71e98073724d5ff75315a604e62086f565cf60d2e
