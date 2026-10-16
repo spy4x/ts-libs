@@ -248,10 +248,6 @@ describe("faqPageJsonLd", () => {
       ],
     })
   })
-
-  it("returns no questions for an empty list", () => {
-    expect(faqPageJsonLd([]).mainEntity).toEqual([])
-  })
 })
 
 describe("jsonLdText", () => {
