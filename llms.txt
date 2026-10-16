@@ -1144,6 +1144,7 @@ StoredSettings	interface	@spy4x/platform/universal/settings	A record as the stor
 VersionedSettings	interface	@spy4x/platform/universal/settings	A settings value and the version it was saved as.
 defineSettings	function	@spy4x/platform/universal/settings	Define one app's settings from an arktype object schema and its defaults.
 saveSettings	function	@spy4x/platform/universal/settings	Read, check and write one save request against a store.
+shellQuote	function	@spy4x/platform/universal/shell	Quotes `value` as one word for a POSIX shell: the shell reads it back as exactly `value`, with no expansion, globbing or word splitting.
 SortDirection	type	@spy4x/platform/universal/sort	Sort direction of one rule.
 SortRule	interface	@spy4x/platform/universal/sort	One column in the sort order.
 parseSort	function	@spy4x/platform/universal/sort	Read sort rules out of a URL parameter.
@@ -2425,4 +2426,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 90b4ca8778435c6da5d9a6608badcba67280e5957846f830b755a7f1ec531658
+# export surface: sha256 5486eff900a1ea7e0c32f4c31661beca8092cab20a930f54df4a38332aad54cb
