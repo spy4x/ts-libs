@@ -147,7 +147,7 @@ export function breadcrumbListJsonLd(
 /** One question and its answer, as a page shows them. */
 export interface FaqItem {
   question: string
-  /** The answer as plain text: search engines read no markup here. */
+  /** The answer as plain text, the same words the page shows. */
   answerText: string
 }
 
