@@ -2407,17 +2407,17 @@ and the unit tier runs the same contract on the in-memory fake. Like the real di
 to write into a folder that does not exist, `mkdirp` creates the parents, and `lock` leaves an empty
 lock file behind.
 
-| Module                   | Contents                                                                                                                                                                                            |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                                                                                                                                                    |
-| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                                                                                                                                              |
-| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS`                                                                                                   |
-| `server/interval-runner` | `startIntervalRunner`, `IntervalRunnerOptions` — runs a task every interval through a `TimerPort`; a failed tick is reported and never stops the next; ticks never overlap; returns a stop function |
-| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                                                                                                                     |
-| `server/ports`           | the port interfaces, `systemClockPort`                                                                                                                                                              |
-| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`                                                                                                          |
-| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                                                                                                                             |
-| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                                                                                                                                |
+| Module                   | Contents                                                                                                                                                                                                                                           |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                                                                                                                                                                                                   |
+| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                                                                                                                                                                                             |
+| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS`                                                                                                                                                  |
+| `server/interval-runner` | `startIntervalRunner`, `IntervalRunnerOptions` — runs a task every interval through a `TimerPort`; a failed tick is reported and never stops the next; ticks never overlap; `runFirstTickNow` runs the first tick at once; returns a stop function |
+| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                                                                                                                                                                    |
+| `server/ports`           | the port interfaces, `systemClockPort`                                                                                                                                                                                                             |
+| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`                                                                                                                                                         |
+| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                                                                                                                                                                            |
+| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                                                                                                                                                                               |
 
 `writeText` and `atomicWriteJson` take an optional `mode` (such as `0o600`): the permission bits a
 file is created with, for one that holds keys. An existing file keeps its bits.
@@ -5668,6 +5668,13 @@ Two adapters, one migration runner. `@spy4x/server/db` is the barrel; `db/migrat
 `db/postgres` and `db/sqlite` are the subpaths. Nothing here ships a driver: `postgres` is pinned in
 the root import map and the SQLite driver is the caller's own, passed through `SqliteDriver`.
 
+### Searching text with `LIKE`: `likeContains`
+
+`likeContains(value)` escapes `\`, `%` and `_` and wraps the result in `%…%`, so a search box's text
+matches literally instead of acting as a wildcard. Postgres escapes with `\` by default:
+`` sql`… WHERE email ILIKE ${likeContains(search)}` ``. SQLite has no default escape, so name it:
+`WHERE email LIKE ? ESCAPE '\'`.
+
 ### Integration-test settings: `@spy4x/server/db/testing`
 
 ```ts
@@ -6444,7 +6451,8 @@ next `get` returning the stored value on a new connection.
 
 `OutboxProcessor`, `OutboxEvent`, `OutboxPublisher`, `OutboxRepository`, `PostgresOutboxRepository`,
 `LoggingOutboxPublisher`, `JobPublisher`, `retryDelayMs`, `errorCodeOf`, `scheduleOutboxEvent`,
-`ensureScheduledOutboxEvent`, `OutboxAttemptFailure`, `OutboxLeaseExpiredError`. Extracted from
+`ensureScheduledOutboxEvent`, `OutboxAttemptFailure`, `OutboxLeaseExpiredError`,
+`attemptFailureLine`, `stepsJob`, `JobStep`. Extracted from
 `template/libs/server/outbox/+index.ts` (#75) — the template is the only source of an outbox in this
 wave's source repositories.
 
@@ -6626,6 +6634,32 @@ const publisher = new JobPublisher({
   fallback: changeNotifier,
 })
 new OutboxProcessor(repository, publisher, { repeatEveryMs: { "outbox.cleanup": 86_400_000 } })
+```
+
+**Logging failed attempts, purging, and jobs of several steps.** `attemptFailureLine(failure)` is
+the log line for `onAttemptFailed`: a `warn:` line for an attempt that will be retried, an `error:`
+line for the last one, naming the row's kind, aggregate, attempt, stage and error name, never the
+error's message (a mail or billing error can quote an address). `repository.removeProcessed(days)`
+deletes the rows processed more than `days` days ago and returns how many; without it the table only
+grows. `stepsJob(label, steps, log)` is a job that runs every step even when an earlier one throws,
+logs each failure with the step's name and message, and then throws naming the failed steps so the
+processor retries.
+
+```ts
+const processor = new OutboxProcessor(
+  repository,
+  new JobPublisher({
+    aggregateType: "job",
+    handlers: {
+      "outbox.cleanup": stepsJob("nightly cleanup", [
+        ["outbox", () => repository.removeProcessed(7)],
+        ["sessions", () => removeExpiredSessions(sql)],
+      ], log),
+    },
+    fallback: changeNotifier,
+  }),
+  { onAttemptFailed: (failure) => log(attemptFailureLine(failure)) },
+)
 ```
 
 ## `server/idempotency`
@@ -7575,20 +7609,20 @@ move here.
 Time and calendar primitives with no application domain attached. IANA timezone math on `Intl`,
 plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime dependencies.
 
-| Module                      | Exports                                                                                                                                                                                                                                                   |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `time/date`                 | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, `startOfWeek`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `DateRange` |
-| `time/locale`               | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `shortDayLabel`, `relativeDayLabel`, `weekdayLabels`, `WeekdayLabel`, `localeOptions` (region formats for a picker)                                                          |
-| `time/tz`                   | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, `timeZoneOptions` (zones for a picker), …                                                     |
-| `time/format`               | `createFormatters(settings)` — date, time, date-time, relative time and number formatting for a person's region format, time zone and clock, each automatic (the device's) when unset                                                                     |
-| `time/ics`                  | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                                          |
-| `time/ics-core`             | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                                       |
-| `time/ical`                 | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                                      |
-| `time/ical-tasks`           | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`, `describeAlarmTrigger`                                                                                       |
-| `time/ical-tasks-model`     | Import it as [`@spy4x/tasks/model`](https://jsr.io/@spy4x/tasks), which documents it. The code sits here until 2.0                                                                                                                                        |
-| `time/ical-tasks-edit`      | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `keepMineText`, `completeTask`, `reopenTask`                                                                                                                                   |
-| `time/ical-tasks-reminders` | Which reminders of a task fall in a time window: `dueReminders` (alarms relative to start or due, absolute ones, a Tasks.org snooze; nothing for a completed task)                                                                                        |
-| `time/rrule`                | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                              |
+| Module                      | Exports                                                                                                                                                                                                                                                                     |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `time/date`                 | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, `startOfWeek`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `recentIsoDates`, `DateRange` |
+| `time/locale`               | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `shortDayLabel`, `relativeDayLabel`, `weekdayLabels`, `WeekdayLabel`, `localeOptions` (region formats for a picker)                                                                            |
+| `time/tz`                   | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, `timeZoneOptions` (zones for a picker), …                                                                       |
+| `time/format`               | `createFormatters(settings)` — date, time, date-time, relative time and number formatting for a person's region format, time zone and clock, each automatic (the device's) when unset                                                                                       |
+| `time/ics`                  | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                                                            |
+| `time/ics-core`             | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                                                         |
+| `time/ical`                 | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                                                        |
+| `time/ical-tasks`           | Tasks and events on the ical model: `readTodo`, `patchTodo`, `completeTodo`, `reopenTodo`, `newTodo`, `readEvent`, `patchEvent`, `newEvent`, `describeAlarmTrigger`                                                                                                         |
+| `time/ical-tasks-model`     | Import it as [`@spy4x/tasks/model`](https://jsr.io/@spy4x/tasks), which documents it. The code sits here until 2.0                                                                                                                                                          |
+| `time/ical-tasks-edit`      | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `keepMineText`, `completeTask`, `reopenTask`                                                                                                                                                     |
+| `time/ical-tasks-reminders` | Which reminders of a task fall in a time window: `dueReminders` (alarms relative to start or due, absolute ones, a Tasks.org snooze; nothing for a completed task)                                                                                                          |
+| `time/rrule`                | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                                                |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"

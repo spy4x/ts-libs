@@ -1687,6 +1687,7 @@ checksumOf	function	@spy4x/server/db	SHA-256 of a migration body, as lower-case 
 createSql	function	@spy4x/server/db	Build a Postgres client with DEFAULT_POOL_OPTIONS applied.
 createSqlFromEnv	function	@spy4x/server/db	Build a client from an environment record, or `undefined` when `DB_HOST` is unset.
 discoverMigrations	function	@spy4x/server/db	A file that is not a migration is skipped, not reported: `.gitkeep` is common.
+likeContains	function	@spy4x/server/db	`value` with every `\`, `%` and `_` escaped by a backslash, wrapped in `%…%`: a `LIKE` pattern that matches any text containing `value` as it is written.
 openSqliteDb	function	@spy4x/server/db	Open a connection, create its directory, and apply the two pragmas.
 parseMigrationName	function	@spy4x/server/db	Turn a file name into a Migration: strip the extension, then the `.no_transaction` suffix.
 parsePostgresEnv	function	@spy4x/server/db	Parse the Postgres connection settings from an explicit environment record.
@@ -1935,6 +1936,7 @@ DrainResult	interface	@spy4x/server/outbox	What one `drainOnce` did.
 EnsureScheduledOptions	interface	@spy4x/server/outbox	Options of ensureScheduledOutboxEvent.
 JobHandler	type	@spy4x/server/outbox	What runs when a job's time has come.
 JobPublisher	class	@spy4x/server/outbox	An OutboxPublisher for an outbox that holds two kinds of rows: jobs (the delayed and repeating rows `scheduleOutboxEvent` writes) and everything else.
+JobStep	type	@spy4x/server/outbox	One step of a stepsJob: a name for the log, and the work.
 LoggingOutboxPublisher	class	@spy4x/server/outbox	
 LostOutboxEvent	interface	@spy4x/server/outbox	An event OutboxRepository.findLost returns.
 OutboxAttemptFailure	interface	@spy4x/server/outbox	One failed attempt, as `OutboxProcessorOptions.onAttemptFailed` gets it.
@@ -1948,10 +1950,12 @@ OutboxSchedule	type	@spy4x/server/outbox	When the job first runs: at a moment, o
 PostgresOutboxRepository	class	@spy4x/server/outbox	
 ReplacedOutboxEvent	interface	@spy4x/server/outbox	A row ensureScheduledOutboxEvent closed because it had used up its attempts.
 ScheduledOutboxEvent	interface	@spy4x/server/outbox	The row a job is: what it is called and what it is about.
+attemptFailureLine	function	@spy4x/server/outbox	The log line for one failed attempt of an outbox row, for `OutboxProcessorOptions.onAttemptFailed`:
 ensureScheduledOutboxEvent	function	@spy4x/server/outbox	Starts a repeating job, once.
 errorCodeOf	function	@spy4x/server/outbox	Short, stable label recorded on the row so failures are greppable.
 retryDelayMs	function	@spy4x/server/outbox	Exponential backoff on the attempt just made, so the first failure waits `baseMs` and each later one doubles up to `maxMs`.
 scheduleOutboxEvent	function	@spy4x/server/outbox	Writes one outbox row that becomes claimable at the given time and returns its id.
+stepsJob	function	@spy4x/server/outbox	A job made of independent steps, such as a nightly cleanup that purges several tables.
 QuotaDecision	enum	@spy4x/server/quota	What a caller should do with a check: proceed, stop, or turn the feature off.
 QuotaError	class	@spy4x/server/quota	The only error a caller has to catch to answer a misconfigured or ill-formed metering call.
 QuotaErrorCode	enum	@spy4x/server/quota	Why a quota operation was refused.
@@ -2194,6 +2198,7 @@ isSameDay	function	@spy4x/time/date	Whether two values name the same calendar da
 isValidDateRange	function	@spy4x/time/date	Whether a range is two real dates in order.
 monthFirstWeekday	function	@spy4x/time/date	Weekday of the first of `date`'s month, counted from the week's own first day.
 parseIsoDate	function	@spy4x/time/date	Midnight UTC of a calendar date, in milliseconds.
+recentIsoDates	function	@spy4x/time/date	The `count` UTC calendar days that end on `now`'s UTC day, oldest first: a chart's x-axis of the last week or month, with today last.
 shiftMonth	function	@spy4x/time/date	The first day of the month `months` away from `date`.
 startOfMonth	function	@spy4x/time/date	First day of the month `date` falls in.
 startOfQuarter	function	@spy4x/time/date	First day of the calendar quarter `date` falls in.
@@ -2426,4 +2431,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 5486eff900a1ea7e0c32f4c31661beca8092cab20a930f54df4a38332aad54cb
+# export surface: sha256 03896f1442d9668a691e49805db3c1fd91560e64219f6d186dc32e3dc7fb5ff6
