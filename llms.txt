@@ -2223,6 +2223,7 @@ Formatters	interface	@spy4x/time/format	The formatters for one person's settings
 HourCycle	type	@spy4x/time/format	A clock: `h12` shows `3:45 PM`, `h23` shows `15:45`.
 createFormatters	function	@spy4x/time/format	Build the formatters for a person's settings.
 deviceFormat	function	@spy4x/time/format	The device's locale and zone, as this runtime's `Intl` reports them.
+regionHourCycle	function	@spy4x/time/format	The clock a region format uses on its own: `h12` (`3:45 PM`) for `en-US`, `h23` (`15:45`) for `de-DE`.
 IcalComponent	interface	@spy4x/time/ical	A `BEGIN:…`/`END:…` block with its properties and nested components.
 IcalDateKind	enum	@spy4x/time/ical	Whether a date value is a date, a floating time, a UTC time or a time in a named zone.
 IcalDateValue	interface	@spy4x/time/ical	A DATE or DATE-TIME value in a form that keeps its kind through a round trip.
@@ -2375,6 +2376,7 @@ parseRrule	function	@spy4x/time/rrule	Parse the value of an `RRULE` property (a 
 TimeZoneOption	interface	@spy4x/time/tz	One entry of a time zone picker, from timeZoneOptions.
 WallClockKind	enum	@spy4x/time/tz	How often a wall clock occurs in a zone on its date.
 WallClockResolution	interface	@spy4x/time/tz	The answer of resolveWallClock.
+ZoneLabelParts	interface	@spy4x/time/tz	The parts zoneLabel joins, for a caller that writes them in another order.
 addDays	function	@spy4x/time/tz	Add `n` days to a `YYYY-MM-DD` date, in `tz` when one is given.
 canonicalTimeZone	function	@spy4x/time/tz	`tz` with its spelling normalised where that is safe, never renamed to another zone name.
 canonicalTimeZoneOr	function	@spy4x/time/tz	canonicalTimeZone of `value` when it is a real zone, `fallback` otherwise.
@@ -2396,6 +2398,7 @@ todayInTz	function	@spy4x/time/tz	`YYYY-MM-DD` for today in `tz`.
 tzOffsetMinutes	function	@spy4x/time/tz	Minutes east of UTC for `tz` at the instant `instant`.
 validTimeZoneOr	function	@spy4x/time/tz	`tz` when it is a real IANA zone, `fallback` otherwise.
 zoneCity	function	@spy4x/time/tz	The last path segment of an IANA zone name with underscores as spaces: `America/New_York` is `New York`, `Asia/Ho_Chi_Minh` is `Ho Chi Minh`, `UTC` is `UTC`.
+zoneLabel	function	@spy4x/time/tz	A zone as a person reads it, with the offset it has at `at`: `Berlin, Europe · GMT+2`.
 zoneOffsetLabel	function	@spy4x/time/tz	The offset of `tz` at `at` as `UTC+7`, `UTC-4`, `UTC+5:30` or `UTC+0`.
 zonedDateTime	function	@spy4x/time/tz	The instant at which `tz`'s wall clock reads `date` + `time`.
 ErrType	enum	@spy4x/validation	Kind of a failed operation.
@@ -2442,4 +2445,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 9c5c9bc1b66d1c1d5476d0f7c454b9a7e4ee2bb7c5c12f797831fef1b6be236a
+# export surface: sha256 9a7fed428b78bd83ef9461114e05b7e194f5e5338819e1a88141bf57ebd95102

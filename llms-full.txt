@@ -7642,8 +7642,8 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `time/date`                 | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, `startOfWeek`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `recentIsoDates`, `DateRange` |
 | `time/locale`               | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `shortDayLabel`, `relativeDayLabel`, `weekdayLabels`, `WeekdayLabel`, `localeOptions` (region formats for a picker)                                                                            |
-| `time/tz`                   | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, `timeZoneOptions` (zones for a picker), …                                                                       |
-| `time/format`               | `createFormatters(settings)` — date, time, date-time, relative time and number formatting for a person's region format, time zone and clock, each automatic (the device's) when unset                                                                                       |
+| `time/tz`                   | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, `zoneLabel`, `timeZoneOptions` (zones for a picker), …                                                          |
+| `time/format`               | `createFormatters(settings)` — date, time, date-time, day-and-month, exact-to-the-second, relative time and number formatting for a person's region format, time zone and clock, each automatic (the device's) when unset; `.utc()` for the same in UTC; `regionHourCycle`  |
 | `time/ics`                  | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                                                            |
 | `time/ics-core`             | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                                                         |
 | `time/ical`                 | Lossless iCalendar model: `parseIcal`, `serializeIcal`, `readText`, `writeDate`, `resolveInstant`, …                                                                                                                                                                        |
@@ -8148,13 +8148,20 @@ a non-negative integer and an empty mail address. There is no silent conversion 
 ## Naming a zone
 
 ```ts
-import { canonicalTimeZoneOr, zoneCity, zoneOffsetLabel } from "@spy4x/time/tz"
+import { canonicalTimeZoneOr, zoneCity, zoneLabel, zoneOffsetLabel } from "@spy4x/time/tz"
 
 canonicalTimeZoneOr("japan", "UTC") // "Asia/Tokyo"
 zoneCity("America/New_York") // "New York"
 zoneOffsetLabel("Asia/Kolkata", new Date("2026-01-15T12:00:00Z")) // "UTC+5:30"
 zoneOffsetLabel("America/New_York", new Date("2026-07-15T12:00:00Z")) // "UTC-4"
+zoneLabel("Europe/Berlin", new Date("2026-07-15T12:00:00Z")) // "Berlin, Europe · GMT+2"
+zoneLabel("Mars/Base", new Date()) // "Mars/Base": an unknown zone comes back as its name
 ```
+
+`zoneLabel` takes the offset word (`prefix`) and a `join` function for a language that writes the
+city, area and offset in another order. Neither it nor `zoneOffsetLabel` throws for a zone this
+runtime does not know: both return the name, because a stored zone from another device must not
+break the page that shows it.
 
 `canonicalTimeZone` never renames a zone. It returns a name the runtime lists as it is, resolves
 slash-less aliases (`Japan`), and fixes letter case when `Intl` spells the same name
