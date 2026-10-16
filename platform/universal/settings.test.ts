@@ -43,6 +43,13 @@ describe("defineSettings", () => {
     expect(prefs.resolve(null)).toEqual({ version: 0, value: defaults })
   })
 
+  it("hands each caller of resolve(null) its own copy of the defaults", () => {
+    const first = prefs.resolve(null)
+    first.value.display.hourCycle = "h12"
+    expect(prefs.resolve(null).value.display.hourCycle).toBeNull()
+    expect(prefs.initial.value.display.hourCycle).toBeNull()
+  })
+
   it("refuses defaults that fail the schema", () => {
     expect(() => defineSettings(schema, { defaults: { ...defaults, theme: "pink" } as never }))
       .toThrow("defaults do not pass")
@@ -69,6 +76,22 @@ describe("parse", () => {
       ok: true,
       value: { theme: "dark", timeZone: "Europe/Berlin", display: { hourCycle: "h12" } },
     })
+  })
+
+  it("drops keys named after Object.prototype members, at the top and one level down", () => {
+    const input = JSON.parse(
+      `{"theme":"dark","timeZone":null,"__proto__":{"x":1},"constructor":1,"toString":2,` +
+        `"valueOf":3,"hasOwnProperty":4,"display":{"hourCycle":"h23","__proto__":{"y":1},` +
+        `"constructor":5,"toString":6}}`,
+    )
+    const result = prefs.parse(input)
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error("expected ok")
+    expect(Object.keys(result.value)).toEqual(["theme", "timeZone", "display"])
+    expect(Object.keys(result.value.display)).toEqual(["hourCycle"])
+    expect(JSON.stringify(result.value)).toBe(
+      `{"theme":"dark","timeZone":null,"display":{"hourCycle":"h23"}}`,
+    )
   })
 
   it("rejects a value whose JSON is over the cap", () => {

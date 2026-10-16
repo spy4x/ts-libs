@@ -24,6 +24,7 @@
 import { type Type, type } from "arktype"
 import { validate, type ValidationError } from "@spy4x/validation"
 import { isRecord } from "./is-record.ts"
+import { utf8ByteLength } from "./text.ts"
 
 /** The default cap on a saved value: 4 KiB of UTF-8 JSON, plenty for a handful of preferences. */
 export const DEFAULT_SETTINGS_MAX_BYTES = 4096
@@ -113,9 +114,9 @@ export function defineSettings<T extends object>(
   const strict = schema.onDeepUndeclaredKey("delete") as unknown as Type<T>
 
   const parse = (value: unknown): SettingsParseResult<T> => {
-    const { error, data } = validate(strict, value)
+    const { error, data } = validate(strict, withoutPrototypeNames(value))
     if (error) return { ok: false, reason: "invalid", error }
-    const bytes = jsonBytes(data)
+    const bytes = utf8ByteLength(JSON.stringify(data))
     if (bytes > maxBytes) return { ok: false, reason: "too-large", maxBytes, bytes }
     return { ok: true, value: data as T }
   }
@@ -132,7 +133,7 @@ export function defineSettings<T extends object>(
     maxBytes,
     parse,
     resolve(stored) {
-      if (stored === null || stored === undefined) return initial
+      if (stored === null || stored === undefined) return structuredClone(initial)
       const merged = isRecord(stored.value) ? { ...initial.value, ...stored.value } : stored.value
       const result = parse(merged)
       return { version: stored.version, value: result.ok ? result.value : initial.value }
@@ -188,6 +189,22 @@ export async function saveSettings<T>(
   return { ok: false, reason: "conflict", current: definition.resolve(await store.read(ownerId)) }
 }
 
-function jsonBytes(value: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength
+const PROTOTYPE_NAMES = new Set(Object.getOwnPropertyNames(Object.prototype))
+
+/**
+ * A copy of a JSON value with every key named after an `Object.prototype` member removed, at every
+ * depth: `__proto__`, `constructor`, `toString` and the rest. arktype's undeclared-key deletion
+ * keeps those names, and `JSON.parse` makes them own keys, so they would otherwise reach storage.
+ * A settings schema therefore cannot declare a key with one of these names.
+ */
+function withoutPrototypeNames(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutPrototypeNames)
+  if (!isRecord(value)) return value
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return value
+  const copy: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (!PROTOTYPE_NAMES.has(key)) copy[key] = withoutPrototypeNames(item)
+  }
+  return copy
 }
