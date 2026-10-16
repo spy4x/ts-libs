@@ -72,7 +72,34 @@ describe("readGitHubUser", () => {
       subject: "1234567",
       email: null,
       emailVerified: false,
+      name: "ann",
     })
+  })
+
+  it("reads name as the display name and avatar_url as the avatar URL", () => {
+    const body = {
+      id: 1,
+      login: "ann",
+      name: "Ann Example",
+      avatar_url: "https://avatars.githubusercontent.com/u/1?v=4",
+    }
+    expect(readGitHubUser(body)).toMatchObject({
+      name: "Ann Example",
+      avatarUrl: "https://avatars.githubusercontent.com/u/1?v=4",
+    })
+  })
+
+  it("falls back to login when name is null, empty or only unstorable characters", () => {
+    for (const name of [null, "", "  ", "\u0000", undefined]) {
+      expect(readGitHubUser({ id: 1, login: "ann", name })?.name).toBe("ann")
+    }
+  })
+
+  it("leaves out an avatar_url that is not an https: URL, and a name and login that are not text", () => {
+    for (const avatar_url of ["http://avatars.test/a", "data:image/png;base64,AA==", "/a.png", 1]) {
+      const profile = readGitHubUser({ id: 1, login: 5, name: false, avatar_url })
+      expect(profile).toEqual({ subject: "1", email: null, emailVerified: false })
+    }
   })
 
   for (
@@ -195,6 +222,7 @@ describe("createOAuthSignIn with GitHub's config", () => {
       subject: "583231",
       email: "Ann@Example.com",
       emailVerified: true,
+      name: "ann",
     })
     expect(result.key).toMatchObject({ email: "ann@example.com", provenAt: NOW })
   })
@@ -230,6 +258,26 @@ describe("createOAuthSignIn with GitHub's config", () => {
     const result = await signInAs(oauth, provider, { sub: "unused" })
     expect(result.outcome).toBe(OAuthOutcome.Linked)
     expect(result.user.id).toBe(owner.user.id)
+  })
+
+  it("keeps the name and avatar from /user after reading /user/emails", async () => {
+    const { oauth, provider } = github([
+      { email: "ann@example.com", primary: true, verified: true },
+    ])
+    provider.userInfoBody = {
+      id: ANN_ID,
+      login: "ann",
+      name: "Ann Example",
+      avatar_url: "https://avatars.githubusercontent.com/u/583231?v=4",
+    }
+    const result = await signInAs(oauth, provider, { sub: "unused" })
+    expect(result.profile).toEqual({
+      subject: "583231",
+      email: "ann@example.com",
+      emailVerified: true,
+      name: "Ann Example",
+      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+    })
   })
 
   it("refuses the sign-in as profile-failed when the /user/emails answer passes 64 KiB", async () => {

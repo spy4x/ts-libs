@@ -5187,7 +5187,8 @@ rejects, the rejection reaches the caller and the code is already issued.
 
 `createOAuthSignIn`, `OAuthSignInError`, `OAuthFailure`, `OAuthOutcome`, `OAuthProviderConfig`,
 `OAuthProfile`, `OAuthProfileContext`, `ConfirmableOAuthSignIn`, `ConfirmableOAuthSignInOptions`,
-`OAuthPendingSignUp`, `OAuthConnectCallbackInput`, `OAuthConnectResult`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`, the flow stores
+`OAuthPendingSignUp`, `OAuthConnectCallbackInput`, `OAuthConnectResult`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`,
+`MAX_OAUTH_NAME_LENGTH`, `MAX_OAUTH_AVATAR_URL_LENGTH`, the flow stores
 (`createMemoryOAuthFlowStore`, `createKvOAuthFlowStore`, `OAuthFlowStore`, `OAuthFlowKv`,
 `OAuthPendingFlow`, `OAuthTakenFlow`, `DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and
 result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
@@ -5260,6 +5261,17 @@ in `result.profile`. A deleted user is refused as `user-deleted`, both on sign-i
 target. When a parallel callback or a proof changes what the resolution read, it reads again once; a
 second conflict is thrown. `readGoogleProfile` counts only the boolean `email_verified: true`, with
 an address present, as vouched for.
+
+**The person's name and picture, for display only.** A profile may carry `name` and `avatarUrl`, so
+an app can show them, for example on its "Create a new account?" page. Google's are `name` and
+`picture` (scope `profile`, now in `GOOGLE_DEFAULT_SCOPES`); GitHub's are `name`, or `login` when
+the person set no name, and `avatar_url`. Anyone can set both on their provider account, so they
+never identify anyone, and `createOAuthSignIn` cleans every profile a provider config or the flow
+store returns: the name loses NUL and lone surrogates, is trimmed and cut to
+`MAX_OAUTH_NAME_LENGTH` (200), and the avatar is kept only as an absolute `https:` URL without a
+user name or password, of at most `MAX_OAUTH_AVATAR_URL_LENGTH` (2048) characters. A field that
+does not survive is left out. A pending sign-up keeps both in the flow store, so `confirmSignUp`'s
+`result.profile` carries them too. The name is still outside text: escape it where it is shown.
 
 **GitHub.** `createGitHubOAuthProvider({ clientId, clientSecret })` writes method `oauth:github`
 with GitHub's numeric user id, as a decimal string, as the subject. GitHub's `/user` answer carries
