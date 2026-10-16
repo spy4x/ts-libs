@@ -476,6 +476,27 @@ describe("request and response frames", () => {
     }
   })
 
+  it("refuses a request id or response requestId holding a NUL or a lone surrogate", () => {
+    const frames = [
+      (id: string) => ({ kind: "client.command", id, name: "n" }),
+      (id: string) => ({ kind: "client.query", id, name: "n" }),
+      (id: string) => ({ kind: "server.result", requestId: id }),
+      (id: string) => ({ kind: "server.error", requestId: id, code: "internal", message: "x" }),
+    ]
+    for (const frame of frames) {
+      for (const id of ["req\u00001", "req\ud8001"]) {
+        const result = codec.decode(JSON.stringify(frame(id)))
+        expect(result.ok, JSON.stringify(frame(id))).toBe(false)
+        if (!result.ok) expect(result.reason).toContain("NUL")
+      }
+    }
+  })
+
+  it("still accepts a request id holding an emoji, a whole surrogate pair", () => {
+    const frame: WireMessage = { kind: "client.query", id: "req-\u{1F4DD}", name: "n" }
+    expect(codec.decode(codec.encode(frame))).toEqual({ ok: true, message: frame })
+  })
+
   it("refuses an idempotency key on a query because a read has no effect to deduplicate", () => {
     const raw = JSON.stringify({ kind: "client.query", id: "r", name: "n", idempotencyKey: "k" })
     const result = codec.decode(raw)

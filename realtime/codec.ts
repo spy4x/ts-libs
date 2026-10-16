@@ -59,6 +59,7 @@
  */
 
 import { type Type, type } from "arktype"
+import { hasUnstorableTextCharacters } from "@spy4x/platform/universal/text"
 
 import type { CursorSnapshot } from "./cursor.ts"
 import { REALTIME_ERROR_CODES, type RealtimeErrorCode } from "./errors.ts"
@@ -181,7 +182,13 @@ const sequenceSchema = "number.integer >= 0"
 
 // Identifiers and names are bounded so a frame cannot smuggle an unbounded string into a log line or
 // a map key; the whole frame is also capped by the registry's `maxMessageBytes`.
-const idSchema = "1 <= string <= 128"
+//
+// A request id is also refused when it holds a character no database text column can store (NUL or
+// a lone surrogate): a host stores it with the request, an audit row for one, and Postgres answers a
+// NUL with an error, which would turn a malformed frame into a server error.
+const idSchema: Type<string> = type("1 <= string <= 128").narrow((id, ctx) =>
+  !hasUnstorableTextCharacters(id) || ctx.mustBe("free of NUL and lone surrogates")
+)
 const nameSchema = "1 <= string <= 128"
 const idempotencyKeySchema = "1 <= string <= 256"
 const errorMessageSchema = "string <= 1024"

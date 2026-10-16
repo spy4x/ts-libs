@@ -812,6 +812,7 @@ BaseModelSchema	constant	@spy4x/platform/model	UndeletableBaseModelSchema plus a
 DateNullableSchema	constant	@spy4x/platform/model	dateSchema, also accepting `null` and defaulting to it when the field is absent.
 DateType	type	@spy4x/platform/model	Value dateSchema produces: always a `Date`, regardless of which input form it parsed.
 ImmutableBaseModelSchema	constant	@spy4x/platform/model	The two fields present on every record: its id and when it was created.
+PUSH_SUBSCRIPTION_LIMITS	constant	@spy4x/platform/model	The longest value, in characters, of each text field of a push subscription request.
 PushNotificationMessage	type	@spy4x/platform/model	Value pushNotificationMessageSchema produces.
 PushSubscribeRequest	type	@spy4x/platform/model	Value pushSubscribeRequestSchema produces.
 PushSubscriptionData	type	@spy4x/platform/model	Alias for PushSubscriptionJson used where the wire origin is not the point.
@@ -2393,4 +2394,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 82d3c31fbb1062e40034cee2ce7aada9fc5bafc979e8dfa4c93efb0d56a69c95
+# export surface: sha256 c5e2c03a57ab1f0e8dd3083833a0d31223ce1a7c7aa0868bcfba0f2b822d4a17

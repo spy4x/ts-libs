@@ -24,6 +24,7 @@ export {
 } from "./base-model.ts"
 
 export {
+  PUSH_SUBSCRIPTION_LIMITS,
   type PushNotificationMessage,
   pushNotificationMessageSchema,
   type PushSubscribeRequest,
