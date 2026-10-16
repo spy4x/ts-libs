@@ -20,6 +20,7 @@ export {
 } from "./processor.ts"
 export { LoggingOutboxPublisher } from "./logging-publisher.ts"
 export { type JobHandler, JobPublisher, type JobPublisherOptions } from "./job-publisher.ts"
+export { attemptFailureLine, type JobStep, stepsJob } from "./job-log.ts"
 export { PostgresOutboxRepository } from "./postgres-repository.ts"
 export {
   type EnsureScheduledOptions,
