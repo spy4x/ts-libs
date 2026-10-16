@@ -1,6 +1,11 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { BillingEventType, type ParseEventResult, SubscriptionStatus } from "./provider.ts"
+import {
+  BillingEventType,
+  type ParseEventResult,
+  RefundStatus,
+  SubscriptionStatus,
+} from "./provider.ts"
 import { createStripeBilling, STRIPE_API_VERSION, type StripeBillingOptions } from "./stripe.ts"
 import { formatMoney } from "@spy4x/platform/universal/money"
 
@@ -829,5 +834,455 @@ describe("parseEvent: signature", () => {
       reason: "malformed_payload",
       message: "event body is not JSON",
     })
+  })
+})
+
+/** Stripe's recorded subscription object, edited by `edit`. */
+const recordedSubscription = async (edit: (object: Record<string, unknown>) => void = () => {}) => {
+  const event = JSON.parse(new TextDecoder().decode(await fixture("customer.subscription.created")))
+  edit(event.data.object)
+  return event.data.object
+}
+
+/** A `fetch` that answers each call with the next response, and records every call. */
+const scripted = (responses: Response[]) => {
+  let next = 0
+  return fakeFetch(() => responses[next++] ?? json({ error: { message: "unexpected" } }, 500))
+}
+
+const SUBSCRIPTION_ID = "sub_1MowQVLkdIwHu7ixeRlqHVzs"
+const READ_HEADERS = { Authorization: `Bearer ${SECRET_KEY}`, "Stripe-Version": STRIPE_API_VERSION }
+const writeHeaders = (idempotencyKey: string) => ({
+  Authorization: `Bearer ${SECRET_KEY}`,
+  "Content-Type": "application/x-www-form-urlencoded",
+  "Stripe-Version": STRIPE_API_VERSION,
+  "Idempotency-Key": idempotencyKey,
+})
+
+/** A paid invoice in the shape of Stripe's invoice list with `expand[]=data.payments`. */
+const paidInvoice = (
+  id: string,
+  amount: number,
+  payment: Record<string, string>,
+  paidAt = 1_799_000_000,
+) => ({
+  id,
+  object: "invoice",
+  amount_paid: amount,
+  currency: "eur",
+  status: "paid",
+  status_transitions: { paid_at: paidAt },
+  payments: {
+    object: "list",
+    data: amount === 0 ? [] : [{
+      id: `inpay_${id}`,
+      object: "invoice_payment",
+      amount_paid: amount,
+      currency: "eur",
+      is_default: true,
+      status: "paid",
+      payment,
+    }],
+  },
+})
+
+describe("readLastPayment", () => {
+  const LIST_URL = "https://api.stripe.com/v1/invoices?subscription=sub_1MowQVLkdIwHu7ixeRlqHVzs" +
+    "&status=paid&limit=10&expand%5B%5D=data.payments"
+
+  it("reads the newest invoice that moved money, then its payment intent's refund state", async () => {
+    const { calls, fetcher } = scripted([
+      json({
+        object: "list",
+        data: [
+          paidInvoice("in_trial", 0, {}),
+          paidInvoice("in_paid", 2700, { type: "payment_intent", payment_intent: "pi_paid" }),
+          paidInvoice("in_older", 2700, { type: "payment_intent", payment_intent: "pi_older" }),
+        ],
+      }),
+      json({
+        id: "pi_paid",
+        latest_charge: { id: "ch_1", amount: 2700, amount_refunded: 0, refunded: false },
+      }),
+    ])
+    const result = await billing({ fetch: fetcher }).readLastPayment({
+      subscriptionId: SUBSCRIPTION_ID,
+    })
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        id: "pi_paid",
+        invoiceId: "in_paid",
+        amount: 2700,
+        currency: "EUR",
+        decimals: 2,
+        paidAt: new Date(1_799_000_000_000),
+        amountRefunded: 0,
+        refunded: false,
+      },
+    })
+    expect(calls.map((call) => [call.init.method, call.url])).toEqual([
+      ["GET", LIST_URL],
+      ["GET", "https://api.stripe.com/v1/payment_intents/pi_paid?expand[]=latest_charge"],
+    ])
+    expect(calls.map((call) => call.init.headers)).toEqual([READ_HEADERS, READ_HEADERS])
+  })
+
+  it("reads an older charge-paid invoice's refund state from the charge", async () => {
+    const { calls, fetcher } = scripted([
+      json({ data: [paidInvoice("in_old", 1500, { type: "charge", charge: "ch_old" })] }),
+      json({ id: "ch_old", amount: 1500, amount_refunded: 1500, refunded: true }),
+    ])
+    const result = await billing({ fetch: fetcher }).readLastPayment({
+      subscriptionId: SUBSCRIPTION_ID,
+    })
+    expect(result.ok && result.value).toMatchObject({
+      id: "ch_old",
+      amount: 1500,
+      amountRefunded: 1500,
+      refunded: true,
+    })
+    expect(calls[1].url).toBe("https://api.stripe.com/v1/charges/ch_old")
+  })
+
+  it("answers null for a subscription whose paid invoices moved no money, such as a trial", async () => {
+    const { calls, fetcher } = scripted([json({ data: [paidInvoice("in_trial", 0, {})] })])
+    const result = await billing({ fetch: fetcher }).readLastPayment({
+      subscriptionId: SUBSCRIPTION_ID,
+    })
+    expect(result).toEqual({ ok: true, value: null })
+    expect(calls.length).toBe(1)
+  })
+
+  it("refuses an ID that is not a subscription's, without calling Stripe", async () => {
+    const { calls, fetcher } = fakeFetch(() => json({}))
+    for (const subscriptionId of ["", "sub_1&status=open", "../charges/ch_1"]) {
+      const result = await billing({ fetch: fetcher }).readLastPayment({ subscriptionId })
+      expect(!result.ok && result.error.code).toBe("invalid_request")
+    }
+    expect(calls.length).toBe(0)
+  })
+
+  it("reports Stripe's error with its status and the secret key cut out", async () => {
+    const { fetcher } = scripted([
+      json({ error: { message: `Invalid API Key provided: ${SECRET_KEY}` } }, 401),
+    ])
+    const result = await billing({ fetch: fetcher }).readLastPayment({
+      subscriptionId: SUBSCRIPTION_ID,
+    })
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "provider_error",
+        message: "Stripe answered 401: Invalid API Key provided: <REDACTED:STRIPE_KEY>",
+        status: 401,
+      },
+    })
+  })
+
+  it("reports a payment intent whose charge came back unexpanded as malformed", async () => {
+    const { fetcher } = scripted([
+      json({
+        data: [paidInvoice("in_1", 2700, { type: "payment_intent", payment_intent: "pi_1" })],
+      }),
+      json({ id: "pi_1", latest_charge: "ch_1" }),
+    ])
+    const result = await billing({ fetch: fetcher }).readLastPayment({
+      subscriptionId: SUBSCRIPTION_ID,
+    })
+    expect(!result.ok && result.error.code).toBe("malformed_response")
+  })
+})
+
+describe("refundPayment", () => {
+  const refund = (status: string | null = "succeeded") => ({
+    id: "re_1",
+    object: "refund",
+    amount: 2700,
+    currency: "eur",
+    payment_intent: "pi_paid",
+    status,
+  })
+
+  it("posts the payment intent with the idempotency key and no amount, so the refund is full", async () => {
+    const { calls, fetcher } = scripted([json(refund())])
+    const result = await billing({ fetch: fetcher }).refundPayment({
+      paymentId: "pi_paid",
+      idempotencyKey: "0199f1c2-refund",
+    })
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        id: "re_1",
+        paymentId: "pi_paid",
+        amount: 2700,
+        currency: "EUR",
+        decimals: 2,
+        status: RefundStatus.Succeeded,
+      },
+    })
+    expect(calls.map((call) => [call.init.method, call.url]))
+      .toEqual([["POST", "https://api.stripe.com/v1/refunds"]])
+    expect(calls[0].init.body).toBe("payment_intent=pi_paid")
+    expect(calls[0].init.headers).toEqual(writeHeaders("0199f1c2-refund"))
+  })
+
+  it("refunds a charge by its charge ID", async () => {
+    const { calls, fetcher } = scripted([json(refund("pending"))])
+    const result = await billing({ fetch: fetcher }).refundPayment({
+      paymentId: "ch_old",
+      idempotencyKey: "key-1",
+    })
+    expect(calls[0].init.body).toBe("charge=ch_old")
+    expect(result.ok && result.value.status).toBe(RefundStatus.Pending)
+  })
+
+  it("reports a refund made with a status it does not know as pending, never as nothing changed", async () => {
+    const { fetcher } = scripted([json(refund("something_new"))])
+    const result = await billing({ fetch: fetcher }).refundPayment({
+      paymentId: "pi_paid",
+      idempotencyKey: "key-1",
+    })
+    expect(result.ok && result.value.status).toBe(RefundStatus.Pending)
+  })
+
+  it("refuses a missing idempotency key or an ID that is no payment's, without calling Stripe", async () => {
+    const { calls, fetcher } = fakeFetch(() => json(refund()))
+    const provider = billing({ fetch: fetcher })
+    for (
+      const request of [
+        { paymentId: "pi_paid" },
+        { paymentId: "pi_paid", idempotencyKey: "" },
+        { paymentId: "pi_paid", idempotencyKey: "k".repeat(256) },
+        { paymentId: "sub_1", idempotencyKey: "key-1" },
+        { paymentId: "in_1", idempotencyKey: "key-1" },
+      ]
+    ) {
+      const result = await provider.refundPayment(request as never)
+      expect({ request, code: !result.ok && result.error.code })
+        .toEqual({ request, code: "invalid_request" })
+    }
+    expect(calls.length).toBe(0)
+  })
+
+  it("reports Stripe refusing a refund as the provider's error with its status", async () => {
+    const { fetcher } = scripted([
+      json({ error: { message: "Charge ch_1 has already been refunded." } }, 400),
+    ])
+    const result = await billing({ fetch: fetcher }).refundPayment({
+      paymentId: "pi_paid",
+      idempotencyKey: "key-1",
+    })
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "provider_error",
+        message: "Stripe answered 400: Charge ch_1 has already been refunded.",
+        status: 400,
+      },
+    })
+  })
+})
+
+describe("setTrialEnd", () => {
+  it("posts the new trial end in seconds with no proration and the idempotency key", async () => {
+    const trialEnd = new Date(1_801_000_000_000)
+    const { calls, fetcher } = scripted([
+      json(
+        await recordedSubscription((object) => {
+          object.status = "trialing"
+          object.trial_end = 1_801_000_000
+        }),
+      ),
+    ])
+    const result = await billing({ fetch: fetcher }).setTrialEnd({
+      subscriptionId: SUBSCRIPTION_ID,
+      trialEnd,
+      idempotencyKey: "key-trial",
+    })
+    expect(result.ok && result.value).toMatchObject({
+      id: SUBSCRIPTION_ID,
+      status: SubscriptionStatus.Trialing,
+      trialEnd,
+    })
+    expect(calls.map((call) => [call.init.method, call.url]))
+      .toEqual([["POST", `https://api.stripe.com/v1/subscriptions/${SUBSCRIPTION_ID}`]])
+    expect(calls[0].init.body).toBe("trial_end=1801000000&proration_behavior=none")
+    expect(calls[0].init.headers).toEqual(writeHeaders("key-trial"))
+  })
+
+  it("refuses an invalid date, a missing key or an ID that is not a subscription's, without calling Stripe", async () => {
+    const { calls, fetcher } = fakeFetch(() => json({}))
+    const provider = billing({ fetch: fetcher })
+    for (
+      const request of [
+        { subscriptionId: SUBSCRIPTION_ID, trialEnd: new Date(NaN), idempotencyKey: "k" },
+        { subscriptionId: SUBSCRIPTION_ID, trialEnd: 1_801_000_000, idempotencyKey: "k" },
+        { subscriptionId: SUBSCRIPTION_ID, trialEnd: new Date(1_801_000_000_000) },
+        {
+          subscriptionId: "../customers/c",
+          trialEnd: new Date(1_801_000_000_000),
+          idempotencyKey: "k",
+        },
+      ]
+    ) {
+      const result = await provider.setTrialEnd(request as never)
+      expect({ request, code: !result.ok && result.error.code })
+        .toEqual({ request, code: "invalid_request" })
+    }
+    expect(calls.length).toBe(0)
+  })
+
+  it("reports Stripe's refusal as the provider's error", async () => {
+    const { fetcher } = scripted([
+      json({ error: { message: "Invalid timestamp: must be in the future" } }, 400),
+    ])
+    const result = await billing({ fetch: fetcher }).setTrialEnd({
+      subscriptionId: SUBSCRIPTION_ID,
+      trialEnd: new Date(1_000_000_000_000),
+      idempotencyKey: "k",
+    })
+    expect(!result.ok && result.error).toEqual({
+      code: "provider_error",
+      message: "Stripe answered 400: Invalid timestamp: must be in the future",
+      status: 400,
+    })
+  })
+})
+
+describe("cancelNow", () => {
+  const canceled = () => recordedSubscription((object) => (object.status = "canceled"))
+
+  it("deletes the subscription with no proration or final invoice, and answers it ended", async () => {
+    const { calls, fetcher } = scripted([json(await canceled())])
+    const result = await billing({ fetch: fetcher }).cancelNow({
+      subscriptionId: SUBSCRIPTION_ID,
+      idempotencyKey: "key-cancel",
+    })
+    expect(result.ok && result.value).toMatchObject({
+      id: SUBSCRIPTION_ID,
+      status: SubscriptionStatus.Canceled,
+    })
+    expect(calls.map((call) => [call.init.method, call.url])).toEqual([[
+      "DELETE",
+      `https://api.stripe.com/v1/subscriptions/${SUBSCRIPTION_ID}?invoice_now=false&prorate=false`,
+    ]])
+    expect(calls[0].init.body).toBe(undefined)
+    expect(calls[0].init.headers).toEqual({ ...READ_HEADERS, "Idempotency-Key": "key-cancel" })
+  })
+
+  it("answers success to a retry of a cancel that already went through", async () => {
+    const { calls, fetcher } = scripted([
+      json({ error: { message: "This subscription has already been canceled." } }, 400),
+      json(await canceled()),
+    ])
+    const result = await billing({ fetch: fetcher }).cancelNow({
+      subscriptionId: SUBSCRIPTION_ID,
+      idempotencyKey: "key-cancel",
+    })
+    expect(result.ok && result.value.status).toBe(SubscriptionStatus.Canceled)
+    expect(calls.map((call) => call.init.method)).toEqual(["DELETE", "GET"])
+  })
+
+  it("reports Stripe's refusal when the subscription is still running", async () => {
+    const { fetcher } = scripted([
+      json({ error: { message: "Something else is wrong" } }, 400),
+      json(await recordedSubscription()),
+    ])
+    const result = await billing({ fetch: fetcher }).cancelNow({
+      subscriptionId: SUBSCRIPTION_ID,
+      idempotencyKey: "key-cancel",
+    })
+    expect(!result.ok && result.error).toEqual({
+      code: "provider_error",
+      message: "Stripe answered 400: Something else is wrong",
+      status: 400,
+    })
+  })
+
+  it("reports a server error without reading back, so the caller retries", async () => {
+    const { calls, fetcher } = scripted([json({ error: { message: "Try again later" } }, 503)])
+    const result = await billing({ fetch: fetcher }).cancelNow({
+      subscriptionId: SUBSCRIPTION_ID,
+      idempotencyKey: "key-cancel",
+    })
+    expect(!result.ok && result.error.status).toBe(503)
+    expect(calls.length).toBe(1)
+  })
+
+  it("refuses a missing idempotency key or an ID that is not a subscription's, without calling Stripe", async () => {
+    const { calls, fetcher } = fakeFetch(() => json({}))
+    const provider = billing({ fetch: fetcher })
+    for (
+      const request of [
+        { subscriptionId: SUBSCRIPTION_ID },
+        { subscriptionId: "sub_1?prorate=true", idempotencyKey: "k" },
+      ]
+    ) {
+      const result = await provider.cancelNow(request as never)
+      expect(!result.ok && result.error.code).toBe("invalid_request")
+    }
+    expect(calls.length).toBe(0)
+  })
+})
+
+describe("setCancelAtPeriodEnd", () => {
+  it("schedules the end at the period's end, and takes it back, each with its idempotency key", async () => {
+    const { calls, fetcher } = scripted([
+      json(await recordedSubscription((object) => (object.cancel_at_period_end = true))),
+      json(await recordedSubscription()),
+    ])
+    const provider = billing({ fetch: fetcher })
+    const scheduled = await provider.setCancelAtPeriodEnd({
+      subscriptionId: SUBSCRIPTION_ID,
+      cancelAtPeriodEnd: true,
+      idempotencyKey: "key-end",
+    })
+    const undone = await provider.setCancelAtPeriodEnd({
+      subscriptionId: SUBSCRIPTION_ID,
+      cancelAtPeriodEnd: false,
+      idempotencyKey: "key-undo",
+    })
+    expect(scheduled.ok && scheduled.value.cancelAtPeriodEnd).toBe(true)
+    expect(undone.ok && undone.value.cancelAtPeriodEnd).toBe(false)
+    expect(calls.map((call) => [call.init.method, call.url, call.init.body])).toEqual([
+      [
+        "POST",
+        `https://api.stripe.com/v1/subscriptions/${SUBSCRIPTION_ID}`,
+        "cancel_at_period_end=true",
+      ],
+      [
+        "POST",
+        `https://api.stripe.com/v1/subscriptions/${SUBSCRIPTION_ID}`,
+        "cancel_at_period_end=false",
+      ],
+    ])
+    expect(calls.map((call) => call.init.headers))
+      .toEqual([writeHeaders("key-end"), writeHeaders("key-undo")])
+  })
+
+  it("refuses a missing idempotency key or a flag that is not a boolean, without calling Stripe", async () => {
+    const { calls, fetcher } = fakeFetch(() => json({}))
+    const provider = billing({ fetch: fetcher })
+    for (
+      const request of [
+        { subscriptionId: SUBSCRIPTION_ID, cancelAtPeriodEnd: true },
+        { subscriptionId: SUBSCRIPTION_ID, cancelAtPeriodEnd: "true", idempotencyKey: "k" },
+      ]
+    ) {
+      const result = await provider.setCancelAtPeriodEnd(request as never)
+      expect(!result.ok && result.error.code).toBe("invalid_request")
+    }
+    expect(calls.length).toBe(0)
+  })
+
+  it("reports a 2xx answer that is not a subscription as malformed", async () => {
+    const { fetcher } = scripted([json({ id: SUBSCRIPTION_ID })])
+    const result = await billing({ fetch: fetcher }).setCancelAtPeriodEnd({
+      subscriptionId: SUBSCRIPTION_ID,
+      cancelAtPeriodEnd: true,
+      idempotencyKey: "k",
+    })
+    expect(!result.ok && result.error.code).toBe("malformed_response")
   })
 })

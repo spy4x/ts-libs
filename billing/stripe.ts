@@ -31,10 +31,13 @@ import {
   type BillingProvider,
   type CheckoutRequest,
   type CheckoutSession,
+  type PaidPayment,
   type ParseEventResult,
   type PlanRef,
   type PortalSession,
   type QuantityRequest,
+  type Refund,
+  RefundStatus,
   type Subscription,
   SubscriptionStatus,
 } from "./provider.ts"
@@ -140,6 +143,35 @@ const quantityRequestSchema = type({
   "idempotencyKey?": "0 < string <= 255",
 })
 
+/** A Stripe ID that goes into a URL path: letters, digits and `_` only, so it cannot leave it. */
+const STRIPE_ID = /^[A-Za-z0-9_]+$/
+/** Stripe's limit for an `Idempotency-Key`. Required on every operator action. */
+const IDEMPOTENCY_KEY = "0 < string <= 255"
+
+/** A payment intent or a charge: the two things Stripe's Refunds endpoint refunds. */
+const PAYMENT_ID = /^(pi|ch)_[A-Za-z0-9_]+$/
+
+const lastPaymentRequestSchema = type({ subscriptionId: STRIPE_ID })
+
+const refundRequestSchema = type({
+  paymentId: PAYMENT_ID,
+  idempotencyKey: IDEMPOTENCY_KEY,
+})
+
+const trialEndRequestSchema = type({
+  subscriptionId: STRIPE_ID,
+  trialEnd: "Date",
+  idempotencyKey: IDEMPOTENCY_KEY,
+})
+
+const cancelRequestSchema = type({ subscriptionId: STRIPE_ID, idempotencyKey: IDEMPOTENCY_KEY })
+
+const cancelAtPeriodEndRequestSchema = type({
+  subscriptionId: STRIPE_ID,
+  cancelAtPeriodEnd: "boolean",
+  idempotencyKey: IDEMPOTENCY_KEY,
+})
+
 const portalRequestSchema = type({
   customerId: "string > 0",
   returnUrl: "string.url",
@@ -187,6 +219,56 @@ const stripeInvoiceSchema = type({
     "subscription_details?": type({ subscription: "string > 0" }).or("null"),
   }).or("null"),
 })
+
+/**
+ * How many paid invoices {@link BillingProvider.readLastPayment} reads, newest first, to find one
+ * that moved money: a trial or a fully discounted period is paid with 0 and moved none.
+ */
+const PAID_INVOICES_READ = 10
+
+/** A page of a subscription's paid invoices, each with its payments (`expand[]=data.payments`). */
+const stripePaidInvoicesSchema = type({
+  data: type({
+    id: "string > 0",
+    amount_paid: "number.integer >= 0",
+    status_transitions: { paid_at: "number.integer | null" },
+    "payments?": type({
+      data: type({
+        amount_paid: "number.integer >= 0 | null",
+        currency: "string == 3",
+        status: "string",
+        payment: {
+          type: "string",
+          "payment_intent?": "string | null",
+          "charge?": "string | null",
+        },
+      }).array(),
+    }).or("null"),
+  }).array(),
+})
+
+/** The refund state of a charge: what a payment intent's `latest_charge` or a charge holds. */
+const stripeChargeSchema = type({
+  amount: "number.integer >= 0",
+  amount_refunded: "number.integer >= 0",
+  refunded: "boolean",
+})
+
+const stripeRefundSchema = type({
+  id: "string > 0",
+  amount: "number.integer >= 0",
+  currency: "string == 3",
+  status: "string | null",
+})
+
+/** Stripe's refund statuses; `requires_action` waits on the customer's bank like `pending`. */
+const REFUND_STATUS = new Map<string, RefundStatus>(Object.entries({
+  pending: RefundStatus.Pending,
+  requires_action: RefundStatus.Pending,
+  succeeded: RefundStatus.Succeeded,
+  failed: RefundStatus.Failed,
+  canceled: RefundStatus.Failed,
+}))
 
 /** Stripe's subscription statuses, each mapped to one {@link SubscriptionStatus}. */
 const STATUS = new Map<string, SubscriptionStatus>(Object.entries({
@@ -278,9 +360,10 @@ const checkoutForm = (request: CheckoutRequest, priceId: string): URLSearchParam
  *
  * Throws when `secretKey` or `webhookSecret` is missing or blank, or when `plans` is empty, lacks
  * an ID or maps a plan or a price twice: each is a configuration error to catch at start-up, not on
- * a customer's checkout. Every other failure is a returned result.
+ * a customer's checkout. Every other failure is a returned result. It has every optional member of
+ * {@link BillingProvider}, so a caller needs no check before the operator actions.
  */
-export function createStripeBilling(options: StripeBillingOptions): BillingProvider {
+export function createStripeBilling(options: StripeBillingOptions): Required<BillingProvider> {
   const secretKey = requireSecret(options?.secretKey, "secretKey")
   const webhookSecret = requireSecret(options.webhookSecret, "webhookSecret")
   const plans = checkedPlans(options.plans)
@@ -314,7 +397,7 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
    * status (with Stripe's own message), or a 2xx body that is not JSON.
    */
   const send = async (
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "DELETE",
     path: string,
     form: URLSearchParams | undefined,
     idempotencyKey: string | undefined,
@@ -407,6 +490,47 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
     }
   }
 
+  /**
+   * POSTs a change to a subscription and returns the subscription after it. The path is built from
+   * an ID that already passed {@link STRIPE_ID}.
+   */
+  const postSubscription = async (
+    subscriptionId: string,
+    form: URLSearchParams,
+    idempotencyKey: string,
+  ): Promise<Result<Subscription, BillingError>> => {
+    const updated = await send("POST", `/subscriptions/${subscriptionId}`, form, idempotencyKey)
+    if (!updated.ok) return updated
+    const after = toSubscription(updated.value)
+    if (!after.ok) return failure("malformed_response", `Stripe's subscription: ${after.error}`)
+    return after
+  }
+
+  /** Reads how much of a payment intent's or a charge's money has gone back already. */
+  const readRefundState = async (
+    paymentId: string,
+  ): Promise<Result<{ amountRefunded: number; refunded: boolean }, BillingError>> => {
+    const isIntent = paymentId.startsWith("pi_")
+    const answer = await send(
+      "GET",
+      isIntent ? `/payment_intents/${paymentId}?expand[]=latest_charge` : `/charges/${paymentId}`,
+      undefined,
+      undefined,
+    )
+    if (!answer.ok) return answer
+    const object = isIntent
+      ? (answer.value as { latest_charge?: unknown } | null)?.latest_charge
+      : answer.value
+    const charge = stripeChargeSchema(object)
+    if (charge instanceof type.errors) {
+      return failure("malformed_response", `Stripe's charge of ${paymentId}: ${charge.summary}`)
+    }
+    return {
+      ok: true,
+      value: { amountRefunded: charge.amount_refunded, refunded: charge.refunded },
+    }
+  }
+
   return {
     async createCheckout(request) {
       const checked = checkoutRequestSchema(request)
@@ -470,6 +594,140 @@ export function createStripeBilling(options: StripeBillingOptions): BillingProvi
       const after = toSubscription(updated.value)
       if (!after.ok) return failure("malformed_response", `Stripe's subscription: ${after.error}`)
       return after
+    },
+
+    async readLastPayment(request) {
+      const checked = lastPaymentRequestSchema(request)
+      if (checked instanceof type.errors) {
+        return failure("invalid_request", `last payment request: ${checked.summary}`)
+      }
+      const query = new URLSearchParams()
+      query.set("subscription", checked.subscriptionId)
+      query.set("status", "paid")
+      query.set("limit", String(PAID_INVOICES_READ))
+      query.append("expand[]", "data.payments")
+      const answer = await send("GET", `/invoices?${query}`, undefined, undefined)
+      if (!answer.ok) return answer
+      const invoices = stripePaidInvoicesSchema(answer.value)
+      if (invoices instanceof type.errors) {
+        return failure("malformed_response", `Stripe's invoices: ${invoices.summary}`)
+      }
+      // Stripe lists invoices newest first. The first one that moved money through a payment
+      // intent or a charge is the last payment; one paid with 0 or outside Stripe is skipped.
+      for (const invoice of invoices.data) {
+        if (invoice.amount_paid === 0) continue
+        const paid = (invoice.payments?.data ?? []).find((candidate) =>
+          candidate.status === "paid" && (candidate.amount_paid ?? 0) > 0 &&
+          (candidate.payment.payment_intent ?? candidate.payment.charge ?? null) !== null
+        )
+        if (paid === undefined) continue
+        const paymentId = (paid.payment.payment_intent ?? paid.payment.charge) as string
+        // The ID goes into the path of the next request.
+        if (!PAYMENT_ID.test(paymentId)) {
+          return failure("malformed_response", `Stripe's invoice payment has an unknown ID`)
+        }
+        const paidAt = fromSeconds(invoice.status_transitions.paid_at)
+        if (paidAt === null) {
+          return failure("malformed_response", `Stripe's paid invoice ${invoice.id} has no paid_at`)
+        }
+        const state = await readRefundState(paymentId)
+        if (!state.ok) return state
+        const currency = paid.currency.toUpperCase()
+        const payment: PaidPayment = {
+          id: paymentId,
+          invoiceId: invoice.id,
+          amount: paid.amount_paid as number,
+          currency,
+          decimals: stripeDecimals(currency),
+          paidAt,
+          amountRefunded: state.value.amountRefunded,
+          refunded: state.value.refunded,
+        }
+        return { ok: true, value: payment }
+      }
+      return { ok: true, value: null }
+    },
+
+    async refundPayment(request) {
+      const checked = refundRequestSchema(request)
+      if (checked instanceof type.errors) {
+        return failure("invalid_request", `refund request: ${checked.summary}`)
+      }
+      // No amount: Stripe refunds everything not refunded yet, which is the only refund offered.
+      const form = new URLSearchParams()
+      form.set(checked.paymentId.startsWith("pi_") ? "payment_intent" : "charge", checked.paymentId)
+      const answer = await send("POST", "/refunds", form, checked.idempotencyKey)
+      if (!answer.ok) return answer
+      const refund = stripeRefundSchema(answer.value)
+      if (refund instanceof type.errors) {
+        return failure("malformed_response", `Stripe's refund: ${refund.summary}`)
+      }
+      const currency = refund.currency.toUpperCase()
+      const value: Refund = {
+        id: refund.id,
+        paymentId: checked.paymentId,
+        amount: refund.amount,
+        currency,
+        decimals: stripeDecimals(currency),
+        // Stripe made the refund; a status it adds later must not read as "nothing changed".
+        status: REFUND_STATUS.get(refund.status ?? "") ?? RefundStatus.Pending,
+      }
+      return { ok: true, value }
+    },
+
+    async setTrialEnd(request) {
+      const checked = trialEndRequestSchema(request)
+      if (checked instanceof type.errors) {
+        return failure("invalid_request", `trial end request: ${checked.summary}`)
+      }
+      const seconds = Math.floor(checked.trialEnd.getTime() / 1000)
+      if (!Number.isFinite(seconds)) {
+        return failure("invalid_request", "trial end request: trialEnd is not a valid date")
+      }
+      const form = new URLSearchParams()
+      form.set("trial_end", String(seconds))
+      // Pinned: moving the trial end neither credits the paid time left nor charges for it.
+      form.set("proration_behavior", "none")
+      return await postSubscription(checked.subscriptionId, form, checked.idempotencyKey)
+    },
+
+    async cancelNow(request) {
+      const checked = cancelRequestSchema(request)
+      if (checked instanceof type.errors) {
+        return failure("invalid_request", `cancel request: ${checked.summary}`)
+      }
+      const path = `/subscriptions/${checked.subscriptionId}`
+      // Pinned to Stripe's defaults: no credit for the unused time and no final invoice.
+      const cancelled = await send(
+        "DELETE",
+        `${path}?invoice_now=false&prorate=false`,
+        undefined,
+        checked.idempotencyKey,
+      )
+      if (cancelled.ok) {
+        const after = toSubscription(cancelled.value)
+        if (!after.ok) return failure("malformed_response", `Stripe's subscription: ${after.error}`)
+        return after
+      }
+      // Stripe ignores the idempotency key on DELETE, and a second cancel of an ended subscription
+      // is an error. Read it back, so a retry of a cancel that went through answers success.
+      if (cancelled.error.code !== "provider_error" || (cancelled.error.status ?? 500) >= 500) {
+        return cancelled
+      }
+      const current = await send("GET", path, undefined, undefined)
+      if (!current.ok) return cancelled
+      const now = toSubscription(current.value)
+      return now.ok && now.value.status === SubscriptionStatus.Canceled ? now : cancelled
+    },
+
+    async setCancelAtPeriodEnd(request) {
+      const checked = cancelAtPeriodEndRequestSchema(request)
+      if (checked instanceof type.errors) {
+        return failure("invalid_request", `cancel at period end request: ${checked.summary}`)
+      }
+      const form = new URLSearchParams()
+      form.set("cancel_at_period_end", String(checked.cancelAtPeriodEnd))
+      return await postSubscription(checked.subscriptionId, form, checked.idempotencyKey)
     },
 
     async createPortalSession(request) {
