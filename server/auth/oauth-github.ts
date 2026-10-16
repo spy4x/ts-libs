@@ -16,7 +16,7 @@ import { type } from "arktype"
 import { validate } from "@spy4x/validation"
 
 import type { OAuthProfile, OAuthProfileContext, OAuthProviderConfig } from "./oauth.ts"
-import { cleanOAuthAvatarUrl, cleanOAuthName, cleanOAuthProfile } from "./oauth-profile.ts"
+import { cleanOAuthName, cleanOAuthProfile } from "./oauth-profile.ts"
 
 /** GitHub's authorization endpoint. */
 export const GITHUB_AUTHORIZATION_ENDPOINT = "https://github.com/login/oauth/authorize"
@@ -70,7 +70,7 @@ export function readGitHubUser(body: unknown): OAuthProfile | null {
     email: null,
     emailVerified: false,
     name: cleanOAuthName(data.name) ?? cleanOAuthName(data.login),
-    avatarUrl: cleanOAuthAvatarUrl(data.avatar_url),
+    avatarUrl: data.avatar_url,
   })
 }
 

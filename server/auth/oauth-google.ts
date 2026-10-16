@@ -14,7 +14,7 @@ import { type } from "arktype"
 import { validate } from "@spy4x/validation"
 
 import type { OAuthProfile, OAuthProviderConfig } from "./oauth.ts"
-import { cleanOAuthAvatarUrl, cleanOAuthName, cleanOAuthProfile } from "./oauth-profile.ts"
+import { cleanOAuthProfile } from "./oauth-profile.ts"
 
 /** Google's authorization endpoint. */
 export const GOOGLE_AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -64,8 +64,8 @@ export function readGoogleProfile(body: unknown): OAuthProfile | null {
     subject: data.sub,
     email,
     emailVerified: email !== null && data.email_verified === true,
-    name: cleanOAuthName(data.name),
-    avatarUrl: cleanOAuthAvatarUrl(data.picture),
+    name: data.name,
+    avatarUrl: data.picture,
   })
 }
 

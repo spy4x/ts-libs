@@ -54,11 +54,20 @@ export function cleanOAuthAvatarUrl(value: unknown): string | undefined {
 }
 
 /**
+ * A profile whose display fields are not checked yet: `name` and `avatarUrl` may be anything a
+ * provider sent.
+ */
+export type UncleanOAuthProfile = Omit<OAuthProfile, "name" | "avatarUrl"> & {
+  name?: unknown
+  avatarUrl?: unknown
+}
+
+/**
  * `profile` with `name` and `avatarUrl` cleaned by {@link cleanOAuthName} and
  * {@link cleanOAuthAvatarUrl}. A field that does not survive is left out, not set to undefined.
  * Every other field is kept as it was.
  */
-export function cleanOAuthProfile(profile: OAuthProfile): OAuthProfile {
+export function cleanOAuthProfile(profile: UncleanOAuthProfile): OAuthProfile {
   const { name, avatarUrl, ...rest } = profile
   const cleaned: OAuthProfile = rest
   const cleanName = cleanOAuthName(name)
