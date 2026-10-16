@@ -2412,7 +2412,10 @@ bus.use(createIdempotencyMiddleware({ store: new PostgresIdempotencyStore(sql) }
 - The same key with a different command name or different input fails with `KEY_REUSED`; a malformed
   key (1 to 128 printable ASCII characters) or one without a signed-in user fails with
   `INVALID_KEY`. The input is fingerprinted by SHA-256 over the sorted-key JSON of the data, minus
-  `actor`, `idempotencyKey`, `requestId` and `request`.
+  `actor`, `idempotencyKey`, a `requestId` that is a string or `null`, and a `request` shaped like
+  a `RequestInfo` (only `requestId`, `ip` and `userAgent`, each a string or unset). A `request` or
+  `requestId` of any other shape is the command's own input and counts. Do not give a command's
+  own string input the name `requestId`: two sends that differ only there share a fingerprint.
 - A run that throws releases its claim, so the retry runs again.
 
 **Options.** Both stores take `leaseSeconds` (default 30: how long an unfinished claim holds before
