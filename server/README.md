@@ -33,7 +33,7 @@ Runs on: server (Deno).
 | `@spy4x/server/http/trusted-proxy`          | Hono middleware that refuses forwarded-client headers (`X-Real-IP` and the rest) from any peer but the trusted proxies, which it follows by name                                                                                                              |
 | `@spy4x/server/export`                      | Versioned export envelope and `Content-Disposition` download response                                                                                                                                                                                         |
 | `@spy4x/server/static`                      | Static-file serving with a MIME table and path-traversal protection                                                                                                                                                                                           |
-| `@spy4x/server/healthcheck`                 | Loopback TCP probe, exit 0/1, for distroless images                                                                                                                                                                                                           |
+| `@spy4x/server/healthcheck`                 | Loopback TCP or HTTP probe, exit 0/1, for distroless images                                                                                                                                                                                                   |
 | `@spy4x/server/storage`                     | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning                                                                                                                                                                          |
 | `@spy4x/server/auth`                        | Sign-in account model and `AuthStore`: see the `server/auth` section below                                                                                                                                                                                    |
 | `@spy4x/server/auth/postgres`               | The Postgres `AuthStore` and `SessionStore`, and the `AUTH_POSTGRES_SCHEMA` tables                                                                                                                                                                            |
@@ -375,10 +375,20 @@ That step, `ProbeConnection.write`/`.read` and the three failure reasons `write_
 and `read_timeout` are removed here as a breaking change: this package is `0.1.0` and has never been
 published, so there is no consumer to carry the old shape forward. A real HTTP request against the
 server would tell more — a server that accepts connections but never answers one still reads healthy
-under connect-and-close — and is tracked as a follow-up (#58), not built in this change.
+under connect-and-close.
+
+Given a `path`, the probe sends a real HTTP `GET` to that loopback path instead and is healthy only
+when the answer has `expectedStatus` (default `200`). Point it at a health route that checks the
+database, and a container whose service still listens but lost its database turns unhealthy. The
+failure reasons are `request_failed` (no answer before the deadline, or the connection refused) and
+`unexpected_status`. The path is appended to the loopback origin, never resolved against it, so it
+cannot name another host; redirects are not followed; the body is cancelled unread; and the
+deadline aborts the request. `ProbeFetcher` is injected the way `ProbeConnector` is, so the unit
+tier needs no socket.
 
 `hostname` must be a `LOOPBACK_HOSTS` entry, so a probe cannot be aimed at a public bind; `timeoutMs`
-must be a non-negative integer; and `HEALTHCHECK_PORT`/`PORT` must be bare decimal digits
+must be a non-negative integer; `path` must start with `/`; `expectedStatus` must be an integer in
+100-599; and `HEALTHCHECK_PORT`/`PORT` must be bare decimal digits
 (`0x1f90`, `1e3`, `+8080` are refused rather than parsed), the same rule this package applies to
 `content-length`.
 

@@ -12,9 +12,14 @@
  * waited for it to be echoed back, and reported a real, running web server as
  * down: a web server never echoes a raw TCP byte, it answers HTTP or nothing, so
  * the echo step always timed out against a live server. Connect-and-close is
- * the whole probe now. A real HTTP request would tell more — a server that
- * accepts connections but never answers one still reads healthy here — and is a
- * deliberate follow-up (#58), not built in this change.
+ * the TCP probe now.
+ *
+ * A port that accepts connections says nothing about whether the service behind
+ * it works: an API that lost its database still listens. Given a `path`, the
+ * probe sends a real HTTP `GET` to that loopback path instead and is healthy
+ * only when the answer has the expected status (default `200`), so a health
+ * route that checks the database turns the container unhealthy when the
+ * database goes away.
  *
  * Where it lives: **`server/healthcheck.ts`, not a separate deploy-tooling package.**
  * `ops/` used to be that package (issue #18) and would have needed its own config for
@@ -24,8 +29,9 @@
  *
  * The probe is separate from the process wrapper ({@link runHealthcheck}) so the
  * decision logic is unit-testable without a socket: `deno test` runs with
- * `--allow-read --allow-env` only, so the connector **and** the timer are injected
- * and neither `Deno.connect` nor a real deadline is exercised by a test.
+ * `--allow-read --allow-env` only, so the connector, the fetcher **and** the timer
+ * are injected and neither a real socket nor a real deadline is exercised by a
+ * unit test.
  *
  * Not ported: the `caldav-mcp` two-stage Dockerfile (`denoland/deno:alpine` →
  * `gcr.io/distroless/cc-debian12` + `deno compile`). Deploy tooling is not part of
@@ -44,6 +50,12 @@ export interface ProbeConnection {
 export interface ProbeConnector {
   /** Connect to `hostname:port`, or reject. */
   connect: (options: { hostname: string; port: number }) => Promise<ProbeConnection>
+}
+
+/** Sends the HTTP request of an HTTP probe. Injected so the probe is testable without `--allow-net`. */
+export interface ProbeFetcher {
+  /** Send `init` to `url`, or reject. Called with `redirect: "manual"` and an abort signal. */
+  fetch: (url: string, init: RequestInit) => Promise<Response>
 }
 
 /** Timer used for deadlines. Injected so a test never waits on the wall clock. */
@@ -66,12 +78,17 @@ export const LOOPBACK_HOSTS: readonly string[] = [
   "0.0.0.0",
 ]
 
-/** Why a probe failed. The only value today is a failed or timed-out connect. */
-export type ProbeFailure = "connect_failed"
+/**
+ * Why a probe failed: a TCP connect that was refused or timed out
+ * (`connect_failed`), an HTTP request that got no answer in time
+ * (`request_failed`), or an HTTP answer with another status than the expected
+ * one (`unexpected_status`).
+ */
+export type ProbeFailure = "connect_failed" | "request_failed" | "unexpected_status"
 
 /** Probe outcome, kept as data so the caller — not the probe — decides what to do. */
 export interface ProbeResult {
-  /** True only when the socket connected, echoed the probe byte and closed cleanly. */
+  /** True only when the socket connected or, with a `path`, the HTTP answer had the expected status. */
   healthy: boolean
   /** Why the probe failed. Absent when healthy. */
   reason?: ProbeFailure
@@ -88,10 +105,23 @@ export interface HealthcheckOptions {
    * straight through.
    */
   hostname?: string
-  /** Connector. Defaults to {@link denoConnector}. */
+  /** Connector for the TCP probe. Defaults to {@link denoConnector}. */
   connector?: ProbeConnector
   /**
-   * Deadline for the connect step, in milliseconds. Defaults to
+   * Path to `GET` on the loopback host, starting with `/`, such as
+   * `/api/health`. Set, the probe makes an HTTP request instead of only
+   * connecting. Absent, it connects and closes again.
+   */
+  path?: string
+  /**
+   * HTTP status that counts as healthy when `path` is set. Defaults to `200`.
+   * Redirects are not followed, so a `3xx` is unhealthy unless it is expected.
+   */
+  expectedStatus?: number
+  /** Fetcher for the HTTP probe. Defaults to the platform `fetch`. */
+  fetcher?: ProbeFetcher
+  /**
+   * Deadline for the connect, or for the HTTP answer's headers, in milliseconds. Defaults to
    * {@link DEFAULT_TIMEOUT_MS}. `0` disables it; a negative or non-finite value
    * is rejected, because a negative deadline silently disables the probe's only
    * bound and `NaN` would fire immediately.
@@ -148,16 +178,19 @@ export async function withDeadline<T>(
 }
 
 /**
- * Probe a loopback port by connecting and closing again.
+ * Probe a loopback port: connect and close again, or, with a `path`, `GET` that
+ * path and compare the status.
  *
- * @returns `{ healthy: true }` when the connect succeeds, or
- * `{ healthy: false, reason: "connect_failed" }` when it is refused or misses
- * its deadline — never a message from the network stack, which could name an
- * internal address.
+ * @returns `{ healthy: true }` when the connect succeeds or the answer has the
+ * expected status. Otherwise `{ healthy: false, reason }`: `connect_failed` when
+ * the connect is refused or misses its deadline, `request_failed` when the HTTP
+ * request gets no answer in time, `unexpected_status` for any other status.
+ * Never a message from the network stack, which could name an internal address.
  * @throws {RangeError} When `port` is not an integer in 1-65535, when `hostname`
- * is not a {@link LOOPBACK_HOSTS} entry, or when `timeoutMs` is negative or not
- * an integer. All three are configuration errors rather than an unhealthy
- * service, and must not exit `1` next to a real outage.
+ * is not a {@link LOOPBACK_HOSTS} entry, when `timeoutMs` is negative or not an
+ * integer, when `path` does not start with `/`, or when `expectedStatus` is
+ * not an integer in 100-599. All are configuration errors rather than an
+ * unhealthy service, and must not exit `1` next to a real outage.
  */
 export async function probeLoopback(options: HealthcheckOptions): Promise<ProbeResult> {
   const { port, hostname = "127.0.0.1" } = options
@@ -175,6 +208,9 @@ export async function probeLoopback(options: HealthcheckOptions): Promise<ProbeR
   }
   if (!Number.isInteger(timeoutMs) || timeoutMs < 0) {
     throw new RangeError(`healthcheck timeoutMs must be a non-negative integer, got ${timeoutMs}`)
+  }
+  if (options.path !== undefined) {
+    return await probeHttp({ ...options, path: options.path, hostname, timeoutMs, timer })
   }
 
   let connection: ProbeConnection
@@ -194,6 +230,57 @@ export async function probeLoopback(options: HealthcheckOptions): Promise<ProbeR
   connection.close()
   return { healthy: true }
 }
+
+/**
+ * The HTTP half of {@link probeLoopback}: `GET` the path on the loopback origin.
+ *
+ * The URL is the loopback origin with the path appended, never the path
+ * resolved against it, so a path like `//example.com/` stays a path on the
+ * loopback host. Redirects are not followed, so the request cannot leave the
+ * box. The body is cancelled unread, so the socket is released.
+ */
+async function probeHttp(
+  options: HealthcheckOptions & {
+    path: string
+    hostname: string
+    timeoutMs: number
+    timer: ProbeTimer
+  },
+): Promise<ProbeResult> {
+  const { path, hostname, port, timeoutMs, timer } = options
+  const expectedStatus = options.expectedStatus ?? 200
+  const fetcher = options.fetcher ?? platformFetcher
+
+  if (!path.startsWith("/")) {
+    throw new RangeError(`healthcheck path must start with "/", got "${path}"`)
+  }
+  if (!Number.isInteger(expectedStatus) || expectedStatus < 100 || expectedStatus > 599) {
+    throw new RangeError(
+      `healthcheck expectedStatus must be an integer in 100-599, got ${expectedStatus}`,
+    )
+  }
+
+  const host = hostname.includes(":") ? `[${hostname}]` : hostname
+  const url = `http://${host}:${port}${path}`
+  const controller = new AbortController()
+  let response: Response
+  try {
+    response = await withDeadline(
+      fetcher.fetch(url, { method: "GET", redirect: "manual", signal: controller.signal }),
+      timeoutMs,
+      () => controller.abort(),
+      timer,
+    )
+  } catch {
+    return { healthy: false, reason: "request_failed" }
+  }
+
+  await response.body?.cancel().catch(() => {})
+  if (response.status !== expectedStatus) return { healthy: false, reason: "unexpected_status" }
+  return { healthy: true }
+}
+
+const platformFetcher: ProbeFetcher = { fetch: (url, init) => fetch(url, init) }
 
 /**
  * Exit code for the probe: `0` healthy, `1` unhealthy.

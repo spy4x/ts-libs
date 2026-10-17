@@ -7,6 +7,7 @@ import {
   LOOPBACK_HOSTS,
   type ProbeConnection,
   type ProbeConnector,
+  type ProbeFetcher,
   probeLoopback,
   resolveHealthcheckPort,
   runHealthcheck,
@@ -334,4 +335,145 @@ Deno.test("healthcheck: an invalid port variable throws instead of probing the d
 Deno.test("healthcheck: the default deadline is short enough for a container probe", () => {
   assertStrictEquals(DEFAULT_TIMEOUT_MS <= 5000, true)
   assertStrictEquals(DEFAULT_TIMEOUT_MS > 0, true)
+})
+
+/** A fetcher that records each request and answers with `status`, tracking whether the body was read or cancelled. */
+function recordingFetcher(status: number) {
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  let cancelled = false
+  const fetcher: ProbeFetcher = {
+    fetch: (url, init) => {
+      calls.push({ url, init })
+      const body = new ReadableStream({
+        cancel: () => {
+          cancelled = true
+        },
+      })
+      return Promise.resolve(new Response(status === 204 ? null : body, { status }))
+    },
+  }
+  return {
+    fetcher,
+    calls,
+    get cancelled() {
+      return cancelled
+    },
+  }
+}
+
+/** A connector that fails the test if the HTTP probe ever opens a raw socket. */
+const forbiddenConnector: ProbeConnector = {
+  connect: () => Promise.reject(new Error("the HTTP probe must not use the TCP connector")),
+}
+
+Deno.test("healthcheck: an HTTP probe that gets 200 from its path is healthy", async () => {
+  const http = recordingFetcher(200)
+  const result = await probeLoopback({
+    port: 8080,
+    path: "/api/health",
+    fetcher: http.fetcher,
+    connector: forbiddenConnector,
+  })
+  assertEquals(result, { healthy: true })
+  assertEquals(http.calls.map((call) => [call.url, call.init.method]), [
+    ["http://127.0.0.1:8080/api/health", "GET"],
+  ])
+})
+
+Deno.test("healthcheck: an HTTP probe that gets another status is unhealthy", async () => {
+  const http = recordingFetcher(503)
+  const result = await probeLoopback({ port: 8080, path: "/api/health", fetcher: http.fetcher })
+  assertEquals(result, { healthy: false, reason: "unexpected_status" })
+})
+
+Deno.test("healthcheck: an HTTP probe honours a non-default expected status", async () => {
+  const noContent = recordingFetcher(204)
+  assertEquals(
+    await probeLoopback({
+      port: 8080,
+      path: "/up",
+      expectedStatus: 204,
+      fetcher: noContent.fetcher,
+    }),
+    { healthy: true },
+  )
+  const ok = recordingFetcher(200)
+  assertEquals(
+    await probeLoopback({ port: 8080, path: "/up", expectedStatus: 204, fetcher: ok.fetcher }),
+    { healthy: false, reason: "unexpected_status" },
+  )
+})
+
+Deno.test("healthcheck: an HTTP probe does not follow a redirect", async () => {
+  const http = recordingFetcher(302)
+  const result = await probeLoopback({ port: 8080, path: "/api/health", fetcher: http.fetcher })
+  assertEquals(result, { healthy: false, reason: "unexpected_status" })
+  assertEquals(http.calls[0]?.init.redirect, "manual")
+})
+
+Deno.test("healthcheck: an HTTP probe releases the answer's body unread", async () => {
+  const http = recordingFetcher(200)
+  await probeLoopback({ port: 8080, path: "/api/health", fetcher: http.fetcher })
+  assertEquals(http.cancelled, true, "the response body was left open")
+})
+
+Deno.test("healthcheck: a failed HTTP request is reported as request_failed", async () => {
+  const fetcher: ProbeFetcher = {
+    fetch: () =>
+      Promise.reject(new TypeError("error sending request for url (http://198.51.100.7)")),
+  }
+  const result = await probeLoopback({ port: 8080, path: "/api/health", fetcher })
+  assertEquals(result, { healthy: false, reason: "request_failed" })
+})
+
+Deno.test("healthcheck: a hanging HTTP request is aborted when the deadline fires", async () => {
+  const manual = manualTimer()
+  let signal: AbortSignal | null | undefined
+  const fetcher: ProbeFetcher = {
+    fetch: (_url, init) => {
+      signal = init.signal
+      return new Promise<Response>(() => {})
+    },
+  }
+  const pending = probeLoopback({
+    port: 8080,
+    path: "/api/health",
+    fetcher,
+    timeoutMs: 50,
+    timer: manual.timer,
+  })
+  await manual.fire()
+  assertEquals(await pending, { healthy: false, reason: "request_failed" })
+  assertEquals(signal?.aborted, true, "the timed-out request was not aborted")
+  assertEquals(manual.cleared.length, 1, "the deadline timer was not cleared")
+})
+
+Deno.test("healthcheck: an HTTP probe brackets an IPv6 loopback host", async () => {
+  const http = recordingFetcher(200)
+  await probeLoopback({ port: 8080, hostname: "::1", path: "/api/health", fetcher: http.fetcher })
+  assertEquals(http.calls[0]?.url, "http://[::1]:8080/api/health")
+})
+
+Deno.test("healthcheck: an HTTP probe path cannot leave the loopback host", async () => {
+  const http = recordingFetcher(200)
+  await probeLoopback({ port: 8080, path: "//example.com/", fetcher: http.fetcher })
+  assertEquals(new URL(http.calls[0]?.url ?? "").host, "127.0.0.1:8080")
+  for (const path of ["", "api/health", "http://example.com/", "@example.com/"]) {
+    await assertRejects(
+      () => probeLoopback({ port: 8080, path, fetcher: http.fetcher }),
+      RangeError,
+    )
+  }
+  assertEquals(http.calls.length, 1, "a refused path was still requested")
+})
+
+Deno.test("healthcheck: an out-of-range expected status throws", async () => {
+  const http = recordingFetcher(200)
+  for (const expectedStatus of [0, 99, 600, 200.5, Number.NaN]) {
+    await assertRejects(
+      () => probeLoopback({ port: 8080, path: "/up", expectedStatus, fetcher: http.fetcher }),
+      RangeError,
+    )
+  }
+  assertEquals(http.calls.length, 0)
 })
