@@ -337,17 +337,27 @@ class PostgresAuthStore implements AuthStore {
         RETURNING proven_email AS "provenEmail"
       `
       if (!deleted) return false
-      if (deleted.provenEmail !== null) {
-        // The user stops owning the address once none of their keys carries it proven.
-        await tx`
-          DELETE FROM auth_email_owners
-          WHERE email = ${deleted.provenEmail} AND user_id = ${userId}
-            AND NOT EXISTS (
-              SELECT 1 FROM auth_keys
-              WHERE user_id = ${userId} AND proven_email = ${deleted.provenEmail}
-            )
-        `
-      }
+      if (deleted.provenEmail !== null) await releaseIfUnproven(tx, userId, deleted.provenEmail)
+      return true
+    })
+  }
+
+  async releaseKeyEmail(userId: number, keyId: number): Promise<boolean> {
+    if (!isStoreId(userId) || !isStoreId(keyId)) return false
+    return await inTransaction(this.#sql, async (tx) => {
+      // The address the key held proven, read under the row lock the update takes anyway.
+      const [released] = await tx<{ provenEmail: string | null }[]>`
+        WITH old AS (
+          SELECT id, proven_email FROM auth_keys
+          WHERE id = ${keyId} AND user_id = ${userId}
+          FOR UPDATE
+        )
+        UPDATE auth_keys SET email = NULL, proven_at = NULL, updated_at = now()
+        FROM old WHERE auth_keys.id = old.id
+        RETURNING old.proven_email AS "provenEmail"
+      `
+      if (!released) return false
+      if (released.provenEmail !== null) await releaseIfUnproven(tx, userId, released.provenEmail)
       return true
     })
   }
@@ -668,6 +678,17 @@ async function claimAddress(tx: Sql, userId: number, email: string): Promise<voi
   if (owner.userId !== userId) throw new AuthConflictError("email-owned")
   await tx`
     DELETE FROM auth_keys WHERE email = ${email} AND user_id <> ${userId} AND proven_at IS NULL
+  `
+}
+
+/** Drops the user's ownership of `email` once none of their keys carries it proven. */
+async function releaseIfUnproven(tx: Sql, userId: number, email: string): Promise<void> {
+  await tx`
+    DELETE FROM auth_email_owners
+    WHERE email = ${email} AND user_id = ${userId}
+      AND NOT EXISTS (
+        SELECT 1 FROM auth_keys WHERE user_id = ${userId} AND proven_email = ${email}
+      )
   `
 }
 
