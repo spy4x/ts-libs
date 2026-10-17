@@ -1847,8 +1847,10 @@ securityHeaders	function	@spy4x/server/http/security-headers	Middleware that set
 withSecurityHeaders	function	@spy4x/server/http/security-headers	A copy of `response` that carries `headers`, for a server securityHeaders cannot run in (Fresh, `Deno.serve`, a worker).
 FORWARDED_HEADERS	constant	@spy4x/server/http/trusted-proxy	The three headers in which a request names the client it came from, and which clientIp reads when told to trust a proxy.
 IsProxyPeer	type	@spy4x/server/http/trusted-proxy	Tells whether a connection's peer address is one of the trusted proxies.
-PROXY_ADDRESS_MAX_AGE_MS	constant	@spy4x/server/http/trusted-proxy	How long a looked-up address of a proxy is trusted before a request starts a new lookup.
-PROXY_LOOKUP_RETRY_MS	constant	@spy4x/server/http/trusted-proxy	The least time between two lookups that a request from an unknown peer starts.
+PROXY_ADDRESS_HARD_MAX_AGE_MS	constant	@spy4x/server/http/trusted-proxy	How long a name's addresses stay trusted after its last successful lookup while later lookups fail or hang.
+PROXY_ADDRESS_MAX_AGE_MS	constant	@spy4x/server/http/trusted-proxy	How long looked-up addresses of a proxy answer without a new lookup.
+PROXY_LOOKUP_DEADLINE_MS	constant	@spy4x/server/http/trusted-proxy	The longest a call waits for a lookup before it answers from the last good addresses.
+PROXY_LOOKUP_RETRY_MS	constant	@spy4x/server/http/trusted-proxy	The least time between the end of a lookup and the next one that an unknown peer starts.
 RequireProxyOptions	interface	@spy4x/server/http/trusted-proxy	Options for requireProxyForForwardedHeaders.
 createProxyPeers	function	@spy4x/server/http/trusted-proxy	The trusted proxies, by address.
 requireProxyForForwardedHeaders	function	@spy4x/server/http/trusted-proxy	Hono middleware that refuses, with 403 and `{ error: message }`, a request that carries one of the FORWARDED_HEADERS and whose peer is not a trusted proxy (or is unknown).
@@ -2445,4 +2447,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 9a7fed428b78bd83ef9461114e05b7e194f5e5338819e1a88141bf57ebd95102
+# export surface: sha256 117b9d06fb2c64825d417f2006a867e71ceb5a7a065fc9fa055ff2913fece8ac

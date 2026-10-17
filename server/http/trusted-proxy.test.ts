@@ -5,7 +5,9 @@ import { denoServeRemoteAddr } from "@spy4x/platform/rate-limit/hono"
 import {
   createProxyPeers,
   FORWARDED_HEADERS,
+  PROXY_ADDRESS_HARD_MAX_AGE_MS,
   PROXY_ADDRESS_MAX_AGE_MS,
+  PROXY_LOOKUP_DEADLINE_MS,
   PROXY_LOOKUP_RETRY_MS,
   requireProxyForForwardedHeaders,
 } from "./trusted-proxy.ts"
@@ -14,11 +16,11 @@ const TRAEFIK = "172.18.0.2"
 const RECREATED = "172.18.0.3"
 const NEIGHBOUR = "172.18.0.9"
 
-type Answer = string[] | Error | `hang`
+type Answer = string[] | Error | `hang` | Promise<string[]>
 
 /**
  * A resolver that answers from `table` and counts its lookups. `"hang"` never answers, like a
- * resolver whose upstream DNS is down.
+ * resolver whose upstream DNS is down; a promise answers when the test settles it.
  */
 function fakeResolver(table: Record<string, Answer>) {
   const lookups: string[] = []
@@ -29,19 +31,52 @@ function fakeResolver(table: Record<string, Answer>) {
       const answer = table[name]
       if (answer === `hang`) return new Promise(() => {})
       if (answer instanceof Error) return Promise.reject(answer)
+      if (answer instanceof Promise) return answer
       return Promise.resolve(answer ?? [])
     },
   }
 }
 
-/** A clock the test moves by hand. */
+/**
+ * A clock and timers the test moves by hand. `advance` moves the time, fires every timer that came
+ * due and lets the promises waiting on them run.
+ */
 function fakeClock() {
   let time = 1_000_000
-  return { now: () => time, advance: (ms: number) => time += ms }
+  const timers = new Set<{ at: number; callback: () => void }>()
+  return {
+    now: () => time,
+    setTimer(callback: () => void, ms: number) {
+      const timer = { at: time + ms, callback }
+      timers.add(timer)
+      return () => timers.delete(timer)
+    },
+    async advance(ms: number) {
+      time += ms
+      for (const timer of [...timers]) {
+        if (timer.at > time) continue
+        timers.delete(timer)
+        timer.callback()
+      }
+      await settle()
+    },
+    /** How many timers are still waiting. */
+    pending: () => timers.size,
+  }
 }
 
-/** Lets a background lookup that the fake resolver answers at once finish. */
+/** Lets promises that are already answered, or that a timer just answered, run. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+/** A promise and whether it has settled yet. */
+function track<T>(promise: Promise<T>) {
+  const state = { settled: false, value: undefined as T | undefined }
+  promise.then((value) => {
+    state.settled = true
+    state.value = value
+  })
+  return state
+}
 
 describe("createProxyPeers", () => {
   it("trusts the address a proxy's name resolves to, and no other", async () => {
@@ -68,7 +103,7 @@ describe("createProxyPeers", () => {
     expect(resolver.lookups).toEqual([])
   })
 
-  it("stops trusting a proxy's old address once it is looked up again", async () => {
+  it("refuses a moved proxy's old address on the first call after the addresses grow old", async () => {
     const table: Record<string, Answer> = { traefik: [TRAEFIK] }
     const clock = fakeClock()
     const isProxy = createProxyPeers({
@@ -80,15 +115,13 @@ describe("createProxyPeers", () => {
 
     // Traefik is recreated at a new address, and its old one goes to another container.
     table.traefik = [RECREATED]
-    clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
-    await isProxy(TRAEFIK) // starts the lookup
-    await settle()
+    await clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
 
     expect(await isProxy(TRAEFIK)).toBe(false)
     expect(await isProxy(RECREATED)).toBe(true)
   })
 
-  it("looks up again for an unknown peer, at most once a second", async () => {
+  it("trusts a recreated proxy's new address on its first request, after the awaited lookup", async () => {
     const table: Record<string, Answer> = { traefik: [TRAEFIK] }
     const clock = fakeClock()
     const resolver = fakeResolver(table)
@@ -96,23 +129,73 @@ describe("createProxyPeers", () => {
     expect(await isProxy(TRAEFIK)).toBe(true)
 
     table.traefik = [RECREATED]
-    expect(await isProxy(RECREATED)).toBe(false)
-    expect(await isProxy(NEIGHBOUR)).toBe(false)
-    await settle()
-    expect(resolver.lookups).toEqual([`traefik`])
+    await clock.advance(PROXY_LOOKUP_RETRY_MS)
 
-    clock.advance(PROXY_LOOKUP_RETRY_MS)
-    expect(await isProxy(RECREATED)).toBe(false) // answered before its lookup ends
-    await settle()
     expect(await isProxy(RECREATED)).toBe(true)
-    expect(resolver.lookups).toEqual([`traefik`, `traefik`])
-    // A known address starts no lookup before the addresses grow old.
-    expect(await isProxy(RECREATED)).toBe(true)
-    await settle()
+    expect(await isProxy(TRAEFIK)).toBe(false)
     expect(resolver.lookups).toEqual([`traefik`, `traefik`])
   })
 
-  it("answers from the known addresses while a lookup hangs", async () => {
+  it("looks up again for an unknown peer at most once a second", async () => {
+    const table: Record<string, Answer> = { traefik: [TRAEFIK] }
+    const clock = fakeClock()
+    const resolver = fakeResolver(table)
+    const isProxy = createProxyPeers({ hosts: ["traefik"], resolver, ...clock })
+    expect(await isProxy(TRAEFIK)).toBe(true)
+
+    expect(await isProxy(NEIGHBOUR)).toBe(false)
+    await clock.advance(PROXY_LOOKUP_RETRY_MS - 1)
+    expect(await isProxy(NEIGHBOUR)).toBe(false)
+    expect(resolver.lookups).toEqual([`traefik`])
+
+    await clock.advance(1)
+    expect(await isProxy(NEIGHBOUR)).toBe(false)
+    expect(resolver.lookups).toEqual([`traefik`, `traefik`])
+    // A known address starts no lookup before the addresses grow old.
+    expect(await isProxy(TRAEFIK)).toBe(true)
+    expect(resolver.lookups).toEqual([`traefik`, `traefik`])
+  })
+
+  it("trusts none of a burst from a moved proxy's old address while DNS hangs an hour later", async () => {
+    const table: Record<string, Answer> = { traefik: [TRAEFIK] }
+    const clock = fakeClock()
+    const resolver = fakeResolver(table)
+    const isProxy = createProxyPeers({ hosts: ["traefik"], resolver, ...clock })
+    expect(await isProxy(TRAEFIK)).toBe(true)
+
+    // Traefik moves, the app sits idle for an hour, and then the resolver stops answering.
+    table.traefik = `hang`
+    await clock.advance(60 * 60 * 1000)
+    const burst = Array.from({ length: 500 }, () => isProxy(TRAEFIK))
+    await clock.advance(PROXY_LOOKUP_DEADLINE_MS)
+
+    expect((await Promise.all(burst)).filter(Boolean)).toEqual([])
+    expect(resolver.lookups).toEqual([`traefik`, `traefik`])
+  })
+
+  it("shares one lookup between concurrent calls and answers them all from it", async () => {
+    const table: Record<string, Answer> = { traefik: [TRAEFIK] }
+    const clock = fakeClock()
+    const resolver = fakeResolver(table)
+    const isProxy = createProxyPeers({ hosts: ["traefik"], resolver, ...clock })
+    expect(await isProxy(TRAEFIK)).toBe(true)
+
+    const slow = Promise.withResolvers<string[]>()
+    table.traefik = slow.promise
+    await clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
+    const oldAddress = Array.from({ length: 50 }, () => track(isProxy(TRAEFIK)))
+    const newAddress = Array.from({ length: 50 }, () => track(isProxy(RECREATED)))
+    await clock.advance(PROXY_LOOKUP_DEADLINE_MS / 2)
+    expect([...oldAddress, ...newAddress].some((call) => call.settled)).toBe(false)
+
+    slow.resolve([RECREATED])
+    await settle()
+    expect(oldAddress.map((call) => call.value)).toEqual(Array(50).fill(false))
+    expect(newAddress.map((call) => call.value)).toEqual(Array(50).fill(true))
+    expect(resolver.lookups).toEqual([`traefik`, `traefik`])
+  })
+
+  it("makes a call wait for a hung lookup no longer than the deadline", async () => {
     const table: Record<string, Answer> = { traefik: [TRAEFIK] }
     const clock = fakeClock()
     const resolver = fakeResolver(table)
@@ -120,15 +203,31 @@ describe("createProxyPeers", () => {
     expect(await isProxy(TRAEFIK)).toBe(true)
 
     table.traefik = `hang`
-    clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
+    await clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
+    const call = track(isProxy(TRAEFIK))
+    await clock.advance(PROXY_LOOKUP_DEADLINE_MS - 1)
+    expect(call.settled).toBe(false)
+    await clock.advance(1)
+    expect(call).toEqual({ settled: true, value: true })
 
-    // Each call settles on its own: none of them waits for the lookup that never ends.
+    // Later calls do not wait again on the lookup that is still hung, and start no second one.
     expect(await isProxy(TRAEFIK)).toBe(true)
     expect(await isProxy(NEIGHBOUR)).toBe(false)
-    clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
+    await clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
     expect(await isProxy(TRAEFIK)).toBe(true)
-    // One lookup at a time: the hung one is not started again.
     expect(resolver.lookups).toEqual([`traefik`, `traefik`])
+  })
+
+  it("cancels the deadline timer once a lookup answers", async () => {
+    const clock = fakeClock()
+    const isProxy = createProxyPeers({
+      hosts: ["traefik"],
+      resolver: fakeResolver({ traefik: [TRAEFIK] }),
+      ...clock,
+    })
+
+    expect(await isProxy(TRAEFIK)).toBe(true)
+    expect(clock.pending()).toBe(0)
   })
 
   it("keeps a name's last addresses when a lookup fails, and reports the failure", async () => {
@@ -144,12 +243,29 @@ describe("createProxyPeers", () => {
     expect(await isProxy(TRAEFIK)).toBe(true)
 
     table.traefik = new Error("SERVFAIL")
-    clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
-    await isProxy(TRAEFIK)
-    await settle()
+    await clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
 
     expect(await isProxy(TRAEFIK)).toBe(true)
     expect(errors).toEqual(["traefik"])
+  })
+
+  it("refuses a name's last addresses once lookups have failed past the hard maximum", async () => {
+    const table: Record<string, Answer> = { traefik: [TRAEFIK] }
+    const clock = fakeClock()
+    const resolver = fakeResolver(table)
+    const isProxy = createProxyPeers({ hosts: ["traefik"], resolver, ...clock })
+    expect(await isProxy(TRAEFIK)).toBe(true)
+
+    table.traefik = new Error("SERVFAIL")
+    await clock.advance(PROXY_ADDRESS_HARD_MAX_AGE_MS - 1)
+    expect(await isProxy(TRAEFIK)).toBe(true)
+    await clock.advance(1)
+    expect(await isProxy(TRAEFIK)).toBe(false)
+
+    // A lookup that succeeds again restores the trust.
+    table.traefik = [TRAEFIK]
+    await clock.advance(PROXY_LOOKUP_RETRY_MS)
+    expect(await isProxy(TRAEFIK)).toBe(true)
   })
 
   it("keeps the last addresses when the failure reporter itself throws", async () => {
@@ -167,16 +283,12 @@ describe("createProxyPeers", () => {
     expect(await isProxy(TRAEFIK)).toBe(true)
 
     table.traefik = new Error("SERVFAIL")
-    clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
-    await isProxy(TRAEFIK)
-    await settle()
+    await clock.advance(PROXY_ADDRESS_MAX_AGE_MS)
     expect(await isProxy(TRAEFIK)).toBe(true)
 
     // The failed lookup finished, so the next one can start once the retry time has passed.
     table.traefik = [RECREATED]
-    clock.advance(PROXY_LOOKUP_RETRY_MS)
-    await isProxy(RECREATED)
-    await settle()
+    await clock.advance(PROXY_LOOKUP_RETRY_MS)
     expect(await isProxy(RECREATED)).toBe(true)
     expect(resolver.lookups).toEqual([`traefik`, `traefik`, `traefik`])
   })
