@@ -118,7 +118,10 @@ export interface HealthcheckOptions {
    * Redirects are not followed, so a `3xx` is unhealthy unless it is expected.
    */
   expectedStatus?: number
-  /** Fetcher for the HTTP probe. Defaults to the platform `fetch`. */
+  /**
+   * Fetcher for the HTTP probe. Defaults to the platform `fetch`, which honours
+   * `HTTP_PROXY` and `NO_PROXY`.
+   */
   fetcher?: ProbeFetcher
   /**
    * Deadline for the connect, or for the HTTP answer's headers, in milliseconds. Defaults to
@@ -236,8 +239,10 @@ export async function probeLoopback(options: HealthcheckOptions): Promise<ProbeR
  *
  * The URL is the loopback origin with the path appended, never the path
  * resolved against it, so a path like `//example.com/` stays a path on the
- * loopback host. Redirects are not followed, so the request cannot leave the
- * box. The body is cancelled unread, so the socket is released.
+ * loopback host, and redirects are not followed. The default fetcher is the
+ * platform `fetch`, which honours `HTTP_PROXY` and `NO_PROXY`: with a proxy set,
+ * the request goes to the proxy unless `NO_PROXY` lists `127.0.0.1`, `localhost`
+ * and `::1`. The body is cancelled unread, so the socket is released.
  */
 async function probeHttp(
   options: HealthcheckOptions & {

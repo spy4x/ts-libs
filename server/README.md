@@ -386,6 +386,11 @@ cannot name another host; redirects are not followed; the body is cancelled unre
 deadline aborts the request. `ProbeFetcher` is injected the way `ProbeConnector` is, so the unit
 tier needs no socket.
 
+The default fetcher is the platform `fetch`, which honours `HTTP_PROXY` and `NO_PROXY`. With a proxy
+set in the container's environment, the probe's request goes to the proxy rather than to loopback,
+and its answer decides the result. An operator who sets a proxy must list `127.0.0.1`, `localhost`
+and `::1` in `NO_PROXY`. The TCP probe opens its socket directly and is not affected.
+
 `hostname` must be a `LOOPBACK_HOSTS` entry, so a probe cannot be aimed at a public bind; `timeoutMs`
 must be a non-negative integer; `path` must start with `/`; `expectedStatus` must be an integer in
 100-599; and `HEALTHCHECK_PORT`/`PORT` must be bare decimal digits
