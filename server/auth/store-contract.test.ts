@@ -31,6 +31,12 @@ export function emailKey(
   return { method, subject: email, email, secret: null, provenAt }
 }
 
+/** The store's `releaseKeyEmail`, which every store held to this contract has. */
+function releaseKeyEmail(store: AuthStore, userId: number, keyId: number): Promise<boolean> {
+  if (!store.releaseKeyEmail) throw new TypeError("the store has no releaseKeyEmail")
+  return store.releaseKeyEmail(userId, keyId)
+}
+
 async function expectConflict(promise: Promise<unknown>, reason: string): Promise<void> {
   const error = await promise.then(() => null, (caught: unknown) => caught)
   expect(error).toBeInstanceOf(AuthConflictError)
@@ -197,6 +203,7 @@ export function describeAuthStoreContract(
           expect(await store.listKeys(id)).toEqual([])
           expect(await store.updateKeySecret(id, "hash")).toBe(false)
           expect(await store.deleteKey(id, 1)).toBe(false)
+          expect(await releaseKeyEmail(store, id, 1)).toBe(false)
         }
       }))
 
@@ -619,6 +626,88 @@ export function describeAuthStoreContract(
 
         const bob = await store.createUserWithKey(emailKey("email-code", "ann@example.com", NOW))
         expect(await store.findUserIdByProvenEmail("ann@example.com")).toBe(bob.user.id)
+      }))
+  })
+
+  describe(`${label}: releasing a key's address`, () => {
+    it("takes the address off the key, keeps the key, and releases the address", () =>
+      withStore(async (store) => {
+        const ann = await store.createUserWithKey({
+          method: "oauth:google",
+          subject: "sub-1",
+          email: "ann@example.com",
+          secret: null,
+          provenAt: NOW,
+        })
+
+        expect(await releaseKeyEmail(store, ann.user.id, ann.key.id)).toBe(true)
+
+        const kept = await store.findKey("oauth:google", "sub-1")
+        expect(kept?.id).toBe(ann.key.id)
+        expect(kept?.userId).toBe(ann.user.id)
+        expect(kept?.email).toBeNull()
+        expect(kept?.provenAt).toBeNull()
+        expect(await store.findUserIdByProvenEmail("ann@example.com")).toBeNull()
+      }))
+
+    it("keeps the address owned while another proven key of the user carries it", () =>
+      withStore(async (store) => {
+        const ann = await store.createUserWithKey(emailKey("email-code", "ann@example.com", NOW))
+        const google = await store.addKey(ann.user.id, {
+          method: "oauth:google",
+          subject: "sub-1",
+          email: "ann@example.com",
+          secret: null,
+          provenAt: NOW,
+        })
+
+        expect(await releaseKeyEmail(store, ann.user.id, google.id)).toBe(true)
+        expect(await store.findUserIdByProvenEmail("ann@example.com")).toBe(ann.user.id)
+
+        expect(await store.deleteKey(ann.user.id, ann.key.id)).toBe(true)
+        expect(await store.findUserIdByProvenEmail("ann@example.com")).toBeNull()
+      }))
+
+    it("refuses another user's key and a key that does not exist, and changes nothing", () =>
+      withStore(async (store) => {
+        const ann = await store.createUserWithKey(emailKey("email-code", "ann@example.com", NOW))
+        const bob = await store.createUserWithKey(emailKey("email-code", "bob@example.com", NOW))
+
+        expect(await releaseKeyEmail(store, bob.user.id, ann.key.id)).toBe(false)
+        expect(await releaseKeyEmail(store, ann.user.id, ann.key.id + bob.key.id + 100)).toBe(
+          false,
+        )
+        expect(await store.findKeyById(ann.key.id)).toEqual(ann.key)
+        expect(await store.findUserIdByProvenEmail("ann@example.com")).toBe(ann.user.id)
+      }))
+
+    it("leaves the key in place when the next person proves the released address", () =>
+      withStore(async (store) => {
+        const ann = await store.createUserWithKey({
+          method: "oauth:google",
+          subject: "sub-1",
+          email: "ann@example.com",
+          secret: null,
+          provenAt: NOW,
+        })
+        expect(await releaseKeyEmail(store, ann.user.id, ann.key.id)).toBe(true)
+
+        const next = await store.createUserWithKey(emailKey("email-code", "ann@example.com", NOW))
+
+        expect(await store.findUserIdByProvenEmail("ann@example.com")).toBe(next.user.id)
+        expect((await store.findKeyById(ann.key.id))?.userId).toBe(ann.user.id)
+      }))
+
+    it("takes an unproven address off the key too, so a later proof cannot delete the key", () =>
+      withStore(async (store) => {
+        const ann = await store.createUserWithKey(emailKey("password", "ann@example.com"))
+
+        expect(await releaseKeyEmail(store, ann.user.id, ann.key.id)).toBe(true)
+        await store.createUserWithKey(emailKey("email-code", "ann@example.com", NOW))
+
+        const kept = await store.findKeyById(ann.key.id)
+        expect(kept?.email).toBeNull()
+        expect(kept?.subject).toBe("ann@example.com")
       }))
   })
 

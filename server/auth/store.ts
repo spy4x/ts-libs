@@ -62,6 +62,14 @@ export interface AuthStore {
   /** Deletes exactly this key of this user and nothing else. false when no such key. */
   deleteKey(userId: number, keyId: number): Promise<boolean>
   /**
+   * Takes the address off this key of this user: its `email` and `provenAt` become null, and the
+   * user stops owning the address once none of their keys carries it proven. The key, its id and
+   * its sessions stay, so the person keeps signing in with it. The address is dropped, not left
+   * unproven, because an unproven key carrying it would be deleted by the next person who proves
+   * it. false when no such key. Optional until 2.0: an app's own store or test double may lack it.
+   */
+  releaseKeyEmail?(userId: number, keyId: number): Promise<boolean>
+  /**
    * Stores a new challenge secret (a hash, never the raw code) for (purpose, subject), replacing any
    * earlier secret and expiry. The guess counter is KEPT when a challenge for the same
    * (purpose, subject) exists and has not expired; it starts at 0 only when there was none or the
@@ -90,5 +98,6 @@ export const AUTH_STORE_METHODS: readonly string[] = [
   "issueChallenge",
   "listKeys",
   "proveKey",
+  "releaseKeyEmail",
   "updateKeySecret",
 ]

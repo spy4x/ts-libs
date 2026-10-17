@@ -152,6 +152,19 @@ export class MemoryAuthStore implements AuthStore {
     })
   }
 
+  releaseKeyEmail(userId: number, keyId: number): Promise<boolean> {
+    return settle(() => {
+      const key = isStoreId(keyId) ? this.#keys.get(keyId) : undefined
+      if (!key || key.userId !== userId) return false
+      const released = key.provenAt === null ? null : key.email
+      key.email = null
+      key.provenAt = null
+      key.updatedAt = this.#now()
+      if (released !== null) this.#releaseIfUnproven(userId, released)
+      return true
+    })
+  }
+
   issueChallenge(input: IssueChallengeInput): Promise<void> {
     return settle(() => {
       const { purpose, subject, secretHash, expiresAt, now } = checkIssueChallenge(input)

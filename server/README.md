@@ -687,7 +687,10 @@ the address does not block it. A key that carries a different address or none st
 `AuthConflictError("key-exists")`, and so does one committed while the proven insert runs; that last
 case succeeds when retried. Proving an address another user owns is refused with
 `AuthConflictError("email-owned")`. Deleting a user's last proven key for an address releases the
-address.
+address. `releaseKeyEmail` does the same without deleting the key: it takes the address off the key
+(both `email` and `provenAt` become null), so a provider identity linked before an address change
+keeps signing in, by its `subject`, while the old address stops naming the account. An unproven
+address is dropped too, since the next person to prove it would otherwise delete the key.
 
 **Addresses are compared in one form.** `normalizeEmail` trims and lower-cases, and accepts only
 what `@spy4x/email` will send to. The store refuses a key whose `email` is not already in that form.
