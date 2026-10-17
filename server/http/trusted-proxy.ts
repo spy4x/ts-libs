@@ -110,6 +110,9 @@ const defaultSetTimer = (callback: () => void, ms: number) => {
  *
  * What remains:
  *
+ *  - A known address is trusted without a lookup until the addresses are
+ *    {@link PROXY_ADDRESS_MAX_AGE_MS} old, so a proxy that moves within that time of the last
+ *    lookup leaves its old address trusted for the rest of it, even with DNS healthy.
  *  - A peer that is not among the addresses within {@link PROXY_LOOKUP_RETRY_MS} after a lookup
  *    ended is refused without a new lookup, so a proxy recreated in that second is refused for up
  *    to a second.

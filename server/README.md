@@ -222,7 +222,8 @@ built. This is the HTTP side; the probe a container runs against itself is `serv
 
 `createProxyPeers`, `requireProxyForForwardedHeaders`, `FORWARDED_HEADERS` (re-exported from
 `@spy4x/platform/rate-limit/client-ip`), `PROXY_ADDRESS_MAX_AGE_MS`, `PROXY_LOOKUP_RETRY_MS`,
-`PROXY_LOOKUP_DEADLINE_MS`, `PROXY_ADDRESS_HARD_MAX_AGE_MS`, and the types `IsProxyPeer`, `ProxyPeersOptions` and `RequireProxyOptions`.
+`PROXY_LOOKUP_DEADLINE_MS`, `PROXY_ADDRESS_HARD_MAX_AGE_MS`, and the types `IsProxyPeer`,
+`ProxyPeersOptions` and `RequireProxyOptions`.
 
 A reverse proxy names the client in `X-Real-IP`, `X-Forwarded-For` or `CF-Connecting-IP`. Any other
 peer that reaches the app directly, such as a neighbour container on a shared Docker network, can
@@ -245,12 +246,15 @@ them unless the last lookup ended under a second ago. It waits for that lookup, 
 (`PROXY_LOOKUP_DEADLINE_MS`), and concurrent requests share one. So a moved proxy's old address is
 refused, and its new one trusted, by the first request that needs a lookup.
 
-What remains: a proxy recreated within a second of the last lookup is refused for up to that
-second. When a lookup fails (an error, or no answer within 1 s), the request is answered from the
-last good addresses, but only while they are under 10 minutes old (`PROXY_ADDRESS_HARD_MAX_AGE_MS`,
-counted from the last successful lookup); past that the name trusts nothing until a lookup
-succeeds. So while DNS is down, a moved proxy's old address stays trusted for at most 10 minutes.
-A failure is reported to `onError`. Tests pass `now` and `setTimer` to drive the clock by hand.
+What remains: a known address is trusted without a lookup until the addresses are 10 s old
+(`PROXY_ADDRESS_MAX_AGE_MS`), so a proxy that moves within 10 s of the last lookup leaves its old
+address trusted for the rest of those 10 s, even with DNS healthy. A proxy recreated within a second
+of the last lookup is refused for up to that second. When a lookup fails (an error, or no answer
+within 1 s), the request is answered from the last good addresses, but only while they are under 10
+minutes old (`PROXY_ADDRESS_HARD_MAX_AGE_MS`, counted from the last successful lookup); past that
+the name trusts nothing until a lookup succeeds. So while DNS is down, a moved proxy's old address
+stays trusted for at most 10 minutes. A failure is reported to `onError`. Tests pass `now` and
+`setTimer` to drive the clock by hand.
 
 ## `server/http/same-origin`
 
