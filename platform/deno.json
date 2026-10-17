@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/platform",
-  "version": "1.77.0",
+  "version": "1.78.0",
   "exports": {
     ".": "./universal.ts",
     "./api": "./api/mod.ts",
