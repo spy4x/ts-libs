@@ -19,7 +19,10 @@ import { probeLoopback } from "./healthcheck.ts"
 function startServer(): { port: number; close: () => Promise<void> } {
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0, onListen: () => {} },
-    () => new Response("ok"),
+    (request) =>
+      new URL(request.url).pathname === "/down"
+        ? new Response("database down", { status: 503 })
+        : new Response("ok"),
   )
   const addr = server.addr
   const port = "port" in addr ? addr.port : 0
@@ -34,6 +37,38 @@ describe("probeLoopback against a real socket", () => {
     } finally {
       await server.close()
     }
+  })
+
+  it("reports a real server's 200 on the probed path as healthy", async () => {
+    const server = startServer()
+    try {
+      assertEquals(await probeLoopback({ port: server.port, path: "/up" }), { healthy: true })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("reports a real server's 503 on the probed path as unexpected_status", async () => {
+    const server = startServer()
+    try {
+      assertEquals(await probeLoopback({ port: server.port, path: "/down" }), {
+        healthy: false,
+        reason: "unexpected_status",
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("reports request_failed for an HTTP probe of a port nothing is listening on", async () => {
+    const server = startServer()
+    const port = server.port
+    await server.close()
+
+    assertEquals(await probeLoopback({ port, path: "/up" }), {
+      healthy: false,
+      reason: "request_failed",
+    })
   })
 
   it("reports connect_failed for a port nothing is listening on", async () => {
