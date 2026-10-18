@@ -5,8 +5,7 @@ for scope, `CONTRIBUTING.md` for the repository rules and maintenance, and `LICE
 (MIT, © 2026 Anton Shubin). The global agent instructions own Git Flow, worktrees, review and
 cleanup; this file adds constraints and overrides them where they conflict.
 
-This repo is a Deno workspace. Every package is built by a different agent in its own PR, owning
-exactly one top-level directory.
+This repo is a Deno workspace: one package per top-level directory.
 
 ## Package layout
 
