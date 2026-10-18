@@ -1,7 +1,7 @@
 /**
  * `@spy4x/realtime` — transport mechanics for a hint-only realtime connection.
  *
- * The contract, from ADR 002 (`spy4x/template`, `docs/decisions/002-realtime-transport-and-sync.md`)
+ * The contract, from ADR 002 (`spy4x/seed`, `docs/decisions/002-realtime-transport-and-sync.md`)
  * and restated in `README.md` as an invariant:
  *
  * - **Requests over the socket are envelopes only.** The socket carries liveness, a sync handshake,

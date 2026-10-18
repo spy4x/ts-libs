@@ -418,7 +418,7 @@ its own error; a missing scope value is a `TypeError`, a bug in the caller rathe
 The codec takes the master secret (usually the session-cookie secret) and signs with
 `deriveCursorSecret(secret, purpose)`, which is `deriveSecret` from `./tokens` under the label
 `spy4x.keyset-cursor.v1:<purpose>`, so each list has its own key and none is the raw master. Ported
-from spy4x/template's group-list and note-list cursors (#314).
+from spy4x/seed's group-list and note-list cursors (#314).
 
 ### `./model`, `./api`, `./request-info` — the shared API, model and push types
 

@@ -1,7 +1,7 @@
 /**
  * Keyset pagination cursor: an opaque, signed page key bound to the scope it was issued for.
  *
- * Ported from spy4x/template's `libs/server/groups/group-list-cursor.ts` and
+ * Ported from spy4x/seed's `libs/server/groups/group-list-cursor.ts` and
  * `libs/server/notes/note-list-cursor.ts`, which were near-copies (#314). A cursor is a
  * {@link createSignedPayloadCodec} token under the cursor's purpose, so this module only adds what a
  * list endpoint needs on top of it: a default `{ updatedAt, id }` page key, scope fields bound as the

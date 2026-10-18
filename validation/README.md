@@ -53,7 +53,7 @@ and the reverse import would be a cycle that fails `deno publish`. `@spy4x/platf
 re-exports the same enum next to the transport errors (`ConnectionError`, `ServerError`,
 `PayloadError`) and their helpers (`connectionError`, `responseError`, `isSilentError`).
 
-This is the shape `spy4x/template` already uses (namespace `libs/platform/types`), extended with the
+This is the shape `spy4x/seed` already uses (namespace `libs/platform/types`), extended with the
 `type`, `message` and `errors` the component library's store reports. One shape means
 `platform/helpers` (#10) does not ship a fourth variant.
 

@@ -19,7 +19,7 @@ Runs on: both halves: `./registry` and `./notify` on the server, `./client` in t
 
 ## The contract
 
-The governing record is ADR 002 in `spy4x/template`
+The governing record is ADR 002 in `spy4x/seed`
 (`docs/decisions/002-realtime-transport-and-sync.md`). Three rules, and
 everything below follows from them. Where the ADR's wording is quoted, the file
 and line are given, so a reader can check the citation rather than the summary.
@@ -251,7 +251,7 @@ The registry options `maxInFlightRequests`, `requestTimeoutMs` and
 
 An app lists what it can do once, in one table, and two adapters serve it: the socket and plain
 HTTP. A command is then reachable with or without a socket, and the two ways in cannot drift
-([ADR 003](https://github.com/spy4x/template/blob/main/docs/decisions/003-swappable-transport-and-local-data.md)).
+([ADR 003](https://github.com/spy4x/seed/blob/main/docs/decisions/003-swappable-transport-and-local-data.md)).
 
 ```ts
 import {

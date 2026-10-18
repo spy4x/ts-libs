@@ -2,7 +2,7 @@
 
 Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracted from
 `mig/lib/ratelimit.ts`, `gb/apps/api/{services,middlewares}/rateLimiter.ts` and
-`caldav-mcp/main.ts`, and it closes a live gap: `template`'s auth routes ship with both
+`caldav-mcp/main.ts`, and it closes a live gap: `seed`'s auth routes ship with both
 `.use(rateLimiter)` calls commented out and no implementation anywhere in that repo.
 
 ## Modules

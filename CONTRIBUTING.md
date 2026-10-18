@@ -37,7 +37,7 @@ These repositories import `@spy4x/*` from JSR. None shares a workspace with this
 an exact version in its own manifest, so read the version there.
 
 - `spy4x/preact-components` — the Preact layer. Imports `platform`, `time` and `validation`.
-- `spy4x/template` — the SaaS app template. Imports `billing`, `email`, `integrations`, `net`,
+- `spy4x/seed` — the SaaS app template. Imports `billing`, `email`, `integrations`, `net`,
   `platform`, `realtime`, `server` and `validation`, and runs the `server` env-age64 CLI for its
   `env:*` tasks.
 - `spy4x/antonshubin.com` — imports `email`, `integrations`, `net`, `platform`, `server` and

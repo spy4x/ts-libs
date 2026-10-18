@@ -259,7 +259,7 @@ export class CryptoService implements SecretCipher {
 
   /**
    * Decrypts standard base64 of `[IV (12 bytes)][ciphertext + tag]` produced by
-   * {@link CryptoService.encrypt} or by `template`'s module. A blob that is not
+   * {@link CryptoService.encrypt} or by `seed`'s module. A blob that is not
    * decodable base64, or is shorter than `IV_LENGTH`, is
    * {@link CryptoErrorCode.MalformedCiphertext}; a GCM tag mismatch (a wrong key
    * included) is {@link CryptoErrorCode.DecryptionFailed}. The raw `TypeError`,

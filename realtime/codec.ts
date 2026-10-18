@@ -2,7 +2,7 @@
  * Wire protocol for a hint-only socket.
  *
  * Originally (ADR 001) the socket was a hint lane and nothing here could mutate anything. ADR 002
- * (both ADRs are spy4x/template's, `docs/decisions/001-*.md` and `002-realtime-transport-and-sync.md`)
+ * (both ADRs are spy4x/seed's, `docs/decisions/001-*.md` and `002-realtime-transport-and-sync.md`)
  * moves every non-auth call onto the socket, so the protocol now carries request and response
  * frames. It still does not dispatch, validate a payload or authorize: the envelope is the
  * library's, the meaning of `name` and `payload` is the host's.

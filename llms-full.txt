@@ -2585,7 +2585,7 @@ its own error; a missing scope value is a `TypeError`, a bug in the caller rathe
 The codec takes the master secret (usually the session-cookie secret) and signs with
 `deriveCursorSecret(secret, purpose)`, which is `deriveSecret` from `./tokens` under the label
 `spy4x.keyset-cursor.v1:<purpose>`, so each list has its own key and none is the raw master. Ported
-from spy4x/template's group-list and note-list cursors (#314).
+from spy4x/seed's group-list and note-list cursors (#314).
 
 ### `./model`, `./api`, `./request-info` — the shared API, model and push types
 
@@ -2793,7 +2793,7 @@ else here knows about tasks.
 
 Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracted from
 `mig/lib/ratelimit.ts`, `gb/apps/api/{services,middlewares}/rateLimiter.ts` and
-`caldav-mcp/main.ts`, and it closes a live gap: `template`'s auth routes ship with both
+`caldav-mcp/main.ts`, and it closes a live gap: `seed`'s auth routes ship with both
 `.use(rateLimiter)` calls commented out and no implementation anywhere in that repo.
 
 ## Modules
@@ -3157,7 +3157,7 @@ Runs on: both halves: `./registry` and `./notify` on the server, `./client` in t
 
 ## The contract
 
-The governing record is ADR 002 in `spy4x/template`
+The governing record is ADR 002 in `spy4x/seed`
 (`docs/decisions/002-realtime-transport-and-sync.md`). Three rules, and
 everything below follows from them. Where the ADR's wording is quoted, the file
 and line are given, so a reader can check the citation rather than the summary.
@@ -3389,7 +3389,7 @@ The registry options `maxInFlightRequests`, `requestTimeoutMs` and
 
 An app lists what it can do once, in one table, and two adapters serve it: the socket and plain
 HTTP. A command is then reachable with or without a socket, and the two ways in cannot drift
-([ADR 003](https://github.com/spy4x/template/blob/main/docs/decisions/003-swappable-transport-and-local-data.md)).
+([ADR 003](https://github.com/spy4x/seed/blob/main/docs/decisions/003-swappable-transport-and-local-data.md)).
 
 ```ts
 import {
@@ -6497,7 +6497,7 @@ a value the lost first send already deleted.
 
 Net effect for a caller: a Redis restart costs no call at all when Redis is back by the time the
 resend reconnects, and otherwise only the calls made while Redis is actually down; a frozen Redis
-costs each affected call at most one command bound. This is what let `spy4x/template`'s
+costs each affected call at most one command bound. This is what let `spy4x/seed`'s
 `crashOnConnectionLoss` adapter be replaced by ordinary per-request error handling.
 
 Pinned by `redis-kv-store.test.ts` (fakes, no real Redis) and by
@@ -6798,7 +6798,7 @@ above zero, or the constructor throws a `RangeError`.
 
 `createLockout`, `lockDelayMs`, `beginCheck`, `resolveLockoutPolicy`, `DEFAULT_LOCKOUT_POLICY`,
 `MAX_LOCK_LIMIT_MS` and the `LockoutStore` port; `createPostgresLockoutStore` in
-`server/lockout/postgres`; `MemoryLockoutStore` in `server/lockout/memory-store`. Ported from spy4x/template `apps/api/services/totp-failures.ts` (#315).
+`server/lockout/postgres`; `MemoryLockoutStore` in `server/lockout/memory-store`. Ported from spy4x/seed `apps/api/services/totp-failures.ts` (#315).
 
 An escalating lockout for any secret a person can guess: a one-time code, an e-mail code, a PIN, a
 recovery code. Counters are kept per subject, a key the caller chooses (a user id, an address), in a
@@ -8292,7 +8292,7 @@ and the reverse import would be a cycle that fails `deno publish`. `@spy4x/platf
 re-exports the same enum next to the transport errors (`ConnectionError`, `ServerError`,
 `PayloadError`) and their helpers (`connectionError`, `responseError`, `isSilentError`).
 
-This is the shape `spy4x/template` already uses (namespace `libs/platform/types`), extended with the
+This is the shape `spy4x/seed` already uses (namespace `libs/platform/types`), extended with the
 `type`, `message` and `errors` the component library's store reports. One shape means
 `platform/helpers` (#10) does not ship a fourth variant.
 
