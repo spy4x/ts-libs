@@ -862,7 +862,7 @@ describe("createPasswordSignIn: options", () => {
 /** Longest username {@link normalizeUsername} accepts, in code points. */
 const USERNAME_MAX_LENGTH = 50
 
-/** A username normaliser like spy4x/template's: trimmed, lower-cased, 1 to 50 code points. */
+/** A username normaliser like spy4x/seed's: trimmed, lower-cased, 1 to 50 code points. */
 function normalizeUsername(raw: unknown): string | null {
   if (typeof raw !== "string") return null
   const username = raw.trim().toLowerCase()

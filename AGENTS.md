@@ -83,7 +83,7 @@ before the export goes.
 ## Extraction rules
 
 - **Source repos are read-only.** Never edit `offer-lens`, `roley`, `rostok`, `mig`, `caldav-mcp`,
-  `template`, `preact-components` or any other repo you port from. They are design-intent sources.
+  `seed`, `preact-components` or any other repo you port from. They are design-intent sources.
 - **Bugs are fixed here, at extraction time.** A bug found in a source repo is fixed in this repo,
   in the ported code, and named in the PR body (file, symptom, fix).
 - **No module is published while it still carries a known bug.** If a security or correctness fix

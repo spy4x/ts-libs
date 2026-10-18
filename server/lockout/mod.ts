@@ -4,7 +4,7 @@
  * shared by every server instance; past a free budget, each wrong guess locks the subject for
  * longer.
  *
- * Ported from spy4x/template `apps/api/services/totp-failures.ts` (#315). The policy and the flow
+ * Ported from spy4x/seed `apps/api/services/totp-failures.ts` (#315). The policy and the flow
  * are the template's; the table and its columns are now the caller's, behind {@link LockoutStore}.
  *
  * How a check goes: {@link Lockout.begin} runs first and counts the check as a failure in advance;

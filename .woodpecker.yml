@@ -1,4 +1,4 @@
-# Woodpecker CI (self-hosted, same instance as spy4x/template and spy4x/preact-components).
+# Woodpecker CI (self-hosted, same instance as spy4x/seed and spy4x/preact-components).
 #
 # The `when` guard is explicit on purpose. The sibling repo `preact-components`
 # shipped `deno task check` with no guard, so the pipeline ran on every event the

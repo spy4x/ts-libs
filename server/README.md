@@ -2269,7 +2269,7 @@ a value the lost first send already deleted.
 
 Net effect for a caller: a Redis restart costs no call at all when Redis is back by the time the
 resend reconnects, and otherwise only the calls made while Redis is actually down; a frozen Redis
-costs each affected call at most one command bound. This is what let `spy4x/template`'s
+costs each affected call at most one command bound. This is what let `spy4x/seed`'s
 `crashOnConnectionLoss` adapter be replaced by ordinary per-request error handling.
 
 Pinned by `redis-kv-store.test.ts` (fakes, no real Redis) and by
@@ -2570,7 +2570,7 @@ above zero, or the constructor throws a `RangeError`.
 
 `createLockout`, `lockDelayMs`, `beginCheck`, `resolveLockoutPolicy`, `DEFAULT_LOCKOUT_POLICY`,
 `MAX_LOCK_LIMIT_MS` and the `LockoutStore` port; `createPostgresLockoutStore` in
-`server/lockout/postgres`; `MemoryLockoutStore` in `server/lockout/memory-store`. Ported from spy4x/template `apps/api/services/totp-failures.ts` (#315).
+`server/lockout/postgres`; `MemoryLockoutStore` in `server/lockout/memory-store`. Ported from spy4x/seed `apps/api/services/totp-failures.ts` (#315).
 
 An escalating lockout for any secret a person can guess: a one-time code, an e-mail code, a PIN, a
 recovery code. Counters are kept per subject, a key the caller chooses (a user id, an address), in a
