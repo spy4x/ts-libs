@@ -542,20 +542,40 @@ describe("createPasswordSignIn: requestReset and completeReset", () => {
     expect(error.reason).toBe("invalid-code")
   })
 
-  it("refuses the right code after the configured number of wrong guesses", async () => {
-    const { provider } = setup({ maxResetAttempts: 3 })
+  it("lets the person's fresh code work after a stranger's request and wrong guesses", async () => {
+    // Five wrong guesses: the default guess limit, which locked the address's challenge before.
+    const { provider, clock } = setup()
     await provider.signUp({ email: ANN, password: "correct horse" })
-    const { code } = await provider.requestReset({ email: ANN })
-    for (let i = 0; i < 3; i++) {
+    await provider.requestReset({ email: ANN })
+    for (let i = 0; i < 5; i++) {
       const wrong = await refusal(
-        provider.completeReset({ email: ANN, code: "guess", newPassword: "battery staple" }),
+        provider.completeReset({ email: ANN, code: `guess-${i}`, newPassword: "battery staple" }),
       )
       expect(wrong.reason).toBe("invalid-code")
     }
-    const locked = await refusal(
+    clock.advance(20 * MINUTE)
+    const { code } = await provider.requestReset({ email: ANN })
+    await provider.completeReset({ email: ANN, code, newPassword: "battery staple" })
+    await provider.signIn({ email: ANN, password: "battery staple" })
+  })
+
+  it("keeps the person's code working when a stranger asks for another one", async () => {
+    const { provider } = setup()
+    await provider.signUp({ email: ANN, password: "correct horse" })
+    const { code } = await provider.requestReset({ email: ANN })
+    await provider.requestReset({ email: ANN })
+    await provider.completeReset({ email: ANN, code, newPassword: "battery staple" })
+    await provider.signIn({ email: ANN, password: "battery staple" })
+  })
+
+  it("refuses a reset code issued for another address", async () => {
+    const { provider } = setup()
+    await provider.signUp({ email: ANN, password: "correct horse" })
+    const { code } = await provider.requestReset({ email: "bob@example.com" })
+    const error = await refusal(
       provider.completeReset({ email: ANN, code, newPassword: "battery staple" }),
     )
-    expect(locked.reason).toBe("locked-out")
+    expect(error.reason).toBe("invalid-code")
     await provider.signIn({ email: ANN, password: "correct horse" })
   })
 

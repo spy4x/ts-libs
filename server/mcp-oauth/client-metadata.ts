@@ -37,6 +37,11 @@ export interface ClientMetadataFetcherOptions {
   trustedHosts?: readonly string[]
   /** How long a fetched document is reused, in milliseconds. Defaults to 10 minutes. */
   cacheMs?: number
+  /**
+   * Most documents kept in the cache, a positive integer. Defaults to 1 000, about 5 MB. When a new
+   * document would pass the cap, expired entries go first, then the oldest.
+   */
+  maxEntries?: number
   /** Largest document accepted, in bytes. Defaults to 5 KiB, the draft's suggested ceiling. */
   maxBytes?: number
   /** Budget for the whole fetch, body included, in milliseconds. Defaults to 5 seconds. */
@@ -50,6 +55,7 @@ export interface ClientMetadataFetcherOptions {
 }
 
 const DEFAULT_CACHE_MS = 10 * 60_000
+const DEFAULT_MAX_ENTRIES = 1_000
 const DEFAULT_MAX_BYTES = 5 * 1024
 const DEFAULT_TIMEOUT_MS = 5_000
 /** Longest `client_name` shown, in characters. */
@@ -98,7 +104,10 @@ export function isClientIdUrl(value: string): boolean {
  * guard, follows no redirect, reads at most `maxBytes`, and accepts the document only when it is
  * valid JSON whose `client_id` equals its URL, lists at least one redirect URI, and declares no
  * token endpoint authentication other than `none` (this server has public clients only). A good
- * document is cached for `cacheMs`; a refusal is not cached.
+ * document is cached for `cacheMs`; a refusal is not cached. The cache holds at most
+ * `maxEntries` documents, so a caller naming endless `client_id` URLs cannot grow it without bound.
+ *
+ * @throws {RangeError} When `maxEntries` is not a positive integer.
  */
 export function createClientMetadataFetcher(
   options: ClientMetadataFetcherOptions = {},
@@ -106,7 +115,23 @@ export function createClientMetadataFetcher(
   const cacheMs = options.cacheMs ?? DEFAULT_CACHE_MS
   const clock = options.clock ?? systemClock
   const trusted = options.trustedHosts && new Set(options.trustedHosts.map((h) => h.toLowerCase()))
+  const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
+    throw new RangeError("maxEntries must be a positive integer")
+  }
   const cache = new Map<string, { metadata: ClientMetadata; until: number }>()
+
+  /** Store a document, first dropping expired entries, then the oldest while the cache is full. */
+  function remember(clientId: string, metadata: ClientMetadata, now: number): void {
+    for (const [id, entry] of cache) {
+      if (entry.until <= now) cache.delete(id)
+    }
+    for (const id of cache.keys()) {
+      if (cache.size < maxEntries) break
+      cache.delete(id)
+    }
+    cache.set(clientId, { metadata, until: now + cacheMs })
+  }
 
   async function fetchDocument(clientId: string): Promise<ClientMetadata | undefined> {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
@@ -174,7 +199,7 @@ export function createClientMetadataFetcher(
         return undefined
       }
       if (metadata !== undefined && cacheMs > 0) {
-        cache.set(clientId, { metadata, until: now + cacheMs })
+        remember(clientId, metadata, now)
       }
       return metadata
     },
