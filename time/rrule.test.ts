@@ -831,8 +831,8 @@ Deno.test(`time/rrule and its local imports use web-platform APIs only`, async (
   }
   assertEquals(
     seen.size,
-    7,
-    `rrule.ts, ical.ts, ical-timezone.ts, windows-zones.ts, ics-core.ts, tz.ts and date.ts`,
+    8,
+    `rrule.ts, ical.ts, ical-timezone.ts, windows-zones.ts, ics-core.ts, tz.ts, formatter-cache.ts and date.ts`,
   )
 })
 
