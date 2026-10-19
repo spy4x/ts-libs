@@ -5,9 +5,9 @@
  *
  * - {@link cachedRead} asks the server, keeps the answer and returns it as fresh. When the server
  *   is unreachable (`ConnectionLostError`, a `RequestTimeoutError`, or the `TypeError` a failed
- *   `fetch` rejects with) it returns the copy instead, or throws the connection error when there is none. Any other error,
- *   `unauthorized` and `forbidden` included, is thrown and leaves the copy alone: a refused read
- *   never replaces the copy and never returns it.
+ *   `fetch` rejects with) it returns the copy instead, or throws the connection error when there
+ *   is none. Any other error, `unauthorized` and `forbidden` included, is thrown and leaves the
+ *   copy alone: a refused read never replaces the copy and never returns it.
  * - {@link readCopy} returns the copy alone, at once, so a screen paints before the server answers.
  * - With no cache (`undefined`) {@link cachedRead} only calls `read`: one code path for a store
  *   whether the app has local data or not, and nothing is written to IndexedDB.
