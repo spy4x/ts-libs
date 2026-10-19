@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
-import { type } from "arktype"
+import { type ArkErrors, type } from "arktype"
 
 import type { ApiResult } from "./api.ts"
 import { updatedAtIdPageKey } from "../keyset-cursor.ts"
@@ -24,6 +24,23 @@ const refused = (status: number, code?: string): ApiResult<unknown> => ({
   error: { status, message: "no", ...(code ? { code } : {}) },
 })
 const down = () => new TypeError("Failed to fetch")
+
+/**
+ * A rejection shaped like arktype's but built by no arktype copy, so `instanceof type.errors`
+ * fails on it: what a schema from a second, differently loaded arktype returns.
+ */
+function foreignArkErrors(message: string): ArkErrors {
+  const issue = { code: "predicate", path: [], problem: message, message }
+  const errors = Object.assign([issue], {
+    summary: message,
+    flatByPath: { "": [issue] },
+    throw: () => {
+      throw new Error(message)
+    },
+  })
+  if (errors instanceof type.errors) throw new Error("the fake must not be a real ArkErrors")
+  return errors as unknown as ArkErrors
+}
 
 describe("createOfflineFetch", () => {
   it("reports offline and sets the flag when the request gets no answer", async () => {
@@ -90,6 +107,23 @@ describe("createOfflineFetch", () => {
       offline: false,
     })
     expect(api.requestFailed).toBe(false)
+  })
+
+  it("answers a rejection from another arktype copy as an error result, not as data", async () => {
+    const api = createOfflineFetch({ send: script(ok({ id: "three" })) })
+
+    const result = await api.fetch("/api/x", {}, () => foreignArkErrors("id must be a number"))
+
+    expect(result).toEqual({
+      ok: false,
+      status: 200,
+      error: {
+        status: 200,
+        message: "The server sent an unusable reply",
+        code: INVALID_REPLY_CODE,
+      },
+      offline: false,
+    })
   })
 
   it("calls subscribers on change only, and not after unsubscribing", async () => {
