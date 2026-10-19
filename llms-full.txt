@@ -5041,7 +5041,7 @@ verification step (#149): `requestVerification({ userId })` returns a code for t
 key's address, and `completeVerification({ userId, code })` checks it and proves the key with
 `AuthStore.proveKey`. The user keeps their id, password and sessions, and becomes the address's
 owner. Take `userId` from a validated session. The code is bound to that user and that address, is
-never a reset code, and uses the reset code's lifetime and guess limit. `requestVerification`
+never a reset code, and uses the reset code's lifetime and the `maxResetAttempts` guess limit. `requestVerification`
 returns null when the key is already proven. The email-code provider's `requestCode` and
 `proveAddress` (see `server/auth/email-code`) prove the address the same way.
 
@@ -5098,7 +5098,10 @@ signed-in devices (see `server/sign-in`).
 
 **A reset hands the address to whoever receives the code.** `requestReset` issues a code for every
 valid address, whether or not an account uses it, and returns it for the app to deliver: 32 random
-bytes, of which only the SHA-256 is stored, valid 30 minutes and for 5 guesses by default.
+bytes, of which only the SHA-256 is stored, valid 30 minutes by default. Every request opens a
+challenge of its own, keyed by a digest of the address and the code, and leaves earlier codes as they
+were, so a stranger who asks for codes for someone's address, or guesses wrong, can neither replace
+nor lock the code that person received.
 `completeReset` checks the new password before it spends a guess, then, on a matching code, takes
 one of three branches:
 
@@ -5117,8 +5120,8 @@ used by then, so the person asks for a new one.
 ### What it does not do
 
 - **It does not send mail.** `requestReset` returns the code; the app sends it.
-- **It does not limit guesses per account or per client.** A reset code allows its own few guesses,
-  but nothing limits how often codes are asked for or passwords tried. Put
+- **It does not limit guesses per account or per client.** A verification code allows its own few
+  guesses and a reset code cannot be guessed, but nothing limits how often codes are asked for or passwords tried. Put
   `@spy4x/platform/rate-limit` in front of every route that calls this provider.
 - **It does not hide an address in use at sign-up.** `email-taken` tells the caller; a reset is the
   way in for the address's owner.

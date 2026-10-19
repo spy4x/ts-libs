@@ -58,7 +58,7 @@ export const DEFAULT_MIN_PASSWORD_LENGTH = 8
 /** How long a reset code lives by default, in minutes. */
 export const DEFAULT_RESET_TTL_MINUTES = 30
 
-/** Guesses allowed per reset code by default. */
+/** Guesses allowed per verification code by default. */
 export const DEFAULT_MAX_RESET_ATTEMPTS = 5
 
 /** Random bytes in a reset code: 256 bits, 43 base64url characters. */
@@ -123,7 +123,11 @@ export interface PasswordSignInOptions extends ProviderDeps {
   minPasswordLength?: number
   /** Minutes a reset code lives, 1 to 1440. Defaults to {@link DEFAULT_RESET_TTL_MINUTES}. */
   resetTtlMinutes?: number
-  /** Guesses per reset code, a positive integer. Defaults to {@link DEFAULT_MAX_RESET_ATTEMPTS}. */
+  /**
+   * Guesses per verification code, a positive integer. Defaults to
+   * {@link DEFAULT_MAX_RESET_ATTEMPTS}. A reset code needs no guess limit: each one has a challenge
+   * of its own, which a wrong code never reaches.
+   */
   maxResetAttempts?: number
   /**
    * Turns the raw `email` field of {@link PasswordCredentials} into the key's subject, or returns
@@ -300,12 +304,16 @@ export interface PasswordSignIn {
    * Issues a reset code for the address, whether or not an account uses it, so the answer tells
    * nothing about existence. The app delivers the code and should rate-limit this call.
    *
+   * Every call opens a challenge of its own and leaves earlier codes as they were: each code works
+   * once, until it expires. So a stranger who asks for a code for someone else's address, then
+   * guesses, neither replaces nor locks the code that person received.
+   *
    * @throws {PasswordSignInError} `invalid-email`.
    * @throws {Error} When {@link PasswordSignInOptions.normalizeSubject} is set.
    */
   requestReset(input: { email: string }): Promise<IssuedReset>
   /**
-   * Checks the reset code (guess-counted by the store), sets the new password, proves the address,
+   * Checks the reset code, sets the new password, proves the address,
    * creates a new session, then signs out every other session of the user.
    *
    * When the password key was unproven and belonged to someone who is not the address's owner, that
@@ -317,8 +325,8 @@ export interface PasswordSignIn {
    * {@link PasswordSignIn.completeVerification}, or with `proveAddress` of the email-code provider
    * (`@spy4x/server/auth/email-code`).
    *
-   * @throws {PasswordSignInError} `invalid-email`, `invalid-password`, `invalid-code`, `locked-out`,
-   *     `no-account`, `conflict`.
+   * @throws {PasswordSignInError} `invalid-email`, `invalid-password`, `invalid-code`, `no-account`,
+   *     `conflict`.
    * @throws {Error} When {@link PasswordSignInOptions.normalizeSubject} is set.
    */
   completeReset(input: CompleteResetInput): Promise<SignInResult>
@@ -592,7 +600,7 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
       const expiresAt = new Date(issuedAt.getTime() + ttlMs)
       await store.issueChallenge({
         purpose: PASSWORD_RESET_PURPOSE,
-        subject: email,
+        subject: await resetSubject(email, code),
         secretHash: await sha256Hex(code),
         expiresAt,
         now: issuedAt,
@@ -611,7 +619,7 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
       const at = now()
       const outcome = await store.attemptChallenge({
         purpose: PASSWORD_RESET_PURPOSE,
-        subject: email,
+        subject: await resetSubject(email, code),
         secretHash: await sha256Hex(code),
         maxAttempts,
         now: at,
@@ -695,6 +703,18 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
       }
     },
   }
+}
+
+/**
+ * The challenge subject of a reset code: a digest of the address and the code. Every
+ * `requestReset` opens a challenge of its own, so a stranger who asks for codes or guesses wrong
+ * never replaces, counts against or locks the code the person received. A wrong code reaches no
+ * challenge at all, and a 256-bit code cannot be guessed, so no guess counter is needed. 64 hex
+ * characters, so it never equals an address, the subject of a reset challenge stored before this
+ * scheme; such a row is never matched again and simply expires.
+ */
+function resetSubject(email: string, code: string): Promise<string> {
+  return sha256Hex(`${PASSWORD_RESET_PURPOSE}\nsubject\n${email}\n${code}`)
 }
 
 function positiveInteger(value: number, name: string, max: number): number {
