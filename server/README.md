@@ -2933,6 +2933,11 @@ Claude apps) and `https://claude.ai/oauth/claude-code-client-metadata` (Claude C
 host covers all of them. The default stays open because narrowing it would break every app that
 serves another client today.
 
+**The metadata cache is capped.** A fetched document is reused for `cacheMs` (10 minutes). The cache
+keeps at most `maxEntries` documents (default 1 000, about 5 MB): storing one first drops expired
+entries, then the oldest while the cache is full, so a caller naming endless `client_id` URLs cannot
+grow it.
+
 **Pending consents are capped.** Each `GET /authorize` stores a pending consent of up to about
 5 KB for 10 minutes, for anyone who calls it. `MemoryOAuthStore` keeps at most `maxPending` of them
 (default 1 000, about 5 MB) and drops the oldest when a new one would pass the cap; the owner then
