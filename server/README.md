@@ -292,6 +292,12 @@ product. Matching is exact on the serialised origin, and the value must round-tr
 check. `createCorsOriginResolver` throws on an empty allowlist rather than returning a resolver that
 accepts everything.
 
+Nothing outside the allowlist passes by default. A Chrome extension is allowed only by listing its
+exact `chrome-extension://<id>` origin. Plain-http loopback origins pass only for the hosts given as
+`devHosts`, which defaults to none: pass `DEV_ORIGIN_HOSTS` in a development build, never in
+production, where any page served from a port on the visitor's machine would pass. `CORS_ALLOW_HEADERS`
+is `Content-Type` and `Authorization`; an app that reads another request header adds it itself.
+
 ## `server/http/bearer-auth`
 
 `bearerTokenFromHeaders`, `bearerTokenFromEnv`, `constantTimeEquals`, `createTokenVerifier`,
