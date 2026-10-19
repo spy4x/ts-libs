@@ -545,10 +545,9 @@ fixed `Date` in tests.
 
 `time/ics-core.ts` holds the byte-level RFC 5545 primitives: 75-octet folding, unfolding, TEXT
 escaping, RFC 6868 parameter escaping, control-character stripping and the UTC DATE-TIME format.
-`time/ics.ts` builds VCALENDAR/VEVENT on top of it. The split originally let the removed `caldav/`
-package (#13) import the same module instead of carrying a third copy; `caldav/` is gone (#63), but
-`time/ics.ts` still needs the split, so `ics-core.ts` stays. `caldav-mcp`'s `ical.ts` — a separate
-repo, not part of this library — slices folded lines by character (`ical.ts:10-19`), which splits
+`time/ics.ts` builds VCALENDAR/VEVENT on top of it, and the `caldav/` package imports the same
+module instead of carrying a copy of its own. `caldav-mcp`'s `ical.ts` — a separate repo, not part
+of this library — slices folded lines by character (`ical.ts:10-19`), which splits
 multi-byte UTF-8; `ics-core.ts` does not.
 
 ### Folding

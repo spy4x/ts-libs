@@ -371,7 +371,10 @@ export function isLocalHostname(host: string): boolean {
   return false
 }
 
-/** True if `addr` (with or without surrounding brackets) is a globally routable IPv6. */
+/**
+ * True if `addr` is a globally routable IPv4 or IPv6 address. An IPv6 address may come with or
+ * without surrounding brackets.
+ */
 export function isPublicAddress(addr: string): boolean {
   if (!addr) return false
   let bare = addr

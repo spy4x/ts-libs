@@ -55,7 +55,7 @@ Deno.serve(async (request) => {
 | [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker                         | server                 |
 | [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync            | both halves            |
 | [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter                 | server                 |
-| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | WebDAV multistatus reader, escaped request bodies, href and origin rules              | shared                 |
+| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | CalDAV client, sync engine and write transport, WebDAV multistatus reader, URL rules  | shared                 |
 | [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks)               | the to-do model of the CalDAV task apps: task, list views, quick-add, reminder runner | shared                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.

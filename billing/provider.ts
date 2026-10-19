@@ -169,7 +169,8 @@ export interface CheckoutRequest {
   trialWithoutPaymentMethod?: boolean
   /**
    * Makes a retried call safe: the provider returns the first call's session instead of creating
-   * a second one. Use one key per intended checkout.
+   * a second one, as long as the retry comes within the provider's key window (24 hours on
+   * Stripe). Use one key per intended checkout.
    */
   idempotencyKey?: string
 }
@@ -181,8 +182,9 @@ export interface QuantityRequest {
   /** The new number of seats or units, a positive integer. */
   quantity: number
   /**
-   * Makes a retried call safe: the provider applies the first call once. Use one key per intended
-   * change, such as the subscription, the quantity and the change that asked for it.
+   * Makes a retried call safe: the provider applies the first call once, as long as the retry
+   * comes within the provider's key window (24 hours on Stripe). Use one key per intended change,
+   * such as the subscription, the quantity and the change that asked for it.
    */
   idempotencyKey?: string
 }
@@ -224,8 +226,9 @@ export interface RefundRequest {
   /** {@link PaidPayment.id}: the payment to refund. */
   paymentId: string
   /**
-   * Required. Makes a retried call safe: the provider refunds once and answers every retry with the
-   * same refund. Make one key per intended refund, such as when the operator opens the dialog.
+   * Required. Makes a retried call safe: the provider refunds once and answers a retry with the
+   * same refund, as long as the retry comes within the provider's key window (24 hours on Stripe).
+   * Make one key per intended refund, such as when the operator opens the dialog.
    */
   idempotencyKey: string
 }

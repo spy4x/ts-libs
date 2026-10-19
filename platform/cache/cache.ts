@@ -326,8 +326,7 @@ export interface PublicAPICacheModel<T, K extends string | number = number> {
  * surfaces as a thrown validation error instead of a silently wrong read.
  *
  * `wrapMany`'s result is not run through `schema`: `schema` describes one `T`, and validating an
- * array would mean validating each element, which is a different, unrequested feature — see the
- * pull request body.
+ * array would mean validating each element, which is a different, unrequested feature.
  *
  * `get` returns a falsy cached value (`0`, `""`, `false`) as-is. The source checked `if (!result)`
  * on the *decoded* value and returned `null` for any of those, which is a bug: a cached `0` or

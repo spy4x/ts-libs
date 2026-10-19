@@ -256,9 +256,10 @@ export const describeErrorKind = (cause: unknown): string => {
  * Both halves are load-bearing. The **read** is guarded because `name` is not a
  * data property: a hostile `Error` subclass can define it as a throwing getter,
  * and an ordinary property read would then propagate that throw out of a
- * function whose whole contract is to *return* a description. `send` promises a
- * `SlackResult` and never a rejection, so an unguarded read here is the
- * difference between a failure result and an exception on the caller's stack.
+ * function whose whole contract is to *return* a description. The notifiers that
+ * call it promise a result and never a rejection, so an unguarded read here is
+ * the difference between a failure result and an exception on the caller's
+ * stack.
  *
  * The **value** is type-checked because `Error.name`'s `string` is a
  * declaration, not a runtime invariant — the property is writable, so whatever

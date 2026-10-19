@@ -159,7 +159,8 @@ export async function constantTimeEqualsText(a: string, b: string): Promise<bool
 }
 
 /**
- * Concatenated digest `sha256hex(raw + secret)`, lower-case, 64 characters.
+ * SHA-256 digest of one UTF-8 string, as lower-case hex, 64 characters. Callers
+ * that hash a token with its secret concatenate them first (`raw + secret`).
  *
  * A caller-supplied hash is compared as-is, so an upper-case stored hash is a
  * mismatch — normalise at the storage boundary, not here.
