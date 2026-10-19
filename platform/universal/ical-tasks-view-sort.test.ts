@@ -9,9 +9,22 @@ import {
   MANUAL_ORDER,
   STAMP_ONLY,
   task,
+  vtodo,
 } from "../../time/testdata/tasks/fixtures.ts"
 
 const UTC = `UTC`
+
+/** A zone Outlook names itself and defines in the document: +09:00 all year. */
+const HEAD_OFFICE_TIME = [
+  `BEGIN:VTIMEZONE`,
+  `TZID:Head Office Time`,
+  `BEGIN:STANDARD`,
+  `DTSTART:16010101T000000`,
+  `TZOFFSETFROM:+0900`,
+  `TZOFFSETTO:+0900`,
+  `END:STANDARD`,
+  `END:VTIMEZONE`,
+]
 const make = (uid: string, title: string, ...lines: string[]) =>
   fixtureTask(task(uid, title, lines))
 const order = (tasks: Task[], mode: SortMode, zone = UTC) =>
@@ -134,4 +147,33 @@ Deno.test("sorting leaves the list it was given as it was", () => {
   const before = tasks.map((t) => t.uid)
   sortTasks(tasks, SortMode.Manual, UTC)
   expect(tasks.map((t) => t.uid)).toEqual(before)
+})
+
+Deno.test("due order reads a zone the task's own VTIMEZONE defines by that definition", () => {
+  // 09:00 in Head Office Time (+09:00) is 00:00Z, before 03:00Z; read in UTC it would be after.
+  const custom = fixtureTask(vtodo([
+    `DTSTAMP:20261001T080000Z`,
+    `UID:custom`,
+    `SUMMARY:B`,
+    `DUE;TZID=Head Office Time:20261008T090000`,
+  ], HEAD_OFFICE_TIME))
+  const utc = make(`utc`, `A`, `DUE:20261008T030000Z`)
+  expect(order([utc, custom], SortMode.Due)).toEqual([`custom`, `utc`])
+})
+
+Deno.test("manual order reads a creation time in a zone the task's own VTIMEZONE defines", () => {
+  // Created 09:00 Head Office Time (+09:00) is 00:00Z, before the other task's 03:00Z.
+  const custom = fixtureTask(vtodo([
+    `DTSTAMP:20261001T080000Z`,
+    `UID:custom`,
+    `SUMMARY:B`,
+    `CREATED;TZID=Head Office Time:20261001T090000`,
+  ], HEAD_OFFICE_TIME))
+  const utc = fixtureTask(vtodo([
+    `DTSTAMP:20261001T080000Z`,
+    `UID:utc`,
+    `SUMMARY:A`,
+    `CREATED:20261001T030000Z`,
+  ]))
+  expect(order([utc, custom], SortMode.Manual)).toEqual([`custom`, `utc`])
 })

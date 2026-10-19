@@ -1,17 +1,13 @@
 /**
  * Bounded body reading — a hard byte cap plus a stalled-body timeout.
  *
- * Merges two behaviours that lived in separate source repos:
- *  - `offer-lens/libs/scraper/mod.ts` streamed a `Response` body and threw the
- *    moment the accumulated bytes passed a hard cap.
- *  - `warthunder-stats/libs/server/http/body.ts` read a `Request` body with the
- *    same cap and pre-checked a declared `Content-Length`.
- *  - The stalled-body half — a timer that cancels the reader — was
- *    `offer-lens`-only and applies to both here.
+ * It caps both a `Response` body and a `Request` body, pre-checks a declared
+ * `Content-Length`, and cancels a reader whose body stalls.
  *
  * Zero dependencies: `ReadableStream`, `TextDecoder` and `setTimeout` are all
  * platform APIs. Bodies are decoded incrementally so a huge payload never lands
- * in memory as one string, and the reader is always cancelled and unlocked.
+ * in memory as one string, and a failed `readBounded*` call always cancels the
+ * body.
  * @module
  */
 
@@ -89,14 +85,16 @@ export interface BodyReadOptions {
    * Stall budget in ms: the maximum time to wait for the next chunk. Defaults
    * to `DEFAULT_BODY_TIMEOUT_MS` (10s). `0` turns the budget off and leaves the
    * byte cap alone governing, which means a body that goes quiet is waited on
-   * for as long as the connection lives.
+   * for as long as the connection lives. A negative or non-finite value (`NaN`,
+   * `Infinity`) is rejected with a `RangeError`.
    */
   timeoutMs?: number
   /**
    * Byte cap for this read. Defaults to `DEFAULT_MAX_BYTES`. Must be a
    * positive finite number: `NaN` and `Infinity` both compare false against
    * a running total, which switches the cap off instead of raising it, so
-   * both are rejected before the reader is taken.
+   * they, `0` and negative values are rejected with a `RangeError` before the
+   * reader is taken.
    */
   maxBytes?: number
 }
@@ -131,11 +129,13 @@ export function readContentLength(headers: { get(name: string): string | null })
  * a hung one fails fast. Both limits apply whether or not the caller asked for
  * them: the defaults are 5 MiB and 10s.
  *
- * The reader is cancelled and unlocked on every exit path, including the two
- * throws — a failed bounded read must not leave the socket open.
+ * The body is cancelled on every failure, and the reader, once taken, is
+ * unlocked on every exit path — a failed bounded read must not leave the socket
+ * open. A refusal that comes before the first read (a bad option or an
+ * oversized declared length) cancels the body without taking a reader.
  *
- * @throws `RangeError` when `maxBytes` is not a finite number (`NaN` or
- * `Infinity`), before the reader is taken.
+ * @throws `RangeError` when `maxBytes` is not a positive finite number, or
+ * `timeoutMs` is negative or not finite, before the reader is taken.
  * @throws `PayloadTooLargeError` when the body exceeds `maxBytes`.
  * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
  */
@@ -146,13 +146,23 @@ async function* readBoundedChunks(
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
   const timeoutMs = options.timeoutMs ?? DEFAULT_BODY_TIMEOUT_MS
 
-  if (!Number.isFinite(maxBytes)) {
-    throw new RangeError(`maxBytes must be a finite number, got ${maxBytes}`)
+  let refusal: Error | undefined
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+    refusal = new RangeError(`maxBytes must be a positive finite number, got ${maxBytes}`)
+  } else if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    refusal = new RangeError(`timeoutMs must be 0 or a positive finite number, got ${timeoutMs}`)
+  } else {
+    const declaredLength = readContentLength(source.headers)
+    if (declaredLength !== null && declaredLength > maxBytes) {
+      refusal = new PayloadTooLargeError(maxBytes)
+    }
   }
-
-  const declaredLength = readContentLength(source.headers)
-  if (declaredLength !== null && declaredLength > maxBytes) {
-    throw new PayloadTooLargeError(maxBytes)
+  if (refusal) {
+    // Refused before the reader is taken: cancel the stream itself so the
+    // connection is released now, not whenever the response is collected. A
+    // body that is already locked or errored rejects the cancel; that is fine.
+    await source.body?.cancel().catch(() => {})
+    throw refusal
   }
 
   if (!source.body) return
@@ -204,7 +214,7 @@ async function* readBoundedChunks(
 /**
  * Read a body into bytes under the hard cap and stall budget.
  *
- * @throws `RangeError` when `maxBytes` is not a finite number.
+ * @throws `RangeError` when `maxBytes` or `timeoutMs` is out of range.
  * @throws `PayloadTooLargeError` when the body exceeds `maxBytes`.
  * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
  */
@@ -232,7 +242,7 @@ export async function readBoundedBody(
  * Read a body as text, decoding incrementally so the cap is enforced before the
  * whole payload is materialised as one string.
  *
- * @throws `RangeError` when `maxBytes` is not a finite number.
+ * @throws `RangeError` when `maxBytes` or `timeoutMs` is out of range.
  * @throws `PayloadTooLargeError` when the body exceeds `maxBytes`.
  * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
  */
@@ -279,6 +289,7 @@ export async function readBoundedJson<T = unknown>(
  * re-exports this same function, so a caller that only needs a form cap does not
  * depend on the whole server package.
  *
+ * @throws `RangeError` when `maxBytes` or `timeoutMs` is out of range.
  * @throws `PayloadTooLargeError` under the same conditions as `readBoundedBody`.
  * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
  * @throws `TypeError` when the request carries no `content-type`; without it the

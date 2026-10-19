@@ -98,6 +98,17 @@ describe("readBoundedText", () => {
     )
   })
 
+  it("cancels the body when the declared length is over the cap", async () => {
+    let cancelled = 0
+    const source = {
+      headers: new Headers({ "content-length": "6" }),
+      body: chunkedStream([new TextEncoder().encode("abcdef")], () => cancelled++),
+    }
+    await assertRejects(() => readBoundedText(source, { maxBytes: 5 }), PayloadTooLargeError)
+    assertEquals(cancelled, 1, "a refused body must not keep its connection open")
+    assertEquals(source.body.locked, false)
+  })
+
   it("rejects a streamed body past the cap", async () => {
     const source = response(chunkedStream([
       new Uint8Array([1, 2, 3]),
@@ -238,12 +249,16 @@ describe("readBoundedBody", () => {
     )
   })
 
-  it("rejects a non-finite cap before a byte is read", async () => {
-    for (const cap of [NaN, Infinity, -Infinity]) {
+  it("rejects a cap that is not a positive finite number and cancels the body", async () => {
+    for (const cap of [NaN, Infinity, -Infinity, 0, -1]) {
+      let cancelled = 0
       const stream = new ReadableStream<Uint8Array>({
         pull(controller) {
           controller.enqueue(new Uint8Array([1]))
           controller.close()
+        },
+        cancel() {
+          cancelled++
         },
       })
       const request = new Request("http://example.test", { method: "POST", body: stream })
@@ -258,6 +273,24 @@ describe("readBoundedBody", () => {
       // taken before the throw" — a caller left with a locked-but-unread
       // stream cannot read it either, so this is the real regression to catch.
       assertEquals(request.body?.locked, false, `${cap} must reject before the reader is taken`)
+      assertEquals(cancelled, 1, `${cap} must cancel the refused body`)
+    }
+  })
+
+  it("rejects a negative or non-finite stall budget and cancels the body", async () => {
+    for (const timeoutMs of [NaN, Infinity, -Infinity, -1]) {
+      let cancelled = 0
+      const source = {
+        headers: new Headers(),
+        body: chunkedStream([new Uint8Array([1])], () => cancelled++),
+      }
+      await assertRejects(
+        () => readBoundedBody(source, { timeoutMs }),
+        RangeError,
+        String(timeoutMs),
+      )
+      assertEquals(source.body.locked, false, `${timeoutMs} must reject before the reader is taken`)
+      assertEquals(cancelled, 1, `${timeoutMs} must cancel the refused body`)
     }
   })
 })

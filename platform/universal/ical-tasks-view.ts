@@ -12,7 +12,7 @@
 
 import { sortRows, type SortRule } from "./sort.ts"
 import { filterRows, search } from "./text.ts"
-import { IcalDateKind } from "@spy4x/time/ical"
+import { type IcalComponent, IcalDateKind, parseIcal } from "@spy4x/time/ical"
 import {
   dateDay,
   dateInstant,
@@ -23,7 +23,7 @@ import {
   type TaskDate,
   type TaskNode,
 } from "@spy4x/time/ical-tasks-model"
-import { addDays, isoDateInTz } from "@spy4x/time/tz"
+import { addDays, isoDateInTz, isValidTimeZone } from "@spy4x/time/tz"
 
 /** How a list shows its tasks. */
 export enum SortMode {
@@ -55,12 +55,28 @@ const BAND_RANK: Record<PriorityBand, number | undefined> = {
   [PriorityBand.None]: undefined,
 }
 
+/** Whether `value` is a zoned time whose `TZID` only the task's own `VTIMEZONE` can define. */
+function needsDocument(value: TaskDate | undefined): boolean {
+  return value?.kind === IcalDateKind.Zoned && !!value.tzid && !isValidTimeZone(value.tzid)
+}
+
+/**
+ * The parsed iCalendar text of `task`, when one of `values` needs it to resolve; otherwise
+ * `undefined`, so the common case does not parse at all. A text that does not parse gives
+ * `undefined` too, and the value is then read as {@link dateInstant} reads it without one.
+ */
+function documentFor(task: Task, ...values: (TaskDate | undefined)[]): IcalComponent | undefined {
+  if (!values.some(needsDocument)) return undefined
+  const parsed = parseIcal(task.ics)
+  return parsed.success ? parsed.output : undefined
+}
+
 /**
  * When a due value sorts. A date sorts at 23:59 of its day, after the timed dues of that day, as
  * Tasks.org sorts it. This is for ordering only: a date is still due the whole day.
  */
-function dueSortInstant(due: TaskDate, zone: string): number {
-  if (due.kind !== IcalDateKind.Date) return dateInstant(due, zone).getTime()
+function dueSortInstant(due: TaskDate, zone: string, root?: IcalComponent): number {
+  if (due.kind !== IcalDateKind.Date) return dateInstant(due, zone, root).getTime()
   return dateInstant({ ...due, kind: IcalDateKind.Floating, time: `23:59:00` }, zone).getTime()
 }
 
@@ -69,10 +85,10 @@ function dueSortInstant(due: TaskDate, zone: string): number {
  * Tasks.org then uses its creation time in seconds since 2001-01-01, so it falls among the dragged
  * tasks by age.
  */
-function manualPosition(task: Task, zone: string): number | undefined {
+function manualPosition(task: Task, zone: string, root?: IcalComponent): number | undefined {
   if (task.sortOrder !== undefined) return task.sortOrder
   if (!task.created) return undefined
-  return (dateInstant(task.created, zone).getTime() - APPLE_EPOCH_MS) / 1000
+  return (dateInstant(task.created, zone, root).getTime() - APPLE_EPOCH_MS) / 1000
 }
 
 const asc = (key: Key): SortRule<Key> => ({ key, direction: `asc` })
@@ -99,13 +115,16 @@ const RULES: Record<SortMode, SortRule<Key>[]> = {
  * - Title: case-insensitive, with `item 2` before `item 10`.
  */
 export function sortTasks(tasks: readonly Task[], mode: SortMode, zone: string): Task[] {
-  const rows: Row[] = tasks.map((task) => ({
-    task,
-    position: manualPosition(task, zone),
-    due: task.due ? dueSortInstant(task.due, zone) : undefined,
-    band: BAND_RANK[priorityBand(task.priority)],
-    title: task.title,
-  }))
+  const rows: Row[] = tasks.map((task) => {
+    const root = documentFor(task, task.due, task.created)
+    return {
+      task,
+      position: manualPosition(task, zone, root),
+      due: task.due ? dueSortInstant(task.due, zone, root) : undefined,
+      band: BAND_RANK[priorityBand(task.priority)],
+      title: task.title,
+    }
+  })
   return sortRows(rows, RULES[mode]).map((row) => row.task)
 }
 
@@ -230,10 +249,13 @@ export interface UpcomingDay {
 /**
  * Whether a due value has passed. A date is overdue from the day after it; a time is overdue the
  * moment it passes, as Tasks.org colours it.
+ *
+ * @param root The parsed document the value was read from. Pass it so a `TZID` that the
+ *   document's own `VTIMEZONE` defines, as Outlook writes, resolves by that definition.
  */
-export function isOverdue(due: TaskDate, now: Date, zone: string): boolean {
+export function isOverdue(due: TaskDate, now: Date, zone: string, root?: IcalComponent): boolean {
   if (due.kind === IcalDateKind.Date) return due.date < isoDateInTz(now, zone)
-  return dateInstant(due, zone).getTime() < now.getTime()
+  return dateInstant(due, zone, root).getTime() < now.getTime()
 }
 
 /** Overdue above today. A task due today whose time has passed counts as overdue. */
@@ -243,7 +265,7 @@ export function todayView(tasks: readonly Task[], now: Date, zone: string): Toda
   const today: Task[] = []
   for (const task of tasks) {
     if (!isOpen(task) || !task.due) continue
-    if (isOverdue(task.due, now, zone)) overdue.push(task)
+    if (isOverdue(task.due, now, zone, documentFor(task, task.due))) overdue.push(task)
     else if (dateDay(task.due, zone) === todayDate) today.push(task)
   }
   return {

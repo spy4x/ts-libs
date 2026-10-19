@@ -33,7 +33,7 @@ function fakeClock(start = T0): { clock: () => number; advance: (ms: number) => 
  * clock instead of `setTimeout` + a live Redis, which is why the three cases now assert exact
  * behaviour instead of hoping one second has elapsed.
  */
-describe("rate limiting (ported from gb, skip removed)", () => {
+describe("rate limiting", () => {
   const windowMs = 2 * 1000
   const limit = 2
 

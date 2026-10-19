@@ -243,17 +243,21 @@ always the canonical URL that actually answered.
 
 - **a hard byte cap** (`maxBytes`, default 5 MiB), checked against both the
   declared `Content-Length` and the running total, so a missing or lying header
-  cannot get past it. A `maxBytes` that is not a finite number (`NaN` or
-  `Infinity`, the shape of a misparsed env var) is rejected with a `RangeError`
-  before the reader is taken, instead of silently disabling the cap;
+  cannot get past it. A `maxBytes` that is not a positive finite number (`0`,
+  a negative value, or `NaN` and `Infinity`, the shape of a misparsed env var)
+  is rejected with a `RangeError` before the reader is taken, instead of
+  silently disabling the cap;
 - **a stall budget** (`timeoutMs`, default 10s), the maximum wait for the _next_
   chunk — so a slow-but-live transfer is allowed to finish while a hung one
   fails fast with `BodyReadTimeoutError`. `timeoutMs: 0` turns it off, which is
-  a thing to ask for deliberately rather than by saying nothing.
+  a thing to ask for deliberately rather than by saying nothing. A negative or
+  non-finite `timeoutMs` is rejected with a `RangeError`.
 
-Failures are typed: `PayloadTooLargeError`, `BodyReadTimeoutError`, and the
-platform `SyntaxError` for malformed JSON. The reader is cancelled and unlocked
-on every exit path.
+Failures are typed: `RangeError` for a bad option, `PayloadTooLargeError`,
+`BodyReadTimeoutError`, and the platform `SyntaxError` for malformed JSON. Every
+failure cancels the body, including a refusal on the declared `Content-Length`
+before a byte is read, so a refused response does not keep its connection open.
+A reader, once taken, is unlocked on every exit path.
 
 `parseBoundedFormData(request, options)` reads a `multipart/form-data` or
 url-encoded request under the same two limits, then parses it, so an over-cap

@@ -9,7 +9,8 @@
  * @module
  */
 
-import { type ArkErrors, type } from "arktype"
+import type { ArkErrors } from "arktype"
+import { isArkErrors } from "@spy4x/validation"
 import { type ApiError, apiFetch } from "./api.ts"
 
 /** The `code` of the error result for a reply that does not match the schema. */
@@ -124,7 +125,7 @@ export function createOfflineFetch(options: OfflineFetchOptions = {}): OfflineFe
       }
       if (!schema) return { ok: true, status: result.status, data: result.data as T }
       const parsed = schema(result.data)
-      if (parsed instanceof type.errors) {
+      if (isArkErrors(parsed)) {
         return {
           ok: false,
           status: result.status,
