@@ -1589,7 +1589,7 @@ ChangePasswordKeepingSessionsInput	interface	@spy4x/server/auth/password	Input o
 CheckedCredentials	interface	@spy4x/server/auth/password	What PasswordSignIn.checkCredentials returns: whose password matched, and its key.
 CompleteResetInput	interface	@spy4x/server/auth/password	Input of PasswordSignIn.completeReset.
 CompleteVerificationInput	interface	@spy4x/server/auth/password	Input of PasswordSignIn.completeVerification.
-DEFAULT_MAX_RESET_ATTEMPTS	constant	@spy4x/server/auth/password	Guesses allowed per reset code by default.
+DEFAULT_MAX_RESET_ATTEMPTS	constant	@spy4x/server/auth/password	Guesses allowed per verification code by default.
 DEFAULT_MIN_PASSWORD_LENGTH	constant	@spy4x/server/auth/password	Shortest new password accepted by default, in characters (code points).
 DEFAULT_RESET_TTL_MINUTES	constant	@spy4x/server/auth/password	How long a reset code lives by default, in minutes.
 IssuedReset	interface	@spy4x/server/auth/password	A reset code for the app to deliver to `email`.
@@ -1825,7 +1825,7 @@ readJsonBody	function	@spy4x/server/http/bounded-body	Read a Hono request's body
 CORS_ALLOW_HEADERS	constant	@spy4x/server/http/cors	Request headers allow-listed for browser CORS preflight.
 CORS_ALLOW_METHODS	constant	@spy4x/server/http/cors	Methods allow-listed for browser CORS preflight.
 CorsOriginOptions	interface	@spy4x/server/http/cors	Options for createCorsOriginResolver and resolveAllowedOrigin.
-DEV_ORIGIN_HOSTS	constant	@spy4x/server/http/cors	Loopback and wildcard-bind hosts accepted over plain `http` in development.
+DEV_ORIGIN_HOSTS	constant	@spy4x/server/http/cors	Loopback and wildcard-bind hosts, for `devHosts` in a development build.
 createCorsOriginResolver	function	@spy4x/server/http/cors	Build the origin callback `hono/cors` expects.
 resolveAllowedOrigin	function	@spy4x/server/http/cors	Decide whether an `Origin` header value may call the API.
 HealthCheck	type	@spy4x/server/http/health	One check: resolves `true` when the dependency works.
@@ -2448,4 +2448,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 12472b91f7cb95354a711cfb96df273d4c9667fad3d75f1c06ff53ded8989acd
+# export surface: sha256 595f18f730c707ac4615e59247542113652cd87f57775324487649e7fd6ec69f
