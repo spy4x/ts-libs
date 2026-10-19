@@ -73,7 +73,7 @@ type OptionSetName = keyof typeof optionSets
 const zonedFormatters = formatterCache()
 
 /**
- * A formatter for one option set and one zone, built once per process.
+ * A formatter for one option set and one zone, kept in a bounded cache.
  *
  * `Intl.DateTimeFormat` construction costs tens of microseconds, this module
  * builds one per formatted booking, and the option sets are a small fixed list.
