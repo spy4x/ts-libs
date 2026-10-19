@@ -95,7 +95,10 @@ export interface CollectionDefinition<P, S extends { version: number }, Item = S
   }
   /** The id of a row in a list. */
   itemId(item: Item): string
-  /** The row a queued create shows in a list (version `0`, as the server has not seen it). */
+  /**
+   * The row a queued create shows in a list (version `0`, as the server has not seen it); also for
+   * an edit of a create the server never confirmed (`ownCreate`) while the list lacks the entity.
+   */
   queuedItem(entry: OutboxEntry<P, S>): Item
   /** The row after a queued edit. */
   applyEdit(item: Item, entry: OutboxEntry<P, S>): Item
@@ -357,7 +360,9 @@ export function createCollections(options: CollectionsOptions): Collections {
         }
         const at = items.findIndex((item) => definition.itemId(item) === entry.entityId)
         if (at !== -1) items[at] = definition.applyEdit(items[at], entry)
-        else if (entry.kind === "create") items.unshift(definition.queuedItem(entry))
+        else if (entry.kind === "create" || entry.ownCreate) {
+          items.unshift(definition.queuedItem(entry))
+        }
       }
       return items
     }

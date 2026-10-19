@@ -358,6 +358,105 @@ describe("outbox merging edits of one entity", () => {
     expect(sent[sent.length - 1].command).toMatchObject({ kind: "delete", baseVersion: 1 })
   })
 
+  it("sends an edit of a create whose answer was lost as an update on version 1, with no conflict", async () => {
+    const { outbox, sent, state } = harness()
+    state.server = () => {
+      throw new ConnectionLostError("closed after the send")
+    }
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("Mine") })
+    // The create arrived: a second create of the id is refused, an update on version 1 is taken.
+    state.server = ({ command }) => {
+      if (command.kind === "create") throw refused("ID_ALREADY_EXISTS")
+      return item("n", 2, "Edited")
+    }
+    state.current = item("n", 1, "Mine")
+    const outcome = await outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Edited"),
+      version: 0,
+    })
+
+    expect(outcome).toEqual({ kind: "sent", server: item("n", 2, "Edited") })
+    expect(sent[1].command).toMatchObject({ kind: "update", baseVersion: 1 })
+    expect(sent[1].key).not.toBe(sent[0].key)
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("sends an edit as the create when the create it was merged into never arrived", async () => {
+    const { outbox, sent, state } = harness()
+    state.server = () => {
+      throw new ConnectionLostError("lost before the server read it")
+    }
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("Mine") })
+    state.server = ({ command }) => {
+      if (command.kind === "update") throw refused("NOTE_NOT_FOUND")
+      return item("n", 1, "Edited")
+    }
+    const outcome = await outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Edited"),
+      version: 0,
+    })
+
+    expect(outcome).toEqual({ kind: "sent", server: item("n", 1, "Edited") })
+    expect(sent.map((s) => [s.command.kind, s.command.baseVersion, s.command.payload.title]))
+      .toEqual([
+        ["create", 0, "Mine"],
+        ["update", 1, "Edited"],
+        ["create", 0, "Edited"],
+      ])
+    expect(new Set(sent.map((s) => s.key)).size).toBe(3)
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("sends an edit as the create when the lost create was edited more than 20 times offline", async () => {
+    const { outbox, sent, state } = harness()
+    state.server = () => {
+      throw new ConnectionLostError("lost before the server read it")
+    }
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("Mine") })
+    state.online = false
+    for (let i = 1; i <= 21; i++) {
+      await outbox.submit({ kind: "update", entityId: "n", payload: text(`Edit ${i}`), version: 0 })
+    }
+    state.online = true
+    state.server = ({ command }) => {
+      if (command.kind === "update") throw refused("NOTE_NOT_FOUND")
+      return item("n", 1, "Edit 21")
+    }
+    await outbox.flush()
+
+    expect(sent.slice(1).map((s) => [s.command.kind, s.command.payload.title])).toEqual([
+      ["update", "Edit 21"],
+      ["create", "Edit 21"],
+    ])
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("still shows a conflict when another edit moved the created entity past version 1", async () => {
+    const { outbox, state } = harness()
+    state.server = () => {
+      throw new ConnectionLostError("closed after the send")
+    }
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("Mine") })
+    state.server = () => {
+      throw refused("VERSION_CONFLICT")
+    }
+    state.current = item("n", 3, "Theirs")
+    const outcome = await outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Edited"),
+      version: 0,
+    })
+
+    expect(outcome).toEqual({ kind: "conflict", reason: "version" })
+    const [entry] = outbox.entries()
+    expect(entry.conflict?.server).toEqual(item("n", 3, "Theirs"))
+  })
+
   it("gives a delete of an unconfirmed create every payload that create was sent with, oldest first", async () => {
     const { outbox, sent, state } = harness()
     state.server = () => {
@@ -368,16 +467,23 @@ describe("outbox merging edits of one entity", () => {
     state.online = false
     await outbox.submit({ kind: "update", entityId: "n", payload: text("Unsent"), version: 0 })
     state.online = true
+    // The first create never arrived: the edit sent as an update is not found, so it goes out as
+    // a create, and that send is lost too.
+    state.server = ({ command }) => {
+      if (command.kind === "update") throw refused("NOTE_NOT_FOUND")
+      throw new ConnectionLostError("closed after the send")
+    }
     await outbox.submit({ kind: "update", entityId: "n", payload: text("Second"), version: 0 })
     state.server = () => undefined
     await outbox.submit({ kind: "delete", entityId: "n", payload: text("Second"), version: 0 })
 
     expect(sent.map((s) => [s.command.kind, s.command.payload.title])).toEqual([
       ["create", "First"],
+      ["update", "Second"],
       ["create", "Second"],
       ["delete", "Second"],
     ])
-    expect(sent[2].command.ownCreates).toEqual([text("First"), text("Second")])
+    expect(sent[3].command.ownCreates).toEqual([text("First"), text("Second")])
     expect(sent[0].command.ownCreates).toBeUndefined()
     expect(outbox.entries()).toEqual([])
   })

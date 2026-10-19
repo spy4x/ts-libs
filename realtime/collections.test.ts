@@ -248,6 +248,24 @@ describe(`a collection's overlay of its queue on a list`, () => {
     expect(list.map((n) => n.id)).toEqual([`n2`])
   })
 
+  it(`shows a create whose answer was lost and that was renamed offline, until the list has it`, async () => {
+    const { server, tags } = setup()
+    server.state.lose = true
+    await tags.outbox.submit({ kind: `create`, entityId: `t-new`, payload: { name: `New` } })
+    server.state.offline = true
+    await tags.outbox.submit({
+      kind: `update`,
+      entityId: `t-new`,
+      payload: { name: `Renamed` },
+      version: 0,
+    })
+
+    expect(await tags.overlay([])).toEqual([{ id: `t-new`, version: 0, name: `Renamed` }])
+    expect(await tags.overlay([{ id: `t-new`, version: 1, name: `New` }])).toEqual([
+      { id: `t-new`, version: 1, name: `Renamed` },
+    ])
+  })
+
   it(`applies the entries it is given, without reading the store`, async () => {
     const { server, tags } = setup()
     server.state.offline = true
@@ -831,7 +849,8 @@ describe(`a refused write that is not a create`, () => {
     h.server.state.lose = true
     await h.tags.outbox.submit({ kind: `create`, entityId: `t`, payload: { name: `First` } })
     h.server.state.lose = false
-    h.server.state.tags.set(`t`, { id: `t`, version: 1, name: `First` })
+    // The lost create arrived, and another device renamed the tag since.
+    h.server.state.tags.set(`t`, { id: `t`, version: 2, name: `Theirs` })
     h.server.state.offline = true
     await h.tags.outbox.submit({
       kind: `update`,
@@ -841,7 +860,7 @@ describe(`a refused write that is not a create`, () => {
     })
     await h.notes.outbox.submit({ kind: `create`, entityId: `n`, payload: note(`Note`, [`t`]) })
     h.server.state.offline = false
-    h.server.state.refuse = (name) => name === `tag.create` ? refusal(`ID_TAKEN`) : undefined
+    h.server.state.refuse = (name) => name === `tag.update` ? refusal(VERSION_CONFLICT) : undefined
     await h.layer.flush()
     expect(h.tags.outbox.entries()[0].conflict?.reason).toBe(`version`)
 
@@ -851,6 +870,33 @@ describe(`a refused write that is not a create`, () => {
 
     expect(h.removed).toEqual([])
     expect(h.server.calls.find((c) => c.name === `note.create`)?.payload.tagIds).toEqual([`t`])
+  })
+
+  it(`takes the tag out of the notes when the person drops a renamed lost create the server lacks`, async () => {
+    const h = setup()
+    h.server.state.lose = true
+    await h.tags.outbox.submit({ kind: `create`, entityId: `t`, payload: { name: `First` } })
+    h.server.state.lose = false
+    h.server.state.offline = true
+    await h.tags.outbox.submit({
+      kind: `update`,
+      entityId: `t`,
+      payload: { name: `Renamed` },
+      version: 0,
+    })
+    await h.notes.outbox.submit({ kind: `create`, entityId: `n`, payload: note(`Note`, [`t`]) })
+    h.server.state.offline = false
+    // The server has no such tag, yet answers the edit as stale: the person sees it as gone.
+    h.server.state.refuse = (name) => name === `tag.update` ? refusal(VERSION_CONFLICT) : undefined
+    await h.layer.flush()
+    expect(h.tags.outbox.entries()[0].conflict?.reason).toBe(`gone`)
+
+    await h.tags.outbox.useTheirs(h.tags.outbox.entries()[0])
+    h.server.state.refuse = undefined
+    await h.layer.flush()
+
+    expect(h.removed.map((event) => event.parent.entityId)).toEqual([`t`])
+    expect(h.server.calls.find((c) => c.name === `note.create`)?.payload.tagIds).toEqual([])
   })
 })
 
