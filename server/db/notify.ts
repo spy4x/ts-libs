@@ -104,17 +104,19 @@ export interface JsonListenerOptions<S extends Type> {
   /** Called with each payload the schema accepts. */
   onMessage: (message: S["infer"]) => void | Promise<void>
   /**
-   * Called when `onMessage` throws or rejects. The error is never rethrown: it would surface
-   * inside the database client's socket handler and could end the process. Default:
+   * Called when `onMessage` or `onListen` throws or rejects. The error is never rethrown: it would
+   * surface inside the database client's socket handler and could end the process. Default:
    * `console.error`.
    */
   onError?: (error: unknown) => void
   /**
    * Called each time the channel is subscribed: once at the start, and again after the
    * connection dropped and came back. Notifications sent in between are lost, so read the current
-   * state here.
+   * state here. It may be async. When it throws or rejects, also on the first subscription, the
+   * error goes to `onError` and `listenJson` still resolves, so the channel stays subscribed and
+   * the stop function is returned.
    */
-  onListen?: () => void
+  onListen?: () => void | Promise<void>
 }
 
 /**
@@ -166,7 +168,12 @@ export async function listenJson<S extends Type>(
       onError(error)
     }
   }, () => {
-    if (!stopped) options.onListen?.()
+    if (stopped || !options.onListen) return
+    try {
+      Promise.resolve(options.onListen()).catch(onError)
+    } catch (error) {
+      onError(error)
+    }
   })
 
   return async () => {

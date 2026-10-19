@@ -1775,7 +1775,8 @@ const stop = await listenJson(sql, "inbox_changed", {
   arrive once.
 - **It is a wake-up, not a queue.** A notification sent while a listener is down or reconnecting
   is lost. Send a hint, keep the truth in a table, and read the table on a hint, at start and in
-  `onListen`, which runs at the first subscription and after every reconnect.
+  `onListen`, which runs at the first subscription and after every reconnect. It may be async; a
+  throw or rejection there goes to `onError`, like one from `onMessage`.
 - **The payload is a hint, at most `MAX_NOTIFY_PAYLOAD_BYTES` (7999) bytes of JSON text.** Postgres
   refuses 8000 bytes or more, and its refusal aborts the transaction, so `announceJson` throws
   `NotifyPayloadTooLargeError` before it sends anything. A value with no JSON form throws a
