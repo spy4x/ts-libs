@@ -1,5 +1,5 @@
 import { expect } from "@std/expect"
-import { IcalDateKind } from "./ical.ts"
+import { IcalDateKind, parseIcal } from "./ical.ts"
 import { AlarmRelated, AlarmTriggerKind } from "./ical-tasks.ts"
 import {
   dateDay,
@@ -161,6 +161,28 @@ Deno.test("a zoned value with a zone name the runtime does not know is read in t
   expect(dateDay(due, UTC)).toBe(`2026-10-08`)
   expect(dateInstant(due, UTC).toISOString()).toBe(`2026-10-08T10:00:00.000Z`)
   expect(dateInstant(due, HO_CHI_MINH).toISOString()).toBe(`2026-10-08T03:00:00.000Z`)
+})
+
+Deno.test("a zoned value whose zone the document's VTIMEZONE defines is read in that zone", () => {
+  const root = parseIcal([
+    `BEGIN:VCALENDAR`,
+    `BEGIN:VTIMEZONE`,
+    `TZID:Head Office Time`,
+    `BEGIN:STANDARD`,
+    `DTSTART:16010101T000000`,
+    `TZOFFSETFROM:+0900`,
+    `TZOFFSETTO:+0900`,
+    `END:STANDARD`,
+    `END:VTIMEZONE`,
+    `END:VCALENDAR`,
+  ].join(`\r\n`)).output!
+  const due = {
+    kind: IcalDateKind.Zoned,
+    date: `2026-10-08`,
+    time: `09:00:00`,
+    tzid: `Head Office Time`,
+  }
+  expect(dateInstant(due, `Europe/Berlin`, root).toISOString()).toBe(`2026-10-08T00:00:00.000Z`)
 })
 
 Deno.test("a task with no CREATED is created at its DTSTAMP", () => {

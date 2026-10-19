@@ -31,6 +31,7 @@
  */
 
 import { formatIsoDate, parseIsoDate } from "./date.ts"
+import { formatterCache } from "./formatter-cache.ts"
 
 /**
  * The `Intl` option sets this module uses, without the zone. Frozen so a caller
@@ -69,10 +70,10 @@ const optionSets = {
 
 type OptionSetName = keyof typeof optionSets
 
-const formatterCache = new Map<string, Intl.DateTimeFormat>()
+const zonedFormatters = formatterCache()
 
 /**
- * A formatter for one option set and one zone, built once per process.
+ * A formatter for one option set and one zone, kept in a bounded cache.
  *
  * `Intl.DateTimeFormat` construction costs tens of microseconds, this module
  * builds one per formatted booking, and the option sets are a small fixed list.
@@ -85,20 +86,18 @@ const formatterCache = new Map<string, Intl.DateTimeFormat>()
  *
  * The cache is process-local and the values are pure: a formatter holds no
  * mutable state and `format` never reads the host zone or clock, so this cannot
- * change a result, only how long it takes to get one.
+ * change a result, only how long it takes to get one. It is bounded (see
+ * `formatter-cache.ts`), because zone spellings and locale tags come from callers.
  */
 function zonedFormatter(
   set: OptionSetName,
   tz: string,
   locale = "en-GB",
 ): Intl.DateTimeFormat {
-  const key = `${locale}:${set}:${tz}`
-  const cached = formatterCache.get(key)
-  if (cached) return cached
-
-  const formatter = new Intl.DateTimeFormat(locale, { timeZone: tz, ...optionSets[set] })
-  formatterCache.set(key, formatter)
-  return formatter
+  return zonedFormatters(
+    `${locale}:${set}:${tz}`,
+    () => new Intl.DateTimeFormat(locale, { timeZone: tz, ...optionSets[set] }),
+  )
 }
 
 /**
@@ -474,19 +473,15 @@ export function resolveWallClock(date: string, time: string, tz: string): WallCl
  */
 const CANONICAL_LOCALE = "en-GB"
 
-const offsetFormatterCache = new Map<string, Intl.DateTimeFormat>()
+const offsetFormatters = formatterCache()
 
 /** A formatter that reads `tz`'s UTC offset text, always in {@link CANONICAL_LOCALE}. */
 function offsetFormatter(tz: string): Intl.DateTimeFormat {
-  const cached = offsetFormatterCache.get(tz)
-  if (cached) return cached
-
-  const formatter = new Intl.DateTimeFormat(CANONICAL_LOCALE, {
-    timeZone: tz,
-    timeZoneName: "shortOffset",
-  })
-  offsetFormatterCache.set(tz, formatter)
-  return formatter
+  return offsetFormatters(tz, () =>
+    new Intl.DateTimeFormat(CANONICAL_LOCALE, {
+      timeZone: tz,
+      timeZoneName: "shortOffset",
+    }))
 }
 
 /**
@@ -516,7 +511,7 @@ export function tzOffsetMinutes(instant: Date, tz: string): number {
   return sign * (hours * 60 + minutes)
 }
 
-const canonicalWallClockFormatterCache = new Map<string, Intl.DateTimeFormat>()
+const canonicalWallClockFormatters = formatterCache()
 
 /**
  * A formatter that reads `tz`'s wall clock — year through minute — always in
@@ -528,20 +523,16 @@ const canonicalWallClockFormatterCache = new Map<string, Intl.DateTimeFormat>()
  * rather than the two `isoDateInTz` + `hhmmInTz` would cost.
  */
 function canonicalWallClockFormatter(tz: string): Intl.DateTimeFormat {
-  const cached = canonicalWallClockFormatterCache.get(tz)
-  if (cached) return cached
-
-  const formatter = new Intl.DateTimeFormat(CANONICAL_LOCALE, {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  })
-  canonicalWallClockFormatterCache.set(tz, formatter)
-  return formatter
+  return canonicalWallClockFormatters(tz, () =>
+    new Intl.DateTimeFormat(CANONICAL_LOCALE, {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }))
 }
 
 /**

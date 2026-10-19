@@ -292,6 +292,12 @@ product. Matching is exact on the serialised origin, and the value must round-tr
 check. `createCorsOriginResolver` throws on an empty allowlist rather than returning a resolver that
 accepts everything.
 
+Nothing outside the allowlist passes by default. A Chrome extension is allowed only by listing its
+exact `chrome-extension://<id>` origin. Plain-http loopback origins pass only for the hosts given as
+`devHosts`, which defaults to none: pass `DEV_ORIGIN_HOSTS` in a development build, never in
+production, where any page served from a port on the visitor's machine would pass. `CORS_ALLOW_HEADERS`
+is `Content-Type` and `Authorization`; an app that reads another request header adds it itself.
+
 ## `server/http/bearer-auth`
 
 `bearerTokenFromHeaders`, `bearerTokenFromEnv`, `constantTimeEquals`, `createTokenVerifier`,
@@ -813,7 +819,7 @@ verification step (#149): `requestVerification({ userId })` returns a code for t
 key's address, and `completeVerification({ userId, code })` checks it and proves the key with
 `AuthStore.proveKey`. The user keeps their id, password and sessions, and becomes the address's
 owner. Take `userId` from a validated session. The code is bound to that user and that address, is
-never a reset code, and uses the reset code's lifetime and guess limit. `requestVerification`
+never a reset code, and uses the reset code's lifetime and the `maxResetAttempts` guess limit. `requestVerification`
 returns null when the key is already proven. The email-code provider's `requestCode` and
 `proveAddress` (see `server/auth/email-code`) prove the address the same way.
 
@@ -870,7 +876,10 @@ signed-in devices (see `server/sign-in`).
 
 **A reset hands the address to whoever receives the code.** `requestReset` issues a code for every
 valid address, whether or not an account uses it, and returns it for the app to deliver: 32 random
-bytes, of which only the SHA-256 is stored, valid 30 minutes and for 5 guesses by default.
+bytes, of which only the SHA-256 is stored, valid 30 minutes by default. Every request opens a
+challenge of its own, keyed by a digest of the address and the code, and leaves earlier codes as they
+were, so a stranger who asks for codes for someone's address, or guesses wrong, can neither replace
+nor lock the code that person received.
 `completeReset` checks the new password before it spends a guess, then, on a matching code, takes
 one of three branches:
 
@@ -889,8 +898,8 @@ used by then, so the person asks for a new one.
 ### What it does not do
 
 - **It does not send mail.** `requestReset` returns the code; the app sends it.
-- **It does not limit guesses per account or per client.** A reset code allows its own few guesses,
-  but nothing limits how often codes are asked for or passwords tried. Put
+- **It does not limit guesses per account or per client.** A verification code allows its own few
+  guesses and a reset code cannot be guessed, but nothing limits how often codes are asked for or passwords tried. Put
   `@spy4x/platform/rate-limit` in front of every route that calls this provider.
 - **It does not hide an address in use at sign-up.** `email-taken` tells the caller; a reset is the
   way in for the address's owner.
@@ -900,6 +909,9 @@ used by then, so the person asks for a new one.
   email-code provider's `proveAddress`, to keep it.
 - **It does not limit how often a verification code is asked for.** Every `requestVerification`
   call is a mail; rate-limit its route like the reset route.
+- **It does not cancel the address's other reset codes.** A successful reset leaves every other
+  unexpired reset code for that address working until it expires (`resetTtlMinutes`), so keep the
+  lifetime short.
 
 ## `server/auth/email-code`
 
@@ -2929,6 +2941,11 @@ Claude's documents are `https://claude.ai/oauth/mcp-oauth-client-metadata` (clau
 Claude apps) and `https://claude.ai/oauth/claude-code-client-metadata` (Claude Code), so that one
 host covers all of them. The default stays open because narrowing it would break every app that
 serves another client today.
+
+**The metadata cache is capped.** A fetched document is reused for `cacheMs` (10 minutes). The cache
+keeps at most `maxEntries` documents (default 1 000, about 5 MB): storing one first drops expired
+entries, then the oldest while the cache is full, so a caller naming endless `client_id` URLs cannot
+grow it.
 
 **Pending consents are capped.** Each `GET /authorize` stores a pending consent of up to about
 5 KB for 10 minutes, for anyone who calls it. `MemoryOAuthStore` keeps at most `maxPending` of them

@@ -10,13 +10,17 @@
  * return `undefined` (no CORS headers), which is not a rejection — browsers only
  * enforce CORS when an `Origin` is present.
  *
- * Deviations from the `offer-lens` source, both covered by tests below:
+ * Deviations from the `offer-lens` source, all covered by tests below:
  *  - the allowed origins are a required argument rather than a module constant
  *    baked to one product, and a resolver built from an empty allowlist throws
  *    instead of accepting every origin — the "no config" default must be refuse,
  *    and for a factory "refuse" means refusing to build;
- *  - `chrome-extension://` is validated by shape before the WHATWG round-trip, so
- *    a non-origin scheme cannot be smuggled through `URL`.
+ *  - no Chrome extension is accepted unless its exact `chrome-extension://<id>`
+ *    origin is in the allowlist: the source echoed every extension's origin, so
+ *    any installed extension could read credentialed responses;
+ *  - plain-http loopback origins are accepted only for the hosts the caller
+ *    passes as `devHosts` (none by default): the source accepted them in every
+ *    deployment, so any page served from a port on the visitor's machine could.
  *
  * @module
  */
@@ -27,14 +31,20 @@ export interface CorsOriginOptions {
    * Origins allowed verbatim, e.g. `https://example.com`. Ports matter: a
    * production origin with `:443` is a different string and is refused unless
    * listed. Required — an omitted allowlist is a programming error, not "allow
-   * everything".
+   * everything". A Chrome extension is allowed only by listing its exact origin,
+   * `chrome-extension://<id>`.
    */
   allowedOrigins: readonly string[]
-  /** HTTP dev hosts accepted with any 1-65535 port. Defaults to {@link DEV_ORIGIN_HOSTS}. */
+  /**
+   * Hosts accepted over plain `http` with any 1-65535 port, for development only.
+   * Defaults to none. Pass {@link DEV_ORIGIN_HOSTS} in a development build to
+   * accept the loopback hosts; never in production, where any page served from a
+   * port on the visitor's machine would pass.
+   */
   devHosts?: readonly string[]
 }
 
-/** Loopback and wildcard-bind hosts accepted over plain `http` in development. */
+/** Loopback and wildcard-bind hosts, for `devHosts` in a development build. Not a default. */
 export const DEV_ORIGIN_HOSTS: readonly string[] = [
   "localhost",
   "127.0.0.1",
@@ -42,21 +52,16 @@ export const DEV_ORIGIN_HOSTS: readonly string[] = [
   "[::1]",
 ]
 
-/** Chrome extension ids are 32 characters from `a` to `p` (16 hex-ish symbols). */
-const CHROME_EXTENSION_ID = /^[a-p]{32}$/
-
-const CHROME_EXTENSION_SCHEME = "chrome-extension://"
-
 /**
  * Decide whether an `Origin` header value may call the API.
  *
  * Rules, in order:
  *  1. An absent/empty origin returns `undefined` (non-browser caller).
- *  2. Exact match against `allowedOrigins` returns the origin unchanged.
- *  3. `chrome-extension://<32 a-p chars>` returns the origin; anything else on
- *     that scheme, including a trailing slash, is refused.
- *  4. `http` on a dev host, with the port elided or a valid 1-65535 integer.
- *  5. Everything else is refused — including `https://localhost`, any origin
+ *  2. Exact match against `allowedOrigins` returns the origin unchanged; this is
+ *     the only way a `chrome-extension://` origin passes.
+ *  3. `http` on one of `devHosts` (none by default), with the port elided or a
+ *     valid 1-65535 integer.
+ *  4. Everything else is refused — including `https://localhost`, any origin
  *     carrying a path, query, fragment, userinfo or trailing slash, and any
  *     host that is not in the exact-match allowlist.
  *
@@ -77,11 +82,6 @@ export function resolveAllowedOrigin(
   const allowed = new Set(options.allowedOrigins)
   if (allowed.has(origin)) return origin
 
-  if (origin.startsWith(CHROME_EXTENSION_SCHEME)) {
-    const id = origin.slice(CHROME_EXTENSION_SCHEME.length)
-    return CHROME_EXTENSION_ID.test(id) ? origin : undefined
-  }
-
   let parsed: URL
   try {
     parsed = new URL(origin)
@@ -94,7 +94,7 @@ export function resolveAllowedOrigin(
   // dev allowance just because the host matches.
   if (parsed.protocol !== "http:") return undefined
 
-  const devHosts = options.devHosts ?? DEV_ORIGIN_HOSTS
+  const devHosts = options.devHosts ?? []
   if (!devHosts.includes(parsed.hostname.toLowerCase())) return undefined
 
   if (parsed.port === "") return origin
@@ -133,6 +133,5 @@ export const CORS_ALLOW_METHODS: readonly string[] = ["GET", "POST", "PUT", "DEL
 /** Request headers allow-listed for browser CORS preflight. */
 export const CORS_ALLOW_HEADERS: readonly string[] = [
   "Content-Type",
-  "X-Session-Id",
   "Authorization",
 ]

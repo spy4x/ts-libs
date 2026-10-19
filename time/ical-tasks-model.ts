@@ -208,9 +208,12 @@ export function isOpen(task: Task): boolean {
  * its own zone. A zoned value whose `TZID` is neither an IANA zone this runtime knows nor a
  * Windows zone name (a name a client made up) is read as a wall clock in `zone`, so it still
  * lands on a day and never disappears from a view.
+ *
+ * @param root The parsed document the value was read from. Pass it so a `TZID` that the
+ *   document's own `VTIMEZONE` defines, as Outlook writes, resolves by that definition.
  */
-export function dateInstant(value: TaskDate, zone: string): Date {
-  const exact = resolveInstant(value, { zone })
+export function dateInstant(value: TaskDate, zone: string, root?: IcalComponent): Date {
+  const exact = resolveInstant(value, { zone, root })
   if (exact) return exact
   const wallClock = resolveInstant({ ...value, kind: IcalDateKind.Floating, tzid: undefined }, {
     zone,
