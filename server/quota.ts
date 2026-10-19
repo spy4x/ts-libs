@@ -8,15 +8,10 @@
  * The distinction is the whole point of the module, so it is a contract, not a
  * comment. `server/quota.ts` never contains a token bucket, a sliding window, a
  * requests-per-second rule, a per-IP key, middleware, or an `X-RateLimit-*` /
- * `Retry-After` header. The source repo (`offer-lens`) has no request rate
- * limiter at all — what it calls a "limit" is a quota, and that is verifiable
- * rather than asserted: a case-insensitive grep for `rate-limit`, `token
- * bucket`, `sliding window`, `X-RateLimit` and `Retry-After` over every `.ts`
- * file in `offer-lens/libs/` and `offer-lens/apps/` matches **nothing**, and the
- * only `429`/`503` literals in `apps/api/` are the two quota sites,
- * `apps/api/routes/analyze.ts:114-125` and `apps/api/routes/batch.ts:112-123`.
- * Rate limiting is a separate package (`platform/rate-limit`, issue #4) owned by
- * another agent.
+ * `Retry-After` header. The source project this was ported from has no request
+ * rate limiter at all — what it calls a "limit" is a quota, and its only
+ * `429`/`503` responses are the two quota sites. Rate limiting is a separate
+ * package (`platform/rate-limit`, issue #4) owned by another agent.
  *
  * - **Measured unit**: a quota counts *business work* (an analysis, a billable
  *   provider call, a document); a rate limiter counts *requests*. One HTTP
@@ -51,7 +46,7 @@
  *
  * ## Sources
  *
- * Ported from `offer-lens`, with the store and the clock injected so the module
+ * Ported from an earlier internal project, with the store and the clock injected so the module
  * carries no driver, no KV client and no `Date.now()`:
  *
  * - `apps/api/services/demo-usage.ts:19-24` — a caller-supplied (BYOK) key
@@ -682,8 +677,8 @@ export function quotaStatusCode(decision: QuotaDecision): 200 | 429 | 503 {
  * `QuotaError(NoPrincipal)` (source `apps/api/routes/usage.ts:14-16` → 400).
  *
  * Both fields are typed `unknown` on purpose. This function's whole job is to
- * read identity out of *untrusted* request input — an `X-Session-Id` header, a
- * decoded JWT claim — where a number, an object or an array can arrive despite
+ * read identity out of *untrusted* request input — a session cookie, a decoded
+ * JWT claim — where a number, an object or an array can arrive despite
  * any static type. A value that is not a string is therefore treated as absent
  * rather than trimmed, so the outcome is always either a real principal or the
  * typed `NoPrincipal`; a raw `TypeError` from `.trim()` would be an untyped

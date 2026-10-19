@@ -2,9 +2,8 @@
  * Request-logging middleware for Hono: one line when a request comes in, one line when the
  * response goes out.
  *
- * Ported from `template/apps/api/middlewares/log.ts` (identical in `financy`; `gb` was not
- * available on this machine, so it is not part of the comparison). The original imported the app's
- * `APIContext` type and its `log` service directly, which a library cannot do. Here the write
+ * Ported from `template/apps/api/middlewares/log.ts` (identical in `financy`). The original
+ * imported the app's `APIContext` type and its `log` service directly, which a library cannot do. Here the write
  * function is a constructor argument instead — the app wires in whatever it wants (a
  * request-id-tagged logger, a line shipped somewhere, or nothing) — and the hardcoded
  * `/api/health` skip becomes a `skipPaths` option, because a health-check path is the app's

@@ -235,7 +235,7 @@ Deno.test("readBoundedBody reports the read error even when cancel rejects", asy
       controller.error(new TypeError("connection reset"))
     },
     cancel() {
-      // `warthunder-stats` awaited this inside the catch block unguarded, so a
+      // The source awaited this inside the catch block unguarded, so a
       // rejecting cancel replaced the error that actually explains the failure.
       return Promise.reject(new Error("cancel failed"))
     },

@@ -106,7 +106,7 @@ export function detectScheme(raw: string): { hadScheme: boolean; scheme: string 
  *  - Strips a default port (`:443` on https, `:80` on http) and keeps any other.
  *  - Preserves the absence of a trailing slash when the input had no path.
  *
- * Deviations from the `offer-lens` source this was ported from, all covered by
+ * Deviations from the internal source this was ported from, all covered by
  * tests below: the port is no longer dropped, `example.com:8443` is no longer
  * mistaken for a scheme, and a slash inside the query is no longer mistaken for
  * a path.

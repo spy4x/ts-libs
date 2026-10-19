@@ -324,15 +324,15 @@ constant-time compare. Same signature, same behaviour; new code should import th
 
 ## Fixes applied at extraction time (`server/http/bounded-body`, `server/http/cors`)
 
-| Source                                       | Bug                                                                                                                                 | Pinned by                                                                      |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `warthunder-stats/.../body.ts:49-51`         | `body.buffer` ignored the view's `byteOffset`/`byteLength` — the `as ArrayBuffer` cast hid it                                       | `parseBoundedFormData respects a non-zero byteOffset on the read buffer` (net) |
-| `warthunder-stats/.../body.ts:11-13`         | an over-cap `content-length` was rejected without cancelling the request body, and the check did not pin the position of the read   | `readBoundedBody leaves an unread rejected body to the server to drain`        |
-| `warthunder-stats/.../body.ts:23-24`         | the cap was enforced by a `NaN`-comparing `Number(...)` check instead of an explicit header reader                                  | `readContentLength reads a bare decimal length and ignores anything else`      |
-| `warthunder-stats/.../body.ts:28`            | `await reader.cancel()` in the `catch` was relied on not to reject, while the sibling call was wrapped                              | `readBoundedBody reports the read error even when cancel rejects`              |
-| `offer-lens/libs/scraper/mod.ts:184-186`     | when the deadline won the `Promise.race` the reader was only cancelled "best effort", leaving a pending `read()` that never settles | `readBoundedBody rejects a stalled body once the stall budget expires`         |
-| `offer-lens/libs/scraper/mod.ts:206`         | the oversized `content-length` early-out was absent, so a body declaring 4 GiB was streamed before being rejected                   | `readBoundedBody rejects an oversized declared content-length before reading`  |
-| `offer-lens/apps/api/services/cors.ts:53-60` | an `https://` host missing from the allowlist fell through to the dev-host check                                                    | `cors: https dev origins are refused`                                          |
+| Source                   | Bug                                                                                                                                 | Pinned by                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| an internal body reader  | `body.buffer` ignored the view's `byteOffset`/`byteLength` — the `as ArrayBuffer` cast hid it                                       | `parseBoundedFormData respects a non-zero byteOffset on the read buffer` (net) |
+| an internal body reader  | an over-cap `content-length` was rejected without cancelling the request body, and the check did not pin the position of the read   | `readBoundedBody leaves an unread rejected body to the server to drain`        |
+| an internal body reader  | the cap was enforced by a `NaN`-comparing `Number(...)` check instead of an explicit header reader                                  | `readContentLength reads a bare decimal length and ignores anything else`      |
+| an internal body reader  | `await reader.cancel()` in the `catch` was relied on not to reject, while the sibling call was wrapped                              | `readBoundedBody reports the read error even when cancel rejects`              |
+| an internal scraper      | when the deadline won the `Promise.race` the reader was only cancelled "best effort", leaving a pending `read()` that never settles | `readBoundedBody rejects a stalled body once the stall budget expires`         |
+| an internal scraper      | the oversized `content-length` early-out was absent, so a body declaring 4 GiB was streamed before being rejected                   | `readBoundedBody rejects an oversized declared content-length before reading`  |
+| an internal CORS service | an `https://` host missing from the allowlist fell through to the dev-host check                                                    | `cors: https dev origins are refused`                                          |
 
 Two rows changed meaning when `server/http/bounded-body.ts` collapsed into the canonical
 reader (`net/bounded-body.ts`): the canonical one rejects an over-cap `content-length` before
@@ -1484,12 +1484,12 @@ smoothing is `platform/rate-limit` (issue #4), which does not live here.
 
 ### Fixes applied at extraction time (`server/crypto`, `server/user-secrets`, `server/quota`)
 
-| Source                                         | Bug                                                                   | Pinned by                                                                           |
-| ---------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `offer-lens/libs/encrypt/mod.ts:13-18`         | a 16-byte AES-128 key was accepted next to AES-256                    | `fromHexKey rejects a 32-hex-character AES-128 key`                                 |
-| `offer-lens/libs/scraper/mod.ts:132`           | failures classified with `msg.includes("abort")`                      | `reports DecryptionFailed for any cipher rejection, classified by type not message` |
-| `offer-lens/apps/api/routes/keys.ts:93,133`    | the provider name and a raw `err.message` were echoed into a response | `never echoes the apiKey in a validation message`                                   |
-| `offer-lens/apps/api/services/auth.ts:157-164` | the per-user quota used a different limit from the session quota      | `check: a limit of 0 is a disabled budget, not an error` + the window tests         |
+| Source                   | Bug                                                                   | Pinned by                                                                           |
+| ------------------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| an internal key cipher   | a 16-byte AES-128 key was accepted next to AES-256                    | `fromHexKey rejects a 32-hex-character AES-128 key`                                 |
+| an internal scraper      | failures classified with `msg.includes("abort")`                      | `reports DecryptionFailed for any cipher rejection, classified by type not message` |
+| internal key routes      | the provider name and a raw `err.message` were echoed into a response | `never echoes the apiKey in a validation message`                                   |
+| an internal auth service | the per-user quota used a different limit from the session quota      | `check: a limit of 0 is a disabled budget, not an error` + the window tests         |
 
 ### Fixes applied after extraction (issue #60)
 
@@ -1957,8 +1957,7 @@ it per user with a conditional write (only if greater than the stored one), and 
 
 `requestLog`, `RequestLogOptions`, `RequestLogWriter`.
 
-Ported from `template/apps/api/middlewares/log.ts` (byte-identical in `financy`; `gb` was not
-reachable from this extraction environment, so it is not part of the comparison). The original
+Ported from `template/apps/api/middlewares/log.ts` (byte-identical in `financy`). The original
 imported the app's own `APIContext` type and its `log` service directly — a library cannot import
 either — so both become constructor arguments here: `write` (defaults to `console.log`) replaces
 the app's `log` service, and the original's hardcoded `/api/health` skip becomes the `skipPaths`

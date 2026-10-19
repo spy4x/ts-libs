@@ -332,7 +332,7 @@ by the transport.
   wording and every other domain string stay in the application. This package owns
   the transport, the escaping, the HTML shell, timezone framing and ICS
   attachment plumbing; it does not own your words.
-- **An SES adapter.** `roley`'s would drag in `@aws-sdk/client-sesv2`. The port
+- **An SES adapter.** The internal source's would drag in `@aws-sdk/client-sesv2`. The port
   makes one a small `fetch` against the SES API when a caller needs it; until
   then it is unbuilt surface.
 - **Binary attachments.** `EmailAttachment.content` is UTF-8 text, which is what

@@ -5,8 +5,8 @@
  * (`template/libs/server/db/+index.ts:5-17`), so every deployment inherited the
  * driver defaults: a connection that never times out, an idle connection that is
  * never reaped, and a pool of 10 that silently queues the eleventh concurrent
- * request behind the slowest in-flight query. `gb/libs/server/db/+index.ts:10-13`
- * set all four; those values are the defaults here, exported as an overridable
+ * request behind the slowest in-flight query. An earlier internal project set all
+ * four; those values are the defaults here, exported as an overridable
  * object rather than inlined into `createSql`.
  *
  * All four are seconds, matching the driver's own units. The names are the

@@ -1,8 +1,8 @@
 /**
  * Form-validation state: which field carries which issue.
  *
- * Ported from the component library's `crud/validation.ts`, itself ported from
- * `gb/libs/client/helpers.ts`, with arktype as the only validator. Framework-agnostic on purpose:
+ * Ported from the component library's `crud/validation.ts`, itself ported from an earlier
+ * internal project, with arktype as the only validator. Framework-agnostic on purpose:
  * the shape is `{ [field]: { [errorType]: { message, payload } } }` and nothing here knows what
  * renders it.
  *

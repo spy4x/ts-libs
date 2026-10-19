@@ -607,7 +607,7 @@ export function failOpenLimiter(
  * Build a limiter key from an identity.
  *
  * Prefixed so one backend can host several limiters (`chart:user:42`) without their counters
- * colliding, matching the `user:<id>` / `ip:<addr>` shape the `gb` middleware used.
+ * colliding, matching the `user:<id>` / `ip:<addr>` shape the source middleware used.
  */
 export function rateLimitKey(kind: RateLimitKind, id: string, prefix = ""): string {
   const scope = kind === RateLimitKind.User ? "user" : "ip"

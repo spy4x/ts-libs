@@ -296,8 +296,7 @@ DOM-component-shaped.
 
 An in-process command bus, query bus and event bus, ported from `template/libs/platform/cqrs`
 (cross-checked against `financy/libs/shared/cqrs`, which differs only in comments — the two are the
-same code). `~/sync/code/gb` was not present in this checkout, so it could not be compared; issue
-#75 names it as a possible third source and this is recorded here in case a later PR finds one.
+same code).
 
 | Module             | Contents                                                           |
 | ------------------ | ------------------------------------------------------------------ |
@@ -386,11 +385,6 @@ on the next operation, with no timer. `CacheService.wrap` has no such mode.
 
 No in-memory `ICacheStorage` ships from this package, matching the source: its own fake
 (`MemoryCacheStorage`) lived in its test file, not as a library export, and stays that way here too.
-
-An earlier draft of this section said `gb` re-verifies `redis.expiretime` on read, on top of its own
-`buildMethods`-shaped registry. That could not be confirmed here — `~/sync/code/gb` was not present
-in this checkout (see the `cqrs` section above) — so whoever next extracts from `gb`, if it turns
-out to have one, should check for that re-verification and decide whether `server/kv` needs it too.
 
 ### `./signed-payload` → `signed-payload.ts` (1 module)
 
@@ -564,7 +558,7 @@ Consequences a consumer should know:
   `platform/universal/errors.ts` and `platform/browser/storage.ts`.
 - This package ships **no** schema-parser adapter (no object exposing both a throwing parse and a
   non-throwing variant), no schema library of its own, and no second envelope. The source's
-  `validate()` ran the parse twice (`gb/libs/shared/helpers.ts:147-185`); the bug is retired by not
+  `validate()` ran the parse twice; the bug is retired by not
   porting the function at all — `@spy4x/validation` parses once.
 - Validation is applied on **write** as well as read in `makeStorage`. A value that fails its own
   schema on read is evicted, because a stored value that no longer matches is stale, not missing.

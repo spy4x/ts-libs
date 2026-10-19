@@ -16,7 +16,7 @@ import {
 
 describe("time constants", () => {
   it("derives ONE_MONTH_IN_MILLISECONDS from ONE_MONTH_IN_SECONDS, not from the year", () => {
-    // `gb/libs/shared/constants.ts:17` read `ONE_YEAR_IN_SECONDS * 1000`, making a
+    // The source repo read `ONE_YEAR_IN_SECONDS * 1000`, making a
     // month equal to a year. Restoring that line turns all three expectations red.
     expect(ONE_MONTH_IN_MILLISECONDS).toBe(ONE_MONTH_IN_SECONDS * MILLISECONDS_IN_SECOND)
     expect(ONE_MONTH_IN_SECONDS).toBe(DAYS_IN_MONTH * 86_400)

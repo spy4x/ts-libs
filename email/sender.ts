@@ -76,10 +76,9 @@ export interface ConsoleSenderOptions {
  * A sender that logs instead of sending, for local runs and for tests that need a
  * port implementation without a mail server.
  *
- * Ported from `roley`'s dev branch (`console.log` of the send command), with the
- * part `roley` got wrong left behind: `roley/src/lib/server/email/sendEmail.ts:23`
- * logs the whole `SendEmailCommand` — `JSON.stringify`, inside the *production*
- * branch too — which puts every message body and every recipient into the log,
+ * Ported from an earlier internal project's dev branch (`console.log` of the send
+ * command), with the part it got wrong left behind: the source logs the whole
+ * `SendEmailCommand` — `JSON.stringify`, inside the *production* branch too — which puts every message body and every recipient into the log,
  * while its credentials sit in the SESv2 client config and never print. This one
  * logs the envelope, the subject, an attachment count and a body preview, and has
  * no credential in scope to log.
