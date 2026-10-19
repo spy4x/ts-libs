@@ -5137,6 +5137,9 @@ used by then, so the person asks for a new one.
   email-code provider's `proveAddress`, to keep it.
 - **It does not limit how often a verification code is asked for.** Every `requestVerification`
   call is a mail; rate-limit its route like the reset route.
+- **It does not cancel the address's other reset codes.** A successful reset leaves every other
+  unexpired reset code for that address working until it expires (`resetTtlMinutes`), so keep the
+  lifetime short.
 
 ## `server/auth/email-code`
 
