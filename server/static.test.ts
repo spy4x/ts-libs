@@ -233,12 +233,44 @@ Deno.test("static: a fixture file is served with its bytes and content type", as
 
 Deno.test("static: a refused path never reaches the filesystem", async () => {
   const spy = spyFs({})
-  for (const path of ["/../secret", "/%2e%2e/secret", "/a%2Fb", "/a\\b", "/", "/./x"]) {
+  const paths = [
+    "/../secret",
+    "/%2e%2e/secret",
+    "/a%2Fb",
+    "/a\\b",
+    "/./x",
+    "/../",
+    "/%2e%2e/",
+    "//",
+  ]
+  for (const path of paths) {
     const response = await serveStatic(path, { root: ROOT, fs: spy.fs })
     assertEquals(response, undefined, `${path} was served`)
   }
   assertEquals(spy.opened, [], "a refused path was read from disk")
   assertEquals(spy.real, [], "a refused path was resolved on disk")
+})
+
+Deno.test("static: a path ending in a slash serves that directory's index.html", async () => {
+  const spy = spyFs({
+    [`${ROOT}/index.html`]: "root index",
+    [`${ROOT}/docs/index.html`]: "docs index",
+  })
+
+  const root = await serveStatic("/", { root: ROOT, fs: spy.fs })
+  const docs = await serveStatic("/docs/", { root: ROOT, fs: spy.fs })
+  const docsWithFallback = await serveStatic("/docs/", {
+    root: ROOT,
+    fs: spy.fs,
+    spaFallback: true,
+  })
+  const missing = await serveStatic("/assets/", { root: ROOT, fs: spy.fs })
+
+  assertEquals(await root?.text(), "root index")
+  assertEquals(await docs?.text(), "docs index")
+  assertEquals(await docsWithFallback?.text(), "docs index")
+  assertEquals(docs?.headers.get("content-type"), "text/html; charset=utf-8")
+  assertEquals(missing, undefined)
 })
 
 Deno.test("static: a traversal path cannot read a file outside the root", async () => {
@@ -293,6 +325,15 @@ Deno.test("static: the SPA fallback still refuses a traversal path", async () =>
   })
   assertEquals(response, undefined)
   assertEquals(spy.opened, [], "the SPA fallback read a traversal path")
+})
+
+Deno.test("static: the SPA fallback serves the shell for a path refused for an encoded slash", async () => {
+  const spy = spyFs({ [`${ROOT}/index.html`]: "shell" })
+
+  const response = await serveStatic("/tasks/a%2Fb", { root: ROOT, fs: spy.fs, spaFallback: true })
+
+  assertEquals(await response?.text(), "shell")
+  assertEquals(spy.opened, [`${ROOT}/index.html`])
 })
 
 Deno.test("static: the SPA fallback serves index.html for the root path", async () => {

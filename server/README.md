@@ -349,8 +349,9 @@ a day the user was not on.
 The request path is percent-decoded **once**, then every segment is checked: `..`, a backslash, an
 absolute path, a NUL byte and an encoded separator are all refused **before any filesystem call**. The
 adapter then compares the realpath of the resolved file against the realpath of the root, because only
-the realpath can reveal a symlink that points outside. An SPA fallback is one flag, not a list of
-route paths.
+the realpath can reveal a symlink that points outside. A path ending in `/` serves that directory's
+`index.html`. An SPA fallback is one flag, not a list of route paths: with `spaFallback`, a missing
+path, or one refused for an encoded separator such as `/tasks/a%2Fb`, gets `<root>/index.html`.
 
 A file is streamed, not read whole: `StaticFs.open` returns the file's size and a `ReadableStream`, so
 serving a large file costs the same per-request memory as serving a small one. `Content-Length` comes
