@@ -203,6 +203,48 @@ describe("createClientMetadataFetcher", () => {
     await source.load(CLIENT_ID)
     expect(fetcher.calls).toHaveLength(2)
   })
+
+  it("keeps at most maxEntries documents, dropping the oldest first", async () => {
+    const ids = [1, 2, 3].map((n) => `https://claude.example/c/${n}`)
+    const fetcher = fetcherFor((url) => json({ ...goodDocument, client_id: url }))
+    const source = createClientMetadataFetcher({
+      fetcher,
+      resolver: publicResolver,
+      clock: { now: () => 0 },
+      maxEntries: 2,
+    })
+    for (const id of ids) await source.load(id)
+    await source.load(ids[2])
+    await source.load(ids[1])
+    expect(fetcher.calls).toHaveLength(3)
+    await source.load(ids[0])
+    expect(fetcher.calls).toHaveLength(4)
+  })
+
+  it("sweeps expired documents out when it stores a new one", async () => {
+    let now = 0
+    const ids = [1, 2].map((n) => `https://claude.example/c/${n}`)
+    const fetcher = fetcherFor((url) => json({ ...goodDocument, client_id: url }))
+    const source = createClientMetadataFetcher({
+      fetcher,
+      resolver: publicResolver,
+      clock: { now: () => now },
+      cacheMs: 1_000,
+    })
+    await source.load(ids[0])
+    now = 2_000
+    await source.load(ids[1])
+    // The clock steps back so a lookup can tell a swept entry (fetched again) from a kept one.
+    now = 500
+    await source.load(ids[0])
+    expect(fetcher.calls).toHaveLength(3)
+  })
+
+  it("refuses a maxEntries that is not a positive integer", () => {
+    for (const maxEntries of [0, -1, 1.5, Number.NaN]) {
+      expect(() => createClientMetadataFetcher({ maxEntries })).toThrow(RangeError)
+    }
+  })
 })
 
 describe("isClientIdUrl", () => {
