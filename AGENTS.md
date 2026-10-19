@@ -111,9 +111,8 @@ A publish cannot be undone: JSR never deletes a version, so tag only the merged 
 already on JSR is skipped, so the `publish` step retries a failed or stalled `deno publish`
 itself, three attempts of 10 minutes each (#683); restart the pipeline only after all three fail.
 
-Releases are cut in batches (#683), not after every merge: one release when an app PR that is open
-now cannot merge without the change (merge everything that lane needs first), when the change
-closes a security or data-loss hole, or once at the end of a wave.
+Releases are cut in batches (#683), never after every merge, at the times the global rule for
+shared libraries allows ("Autonomy" in the global agent rules).
 
 ## Branches
 
