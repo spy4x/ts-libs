@@ -10,7 +10,7 @@
  * return `undefined` (no CORS headers), which is not a rejection — browsers only
  * enforce CORS when an `Origin` is present.
  *
- * Deviations from the `offer-lens` source, all covered by tests below:
+ * Deviations from the source, all covered by tests below:
  *  - the allowed origins are a required argument rather than a module constant
  *    baked to one product, and a resolver built from an empty allowlist throws
  *    instead of accepting every origin — the "no config" default must be refuse,
