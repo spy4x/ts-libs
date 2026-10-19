@@ -1,13 +1,8 @@
 /**
  * Bounded body reading — a hard byte cap plus a stalled-body timeout.
  *
- * Merges two behaviours that lived in separate source repos:
- *  - `offer-lens/libs/scraper/mod.ts` streamed a `Response` body and threw the
- *    moment the accumulated bytes passed a hard cap.
- *  - `warthunder-stats/libs/server/http/body.ts` read a `Request` body with the
- *    same cap and pre-checked a declared `Content-Length`.
- *  - The stalled-body half — a timer that cancels the reader — was
- *    `offer-lens`-only and applies to both here.
+ * It caps both a `Response` body and a `Request` body, pre-checks a declared
+ * `Content-Length`, and cancels a reader whose body stalls.
  *
  * Zero dependencies: `ReadableStream`, `TextDecoder` and `setTimeout` are all
  * platform APIs. Bodies are decoded incrementally so a huge payload never lands

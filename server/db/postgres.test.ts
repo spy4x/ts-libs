@@ -18,7 +18,7 @@ import {
   PostgresEnvName,
 } from "./postgres.ts"
 
-Deno.test("DEFAULT_POOL_OPTIONS carries the values gb tuned", () => {
+Deno.test("DEFAULT_POOL_OPTIONS carries the tuned values", () => {
   assertEquals(DEFAULT_POOL_OPTIONS, {
     connectTimeout: 10,
     idleTimeout: 30,

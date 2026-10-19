@@ -1,8 +1,8 @@
 /**
  * The SQLite adapter.
  *
- * Ported from `warthunder-stats/libs/server/db/+index.ts` and `reset.ts`, with
- * three changes and one omission:
+ * Ported from the SQLite layer of an earlier internal project, with three changes
+ * and one omission:
  *
  *  - **the driver is a port.** The source imported `better-sqlite3` at the top of
  *    the module (`:9`), which put a native npm binary in the dependency graph of
@@ -783,9 +783,9 @@ export async function applySqliteSchema(db: SqliteDb, schema: SqliteSchema): Pro
 /**
  * Delete a database file and its `-wal`/`-shm` sidecars.
  *
- * Ported from `warthunder-stats/libs/server/db/reset.ts:6-13`. A missing file is not
- * an error; every other remove failure propagates, so a permission problem is never
- * reported as "already clean". Sidecars are a consequence of WAL: a leftover `-wal`
+ * Ported from an earlier internal project. A missing file is not an error; every
+ * other remove failure propagates, so a permission problem is never reported as
+ * "already clean". Sidecars are a consequence of WAL: a leftover `-wal`
  * beside a fresh database is a set of unapplied frames, which is why a reset removes
  * all three rather than the main file alone.
  */

@@ -10,9 +10,8 @@
  * already pinned in the root import map, and the SQLite driver is the caller's
  * choice.
  *
- * Source repos, all read-only design sources:
- * `template/libs/server/db`, `gb/libs/server/db`, `offer-lens/libs/db`,
- * `warthunder-stats/libs/server/db`.
+ * Design sources: `template/libs/server/db` and the database layers of three
+ * earlier internal projects.
  *
  * @module
  */

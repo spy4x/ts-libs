@@ -2,15 +2,15 @@
  * The Postgres service base class.
  *
  * Ported from `template/libs/server/db/+index.ts:26-213`, with the cache helpers
- * kept and the transaction helper reconciled against
- * `offer-lens/libs/db/mod.ts:38-65`.
+ * kept and the transaction helper reconciled against one ported from an earlier
+ * internal project.
  *
  * **Reconciliation.** Both sources have a `begin<T>()`, and they differ in two
  * ways. The template stores the client in a `protected sql` field and clones with
- * `Object.create(this)` plus a `protected setSql`; offer-lens stores it in a
+ * `Object.create(this)` plus a `protected setSql`; the other source stores it in a
  * `protected db` field and clones the same way, with a constructor that throws
  * when no client exists. The shapes are otherwise one mechanism, so this keeps the
- * template's shape and ports offer-lens's two improvements into it:
+ * template's shape and ports the other source's two improvements into it:
  *
  *  - `begin` recurses correctly. The template called `this.sql.begin(...)`, and a
  *    clone's `sql` is a transaction handle, which has no `begin` of its own. Neither

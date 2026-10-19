@@ -19,18 +19,18 @@
  * The key material has two entry points, and they are not interchangeable:
  * `new CryptoService(secret)` hashes the passphrase with SHA-256 (template's
  * derivation), while `CryptoService.fromHexKey(hex)` decodes 64 hex characters
- * to the 32 raw AES-256 key bytes and imports them as they are
- * (`offer-lens/libs/encrypt/mod.ts:13-19`'s key path). Same wire format, two
- * keys — see the {@link CryptoService} JSDoc.
+ * to the 32 raw AES-256 key bytes and imports them as they are (the key path
+ * of an earlier internal project). Same wire format, two keys — see the
+ * {@link CryptoService} JSDoc.
  *
  * Two documented defects of the sources are fixed here rather than ported:
  *
- * - `offer-lens/libs/encrypt/mod.ts:13-18` accepted a 32-hex-character
+ * - The hex-key source accepted a 32-hex-character
  *   (16-byte, AES-128) `ENCRYPTION_KEY` next to a 64-hex-character AES-256 one,
  *   so the same deployment could silently run one of two key sizes.
  *   `CryptoService.fromHexKey` now demands exactly 32 key bytes
  *   (`HEX_KEY_LENGTH` = 64 hex characters) and rejects AES-128 matter.
- * - `offer-lens/libs/scraper/mod.ts:132` classified failures with
+ * - The same source classified failures with
  *   `msg.includes("abort") || msg.includes("timeout")`. Nothing here inspects
  *   message text: every failure leaves as a {@link CryptoError} with a
  *   {@link CryptoErrorCode}, and caught values are narrowed with `instanceof`.
@@ -154,7 +154,7 @@ export interface SecretCipher {
  *   from `template/libs/server/crypto`.
  * - {@link CryptoService.fromHexKey} treats the argument as 32 hex-encoded raw
  *   key bytes and imports those bytes unchanged, with no hashing — the key path
- *   from `offer-lens/libs/encrypt/mod.ts:13-19`.
+ *   ported from an earlier internal project.
  *
  * The two are not interchangeable: `fromHexKey(h)` does not read a ciphertext
  * produced by `new CryptoService(h)`. Whichever entry point a deployment picks
@@ -195,8 +195,8 @@ export class CryptoService implements SecretCipher {
    * hex is decoded to bytes and imported raw, never hashed, so
    * `fromHexKey(h)` and `new CryptoService(h)` — the same 64 characters —
    * produce different keys and neither can decrypt the other's ciphertext.
-   * This matches the source's key path (`offer-lens/libs/encrypt/mod.ts:13-19`)
-   * while dropping its acceptance of a 16-byte/AES-128 key.
+   * This matches the source's key path while dropping its acceptance of a
+   * 16-byte/AES-128 key.
    *
    * Accepts exactly {@link HEX_KEY_LENGTH} hex characters — no 16-byte/AES-128
    * key, no `0x` prefix, no separators, no padding. Upper-case and lower-case

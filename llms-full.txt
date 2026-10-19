@@ -57,7 +57,7 @@ Deno.serve(async (request) => {
 | [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker                         | server                 |
 | [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync            | both halves            |
 | [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter                 | server                 |
-| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | WebDAV multistatus reader, escaped request bodies, href and origin rules              | shared                 |
+| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | CalDAV client, sync engine and write transport, WebDAV multistatus reader, URL rules  | shared                 |
 | [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks)               | the to-do model of the CalDAV task apps: task, list views, quick-add, reminder runner | shared                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
@@ -188,7 +188,8 @@ if (parsed.event?.type === BillingEventType.PaymentSucceeded) {
 return new Response(null, { status: 200 })
 
 // Operator actions. Make one idempotency key per intended action, such as when the dialog opens
-// (`uuidV7()` from `@spy4x/platform/universal/uuid`), so a double click or a retry acts once.
+// (`uuidV7()` from `@spy4x/platform/universal/uuid`), so a double click or a retry within Stripe's
+// 24-hour key window acts once.
 const last = await billing.readLastPayment({ subscriptionId })
 if (last.ok && last.value !== null && !last.value.refunded) {
   await billing.refundPayment({ paymentId: last.value.id, idempotencyKey })
@@ -215,7 +216,8 @@ await billing.cancelNow({ subscriptionId, idempotencyKey })
   price.
 - **Operator actions.** Each one that changes something takes a required `idempotencyKey`, sent as
   Stripe's `Idempotency-Key`, and refuses a call without one as `invalid_request` before calling
-  Stripe. None of them changes what the app stores: the webhook that follows does.
+  Stripe. Stripe keeps a key for 24 hours, so only a retry within that window gets the first call's
+  answer. None of them changes what the app stores: the webhook that follows does.
   - `readLastPayment({ subscriptionId })` answers the newest payment that moved money: its
     payment intent or charge ID, invoice, amount, currency, decimals, `paidAt`, `amountRefunded`
     and `refunded` (nothing left to refund). It reads the ten newest paid invoices and skips one
@@ -940,7 +942,7 @@ by the transport.
   wording and every other domain string stay in the application. This package owns
   the transport, the escaping, the HTML shell, timezone framing and ICS
   attachment plumbing; it does not own your words.
-- **An SES adapter.** `roley`'s would drag in `@aws-sdk/client-sesv2`. The port
+- **An SES adapter.** The internal source's would drag in `@aws-sdk/client-sesv2`. The port
   makes one a small `fetch` against the SES API when a caller needs it; until
   then it is unbuilt surface.
 - **Binary attachments.** `EmailAttachment.content` is UTF-8 text, which is what
@@ -2467,8 +2469,7 @@ DOM-component-shaped.
 
 An in-process command bus, query bus and event bus, ported from `template/libs/platform/cqrs`
 (cross-checked against `financy/libs/shared/cqrs`, which differs only in comments — the two are the
-same code). `~/sync/code/gb` was not present in this checkout, so it could not be compared; issue
-#75 names it as a possible third source and this is recorded here in case a later PR finds one.
+same code).
 
 | Module             | Contents                                                           |
 | ------------------ | ------------------------------------------------------------------ |
@@ -2557,11 +2558,6 @@ on the next operation, with no timer. `CacheService.wrap` has no such mode.
 
 No in-memory `ICacheStorage` ships from this package, matching the source: its own fake
 (`MemoryCacheStorage`) lived in its test file, not as a library export, and stays that way here too.
-
-An earlier draft of this section said `gb` re-verifies `redis.expiretime` on read, on top of its own
-`buildMethods`-shaped registry. That could not be confirmed here — `~/sync/code/gb` was not present
-in this checkout (see the `cqrs` section above) — so whoever next extracts from `gb`, if it turns
-out to have one, should check for that re-verification and decide whether `server/kv` needs it too.
 
 ### `./signed-payload` → `signed-payload.ts` (1 module)
 
@@ -2735,7 +2731,7 @@ Consequences a consumer should know:
   `platform/universal/errors.ts` and `platform/browser/storage.ts`.
 - This package ships **no** schema-parser adapter (no object exposing both a throwing parse and a
   non-throwing variant), no schema library of its own, and no second envelope. The source's
-  `validate()` ran the parse twice (`gb/libs/shared/helpers.ts:147-185`); the bug is retired by not
+  `validate()` ran the parse twice; the bug is retired by not
   porting the function at all — `@spy4x/validation` parses once.
 - Validation is applied on **write** as well as read in `makeStorage`. A value that fails its own
   schema on read is evicted, because a stored value that no longer matches is stale, not missing.
@@ -2796,9 +2792,9 @@ else here knows about tasks.
 # `@spy4x/platform/rate-limit`
 
 Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracted from
-`mig/lib/ratelimit.ts`, `gb/apps/api/{services,middlewares}/rateLimiter.ts` and
-`caldav-mcp/main.ts`, and it closes a live gap: `seed`'s auth routes ship with both
-`.use(rateLimiter)` calls commented out and no implementation anywhere in that repo.
+`mig/lib/ratelimit.ts`, an earlier internal project's rate limiter and `caldav-mcp/main.ts`, and it
+closes a live gap: `seed`'s auth routes ship with both `.use(rateLimiter)` calls commented out and
+no implementation anywhere in that repo.
 
 ## Modules
 
@@ -2978,10 +2974,10 @@ window by retrying.
 
 ## Key resolution
 
-`keyResolver(req)` is a parameter, never a lookup into framework state. `gb`'s only app-coupled line
-was `c.get?.("auth")`, and its optional chaining silently degraded every request to a shared
-`ip:unknown` bucket when the auth middleware had not run. `userThenIp(userId)` provides the
-`user:<id>` / `ip:<addr>` shape; anything else is the caller's own resolver.
+`keyResolver(req)` is a parameter, never a lookup into framework state. The source's only
+app-coupled line was `c.get?.("auth")`, and its optional chaining silently degraded every request
+to a shared `ip:unknown` bucket when the auth middleware had not run. `userThenIp(userId)` provides
+the `user:<id>` / `ip:<addr>` shape; anything else is the caller's own resolver.
 
 ## `clientIp` trust boundary
 
@@ -3092,7 +3088,7 @@ outside the middleware, stating explicitly which of the two you want.
 
 ## Headers
 
-Draft-6, matching `standardHeaders: "draft-6"` in the `gb` source:
+Draft-6, matching `standardHeaders: "draft-6"` in the source:
 
 | Header                | Value                                                           |
 | --------------------- | --------------------------------------------------------------- |
@@ -3111,7 +3107,7 @@ combined `RateLimit` field is not emitted.
   per-key or per-host (MusicBrainz and CoverArtArchive hold separate instances, so their shared
   1 req/s was never enforced) and has no burst, concurrency cap, 429/503 backoff or jitter. The
   limiter here supersedes it.
-- **Not here:** quota and usage accounting (`offer-lens/apps/api/services/demo-usage.ts`) — metering
+- **Not here:** quota and usage accounting (`server/quota`) — metering
   is a separate concern with a different lifetime.
 - **Not installed:** `hono-rate-limiter` and `rate-limit-redis`. The first is this middleware; the
   second would make a Redis client a hard dependency of the limiter core, which is what the
@@ -3765,18 +3761,18 @@ with `details.code` `IN_PROGRESS`. Every other answer is final; `unauthorized` i
 Each row is a bug in the source this package redesigns, with the test that now
 pins the behaviour.
 
-| Bug                                                                                                                                                                                                                                                                     | Source                                                                                                                                                       | Fix here                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| An unknown model broadcast to **every connected user** (`default:` → `Array.from(userBySocket.values())`, and `case tag:` doing the same)                                                                                                                               | `financy/apps/api/services/websockets.ts:1187-1198`                                                                                                          | Unknown aggregate → zero recipients, `NotifyStatus.UnknownAggregate`, never a fan-out call (`notify.ts`)                                                                                                                                                                                                                                                                                                                                               |
-| A throwing recipient lookup fell back to `sendToAll`                                                                                                                                                                                                                    | `financy/apps/api/services/websockets.ts:1147-1151`                                                                                                          | Resolver failure → `NotifyStatus.Failed`, zero recipients, `onError` (`notify.ts`)                                                                                                                                                                                                                                                                                                                                                                     |
-| `SYNC_START` sent a hardcoded `0` (`p: [0]`, with a TODO to persist the checkpoint), so every connect re-downloaded everything                                                                                                                                          | `financy/apps/web/src/state/ws.ts:276-286`                                                                                                                   | The handshake sends the persisted cursors, or an explicit `fromStart: true` for a genuinely cold client (`client-transport.ts`)                                                                                                                                                                                                                                                                                                                        |
-| Guards written as `return` inside a per-model `if` chain: inconsistent (an unknown op is rejected for `transaction` at `:347-358` and `userSettings` at `:1047-1058`, silently ignored for `user` at `:962-1002`) and scoped to the whole handler rather than the block | `financy/apps/api/services/websockets.ts:179-1059`                                                                                                           | `registry.ts:293-323` dispatches on frame kind with one `if` chain and a single terminal `reportMalformed` call: every handled branch returns, so a frame that does not decode, or arrives in the wrong direction, can only reach that report and is never dispatched. (The `switch` in this package is `client-transport.ts`'s inbound path, with a `default` that reports a wrong-direction frame.) Hints go through one keyed adapter (`notify.ts`) |
-| `syncedAt` in an in-memory signal, so it died with the tab                                                                                                                                                                                                              | `financy/apps/web/src/state/ws.ts:43,196`; `gb/apps/web/state/ws.ts:65,79,256-258` — `:65` declares the field, `:79` initialises it, `:256-258` overwrite it | Cursors and the sync time are persisted through an injected `KeyValueStore`; a pull that succeeds calls `markSynced()` (`cursor.ts`)                                                                                                                                                                                                                                                                                                                   |
+| Bug                                                                                                                                                                                                                                                                     | Source                                                                              | Fix here                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| An unknown model broadcast to **every connected user** (`default:` → `Array.from(userBySocket.values())`, and `case tag:` doing the same)                                                                                                                               | `financy/apps/api/services/websockets.ts:1187-1198`                                 | Unknown aggregate → zero recipients, `NotifyStatus.UnknownAggregate`, never a fan-out call (`notify.ts`)                                                                                                                                                                                                                                                                                                                                               |
+| A throwing recipient lookup fell back to `sendToAll`                                                                                                                                                                                                                    | `financy/apps/api/services/websockets.ts:1147-1151`                                 | Resolver failure → `NotifyStatus.Failed`, zero recipients, `onError` (`notify.ts`)                                                                                                                                                                                                                                                                                                                                                                     |
+| `SYNC_START` sent a hardcoded `0` (`p: [0]`, with a TODO to persist the checkpoint), so every connect re-downloaded everything                                                                                                                                          | `financy/apps/web/src/state/ws.ts:276-286`                                          | The handshake sends the persisted cursors, or an explicit `fromStart: true` for a genuinely cold client (`client-transport.ts`)                                                                                                                                                                                                                                                                                                                        |
+| Guards written as `return` inside a per-model `if` chain: inconsistent (an unknown op is rejected for `transaction` at `:347-358` and `userSettings` at `:1047-1058`, silently ignored for `user` at `:962-1002`) and scoped to the whole handler rather than the block | `financy/apps/api/services/websockets.ts:179-1059`                                  | `registry.ts:293-323` dispatches on frame kind with one `if` chain and a single terminal `reportMalformed` call: every handled branch returns, so a frame that does not decode, or arrives in the wrong direction, can only reach that report and is never dispatched. (The `switch` in this package is `client-transport.ts`'s inbound path, with a `default` that reports a wrong-direction frame.) Hints go through one keyed adapter (`notify.ts`) |
+| `syncedAt` in an in-memory signal, so it died with the tab                                                                                                                                                                                                              | `financy/apps/web/src/state/ws.ts:43,196`; an earlier internal project did the same | Cursors and the sync time are persisted through an injected `KeyValueStore`; a pull that succeeds calls `markSynced()` (`cursor.ts`)                                                                                                                                                                                                                                                                                                                   |
 
-Two more differences worth naming, both in the registry: `gb` pinged every
+Two more differences worth naming, both in the registry: the source pinged every
 socket and never looked for a pong, so a half-open socket stayed in the fan-out
 forever — here a socket silent past `livenessTimeoutMs` is closed and reaped;
-and `gb`'s `sendToAll` threw out of its loop on the first bad socket, truncating
+and its `sendToAll` threw out of its loop on the first bad socket, truncating
 the broadcast — here a throwing socket is reaped and the loop continues.
 
 ## Fixed after ship
@@ -4559,15 +4555,15 @@ constant-time compare. Same signature, same behaviour; new code should import th
 
 ## Fixes applied at extraction time (`server/http/bounded-body`, `server/http/cors`)
 
-| Source                                       | Bug                                                                                                                                 | Pinned by                                                                      |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `warthunder-stats/.../body.ts:49-51`         | `body.buffer` ignored the view's `byteOffset`/`byteLength` — the `as ArrayBuffer` cast hid it                                       | `parseBoundedFormData respects a non-zero byteOffset on the read buffer` (net) |
-| `warthunder-stats/.../body.ts:11-13`         | an over-cap `content-length` was rejected without cancelling the request body, and the check did not pin the position of the read   | `readBoundedBody leaves an unread rejected body to the server to drain`        |
-| `warthunder-stats/.../body.ts:23-24`         | the cap was enforced by a `NaN`-comparing `Number(...)` check instead of an explicit header reader                                  | `readContentLength reads a bare decimal length and ignores anything else`      |
-| `warthunder-stats/.../body.ts:28`            | `await reader.cancel()` in the `catch` was relied on not to reject, while the sibling call was wrapped                              | `readBoundedBody reports the read error even when cancel rejects`              |
-| `offer-lens/libs/scraper/mod.ts:184-186`     | when the deadline won the `Promise.race` the reader was only cancelled "best effort", leaving a pending `read()` that never settles | `readBoundedBody rejects a stalled body once the stall budget expires`         |
-| `offer-lens/libs/scraper/mod.ts:206`         | the oversized `content-length` early-out was absent, so a body declaring 4 GiB was streamed before being rejected                   | `readBoundedBody rejects an oversized declared content-length before reading`  |
-| `offer-lens/apps/api/services/cors.ts:53-60` | an `https://` host missing from the allowlist fell through to the dev-host check                                                    | `cors: https dev origins are refused`                                          |
+| Source                   | Bug                                                                                                                                 | Pinned by                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| an internal body reader  | `body.buffer` ignored the view's `byteOffset`/`byteLength` — the `as ArrayBuffer` cast hid it                                       | `parseBoundedFormData respects a non-zero byteOffset on the read buffer` (net) |
+| an internal body reader  | an over-cap `content-length` was rejected without cancelling the request body, and the check did not pin the position of the read   | `readBoundedBody leaves an unread rejected body to the server to drain`        |
+| an internal body reader  | the cap was enforced by a `NaN`-comparing `Number(...)` check instead of an explicit header reader                                  | `readContentLength reads a bare decimal length and ignores anything else`      |
+| an internal body reader  | `await reader.cancel()` in the `catch` was relied on not to reject, while the sibling call was wrapped                              | `readBoundedBody reports the read error even when cancel rejects`              |
+| an internal scraper      | when the deadline won the `Promise.race` the reader was only cancelled "best effort", leaving a pending `read()` that never settles | `readBoundedBody rejects a stalled body once the stall budget expires`         |
+| an internal scraper      | the oversized `content-length` early-out was absent, so a body declaring 4 GiB was streamed before being rejected                   | `readBoundedBody rejects an oversized declared content-length before reading`  |
+| an internal CORS service | an `https://` host missing from the allowlist fell through to the dev-host check                                                    | `cors: https dev origins are refused`                                          |
 
 Two rows changed meaning when `server/http/bounded-body.ts` collapsed into the canonical
 reader (`net/bounded-body.ts`): the canonical one rejects an over-cap `content-length` before
@@ -5719,12 +5715,12 @@ smoothing is `platform/rate-limit` (issue #4), which does not live here.
 
 ### Fixes applied at extraction time (`server/crypto`, `server/user-secrets`, `server/quota`)
 
-| Source                                         | Bug                                                                   | Pinned by                                                                           |
-| ---------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `offer-lens/libs/encrypt/mod.ts:13-18`         | a 16-byte AES-128 key was accepted next to AES-256                    | `fromHexKey rejects a 32-hex-character AES-128 key`                                 |
-| `offer-lens/libs/scraper/mod.ts:132`           | failures classified with `msg.includes("abort")`                      | `reports DecryptionFailed for any cipher rejection, classified by type not message` |
-| `offer-lens/apps/api/routes/keys.ts:93,133`    | the provider name and a raw `err.message` were echoed into a response | `never echoes the apiKey in a validation message`                                   |
-| `offer-lens/apps/api/services/auth.ts:157-164` | the per-user quota used a different limit from the session quota      | `check: a limit of 0 is a disabled budget, not an error` + the window tests         |
+| Source                   | Bug                                                                   | Pinned by                                                                           |
+| ------------------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| an internal key cipher   | a 16-byte AES-128 key was accepted next to AES-256                    | `fromHexKey rejects a 32-hex-character AES-128 key`                                 |
+| an internal scraper      | failures classified with `msg.includes("abort")`                      | `reports DecryptionFailed for any cipher rejection, classified by type not message` |
+| internal key routes      | the provider name and a raw `err.message` were echoed into a response | `never echoes the apiKey in a validation message`                                   |
+| an internal auth service | the per-user quota used a different limit from the session quota      | `check: a limit of 0 is a disabled budget, not an error` + the window tests         |
 
 ### Fixes applied after extraction (issue #60)
 
@@ -6192,8 +6188,7 @@ it per user with a conditional write (only if greater than the stored one), and 
 
 `requestLog`, `RequestLogOptions`, `RequestLogWriter`.
 
-Ported from `template/apps/api/middlewares/log.ts` (byte-identical in `financy`; `gb` was not
-reachable from this extraction environment, so it is not part of the comparison). The original
+Ported from `template/apps/api/middlewares/log.ts` (byte-identical in `financy`). The original
 imported the app's own `APIContext` type and its `log` service directly — a library cannot import
 either — so both become constructor arguments here: `write` (defaults to `console.log`) replaces
 the app's `log` service, and the original's hardcoded `/api/health` skip becomes the `skipPaths`
@@ -8240,10 +8235,9 @@ fixed `Date` in tests.
 
 `time/ics-core.ts` holds the byte-level RFC 5545 primitives: 75-octet folding, unfolding, TEXT
 escaping, RFC 6868 parameter escaping, control-character stripping and the UTC DATE-TIME format.
-`time/ics.ts` builds VCALENDAR/VEVENT on top of it. The split originally let the removed `caldav/`
-package (#13) import the same module instead of carrying a third copy; `caldav/` is gone (#63), but
-`time/ics.ts` still needs the split, so `ics-core.ts` stays. `caldav-mcp`'s `ical.ts` — a separate
-repo, not part of this library — slices folded lines by character (`ical.ts:10-19`), which splits
+`time/ics.ts` builds VCALENDAR/VEVENT on top of it, and the `caldav/` package imports the same
+module instead of carrying a copy of its own. `caldav-mcp`'s `ical.ts` — a separate repo, not part
+of this library — slices folded lines by character (`ical.ts:10-19`), which splits
 multi-byte UTF-8; `ics-core.ts` does not.
 
 ### Folding

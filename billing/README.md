@@ -62,7 +62,8 @@ if (parsed.event?.type === BillingEventType.PaymentSucceeded) {
 return new Response(null, { status: 200 })
 
 // Operator actions. Make one idempotency key per intended action, such as when the dialog opens
-// (`uuidV7()` from `@spy4x/platform/universal/uuid`), so a double click or a retry acts once.
+// (`uuidV7()` from `@spy4x/platform/universal/uuid`), so a double click or a retry within Stripe's
+// 24-hour key window acts once.
 const last = await billing.readLastPayment({ subscriptionId })
 if (last.ok && last.value !== null && !last.value.refunded) {
   await billing.refundPayment({ paymentId: last.value.id, idempotencyKey })
@@ -89,7 +90,8 @@ await billing.cancelNow({ subscriptionId, idempotencyKey })
   price.
 - **Operator actions.** Each one that changes something takes a required `idempotencyKey`, sent as
   Stripe's `Idempotency-Key`, and refuses a call without one as `invalid_request` before calling
-  Stripe. None of them changes what the app stores: the webhook that follows does.
+  Stripe. Stripe keeps a key for 24 hours, so only a retry within that window gets the first call's
+  answer. None of them changes what the app stores: the webhook that follows does.
   - `readLastPayment({ subscriptionId })` answers the newest payment that moved money: its
     payment intent or charge ID, invoice, amount, currency, decimals, `paidAt`, `amountRefunded`
     and `refunded` (nothing left to refund). It reads the ten newest paid invoices and skips one

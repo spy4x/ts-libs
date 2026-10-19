@@ -1,9 +1,8 @@
 /**
  * Retry policies for the notifiers.
  *
- * The retry *mechanism* lives in `./retry.ts`, which is byte-identical to
- * `integrations/retry.ts`. Only the policy numbers are package-specific, so
- * they live here rather than in the shared copy.
+ * The retry *mechanism* lives in `./retry.ts`. Only the policy numbers live
+ * here.
  */
 
 import type { RetryPolicy } from "./retry.ts"

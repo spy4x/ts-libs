@@ -1,7 +1,7 @@
 /**
  * Hono middleware factory over any limiter from `memory.ts`.
  *
- * Ported from `gb/apps/api/services/rateLimiter.ts` + `middlewares/rateLimiter.ts`, with the two
+ * Ported from an earlier internal project's rate-limiter service and middleware, with the two
  * external packages dropped: `hono-rate-limiter`'s whole job here is "run a limiter, emit draft-6
  * headers", which is this file, and `rate-limit-redis` existed to put the store in Redis — a job
  * the `RateLimitStore` port now does without dragging a Redis client into the limiter.
@@ -175,7 +175,8 @@ export type KeyResolver<E extends Env = Record<string, never>> = (
 export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never>> {
   /**
    * Bucket the request. Given the request plus the context, because a request alone carries no peer
-   * address and reaching into Hono context for app state was what made `gb`'s version uncopyable.
+   * address and reaching into Hono context for app state was what made the source's version
+   * uncopyable.
    */
   keyResolver: KeyResolver<E>
   /**
@@ -250,7 +251,7 @@ export type RateLimitHonoContext<E extends Env = Record<string, never>> = Contex
  * Build the middleware for a limiter.
  *
  * The key resolver is a parameter because that was the only app-coupled line in the source
- * (`c.get?.("auth")`). `gb`'s optional chaining meant a missing auth middleware silently degraded
+ * (`c.get?.("auth")`). Its optional chaining meant a missing auth middleware silently degraded
  * every request to a shared `ip:unknown` bucket; here the coupling is explicit and the fallback is
  * the caller's own code.
  *

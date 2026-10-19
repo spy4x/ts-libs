@@ -4,8 +4,8 @@
  * A month is **30 days** and a year is **12 months**, matching the fixed-length convention the
  * inventory batch already used for cache TTLs. Derive every millisecond constant from its own
  * second-based counterpart: the source repo computed {@link ONE_MONTH_IN_MILLISECONDS} from
- * `ONE_YEAR_IN_SECONDS` (`gb/libs/shared/constants.ts:17`), which silently made the month twelve
- * times too long — i.e. byte-identical to a year.
+ * `ONE_YEAR_IN_SECONDS`, which silently made the month twelve times too long — i.e.
+ * byte-identical to a year.
  *
  * @module
  */

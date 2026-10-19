@@ -2,10 +2,9 @@
  * RFC 5545 iCalendar wire primitives: content-line folding, TEXT/parameter
  * escaping and the UTC DATE-TIME value type.
  *
- * This module is the byte-level core for the `time/` writer (`time/ics.ts`). It
- * used to also be the shared core for the CalDAV wire code in `caldav/` (issue
- * #13), which was removed from ts-libs (#63); `time/ics.ts` still needs the
- * split, so this file stays. It deliberately contains no VCALENDAR/VEVENT
+ * This module is the byte-level core for the `time/` writer (`time/ics.ts`) and
+ * for the CalDAV wire code in `caldav/`, which imports it instead of carrying a
+ * copy of its own. It deliberately contains no VCALENDAR/VEVENT
  * structure and no parser: it is the byte-level layer, not the format on top.
  *
  * The folding algorithm originates in `mig/lib/ics.ts` (fold) and this port

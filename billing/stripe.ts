@@ -1,7 +1,7 @@
 /**
  * Stripe adapter for {@link BillingProvider}, over Stripe's REST API with `fetch`. No Stripe SDK:
- * a few calls (Checkout Sessions, Billing Portal Sessions, Subscriptions, webhook events) do not
- * justify a large npm dependency.
+ * a few calls (Checkout Sessions, Billing Portal Sessions, Subscriptions, Invoices, Payment
+ * Intents, Charges, Refunds, webhook events) do not justify a large npm dependency.
  *
  * - **API version.** Every request sends {@link STRIPE_API_VERSION}. A webhook payload follows the
  *   version of the webhook endpoint, not of the request, so set the endpoint in Stripe's dashboard

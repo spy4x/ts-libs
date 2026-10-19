@@ -171,10 +171,10 @@ export const healthchecksConfigFromEnv = (
 /**
  * healthchecks.io client.
  *
- * The default policy is the source's: 10 attempts with 60s doubling capped at
- * 10 minutes per wait. `Retry-After` is honoured when the provider sends it —
- * healthchecks.io rate-limits with `429` and the source ignored the header,
- * hammering the endpoint on the exact failures it was retrying.
+ * The default policy is the source's: 10 attempts with 60s doubling, capped at
+ * 5 minutes per wait (see `DEFAULT_RETRY_POLICY`). `Retry-After` is honoured
+ * when the provider sends it — healthchecks.io rate-limits with `429` and the
+ * source ignored the header, hammering the endpoint on the exact failures it was retrying.
  */
 export class HealthchecksClient {
   private readonly pingUrl: string

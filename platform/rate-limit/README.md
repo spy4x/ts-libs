@@ -1,9 +1,9 @@
 # `@spy4x/platform/rate-limit`
 
 Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracted from
-`mig/lib/ratelimit.ts`, `gb/apps/api/{services,middlewares}/rateLimiter.ts` and
-`caldav-mcp/main.ts`, and it closes a live gap: `seed`'s auth routes ship with both
-`.use(rateLimiter)` calls commented out and no implementation anywhere in that repo.
+`mig/lib/ratelimit.ts`, an earlier internal project's rate limiter and `caldav-mcp/main.ts`, and it
+closes a live gap: `seed`'s auth routes ship with both `.use(rateLimiter)` calls commented out and
+no implementation anywhere in that repo.
 
 ## Modules
 
@@ -183,10 +183,10 @@ window by retrying.
 
 ## Key resolution
 
-`keyResolver(req)` is a parameter, never a lookup into framework state. `gb`'s only app-coupled line
-was `c.get?.("auth")`, and its optional chaining silently degraded every request to a shared
-`ip:unknown` bucket when the auth middleware had not run. `userThenIp(userId)` provides the
-`user:<id>` / `ip:<addr>` shape; anything else is the caller's own resolver.
+`keyResolver(req)` is a parameter, never a lookup into framework state. The source's only
+app-coupled line was `c.get?.("auth")`, and its optional chaining silently degraded every request
+to a shared `ip:unknown` bucket when the auth middleware had not run. `userThenIp(userId)` provides
+the `user:<id>` / `ip:<addr>` shape; anything else is the caller's own resolver.
 
 ## `clientIp` trust boundary
 
@@ -297,7 +297,7 @@ outside the middleware, stating explicitly which of the two you want.
 
 ## Headers
 
-Draft-6, matching `standardHeaders: "draft-6"` in the `gb` source:
+Draft-6, matching `standardHeaders: "draft-6"` in the source:
 
 | Header                | Value                                                           |
 | --------------------- | --------------------------------------------------------------- |
@@ -316,7 +316,7 @@ combined `RateLimit` field is not emitted.
   per-key or per-host (MusicBrainz and CoverArtArchive hold separate instances, so their shared
   1 req/s was never enforced) and has no burst, concurrency cap, 429/503 backoff or jitter. The
   limiter here supersedes it.
-- **Not here:** quota and usage accounting (`offer-lens/apps/api/services/demo-usage.ts`) — metering
+- **Not here:** quota and usage accounting (`server/quota`) — metering
   is a separate concern with a different lifetime.
 - **Not installed:** `hono-rate-limiter` and `rate-limit-redis`. The first is this middleware; the
   second would make a Redis client a hard dependency of the limiter core, which is what the

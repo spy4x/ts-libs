@@ -8,14 +8,13 @@
  *
  * Two behaviours come from source repos that only one of them had:
  *
- *  - the `.no_transaction` filename suffix (`gb/libs/server/db/migrate.ts:9,69,78-91`). A
- *    `CREATE INDEX CONCURRENTLY` cannot run inside a transaction, so a migration whose name
- *    ends in that suffix is handed to `applyWithoutTransaction` and recorded in the same
- *    call: the record insert is what proves the migration ran, and it has to happen outside
- *    the transaction the statement cannot be wrapped in.
- *  - the name-based history table (`offer-lens/libs/db/migrate.ts:17-23,36-37`). The template
- *    runner keyed on file names and re-read the whole table per run; here the applied set is
- *    read once per run into a `Set`.
+ *  - the `.no_transaction` filename suffix. A `CREATE INDEX CONCURRENTLY` cannot run inside a
+ *    transaction, so a migration whose name ends in that suffix is handed to
+ *    `applyWithoutTransaction` and recorded in the same call: the record insert is what proves
+ *    the migration ran, and it has to happen outside the transaction the statement cannot be
+ *    wrapped in.
+ *  - the name-based history table. The template runner keyed on file names and re-read the
+ *    whole table per run; here the applied set is read once per run into a `Set`.
  *
  * History rows store the migration **name**, not the file name: the `.sql` extension is
  * stripped and so is the `.no_transaction` suffix, so renaming a migration's transaction

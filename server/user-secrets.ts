@@ -2,8 +2,8 @@
  * BYOK (bring-your-own-key) secret store: validate → encrypt at rest → keep a masked hint →
  * upsert per `(user, provider)` → delete.
  *
- * Ported from `offer-lens/apps/api/routes/keys.ts` (the Hono routes stay out — no framework
- * here) and the persistence semantics of `offer-lens/libs/db/mod.ts`. The SQL stays out too:
+ * Ported from an earlier internal project: its key routes (`keys.ts`; the Hono routes stay out —
+ * no framework here) and the persistence semantics of its `db/mod.ts`. The SQL stays out too:
  * persistence is an injected {@link UserSecretPort}, so this module holds no driver, no
  * connection and no query text.
  *
@@ -22,7 +22,7 @@
  * - Provider names are normalised to lower case at this boundary, so `OpenAI` and `openai` cannot
  *   become two rows of one user (see {@link PROVIDER_PATTERN}).
  * - Failures are classified by **type and position, never by message text** (the
- *   `offer-lens/libs/scraper/mod.ts:132` anti-pattern): any cipher rejection becomes
+ *   source's anti-pattern): any cipher rejection becomes
  *   {@link UserSecretErrorCode.DecryptionFailed}, whatever the underlying error says.
  * - The source accepted any non-empty provider string, which stores rows no adapter can ever
  *   match; {@link PROVIDER_PATTERN} bounds that at the edge.

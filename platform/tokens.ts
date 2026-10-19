@@ -7,8 +7,8 @@
 //    (`tokens.ts:42`), so a missing secret silently hashed against the string
 //    `"undefined"` — a fail-open. See `newOpaqueToken`.
 // 2. Callers must never compare signatures with `!==`. The source's compare was
-//    constant-time already (`tokens.ts:55-62`), but the equivalent in
-//    `offer-lens/libs/auth/mod.ts:115` is a plain `sigB64 !== expectedSig`.
+//    constant-time already (`tokens.ts:55-62`), but the equivalent in an earlier
+//    internal project is a plain `sigB64 !== expectedSig`.
 //    `verifyOpaqueToken` therefore routes through `constantTimeEquals`, and
 //    `tokens.test.ts` asserts that call site so the mistake cannot come back.
 // 3. ULID generation is `@std/ulid`'s `monotonicUlid`, not a hand-written encoder. The encoder
@@ -159,7 +159,8 @@ export async function constantTimeEqualsText(a: string, b: string): Promise<bool
 }
 
 /**
- * Concatenated digest `sha256hex(raw + secret)`, lower-case, 64 characters.
+ * SHA-256 digest of one UTF-8 string, as lower-case hex, 64 characters. Callers
+ * that hash a token with its secret concatenate them first (`raw + secret`).
  *
  * A caller-supplied hash is compared as-is, so an upper-case stored hash is a
  * mismatch — normalise at the storage boundary, not here.
@@ -259,8 +260,8 @@ export async function newOpaqueToken(secret: string): Promise<{ raw: string; has
 
 /**
  * Recomputes `sha256Hex(raw + secret)` and compares it to the stored hash via
- * `constantTimeEquals` — never `===`, never `!==` (the shape that made
- * `offer-lens/libs/auth/mod.ts:115` timing-unsafe).
+ * `constantTimeEquals` — never `===`, never `!==` (the shape that made an earlier
+ * internal project's compare timing-unsafe).
  *
  * Returns `false` for every malformed input rather than throwing: a wrong raw
  * token, a wrong secret, an empty, truncated, upper-case, non-hex or unusual
