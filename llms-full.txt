@@ -3998,7 +3998,8 @@ await cache.clear() // sign-out, or a start that finds no session: every copy of
 ```
 
 - Every answer replaces the copy under its key. A read that cannot reach the server
-  (`ConnectionLostError`, or the `TypeError` a failed `fetch` rejects with) answers from the copy,
+  (`ConnectionLostError`, a `RequestTimeoutError`, or the `TypeError` a failed `fetch` rejects with)
+  answers from the copy,
   or throws the connection error when there is none. A `TypeError` thrown by your own `read`
   function counts as unreachable too.
 - `delete(key)` removes one copy and leaves the rest; it does nothing when there is none.
