@@ -188,6 +188,35 @@ Deno.test("tells onListen at the first subscription and after each reconnect", a
   assertEquals(subscribed, 2)
 })
 
+Deno.test("reports an onListen that throws or rejects, from the first subscription on, and keeps listening", async () => {
+  const db = fakeSql()
+  const errors: unknown[] = []
+  const heard: unknown[] = []
+  const thrown = new Error("first resync failed")
+  const rejected = new Error("resync after reconnect failed")
+  let calls = 0
+
+  const stop = await listenJson(db.sql, "inbox_changed", {
+    schema: inboxChange,
+    onMessage: (message) => void heard.push(message),
+    onListen: () => {
+      calls++
+      if (calls === 1) throw thrown
+      return Promise.reject(rejected)
+    },
+    onError: (error) => void errors.push(error),
+  })
+  db.reconnect()
+  await Promise.resolve()
+  await Promise.resolve()
+  db.notify(`{"userId":7}`)
+
+  assertEquals(errors, [thrown, rejected])
+  assertEquals(heard, [{ userId: 7 }])
+  assertEquals(typeof stop, "function")
+  assertEquals(db.unlistened(), 0)
+})
+
 Deno.test("after stop it unsubscribes and calls nothing, even if the client still delivers", async () => {
   const db = fakeSql()
   const heard: unknown[] = []

@@ -108,8 +108,11 @@ store, the double an app writes for its tests): a new member is optional, or it 
 
 A publish cannot be undone: JSR never deletes a version, so tag only the merged bump commit on
 `main`. Once that PR merges with a green gate, push the tag without asking. A version that is
-already on JSR is skipped, so re-running a tag build that failed part-way
-publishes only what is missing.
+already on JSR is skipped, so the `publish` step retries a failed or stalled `deno publish`
+itself, three attempts of 10 minutes each (#683); restart the pipeline only after all three fail.
+
+Releases are cut in batches (#683), never after every merge, at the times the global rule for
+shared libraries allows ("Autonomy" in the global agent rules).
 
 ## Branches
 
