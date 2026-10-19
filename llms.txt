@@ -389,7 +389,7 @@ ipHint	function	@spy4x/net	The address with only its network part shown, for dis
 ipInRanges	function	@spy4x/net	True when `ip` lies inside at least one of `cidrs`.
 isLocalHostname	function	@spy4x/net	True if the hostname is a special-use name that resolves locally.
 isLoopbackHost	function	@spy4x/net	True when `host` names the machine itself the way a browser decides it: `localhost`, any name under `.localhost`, an address in `127.0.0.0/8`, or `::1`.
-isPublicAddress	function	@spy4x/net	True if `addr` (with or without surrounding brackets) is a globally routable IPv6.
+isPublicAddress	function	@spy4x/net	True if `addr` is a globally routable IPv4 or IPv6 address.
 isPublicIpv4	function	@spy4x/net	True if `addr` is a globally routable IPv4 address.
 isPublicIpv6	function	@spy4x/net	True if the IPv6 address (with optional embedded IPv4) is globally routable.
 isUrlShapeOk	function	@spy4x/net	Narrow a `normalizeUrlShape` result to its success branch.
@@ -445,7 +445,7 @@ UrlValidationError	class	@spy4x/net/url-policy	A URL rejected by the policy, wit
 defaultResolver	constant	@spy4x/net/url-policy	The production resolver: system A **and** AAAA lookups, both required.
 denyNetFlag	function	@spy4x/net/url-policy	`DENY_NET_ADDRESSES` as the command-line flag that applies them.
 isLocalHostname	function	@spy4x/net/url-policy	True if the hostname is a special-use name that resolves locally.
-isPublicAddress	function	@spy4x/net/url-policy	True if `addr` (with or without surrounding brackets) is a globally routable IPv6.
+isPublicAddress	function	@spy4x/net/url-policy	True if `addr` is a globally routable IPv4 or IPv6 address.
 isPublicIpv4	function	@spy4x/net/url-policy	True if `addr` is a globally routable IPv4 address.
 isPublicIpv6	function	@spy4x/net/url-policy	True if the IPv6 address (with optional embedded IPv4) is globally routable.
 normalizeUrlShape	function	@spy4x/net/url-policy	Normalise the shape of a user-entered URL.
@@ -1022,8 +1022,8 @@ deriveSecret	function	@spy4x/platform/tokens	A subordinate secret derived from a
 monotonicUlid	function	@spy4x/platform/tokens	Generate a ULID that monotonically increases even for the same millisecond, optionally passing the current time.
 newOpaqueToken	function	@spy4x/platform/tokens	Mints an opaque token: `raw` goes to the caller, `hash` is what the server stores.
 randomBase64Url	function	@spy4x/platform/tokens	Cryptographically random bytes, base64url, unpadded.
-sha256Hex	function	@spy4x/platform/tokens	Concatenated digest `sha256hex(raw + secret)`, lower-case, 64 characters.
-verifyOpaqueToken	function	@spy4x/platform/tokens	Recomputes `sha256Hex(raw + secret)` and compares it to the stored hash via `constantTimeEquals` — never `===`, never `!==` (the shape that made `offer-lens/libs/auth/mod.ts:115` timing-unsafe).
+sha256Hex	function	@spy4x/platform/tokens	SHA-256 digest of one UTF-8 string, as lower-case hex, 64 characters.
+verifyOpaqueToken	function	@spy4x/platform/tokens	Recomputes `sha256Hex(raw + secret)` and compares it to the stored hash via `constantTimeEquals` — never `===`, never `!==` (the shape that made an earlier internal project's compare timing-unsafe).
 BackoffJitterMode	type	@spy4x/platform/universal/async	How backoffDelay spreads a capped delay.
 Debounced	interface	@spy4x/platform/universal/async	Trailing-edge debounce.
 RandomSource	type	@spy4x/platform/universal/async	A source of numbers in `[0, 1)`, the shape `Math.random` has.
@@ -2285,23 +2285,23 @@ readEvent	function	@spy4x/time/ical-tasks	Read the first VEVENT of `root` that i
 readTodo	function	@spy4x/time/ical-tasks	Read the first VTODO of `root` that is not a recurrence override.
 reopenTodo	function	@spy4x/time/ical-tasks	Reopen a completed task in place: STATUS becomes `NEEDS-ACTION`, COMPLETED and a `PERCENT-COMPLETE` of 100 are removed.
 COMPLETE_REFUSED_BY_RULE	constant	@spy4x/time/ical-tasks-edit	The codes that mean the repeat rule or the dates are outside what can be reproduced, as opposed to a broken text.
-CompleteError	interface	@spy4x/time/ical-tasks-edit	
+CompleteError	interface	@spy4x/time/ical-tasks-edit	Why completeTask or reopenTask refused.
 CompleteKind	enum	@spy4x/time/ical-tasks-edit	What a successful change did to the task.
-CompleteOutput	interface	@spy4x/time/ical-tasks-edit	
-CompleteResult	type	@spy4x/time/ical-tasks-edit	
-CreateOutput	interface	@spy4x/time/ical-tasks-edit	
-CreateResult	type	@spy4x/time/ical-tasks-edit	
+CompleteOutput	interface	@spy4x/time/ical-tasks-edit	A completed, advanced or reopened task, its text and the text that undoes it.
+CompleteResult	type	@spy4x/time/ical-tasks-edit	The result of completeTask and reopenTask.
+CreateOutput	interface	@spy4x/time/ical-tasks-edit	A new task's text and where to create it.
+CreateResult	type	@spy4x/time/ical-tasks-edit	The result of createTask.
 EditField	enum	@spy4x/time/ical-tasks-edit	The task fields the editor changes.
-EditOutput	interface	@spy4x/time/ical-tasks-edit	
+EditOutput	interface	@spy4x/time/ical-tasks-edit	An edited task, its patched text and, for a move, the list it goes to.
 EditResult	type	@spy4x/time/ical-tasks-edit	The result of editTask.
-KeepMineError	interface	@spy4x/time/ical-tasks-edit	
-KeepMineOutput	interface	@spy4x/time/ical-tasks-edit	
+KeepMineError	interface	@spy4x/time/ical-tasks-edit	Why keepMineText refused, and at which step.
+KeepMineOutput	interface	@spy4x/time/ical-tasks-edit	The server's task with my changes on it, and its text.
 KeepMineResult	type	@spy4x/time/ical-tasks-edit	The result of keepMineText.
 KeepMineStep	enum	@spy4x/time/ical-tasks-edit	The step of keepMineText that refused.
-NewTaskContext	interface	@spy4x/time/ical-tasks-edit	
+NewTaskContext	interface	@spy4x/time/ical-tasks-edit	What createTask needs besides the fields: the identity, the clock and the list.
 NewTaskFields	interface	@spy4x/time/ical-tasks-edit	The fields a new task can start with.
-RebaseKind	enum	@spy4x/time/ical-tasks-edit	
-RebaseResult	type	@spy4x/time/ical-tasks-edit	
+RebaseKind	enum	@spy4x/time/ical-tasks-edit	Whether rebaseEdit applied the edit or found a collision.
+RebaseResult	type	@spy4x/time/ical-tasks-edit	The result of rebaseEdit: the applied edit, or the fields that collided.
 TaskEdit	interface	@spy4x/time/ical-tasks-edit	What the editor changed.
 collisions	function	@spy4x/time/ical-tasks-edit	The fields both sides changed, to different values.
 completeTask	function	@spy4x/time/ical-tasks-edit	Completes `task`; a repeating task moves to its next occurrence instead.
@@ -2448,4 +2448,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 8bbb86b0d00e2f7f55bcd19d0ddb901814d588646dd471ad3db251bd3ecf132e
+# export surface: sha256 1a16c0a1db8c56bb6d584124cc41a3e8c39e42b256598805a7bc5d72efd20a09
