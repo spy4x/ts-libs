@@ -831,7 +831,8 @@ describe(`a refused write that is not a create`, () => {
     h.server.state.lose = true
     await h.tags.outbox.submit({ kind: `create`, entityId: `t`, payload: { name: `First` } })
     h.server.state.lose = false
-    h.server.state.tags.set(`t`, { id: `t`, version: 1, name: `First` })
+    // The lost create arrived, and another device renamed the tag since.
+    h.server.state.tags.set(`t`, { id: `t`, version: 2, name: `Theirs` })
     h.server.state.offline = true
     await h.tags.outbox.submit({
       kind: `update`,
@@ -841,7 +842,7 @@ describe(`a refused write that is not a create`, () => {
     })
     await h.notes.outbox.submit({ kind: `create`, entityId: `n`, payload: note(`Note`, [`t`]) })
     h.server.state.offline = false
-    h.server.state.refuse = (name) => name === `tag.create` ? refusal(`ID_TAKEN`) : undefined
+    h.server.state.refuse = (name) => name === `tag.update` ? refusal(VERSION_CONFLICT) : undefined
     await h.layer.flush()
     expect(h.tags.outbox.entries()[0].conflict?.reason).toBe(`version`)
 

@@ -11,7 +11,9 @@
  * - **A fresh key after an unknown outcome.** Every send carries the entry's idempotency key. An
  *   entry whose send may have reached the server (`attempted`) gets a new key when it is changed
  *   again, because the server would answer the old key with the first result and drop the new
- *   text. If the first send had in fact been applied, the result is a visible conflict.
+ *   text. If the first send had in fact been applied, the result is a visible conflict. An edit of
+ *   a create that may have arrived is sent as an update on version 1 instead, and as the create
+ *   again when the server answers `not-found`.
  * - **Clear only while the key still matches.** After a send, the entry is removed or marked a
  *   conflict only if the queue still holds it with the key that was sent. An edit another tab made
  *   meanwhile has a new key and stays queued.
@@ -79,6 +81,14 @@ function capped<P>(snapshot: OutboxEntrySnapshot<P>): OutboxEntrySnapshot<P> {
 function mayHaveReachedServer<P>(entry: OutboxEntrySnapshot<P>): boolean {
   for (let step: OutboxEntrySnapshot<P> | undefined = entry; step; step = step.before) {
     if (step.attempted) return true
+  }
+  return false
+}
+
+/** Whether `entry` is an edit merged into a create made on this device. */
+function createdHere<P>(entry: OutboxEntrySnapshot<P>): boolean {
+  for (let step = entry.before; step; step = step.before) {
+    if (step.kind === "create") return true
   }
   return false
 }
@@ -468,6 +478,19 @@ export function createOutbox<P, S extends { version: number }>(
       ? { key: newKey(), attempted: false }
       : { key: existing.key, attempted: false }
     if (change.kind === "update") {
+      if (existing.kind === "create" && mayHaveReachedServer(existing)) {
+        // The create may be on the server, where a second create is refused as `already-exists`:
+        // send the edit on top of version 1. A `not-found` answer sends the create again (`refuse`).
+        return await save({
+          ...existing,
+          payload: change.payload,
+          kind: "update",
+          baseVersion: 1,
+          key: newKey(),
+          attempted: false,
+          before,
+        })
+      }
       return await save({ ...existing, payload: change.payload, ...renewed, before })
     }
     if (existing.kind === "create") {
@@ -564,6 +587,11 @@ export function createOutbox<P, S extends { version: number }>(
       await drop(entry.seq!)
       if (wants) settle(entry.seq!, { kind: "sent" })
       return true
+    }
+    if (failure.kind === "not-found" && entry.kind === "update" && createdHere(entry)) {
+      // The create this edit was merged into never arrived: send the latest text as the create.
+      await save({ ...entry, kind: "create", baseVersion: 0, key: newKey(), attempted: false })
+      return await sendOne(entry.seq!)
     }
     if (wants && alone) {
       // The person is looking at the screen: the app shows the refusal itself.
