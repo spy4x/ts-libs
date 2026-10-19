@@ -215,8 +215,12 @@ export interface ServeStaticOptions {
   /** Filesystem to read through. Defaults to {@link denoStaticFs}. */
   fs?: StaticFs
   /**
-   * Serve `<root>/index.html` for a path that does not exist. This is the whole
-   * SPA story: one flag, not a list of route paths.
+   * Serve `<root>/index.html` for a path that does not exist, and for one that
+   * {@link resolveStaticPath} refuses for an encoded separator, `%2F` or `%5C`
+   * (`/tasks/a%2Fb`, an SPA route with a slash inside one segment). The fallback is always that one
+   * fixed file, so a refused path never reaches the filesystem. A traversal
+   * attempt (`..`, a backslash, a control character) is still not served.
+   * This is the whole SPA story: one flag, not a list of route paths.
    */
   spaFallback?: boolean
   /** `Cache-Control` value to set on served files. Omitted means no header. */
@@ -232,11 +236,25 @@ export interface ServeStaticOptions {
   method?: string
 }
 
-/** File name served for a directory request and for the SPA fallback. */
+/**
+ * File name served for a request path that ends in `/` (`/docs/` serves
+ * `docs/index.html`, `/` serves `index.html`) and for the SPA fallback.
+ */
 const INDEX_FILE = "index.html"
 
 /**
+ * Refusals the SPA fallback answers with the shell: an empty path, and an
+ * encoded separator such as `%2F`, which an SPA route can carry in one of its own segments
+ * (`/tasks/a%2Fb`). A traversal attempt still gets no response.
+ */
+const SPA_REASONS: ReadonlySet<StaticRejection> = new Set(["empty_path", "encoded_separator"])
+
+/**
  * Serve one request path from the static root.
+ *
+ * A path that ends in `/` serves that directory's `index.html`. The file name is
+ * appended before {@link resolveStaticPath} checks the path, so every traversal
+ * guard still applies to the result.
  *
  * @param requestPath `URL.pathname` of the request, still percent-encoded.
  * @param options Root directory plus optional filesystem, SPA flag, cache header
@@ -254,8 +272,9 @@ export async function serveStatic(
 ): Promise<Response | undefined> {
   const fs = options.fs ?? denoStaticFs
 
-  let resolved = resolveStaticPath(requestPath, options.root)
-  if (!resolved.ok && resolved.reason === "empty_path" && options.spaFallback) {
+  const path = requestPath.endsWith("/") ? `${requestPath}${INDEX_FILE}` : requestPath
+  let resolved = resolveStaticPath(path, options.root)
+  if (!resolved.ok && options.spaFallback && SPA_REASONS.has(resolved.reason)) {
     resolved = resolveStaticPath(`/${INDEX_FILE}`, options.root)
   }
   if (!resolved.ok) return undefined
