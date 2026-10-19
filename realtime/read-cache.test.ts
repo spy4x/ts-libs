@@ -1,7 +1,7 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { IDBFactory } from "npm:fake-indexeddb@6.2.5"
-import { ConnectionLostError } from "./client-transport.ts"
+import { ConnectionLostError, RequestTimeoutError } from "./client-transport.ts"
 import { RealtimeRequestError } from "./errors.ts"
 import {
   cachedRead,
@@ -49,6 +49,19 @@ describe("cachedRead", () => {
 
     expect(offline.value).toEqual([1])
     expect(offline.fresh).toBe(false)
+  })
+
+  it("answers from the copy when the server does not answer in time", async () => {
+    const cache = createReadCache({ name: "reads:u1", indexedDB: freshFactory() })
+    await cachedRead(cache, "groups", answer([1]))
+
+    const late = await cachedRead(
+      cache,
+      "groups",
+      () => Promise.reject(new RequestTimeoutError("frame-1", 15_000)),
+    )
+
+    expect(late).toEqual({ value: [1], fresh: false, savedAt: expect.any(Number) })
   })
 
   it("throws the connection error when the server is unreachable and nothing is saved", async () => {

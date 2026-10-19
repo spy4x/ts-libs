@@ -691,7 +691,9 @@ The rules it keeps, each one a lost edit found in a product that wrote the queue
   is sent.
 - **A fresh key after an unknown outcome.** An entry whose send may have reached the server gets a
   new idempotency key when it is edited again, so the server does not answer the old key and drop
-  the new text.
+  the new text. An edit of such a create is sent as an update on version 1, so the server does not
+  refuse a second create of the id; if the server has no such entity, the edit goes out as the
+  create.
 - **Clear only while the key matches.** After a send, an entry is removed, or marked a conflict,
   only if the queue still holds it under the key that was sent. An edit another tab made in the
   meantime stays queued.
@@ -858,7 +860,8 @@ await cache.clear() // sign-out, or a start that finds no session: every copy of
 ```
 
 - Every answer replaces the copy under its key. A read that cannot reach the server
-  (`ConnectionLostError`, or the `TypeError` a failed `fetch` rejects with) answers from the copy,
+  (`ConnectionLostError`, a `RequestTimeoutError`, or the `TypeError` a failed `fetch` rejects with)
+  answers from the copy,
   or throws the connection error when there is none. A `TypeError` thrown by your own `read`
   function counts as unreachable too.
 - `delete(key)` removes one copy and leaves the rest; it does nothing when there is none.

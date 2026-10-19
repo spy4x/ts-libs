@@ -11,7 +11,9 @@
  * - **A fresh key after an unknown outcome.** Every send carries the entry's idempotency key. An
  *   entry whose send may have reached the server (`attempted`) gets a new key when it is changed
  *   again, because the server would answer the old key with the first result and drop the new
- *   text. If the first send had in fact been applied, the result is a visible conflict.
+ *   text. If the first send had in fact been applied, the result is a visible conflict. An edit of
+ *   a create that may have arrived is sent as an update on version 1 instead, and as the create
+ *   again when the server answers `not-found`.
  * - **Clear only while the key still matches.** After a send, the entry is removed or marked a
  *   conflict only if the queue still holds it with the key that was sent. An edit another tab made
  *   meanwhile has a new key and stays queued.
@@ -119,6 +121,11 @@ export interface OutboxEntry<P, S> {
   before?: OutboxEntrySnapshot<P>
   /** Older steps were forgotten, so `withdraw` cannot take this write back. */
   truncated?: boolean
+  /**
+   * On an `update`: the entity was created on this device and the server never confirmed the
+   * create, so the edit goes out as the create when the server does not have the entity.
+   */
+  ownCreate?: boolean
   conflict?: { reason: ConflictReason; message: string; server: S | null }
   queuedAt: string
 }
@@ -468,6 +475,20 @@ export function createOutbox<P, S extends { version: number }>(
       ? { key: newKey(), attempted: false }
       : { key: existing.key, attempted: false }
     if (change.kind === "update") {
+      if (existing.kind === "create" && mayHaveReachedServer(existing)) {
+        // The create may be on the server, where a second create is refused as `already-exists`:
+        // send the edit on top of version 1. A `not-found` answer sends the create again (`refuse`).
+        return await save({
+          ...existing,
+          payload: change.payload,
+          kind: "update",
+          baseVersion: 1,
+          key: newKey(),
+          attempted: false,
+          ownCreate: true,
+          before,
+        })
+      }
       return await save({ ...existing, payload: change.payload, ...renewed, before })
     }
     if (existing.kind === "create") {
@@ -564,6 +585,18 @@ export function createOutbox<P, S extends { version: number }>(
       await drop(entry.seq!)
       if (wants) settle(entry.seq!, { kind: "sent" })
       return true
+    }
+    if (failure.kind === "not-found" && entry.kind === "update" && entry.ownCreate) {
+      // The create this edit was merged into never arrived: send the latest text as the create.
+      await save({
+        ...entry,
+        kind: "create",
+        baseVersion: 0,
+        key: newKey(),
+        attempted: false,
+        ownCreate: undefined,
+      })
+      return await sendOne(entry.seq!)
     }
     if (wants && alone) {
       // The person is looking at the screen: the app shows the refusal itself.
@@ -662,6 +695,7 @@ export function createOutbox<P, S extends { version: number }>(
         conflict: undefined,
         before: undefined,
         truncated: undefined,
+        ownCreate: undefined,
       })
     })
     await sendQueued()
@@ -680,7 +714,9 @@ export function createOutbox<P, S extends { version: number }>(
       if (server) await cache?.put(server)
       else if (entry.conflict?.reason === "gone") await cache?.remove(entry.entityId)
       await drop(entry.seq!)
-      if (entry.kind === "create" && !server) abandoned.push({ entry, reason: "discarded" })
+      if ((entry.kind === "create" || entry.ownCreate) && !server) {
+        abandoned.push({ entry, reason: "discarded" })
+      }
     })
   }
 
