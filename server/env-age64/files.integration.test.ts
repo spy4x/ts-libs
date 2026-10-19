@@ -188,6 +188,38 @@ Deno.test("findEnvAgeFiles: only matches .env*.age files, not the plaintext sibl
   }
 })
 
+Deno.test("findEnvFiles: finds a <name>.env file in a subdirectory, skipping its .example", async () => {
+  // rostok keeps one env file per app at `servers/<server>/configs/<app>.env`, named by a
+  // Compose `env_file:` entry; a name that only ends in `.env` must be found like `.env` itself.
+  const root = await createScratchFolder("age64_named_env")
+  try {
+    await Deno.mkdir(join(root, "configs"))
+    await Deno.writeTextFile(join(root, "configs", "mig.env"), "A=1\n")
+    await Deno.writeTextFile(join(root, "configs", "mig.env.example"), "A=example\n")
+    await Deno.writeTextFile(join(root, "configs", "mig.example.env"), "A=example\n")
+    await Deno.writeTextFile(join(root, "configs", "mig.envrc"), "A=1\n")
+
+    assertEquals(await findEnvFiles(root), [join(root, "configs", "mig.env")])
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
+Deno.test("findEnvAgeFiles: finds a <name>.env.age file, not its plaintext sibling", async () => {
+  const root = await createScratchFolder("age64_named_env_age")
+  try {
+    await Deno.mkdir(join(root, "configs"))
+    await Deno.writeTextFile(join(root, "configs", "mig.env"), "A=1\n")
+    await Deno.writeTextFile(join(root, "configs", "mig.env.age"), "A=age64:x\n")
+    await Deno.writeTextFile(join(root, "configs", "mig.example.env.age"), "A=age64:x\n")
+    await Deno.writeTextFile(join(root, "configs", "notes.age"), "A=age64:x\n")
+
+    assertEquals(await findEnvAgeFiles(root), [join(root, "configs", "mig.env.age")])
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
 Deno.test("findEnvFiles: skips a .sops-backup file, matching rostok's own exclusion", async () => {
   const root = await createScratchFolder("age64_sops_backup")
   try {
@@ -437,6 +469,28 @@ Deno.test("encryptEnvFiles -> decryptEnvFiles: round-trips duplicate keys and ex
     await Deno.remove(join(root, ".env"))
     await decryptEnvFiles(root)
     assertEquals(await Deno.readTextFile(join(root, ".env")), source)
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
+Deno.test("encryptEnvFiles -> decryptEnvFiles: round-trips a <name>.env file byte for byte", async () => {
+  const root = await createScratchFolder("age64_named_env_roundtrip")
+  try {
+    await generateAgeKey(root)
+    await Deno.mkdir(join(root, "configs"))
+    const envPath = join(root, "configs", "mig.env")
+    const source = "# mig\nSESSION_SECRET=s3cret\nSMTP_PASSWORD='p # w'\n"
+    await Deno.writeTextFile(envPath, source)
+
+    assertEquals(await encryptEnvFiles(root), [`${envPath}.age`])
+    const encrypted = await Deno.readTextFile(`${envPath}.age`)
+    assertEquals(encrypted.split("\n").includes("SESSION_SECRET=s3cret"), false)
+    assertEquals(encrypted.startsWith("# mig\nSESSION_SECRET=age64:"), true)
+
+    await Deno.remove(envPath)
+    assertEquals(await decryptEnvFiles(root), [envPath])
+    assertEquals(await Deno.readTextFile(envPath), source)
   } finally {
     await removeScratchFolder(root)
   }
