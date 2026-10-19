@@ -72,33 +72,41 @@ async function walk(
   }
 }
 
-// The temp-file prefix atomicWrite uses. Deliberately outside the `.env*` shape that
+// The temp-file prefix atomicWrite uses. Deliberately outside the `.env*` and `*.env` shapes that
 // isPlaintextEnvName/isEncryptedEnvName match: a leftover from a crash between makeTempFile and
 // remove must never be picked up as a real env file and encrypted or decrypted on the next run.
 // Exported so a test can build a realistic leftover name from the actual constant rather than a
 // hardcoded string that would keep passing even if this value regressed.
 export const TEMP_FILE_PREFIX = ".age64-tmp-"
 
-/** True for a plaintext env file name: starts with `.env`, isn't an example, isn't `.age`. */
+/**
+ * True for a plaintext env file name: starts with `.env` (`.env`, `.env.prod`) or ends with `.env`
+ * (`mig.env`, the per-app file a Compose `env_file:` names), isn't an example, isn't `.age`.
+ */
 function isPlaintextEnvName(name: string): boolean {
-  return name.startsWith(".env") && !name.includes(".example") && !name.endsWith(".age") &&
-    !name.includes(".sops-backup")
+  return (name.startsWith(".env") || name.endsWith(".env")) && !name.includes(".example") &&
+    !name.endsWith(".age") && !name.includes(".sops-backup")
 }
 
-/** True for an encrypted env file name: starts with `.env`, isn't an example, ends in `.age`. */
+/** True for an encrypted env file name: a plaintext env file name followed by `.age`. */
 function isEncryptedEnvName(name: string): boolean {
-  return name.startsWith(".env") && !name.includes(".example") && name.endsWith(".age") &&
-    !name.endsWith(".sops-backup.age")
+  return name.endsWith(".age") && isPlaintextEnvName(name.slice(0, -".age".length))
 }
 
-/** Every plaintext `.env*` file under `root`, sorted, skipping hidden dirs and nested checkouts. */
+/**
+ * Every plaintext `.env*` and `*.env` file under `root`, sorted, skipping hidden dirs and nested
+ * checkouts.
+ */
 export async function findEnvFiles(root: string): Promise<string[]> {
   const results: string[] = []
   await walk(root, results, isPlaintextEnvName)
   return results.sort()
 }
 
-/** Every `.env*.age` file under `root`, sorted, skipping hidden dirs and nested checkouts. */
+/**
+ * Every `.env*.age` and `*.env.age` file under `root`, sorted, skipping hidden dirs and nested
+ * checkouts.
+ */
 export async function findEnvAgeFiles(root: string): Promise<string[]> {
   const results: string[] = []
   await walk(root, results, isEncryptedEnvName)
@@ -236,10 +244,10 @@ export async function ageStatus(root: string): Promise<AgeStatus> {
 }
 
 /**
- * Re-encrypt every `.env*` file under `root` to its `.env.age` sibling, mode `0644`, reusing
- * unchanged ciphertext byte-for-byte. Every file is attempted even if one fails; if any did, the
- * combined error is thrown after the rest have run (fail loudly, but don't let one bad value in
- * one file block every other file from being encrypted).
+ * Re-encrypt every `.env*` and `*.env` file under `root` to its `.age` sibling, mode `0644`,
+ * reusing unchanged ciphertext byte-for-byte. Every file is attempted even if one fails; if any
+ * did, the combined error is thrown after the rest have run (fail loudly, but don't let one bad
+ * value in one file block every other file from being encrypted).
  */
 export async function encryptEnvFiles(root: string): Promise<string[]> {
   const key = await readAgeKey(root)
@@ -281,8 +289,8 @@ export async function encryptEnvFiles(root: string): Promise<string[]> {
 }
 
 /**
- * Decrypt every `.env*.age` file under `root` to its plaintext sibling, mode `0600`. Same
- * fail-loudly-after-attempting-every-file behaviour as {@link encryptEnvFiles}.
+ * Decrypt every `.env*.age` and `*.env.age` file under `root` to its plaintext sibling, mode
+ * `0600`. Same fail-loudly-after-attempting-every-file behaviour as {@link encryptEnvFiles}.
  */
 export async function decryptEnvFiles(root: string): Promise<string[]> {
   const key = await readAgeKey(root)

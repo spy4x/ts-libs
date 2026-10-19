@@ -1760,9 +1760,9 @@ GenerateAgeKeyResult	interface	@spy4x/server/env-age64	Result of generateAgeKey:
 UnsupportedEnvSyntaxError	class	@spy4x/server/env-age64	Thrown by parseEnvFile on anything it can't safely round-trip.
 ageStatus	function	@spy4x/server/env-age64	Inspect `root`'s env files and key, without decrypting anything.
 decodeEnvValue	function	@spy4x/server/env-age64	Applies Docker Compose's value rules to the raw text after `=` (an EnvAssignment's `value`): surrounding quotes are removed and a ` # comment` after a closing quote is dropped; an unquoted value ends before ` #` (a space, then `#`), while a `#` after anything else stays (`abc#def`).
-decryptEnvFiles	function	@spy4x/server/env-age64	Decrypt every `.env*.age` file under `root` to its plaintext sibling, mode `0600`.
+decryptEnvFiles	function	@spy4x/server/env-age64	Decrypt every `.env*.age` and `*.env.age` file under `root` to its plaintext sibling, mode `0600`.
 decryptValue	function	@spy4x/server/env-age64	Decrypt an `age64:<base64>` value with `identity` (an `AGE-SECRET-KEY-1...` string).
-encryptEnvFiles	function	@spy4x/server/env-age64	Re-encrypt every `.env*` file under `root` to its `.env.age` sibling, mode `0644`, reusing unchanged ciphertext byte-for-byte.
+encryptEnvFiles	function	@spy4x/server/env-age64	Re-encrypt every `.env*` and `*.env` file under `root` to its `.age` sibling, mode `0644`, reusing unchanged ciphertext byte-for-byte.
 encryptValue	function	@spy4x/server/env-age64	Encrypt one value for `recipient` (an `age1...` string).
 generateAgeKey	function	@spy4x/server/env-age64	Generate a fresh identity and write it to `<root>/.age/key.txt`, mode `0600`.
 isAge64Value	function	@spy4x/server/env-age64	True when `value` is an `age64:...` ciphertext rather than plaintext.
@@ -2448,4 +2448,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 a7ec0022d34a741ed60714ff46707e3277f6f56a01ccb1fcd7616a88607a8c39
+# export surface: sha256 b78fb3498501fc66346fdd88382ea2a0a434d5ee5764384eecbc9da5a722f6a5
