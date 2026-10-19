@@ -15,8 +15,9 @@
  *   writes `X-MOZ-LASTACK` on the task when a reminder is dismissed or snoozed.
  * - A date-only `DTSTART` or `DUE` is read at `dateOnlyTime` (midnight by default) in the given
  *   zone, a floating time is that wall clock in the given zone, and a `TZID` value keeps its own
- *   zone; a `TZID` this runtime does not know is read as a wall clock in the given zone, as
- *   `dateInstant` does.
+ *   zone, including one a `VTIMEZONE` of the same resource defines; a `TZID` that is neither known
+ *   to this runtime nor defined there is read as a wall clock in the given zone, as `dateInstant`
+ *   does.
  * - A completed or cancelled task has no reminders.
  *
  * Nothing here throws for a task it cannot read: text that is not iCalendar, a resource with no
@@ -100,18 +101,28 @@ function durationMs(text: string): number | undefined {
 }
 
 /** The instant of a UTC or zoned date-time property of `component`, such as `X-MOZ-LASTACK`. */
-function instantOf(component: IcalComponent, name: string, zone: string): number | undefined {
+function instantOf(
+  component: IcalComponent,
+  name: string,
+  zone: string,
+  root: IcalComponent,
+): number | undefined {
   const property = getProperty(component, name)
   const value = property && readDate(property)
-  return value ? resolveInstant(value, { zone })?.getTime() : undefined
+  return value ? resolveInstant(value, { zone, root })?.getTime() : undefined
 }
 
 /** The instant a `DTSTART` or `DUE` value stands for; see the module rules. */
-function anchorInstant(value: IcalDateValue, zone: string, dateOnlyTime: string): number {
+function anchorInstant(
+  value: IcalDateValue,
+  zone: string,
+  dateOnlyTime: string,
+  root: IcalComponent,
+): number {
   const read = value.kind === IcalDateKind.Date
     ? { kind: IcalDateKind.Floating, date: value.date, time: dateOnlyTime }
     : value
-  return dateInstant(read, zone).getTime()
+  return dateInstant(read, zone, root).getTime()
 }
 
 /** The moment of one trigger in milliseconds, or `undefined` when it cannot be placed in time. */
@@ -120,15 +131,16 @@ function triggerMoment(
   todo: Todo,
   zone: string,
   dateOnlyTime: string,
+  root: IcalComponent,
 ): number | undefined {
   if (!trigger) return undefined
   if (trigger.kind === AlarmTriggerKind.Absolute) {
-    return resolveInstant(trigger.at, { zone })?.getTime()
+    return resolveInstant(trigger.at, { zone, root })?.getTime()
   }
   const anchor = trigger.related === AlarmRelated.End ? todo.due : todo.start
   const offset = durationMs(trigger.duration)
   if (!anchor || offset === undefined) return undefined
-  return anchorInstant(anchor, zone, dateOnlyTime) + offset
+  return anchorInstant(anchor, zone, dateOnlyTime, root) + offset
 }
 
 function normaliseTimeOfDay(value: string | undefined): string {
@@ -155,21 +167,22 @@ function taskReminders(ics: string, options: DueRemindersOptions): DueReminder[]
   ) return []
 
   const { zone } = options
-  const taskAck = instantOf(component, "X-MOZ-LASTACK", zone) ?? -Infinity
+  const root = parsed.output
+  const taskAck = instantOf(component, "X-MOZ-LASTACK", zone, root) ?? -Infinity
   const valarms = component.components.filter((child) => child.name.toUpperCase() === "VALARM")
   const moments = new Set<number>()
   // `todo.alarms` is read from the same VALARMs in the same order.
   todo.alarms.forEach((alarm, index) => {
-    const moment = triggerMoment(alarm.trigger, todo, zone, dateOnlyTime)
+    const moment = triggerMoment(alarm.trigger, todo, zone, dateOnlyTime, root)
     if (moment === undefined) return
     const ack = Math.max(
       taskAck,
-      instantOf(valarms[index], "X-MOZ-LASTACK", zone) ?? -Infinity,
-      instantOf(valarms[index], "ACKNOWLEDGED", zone) ?? -Infinity,
+      instantOf(valarms[index], "X-MOZ-LASTACK", zone, root) ?? -Infinity,
+      instantOf(valarms[index], "ACKNOWLEDGED", zone, root) ?? -Infinity,
     )
     if (moment > ack) moments.add(moment)
   })
-  const snooze = instantOf(component, "X-MOZ-SNOOZE-TIME", zone)
+  const snooze = instantOf(component, "X-MOZ-SNOOZE-TIME", zone, root)
   if (snooze !== undefined && snooze > taskAck) moments.add(snooze)
 
   const uid = todo.uid

@@ -302,3 +302,40 @@ describe("dueReminders: how Tasks.org writes reminders and snoozes", () => {
     expect(moments(done)).toEqual([])
   })
 })
+
+describe("dueReminders: a TZID the resource's own VTIMEZONE defines", () => {
+  /** A task in `Head Office Time`, a zone at +09:00 that only the resource's VTIMEZONE defines. */
+  function headOffice(lines: string[]): string {
+    return task(lines).replace(
+      "BEGIN:VTODO",
+      [
+        "BEGIN:VTIMEZONE",
+        "TZID:Head Office Time",
+        "BEGIN:STANDARD",
+        "DTSTART:16010101T000000",
+        "TZOFFSETFROM:+0900",
+        "TZOFFSETTO:+0900",
+        "END:STANDARD",
+        "END:VTIMEZONE",
+        "BEGIN:VTODO",
+      ].join("\r\n"),
+    )
+  }
+
+  it("counts a relative reminder from the due time in that zone", () => {
+    const ics = headOffice([
+      "DUE;TZID=Head Office Time:20261012T090000",
+      ...alarm("TRIGGER;RELATED=END:-PT15M"),
+    ])
+    expect(moments(ics)).toEqual(["2026-10-11T23:45:00.000Z"])
+  })
+
+  it("places an absolute reminder and a snooze in that zone", () => {
+    const ics = headOffice([
+      "DUE:20261020T090000Z",
+      ...alarm("TRIGGER;VALUE=DATE-TIME;TZID=Head Office Time:20261012T090000"),
+      "X-MOZ-SNOOZE-TIME;TZID=Head Office Time:20261013T090000",
+    ])
+    expect(moments(ics)).toEqual(["2026-10-12T00:00:00.000Z", "2026-10-13T00:00:00.000Z"])
+  })
+})
