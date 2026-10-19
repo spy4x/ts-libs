@@ -8,12 +8,25 @@ import {
   ERRANDS,
   fixtureTask,
   task,
+  vtodo,
 } from "../../time/testdata/tasks/fixtures.ts"
 
 const UTC = `UTC`
 const HO_CHI_MINH = `Asia/Ho_Chi_Minh`
 const AUCKLAND = `Pacific/Auckland`
 const LOS_ANGELES = `America/Los_Angeles`
+
+/** A zone Outlook names itself and defines in the document: +09:00 all year. */
+const HEAD_OFFICE_TIME = [
+  `BEGIN:VTIMEZONE`,
+  `TZID:Head Office Time`,
+  `BEGIN:STANDARD`,
+  `DTSTART:16010101T000000`,
+  `TZOFFSETFROM:+0900`,
+  `TZOFFSETTO:+0900`,
+  `END:STANDARD`,
+  `END:VTIMEZONE`,
+]
 
 const dated = (uid: string, due: string) => fixtureTask(task(uid, `Task ${uid}`, [due]))
 const uids = (tasks: Task[]) => tasks.map((t) => t.uid)
@@ -151,4 +164,18 @@ Deno.test("Today lists a date-only task after the timed tasks still due today", 
     UTC,
   )
   expect(uids(view.today)).toEqual([`timed`, `date`])
+})
+
+Deno.test("a due in a zone its own VTIMEZONE defines is overdue by that zone", () => {
+  // Outlook names a zone of its own and defines it in the document: +09:00 all year, so 09:00
+  // there is 00:00Z. At 01:00Z it has passed, though 09:00 in the viewer's UTC has not.
+  const due = fixtureTask(vtodo([
+    `DTSTAMP:20261001T080000Z`,
+    `UID:custom`,
+    `SUMMARY:Call head office`,
+    `DUE;TZID=Head Office Time:20261008T090000`,
+  ], HEAD_OFFICE_TIME))
+  const view = todayView([due], new Date(`2026-10-08T01:00:00Z`), UTC)
+  expect(uids(view.overdue)).toEqual([`custom`])
+  expect(uids(view.today)).toEqual([])
 })
