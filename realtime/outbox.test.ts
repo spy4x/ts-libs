@@ -411,6 +411,30 @@ describe("outbox merging edits of one entity", () => {
     expect(outbox.entries()).toEqual([])
   })
 
+  it("sends an edit as the create when the lost create was edited more than 20 times offline", async () => {
+    const { outbox, sent, state } = harness()
+    state.server = () => {
+      throw new ConnectionLostError("lost before the server read it")
+    }
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("Mine") })
+    state.online = false
+    for (let i = 1; i <= 21; i++) {
+      await outbox.submit({ kind: "update", entityId: "n", payload: text(`Edit ${i}`), version: 0 })
+    }
+    state.online = true
+    state.server = ({ command }) => {
+      if (command.kind === "update") throw refused("NOTE_NOT_FOUND")
+      return item("n", 1, "Edit 21")
+    }
+    await outbox.flush()
+
+    expect(sent.slice(1).map((s) => [s.command.kind, s.command.payload.title])).toEqual([
+      ["update", "Edit 21"],
+      ["create", "Edit 21"],
+    ])
+    expect(outbox.entries()).toEqual([])
+  })
+
   it("still shows a conflict when another edit moved the created entity past version 1", async () => {
     const { outbox, state } = harness()
     state.server = () => {

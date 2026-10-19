@@ -85,14 +85,6 @@ function mayHaveReachedServer<P>(entry: OutboxEntrySnapshot<P>): boolean {
   return false
 }
 
-/** Whether `entry` is an edit merged into a create made on this device. */
-function createdHere<P>(entry: OutboxEntrySnapshot<P>): boolean {
-  for (let step = entry.before; step; step = step.before) {
-    if (step.kind === "create") return true
-  }
-  return false
-}
-
 /** The payloads of the create sends started before `entry` became a delete, oldest first. */
 function startedCreates<P>(entry: OutboxEntrySnapshot<P>): P[] {
   const payloads: P[] = []
@@ -129,6 +121,11 @@ export interface OutboxEntry<P, S> {
   before?: OutboxEntrySnapshot<P>
   /** Older steps were forgotten, so `withdraw` cannot take this write back. */
   truncated?: boolean
+  /**
+   * On an `update`: the entity was created on this device and the server never confirmed the
+   * create, so the edit goes out as the create when the server does not have the entity.
+   */
+  ownCreate?: boolean
   conflict?: { reason: ConflictReason; message: string; server: S | null }
   queuedAt: string
 }
@@ -488,6 +485,7 @@ export function createOutbox<P, S extends { version: number }>(
           baseVersion: 1,
           key: newKey(),
           attempted: false,
+          ownCreate: true,
           before,
         })
       }
@@ -588,9 +586,16 @@ export function createOutbox<P, S extends { version: number }>(
       if (wants) settle(entry.seq!, { kind: "sent" })
       return true
     }
-    if (failure.kind === "not-found" && entry.kind === "update" && createdHere(entry)) {
+    if (failure.kind === "not-found" && entry.kind === "update" && entry.ownCreate) {
       // The create this edit was merged into never arrived: send the latest text as the create.
-      await save({ ...entry, kind: "create", baseVersion: 0, key: newKey(), attempted: false })
+      await save({
+        ...entry,
+        kind: "create",
+        baseVersion: 0,
+        key: newKey(),
+        attempted: false,
+        ownCreate: undefined,
+      })
       return await sendOne(entry.seq!)
     }
     if (wants && alone) {
@@ -690,6 +695,7 @@ export function createOutbox<P, S extends { version: number }>(
         conflict: undefined,
         before: undefined,
         truncated: undefined,
+        ownCreate: undefined,
       })
     })
     await sendQueued()
@@ -708,7 +714,9 @@ export function createOutbox<P, S extends { version: number }>(
       if (server) await cache?.put(server)
       else if (entry.conflict?.reason === "gone") await cache?.remove(entry.entityId)
       await drop(entry.seq!)
-      if (entry.kind === "create" && !server) abandoned.push({ entry, reason: "discarded" })
+      if ((entry.kind === "create" || entry.ownCreate) && !server) {
+        abandoned.push({ entry, reason: "discarded" })
+      }
     })
   }
 
