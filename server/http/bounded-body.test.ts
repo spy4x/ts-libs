@@ -134,11 +134,11 @@ Deno.test("readBoundedBody rejects an oversized declared content-length before r
   )
 })
 
-Deno.test("readBoundedBody leaves an unread rejected body to the server to drain", async () => {
-  // The canonical reader rejects the declared length before taking a reader, so
-  // there is no lock to release and nothing here to cancel: an unread request
-  // body belongs to the server, which drains or cancels it once the handler has
-  // answered. The pre-collapse copy cancelled it at this point instead.
+Deno.test("readBoundedBody cancels a body it refuses on the declared length", async () => {
+  // The canonical reader rejects the declared length before taking a reader, and
+  // cancels the stream itself so a refused body is released at once (#672):
+  // the same reader serves outbound responses, whose connection would otherwise
+  // stay open until the response is collected.
   let cancelled = false
   const body = new ReadableStream<Uint8Array>({
     pull() {
@@ -154,7 +154,7 @@ Deno.test("readBoundedBody leaves an unread rejected body to the server to drain
   )
 
   await assertRejects(() => readBoundedBody(request, { maxBytes: 5 }), PayloadTooLargeError)
-  assertStrictEquals(cancelled, false, "the rejected body was cancelled despite never being read")
+  assertStrictEquals(cancelled, true, "the refused body was left open")
 })
 
 Deno.test("readBoundedBody rejects a stalled body once the stall budget expires", async () => {
@@ -248,20 +248,15 @@ Deno.test("readBoundedBody reports the read error even when cancel rejects", asy
 })
 
 Deno.test("readBoundedBody rejects an unusable cap instead of reading", async () => {
-  // The canonical reader's `RangeError` branch only fires for a cap that is
-  // not finite (`NaN`, `Infinity`). `-1` and `1.5` are both finite, so they
-  // still fail closed on the same `PayloadTooLargeError` a real over-cap body
-  // raises, exactly as they did before the collapse.
-  for (const cap of [-1, 1.5]) {
-    // A fresh request per case: a body can only be read once, so reusing one
-    // would test the second read against an already-drained stream.
-    const request = new Request(ORIGIN, { method: "POST", body: "abc" })
-    await assertRejects(
-      () => readBoundedBody(request, { maxBytes: cap }),
-      PayloadTooLargeError,
-      String(cap),
-    )
-  }
+  // The canonical reader raises `RangeError` for a cap that is not a positive
+  // finite number, so `-1` is refused as a bad option (#672). `1.5` is a
+  // positive finite cap, and fails closed on the same `PayloadTooLargeError` a
+  // real over-cap body raises.
+  // A fresh request per case: a body can only be read once, so reusing one
+  // would test the second read against an already-drained stream.
+  const post = () => new Request(ORIGIN, { method: "POST", body: "abc" })
+  await assertRejects(() => readBoundedBody(post(), { maxBytes: -1 }), RangeError, "-1")
+  await assertRejects(() => readBoundedBody(post(), { maxBytes: 1.5 }), PayloadTooLargeError, "1.5")
 })
 
 Deno.test("readBoundedBody rejects a non-finite cap instead of reading (was: fails open)", async () => {
