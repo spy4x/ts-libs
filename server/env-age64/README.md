@@ -60,7 +60,7 @@ to poison.
 | Export                               | What it does                                                                        |
 | ------------------------------------ | ----------------------------------------------------------------------------------- |
 | `encryptEnvFiles(root)`              | Re-encrypts every env file under `root` to its `.age` sibling (mode `0644`)         |
-| `decryptEnvFiles(root)`              | Decrypts every `.env*.age`/`*.env.age` under `root` to its sibling (mode `0600`)    |
+| `decryptEnvFiles(root)`              | Decrypts every env file name plus `.age` under `root` to its sibling (mode `0600`)  |
 | `ageStatus(root)`                    | `{ keyPresent, recipient?, envFiles, ageFiles }` — no decryption                    |
 | `generateAgeKey(root)`               | Writes a fresh `.age/key.txt` (mode `0600`); refuses to overwrite an existing one   |
 | `encryptValue(value, recipient)`     | Encrypt one value for an `age1...` recipient — no filesystem involved               |
