@@ -10,6 +10,7 @@ import { sha256Hex } from "@spy4x/platform/tokens"
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
 import { bearerTokenFromHeaders } from "../http/bearer-auth.ts"
 import type { OAuthStore } from "./model.ts"
+import { isLoopbackRedirect } from "./redirect-uri.ts"
 
 /** The well-known path prefix of a protected resource metadata document. */
 export const PROTECTED_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource"
@@ -30,8 +31,7 @@ export function canonicalResource(value: string): string | undefined {
   } catch {
     return undefined
   }
-  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-  const scheme = url.protocol === "https:" || (url.protocol === "http:" && loopback)
+  const scheme = url.protocol === "https:" || isLoopbackRedirect(url)
   if (!scheme || url.hash !== "" || value.includes("#")) return undefined
   if (url.username !== "" || url.password !== "") return undefined
   return url.pathname === "/" && url.search === "" ? url.origin : url.href
