@@ -316,8 +316,7 @@ const readBodyPrefix = async (response: Response, maxBytes: number): Promise<str
       total += kept.byteLength
       text += decoder.decode(kept, { stream: true })
     }
-    // The prefix is all this client needs; a cancel that fails must not discard it.
-    await reader.cancel().catch(() => undefined)
+    await reader.cancel()
     return text + decoder.decode()
   } finally {
     reader.releaseLock()
