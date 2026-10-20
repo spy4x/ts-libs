@@ -25,20 +25,14 @@
  * @module
  */
 
-import { DEFAULT_RETRY_POLICY } from "./policy.ts"
 import {
-  type BackoffFn,
-  createExponentialBackoff,
-  DEFAULT_REQUEST_TIMEOUT_MS,
-  describeTransportError,
-  isRequestTimeout,
-  isTransientStatus,
-  parseRetryAfterMs,
-  releaseResponseBody,
-  type RetryPolicy,
-  runWithRetry,
-  type Sleeper,
-} from "./retry.ts"
+  createPostTransport,
+  type PostOutcome,
+  type PostTransport,
+  postWithRetry,
+} from "./_post.ts"
+import { DEFAULT_RETRY_POLICY } from "./policy.ts"
+import type { BackoffFn, Sleeper } from "./retry.ts"
 import type { RandomSource } from "@spy4x/platform/universal/async"
 import type { NowFn } from "@spy4x/platform/universal/time"
 
@@ -178,12 +172,7 @@ export const healthchecksConfigFromEnv = (
  */
 export class HealthchecksClient {
   private readonly pingUrl: string
-  private readonly fetcher: typeof fetch
-  private readonly sleep: Sleeper
-  private readonly clock: NowFn
-  private readonly policy: RetryPolicy
-  private readonly backoff: BackoffFn
-  private readonly requestTimeoutMs: number
+  private readonly transport: PostTransport
 
   /** Throws when `config.pingUrl` is empty or unparseable. */
   constructor(config: HealthchecksClientConfig, options: HealthchecksClientOptions = {}) {
@@ -204,16 +193,7 @@ export class HealthchecksClient {
       throw new Error("HealthchecksClient: pingUrl is not a valid absolute URL")
     }
     this.pingUrl = pingUrl.replace(/\/+$/, "")
-    this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init))
-    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
-    this.clock = options.clock ?? (() => Date.now())
-    this.policy = {
-      ...DEFAULT_RETRY_POLICY,
-      ...options.retry,
-      onDelay: options.onDelay,
-    }
-    this.backoff = options.backoff ?? createExponentialBackoff(this.policy, options.random)
-    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    this.transport = createPostTransport(DEFAULT_RETRY_POLICY, options)
   }
 
   /**
@@ -234,30 +214,20 @@ export class HealthchecksClient {
     const url = this.urlFor(ping.outcome)
     const body = ping.body ?? ""
 
-    let last: PostOutcome | undefined
-    const run = await runWithRetry<PostOutcome>({
-      policy: this.policy,
-      sleep: this.sleep,
-      clock: this.clock,
-      backoff: this.backoff,
-      attempt: async (attempt, remainingBudgetMs) => {
-        const attemptOutcome = await this.post(url, body, attempt, remainingBudgetMs)
-        last = attemptOutcome
-        return {
-          failed: !attemptOutcome.ok && attemptOutcome.retryable,
-          retryAfterMs: attemptOutcome.ok ? undefined : attemptOutcome.retryAfterMs,
-          value: attemptOutcome,
-        }
-      },
+    const { settled, attempts, waitedMs } = await postWithRetry(this.transport, {
+      service: "healthchecks",
+      urlSetting: "ping URL",
+      url,
+      body,
+      accepted: readAnswer,
     })
-    const settled = last ?? run.result
     if (settled.ok) {
       return {
         ok: true,
         httpStatus: settled.httpStatus,
-        attempts: run.attempts,
+        attempts,
         body,
-        waitedMs: run.waitedMs,
+        waitedMs,
       }
     }
     return {
@@ -265,8 +235,8 @@ export class HealthchecksClient {
       code: settled.code,
       message: settled.message,
       status: settled.status,
-      attempts: run.attempts,
-      waitedMs: run.waitedMs,
+      attempts,
+      waitedMs,
     }
   }
 
@@ -276,92 +246,6 @@ export class HealthchecksClient {
       return this.pingUrl
     }
     return `${this.pingUrl}/${outcome === HealthchecksOutcome.Fail ? "fail" : "start"}`
-  }
-
-  /** Issues one HTTP attempt, bounded by whichever is smaller of the request timeout or budget. */
-  private async post(
-    url: string,
-    body: string,
-    attempt: number,
-    remainingBudgetMs: number,
-  ): Promise<PostOutcome> {
-    // Never longer than what `totalBudgetMs` has left: a per-request timeout
-    // alone bounds one request, but not the operation `ping` promises to bound.
-    const timeoutMs = Math.max(Math.min(this.requestTimeoutMs, remainingBudgetMs), 0)
-    try {
-      const response = await this.fetcher(url, {
-        method: "POST",
-        body,
-        redirect: "manual",
-        signal: AbortSignal.timeout(timeoutMs),
-      })
-      if (isRedirect(response)) {
-        await releaseResponseBody(response)
-        // The `Location` value and the ping URL both stay out of the message:
-        // the URL carries the check's capability key.
-        return {
-          ok: false,
-          code: "redirected",
-          message: `healthchecks answered with a redirect (${response.status}); ` +
-            "set the ping URL to its final address",
-          status: response.status,
-          attempts: attempt,
-          retryable: false,
-        }
-      }
-      if (response.ok) {
-        const answer = (await readBodyPrefix(response, BODY_PREFIX_BYTES)).trim()
-        if (answer === NOT_FOUND_BODY) {
-          return {
-            ok: false,
-            code: "check_not_found",
-            message: `healthchecks has no check for this ping URL (${NOT_FOUND_BODY})`,
-            status: response.status,
-            attempts: attempt,
-            retryable: false,
-          }
-        }
-        if (answer === RATE_LIMITED_BODY) {
-          return {
-            ok: false,
-            code: "rate_limited",
-            message: `healthchecks ignored the ping (${RATE_LIMITED_BODY})`,
-            status: response.status,
-            attempts: attempt,
-            retryable: true,
-          }
-        }
-        return { ok: true, httpStatus: response.status, attempts: attempt }
-      }
-      const outcome: PostFailure = {
-        ok: false,
-        code: "http_error",
-        message: `${response.status} ${response.statusText}`.trim(),
-        status: response.status,
-        attempts: attempt,
-        retryable: isTransientStatus(response.status),
-        retryAfterMs: parseRetryAfterMs(response.headers.get("Retry-After")),
-      }
-      await releaseResponseBody(response)
-      return outcome
-    } catch (cause) {
-      if (isRequestTimeout(cause)) {
-        return {
-          ok: false,
-          code: "timeout",
-          message: `healthchecks request timed out after ${timeoutMs}ms`,
-          attempts: attempt,
-          retryable: true,
-        }
-      }
-      return {
-        ok: false,
-        code: "network_error",
-        message: describeTransportError(cause),
-        attempts: attempt,
-        retryable: true,
-      }
-    }
   }
 }
 
@@ -373,11 +257,31 @@ const RATE_LIMITED_BODY = "OK (rate limited)"
 const BODY_PREFIX_BYTES = 64
 
 /**
- * A 3xx answer to a `redirect: "manual"` request. Deno hands back the real
- * status; a browser hands back an `opaqueredirect` response with status 0.
+ * Decides a 2xx answer by its first bytes: healthchecks.io answers `200 OK (not found)` for a
+ * UUID it does not know and `200 OK (rate limited)` for a ping it ignored.
  */
-const isRedirect = (response: Response): boolean =>
-  response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)
+const readAnswer = async (response: Response): Promise<PostOutcome<HealthchecksErrorCode>> => {
+  const answer = (await readBodyPrefix(response, BODY_PREFIX_BYTES)).trim()
+  if (answer === NOT_FOUND_BODY) {
+    return {
+      ok: false,
+      code: "check_not_found",
+      message: `healthchecks has no check for this ping URL (${NOT_FOUND_BODY})`,
+      status: response.status,
+      retryable: false,
+    }
+  }
+  if (answer === RATE_LIMITED_BODY) {
+    return {
+      ok: false,
+      code: "rate_limited",
+      message: `healthchecks ignored the ping (${RATE_LIMITED_BODY})`,
+      status: response.status,
+      retryable: true,
+    }
+  }
+  return { ok: true, httpStatus: response.status }
+}
 
 /**
  * Reads at most `maxBytes` of a response body as text, then cancels the
@@ -407,22 +311,4 @@ const readBodyPrefix = async (response: Response, maxBytes: number): Promise<str
   } finally {
     reader.releaseLock()
   }
-}
-
-type PostOutcome = PostSuccess | PostFailure
-
-interface PostSuccess {
-  ok: true
-  httpStatus: number
-  attempts: number
-}
-
-interface PostFailure {
-  ok: false
-  code: HealthchecksErrorCode
-  message: string
-  attempts: number
-  retryable: boolean
-  status?: number
-  retryAfterMs?: number
 }
