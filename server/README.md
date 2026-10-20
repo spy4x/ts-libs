@@ -2007,8 +2007,9 @@ turns it off for a non-TTY or `NO_COLOR` environment, so nothing new needs decid
 `MIN_REQUEST_ID_MAX_LENGTH`.
 
 Ported from `template/apps/api/base-middleware.ts`. The app-specific parts became options:
-`requestIdMaxLength` (default 128; a longer `X-Request-Id` is replaced by a generated 8-character
-id, so it cannot overflow a database column), `skipLogPaths` (the template's hardcoded
+`requestIdMaxLength` (default 128; a longer `X-Request-Id` is replaced by a generated id, so it
+cannot overflow a database column; the id is a version 7 UUID, or 8 random URL-safe characters
+when the cap is below 36), `skipLogPaths` (the template's hardcoded
 `/api/health`; default none), `parseAuth` (optional) and `reportError` (optional, takes the
 `ReportContext` of `@spy4x/platform`'s error reporter). The app type is generic (`Hono<E>`), where
 the template named its own `APIContext`.
@@ -2018,8 +2019,8 @@ the request id, the method and the path, never the query, a header or a body, in
 route's own `onError` answered (that answer stays). An `HTTPException` below 500 is an answer, not
 a failure, and is not reported. A throw inside `reportError`, or a promise it returns that rejects, is swallowed.
 
-`requestIdMaxLength` must be an integer of at least `MIN_REQUEST_ID_MAX_LENGTH` (8, the length of a
-generated id); anything else throws a `RangeError` when `applyBaseMiddleware` is called.
+`requestIdMaxLength` must be an integer of at least `MIN_REQUEST_ID_MAX_LENGTH` (8, the length of
+the shortest generated id); anything else throws a `RangeError` when `applyBaseMiddleware` is called.
 
 ## `server/config`
 

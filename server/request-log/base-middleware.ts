@@ -13,14 +13,18 @@ import { HTTPException } from "hono/http-exception"
 import { requestId } from "hono/request-id"
 import type { ReportContext } from "@spy4x/platform"
 import { randomBase64Url } from "@spy4x/platform/tokens"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 import { escapeControlCharacters } from "./escape.ts"
 import { requestLog } from "./log.ts"
 
 /** Longest `X-Request-Id` kept when {@link BaseMiddlewareOptions.requestIdMaxLength} is unset. */
 export const DEFAULT_REQUEST_ID_MAX_LENGTH = 128
 
-/** Smallest `requestIdMaxLength` allowed: the length of a generated id. */
+/** Smallest `requestIdMaxLength` allowed: the length of the shortest generated id. */
 export const MIN_REQUEST_ID_MAX_LENGTH = 8
+
+/** Length of a version 7 UUID, the id generated when the cap allows it. */
+const UUID_LENGTH = 36
 
 /** What {@link applyBaseMiddleware} needs. */
 export interface BaseMiddlewareOptions {
@@ -36,9 +40,10 @@ export interface BaseMiddlewareOptions {
   reportError?: (error: unknown, context: ReportContext) => unknown
   /**
    * Longest `X-Request-Id` the caller may send. A longer one is replaced by a generated id, so it
-   * cannot reach a database column. An integer of at least {@link MIN_REQUEST_ID_MAX_LENGTH}, so
-   * a generated id always fits; anything else makes {@link applyBaseMiddleware} throw a
-   * `RangeError`. Defaults to {@link DEFAULT_REQUEST_ID_MAX_LENGTH}.
+   * cannot reach a database column. A generated id is a version 7 UUID, or 8 random URL-safe
+   * characters when the cap is below 36. An integer of at least
+   * {@link MIN_REQUEST_ID_MAX_LENGTH}, so a generated id always fits; anything else makes
+   * {@link applyBaseMiddleware} throw a `RangeError`. Defaults to {@link DEFAULT_REQUEST_ID_MAX_LENGTH}.
    */
   requestIdMaxLength?: number
   /** Paths left out of the request log, such as a health check. Defaults to none. */
@@ -100,11 +105,12 @@ export function applyBaseMiddleware<E extends Env>(
   app.onError((error, c) =>
     error instanceof HTTPException ? error.getResponse() : c.text("Internal Server Error", 500)
   )
+  const limitLength = requestIdMaxLength ?? DEFAULT_REQUEST_ID_MAX_LENGTH
   app.use(
     contextStorage(),
     requestId({
-      generator: () => randomBase64Url(6),
-      limitLength: requestIdMaxLength ?? DEFAULT_REQUEST_ID_MAX_LENGTH,
+      generator: limitLength >= UUID_LENGTH ? uuidV7 : () => randomBase64Url(6),
+      limitLength,
     }),
     reportFailures,
     requestLog({ write, skipPaths: skipLogPaths }),
