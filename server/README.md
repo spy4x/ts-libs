@@ -456,7 +456,7 @@ development. Use `upload`/`download` with a local provider.
 ```ts
 import { createStorage } from "@spy4x/server/storage"
 
-const storage = await createStorage() // reads Deno.env, returns undefined if unconfigured
+const storage = await createStorage() // reads the storage variables, undefined if unconfigured
 await storage?.upload("media/photo.png", bytes)
 ```
 
@@ -465,7 +465,7 @@ await storage?.upload("media/photo.png", bytes)
 provider. The key is an **argument**, not a module-scope `$env` read, so
 importing the package has no environment dependency and cannot fail on a missing
 variable. `createStorage()` is the only function that reads real environment
-variables, and it uses the same `parseStorageEnv(record)` helper that a test
+variables, only the ones `storageEnvNames()` lists, and it uses the same `parseStorageEnv(record)` helper that a test
 drives with a literal object.
 
 ### Injecting configuration

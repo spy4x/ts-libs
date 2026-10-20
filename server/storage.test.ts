@@ -1713,6 +1713,22 @@ describe("createStorage", () => {
   })
 })
 
+// A top-level test, because a nested one cannot narrow its permissions. The grant lists only the
+// storage variables, so reading any other one (as `Deno.env.toObject()` did) throws.
+Deno.test({
+  name: "createStorage reads only the storage variables, so --allow-env can name just those",
+  permissions: { env: Object.values(StorageEnvName), read: true },
+  async fn() {
+    const saved = Deno.env.get(StorageEnvName.Provider)
+    Deno.env.delete(StorageEnvName.Provider)
+    try {
+      assertEquals(await createStorage(), undefined)
+    } finally {
+      if (saved !== undefined) Deno.env.set(StorageEnvName.Provider, saved)
+    }
+  },
+})
+
 /** The port is exported as a type: this pins that a caller can implement it. */
 describe("FileStorage port", () => {
   it("is implementable by a caller's own provider", async () => {
