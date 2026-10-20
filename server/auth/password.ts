@@ -40,7 +40,7 @@ import {
   type NewAuthKey,
   normalizeEmail,
 } from "./model.ts"
-import { isStoreText, MAX_SUBJECT_LENGTH } from "./input.ts"
+import { isStoreText, MAX_SUBJECT_LENGTH, positiveInteger } from "./input.ts"
 import type { ProviderDeps, SignInResult } from "./provider.ts"
 
 /** The `AuthKey.method` of every key this provider writes. */
@@ -715,11 +715,4 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
  */
 function resetSubject(email: string, code: string): Promise<string> {
   return sha256Hex(`${PASSWORD_RESET_PURPOSE}\nsubject\n${email}\n${code}`)
-}
-
-function positiveInteger(value: number, name: string, max: number): number {
-  if (!Number.isSafeInteger(value) || value < 1 || value > max) {
-    throw new RangeError(`${name} must be an integer from 1 to ${max}`)
-  }
-  return value
 }

@@ -132,6 +132,30 @@ export function checkAttemptChallenge(value: AttemptChallengeInput): AttemptChal
 }
 
 /**
+ * `value` when it is an integer from 1 to `max`; otherwise throws `ErrorType` naming the option.
+ * The one range check for the numeric options of every sign-in factory in this folder.
+ *
+ * `ErrorType` is there only because `createOAuthSignIn` documents a `TypeError` for a bad number
+ * option while the email-code and password factories document a `RangeError`; both are public.
+ *
+ * @throws {RangeError} By default, when `value` is not a safe integer from 1 to `max`.
+ */
+export function positiveInteger(
+  value: unknown,
+  name: string,
+  max: number = Number.MAX_SAFE_INTEGER,
+  ErrorType: new (message: string) => Error = RangeError,
+): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > max) {
+    const rule = max === Number.MAX_SAFE_INTEGER
+      ? "a positive integer"
+      : `an integer from 1 to ${max}`
+    throw new ErrorType(`${name} must be ${rule}`)
+  }
+  return value as number
+}
+
+/**
  * Each broken rule as "<field> must be <rule>", without the rejected value.
  *
  * arktype's own summary appends `(was …)`, and the value it quotes can be a key secret or a
