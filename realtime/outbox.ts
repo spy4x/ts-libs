@@ -480,6 +480,11 @@ export function createOutbox<P, S extends { version: number }>(
       conflict: undefined,
     }
     if (change.kind === "update") {
+      if (existing.kind === "create" && existing.status === "conflict") {
+        // The server refused this create, so it did not land: an update on version 1 would write
+        // over the entity that holds the id. Send the edit as the create again, to be refused again.
+        return await save({ ...existing, ...renewed, payload: change.payload, before })
+      }
       if (existing.kind === "create" && mayHaveReachedServer(existing)) {
         // The create may be on the server, where a second create is refused as `already-exists`:
         // send the edit on top of version 1. A `not-found` answer sends the create again (`refuse`).

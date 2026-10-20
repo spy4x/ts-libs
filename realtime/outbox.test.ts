@@ -794,6 +794,43 @@ describe("outbox conflicts found after a reconnect", () => {
     expect(outbox.entries()).toEqual([])
   })
 
+  it("does not overwrite another creator's entity with an edit made during an already-exists conflict", async () => {
+    const { outbox, sent, state, offline } = harness()
+    offline()
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("Mine") })
+    let serverCopy: Item = item("n", 1, "Theirs")
+    state.current = serverCopy
+    state.online = true
+    state.server = ({ command }) => {
+      if (command.kind === "create") throw refused("ID_ALREADY_EXISTS")
+      if (command.baseVersion !== serverCopy.version) throw refused("VERSION_CONFLICT")
+      serverCopy = { id: "n", version: serverCopy.version + 1, title: command.payload.title }
+      state.current = serverCopy
+      return serverCopy
+    }
+    await outbox.flush()
+    expect(outbox.entries()[0]).toMatchObject({
+      status: "conflict",
+      conflict: { reason: "version" },
+    })
+    sent.length = 0
+
+    await outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Mine, edited"),
+      version: 0,
+    })
+
+    expect(serverCopy.title).toBe("Theirs")
+    expect(sent.map((s) => [s.command.kind, s.command.baseVersion])).toEqual([["create", 0]])
+    expect(outbox.entries()[0]).toMatchObject({
+      kind: "create",
+      status: "conflict",
+      payload: text("Mine, edited"),
+    })
+  })
+
   it("does not send a conflicted write again on its own", async () => {
     const { outbox, sent } = await staleUpdate()
     sent.length = 0
