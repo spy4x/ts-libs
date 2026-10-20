@@ -1,5 +1,6 @@
 /**
- * The canonical address and the structured data a server-rendered page publishes.
+ * The canonical address, the structured data, the `sitemap.xml` and the `llms.txt` a
+ * server-rendered site publishes.
  *
  * - **A canonical address is normalised before it is published.** Search engines and social
  *   networks read it, so it is parsed, required to be `http` or `https`, and stripped of the parts
@@ -9,6 +10,8 @@
  *   name for a segment of it. A route that wants a `BreadcrumbList` states its own crumbs.
  * - **JSON-LD is escaped for the `<script>` it goes into**, so a value containing `</script>` cannot
  *   end the element early.
+ * - **Every address in a sitemap or an `llms.txt` is absolute and normalised** the same way a
+ *   canonical address is, because both files are read on their own, away from any page.
  *
  * @module
  */
@@ -196,4 +199,106 @@ export function jsonLdText(value: unknown): string {
 /** The `\uXXXX` escape of one character `jsonLdText` must not emit raw. */
 function jsonLdEscape(char: string): string {
   return `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`
+}
+
+/** One page in a `sitemap.xml`. */
+export interface SitemapEntry {
+  /** Absolute `http`/`https` address of the page. */
+  url: string
+  /** When the page's content last changed. Omit it rather than guess: a wrong date is ignored. */
+  lastmod?: Date
+}
+
+/**
+ * The text of a `sitemap.xml` that lists `entries` in the order given.
+ *
+ * Only `loc` and `lastmod` are written: search engines ignore `priority` and `changefreq`. Each
+ * address is normalised like a canonical one and XML-escaped; `lastmod` is written as an ISO 8601
+ * timestamp in UTC.
+ *
+ * @throws When an address is not an absolute `http`/`https` URL, or a `lastmod` is an invalid date.
+ */
+export function sitemapXml(entries: readonly SitemapEntry[]): string {
+  const urls = entries.map(({ url, lastmod }) => {
+    const loc = `    <loc>${escapeXml(webUrl(url, "sitemap url").href)}</loc>\n`
+    if (lastmod === undefined) return `  <url>\n${loc}  </url>\n`
+    if (Number.isNaN(lastmod.getTime())) {
+      throw new Error(`sitemap lastmod must be a valid date, received one for: ${url}`)
+    }
+    return `  <url>\n${loc}    <lastmod>${lastmod.toISOString()}</lastmod>\n  </url>\n`
+  })
+
+  return `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join("")}</urlset>\n`
+}
+
+/** `value` safe inside an XML element body or a double- or single-quoted attribute. */
+function escapeXml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => XML_ENTITIES[char])
+}
+
+const XML_ENTITIES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&apos;",
+}
+
+/** One link in an `llms.txt` section. */
+export interface LlmsTxtLink {
+  /** The link text. */
+  title: string
+  /** Absolute `http`/`https` address of the page. */
+  url: string
+  /** What a reader finds there, written after the link. */
+  description?: string
+}
+
+/** One `## Section` of an `llms.txt` and its links. */
+export interface LlmsTxtSection {
+  title: string
+  links: readonly LlmsTxtLink[]
+}
+
+/** What an `llms.txt` says: the site's name, a one-paragraph summary and its sections. */
+export interface LlmsTxtDocument {
+  title: string
+  summary: string
+  sections: readonly LlmsTxtSection[]
+}
+
+/**
+ * The text of an `/llms.txt` in the format llmstxt.org describes: `# Title`, a `> summary` line,
+ * then each section as a `## Section` heading followed by `- [Title](url): description` lines.
+ *
+ * Line breaks inside a title, summary or description become spaces, so a value cannot start a
+ * heading or a list item of its own. `\`, `[` and `]` in a link text are backslash-escaped, and
+ * every address is normalised like a canonical one with its parentheses percent-encoded, so neither
+ * can end the link early.
+ *
+ * @throws When an address is not an absolute `http`/`https` URL.
+ */
+export function llmsTxt({ title, summary, sections }: LlmsTxtDocument): string {
+  const blocks = [`# ${oneLine(title)}`, `> ${oneLine(summary)}`]
+
+  for (const section of sections) {
+    const links = section.links.map(({ title, url, description }) => {
+      const href = webUrl(url, "llms.txt url").href.replace(
+        /[()]/g,
+        (paren) => paren === "(" ? "%28" : "%29",
+      )
+      const text = oneLine(title).replace(/[\\[\]]/g, "\\$&")
+      const note = description === undefined ? "" : `: ${oneLine(description)}`
+      return `- [${text}](${href})${note}`
+    })
+    blocks.push([`## ${oneLine(section.title)}`, ...links].join("\n"))
+  }
+
+  return `${blocks.join("\n\n")}\n`
+}
+
+/** `value` with every run of whitespace that holds a line break collapsed to one space. */
+function oneLine(value: string): string {
+  return value.replace(/\s*[\r\n]\s*/g, " ").trim()
 }
