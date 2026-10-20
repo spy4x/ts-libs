@@ -1,5 +1,6 @@
-// An app that imports only `@spy4x/tasks` can create, edit and complete a task and ask which of its
-// reminders are due (#677). Each call goes through the package's own entry points.
+// An app can create, edit and complete a task and ask which of its reminders are due through
+// `@spy4x/tasks` entry points (#677). The date and alarm enums those calls take still come from
+// `@spy4x/time`.
 
 import { expect } from "@std/expect"
 import { completeTask, createTask, editTask } from "@spy4x/tasks/edit"
