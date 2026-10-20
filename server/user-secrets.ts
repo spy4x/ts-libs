@@ -64,7 +64,7 @@ export enum UserSecretErrorCode {
    * decrypted — one user's key must never be opened on another user's request.
    */
   RowMismatch = 8,
-  /** `model` is not a string of at most {@link MAX_MODEL_LENGTH} characters without control characters. */
+  /** `model` is not a string of at most {@link MAX_MODEL_LENGTH} characters, free of control characters. */
   InvalidModel = 9,
   /** The cipher rejected the api key while encrypting it; nothing was stored. */
   EncryptionFailed = 10,
@@ -74,7 +74,8 @@ export enum UserSecretErrorCode {
  * The only error this module throws — a code, a constant message and a rejection type identity.
  *
  * The message is deliberately not parameterised: a caller value in a message is how a provider
- * name or a raw driver message ends up rendered to a user next to secret material. The error therefore carries **no `cause`** either: `cause` is a live handle on
+ * name or a raw driver message ends up rendered to a user next to secret material. The error
+ * therefore carries **no `cause`** either: `cause` is a live handle on
  * a rejection that a driver or cipher may have populated with the value it failed on, and the
  * reviewer recovered a plaintext api key from exactly that handle. The house rule is that only the
  * error's *type* crosses a boundary, never `message`, `stack`, `cause` or any field of the error.
@@ -340,7 +341,8 @@ function tryParseUrl(value: string): URL | null {
 }
 
 /**
- * An empty or omitted `baseUrl` is valid (the adapter falls back to its own default). A non-empty one has to survive three checks, in this order:
+ * An empty or omitted `baseUrl` is valid (the adapter falls back to its own default). A non-empty
+ * one has to survive three checks, in this order:
  *
  * 1. **This module's own shape rules.** An absolute `http:`/`https:` URL, with no user name or
  *    password in it and no control characters. These run first and always, including when internal

@@ -312,7 +312,7 @@ describe("sendIssue", () => {
     expect(everything).toContain("<REDACTED:EMAIL>")
   })
 
-  it("skips a row that is not a bare address, never mails it, and still closes the issue", async () => {
+  it("skips a row that is not a bare address and still closes the issue", async () => {
     const { log, input } = setup()
     const relay = fakeSender()
     const result = await sendIssue(

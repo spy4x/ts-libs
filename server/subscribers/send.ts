@@ -65,7 +65,7 @@ export type SendIssueResult =
  * The whole run holds the log's send lock, and a second call that finds it held answers
  * `in-progress` instead of waiting. A link that cannot be built and a send that throws each cost
  * that one mail and count as failed; the run goes on. A row that is not a bare address is logged
- * and counted as skipped: no rerun can mail it, so it must not keep the issue open forever. A log write
+ * and counted as skipped: no rerun can mail it, so it must not keep the issue open. A log write
  * that fails stops the run and throws, because carrying on could mail someone twice.
  *
  * The log names each row by its number and redacts the address from every relay error.
