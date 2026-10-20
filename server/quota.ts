@@ -274,7 +274,10 @@ export interface QuotaState {
   remaining: number
   /** 0 means one single lifetime window. */
   windowSeconds: number
-  /** false when a caller-supplied (BYOK) key bypassed the metered budget, or when no metered key exists. */
+  /**
+   * false when a caller-supplied (BYOK) key bypassed the metered budget, or when no metered key
+   * exists.
+   */
   metered: boolean
   /**
    * The clock reading {@link QuotaMeter.reserve} used to key the units it took,
@@ -561,8 +564,8 @@ export interface QuotaMeter {
    * this method: the caller records only on the path where {@link check}
    * returned `Allowed`, and `check` is where the own-key bypass lives. This
    * meter cannot tell on its own whether the work it is being told about was
-   * paid for by the caller's key or by the metered one, so a call site that records unconditionally charges the
-   * metered budget for BYOK work. That is the caller's invariant to keep, and
+   * paid for by the caller's key or by the metered one, so a call site that records
+   * unconditionally charges the metered budget for BYOK work. That is the caller's invariant to keep, and
    * this contract is stated rather than silently assumed.
    *
    * @throws {QuotaError} `InvalidCount` when `count` is not an integer between 1
