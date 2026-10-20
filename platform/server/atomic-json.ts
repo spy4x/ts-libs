@@ -12,6 +12,7 @@
  * @module
  */
 
+import { type ArkErrors, type } from "arktype"
 import { dirname } from "@std/path"
 
 import type { FileSystemPort, WriteTextOptions } from "./ports.ts"
@@ -22,21 +23,36 @@ export type ReadJsonResult<T> =
   | { kind: "missing" }
   | { kind: "invalid"; raw: string; reason: string }
 
+/** Options of {@link readJsonFile}. */
+export interface ReadJsonOptions<T> {
+  /**
+   * An arktype type the parsed document must match, such as `type({ count: "number" })`. A
+   * document that does not match is `{ kind: "invalid" }` with arktype's summary as the reason,
+   * and `value` is what the type returns, morphs applied. Left out, the parsed JSON is returned
+   * unchecked as `T`.
+   */
+  schema?: (data: unknown) => T | ArkErrors
+}
+
 /**
  * Read and parse a JSON document.
  *
  * A missing file is `{ kind: "missing" }`, not an error: a first run has no state yet. Unparseable
- * content is `{ kind: "invalid" }` and keeps the raw text, so a caller can quarantine or repair it
- * instead of silently starting from scratch.
+ * content, or content that fails `options.schema`, is `{ kind: "invalid" }` and keeps the raw
+ * text, so a caller can quarantine or repair it instead of silently starting from scratch. Without
+ * a schema, `T` is the caller's claim, not a check: a file edited by hand or written by an older
+ * version comes back as `T` whatever it holds.
  */
 export async function readJsonFile<T>(
   fs: FileSystemPort,
   path: string,
+  options: ReadJsonOptions<T> = {},
 ): Promise<ReadJsonResult<T>> {
   const raw = await fs.readText(path)
   if (raw === null) return { kind: "missing" }
+  let parsed: unknown
   try {
-    return { kind: "ok", value: JSON.parse(raw) as T }
+    parsed = JSON.parse(raw)
   } catch (error) {
     return {
       kind: "invalid",
@@ -44,6 +60,10 @@ export async function readJsonFile<T>(
       reason: error instanceof Error ? error.message : String(error),
     }
   }
+  if (options.schema === undefined) return { kind: "ok", value: parsed as T }
+  const checked = options.schema(parsed)
+  if (checked instanceof type.errors) return { kind: "invalid", raw, reason: checked.summary }
+  return { kind: "ok", value: checked as T }
 }
 
 /** Where a temporary file should live, given the document it will replace. */
