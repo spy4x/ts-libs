@@ -227,7 +227,9 @@ await billing.cancelNow({ subscriptionId, idempotencyKey })
   - `refundPayment({ paymentId, idempotencyKey })` refunds in full: it sends no amount, so Stripe
     refunds everything not refunded yet. There are no partial refunds. The answer is the `Refund`
     with its real amount and a `RefundStatus`; a status Stripe adds later reads as `Pending`, never
-    as a failure, because the refund exists.
+    as a failure, because the refund exists. A retry after Stripe's 24-hour key window is refused
+    by Stripe as already refunded, so on a 4xx the adapter reads the payment back and answers its
+    newest refund when nothing is left to refund.
   - `setTrialEnd({ subscriptionId, trialEnd, idempotencyKey })` gives time at no charge: nothing is
     charged before `trialEnd`, and `proration_behavior=none` neither credits nor charges the paid
     time left. Stripe refuses a date in the past.
