@@ -2509,11 +2509,12 @@ const processor = new OutboxProcessor(
 
 `createIdempotencyMiddleware`, `fingerprint`, `isIdempotencyKey`, `IdempotencyError`,
 `IdempotencyStore`, `PostgresIdempotencyStore`, `IDEMPOTENCY_POSTGRES_SCHEMA`,
-`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`,
+`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`, `IDEMPOTENCY_POSTGRES_USER_ID_TEXT`, `IdempotencyUserId`,
 `MemoryIdempotencyStore`, `IDEMPOTENCY_LEASE_SECONDS`, `IDEMPOTENCY_RETENTION_DAYS`. Extracted from
 `template/libs/server/idempotency/` (#313).
 
 A command whose data carries an `idempotencyKey` and an `actor.userId` runs once per (user, key).
+The user id is a number or a non-empty string, such as a version 7 UUID.
 A repeat returns the first run's result as JSON and changes nothing. Register the middleware on the
 `CommandBus` from `@spy4x/platform/cqrs`:
 
@@ -2545,6 +2546,8 @@ it, and its result, for the full retention.
 **The table.** `IDEMPOTENCY_POSTGRES_SCHEMA` is the SQL for `idempotency_keys`; run it as one of
 your migrations. It has no foreign key on `user_id`, because this library does not own your users
 table; add `REFERENCES users (id) ON DELETE CASCADE` if you want rows to go with the user.
+`user_id` is an `integer`. An app whose user ids are strings also runs
+`IDEMPOTENCY_POSTGRES_USER_ID_TEXT`, which widens it to `text`, before it opens the store's pool.
 
 **Fencing.** `begin` returns `{ status: "claimed", token }`; `complete` and `release` take that token
 and change nothing when it is not the key's current one. A run that outlives its lease and loses its
