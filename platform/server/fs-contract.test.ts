@@ -150,5 +150,67 @@ export function describeFileSystemContract(name: string, open: OpenFileSystem): 
         expect(await fs.exists(path)).toBe(true)
       })
     })
+
+    // The byte and stream methods are optional on the port, but both implementations here have
+    // them: a missing one fails these cases with a TypeError instead of skipping them.
+
+    it("writeBytes and readBytes round-trip bytes that are not valid UTF-8", async () => {
+      await withFixture(open, async (fs, root) => {
+        const path = `${root}/blob.bin`
+        const data = new Uint8Array([0xff, 0x00, 0xfe, 0x80, 0x41])
+        await fs.writeText(path, "a longer first version")
+        await fs.writeBytes!(path, data)
+        expect(await fs.readBytes!(path)).toEqual(data)
+        expect(await fs.readDir(root)).toEqual([
+          { name: "blob.bin", isDirectory: false, isFile: true, size: 5 },
+        ])
+        expect(await fs.readBytes!(`${root}/absent.bin`)).toBeNull()
+      })
+    })
+
+    it("readBytes returns the UTF-8 bytes of a file written as text", async () => {
+      await withFixture(open, async (fs, root) => {
+        await fs.writeText(`${root}/a.txt`, "ü€")
+        expect(await fs.readBytes!(`${root}/a.txt`)).toEqual(new TextEncoder().encode("ü€"))
+      })
+    })
+
+    it("writeStream writes every chunk, replaces old content and returns the byte count", async () => {
+      await withFixture(open, async (fs, root) => {
+        const path = `${root}/upload.bin`
+        await fs.writeText(path, "a longer first version than the upload")
+        const chunks = [new Uint8Array([1, 2, 3]), new Uint8Array([0xff]), new Uint8Array([4, 5])]
+        expect(await fs.writeStream!(path, ReadableStream.from(chunks))).toBe(6)
+        expect(await fs.readBytes!(path)).toEqual(new Uint8Array([1, 2, 3, 0xff, 4, 5]))
+        const stream = await fs.readStream!(path)
+        expect(new Uint8Array(await new Response(stream).arrayBuffer())).toEqual(
+          new Uint8Array([1, 2, 3, 0xff, 4, 5]),
+        )
+        expect(await fs.readStream!(`${root}/absent.bin`)).toBeNull()
+      })
+    })
+
+    it("writeStream rejects when its source errors", async () => {
+      await withFixture(open, async (fs, root) => {
+        const source = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1]))
+            controller.error(new Error("connection reset"))
+          },
+        })
+        await expect(fs.writeStream!(`${root}/cut.bin`, source)).rejects.toThrow()
+      })
+    })
+
+    it("writeBytes and writeStream refuse a folder that does not exist", async () => {
+      await withFixture(open, async (fs, root) => {
+        await expect(fs.writeBytes!(`${root}/missing/a.bin`, new Uint8Array([1]))).rejects
+          .toThrow()
+        await expect(
+          fs.writeStream!(`${root}/missing/b.bin`, ReadableStream.from([new Uint8Array([1])])),
+        ).rejects.toThrow()
+        expect(await fs.exists(`${root}/missing`)).toBe(false)
+      })
+    })
   })
 }

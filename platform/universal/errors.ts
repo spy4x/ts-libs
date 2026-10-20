@@ -16,6 +16,7 @@ import {
   VALIDATION_MESSAGE,
   type ValidationError as ValidationErrorShape,
 } from "@spy4x/validation"
+import { errorBodyFields } from "./error-body.ts"
 
 export { ErrType }
 
@@ -112,8 +113,9 @@ export function connectionError(message: string): ConnectionError {
  *
  * A status of `0` is `Response.error()` — the request never left — and becomes a
  * {@link ConnectionError} with {@link ERR_MESSAGE}`.connection`. Anything else becomes a
- * {@link ServerError} carrying the server's own message when the JSON body holds one (`"error"`,
- * `"message"` or `"detail"`, or the body is a bare string), falling back to the status text, then
+ * {@link ServerError} carrying the server's own message when the JSON body holds one (a bare string,
+ * `"error"`, `"error.message"`, `"message"` or `"detail"`, the rule `apiFetch` from
+ * `@spy4x/platform/api` reads a body by), falling back to the status text, then
  * to `HTTP <status>`. Only the standard `Response` is used, so this runs in a browser and on a
  * server alike. Reading the body consumes it, which is fine: the caller has already decided the
  * response failed.
@@ -140,18 +142,10 @@ export function isSilentError(error: AnyError | StoreError): boolean {
     (error.type === ErrType.Server && error.status === 500)
 }
 
-/** Body-derived message, or `null` when the body is absent, unparseable or empty. */
+/** Body-derived message, or `null` when the body is absent, unparseable or names none. */
 async function readErrorMessage(response: Response): Promise<string | null> {
   try {
-    const body: unknown = await response.json()
-    if (typeof body === "string") return body || null
-    if (body !== null && typeof body === "object") {
-      for (const key of ["error", "message", "detail"]) {
-        const value = (body as Record<string, unknown>)[key]
-        if (typeof value === "string" && value) return value
-      }
-    }
-    return null
+    return errorBodyFields(await response.json()).message ?? null
   } catch {
     return null
   }

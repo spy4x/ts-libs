@@ -185,8 +185,59 @@ Deno.test("a zoned value whose zone the document's VTIMEZONE defines is read in 
   expect(dateInstant(due, `Europe/Berlin`, root).toISOString()).toBe(`2026-10-08T00:00:00.000Z`)
 })
 
+Deno.test("a due near midnight in a zone only the document's VTIMEZONE defines lands on the viewer's day", () => {
+  const root = parseIcal([
+    `BEGIN:VCALENDAR`,
+    `BEGIN:VTIMEZONE`,
+    `TZID:Head Office Time`,
+    `BEGIN:STANDARD`,
+    `DTSTART:16010101T000000`,
+    `TZOFFSETFROM:+0900`,
+    `TZOFFSETTO:+0900`,
+    `END:STANDARD`,
+    `END:VTIMEZONE`,
+    `END:VCALENDAR`,
+  ].join(`\r\n`)).output!
+  // 00:30 on the 9th at +09:00 is 15:30 UTC on the 8th, 17:30 on the 8th in Berlin.
+  const due = {
+    kind: IcalDateKind.Zoned,
+    date: `2026-10-09`,
+    time: `00:30:00`,
+    tzid: `Head Office Time`,
+  }
+  expect(dateDay(due, `Europe/Berlin`, root)).toBe(`2026-10-08`)
+  // Without the document the zone is unknown and the wall clock is read in the viewer's zone.
+  expect(dateDay(due, `Europe/Berlin`)).toBe(`2026-10-09`)
+})
+
 Deno.test("a task with no CREATED is created at its DTSTAMP", () => {
   const stamped = fixtureTask(STAMP_ONLY)
+  expect(stamped.created).toEqual({
+    kind: IcalDateKind.Utc,
+    date: `2026-10-01`,
+    time: `08:00:00`,
+  })
+})
+
+Deno.test("a task with no CREATED is created at its master's DTSTAMP, not an override's", () => {
+  const stamped = fixtureTask([
+    `BEGIN:VCALENDAR`,
+    `VERSION:2.0`,
+    `BEGIN:VTODO`,
+    `DTSTAMP:20261005T080000Z`,
+    `UID:100200420`,
+    `RECURRENCE-ID:20261005T080000Z`,
+    `SUMMARY:Override`,
+    `END:VTODO`,
+    `BEGIN:VTODO`,
+    `DTSTAMP:20261001T080000Z`,
+    `UID:100200420`,
+    `SUMMARY:Master`,
+    `RRULE:FREQ=DAILY`,
+    `END:VTODO`,
+    `END:VCALENDAR`,
+  ].join(`\r\n`))
+  expect(stamped.title).toBe(`Master`)
   expect(stamped.created).toEqual({
     kind: IcalDateKind.Utc,
     date: `2026-10-01`,
