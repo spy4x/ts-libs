@@ -43,7 +43,8 @@ export interface BaseMiddlewareOptions {
    * cannot reach a database column. A generated id is a version 7 UUID, or 8 random URL-safe
    * characters when the cap is below 36. An integer of at least
    * {@link MIN_REQUEST_ID_MAX_LENGTH}, so a generated id always fits; anything else makes
-   * {@link applyBaseMiddleware} throw a `RangeError`. Defaults to {@link DEFAULT_REQUEST_ID_MAX_LENGTH}.
+   * {@link applyBaseMiddleware} throw a `RangeError`. Defaults to
+   * {@link DEFAULT_REQUEST_ID_MAX_LENGTH}.
    */
   requestIdMaxLength?: number
   /** Paths left out of the request log, such as a health check. Defaults to none. */

@@ -33,8 +33,8 @@
  *   succeeded.
  * - **What it emits**: a quota emits a *state* for the UI (`used`, `limit`,
  *   `remaining`) and a decision that maps to `200` / `429` / `503`
- *   ({@link quotaStatusCode}). A rate
- *   limiter emits headers and a bodyless rejection.
+ *   ({@link quotaStatusCode}). A rate limiter emits headers and a bodyless
+ *   rejection.
  *
  * Consequences that follow from the above, and are deliberate: `429` here means
  * "this principal has spent their budget", never "you are going too fast", and
@@ -559,9 +559,9 @@ export interface QuotaMeter {
    *
    * There is deliberately no BYOK parameter here. A BYOK request never reaches
    * this method: the caller records only on the path where {@link check}
-   * returned `Allowed`, and `check` is where the own-key bypass lives. This meter cannot tell on its own whether the
-   * work it is being told about was paid for by the caller's key or by the
-   * metered one, so a call site that records unconditionally charges the
+   * returned `Allowed`, and `check` is where the own-key bypass lives. This
+   * meter cannot tell on its own whether the work it is being told about was
+   * paid for by the caller's key or by the metered one, so a call site that records unconditionally charges the
    * metered budget for BYOK work. That is the caller's invariant to keep, and
    * this contract is stated rather than silently assumed.
    *

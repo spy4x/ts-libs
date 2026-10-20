@@ -64,7 +64,10 @@ export enum UserSecretErrorCode {
    * decrypted — one user's key must never be opened on another user's request.
    */
   RowMismatch = 8,
-  /** `model` is not a string of at most {@link MAX_MODEL_LENGTH} characters, free of control characters. */
+  /**
+   * `model` is not a string of at most {@link MAX_MODEL_LENGTH} characters, free of control
+   * characters.
+   */
   InvalidModel = 9,
   /** The cipher rejected the api key while encrypting it; nothing was stored. */
   EncryptionFailed = 10,
