@@ -290,7 +290,7 @@ WebhookVerifyResult	type	@spy4x/integrations	Result of verifyWebhookRequest: the
 createExponentialBackoff	function	@spy4x/integrations	Deprecated: Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`), kept for this module's existing 1-based-attempt, `Retry-After`-aware call shape. Exponential backoff, clamped and optionally jittered.
 describeTransportError	function	@spy4x/integrations	Describes a transport failure **without** the request URL.
 healthchecksConfigFromEnv	function	@spy4x/integrations	Reads a ping URL from an environment reader.
-isPermanentStatus	function	@spy4x/integrations	Statuses that will never succeed on a retry: the request itself is wrong.
+isPermanentStatus	function	@spy4x/integrations	Deprecated: No client in this package uses it; compare `status >= 400 && status < 500` in place. Statuses that will never succeed on a retry: the request itself is wrong.
 isRequestTimeout	function	@spy4x/integrations	True when `cause` is the `TimeoutError` an `AbortSignal.timeout()` firing produces.
 isTransientStatus	function	@spy4x/integrations	Statuses worth another attempt: rate limiting and upstream faults.
 ntfyConfigFromEnv	function	@spy4x/integrations	Reads ntfy settings from an environment reader.
@@ -2468,4 +2468,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 18374c4f3266441b70403638c73737eebe671511308495034d9d954dd25bfb54
+# export surface: sha256 98c8c5f2c2779a4e7b958f65ecf1781e875d9e2e963204eec65535123b1d4e53

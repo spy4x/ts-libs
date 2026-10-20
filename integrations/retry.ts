@@ -185,7 +185,12 @@ export const createExponentialBackoff = (
 /** Statuses worth another attempt: rate limiting and upstream faults. */
 export const isTransientStatus = (status: number): boolean => status === 429 || status >= 500
 
-/** Statuses that will never succeed on a retry: the request itself is wrong. */
+/**
+ * Statuses that will never succeed on a retry: the request itself is wrong.
+ *
+ * @deprecated No client in this package uses it; compare `status >= 400 && status < 500` in
+ * place. Removed in 2.0.
+ */
 export const isPermanentStatus = (status: number): boolean => status >= 400 && status < 500
 
 /**
