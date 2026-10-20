@@ -149,6 +149,7 @@ export {
 
 export {
   adaptWebSocket,
+  type AdaptWebSocketOptions,
   createWebSocketFactory,
   mapReadyState,
   type NativeSocketLike,
