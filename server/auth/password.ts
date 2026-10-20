@@ -409,10 +409,15 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
   }
 
   /** Hashes a new password, or refuses it as `invalid-password`. */
-  async function hashNewPassword(password: unknown): Promise<string> {
+  /** Throws `invalid-password` unless `password` is a string of at least `minLength` characters. */
+  function checkNewPassword(password: unknown): asserts password is string {
     if (typeof password !== "string" || [...password].length < minLength) {
       throw new PasswordSignInError("invalid-password")
     }
+  }
+
+  async function hashNewPassword(password: unknown): Promise<string> {
+    checkNewPassword(password)
     try {
       return await hasher.hash(password)
     } catch (error) {
@@ -536,7 +541,11 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     const user = await liveUser(key.userId)
     if (!user) throw new PasswordSignInError("invalid-credentials")
     if (check.needsRehash) await store.updateKeySecret(key.id, await hasher.hash(password))
-    return { user, key: await reloadKey(key.id) }
+    // A key deleted since it was read no longer signs anyone in: the same refusal as a wrong
+    // password, not the `conflict` that `reloadKey` throws.
+    const current = await store.findKeyById(key.id)
+    if (!current) throw new PasswordSignInError("invalid-credentials")
+    return { user, key: current }
   }
 
   return {
@@ -600,7 +609,7 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
       const expiresAt = new Date(issuedAt.getTime() + ttlMs)
       await store.issueChallenge({
         purpose: PASSWORD_RESET_PURPOSE,
-        subject: await resetSubject(email, code),
+        subject: `${await resetAddressPrefix(email)}${await resetCodeDigest(email, code)}`,
         secretHash: await sha256Hex(code),
         expiresAt,
         now: issuedAt,
@@ -611,21 +620,35 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     async completeReset({ email: rawEmail, code, newPassword, device }) {
       requireAddressSubjects("completeReset")
       const email = requireEmail(rawEmail)
-      // Checked before the guess is spent, so a refused password does not consume a matching code.
-      const secret = await hashNewPassword(newPassword)
+      // The length rule is checked before the guess is spent, so a too-short password does not
+      // consume a matching code. The hash itself waits for a matching code, so a wrong code costs
+      // no hash. Timing then tells a match from a miss, which the answer tells anyway.
+      checkNewPassword(newPassword)
       if (typeof code !== "string" || code.length === 0) {
         throw new PasswordSignInError("invalid-code")
       }
       const at = now()
-      const outcome = await store.attemptChallenge({
-        purpose: PASSWORD_RESET_PURPOSE,
-        subject: await resetSubject(email, code),
-        secretHash: await sha256Hex(code),
-        maxAttempts,
-        now: at,
-      })
+      const prefix = await resetAddressPrefix(email)
+      const codeDigest = await resetCodeDigest(email, code)
+      const secretHash = await sha256Hex(code)
+      const attempt = (subject: string) =>
+        store.attemptChallenge({
+          purpose: PASSWORD_RESET_PURPOSE,
+          subject,
+          secretHash,
+          maxAttempts,
+          now: at,
+        })
+      let outcome = await attempt(`${prefix}${codeDigest}`)
+      // A code issued by 1.82 or earlier has the bare code digest as its subject. Such a row expires
+      // within `resetTtlMinutes` (one day at most), after which this second lookup finds nothing.
+      if (outcome === ChallengeOutcome.Missing) outcome = await attempt(codeDigest)
       if (outcome === ChallengeOutcome.LockedOut) throw new PasswordSignInError("locked-out")
       if (outcome !== ChallengeOutcome.Matched) throw new PasswordSignInError("invalid-code")
+      // The code is spent: cancel the address's other reset codes. A store without the optional
+      // method leaves them working until they expire.
+      await store.deleteChallenges?.(PASSWORD_RESET_PURPOSE, prefix)
+      const secret = await hashNewPassword(newPassword)
 
       const key = await store.findKey(PASSWORD_METHOD, email)
       if (!key) throw new PasswordSignInError("no-account")
@@ -706,13 +729,21 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
 }
 
 /**
- * The challenge subject of a reset code: a digest of the address and the code. Every
- * `requestReset` opens a challenge of its own, so a stranger who asks for codes or guesses wrong
- * never replaces, counts against or locks the code the person received. A wrong code reaches no
- * challenge at all, and a 256-bit code cannot be guessed, so no guess counter is needed. 64 hex
- * characters, so it never equals an address, the subject of a reset challenge stored before this
- * scheme; such a row is never matched again and simply expires.
+ * The challenge subject of a reset code is {@link resetAddressPrefix} followed by
+ * {@link resetCodeDigest}: 129 characters. Every `requestReset` opens a challenge of its own, so a
+ * stranger who asks for codes or guesses wrong never replaces, counts against or locks the code the
+ * person received. A wrong code reaches no challenge at all, and a 256-bit code cannot be guessed,
+ * so no guess counter is needed. The address part lets a successful reset delete the address's
+ * other codes (`AuthStore.deleteChallenges`) without knowing them.
+ *
+ * Up to 1.82 the subject was the code digest alone (64 hex characters); `completeReset` still
+ * looks those up. Older still, the subject was the address, which never matches either form.
  */
-function resetSubject(email: string, code: string): Promise<string> {
+async function resetAddressPrefix(email: string): Promise<string> {
+  return `${await sha256Hex(`${PASSWORD_RESET_PURPOSE}\naddress\n${email}`)}.`
+}
+
+/** The code half of a reset challenge's subject. See {@link resetAddressPrefix}. */
+function resetCodeDigest(email: string, code: string): Promise<string> {
   return sha256Hex(`${PASSWORD_RESET_PURPOSE}\nsubject\n${email}\n${code}`)
 }

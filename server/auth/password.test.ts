@@ -8,19 +8,23 @@ import {
   SessionStatus,
 } from "../sign-in/mod.ts"
 import { createClock, createFakeStore, PEPPER } from "../sign-in/fake-store.test.ts"
+import { sha256Hex } from "@spy4x/platform/tokens"
 import { MemoryAuthStore } from "./memory-store.ts"
 import { AuthConflictError, type AuthSessionRecord } from "./model.ts"
 import {
   createPasswordSignIn,
   PASSWORD_METHOD,
+  PASSWORD_RESET_PURPOSE,
   type PasswordSignInError,
   type PasswordSignInOptions,
 } from "./password.ts"
+import type { AuthStore } from "./store.ts"
 
 /** The lowest iteration count the hasher accepts, so the suite stays fast. */
 const ITERATIONS = 100_000
 const MINUTE = 60_000
 const ANN = "ann@example.com"
+const BOB = "bob@example.com"
 const MALLORY_PASSWORD = "mallory-secret-1"
 const LAPTOP = { deviceName: "Firefox on Linux", ipHint: "203.0.113.x" }
 const PHONE = { deviceName: "Safari on iOS", ipHint: "2001:db8:1:2::x" }
@@ -223,6 +227,17 @@ describe("createPasswordSignIn: signIn", () => {
     expect(result.key.secret).toMatch(/^pbkdf2-sha256\$100001\$/)
     expect((await store.findKeyById(created.key.id))?.secret).toBe(result.key.secret)
     await provider.signIn({ email: ANN, password: "correct horse" })
+  })
+})
+
+describe("createPasswordSignIn: a key deleted during sign-in", () => {
+  it("refuses with invalid-credentials, not conflict", async () => {
+    const { provider, store } = setup()
+    await provider.signUp({ email: ANN, password: "correct horse" })
+    // The key is read once, then gone by the time the provider reads it again.
+    store.findKeyById = () => Promise.resolve(null)
+    const error = await refusal(provider.signIn({ email: ANN, password: "correct horse" }))
+    expect(error.reason).toBe("invalid-credentials")
   })
 })
 
@@ -588,6 +603,70 @@ describe("createPasswordSignIn: requestReset and completeReset", () => {
       provider.completeReset({ email: ANN, code, newPassword: "battery staple" }),
     )
     expect(error.reason).toBe("invalid-code")
+  })
+
+  it("cancels the address's other reset codes once one of them resets the password", async () => {
+    const { provider } = setup()
+    await provider.signUp({ email: ANN, password: "correct horse" })
+    await provider.signUp({ email: BOB, password: "correct horse" })
+    const first = await provider.requestReset({ email: ANN })
+    const second = await provider.requestReset({ email: ANN })
+    const bobs = await provider.requestReset({ email: BOB })
+    await provider.completeReset({ email: ANN, code: first.code, newPassword: "battery staple" })
+
+    const error = await refusal(
+      provider.completeReset({ email: ANN, code: second.code, newPassword: "mallory-pass" }),
+    )
+    expect(error.reason).toBe("invalid-code")
+    await provider.signIn({ email: ANN, password: "battery staple" })
+    await provider.completeReset({ email: BOB, code: bobs.code, newPassword: "battery staple" })
+  })
+
+  it("leaves the other codes working with a store that has no deleteChallenges", async () => {
+    const memory = new MemoryAuthStore({ clock: createClock() })
+    const { deleteChallenges: _, ...methods } = Object.fromEntries(
+      Object.getOwnPropertyNames(MemoryAuthStore.prototype)
+        .filter((name) => name !== "constructor")
+        .map((name) => {
+          const method =
+            (memory as unknown as Record<string, (...args: unknown[]) => unknown>)[name]
+          return [name, method.bind(memory)]
+        }),
+    )
+    const { provider } = setup({ store: methods as unknown as AuthStore })
+    await provider.signUp({ email: ANN, password: "correct horse" })
+    const first = await provider.requestReset({ email: ANN })
+    const second = await provider.requestReset({ email: ANN })
+    await provider.completeReset({ email: ANN, code: first.code, newPassword: "battery staple" })
+    await provider.completeReset({ email: ANN, code: second.code, newPassword: "second staple" })
+    await provider.signIn({ email: ANN, password: "second staple" })
+  })
+
+  it("still accepts a code issued before the subject carried the address", async () => {
+    const { provider, store, clock } = setup()
+    await provider.signUp({ email: ANN, password: "correct horse" })
+    const code = "a-code-issued-by-version-1-82-or-earlier-xyz"
+    await store.issueChallenge({
+      purpose: PASSWORD_RESET_PURPOSE,
+      subject: await sha256Hex(`${PASSWORD_RESET_PURPOSE}\nsubject\n${ANN}\n${code}`),
+      secretHash: await sha256Hex(code),
+      expiresAt: new Date(clock.now() + 10 * MINUTE),
+      now: new Date(clock.now()),
+    })
+    await provider.completeReset({ email: ANN, code, newPassword: "battery staple" })
+    await provider.signIn({ email: ANN, password: "battery staple" })
+  })
+
+  it("hashes no new password for a wrong code", async () => {
+    const { provider, hasherCalls } = setup()
+    await provider.signUp({ email: ANN, password: "correct horse" })
+    await provider.requestReset({ email: ANN })
+    hasherCalls.length = 0
+    const error = await refusal(
+      provider.completeReset({ email: ANN, code: "wrong", newPassword: "battery staple" }),
+    )
+    expect(error.reason).toBe("invalid-code")
+    expect(hasherCalls).toEqual([])
   })
 
   it("does not spend a matching code on a refused new password", async () => {
