@@ -4352,8 +4352,11 @@ stall rejects with the canonical `BodyReadTimeoutError`, importable from
 `c.req.raw` through the canonical `readBoundedJson` and throws Hono's `HTTPException`: 413 for a
 body over the cap, 408 for a stalled body and 400 for a body that is not JSON, the empty body
 included. A route without `onError` answers with that status on its own; a route with its own error
-shape catches the exception and reads `status`, and the reader's error is kept as `cause`. Any other
-error is rethrown unchanged.
+shape catches the exception and reads `status`, and the reader's error is kept as `cause`. The 413's
+response carries `connection: close`, because once the unread body is cancelled `Deno.serve` no longer
+closes the connection by itself. Any other error is rethrown unchanged, including the `RangeError`
+for a `maxBytes` that is not a positive finite number (`0` among them), which a route answers with
+500, not 413.
 
 Two options go beyond the reader's `maxBytes` and `timeoutMs`. `requireJsonContentType: true`
 refuses, before the body is read, a request that is not declared as `application/json`: 415 with
