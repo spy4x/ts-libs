@@ -390,6 +390,43 @@ describe("HealthchecksClient.ping", () => {
     expect(captured?.bodyUsed).toBe(true)
   })
 
+  it("does not send a ping again when the body of its 2xx cannot be read", async () => {
+    let calls = 0
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: () => {
+        calls++
+        const body = new ReadableStream<Uint8Array>({
+          pull: (controller) => controller.error(new TypeError("connection reset")),
+        })
+        return Promise.resolve(new Response(body, { status: 200 }))
+      },
+      sleep: () => Promise.resolve(),
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result.ok && result.httpStatus).toBe(200)
+    expect(calls).toBe(1)
+  })
+
+  it("does not send a ping again when releasing the rest of its 2xx body fails", async () => {
+    let calls = 0
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: () => {
+        calls++
+        const body = new ReadableStream<Uint8Array>({
+          start: (controller) => controller.enqueue(new TextEncoder().encode("x".repeat(100))),
+          cancel: () => {
+            throw new TypeError("connection reset")
+          },
+        })
+        return Promise.resolve(new Response(body, { status: 200 }))
+      },
+      sleep: () => Promise.resolve(),
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result.ok && result.httpStatus).toBe(200)
+    expect(calls).toBe(1)
+  })
+
   it("releases the response body on an HTTP error too", async () => {
     let captured: Response | undefined
     const client = new HealthchecksClient({ pingUrl: PING_URL }, {

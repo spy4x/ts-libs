@@ -452,6 +452,25 @@ describe("NtfyClient.push", () => {
     expect(captured?.bodyUsed).toBe(true)
   })
 
+  it("does not send a push again when releasing its 2xx body fails", async () => {
+    let calls = 0
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: () => {
+        calls++
+        const body = new ReadableStream<Uint8Array>({
+          cancel: () => {
+            throw new TypeError("connection reset")
+          },
+        })
+        return Promise.resolve(new Response(body, { status: 200 }))
+      },
+      sleep: () => Promise.resolve(),
+    })
+    const result = await client.notifyFailure("backup failed", "detail")
+    expect(result.ok && result.status === "pushed" && result.httpStatus).toBe(200)
+    expect(calls).toBe(1)
+  })
+
   it("releases the response body on an HTTP error too", async () => {
     let captured: Response | undefined
     const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {

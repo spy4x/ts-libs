@@ -261,7 +261,14 @@ const BODY_PREFIX_BYTES = 64
  * UUID it does not know and `200 OK (rate limited)` for a ping it ignored.
  */
 const readAnswer = async (response: Response): Promise<PostOutcome<HealthchecksErrorCode>> => {
-  const answer = (await readBodyPrefix(response, BODY_PREFIX_BYTES)).trim()
+  let answer: string
+  try {
+    answer = (await readBodyPrefix(response, BODY_PREFIX_BYTES)).trim()
+  } catch {
+    // The 2xx says healthchecks took the ping. A body that cannot be read is no reason to send it
+    // again, and the two documented exceptions are a few bytes that arrive with the status line.
+    return { ok: true, httpStatus: response.status }
+  }
   if (answer === NOT_FOUND_BODY) {
     return {
       ok: false,
@@ -306,7 +313,8 @@ const readBodyPrefix = async (response: Response, maxBytes: number): Promise<str
       total += kept.byteLength
       text += decoder.decode(kept, { stream: true })
     }
-    await reader.cancel()
+    // The prefix is all this client needs; a cancel that fails must not discard it.
+    await reader.cancel().catch(() => undefined)
     return text + decoder.decode()
   } finally {
     reader.releaseLock()

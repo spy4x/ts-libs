@@ -407,8 +407,11 @@ export class NtfyClient {
   }
 }
 
-/** A 2xx from ntfy is a delivered push; its body is never read. */
+/**
+ * A 2xx from ntfy is a delivered push; its body is never read. A failure to release that body is
+ * ignored: reporting it as a network error retried a push ntfy had already delivered.
+ */
 const releaseAccepted = async (response: Response): Promise<PostOutcome<NtfyErrorCode>> => {
-  await releaseResponseBody(response)
+  await releaseResponseBody(response).catch(() => undefined)
   return { ok: true, httpStatus: response.status }
 }

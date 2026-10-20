@@ -100,7 +100,10 @@ export interface PostRequest<Code extends string> {
   url: string
   headers?: Headers
   body: string
-  /** Decides a 2xx answer and releases its body. */
+  /**
+   * Decides a 2xx answer and releases its body. Must not throw: a failure to read or release the
+   * body after the provider accepted the request is not a reason to send it again.
+   */
   accepted: (response: Response) => Promise<PostOutcome<Code>>
 }
 
@@ -161,7 +164,7 @@ const postOnce = async <Code extends string>(
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (isRedirect(response)) {
-      await releaseResponseBody(response)
+      await releaseResponseBody(response).catch(() => undefined)
       // Neither `Location` nor the URL goes into the message: the URL can carry a credential.
       return {
         ok: false,
@@ -183,7 +186,7 @@ const postOnce = async <Code extends string>(
       retryable: isTransientStatus(response.status),
       retryAfterMs: parseRetryAfterMs(response.headers.get("Retry-After")),
     }
-    await releaseResponseBody(response)
+    await releaseResponseBody(response).catch(() => undefined)
     return outcome
   } catch (cause) {
     if (isRequestTimeout(cause)) {
