@@ -809,6 +809,23 @@ describe("ConnectionRegistry request frames", () => {
     ])
   })
 
+  it("reports a result it cannot encode as its own fault, not as a malformed client frame", async () => {
+    const encodeErrors: [string, string][] = []
+    const { registry, factory } = createHarness(true, {
+      onEncodeError: (_error, frame) => encodeErrors.push([frame.socketId, frame.message.kind]),
+    })
+    const malformed: string[] = []
+    registry.onMalformedFrame((frame) => malformed.push(frame.reason))
+    registry.onRequest(() => ({ big: 10n }))
+    const handle = registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(queryFrame("r1"))
+    await drainMicrotasks()
+
+    expect(malformed).toEqual([])
+    expect(encodeErrors).toEqual([[handle!.id, "server.result"]])
+  })
+
   it("refuses a second dispatcher and lets a new one register after unsubscribe", () => {
     const { registry } = createHarness()
     const off = registry.onRequest(() => null)

@@ -76,6 +76,7 @@ export {
   type ConnectionHandle,
   ConnectionRegistry,
   type ConnectionRegistryOptions,
+  type EncodeFailure,
   type FrameContext,
   type FrameHandler,
   type MalformedFrame,

@@ -148,6 +148,19 @@ export interface ConnectionRegistryOptions {
   requestTimeoutMs?: number
   /** Called with every value a dispatcher threw that was not a {@link RealtimeRequestError}. */
   onRequestError?: (error: unknown, context: RequestContext) => void
+  /**
+   * Called when the codec cannot encode a frame this server sends (a `BigInt` in a result, say):
+   * a fault of the server, never of the client. Defaults to `console.error`.
+   */
+  onEncodeError?: (error: unknown, frame: EncodeFailure) => void
+}
+
+/** The frame {@link ConnectionRegistryOptions.onEncodeError} is told about. */
+export interface EncodeFailure {
+  socketId: string
+  userId: string
+  /** The message that could not be encoded. */
+  message: ServerMessage
 }
 
 interface Connection {
@@ -197,6 +210,7 @@ export class ConnectionRegistry {
   readonly #maxInFlightRequests: number
   readonly #requestTimeoutMs: number
   readonly #onRequestError: ConnectionRegistryOptions["onRequestError"]
+  readonly #onEncodeError: NonNullable<ConnectionRegistryOptions["onEncodeError"]>
   #requestDispatcher: RequestDispatcher | null = null
   readonly #connections = new Map<string, Connection>()
   readonly #byUser = new Map<string, Set<string>>()
@@ -227,6 +241,8 @@ export class ConnectionRegistry {
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     )
     this.#onRequestError = options.onRequestError
+    this.#onEncodeError = options.onEncodeError ??
+      ((error, frame) => console.error(`realtime: cannot encode ${frame.message.kind}`, error))
   }
 
   /**
@@ -630,7 +646,11 @@ export class ConnectionRegistry {
     try {
       frame = this.#codec.encode(message)
     } catch (error) {
-      this.#reportMalformed(connection, describeError(error))
+      callListener(`the onEncodeError`, this.#onEncodeError, error, {
+        socketId: connection.id,
+        userId: connection.userId,
+        message,
+      })
       return false
     }
     try {
