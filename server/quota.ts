@@ -8,10 +8,7 @@
  * The distinction is the whole point of the module, so it is a contract, not a
  * comment. `server/quota.ts` never contains a token bucket, a sliding window, a
  * requests-per-second rule, a per-IP key, middleware, or an `X-RateLimit-*` /
- * `Retry-After` header. The source project this was ported from has no request
- * rate limiter at all — what it calls a "limit" is a quota, and its only
- * `429`/`503` responses are the two quota sites. Rate limiting is a separate
- * package (`platform/rate-limit`, issue #4) owned by another agent.
+ * `Retry-After` header. Rate limiting is `@spy4x/platform/rate-limit`.
  *
  * - **Measured unit**: a quota counts *business work* (an analysis, a billable
  *   provider call, a document); a rate limiter counts *requests*. One HTTP
@@ -36,7 +33,7 @@
  *   succeeded.
  * - **What it emits**: a quota emits a *state* for the UI (`used`, `limit`,
  *   `remaining`) and a decision that maps to `200` / `429` / `503`
- *   ({@link quotaStatusCode}, from `apps/api/routes/analyze.ts:114-125`). A rate
+ *   ({@link quotaStatusCode}). A rate
  *   limiter emits headers and a bodyless rejection.
  *
  * Consequences that follow from the above, and are deliberate: `429` here means
@@ -44,83 +41,37 @@
  * the `503` in {@link QuotaDecision.Unavailable} is a service condition, not an
  * exhausted budget.
  *
- * ## Sources
+ * ## Rules
  *
- * Ported from an earlier internal project, with the store and the clock injected so the module
- * carries no driver, no KV client and no `Date.now()`:
+ * The store and the clock are injected, so the module carries no driver, no KV
+ * client and no `Date.now()`.
  *
- * - `apps/api/services/demo-usage.ts:19-24` — a caller-supplied (BYOK) key
- *   bypasses metering entirely.
- * - `apps/api/services/demo-usage.ts:27-32` — no metered provider key
- *   configured means the request cannot proceed at all; that is a *service*
- *   condition, distinguishable from a limit hit.
- * - `apps/api/services/demo-usage.ts:34-46` and
- *   `apps/api/services/auth.ts:156-165` (`checkUserLimit`) — a logged-in
- *   principal gets the per-user limit.
- * - `apps/api/services/demo-usage.ts:48-57` and `apps/api/routes/usage.ts:9-18`
- *   — a session id is the fallback principal; neither present is a caller
- *   error (`routes/usage.ts:14-16` answered `400`).
- * - `apps/api/services/demo-usage.ts:63-80` — recording happens after the work,
- *   and a record can push usage past the limit.
- * - `apps/api/routes/usage.ts:20-31` — an active own-key marks the metered
- *   budget as inactive.
- * - `apps/api/routes/analyze.ts:114-125` (the same shape at
- *   `apps/api/routes/batch.ts:112-123`) — the two-branch contract
- *   {@link quotaStatusCode} encodes. It is the *route*, not `routes/usage.ts`
- *   (which only reads), that maps a blocked check to a status: no configured
- *   provider key → `503`, otherwise a spent budget → `429`. The `200` case is
- *   simply "not blocked" — the route proceeds to the work. The source's two
- *   response strings are its product's, not this module's, and are not ported.
- * - `libs/db/mod.ts:224-248` (`getSessionUsage` / `recordSessionUsage` /
- *   `getUserUsage` / `incrementUsage`) is the shape {@link QuotaStore} was
- *   extracted from; the driver is not ported.
- *
- * ## Deviations from the source (all intentional, all tested)
- *
- * 1. {@link QuotaMeter.record} does **not** spend budget when the metered
- *    resource is not configured. The source recorded unconditionally
- *    (`apps/api/services/demo-usage.ts:63-80`), which charged a user for a
- *    request that could not be served. A service that cannot serve does not
- *    spend budget.
- * 2. {@link QuotaMeter.record} returns the full state instead of a bare
- *    usage record, and reports `Exhausted` rather than merely overshooting.
- * 3. {@link QuotaMeter.get} reports the *metered* budget
- *    (`metered: meteredResourceAvailable`) because a read has no way to know
- *    about a BYOK key; the source patched its own-key flag afterwards
- *    (`routes/usage.ts:20-31`). The caller still marks BYOK separately.
- * 4. `bypassWithOwnKey` defaults to `true` but is a policy flag, so an
- *    installation that wants every request metered can say so.
- * 5. The `503` is an explicit {@link QuotaDecision.Unavailable} driven by
- *    `meteredResourceAvailable`, not the source's `usage.limit === 0` sentinel
- *    (`apps/api/routes/analyze.ts:115`, `apps/api/routes/batch.ts:113`). That
- *    sentinel overloaded a legitimate value — `limit: 0` is also a correctly
- *    configured, disabled budget — so the source could not express "no provider
- *    key" and "no free requests allowed" as different things. Here they differ:
- *    `Unavailable` (`503`, a service condition) versus `Exhausted` with
- *    `limit: 0` (`429`, a spent budget).
- * 6. **A source bug, fixed here by construction.** The per-user path metered
- *    against `ANONYMOUS_LIMIT = 3` (`libs/shared/mod.ts:189`, via
- *    `apps/api/services/auth.ts:157-164`) while the session path metered against
- *    `DEMO_LIMIT = 50` (`libs/shared/mod.ts:194`, via
- *    `apps/api/services/demo-usage.ts:52`) — so a logged-in user got *fewer*
- *    free requests than an anonymous session, and the two routes reported
- *    different limits for the same product. This port has no module-level limit
- *    constant at all: the limit is explicit {@link QuotaPolicy} configuration,
- *    so the two principals can only differ when the caller says so, and a
- *    reviewer reads the number at the wiring site rather than in a shared
- *    constants file.
- * 7. **The gate is one atomic step.** The source read a counter, ran the work
- *    and incremented afterwards (`apps/api/services/demo-usage.ts:34-80`), so
- *    parallel requests all read the same "one left" and all proceeded — with a
- *    limit of 1 and ten parallel callers, ten of them ran.
- *    {@link QuotaMeter.reserve} takes the units before the work in a single
- *    store operation, and {@link QuotaMeter.release} gives them back when the
- *    work failed. {@link QuotaMeter.check} stays, as a display-only read.
+ * 1. **The gate is one atomic step.** {@link QuotaMeter.reserve} takes the units
+ *    before the work in a single store operation, so parallel callers cannot all
+ *    be told they have the last unit, and {@link QuotaMeter.release} gives them
+ *    back when the work failed. {@link QuotaMeter.check} is a display-only read.
+ * 2. **Recording comes after the work** and may overshoot the limit; the result
+ *    is the full state, `Exhausted` once the budget is spent.
+ * 3. **An unavailable service spends nothing.** {@link QuotaMeter.record} does
+ *    not count work when the metered resource is not configured.
+ * 4. **A caller's own key (BYOK) bypasses metering**, by default
+ *    (`bypassWithOwnKey`); an installation that wants every request metered can
+ *    turn that off. {@link QuotaMeter.get} has no way to know about a BYOK key,
+ *    so it reports the metered budget and the caller marks BYOK separately.
+ * 5. **Disabled versus unavailable.** No configured metered resource is
+ *    {@link QuotaDecision.Unavailable} (`503`, a service condition), driven by
+ *    `meteredResourceAvailable`. `limit: 0` is a correctly configured, disabled
+ *    budget: `Exhausted` (`429`, a spent budget). The two never share a value.
+ * 6. **The limit is configuration.** There is no module-level limit constant:
+ *    {@link QuotaPolicy} sets it, so a user and a session principal differ only
+ *    when the caller says so, and a reviewer reads the number at the wiring site.
+ * 7. **A user wins over a session**, and neither present is
+ *    {@link QuotaErrorCode.NoPrincipal}.
  * 8. **Anonymous principals share one pool.** A session id is caller-chosen, so
- *    a per-session counter bounds nothing on its own: rotating the id gave a
- *    fresh budget every request. {@link QuotaPolicy.sessions} is now the one
- *    place that allows session principals at all, and it carries the budget all
- *    of them share.
+ *    a per-session counter bounds nothing on its own: rotating the id would give
+ *    a fresh budget every request. {@link QuotaPolicy.sessions} is the one place
+ *    that allows session principals at all, and it carries the budget all of
+ *    them share.
  *
  * ## Validation and dependencies
  *
@@ -131,14 +82,11 @@
  * arktype summary echoes the offending value (`must be non-negative (was -1)`),
  * and a constant message keeps a config value out of a log line.
  *
- * **No new dependency**: `arktype` is already pinned in the root import map at
- * 2.2.3, and `import { type } from "arktype"` is this module's only import. The
- * wiring guards around it stay hand-written on purpose — `typeof
- * options.meteredResourceAvailable !== "boolean"` and the store port's four
- * `typeof … === "function"` checks are not input parsing but a check that a DI
- * container was filled in, and they read as such.
+ * The wiring guards stay hand-written — `typeof options.meteredResourceAvailable
+ * !== "boolean"` and the store port's four `typeof … === "function"` checks are
+ * not input parsing but a check that a DI container was filled in.
  *
- * Nothing else is imported: no framework, no logging, no headers. `429`/`503`
+ * `arktype` is the only import: no framework, no logging, no headers. `429`/`503`
  * are values a caller maps onto its own response.
  *
  * @module
@@ -164,7 +112,7 @@ const SESSIONS_SHAPE = ["undefined", "|", { poolLimit: "number.integer >= 0" }] 
  * explicit `windowSeconds: 0` is refused rather than folded into the lifetime
  * window an omitted field produces, because "a window of zero seconds" is a
  * configuration typo worth failing on, not a lifetime budget. `limit: 0` stays
- * legal — a disabled budget (see deviation 5 in the module doc).
+ * legal — a disabled budget (see rule 5 in the module doc).
  *
  * Undeclared keys are ignored, matching the hand-written check this replaced: a
  * policy object carrying extra wiring fields is not a shape error.
@@ -245,20 +193,18 @@ export enum QuotaDecision {
   /** The principal is inside the budget; the work may proceed. */
   Allowed = 1,
   /**
-   * The budget is spent. Maps to `429` — an exhausted entitlement, not a flood
-   * (source `apps/api/routes/analyze.ts:121-124`).
+   * The budget is spent. Maps to `429` — an exhausted entitlement, not a flood.
    */
   Exhausted = 2,
   /**
-   * The metered provider key is not configured, so there is nothing to meter
-   * (source `apps/api/services/demo-usage.ts:27-32`, surfaced as `503` at
-   * `apps/api/routes/analyze.ts:115-120`). Retrying later may work, and it is
-   * emphatically not {@link Exhausted}.
+   * The metered provider key is not configured, so there is nothing to meter.
+   * Maps to `503`. Retrying later may work, and it is emphatically not
+   * {@link Exhausted}.
    */
   Unavailable = 3,
 }
 
-/** Who owns a counter. Sessions are the anonymous fallback (source `demo-usage.ts:48-57`). */
+/** Who owns a counter. Sessions are the anonymous fallback. */
 export enum QuotaPrincipalKind {
   /** An authenticated principal; has priority over a session id. */
   User = 1,
@@ -344,13 +290,10 @@ export interface QuotaState {
 export interface QuotaPolicy {
   /**
    * Units of business work allowed inside one window. `0` is legitimate and
-   * means the budget is disabled — deliberately *not* the source's "no key
-   * configured" sentinel (see deviation 5 in the module doc).
+   * means the budget is disabled — *not* "no key configured" (see rule 5 in the
+   * module doc).
    *
-   * The value is configuration with no module-level constant behind it: the
-   * source had two (`ANONYMOUS_LIMIT = 3` at `libs/shared/mod.ts:189`,
-   * `DEMO_LIMIT = 50` at `libs/shared/mod.ts:194`) and they disagreed, which is
-   * the bug deviation 6 records.
+   * The value is configuration with no module-level constant behind it (rule 6).
    */
   limit: number
   /**
@@ -365,7 +308,7 @@ export interface QuotaPolicy {
    * "no window length".
    */
   windowSeconds?: number
-  /** Default true: a BYOK request bypasses metering entirely (source demo-usage.ts:19-24). */
+  /** Default true: a BYOK request bypasses metering entirely. */
   bypassWithOwnKey?: boolean
   /**
    * Anonymous (session) principals, and the budget they all share.
@@ -477,8 +420,7 @@ export interface QuotaMeterOptions {
  */
 export interface QuotaMeter {
   /**
-   * Inspect the budget without spending any of it — **for display only** (source
-   * `apps/api/services/demo-usage.ts:13-58`).
+   * Inspect the budget without spending any of it — **for display only**.
    *
    * This is what renders "37 of 50 used". It must not gate work: between the
    * answer and the work, any number of other requests can spend the same
@@ -488,11 +430,8 @@ export interface QuotaMeter {
    *
    * `hasOwnKey` mirrors the caller having supplied their own provider key: with
    * the default policy the budget is bypassed, `used: 0`, `remaining: limit`,
-   * `metered: false`, and the store is not touched. In the source the flag
-   * travelled as the truthy string literal `"byok"` in the key's position
-   * (`apps/api/routes/analyze.ts:111`, tested at `demo-usage.ts:19`) — the value
-   * was never a key, only a marker that a key existed, which is exactly why this
-   * port makes it a `boolean`.
+   * `metered: false`, and the store is not touched. It is a `boolean` because it
+   * marks that a key exists; the key itself never reaches the meter.
    */
   check(principal: QuotaPrincipal, options?: { hasOwnKey?: boolean }): Promise<QuotaState>
   /**
@@ -609,7 +548,7 @@ export interface QuotaMeter {
   ): Promise<QuotaState>
   /**
    * Add `count` (default 1) units of completed business work and return the
-   * resulting state (source `apps/api/services/demo-usage.ts:63-80`). Call it
+   * resulting state. Call it
    * *after* the work: the result may be `Exhausted` with `used > limit`, and
    * that overshoot is reported, never clamped away.
    *
@@ -620,10 +559,7 @@ export interface QuotaMeter {
    *
    * There is deliberately no BYOK parameter here. A BYOK request never reaches
    * this method: the caller records only on the path where {@link check}
-   * returned `Allowed`, and `check` is where the own-key bypass lives — the
-   * source returned from its check before any recording was reached
-   * (`apps/api/services/demo-usage.ts:19-24`), so the same call site skipped the
-   * recording step entirely. This meter cannot tell on its own whether the
+   * returned `Allowed`, and `check` is where the own-key bypass lives. This meter cannot tell on its own whether the
    * work it is being told about was paid for by the caller's key or by the
    * metered one, so a call site that records unconditionally charges the
    * metered budget for BYOK work. That is the caller's invariant to keep, and
@@ -634,12 +570,10 @@ export interface QuotaMeter {
    */
   record(principal: QuotaPrincipal, count?: number): Promise<QuotaState>
   /**
-   * Read the current budget without incrementing (source
-   * `apps/api/services/demo-usage.ts:85-94`).
+   * Read the current budget without incrementing.
    *
    * `hasOwnKey` is unknown on a read, so this reports the metered budget
-   * (`metered: meteredResourceAvailable`); the caller marks BYOK separately, as the
-   * source route did (`apps/api/routes/usage.ts:20-31`).
+   * (`metered: meteredResourceAvailable`); the caller marks BYOK separately.
    */
   get(principal: QuotaPrincipal): Promise<QuotaState>
 }
@@ -654,14 +588,7 @@ const HTTP_STATUS_BY_DECISION: Record<QuotaDecision, 200 | 429 | 503> = {
 /**
  * 200 for Allowed, 429 for Exhausted, 503 for Unavailable — the status a caller
  * answers with, as a value. Nothing here writes a response, a header or a body.
- *
- * Renamed from `quotaHttpStatus`: the mapping is this module's own decision
- * table, not a port of one product's route handler, and the caller decides what
- * a status code means in its transport. The two branches were read from
- * `apps/api/routes/analyze.ts:114-125` and the identical pair at
- * `apps/api/routes/batch.ts:112-123`; the response strings around them were that
- * product's wording and stayed there. `apps/api/routes/usage.ts` was never the
- * mapping site — it only reads state for the UI.
+ * The caller decides what a status code means in its transport.
  */
 export function quotaStatusCode(decision: QuotaDecision): 200 | 429 | 503 {
   return HTTP_STATUS_BY_DECISION[decision]
@@ -670,11 +597,11 @@ export function quotaStatusCode(decision: QuotaDecision): 200 | 429 | 503 {
 /**
  * Resolve the principal a counter is billed to.
  *
- * User wins over session (source `apps/api/services/demo-usage.ts:34-48`): an
+ * User wins over session: an
  * authenticated request is metered against the user even when it also carries a
  * session id, so signing in cannot reset a budget by rotating a session.
  * Blank/whitespace ids count as absent; neither present throws
- * `QuotaError(NoPrincipal)` (source `apps/api/routes/usage.ts:14-16` → 400).
+ * `QuotaError(NoPrincipal)`, which a route answers with `400`.
  *
  * Both fields are typed `unknown` on purpose. This function's whole job is to
  * read identity out of *untrusted* request input — a session cookie, a decoded
@@ -881,7 +808,7 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
   /**
    * The caller's own key is not our spend: nothing is read, nothing is written,
    * and the UI reports the metered budget as inactive rather than as "50
-   * remaining" (source demo-usage.ts:19-24).
+   * remaining".
    *
    * `limit`, not the counter: a BYOK request spends nothing, so the budget is
    * reported whole. With `limit: 0` (a disabled budget) the result is `Allowed`
@@ -1072,14 +999,13 @@ export function createQuotaMeter(options: QuotaMeterOptions): QuotaMeter {
     async record(principal, count = 1) {
       assertPrincipalAllowed(principal)
       assertCount(count)
-      // Deviation from the source, which recorded unconditionally: a service
-      // that cannot serve does not spend the principal's budget.
+      // A service that cannot serve does not spend the principal's budget (rule 3).
       if (!meteredResourceAvailable) return unavailable()
       const nowMs = clock()
       if (isSession(principal)) await store.increment(poolKeyAt(nowMs), count)
       const used = await store.increment(keyFor(principal, nowMs), count)
       // Above the limit on purpose: the work already happened, so it is
-      // recorded and reported, never clamped (source demo-usage.ts:63-80).
+      // recorded and reported, never clamped.
       return stateOf(decisionFor(used), used, true)
     },
 
