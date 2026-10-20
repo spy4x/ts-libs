@@ -79,6 +79,19 @@ describe("createFileSendLog", () => {
     expect((await log.find("second-post"))?.recipients).toEqual(["a1", "b2"])
   })
 
+  it("drops a torn journal line before the next run appends, so its finish succeeds", async () => {
+    const fs = fakeFs({
+      [PATH]: SITE_LOG,
+      [`${PATH}.journal`]: `{"slug":"second-post","mark":"b2"}\n{"slug":"second-po`,
+    })
+    const log = createFileSendLog({ path: PATH, fs })
+    await log.start({ issue: "second-post", subject: "S", audience: [], at: new Date() })
+    await log.record("second-post", "c3")
+    await log.finish({ issue: "second-post", failed: 0, at: new Date() })
+    expect(JSON.parse(fs.files.get(PATH)!)[1].recipients).toEqual(["a1", "b2", "c3"])
+    expect(fs.files.has(`${PATH}.journal`)).toBe(false)
+  })
+
   it("refuses to read a journal with a complete line that is not a mark", async () => {
     const fs = fakeFs({ [PATH]: SITE_LOG, [`${PATH}.journal`]: `nonsense\n` })
     const log = createFileSendLog({ path: PATH, fs })

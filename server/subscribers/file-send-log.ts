@@ -1,4 +1,4 @@
-import { atomicWriteJson, readJsonFile } from "@spy4x/platform/server/atomic-json"
+import { atomicWriteJson, readJsonFile, tempPathFor } from "@spy4x/platform/server/atomic-json"
 import { denoFileSystem } from "@spy4x/platform/server/deno-fs"
 import { FileLock } from "@spy4x/platform/server/file-lock"
 import { processId } from "@spy4x/platform/server/process"
@@ -54,8 +54,10 @@ function fromStored(row: StoredEntry): SendLogEntry {
  *   so a crash or a full disk never leaves a torn log. `record` appends one line to
  *   `<path>.journal` instead of rewriting the file, so a send to n people costs n small appends,
  *   not n rewrites of a file that grows with every one. Every read folds the journal in, and the
- *   next rewrite stores it in the file and removes it. A crash can tear only the journal's last
- *   line, which is ignored: at most the mail in flight is sent again.
+ *   next rewrite stores it in the file and removes it. A crash or a full disk can tear only the
+ *   journal's last line. Reads ignore it, and before a log object first appends for an issue it
+ *   rewrites the journal without it, so the next mark never joins the torn text. At most the mail
+ *   in flight is sent again.
  * - Changes made by one log object queue behind each other. Take {@link SendLog.lock} before
  *   sending: two processes that change the file without it can lose a recipient.
  * - A file that does not parse, or is not an array, is never overwritten: its text is copied to
@@ -123,6 +125,22 @@ export function createFileSendLog(options: FileSendLogOptions): SendLog {
     })
   }
 
+  /** Rewrites the journal without a last line a crash cut short, through a temp file and a
+   * rename, so the next append starts on a line of its own. */
+  async function dropTornTail(): Promise<void> {
+    const text = await fs.readText(journal)
+    if (text === null || text === `` || text.endsWith(`\n`)) return
+    const complete = text.slice(0, text.lastIndexOf(`\n`) + 1)
+    const temp = tempPathFor(journal, { pid: processId() ?? 0, sequence: ++sequence })
+    try {
+      await fs.writeText(temp, complete)
+      await fs.rename(temp, journal)
+    } catch (error) {
+      await fs.remove(temp).catch(() => {})
+      throw error
+    }
+  }
+
   /** Runs `change` on the loaded entries, one call at a time, and writes them back when it says
    * so. */
   function update<T>(change: (rows: StoredEntry[]) => { value: T; save: boolean }): Promise<T> {
@@ -187,6 +205,7 @@ export function createFileSendLog(options: FileSendLogOptions): SendLog {
       const run = queue.then(async () => {
         if (!started.has(issue)) {
           const row = stored(await load(), issue)
+          await dropTornTail()
           started.add(issue)
           if (row.recipients?.includes(mark)) return
         }
