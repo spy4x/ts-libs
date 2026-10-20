@@ -33,6 +33,7 @@ import {
 } from "./_post.ts"
 import { DEFAULT_RETRY_POLICY } from "./policy.ts"
 import type { BackoffFn, Sleeper } from "./retry.ts"
+import { processEnv } from "@spy4x/platform/server/process"
 import type { RandomSource } from "@spy4x/platform/universal/async"
 import type { NowFn } from "@spy4x/platform/universal/time"
 
@@ -153,10 +154,12 @@ export interface HealthchecksClientOptions {
  *
  * `null` when absent or blank. Nothing is read at module scope, so importing
  * this module cannot throw on a process with no environment, and no secret
- * value is ever baked into a module-level singleton.
+ * value is ever baked into a module-level singleton. The default reader is
+ * `processEnv` from `@spy4x/platform/server/process`, so it works on Deno, Node
+ * and Bun; on Deno it needs `--allow-env`.
  */
 export const healthchecksConfigFromEnv = (
-  read: (name: string) => string | undefined = (name) => Deno.env.get(name),
+  read: (name: string) => string | undefined = (name) => processEnv.get(name),
 ): HealthchecksClientConfig | null => {
   const pingUrl = read("HEALTHCHECKS_PING_URL")?.trim()
   return pingUrl ? { pingUrl } : null

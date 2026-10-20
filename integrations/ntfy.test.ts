@@ -82,6 +82,25 @@ const clientFor = (
   return { client, transport, timer }
 }
 
+/**
+ * Runs `fn` with the globals Node and Bun have and Deno's hidden, so the default env reader has to
+ * take the `process.env` path. Restored before returning, even when `fn` throws.
+ */
+const withNodeLikeHost = <T>(env: Record<string, string>, fn: () => T): T => {
+  const saved = ["Deno", "process"].map((name) =>
+    [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const
+  )
+  Object.defineProperty(globalThis, "Deno", { value: undefined, configurable: true })
+  Object.defineProperty(globalThis, "process", { value: { env }, configurable: true })
+  try {
+    return fn()
+  } finally {
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+    }
+  }
+}
+
 describe("ntfyConfigFromEnv", () => {
   it("reads URL, topic and token", () => {
     const env: Record<string, string> = { NTFY_URL: BASE_URL, NTFY_TOPIC: TOPIC, NTFY_TOKEN: TOKEN }
@@ -100,6 +119,12 @@ describe("ntfyConfigFromEnv", () => {
   it("returns null when the URL or topic is missing", () => {
     expect(ntfyConfigFromEnv(() => undefined)).toBeNull()
     expect(ntfyConfigFromEnv((name) => (name === "NTFY_URL" ? BASE_URL : undefined))).toBeNull()
+  })
+
+  it("reads process.env by default on a runtime without Deno", () => {
+    const env = { NTFY_URL: BASE_URL, NTFY_TOPIC: TOPIC, NTFY_TOKEN: TOKEN }
+    const config = withNodeLikeHost(env, () => ntfyConfigFromEnv())
+    expect(config).toEqual({ baseUrl: BASE_URL, topic: TOPIC, token: TOKEN })
   })
 })
 

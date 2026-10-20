@@ -34,6 +34,7 @@ import {
   postWithRetry,
 } from "./_post.ts"
 import { type BackoffFn, releaseResponseBody, type RetryPolicy, type Sleeper } from "./retry.ts"
+import { processEnv } from "@spy4x/platform/server/process"
 import type { RandomSource } from "@spy4x/platform/universal/async"
 import type { NowFn } from "@spy4x/platform/universal/time"
 
@@ -247,10 +248,12 @@ const describeUrlShape = (value: string): string => {
  * because a self-hosted ntfy on a private network may not use auth. `null`
  * when incomplete, so "not configured" stays a caller decision — `mig`
  * collapsed it into a silent no-op, which means a typo'd variable name looks
- * exactly like a deliberate disable.
+ * exactly like a deliberate disable. The default reader is `processEnv` from
+ * `@spy4x/platform/server/process`, so it works on Deno, Node and Bun; on Deno
+ * it needs `--allow-env`.
  */
 export const ntfyConfigFromEnv = (
-  read: (name: string) => string | undefined = (name) => Deno.env.get(name),
+  read: (name: string) => string | undefined = (name) => processEnv.get(name),
 ): NtfyClientConfig | null => {
   const baseUrl = read("NTFY_URL")?.trim()
   const topic = read("NTFY_TOPIC")?.trim()

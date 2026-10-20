@@ -81,6 +81,25 @@ const clientFor = (responses: FakeResponse[], overrides: { pingUrl?: string } = 
   return { client, transport, timer }
 }
 
+/**
+ * Runs `fn` with the globals Node and Bun have and Deno's hidden, so the default env reader has to
+ * take the `process.env` path. Restored before returning, even when `fn` throws.
+ */
+const withNodeLikeHost = <T>(env: Record<string, string>, fn: () => T): T => {
+  const saved = ["Deno", "process"].map((name) =>
+    [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const
+  )
+  Object.defineProperty(globalThis, "Deno", { value: undefined, configurable: true })
+  Object.defineProperty(globalThis, "process", { value: { env }, configurable: true })
+  try {
+    return fn()
+  } finally {
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+    }
+  }
+}
+
 describe("healthchecksConfigFromEnv", () => {
   it("reads the ping URL", () => {
     expect(
@@ -94,6 +113,14 @@ describe("healthchecksConfigFromEnv", () => {
   it("returns null when the variable is absent or blank", () => {
     expect(healthchecksConfigFromEnv(() => undefined)).toBeNull()
     expect(healthchecksConfigFromEnv(() => "  ")).toBeNull()
+  })
+
+  it("reads process.env by default on a runtime without Deno", () => {
+    const config = withNodeLikeHost(
+      { HEALTHCHECKS_PING_URL: PING_URL },
+      () => healthchecksConfigFromEnv(),
+    )
+    expect(config).toEqual({ pingUrl: PING_URL })
   })
 })
 
