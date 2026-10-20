@@ -217,6 +217,22 @@ redirect refused by the policy, and a `Location` the URL parser cannot read,
 both raise `UrlValidationError` with code `invalid_redirect` or `non_public_ip`
 — never a bare `TypeError` — after the redirect body has been cancelled.
 
+A request body goes in `body`, in any shape the platform `fetch` takes, and is
+refused with `GET` or `HEAD`. A redirect that turns the request into a `GET`
+drops the body and its `Content-Type`, `Content-Encoding`, `Content-Language`
+and `Content-Location` headers. A 307 or 308 sends the body again only to the
+same origin, and only when it can be read twice: a 307 or 308 to another
+origin, or with a `ReadableStream` body, is refused with code
+`invalid_redirect`.
+
+```ts
+const { response } = await safeFetch("https://push.example.com/send", {
+  method: SafeFetchMethod.Post,
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ title: "Hello" }),
+})
+```
+
 Two things about that rule are worth knowing before you rely on it:
 
 - **`headers` is parsed by the platform `Headers` before anything reads it**, so
