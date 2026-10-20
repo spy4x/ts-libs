@@ -1312,16 +1312,21 @@ work factor should use `fromHexKey` with a key its own key management produced.
 
 `createUserSecretStore`, `UserSecretError`, `UserSecretErrorCode`, `UserSecretPort`,
 `StoredUserSecret`, `SaveUserSecretInput`, `UserSecretSummary`, `UserSecretStoreOptions`,
-`PROVIDER_PATTERN`, `MIN_API_KEY_LENGTH`, `MAX_API_KEY_LENGTH`, `MAX_PROVIDER_LENGTH`.
+`PROVIDER_PATTERN`, `MIN_API_KEY_LENGTH`, `MAX_API_KEY_LENGTH`, `MAX_PROVIDER_LENGTH`,
+`MAX_MODEL_LENGTH`.
 
 The BYOK pattern: validate → `cipher.encrypt` at rest → keep `maskKey`'s hint → upsert per
 `(user, provider)` → delete, with persistence behind an injected `UserSecretPort` (no SQL, no driver)
 and the cipher behind `SecretCipher`. `save` returns a summary, `list` returns summaries only — the
 ciphertext has no field to travel in — and `openSecret` is the single call that yields a plaintext,
-for the outbound provider request. The port's `upsert` contract is the source's
+for the outbound provider request. The port's `upsert` contract is an SQL
 `ON CONFLICT (user_id, provider) DO UPDATE`: replace the secret and hint, force `isActive`, bump
 `updatedAt`, preserve `createdAt`. Neither the cipher nor the mask is re-implemented here; both come
 from `server/crypto.ts`.
+
+A `model` longer than `MAX_MODEL_LENGTH` (256) or carrying a control character is refused as
+`InvalidModel`. A cipher that rejects while encrypting is `EncryptionFailed`, while decrypting
+`DecryptionFailed`; a port that rejects is `PortFailure`.
 
 **A base URL is an outbound destination, so it is checked like one.** A non-empty `baseUrl` must be
 an absolute `http:`/`https:` URL with no user name or password and no control characters — the
