@@ -219,7 +219,9 @@ export interface ServeStaticOptions {
    * {@link resolveStaticPath} refuses for an encoded separator, `%2F` or `%5C`
    * (`/tasks/a%2Fb`, an SPA route with a slash inside one segment). The fallback is always that one
    * fixed file, so a refused path never reaches the filesystem. A traversal
-   * attempt (`..`, a backslash, a control character) is still not served.
+   * attempt (`..`, a backslash, a control character) is still not served, nor
+   * is a malformed escape (`%zz`) or an empty segment (`/docs//`): those resolve
+   * to `undefined`, the caller's `404`.
    * This is the whole SPA story: one flag, not a list of route paths.
    */
   spaFallback?: boolean
