@@ -474,6 +474,21 @@ describe("ConnectionRegistry limits", () => {
     expect(closed[0]?.detail).toContain("exceeds the 16 byte limit")
   })
 
+  it("measures a frame in UTF-8 bytes, as TextEncoder counts them", () => {
+    // Two-byte, three-byte and four-byte characters, and a lone surrogate encoded as U+FFFD.
+    const frame = "aé€😀\uD800"
+    const bytes = new TextEncoder().encode(frame).byteLength
+    const { registry, factory } = createHarness(true, { maxMessageBytes: bytes - 1 })
+    const malformed: string[] = []
+    registry.onMalformedFrame((report) => malformed.push(report.reason))
+    registry.attach("user-1", factory.open("wss://api.example.test/ws"))
+
+    factory.latest.receive(frame)
+
+    expect(bytes).toBe(13)
+    expect(malformed).toEqual([`message of 13 bytes exceeds the ${bytes - 1} byte limit`])
+  })
+
   it("still accepts a frame at or under the message size limit", () => {
     const { registry, factory } = createHarness(true, { maxMessageBytes: 1_024 })
     registry.attach("user-1", factory.open("wss://api.example.test/ws"))

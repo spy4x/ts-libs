@@ -442,7 +442,7 @@ export class ConnectionRegistry {
   #receive(connection: Connection, data: string): void {
     connection.lastSeenAt = this.#clock.now()
 
-    const bytes = new TextEncoder().encode(data).byteLength
+    const bytes = utf8ByteLength(data)
     if (bytes > this.#maxMessageBytes) {
       const reason = `message of ${bytes} bytes exceeds the ${this.#maxMessageBytes} byte limit`
       this.#reportMalformed(connection, reason)
@@ -762,4 +762,22 @@ function reasonText(reason: CloseReason): string {
 /** One-line rendering of an unknown thrown value. */
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * UTF-8 bytes `text` encodes to, the same count `TextEncoder` gives, without allocating the encoded
+ * copy: a surrogate pair is 4 bytes, and a lone surrogate 3, as the U+FFFD it is replaced with.
+ */
+function utf8ByteLength(text: string): number {
+  let bytes = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code < 0x80) bytes += 1
+    else if (code < 0x800) bytes += 2
+    else if (code >= 0xd800 && code < 0xdc00 && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      bytes += 4
+      i++
+    } else bytes += 3
+  }
+  return bytes
 }
