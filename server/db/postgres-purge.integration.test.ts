@@ -72,6 +72,31 @@ describe("purgeDatabase against a real server", () => {
   })
 })
 
+describe("purgeDatabase with allowed: true", () => {
+  it("purges without an ENV value or --prod", async () => {
+    const settings = postgresSettings()
+    await requireReachable(settings.address)
+
+    const schema = uniqueIdentifier("it_purge_allowed")
+    const table = uniqueIdentifier("note")
+    const sql = createSql({ connection: settings.connection, max: 1, applicationName: schema })
+
+    try {
+      await sql`SET client_min_messages = warning`
+      await sql`CREATE SCHEMA ${sql(schema)}`
+      await sql`CREATE TABLE ${sql(schema)}.${sql(table)} (id integer PRIMARY KEY)`
+
+      const purged = await purgeDatabase({ sql, schema, allowed: true })
+
+      assertEquals(purged, { dropped: [table], refused: false })
+      assertEquals(await tableExists(sql, schema, table), false)
+    } finally {
+      await sql`DROP SCHEMA IF EXISTS ${sql(schema)} CASCADE`
+      await sql.end()
+    }
+  })
+})
+
 describe("purgeDatabase against a camelCase client", () => {
   it("reports and drops the named schema's table, not a same-named one in public", async () => {
     // `transform: postgres.camel` is what the template's own client used
