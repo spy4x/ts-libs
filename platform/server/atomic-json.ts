@@ -12,8 +12,9 @@
  * @module
  */
 
-import { type ArkErrors, type } from "arktype"
+import type { ArkErrors } from "arktype"
 import { dirname } from "@std/path"
+import { isArkErrors } from "@spy4x/validation"
 
 import type { FileSystemPort, WriteTextOptions } from "./ports.ts"
 
@@ -28,8 +29,9 @@ export interface ReadJsonOptions<T> {
   /**
    * An arktype type the parsed document must match, such as `type({ count: "number" })`. A
    * document that does not match is `{ kind: "invalid" }` with arktype's summary as the reason,
-   * and `value` is what the type returns, morphs applied. Left out, the parsed JSON is returned
-   * unchecked as `T`.
+   * and `value` is what the type returns, morphs applied. A failure is recognised by its shape
+   * (`isArkErrors` from `@spy4x/validation`), not by `instanceof`, so a type built with the app's
+   * own copy of arktype works too. Left out, the parsed JSON is returned unchecked as `T`.
    */
   schema?: (data: unknown) => T | ArkErrors
 }
@@ -62,7 +64,7 @@ export async function readJsonFile<T>(
   }
   if (options.schema === undefined) return { kind: "ok", value: parsed as T }
   const checked = options.schema(parsed)
-  if (checked instanceof type.errors) return { kind: "invalid", raw, reason: checked.summary }
+  if (isArkErrors(checked)) return { kind: "invalid", raw, reason: checked.summary }
   return { kind: "ok", value: checked as T }
 }
 

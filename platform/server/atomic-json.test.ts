@@ -42,6 +42,22 @@ describe("readJsonFile", () => {
     }
   })
 
+  it("reports invalid when the schema's errors come from another copy of arktype", async () => {
+    const fs = fakeFs({ "/state.json": `{"version":"two"}` })
+    // Errors-shaped like arktype's, but not an instance of this copy's class.
+    const foreignErrors = Object.assign([{ path: ["version"] }], {
+      summary: "version must be a number (was string)",
+      throw: () => {},
+    })
+    const schema = (_data: unknown) => foreignErrors as unknown as { version: number }
+    const result = await readJsonFile(fs, "/state.json", { schema })
+    expect(result).toEqual({
+      kind: "invalid",
+      raw: `{"version":"two"}`,
+      reason: "version must be a number (was string)",
+    })
+  })
+
   it("returns the schema's output for a document that matches it", async () => {
     const fs = fakeFs({ "/state.json": `{"version":2,"extra":true}` })
     const schema = type({ "+": "delete", version: "number" })
