@@ -636,6 +636,38 @@ describe("the DKIM-Signature field name", () => {
   })
 })
 
+describe("a signature that covers another DKIM-Signature field", () => {
+  const BODY = "This is a test.\r\n"
+
+  /** The author signs, then a mailing list signs over the author's signature too. */
+  async function reSigned(): Promise<{ raw: string; publicKey: DkimPublicKey }> {
+    const author = await sign(TEST_HEADERS, BODY)
+    return await sign(splitMessage(author.raw).headers, BODY, {
+      names: ["from", "to", "subject", "dkim-signature"],
+    })
+  }
+
+  it("verifies a mailing list's signature over the author's", async () => {
+    // §3.5 forbids h= naming only the field being verified. Refusing every
+    // `dkim-signature` in h= failed a list that re-signs the author's field.
+    const { raw, publicKey } = await reSigned()
+    const results = await verifyDkimSignatures(raw, publicKey)
+    assertEquals(results.length, 2)
+    for (const result of results) assert(result.valid, `reason=${result.reason}`)
+    assertEquals(results[1].parsed?.signedHeaders.at(-1), "dkim-signature")
+  })
+
+  it("fails the list's signature when the author's field was changed", async () => {
+    const { raw, publicKey } = await reSigned()
+    // `replace` changes the first field only, which is the author's.
+    const tampered = raw.replace("DKIM-Signature: v=1;", "DKIM-Signature: v=1; n=edited;")
+    assert(tampered !== raw)
+    const results = await verifyDkimSignatures(tampered, publicKey)
+    assertEquals(results[1].valid, false)
+    assertEquals(results[1].reason, "signature did not verify against public key")
+  })
+})
+
 // --- verifier policy RFC 6376 leaves to the caller -------------------------
 
 describe("the l= body bound is counted in octets", () => {
@@ -1997,18 +2029,13 @@ describe("parseDkimSignature", () => {
     )
   })
 
-  it("rejects h= that names dkim-signature", () => {
-    // §3.5: the field "MUST NOT include the DKIM-Signature header field that is
-    // being created or verified". Requiring it instead — as an earlier version
-    // did — rejected every standard signer, RFC 6376's own examples included.
-    assertThrows(
-      () =>
-        parseDkimSignature(
-          "v=1; a=rsa-sha256; d=example.com; s=sel; h=from:dkim-signature; bh=abc; b=xxx",
-        ),
-      DkimParseError,
-      "must not name dkim-signature",
+  it("accepts h= that names dkim-signature", () => {
+    // §3.5 forbids only the field being created or verified; another
+    // DKIM-Signature field may be signed, which is how a mailing list re-signs.
+    const parsed = parseDkimSignature(
+      "v=1; a=rsa-sha256; d=example.com; s=sel; h=from:dkim-signature; bh=abc; b=xxx",
     )
+    assertEquals(parsed.signedHeaders, ["from", "dkim-signature"])
   })
 
   it("rejects an unsupported algorithm", () => {

@@ -377,13 +377,11 @@ function parseDkimSignatureHeader(raw: string, requireB = true): ParsedDkimSigna
       )
     }
   }
-  // §3.5: the field "MUST NOT include the DKIM-Signature header field that is
-  // being created or verified", and §3.7 adds that field to the header hash
-  // unconditionally as its own step. Every standard signer omits it, so
-  // demanding it rejected all of them.
-  if (signedHeaders.includes("dkim-signature")) {
-    throw new DkimParseError("DKIM-Signature h= tag must not name dkim-signature")
-  }
+  // §3.5: h= "MUST NOT include the DKIM-Signature header field that is being
+  // created or verified", but it may name *other* DKIM-Signature fields: a
+  // mailing list that re-signs covers the author's signature that way. The
+  // field being verified is kept out of the selection in `verifyOneSignature`,
+  // and §3.7 adds it to the hash as its own step.
 
   const domain = tags.get("d")!.value.toLowerCase()
   const selector = tags.get("s")!.value.toLowerCase()
@@ -1637,9 +1635,11 @@ export async function verifyDkimSignatures(
   // form reconstructed for hashing matches what that signer saw.
   // The name is compared trimmed, as `selectSignedHeaders` compares it: RFC 5322's
   // obsolete syntax allows WSP before the colon, so `DKIM-Signature :` is a field.
-  const fields = headers.filter((line) => {
+  const fields: number[] = []
+  headers.forEach((line, index) => {
     const colon = line.indexOf(":")
-    return colon !== -1 && trimHeaderName(line.slice(0, colon)).toLowerCase() === "dkim-signature"
+    if (colon === -1) return
+    if (trimHeaderName(line.slice(0, colon)).toLowerCase() === "dkim-signature") fields.push(index)
   })
   if (fields.length === 0) {
     return [{ valid: false, reason: "no DKIM-Signature header found" }]
@@ -1658,7 +1658,7 @@ export async function verifyDkimSignatures(
 
   const maxSignatures = options.maxSignatures ?? DEFAULT_MAX_SIGNATURES
   const results: DkimVerificationResult[] = []
-  for (const [index, field] of fields.entries()) {
+  for (const [index, at] of fields.entries()) {
     // §6.1: a verifier may limit how many signatures it tries. Without a limit,
     // every extra field buys an attacker one key lookup and one public-key
     // operation.
@@ -1670,7 +1670,10 @@ export async function verifyDkimSignatures(
       })
       continue
     }
-    results.push(await verifyOneSignature(field, headers, publicKey, options, bodyHashCache))
+    // §3.5: the field being verified is never one of the headers h= selects, so
+    // an h= that names `dkim-signature` reaches only the other signatures.
+    const others = headers.filter((_, i) => i !== at)
+    results.push(await verifyOneSignature(headers[at], others, publicKey, options, bodyHashCache))
   }
   return results
 }
