@@ -147,7 +147,8 @@ export function parseAddress(value: string): EmailAddress {
   }
 
   const trimmed = value.trim()
-  const open = trimmed.indexOf("<")
+  // A quoted display name may hold `<` and `>`; the addr-spec starts after it.
+  const open = trimmed.indexOf("<", quotedPrefixEnd(trimmed))
   const close = trimmed.lastIndexOf(">")
 
   if (open === -1 && close === -1) {
@@ -164,7 +165,7 @@ export function parseAddress(value: string): EmailAddress {
   const address = assertAddrSpec(trimmed.slice(open + 1, close).trim(), value)
 
   if (rawName === "") return { address }
-  if (rawName.includes("<")) {
+  if (!rawName.startsWith('"') && rawName.includes("<")) {
     throw new TypeError(`Malformed display name in ${JSON.stringify(value)}`)
   }
 
@@ -286,6 +287,19 @@ function assertAddrSpec(address: string, original: string): string {
  * in a header. The bare-quote scan runs before the escapes are resolved, so
  * `"a\"b"` survives while `"a"b"` still fails.
  */
+/**
+ * The index just past the closing quote when `value` opens with a quoted string,
+ * else 0. A backslash escapes the next character, as in an RFC 5322 quoted-string.
+ */
+function quotedPrefixEnd(value: string): number {
+  if (!value.startsWith('"')) return 0
+  for (let at = 1; at < value.length; at++) {
+    if (value[at] === "\\") at++
+    else if (value[at] === '"') return at + 1
+  }
+  return 0
+}
+
 function unquoteDisplayName(rawName: string, original: string): string {
   const startsQuoted = rawName.startsWith('"')
   const endsQuoted = rawName.endsWith('"')

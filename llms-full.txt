@@ -979,8 +979,10 @@ Given a raw RFC 5322 message and a DKIM public key, `verifyDkim` answers one
 question: **does this message's `DKIM-Signature` verify against this key?**
 
 - Signature-header parsing (`parseDkimSignature`), including folded values.
-- `simple` and `relaxed` canonicalization, for headers and for bodies
-  (`canonicalizeHeader`, `canonicalizeBody`).
+- `simple` and `relaxed` canonicalization, for headers and for bodies.
+  `canonicalizeHeader`, `canonicalizeBody`, `splitMessage`, `sha256Base64` and
+  `refuseHeaderLineEndings` are deprecated: they are internal steps of
+  `verifyDkim` and go in 2.0.
 - The body hash (`bh=`), computed over the canonicalized body truncated to the
   `l=` bound when one is present, as RFC 6376 §3.7 step 1 requires. Canonicalized
   and hashed at most once per distinct `(c=, l=)` combination for the whole
@@ -1155,10 +1157,11 @@ which propagates the resolver's rejection instead of reporting it.
   contained and rejected the lower-case signer. `relaxed` lower-cases the name
   (§3.4.2), so there the case carries no information and a renamed field still
   verifies.
-- **`h=` must NOT list `dkim-signature`.** §3.5 forbids it, and §3.7 adds that
-  field to the header hash as its own unconditional step. Requiring it — as an
-  earlier revision of this file did — rejects every standard signer, RFC 6376's
-  own examples included.
+- **`h=` may list `dkim-signature`, but never reaches the field being
+  verified.** §3.5 forbids signing the field being created or verified, and §3.7
+  adds that field to the header hash as its own step, so it is left out of the
+  `h=` selection. Other `DKIM-Signature` fields are selected like any header:
+  that is how a mailing list re-signs and covers the author's signature.
 - **Tags after `b=` are verified, not refused.** §3.7 deletes only the _value_ of
   `b=`, so everything after it stays inside the signed bytes. A signature ending
   `…; b=SIG; x=1800000000` is valid and its `x=` is authenticated, and appending
@@ -2414,39 +2417,48 @@ download response `@spy4x/server/export` builds without either package importing
 `platform/tokens.ts`) and `browser/dropdown` (an 11-line rule that is the dropdown component's own
 business, in `preact-components`) were removed.
 
-### `./server` → `server.ts` (8 modules)
+### `./server` → `server.ts` (11 modules)
 
 Deno-only helpers. Every filesystem module takes a port (`FileSystemPort`, `ClockPort`, `TimerPort`)
 instead of calling `Deno.*` directly, because the root `test` task grants `--allow-read --allow-env`
 and **no `--allow-write`**. The decision logic — what to write, when to flush, which entry to skip —
 is tested against an in-memory fake.
 
-Only these touch `Deno` anyway: `denoFileSystem` and `denoByteReader` (`server/deno-fs.ts`),
-`Deno.pid` as the temp-file uniquifier default in `server/throttled-saver.ts`, and the
-`Deno.addSignalListener`/`Deno.removeSignalListener` defaults of `shutdownSignal`
-(`server/shutdown-signal.ts`), which its tests replace with fakes. Of `denoFileSystem`'s **9
-methods**, three are covered by `server/deno-fs.test.ts` under the read-only grant — `exists`,
-`readText`, `readDir` (including its `isNotFound` mapping and the `NotADirectory` rethrow) — and the
-`exists`/`readText`/`readDir` rethrow branches are reached via `ENOTDIR`. `denoByteReader` is
-covered separately (chunk-size independence and a missing-file rethrow). The write side —
-`writeText`, `appendText`, `rename`, `mkdirp`, `lock` and the successful branch of `remove` — needs
+Only these touch `Deno` anyway: `denoFileSystem` and `denoByteReader` (`server/deno-fs.ts`), and
+the `Deno.addSignalListener`/`Deno.removeSignalListener` defaults of `shutdownSignal`
+(`server/shutdown-signal.ts`), which its tests replace with fakes. `server/process` reads the
+environment and the process id on Deno, Node and Bun alike. Of `denoFileSystem`'s **13 methods**,
+five are covered by `server/deno-fs.test.ts` under the read-only grant — `exists`, `readText`,
+`readDir`, `readBytes` and `readStream` (including the `isNotFound` mapping and the rethrow of any
+other error, reached via `ENOTDIR`). `denoByteReader` is covered separately (chunk-size
+independence and a missing-file rethrow). The write side — `writeText`, `appendText`, `writeBytes`,
+`writeStream`, `rename`, `mkdirp`, `lock` and the successful branch of `remove` — needs
 `--allow-write`, so it runs in the integration tier: `server/deno-fs.integration.test.ts` holds
 `denoFileSystem` on a real scratch folder to the shared contract in `server/fs-contract.test.ts`,
 and the unit tier runs the same contract on the in-memory fake. Like the real disk, the fake refuses
 to write into a folder that does not exist, `mkdirp` creates the parents, and `lock` leaves an empty
 lock file behind.
 
-| Module                   | Contents                                                                                                                                                                                                                                           |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                                                                                                                                                                                                   |
-| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                                                                                                                                                                                             |
-| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS`                                                                                                                                                  |
-| `server/interval-runner` | `startIntervalRunner`, `IntervalRunnerOptions` — runs a task every interval through a `TimerPort`; a failed tick is reported and never stops the next; ticks never overlap; `runFirstTickNow` runs the first tick at once; returns a stop function |
-| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                                                                                                                                                                    |
-| `server/ports`           | the port interfaces, `systemClockPort`                                                                                                                                                                                                             |
-| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`                                                                                                                                                         |
-| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                                                                                                                                                                            |
-| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                                                                                                                                                                               |
+| Module                   | Contents                                                                                                                                                                                                                                                                                                  |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                                                                                                                                                                                                                                                          |
+| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                                                                                                                                                                                                                                                    |
+| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS`                                                                                                                                                                                                         |
+| `server/interval-runner` | `startIntervalRunner`, `IntervalRunnerOptions` — runs a task every interval through a `TimerPort`; a failed tick is reported and never stops the next; ticks never overlap; `runFirstTickNow` runs the first tick at once; `tickTimeoutMs` gives up on a tick that never settles; returns a stop function |
+| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                                                                                                                                                                                                                           |
+| `server/ports`           | the port interfaces, `systemClockPort`                                                                                                                                                                                                                                                                    |
+| `server/process`         | `processEnv`, `readEnvRecord`, `processId`, `EnvReader` — the environment and process id on Deno, Node and Bun                                                                                                                                                                                            |
+| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`                                                                                                                                                                                                                |
+| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                                                                                                                                                                                                                                   |
+| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                                                                                                                                                                                                                                      |
+
+`FileSystemPort` also has four optional methods for binary files: `readBytes` and `writeBytes` for
+a whole file, `readStream` and `writeStream` for one too large to hold in memory. They are optional
+so a port written before them still compiles; `denoFileSystem` and the in-memory fake have all four.
+
+`processEnv.get(name)` reads one variable, with a blank value as `undefined`, the same shape as
+`EnvReader` in `@spy4x/server/config`. `readEnvRecord(names)` reads only the names given into a
+record, for a parser that takes one, so `--allow-env` can list exactly those names.
 
 `writeText` and `atomicWriteJson` take an optional `mode` (such as `0o600`): the permission bits a
 file is created with, for one that holds keys. An existing file keeps its bits.

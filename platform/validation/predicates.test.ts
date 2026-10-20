@@ -10,6 +10,7 @@ import {
 } from "@std/assert"
 import { type } from "arktype"
 import { isValidTimeZone } from "@spy4x/time/tz"
+import { parseBareAddress } from "@spy4x/email/address"
 import {
   DEL_CODE_POINT,
   emailAddress,
@@ -270,8 +271,18 @@ Deno.test("email type names the rule in its arktype message", () => {
 })
 
 Deno.test("email predicate accepts a 254-character address and refuses 255", () => {
-  const domain = `@${"b".repeat(60)}.${"c".repeat(60)}.com`
+  const domain = `@${"b".repeat(60)}.${"c".repeat(60)}.${"d".repeat(60)}.${"e".repeat(20)}.com`
   const local = (total: number) => "a".repeat(total - domain.length)
   assert(isEmailAddress(local(254) + domain))
   assertFalse(isEmailAddress(local(255) + domain))
+})
+
+Deno.test("email predicate agrees with parseBareAddress on a 70-character local part and the Kelvin sign", () => {
+  const longLocal = `${"a".repeat(70)}@example.com`
+  const kelvin = "\u212Aate@example.com"
+  assertEquals(parseBareAddress(longLocal), null)
+  assertEquals(parseBareAddress(kelvin), null)
+  assertFalse(isEmailAddress(longLocal))
+  assertFalse(isEmailAddress(kelvin))
+  assert(isEmailAddress(`${"a".repeat(64)}@example.com`))
 })

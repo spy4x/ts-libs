@@ -33,6 +33,19 @@ Deno.test("denoFileSystem creates a file with the permission bits asked for", as
   }
 })
 
+Deno.test("denoFileSystem writeBytes and writeStream create a file with the bits asked for", async () => {
+  const root = await createScratchFolder("it_deno_fs_byte_mode")
+  try {
+    await denoFileSystem.writeBytes!(`${root}/a.bin`, new Uint8Array([1]), { mode: 0o600 })
+    expect(await permissionBits(`${root}/a.bin`)).toBe(0o600)
+    const source = ReadableStream.from([new Uint8Array([1])])
+    await denoFileSystem.writeStream!(`${root}/b.bin`, source, { mode: 0o600 })
+    expect(await permissionBits(`${root}/b.bin`)).toBe(0o600)
+  } finally {
+    await removeScratchFolder(root)
+  }
+})
+
 Deno.test("an atomic write with a mode replaces a world-readable document with an owner-only one", async () => {
   const root = await createScratchFolder("it_deno_fs_atomic_mode")
   try {
