@@ -1271,6 +1271,7 @@ CursorTracker	class	@spy4x/realtime	In-memory per-group cursor arithmetic.
 DEFAULT_BACKOFF	constant	@spy4x/realtime	Defaults used when a caller does not override them.
 DEFAULT_MAX_CALL_BYTES	constant	@spy4x/realtime	The default cap on a call's body, the same as the socket's default frame cap.
 DecodeResult	type	@spy4x/realtime	Outcome of decoding one text frame.
+EncodeFailure	interface	@spy4x/realtime	The frame ConnectionRegistryOptions.onEncodeError is told about.
 FrameContext	interface	@spy4x/realtime	A client frame the registry does not own, handed to the application.
 FrameHandler	type	@spy4x/realtime	
 GapReport	interface	@spy4x/realtime	A non-contiguous sequence, with the cursor a pull must resume from.
@@ -1485,6 +1486,7 @@ CloseHandler	type	@spy4x/realtime/registry
 CloseReason	enum	@spy4x/realtime/registry	Why a connection left the registry.
 ConnectionHandle	interface	@spy4x/realtime/registry	Identifies one socket of one user.
 ConnectionRegistry	class	@spy4x/realtime/registry	Every live socket, indexed by user and by socket id.
+EncodeFailure	interface	@spy4x/realtime/registry	The frame ConnectionRegistryOptions.onEncodeError is told about.
 FrameContext	interface	@spy4x/realtime/registry	A client frame the registry does not own, handed to the application.
 FrameHandler	type	@spy4x/realtime/registry	
 MalformedFrame	interface	@spy4x/realtime/registry	A frame that could not be decoded, or arrived in the wrong direction.
@@ -2448,4 +2450,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 5af9464d523180b1a464d8327f6d64cc38fa83023509aee7e5c9e57aa37219e4
+# export surface: sha256 aa3a8ebb6b2472a0c43622f02d67a998b8fa0dc35ba2132dc2586fa0f5fa3717
