@@ -275,11 +275,16 @@ failure cancels the body, including a refusal on the declared `Content-Length`
 before a byte is read, so a refused response does not keep its connection open.
 A reader, once taken, is unlocked on every exit path.
 
+A server that answers `PayloadTooLargeError` with a 413 sets `connection: close`
+on that response itself. Cancelling the request body is what makes `Deno.serve`
+(checked on 2.9.7) leave that header out: without it, the client is not told
+that the rest of its upload will not be read on that connection.
+
 `parseBoundedFormData(request, options)` reads a `multipart/form-data` or
 url-encoded request under the same two limits, then parses it, so an over-cap
 upload is rejected at `maxBytes` rather than buffered in full the way
 `request.formData()` would. It needs a `content-type` header (the multipart
-boundary lives there) and throws a `TypeError` without one.
+boundary lives there) and, without one, cancels the body and throws a `TypeError`.
 `@spy4x/server/http/bounded-body` re-exports this same function.
 
 ## IP addresses and ranges

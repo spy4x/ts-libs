@@ -17,7 +17,14 @@ export enum BodyReadErrorCode {
   BodyReadTimeout = "body_read_timeout",
 }
 
-/** Body exceeded the byte cap. */
+/**
+ * Body exceeded the byte cap.
+ *
+ * A server that answers it with a 413 should set `connection: close` on that response itself. The
+ * read cancels the request body, and once the body is cancelled `Deno.serve` (checked on 2.9.7)
+ * no longer adds `connection: close` to the response, so the client is not told that the rest of
+ * its upload will not be read on that connection.
+ */
 export class PayloadTooLargeError extends Error {
   /** Discriminant matching {@link BodyReadErrorCode.PayloadTooLarge}. */
   readonly code = BodyReadErrorCode.PayloadTooLarge
