@@ -4696,7 +4696,7 @@ development. Use `upload`/`download` with a local provider.
 ```ts
 import { createStorage } from "@spy4x/server/storage"
 
-const storage = await createStorage() // reads Deno.env, returns undefined if unconfigured
+const storage = await createStorage() // reads the storage variables, undefined if unconfigured
 await storage?.upload("media/photo.png", bytes)
 ```
 
@@ -4705,7 +4705,7 @@ await storage?.upload("media/photo.png", bytes)
 provider. The key is an **argument**, not a module-scope `$env` read, so
 importing the package has no environment dependency and cannot fail on a missing
 variable. `createStorage()` is the only function that reads real environment
-variables, and it uses the same `parseStorageEnv(record)` helper that a test
+variables, only the ones `storageEnvNames()` lists, and it uses the same `parseStorageEnv(record)` helper that a test
 drives with a literal object.
 
 ### Injecting configuration
@@ -4773,16 +4773,22 @@ URL, and an ACL outside the canned set is rejected. `getDownloadURL` ignores
 
 `ObjectFs` (`readObject`, `writeObject`, `existsObject`) is the filesystem
 dependency of both providers, and is what lets the local provider be exercised
-without disk access. `createDenoObjectFs()` is the real adapter and
-`createMemoryObjectFs()` is exported for callers that want the same substitute in
-their own tests.
+without disk access. `createDenoObjectFs()` is the real adapter: it is
+`createObjectFs(fs)` over the platform's `denoFileSystem`, and `createObjectFs`
+takes any `FileSystemPort` (`@spy4x/platform/server/ports`) that has `readBytes`,
+`writeBytes` and `writeStream`. `createMemoryObjectFs()` is exported for callers
+that want the same substitute in their own tests.
 
 `writeObject` returns the byte count it wrote and accepts a `Uint8Array` or a
 `ReadableStream<Uint8Array>`, which is how `download` streams a response body
-straight to disk without buffering the whole object.
+straight to disk without buffering the whole object. It writes to a temporary
+file beside the target and renames it into place, so a download cut off midway
+keeps the file that was there, and the temporary file is removed. Creating the
+parent folder ignores only `AlreadyExists`; any other failure, such as a denied
+permission, is thrown.
 
 The write path is split so its logic is reachable without disk access:
-`writeToFile(path, data, open?)` owns the byte counting, the open flags contract
+`writeToFile(path, data, open?, makeDirectory?)` owns the byte counting, the open flags contract
 and the closer-on-error path, and takes `open` as an injectable opener.
 `parentDirectory(filePath)` decides which directory must exist first and returns
 `undefined` when none does — a bare filename like `"out.png"` creates no
@@ -4795,15 +4801,13 @@ through `createMemoryObjectFs()`, the S3 provider through an injected `fetch`,
 `writeToFile` through an injected opener, and the whole `Deno` surface through an
 injected `DenoFsHost`.
 
-**Disclosed, measured gap.** `server/storage/fs.ts` is the one module below full
-statement coverage: **93.75% (75/80)**, with every other module at 100%
-(`env`, `errors`, `index`, `local`, `memory-fs`, `paths`, `s3`, `sigv4`). The
-five uncovered statements are all platform calls behind `--allow-write`:
-`Deno.open(path, { create: true, write: true, truncate: true })` and the
-`denoFsHost.open` binding that reaches it. Nothing in that module's own logic is
-uncovered: the stat-to-boolean branch, both write branches, the byte count, the
-closer-on-error path (buffer _and_ stream) and the directory decision all have
-direct tests.
+**Disclosed gap.** In the unit tier, `server/storage/fs.ts` leaves only its
+platform calls behind `--allow-write` uncovered: `Deno.open`, `Deno.mkdir`,
+`Deno.rename` and `Deno.remove` in `denoFsHost` and the default opener. Nothing
+in that module's own logic is uncovered: the stat-to-boolean branch, both write
+branches, the byte count, the closer-on-error path (buffer _and_ stream), the
+rename into place and the directory decision all have direct tests, and the
+integration tier runs the `ObjectFs` contract on real disk.
 
 `Deno.makeTempDir` does **not** make that gap closable here. On this box it fails
 under the task's exact grants, and under no grants at all:

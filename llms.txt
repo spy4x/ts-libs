@@ -1634,13 +1634,15 @@ MissingEnvError	class	@spy4x/server/config	Raised when a required environment va
 createEnvReader	function	@spy4x/server/config	An `EnvReader` over a fixed record — what a unit test injects instead of the process environment, so a config or middleware test runs under `--allow-read --allow-env` without any environment variable actually being set.
 loadConfig	function	@spy4x/server/config	Read every environment variable `schema` declares and validate them together, once.
 readEnvVar	function	@spy4x/server/config	Read one required value now, outside a schema — for the one variable a caller needs before the rest of its configuration can even be assembled (`ENV`, deciding which schema to validate against, for example).
+readOptionalEnvVar	function	@spy4x/server/config	Read one value that may be absent: the value, or `undefined` when `name` is unset or blank.
 stringBoolean	constant	@spy4x/server/config	`"true"` or `"false"`, exactly — an environment boolean written by a person or a deploy script, not inferred from `"1"`, `"yes"` or an empty string.
-systemEnv	constant	@spy4x/server/config	The process environment.
+systemEnv	constant	@spy4x/server/config	The process environment through `Deno.env`, read on each call and never at module scope.
 EnvReader	interface	@spy4x/server/config/env	Reads environment values.
 MissingEnvError	class	@spy4x/server/config/env	Raised when a required environment variable is missing or blank.
 createEnvReader	function	@spy4x/server/config/env	An `EnvReader` over a fixed record — what a unit test injects instead of the process environment, so a config or middleware test runs under `--allow-read --allow-env` without any environment variable actually being set.
 readEnvVar	function	@spy4x/server/config/env	Read one required value now, outside a schema — for the one variable a caller needs before the rest of its configuration can even be assembled (`ENV`, deciding which schema to validate against, for example).
-systemEnv	constant	@spy4x/server/config/env	The process environment.
+readOptionalEnvVar	function	@spy4x/server/config/env	Read one value that may be absent: the value, or `undefined` when `name` is unset or blank.
+systemEnv	constant	@spy4x/server/config/env	The process environment through `Deno.env`, read on each call and never at module scope.
 AES_ALGORITHM	constant	@spy4x/server/crypto	WebCrypto algorithm name.
 AES_KEY_BYTES	constant	@spy4x/server/crypto	Key size in bytes.
 CryptoError	class	@spy4x/server/crypto	The one error this module throws.
@@ -2081,6 +2083,7 @@ DefaultBucketStorage	class	@spy4x/server/storage	Bind a provider to one bucket.
 FileStorage	interface	@spy4x/server/storage	Wire-level object storage provider.
 LocalStorage	class	@spy4x/server/storage	Local-filesystem provider for development.
 MAX_PRESIGN_EXPIRES_IN_SECONDS	constant	@spy4x/server/storage	
+MakeDirectory	type	@spy4x/server/storage	Creates a directory and every missing parent.
 ObjectFs	interface	@spy4x/server/storage	Minimal object-store filesystem port.
 PresignCredentials	interface	@spy4x/server/storage	Credentials for one presign.
 PresignOptions	interface	@spy4x/server/storage	Per-call presign overrides.
@@ -2095,12 +2098,13 @@ assertBucket	function	@spy4x/server/storage	Validate a bucket name.
 createBucketStorage	function	@spy4x/server/storage	Build a bucket-bound storage from an already-constructed provider.
 createDenoObjectFs	function	@spy4x/server/storage	`ObjectFs` backed by `Deno`.
 createMemoryObjectFs	function	@spy4x/server/storage	In-memory `ObjectFs`.
+createObjectFs	function	@spy4x/server/storage	`ObjectFs` over a platform `FileSystemPort`: reads with `readBytes`, writes with `writeBytes` or `writeStream`, and checks with `exists`.
 createStorage	function	@spy4x/server/storage	Read the environment, then build the configured storage.
 createStorageFrom	function	@spy4x/server/storage	Build the configured storage from an explicit configuration.
 defaultS3Endpoint	function	@spy4x/server/storage	AWS's regional S3 endpoint, used when `config.endpoint` is not set.
 encodeRfc3986	function	@spy4x/server/storage	Percent-encode per RFC 3986.
 encodeS3Path	function	@spy4x/server/storage	Encode an object key for the canonical URI, keeping `/` as the separator.
-ensureFileDirectory	function	@spy4x/server/storage	Create the directory holding `filePath`.
+ensureFileDirectory	function	@spy4x/server/storage	Create the directory holding `filePath`, with every missing parent.
 formatAmzDate	function	@spy4x/server/storage	`YYYYMMDDTHHMMSSZ`, the only timestamp format SigV4 accepts.
 isSafeObjectPath	function	@spy4x/server/storage	Report whether one path is safe to join onto a bucket: relative, free of a scheme, a backslash or a NUL byte, and free of a `..` segment.
 loadStorageProvider	function	@spy4x/server/storage	Load and construct a provider by dynamic `import()`.
@@ -2468,4 +2472,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 18374c4f3266441b70403638c73737eebe671511308495034d9d954dd25bfb54
+# export surface: sha256 0deacf30a5e931748812d1e2380311fa51a1326b37ad34f4520cf66cae0cc310

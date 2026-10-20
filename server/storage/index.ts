@@ -13,7 +13,12 @@ import type { S3StorageConfig } from "./s3.ts"
 
 export { StorageError, type StorageErrorCode } from "./errors.ts"
 export { parseExpiresIn, parseStorageEnv, type StorageConfig, StorageEnvName } from "./env.ts"
-export { createDenoObjectFs, ensureFileDirectory } from "./fs.ts"
+export {
+  createDenoObjectFs,
+  createObjectFs,
+  ensureFileDirectory,
+  type MakeDirectory,
+} from "./fs.ts"
 export { DEFAULT_LOCAL_BASE_PATH, LocalStorage, type LocalStorageConfig } from "./local.ts"
 export { createMemoryObjectFs } from "./memory-fs.ts"
 export {

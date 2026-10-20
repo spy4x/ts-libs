@@ -1,3 +1,6 @@
+import { denoFileSystem } from "@spy4x/platform/server/deno-fs"
+import type { FileSystemPort } from "@spy4x/platform/server/ports"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 import type { ObjectFs } from "./ports.ts"
 
 /**
@@ -33,15 +36,120 @@ export function parentDirectory(filePath: string): string | undefined {
   return leading ? `/${parent}` : parent
 }
 
+/** Creates a directory and every missing parent. Injected so a test needs no `--allow-write`. */
+export type MakeDirectory = (path: string) => Promise<void>
+
+/** The real `MakeDirectory`: `Deno.mkdir` with `recursive`, which needs `--allow-write`. */
+function makeDirectoryRecursive(path: string): Promise<void> {
+  return Deno.mkdir(path, { recursive: true })
+}
+
 /**
- * Create the directory holding `filePath`. `Deno.mkdir` with `recursive` makes
- * every missing parent, and an already-existing path is swallowed rather than
- * failing a retried write.
+ * Create the directory holding `filePath`, with every missing parent.
+ *
+ * Only `AlreadyExists` is swallowed: a file already sits where the directory
+ * should be, and the write that follows fails with the precise error
+ * (`NotADirectory`). Any other failure, such as a denied permission or a full
+ * disk, is thrown, so the caller sees the real cause instead of a later
+ * `NotFound` from opening a file in a directory that was never made.
  */
-export async function ensureFileDirectory(filePath: string): Promise<void> {
+export async function ensureFileDirectory(
+  filePath: string,
+  makeDirectory: MakeDirectory = makeDirectoryRecursive,
+): Promise<void> {
   const parent = parentDirectory(filePath)
   if (parent === undefined) return
-  await Deno.mkdir(parent, { recursive: true }).catch(() => {})
+  try {
+    await makeDirectory(parent)
+  } catch (error) {
+    if (!(error instanceof Deno.errors.AlreadyExists)) throw error
+  }
+}
+
+/** What {@link replaceFile} needs besides the write itself. */
+interface ReplaceSteps {
+  makeDirectory: MakeDirectory
+  rename(from: string, to: string): Promise<void>
+  remove(path: string): Promise<void>
+}
+
+/**
+ * A fresh path in the same directory as `filePath`, so a `rename` onto
+ * `filePath` stays on one filesystem and is atomic. The name does not repeat
+ * the target's own name, so a long object name cannot push it past the
+ * filesystem's name limit.
+ */
+function temporarySibling(filePath: string): string {
+  const parent = parentDirectory(filePath)
+  const name = `.${uuidV7()}.part`
+  if (parent === undefined) return name
+  return parent === "/" ? `/${name}` : `${parent}/${name}`
+}
+
+/**
+ * Write to a temporary file beside `filePath`, then rename it over `filePath`.
+ *
+ * A download cut off midway, or any other failed write, leaves the object that
+ * was there untouched instead of a truncated one, and the temporary file is
+ * removed. The removal is best effort: its own failure never hides the write's
+ * error.
+ */
+async function replaceFile(
+  filePath: string,
+  write: (path: string) => Promise<number>,
+  steps: ReplaceSteps,
+): Promise<number> {
+  await ensureFileDirectory(filePath, steps.makeDirectory)
+  const temporary = temporarySibling(filePath)
+  try {
+    const count = await write(temporary)
+    await steps.rename(temporary, filePath)
+    return count
+  } catch (error) {
+    await steps.remove(temporary).catch(() => {})
+    throw error
+  }
+}
+
+/**
+ * `ObjectFs` over a platform `FileSystemPort`: reads with `readBytes`, writes
+ * with `writeBytes` or `writeStream`, and checks with `exists`.
+ *
+ * A write goes to a temporary file in the same directory and is renamed into
+ * place, so a write that fails midway (a download whose connection drops)
+ * leaves the old object as it was. Reading a missing object rejects with
+ * `Deno.errors.NotFound`, as every `ObjectFs` does.
+ *
+ * @param fs Defaults to `denoFileSystem` of `@spy4x/platform/server/deno-fs`.
+ * @throws {TypeError} When `fs` lacks `readBytes`, `writeBytes` or
+ * `writeStream`, which the port leaves optional.
+ */
+export function createObjectFs(fs: FileSystemPort = denoFileSystem): ObjectFs {
+  const { readBytes, writeBytes, writeStream } = fs
+  if (readBytes === undefined || writeBytes === undefined || writeStream === undefined) {
+    throw new TypeError(
+      "createObjectFs needs a FileSystemPort with readBytes, writeBytes and writeStream",
+    )
+  }
+  const steps: ReplaceSteps = {
+    makeDirectory: (path) => fs.mkdirp(path),
+    rename: (from, to) => fs.rename(from, to),
+    remove: (path) => fs.remove(path),
+  }
+  return {
+    readObject: async (path) => {
+      const bytes = await readBytes.call(fs, path)
+      if (bytes === null) throw new Deno.errors.NotFound(`No such object: ${path}`)
+      return bytes
+    },
+    existsObject: (path) => fs.exists(path),
+    writeObject: (path, data) =>
+      replaceFile(path, async (target) => {
+        if (!(data instanceof Uint8Array)) return await writeStream.call(fs, target, data)
+        await writeBytes.call(fs, target, data)
+        return data.byteLength
+      }, steps),
+  }
 }
 
 /**
@@ -61,8 +169,9 @@ export async function writeToFile(
   path: string,
   data: Uint8Array | ReadableStream<Uint8Array>,
   open: OpenFile = openFileForWrite,
+  makeDirectory: MakeDirectory = makeDirectoryRecursive,
 ): Promise<number> {
-  await ensureFileDirectory(path)
+  await ensureFileDirectory(path, makeDirectory)
   const file = await open(path)
   if (data instanceof Uint8Array) {
     // Both branches close explicitly on error and on success. The closer is the
@@ -142,12 +251,25 @@ function closeQuietly(file: WritableFileHandle): void {
   }
 }
 
-/** Minimal `Deno` surface `createDenoObjectFs` uses. Injected so a test needs no permission. */
+/**
+ * Minimal `Deno` surface `createDenoObjectFs` uses. Injected so a test needs no permission.
+ *
+ * A new caller injects a `FileSystemPort` into {@link createObjectFs} instead.
+ */
 export interface DenoFsHost {
   readFile(path: string): Promise<Uint8Array>
   stat(path: string): Promise<unknown>
   writeFile(path: string, data: Uint8Array): Promise<void>
   open(path: string): Promise<WritableFileHandle>
+  /** Creates a directory and its parents. Without it, `Deno.mkdir` is used. */
+  mkdir?(path: string): Promise<void>
+  /**
+   * Renames a file over another. With it, a write goes to a temporary file and
+   * is renamed into place; without it, the write truncates the target first.
+   */
+  rename?(from: string, to: string): Promise<void>
+  /** Removes the temporary file of a failed write. */
+  remove?(path: string): Promise<void>
 }
 
 /** The real host: every call is a platform call and needs `--allow-read` or `--allow-write`. */
@@ -156,21 +278,28 @@ export const denoFsHost: DenoFsHost = {
   stat: (path) => Deno.stat(path),
   writeFile: (path, data) => Deno.writeFile(path, data),
   open: (path) => openFileForWrite(path),
+  mkdir: (path) => makeDirectoryRecursive(path),
+  rename: (from, to) => Deno.rename(from, to),
+  remove: (path) => Deno.remove(path),
 }
 
 /**
  * `ObjectFs` backed by `Deno`. Read paths need `--allow-read`; `writeObject`
- * needs `--allow-write`, which the repo test task deliberately does not grant,
- * so the suite drives `writeToFile` with an injected opener and the local
- * provider with an in-memory `ObjectFs` instead.
+ * needs `--allow-write`.
  *
- * `host` is the one seam that is not covered by a real call in the suite: with
- * `denoFsHost` it is `Deno.readFile`/`stat`/`writeFile`/`open`, i.e. platform
- * calls. Everything around it — the stat-to-boolean decision, both write
- * branches, the byte count and the closer-on-error path — is covered through an
- * injected host.
+ * Without `host` it is {@link createObjectFs} over the platform's
+ * `denoFileSystem`, and the integration tier runs the `ObjectFs` contract
+ * against it. With `host`, every call goes through that host, which is how the
+ * unit tier drives the stat-to-boolean decision, both write branches, the byte
+ * count and the closer-on-error path without `--allow-write`. Either way a
+ * write is renamed into place when it can be: always without `host`, and with
+ * a host that has `rename`.
  */
-export function createDenoObjectFs(host: DenoFsHost = denoFsHost): ObjectFs {
+export function createDenoObjectFs(host?: DenoFsHost): ObjectFs {
+  if (host === undefined) return createObjectFs(denoFileSystem)
+  const makeDirectory = host.mkdir === undefined ? makeDirectoryRecursive : host.mkdir.bind(host)
+  const rename = host.rename?.bind(host)
+  const remove = host.remove?.bind(host) ?? (() => Promise.resolve())
   return {
     readObject: (path) => host.readFile(path),
     existsObject: async (path) => {
@@ -185,6 +314,11 @@ export function createDenoObjectFs(host: DenoFsHost = denoFsHost): ObjectFs {
         throw error
       }
     },
-    writeObject: (path, data) => writeToFile(path, data, (target) => host.open(target)),
+    writeObject: (path, data) => {
+      const write = (target: string) =>
+        writeToFile(target, data, (file) => host.open(file), makeDirectory)
+      if (rename === undefined) return write(path)
+      return replaceFile(path, write, { makeDirectory, rename, remove })
+    },
   }
 }
