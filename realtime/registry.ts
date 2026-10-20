@@ -1,38 +1,41 @@
 /**
  * Connection registry: who is connected, on how many sockets, and are they still alive.
  *
- * Ported in behaviour from an earlier internal project's websocket service (registry and
- * heartbeat) and redesigned around a socket port, so this module imports no WebSocket library and every behaviour
- * below is testable with a fake socket and a fake clock.
+ * Ported in behaviour from an earlier internal project's websocket service (registry and heartbeat)
+ * and redesigned around a socket port, so this module imports no WebSocket library and every
+ * behaviour below is testable with a fake socket and a fake clock.
  *
  * What changed from the source, and why:
  *
- * - **Liveness is verified, not assumed.** The source pinged every socket every 30s and never looked
- *   for a pong, so a half-open socket stayed in the registry forever and every broadcast wrote to it. Here
- *   a socket that has not sent anything within `livenessTimeoutMs` is closed and reaped.
+ * - **Liveness is verified, not assumed.** The source pinged every socket every 30s and never
+ *   looked for a pong, so a half-open socket stayed in the registry forever and every broadcast
+ *   wrote to it. Here a socket that has not sent anything within `livenessTimeoutMs` is closed and
+ *   reaped.
  * - **Reaping is eager.** Orphan cleanup happened only in the socket's own close handler, which by
  *   definition never runs for a socket that died silently. `#reap` removes the connection from both
  *   maps immediately; a later close event is a no-op.
- * - **A failing send does not abort a broadcast.** The source's `sendToAll` called `send`, which threw out
- *   of the loop, so one bad socket truncated fan-out for everyone after it. Here a throwing socket is
- *   reaped and the loop continues.
+ * - **A failing send does not abort a broadcast.** The source's `sendToAll` called `send`, which
+ *   threw out of the loop, so one bad socket truncated fan-out for everyone after it. Here a
+ *   throwing socket is reaped and the loop continues.
  * - **One interval, not one per socket**, so the timer count does not grow with connections.
- * - **Direction is enforced.** A client frame that decodes as a server frame is dropped as malformed
- *   instead of being dispatched.
+ * - **Direction is enforced.** A client frame that decodes as a server frame is dropped as
+ *   malformed instead of being dispatched.
  * - **Three limits neither source enforced (issue #65, finding 5).** A user id could open an
  *   unbounded number of sockets; an oversized text frame was handed straight to the codec and the
  *   validator before anything measured it; and nothing slowed delivery to a socket whose peer had
  *   stopped reading. `attach` now refuses past `maxConnectionsPerUser`, `#receive` measures a frame
  *   before decoding it and reaps the connection past `maxMessageBytes`, and `#deliver` skips a send
  *   past `maxBufferedBytes` instead of queueing without bound. All three limits are this package's
- *   own — the upgrade handler, rate limiting per IP and anything else the surrounding server does is
- *   outside it, same as the rest of the sync protocol (see README, "Explicitly not implemented").
+ *   own — the upgrade handler, rate limiting per IP and anything else the surrounding server does
+ *   is outside it, same as the rest of the sync protocol (see README, "Explicitly not
+ *   implemented").
  * - **Requests are bounded, correlated and never dispatched by the registry.** A `client.command`
- *   or `client.query` is handed to the one dispatcher registered with {@link ConnectionRegistry.onRequest};
- *   the registry only enforces `maxInFlightRequests` per connection (a typed `rate_limited` error
- *   beyond it), rejects a request id already in flight, answers with `server.result` or a typed
- *   `server.error`, and gives up on a dispatcher that outlives `requestTimeoutMs`. What a request
- *   name means — a command bus, a query bus, authorization — is the host's.
+ *   or `client.query` is handed to the one dispatcher registered with
+ *   {@link ConnectionRegistry.onRequest}; the registry only enforces `maxInFlightRequests` per
+ *   connection (a typed `rate_limited` error beyond it), rejects a request id already in flight,
+ *   answers with `server.result` or a typed `server.error`, and gives up on a dispatcher that
+ *   outlives `requestTimeoutMs`. What a request name means — a command bus, a query bus,
+ *   authorization — is the host's.
  *
  * @module
  */
