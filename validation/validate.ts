@@ -13,7 +13,8 @@
  * @module
  */
 
-import type { ArkError, ArkErrors, Type } from "arktype"
+import type { ArkErrors, Type } from "arktype"
+import { flatIssues } from "./flat-issues.ts"
 // `model.ts` imports `isArkErrors` from here, so the two modules import each other. That is safe:
 // neither reads the other's binding at load time, only inside a function call.
 import { FORM_FIELD } from "./model.ts"
@@ -142,12 +143,9 @@ export function isArkErrors(value: unknown): value is ArkErrors {
  */
 export function toValidationError(issues: ArkErrors): ValidationError {
   const errors: ValidationIssues = {}
-  for (const [path, list] of Object.entries(issues.flatByPath)) {
-    errors[path === "" ? FORM_FIELD : path] = list.map((issue) => ({
-      code: issue.code,
-      path,
-      message: problemOf(issue),
-    }))
+  for (const { path, code, problem } of flatIssues(issues)) {
+    const key = path === "" ? FORM_FIELD : path
+    errors[key] = [...(errors[key] ?? []), { code, path, message: problem }]
   }
   return {
     type: ErrType.Validation,
@@ -155,22 +153,6 @@ export function toValidationError(issues: ArkErrors): ValidationError {
     errors,
     description: issues.summary,
     details: issues,
-  }
-}
-
-/**
- * An issue's explanation without its path, or its full message when arktype cannot build one.
- *
- * arktype builds `problem` from the issue's `expected` text. A rejection written the way arktype's
- * own docs show it, `ctx.reject({ message: "…" })`, has a message but no `expected`, and reading
- * its `problem` throws a `TypeError`. Its `message` is the caller's own sentence, with no path in
- * it, so it is the right text to show instead.
- */
-function problemOf(issue: ArkError): string {
-  try {
-    return issue.problem
-  } catch {
-    return issue.message
   }
 }
 
