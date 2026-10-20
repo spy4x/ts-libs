@@ -32,6 +32,7 @@ import {
   type CheckoutRequest,
   type CheckoutSession,
   type PaidPayment,
+  type Payment,
   type ParseEventResult,
   type PlanRef,
   type PortalSession,
@@ -491,6 +492,32 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
   }
 
   /**
+   * Maps a verified Stripe invoice to the payment of a payment event, or explains why it cannot.
+   * A succeeded payment carries what was paid; a failed one what was due.
+   */
+  const toPayment = (paymentType: BillingEventType, object: unknown): Result<Payment, string> => {
+    const invoice = stripeInvoiceSchema(object)
+    if (invoice instanceof type.errors) return { ok: false, error: invoice.summary }
+    const currency = invoice.currency.toUpperCase()
+    const parent = invoice.parent
+    return {
+      ok: true,
+      value: {
+        invoiceId: invoice.id,
+        customerId: invoice.customer,
+        subscriptionId: parent?.type === "subscription_details"
+          ? parent.subscription_details?.subscription ?? null
+          : null,
+        amount: paymentType === BillingEventType.PaymentSucceeded
+          ? invoice.amount_paid
+          : invoice.amount_due,
+        currency,
+        decimals: stripeDecimals(currency),
+      },
+    }
+  }
+
+  /**
    * POSTs a change to a subscription and returns the subscription after it. The path is built from
    * an ID that already passed {@link STRIPE_ID}.
    */
@@ -782,28 +809,13 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
 
       const paymentType = PAYMENT_EVENTS.get(event.type)
       if (paymentType !== undefined) {
-        const invoice = stripeInvoiceSchema(event.data.object)
-        if (invoice instanceof type.errors) return malformed(`${event.type}: ${invoice.summary}`)
-        const currency = invoice.currency.toUpperCase()
-        const amount = paymentType === BillingEventType.PaymentSucceeded
-          ? invoice.amount_paid
-          : invoice.amount_due
-        const parent = invoice.parent
-        const subscriptionId = parent?.type === "subscription_details"
-          ? parent.subscription_details?.subscription ?? null
-          : null
+        const payment = toPayment(paymentType, event.data.object)
+        if (!payment.ok) return malformed(`${event.type}: ${payment.error}`)
         const parsed: BillingEvent = {
           id: event.id,
           type: paymentType as BillingEventType.PaymentSucceeded | BillingEventType.PaymentFailed,
           occurredAt,
-          payment: {
-            invoiceId: invoice.id,
-            customerId: invoice.customer,
-            subscriptionId,
-            amount,
-            currency,
-            decimals: stripeDecimals(currency),
-          },
+          payment: payment.value,
         }
         return { ok: true, event: parsed }
       }
