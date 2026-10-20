@@ -1028,6 +1028,26 @@ describe("safeFetch with a request body", () => {
       assertEquals(sent.length, 1)
     })
 
+    it(`refuses a same-origin ${status} when the body is an async generator`, async () => {
+      const { fetcher, sent } = bodyFetcher([{ status, location: "/v2/push" }])
+      // The runtime accepts an async iterable as a body; the `BodyInit` type does not name it.
+      async function* chunks() {
+        yield new TextEncoder().encode("amount=100")
+      }
+      const error = await assertRejects(
+        () =>
+          safeFetch("https://example.com/push", {
+            resolver: ALWAYS_PUBLIC,
+            fetcher,
+            method: SafeFetchMethod.Post,
+            body: chunks() as unknown as BodyInit,
+          }),
+        UrlValidationError,
+      )
+      assertEquals(error.code, "invalid_redirect")
+      assertEquals(sent.length, 1)
+    })
+
     it(`refuses a same-origin ${status} when the body is a stream`, async () => {
       const { fetcher, sent } = bodyFetcher([{ status, location: "/v2/push" }])
       const error = await assertRejects(
@@ -1044,6 +1064,31 @@ describe("safeFetch with a request body", () => {
       assertEquals(sent.length, 1)
     })
   }
+
+  it("sends every body kind that can be read twice again on a same-origin 307", async () => {
+    const form = new FormData()
+    form.set("a", "1")
+    const bodies: BodyInit[] = [
+      "a=1",
+      new Blob(["a=1"]),
+      new TextEncoder().encode("a=1").buffer,
+      new TextEncoder().encode("a=1"),
+      new DataView(new TextEncoder().encode("a=1").buffer),
+      form,
+      new URLSearchParams({ a: "1" }),
+    ]
+    for (const body of bodies) {
+      const { fetcher, sent } = bodyFetcher([{ status: 307, location: "/v2/push" }])
+      await safeFetch("https://example.com/push", {
+        resolver: ALWAYS_PUBLIC,
+        fetcher,
+        method: SafeFetchMethod.Post,
+        body,
+      })
+      assertEquals(sent.length, 2)
+      assertStrictEquals(sent[1].body, body)
+    }
+  })
 
   for (const status of [301, 302, 303]) {
     it(`drops the body and its content headers when a ${status} turns a POST into a GET`, async () => {
@@ -1070,6 +1115,14 @@ describe("safeFetch with a request body", () => {
       headers: JSON_HEADERS,
     })
     assertEquals(sent[1].headers, JSON_HEADERS)
+  })
+
+  it("treats a null body as no body", async () => {
+    const { fetcher, sent } = bodyFetcher([])
+    // The type has no `null`, but a JavaScript caller can pass it, as `fetch` allows.
+    const body = null as unknown as BodyInit
+    await safeFetch("https://example.com/", { resolver: ALWAYS_PUBLIC, fetcher, body })
+    assertEquals(sent.map((r) => [r.method, r.body]), [["GET", undefined]])
   })
 
   for (const method of ["GET", "head"]) {
@@ -1136,7 +1189,7 @@ describe("defaultFetcher", () => {
     assertStrictEquals(seen[0]?.signal, signal)
   })
 
-  it("hands the body to the platform fetch, with duplex half for a stream", async () => {
+  it("hands the body to the platform fetch, with duplex half for a body read once", async () => {
     const seen: (RequestInit & { duplex?: string })[] = []
     const original = globalThis.fetch
     globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
@@ -1144,6 +1197,10 @@ describe("defaultFetcher", () => {
       return Promise.resolve(new Response("ok", { status: 200 }))
     }) as typeof fetch
     const stream = new Response("streamed").body!
+    async function* chunks() {
+      yield new TextEncoder().encode("generated")
+    }
+    const generated = chunks() as unknown as BodyInit
     try {
       await defaultFetcher.fetch("https://example.com/a", {
         redirect: "manual",
@@ -1155,6 +1212,11 @@ describe("defaultFetcher", () => {
         method: "POST",
         body: stream,
       })
+      await defaultFetcher.fetch("https://example.com/c", {
+        redirect: "manual",
+        method: "POST",
+        body: generated,
+      })
     } finally {
       globalThis.fetch = original
       await stream.cancel()
@@ -1162,6 +1224,8 @@ describe("defaultFetcher", () => {
     assertEquals([seen[0].body, seen[0].duplex], ["text", undefined])
     assertStrictEquals(seen[1].body, stream)
     assertEquals(seen[1].duplex, "half")
+    assertStrictEquals(seen[2].body, generated)
+    assertEquals(seen[2].duplex, "half")
   })
 
   it("keeps a POST a POST across a 307 when safeFetch uses it by default", async () => {

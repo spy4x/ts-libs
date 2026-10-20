@@ -31,9 +31,11 @@
  * moment a hop changes origin — see `CREDENTIAL_HEADERS`.
  *
  * A REQUEST BODY DOES NOT CROSS AN ORIGIN EITHER: a 307 or 308 that would carry
- * `options.body` to another origin is refused, and so is one that would have to
- * send a stream again, because a stream is read once. A redirect that turns the
- * request into a `GET` drops the body, as the platform `fetch` does.
+ * `options.body` to another origin is refused, and so is one whose body cannot be
+ * sent twice: anything but a string, `Blob`, `ArrayBuffer`, typed array or
+ * `DataView`, `FormData` or `URLSearchParams` — a stream or an (async) iterable
+ * is read once. A redirect that turns the request into a `GET` drops the body,
+ * as the platform `fetch` does.
  * @module
  */
 
@@ -98,7 +100,10 @@ export enum SafeFetchMethod {
  * re-validation this module exists for.
  */
 export interface Fetcher {
-  /** Issues one request. `init.redirect` is always `"manual"`. */
+  /**
+   * Issues one request. `init.redirect` is always `"manual"`. An implementation must forward
+   * `init.body`: one written before `body` existed sends a `POST` without its body, silently.
+   */
   fetch(
     input: string,
     init: {
@@ -115,7 +120,8 @@ export interface Fetcher {
 /** {@link Fetcher} backed by the platform `fetch`. */
 export const defaultFetcher: Fetcher = {
   fetch: (input, init) => {
-    // A stream body needs `duplex: "half"` under Node and Bun; Deno ignores it. The platform
+    // A body that is read once (a stream, an async iterable) needs `duplex: "half"` under Node
+    // and Bun; Deno ignores it. The platform
     // `RequestInit` type does not name it everywhere, hence the widened type.
     const request: RequestInit & { duplex?: "half" } = {
       redirect: init.redirect,
@@ -124,7 +130,7 @@ export const defaultFetcher: Fetcher = {
       headers: init.headers,
       body: init.body,
     }
-    if (init.body instanceof ReadableStream) request.duplex = "half"
+    if (init.body !== undefined && !isReplayableBody(init.body)) request.duplex = "half"
     return fetch(input, request)
   },
 }
@@ -171,8 +177,10 @@ export interface SafeFetchOptions {
    * anything but `HEAD`) drops it, together with the headers that describe it:
    * `Content-Type`, `Content-Encoding`, `Content-Language` and
    * `Content-Location`. A 307 or 308 sends it again, but only to the same
-   * origin and only when it can be read twice: a `ReadableStream` cannot, so
-   * that redirect is refused.
+   * origin and only when it can be read twice — a string, `Blob`, `ArrayBuffer`,
+   * typed array or `DataView`, `FormData` or `URLSearchParams`. Any other body
+   * (a `ReadableStream`, an async or sync iterable) is read once, so that
+   * redirect is refused.
    */
   body?: BodyInit
 }
@@ -197,7 +205,8 @@ export interface SafeFetchResult {
  *
  * `options.body` is sent with the first request. A redirect that rewrites the
  * method to `GET` drops it; a 307 or 308 resends it to the same origin only, and
- * only when it is not a `ReadableStream`, and is refused otherwise.
+ * only when it can be read twice (a string, `Blob`, `ArrayBuffer`, typed array or
+ * `DataView`, `FormData` or `URLSearchParams`), and is refused otherwise.
  *
  * `options.headers` are normalised through the platform `Headers`, sent on the
  * first request and carried along the chain, except that the headers in
@@ -208,7 +217,7 @@ export interface SafeFetchResult {
  * @throws `UrlValidationError` when the initial URL or any redirect target
  * fails the policy, when a redirect carries no `Location`, when the chain
  * exceeds `maxRedirects`, when a 307 or 308 would resend `options.body` to
- * another origin or resend a stream body, or when an option — `timeoutMs`,
+ * another origin or resend a body that is read once, or when an option — `timeoutMs`,
  * `maxRedirects`, `headers`, a `body` with `GET` or `HEAD` — is not something
  * this module can use.
  */
@@ -238,7 +247,8 @@ export async function safeFetch(
   const resolver = options.resolver ?? defaultResolver
   let method = options.method ?? SafeFetchMethod.Get
   let headers = normalizeHeaders(options.headers)
-  let body = options.body
+  // `null` is "no body", as it is to the platform `fetch`.
+  let body = options.body ?? undefined
   if (body !== undefined && isBodyless(method)) {
     throw new UrlValidationError("invalid_format", "body is not allowed with GET or HEAD")
   }
@@ -316,10 +326,10 @@ export async function safeFetch(
             "invalid_redirect",
             "Redirect would send the request body to another origin",
           )
-        } else if (body instanceof ReadableStream) {
+        } else if (!isReplayableBody(body)) {
           throw new UrlValidationError(
             "invalid_redirect",
-            "Redirect would send a stream body again, and a stream is read once",
+            "Redirect would send a body again that can be read only once",
           )
         }
       }
@@ -439,4 +449,14 @@ async function tryCancel(response: Response): Promise<void> {
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 ||
     status === 307 || status === 308
+}
+
+/**
+ * Whether `body` can be sent a second time: the kinds the platform `fetch` re-reads from the
+ * start on every request. Everything else — a `ReadableStream`, an async or sync iterable — is
+ * consumed by the first request and would go out empty the second time.
+ */
+function isReplayableBody(body: BodyInit): boolean {
+  return typeof body === "string" || body instanceof Blob || body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body) || body instanceof FormData || body instanceof URLSearchParams
 }
