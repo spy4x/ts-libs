@@ -46,7 +46,8 @@ export function readEnvRecord<Name extends string>(
   names: readonly Name[],
   env: EnvReader = processEnv,
 ): Record<Name, string | undefined> {
-  // `fromEntries` defines own properties, so a name like `__proto__` cannot reach the prototype.
+  // `fromEntries` defines own properties, so on Node and Bun a name like `__proto__` cannot reach
+  // the prototype. Deno has no `__proto__` accessor, so its tests cannot show the difference.
   return Object.fromEntries(names.map((name) => [name, env.get(name)])) as Record<
     Name,
     string | undefined

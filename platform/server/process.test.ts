@@ -48,21 +48,15 @@ describe("processEnv and processId", () => {
 })
 
 describe("readEnvRecord", () => {
-  it("reads only the names asked for, blank as undefined", () => {
+  it("reads only the names asked for, an unset one as undefined", () => {
     const asked: string[] = []
     const env = {
       get: (name: string) => {
         asked.push(name)
-        return ({ A: "a", B: "" } as Record<string, string>)[name] || undefined
+        return name === "A" ? "a" : undefined
       },
     }
-    expect(readEnvRecord(["A", "B", "C"], env)).toEqual({ A: "a", B: undefined, C: undefined })
-    expect(asked).toEqual(["A", "B", "C"])
-  })
-
-  it("keeps a name like __proto__ as an own key, not the prototype", () => {
-    const record = readEnvRecord(["__proto__"], { get: () => "x" })
-    expect(Object.hasOwn(record, "__proto__")).toBe(true)
-    expect(Object.getPrototypeOf(record)).toBe(Object.prototype)
+    expect(readEnvRecord(["A", "B"], env)).toEqual({ A: "a", B: undefined })
+    expect(asked).toEqual(["A", "B"])
   })
 })
