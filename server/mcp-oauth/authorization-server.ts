@@ -119,6 +119,11 @@ export interface OwnerPassword {
    * approval is refused with `429`: the ceiling against guessing spread over many addresses. Must
    * be more than `maxFailures`, so one locked address never locks the owner out. Defaults to ten
    * times `maxFailures`.
+   *
+   * About ten addresses reach the default ceiling in a minute and keep every approval refused for
+   * the rest of `totalWindowMs`, 24 hours by default. The owner's way back in is a one-time code
+   * from `createApprovalCode`, typed in place of the password: the lockout does not apply to
+   * it. The README, "Approving while the limit is reached", has the details.
    */
   maxTotalFailures?: number
   /** The window `maxTotalFailures` counts over, in milliseconds. Defaults to 24 hours. */
