@@ -21,14 +21,21 @@ import { encodeHex } from "@std/encoding/hex"
 import { timingSafeEqual } from "@std/crypto/timing-safe-equal"
 import { assertUsableSecret } from "./token-secret.ts"
 
+import { monotonicUlid as stdMonotonicUlid } from "@std/ulid"
+
 /**
- * Monotonic ULID generator, re-exported from `@std/ulid`.
+ * Monotonic ULID generator, the one from `@std/ulid`.
  *
  * Shares its monotonic state with every other caller in the process — that is what makes ids
  * process-wide monotonic — and accepts an optional seed time for a caller that wants a
  * deterministic timestamp component.
+ *
+ * @deprecated Every new id is a version 7 UUID: use `uuidV7` from `@spy4x/platform/universal/uuid`.
+ * This export stays until 2.0.
  */
-export { monotonicUlid } from "@std/ulid"
+export function monotonicUlid(seedTime?: number): string {
+  return stdMonotonicUlid(seedTime)
+}
 
 /** Length of a ULID string: 26 Crockford base32 characters. */
 export const ULID_LENGTH = 26
