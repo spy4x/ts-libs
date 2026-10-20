@@ -36,9 +36,9 @@ export interface SendIssueInput {
 /**
  * What a {@link sendIssue} run did.
  *
- * - `sent`: the run went through the audience. `skipped` counts members already mailed and people
- *   outside the audience, `failed` the mails that were not accepted. Rerun while `failed` is above
- *   zero: only the missed recipients are mailed.
+ * - `sent`: the run went through the audience. `skipped` counts members already mailed, people
+ *   outside the audience and rows that are not a bare address, `failed` the mails that were not
+ *   accepted. Rerun while `failed` is above zero: only the missed recipients are mailed.
  * - `already-sent`: an earlier run closed the issue, or the log has a legacy entry for it. Nothing
  *   was sent.
  * - `in-progress`: another run holds the send lock. Nothing was sent.
@@ -63,8 +63,9 @@ export type SendIssueResult =
  * secret (`SubscriptionCrypto.sentMarks`) and written under the current one.
  *
  * The whole run holds the log's send lock, and a second call that finds it held answers
- * `in-progress` instead of waiting. A row that is not a bare address, a link that cannot be built
- * and a send that throws each cost that one mail and count as failed; the run goes on. A log write
+ * `in-progress` instead of waiting. A link that cannot be built and a send that throws each cost
+ * that one mail and count as failed; the run goes on. A row that is not a bare address is logged
+ * and counted as skipped: no rerun can mail it, so it must not keep the issue open forever. A log write
  * that fails stops the run and throws, because carrying on could mail someone twice.
  *
  * The log names each row by its number and redacts the address from every relay error.
@@ -109,7 +110,7 @@ async function sendLocked(input: SendIssueInput, log: SendLog): Promise<SendIssu
   for (const { row, index, to, marks } of rows) {
     const label = `row ${index + 1}`
     if (to === null) {
-      failed++
+      skipped++
       out.error(`  ✗ ${label}: not a bare address, skipped`)
       continue
     }
