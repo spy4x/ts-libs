@@ -7,7 +7,7 @@
  * The limits match the `CHECK` constraints in `AUTH_POSTGRES_SCHEMA`.
  */
 
-import { type } from "arktype"
+import { type ArkErrors, type } from "arktype"
 import { validate } from "@spy4x/validation"
 import { type NewAuthKey, normalizeEmail } from "./model.ts"
 import type { AttemptChallengeInput, IssueChallengeInput } from "./store.ts"
@@ -93,7 +93,7 @@ export function isStoreId(value: unknown): value is number {
  */
 export function checkNewKey(value: NewAuthKey): NewAuthKey {
   const { error, data } = validate(newAuthKey, value)
-  if (error) throw new TypeError(`invalid new auth key: ${error.description}`)
+  if (error) throw new TypeError(`invalid new auth key: ${rulesBroken(error.details)}`)
   return {
     method: data.method,
     subject: data.subject,
@@ -106,27 +106,40 @@ export function checkNewKey(value: NewAuthKey): NewAuthKey {
 /** @throws {TypeError} When `secret` is not a string of 1 to {@link MAX_SECRET_LENGTH} characters. */
 export function checkSecret(value: string): string {
   const { error, data } = validate(secret, value)
-  if (error) throw new TypeError(`invalid key secret: ${error.description}`)
+  if (error) throw new TypeError(`invalid key secret: ${rulesBroken(error.details)}`)
   return data
 }
 
 /** @throws {TypeError} When the value is not a valid `Date`; `name` goes into the message. */
 export function checkDate(value: Date, name: string): Date {
   const { error, data } = validate(validDate, value)
-  if (error) throw new TypeError(`invalid ${name}: ${error.description}`)
+  if (error) throw new TypeError(`invalid ${name}: ${rulesBroken(error.details)}`)
   return data
 }
 
 /** @throws {TypeError} When a field is missing or out of range. */
 export function checkIssueChallenge(value: IssueChallengeInput): IssueChallengeInput {
   const { error, data } = validate(issueChallengeInput, value)
-  if (error) throw new TypeError(`invalid challenge: ${error.description}`)
+  if (error) throw new TypeError(`invalid challenge: ${rulesBroken(error.details)}`)
   return data
 }
 
 /** @throws {TypeError} When a field is missing or out of range. */
 export function checkAttemptChallenge(value: AttemptChallengeInput): AttemptChallengeInput {
   const { error, data } = validate(attemptChallengeInput, value)
-  if (error) throw new TypeError(`invalid challenge guess: ${error.description}`)
+  if (error) throw new TypeError(`invalid challenge guess: ${rulesBroken(error.details)}`)
   return data
+}
+
+/**
+ * Each broken rule as "<field> must be <rule>", without the rejected value.
+ *
+ * arktype's own summary appends `(was …)`, and the value it quotes can be a key secret or a
+ * challenge hash: an error message reaches logs, so it names the field and the rule only, as
+ * `server/user-secrets.ts` does.
+ */
+function rulesBroken(errors: ArkErrors): string {
+  return errors.map((error) => `${error.propString || "value"} must be ${error.expected}`).join(
+    "; ",
+  )
 }
