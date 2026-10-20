@@ -51,11 +51,7 @@ export const denoFileSystem: FileSystemPort = {
   },
 
   writeText(path, content, options) {
-    return Deno.writeTextFile(
-      path,
-      content,
-      options?.mode === undefined ? {} : { mode: options.mode },
-    )
+    return Deno.writeTextFile(path, content, modeOption(options?.mode))
   },
 
   appendText(path, content) {
@@ -98,6 +94,48 @@ export const denoFileSystem: FileSystemPort = {
     )
   },
 
+  async readBytes(path) {
+    try {
+      return await Deno.readFile(path)
+    } catch (error) {
+      if (isNotFound(error)) return null
+      throw error
+    }
+  },
+
+  writeBytes(path, data, options) {
+    return Deno.writeFile(path, data, modeOption(options?.mode))
+  },
+
+  async readStream(path) {
+    try {
+      // The stream closes the file when it is read to the end or cancelled.
+      return (await Deno.open(path, { read: true })).readable
+    } catch (error) {
+      if (isNotFound(error)) return null
+      throw error
+    }
+  },
+
+  async writeStream(path, source, options) {
+    const file = await Deno.open(path, {
+      write: true,
+      create: true,
+      truncate: true,
+      ...modeOption(options?.mode),
+    })
+    let written = 0
+    const counter = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        written += chunk.byteLength
+        controller.enqueue(chunk)
+      },
+    })
+    // `pipeTo` closes the file on success and aborts it, which also closes it, on an error.
+    await source.pipeThrough(counter).pipeTo(file.writable)
+    return written
+  },
+
   async lock(path): Promise<LockHandle | null> {
     const file = await Deno.open(path, { create: true, write: true, read: false })
     if (!file.tryLockSync(true)) {
@@ -119,6 +157,11 @@ export const denoFileSystem: FileSystemPort = {
       },
     }
   },
+}
+
+/** `{ mode }` when a mode was asked for, otherwise no options. */
+function modeOption(mode: number | undefined): { mode?: number } {
+  return mode === undefined ? {} : { mode }
 }
 
 /** Stat a file entry for its byte size; an entry that vanished mid-listing keeps no size. */

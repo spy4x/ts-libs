@@ -55,6 +55,25 @@ describe("denoFileSystem.readText", () => {
   })
 })
 
+describe("denoFileSystem.readBytes and readStream", () => {
+  it("return the whole file, the same bytes as Deno.readFile", async () => {
+    const expected = await Deno.readFile(THIS_FILE)
+    expect(await denoFileSystem.readBytes!(THIS_FILE)).toEqual(expected)
+    const stream = await denoFileSystem.readStream!(THIS_FILE)
+    expect(new Uint8Array(await new Response(stream).arrayBuffer())).toEqual(expected)
+  })
+
+  it("return null for an absent path rather than throwing", async () => {
+    expect(await denoFileSystem.readBytes!(ABSENT)).toBeNull()
+    expect(await denoFileSystem.readStream!(ABSENT)).toBeNull()
+  })
+
+  it("rethrow a non-NotFound error rather than reporting the path as absent", async () => {
+    await expect(denoFileSystem.readBytes!(`${THIS_FILE}/nested`)).rejects.toThrow()
+    await expect(denoFileSystem.readStream!(`${THIS_FILE}/nested`)).rejects.toThrow()
+  })
+})
+
 describe("denoFileSystem.readDir", () => {
   it("lists the entries of a directory", async () => {
     const entries = await denoFileSystem.readDir(SERVER_DIR_PATH)
