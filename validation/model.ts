@@ -128,7 +128,8 @@ export function schemaIssues<S extends Type>(
  *
  * Only {@link ValidationType.SCHEMA} is written: a field that now passes has that entry cleared,
  * and an application's own issue types survive untouched, so a domain check does not have to be
- * re-run to avoid being erased by the next keystroke.
+ * re-run to avoid being erased by the next keystroke. A field left with no issue at all is dropped,
+ * as {@link setFieldIssue} drops it, so `vl.name` reads `undefined` rather than `{}`.
  */
 export function validateSchema<S extends Type, M extends object>(
   schema: S,
@@ -144,7 +145,8 @@ export function validateSchema<S extends Type, M extends object>(
       ...next[field],
       [ValidationType.SCHEMA]: message === undefined ? undefined : { message },
     })
-    next = { ...next, [field]: current }
+    if (Object.keys(current).length === 0) delete next[field]
+    else next = { ...next, [field]: current }
   }
   return next
 }

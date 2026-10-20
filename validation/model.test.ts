@@ -201,7 +201,7 @@ describe("validateSchema", () => {
     expect(validated.name?.[ValidationType.SCHEMA]).toBeUndefined()
   })
 
-  it("clears only the field that now passes", () => {
+  it("drops a field that is left with no issue, rather than leaving an empty record", () => {
     const invalid = validateSchema(
       personSchema,
       wrong({ name: "", age: "old", address: { city: "L" } }),
@@ -216,10 +216,9 @@ describe("validateSchema", () => {
       invalid,
     )
 
-    // Unlike `setFieldIssue`, `validateSchema` keeps the field as an empty record rather than
-    // deleting it — ported as-is, and both reads (`isValid`, `sameValidation`) treat it as clean.
-    expect(partial.name).toEqual({})
-    expect(partial.name?.[ValidationType.SCHEMA]).toBeUndefined()
+    // Like `setFieldIssue`, a field whose only issue was cleared is gone, not `{}`.
+    expect(partial.name).toBeUndefined()
+    expect("name" in partial).toBe(false)
     expect(partial.age?.[ValidationType.SCHEMA]?.message).toContain("age must be a number")
     expect(isValid(partial)).toBe(false)
   })
