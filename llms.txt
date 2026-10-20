@@ -930,6 +930,7 @@ LockHandle	interface	@spy4x/platform/server	A held file lock.
 LockState	enum	@spy4x/platform/server	Lock state, so a check can distinguish "held" from "held by me".
 LockUnavailableError	class	@spy4x/platform/server	Raised when another holder owns the lock.
 LogRecord	type	@spy4x/platform/server	One log record: the caller's event plus a timestamp.
+ReadJsonOptions	interface	@spy4x/platform/server	Options of readJsonFile.
 ReadJsonResult	type	@spy4x/platform/server	Result of reading a JSON document.
 ReminderNotifyResult	type	@spy4x/platform/server	What `notify` says about one reminder:
 ReminderRunner	interface	@spy4x/platform/server	A runner built by createReminderRunner.
@@ -959,6 +960,7 @@ startIntervalRunner	function	@spy4x/platform/server	Runs `task` every `intervalM
 systemClockPort	constant	@spy4x/platform/server	Deprecated: Use `systemClock` from `@spy4x/platform/universal/time`. The host clock.
 systemTimerPort	constant	@spy4x/platform/server	Real timers.
 tempPathFor	function	@spy4x/platform/server	Build the temp path for an atomic write: `<path>.<pid>.<sequence>.tmp`.
+ReadJsonOptions	interface	@spy4x/platform/server/atomic-json	Options of readJsonFile.
 ReadJsonResult	type	@spy4x/platform/server/atomic-json	Result of reading a JSON document.
 TempPathOptions	interface	@spy4x/platform/server/atomic-json	Where a temporary file should live, given the document it will replace.
 atomicWriteJson	function	@spy4x/platform/server/atomic-json	Serialise `value` and replace `path` with it atomically.
@@ -1019,7 +1021,7 @@ ULID_LENGTH	constant	@spy4x/platform/tokens	Length of a ULID string: 26 Crockfor
 constantTimeEquals	function	@spy4x/platform/tokens	Compares two hex digests in constant time.
 constantTimeEqualsText	function	@spy4x/platform/tokens	Compares two arbitrary strings in constant time.
 deriveSecret	function	@spy4x/platform/tokens	A subordinate secret derived from a master secret: HKDF-SHA-256 (RFC 5869) with `secret` as the input key material, the fixed salt `spy4x.derive-secret.v1` and `label` as `info`, 32 bytes as lower-case hex, 64 characters.
-monotonicUlid	function	@spy4x/platform/tokens	Generate a ULID that monotonically increases even for the same millisecond, optionally passing the current time.
+monotonicUlid	function	@spy4x/platform/tokens	Deprecated: Every new id is a version 7 UUID: use `uuidV7` from `@spy4x/platform/universal/uuid`. Monotonic ULID generator, the one from `@std/ulid`.
 newOpaqueToken	function	@spy4x/platform/tokens	Mints an opaque token: `raw` goes to the caller, `hash` is what the server stores.
 randomBase64Url	function	@spy4x/platform/tokens	Cryptographically random bytes, base64url, unpadded.
 sha256Hex	function	@spy4x/platform/tokens	SHA-256 digest of one UTF-8 string, as lower-case hex, 64 characters.
@@ -1229,7 +1231,7 @@ hasHeaderControlCharacters	function	@spy4x/platform/validation/predicates	True w
 hasTextControlCharacters	function	@spy4x/platform/validation/predicates	True when `value` contains a code point ≤ 31 other than TAB/LF/CR, or 127 — unsafe in stored free text.
 headerSafeString	constant	@spy4x/platform/validation/predicates	`string` that is safe to place in a header value (no control characters at all).
 honeypotField	constant	@spy4x/platform/validation/predicates	The honeypot field: present and an empty string.
-isEmailAddress	function	@spy4x/platform/validation/predicates	True when `value` is a bare email address (`jane@example.com`, no display name) that `@spy4x/email` would send to: a dot-atom local part and a dotted domain of at least two labels (`user@localhost` is refused), at most `MAX_ADDR_SPEC_LENGTH` (254) characters, the limit `@spy4x/email/address` exports.
+isEmailAddress	function	@spy4x/platform/validation/predicates	True when `value` is a bare email address (`jane@example.com`, no display name) that `@spy4x/email` would send to: a dot-atom local part and a dotted domain of at least two labels (`user@localhost` is refused), a local part of at most 64 characters, and at most `MAX_ADDR_SPEC_LENGTH` (254) characters in all, the limit `@spy4x/email/address` exports.
 isHoneypotFilled	function	@spy4x/platform/validation/predicates	True when a honeypot field was filled in, i.e. the submission is very likely automated.
 isValidTimeZoneName	function	@spy4x/platform/validation/predicates	Deprecated: Use `isValidTimeZone` from `@spy4x/time/tz`. True when `Intl.DateTimeFormat` accepts `value` as a time zone.
 textSafeString	constant	@spy4x/platform/validation/predicates	`string` that is safe as free text: TAB, LF and CR are allowed.
@@ -2448,4 +2450,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 5af9464d523180b1a464d8327f6d64cc38fa83023509aee7e5c9e57aa37219e4
+# export surface: sha256 47b54ef299857d5441f8c11f1bd7a70f840246056f1d1391829239adb9e9bd6e
