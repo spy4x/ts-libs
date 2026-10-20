@@ -55,8 +55,9 @@ Deno.test("export: collections are attached under their own names", async () => 
 })
 
 Deno.test("export: a collection named __proto__ is kept as its own property", async () => {
-  // Deno leaves out the `Object.prototype.__proto__` accessor that Node and Bun have, so the test
-  // puts it back for its own duration: with it, assigning to `__proto__` replaces the prototype.
+  // Deno's `Object.prototype.__proto__` setter does not change the prototype; Node's and Bun's
+  // does. The test swaps in that behaviour for its own duration, then restores Deno's accessor.
+  const own = Object.getOwnPropertyDescriptor(Object.prototype, "__proto__")
   Object.defineProperty(Object.prototype, "__proto__", {
     get(this: object) {
       return Object.getPrototypeOf(this)
@@ -77,7 +78,8 @@ Deno.test("export: a collection named __proto__ is kept as its own property", as
     assertEquals(Object.getOwnPropertyDescriptor(envelope, "__proto__")?.value, { id: "row-1" })
     assertEquals(JSON.stringify(envelope).includes(`"__proto__":{"id":"row-1"}`), true)
   } finally {
-    delete (Object.prototype as { __proto__?: unknown }).__proto__
+    if (own) Object.defineProperty(Object.prototype, "__proto__", own)
+    else delete (Object.prototype as { __proto__?: unknown }).__proto__
   }
 })
 
