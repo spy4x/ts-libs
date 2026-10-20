@@ -161,11 +161,11 @@ export function toValidationError(issues: ArkErrors): ValidationError {
  *
  * Useful when a whole batch is rejected and only one line of copy is available. The message is
  * path-prefixed (`"address.city must be a string"`), so a nested failure names its own field.
- * Returns `null` when the error carries no issues. Only `details` is read, so an error built by hand
- * with just `description` and `details` is accepted too.
+ * Returns `null` when the error carries no issues. Only `details` is read, so `description` is
+ * optional and an error built by hand with just `details` is accepted too.
  */
 export function firstIssueMessage(
-  error: Pick<ValidationError, "description" | "details">,
+  error: Pick<ValidationError, "details"> & Partial<Pick<ValidationError, "description">>,
 ): string | null {
   for (const issue of error.details) {
     if (issue.message) return issue.message
