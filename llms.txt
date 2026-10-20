@@ -497,6 +497,9 @@ HONEYPOT_FIELD_NAME	constant	@spy4x/platform	Default `name` of the honeypot fiel
 HOURS_IN_DAY	constant	@spy4x/platform	Hours in one day.
 InferSchema	type	@spy4x/platform	Value a schema accepts and produces.
 KeyValueStore	interface	@spy4x/platform	Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias (#71).
+LlmsTxtDocument	interface	@spy4x/platform	What an `llms.txt` says: the site's name, a one-paragraph summary and its sections.
+LlmsTxtLink	interface	@spy4x/platform	One link in an `llms.txt` section.
+LlmsTxtSection	interface	@spy4x/platform	One `## Section` of an `llms.txt` and its links.
 MAX_MASKED_EMAIL_LENGTH	constant	@spy4x/platform	Longest text maskEmail returns, in UTF-16 code units: one code point (at most two units), the three stars, `@`, and a domain of at most 253.
 MAX_TICKS	constant	@spy4x/platform	Hard ceiling on generated ticks, and on the iterations the tick loop may spend producing them — see the doc of `ticksForStep` (the private loop behind ticks and stepAxis) for why the loop needs its own bound, not just the output's.
 MILLISECONDS_IN_SECOND	constant	@spy4x/platform	Milliseconds in one second.
@@ -533,6 +536,7 @@ ResponseError	type	@spy4x/platform	Errors from a response that never reached a u
 Result	type	@spy4x/platform	A value or an error, as a discriminated union on `ok`.
 SECONDS_IN_MINUTE	constant	@spy4x/platform	Seconds in one minute.
 ServerError	interface	@spy4x/platform	The server answered with a failure status.
+SitemapEntry	interface	@spy4x/platform	One page in a `sitemap.xml`.
 SortDirection	type	@spy4x/platform	Sort direction of one rule.
 SortRule	interface	@spy4x/platform	One column in the sort order.
 StepAxis	interface	@spy4x/platform	Bounds rounded outward to multiples of a step, and the ticks between them.
@@ -575,6 +579,7 @@ isUuid	function	@spy4x/platform	True for a lower-case UUID string.
 isValidDate	function	@spy4x/platform	Whether the input is a usable date: a `Date` or an ISO `YYYY-MM-DD`-prefixed string that `Date` can parse.
 jsonLdText	function	@spy4x/platform	Serialise JSON-LD for a `<script>` body.
 levenshtein	function	@spy4x/platform	Levenshtein edit distance between two strings, computed over code points.
+llmsTxt	function	@spy4x/platform	The text of an `/llms.txt` in the format llmstxt.org describes: `# Title`, a `> summary` line, then each section as a `## Section` heading followed by `- [Title](url): description` lines.
 maskEmail	function	@spy4x/platform	An email address with its local part hidden behind its first character, for showing a person which address they used without spelling it out: `jane.doe@example.com` gives `j***@example.com`.
 nextUtcHour	function	@spy4x/platform	The next time the clock reads `hour`:00 UTC after `now`: later today when that hour has not come yet, tomorrow when it is now or past.
 niceStep	function	@spy4x/platform	Round a span up to a sensible tick step at roughly `target` ticks.
@@ -595,6 +600,7 @@ search	function	@spy4x/platform	Whether one search word occurs in one value.
 searchWords	function	@spy4x/platform	Split a search box's value into words.
 serializeSort	function	@spy4x/platform	Write sort rules into a URL parameter.
 similarity	function	@spy4x/platform	Similarity of two strings in `[0, 1]`, derived from levenshtein.
+sitemapXml	function	@spy4x/platform	The text of a `sitemap.xml` that lists `entries` in the order given.
 sleep	function	@spy4x/platform	Wait `ms` milliseconds.
 sortRows	function	@spy4x/platform	Sort rows by every rule in order.
 stepAxis	function	@spy4x/platform	Round `[min, max]` outward to multiples of `step` and return the new bounds with the ticks between them.
@@ -1131,12 +1137,18 @@ Crumb	interface	@spy4x/platform/universal/seo	One entry in the breadcrumb trail 
 FaqItem	interface	@spy4x/platform/universal/seo	One question and its answer, as a page shows them.
 FaqPageJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `FAQPage` node.
 FaqQuestionJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `Question` inside an `FAQPage`.
+LlmsTxtDocument	interface	@spy4x/platform/universal/seo	What an `llms.txt` says: the site's name, a one-paragraph summary and its sections.
+LlmsTxtLink	interface	@spy4x/platform/universal/seo	One link in an `llms.txt` section.
+LlmsTxtSection	interface	@spy4x/platform/universal/seo	One `## Section` of an `llms.txt` and its links.
+SitemapEntry	interface	@spy4x/platform/universal/seo	One page in a `sitemap.xml`.
 breadcrumbItems	function	@spy4x/platform/universal/seo	`itemListElement` for a schema.org `BreadcrumbList`, built from the crumbs the caller stated.
 breadcrumbListJsonLd	function	@spy4x/platform/universal/seo	The complete `BreadcrumbList` node, `@id`-anchored to the page it describes.
 canonicalUrl	function	@spy4x/platform/universal/seo	Parse a canonical address into the normalised `URL` that will be published.
 faqPageJsonLd	function	@spy4x/platform/universal/seo	The `FAQPage` node for the questions a page shows, in the order it shows them.
 jsonLdText	function	@spy4x/platform/universal/seo	Serialise JSON-LD for a `<script>` body.
+llmsTxt	function	@spy4x/platform/universal/seo	The text of an `/llms.txt` in the format llmstxt.org describes: `# Title`, a `> summary` line, then each section as a `## Section` heading followed by `- [Title](url): description` lines.
 normalizeCanonical	function	@spy4x/platform/universal/seo	The canonical address as it should be published: one clean `http`/`https` address.
+sitemapXml	function	@spy4x/platform/universal/seo	The text of a `sitemap.xml` that lists `entries` in the order given.
 DEFAULT_SETTINGS_MAX_BYTES	constant	@spy4x/platform/universal/settings	The default cap on a saved value: 4 KiB of UTF-8 JSON, plenty for a handful of preferences.
 SettingsDefinition	interface	@spy4x/platform/universal/settings	One app's settings: its schema, defaults and cap, with the checks built on them.
 SettingsOptions	interface	@spy4x/platform/universal/settings	Options for defineSettings.
@@ -2448,4 +2460,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 8d6f3ae865d2d4a9cdf01071f5c3fcf824c1e74a8bf3b7a899f7a85133f16689
+# export surface: sha256 d48b1f4800f64f9e5513ca03991c0a32c07f228f55a8ab72f090fb5f95ef956c
