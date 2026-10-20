@@ -19,7 +19,8 @@
  * @module
  */
 
-import type { Sql, Transaction } from "../db/index.ts"
+import type { Sql } from "../db/index.ts"
+import { runIsolated } from "./run-isolated.ts"
 import {
   cleanSessionDevice,
   type NewSessionDevice,
@@ -614,28 +615,13 @@ export function createPostgresSessionStore(sql: Sql): Required<SessionStore<Auth
  */
 async function inTransaction<T>(sql: Sql, body: (tx: Sql) => Promise<T>): Promise<T> {
   try {
-    return await runIsolated(sql, body)
+    return await runIsolated(sql, body, "auth store")
   } catch (error) {
     if (isUniqueViolation(error, "auth_keys_method_subject_key")) {
       throw new AuthConflictError("key-exists")
     }
     throw error
   }
-}
-
-/** The transaction or savepoint half of {@link inTransaction}. */
-async function runIsolated<T>(sql: Sql, body: (tx: Sql) => Promise<T>): Promise<T> {
-  if (typeof (sql as { begin?: unknown }).begin === "function") {
-    return (await sql.begin((tx) => body(tx))) as T
-  }
-  const handle = sql as Partial<Transaction>
-  if (typeof handle.savepoint === "function") {
-    return (await handle.savepoint((tx) => body(tx))) as T
-  }
-  throw new TypeError(
-    "the Postgres auth store needs a pool or a transaction handle; this handle has neither " +
-      "`begin` nor `savepoint` (a `sql.reserve()` connection has neither)",
-  )
 }
 
 function isUniqueViolation(error: unknown, constraint: string): boolean {

@@ -48,6 +48,7 @@ import { type } from "arktype"
 import type { Sql } from "../db/index.ts"
 import { expectRowShape, identifierRewrittenBy } from "../db/postgres-migrate.ts"
 import type { LockoutState, LockoutStore } from "./mod.ts"
+import { runIsolated } from "../auth/run-isolated.ts"
 
 /** The column names the store reads and writes. */
 export interface LockoutColumns {
@@ -71,7 +72,11 @@ export const DEFAULT_LOCKOUT_COLUMNS: Readonly<LockoutColumns> = Object.freeze({
 
 /** Options for {@link createPostgresLockoutStore}. */
 export interface PostgresLockoutStoreOptions {
-  /** A pool client: each update runs in its own `sql.begin` transaction. */
+  /**
+   * A pool, or a transaction handle (the `tx` of the caller's `sql.begin`). On a pool each update
+   * runs in its own transaction; on a transaction handle it runs in a savepoint, and commits or
+   * rolls back with the caller's transaction. A `sql.reserve()` connection is refused.
+   */
   sql: Sql
   /** The table holding the counters. */
   table: string
@@ -140,7 +145,7 @@ export function createPostgresLockoutStore(options: PostgresLockoutStoreOptions)
 
   return {
     update: async (subject, change) => {
-      await sql.begin(async (tx) => {
+      await runIsolated(sql, async (tx) => {
         if (createMissing) {
           await tx`
             INSERT INTO ${target} (${subjectColumn}, ${failures}) VALUES (${subject}, 0)
@@ -169,7 +174,7 @@ export function createPostgresLockoutStore(options: PostgresLockoutStoreOptions)
               ${lastFailureAt} = ${toDate(next.lastFailureAt)}
           WHERE ${subjectColumn} = ${subject}
         `
-      })
+      }, "lockout store")
     },
   }
 }
