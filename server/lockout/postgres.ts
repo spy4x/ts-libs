@@ -73,9 +73,13 @@ export const DEFAULT_LOCKOUT_COLUMNS: Readonly<LockoutColumns> = Object.freeze({
 /** Options for {@link createPostgresLockoutStore}. */
 export interface PostgresLockoutStoreOptions {
   /**
-   * A pool, or a transaction handle (the `tx` of the caller's `sql.begin`). On a pool each update
-   * runs in its own transaction; on a transaction handle it runs in a savepoint, and commits or
-   * rolls back with the caller's transaction. A `sql.reserve()` connection is refused.
+   * Pass the pool. On a pool each update runs in its own transaction and is committed at once.
+   *
+   * A transaction handle (the `tx` of the caller's `sql.begin`) also works: each update then runs in
+   * a savepoint, and commits or rolls back with the caller's transaction. A rollback after a wrong
+   * guess erases that guess's count, so an app that refuses a wrong guess by throwing inside its
+   * transaction is never locked out. Pass a handle only when that transaction commits whatever the
+   * guess was. A `sql.reserve()` connection is refused.
    */
   sql: Sql
   /** The table holding the counters. */

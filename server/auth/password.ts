@@ -408,7 +408,6 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     return new Date(value)
   }
 
-  /** Hashes a new password, or refuses it as `invalid-password`. */
   /** Throws `invalid-password` unless `password` is a string of at least `minLength` characters. */
   function checkNewPassword(password: unknown): asserts password is string {
     if (typeof password !== "string" || [...password].length < minLength) {
@@ -416,6 +415,7 @@ export function createPasswordSignIn(options: PasswordSignInOptions): PasswordSi
     }
   }
 
+  /** Hashes a new password, or refuses it as `invalid-password`. */
   async function hashNewPassword(password: unknown): Promise<string> {
     checkNewPassword(password)
     try {
