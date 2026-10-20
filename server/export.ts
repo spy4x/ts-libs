@@ -94,7 +94,14 @@ export async function buildExportEnvelope<TUser>(
   }
 
   for (const collection of collections) {
-    envelope[collection.name] = await collection.load(userId)
+    // Defined, not assigned: assigning to `__proto__` would replace the envelope's prototype, and
+    // the collection would vanish from the JSON.
+    Object.defineProperty(envelope, collection.name, {
+      value: await collection.load(userId),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
   }
 
   return envelope

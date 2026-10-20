@@ -54,6 +54,17 @@ Deno.test("export: collections are attached under their own names", async () => 
   assertEquals(envelope.snapshots, [{ id: "snap-1" }])
 })
 
+Deno.test("export: a collection named __proto__ is kept as its own property", async () => {
+  const envelope = await buildExportEnvelope({
+    userId: "user-1",
+    user: { id: "user-1" },
+    collections: [{ name: "__proto__", load: () => ({ id: "row-1" }) }],
+    now: FIXED_NOW,
+  })
+  assertStrictEquals(Object.getPrototypeOf(envelope), Object.prototype)
+  assertEquals(JSON.parse(JSON.stringify(envelope))["__proto__"], { id: "row-1" })
+})
+
 Deno.test("export: each loader is scoped to the requesting user", async () => {
   const seen: string[] = []
   await buildExportEnvelope({
