@@ -27,6 +27,7 @@ import type { AttemptChallengeInput, AuthStore, IssueChallengeInput } from "./st
 import {
   checkAttemptChallenge,
   checkDate,
+  checkDeleteChallenges,
   checkIssueChallenge,
   checkNewKey,
   checkSecret,
@@ -168,6 +169,11 @@ export class MemoryAuthStore implements AuthStore {
   issueChallenge(input: IssueChallengeInput): Promise<void> {
     return settle(() => {
       const { purpose, subject, secretHash, expiresAt, now } = checkIssueChallenge(input)
+      // Every new challenge can add a row, so the rows expired by this call's `now` go here;
+      // otherwise one row per reset request would pile up for the life of the process.
+      for (const [id, row] of this.#challenges) {
+        if (row.expiresAt.getTime() <= now.getTime()) this.#challenges.delete(id)
+      }
       const id = challengeId(purpose, subject)
       const previous = this.#challenges.get(id)
       const live = previous !== undefined && previous.expiresAt.getTime() > now.getTime()
@@ -194,6 +200,16 @@ export class MemoryAuthStore implements AuthStore {
       }
       challenge.attempts += 1
       return ChallengeOutcome.WrongGuess
+    })
+  }
+
+  deleteChallenges(purpose: string, subjectPrefix: string): Promise<void> {
+    return settle(() => {
+      checkDeleteChallenges(purpose, subjectPrefix)
+      const prefix = challengeId(purpose, subjectPrefix)
+      for (const id of this.#challenges.keys()) {
+        if (id.startsWith(prefix)) this.#challenges.delete(id)
+      }
     })
   }
 

@@ -41,6 +41,7 @@ import type { AttemptChallengeInput, AuthStore, IssueChallengeInput } from "./st
 import {
   checkAttemptChallenge,
   checkDate,
+  checkDeleteChallenges,
   checkIssueChallenge,
   checkNewKey,
   checkSecret,
@@ -421,6 +422,14 @@ class PostgresAuthStore implements AuthStore {
     if (row.consumed) return ChallengeOutcome.Matched
     if (row.counted) return ChallengeOutcome.WrongGuess
     throw new Error("attemptChallenge: a live, open challenge was neither consumed nor counted")
+  }
+
+  async deleteChallenges(purpose: string, subjectPrefix: string): Promise<void> {
+    checkDeleteChallenges(purpose, subjectPrefix)
+    await this.#sql`
+      DELETE FROM auth_challenges
+      WHERE purpose = ${purpose} AND starts_with(subject, ${subjectPrefix})
+    `
   }
 }
 

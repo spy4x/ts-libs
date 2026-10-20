@@ -62,6 +62,8 @@ const issueChallengeInput = type({
   now: validDate,
 })
 
+const deleteChallengesInput = type({ purpose: method, subjectPrefix: subject })
+
 const attemptChallengeInput = type({
   purpose: method,
   subject,
@@ -122,6 +124,12 @@ export function checkIssueChallenge(value: IssueChallengeInput): IssueChallengeI
   const { error, data } = validate(issueChallengeInput, value)
   if (error) throw new TypeError(`invalid challenge: ${rulesBroken(error.details)}`)
   return data
+}
+
+/** @throws {TypeError} When `purpose` or `subjectPrefix` is not text either store can hold. */
+export function checkDeleteChallenges(purpose: string, subjectPrefix: string): void {
+  const { error } = validate(deleteChallengesInput, { purpose, subjectPrefix })
+  if (error) throw new TypeError(`invalid challenge deletion: ${rulesBroken(error.details)}`)
 }
 
 /** @throws {TypeError} When a field is missing or out of range. */
