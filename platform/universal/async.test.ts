@@ -42,13 +42,14 @@ describe("debounce", () => {
     expect(debounced.pending()).toBe(false)
   })
 
-  it("runs the queued invocation at once on flush, and not again when the timer would fire", async () => {
+  it("runs the queued invocation at once on flush, and not again on a second flush or when the timer would fire", async () => {
     const { debounced, calls } = recorder()
     debounced("first")
     debounced("last")
     debounced.flush()
     expect(calls).toEqual([["last"]])
     expect(debounced.pending()).toBe(false)
+    debounced.flush()
     await sleep(20)
     expect(calls).toEqual([["last"]])
   })
