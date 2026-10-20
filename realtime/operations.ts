@@ -461,9 +461,10 @@ export function createCallHandler<TActor>(
  * Checks a request payload with an arktype schema and returns the parsed value. A payload that
  * does not match throws `RealtimeRequestError("bad_request", …)` with arktype's summary, which a
  * client may show, and `details` of `{ errors }`: the issues keyed by field path, the shape
- * `toValidationError` from `@spy4x/validation` gives, so a form can mark each field. Use the same schema as the REST route that checks the same body, so the two
- * ways in cannot drift. A rejection is recognised by its shape (`isArkErrors`), so a schema built by
- * another loaded copy of arktype is still refused.
+ * `toValidationError` from `@spy4x/validation` gives, so a form can mark each field. Use the same
+ * schema as the REST route that checks the same body, so the two ways in cannot drift. A rejection
+ * is recognised by its shape (`isArkErrors`), so a schema built by another loaded copy of arktype
+ * is still refused.
  */
 export function parsePayload<T extends Type>(schema: T, payload: unknown): T["infer"] {
   const result = schema(payload)
