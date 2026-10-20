@@ -7,7 +7,9 @@ import {
   canonicalUrl,
   faqPageJsonLd,
   jsonLdText,
+  llmsTxt,
   normalizeCanonical,
+  sitemapXml,
 } from "./seo.ts"
 
 /** The trail a route states for `/products/widgets`, root first, current page last. */
@@ -269,5 +271,135 @@ describe("jsonLdText", () => {
     const value = { name: "</script>", nested: { list: [1, "<b>&amp;\u2028\u2029"] } }
 
     expect(JSON.parse(jsonLdText(value))).toEqual(value)
+  })
+})
+
+describe("sitemapXml", () => {
+  it("lists every page with its loc and, when given, its lastmod", () => {
+    const xml = sitemapXml([
+      { url: "https://acme.example/", lastmod: new Date("2026-10-21T08:30:00Z") },
+      { url: "https://acme.example/pricing" },
+    ])
+
+    expect(xml).toBe(
+      `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://acme.example/</loc>
+    <lastmod>2026-10-21T08:30:00.000Z</lastmod>
+  </url>
+  <url>
+    <loc>https://acme.example/pricing</loc>
+  </url>
+</urlset>
+`,
+    )
+  })
+
+  it("escapes & and ' in an address so the XML stays well-formed", () => {
+    const xml = sitemapXml([{ url: "https://acme.example/it's?x=1&y=2" }])
+
+    expect(xml).toContain("<loc>https://acme.example/it&apos;s?x=1&amp;y=2</loc>")
+  })
+
+  it("normalises an address the way a canonical one is", () => {
+    const xml = sitemapXml([{ url: "https://user:pw@ACME.Example:443/a#frag" }])
+
+    expect(xml).toContain("<loc>https://acme.example/a</loc>")
+  })
+
+  it("refuses a relative address", () => {
+    expect(() => sitemapXml([{ url: "/pricing" }])).toThrow("sitemap url must be an absolute URL")
+  })
+
+  it("refuses an invalid lastmod", () => {
+    expect(() => sitemapXml([{ url: "https://acme.example/", lastmod: new Date("soon") }]))
+      .toThrow("sitemap lastmod must be a valid date")
+  })
+
+  it("writes an empty urlset for no pages", () => {
+    expect(sitemapXml([])).toContain(
+      `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n</urlset>\n`,
+    )
+  })
+})
+
+describe("llmsTxt", () => {
+  it("writes the title, the summary and each section with its links", () => {
+    const text = llmsTxt({
+      title: "Acme",
+      summary: "Widgets for teams.",
+      sections: [
+        {
+          title: "Docs",
+          links: [
+            {
+              title: "Pricing",
+              url: "https://acme.example/pricing",
+              description: "Plans and prices",
+            },
+            { title: "Features", url: "https://acme.example/features" },
+          ],
+        },
+        { title: "Optional", links: [{ title: "Blog", url: "https://acme.example/blog" }] },
+      ],
+    })
+
+    expect(text).toBe(
+      `# Acme
+
+> Widgets for teams.
+
+## Docs
+- [Pricing](https://acme.example/pricing): Plans and prices
+- [Features](https://acme.example/features)
+
+## Optional
+- [Blog](https://acme.example/blog)
+`,
+    )
+  })
+
+  it("turns a line break inside a value into a space, so it cannot start a heading", () => {
+    const text = llmsTxt({
+      title: "Acme\n# Evil",
+      summary: "Line one\r\n\n## Line two",
+      sections: [{
+        title: "Docs",
+        links: [{
+          title: "A",
+          url: "https://acme.example/a",
+          description: "x\n- [B](https://b.example)",
+        }],
+      }],
+    })
+
+    expect(text).toContain("# Acme # Evil\n")
+    expect(text).toContain("> Line one ## Line two\n")
+    expect(text).toContain("- [A](https://acme.example/a): x - [B](https://b.example)\n")
+    expect(text.split("\n").filter((line) => line.startsWith("#"))).toHaveLength(2)
+  })
+
+  it("escapes brackets in a link text and parentheses in an address, so the link stays whole", () => {
+    const text = llmsTxt({
+      title: "Acme",
+      summary: "S",
+      sections: [{
+        title: "Docs",
+        links: [{ title: "a] [b\\", url: "https://acme.example/wiki/Foo_(bar)" }],
+      }],
+    })
+
+    expect(text).toContain("- [a\\] \\[b\\\\](https://acme.example/wiki/Foo_%28bar%29)\n")
+  })
+
+  it("refuses a relative address", () => {
+    expect(() =>
+      llmsTxt({
+        title: "Acme",
+        summary: "S",
+        sections: [{ title: "Docs", links: [{ title: "A", url: "/a" }] }],
+      })
+    ).toThrow("llms.txt url must be an absolute URL")
   })
 })
