@@ -22,6 +22,7 @@ import {
 import {
   type AlarmTrigger,
   AlarmTriggerKind,
+  findMaster,
   readTodo,
   RepeatFrom,
   type Todo,
@@ -170,11 +171,9 @@ function toTask(todo: Todo, uid: string, source: TaskSource, root: IcalComponent
   return task
 }
 
-/** The `DTSTAMP` of the task's VTODO, which `readTodo` does not return. */
+/** The `DTSTAMP` of the task's master VTODO, which `readTodo` does not return. */
 function stampOf(root: IcalComponent): TaskDate | undefined {
-  const todo = root.name.toUpperCase() === `VTODO`
-    ? root
-    : root.components.find((component) => component.name.toUpperCase() === `VTODO`)
+  const todo = findMaster(root, `VTODO`)
   const stamp = todo && getProperty(todo, `DTSTAMP`)
   return stamp ? readDate(stamp) : undefined
 }

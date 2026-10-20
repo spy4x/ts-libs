@@ -219,6 +219,32 @@ Deno.test("a task with no CREATED is created at its DTSTAMP", () => {
   })
 })
 
+Deno.test("a task with no CREATED is created at its master's DTSTAMP, not an override's", () => {
+  const stamped = fixtureTask([
+    `BEGIN:VCALENDAR`,
+    `VERSION:2.0`,
+    `BEGIN:VTODO`,
+    `DTSTAMP:20261005T080000Z`,
+    `UID:100200420`,
+    `RECURRENCE-ID:20261005T080000Z`,
+    `SUMMARY:Override`,
+    `END:VTODO`,
+    `BEGIN:VTODO`,
+    `DTSTAMP:20261001T080000Z`,
+    `UID:100200420`,
+    `SUMMARY:Master`,
+    `RRULE:FREQ=DAILY`,
+    `END:VTODO`,
+    `END:VCALENDAR`,
+  ].join(`\r\n`))
+  expect(stamped.title).toBe(`Master`)
+  expect(stamped.created).toEqual({
+    kind: IcalDateKind.Utc,
+    date: `2026-10-01`,
+    time: `08:00:00`,
+  })
+})
+
 Deno.test("a date and a floating time stay on the day they are written, even on a day the zone skipped", () => {
   // Samoa went from 2011-12-29 straight to 2011-12-31, so no instant on the 30th exists there.
   const skipped = `Pacific/Apia`
