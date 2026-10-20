@@ -4,12 +4,12 @@
 // whether the message's DKIM-Signature verifies against that key. It fetches
 // nothing on its own unless a caller injects a DNS TXT resolver.
 //
-// Zero external imports on purpose — Web Crypto (`crypto.subtle`) and
-// platform primitives (`atob`/`btoa`, `TextEncoder`, `Deno.resolveDns`) only.
-// Anything this file "needs" from `@std/*` is a smell, not a dependency to
-// add. The one import below, of `./dkim-body-hash.ts`, is a sibling module of
-// this same package rather than a dependency — see that file's module note.
+// Web Crypto (`crypto.subtle`), platform primitives (`TextEncoder`,
+// `Deno.resolveDns`) and `@std/encoding` for base64 only (#674). The import of
+// `./dkim-body-hash.ts` is a sibling module of this same package rather than a
+// dependency — see that file's module note.
 
+import { decodeBase64, decodeBase64Url, encodeBase64 } from "@std/encoding"
 import { type BodyHashCache, createBodyHashCache } from "./dkim-body-hash.ts"
 
 /** Which canonicalization RFC 6376 §3.4 applies to a header or a body. */
@@ -779,16 +779,11 @@ async function defaultResolveTxt(name: string): Promise<string[][]> {
 function base64Decode(input: string): Uint8Array {
   // Strip WSP: a folded b=/bh= and a TXT record split across quoted strings
   // both leave whitespace inside the base64.
-  const cleaned = input.replace(/\s+/g, "")
-  let binary: string
   try {
-    binary = atob(cleaned)
+    return decodeBase64(input.replace(/\s+/g, ""))
   } catch {
     throw new DkimParseError("value is not valid base64")
   }
-  const out = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i)
-  return out
 }
 
 /**
@@ -1499,13 +1494,7 @@ function selectSignedHeaders(
 export async function sha256Base64(input: string | Uint8Array): Promise<string> {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input
   const digest = await crypto.subtle.digest("SHA-256", asBytes(bytes))
-  return base64Encode(new Uint8Array(digest))
-}
-
-function base64Encode(bytes: Uint8Array): string {
-  let bin = ""
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
-  return btoa(bin)
+  return encodeBase64(digest)
 }
 
 /**
@@ -2095,8 +2084,11 @@ function bitLength(bytes: Uint8Array): number {
 
 /** Decode base64url, which is what JWK uses: `-_` for `+/`, and no padding. */
 function base64UrlDecode(value: string): Uint8Array {
-  const standard = value.replaceAll("-", "+").replaceAll("_", "/")
-  return base64Decode(standard + "=".repeat((4 - (standard.length % 4)) % 4))
+  try {
+    return decodeBase64Url(value)
+  } catch {
+    throw new DkimParseError("value is not valid base64url")
+  }
 }
 
 /**

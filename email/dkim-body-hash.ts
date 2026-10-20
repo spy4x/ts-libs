@@ -12,13 +12,13 @@
  * so the canonicalisation pass and the digest each run at most once per
  * distinct combination the message actually asks for.
  *
- * Split out of `dkim-verify.ts` — which documents "zero imports" for
+ * Split out of `dkim-verify.ts` — which keeps its imports few for
  * itself — so this caching seam has a name a test can import directly
  * without widening the package's public surface: this file is not listed in
  * `email/deno.json`'s `exports` map, and `mod.ts` does not re-export it, so
  * nothing outside `email/` can reach it. `dkim-verify.ts` imports it as an
  * ordinary sibling module of the same package, not an external dependency —
- * the "zero imports" rule that file states for itself is about that, not
+ * the import rule that file states for itself is about that, not
  * about splitting one package across two files.
  */
 
