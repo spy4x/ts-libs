@@ -17,6 +17,7 @@
 //    once the stdlib package is pinned.
 
 import { encodeBase64Url } from "@std/encoding/base64url"
+import { encodeHex } from "@std/encoding/hex"
 import { timingSafeEqual } from "@std/crypto/timing-safe-equal"
 import { assertUsableSecret } from "./token-secret.ts"
 
@@ -166,10 +167,7 @@ export async function constantTimeEqualsText(a: string, b: string): Promise<bool
  * mismatch — normalise at the storage boundary, not here.
  */
 export async function sha256Hex(input: string): Promise<string> {
-  const digest = await sha256Bytes(new TextEncoder().encode(input))
-  let hex = ""
-  for (const byte of digest) hex += byte.toString(16).padStart(2, "0")
-  return hex
+  return encodeHex(await sha256Bytes(new TextEncoder().encode(input)))
 }
 
 /** The HKDF salt {@link deriveSecret} uses. Fixed, so a secret and a label always give one key. */
@@ -212,9 +210,7 @@ export async function deriveSecret(secret: string, label: string): Promise<strin
     key,
     256,
   )
-  let hex = ""
-  for (const byte of new Uint8Array(bits)) hex += byte.toString(16).padStart(2, "0")
-  return hex
+  return encodeHex(new Uint8Array(bits))
 }
 
 /**
