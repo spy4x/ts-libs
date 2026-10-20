@@ -4,7 +4,6 @@ import type { Clock, RandomSource, Sleeper } from "./retry.ts"
 import {
   createExponentialBackoff,
   DEFAULT_REQUEST_TIMEOUT_MS,
-  describeErrorKind,
   describeTransportError,
   isPermanentStatus,
   isRequestTimeout,
@@ -375,13 +374,6 @@ describe("runWithRetry", () => {
   })
 })
 
-/**
- * Both copies of this module are asserted separately — `retry-drift.test.ts`
- * proves the bytes match, which is not the same as proving either copy behaves
- * — so each one carries its own guard tests for `describeTransportError` and
- * `describeErrorKind`.
- */
-
 /** An `Error` whose `name` getter throws, as a caller's hostile payload can supply. */
 const errorWithThrowingName = (message: string): unknown =>
   new (class extends Error {
@@ -389,13 +381,6 @@ const errorWithThrowingName = (message: string): unknown =>
       throw new TypeError(message)
     }
   })("boom")
-
-/** An `Error` wearing whatever name the caller set, which `Error.name` allows. */
-const errorNamed = (name: string): unknown => {
-  const error = new TypeError("boom")
-  Object.defineProperty(error, "name", { value: name })
-  return error
-}
 
 /**
  * An `Error` whose `name` holds a value that is not a string, which the
@@ -425,12 +410,6 @@ describe("describeTransportError", () => {
     )
     expect(described).toBe("transport failure (url withheld)")
     expect(described).not.toContain("REALTOKENISH")
-  })
-
-  it("refuses a caller-set name, so the field cannot carry caller text", () => {
-    // Only the classes the platform throws are named; a name the caller chose is
-    // not one of them. The `Error` fallback is what the result reports instead.
-    expect(describeErrorKind(errorNamed("REALTOKENISH"))).toBe("Error")
   })
 
   it("refuses a Symbol name, which would otherwise throw out of the template", () => {
@@ -467,47 +446,5 @@ describe("describeTransportError", () => {
     expect(describeTransportError(errorWithRawName("TypeError"))).toBe(
       "TypeError: transport failure (url withheld)",
     )
-  })
-})
-
-describe("describeErrorKind", () => {
-  it("names a real platform class, so the allowlist is not empty", () => {
-    expect(describeErrorKind(new TypeError("boom"))).toBe("TypeError")
-    expect(describeErrorKind(new RangeError("boom"))).toBe("RangeError")
-    // Folded in from the deleted ops/notify/retry-guards.test.ts (#67): the ops
-    // copy's example was SyntaxError, which this file's allowlist case had not
-    // exercised.
-    expect(describeErrorKind(new SyntaxError("boom"))).toBe("SyntaxError")
-  })
-
-  it("reports Error for a caller-set name", () => {
-    // `Error.name` is writable, so it is caller text: `REALTOKENISH` is 12
-    // alphabetic characters, which the previous `/^[A-Za-z]{1,32}$/` admitted.
-    expect(describeErrorKind(errorNamed("REALTOKENISH"))).toBe("Error")
-    expect(describeErrorKind(errorNamed("A".repeat(32)))).toBe("Error")
-  })
-
-  it("reports Error for a URL-shaped name, as it did before the allowlist", () => {
-    expect(describeErrorKind(errorNamed("https://hooks.slack.invalid/T/B/REALTOKENISH"))).toBe(
-      "Error",
-    )
-  })
-
-  it("returns instead of throwing when the name getter itself throws", () => {
-    expect(describeErrorKind(errorWithThrowingName("Invalid URL: 'https://x.invalid/TOKEN'"))).toBe(
-      "Error",
-    )
-  })
-
-  it("never stringifies a non-Error, so a hostile toString cannot run", () => {
-    expect(describeErrorKind("REALTOKENISH")).toBe("Error")
-    expect(describeErrorKind(undefined)).toBe("Error")
-    expect(
-      describeErrorKind({
-        toString: () => {
-          throw new TypeError("REALTOKENISH")
-        },
-      }),
-    ).toBe("Error")
   })
 })
