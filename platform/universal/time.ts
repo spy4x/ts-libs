@@ -6,6 +6,8 @@
  * arguments, and the two date-formatting entry points take an explicit IANA time zone.
  */
 
+import { parseIsoDate } from "@spy4x/time/date"
+
 /**
  * Weekday names indexed Monday-first, matching {@link getDaysOfWeek}'s bitmask order.
  *
@@ -75,24 +77,21 @@ export function nextUtcHour(now: Date, hour: number): Date {
  * Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
  *
  * Leap years are resolved properly (`2000-02-29` and `2024-02-29` pass; `1900-02-29` and
- * `2023-02-29` do not), which `Date` parsing would silently roll over into March.
+ * `2023-02-29` do not), which `Date` parsing would silently roll over into March. The calendar
+ * check is `parseIsoDate` from `@spy4x/time/date`; year `0000` is refused besides.
  *
  * @returns the normalised date, or `null` when the input is not a real calendar date.
  */
 export function normalizeCalendarDate(value: string): string | null {
   const match = CALENDAR_DATE.exec(value.trim())
-  if (!match) return null
-
-  const year = Number(match[1])
-  const month = Number(match[2])
-  const day = Number(match[3])
-  if (year < 1 || month < 1 || month > 12 || day < 1) return null
-
-  const isLeap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
-  const daysInMonth = [31, isLeap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-  if (day > daysInMonth[month - 1]) return null
-
-  return `${match[1]}-${match[2]}-${match[3]}`
+  if (!match || match[1] === "0000") return null
+  const date = `${match[1]}-${match[2]}-${match[3]}`
+  try {
+    parseIsoDate(date)
+  } catch {
+    return null
+  }
+  return date
 }
 
 /** Options for {@link formatTime}. */
