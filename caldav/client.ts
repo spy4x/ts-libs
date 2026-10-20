@@ -447,7 +447,8 @@ function beforeDeadline<T>(call: Call, work: Promise<T>): Promise<T> {
 
 /** Send one request, following same-origin redirects by hand, and read the body bounded. */
 async function send(settings: Settings, call: Call, exchange: Exchange): Promise<Reply> {
-  const { server, maxBytes, timeoutMs, maxRedirects } = settings
+  // Called without a receiver: the browser's own `fetch` throws "Illegal invocation" otherwise.
+  const { server, maxBytes, timeoutMs, maxRedirects, fetch: doFetch } = settings
   let { method, url, body } = exchange
   for (let hop = 0;; hop++) {
     if (!isSameOrigin(url, server)) {
@@ -466,7 +467,7 @@ async function send(settings: Settings, call: Call, exchange: Exchange): Promise
     try {
       response = await beforeDeadline(
         call,
-        settings.fetch(url.href, {
+        doFetch(url.href, {
           method,
           headers,
           body,
