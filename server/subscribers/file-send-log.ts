@@ -1,13 +1,15 @@
 import { atomicWriteJson, readJsonFile } from "@spy4x/platform/server/atomic-json"
 import { denoFileSystem } from "@spy4x/platform/server/deno-fs"
 import { FileLock } from "@spy4x/platform/server/file-lock"
+import { processId } from "@spy4x/platform/server/process"
 import type { FileSystemPort } from "@spy4x/platform/server/ports"
 import type { SendLog, SendLogEntry } from "./send-log.ts"
 
 /** Options for {@link createFileSendLog}. */
 export interface FileSendLogOptions {
   /** The JSON file, such as `data/newsletter-log.json`. Its folder is created on the first write.
-   * The send lock is the file `<path>.lock` beside it. */
+   * The send lock is the file `<path>.lock` beside it, and recipients recorded since the last
+   * rewrite are appended to `<path>.journal`. */
   path: string
   /** Defaults to the real disk; a test passes a fake. */
   fs?: FileSystemPort
@@ -23,6 +25,12 @@ interface StoredEntry {
   sent?: number
   failed?: number
   completedAt?: string
+}
+
+/** One line of `<path>.journal`: a recipient recorded since the file was last written. */
+interface JournalLine {
+  slug: string
+  mark: string
 }
 
 function fromStored(row: StoredEntry): SendLogEntry {
@@ -42,19 +50,26 @@ function fromStored(row: StoredEntry): SendLogEntry {
  *
  * - The send lock is an exclusive lock on `<path>.lock`, held by the OS, so a crashed run frees it.
  *   It covers the whole file, so only one issue sends at a time.
- * - Each change reads the file, edits it and writes it back through a temp file and a rename, so a
- *   crash or a full disk never leaves a torn log. Changes made by one log object queue behind each
- *   other. Take {@link SendLog.lock} before sending: two processes that change the file without it
- *   can lose a recipient.
+ * - `start` and `finish` read the file, edit it and write it back through a temp file and a rename,
+ *   so a crash or a full disk never leaves a torn log. `record` appends one line to
+ *   `<path>.journal` instead of rewriting the file, so a send to n people costs n small appends,
+ *   not n rewrites of a file that grows with every one. Every read folds the journal in, and the
+ *   next rewrite stores it in the file and removes it. A crash can tear only the journal's last
+ *   line, which is ignored: at most the mail in flight is sent again.
+ * - Changes made by one log object queue behind each other. Take {@link SendLog.lock} before
+ *   sending: two processes that change the file without it can lose a recipient.
  * - A file that does not parse, or is not an array, is never overwritten: its text is copied to
  *   `<path>.invalid` (the first copy stays), the call throws and the file stays for a person to
  *   repair. A corrupt log must stop a send, not allow a second one.
  */
 export function createFileSendLog(options: FileSendLogOptions): SendLog {
   const { path } = options
+  const journal = `${path}.journal`
   const fs = options.fs ?? denoFileSystem
   let sequence = 0
   let queue: Promise<unknown> = Promise.resolve()
+  /** Issues this object has seen started, so `record` appends without reading the whole log. */
+  const started = new Set<string>()
 
   /** Keeps the first damaged copy of the file in `<path>.invalid` and says what happened. A later
    * one does not replace it, and the file itself is never touched. */
@@ -82,7 +97,30 @@ export function createFileSendLog(options: FileSendLogOptions): SendLog {
       const kept = await keepCopy((await fs.readText(path)) ?? ``)
       throw new Error(`${path} is not a JSON array; ${kept}. Fix it by hand before sending`)
     }
-    return result.value as StoredEntry[]
+    const rows = result.value as StoredEntry[]
+    for (const { slug, mark } of await loadJournal()) {
+      const row = rows.find((r) => r.slug === slug)
+      const recipients = row && (row.recipients ??= [])
+      if (recipients && !recipients.includes(mark)) recipients.push(mark)
+    }
+    return rows
+  }
+
+  /** The journal's complete lines. The text after the last newline is empty, or a write a crash
+   * cut short, and is ignored. */
+  async function loadJournal(): Promise<JournalLine[]> {
+    const lines = ((await fs.readText(journal)) ?? ``).split(`\n`).slice(0, -1)
+    return lines.map((line) => {
+      try {
+        const { slug, mark } = JSON.parse(line)
+        if (typeof slug === `string` && typeof mark === `string`) return { slug, mark }
+      } catch {
+        // Reported below, as a line that is not a recorded mark.
+      }
+      throw new Error(
+        `${journal} has a line that is not a recorded mark. Fix it by hand before sending`,
+      )
+    })
   }
 
   /** Runs `change` on the loaded entries, one call at a time, and writes them back when it says
@@ -91,7 +129,12 @@ export function createFileSendLog(options: FileSendLogOptions): SendLog {
     const run = queue.then(async () => {
       const rows = await load()
       const { value, save } = change(rows)
-      if (save) await atomicWriteJson(fs, path, rows, { pid: Deno.pid, sequence: ++sequence })
+      if (save) {
+        await atomicWriteJson(fs, path, rows, { pid: processId() ?? 0, sequence: ++sequence })
+        // The file now holds every journaled mark. A crash before this removal folds them in
+        // again, which changes nothing.
+        await fs.remove(journal)
+      }
       return value
     })
     queue = run.catch(() => {})
@@ -129,6 +172,7 @@ export function createFileSendLog(options: FileSendLogOptions): SendLog {
             recipients: [],
           }
           rows.push(created)
+          started.add(issue)
           return { value: fromStored(created), save: true }
         }
         if (row.recipients !== undefined && row.audience === undefined) {
@@ -140,13 +184,17 @@ export function createFileSendLog(options: FileSendLogOptions): SendLog {
     },
 
     record(issue, mark) {
-      return update((rows) => {
-        const row = stored(rows, issue)
-        const recipients = row.recipients ??= []
-        if (recipients.includes(mark)) return { value: undefined, save: false }
-        recipients.push(mark)
-        return { value: undefined, save: true }
+      const run = queue.then(async () => {
+        if (!started.has(issue)) {
+          const row = stored(await load(), issue)
+          started.add(issue)
+          if (row.recipients?.includes(mark)) return
+        }
+        // A mark appended twice is stored once when the journal is folded in.
+        await fs.appendText(journal, `${JSON.stringify({ slug: issue, mark })}\n`)
       })
+      queue = run.catch(() => {})
+      return run
     },
 
     finish({ issue, failed, at }) {
