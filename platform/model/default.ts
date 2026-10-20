@@ -1,9 +1,9 @@
 /**
  * The type arktype gives a key with a default (`"number | null = null"`), rebuilt from arktype's
  * public API. Importing it from `arktype/internal/attributes.ts` worked, but an internal path can
- * move in any arktype release; deriving its key from the type of a schema made with the public `type` keeps
- * this module on the public surface, and a change to the shape fails `deno check` here instead of
- * slipping through. Not exported from the package.
+ * move in any arktype release; deriving its key from the type of a schema made with the public
+ * `type` keeps this module on the public surface, and a change to the shape fails `deno check` here
+ * instead of slipping through. Not exported from the package.
  *
  * @module
  */
