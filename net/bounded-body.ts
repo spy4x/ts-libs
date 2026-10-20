@@ -294,6 +294,7 @@ export async function readBoundedJson<T = unknown>(
  * @throws `BodyReadTimeoutError` when no chunk arrives within `timeoutMs`.
  * @throws `TypeError` when the request carries no `content-type`; without it the
  * multipart boundary is unknown and the parse could only return an empty body.
+ * The body is cancelled first, as on every other refusal.
  */
 export async function parseBoundedFormData(
   request: Request,
@@ -301,6 +302,8 @@ export async function parseBoundedFormData(
 ): Promise<FormData> {
   const contentType = request.headers.get("content-type")
   if (!contentType) {
+    // Refused before a read, like every other refusal here: release the body first.
+    await request.body?.cancel().catch(() => {})
     throw new TypeError("parseBoundedFormData requires a content-type header")
   }
   const body = await readBoundedBody(request, options)
