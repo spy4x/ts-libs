@@ -471,20 +471,25 @@ export function createOutbox<P, S extends { version: number }>(
       before: existing.before,
       truncated: existing.truncated,
     })
-    const renewed = existing.attempted
-      ? { key: newKey(), attempted: false }
-      : { key: existing.key, attempted: false }
+    // A new edit replaces the write a conflict was about, so the merged entry is sent again: the
+    // server answers it, and a refusal becomes a new conflict about what the person wrote last.
+    const renewed = {
+      key: existing.attempted ? newKey() : existing.key,
+      attempted: false,
+      status: "pending" as const,
+      conflict: undefined,
+    }
     if (change.kind === "update") {
       if (existing.kind === "create" && mayHaveReachedServer(existing)) {
         // The create may be on the server, where a second create is refused as `already-exists`:
         // send the edit on top of version 1. A `not-found` answer sends the create again (`refuse`).
         return await save({
           ...existing,
+          ...renewed,
           payload: change.payload,
           kind: "update",
           baseVersion: 1,
           key: newKey(),
-          attempted: false,
           ownCreate: true,
           before,
         })
@@ -501,21 +506,21 @@ export function createOutbox<P, S extends { version: number }>(
       // The create may have reached the server, so the entity may exist there: delete version 1.
       return await save({
         ...existing,
+        ...renewed,
         payload: change.payload,
         kind: "delete",
         baseVersion: 1,
         key: newKey(),
-        attempted: false,
-        status: "pending",
-        conflict: undefined,
         before,
       })
     }
+    // `ownCreate` belongs to an update: a delete is never sent as the create.
     return await save({
       ...existing,
       payload: change.payload,
       kind: "delete",
       ...renewed,
+      ownCreate: undefined,
       before,
     })
   }
@@ -714,7 +719,8 @@ export function createOutbox<P, S extends { version: number }>(
       if (server) await cache?.put(server)
       else if (entry.conflict?.reason === "gone") await cache?.remove(entry.entityId)
       await drop(entry.seq!)
-      if ((entry.kind === "create" || entry.ownCreate) && !server) {
+      const created = entry.kind === "create" || (entry.kind === "update" && entry.ownCreate)
+      if (created && !server) {
         abandoned.push({ entry, reason: "discarded" })
       }
     })
