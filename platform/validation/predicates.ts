@@ -27,7 +27,7 @@
 
 import { Type, type } from "arktype"
 import { isValidTimeZone } from "@spy4x/time/tz"
-import { isAddress, MAX_ADDR_SPEC_LENGTH } from "@spy4x/email/address"
+import { parseBareAddress } from "@spy4x/email/address"
 
 /** Highest ASCII control code point, inclusive: the C0 block. */
 export const HEADER_MAX_CODE_POINT = 31
@@ -120,18 +120,21 @@ export function isValidTimeZoneName(value: string): boolean {
 /**
  * True when `value` is a bare email address (`jane@example.com`, no display name) that
  * `@spy4x/email` would send to: a dot-atom local part and a dotted domain of at least two labels
- * (`user@localhost` is refused), at most `MAX_ADDR_SPEC_LENGTH` (254) characters, the limit
+ * (`user@localhost` is refused), a local part of at most 64 characters, and at most
+ * `MAX_ADDR_SPEC_LENGTH` (254) characters in all, the limit
  * `@spy4x/email/address` exports.
  *
- * One rule, not two: the pattern is `isAddress` from `@spy4x/email/address`, so a form that accepts
- * an address here never meets a different verdict when the address reaches the sender. The
- * dependency runs `platform` to `email`, and `email` imports nothing from `platform`, so there is
- * no cycle. `mig`'s own pattern (a copy of Zod 3's `.email()`) differs only at the edges: it
- * refuses `%` in the local part, which this accepts, as RFC 5322 does. `value` is checked as given;
- * trim and lowercase it first, as a form would.
+ * One rule, not two: this is `parseBareAddress` from `@spy4x/email/address`, so a form that accepts
+ * an address here never meets a different verdict when the address reaches the sender. That
+ * includes its 64-character limit on the local part, and the order of its checks: a look-alike such
+ * as the Kelvin sign (U+212A), which lowercases to an ASCII `k`, is refused before any lowercasing.
+ * The dependency runs `platform` to `email`, and `email` imports nothing from `platform`, so there
+ * is no cycle. `mig`'s own pattern (a copy of Zod 3's `.email()`) differs only at the edges: it
+ * refuses `%` in the local part, which this accepts, as RFC 5322 does. `value` is checked as given,
+ * so surrounding whitespace is refused; trim and lowercase it first, as a form would.
  */
 export function isEmailAddress(value: string): boolean {
-  return value.length <= MAX_ADDR_SPEC_LENGTH && isAddress(value)
+  return value === value.trim() && parseBareAddress(value) !== null
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
+import { type } from "arktype"
 
 import { atomicWriteJson, readJsonFile, tempPathFor } from "./atomic-json.ts"
 import { fakeFs } from "./_fake-fs.ts"
@@ -29,6 +30,39 @@ describe("readJsonFile", () => {
   it("accepts any JSON value, including a bare scalar", async () => {
     const fs = fakeFs({ "/n.json": "42" })
     expect(await readJsonFile(fs, "/n.json")).toEqual({ kind: "ok", value: 42 })
+  })
+
+  it("reports a document that fails the schema as invalid, naming the field", async () => {
+    const fs = fakeFs({ "/state.json": `{"version":"two"}` })
+    const result = await readJsonFile(fs, "/state.json", { schema: type({ version: "number" }) })
+    expect(result.kind).toBe("invalid")
+    if (result.kind === "invalid") {
+      expect(result.raw).toBe(`{"version":"two"}`)
+      expect(result.reason).toContain("version")
+    }
+  })
+
+  it("reports invalid when the schema's errors come from another copy of arktype", async () => {
+    const fs = fakeFs({ "/state.json": `{"version":"two"}` })
+    // Errors-shaped like arktype's, but not an instance of this copy's class.
+    const foreignErrors = Object.assign([{ path: ["version"] }], {
+      summary: "version must be a number (was string)",
+      throw: () => {},
+    })
+    const schema = (_data: unknown) => foreignErrors as unknown as { version: number }
+    const result = await readJsonFile(fs, "/state.json", { schema })
+    expect(result).toEqual({
+      kind: "invalid",
+      raw: `{"version":"two"}`,
+      reason: "version must be a number (was string)",
+    })
+  })
+
+  it("returns the schema's output for a document that matches it", async () => {
+    const fs = fakeFs({ "/state.json": `{"version":2,"extra":true}` })
+    const schema = type({ "+": "delete", version: "number" })
+    expect(await readJsonFile(fs, "/state.json", { schema }))
+      .toEqual({ kind: "ok", value: { version: 2 } })
   })
 })
 
