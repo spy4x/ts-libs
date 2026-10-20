@@ -117,6 +117,40 @@ describe("EventBus", () => {
     expect(errors).toEqual([new Error("boom")])
   })
 
+  it("keeps dispatching and logs both errors when onListenerError itself throws", async () => {
+    const logged: unknown[][] = []
+    const original = console.error
+    console.error = (...args: unknown[]) => void logged.push(args)
+    try {
+      const bus = new EventBus(() => {
+        throw new Error("handler boom")
+      })
+      let secondRan = false
+      bus.on(PingEvent, () => {
+        throw new Error("boom")
+      })
+      bus.on(PingEvent, () => Promise.reject(new Error("async boom")))
+      bus.on(PingEvent, () => {
+        secondRan = true
+      })
+
+      bus.emit(new PingEvent({ value: "ok" }))
+      await flush()
+      await flush()
+
+      expect(secondRan).toBe(true)
+      const errors = logged.map((args) => args[1])
+      expect(errors).toEqual([
+        new Error("boom"),
+        new Error("handler boom"),
+        new Error("async boom"),
+        new Error("handler boom"),
+      ])
+    } finally {
+      console.error = original
+    }
+  })
+
   it("reports a rejected async listener through onListenerError", async () => {
     const errors: unknown[] = []
     const bus = new EventBus((_eventClass, error) => errors.push(error))
