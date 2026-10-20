@@ -2854,14 +2854,17 @@ const result = await sendIssue({
 - Each link is minted with the row's stored key, so it survives a rotation. Marks are read under the
   current and every previous secret, and written under the current one, so a rotation between runs
   does not mail anyone twice.
-- A row that is not a bare address, a link that cannot be built and a send that throws each count
-  as one failure, and the run goes on. The log names a row by its number, and a relay error is
+- A link that cannot be built and a send that throws each count as one failure, and the run goes
+  on. A row that is not a bare address is logged and counted as skipped, so it cannot keep the issue
+  open forever. The log names a row by its number, and a relay error is
   redacted before it is logged. The send log holds marks, never addresses.
 - An empty list answers `no-subscribers` and records nothing: it usually means the store could not
   be read.
 
 `describeSendLogContract` in `send-log-contract.test.ts` is the contract every adapter runs. The
-file log reads and writes antonshubin.com's `newsletter-log.json` unchanged. A file that does not
+file log reads and writes antonshubin.com's `newsletter-log.json` unchanged. During a send it
+appends each recipient to `<path>.journal` rather than rewriting the file per mail; the next write
+of the file folds the journal in and removes it. A file that does not
 parse, or is not an array, is left alone and every call throws, so a corrupt log stops a send
 instead of allowing a second one.
 
