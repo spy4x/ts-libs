@@ -927,6 +927,7 @@ DEFAULT_FILE_LOCK_WAIT_MS	constant	@spy4x/platform/server	How long a FileLock.ru
 DEFAULT_REMINDER_CATCH_UP_MS	constant	@spy4x/platform/server	How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
 DEFAULT_REMINDER_INTERVAL_MS	constant	@spy4x/platform/server	How often the runner ticks unless `intervalMs` says otherwise: once a minute.
 DEFAULT_REMINDER_TICK_TIMEOUT_MS	constant	@spy4x/platform/server	How long one tick may take unless `tickTimeoutMs` says otherwise: two minutes.
+EnvReader	interface	@spy4x/platform/server	Reads environment values.
 FileLock	class	@spy4x/platform/server	One held lock.
 FileLockWaitError	class	@spy4x/platform/server	Raised when a FileLock.runExclusive call waited FileLockOptions.waitMs for an earlier `runExclusive` on the same instance and gave up.
 FileSystemPort	interface	@spy4x/platform/server	Storage primitives a server helper needs.
@@ -951,13 +952,16 @@ TempPathOptions	interface	@spy4x/platform/server	Where a temporary file should l
 ThrottledJsonSaver	class	@spy4x/platform/server	Coalescing writer for one JSON document.
 TimerPort	interface	@spy4x/platform/server	Scheduling primitives a ThrottledJsonSaver needs.
 WalkEntry	interface	@spy4x/platform/server	A single directory entry, as returned by a directory listing.
-WriteTextOptions	interface	@spy4x/platform/server	Options of FileSystemPort.writeText.
+WriteTextOptions	interface	@spy4x/platform/server	Options of FileSystemPort.writeText, `writeBytes` and `writeStream`.
 atomicWriteJson	function	@spy4x/platform/server	Serialise `value` and replace `path` with it atomically.
 createReminderRunner	function	@spy4x/platform/server	Builds a runner; nothing runs until ReminderRunner.start or ReminderRunner.tick.
 denoByteReader	function	@spy4x/platform/server	ByteReader over one file, read in chunks so a large file never lands in memory at once.
 denoFileSystem	constant	@spy4x/platform/server	FileSystemPort backed by Deno's filesystem APIs.
 formatLogLine	function	@spy4x/platform/server	Serialise a log record to one line, stamped with the clock at append time.
 parseLogLines	function	@spy4x/platform/server	Parse JSONL text, skipping blank lines and reporting the lines that do not parse.
+processEnv	constant	@spy4x/platform/server	The process environment, read through `Deno.env` on Deno and `process.env` on Node and Bun.
+processId	function	@spy4x/platform/server	The id of the running process: `Deno.pid` on Deno, `process.pid` on Node and Bun, `undefined` where there is none (a browser).
+readEnvRecord	function	@spy4x/platform/server	Read the named variables into a record, for a parser that takes one, such as `parseStorageEnv` in `@spy4x/server/storage`.
 readJsonFile	function	@spy4x/platform/server	Read and parse a JSON document.
 runCommand	function	@spy4x/platform/server	Run `command` (the program, then its arguments) and resolve with its outcome.
 shutdownSignal	function	@spy4x/platform/server	Return an `AbortSignal` that aborts on the first of `options.signals` (default `SIGINT` and `SIGTERM`).
@@ -988,8 +992,12 @@ ClockPort	type	@spy4x/platform/server/ports	Deprecated: Identical shape to `Cloc
 FileSystemPort	interface	@spy4x/platform/server/ports	Storage primitives a server helper needs.
 LockHandle	interface	@spy4x/platform/server/ports	A held file lock.
 WalkEntry	interface	@spy4x/platform/server/ports	A single directory entry, as returned by a directory listing.
-WriteTextOptions	interface	@spy4x/platform/server/ports	Options of FileSystemPort.writeText.
+WriteTextOptions	interface	@spy4x/platform/server/ports	Options of FileSystemPort.writeText, `writeBytes` and `writeStream`.
 systemClockPort	constant	@spy4x/platform/server/ports	Deprecated: Use `systemClock` from `@spy4x/platform/universal/time`. The host clock.
+EnvReader	interface	@spy4x/platform/server/process	Reads environment values.
+processEnv	constant	@spy4x/platform/server/process	The process environment, read through `Deno.env` on Deno and `process.env` on Node and Bun.
+processId	function	@spy4x/platform/server/process	The id of the running process: `Deno.pid` on Deno, `process.pid` on Node and Bun, `undefined` where there is none (a browser).
+readEnvRecord	function	@spy4x/platform/server/process	Read the named variables into a record, for a parser that takes one, such as `parseStorageEnv` in `@spy4x/server/storage`.
 DEFAULT_REMINDER_CATCH_UP_MS	constant	@spy4x/platform/server/reminder-runner	Deprecated: Import from `@spy4x/tasks/reminder-runner`. How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
 DEFAULT_REMINDER_INTERVAL_MS	constant	@spy4x/platform/server/reminder-runner	Deprecated: Import from `@spy4x/tasks/reminder-runner`. How often the runner ticks unless `intervalMs` says otherwise: once a minute.
 DEFAULT_REMINDER_TICK_TIMEOUT_MS	constant	@spy4x/platform/server/reminder-runner	Deprecated: Import from `@spy4x/tasks/reminder-runner`. How long one tick may take unless `tickTimeoutMs` says otherwise: two minutes.
@@ -2460,4 +2468,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 75878fde5991d8179be9007a0022a117e874e8f82018ab0753381d1ffdab60cf
+# export surface: sha256 18374c4f3266441b70403638c73737eebe671511308495034d9d954dd25bfb54

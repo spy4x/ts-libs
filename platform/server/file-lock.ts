@@ -94,6 +94,8 @@ export class FileLock {
   readonly #waitMs: number
   readonly #queue = new AsyncMutex()
   #handle: LockHandle | null = null
+  /** The lock attempt in progress, shared by every caller that arrives while it runs. */
+  #taking: Promise<boolean> | null = null
 
   constructor(options: FileLockOptions) {
     this.#fs = options.fs
@@ -119,19 +121,28 @@ export class FileLock {
    * The parent directory is created first — a lock file in a directory that does not exist yet is
    * a NotFound, not a contention, and reporting it as contention would be misleading. The
    * descriptor is closed when the port reports the lock is already held, so a failed acquire
-   * leaks nothing.
+   * leaks nothing. Concurrent calls on one instance share one attempt, so the second never sees
+   * its own instance's lock as held by another.
    */
   async acquire(): Promise<void> {
-    if (this.#handle !== null) return
-    await this.#fs.mkdirp(dirname(this.#path))
-    const handle = await this.#fs.lock(this.#path)
-    if (handle === null) throw new LockUnavailableError(this.#path)
-    this.#handle = handle
+    if (!(await this.#take())) throw new LockUnavailableError(this.#path)
   }
 
-  /** Take the lock if free. Never throws for contention. */
-  async tryAcquire(): Promise<boolean> {
-    if (this.#handle !== null) return true
+  /** Take the lock if free. Never throws for contention. Shares an attempt already running. */
+  tryAcquire(): Promise<boolean> {
+    return this.#take()
+  }
+
+  /** One lock attempt at a time per instance; a call made while one runs waits for its result. */
+  #take(): Promise<boolean> {
+    if (this.#handle !== null) return Promise.resolve(true)
+    this.#taking ??= this.#open().finally(() => {
+      this.#taking = null
+    })
+    return this.#taking
+  }
+
+  async #open(): Promise<boolean> {
     await this.#fs.mkdirp(dirname(this.#path))
     const handle = await this.#fs.lock(this.#path)
     if (handle === null) return false

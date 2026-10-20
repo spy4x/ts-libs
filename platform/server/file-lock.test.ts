@@ -47,6 +47,16 @@ describe("FileLock", () => {
     await expect(second.acquire()).resolves.toBeUndefined()
   })
 
+  it("lets two concurrent acquire calls on one instance share one lock", async () => {
+    const fs = fakeFs()
+    const lock = new FileLock({ fs, path: "/dir/job.lock" })
+    await Promise.all([lock.acquire(), lock.acquire(), lock.tryAcquire()])
+    expect(lock.state).toBe(LockState.Owned)
+    expect(fs.calls.filter((call) => call.op === "lock").length).toBe(1)
+    await lock.release()
+    expect(fs.locks.size).toBe(0)
+  })
+
   it("does not re-acquire when already held", async () => {
     const fs = fakeFs()
     const lock = new FileLock({ fs, path: "/l" })
