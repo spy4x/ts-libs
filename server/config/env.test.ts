@@ -1,6 +1,14 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
-import { createEnvReader, MissingEnvError, readEnvVar, systemEnv } from "./env.ts"
+import { type EnvReader as PlatformEnvReader, processEnv } from "@spy4x/platform/server/process"
+import {
+  createEnvReader,
+  type EnvReader,
+  MissingEnvError,
+  readEnvVar,
+  readOptionalEnvVar,
+  systemEnv,
+} from "./env.ts"
 
 describe("systemEnv", () => {
   it("treats a blank real environment variable as unset, not as a set-but-blank value", () => {
@@ -85,5 +93,37 @@ describe("the config/env entry point", () => {
     expect(source.match(/\bfrom\s*["'`]/g)).toBeNull()
     expect(source.match(/^\s*import\b/gm)).toBeNull()
     expect(source.match(/\bimport\s*\(/g)).toBeNull()
+  })
+})
+
+describe("readOptionalEnvVar", () => {
+  it("returns undefined for a missing variable, where readEnvVar with optional returns an empty string", () => {
+    const env = createEnvReader({})
+
+    expect(readOptionalEnvVar(env, "MISSING")).toBeUndefined()
+    expect(readEnvVar(env, "MISSING", { optional: true })).toBe("")
+  })
+
+  it("returns the value of a set variable", () => {
+    expect(readOptionalEnvVar(createEnvReader({ NAME: "value" }), "NAME")).toBe("value")
+  })
+
+  it("returns undefined for a blank value from a reader that does not fold blanks itself", () => {
+    const raw: EnvReader = { get: () => "" }
+
+    expect(readOptionalEnvVar(raw, "NAME")).toBeUndefined()
+  })
+})
+
+describe("systemEnv and the platform reader", () => {
+  it("fits where the platform's EnvReader is expected, and reads the same value", () => {
+    const name = "TS_LIBS_SERVER_CONFIG_ENV_TEST_PLATFORM_VARIABLE"
+    Deno.env.set(name, "same")
+    try {
+      const readers: PlatformEnvReader[] = [systemEnv, processEnv]
+      expect(readers.map((reader) => reader.get(name))).toEqual(["same", "same"])
+    } finally {
+      Deno.env.delete(name)
+    }
   })
 })
