@@ -150,8 +150,8 @@ SmtpTransportFactory	interface	@spy4x/email	Builds a transport from a connection
 TRANSIT_ADDED_HEADER_NAMES	constant	@spy4x/email	Header field names a relay is expected to add to a message in transit.
 assertNoControlCharacters	function	@spy4x/email	Reject a value that carries a control character — CR and LF above all.
 assertSendableMessage	function	@spy4x/email	Validate a message before any transport sees it.
-canonicalizeBody	function	@spy4x/email	Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
-canonicalizeHeader	function	@spy4x/email	Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
+canonicalizeBody	function	@spy4x/email	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
+canonicalizeHeader	function	@spy4x/email	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
 createConsoleSender	function	@spy4x/email	A sender that logs instead of sending, for local runs and for tests that need a port implementation without a mail server.
 createSmtpSender	function	@spy4x/email	Create a sender for one SMTP configuration.
 emailButton	function	@spy4x/email	A table-based "bulletproof" call-to-action button for the body of a mail.
@@ -162,7 +162,7 @@ frameInstantLong	function	@spy4x/email	Render an instant as the recipient's own 
 frameInstantShort	function	@spy4x/email	frameInstantLong without the zone name, for a subject line: `"Fri 28 Aug 04:00"`.
 frameWallClockLong	function	@spy4x/email	Frame a `YYYY-MM-DD` + `HH:MM` wall clock written in `sourceTz` for a recipient in `recipientTz`, falling back to the zone the wall clock was written in.
 frameWallClockShort	function	@spy4x/email	frameWallClockLong without the zone name, for a subject line.
-hasBody	function	@spy4x/email	True when a body field carries something worth sending.
+hasBody	function	@spy4x/email	Deprecated: An internal step of `assertSendableMessage` and the SMTP sender, exported by mistake; it goes in 2.0. True when a body field carries something worth sending.
 htmlWrap	function	@spy4x/email	Wrap a body in the shared letter-shaped shell.
 icalAttachment	function	@spy4x/email	Build the ICS attachment for an event.
 isAddress	function	@spy4x/email	True when `value` is an addr-spec this module will send to.
@@ -170,9 +170,9 @@ parseAddress	function	@spy4x/email	Parse `Name <addr>` or a bare addr-spec into 
 parseAddresses	function	@spy4x/email	Parse a recipient list, deduplicating case-insensitively.
 parseDkimPublicKey	function	@spy4x/email	Parse a DKIM TXT record's `p=` field into a public key.
 parseDkimSignature	function	@spy4x/email	Parse a `DKIM-Signature` header value (without the leading `DKIM-Signature:`) into structured form.
-refuseHeaderLineEndings	function	@spy4x/email	Refuse a header block whose line endings are not uniform, and say why.
-sha256Base64	function	@spy4x/email	Compute the base64 SHA-256 digest of a string or of raw octets.
-splitMessage	function	@spy4x/email	Split a raw RFC 5322 message into raw header lines and a raw body.
+refuseHeaderLineEndings	function	@spy4x/email	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Refuse a header block whose line endings are not uniform, and say why.
+sha256Base64	function	@spy4x/email	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Compute the base64 SHA-256 digest of a string or of raw octets.
+splitMessage	function	@spy4x/email	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Split a raw RFC 5322 message into raw header lines and a raw body.
 verifyDkim	function	@spy4x/email	Verify a message's DKIM signatures and report one verdict.
 verifyDkimSignatures	function	@spy4x/email	Verify every `DKIM-Signature` field in the message and return one result each, in the order the fields appear.
 EmailAddress	interface	@spy4x/email/address	A parsed mailbox: the addr-spec, plus the display name that preceded it.
@@ -200,14 +200,14 @@ DkimVerifyOptions	interface	@spy4x/email/dkim-verify	Options for verifyDkim and 
 DnsTxtResolver	interface	@spy4x/email/dkim-verify	DNS TXT lookup contract, defaulting to `Deno.resolveDns(name, "TXT")`, which needs `--allow-net`.
 MIN_RSA_KEY_BITS	constant	@spy4x/email/dkim-verify	RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less than 1024 bits as valid."
 TRANSIT_ADDED_HEADER_NAMES	constant	@spy4x/email/dkim-verify	Header field names a relay is expected to add to a message in transit.
-canonicalizeBody	function	@spy4x/email/dkim-verify	Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
-canonicalizeHeader	function	@spy4x/email/dkim-verify	Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
+canonicalizeBody	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
+canonicalizeHeader	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
 fetchDkimPublicKey	function	@spy4x/email/dkim-verify	Fetch and parse a DKIM public key from DNS, from `<selector>._domainkey.<domain>`.
 parseDkimPublicKey	function	@spy4x/email/dkim-verify	Parse a DKIM TXT record's `p=` field into a public key.
 parseDkimSignature	function	@spy4x/email/dkim-verify	Parse a `DKIM-Signature` header value (without the leading `DKIM-Signature:`) into structured form.
-refuseHeaderLineEndings	function	@spy4x/email/dkim-verify	Refuse a header block whose line endings are not uniform, and say why.
-sha256Base64	function	@spy4x/email/dkim-verify	Compute the base64 SHA-256 digest of a string or of raw octets.
-splitMessage	function	@spy4x/email/dkim-verify	Split a raw RFC 5322 message into raw header lines and a raw body.
+refuseHeaderLineEndings	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Refuse a header block whose line endings are not uniform, and say why.
+sha256Base64	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Compute the base64 SHA-256 digest of a string or of raw octets.
+splitMessage	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Split a raw RFC 5322 message into raw header lines and a raw body.
 verifyDkim	function	@spy4x/email/dkim-verify	Verify a message's DKIM signatures and report one verdict.
 verifyDkimSignatures	function	@spy4x/email/dkim-verify	Verify every `DKIM-Signature` field in the message and return one result each, in the order the fields appear.
 DARK_HTML_SHELL_THEME	constant	@spy4x/email/html	The look `htmlWrap` had before HtmlShellOptions.theme existed: a dark navy body with light text and an orange brand link, ported as-is from `mig`.
@@ -236,9 +236,9 @@ frameInstantLong	function	@spy4x/email/message	Render an instant as the recipien
 frameInstantShort	function	@spy4x/email/message	frameInstantLong without the zone name, for a subject line: `"Fri 28 Aug 04:00"`.
 frameWallClockLong	function	@spy4x/email/message	Frame a `YYYY-MM-DD` + `HH:MM` wall clock written in `sourceTz` for a recipient in `recipientTz`, falling back to the zone the wall clock was written in.
 frameWallClockShort	function	@spy4x/email/message	frameWallClockLong without the zone name, for a subject line.
-hasBody	function	@spy4x/email/message	True when a body field carries something worth sending.
+hasBody	function	@spy4x/email/message	Deprecated: An internal step of `assertSendableMessage` and the SMTP sender, exported by mistake; it goes in 2.0. True when a body field carries something worth sending.
 icalAttachment	function	@spy4x/email/message	Build the ICS attachment for an event.
-listUnsubscribeHeaders	function	@spy4x/email/message	The `List-Unsubscribe` and `List-Unsubscribe-Post` header values for a validated ListUnsubscribe, ready for the transport's `headers` option.
+listUnsubscribeHeaders	function	@spy4x/email/message	The `List-Unsubscribe` and `List-Unsubscribe-Post` header values for a ListUnsubscribe, ready for the transport's `headers` option.
 EmailSender	interface	@spy4x/email/sender	The port every transport implements, and the only thing callers depend on.
 SendFailure	interface	@spy4x/email/sender	No mail was sent, or some recipient was refused.
 SendResult	type	@spy4x/email/sender	Outcome of one send attempt.
@@ -2470,4 +2470,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 cbc2ff132a40c0f77c3bfc1c89ef9700020e5d082f480b0276c3b0a2f887962b
+# export surface: sha256 871a267e83227dce89385fa2090eb3ea50e9f75fbc4b94626099796773c6aabc

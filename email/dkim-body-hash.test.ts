@@ -1,6 +1,6 @@
 // Behaviour tests for the per-message body-hash cache, in isolation from
-// dkim-verify.ts. Dependencies are injected and counted directly here, rather
-// than through the test-only counters `dkim-verify.test.ts` uses to prove the
+// dkim-verify.ts. Dependencies are injected and counted directly here, while
+// `dkim-verify.test.ts` counts `crypto.subtle.digest` calls to prove the
 // real verifier shares one cache per message — these two files cover the same
 // defect from two sides: this one is the cache's own contract, that one is
 // integration evidence that `verifyDkimSignatures` actually uses it.
@@ -8,8 +8,7 @@
 import { assertEquals } from "@std/assert"
 import { createBodyHashCache } from "./dkim-body-hash.ts"
 
-/** A `BodyHashDependencies` that counts its own calls, independent of the
- * module-level counters `dkim-verify.test.ts` reads. */
+/** A `BodyHashDependencies` that counts its own calls. */
 function countingDeps(body: string) {
   const canonicalizeCalls: string[] = []
   const digestCalls: number[] = []
