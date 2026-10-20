@@ -200,6 +200,9 @@ function assertListUnsubscribe(value: ListUnsubscribe): void {
  *
  * A whitespace-only body is absent: `text: ""` used to produce a `text/plain`
  * part containing nothing, which a text-only client shows as a blank mail.
+ *
+ * @deprecated An internal step of `assertSendableMessage` and the SMTP sender, exported by
+ * mistake; it goes in 2.0. Check `value?.trim()` instead.
  */
 export function hasBody(value: string | undefined): value is string {
   return value !== undefined && value.trim() !== ""

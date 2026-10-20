@@ -489,6 +489,9 @@ function parseAlgorithm(value: string): DkimAlgorithm {
  * canonical line — `name: value CRLF` relaxed, `name:value CRLF` simple —
  * because the separator is part of what is hashed. Bare LF is normalised to
  * CRLF: RFC 6376 hashes the CRLF form even when storage kept LF endings.
+ *
+ * @deprecated An internal step of `verifyDkim`, exported by mistake; it goes in 2.0.
+ * Call `verifyDkim` or `verifyDkimSignatures` instead.
  */
 export function canonicalizeHeader(
   name: string,
@@ -540,6 +543,9 @@ function trimWsp(value: string): string {
  *
  * An `l=` bound is applied afterwards, to these canonical octets, by
  * {@link verifyDkim} — the bound is counted in octets, not in characters.
+ *
+ * @deprecated An internal step of `verifyDkim`, exported by mistake; it goes in 2.0.
+ * Call `verifyDkim` or `verifyDkimSignatures` instead.
  */
 export function canonicalizeBody(body: string, algorithm: Canonicalization): string {
   // One pass to split, one pass per line, one join: the cost grows with the body,
@@ -801,6 +807,9 @@ function base64Decode(input: string): Uint8Array {
  * character after the empty line to be non-WSP swallowed every body beginning
  * with SP or HTAB into the header region, where it was never hashed — and
  * RFC 6376 §3.4.5 Example 1's own body begins with a space.
+ *
+ * @deprecated An internal step of `verifyDkim`, exported by mistake; it goes in 2.0.
+ * Call `verifyDkim` or `verifyDkimSignatures` instead.
  */
 export function splitMessage(raw: string): { headers: string[]; body: string } {
   const { headerEnd, sepLen } = locateHeaderEnd(raw)
@@ -1108,6 +1117,9 @@ function scanForbiddenHeaderBytes(raw: string, end: number): string | undefined 
  * of these ten code points is refused unconditionally, with no exemption for
  * a byte or sequence that merely looks like part of a longer, legitimate
  * UTF-8 character.
+ *
+ * @deprecated An internal step of `verifyDkim`, exported by mistake; it goes in 2.0.
+ * Call `verifyDkim` or `verifyDkimSignatures` instead.
  */
 export function refuseHeaderLineEndings(raw: string): string | undefined {
   const { headerEnd, sepLen } = locateHeaderEnd(raw)
@@ -1488,6 +1500,9 @@ function selectSignedHeaders(
  * Passing `Uint8Array` is what lets a caller bound *octets* — an `l=` bound can
  * land inside a multi-octet character, and decoding the sliced bytes back to a
  * string would hash the replacement character instead of the declared bytes.
+ *
+ * @deprecated An internal step of `verifyDkim`, exported by mistake; it goes in 2.0.
+ * Call `verifyDkim` or `verifyDkimSignatures` instead.
  */
 export async function sha256Base64(input: string | Uint8Array): Promise<string> {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input

@@ -369,8 +369,10 @@ Given a raw RFC 5322 message and a DKIM public key, `verifyDkim` answers one
 question: **does this message's `DKIM-Signature` verify against this key?**
 
 - Signature-header parsing (`parseDkimSignature`), including folded values.
-- `simple` and `relaxed` canonicalization, for headers and for bodies
-  (`canonicalizeHeader`, `canonicalizeBody`).
+- `simple` and `relaxed` canonicalization, for headers and for bodies.
+  `canonicalizeHeader`, `canonicalizeBody`, `splitMessage`, `sha256Base64` and
+  `refuseHeaderLineEndings` are deprecated: they are internal steps of
+  `verifyDkim` and go in 2.0.
 - The body hash (`bh=`), computed over the canonicalized body truncated to the
   `l=` bound when one is present, as RFC 6376 §3.7 step 1 requires. Canonicalized
   and hashed at most once per distinct `(c=, l=)` combination for the whole
