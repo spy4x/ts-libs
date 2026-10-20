@@ -41,6 +41,7 @@ import {
   type XmlElement,
   type XmlName,
 } from "./xml.ts"
+import { isSafeEntityId } from "./_entity-id.ts"
 import { childUrl, isSameOrigin, resolveHref, sameResource } from "./url.ts"
 import {
   BodyReadTimeoutError,
@@ -358,14 +359,18 @@ const HTTP_REFUSED_MESSAGE =
   "serverUrl is an http: address, which would send the password unencrypted; " +
   "use https:, or set allowHttp: true to allow it"
 
-/**
- * Create a client for one CalDAV server and one user.
- *
- * Throws a `TypeError` when `serverUrl` is not an `http:` or `https:` URL, when it is `http:` and
- * `allowHttp` is not `true`, or when the username contains `:`. Nothing is sent before that check.
- * Every other failure is returned, never thrown.
- */
-export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
+/** A client's checked options, with the defaults filled in. */
+interface Settings {
+  server: URL
+  authorization: string
+  fetch: NonNullable<CalDavClientOptions["fetch"]>
+  maxBytes: number
+  timeoutMs: number
+  maxRedirects: number
+}
+
+/** Check a client's options before anything is sent; throws the `TypeError`s of the factory. */
+function settingsOf(options: CalDavClientOptions): Settings {
   let server: URL
   try {
     server = new URL(options.serverUrl)
@@ -387,436 +392,518 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
   requirePositiveInteger(options.maxResponseBytes, "maxResponseBytes")
   requirePositiveInteger(options.timeoutMs, "timeoutMs")
   requirePositiveInteger(options.maxRedirects, "maxRedirects", true)
-  const authorization = `Basic ${encodeBase64(`${options.auth.username}:${options.auth.password}`)}`
-  const doFetch = options.fetch ?? ((input, init) => fetch(input, init))
-  const maxBytes = options.maxResponseBytes ?? DEFAULT_MAX_XML_BYTES
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS
+  return {
+    server,
+    authorization: `Basic ${encodeBase64(`${options.auth.username}:${options.auth.password}`)}`,
+    fetch: options.fetch ?? ((input, init) => fetch(input, init)),
+    maxBytes: options.maxResponseBytes ?? DEFAULT_MAX_XML_BYTES,
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    maxRedirects: options.maxRedirects ?? DEFAULT_MAX_REDIRECTS,
+  }
+}
 
-  /** Resolve a caller's URL argument; refuse one that is invalid or on another origin. */
-  const own = (value: string | URL, what: string): URL => {
-    let url: URL
+/** Resolve a caller's URL argument; refuse one that is invalid or on another origin. */
+function own(server: URL, value: string | URL, what: string): URL {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    fail(CalDavErrorCode.InvalidArgument, `${what} is not a valid URL`)
+  }
+  if (hasUserInfo(url)) {
+    fail(CalDavErrorCode.InvalidArgument, `${what} must not carry credentials`)
+  }
+  if (!isSameOrigin(url, server)) {
+    fail(CalDavErrorCode.OutsideServer, `${what} is not on the server's origin`)
+  }
+  return url
+}
+
+/** Resolve an href the server sent; refuse one that leaves the server's origin. */
+function ownHref(server: URL, href: string, base: URL): URL {
+  const url = resolveHref(href, base)
+  if (url === null) fail(CalDavErrorCode.Malformed, "the server sent an invalid href")
+  if (hasUserInfo(url)) {
+    fail(CalDavErrorCode.Malformed, "the server sent an href with credentials")
+  }
+  if (!isSameOrigin(url, server)) {
+    fail(CalDavErrorCode.OutsideServer, "the server sent an href on another origin")
+  }
+  return url
+}
+
+/** Reject when the call's deadline passes, so a stalled body read cannot outlive it. */
+function beforeDeadline<T>(call: Call, work: Promise<T>): Promise<T> {
+  if (call.signal.aborted) return Promise.reject(call.signal.reason)
+  let onAbort: () => void = () => {}
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(call.signal.reason)
+    call.signal.addEventListener("abort", onAbort, { once: true })
+  })
+  return Promise.race([work, aborted]).finally(() =>
+    call.signal.removeEventListener("abort", onAbort)
+  )
+}
+
+/** Send one request, following same-origin redirects by hand, and read the body bounded. */
+async function send(settings: Settings, call: Call, exchange: Exchange): Promise<Reply> {
+  const { server, maxBytes, timeoutMs, maxRedirects } = settings
+  let { method, url, body } = exchange
+  for (let hop = 0;; hop++) {
+    if (!isSameOrigin(url, server)) {
+      fail(CalDavErrorCode.OutsideServer, "refusing a request outside the server's origin")
+    }
+    if (hasUserInfo(url)) fail(CalDavErrorCode.InvalidArgument, "refusing a URL with credentials")
+    let headers: Headers
     try {
-      url = new URL(value)
+      headers = new Headers(exchange.headers)
     } catch {
-      fail(CalDavErrorCode.InvalidArgument, `${what} is not a valid URL`)
+      fail(CalDavErrorCode.InvalidArgument, "a header value is not valid")
     }
-    if (hasUserInfo(url)) {
-      fail(CalDavErrorCode.InvalidArgument, `${what} must not carry credentials`)
-    }
-    if (!isSameOrigin(url, server)) {
-      fail(CalDavErrorCode.OutsideServer, `${what} is not on the server's origin`)
-    }
-    return url
-  }
-
-  /** Resolve an href the server sent; refuse one that leaves the server's origin. */
-  const ownHref = (href: string, base: URL): URL => {
-    const url = resolveHref(href, base)
-    if (url === null) fail(CalDavErrorCode.Malformed, "the server sent an invalid href")
-    if (hasUserInfo(url)) {
-      fail(CalDavErrorCode.Malformed, "the server sent an href with credentials")
-    }
-    if (!isSameOrigin(url, server)) {
-      fail(CalDavErrorCode.OutsideServer, "the server sent an href on another origin")
-    }
-    return url
-  }
-
-  /** Reject when the call's deadline passes, so a stalled body read cannot outlive it. */
-  const beforeDeadline = <T>(call: Call, work: Promise<T>): Promise<T> => {
-    if (call.signal.aborted) return Promise.reject(call.signal.reason)
-    let onAbort: () => void = () => {}
-    const aborted = new Promise<never>((_resolve, reject) => {
-      onAbort = () => reject(call.signal.reason)
-      call.signal.addEventListener("abort", onAbort, { once: true })
-    })
-    return Promise.race([work, aborted]).finally(() =>
-      call.signal.removeEventListener("abort", onAbort)
-    )
-  }
-
-  /** Send one request, following same-origin redirects by hand, and read the body bounded. */
-  const send = async (call: Call, exchange: Exchange): Promise<Reply> => {
-    let { method, url, body } = exchange
-    for (let hop = 0;; hop++) {
-      if (!isSameOrigin(url, server)) {
-        fail(CalDavErrorCode.OutsideServer, "refusing a request outside the server's origin")
-      }
-      if (hasUserInfo(url)) fail(CalDavErrorCode.InvalidArgument, "refusing a URL with credentials")
-      let headers: Headers
-      try {
-        headers = new Headers(exchange.headers)
-      } catch {
-        fail(CalDavErrorCode.InvalidArgument, "a header value is not valid")
-      }
-      // Checked again per hop: a redirect may only ever lead back to this same origin.
-      if (isSameOrigin(url, server)) headers.set("Authorization", authorization)
-      let response: Response
-      try {
-        response = await beforeDeadline(
-          call,
-          doFetch(url.href, {
-            method,
-            headers,
-            body,
-            redirect: "manual",
-            credentials: "omit",
-            signal: call.signal,
-          }),
-        )
-      } catch (cause) {
-        if (cause instanceof CallFailure) throw cause
-        if (call.signal.aborted) fail(CalDavErrorCode.Timeout, `no answer within ${timeoutMs} ms`)
-        fail(CalDavErrorCode.Network, `the request failed: ${messageOf(cause)}`)
-      }
-      if (response.type === "opaqueredirect") {
-        fail(CalDavErrorCode.Server, "the server redirected and the runtime hid the target")
-      }
-      if (REDIRECT_STATUSES.has(response.status)) {
-        await discard(response)
-        const location = response.headers.get("Location")
-        const target = location === null ? null : resolveHref(location, url)
-        if (target === null) {
-          fail(CalDavErrorCode.Server, "a redirect without a valid Location", {
-            status: response.status,
-          })
-        }
-        if (hasUserInfo(target)) {
-          fail(CalDavErrorCode.Server, "the server redirected to a URL with credentials", {
-            status: response.status,
-          })
-        }
-        if (!isSameOrigin(target, server)) {
-          fail(CalDavErrorCode.CrossOriginRedirect, "the server redirected to another origin", {
-            status: response.status,
-            target: target.href,
-          })
-        }
-        if (hop >= maxRedirects) {
-          fail(CalDavErrorCode.TooManyRedirects, `more than ${maxRedirects} redirects`)
-        }
-        if (response.status === 303) {
-          method = "GET"
-          body = undefined
-        }
-        url = target
-        continue
-      }
-      let text: string
-      try {
-        text = await beforeDeadline(
-          call,
-          readBoundedText(response, {
-            maxBytes,
-            timeoutMs: Math.max(1, call.deadline - Date.now()),
-          }),
-        )
-      } catch (cause) {
-        if (cause instanceof PayloadTooLargeError) {
-          fail(CalDavErrorCode.TooLarge, `the response is over ${maxBytes} bytes`)
-        }
-        if (cause instanceof BodyReadTimeoutError || call.signal.aborted) {
-          fail(CalDavErrorCode.Timeout, `no complete answer within ${timeoutMs} ms`)
-        }
-        fail(CalDavErrorCode.Network, `reading the response failed: ${messageOf(cause)}`)
-      }
-      return { status: response.status, url, headers: response.headers, text }
-    }
-  }
-
-  /** Run one public call: one deadline for all its requests, failures turned into results. */
-  const run = async <T>(work: (call: Call) => Promise<T>): Promise<CalDavResult<T>> => {
-    const controller = new AbortController()
-    const timer = setTimeout(
-      () => controller.abort(new DOMException("timed out", "TimeoutError")),
-      timeoutMs,
-    )
+    // Checked again per hop: a redirect may only ever lead back to this same origin.
+    if (isSameOrigin(url, server)) headers.set("Authorization", settings.authorization)
+    let response: Response
     try {
-      const output = await work({ signal: controller.signal, deadline: Date.now() + timeoutMs })
-      return { success: true, output, error: null }
+      response = await beforeDeadline(
+        call,
+        settings.fetch(url.href, {
+          method,
+          headers,
+          body,
+          redirect: "manual",
+          credentials: "omit",
+          signal: call.signal,
+        }),
+      )
     } catch (cause) {
-      if (cause instanceof CallFailure) return { success: false, output: null, error: cause.error }
-      throw cause
-    } finally {
-      clearTimeout(timer)
+      if (cause instanceof CallFailure) throw cause
+      if (call.signal.aborted) fail(CalDavErrorCode.Timeout, `no answer within ${timeoutMs} ms`)
+      fail(CalDavErrorCode.Network, `the request failed: ${messageOf(cause)}`)
+    }
+    if (response.type === "opaqueredirect") {
+      fail(CalDavErrorCode.Server, "the server redirected and the runtime hid the target")
+    }
+    if (REDIRECT_STATUSES.has(response.status)) {
+      await discard(response)
+      const location = response.headers.get("Location")
+      const target = location === null ? null : resolveHref(location, url)
+      if (target === null) {
+        fail(CalDavErrorCode.Server, "a redirect without a valid Location", {
+          status: response.status,
+        })
+      }
+      if (hasUserInfo(target)) {
+        fail(CalDavErrorCode.Server, "the server redirected to a URL with credentials", {
+          status: response.status,
+        })
+      }
+      if (!isSameOrigin(target, server)) {
+        fail(CalDavErrorCode.CrossOriginRedirect, "the server redirected to another origin", {
+          status: response.status,
+          target: target.href,
+        })
+      }
+      if (hop >= maxRedirects) {
+        fail(CalDavErrorCode.TooManyRedirects, `more than ${maxRedirects} redirects`)
+      }
+      if (response.status === 303) {
+        method = "GET"
+        body = undefined
+      }
+      url = target
+      continue
+    }
+    let text: string
+    try {
+      text = await beforeDeadline(
+        call,
+        readBoundedText(response, {
+          maxBytes,
+          timeoutMs: Math.max(1, call.deadline - Date.now()),
+        }),
+      )
+    } catch (cause) {
+      if (cause instanceof PayloadTooLargeError) {
+        fail(CalDavErrorCode.TooLarge, `the response is over ${maxBytes} bytes`)
+      }
+      if (cause instanceof BodyReadTimeoutError || call.signal.aborted) {
+        fail(CalDavErrorCode.Timeout, `no complete answer within ${timeoutMs} ms`)
+      }
+      fail(CalDavErrorCode.Network, `reading the response failed: ${messageOf(cause)}`)
+    }
+    return { status: response.status, url, headers: response.headers, text }
+  }
+}
+
+/** Run one public call: one deadline for all its requests, failures turned into results. */
+async function run<T>(
+  timeoutMs: number,
+  work: (call: Call) => Promise<T>,
+): Promise<CalDavResult<T>> {
+  const controller = new AbortController()
+  const timer = setTimeout(
+    () => controller.abort(new DOMException("timed out", "TimeoutError")),
+    timeoutMs,
+  )
+  try {
+    const output = await work({ signal: controller.signal, deadline: Date.now() + timeoutMs })
+    return { success: true, output, error: null }
+  } catch (cause) {
+    if (cause instanceof CallFailure) return { success: false, output: null, error: cause.error }
+    throw cause
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Send a PROPFIND and read its multistatus answer. */
+async function propfind(
+  settings: Settings,
+  call: Call,
+  url: URL,
+  depth: "0" | "1",
+  props: XmlName[],
+) {
+  const reply = await send(settings, call, {
+    method: "PROPFIND",
+    url,
+    headers: { Depth: depth, "Content-Type": XML_TYPE },
+    body: propfindBody(props),
+  })
+  return { reply, responses: multistatus(expectStatus(reply, [207]), settings.maxBytes) }
+}
+
+/** Send a REPORT of depth 1 and read its multistatus answer. */
+async function report(settings: Settings, call: Call, url: URL, body: string) {
+  const reply = await send(settings, call, {
+    method: "REPORT",
+    url,
+    headers: { Depth: "1", "Content-Type": XML_TYPE },
+    body,
+  })
+  return { reply, responses: multistatus(expectStatus(reply, [207]), settings.maxBytes) }
+}
+
+/**
+ * Whether a `calendar-query` answer means "an existing calendar with no matching objects".
+ *
+ * Stalwart answers an empty calendar with 207 holding one response, the collection itself at
+ * 404 ("No resources found"), and answers a calendar that does not exist the same way, so the
+ * REPORT cannot tell them apart. A `PROPFIND` of depth 0 can: it gives 404 for an address that
+ * names nothing, which fails with `NotFound`, and a `calendar` resource type for a calendar.
+ * An answer with any other shape is left to {@link toObjects}.
+ *
+ * `base` is the address the answer came from. After a redirect it differs from `calendar`, the
+ * address asked for, and the entry may name either.
+ */
+async function isEmptyCalendarAnswer(
+  settings: Settings,
+  call: Call,
+  responses: DavResponse[],
+  base: URL,
+  calendar: URL,
+): Promise<boolean> {
+  const [only] = responses
+  if (responses.length !== 1 || only.status === undefined || !isGone(only.status)) return false
+  if (!isEither(ownHref(settings.server, only.href, base), calendar, base)) return false
+  const probe = await propfind(settings, call, base, "0", RESOURCE_TYPE_PROPS)
+  for (const response of probe.responses) {
+    const url = ownHref(settings.server, response.href, probe.reply.url)
+    if (!isEither(url, base, probe.reply.url)) continue
+    failIfSelfFailed(response)
+    if (isCalendar(response)) return true
+  }
+  fail(CalDavErrorCode.NotFound, "the address is not a calendar", { status: 404 })
+}
+
+/**
+ * Turn calendar-data responses into objects; refuse a foreign href or a missing body. An entry
+ * for the collection itself, under the address asked for or the one the answer came from
+ * (`base`), fails the call when it is an error. `failed` is the status of the first other entry
+ * the server reported as an error that does not mean "gone".
+ */
+function toObjects(server: URL, responses: DavResponse[], base: URL, collection: URL) {
+  const objects: CalDavObject[] = []
+  const missing: string[] = []
+  let failed: number | undefined
+  for (const response of responses) {
+    const url = ownHref(server, response.href, base)
+    if (isEither(url, collection, base)) {
+      failIfSelfFailed(response)
+      continue
+    }
+    if (response.status !== undefined && response.status >= 400) {
+      if (!isGone(response.status)) failed ??= response.status
+      for (const href of response.hrefs) missing.push(ownHref(server, href, base).href)
+      continue
+    }
+    const data = getPropText(response, CALDAV_NS, "calendar-data")
+    if (data === undefined) {
+      fail(CalDavErrorCode.Malformed, "a calendar object came without calendar-data")
+    }
+    // Whitespace around the element text is XML formatting, not part of the etag.
+    const etag = entityTag(getPropText(response, DAV_NS, "getetag"))
+    objects.push({ url: url.href, etag, data })
+  }
+  return { objects, missing, failed }
+}
+
+/** Validate an etag before it is sent: present, and sendable as a header exactly as given. */
+function requireEtag(etag: unknown): string {
+  if (typeof etag !== "string" || etag.trim() === "") {
+    fail(CalDavErrorCode.InvalidArgument, "an etag is required; read the object first")
+  }
+  // One quoted entity tag, as read: `*` would match any version and a list any of several, so
+  // either would turn a guarded write into a blind one.
+  if (!ENTITY_TAG.test(etag)) {
+    fail(CalDavErrorCode.InvalidArgument, "the etag must be one quoted entity tag, as read")
+  }
+  try {
+    new Headers({ "If-Match": etag })
+  } catch {
+    fail(CalDavErrorCode.InvalidArgument, "the etag cannot be sent as a header")
+  }
+  return etag
+}
+
+function requireIcs(ics: unknown): string {
+  if (typeof ics !== "string" || ics.trim() === "") {
+    fail(CalDavErrorCode.InvalidArgument, "the iCalendar text is empty")
+  }
+  return ics
+}
+
+/** Refuse a `createObject` name that is not a plain file name. */
+function requireName(name: string): string {
+  if (isSafeEntityId(name)) return name
+  if (name === "." || name === "..") {
+    fail(CalDavErrorCode.InvalidArgument, "name cannot be . or ..")
+  }
+  fail(CalDavErrorCode.InvalidArgument, "name must be letters, digits, . _ ~ and -")
+}
+
+/** Build a request body from a caller's arguments; a refused argument is `InvalidArgument`. */
+function bodyFrom(build: () => string): string {
+  try {
+    return build()
+  } catch (cause) {
+    fail(CalDavErrorCode.InvalidArgument, messageOf(cause))
+  }
+}
+
+/** PROPFIND the principal from one starting point; fails when it does not answer as CalDAV. */
+async function principalFrom(settings: Settings, call: Call, start: URL): Promise<URL> {
+  const { reply, responses } = await propfind(settings, call, start, "0", PRINCIPAL_PROPS)
+  for (const response of responses) {
+    const prop = getProp(response, DAV_NS, "current-user-principal")
+    const href = prop && childElements(prop, DAV_NS, "href")[0]
+    if (href) return ownHref(settings.server, textOf(href), reply.url)
+  }
+  fail(CalDavErrorCode.NotFound, "the server named no current-user-principal")
+}
+
+/** Find the principal, from the server URL or `/.well-known/caldav`, and its calendar homes. */
+async function discover(settings: Settings, call: Call): Promise<CalDavDiscovery> {
+  const { server } = settings
+  const wellKnown = new URL("/.well-known/caldav", server)
+  const starts = server.pathname === "/" ? [wellKnown, server] : [server, wellKnown]
+  let principal: URL | undefined
+  let firstError: CalDavError | undefined
+  for (const start of starts) {
+    try {
+      principal = await principalFrom(settings, call, start)
+      break
+    } catch (cause) {
+      if (!(cause instanceof CallFailure)) throw cause
+      const code = cause.error.code
+      // Wrong credentials or a spent budget fail the same way from every starting point.
+      if (code === CalDavErrorCode.Unauthorized || code === CalDavErrorCode.Timeout) {
+        throw cause
+      }
+      if (firstError === undefined || code === CalDavErrorCode.CrossOriginRedirect) {
+        firstError = cause.error
+      }
     }
   }
-
-  const propfind = async (call: Call, url: URL, depth: "0" | "1", props: XmlName[]) => {
-    const reply = await send(call, {
-      method: "PROPFIND",
-      url,
-      headers: { Depth: depth, "Content-Type": XML_TYPE },
-      body: propfindBody(props),
-    })
-    return { reply, responses: multistatus(expectStatus(reply, [207]), maxBytes) }
+  if (principal === undefined) throw new CallFailure(firstError!)
+  const { reply, responses } = await propfind(settings, call, principal, "0", HOME_PROPS)
+  const homeUrls: string[] = []
+  for (const response of responses) {
+    const prop = getProp(response, CALDAV_NS, "calendar-home-set")
+    if (prop === undefined) continue
+    for (const href of childElements(prop, DAV_NS, "href")) {
+      homeUrls.push(ownHref(server, textOf(href), reply.url).href)
+    }
   }
+  if (homeUrls.length === 0) {
+    fail(CalDavErrorCode.NotFound, "the principal names no calendar-home-set")
+  }
+  return { principalUrl: principal.href, homeUrls }
+}
 
-  const report = async (call: Call, url: URL, body: string) => {
-    const reply = await send(call, {
-      method: "REPORT",
-      url,
-      headers: { Depth: "1", "Content-Type": XML_TYPE },
+/** The calendar a PROPFIND response describes, at `url`. */
+function calendarOf(response: DavResponse, url: URL): CalDavCalendar {
+  const components = getProp(response, CALDAV_NS, "supported-calendar-component-set")
+  const calendar: CalDavCalendar = {
+    url: url.href,
+    displayName: getPropText(response, DAV_NS, "displayname")?.trim() || lastSegment(url),
+    components: components === undefined ? [] : childElements(components, CALDAV_NS, "comp")
+      .map((comp) => comp.attributes.find((a) => a.name === "name")?.value ?? "")
+      .filter((name) => name !== ""),
+  }
+  const color = getPropText(response, APPLE_ICAL_NS, "calendar-color")?.trim()
+  if (color) calendar.color = color
+  const ctag = getPropText(response, CALENDARSERVER_NS, "getctag")?.trim()
+  if (ctag) calendar.ctag = ctag
+  const syncToken = getPropText(response, DAV_NS, "sync-token")?.trim()
+  if (syncToken) calendar.syncToken = syncToken
+  return calendar
+}
+
+/** The calendars in one calendar home. */
+async function listCalendars(settings: Settings, call: Call, home: URL): Promise<CalDavCalendar[]> {
+  const { reply, responses } = await propfind(settings, call, home, "1", CALENDAR_PROPS)
+  const calendars: CalDavCalendar[] = []
+  for (const response of responses) {
+    const url = ownHref(settings.server, response.href, reply.url)
+    if (isEither(url, home, reply.url)) failIfSelfFailed(response)
+    if (isCalendar(response)) calendars.push(calendarOf(response, url))
+  }
+  return calendars
+}
+
+/** The objects of one calendar that match the listing options. */
+async function listObjects(
+  settings: Settings,
+  call: Call,
+  calendar: URL,
+  listOptions: ListObjectsOptions,
+): Promise<CalDavObject[]> {
+  const openOnly = listOptions.component.toUpperCase() === "VTODO" &&
+    listOptions.includeCompleted !== true
+  const body = bodyFrom(() =>
+    calendarQueryBody({
+      component: listOptions.component,
+      timeRange: listOptions.timeRange,
+      withoutProperties: openOnly ? ["COMPLETED"] : [],
+    })
+  )
+  const { reply, responses } = await report(settings, call, calendar, body)
+  if (await isEmptyCalendarAnswer(settings, call, responses, reply.url, calendar)) return []
+  const listed = toObjects(settings.server, responses, reply.url, calendar)
+  // A stored copy of an object the server could not read must not look deleted.
+  if (listed.failed !== undefined) {
+    failForStatus(listed.failed, "the server reported an error for an object of the listing")
+  }
+  return listed.objects
+}
+
+/** Fail when a PROPPATCH multistatus refuses any property. */
+function failIfPropertyRefused(responses: DavResponse[]): void {
+  for (const response of responses) {
+    for (const propstat of response.propstats) {
+      if (propstat.status < 200 || propstat.status > 299) {
+        failForStatus(propstat.status, "the server refused a calendar property")
+      }
+    }
+  }
+}
+
+/** The response that describes `target` itself, among a PROPFIND's answers. */
+function selfOf(server: URL, responses: DavResponse[], target: URL): DavResponse | undefined {
+  return responses.find((response) => sameResource(ownHref(server, response.href, target), target))
+}
+
+/** The names of the `DAV:` privileges in a `current-user-privilege-set`. */
+function privilegeNames(set: XmlElement): string[] {
+  return childElements(set, DAV_NS, "privilege").flatMap((privilege) =>
+    privilege.children.flatMap((child) =>
+      typeof child !== "string" && child.namespace === DAV_NS ? [child.name] : []
+    )
+  )
+}
+
+/**
+ * Create a client for one CalDAV server and one user.
+ *
+ * Throws a `TypeError` when `serverUrl` is not an `http:` or `https:` URL, when it is `http:` and
+ * `allowHttp` is not `true`, or when the username contains `:`. Nothing is sent before that check.
+ * Every other failure is returned, never thrown.
+ */
+export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
+  const settings = settingsOf(options)
+  const { server, maxBytes } = settings
+  const call = <T>(work: (call: Call) => Promise<T>) => run(settings.timeoutMs, work)
+  const put = async (call: Call, target: URL, headers: Record<string, string>, body: string) =>
+    await send(settings, call, {
+      method: "PUT",
+      url: target,
+      headers: { "Content-Type": ICS_TYPE, ...headers },
       body,
     })
-    return { reply, responses: multistatus(expectStatus(reply, [207]), maxBytes) }
-  }
-
-  /**
-   * Whether a `calendar-query` answer means "an existing calendar with no matching objects".
-   *
-   * Stalwart answers an empty calendar with 207 holding one response, the collection itself at
-   * 404 ("No resources found"), and answers a calendar that does not exist the same way, so the
-   * REPORT cannot tell them apart. A `PROPFIND` of depth 0 can: it gives 404 for an address that
-   * names nothing, which fails with `NotFound`, and a `calendar` resource type for a calendar.
-   * An answer with any other shape is left to {@link toObjects}.
-   *
-   * `base` is the address the answer came from. After a redirect it differs from `calendar`, the
-   * address asked for, and the entry may name either.
-   */
-  const isEmptyCalendarAnswer = async (
-    call: Call,
-    responses: DavResponse[],
-    base: URL,
-    calendar: URL,
-  ): Promise<boolean> => {
-    const [only] = responses
-    if (responses.length !== 1 || only.status === undefined || !isGone(only.status)) return false
-    if (!isEither(ownHref(only.href, base), calendar, base)) return false
-    const probe = await propfind(call, base, "0", RESOURCE_TYPE_PROPS)
-    for (const response of probe.responses) {
-      if (!isEither(ownHref(response.href, probe.reply.url), base, probe.reply.url)) continue
-      failIfSelfFailed(response)
-      if (isCalendar(response)) return true
-    }
-    fail(CalDavErrorCode.NotFound, "the address is not a calendar", { status: 404 })
-  }
-
-  /**
-   * Turn calendar-data responses into objects; refuse a foreign href or a missing body. An entry
-   * for the collection itself, under the address asked for or the one the answer came from
-   * (`base`), fails the call when it is an error. `failed` is the status of the first other entry
-   * the server reported as an error that does not mean "gone".
-   */
-  const toObjects = (responses: DavResponse[], base: URL, collection: URL) => {
-    const objects: CalDavObject[] = []
-    const missing: string[] = []
-    let failed: number | undefined
-    for (const response of responses) {
-      const url = ownHref(response.href, base)
-      if (isEither(url, collection, base)) {
-        failIfSelfFailed(response)
-        continue
-      }
-      if (response.status !== undefined && response.status >= 400) {
-        if (!isGone(response.status)) failed ??= response.status
-        for (const href of response.hrefs) missing.push(ownHref(href, base).href)
-        continue
-      }
-      const data = getPropText(response, CALDAV_NS, "calendar-data")
-      if (data === undefined) {
-        fail(CalDavErrorCode.Malformed, "a calendar object came without calendar-data")
-      }
-      // Whitespace around the element text is XML formatting, not part of the etag.
-      const etag = entityTag(getPropText(response, DAV_NS, "getetag"))
-      objects.push({ url: url.href, etag, data })
-    }
-    return { objects, missing, failed }
-  }
-
-  /** Validate an etag before it is sent: present, and sendable as a header exactly as given. */
-  const requireEtag = (etag: unknown): string => {
-    if (typeof etag !== "string" || etag.trim() === "") {
-      fail(CalDavErrorCode.InvalidArgument, "an etag is required; read the object first")
-    }
-    // One quoted entity tag, as read: `*` would match any version and a list any of several, so
-    // either would turn a guarded write into a blind one.
-    if (!ENTITY_TAG.test(etag)) {
-      fail(CalDavErrorCode.InvalidArgument, "the etag must be one quoted entity tag, as read")
-    }
-    try {
-      new Headers({ "If-Match": etag })
-    } catch {
-      fail(CalDavErrorCode.InvalidArgument, "the etag cannot be sent as a header")
-    }
-    return etag
-  }
-
-  const requireIcs = (ics: unknown): string => {
-    if (typeof ics !== "string" || ics.trim() === "") {
-      fail(CalDavErrorCode.InvalidArgument, "the iCalendar text is empty")
-    }
-    return ics
-  }
-
-  /** PROPFIND the principal from one starting point; `null` when it does not answer as CalDAV. */
-  const principalFrom = async (call: Call, start: URL): Promise<URL> => {
-    const { reply, responses } = await propfind(call, start, "0", PRINCIPAL_PROPS)
-    for (const response of responses) {
-      const prop = getProp(response, DAV_NS, "current-user-principal")
-      const href = prop && childElements(prop, DAV_NS, "href")[0]
-      if (href) return ownHref(textOf(href), reply.url)
-    }
-    fail(CalDavErrorCode.NotFound, "the server named no current-user-principal")
-  }
 
   return {
-    discover: () =>
-      run(async (call) => {
-        const wellKnown = new URL("/.well-known/caldav", server)
-        const starts = server.pathname === "/" ? [wellKnown, server] : [server, wellKnown]
-        let principal: URL | undefined
-        let firstError: CalDavError | undefined
-        for (const start of starts) {
-          try {
-            principal = await principalFrom(call, start)
-            break
-          } catch (cause) {
-            if (!(cause instanceof CallFailure)) throw cause
-            const code = cause.error.code
-            // Wrong credentials or a spent budget fail the same way from every starting point.
-            if (code === CalDavErrorCode.Unauthorized || code === CalDavErrorCode.Timeout) {
-              throw cause
-            }
-            if (firstError === undefined || code === CalDavErrorCode.CrossOriginRedirect) {
-              firstError = cause.error
-            }
-          }
-        }
-        if (principal === undefined) throw new CallFailure(firstError!)
-        const { reply, responses } = await propfind(call, principal, "0", HOME_PROPS)
-        const homeUrls: string[] = []
-        for (const response of responses) {
-          const prop = getProp(response, CALDAV_NS, "calendar-home-set")
-          if (prop === undefined) continue
-          for (const href of childElements(prop, DAV_NS, "href")) {
-            homeUrls.push(ownHref(textOf(href), reply.url).href)
-          }
-        }
-        if (homeUrls.length === 0) {
-          fail(CalDavErrorCode.NotFound, "the principal names no calendar-home-set")
-        }
-        return { principalUrl: principal.href, homeUrls }
-      }),
+    discover: () => call((c) => discover(settings, c)),
 
     listCalendars: (homeUrl) =>
-      run(async (call) => {
-        const home = own(homeUrl, "homeUrl")
-        const { reply, responses } = await propfind(call, home, "1", CALENDAR_PROPS)
-        const calendars: CalDavCalendar[] = []
-        for (const response of responses) {
-          const url = ownHref(response.href, reply.url)
-          if (isEither(url, home, reply.url)) failIfSelfFailed(response)
-          if (!isCalendar(response)) continue
-          const components = getProp(response, CALDAV_NS, "supported-calendar-component-set")
-          const calendar: CalDavCalendar = {
-            url: url.href,
-            displayName: getPropText(response, DAV_NS, "displayname")?.trim() || lastSegment(url),
-            components: components === undefined ? [] : childElements(components, CALDAV_NS, "comp")
-              .map((comp) => comp.attributes.find((a) => a.name === "name")?.value ?? "")
-              .filter((name) => name !== ""),
-          }
-          const color = getPropText(response, APPLE_ICAL_NS, "calendar-color")?.trim()
-          if (color) calendar.color = color
-          const ctag = getPropText(response, CALENDARSERVER_NS, "getctag")?.trim()
-          if (ctag) calendar.ctag = ctag
-          const syncToken = getPropText(response, DAV_NS, "sync-token")?.trim()
-          if (syncToken) calendar.syncToken = syncToken
-          calendars.push(calendar)
-        }
-        return calendars
-      }),
+      call((c) => listCalendars(settings, c, own(server, homeUrl, "homeUrl"))),
 
     listObjects: (calendarUrl, listOptions) =>
-      run(async (call) => {
-        const calendar = own(calendarUrl, "calendarUrl")
-        const openOnly = listOptions.component.toUpperCase() === "VTODO" &&
-          listOptions.includeCompleted !== true
-        let body: string
-        try {
-          body = calendarQueryBody({
-            component: listOptions.component,
-            timeRange: listOptions.timeRange,
-            withoutProperties: openOnly ? ["COMPLETED"] : [],
-          })
-        } catch (cause) {
-          fail(CalDavErrorCode.InvalidArgument, messageOf(cause))
-        }
-        const { reply, responses } = await report(call, calendar, body)
-        if (await isEmptyCalendarAnswer(call, responses, reply.url, calendar)) return []
-        const listed = toObjects(responses, reply.url, calendar)
-        // A stored copy of an object the server could not read must not look deleted.
-        if (listed.failed !== undefined) {
-          failForStatus(listed.failed, "the server reported an error for an object of the listing")
-        }
-        return listed.objects
-      }),
+      call((c) => listObjects(settings, c, own(server, calendarUrl, "calendarUrl"), listOptions)),
 
     getObjects: (calendarUrl, urls) =>
-      run(async (call) => {
-        const calendar = own(calendarUrl, "calendarUrl")
-        const targets = urls.map((url) => own(url, "an object URL"))
+      call(async (c) => {
+        const calendar = own(server, calendarUrl, "calendarUrl")
+        const targets = urls.map((url) => own(server, url, "an object URL"))
         if (targets.length === 0) return { objects: [], missing: [] }
         const body = calendarMultigetBody(targets.map((url) => `${url.pathname}${url.search}`))
-        const { reply, responses } = await report(call, calendar, body)
-        const { objects, missing } = toObjects(responses, reply.url, calendar)
+        const { reply, responses } = await report(settings, c, calendar, body)
+        const { objects, missing } = toObjects(server, responses, reply.url, calendar)
         return { objects, missing }
       }),
 
     getObject: (url) =>
-      run(async (call) => {
-        const target = own(url, "url")
+      call(async (c) => {
+        const target = own(server, url, "url")
         const reply = expectStatus(
-          await send(call, { method: "GET", url: target, headers: { Accept: "text/calendar" } }),
+          await send(settings, c, {
+            method: "GET",
+            url: target,
+            headers: { Accept: "text/calendar" },
+          }),
           [200],
         )
         return { url: reply.url.href, etag: entityTag(reply.headers.get("ETag")), data: reply.text }
       }),
 
-    createObject: (calendarUrl, ics, options) =>
-      run(async (call) => {
-        const calendar = own(calendarUrl, "calendarUrl")
+    createObject: (calendarUrl, ics, createOptions) =>
+      call(async (c) => {
+        const calendar = own(server, calendarUrl, "calendarUrl")
         const body = requireIcs(ics)
-        const name = options?.name
-        if (name !== undefined && !/^[A-Za-z0-9._~-]+$/.test(name)) {
-          fail(CalDavErrorCode.InvalidArgument, "name must be letters, digits, . _ ~ and -")
-        }
-        if (name === "." || name === "..") {
-          fail(CalDavErrorCode.InvalidArgument, "name cannot be . or ..")
-        }
+        const name = createOptions?.name
+        if (name !== undefined) requireName(name)
         // A fresh name, never the UID: Tasks.org and DAVx5 name resources unlike their UIDs.
         const target = childUrl(calendar, name ?? `${uuidV7()}.ics`)
-        const reply = await send(call, {
-          method: "PUT",
-          url: target,
-          headers: { "Content-Type": ICS_TYPE, "If-None-Match": "*" },
-          body,
-        })
+        const reply = await put(c, target, { "If-None-Match": "*" }, body)
         expectStatus(reply, [200, 201, 204], CalDavErrorCode.AlreadyExists)
         return { url: reply.url.href, etag: entityTag(reply.headers.get("ETag")) }
       }),
 
     updateObject: (url, ics, etag) =>
-      run(async (call) => {
-        const target = own(url, "url")
+      call(async (c) => {
+        const target = own(server, url, "url")
         const ifMatch = requireEtag(etag)
         const body = requireIcs(ics)
-        const reply = await send(call, {
-          method: "PUT",
-          url: target,
-          headers: { "Content-Type": ICS_TYPE, "If-Match": ifMatch },
-          body,
-        })
+        const reply = await put(c, target, { "If-Match": ifMatch }, body)
         expectStatus(reply, [200, 201, 204], CalDavErrorCode.Conflict)
         return { url: reply.url.href, etag: entityTag(reply.headers.get("ETag")) }
       }),
 
     deleteObject: (url, etag) =>
-      run(async (call) => {
-        const target = own(url, "url")
+      call(async (c) => {
+        const target = own(server, url, "url")
         const ifMatch = requireEtag(etag)
-        const reply = await send(call, {
+        const reply = await send(settings, c, {
           method: "DELETE",
           url: target,
           headers: { "If-Match": ifMatch },
@@ -826,17 +913,12 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
       }),
 
     makeCalendar: (homeUrl, calendar) =>
-      run(async (call) => {
-        const home = own(homeUrl, "homeUrl")
+      call(async (c) => {
+        const home = own(server, homeUrl, "homeUrl")
         const target = childUrl(home, uuidV7())
         target.pathname += "/"
-        let body: string
-        try {
-          body = mkcalendarBody(calendar)
-        } catch (cause) {
-          fail(CalDavErrorCode.InvalidArgument, messageOf(cause))
-        }
-        const reply = await send(call, {
+        const body = bodyFrom(() => mkcalendarBody(calendar))
+        const reply = await send(settings, c, {
           method: "MKCALENDAR",
           url: target,
           headers: { "Content-Type": XML_TYPE },
@@ -847,59 +929,39 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
       }),
 
     updateCalendar: (url, changes) =>
-      run(async (call) => {
-        const target = own(url, "url")
-        let body: string
-        try {
-          body = proppatchBody(changes)
-        } catch (cause) {
-          fail(CalDavErrorCode.InvalidArgument, messageOf(cause))
-        }
-        const reply = await send(call, {
+      call(async (c) => {
+        const target = own(server, url, "url")
+        const body = bodyFrom(() => proppatchBody(changes))
+        const reply = await send(settings, c, {
           method: "PROPPATCH",
           url: target,
           headers: { "Content-Type": XML_TYPE },
           body,
         })
         if (reply.status === 200 || reply.status === 204) return null
-        for (const response of multistatus(expectStatus(reply, [207]), maxBytes)) {
-          for (const propstat of response.propstats) {
-            if (propstat.status < 200 || propstat.status > 299) {
-              failForStatus(propstat.status, "the server refused a calendar property")
-            }
-          }
-        }
+        failIfPropertyRefused(multistatus(expectStatus(reply, [207]), maxBytes))
         return null
       }),
 
     deleteCalendar: (url) =>
-      run(async (call) => {
-        const target = own(url, "url")
-        const { responses } = await propfind(call, target, "0", [CALENDAR_PROPS[0]])
-        const self = responses.find((response) =>
-          sameResource(ownHref(response.href, target), target)
-        )
+      call(async (c) => {
+        const target = own(server, url, "url")
+        const { responses } = await propfind(settings, c, target, "0", [CALENDAR_PROPS[0]])
+        const self = selfOf(server, responses, target)
         if (self === undefined || !isCalendar(self)) {
           fail(CalDavErrorCode.InvalidArgument, "refusing to delete what is not a calendar")
         }
-        expectStatus(await send(call, { method: "DELETE", url: target }), [200, 204])
+        expectStatus(await send(settings, c, { method: "DELETE", url: target }), [200, 204])
         return null
       }),
 
     getPrivileges: (url) =>
-      run(async (call) => {
-        const target = own(url, "url")
-        const { responses } = await propfind(call, target, "0", PRIVILEGE_PROPS)
-        const self = responses.find((response) =>
-          sameResource(ownHref(response.href, target), target)
-        )
+      call(async (c) => {
+        const target = own(server, url, "url")
+        const { responses } = await propfind(settings, c, target, "0", PRIVILEGE_PROPS)
+        const self = selfOf(server, responses, target)
         const set = self && getProp(self, DAV_NS, "current-user-privilege-set")
-        if (set === undefined) return null
-        return childElements(set, DAV_NS, "privilege").flatMap((privilege) =>
-          privilege.children.flatMap((child) =>
-            typeof child !== "string" && child.namespace === DAV_NS ? [child.name] : []
-          )
-        )
+        return set === undefined ? null : privilegeNames(set)
       }),
   }
 }

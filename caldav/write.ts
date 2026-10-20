@@ -52,7 +52,10 @@ import {
   CalDavErrorCode,
   type CalDavObject,
 } from "./client.ts"
+import { isSafeEntityId } from "./_entity-id.ts"
 import { childUrl } from "./url.ts"
+
+export { isSafeEntityId }
 
 /** The object calls a write transport needs. A {@link CalDavClient} satisfies it. */
 export type CalDavWriter = Pick<
@@ -136,14 +139,6 @@ export interface CalDavWriteTransport<P, S> {
   fetchServer(entityId: string): Promise<S | null>
   /** Reads what `send` threw; anything else is an unknown outcome, so `unreachable`. */
   classify(error: unknown): CalDavSendFailure
-}
-
-/**
- * Whether an entity id can name an object: letters, digits, `.`, `_`, `~` and `-`, and not `.` or
- * `..`. The same rule as the `name` of `CalDavClient.createObject`.
- */
-export function isSafeEntityId(entityId: string): boolean {
-  return /^[A-Za-z0-9._~-]+$/.test(entityId) && entityId !== "." && entityId !== ".."
 }
 
 /** The UID of an iCalendar text (lines unfolded, parameters ignored), or `null` when it has none. */
