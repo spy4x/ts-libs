@@ -5,10 +5,10 @@ import {
   createDenoObjectFs,
   createObjectFs,
   type DenoFsHost,
-  ensureFileDirectory,
   type WritableFileHandle,
   writeToFile,
 } from "./fs.ts"
+import { ensureDirectoryWith } from "./_directory.ts"
 import { LocalStorage } from "./local.ts"
 import { S3Storage } from "./s3.ts"
 
@@ -156,12 +156,12 @@ describe("storage callers with a handle that writes short", () => {
   })
 })
 
-describe("ensureFileDirectory", () => {
+describe("ensureDirectoryWith, behind ensureFileDirectory", () => {
   it("rethrows a failure to create the directory, such as a denied permission", async () => {
     const denied = () => Promise.reject(new Deno.errors.PermissionDenied("denied"))
 
     await assertRejects(
-      () => ensureFileDirectory("a/b/file.bin", denied),
+      () => ensureDirectoryWith("a/b/file.bin", denied),
       Deno.errors.PermissionDenied,
     )
   })
@@ -169,7 +169,7 @@ describe("ensureFileDirectory", () => {
   it("swallows AlreadyExists, so the write that follows reports the precise error", async () => {
     const exists = () => Promise.reject(new Deno.errors.AlreadyExists("a file is there"))
 
-    await ensureFileDirectory("a/b/file.bin", exists)
+    await ensureDirectoryWith("a/b/file.bin", exists)
   })
 })
 

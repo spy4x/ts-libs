@@ -4710,8 +4710,8 @@ await storage?.upload("media/photo.png", bytes)
 provider. The key is an **argument**, not a module-scope `$env` read, so
 importing the package has no environment dependency and cannot fail on a missing
 variable. `createStorage()` is the only function that reads real environment
-variables, only the ones `storageEnvNames()` lists, and it uses the same `parseStorageEnv(record)` helper that a test
-drives with a literal object.
+variables, only the ones `storageEnvNames()` lists, and it uses the same
+`parseStorageEnv(record)` helper that a test drives with a literal object.
 
 ### Injecting configuration
 
@@ -4778,11 +4778,11 @@ URL, and an ACL outside the canned set is rejected. `getDownloadURL` ignores
 
 `ObjectFs` (`readObject`, `writeObject`, `existsObject`) is the filesystem
 dependency of both providers, and is what lets the local provider be exercised
-without disk access. `createDenoObjectFs()` is the real adapter: it is
-`createObjectFs(fs)` over the platform's `denoFileSystem`, and `createObjectFs`
-takes any `FileSystemPort` (`@spy4x/platform/server/ports`) that has `readBytes`,
-`writeBytes` and `writeStream`. `createMemoryObjectFs()` is exported for callers
-that want the same substitute in their own tests.
+without disk access. `createDenoObjectFs()` is the real adapter: it reads and
+writes through the platform's `denoFileSystem` port
+(`@spy4x/platform/server/deno-fs`) and its `readBytes`, `writeBytes` and
+`writeStream` methods. `createMemoryObjectFs()` is exported for callers that want
+the same substitute in their own tests.
 
 `writeObject` returns the byte count it wrote and accepts a `Uint8Array` or a
 `ReadableStream<Uint8Array>`, which is how `download` streams a response body

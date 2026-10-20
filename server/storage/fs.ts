@@ -1,48 +1,15 @@
 import { denoFileSystem } from "@spy4x/platform/server/deno-fs"
 import type { FileSystemPort } from "@spy4x/platform/server/ports"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
+import {
+  ensureDirectoryWith,
+  type MakeDirectory,
+  makeDirectoryRecursive,
+  parentDirectory,
+} from "./_directory.ts"
 import type { ObjectFs } from "./ports.ts"
 
-/**
- * Directory that must exist before writing `filePath`, or `undefined` when
- * nothing has to be created.
- *
- * **This is not a sanitiser.** A `..` segment is preserved as given
- * (`"../../evil/x.png"` → `"../../evil"`), and so is a percent-encoded one,
- * because resolving an object key is `paths.ts`'s job: every bucket and key that
- * reaches here has already been validated to be relative and `..`-free, so the
- * only paths this sees are ones a caller produced. A caller that feeds it an
- * unvalidated string gets an unvalidated path — that is the documented contract,
- * not an oversight.
- *
- * Pure, and exported for testing, because the naive form
- * `filePath.slice(0, filePath.lastIndexOf("/"))` is wrong for a bare filename:
- * `lastIndexOf` returns `-1` and `slice(0, -1)` silently drops the last
- * character, so `"out.png"` produced the stray directory `out.pn`. Callers must
- * treat `undefined` as "no directory to create" and never mkdir it.
- */
-export function parentDirectory(filePath: string): string | undefined {
-  if (filePath === "") return undefined
-  const normalized = filePath.replaceAll("\\", "/")
-  const cut = normalized.lastIndexOf("/")
-  if (cut < 0) return undefined
-  const leading = normalized.startsWith("/")
-  const parts = normalized
-    .slice(leading ? 1 : 0, cut)
-    .split("/")
-    .filter((part) => part !== "" && part !== ".")
-  if (parts.length === 0) return leading ? "/" : undefined
-  const parent = parts.join("/")
-  return leading ? `/${parent}` : parent
-}
-
-/** Creates a directory and every missing parent. Injected so a test needs no `--allow-write`. */
-export type MakeDirectory = (path: string) => Promise<void>
-
-/** The real `MakeDirectory`: `Deno.mkdir` with `recursive`, which needs `--allow-write`. */
-function makeDirectoryRecursive(path: string): Promise<void> {
-  return Deno.mkdir(path, { recursive: true })
-}
+export { parentDirectory }
 
 /**
  * Create the directory holding `filePath`, with every missing parent.
@@ -53,17 +20,8 @@ function makeDirectoryRecursive(path: string): Promise<void> {
  * disk, is thrown, so the caller sees the real cause instead of a later
  * `NotFound` from opening a file in a directory that was never made.
  */
-export async function ensureFileDirectory(
-  filePath: string,
-  makeDirectory: MakeDirectory = makeDirectoryRecursive,
-): Promise<void> {
-  const parent = parentDirectory(filePath)
-  if (parent === undefined) return
-  try {
-    await makeDirectory(parent)
-  } catch (error) {
-    if (!(error instanceof Deno.errors.AlreadyExists)) throw error
-  }
+export function ensureFileDirectory(filePath: string): Promise<void> {
+  return ensureDirectoryWith(filePath, makeDirectoryRecursive)
 }
 
 /** What {@link replaceFile} needs besides the write itself. */
@@ -99,7 +57,7 @@ async function replaceFile(
   write: (path: string) => Promise<number>,
   steps: ReplaceSteps,
 ): Promise<number> {
-  await ensureFileDirectory(filePath, steps.makeDirectory)
+  await ensureDirectoryWith(filePath, steps.makeDirectory)
   const temporary = temporarySibling(filePath)
   try {
     const count = await write(temporary)
@@ -171,7 +129,7 @@ export async function writeToFile(
   open: OpenFile = openFileForWrite,
   makeDirectory: MakeDirectory = makeDirectoryRecursive,
 ): Promise<number> {
-  await ensureFileDirectory(path, makeDirectory)
+  await ensureDirectoryWith(path, makeDirectory)
   const file = await open(path)
   if (data instanceof Uint8Array) {
     // Both branches close explicitly on error and on success. The closer is the
@@ -254,7 +212,8 @@ function closeQuietly(file: WritableFileHandle): void {
 /**
  * Minimal `Deno` surface `createDenoObjectFs` uses. Injected so a test needs no permission.
  *
- * A new caller injects a `FileSystemPort` into {@link createObjectFs} instead.
+ * With `rename` but no `remove`, a write that fails leaves its temporary
+ * file (`.<uuid>.part` beside the target) behind: give a host both or neither.
  */
 export interface DenoFsHost {
   readFile(path: string): Promise<Uint8Array>
@@ -268,7 +227,10 @@ export interface DenoFsHost {
    * is renamed into place; without it, the write truncates the target first.
    */
   rename?(from: string, to: string): Promise<void>
-  /** Removes the temporary file of a failed write. */
+  /**
+   * Removes the temporary file of a failed write. Without it, that file stays
+   * on disk when the host has `rename`.
+   */
   remove?(path: string): Promise<void>
 }
 
@@ -287,8 +249,8 @@ export const denoFsHost: DenoFsHost = {
  * `ObjectFs` backed by `Deno`. Read paths need `--allow-read`; `writeObject`
  * needs `--allow-write`.
  *
- * Without `host` it is {@link createObjectFs} over the platform's
- * `denoFileSystem`, and the integration tier runs the `ObjectFs` contract
+ * Without `host` it reads and writes through the platform's
+ * `denoFileSystem` port (`readBytes`, `writeBytes`, `writeStream`), and the integration tier runs the `ObjectFs` contract
  * against it. With `host`, every call goes through that host, which is how the
  * unit tier drives the stat-to-boolean decision, both write branches, the byte
  * count and the closer-on-error path without `--allow-write`. Either way a
