@@ -39,6 +39,7 @@
     "./server/interval-runner": "./server/interval-runner.ts",
     "./server/jsonl-logger": "./server/jsonl-logger.ts",
     "./server/ports": "./server/ports.ts",
+    "./server/process": "./server/process.ts",
     "./server/reminder-runner": "./server/reminder-runner.ts",
     "./server/run-command": "./server/run-command.ts",
     "./server/shutdown-signal": "./server/shutdown-signal.ts",
