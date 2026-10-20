@@ -68,12 +68,19 @@ export interface PostTransport {
   requestTimeoutMs: number
 }
 
-/** Resolves `options` over the real defaults. */
+/**
+ * Resolves `options` over the real defaults. A retry override set to `undefined` keeps the
+ * default: spreading it as is replaced `maxAttempts` with `undefined`, so no attempt ran and the
+ * client threw on the missing result.
+ */
 export const createPostTransport = (
   defaults: RetryPolicy,
   options: PostClientOptions,
 ): PostTransport => {
-  const policy: RetryPolicy = { ...defaults, ...options.retry, onDelay: options.onDelay }
+  const overrides = Object.fromEntries(
+    Object.entries(options.retry ?? {}).filter(([, value]) => value !== undefined),
+  )
+  const policy: RetryPolicy = { ...defaults, ...overrides, onDelay: options.onDelay }
   return {
     fetcher: options.fetcher ?? ((input, init) => fetch(input, init)),
     sleep: options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),

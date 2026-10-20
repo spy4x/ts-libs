@@ -331,6 +331,21 @@ describe("NtfyClient.push", () => {
     expect(transport.requests.length).toBe(5)
   })
 
+  it("keeps the default policy when a retry override is undefined", async () => {
+    const transport = fakeTransport([{ status: 500 }])
+    const timer = recordingTimer()
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: transport.fetcher,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      random: () => 0.5,
+      retry: { maxAttempts: undefined, baseDelayMs: undefined },
+    })
+    const result = await client.notifyFailure("backup failed", "detail")
+    expect(result.ok === false && result.attempts).toBe(5)
+    expect(timer.delays[0]).toBe(3000)
+  })
+
   it("asks the injected timer for Retry-After seconds, not the 3s default", async () => {
     const { client, timer } = clientFor([
       { status: 429, headers: { "Retry-After": "2" } },

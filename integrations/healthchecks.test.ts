@@ -249,6 +249,21 @@ describe("HealthchecksClient.ping", () => {
     expect(result.ok === false && result.attempts).toBe(10)
   })
 
+  it("keeps the default policy when a retry override is undefined", async () => {
+    const transport = fakeTransport([{ status: 500 }])
+    const timer = recordingTimer()
+    const client = new HealthchecksClient({ pingUrl: PING_URL }, {
+      fetcher: transport.fetcher,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      random: () => 0.5,
+      retry: { maxAttempts: undefined, baseDelayMs: undefined },
+    })
+    const result = await client.ping({ outcome: HealthchecksOutcome.Success })
+    expect(result.ok === false && result.attempts).toBe(10)
+    expect(timer.delays[0]).toBe(60_000)
+  })
+
   it("recovers on the second attempt of a transient failure", async () => {
     const { client, transport, timer } = clientFor([{ status: 503 }, { status: 200 }])
     const result = await client.ping({ outcome: HealthchecksOutcome.Fail })
