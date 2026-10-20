@@ -369,7 +369,7 @@ EXPLICIT_SCHEME	constant	@spy4x/net	Any `scheme:` prefix, with or without `//`, 
 Fetcher	interface	@spy4x/net	The seam that keeps this module off the network in tests.
 INVALID_CHARACTERS	constant	@spy4x/net	Whitespace and control characters that make a URL input invalid.
 NormalizeUrlShapeResult	type	@spy4x/net	Outcome of normalizeUrlShape.
-PLAIN_HOSTNAME	constant	@spy4x/net	A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
+PLAIN_HOSTNAME	constant	@spy4x/net	Deprecated: Nothing in this library uses it; write the pattern where it is needed. A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
 ParsedIp	interface	@spy4x/net	An address that parseIp accepted.
 PayloadTooLargeError	class	@spy4x/net	Body exceeded the byte cap.
 SafeFetchMethod	enum	@spy4x/net	Request methods a redirect is allowed to carry unchanged.
@@ -392,7 +392,7 @@ isLoopbackHost	function	@spy4x/net	True when `host` names the machine itself the
 isPublicAddress	function	@spy4x/net	True if `addr` is a globally routable IPv4 or IPv6 address.
 isPublicIpv4	function	@spy4x/net	True if `addr` is a globally routable IPv4 address.
 isPublicIpv6	function	@spy4x/net	True if the IPv6 address (with optional embedded IPv4) is globally routable.
-isUrlShapeOk	function	@spy4x/net	Narrow a `normalizeUrlShape` result to its success branch.
+isUrlShapeOk	function	@spy4x/net	Deprecated: Read `result.ok` instead: it narrows the result the same way. Narrow a `normalizeUrlShape` result to its success branch.
 normalizeIp	function	@spy4x/net	The canonical spelling of `input` (parseIp), or `null` when it is not an address.
 normalizeUrlShape	function	@spy4x/net	Normalise the shape of a user-entered URL.
 parseBoundedFormData	function	@spy4x/net	Parse a `multipart/form-data` (or url-encoded) request body under the same cap and stall budget as `readBoundedBody`.
@@ -458,13 +458,13 @@ INVALID_CHARACTERS	constant	@spy4x/net/url-shape	Whitespace and control characte
 INVALID_CHARACTERS_MESSAGE	constant	@spy4x/net/url-shape	Message for the control-character case of UrlShapeErrorCode `"invalid_format"`.
 INVALID_FORMAT_MESSAGE	constant	@spy4x/net/url-shape	Message for UrlShapeErrorCode `"invalid_format"`.
 NormalizeUrlShapeResult	type	@spy4x/net/url-shape	Outcome of normalizeUrlShape.
-PLAIN_HOSTNAME	constant	@spy4x/net/url-shape	A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
+PLAIN_HOSTNAME	constant	@spy4x/net/url-shape	Deprecated: Nothing in this library uses it; write the pattern where it is needed. A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
 UNSUPPORTED_PROTOCOL_MESSAGE	constant	@spy4x/net/url-shape	Message for UrlShapeErrorCode `"unsupported_protocol"`.
 UrlShapeError	interface	@spy4x/net/url-shape	Rejected input, with the reason a caller can branch on.
 UrlShapeErrorCode	type	@spy4x/net/url-shape	Machine-readable rejection reason.
 UrlShapeOk	interface	@spy4x/net/url-shape	Accepted input, normalised.
 detectScheme	function	@spy4x/net/url-shape	Split an explicit `scheme:` prefix off the raw input.
-isUrlShapeOk	function	@spy4x/net/url-shape	Narrow a `normalizeUrlShape` result to its success branch.
+isUrlShapeOk	function	@spy4x/net/url-shape	Deprecated: Read `result.ok` instead: it narrows the result the same way. Narrow a `normalizeUrlShape` result to its success branch.
 normalizeUrlShape	function	@spy4x/net/url-shape	Normalise the shape of a user-entered URL.
 UNKNOWN_DEVICE	constant	@spy4x/net/user-agent	The name of a device whose user agent says nothing this module recognises.
 deviceName	function	@spy4x/net/user-agent	A short name a person recognises their device by, such as "Firefox on Linux" or "Safari on iPhone".
@@ -2448,4 +2448,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 96f28bb56c873a0b56ce25f6c68b0f6c66ae704e53dc45a166ed60cc7fdd94e7
+# export surface: sha256 107001a3754df69c9792efd507e2d6c7fe2e49d22eee6a2547f2a02235437ad7
