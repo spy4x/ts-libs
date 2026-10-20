@@ -236,6 +236,27 @@ Deno.test("after stop it unsubscribes and calls nothing, even if the client stil
   assertEquals(subscribed, 1)
 })
 
+Deno.test("does not report an async onListen or onMessage that rejects after stop", async () => {
+  const db = fakeSql()
+  const errors: unknown[] = []
+  let failListen: (error: Error) => void = () => {}
+  let failMessage: (error: Error) => void = () => {}
+
+  const stop = await listenJson(db.sql, "inbox_changed", {
+    schema: inboxChange,
+    onMessage: () => new Promise<void>((_, reject) => failMessage = reject),
+    onListen: () => new Promise<void>((_, reject) => failListen = reject),
+    onError: (error) => void errors.push(error),
+  })
+  db.notify(`{"userId":7}`)
+  await stop()
+  failListen(new Error("resync failed late"))
+  failMessage(new Error("handler failed late"))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  assertEquals(errors, [])
+})
+
 Deno.test("reports a schema that throws and keeps listening", async () => {
   const db = fakeSql()
   const heard: unknown[] = []
