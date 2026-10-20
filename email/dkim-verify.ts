@@ -1635,7 +1635,12 @@ export async function verifyDkimSignatures(
   // one used to condemn the whole message, and a valid one an attacker put on top
   // used to decide it. Each field's value keeps its exact bytes, so the canonical
   // form reconstructed for hashing matches what that signer saw.
-  const fields = headers.filter((line) => line.toLowerCase().startsWith("dkim-signature:"))
+  // The name is compared trimmed, as `selectSignedHeaders` compares it: RFC 5322's
+  // obsolete syntax allows WSP before the colon, so `DKIM-Signature :` is a field.
+  const fields = headers.filter((line) => {
+    const colon = line.indexOf(":")
+    return colon !== -1 && trimHeaderName(line.slice(0, colon)).toLowerCase() === "dkim-signature"
+  })
   if (fields.length === 0) {
     return [{ valid: false, reason: "no DKIM-Signature header found" }]
   }

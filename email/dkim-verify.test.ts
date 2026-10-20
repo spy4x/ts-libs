@@ -624,6 +624,16 @@ describe("the DKIM-Signature field name", () => {
     const key = parseDkimPublicKey(record) ?? undefined
     assertEquals((await verifyDkim(renameSignatureField(raw, "DKIM-SIGNATURE"), key)).valid, true)
   })
+
+  it("finds a field written with a space before its colon", async () => {
+    // RFC 5322's obsolete syntax allows WSP before the colon, and relaxed
+    // canonicalization removes it, so `DKIM-Signature :` still carries a valid
+    // signature. Matching the literal `dkim-signature:` reported none at all.
+    const { raw, record } = await fixture("dkimpy-relaxed")
+    const key = parseDkimPublicKey(record) ?? undefined
+    const result = await verifyDkim(renameSignatureField(raw, "DKIM-Signature "), key)
+    assert(result.valid, `reason=${result.reason}`)
+  })
 })
 
 // --- verifier policy RFC 6376 leaves to the caller -------------------------
