@@ -54,6 +54,7 @@ import {
 } from "./client.ts"
 import { isSafeEntityId } from "./_entity-id.ts"
 import { childUrl } from "./url.ts"
+import { getProperty, type IcalComponent, parseIcal } from "@spy4x/time/ical"
 
 export { isSafeEntityId }
 
@@ -141,23 +142,42 @@ export interface CalDavWriteTransport<P, S> {
   classify(error: unknown): CalDavSendFailure
 }
 
-/** The UID of an iCalendar text (lines unfolded, parameters ignored), or `null` when it has none. */
+/** Every iCalendar component in a tree, the root first. */
+function componentsOf(root: IcalComponent): IcalComponent[] {
+  return [root, ...root.components.flatMap(componentsOf)]
+}
+
+/** The UID of an iCalendar text (parameters ignored), or `null` when it has none or is unreadable. */
 function uidOf(ics: string): string | null {
-  const lines = ics.replace(/\r?\n[ \t]/g, "").split(/\r?\n/)
-  for (const line of lines) {
-    const match = /^UID(?:;[^:]*)?:(.*)$/i.exec(line)
-    if (match) return match[1].trim()
+  const parsed = parseIcal(ics)
+  if (!parsed.success) return null
+  for (const component of componentsOf(parsed.output)) {
+    const uid = getProperty(component, "UID")
+    if (uid) return uid.value.trim()
   }
   return null
 }
 
-/** Whether two iCalendar texts hold the same content lines (unfolded, blank ones dropped), in any order. */
+/** The content lines of an iCalendar text as comparable keys, sorted; `null` when unreadable. */
+function contentKeys(ics: string): string[] | null {
+  const parsed = parseIcal(ics)
+  if (!parsed.success) return null
+  return componentsOf(parsed.output).flatMap((component) => [
+    `BEGIN:${component.name}`,
+    `END:${component.name}`,
+    ...component.properties.map(({ name, params, value }) => JSON.stringify([name, params, value])),
+  ]).sort()
+}
+
+/**
+ * Whether two iCalendar texts hold the same components and content lines, in any order. An
+ * unreadable text matches nothing.
+ */
 function sameLines(a: string, b: string): boolean {
-  const lines = (ics: string) =>
-    ics.replace(/\r?\n[ \t]/g, "").split(/\r?\n/).filter((line) => line !== "").sort()
-  const left = lines(a)
-  const right = lines(b)
-  return left.length === right.length && left.every((line, index) => line === right[index])
+  const left = contentKeys(a)
+  const right = contentKeys(b)
+  return left !== null && right !== null && left.length === right.length &&
+    left.every((key, index) => key === right[index])
 }
 
 const PLACEHOLDER = "http://path.invalid"
