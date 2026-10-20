@@ -55,32 +55,6 @@ export interface BodyHashCache {
   get(algorithm: BodyCanonicalization, bodyLength: number | undefined): Promise<BodyHashResult>
 }
 
-let canonicalizationPasses = 0
-let hashPasses = 0
-
-/**
- * Test-only: how many times a body was actually canonicalised — a cache
- * miss, not a hit — across every cache this module has created since the
- * last reset. Not part of the package's public surface; see the module note.
- */
-export function canonicalizationPassesForTests(): number {
-  return canonicalizationPasses
-}
-
-/**
- * Test-only: how many times a canonical body was actually hashed — a cache
- * miss for a `(mode, l=)` pair, not a hit — since the last reset.
- */
-export function hashPassesForTests(): number {
-  return hashPasses
-}
-
-/** Test-only: zero both counters. */
-export function resetBodyHashCountersForTests(): void {
-  canonicalizationPasses = 0
-  hashPasses = 0
-}
-
 /**
  * Build one cache for one message. `deps.canonicalize` runs at most once per
  * distinct `algorithm` value that {@link BodyHashCache.get} is called with,
@@ -98,7 +72,6 @@ export function createBodyHashCache(deps: BodyHashDependencies): BodyHashCache {
   function bytesFor(algorithm: BodyCanonicalization): Uint8Array {
     let bytes = canonicalBytes.get(algorithm)
     if (bytes === undefined) {
-      canonicalizationPasses++
       bytes = deps.encode(deps.canonicalize(algorithm))
       canonicalBytes.set(algorithm, bytes)
     }
@@ -110,7 +83,6 @@ export function createBodyHashCache(deps: BodyHashDependencies): BodyHashCache {
       const key = `${algorithm}:${bodyLength ?? "*"}`
       let pending = results.get(key)
       if (pending === undefined) {
-        hashPasses++
         pending = (async () => {
           const canonical = bytesFor(algorithm)
           const signedOctets = bodyLength === undefined
