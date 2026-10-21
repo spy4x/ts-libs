@@ -1446,7 +1446,7 @@ createOperationDispatcher	function	@spy4x/realtime/operations	The socket adapter
 expectNoPayload	function	@spy4x/realtime/operations	Refuses a payload on a request that takes none, so a client cannot smuggle fields past it.
 isBoundToUser	function	@spy4x/realtime/operations	Whether a call is bound to the authenticated user.
 parsePayload	function	@spy4x/realtime/operations	Checks a request payload with an arktype schema and returns the parsed value.
-AbandonReason	type	@spy4x/realtime/outbox	How a queued create left the queue unsent: - `withdrawn`: the person took it back (`withdraw`); - `dropped`: the entity was deleted before any send, so the two cancelled out; - `discarded`: the server refused it and the person chose the server's side (`useTheirs`) while the server holds no such entity, or a change that stood alone was refused (`submit` answered `failed`).
+AbandonReason	type	@spy4x/realtime/outbox	How a queued create left the queue unsent: - `withdrawn`: the person took it back (`withdraw`); - `dropped`: the entity was deleted before any send, so the two cancelled out; - `discarded`: the server refused it and the person chose the server's side (`useTheirs`) or deleted the entity while the server holds no such entity, or a change that stood alone was refused (`submit` answered `failed`).
 Change	type	@spy4x/realtime/outbox	What a person did to an entity.
 ConflictReason	type	@spy4x/realtime/outbox	Why a write stopped the queue for its entity and now waits for a person: - `version`: the entity changed on the server since this write was based on it; - `gone`: the entity was deleted on the server; - `rejected`: the server refused the write (for example the role no longer allows it).
 ConflictRef	interface	@spy4x/realtime/outbox	The conflict a person was shown: an OutboxEntry from `entries()` fits.
@@ -2472,4 +2472,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 14e4ec6e1badc1fb5808330a968bfe9930c1a3e0c1c0564ef95e75b903f35c19
+# export surface: sha256 b5419c12c9c235a14dc1df56f83b8c1276507c837f01159bfbe3e9609e48f4d5
