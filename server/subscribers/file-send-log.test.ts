@@ -42,9 +42,60 @@ describe("createFileSendLog", () => {
     const fs = fakeFs({ [PATH]: SITE_LOG })
     const log = createFileSendLog({ path: PATH, fs })
     await log.record("second-post", "b2")
+    await log.finish({ issue: "second-post", failed: 1, at: new Date() })
     const expected = JSON.parse(SITE_LOG)
     expected[1].recipients = ["a1", "b2"]
+    expected[1].sent = 2
     expect(JSON.parse(fs.files.get(PATH)!)).toEqual(expected)
+    expect(fs.files.has(`${PATH}.journal`)).toBe(false)
+  })
+
+  it("records each recipient with one append and never rewrites the log for it", async () => {
+    const fs = fakeFs({ "/data/.keep": "" })
+    const log = createFileSendLog({ path: PATH, fs })
+    await log.start({ issue: "p", subject: "S", audience: [], at: new Date() })
+    const before = fs.calls.length
+    for (let i = 0; i < 50; i++) await log.record("p", `m${i}`)
+    const calls = fs.calls.slice(before)
+    expect(calls.filter((c) => c.op === "appendText").length).toBe(50)
+    expect(calls.filter((c) => c.op !== "appendText" && c.op !== "readText").length).toBe(0)
+    expect(calls.filter((c) => c.op === "readText").length).toBeLessThanOrEqual(2)
+  })
+
+  it("keeps every recorded recipient when a run dies before it finishes", async () => {
+    const fs = fakeFs({ [PATH]: SITE_LOG })
+    await createFileSendLog({ path: PATH, fs }).record("second-post", "b2")
+    // A new process, as after a crash: it reads the file and the journal the dead one left.
+    const log = createFileSendLog({ path: PATH, fs })
+    expect((await log.find("second-post"))?.recipients).toEqual(["a1", "b2"])
+  })
+
+  it("ignores a journal line a crash cut short", async () => {
+    const fs = fakeFs({
+      [PATH]: SITE_LOG,
+      [`${PATH}.journal`]: `{"slug":"second-post","mark":"b2"}\n{"slug":"second-po`,
+    })
+    const log = createFileSendLog({ path: PATH, fs })
+    expect((await log.find("second-post"))?.recipients).toEqual(["a1", "b2"])
+  })
+
+  it("drops a torn journal line before the next run appends, so its finish succeeds", async () => {
+    const fs = fakeFs({
+      [PATH]: SITE_LOG,
+      [`${PATH}.journal`]: `{"slug":"second-post","mark":"b2"}\n{"slug":"second-po`,
+    })
+    const log = createFileSendLog({ path: PATH, fs })
+    await log.start({ issue: "second-post", subject: "S", audience: [], at: new Date() })
+    await log.record("second-post", "c3")
+    await log.finish({ issue: "second-post", failed: 0, at: new Date() })
+    expect(JSON.parse(fs.files.get(PATH)!)[1].recipients).toEqual(["a1", "b2", "c3"])
+    expect(fs.files.has(`${PATH}.journal`)).toBe(false)
+  })
+
+  it("refuses to read a journal with a complete line that is not a mark", async () => {
+    const fs = fakeFs({ [PATH]: SITE_LOG, [`${PATH}.journal`]: `nonsense\n` })
+    const log = createFileSendLog({ path: PATH, fs })
+    await expect(log.find("second-post")).rejects.toThrow("Fix it by hand")
   })
 
   it("leaves a legacy entry untouched when its issue starts again", async () => {
@@ -111,12 +162,15 @@ describe("createFileSendLog", () => {
     const fs = fakeFs({ [PATH]: SITE_LOG })
     const log = createFileSendLog({ path: PATH, fs })
     fs.failRenames.add(`${PATH}.${Deno.pid}.1.tmp`)
-    await expect(log.record("second-post", "b2")).rejects.toThrow()
+    await log.record("second-post", "b2")
+    await expect(log.finish({ issue: "second-post", failed: 0, at: new Date() })).rejects
+      .toThrow()
     expect(fs.files.get(PATH)).toBe(SITE_LOG)
     expect([...fs.files.keys()].filter((p) => p.endsWith(".tmp"))).toEqual([])
-    // The queue keeps going after a failed change.
-    await log.record("second-post", "b2")
+    // The journal survives the failed write, and the queue keeps going after it.
     expect((await log.find("second-post"))?.recipients).toEqual(["a1", "b2"])
+    await log.record("second-post", "c3")
+    expect((await log.find("second-post"))?.recipients).toEqual(["a1", "b2", "c3"])
   })
 
   it("locks through <path>.lock, so a second log object on the same file is refused", async () => {

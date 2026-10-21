@@ -6,6 +6,7 @@ import {
   IDEMPOTENCY_RETENTION_DAYS,
   type IdempotencyClaim,
   type IdempotencyStore,
+  type IdempotencyUserId,
 } from "./idempotency.ts"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
@@ -65,6 +66,19 @@ export const IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT = `
 ALTER TABLE idempotency_keys ALTER COLUMN claim_token TYPE text USING claim_token::text;
 `
 
+/**
+ * A migration, as SQL text, for an app whose user ids are strings (a version 7 UUID, say): it
+ * widens `user_id` from `integer` to `text`. Run it after {@link IDEMPOTENCY_POSTGRES_SCHEMA}.
+ * Existing rows keep their keys, numeric user ids keep working, and running it twice changes
+ * nothing. An app with numeric user ids needs nothing.
+ *
+ * Run it before the app opens the pool the store uses: a connection that already ran the store's
+ * statements keeps their `integer` parameter type until it reconnects.
+ */
+export const IDEMPOTENCY_POSTGRES_USER_ID_TEXT = `
+ALTER TABLE idempotency_keys ALTER COLUMN user_id TYPE text USING user_id::text;
+`
+
 /** What {@link PostgresIdempotencyStore} reads from outside. */
 export interface PostgresIdempotencyStoreOptions {
   /** Seconds an unfinished claim holds before a retry may take it over. Default 30. */
@@ -93,7 +107,7 @@ interface StoredKeyRow {
  * was open while the column changed type, and matches nothing (instead of failing) when a token
  * that is not a UUID meets a `uuid` column.
  */
-export class PostgresIdempotencyStore implements IdempotencyStore {
+export class PostgresIdempotencyStore implements IdempotencyStore<IdempotencyUserId> {
   private readonly leaseSeconds: number
   private readonly retentionDays: number
 
@@ -104,7 +118,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
     assertPositiveFinite("retentionDays", this.retentionDays)
   }
 
-  async begin(claim: IdempotencyClaim): Promise<BeginOutcome> {
+  async begin(claim: IdempotencyClaim<IdempotencyUserId>): Promise<BeginOutcome> {
     const { userId, key, commandName, requestHash } = claim
     // A key past its retention is forgotten here too, so the retention holds before any sweep.
     await this.sql`
@@ -162,7 +176,12 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
     return { status: "in_progress" }
   }
 
-  async complete(userId: number, key: string, token: string, result: unknown): Promise<void> {
+  async complete(
+    userId: IdempotencyUserId,
+    key: string,
+    token: string,
+    result: unknown,
+  ): Promise<void> {
     await this.sql`
       UPDATE idempotency_keys
       SET status = ${DONE},
@@ -173,7 +192,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
     `
   }
 
-  async release(userId: number, key: string, token: string): Promise<void> {
+  async release(userId: IdempotencyUserId, key: string, token: string): Promise<void> {
     await this.sql`
       DELETE FROM idempotency_keys
       WHERE user_id = ${userId} AND key = ${key} AND status = ${STARTED}

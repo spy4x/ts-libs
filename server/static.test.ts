@@ -327,6 +327,30 @@ Deno.test("static: the SPA fallback still refuses a traversal path", async () =>
   assertEquals(spy.opened, [], "the SPA fallback read a traversal path")
 })
 
+Deno.test("static: the SPA fallback refuses a backslash, a control character and a malformed escape", async () => {
+  const spy = spyFs({ [`${ROOT}/index.html`]: "shell" })
+  const paths = ["/a\\b", "/a%00b", "/a%0Ab", "/a%7Fb", "/a%zz", "/a%"]
+
+  for (const path of paths) {
+    const response = await serveStatic(path, { root: ROOT, fs: spy.fs, spaFallback: true })
+    assertEquals(response, undefined, `served the shell for ${JSON.stringify(path)}`)
+  }
+  assertEquals(spy.opened, [], "the SPA fallback read a refused path")
+})
+
+// A doubled slash leaves an empty segment, which `resolveStaticPath` refuses as `not_a_file_path`.
+// The fallback does not answer it: it is no route an SPA links to, and serving it would need a
+// rejection reason of its own.
+Deno.test("static: the SPA fallback does not answer a path with a doubled slash", async () => {
+  const spy = spyFs({ [`${ROOT}/index.html`]: "shell" })
+
+  assertEquals(
+    await serveStatic("/docs//", { root: ROOT, fs: spy.fs, spaFallback: true }),
+    undefined,
+  )
+  assertEquals(spy.opened, [])
+})
+
 Deno.test("static: the SPA fallback serves the shell for a path refused for an encoded slash", async () => {
   const spy = spyFs({ [`${ROOT}/index.html`]: "shell" })
 

@@ -1,3 +1,5 @@
+import { encodeHex } from "@std/encoding/hex"
+import { sha256Hex } from "@spy4x/platform/tokens"
 import { StorageError } from "./errors.ts"
 import { buildCanonicalQuery, encodeS3Path } from "./paths.ts"
 
@@ -54,12 +56,6 @@ export interface PresignRequest {
   query?: Record<string, string | undefined>
 }
 
-function sha256Hex(input: string): Promise<string> {
-  return crypto.subtle
-    .digest("SHA-256", new TextEncoder().encode(input))
-    .then((digest) => toHex(new Uint8Array(digest)))
-}
-
 async function hmacSha256(key: Uint8Array | string, message: string): Promise<Uint8Array> {
   const raw = typeof key === "string" ? new TextEncoder().encode(key) : key
   const cryptoKey = await crypto.subtle.importKey(
@@ -71,12 +67,6 @@ async function hmacSha256(key: Uint8Array | string, message: string): Promise<Ui
   )
   const signature = await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(message))
   return new Uint8Array(signature)
-}
-
-function toHex(bytes: Uint8Array): string {
-  let out = ""
-  for (const byte of bytes) out += byte.toString(16).padStart(2, "0")
-  return out
 }
 
 /** `YYYYMMDDTHHMMSSZ`, the only timestamp format SigV4 accepts. */
@@ -193,7 +183,7 @@ export async function signS3Request(request: PresignRequest): Promise<string> {
     request.region,
     service,
   )
-  const signature = toHex(await hmacSha256(signingKey, stringToSign))
+  const signature = encodeHex(await hmacSha256(signingKey, stringToSign))
 
   return `${endpoint.origin}/${
     encodeS3Path(request.key)

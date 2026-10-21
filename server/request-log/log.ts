@@ -2,20 +2,14 @@
  * Request-logging middleware for Hono: one line when a request comes in, one line when the
  * response goes out.
  *
- * Ported from `template/apps/api/middlewares/log.ts` (identical in `financy`). The original
- * imported the app's `APIContext` type and its `log` service directly, which a library cannot do. Here the write
- * function is a constructor argument instead — the app wires in whatever it wants (a
- * request-id-tagged logger, a line shipped somewhere, or nothing) — and the hardcoded
- * `/api/health` skip becomes a `skipPaths` option, because a health-check path is the app's
- * choice, not this middleware's.
+ * The app passes the write function — a request-id-tagged logger, a line shipped somewhere, or
+ * nothing — and the paths to leave out, such as a health check, as `skipPaths`.
  *
  * **What this logs, and what it does not.** Every line carries only the HTTP method, the request
  * pathname, and — on the outgoing line — the response status and elapsed time. The pathname comes
  * from Hono's own `c.req.path`, which never includes the query string, so a token or password
  * passed as `?key=…` cannot reach a log line through this middleware. No header is read and no
- * request or response body is read. The original had the same property (it built its path with
- * `getPath(c.req.raw)`, which stops at the first `?`) — nothing was leaking here, and this port
- * keeps that guarantee explicit and tested rather than incidental.
+ * request or response body is read.
  *
  * **One request, one line each way.** Hono decodes the pathname, so `%0A` arrives as a real line
  * break. A line break or any other control character in the path is written escaped, as `\n` or

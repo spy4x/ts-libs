@@ -41,6 +41,18 @@ function streamOf(chunks: number[][]): ReadableStream<Uint8Array> {
   })
 }
 
+/** A stream that yields `first`, then errors with "source broke" on the next read. */
+export function failsAfter(first: number[]): ReadableStream<Uint8Array> {
+  let reads = 0
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      reads += 1
+      if (reads === 1) controller.enqueue(new Uint8Array(first))
+      else throw new Error("source broke")
+    },
+  })
+}
+
 /**
  * Registers the contract suite for one filesystem.
  *
@@ -111,21 +123,19 @@ export function describeObjectFsContract(
         expect(await fs.readObject(`${root}/x.bin`)).toEqual(new Uint8Array([1, 2, 3]))
       }))
 
-    it("rejects a stream that fails midway, keeping only the bytes it delivered", () =>
+    it("rejects a stream that fails midway and keeps the object it was replacing", () =>
       withFs(async ({ fs, root }) => {
         await fs.writeObject(`${root}/x.bin`, new Uint8Array([1, 2, 3, 4, 5]))
-        let reads = 0
-        const failing = new ReadableStream<Uint8Array>({
-          pull(controller) {
-            reads += 1
-            if (reads === 1) controller.enqueue(new Uint8Array([9, 9]))
-            else throw new Error("source broke")
-          },
-        })
-        expect((await rejection(fs.writeObject(`${root}/x.bin`, failing))).message).toBe(
-          "source broke",
-        )
-        expect(await fs.readObject(`${root}/x.bin`)).toEqual(new Uint8Array([9, 9]))
+        expect((await rejection(fs.writeObject(`${root}/x.bin`, failsAfter([9, 9])))).message)
+          .toBe("source broke")
+        expect(await fs.readObject(`${root}/x.bin`)).toEqual(new Uint8Array([1, 2, 3, 4, 5]))
+      }))
+
+    it("leaves no object behind when the first write of a path fails midway", () =>
+      withFs(async ({ fs, root }) => {
+        expect((await rejection(fs.writeObject(`${root}/x.bin`, failsAfter([9, 9])))).message)
+          .toBe("source broke")
+        expect(await fs.existsObject(`${root}/x.bin`)).toBe(false)
       }))
 
     it("treats a doubled slash and a `.` segment as the plain path", () =>

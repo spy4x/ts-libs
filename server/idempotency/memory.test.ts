@@ -39,6 +39,15 @@ describe("MemoryIdempotencyStore options", () => {
     expect((await store.begin(claim)).status).toBe("claimed")
   })
 
+  it('keeps the user 1 apart from the user "1", and a colon in an id from the key', async () => {
+    const store = new MemoryIdempotencyStore()
+    const claimOf = (userId: number | string, key: string) => ({ ...claim, userId, key })
+    expect((await store.begin(claimOf(1, "k"))).status).toBe("claimed")
+    expect((await store.begin(claimOf("1", "k"))).status).toBe("claimed")
+    expect((await store.begin(claimOf("a:b", "c"))).status).toBe("claimed")
+    expect((await store.begin(claimOf("a", "b:c"))).status).toBe("claimed")
+  })
+
   it("refuses a lease that is not a finite number above zero", () => {
     for (const bad of [0, -1, NaN, Infinity]) {
       expect(() => new MemoryIdempotencyStore({ leaseSeconds: bad })).toThrow(RangeError)

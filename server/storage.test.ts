@@ -123,9 +123,13 @@ function fakeDenoHost(overrides: Partial<DenoFsHost> = {}): DenoFsHost {
     stat: () => Promise.reject(new Error("stat not configured")),
     writeFile: () => Promise.reject(new Error("writeFile not configured")),
     open: () => Promise.reject(new Error("open not configured")),
+    mkdir: noDirectory,
     ...overrides,
   }
 }
+
+/** A `MakeDirectory` that creates nothing, for writes under the unit tier's read-only grant. */
+const noDirectory = () => Promise.resolve()
 
 /**
  * A `WritableFileHandle` double: records what was written and whether it was
@@ -1100,6 +1104,7 @@ describe("writeToFile", () => {
       "/tmp/photo.png",
       BINARY_PAYLOAD,
       () => Promise.resolve(file.handle),
+      noDirectory,
     )
 
     assertEquals(written, BINARY_PAYLOAD.byteLength)
@@ -1116,6 +1121,7 @@ describe("writeToFile", () => {
       "/tmp/big.bin",
       chunkStream([...oddChunks(payload)]),
       () => Promise.resolve(file.handle),
+      noDirectory,
     )
 
     assertEquals(written, CHUNK_BOUNDARY_LENGTH)
@@ -1133,6 +1139,7 @@ describe("writeToFile", () => {
           "/tmp/photo.png",
           chunkStream([BINARY_PAYLOAD]),
           () => Promise.resolve(file.handle),
+          noDirectory,
         ),
       Error,
       "simulated write failure",
@@ -1146,7 +1153,7 @@ describe("writeToFile", () => {
     const file = fakeFileHandle({ failOnWrite: true })
 
     const error = await assertRejects(() =>
-      writeToFile("/tmp/photo.png", BINARY_PAYLOAD, () => Promise.resolve(file.handle))
+      writeToFile("/tmp/photo.png", BINARY_PAYLOAD, () => Promise.resolve(file.handle), noDirectory)
     )
 
     assert(error instanceof Error)
@@ -1164,7 +1171,7 @@ describe("writeToFile", () => {
     })
 
     const error = await assertRejects(() =>
-      writeToFile("/tmp/photo.png", failing, () => Promise.resolve(file.handle))
+      writeToFile("/tmp/photo.png", failing, () => Promise.resolve(file.handle), noDirectory)
     )
 
     assert(error instanceof Error)
@@ -1186,7 +1193,7 @@ describe("writeToFile", () => {
     })
 
     await assertRejects(() =>
-      writeToFile("/tmp/photo.png", failing, () => Promise.resolve(file.handle))
+      writeToFile("/tmp/photo.png", failing, () => Promise.resolve(file.handle), noDirectory)
     )
 
     assertEquals(file.bytes(), BINARY_PAYLOAD, "a partial write is kept, not discarded")
@@ -1213,8 +1220,8 @@ describe("writeToFile", () => {
       return Promise.resolve(file.handle)
     }
 
-    await writeToFile("/a/one.bin", BINARY_PAYLOAD, opener)
-    await writeToFile("/a/two.bin", chunkStream([BINARY_PAYLOAD]), opener)
+    await writeToFile("/a/one.bin", BINARY_PAYLOAD, opener, noDirectory)
+    await writeToFile("/a/two.bin", chunkStream([BINARY_PAYLOAD]), opener, noDirectory)
 
     assertEquals(opened, ["/a/one.bin", "/a/two.bin"])
   })
@@ -1711,6 +1718,22 @@ describe("createStorage", () => {
     assert(names.includes(StorageEnvName.S3AccessKeyId))
     assertEquals(names.length, Object.values(StorageEnvName).length)
   })
+})
+
+// A top-level test, because a nested one cannot narrow its permissions. The grant lists only the
+// storage variables, so reading any other one (as `Deno.env.toObject()` did) throws.
+Deno.test({
+  name: "createStorage reads only the storage variables, so --allow-env can name just those",
+  permissions: { env: Object.values(StorageEnvName), read: true },
+  async fn() {
+    const saved = Deno.env.get(StorageEnvName.Provider)
+    Deno.env.delete(StorageEnvName.Provider)
+    try {
+      assertEquals(await createStorage(), undefined)
+    } finally {
+      if (saved !== undefined) Deno.env.set(StorageEnvName.Provider, saved)
+    }
+  },
 })
 
 /** The port is exported as a type: this pins that a caller can implement it. */

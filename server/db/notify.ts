@@ -134,7 +134,8 @@ export interface JsonListenerOptions<S extends Type> {
  * The client (postgres.js) keeps one connection of its own for listening and subscribes again
  * when that connection drops; this function adds nothing to that. After such a reconnect the
  * client's own `unlisten` no longer removes the handler, so the stop function also switches the
- * handler off itself: no `onMessage`, `onError` or `onListen` call starts after it was called.
+ * handler off itself: no `onMessage`, `onError` or `onListen` call starts after it was called,
+ * including the `onError` for an async `onMessage` or `onListen` that rejects later.
  * The listening connection closes with `sql.end()`.
  *
  * @throws RangeError when `channel` is empty, longer than {@link MAX_NOTIFY_CHANNEL_BYTES} bytes
@@ -147,9 +148,14 @@ export async function listenJson<S extends Type>(
 ): Promise<() => Promise<void>> {
   assertChannel(channel)
   const { schema, onMessage } = options
-  const onError = options.onError ??
+  const handleError = options.onError ??
     ((error: unknown) => console.error(`listenJson: the handler of ${channel} failed`, error))
   let stopped = false
+  // An async `onMessage` or `onListen` can reject after the stop function ran; that failure
+  // belongs to a listener the caller already closed, so it is not reported.
+  const onError = (error: unknown) => {
+    if (!stopped) handleError(error)
+  }
 
   const subscription = await sql.listen(channel, (payload) => {
     if (stopped) return
