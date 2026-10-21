@@ -861,7 +861,7 @@ StoreRateLimiter	class	@spy4x/platform/rate-limit	Store-backed sliding window ov
 TrustedProxyHeader	type	@spy4x/platform/rate-limit	A single proxy header clientIp may be told to trust, in place of the default all-three-headers order.
 UNKNOWN_CLIENT_IP	constant	@spy4x/platform/rate-limit	Fallback when no header and no peer address is available.
 clientIp	function	@spy4x/platform/rate-limit	Resolve the client IP for a request.
-clientIpBucket	function	@spy4x/platform/rate-limit	The rate-limit identity of a client address: an IPv6 address reduced to its /64 network (`2001:db8:1:2::/64`), anything else unchanged.
+clientIpBucket	function	@spy4x/platform/rate-limit	The rate-limit identity of a client address: an IPv6 address reduced to its /64 network (`2001:db8:1:2::/64`), or to the network `options.ipv6Prefix` names, anything else unchanged.
 createKvStore	function	@spy4x/platform/rate-limit	Build a `RateLimitStore` over any RateLimitKv.
 createMemoryRateLimiter	function	@spy4x/platform/rate-limit	Build an in-process limiter.
 createRateLimitMiddleware	function	@spy4x/platform/rate-limit	Build the middleware for a limiter.
@@ -878,7 +878,7 @@ FORWARDED_HEADERS	constant	@spy4x/platform/rate-limit/client-ip	The three header
 TrustedProxyHeader	type	@spy4x/platform/rate-limit/client-ip	A single proxy header clientIp may be told to trust, in place of the default all-three-headers order.
 UNKNOWN_CLIENT_IP	constant	@spy4x/platform/rate-limit/client-ip	Fallback when no header and no peer address is available.
 clientIp	function	@spy4x/platform/rate-limit/client-ip	Resolve the client IP for a request.
-clientIpBucket	function	@spy4x/platform/rate-limit/client-ip	The rate-limit identity of a client address: an IPv6 address reduced to its /64 network (`2001:db8:1:2::/64`), anything else unchanged.
+clientIpBucket	function	@spy4x/platform/rate-limit/client-ip	The rate-limit identity of a client address: an IPv6 address reduced to its /64 network (`2001:db8:1:2::/64`), or to the network `options.ipv6Prefix` names, anything else unchanged.
 humanRetry	function	@spy4x/platform/rate-limit/client-ip	Milliseconds as a human retry hint: `"1 second"`, `"45 seconds"`, `"2 minutes"`.
 KeyResolver	type	@spy4x/platform/rate-limit/hono	Key the current request.
 RATE_LIMIT_HEADERS	constant	@spy4x/platform/rate-limit/hono	Default draft-6 header names.
@@ -2507,4 +2507,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 a9e0ea2680dea52d2cde80771d581c9d79745ff1c8d68674d9ef83a749d77ae5
+# export surface: sha256 d7ed53e0046b778d98bcbd6ebd4ee1bd2b6e4496357fc0e14bb940bfc321b810

@@ -64,6 +64,7 @@ export {
 export {
   clientIp,
   clientIpBucket,
+  type ClientIpBucketOptions,
   type ClientIpOptions,
   FORWARDED_HEADERS,
   humanRetry,
