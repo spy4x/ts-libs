@@ -21,7 +21,9 @@
  *   chain in one tab, Web Locks across the tabs of one browser.
  * - **Conflicts wait for a person.** A write the server refuses as stale or for another reason is
  *   marked, never applied over the other side. The person chooses `keepMine` or `useTheirs`. A
- *   refusal seen by `submit` drops only a write that holds nothing queued before it.
+ *   refusal seen by `submit` drops only a write that holds nothing queued before it. Deleting an
+ *   entity whose create the server refused drops the create, as `useTheirs` does, and sends
+ *   nothing.
  *
  * @module
  */
@@ -200,7 +202,10 @@ export type Outcome<S> =
   | { kind: "sent"; server?: S }
   /** It is saved on this device and goes out when the connection is back. */
   | { kind: "queued" }
-  /** It never reached the server: created and deleted before any send. */
+  /**
+   * It never reached the server: created and deleted before any send, or deleted after the server
+   * refused the create.
+   */
   | { kind: "dropped" }
   /** The server refused it. Nothing is queued; `error` is what the send threw. */
   | { kind: "failed"; error: unknown }
@@ -271,8 +276,8 @@ export interface OutboxPorts<P, S extends { version: number }> {
  * How a queued create left the queue unsent:
  * - `withdrawn`: the person took it back (`withdraw`);
  * - `dropped`: the entity was deleted before any send, so the two cancelled out;
- * - `discarded`: the server refused it and the person chose the server's side (`useTheirs`) while
- *   the server holds no such entity, or a change that stood alone was refused (`submit` answered
+ * - `discarded`: the server refused it and the person chose the server's side (`useTheirs`) or
+ *   deleted the entity while the server holds no such entity, or a change that stood alone was refused (`submit` answered
  *   `failed`). When the refusal carried the server's entity (the id is taken), the entity exists
  *   and nothing is reported.
  */
@@ -501,6 +506,12 @@ export function createOutbox<P, S extends { version: number }>(
       }
       return await save({ ...existing, payload: change.payload, ...renewed, before })
     }
+    if (existing.kind === "create" && existing.status === "conflict") {
+      // The server refused this create, so it did not land: a delete of version 1 would remove the
+      // entity that holds the id. Deleting it means dropping the create, as `useTheirs` does.
+      await takeTheirs(existing)
+      return null
+    }
     if (existing.kind === "create") {
       // A create is on the server only if a send of it, before or after a merged edit, was started.
       if (!mayHaveReachedServer(existing)) {
@@ -719,16 +730,20 @@ export function createOutbox<P, S extends { version: number }>(
   async function useTheirs(shown: ConflictRef): Promise<void> {
     await stepped(async () => {
       const entry = await findConflict(shown)
-      if (!entry) return
-      const server = entry.conflict?.server
-      if (server) await cache?.put(server)
-      else if (entry.conflict?.reason === "gone") await cache?.remove(entry.entityId)
-      await drop(entry.seq!)
-      const created = entry.kind === "create" || (entry.kind === "update" && entry.ownCreate)
-      if (created && !server) {
-        abandoned.push({ entry, reason: "discarded" })
-      }
+      if (entry) await takeTheirs(entry)
     })
+  }
+
+  /** Drops a conflicted entry and keeps the server's side, under the caller's lock. */
+  async function takeTheirs(entry: Entry): Promise<void> {
+    const server = entry.conflict?.server
+    if (server) await cache?.put(server)
+    else if (entry.conflict?.reason === "gone") await cache?.remove(entry.entityId)
+    await drop(entry.seq!)
+    const created = entry.kind === "create" || (entry.kind === "update" && entry.ownCreate)
+    if (created && !server) {
+      abandoned.push({ entry, reason: "discarded" })
+    }
   }
 
   async function withdraw(entityId: string): Promise<boolean> {

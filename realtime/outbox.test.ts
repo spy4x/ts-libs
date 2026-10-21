@@ -831,6 +831,45 @@ describe("outbox conflicts found after a reconnect", () => {
     })
   })
 
+  it("drops a create refused as already-exists when the entity is deleted, keeping the other creator's entity", async () => {
+    const { store, cache, outbox, sent, state, offline } = harness()
+    offline()
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("Mine") })
+    let serverCopy: Item | null = item("n", 1, "Theirs")
+    state.current = serverCopy
+    state.online = true
+    state.server = ({ command }) => {
+      if (command.kind === "create") throw refused("ID_ALREADY_EXISTS")
+      if (command.kind === "delete") serverCopy = null
+      return serverCopy ?? undefined
+    }
+    await outbox.flush()
+    expect(outbox.entries()[0]).toMatchObject({ kind: "create", status: "conflict" })
+    sent.length = 0
+
+    const outcome = await outbox.submit({
+      kind: "delete",
+      entityId: "n",
+      payload: text("Mine"),
+      version: 1,
+    })
+
+    expect(outcome).toEqual({ kind: "dropped" })
+    expect(sent).toEqual([])
+    expect(serverCopy).toEqual(item("n", 1, "Theirs"))
+    expect(cache.items.get("n")).toEqual(item("n", 1, "Theirs"))
+    expect(outbox.entries()).toEqual([])
+    const again = createOutbox<Text, Item>({
+      store,
+      lock: createPromiseLock(),
+      canSend: () => true,
+      classify,
+      send: () => Promise.reject(new Error("nothing may be sent")),
+      fetchServer: () => Promise.resolve(null),
+    })
+    expect(await again.reload()).toEqual([])
+  })
+
   it("does not send a conflicted write again on its own", async () => {
     const { outbox, sent } = await staleUpdate()
     sent.length = 0
@@ -1853,6 +1892,31 @@ describe("outbox ports for a group of outboxes", () => {
 
     await outbox.useTheirs(outbox.entries()[0])
 
+    expect(told).toEqual([["a", "discarded"]])
+  })
+
+  it("tells that a create was discarded when it was deleted after the server refused it", async () => {
+    const told: [string, string][] = []
+    let held = true
+    const { outbox, sent } = grouped({
+      ready: () => !held,
+      onAbandoned: (entry, reason) => {
+        told.push([entry.entityId, reason])
+      },
+      server: () => {
+        throw refused("ROLE_INSUFFICIENT")
+      },
+    })
+    await outbox.submit(create("a"))
+    held = false
+    await outbox.flush()
+    expect(outbox.entries()[0].status).toBe("conflict")
+    sent.length = 0
+
+    await outbox.submit({ kind: "delete", entityId: "a", payload: text("a"), version: 1 })
+
+    expect(sent).toEqual([])
+    expect(outbox.entries()).toEqual([])
     expect(told).toEqual([["a", "discarded"]])
   })
 
