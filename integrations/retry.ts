@@ -185,7 +185,12 @@ export const createExponentialBackoff = (
 /** Statuses worth another attempt: rate limiting and upstream faults. */
 export const isTransientStatus = (status: number): boolean => status === 429 || status >= 500
 
-/** Statuses that will never succeed on a retry: the request itself is wrong. */
+/**
+ * Statuses that will never succeed on a retry: the request itself is wrong.
+ *
+ * @deprecated No client in this package uses it; compare `status >= 400 && status < 500` in
+ * place. Removed in 2.0.
+ */
 export const isPermanentStatus = (status: number): boolean => status >= 400 && status < 500
 
 /**
@@ -214,43 +219,6 @@ export const describeTransportError = (cause: unknown): string => {
 }
 
 /**
- * The error-class names `describeErrorKind` may report.
- *
- * A closed set, so the value cannot carry caller text; see the docstring below.
- */
-const ERROR_CLASS_NAMES: ReadonlySet<string> = new Set([
-  "AggregateError",
-  "EvalError",
-  "RangeError",
-  "ReferenceError",
-  "SyntaxError",
-  "TypeError",
-  "URIError",
-])
-
-/**
- * Names an error's class without its message.
- *
- * For failures where the message is caller-controlled text — a `JSON.stringify`
- * that hit a hostile `toJSON` or getter — the class is the safe half. What
- * makes it safe is the **allowlist** below, not the fact that it is a name:
- * `name` is a writable property, so an `Error` the caller crafted can carry an
- * arbitrary string in it. An earlier version of this function admitted any
- * `/^[A-Za-z]{1,32}$/` instead, which let 32 caller-chosen letters
- * (`name: "REALTOKENISH"`) reach a returned, loggable result; only the classes
- * the platform itself throws may be reported now. Anything not an `Error` is
- * reported as `Error`, never stringified, because `String(value)` on an
- * arbitrary thrown value can run a `toString` the caller supplied.
- */
-export const describeErrorKind = (cause: unknown): string => {
-  const name = readErrorName(cause)
-  if (name !== undefined && ERROR_CLASS_NAMES.has(name)) {
-    return name
-  }
-  return "Error"
-}
-
-/**
  * Reads `cause.name`, or `undefined` unless that read yields a string.
  *
  * Both halves are load-bearing. The **read** is guarded because `name` is not a
@@ -267,12 +235,11 @@ export const describeErrorKind = (cause: unknown): string => {
  * throws `TypeError: Cannot convert a Symbol value to a string`, which
  * re-opened the rejection the guard above exists to close. A
  * non-string-but-stringifiable value (`null`, `42`, an object) is refused too
- * rather than coerced, and the ruling is the same one `describeErrorKind`
- * follows: `name` is caller text and the field it feeds is a returned, loggable
- * string, so "not a string" means the plain `transport failure (url withheld)`
- * wording rather than `"null: transport failure (url withheld)"` or `"42: …"`.
- * The only name either caller interpolates is one that was a string to begin
- * with.
+ * rather than coerced: `name` is caller text and the field it feeds is a
+ * returned, loggable string, so "not a string" means the plain
+ * `transport failure (url withheld)` wording rather than
+ * `"null: transport failure (url withheld)"` or `"42: …"`. The only name the
+ * caller interpolates is one that was a string to begin with.
  */
 const readErrorName = (cause: unknown): string | undefined => {
   try {
