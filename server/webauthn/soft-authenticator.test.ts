@@ -26,18 +26,32 @@ export interface Bend {
   flags?: number
   counter?: number
   crossOrigin?: boolean
+  topOrigin?: string
 }
 
-/** A COSE algorithm id, or `"-7/P-384"` for a key that claims ES256 on the wrong curve. */
-type Algorithm = -7 | -257 | -8 | "-7/P-384"
+/**
+ * A COSE algorithm id, `"-7/P-384"` for a key that claims ES256 on the wrong curve, or
+ * `"-257/1024"` for an RS256 key with a 1024-bit modulus.
+ */
+type Algorithm = -7 | -257 | -8 | "-7/P-384" | "-257/1024"
 
 export class SoftAuthenticator {
-  readonly credentialId = crypto.getRandomValues(new Uint8Array(32))
+  readonly credentialId: Uint8Array
   counter: number
   #keys: CryptoKeyPair | null = null
 
-  constructor(readonly alg: Algorithm = -7, counter = 0, readonly origin = "https://app.test") {
+  constructor(
+    readonly alg: Algorithm = -7,
+    counter = 0,
+    readonly origin = "https://app.test",
+    idBytes = 32,
+  ) {
     this.counter = counter
+    this.credentialId = crypto.getRandomValues(new Uint8Array(idBytes))
+  }
+
+  get #rsa(): boolean {
+    return this.alg === -257 || this.alg === "-257/1024"
   }
 
   get id(): string {
@@ -117,6 +131,7 @@ export class SoftAuthenticator {
       challenge: bend.challenge ?? challenge,
       origin: bend.origin ?? this.origin,
       crossOrigin: bend.crossOrigin ?? false,
+      ...(bend.topOrigin ? { topOrigin: bend.topOrigin } : {}),
     }
     return encodeBase64Url(new TextEncoder().encode(JSON.stringify(data)))
   }
@@ -136,10 +151,10 @@ export class SoftAuthenticator {
 
   async #keyPair(): Promise<CryptoKeyPair> {
     if (this.#keys) return this.#keys
-    const params = this.alg === -7 ? { name: "ECDSA", namedCurve: "P-256" } : this.alg === -257
+    const params = this.alg === -7 ? { name: "ECDSA", namedCurve: "P-256" } : this.#rsa
       ? {
         name: "RSASSA-PKCS1-v1_5",
-        modulusLength: 2048,
+        modulusLength: this.alg === -257 ? 2048 : 1024,
         publicExponent: new Uint8Array([1, 0, 1]),
         hash: "SHA-256",
       }
@@ -155,7 +170,7 @@ export class SoftAuthenticator {
     const b = (value?: string) => decodeBase64Url(value!)
     const entries: [number, number | Uint8Array][] = this.alg === -7
       ? [[1, 2], [3, -7], [-1, 1], [-2, b(jwk.x)], [-3, b(jwk.y)]]
-      : this.alg === -257
+      : this.#rsa
       ? [[1, 3], [3, -257], [-1, b(jwk.n)], [-2, b(jwk.e)]]
       : this.alg === "-7/P-384"
       ? [[1, 2], [3, -7], [-1, 2], [-2, b(jwk.x)], [-3, b(jwk.y)]]
@@ -165,7 +180,7 @@ export class SoftAuthenticator {
 
   async #sign(data: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
     const { privateKey } = await this.#keyPair()
-    if (this.alg === -257) {
+    if (this.#rsa) {
       return new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, data))
     }
     const raw = new Uint8Array(

@@ -5561,33 +5561,60 @@ as given, because providers compare it character by character.
 
 ## `server/webauthn`
 
-Passkeys for a relying party (spy4x/seed#222). Four functions and two response schemas:
+Passkeys for a relying party (spy4x/seed#222). Four functions and two response schemas. Adding a
+passkey, with the app's own storage declared:
 
 ```ts
+import { type } from "arktype"
 import {
-  authenticationOptions,
-  authenticationResponseSchema,
   registrationOptions,
   registrationResponseSchema,
-  verifyAuthentication,
   verifyRegistration,
+  type WebAuthnChallenge,
+  type WebAuthnCredential,
 } from "@spy4x/server/webauthn"
+
+declare const challenges: {
+  put(key: string, challenge: WebAuthnChallenge): Promise<void>
+  /** Get and delete in one step, so a challenge answers one response only. */
+  take(key: string): Promise<WebAuthnChallenge | null>
+}
+declare function saveCredential(
+  userId: string,
+  credential: Omit<WebAuthnCredential, "userId">,
+): Promise<void>
 
 const rp = { id: "example.com", name: "Example", origins: ["https://app.example.com"] }
 
-// Adding a passkey: send `options` to the browser, keep `challenge` for this person.
-const { options, challenge } = registrationOptions(rp, { user: { id: userId, name: email } })
+/** Step 1: the options for `navigator.credentials.create()`. */
+export async function startAddingPasskey(userId: string, email: string) {
+  const { options, challenge } = registrationOptions(rp, { user: { id: userId, name: email } })
+  await challenges.put(`add:${userId}`, challenge)
+  return options
+}
 
-// The response: parse it, take the challenge out of the store (get and delete in one step), check.
-const response = registrationResponseSchema(body)
-const result = await verifyRegistration(rp, { response, challenge: taken })
-if (result.ok) save(userId, result.credential) // id, publicKey, counter, transports
+/** Step 2: the browser's response. */
+export async function finishAddingPasskey(userId: string, body: unknown): Promise<boolean> {
+  const response = registrationResponseSchema(body)
+  if (response instanceof type.errors) return false
+  const challenge = await challenges.take(`add:${userId}`)
+  if (!challenge) return false
+  const result = await verifyRegistration(rp, { response, challenge })
+  if (!result.ok) return false
+  await saveCredential(userId, result.credential) // id, publicKey, counter, transports
+  return true
+}
 ```
 
-Signing in is the same shape: `authenticationOptions(rp)` with no `allow` list lets the browser offer
-every passkey for the site (the picker and autofill), the app looks the credential up by
+Signing in is the same shape. `authenticationOptions(rp)` with no `allow` list lets the browser
+offer every passkey for the site (the picker and autofill); the app looks the credential up by
 `response.id`, and `verifyAuthentication(rp, { response, challenge, credential })` returns the new
 counter to store, or a reason (`WebAuthnRefusal`) such as `wrong_origin` or `counter_regressed`.
+
+When the app already knows who the person is (a second factor after a password, or a step-up before
+a sensitive action), it passes that person's id too: `verifyAuthentication(rp, { response,
+challenge, credential, userId })`. The `allow` list only tells the browser which passkeys to offer;
+without `userId`, a valid passkey of another account would pass.
 
 ### What it checks
 
@@ -5597,8 +5624,9 @@ site's frame; the authenticator data is for `SHA-256(rp.id)`; the person was pre
 (fingerprint, face or PIN); a backed-up flag comes with the backup-eligible flag.
 
 Registration also: the attested credential's id is the response's and at most 1023 bytes, and its
-key is ES256 on P-256 or RS256. Sign-in also: the response names the stored credential and, when it
-carries a user handle, the credential's owner; the signature over the authenticator data and the
+key is ES256 on P-256 or RS256 with a modulus of at least 2048 bits. Sign-in also: the response
+names the stored credential, the credential belongs to `userId` when the app passes one, and, when
+the response carries a user handle, it is the credential's owner; the signature over the authenticator data and the
 client data's hash verifies with the stored key; and the counter went up, unless both it and the
 stored one are zero, as synced passkeys send. The counter is compared only after the signature
 verified, so a forged response cannot make a real passkey look cloned.

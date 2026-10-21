@@ -4,8 +4,10 @@
  *
  * Kept small on purpose:
  *
- * - Only ES256 (COSE -7, P-256) and RS256 (COSE -257) keys are accepted. Every mainstream passkey
- *   provider offers ES256.
+ * - Only ES256 (COSE -7, P-256) and RS256 (COSE -257, a modulus of at least 2048 bits) keys are
+ *   accepted. Every mainstream passkey provider offers ES256.
+ * - A second factor or a step-up must pass the person's `userId` to `verifyAuthentication`: the
+ *   `allow` list only tells the browser what to offer, and is not checked again here.
  * - User verification (the device's fingerprint, face or PIN) is required on every ceremony, so a
  *   passkey alone is a full sign-in, never a weaker factor.
  * - Attestation is neither requested nor checked: options ask for `"none"`, and the attestation
@@ -58,6 +60,8 @@ export const WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60_000
 /** Longest credential id the specification allows, in bytes. */
 const MAX_CREDENTIAL_ID_BYTES = 1023
 const CHALLENGE_BYTES = 32
+/** The smallest RSA modulus accepted, in bits (NIST SP 800-131A). */
+const MIN_RSA_BITS = 2048
 const TRANSPORTS: readonly string[] = [
   "ble",
   "cable",
@@ -118,7 +122,7 @@ export type WebAuthnRefusal =
   | "user_not_present"
   /** The authenticator did not verify the person (no fingerprint, face or PIN). */
   | "user_not_verified"
-  /** The new key is not ES256 or RS256. */
+  /** The key is not ES256 on P-256, nor RS256 with a modulus of at least 2048 bits. */
   | "unsupported_algorithm"
   /** The response names another credential, or another user than the credential's. */
   | "wrong_credential"
@@ -153,8 +157,11 @@ export interface RegistrationOptionsInput {
 /** Parameters of {@link authenticationOptions}. */
 export interface AuthenticationOptionsInput {
   /**
-   * The passkeys that may answer. Leave empty for a sign-in where the person has not said who they
-   * are yet (the passkey picker or autofill): the browser then offers every passkey for the site.
+   * The passkeys the browser should offer, when the app already knows who the person is (a
+   * second factor, or a step-up before a sensitive action). The browser uses this list; the server
+   * does not see it again, so pass the same person's id as `userId` to {@link verifyAuthentication}.
+   * Leave it empty for a sign-in where the person has not said who they are yet (the passkey picker
+   * or autofill): the browser then offers every passkey for the site.
    */
   allow?: readonly Pick<WebAuthnCredential, "id" | "transports">[]
   now?: NowFn
@@ -350,12 +357,21 @@ export async function verifyAuthentication(
     response: AuthenticationResponse
     challenge: WebAuthnChallenge
     credential: WebAuthnCredential
+    /**
+     * The person the app already identified, for a second factor or a step-up. When set, a
+     * passkey of anyone else is refused as `wrong_credential`, even with a valid signature. Leave
+     * it out only for a sign-in that identifies the person by the passkey itself.
+     */
+    userId?: string
     now?: NowFn
   },
 ): Promise<WebAuthnResult<AuthenticatedPasskey>> {
   const { response, credential } = input
   if (response.id !== response.rawId) return refuse("malformed")
   if (response.id !== credential.id) return refuse("wrong_credential")
+  if (input.userId !== undefined && input.userId !== credential.userId) {
+    return refuse("wrong_credential")
+  }
   const handle = response.response.userHandle
   if (handle && handle !== userHandle(credential.userId)) return refuse("wrong_credential")
   const client = checkClientData(rp, response.response.clientDataJSON, "webauthn.get", input)
@@ -463,7 +479,10 @@ async function rpIdMatches(rpId: string, rpIdHash: Uint8Array): Promise<boolean>
     expected.every((byte, i) => byte === rpIdHash[i])
 }
 
-/** Whether a COSE key is ES256 on P-256 or RS256, with the key type that algorithm needs. */
+/**
+ * Whether a COSE key is ES256 on P-256 or RS256 with a modulus of at least 2048 bits, with the key
+ * type that algorithm needs.
+ */
 function keyAlgorithm(publicKey: Uint8Array): "ok" | "unsupported" | "malformed" {
   let key
   try {
@@ -479,6 +498,18 @@ function keyAlgorithm(publicKey: Uint8Array): "ok" | "unsupported" | "malformed"
       ? "ok"
       : "unsupported"
   }
-  if (alg === cose.COSEALG.RS256) return kty === cose.COSEKTY.RSA ? "ok" : "unsupported"
+  if (alg === cose.COSEALG.RS256) {
+    const n = key.get(cose.COSEKEYS.n)
+    return kty === cose.COSEKTY.RSA && n instanceof Uint8Array && bitLength(n) >= MIN_RSA_BITS
+      ? "ok"
+      : "unsupported"
+  }
   return "unsupported"
+}
+
+/** The bit length of a big-endian unsigned integer, leading zero bytes ignored. */
+function bitLength(bytes: Uint8Array): number {
+  const start = bytes.findIndex((byte) => byte !== 0)
+  if (start === -1) return 0
+  return (bytes.length - start - 1) * 8 + (32 - Math.clz32(bytes[start]))
 }
