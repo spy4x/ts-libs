@@ -25,6 +25,8 @@ const CAPTION_SIZE = 32
 /** A caption stays at least this long, and long enough to read at this pace. */
 const MIN_CAPTION_SECONDS = 2.5
 const CHARS_PER_SECOND = 15
+/** The longest caption that fits the band at a readable size, as the shared skill's encoder. */
+const MAX_CAPTION_CHARS = 64
 /** The site's colours: Ink (page), Parchment (text), Graphite (secondary text). */
 const INK = "0x15120f"
 const PARCHMENT = "0xefebe2"
@@ -383,6 +385,9 @@ async function encode(): Promise<void> {
   const total = TITLE.seconds + lengths.reduce((a, b) => a + b, 0) + END.seconds
   const list = cues(lengths)
   for (const cue of list) {
+    if (cue.text.length > MAX_CAPTION_CHARS) {
+      throw new Error(`"${cue.text}" is longer than ${MAX_CAPTION_CHARS} characters`)
+    }
     const least = Math.max(MIN_CAPTION_SECONDS, cue.text.length / CHARS_PER_SECOND)
     if (cue.end - cue.start < least) {
       throw new Error(
