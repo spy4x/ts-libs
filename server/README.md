@@ -45,6 +45,7 @@ Runs on: server (Deno).
 | `@spy4x/server/auth/oauth-github`           | GitHub's provider configuration for `@spy4x/server/auth/oauth`                                                                                                                                                                                                |
 | `@spy4x/server/sign-in`                     | Sessions, the session cookie, Hono auth guards, peppered password hashing, TOTP                                                                                                                                                                               |
 | `@spy4x/server/sign-in/password-hash`       | CLI: prints a password's hash under `AUTH_PEPPER`, reading the password from stdin                                                                                                                                                                            |
+| `@spy4x/server/webauthn`                    | Passkeys: WebAuthn options and the registration and sign-in checks, ES256 and RS256 only, user verification required                                                                                                                                          |
 | `@spy4x/server/crypto`                      | AES-256-GCM cipher bound to its row, hex key, capped `maskKey` hint                                                                                                                                                                                           |
 | `@spy4x/server/user-secrets`                | BYOK store over an injected port: guarded base URL, encrypt, mask, upsert                                                                                                                                                                                     |
 | `@spy4x/server/quota`                       | Usage metering with an atomic reserve and 429/503 — not a rate limiter                                                                                                                                                                                        |
@@ -1281,6 +1282,86 @@ as given, because providers compare it character by character.
   endpoint, called with the access token the token endpoint returned over TLS.
 - **It does not update a key's address** when the provider later reports a different one.
 - **It does not refuse to disconnect a user's last key.** The app decides whether that is allowed.
+
+## `server/webauthn`
+
+Passkeys for a relying party (spy4x/seed#222). Four functions and two response schemas. Adding a
+passkey, with the app's own storage declared:
+
+```ts
+import { type } from "arktype"
+import {
+  registrationOptions,
+  registrationResponseSchema,
+  verifyRegistration,
+  type WebAuthnChallenge,
+  type WebAuthnCredential,
+} from "@spy4x/server/webauthn"
+
+declare const challenges: {
+  put(key: string, challenge: WebAuthnChallenge): Promise<void>
+  /** Get and delete in one step, so a challenge answers one response only. */
+  take(key: string): Promise<WebAuthnChallenge | null>
+}
+declare function saveCredential(
+  userId: string,
+  credential: Omit<WebAuthnCredential, "userId">,
+): Promise<void>
+
+const rp = { id: "example.com", name: "Example", origins: ["https://app.example.com"] }
+
+/** Step 1: the options for `navigator.credentials.create()`. */
+export async function startAddingPasskey(userId: string, email: string) {
+  const { options, challenge } = registrationOptions(rp, { user: { id: userId, name: email } })
+  await challenges.put(`add:${userId}`, challenge)
+  return options
+}
+
+/** Step 2: the browser's response. */
+export async function finishAddingPasskey(userId: string, body: unknown): Promise<boolean> {
+  const response = registrationResponseSchema(body)
+  if (response instanceof type.errors) return false
+  const challenge = await challenges.take(`add:${userId}`)
+  if (!challenge) return false
+  const result = await verifyRegistration(rp, { response, challenge })
+  if (!result.ok) return false
+  await saveCredential(userId, result.credential) // id, publicKey, counter, transports
+  return true
+}
+```
+
+Signing in is the same shape. `authenticationOptions(rp)` with no `allow` list lets the browser
+offer every passkey for the site (the picker and autofill); the app looks the credential up by
+`response.id`, and `verifyAuthentication(rp, { response, challenge, credential })` returns the new
+counter to store, or a reason (`WebAuthnRefusal`) such as `wrong_origin` or `counter_regressed`.
+
+When the app already knows who the person is (a second factor after a password, or a step-up before
+a sensitive action), it passes that person's id too: `verifyAuthentication(rp, { response,
+challenge, credential, userId })`. The `allow` list only tells the browser which passkeys to offer;
+without `userId`, a valid passkey of another account would pass.
+
+### What it checks
+
+Every ceremony: the client data's `type` names the right ceremony; its challenge is the stored one
+and has not expired (five minutes); its origin is one of `rp.origins` exactly, and it ran in no other
+site's frame; the authenticator data is for `SHA-256(rp.id)`; the person was present and verified
+(fingerprint, face or PIN); a backed-up flag comes with the backup-eligible flag.
+
+Registration also: the attested credential's id is the response's and at most 1023 bytes, and its
+key is ES256 on P-256 or RS256 with a modulus of at least 2048 bits. Sign-in also: the response
+names the stored credential, the credential belongs to `userId` when the app passes one, and, when
+the response carries a user handle, it is the credential's owner; the signature over the authenticator data and the
+client data's hash verifies with the stored key; and the counter went up, unless both it and the
+stored one are zero, as synced passkeys send. The counter is compared only after the signature
+verified, so a forged response cannot make a real passkey look cloned.
+
+### What it does not do
+
+- No attestation. Options ask for `"none"` and the statement is ignored, so no certificate is parsed
+  and no revocation list is fetched.
+- No storage. The app keeps challenges (single-use, so take them out with an atomic get-and-delete)
+  and credentials, and refuses to register a credential id it already has.
+- No algorithms but ES256 and RS256, and no ceremony without user verification.
 
 ## `server/crypto`
 

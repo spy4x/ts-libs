@@ -2205,6 +2205,27 @@ UserSecretPort	interface	@spy4x/server/user-secrets	The injected persistence por
 UserSecretStore	interface	@spy4x/server/user-secrets	
 UserSecretSummary	interface	@spy4x/server/user-secrets	What a list/UI may see: metadata plus a hint.
 createUserSecretStore	function	@spy4x/server/user-secrets	Builds a store over an injected port and cipher.
+AuthenticatedPasskey	interface	@spy4x/server/webauthn	What verifyAuthentication returns on success.
+AuthenticationResponse	interface	@spy4x/server/webauthn	An authentication response that passed authenticationResponseSchema.
+AuthenticatorTransport	type	@spy4x/server/webauthn	How a browser can reach an authenticator, as `AuthenticatorAttestationResponse.getTransports()` says.
+PublicKeyCredentialCreationOptionsJSON	interface	@spy4x/server/webauthn	A variant of PublicKeyCredentialCreationOptions suitable for JSON transmission to the browser to (eventually) get passed into navigator.credentials.create(...) in the browser.
+PublicKeyCredentialRequestOptionsJSON	interface	@spy4x/server/webauthn	A variant of PublicKeyCredentialRequestOptions suitable for JSON transmission to the browser to (eventually) get passed into navigator.credentials.get(...) in the browser.
+RegisteredPasskey	interface	@spy4x/server/webauthn	What verifyRegistration returns on success: store all of it.
+RegistrationResponse	interface	@spy4x/server/webauthn	A registration response that passed registrationResponseSchema.
+WEBAUTHN_ALGORITHMS	constant	@spy4x/server/webauthn	COSE algorithm ids accepted for a passkey's key: ES256 (-7) and RS256 (-257).
+WEBAUTHN_CHALLENGE_TTL_MS	constant	@spy4x/server/webauthn	How long a challenge stays valid, and the `timeout` the browser is given: five minutes.
+WebAuthnChallenge	interface	@spy4x/server/webauthn	A challenge the caller stores between the options and the response.
+WebAuthnCredential	interface	@spy4x/server/webauthn	A stored passkey, as verifyRegistration returned it and the caller kept it.
+WebAuthnOptions	interface	@spy4x/server/webauthn	What registrationOptions and authenticationOptions produce.
+WebAuthnRefusal	type	@spy4x/server/webauthn	Why a response was refused.
+WebAuthnRelyingParty	interface	@spy4x/server/webauthn	Who the passkeys belong to: the site, as the browser sees it.
+WebAuthnResult	type	@spy4x/server/webauthn	The result of a `verify` function.
+authenticationOptions	function	@spy4x/server/webauthn	Options for `navigator.credentials.get()`, requiring user verification.
+authenticationResponseSchema	constant	@spy4x/server/webauthn	An authentication response, as `PublicKeyCredential.toJSON()` makes it after `get()`.
+registrationOptions	function	@spy4x/server/webauthn	Options for `navigator.credentials.create()`, asking for a discoverable passkey with user verification, ES256 or RS256, and no attestation.
+registrationResponseSchema	constant	@spy4x/server/webauthn	A registration response, as `PublicKeyCredential.toJSON()` makes it after `create()`.
+verifyAuthentication	function	@spy4x/server/webauthn	Checks an authentication response against the challenge taken from the store and the stored credential whose id is `response.id`.
+verifyRegistration	function	@spy4x/server/webauthn	Checks a registration response against the challenge taken from the store.
 COMPLETE_REFUSED_BY_RULE	constant	@spy4x/tasks/edit	The codes that mean the repeat rule or the dates are outside what can be reproduced, as opposed to a broken text.
 CompleteError	interface	@spy4x/tasks/edit	Why completeTask or reopenTask refused.
 CompleteKind	enum	@spy4x/tasks/edit	What a successful change did to the task.
@@ -2527,4 +2548,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 4476e5f939e1583760825a2d46a0616f41367f42011d6bcd83c0cd233efecbf9
+# export surface: sha256 6943ded43df2bb8a74ed3d5840c8612bab5d62354e6c4a4ec3b802155a0ac4c5
