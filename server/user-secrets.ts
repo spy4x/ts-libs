@@ -2,48 +2,30 @@
  * BYOK (bring-your-own-key) secret store: validate → encrypt at rest → keep a masked hint →
  * upsert per `(user, provider)` → delete.
  *
- * Ported from an earlier internal project: its key routes (`keys.ts`; the Hono routes stay out —
- * no framework here) and the persistence semantics of its `db/mod.ts`. The SQL stays out too:
- * persistence is an injected {@link UserSecretPort}, so this module holds no driver, no
- * connection and no query text.
+ * Persistence is an injected {@link UserSecretPort}, so this module holds no driver, no connection
+ * and no query text. What it guarantees:
  *
- * What was fixed at port time, and why:
- *
- * - `keys.ts:22-27` validated by hand in the route and `keys.ts:93` interpolated the caller's
- *   provider into a user-facing message. Here every failure is a {@link UserSecretError} with a
- *   **constant** message: no caller value is ever echoed.
- * - `keys.ts:133` returned `err.message` — in the encrypt/decrypt path that message can be a
- *   cipher error naming key material. Here a thrown {@link UserSecretError} carries a code, a
- *   constant message and the identity of a known rejection type — never the rejection itself, its
- *   `message`, its `stack`, its `cause` or any string it chose (including its `name`). A port or a
- *   cipher that echoes its input (a driver quoting the row it failed on, a cipher quoting the value
- *   it refused) therefore cannot leak a plaintext or a ciphertext through this module's error
- *   object.
- * - Provider names are normalised to lower case at this boundary, so `OpenAI` and `openai` cannot
- *   become two rows of one user (see {@link PROVIDER_PATTERN}).
- * - Failures are classified by **type and position, never by message text** (the
- *   source's anti-pattern): any cipher rejection becomes
- *   {@link UserSecretErrorCode.DecryptionFailed}, whatever the underlying error says.
- * - The source accepted any non-empty provider string, which stores rows no adapter can ever
- *   match; {@link PROVIDER_PATTERN} bounds that at the edge.
- * - `keys.ts:26` accepted any `http(s)` base URL, so a user could point the outbound call at
- *   `http://169.254.169.254/` — the cloud metadata service — or at anything else inside the
- *   network. A non-empty base URL now goes through `validatePublicUrl` from
- *   `@spy4x/net/url-policy` with an injected resolver, and an installation that really does host
- *   its own model server opts into internal addresses explicitly
+ * - Every failure is a {@link UserSecretError} with a **constant** message and a code. No caller
+ *   value is echoed, and a rejection from the port or the cipher crosses only as the identity of a
+ *   known error type — never its `message`, `stack`, `cause` or `name` — so a port or a cipher that
+ *   quotes its input cannot leak a plaintext or a ciphertext through this module's error object.
+ * - Failures are classified by **type and position, never by message text**: a cipher rejection
+ *   while encrypting is {@link UserSecretErrorCode.EncryptionFailed}, while decrypting
+ *   {@link UserSecretErrorCode.DecryptionFailed}, and a port rejection
+ *   {@link UserSecretErrorCode.PortFailure}.
+ * - Provider names are slugs ({@link PROVIDER_PATTERN}) normalised to lower case, so `OpenAI` and
+ *   `openai` are one row.
+ * - A non-empty base URL goes through `validatePublicUrl` from `@spy4x/net/url-policy`, so a user
+ *   cannot point the outbound call at the cloud metadata service or anything else inside the
+ *   network, unless the installation opts in
  *   ({@link UserSecretStoreOptions.allowInternalBaseUrl}).
- * - The source trusted its query to have filtered by user. Every row this store receives is
- *   checked against the user and provider that were asked for, and a row that does not match is
- *   refused as {@link UserSecretErrorCode.RowMismatch} rather than decrypted.
- * - Nothing bound a ciphertext to its row, so a blob copied into another user's row opened
- *   normally. Each secret is now sealed against {@link secretContext} — this module's name, a
- *   version, and the row's user and provider — which the cipher authenticates as additional data.
- *   A value copied to another row no longer opens.
- *
- * **Stored values written before the row binding cannot be opened.** A ciphertext written without a
- * context fails authentication once one is always supplied. No project stores secrets with this
- * module yet, so there is nothing to migrate; an installation that had one would re-encrypt from
- * the plaintext it still holds, because the old value cannot be read here any more.
+ * - Every row the port returns is checked against the user and provider that were asked for, and a
+ *   row that does not match is refused as {@link UserSecretErrorCode.RowMismatch} rather than
+ *   decrypted.
+ * - Each secret is sealed against {@link secretContext} — this module's name, a version, and the
+ *   row's user and provider — which the cipher authenticates as additional data, so a value copied
+ *   to another row does not open. A ciphertext written without that context does not open either;
+ *   re-encrypt it from the plaintext.
  *
  * The mask and the cipher have exactly one implementation in this package (`./crypto.ts`); this
  * module never re-implements AES or masking.
@@ -54,6 +36,7 @@
 import { type } from "arktype"
 import { defaultResolver, validatePublicUrl } from "@spy4x/net/url-policy"
 import type { DnsResolver } from "@spy4x/net/url-policy"
+import { hasHeaderControlCharacters } from "@spy4x/platform/validation/predicates"
 
 import { CryptoError, DEFAULT_MASK_VISIBLE, maskKey } from "./crypto.ts"
 import type { SecretCipher } from "./crypto.ts"
@@ -61,10 +44,11 @@ import type { SecretCipher } from "./crypto.ts"
 /**
  * Failure codes, stable integers so a caller can switch without string matching.
  *
- * `1`-`4` are input rejections, `5` a missing (or inactive) row, `6` a stored secret the cipher
- * could not open, `7` a rejection from the injected port or cipher, `8` a row that belongs to
- * somebody else. `6`-`7` report the identity of a known rejection type and nothing else the
- * rejection carried — no message, no stack, no cause, no implementation-supplied name.
+ * `1`-`4` and `9` are input rejections, `5` a missing (or inactive) row, `6` a stored secret the
+ * cipher could not open, `7` a rejection from the injected port, `8` a row that belongs to somebody
+ * else, `10` a cipher rejection while encrypting. `6`, `7` and `10` report the identity of a known
+ * rejection type and nothing else the rejection carried — no message, no stack, no cause, no
+ * implementation-supplied name.
  */
 export enum UserSecretErrorCode {
   InvalidUserId = 1,
@@ -80,14 +64,21 @@ export enum UserSecretErrorCode {
    * decrypted — one user's key must never be opened on another user's request.
    */
   RowMismatch = 8,
+  /**
+   * `model` is not a string of at most {@link MAX_MODEL_LENGTH} characters, free of control
+   * characters.
+   */
+  InvalidModel = 9,
+  /** The cipher rejected the api key while encrypting it; nothing was stored. */
+  EncryptionFailed = 10,
 }
 
 /**
  * The only error this module throws — a code, a constant message and a rejection type identity.
  *
  * The message is deliberately not parameterised: a caller value in a message is how a provider
- * name (`keys.ts:93`) or a raw driver message (`keys.ts:133`) ends up rendered to a user next to
- * secret material. The error therefore carries **no `cause`** either: `cause` is a live handle on
+ * name or a raw driver message ends up rendered to a user next to secret material. The error
+ * therefore carries **no `cause`** either: `cause` is a live handle on
  * a rejection that a driver or cipher may have populated with the value it failed on, and the
  * reviewer recovered a plaintext api key from exactly that handle. The house rule is that only the
  * error's *type* crosses a boundary, never `message`, `stack`, `cause` or any field of the error.
@@ -118,22 +109,25 @@ export class UserSecretError extends Error {
   }
 }
 
-/** Shortest accepted api key, mirroring the `keys.ts:25` rule. */
+/** Shortest accepted api key. */
 export const MIN_API_KEY_LENGTH = 8
 
 /**
- * Longest accepted api key. The source had no ceiling; an unbounded string is an unbounded
- * cipher row and an unbounded request body, so the port rejects it by type instead.
+ * Longest accepted api key: an unbounded string is an unbounded cipher row and an unbounded request
+ * body.
  */
 export const MAX_API_KEY_LENGTH = 4096
 
 /** Longest accepted provider name — long enough for `azure-openai-eu-west`, short enough to key on. */
 export const MAX_PROVIDER_LENGTH = 64
 
+/** Longest accepted model name. Real names are short (`gpt-4o-mini`); the cap bounds the row. */
+export const MAX_MODEL_LENGTH = 256
+
 /**
  * Shape of a provider name an adapter can actually match.
  *
- * Decision (the source accepted any non-empty string, `keys.ts:22-23`): a provider is a slug —
+ * A provider is a slug —
  * a leading alphanumeric followed by alphanumerics, dot, underscore or dash, case-insensitive.
  * Rejecting anything else at the edge keeps `(user, provider)` rows addressable, keeps a provider
  * out of any URL path or query unescaped, and makes an adapter lookup a pure switch instead of a
@@ -169,7 +163,7 @@ export interface StoredUserSecret {
 }
 
 /**
- * The injected persistence port. `upsert` MUST behave like the source's
+ * The injected persistence port. `upsert` MUST behave like an SQL
  * `ON CONFLICT (user_id, provider) DO UPDATE`: replace secretEncrypted/keyHint/baseUrl/model, force
  * isActive true, set updatedAt from the incoming record, and **preserve the stored createdAt**.
  * No SQL, no driver and no connection lives in this module.
@@ -251,6 +245,8 @@ const INVALID_BASE_URL_MESSAGE = "baseUrl is invalid"
 const NOT_FOUND_MESSAGE = "no active secret is stored for that provider"
 const DECRYPTION_FAILED_MESSAGE = "the stored secret could not be decrypted"
 const PORT_FAILURE_MESSAGE = "the user secret port failed"
+const INVALID_MODEL_MESSAGE = "model is invalid"
+const ENCRYPTION_FAILED_MESSAGE = "the secret could not be encrypted"
 const ROW_MISMATCH_MESSAGE = "the port returned a row for a different user or provider"
 
 // ── Shape and rule checks ────────────────────────────────────────────────────────────────────
@@ -263,22 +259,6 @@ const saveInputShape = type({
 })
 
 /**
- * True when the value carries a C0 control character (code point ≤ 31) or DEL (127).
- *
- * Scanned by code point rather than with a control-character regex: `deno lint`'s
- * `no-control-regex` rejects the pattern form outright (`deno lint` is part of CI), and the loop
- * states the rule the port fix (row 4) is about. NUL and friends survive JSON encoding, end up in
- * a DB text column, and are how a secret escapes a one-line log record.
- */
-function hasControlCharacter(value: string): boolean {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0)
-    if (codePoint !== undefined && (codePoint <= 31 || codePoint === 127)) return true
-  }
-  return false
-}
-
-/**
  * Maps an arktype shape failure to a typed error **by field path only**.
  *
  * Reason this exists instead of rethrowing the arktype error: arktype messages echo the offending
@@ -286,8 +266,7 @@ function hasControlCharacter(value: string): boolean {
  * itself. A path is metadata; a message is not. The field order of `problems` is arktype's, so
  * the first problem decides; a problem with no field (a payload that is not an object at all) is
  * reported as `InvalidProvider`, since a payload that cannot be read as an object cannot name a
- * provider. `model` has no code of its own and is reported as `InvalidBaseUrl`: both are endpoint
- * configuration read at call time, and inventing a code is worse than one documented mapping.
+ * provider.
  */
 function shapeFailure(errors: type.errors): UserSecretError {
   for (const problem of errors) {
@@ -297,8 +276,9 @@ function shapeFailure(errors: type.errors): UserSecretError {
       case "apiKey":
         return new UserSecretError(UserSecretErrorCode.InvalidApiKey, INVALID_API_KEY_MESSAGE)
       case "baseUrl":
-      case "model":
         return new UserSecretError(UserSecretErrorCode.InvalidBaseUrl, INVALID_BASE_URL_MESSAGE)
+      case "model":
+        return new UserSecretError(UserSecretErrorCode.InvalidModel, INVALID_MODEL_MESSAGE)
       default:
         break
     }
@@ -328,19 +308,29 @@ function assertProvider(provider: string): void {
 }
 
 /**
- * Length and character rules for the secret itself. The length band is the source's `keys.ts:25`
- * rule plus a ceiling; the control-character rule is new — a key carrying `\u0000` or a raw
- * newline breaks the outbound `Authorization` header, and in a log or an error it is how a
- * secret escapes a one-line record.
+ * Length and character rules for the secret itself. A key carrying `\u0000` or a raw newline
+ * breaks the outbound `Authorization` header, and in a log or an error it is how a secret escapes
+ * a one-line record.
  */
 function assertApiKey(apiKey: string): void {
   if (
     typeof apiKey !== "string" ||
     apiKey.length < MIN_API_KEY_LENGTH ||
     apiKey.length > MAX_API_KEY_LENGTH ||
-    hasControlCharacter(apiKey)
+    hasHeaderControlCharacters(apiKey)
   ) {
     throw new UserSecretError(UserSecretErrorCode.InvalidApiKey, INVALID_API_KEY_MESSAGE)
+  }
+}
+
+/**
+ * An empty or omitted model is valid (the adapter uses its own default). A model name ends up in
+ * an outbound request — a JSON body, and for some providers a URL path — so it gets a length cap
+ * and the same control-character rule as the key.
+ */
+function assertModel(model: string): void {
+  if (model.length > MAX_MODEL_LENGTH || hasHeaderControlCharacters(model)) {
+    throw new UserSecretError(UserSecretErrorCode.InvalidModel, INVALID_MODEL_MESSAGE)
   }
 }
 
@@ -354,8 +344,8 @@ function tryParseUrl(value: string): URL | null {
 }
 
 /**
- * An empty or omitted `baseUrl` is valid (the adapter falls back to its own default, as
- * `keys.ts:98` does). A non-empty one has to survive three checks, in this order:
+ * An empty or omitted `baseUrl` is valid (the adapter falls back to its own default). A non-empty
+ * one has to survive three checks, in this order:
  *
  * 1. **This module's own shape rules.** An absolute `http:`/`https:` URL, with no user name or
  *    password in it and no control characters. These run first and always, including when internal
@@ -390,7 +380,7 @@ async function assertBaseUrl(
     parsed === null ||
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
     parsed.username !== "" || parsed.password !== "" ||
-    hasControlCharacter(baseUrl)
+    hasHeaderControlCharacters(baseUrl)
   ) {
     throw new UserSecretError(UserSecretErrorCode.InvalidBaseUrl, INVALID_BASE_URL_MESSAGE)
   }
@@ -437,22 +427,23 @@ function assertRowMatches(row: StoredUserSecret, userId: string, provider: strin
 }
 
 /**
- * Runs one port (or cipher) call and translates any rejection into `PortFailure`.
+ * Runs one port call and translates any rejection into `code` (`PortFailure` unless the caller
+ * names another).
  *
  * The rejection itself is dropped: only the identity of a known error type is kept (see
  * `rejectionNameOf`). A `cause` would hand the caller a live object whose `message` may quote the
  * row, the ciphertext or the plaintext the injected implementation was working on. Used narrowly —
  * wrapping a whole operation would swallow the codes of this module's own typed errors.
  */
-async function callPort<T>(operation: () => Promise<T>): Promise<T> {
+async function callPort<T>(
+  operation: () => Promise<T>,
+  code = UserSecretErrorCode.PortFailure,
+  message = PORT_FAILURE_MESSAGE,
+): Promise<T> {
   try {
     return await operation()
   } catch (error) {
-    throw new UserSecretError(
-      UserSecretErrorCode.PortFailure,
-      PORT_FAILURE_MESSAGE,
-      rejectionNameOf(error),
-    )
+    throw new UserSecretError(code, message, rejectionNameOf(error))
   }
 }
 
@@ -485,9 +476,8 @@ function rejectionNameOf(error: unknown): string {
  * Projects a stored row onto what a list or a UI may see.
  *
  * Written as an explicit literal, never a spread with `secretEncrypted` deleted: a spread copies
- * whatever the port adds tomorrow, and `db/mod.ts:273-277` already proves the row type grows.
- * The summary is the boundary that keeps ciphertext out of a response — the source kept that
- * property by hand (`keys.ts:56-64`), this keeps it structurally.
+ * whatever the port adds tomorrow. The summary is the boundary that keeps ciphertext out of a
+ * response, structurally.
  */
 function toSummary(row: StoredUserSecret): UserSecretSummary {
   return {
@@ -504,9 +494,9 @@ function toSummary(row: StoredUserSecret): UserSecretSummary {
 /**
  * Builds a store over an injected port and cipher.
  *
- * Behaviour ported, with its source:
+ * Behaviour:
  *
- * - `save` — `keys.ts:29-46` + `db/mod.ts:240-261`: encrypt the key, store `keyHint =
+ * - `save`: encrypt the key, store `keyHint =
  *   maskKey(key, 4)`, then upsert on `(user, provider)`. The conflict branch refreshes the secret,
  *   the hint, `baseUrl`, `model`, forces `isActive = true` and bumps `updatedAt`; `createdAt` is
  *   deliberately left alone. `save` re-reads the pair through `findActive` so the returned summary
@@ -517,15 +507,14 @@ function toSummary(row: StoredUserSecret): UserSecretSummary {
  *   fail a save that succeeded.
  * - every provider that reaches the port is normalised with `providerKey`, in `save`, `openSecret`
  *   and `remove` alike, so the row key is one provider and not one per casing.
- * - `list` — `keys.ts:49-67` + `db/mod.ts:262-280`: metadata and the hint only, never the
- *   ciphertext, and the port's order is preserved (the source's `ORDER BY created_at DESC` is the
+ * - `list`: metadata and the hint only, never the ciphertext, in the port's order (sorting is the
  *   port's job).
- * - `remove` — `keys.ts:69-82` + `db/mod.ts:296-304`: idempotent, so no row count is checked and
+ * - `remove`: idempotent, so no row count is checked and
  *   deleting what was never stored is not an error.
  * - every row the port hands back is checked against the user and provider that were asked for
  *   (`save`'s re-read, `list`, `openSecret`), and every secret is sealed against
  *   {@link secretContext}, so neither a wrong row nor a copied ciphertext can become a plaintext.
- * - `openSecret` — `keys.ts:88-98` + `db/mod.ts:281-295`: opens the active row for an outbound
+ * - `openSecret`: opens the active row for an outbound
  *   call, reports a missing or unknown provider as `NotFound` (never a hint in its place), and
  *   reports any cipher rejection as `DecryptionFailed` — classified by type, never by message, and
  *   described by the identity of a known rejection type rather than the rejection.
@@ -548,10 +537,14 @@ export function createUserSecretStore(options: UserSecretStoreOptions): UserSecr
       assertApiKey(shape.apiKey)
       const baseUrl = shape.baseUrl ?? ""
       await assertBaseUrl(baseUrl, { allowInternal, resolver })
+      const model = shape.model ?? ""
+      assertModel(model)
 
       const provider = providerKey(shape.provider)
-      const secretEncrypted = await callPort(() =>
-        cipher.encrypt(shape.apiKey, secretContext(userId, provider))
+      const secretEncrypted = await callPort(
+        () => cipher.encrypt(shape.apiKey, secretContext(userId, provider)),
+        UserSecretErrorCode.EncryptionFailed,
+        ENCRYPTION_FAILED_MESSAGE,
       )
       const timestamp = now().toISOString()
       const record: StoredUserSecret = {
@@ -560,7 +553,7 @@ export function createUserSecretStore(options: UserSecretStoreOptions): UserSecr
         secretEncrypted,
         keyHint: maskKey(shape.apiKey, maskVisible),
         baseUrl,
-        model: shape.model ?? "",
+        model,
         isActive: true,
         createdAt: timestamp,
         updatedAt: timestamp,

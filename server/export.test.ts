@@ -54,6 +54,35 @@ Deno.test("export: collections are attached under their own names", async () => 
   assertEquals(envelope.snapshots, [{ id: "snap-1" }])
 })
 
+Deno.test("export: a collection named __proto__ is kept as its own property", async () => {
+  // Deno's `Object.prototype.__proto__` setter does not change the prototype; Node's and Bun's
+  // does. The test swaps in that behaviour for its own duration, then restores Deno's accessor.
+  const own = Object.getOwnPropertyDescriptor(Object.prototype, "__proto__")
+  Object.defineProperty(Object.prototype, "__proto__", {
+    get(this: object) {
+      return Object.getPrototypeOf(this)
+    },
+    set(this: object, value: object) {
+      Object.setPrototypeOf(this, value)
+    },
+    configurable: true,
+  })
+  try {
+    const envelope = await buildExportEnvelope({
+      userId: "user-1",
+      user: { id: "user-1" },
+      collections: [{ name: "__proto__", load: () => ({ id: "row-1" }) }],
+      now: FIXED_NOW,
+    })
+    assertStrictEquals(Object.getPrototypeOf(envelope), Object.prototype)
+    assertEquals(Object.getOwnPropertyDescriptor(envelope, "__proto__")?.value, { id: "row-1" })
+    assertEquals(JSON.stringify(envelope).includes(`"__proto__":{"id":"row-1"}`), true)
+  } finally {
+    if (own) Object.defineProperty(Object.prototype, "__proto__", own)
+    else delete (Object.prototype as { __proto__?: unknown }).__proto__
+  }
+})
+
 Deno.test("export: each loader is scoped to the requesting user", async () => {
   const seen: string[] = []
   await buildExportEnvelope({

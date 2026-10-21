@@ -14,11 +14,12 @@ import {
   IDEMPOTENCY_RETENTION_DAYS,
   type IdempotencyClaim,
   type IdempotencyStore,
+  type IdempotencyUserId,
 } from "./idempotency.ts"
 
 /** A fresh, empty store and how to move its clock and dispose of it. */
 export interface StoreFixture {
-  store: IdempotencyStore
+  store: IdempotencyStore<IdempotencyUserId>
   /** Makes every stored row `ms` older, as if that much time had passed. */
   advance(ms: number): Promise<void>
   close(): Promise<void>

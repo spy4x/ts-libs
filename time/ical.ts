@@ -22,7 +22,8 @@ import {
   icsUnescape,
   icsUnescapeParameter,
 } from "./ics-core.ts"
-import { vtimezoneInstant } from "./ical-timezone.ts"
+import { parseIsoDate } from "./date.ts"
+import { findTimezone, vtimezoneInstant } from "./ical-timezone.ts"
 import { isValidTimeZone, zonedDateTime } from "./tz.ts"
 import { WINDOWS_ZONES } from "./windows-zones.ts"
 
@@ -486,10 +487,18 @@ export function writeList(component: IcalComponent, name: string, items: string[
   setProperty(component, name, value)
 }
 
-function validDate(year: number, month: number, day: number): boolean {
-  const date = new Date(Date.UTC(year, month - 1, day))
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
+/**
+ * Whether `date` (`YYYY-MM-DD`) is a day the calendar has, in the years 0100–9999: the window
+ * `zonedDateTime` resolves, so a two-digit year is never read as 19xx.
+ */
+function validDate(date: string): boolean {
+  if (date < "0100") return false
+  try {
+    parseIsoDate(date)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -502,8 +511,8 @@ export function readDate(property: IcalProperty): IcalDateValue | undefined {
   const match = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z?))?$/.exec(raw)
   if (!match) return undefined
   const [, year, month, day, hours, minutes, seconds, zulu] = match
-  if (!validDate(Number(year), Number(month), Number(day))) return undefined
   const date = `${year}-${month}-${day}`
+  if (!validDate(date)) return undefined
   const isDate = getParameter(property, "VALUE")?.values[0]?.toUpperCase() === "DATE"
   if (hours === undefined) {
     return isDate || !getParameter(property, "VALUE")
@@ -517,14 +526,6 @@ export function readDate(property: IcalProperty): IcalDateValue | undefined {
   return tzid
     ? { kind: IcalDateKind.Zoned, date, time, tzid }
     : { kind: IcalDateKind.Floating, date, time }
-}
-
-/** Whether `root` (or any component under it) holds a VTIMEZONE whose TZID is `tzid`. */
-function hasTimezone(root: IcalComponent, tzid: string): boolean {
-  if (root.name.toUpperCase() === "VTIMEZONE" && getProperty(root, "TZID")?.value === tzid) {
-    return true
-  }
-  return root.components.some((child) => hasTimezone(child, tzid))
 }
 
 /** The sibling whose value type must match `name`'s, per RFC 5545 §3.6.1 and §3.6.2. */
@@ -572,8 +573,7 @@ export function writeDate(
   if (existing && splitList(existing.value).length > 1) {
     return fail(IcalErrorCode.InvalidValue, `${upper} holds a list; writeDate writes one value`)
   }
-  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.date)
-  if (!dateMatch || !validDate(Number(dateMatch[1]), Number(dateMatch[2]), Number(dateMatch[3]))) {
+  if (!validDate(value.date)) {
     return fail(IcalErrorCode.InvalidValue, `invalid date ${JSON.stringify(value.date)}`)
   }
   const isDate = value.kind === IcalDateKind.Date
@@ -601,7 +601,7 @@ export function writeDate(
   }
   if (value.kind === IcalDateKind.Zoned) {
     const carried = existing && getParameter(existing, "TZID")?.values[0]
-    const defined = options.root && value.tzid && hasTimezone(options.root, value.tzid)
+    const defined = options.root && value.tzid && findTimezone(options.root, value.tzid)
     if (!value.tzid || (value.tzid !== carried && !defined)) {
       return fail(IcalErrorCode.UnknownTzid, `no VTIMEZONE defines ${JSON.stringify(value.tzid)}`)
     }

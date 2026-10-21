@@ -10,8 +10,9 @@ import type { ObjectFs } from "./ports.ts"
  * and that suite runs against both: a folder is every path some object sits
  * below, so it exists, and reading or writing it rejects with `IsADirectory`; a
  * path below an object rejects with `NotADirectory`; a doubled slash or a `.`
- * segment names the same object as the plain path; and a write empties the
- * object first, so a stream that fails midway leaves only what it delivered.
+ * segment names the same object as the plain path; and a write replaces the
+ * object only once it has every byte, so a stream that fails midway leaves the
+ * object it was replacing, or none.
  */
 export function createMemoryObjectFs(entries: Iterable<[string, Uint8Array]> = []): ObjectFs {
   const store = new Map<string, Uint8Array>()
@@ -64,9 +65,8 @@ export function createMemoryObjectFs(entries: Iterable<[string, Uint8Array]> = [
         store.set(path, Uint8Array.from(data))
         return data.byteLength
       }
-      // Emptied first and grown chunk by chunk, as a truncating open followed by writes would.
+      // Stored only once complete, as a write to a temporary file renamed into place is.
       let stored = new Uint8Array()
-      store.set(path, stored)
       const reader = data.getReader()
       while (true) {
         const { done, value } = await reader.read()
@@ -75,8 +75,8 @@ export function createMemoryObjectFs(entries: Iterable<[string, Uint8Array]> = [
         grown.set(stored)
         grown.set(value, stored.byteLength)
         stored = grown
-        store.set(path, stored)
       }
+      store.set(path, stored)
       return stored.byteLength
     },
   }

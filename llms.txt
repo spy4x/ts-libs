@@ -290,7 +290,7 @@ WebhookVerifyResult	type	@spy4x/integrations	Result of verifyWebhookRequest: the
 createExponentialBackoff	function	@spy4x/integrations	Deprecated: Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`), kept for this module's existing 1-based-attempt, `Retry-After`-aware call shape. Exponential backoff, clamped and optionally jittered.
 describeTransportError	function	@spy4x/integrations	Describes a transport failure **without** the request URL.
 healthchecksConfigFromEnv	function	@spy4x/integrations	Reads a ping URL from an environment reader.
-isPermanentStatus	function	@spy4x/integrations	Statuses that will never succeed on a retry: the request itself is wrong.
+isPermanentStatus	function	@spy4x/integrations	Deprecated: No client in this package uses it; compare `status >= 400 && status < 500` in place. Statuses that will never succeed on a retry: the request itself is wrong.
 isRequestTimeout	function	@spy4x/integrations	True when `cause` is the `TimeoutError` an `AbortSignal.timeout()` firing produces.
 isTransientStatus	function	@spy4x/integrations	Statuses worth another attempt: rate limiting and upstream faults.
 ntfyConfigFromEnv	function	@spy4x/integrations	Reads ntfy settings from an environment reader.
@@ -1638,13 +1638,15 @@ MissingEnvError	class	@spy4x/server/config	Raised when a required environment va
 createEnvReader	function	@spy4x/server/config	An `EnvReader` over a fixed record — what a unit test injects instead of the process environment, so a config or middleware test runs under `--allow-read --allow-env` without any environment variable actually being set.
 loadConfig	function	@spy4x/server/config	Read every environment variable `schema` declares and validate them together, once.
 readEnvVar	function	@spy4x/server/config	Read one required value now, outside a schema — for the one variable a caller needs before the rest of its configuration can even be assembled (`ENV`, deciding which schema to validate against, for example).
+readOptionalEnvVar	function	@spy4x/server/config	Read one value that may be absent: the value, or `undefined` when `name` is unset or blank.
 stringBoolean	constant	@spy4x/server/config	`"true"` or `"false"`, exactly — an environment boolean written by a person or a deploy script, not inferred from `"1"`, `"yes"` or an empty string.
-systemEnv	constant	@spy4x/server/config	The process environment.
+systemEnv	constant	@spy4x/server/config	The process environment through `Deno.env`, read on each call and never at module scope.
 EnvReader	interface	@spy4x/server/config/env	Reads environment values.
 MissingEnvError	class	@spy4x/server/config/env	Raised when a required environment variable is missing or blank.
 createEnvReader	function	@spy4x/server/config/env	An `EnvReader` over a fixed record — what a unit test injects instead of the process environment, so a config or middleware test runs under `--allow-read --allow-env` without any environment variable actually being set.
 readEnvVar	function	@spy4x/server/config/env	Read one required value now, outside a schema — for the one variable a caller needs before the rest of its configuration can even be assembled (`ENV`, deciding which schema to validate against, for example).
-systemEnv	constant	@spy4x/server/config/env	The process environment.
+readOptionalEnvVar	function	@spy4x/server/config/env	Read one value that may be absent: the value, or `undefined` when `name` is unset or blank.
+systemEnv	constant	@spy4x/server/config/env	The process environment through `Deno.env`, read on each call and never at module scope.
 AES_ALGORITHM	constant	@spy4x/server/crypto	WebCrypto algorithm name.
 AES_KEY_BYTES	constant	@spy4x/server/crypto	Key size in bytes.
 CryptoError	class	@spy4x/server/crypto	The one error this module throws.
@@ -1883,12 +1885,14 @@ BeginOutcome	type	@spy4x/server/idempotency	What IdempotencyStore.begin found fo
 IDEMPOTENCY_LEASE_SECONDS	constant	@spy4x/server/idempotency	Default for how long an unfinished run keeps its claim.
 IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT	constant	@spy4x/server/idempotency	Deprecated: Not needed since 1.64.1: PostgresIdempotencyStore works on a `uuid` column and on a `text` column. The migration release 1.64.0 needed, as SQL text: it widens `claim_token` from `uuid` to `text`.
 IDEMPOTENCY_POSTGRES_SCHEMA	constant	@spy4x/server/idempotency	The table and index, as SQL text the app runs as a migration.
+IDEMPOTENCY_POSTGRES_USER_ID_TEXT	constant	@spy4x/server/idempotency	A migration, as SQL text, for an app whose user ids are strings (a version 7 UUID, say): it widens `user_id` from `integer` to `text`.
 IDEMPOTENCY_RETENTION_DAYS	constant	@spy4x/server/idempotency	Default for how long a stored key stays usable: the longest a client may be offline.
 IdempotencyClaim	interface	@spy4x/server/idempotency	The user, key and input a command was sent with.
 IdempotencyError	class	@spy4x/server/idempotency	Why a command with an idempotency key was refused before it ran.
 IdempotencyErrorCode	type	@spy4x/server/idempotency	
 IdempotencyOptions	interface	@spy4x/server/idempotency	What createIdempotencyMiddleware needs.
 IdempotencyStore	interface	@spy4x/server/idempotency	Keeps the outcome of every command that carried an idempotency key.
+IdempotencyUserId	type	@spy4x/server/idempotency	A user id as the stores key on it: a number, or a string such as a version 7 UUID.
 MAX_IDEMPOTENCY_COMMAND_NAME_LENGTH	constant	@spy4x/server/idempotency	The longest command name the stores accept; the Postgres column is `VARCHAR(100)`.
 MAX_IDEMPOTENCY_KEY_LENGTH	constant	@spy4x/server/idempotency	The longest key the stores accept; the Postgres column is `VARCHAR(128)`.
 MemoryIdempotencyStore	class	@spy4x/server/idempotency	An IdempotencyStore that keeps rows in memory, for tests and single-process tools.
@@ -2015,7 +2019,7 @@ RequestLogWriter	type	@spy4x/server/request-log	Called once per logged line.
 requestLog	function	@spy4x/server/request-log	Build the request-log middleware.
 BaseMiddlewareOptions	interface	@spy4x/server/request-log/base-middleware	What applyBaseMiddleware needs.
 DEFAULT_REQUEST_ID_MAX_LENGTH	constant	@spy4x/server/request-log/base-middleware	Longest `X-Request-Id` kept when BaseMiddlewareOptions.requestIdMaxLength is unset.
-MIN_REQUEST_ID_MAX_LENGTH	constant	@spy4x/server/request-log/base-middleware	Smallest `requestIdMaxLength` allowed: the length of a generated id.
+MIN_REQUEST_ID_MAX_LENGTH	constant	@spy4x/server/request-log/base-middleware	Smallest `requestIdMaxLength` allowed: the length of the shortest generated id.
 applyBaseMiddleware	function	@spy4x/server/request-log/base-middleware	Installs the base middleware on `app`, in this order: `contextStorage`, the request id (the caller's up to the length cap, otherwise 8 random base64url characters), failure reporting, the request log, then `parseAuth`.
 Auth	interface	@spy4x/server/sign-in	The middleware and request helpers createAuth returns.
 AuthEnv	interface	@spy4x/server/sign-in	The Hono environment the middleware reads and writes.
@@ -2104,7 +2108,7 @@ createStorageFrom	function	@spy4x/server/storage	Build the configured storage fr
 defaultS3Endpoint	function	@spy4x/server/storage	AWS's regional S3 endpoint, used when `config.endpoint` is not set.
 encodeRfc3986	function	@spy4x/server/storage	Percent-encode per RFC 3986.
 encodeS3Path	function	@spy4x/server/storage	Encode an object key for the canonical URI, keeping `/` as the separator.
-ensureFileDirectory	function	@spy4x/server/storage	Create the directory holding `filePath`.
+ensureFileDirectory	function	@spy4x/server/storage	Create the directory holding `filePath`, with every missing parent.
 formatAmzDate	function	@spy4x/server/storage	`YYYYMMDDTHHMMSSZ`, the only timestamp format SigV4 accepts.
 isSafeObjectPath	function	@spy4x/server/storage	Report whether one path is safe to join onto a bucket: relative, free of a scheme, a backslash or a NUL byte, and free of a `..` segment.
 loadStorageProvider	function	@spy4x/server/storage	Load and construct a provider by dynamic `import()`.
@@ -2168,9 +2172,10 @@ PostgresSubscribersOptions	interface	@spy4x/server/subscribers/postgres	What the
 SUBSCRIBERS_POSTGRES_SCHEMA	constant	@spy4x/server/subscribers/postgres	The three tables, as SQL text the app runs as a migration.
 createPostgresSendLog	function	@spy4x/server/subscribers/postgres	A SendLog over the `subscriber_sends` table (SUBSCRIBERS_POSTGRES_SCHEMA) for the list `listId`.
 createPostgresSubscriberStore	function	@spy4x/server/subscribers/postgres	A SubscriberStore over the `subscribers` and `subscriber_unsubscribes` tables (SUBSCRIBERS_POSTGRES_SCHEMA) for the list `listId`.
-MAX_API_KEY_LENGTH	constant	@spy4x/server/user-secrets	Longest accepted api key.
+MAX_API_KEY_LENGTH	constant	@spy4x/server/user-secrets	Longest accepted api key: an unbounded string is an unbounded cipher row and an unbounded request body.
+MAX_MODEL_LENGTH	constant	@spy4x/server/user-secrets	Longest accepted model name.
 MAX_PROVIDER_LENGTH	constant	@spy4x/server/user-secrets	Longest accepted provider name — long enough for `azure-openai-eu-west`, short enough to key on.
-MIN_API_KEY_LENGTH	constant	@spy4x/server/user-secrets	Shortest accepted api key, mirroring the `keys.ts:25` rule.
+MIN_API_KEY_LENGTH	constant	@spy4x/server/user-secrets	Shortest accepted api key.
 PROVIDER_PATTERN	constant	@spy4x/server/user-secrets	Shape of a provider name an adapter can actually match.
 SaveUserSecretInput	interface	@spy4x/server/user-secrets	
 StoredUserSecret	interface	@spy4x/server/user-secrets	A stored row, as the port sees it.
@@ -2180,6 +2185,33 @@ UserSecretPort	interface	@spy4x/server/user-secrets	The injected persistence por
 UserSecretStore	interface	@spy4x/server/user-secrets	
 UserSecretSummary	interface	@spy4x/server/user-secrets	What a list/UI may see: metadata plus a hint.
 createUserSecretStore	function	@spy4x/server/user-secrets	Builds a store over an injected port and cipher.
+COMPLETE_REFUSED_BY_RULE	constant	@spy4x/tasks/edit	The codes that mean the repeat rule or the dates are outside what can be reproduced, as opposed to a broken text.
+CompleteError	interface	@spy4x/tasks/edit	Why completeTask or reopenTask refused.
+CompleteKind	enum	@spy4x/tasks/edit	What a successful change did to the task.
+CompleteOutput	interface	@spy4x/tasks/edit	A completed, advanced or reopened task, its text and the text that undoes it.
+CompleteResult	type	@spy4x/tasks/edit	The result of completeTask and reopenTask.
+CreateOutput	interface	@spy4x/tasks/edit	A new task's text and where to create it.
+CreateResult	type	@spy4x/tasks/edit	The result of createTask.
+EditField	enum	@spy4x/tasks/edit	The task fields the editor changes.
+EditOutput	interface	@spy4x/tasks/edit	An edited task, its patched text and, for a move, the list it goes to.
+EditResult	type	@spy4x/tasks/edit	The result of editTask.
+KeepMineError	interface	@spy4x/tasks/edit	Why keepMineText refused, and at which step.
+KeepMineOutput	interface	@spy4x/tasks/edit	The server's task with my changes on it, and its text.
+KeepMineResult	type	@spy4x/tasks/edit	The result of keepMineText.
+KeepMineStep	enum	@spy4x/tasks/edit	The step of keepMineText that refused.
+NewTaskContext	interface	@spy4x/tasks/edit	What createTask needs besides the fields: the identity, the clock and the list.
+NewTaskFields	interface	@spy4x/tasks/edit	The fields a new task can start with.
+RebaseKind	enum	@spy4x/tasks/edit	Whether rebaseEdit applied the edit or found a collision.
+RebaseResult	type	@spy4x/tasks/edit	The result of rebaseEdit: the applied edit, or the fields that collided.
+TaskEdit	interface	@spy4x/tasks/edit	What the editor changed.
+collisions	function	@spy4x/tasks/edit	The fields both sides changed, to different values.
+completeTask	function	@spy4x/tasks/edit	Completes `task`; a repeating task moves to its next occurrence instead.
+createTask	function	@spy4x/tasks/edit	Builds the text for a new task.
+editTask	function	@spy4x/tasks/edit	Patches `task.ics` with `edit`.
+keepMine	function	@spy4x/tasks/edit	"Keep mine": applies the fields `edit` really changed (against `base`) to `theirs`, overwriting the server's value where both changed the same field and leaving every other server change alone.
+keepMineText	function	@spy4x/tasks/edit	"Keep mine" for a change that is stored as whole text: a write that waited in a queue while the server's copy changed.
+rebaseEdit	function	@spy4x/tasks/edit	Re-applies `edit`, made on `base`, to `theirs`, the fresh copy from the server.
+reopenTask	function	@spy4x/tasks/edit	Reopens a completed task.
 ParseTaskResult	type	@spy4x/tasks/model	The result of parseTask: the task, or a message that says why there is none.
 PriorityBand	enum	@spy4x/tasks/model	How Tasks.org groups the iCalendar priority numbers 1 to 9 (0 is none).
 RepeatFrom	enum	@spy4x/tasks/model	Which date the next occurrence of a repeating task is counted from when it is completed.
@@ -2211,6 +2243,9 @@ ReminderRunnerState	interface	@spy4x/tasks/reminder-runner	What the runner remem
 ReminderRunnerStep	type	@spy4x/tasks/reminder-runner	Which part of a tick failed, as ReminderRunnerOptions.onError is told.
 ReminderStatePort	interface	@spy4x/tasks/reminder-runner	Where the runner keeps its ReminderRunnerState.
 createReminderRunner	function	@spy4x/tasks/reminder-runner	Builds a runner; nothing runs until ReminderRunner.start or ReminderRunner.tick.
+DueReminder	interface	@spy4x/tasks/reminders	One reminder of one task, placed in time.
+ReminderWindow	interface	@spy4x/tasks/reminders	A half-open stretch of time: after `after`, up to and including `upTo`.
+dueReminders	function	@spy4x/tasks/reminders	The reminders of the task in `ics` whose moment falls in `window`: after `window.after`, up to and including `window.upTo`, earliest first.
 SortMode	enum	@spy4x/tasks/view	How a list shows its tasks.
 SortOrderChange	interface	@spy4x/tasks/view	A new `X-APPLE-SORT-ORDER` to write for one task.
 TodayView	interface	@spy4x/tasks/view	The Today view.
@@ -2472,4 +2507,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 b5419c12c9c235a14dc1df56f83b8c1276507c837f01159bfbe3e9609e48f4d5
+# export surface: sha256 a9e0ea2680dea52d2cde80771d581c9d79745ff1c8d68674d9ef83a749d77ae5

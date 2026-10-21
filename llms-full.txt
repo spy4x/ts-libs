@@ -227,7 +227,9 @@ await billing.cancelNow({ subscriptionId, idempotencyKey })
   - `refundPayment({ paymentId, idempotencyKey })` refunds in full: it sends no amount, so Stripe
     refunds everything not refunded yet. There are no partial refunds. The answer is the `Refund`
     with its real amount and a `RefundStatus`; a status Stripe adds later reads as `Pending`, never
-    as a failure, because the refund exists.
+    as a failure, because the refund exists. A retry after Stripe's 24-hour key window is refused
+    by Stripe as already refunded, so on a 4xx the adapter reads the payment back and answers its
+    newest refund when nothing is left to refund.
   - `setTrialEnd({ subscriptionId, trialEnd, idempotencyKey })` gives time at no charge: nothing is
     charged before `trialEnd`, and `proration_behavior=none` neither credits nor charges the paid
     time left. Stripe refuses a date in the past.
@@ -4381,8 +4383,11 @@ stall rejects with the canonical `BodyReadTimeoutError`, importable from
 `c.req.raw` through the canonical `readBoundedJson` and throws Hono's `HTTPException`: 413 for a
 body over the cap, 408 for a stalled body and 400 for a body that is not JSON, the empty body
 included. A route without `onError` answers with that status on its own; a route with its own error
-shape catches the exception and reads `status`, and the reader's error is kept as `cause`. Any other
-error is rethrown unchanged.
+shape catches the exception and reads `status`, and the reader's error is kept as `cause`. The 413's
+response carries `connection: close`, because once the unread body is cancelled `Deno.serve` no longer
+closes the connection by itself. Any other error is rethrown unchanged, including the `RangeError`
+for a `maxBytes` that is not a positive finite number (`0` among them), which a route answers with
+500, not 413.
 
 Two options go beyond the reader's `maxBytes` and `timeoutMs`. `requireJsonContentType: true`
 refuses, before the body is read, a request that is not declared as `application/json`: 415 with
@@ -4626,7 +4631,9 @@ absolute path, a NUL byte and an encoded separator are all refused **before any 
 adapter then compares the realpath of the resolved file against the realpath of the root, because only
 the realpath can reveal a symlink that points outside. A path ending in `/` serves that directory's
 `index.html`. An SPA fallback is one flag, not a list of route paths: with `spaFallback`, a missing
-path, or one refused for an encoded separator such as `/tasks/a%2Fb`, gets `<root>/index.html`.
+path, or one refused for an encoded separator such as `/tasks/a%2Fb`, gets `<root>/index.html`. Every
+other refused path gets no response, with or without the flag: a traversal, a backslash, a control
+character, a malformed escape such as `%zz`, and an empty segment such as `/docs//`.
 
 A file is streamed, not read whole: `StaticFs.open` returns the file's size and a `ReadableStream`, so
 serving a large file costs the same per-request memory as serving a small one. `Content-Length` comes
@@ -4725,7 +4732,7 @@ development. Use `upload`/`download` with a local provider.
 ```ts
 import { createStorage } from "@spy4x/server/storage"
 
-const storage = await createStorage() // reads Deno.env, returns undefined if unconfigured
+const storage = await createStorage() // reads the storage variables, undefined if unconfigured
 await storage?.upload("media/photo.png", bytes)
 ```
 
@@ -4734,8 +4741,8 @@ await storage?.upload("media/photo.png", bytes)
 provider. The key is an **argument**, not a module-scope `$env` read, so
 importing the package has no environment dependency and cannot fail on a missing
 variable. `createStorage()` is the only function that reads real environment
-variables, and it uses the same `parseStorageEnv(record)` helper that a test
-drives with a literal object.
+variables, only the ones `storageEnvNames()` lists, and it uses the same
+`parseStorageEnv(record)` helper that a test drives with a literal object.
 
 ### Injecting configuration
 
@@ -4802,16 +4809,22 @@ URL, and an ACL outside the canned set is rejected. `getDownloadURL` ignores
 
 `ObjectFs` (`readObject`, `writeObject`, `existsObject`) is the filesystem
 dependency of both providers, and is what lets the local provider be exercised
-without disk access. `createDenoObjectFs()` is the real adapter and
-`createMemoryObjectFs()` is exported for callers that want the same substitute in
-their own tests.
+without disk access. `createDenoObjectFs()` is the real adapter: it reads and
+writes through the platform's `denoFileSystem` port
+(`@spy4x/platform/server/deno-fs`) and its `readBytes`, `writeBytes` and
+`writeStream` methods. `createMemoryObjectFs()` is exported for callers that want
+the same substitute in their own tests.
 
 `writeObject` returns the byte count it wrote and accepts a `Uint8Array` or a
 `ReadableStream<Uint8Array>`, which is how `download` streams a response body
-straight to disk without buffering the whole object.
+straight to disk without buffering the whole object. It writes to a temporary
+file beside the target and renames it into place, so a download cut off midway
+keeps the file that was there, and the temporary file is removed. Creating the
+parent folder ignores only `AlreadyExists`; any other failure, such as a denied
+permission, is thrown.
 
 The write path is split so its logic is reachable without disk access:
-`writeToFile(path, data, open?)` owns the byte counting, the open flags contract
+`writeToFile(path, data, open?, makeDirectory?)` owns the byte counting, the open flags contract
 and the closer-on-error path, and takes `open` as an injectable opener.
 `parentDirectory(filePath)` decides which directory must exist first and returns
 `undefined` when none does — a bare filename like `"out.png"` creates no
@@ -4824,15 +4837,13 @@ through `createMemoryObjectFs()`, the S3 provider through an injected `fetch`,
 `writeToFile` through an injected opener, and the whole `Deno` surface through an
 injected `DenoFsHost`.
 
-**Disclosed, measured gap.** `server/storage/fs.ts` is the one module below full
-statement coverage: **93.75% (75/80)**, with every other module at 100%
-(`env`, `errors`, `index`, `local`, `memory-fs`, `paths`, `s3`, `sigv4`). The
-five uncovered statements are all platform calls behind `--allow-write`:
-`Deno.open(path, { create: true, write: true, truncate: true })` and the
-`denoFsHost.open` binding that reaches it. Nothing in that module's own logic is
-uncovered: the stat-to-boolean branch, both write branches, the byte count, the
-closer-on-error path (buffer _and_ stream) and the directory decision all have
-direct tests.
+**Disclosed gap.** In the unit tier, `server/storage/fs.ts` leaves only its
+platform calls behind `--allow-write` uncovered: `Deno.open`, `Deno.mkdir`,
+`Deno.rename` and `Deno.remove` in `denoFsHost` and the default opener. Nothing
+in that module's own logic is uncovered: the stat-to-boolean branch, both write
+branches, the byte count, the closer-on-error path (buffer _and_ stream), the
+rename into place and the directory decision all have direct tests, and the
+integration tier runs the `ObjectFs` contract on real disk.
 
 `Deno.makeTempDir` does **not** make that gap closable here. On this box it fails
 under the task's exact grants, and under no grants at all:
@@ -5586,16 +5597,21 @@ work factor should use `fromHexKey` with a key its own key management produced.
 
 `createUserSecretStore`, `UserSecretError`, `UserSecretErrorCode`, `UserSecretPort`,
 `StoredUserSecret`, `SaveUserSecretInput`, `UserSecretSummary`, `UserSecretStoreOptions`,
-`PROVIDER_PATTERN`, `MIN_API_KEY_LENGTH`, `MAX_API_KEY_LENGTH`, `MAX_PROVIDER_LENGTH`.
+`PROVIDER_PATTERN`, `MIN_API_KEY_LENGTH`, `MAX_API_KEY_LENGTH`, `MAX_PROVIDER_LENGTH`,
+`MAX_MODEL_LENGTH`.
 
 The BYOK pattern: validate → `cipher.encrypt` at rest → keep `maskKey`'s hint → upsert per
 `(user, provider)` → delete, with persistence behind an injected `UserSecretPort` (no SQL, no driver)
 and the cipher behind `SecretCipher`. `save` returns a summary, `list` returns summaries only — the
 ciphertext has no field to travel in — and `openSecret` is the single call that yields a plaintext,
-for the outbound provider request. The port's `upsert` contract is the source's
+for the outbound provider request. The port's `upsert` contract is an SQL
 `ON CONFLICT (user_id, provider) DO UPDATE`: replace the secret and hint, force `isActive`, bump
 `updatedAt`, preserve `createdAt`. Neither the cipher nor the mask is re-implemented here; both come
 from `server/crypto.ts`.
+
+A `model` longer than `MAX_MODEL_LENGTH` (256) or carrying a control character is refused as
+`InvalidModel`. A cipher that rejects while encrypting is `EncryptionFailed`, while decrypting
+`DecryptionFailed`; a port that rejects is `PortFailure`.
 
 **A base URL is an outbound destination, so it is checked like one.** A non-empty `baseUrl` must be
 an absolute `http:`/`https:` URL with no user name or password and no control characters — the
@@ -6281,8 +6297,9 @@ turns it off for a non-TTY or `NO_COLOR` environment, so nothing new needs decid
 `MIN_REQUEST_ID_MAX_LENGTH`.
 
 Ported from `template/apps/api/base-middleware.ts`. The app-specific parts became options:
-`requestIdMaxLength` (default 128; a longer `X-Request-Id` is replaced by a generated 8-character
-id, so it cannot overflow a database column), `skipLogPaths` (the template's hardcoded
+`requestIdMaxLength` (default 128; a longer `X-Request-Id` is replaced by a generated id, so it
+cannot overflow a database column; the id is a version 7 UUID, or 8 random URL-safe characters
+when the cap is below 36), `skipLogPaths` (the template's hardcoded
 `/api/health`; default none), `parseAuth` (optional) and `reportError` (optional, takes the
 `ReportContext` of `@spy4x/platform`'s error reporter). The app type is generic (`Hono<E>`), where
 the template named its own `APIContext`.
@@ -6292,8 +6309,8 @@ the request id, the method and the path, never the query, a header or a body, in
 route's own `onError` answered (that answer stays). An `HTTPException` below 500 is an answer, not
 a failure, and is not reported. A throw inside `reportError`, or a promise it returns that rejects, is swallowed.
 
-`requestIdMaxLength` must be an integer of at least `MIN_REQUEST_ID_MAX_LENGTH` (8, the length of a
-generated id); anything else throws a `RangeError` when `applyBaseMiddleware` is called.
+`requestIdMaxLength` must be an integer of at least `MIN_REQUEST_ID_MAX_LENGTH` (8, the length of
+the shortest generated id); anything else throws a `RangeError` when `applyBaseMiddleware` is called.
 
 ## `server/config`
 
@@ -6783,11 +6800,12 @@ const processor = new OutboxProcessor(
 
 `createIdempotencyMiddleware`, `fingerprint`, `isIdempotencyKey`, `IdempotencyError`,
 `IdempotencyStore`, `PostgresIdempotencyStore`, `IDEMPOTENCY_POSTGRES_SCHEMA`,
-`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`,
+`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`, `IDEMPOTENCY_POSTGRES_USER_ID_TEXT`, `IdempotencyUserId`,
 `MemoryIdempotencyStore`, `IDEMPOTENCY_LEASE_SECONDS`, `IDEMPOTENCY_RETENTION_DAYS`. Extracted from
 `template/libs/server/idempotency/` (#313).
 
 A command whose data carries an `idempotencyKey` and an `actor.userId` runs once per (user, key).
+The user id is a number or a non-empty string, such as a version 7 UUID.
 A repeat returns the first run's result as JSON and changes nothing. Register the middleware on the
 `CommandBus` from `@spy4x/platform/cqrs`:
 
@@ -6819,6 +6837,8 @@ it, and its result, for the full retention.
 **The table.** `IDEMPOTENCY_POSTGRES_SCHEMA` is the SQL for `idempotency_keys`; run it as one of
 your migrations. It has no foreign key on `user_id`, because this library does not own your users
 table; add `REFERENCES users (id) ON DELETE CASCADE` if you want rows to go with the user.
+`user_id` is an `integer`. An app whose user ids are strings also runs
+`IDEMPOTENCY_POSTGRES_USER_ID_TEXT`, which widens it to `text`, before it opens the store's pool.
 
 **Fencing.** `begin` returns `{ status: "claimed", token }`; `complete` and `release` take that token
 and change nothing when it is not the key's current one. A run that outlives its lease and loses its
@@ -7135,14 +7155,17 @@ const result = await sendIssue({
 - Each link is minted with the row's stored key, so it survives a rotation. Marks are read under the
   current and every previous secret, and written under the current one, so a rotation between runs
   does not mail anyone twice.
-- A row that is not a bare address, a link that cannot be built and a send that throws each count
-  as one failure, and the run goes on. The log names a row by its number, and a relay error is
+- A link that cannot be built and a send that throws each count as one failure, and the run goes
+  on. A row that is not a bare address is logged and counted as skipped, so it cannot keep the issue
+  open forever. The log names a row by its number, and a relay error is
   redacted before it is logged. The send log holds marks, never addresses.
 - An empty list answers `no-subscribers` and records nothing: it usually means the store could not
   be read.
 
 `describeSendLogContract` in `send-log-contract.test.ts` is the contract every adapter runs. The
-file log reads and writes antonshubin.com's `newsletter-log.json` unchanged. A file that does not
+file log reads and writes antonshubin.com's `newsletter-log.json` unchanged. During a send it
+appends each recipient to `<path>.journal` rather than rewriting the file per mail; the next write
+of the file folds the journal in and removes it. A file that does not
 parse, or is not an array, is left alone and every call throws, so a corrupt log stops a send
 instead of allowing a second one.
 
@@ -7625,20 +7648,22 @@ was rewritten, and every bug fixed over either source.
 
 # `@spy4x/tasks`
 
-The to-do model that the CalDAV task apps share: the task a screen shows, the list views, the
-quick-add syntax and the runner that sends reminders. A domain model, not a general helper, which
-is why it has a package of its own instead of a general name in `@spy4x/platform` or `@spy4x/time`.
+The to-do model that the CalDAV task apps share: the task a screen shows, writing it back, which
+reminders are due, the list views, the quick-add syntax and the runner that sends reminders. A
+domain model, not a general helper, which is why it has a package of its own instead of a general
+name in `@spy4x/platform` or `@spy4x/time`.
 
 | Entry point                    | Exports                                                                                                                                                   |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@spy4x/tasks/model`           | The `Task` a screen shows, read from a CalDAV resource: `parseTask`, `priorityBand`, `PriorityBand`, `TaskStatus`, `isOpen`, `dateInstant`, `dateDay`     |
+| `@spy4x/tasks/edit`            | Writing a task back: `createTask`, `editTask`, `completeTask`, `reopenTask`, `rebaseEdit`, `keepMine`, `keepMineText`, `collisions`                       |
+| `@spy4x/tasks/reminders`       | `dueReminders`: the reminders of one task that fall in a time window                                                                                      |
 | `@spy4x/tasks/view`            | List screens for that `Task`: `SortMode`, `sortTasks`, `reorderTask`, `buildTree`, `flattenTree`, `searchTasks`, `todayView`, `upcomingView`, `isOverdue` |
 | `@spy4x/tasks/quick-add`       | `parseQuickAdd`: one task line to title, tags, contexts, due date, priority and token spans                                                               |
 | `@spy4x/tasks/reminder-runner` | `createReminderRunner`, `ReminderStatePort`, `ReminderRunnerState`, `ReminderNotifyResult`: sends the task reminders that came due since the last run     |
 
-Reading, patching and completing the iCalendar text of a task stays in `@spy4x/time`
-(`time/ical-tasks`, `time/ical-tasks-edit`, `time/ical-tasks-reminders`), and talking to the server
-in `@spy4x/caldav`.
+The low-level iCalendar reading and patching of a VTODO stays in `@spy4x/time/ical-tasks`, and
+talking to the server in `@spy4x/caldav`.
 
 ## Install
 
@@ -7676,6 +7701,22 @@ a throw: one odd resource must not take the whole list down. `priorityBand` turn
 `PRIORITY` (0 to 9) into the band a screen shows, `isOpen` says whether a task still needs doing,
 and `dateInstant` and `dateDay` turn a task's date into a moment or a `YYYY-MM-DD` day in the
 viewer's time zone.
+
+## Writing a task back
+
+`createTask` builds the text of a new task or subtask and the `href` to create it at; the caller
+passes the new `UID` and the clock. `editTask` applies what the editor changed as a patch of the
+original text, so lines another app wrote survive, and says where a task moved to another list
+goes. `completeTask` completes a task or moves a repeating one to its next occurrence, with the
+text to write back for an undo; `reopenTask` reopens a completed one. After a 412 on `If-Match`,
+`rebaseEdit`, `keepMine` and `keepMineText` re-apply the edit to the server's fresh copy.
+
+## Due reminders
+
+`dueReminders` reads one task's `VALARM`s and snooze and returns the reminders whose moment falls
+after `after` and up to `upTo`, each with a key that is the same on every read. It never throws for
+a task it cannot read; such a task has no reminders. `createReminderRunner` below calls it on a
+timer.
 
 ## The views
 
@@ -7720,12 +7761,14 @@ runner.start()
 
 ## The old import paths
 
-Before this package, the four entry points had general names. Those paths keep working until 2.0
+Before this package, these entry points had general names. Those paths keep working until 2.0
 and hand out the very same values, so an app can move one import at a time:
 
 | Old path, kept until 2.0                    | Import from                    |
 | ------------------------------------------- | ------------------------------ |
 | `@spy4x/time/ical-tasks-model`              | `@spy4x/tasks/model`           |
+| `@spy4x/time/ical-tasks-edit`               | `@spy4x/tasks/edit`            |
+| `@spy4x/time/ical-tasks-reminders`          | `@spy4x/tasks/reminders`       |
 | `@spy4x/platform/universal/ical-tasks-view` | `@spy4x/tasks/view`            |
 | `@spy4x/platform/universal/quick-add`       | `@spy4x/tasks/quick-add`       |
 | `@spy4x/platform/server/reminder-runner`    | `@spy4x/tasks/reminder-runner` |

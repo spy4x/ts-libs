@@ -15,6 +15,7 @@ import { IDEMPOTENCY_LEASE_SECONDS } from "./idempotency.ts"
 import {
   IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT,
   IDEMPOTENCY_POSTGRES_SCHEMA,
+  IDEMPOTENCY_POSTGRES_USER_ID_TEXT,
   PostgresIdempotencyStore,
 } from "./postgres.ts"
 import { describeIdempotencyStoreContract, type StoreFixture } from "./store-contract.test.ts"
@@ -28,6 +29,7 @@ async function openSchema(
   options?: ConstructorParameters<typeof PostgresIdempotencyStore>[1],
   column: ClaimTokenColumn = "uuid",
   connections = 4,
+  userIdText = false,
 ): Promise<StoreFixture & { sql: Sql }> {
   const settings = postgresSettings()
   await requireReachable(settings.address)
@@ -52,6 +54,7 @@ async function openSchema(
     await sql.unsafe(IDEMPOTENCY_POSTGRES_SCHEMA)
     // The `text` table is made the way an app on 1.64.0 got it: by the widening migration.
     if (column === "text") await sql.unsafe(IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT)
+    if (userIdText) await sql.unsafe(IDEMPOTENCY_POSTGRES_USER_ID_TEXT)
   } catch (error) {
     await close()
     throw error
@@ -242,6 +245,40 @@ describe("PostgresIdempotencyStore while claim_token is widened under it", () =>
       expect(await store.begin(claim("done"))).toEqual({ status: "replay", result: "kept" })
       await store.release(1, "freed", freed)
       expect(await store.begin(claim("freed"))).toMatchObject({ status: "claimed" })
+    } finally {
+      await fixture.close()
+    }
+  })
+})
+
+describeIdempotencyStoreContract(
+  "PostgresIdempotencyStore on a text user_id",
+  () => openSchema(undefined, "uuid", 4, true),
+)
+
+describe("IDEMPOTENCY_POSTGRES_USER_ID_TEXT", () => {
+  it("keys UUID users apart, keeps a numeric user's earlier key, and runs twice", async () => {
+    const fixture = await openSchema()
+    try {
+      const { sql, store } = fixture
+      // Written by hand, so the store prepares no statement before the column changes type: an
+      // app runs its migrations before it opens the pool the store uses.
+      await sql`
+        INSERT INTO idempotency_keys
+          (user_id, key, command_name, request_hash, claim_token, status, result)
+        VALUES (1, 'k', 'RenameCommand', 'hash-a', ${TOKEN_OF_1_63}, 2, '"numeric"'::jsonb)
+      `
+      await sql.unsafe(IDEMPOTENCY_POSTGRES_USER_ID_TEXT)
+      await sql.unsafe(IDEMPOTENCY_POSTGRES_USER_ID_TEXT)
+
+      expect(await store.begin(claim("k"))).toEqual({ status: "replay", result: "numeric" })
+      const one = { ...claim("k"), userId: "01929b2c-6f00-7000-8000-000000000001" }
+      const two = { ...claim("k"), userId: "01929b2c-6f00-7000-8000-000000000002" }
+      const first = await store.begin(one)
+      if (first.status !== "claimed") throw new Error("expected a claim")
+      await store.complete(one.userId, "k", first.token, "uuid")
+      expect(await store.begin(one)).toEqual({ status: "replay", result: "uuid" })
+      expect(await store.begin(two)).toMatchObject({ status: "claimed" })
     } finally {
       await fixture.close()
     }

@@ -36,7 +36,7 @@ async function withLine(name: string, from: string | RegExp, to: string): Promis
   return changed
 }
 
-function complete(text: string, options: { now: Date } = OPTIONS) {
+function complete(text: string, options: { now: Date; timeZone?: string } = OPTIONS) {
   const root = parse(text)
   const result = completeTodo(root, options)
   return { root, result, text: serializeIcal(root) }
@@ -246,4 +246,53 @@ Deno.test(`reopening a task that is not completed is refused and changes nothing
   assert(!result.success)
   assertEquals(result.error.code, CompleteTodoErrorCode.NotCompleted)
   assertEquals(serializeIcal(root), text)
+})
+
+/** A task document with these VTODO lines. */
+function vtodo(...lines: string[]): string {
+  return [
+    `BEGIN:VCALENDAR`,
+    `VERSION:2.0`,
+    `PRODID:-//test//EN`,
+    `BEGIN:VTODO`,
+    `UID:edge-years`,
+    `DTSTAMP:20261001T000000Z`,
+    ...lines,
+    `END:VTODO`,
+    `END:VCALENDAR`,
+    ``,
+  ].join(`\r\n`)
+}
+
+Deno.test(`a date-only start that would move past the year 9999 is refused, not thrown`, () => {
+  const text = vtodo(`DTSTART;VALUE=DATE:99991231`, `DUE;VALUE=DATE:99990101`, `RRULE:FREQ=DAILY`)
+  assertRefused(text, CompleteTodoErrorCode.UnusableDate)
+})
+
+Deno.test(`a weekly restart from completion that would pass the year 9999 is refused, not thrown`, () => {
+  const text = vtodo(
+    `DUE;VALUE=DATE:99991201`,
+    `RRULE:FREQ=WEEKLY;INTERVAL=3;BYDAY=MO`,
+    `X-REPEAT-FROM:COMPLETION`,
+  )
+  const options = { now: new Date(`9999-12-20T10:00:00Z`), timeZone: `UTC` }
+  const { result, text: after } = complete(text, options)
+  assert(!result.success, `expected a refusal`)
+  assertEquals(result.error.code, CompleteTodoErrorCode.UnusableDate)
+  assertEquals(after, serializeIcal(parse(text)), `a refusal leaves the document as it was`)
+})
+
+Deno.test(`an absolute reminder before the year 1000 moves with four year digits`, () => {
+  const text = vtodo(
+    `DUE:20261010T080000Z`,
+    `RRULE:FREQ=DAILY`,
+    `BEGIN:VALARM`,
+    `ACTION:DISPLAY`,
+    `DESCRIPTION:Reminder`,
+    `TRIGGER;VALUE=DATE-TIME:09990101T080000Z`,
+    `END:VALARM`,
+  )
+  const { result, text: after } = complete(text)
+  assert(result.success, result.error?.message)
+  assert(after.includes(`\r\nTRIGGER;VALUE=DATE-TIME:09990102T080000Z\r\n`), after)
 })

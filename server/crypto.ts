@@ -46,6 +46,7 @@
  */
 
 import { decodeBase64, encodeBase64 } from "@std/encoding/base64"
+import { decodeHex } from "@std/encoding/hex"
 
 /** WebCrypto algorithm name. */
 export const AES_ALGORITHM = "AES-GCM"
@@ -215,7 +216,7 @@ export class CryptoService implements SecretCipher {
         `encryption key must be exactly ${HEX_KEY_LENGTH} hex characters (${AES_KEY_BYTES} bytes)`,
       )
     }
-    // `isHexKey` makes a decode failure impossible, so the decoder needs no
+    // `isHexKey` makes a decode failure impossible, so the decode needs no
     // error path of its own. The `#keyBytes` assignment replaces the
     // constructor's SHA-256 source before the instance is handed out.
     const bytes = decodeHex(hex.toLowerCase())
@@ -352,18 +353,6 @@ function gcmParameters(iv: Uint8Array<ArrayBuffer>, context: string | undefined)
  */
 async function digestOf(secret: string): Promise<Uint8Array<ArrayBuffer>> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(secret)))
-}
-
-/**
- * Decodes `hex` (exactly two characters per byte, already lower-cased and
- * pattern-checked by the caller) into raw key bytes.
- */
-function decodeHex(hex: string): Uint8Array<ArrayBuffer> {
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let index = 0; index < bytes.length; index++) {
-    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16)
-  }
-  return bytes
 }
 
 /**

@@ -41,6 +41,7 @@
  */
 import { type } from "arktype"
 import { type PushNotificationMessage, pushNotificationMessageSchema } from "@spy4x/platform/model"
+import { sha256Hex } from "@spy4x/platform/tokens"
 import {
   MAX_PUSH_PAYLOAD_BYTES,
   type PushDelivery,
@@ -125,9 +126,7 @@ export async function reminderPushMessage(
   reminder: ReminderForPush,
   options: ReminderPushMessageOptions = {},
 ): Promise<PushNotificationMessage> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(reminder.key))
-  const tag = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
-    .join("")
+  const tag = await sha256Hex(reminder.key)
   return checked({ title: titleOf(reminder.summary, options), url: options.url ?? null, tag })
 }
 

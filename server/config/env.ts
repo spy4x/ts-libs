@@ -19,7 +19,13 @@
  * @module
  */
 
-/** Reads environment values. Injected so nothing here depends on the process environment. */
+/**
+ * Reads environment values. Injected so nothing here depends on the process environment.
+ *
+ * The same shape as `EnvReader` in `@spy4x/platform/server/process`, so a reader from either
+ * package fits wherever the other is expected. It is declared here, not imported, because this
+ * file imports nothing (#443): `@spy4x/server/config/env` pulls in no other package.
+ */
 export interface EnvReader {
   /** Value of `name`, or `undefined` when unset or blank. */
   get(name: string): string | undefined
@@ -37,7 +43,11 @@ function blankToUndefined(value: string | undefined): string | undefined {
   return value === undefined || value === "" ? undefined : value
 }
 
-/** The process environment. The only adapter that reads `Deno.env`, and never at module scope. */
+/**
+ * The process environment through `Deno.env`, read on each call and never at module scope. Code
+ * that must also run on Node or Bun passes `processEnv` of `@spy4x/platform/server/process`
+ * instead, which reads `Deno.env` the same way on Deno and `process.env` elsewhere.
+ */
 export const systemEnv: EnvReader = {
   get: (name) => blankToUndefined(Deno.env.get(name)),
 }
@@ -59,6 +69,9 @@ export function createEnvReader(values: Record<string, string | undefined>): Env
  * against, for example). `loadConfig` in `@spy4x/server/config` is the entry point for everything
  * else.
  *
+ * With `optional`, a missing value comes back as `""`, which a caller cannot tell apart from a
+ * value it chose; {@link readOptionalEnvVar} returns `undefined` instead.
+ *
  * @throws {MissingEnvError} When `name` is unset or blank, unless `optional`.
  */
 export function readEnvVar(
@@ -72,4 +85,12 @@ export function readEnvVar(
     throw new MissingEnvError(name)
   }
   return value
+}
+
+/**
+ * Read one value that may be absent: the value, or `undefined` when `name` is unset or blank. Use
+ * it instead of `readEnvVar(env, name, { optional: true })`, which answers `""` for a missing one.
+ */
+export function readOptionalEnvVar(env: EnvReader, name: string): string | undefined {
+  return blankToUndefined(env.get(name))
 }

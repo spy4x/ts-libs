@@ -6,6 +6,8 @@ import { HTTPException } from "hono/http-exception"
 import type { RequestIdVariables } from "hono/request-id"
 import { applyBaseMiddleware } from "./base-middleware.ts"
 
+const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
 interface APIContext {
   Variables: RequestIdVariables
 }
@@ -38,10 +40,18 @@ describe("the request id of an API call", () => {
 })
 
 describe("the request id's options", () => {
-  it("generates an 8-character URL-safe id when the caller sends none", async () => {
+  it("generates a version 7 UUID when the caller sends none", async () => {
     const id = await (await app().request("/api/id")).text()
 
-    expect(id).toMatch(/^[A-Za-z0-9_-]{8}$/)
+    expect(id).toMatch(UUID_V7)
+  })
+
+  it("generates an 8-character URL-safe id when the cap is below a UUID's 36", async () => {
+    const capped = new Hono<APIContext>().basePath("/api")
+    applyBaseMiddleware(capped, { write: () => {}, requestIdMaxLength: 35 })
+    capped.get("/id", (c) => c.text(c.get("requestId")))
+
+    expect(await (await capped.request("/api/id")).text()).toMatch(/^[A-Za-z0-9_-]{8}$/)
   })
 
   it("applies a request id cap the caller sets", async () => {
@@ -67,7 +77,7 @@ describe("the request id's limits", () => {
     const response = await app().request("/api/id", { headers: { "X-Request-Id": "a b" } })
 
     const id = await response.text()
-    expect(id).toMatch(/^[A-Za-z0-9_-]{8}$/)
+    expect(id).toMatch(UUID_V7)
     expect(response.headers.get("X-Request-Id")).toBe(id)
   })
 

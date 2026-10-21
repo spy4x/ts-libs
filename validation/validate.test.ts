@@ -282,4 +282,13 @@ describe("firstIssueMessage", () => {
     }
     expect(firstIssueMessage(legacy)).toBe("name must be non-empty")
   })
+
+  it("accepts an error with only details, since description is never read", () => {
+    const result = userSchema({ name: "", joinedAt: new Date(), address: { city: "x" } })
+    if (!isArkErrors(result)) throw new Error("expected errors")
+
+    // If `description` became required again, this call would stop type-checking.
+    const detailsOnly: { details: ArkErrors } = { details: result }
+    expect(firstIssueMessage(detailsOnly)).toBe("name must be non-empty")
+  })
 })

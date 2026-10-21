@@ -161,13 +161,17 @@ function isJsonContentType(header: string | null): boolean {
  * @throws {HTTPException} 415 ({@link JSON_BODY_WRONG_TYPE}) when `requireJsonContentType` is set
  * and the request is not declared as `application/json`. The body is not read.
  * @throws {HTTPException} 413 ({@link JSON_BODY_TOO_LARGE}) when the body, or its declared
- * `content-length`, is over `maxBytes`.
+ * `content-length`, is over `maxBytes`. Its response carries `connection: close`, see
+ * {@link readFormBody}.
  * @throws {HTTPException} 408 ({@link JSON_BODY_TIMEOUT}) when no chunk arrives within
  * `timeoutMs`.
  * @throws {HTTPException} 400 ({@link JSON_BODY_INVALID}) when the body is not valid JSON.
  * @throws The error `toError` returns, in place of each `HTTPException` above, when it is given.
- * @throws Any other error unchanged, such as the `RangeError` for a `maxBytes` that is not finite,
- * or a `TypeError` for a body that was already read.
+ * The 413 above carries `connection: close`; a route with `toError` sets that header itself.
+ * @throws Any other error unchanged, such as the `RangeError` for a `maxBytes` that is not a
+ * positive finite number (`0`, a negative value, `NaN` or `Infinity`), which Hono answers with 500,
+ * not 413, because the cap is the server's mistake; or a `TypeError` for a body that was already
+ * read.
  */
 export async function readJsonBody<T = unknown>(
   c: Context,
@@ -184,7 +188,9 @@ export async function readJsonBody<T = unknown>(
     return await readBoundedJson<T>(c.req.raw, readOptions)
   } catch (error) {
     if (error instanceof PayloadTooLargeError) {
-      throw refuse({ status: 413, message: JSON_BODY_TOO_LARGE, cause: error })
+      throw toError === undefined
+        ? tooLarge(JSON_BODY_TOO_LARGE, error)
+        : refuse({ status: 413, message: JSON_BODY_TOO_LARGE, cause: error })
     }
     if (error instanceof BodyReadTimeoutError) {
       throw refuse({ status: 408, message: JSON_BODY_TIMEOUT, cause: error })
@@ -194,6 +200,12 @@ export async function readJsonBody<T = unknown>(
     }
     throw error
   }
+}
+
+/** A 413 `HTTPException` whose response asks the client to close the connection. */
+function tooLarge(message: string, cause: unknown): HTTPException {
+  const res = new Response(message, { status: 413, headers: { connection: "close" } })
+  return new HTTPException(413, { message, cause, res })
 }
 
 /** Message of the 413 {@link readFormBody} throws when the body is over the cap. */
@@ -221,14 +233,18 @@ export const FORM_BODY_INVALID = "Request body is not a form"
  * @param options `maxBytes` (default 5 MiB) and `timeoutMs`, the per-chunk stall budget (default
  * 10 s).
  * @throws {HTTPException} 413 ({@link FORM_BODY_TOO_LARGE}) when the body, or its declared
- * `content-length`, is over `maxBytes`.
+ * `content-length`, is over `maxBytes`. Its response carries `connection: close`: the unread rest
+ * of the body is cancelled, and `Deno.serve` then no longer closes the connection by itself, so a
+ * client that pipelines its next request after the refused one would wait for an answer.
  * @throws {HTTPException} 408 ({@link FORM_BODY_TIMEOUT}) when no chunk arrives within
  * `timeoutMs`.
  * @throws {HTTPException} 400 ({@link FORM_BODY_INVALID}) when the request has no `content-type`,
  * names a type that is not a form, or its body does not parse as that form.
  * @throws TypeError when the body was already read: that is a mistake in the server, not in the
  * request, so it is not turned into a 400.
- * @throws Any other error unchanged, such as the `RangeError` for a `maxBytes` that is not finite.
+ * @throws Any other error unchanged, such as the `RangeError` for a `maxBytes` that is not a
+ * positive finite number (`0`, a negative value, `NaN` or `Infinity`), which Hono answers with 500,
+ * not 413, because the cap is the server's mistake.
  */
 export async function readFormBody(
   request: Request,
@@ -239,7 +255,7 @@ export async function readFormBody(
     return await parseBoundedFormData(request, options)
   } catch (error) {
     if (error instanceof PayloadTooLargeError) {
-      throw new HTTPException(413, { message: FORM_BODY_TOO_LARGE, cause: error })
+      throw tooLarge(FORM_BODY_TOO_LARGE, error)
     }
     if (error instanceof BodyReadTimeoutError) {
       throw new HTTPException(408, { message: FORM_BODY_TIMEOUT, cause: error })
