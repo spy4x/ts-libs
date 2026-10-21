@@ -1073,6 +1073,11 @@ stepAxis	function	@spy4x/platform/universal/axis	Round `[min, max]` outward to m
 ticks	function	@spy4x/platform/universal/axis	Tick values at multiples of a nice step, kept within half a step of `[min, max]`.
 BoundedIntegerOptions	interface	@spy4x/platform/universal/bounded-integer	Options of parseBoundedInteger.
 parseBoundedInteger	function	@spy4x/platform/universal/bounded-integer	The whole number `value` spells, or `options.fallback` when `value` is `undefined`, or `null` when it is anything else that is not an integer in `min` to `max`.
+contrastRatio	function	@spy4x/platform/universal/color	The WCAG 2.x contrast ratio of two hex colours, from 1 (the same) to 21 (black on white).
+hexColor	constant	@spy4x/platform/universal/color	A `string` that isHexColor accepts, for an arktype schema.
+isHexColor	function	@spy4x/platform/universal/color	True for a six-digit hex colour, `#rrggbb`, in lower or upper case.
+readableTextColor	function	@spy4x/platform/universal/color	Black or white, whichever has the higher contrast ratio on `background`.
+relativeLuminance	function	@spy4x/platform/universal/color	The WCAG 2.x relative luminance of a hex colour: 0 for black, 1 for white.
 AsyncMutex	class	@spy4x/platform/universal/concurrency	A fair mutual-exclusion lock for async critical sections.
 DEFAULT_DEBOUNCE_DELAY	constant	@spy4x/platform/universal/constants	Default trailing-edge debounce delay, in milliseconds.
 DEFAULT_FLUSH_INTERVAL_MS	constant	@spy4x/platform/universal/constants	Default window for the throttled JSON saver, in milliseconds.
@@ -2548,4 +2553,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 6943ded43df2bb8a74ed3d5840c8612bab5d62354e6c4a4ec3b802155a0ac4c5
+# export surface: sha256 5686941085b14911f85428c7c7f76a704dd96d051b08d60f80784fb461210e30
