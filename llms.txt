@@ -1638,13 +1638,15 @@ MissingEnvError	class	@spy4x/server/config	Raised when a required environment va
 createEnvReader	function	@spy4x/server/config	An `EnvReader` over a fixed record — what a unit test injects instead of the process environment, so a config or middleware test runs under `--allow-read --allow-env` without any environment variable actually being set.
 loadConfig	function	@spy4x/server/config	Read every environment variable `schema` declares and validate them together, once.
 readEnvVar	function	@spy4x/server/config	Read one required value now, outside a schema — for the one variable a caller needs before the rest of its configuration can even be assembled (`ENV`, deciding which schema to validate against, for example).
+readOptionalEnvVar	function	@spy4x/server/config	Read one value that may be absent: the value, or `undefined` when `name` is unset or blank.
 stringBoolean	constant	@spy4x/server/config	`"true"` or `"false"`, exactly — an environment boolean written by a person or a deploy script, not inferred from `"1"`, `"yes"` or an empty string.
-systemEnv	constant	@spy4x/server/config	The process environment.
+systemEnv	constant	@spy4x/server/config	The process environment through `Deno.env`, read on each call and never at module scope.
 EnvReader	interface	@spy4x/server/config/env	Reads environment values.
 MissingEnvError	class	@spy4x/server/config/env	Raised when a required environment variable is missing or blank.
 createEnvReader	function	@spy4x/server/config/env	An `EnvReader` over a fixed record — what a unit test injects instead of the process environment, so a config or middleware test runs under `--allow-read --allow-env` without any environment variable actually being set.
 readEnvVar	function	@spy4x/server/config/env	Read one required value now, outside a schema — for the one variable a caller needs before the rest of its configuration can even be assembled (`ENV`, deciding which schema to validate against, for example).
-systemEnv	constant	@spy4x/server/config/env	The process environment.
+readOptionalEnvVar	function	@spy4x/server/config/env	Read one value that may be absent: the value, or `undefined` when `name` is unset or blank.
+systemEnv	constant	@spy4x/server/config/env	The process environment through `Deno.env`, read on each call and never at module scope.
 AES_ALGORITHM	constant	@spy4x/server/crypto	WebCrypto algorithm name.
 AES_KEY_BYTES	constant	@spy4x/server/crypto	Key size in bytes.
 CryptoError	class	@spy4x/server/crypto	The one error this module throws.
@@ -2104,7 +2106,7 @@ createStorageFrom	function	@spy4x/server/storage	Build the configured storage fr
 defaultS3Endpoint	function	@spy4x/server/storage	AWS's regional S3 endpoint, used when `config.endpoint` is not set.
 encodeRfc3986	function	@spy4x/server/storage	Percent-encode per RFC 3986.
 encodeS3Path	function	@spy4x/server/storage	Encode an object key for the canonical URI, keeping `/` as the separator.
-ensureFileDirectory	function	@spy4x/server/storage	Create the directory holding `filePath`.
+ensureFileDirectory	function	@spy4x/server/storage	Create the directory holding `filePath`, with every missing parent.
 formatAmzDate	function	@spy4x/server/storage	`YYYYMMDDTHHMMSSZ`, the only timestamp format SigV4 accepts.
 isSafeObjectPath	function	@spy4x/server/storage	Report whether one path is safe to join onto a bucket: relative, free of a scheme, a backslash or a NUL byte, and free of a `..` segment.
 loadStorageProvider	function	@spy4x/server/storage	Load and construct a provider by dynamic `import()`.
@@ -2502,4 +2504,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 fbd8087b953cfc85df38cd48dcbf34e3da9e4226e3971df377dd71d76722971d
+# export surface: sha256 e785bf1815e99a9b5b9e703b5b3610839acb10be0a44e17354f01d9a6f683773

@@ -28,9 +28,9 @@ import {
   s3Settings,
   uniqueKeyPrefix,
 } from "@integration-testing"
-import { createDenoObjectFs } from "./fs.ts"
+import { createDenoObjectFs, denoFsHost } from "./fs.ts"
 import { LocalStorage } from "./local.ts"
-import { describeObjectFsContract } from "./object-fs-contract.test.ts"
+import { describeObjectFsContract, failsAfter } from "./object-fs-contract.test.ts"
 import { S3Storage } from "./s3.ts"
 
 // The same contract `memory-fs.test.ts` runs against the in-memory fake, here on real disk: every
@@ -38,6 +38,31 @@ import { S3Storage } from "./s3.ts"
 describeObjectFsContract("createDenoObjectFs", async () => {
   const root = await createScratchFolder("it_object_fs")
   return { fs: createDenoObjectFs(), root, close: () => removeScratchFolder(root) }
+})
+
+// The injected-host path, with the real host, keeps the same contract.
+describeObjectFsContract("createDenoObjectFs(denoFsHost)", async () => {
+  const root = await createScratchFolder("it_object_fs_host")
+  return { fs: createDenoObjectFs(denoFsHost), root, close: () => removeScratchFolder(root) }
+})
+
+describe("createDenoObjectFs temporary files", () => {
+  it("leaves only the original file in the folder after a write fails midway", async () => {
+    for (const fs of [createDenoObjectFs(), createDenoObjectFs(denoFsHost)]) {
+      const folder = await createScratchFolder("it_object_fs_partial")
+      try {
+        await fs.writeObject(`${folder}/x.bin`, new Uint8Array([1, 2, 3]))
+        await fs.writeObject(`${folder}/x.bin`, failsAfter([9])).catch(() => {})
+
+        const names = []
+        for await (const entry of Deno.readDir(folder)) names.push(entry.name)
+        assertEquals(names, ["x.bin"])
+        assertEquals(await Deno.readFile(`${folder}/x.bin`), new Uint8Array([1, 2, 3]))
+      } finally {
+        await removeScratchFolder(folder)
+      }
+    }
+  })
 })
 
 describe("LocalStorage against a real filesystem", () => {

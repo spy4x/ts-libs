@@ -49,7 +49,7 @@
  */
 
 import { extname, join } from "@std/path"
-import { encodeHex } from "@std/encoding/hex"
+import { sha256Hex } from "@spy4x/platform/tokens"
 
 /** Suffix that marks a migration which must run outside a transaction. */
 export const NO_TRANSACTION_SUFFIX = ".no_transaction"
@@ -124,9 +124,8 @@ export class MigrationEditedError extends Error {
  * forgave whitespace would have to decide which whitespace is significant inside a
  * string literal.
  */
-export async function checksumOf(sqlText: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sqlText))
-  return encodeHex(new Uint8Array(digest))
+export function checksumOf(sqlText: string): Promise<string> {
+  return sha256Hex(sqlText)
 }
 
 /**

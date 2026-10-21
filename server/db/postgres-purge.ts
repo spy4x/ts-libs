@@ -71,6 +71,12 @@ export interface PurgeOptions {
   environment?: Record<string, string | undefined>
   /** Command-line arguments, checked for {@link PROD_FLAG}. Defaults to none. */
   args?: readonly string[]
+  /**
+   * The caller's own decision, which replaces the guard: `true` purges and `false` refuses,
+   * and neither reads `environment` or `args`. Omitted, the guard decides from
+   * {@link ENV_NAME} and {@link PROD_FLAG}.
+   */
+  allowed?: boolean
   /** Schema to purge. Defaults to `public`. */
   schema?: string
 }
@@ -78,10 +84,10 @@ export interface PurgeOptions {
 /**
  * Drop every base table in `options.schema`, `CASCADE`.
  *
- * Refuses without querying anything unless {@link ENV_NAME} names one of
- * {@link SAFE_ENV_VALUES} or {@link PROD_FLAG} is present. Returns the dropped names
- * rather than logging them, so a CLI and a test can present the same result
- * differently.
+ * Refuses without querying anything unless `allowed` is `true`, or, with `allowed`
+ * omitted, {@link ENV_NAME} names one of {@link SAFE_ENV_VALUES} or {@link PROD_FLAG}
+ * is present. Returns the dropped names rather than logging them, so a CLI and a test
+ * can present the same result differently.
  *
  * Each table is dropped by its schema and its name, as two separately quoted
  * identifiers. Dropping the bare name would resolve through `search_path` instead:
@@ -111,7 +117,8 @@ export async function purgeDatabase(options: PurgeOptions): Promise<PurgeResult>
   const environment = options.environment ?? {}
   const args = options.args ?? []
   const schema = options.schema ?? "public"
-  if (!isSafeEnvironment(environment) && !args.includes(PROD_FLAG)) {
+  const allowed = options.allowed ?? (isSafeEnvironment(environment) || args.includes(PROD_FLAG))
+  if (!allowed) {
     return { dropped: [], refused: true }
   }
 
