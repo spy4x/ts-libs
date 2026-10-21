@@ -486,6 +486,7 @@ DEFAULT_FLUSH_INTERVAL_MS	constant	@spy4x/platform	Default window for the thrott
 DayOfWeek	type	@spy4x/platform	Weekday identifier, Monday-first.
 Debounced	interface	@spy4x/platform	Trailing-edge debounce.
 ERR_MESSAGE	constant	@spy4x/platform	Canonical copy for each category, so the same failure reads the same in every product.
+EntryMatch	interface	@spy4x/platform	How well a query matched one entry.
 Err	interface	@spy4x/platform	Base shape every error shares: a category and human-readable copy.
 ErrType	enum	@spy4x/platform	Kind of a failed operation.
 ErrorEventTarget	interface	@spy4x/platform	The target of `install`: `window`, or anything with `addEventListener`.
@@ -535,6 +536,9 @@ RequestError	type	@spy4x/platform	Errors a request itself can produce.
 ResponseError	type	@spy4x/platform	Errors from a response that never reached a usable body.
 Result	type	@spy4x/platform	A value or an error, as a discriminated union on `ok`.
 SECONDS_IN_MINUTE	constant	@spy4x/platform	Seconds in one minute.
+SearchEntry	interface	@spy4x/platform	Something searchEntries can find: a label and, optionally, other names for it.
+SearchMatch	interface	@spy4x/platform	One result of searchEntries.
+SearchMatchKind	type	@spy4x/platform	How a query matched an entry, from the strongest to the weakest:
 ServerError	interface	@spy4x/platform	The server answered with a failure status.
 SitemapEntry	interface	@spy4x/platform	One page in a `sitemap.xml`.
 SortDirection	type	@spy4x/platform	Sort direction of one rule.
@@ -581,6 +585,7 @@ jsonLdText	function	@spy4x/platform	Serialise JSON-LD for a `<script>` body.
 levenshtein	function	@spy4x/platform	Levenshtein edit distance between two strings, computed over code points.
 llmsTxt	function	@spy4x/platform	The text of an `/llms.txt` in the format llmstxt.org describes: `# Title`, a `> summary` line, then each section as a `## Section` heading followed by `- [Title](url): description` lines.
 maskEmail	function	@spy4x/platform	An email address with its local part hidden behind its first character, for showing a person which address they used without spelling it out: `jane.doe@example.com` gives `j***@example.com`.
+matchEntry	function	@spy4x/platform	How well `query` matches one entry, or `null` when it does not.
 nextUtcHour	function	@spy4x/platform	The next time the clock reads `hour`:00 UTC after `now`: later today when that hour has not come yet, tomorrow when it is now or past.
 niceStep	function	@spy4x/platform	Round a span up to a sensible tick step at roughly `target` ticks.
 normalizeCalendarDate	function	@spy4x/platform	Normalise `YYYY.MM.DD` or `YYYY-MM-DD` to `YYYY-MM-DD`, rejecting impossible dates.
@@ -597,6 +602,7 @@ round	function	@spy4x/platform	Round to the nearest 10^-`decimals`.
 scrubText	function	@spy4x/platform	Free text with the secrets it may carry masked: URLs lose their query, `Bearer` values, and the value of anything named like a password, token, cookie or key.
 scrubUrl	function	@spy4x/platform	`url` as origin and path only, with credentials, query and fragment dropped.
 search	function	@spy4x/platform	Whether one search word occurs in one value.
+searchEntries	function	@spy4x/platform	The entries that `query` matches, the best first (see matchEntry for what matches).
 searchWords	function	@spy4x/platform	Split a search box's value into words.
 serializeSort	function	@spy4x/platform	Write sort rules into a URL parameter.
 similarity	function	@spy4x/platform	Similarity of two strings in `[0, 1]`, derived from levenshtein.
@@ -1211,7 +1217,11 @@ mean	function	@spy4x/platform/universal/statistics	Arithmetic mean; `undefined` 
 median	function	@spy4x/platform/universal/statistics	Median of `values`; `undefined` for an empty list.
 quantileSorted	function	@spy4x/platform/universal/statistics	The `p`-th quantile (0 to 1) of an ascending-sorted list, by linear interpolation between the two nearest ranks (the default of NumPy and R).
 seededRandom	function	@spy4x/platform/universal/statistics	A seeded random number generator returning floats in [0, 1): mulberry32.
+EntryMatch	interface	@spy4x/platform/universal/text	How well a query matched one entry.
 MAX_MASKED_EMAIL_LENGTH	constant	@spy4x/platform/universal/text	Longest text maskEmail returns, in UTF-16 code units: one code point (at most two units), the three stars, `@`, and a domain of at most 253.
+SearchEntry	interface	@spy4x/platform/universal/text	Something searchEntries can find: a label and, optionally, other names for it.
+SearchMatch	interface	@spy4x/platform/universal/text	One result of searchEntries.
+SearchMatchKind	type	@spy4x/platform/universal/text	How a query matched an entry, from the strongest to the weakest:
 UnsafeTextOptions	interface	@spy4x/platform/universal/text	Options of hasUnsafeTextCharacters.
 convertToKebabCase	function	@spy4x/platform/universal/text	Convert a free-form identifier to kebab-case.
 filterRows	function	@spy4x/platform/universal/text	Keep the rows that every word of the query matches.
@@ -1221,8 +1231,10 @@ hasUnstorableTextCharacters	function	@spy4x/platform/universal/text	Whether text
 initials	function	@spy4x/platform/universal/text	Reduce a name to one or two initials, e.g. for an avatar's fallback face.
 levenshtein	function	@spy4x/platform/universal/text	Levenshtein edit distance between two strings, computed over code points.
 maskEmail	function	@spy4x/platform/universal/text	An email address with its local part hidden behind its first character, for showing a person which address they used without spelling it out: `jane.doe@example.com` gives `j***@example.com`.
+matchEntry	function	@spy4x/platform/universal/text	How well `query` matches one entry, or `null` when it does not.
 pluralize	function	@spy4x/platform/universal/text	Naive English pluraliser for UI copy.
 search	function	@spy4x/platform/universal/text	Whether one search word occurs in one value.
+searchEntries	function	@spy4x/platform/universal/text	The entries that `query` matches, the best first (see matchEntry for what matches).
 searchWords	function	@spy4x/platform/universal/text	Split a search box's value into words.
 similarity	function	@spy4x/platform/universal/text	Similarity of two strings in `[0, 1]`, derived from levenshtein.
 utf8ByteLength	function	@spy4x/platform/universal/text	UTF-8 byte length, i.e. what a `Content-Length` or a storage quota counts.
@@ -2553,4 +2565,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 5686941085b14911f85428c7c7f76a704dd96d051b08d60f80784fb461210e30
+# export surface: sha256 68a587c1c043bbe7869af26ab5aa68befe59fb64d0793417e9c1e2a36e0bf5f4
