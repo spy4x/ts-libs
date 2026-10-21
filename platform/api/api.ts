@@ -27,6 +27,8 @@
  * default so `fetch` sets its own `content-type`.
  */
 
+import { errorBodyFields } from "../universal/error-body.ts"
+
 /**
  * One failure `apiFetch` can report: an HTTP status, a message meant to be shown as-is, and the
  * server's machine-readable `code` when the error body carried one.
@@ -56,11 +58,13 @@ export type ApiResult<T> =
  * one who passes `FormData`, not the same behaviour as one who passes no `body` at all.
  * The response body is read as JSON regardless of status; a body that is not valid JSON (including
  * an empty body) is treated as `null` rather than failing the call. On a non-2xx response, the
- * error message is the body's string `error` field, else the string `message` of an `error`
- * object, else the body's string `message` field, else the fallback `"Request failed"`; `error.code`
- * is set from the string `code` of an `error` object, else the body's string `code` field, and is
- * absent otherwise. So a server answering `{ error }`, `{ code, message }` or
- * `{ error: { code, message } }` needs no wrapper of its own; non-string nested fields are ignored.
+ * error message is the first non-empty string of: a bare string body, the body's `error` field, the
+ * `message` of an `error` object, the body's `message`, its `detail`, else the fallback
+ * `"Request failed"`; `error.code` is the non-empty string `code` of an `error` object, else the
+ * body's `code`, and is absent otherwise. So a server answering `{ error }`, `{ code, message }`,
+ * `{ error: { code, message } }` or `{ detail }` needs no wrapper of its own; non-string nested
+ * fields are ignored. `responseError` from `@spy4x/platform/universal/errors` reads a body by the
+ * same rule.
  *
  * Only an HTTP answer resolves. A network failure (no connection, DNS, CORS, an aborted `signal`)
  * still rejects with whatever `fetch` threw, so a caller that must not throw wraps the call in
@@ -103,26 +107,8 @@ export async function apiFetch<T>(
   }
 
   if (!response.ok) {
-    const fields: Record<string, unknown> = data !== null && typeof data === "object"
-      ? data as Record<string, unknown>
-      : {}
-    const nested: Record<string, unknown> =
-      fields.error !== null && typeof fields.error === "object"
-        ? fields.error as Record<string, unknown>
-        : {}
-    const message = typeof fields.error === "string"
-      ? fields.error
-      : typeof nested.message === "string"
-      ? nested.message
-      : typeof fields.message === "string"
-      ? fields.message
-      : "Request failed"
-    const error: ApiError = { status: response.status, message }
-    const code = typeof nested.code === "string"
-      ? nested.code
-      : typeof fields.code === "string"
-      ? fields.code
-      : undefined
+    const { message, code } = errorBodyFields(data)
+    const error: ApiError = { status: response.status, message: message ?? "Request failed" }
     if (code !== undefined) error.code = code
     return { ok: false, status: response.status, error }
   }

@@ -39,7 +39,7 @@ export type ClockPort = Clock
  */
 export const systemClockPort: ClockPort = systemClock
 
-/** Options of {@link FileSystemPort.writeText}. */
+/** Options of {@link FileSystemPort.writeText}, `writeBytes` and `writeStream`. */
 export interface WriteTextOptions {
   /**
    * Permission bits for a file this call creates, such as `0o600` for a file only its owner may
@@ -73,6 +73,33 @@ export interface FileSystemPort {
   readDir(path: string): Promise<WalkEntry[]>
   /** Exclusive advisory lock on `path`. `null` when another holder owns it. */
   lock(path: string): Promise<LockHandle | null>
+  /**
+   * Raw bytes, or `null` when the path is absent. Optional: an implementer written before it was
+   * added may leave it out, so a caller checks for it or documents that it needs it.
+   */
+  readBytes?(path: string): Promise<Uint8Array | null>
+  /**
+   * Write bytes, replacing any existing content. `options.mode` applies when the file is new.
+   * Optional, as {@link FileSystemPort.readBytes} is.
+   */
+  writeBytes?(path: string, data: Uint8Array, options?: WriteTextOptions): Promise<void>
+  /**
+   * The file's bytes as a stream, so a large file never lands in memory at once, or `null` when
+   * the path is absent. The caller reads it to the end or cancels it, which closes the file.
+   * Optional, as {@link FileSystemPort.readBytes} is.
+   */
+  readStream?(path: string): Promise<ReadableStream<Uint8Array> | null>
+  /**
+   * Write everything `source` yields, replacing any existing content, and resolve to the number of
+   * bytes written. `options.mode` applies when the file is new. When `source` errors, the call
+   * rejects and the file may hold part of it: write to a temporary path and `rename` it into place
+   * for an all-or-nothing write. Optional, as {@link FileSystemPort.readBytes} is.
+   */
+  writeStream?(
+    path: string,
+    source: ReadableStream<Uint8Array>,
+    options?: WriteTextOptions,
+  ): Promise<number>
 }
 
 /** A held file lock. Releasing twice is a no-op. */

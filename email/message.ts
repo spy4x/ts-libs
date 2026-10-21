@@ -141,10 +141,16 @@ export function assertSendableMessage(message: EmailMessage): void {
 }
 
 /**
- * The `List-Unsubscribe` and `List-Unsubscribe-Post` header values for a validated
+ * The `List-Unsubscribe` and `List-Unsubscribe-Post` header values for a
  * {@link ListUnsubscribe}, ready for the transport's `headers` option.
+ *
+ * @throws {TypeError} on the values {@link assertSendableMessage} refuses for
+ * `listUnsubscribe`: a missing or non-https `url`, or a `mailto` that is not a
+ * bare address. Checked here too, so a caller building headers itself cannot put
+ * a line break or a `<`/`>` into the header.
  */
 export function listUnsubscribeHeaders(value: ListUnsubscribe): Record<string, string> {
+  assertListUnsubscribe(value)
   // `href`, not the raw text, so a non-ASCII host or path goes out as plain ASCII.
   const targets = [`<${new URL(value.url).href}>`]
   if (value.mailto !== undefined) targets.push(`<mailto:${value.mailto}>`)
@@ -194,6 +200,9 @@ function assertListUnsubscribe(value: ListUnsubscribe): void {
  *
  * A whitespace-only body is absent: `text: ""` used to produce a `text/plain`
  * part containing nothing, which a text-only client shows as a blank mail.
+ *
+ * @deprecated An internal step of `assertSendableMessage` and the SMTP sender, exported by
+ * mistake; it goes in 2.0. Check `value?.trim()` instead.
  */
 export function hasBody(value: string | undefined): value is string {
   return value !== undefined && value.trim() !== ""
