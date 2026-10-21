@@ -260,6 +260,20 @@ describe("create", () => {
     expect(objects.size).toBe(1)
   })
 
+  it("never counts a repeated create as done when the server's copy is not readable iCalendar", async () => {
+    const { send, state, objects, seen, failureOf } = setup()
+    state.dropAnswerOnce = true
+    await failureOf(send("create", "e1", "milk", 0))
+    const stored = objects.get(new URL(`${CALENDAR}e1.ics`).pathname)!
+    const broken = stored.ics.replace("END:VCALENDAR\r\n", "")
+    expect(broken).not.toBe(stored.ics)
+    stored.ics = broken
+    const failure = await failureOf(send("create", "e1", "milk", 0))
+    expect(failure.kind).toBe("rejected")
+    expect(stored.ics).toBe(broken)
+    expect(seen.map((s) => s.method)).toEqual(["PUT", "PUT", "GET"])
+  })
+
   it("refuses a create whose file name is held by an object with another UID, leaving it untouched", async () => {
     const { send, objects, seen, failureOf } = setup()
     const path = new URL(`${CALENDAR}e1.ics`).pathname

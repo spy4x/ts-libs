@@ -950,6 +950,200 @@ describe("safeFetch", () => {
   })
 })
 
+interface SentRequest {
+  url: string
+  method: string
+  headers: Record<string, string> | undefined
+  body: BodyInit | undefined
+}
+
+/** A `Fetcher` that answers each call with the next redirect in `redirects`, then a 200. */
+function bodyFetcher(
+  redirects: { status: number; location: string }[],
+): { fetcher: Fetcher; sent: SentRequest[] } {
+  const sent: SentRequest[] = []
+  const fetcher: Fetcher = {
+    fetch(input, init) {
+      sent.push({ url: input, method: init.method ?? "", headers: init.headers, body: init.body })
+      const next = redirects[sent.length - 1]
+      return Promise.resolve(
+        next
+          ? new Response(null, { status: next.status, headers: { location: next.location } })
+          : new Response("ok", { status: 200 }),
+      )
+    },
+  }
+  return { fetcher, sent }
+}
+
+describe("safeFetch with a request body", () => {
+  const JSON_HEADERS = {
+    "content-type": "application/json",
+    "content-language": "en",
+    accept: "*/*",
+  }
+
+  it("sends the body with the first request", async () => {
+    const { fetcher, sent } = bodyFetcher([])
+    await safeFetch("https://example.com/push", {
+      resolver: ALWAYS_PUBLIC,
+      fetcher,
+      method: SafeFetchMethod.Post,
+      body: `{"a":1}`,
+    })
+    assertEquals(sent.map((r) => [r.method, r.body]), [["POST", `{"a":1}`]])
+  })
+
+  for (const status of [307, 308]) {
+    it(`sends the body again on a same-origin ${status}`, async () => {
+      const { fetcher, sent } = bodyFetcher([{ status, location: "/v2/push" }])
+      const result = await safeFetch("https://example.com/push", {
+        resolver: ALWAYS_PUBLIC,
+        fetcher,
+        method: SafeFetchMethod.Put,
+        headers: JSON_HEADERS,
+        body: `{"a":1}`,
+      })
+      assertEquals(result.url, "https://example.com/v2/push")
+      assertEquals(sent.map((r) => [r.url, r.method, r.body]), [
+        ["https://example.com/push", "PUT", `{"a":1}`],
+        ["https://example.com/v2/push", "PUT", `{"a":1}`],
+      ])
+      assertEquals(sent[1].headers, JSON_HEADERS)
+    })
+
+    it(`refuses a ${status} that would carry the body to another origin`, async () => {
+      const { fetcher, sent } = bodyFetcher([{ status, location: "https://other.example.org/" }])
+      const error = await assertRejects(
+        () =>
+          safeFetch("https://example.com/push", {
+            resolver: ALWAYS_PUBLIC,
+            fetcher,
+            method: SafeFetchMethod.Post,
+            body: `{"a":1}`,
+          }),
+        UrlValidationError,
+      )
+      assertEquals(error.code, "invalid_redirect")
+      assertEquals(sent.length, 1)
+    })
+
+    it(`refuses a same-origin ${status} when the body is an async generator`, async () => {
+      const { fetcher, sent } = bodyFetcher([{ status, location: "/v2/push" }])
+      // The runtime accepts an async iterable as a body; the `BodyInit` type does not name it.
+      async function* chunks() {
+        yield new TextEncoder().encode("amount=100")
+      }
+      const error = await assertRejects(
+        () =>
+          safeFetch("https://example.com/push", {
+            resolver: ALWAYS_PUBLIC,
+            fetcher,
+            method: SafeFetchMethod.Post,
+            body: chunks() as unknown as BodyInit,
+          }),
+        UrlValidationError,
+      )
+      assertEquals(error.code, "invalid_redirect")
+      assertEquals(sent.length, 1)
+    })
+
+    it(`refuses a same-origin ${status} when the body is a stream`, async () => {
+      const { fetcher, sent } = bodyFetcher([{ status, location: "/v2/push" }])
+      const error = await assertRejects(
+        () =>
+          safeFetch("https://example.com/push", {
+            resolver: ALWAYS_PUBLIC,
+            fetcher,
+            method: SafeFetchMethod.Post,
+            body: new Response(`{"a":1}`).body!,
+          }),
+        UrlValidationError,
+      )
+      assertEquals(error.code, "invalid_redirect")
+      assertEquals(sent.length, 1)
+    })
+  }
+
+  it("sends every body kind that can be read twice again on a same-origin 307", async () => {
+    const form = new FormData()
+    form.set("a", "1")
+    const bodies: BodyInit[] = [
+      "a=1",
+      new Blob(["a=1"]),
+      new TextEncoder().encode("a=1").buffer,
+      new TextEncoder().encode("a=1"),
+      new DataView(new TextEncoder().encode("a=1").buffer),
+      form,
+      new URLSearchParams({ a: "1" }),
+    ]
+    for (const body of bodies) {
+      const { fetcher, sent } = bodyFetcher([{ status: 307, location: "/v2/push" }])
+      await safeFetch("https://example.com/push", {
+        resolver: ALWAYS_PUBLIC,
+        fetcher,
+        method: SafeFetchMethod.Post,
+        body,
+      })
+      assertEquals(sent.length, 2)
+      assertStrictEquals(sent[1].body, body)
+    }
+  })
+
+  for (const status of [301, 302, 303]) {
+    it(`drops the body and its content headers when a ${status} turns a POST into a GET`, async () => {
+      const { fetcher, sent } = bodyFetcher([{ status, location: "https://other.example.org/" }])
+      const result = await safeFetch("https://example.com/push", {
+        resolver: ALWAYS_PUBLIC,
+        fetcher,
+        method: SafeFetchMethod.Post,
+        headers: JSON_HEADERS,
+        body: `{"a":1}`,
+      })
+      assertEquals(result.url, "https://other.example.org/")
+      assertEquals(sent.map((r) => [r.method, r.body]), [["POST", `{"a":1}`], ["GET", undefined]])
+      assertEquals(sent[1].headers, { accept: "*/*" })
+    })
+  }
+
+  it("keeps the content headers on a 303 when there was no body", async () => {
+    const { fetcher, sent } = bodyFetcher([{ status: 303, location: "/done" }])
+    await safeFetch("https://example.com/push", {
+      resolver: ALWAYS_PUBLIC,
+      fetcher,
+      method: SafeFetchMethod.Post,
+      headers: JSON_HEADERS,
+    })
+    assertEquals(sent[1].headers, JSON_HEADERS)
+  })
+
+  it("treats a null body as no body", async () => {
+    const { fetcher, sent } = bodyFetcher([])
+    // The type has no `null`, but a JavaScript caller can pass it, as `fetch` allows.
+    const body = null as unknown as BodyInit
+    await safeFetch("https://example.com/", { resolver: ALWAYS_PUBLIC, fetcher, body })
+    assertEquals(sent.map((r) => [r.method, r.body]), [["GET", undefined]])
+  })
+
+  for (const method of ["GET", "head"]) {
+    it(`refuses a body with ${method} before sending anything`, async () => {
+      const { fetcher, sent } = bodyFetcher([])
+      const error = await assertRejects(
+        () =>
+          safeFetch("https://example.com/", {
+            resolver: ALWAYS_PUBLIC,
+            fetcher,
+            method,
+            body: "x",
+          }),
+        UrlValidationError,
+      )
+      assertEquals(error.code, "invalid_format")
+      assertEquals(sent.length, 0)
+    })
+  }
+})
+
 describe("defaultFetcher", () => {
   it("always requests manual redirects", async () => {
     // `redirect: "manual"` is the whole guard: with the platform default the
@@ -993,6 +1187,45 @@ describe("defaultFetcher", () => {
     assertEquals(seen[0]?.method, "POST")
     assertEquals(seen[0]?.headers, { "x-trace": "one" })
     assertStrictEquals(seen[0]?.signal, signal)
+  })
+
+  it("hands the body to the platform fetch, with duplex half for a body read once", async () => {
+    const seen: (RequestInit & { duplex?: string })[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+      seen.push(init ?? {})
+      return Promise.resolve(new Response("ok", { status: 200 }))
+    }) as typeof fetch
+    const stream = new Response("streamed").body!
+    async function* chunks() {
+      yield new TextEncoder().encode("generated")
+    }
+    const generated = chunks() as unknown as BodyInit
+    try {
+      await defaultFetcher.fetch("https://example.com/a", {
+        redirect: "manual",
+        method: "POST",
+        body: "text",
+      })
+      await defaultFetcher.fetch("https://example.com/b", {
+        redirect: "manual",
+        method: "POST",
+        body: stream,
+      })
+      await defaultFetcher.fetch("https://example.com/c", {
+        redirect: "manual",
+        method: "POST",
+        body: generated,
+      })
+    } finally {
+      globalThis.fetch = original
+      await stream.cancel()
+    }
+    assertEquals([seen[0].body, seen[0].duplex], ["text", undefined])
+    assertStrictEquals(seen[1].body, stream)
+    assertEquals(seen[1].duplex, "half")
+    assertStrictEquals(seen[2].body, generated)
+    assertEquals(seen[2].duplex, "half")
   })
 
   it("keeps a POST a POST across a 307 when safeFetch uses it by default", async () => {

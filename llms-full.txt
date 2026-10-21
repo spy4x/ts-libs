@@ -227,7 +227,9 @@ await billing.cancelNow({ subscriptionId, idempotencyKey })
   - `refundPayment({ paymentId, idempotencyKey })` refunds in full: it sends no amount, so Stripe
     refunds everything not refunded yet. There are no partial refunds. The answer is the `Refund`
     with its real amount and a `RefundStatus`; a status Stripe adds later reads as `Pending`, never
-    as a failure, because the refund exists.
+    as a failure, because the refund exists. A retry after Stripe's 24-hour key window is refused
+    by Stripe as already refunded, so on a 4xx the adapter reads the payment back and answers its
+    newest refund when nothing is left to refund.
   - `setTrialEnd({ subscriptionId, trialEnd, idempotencyKey })` gives time at no charge: nothing is
     charged before `trialEnd`, and `proration_behavior=none` neither credits nor charges the paid
     time left. Stripe refuses a date in the past.
@@ -979,8 +981,10 @@ Given a raw RFC 5322 message and a DKIM public key, `verifyDkim` answers one
 question: **does this message's `DKIM-Signature` verify against this key?**
 
 - Signature-header parsing (`parseDkimSignature`), including folded values.
-- `simple` and `relaxed` canonicalization, for headers and for bodies
-  (`canonicalizeHeader`, `canonicalizeBody`).
+- `simple` and `relaxed` canonicalization, for headers and for bodies.
+  `canonicalizeHeader`, `canonicalizeBody`, `splitMessage`, `sha256Base64` and
+  `refuseHeaderLineEndings` are deprecated: they are internal steps of
+  `verifyDkim` and go in 2.0.
 - The body hash (`bh=`), computed over the canonicalized body truncated to the
   `l=` bound when one is present, as RFC 6376 §3.7 step 1 requires. Canonicalized
   and hashed at most once per distinct `(c=, l=)` combination for the whole
@@ -1155,10 +1159,11 @@ which propagates the resolver's rejection instead of reporting it.
   contained and rejected the lower-case signer. `relaxed` lower-cases the name
   (§3.4.2), so there the case carries no information and a renamed field still
   verifies.
-- **`h=` must NOT list `dkim-signature`.** §3.5 forbids it, and §3.7 adds that
-  field to the header hash as its own unconditional step. Requiring it — as an
-  earlier revision of this file did — rejects every standard signer, RFC 6376's
-  own examples included.
+- **`h=` may list `dkim-signature`, but never reaches the field being
+  verified.** §3.5 forbids signing the field being created or verified, and §3.7
+  adds that field to the header hash as its own step, so it is left out of the
+  `h=` selection. Other `DKIM-Signature` fields are selected like any header:
+  that is how a mailing list re-signs and covers the author's signature.
 - **Tags after `b=` are verified, not refused.** §3.7 deletes only the _value_ of
   `b=`, so everything after it stays inside the signed bytes. A signature ending
   `…; b=SIG; x=1800000000` is valid and its `x=` is authenticated, and appending
@@ -1994,6 +1999,24 @@ redirect refused by the policy, and a `Location` the URL parser cannot read,
 both raise `UrlValidationError` with code `invalid_redirect` or `non_public_ip`
 — never a bare `TypeError` — after the redirect body has been cancelled.
 
+A request body goes in `body`, in any shape the platform `fetch` takes, and is
+refused with `GET` or `HEAD`. A redirect that turns the request into a `GET`
+drops the body and its `Content-Type`, `Content-Encoding`, `Content-Language`
+and `Content-Location` headers. A 307 or 308 sends the body again only to the
+same origin, and only when it can be read twice: a string, `Blob`,
+`ArrayBuffer`, typed array or `DataView`, `FormData` or `URLSearchParams`. A
+307 or 308 to another origin, or with any other body (a `ReadableStream`, an
+async or sync iterable, which are read once), is refused with code
+`invalid_redirect`. A custom `Fetcher` must forward `init.body`.
+
+```ts
+const { response } = await safeFetch("https://push.example.com/send", {
+  method: SafeFetchMethod.Post,
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ title: "Hello" }),
+})
+```
+
 Two things about that rule are worth knowing before you rely on it:
 
 - **`headers` is parsed by the platform `Headers` before anything reads it**, so
@@ -2036,11 +2059,16 @@ failure cancels the body, including a refusal on the declared `Content-Length`
 before a byte is read, so a refused response does not keep its connection open.
 A reader, once taken, is unlocked on every exit path.
 
+A server that answers `PayloadTooLargeError` with a 413 sets `connection: close`
+on that response itself. Cancelling the request body is what makes `Deno.serve`
+(checked on 2.9.7) leave that header out: without it, the client is not told
+that the rest of its upload will not be read on that connection.
+
 `parseBoundedFormData(request, options)` reads a `multipart/form-data` or
 url-encoded request under the same two limits, then parses it, so an over-cap
 upload is rejected at `maxBytes` rather than buffered in full the way
 `request.formData()` would. It needs a `content-type` header (the multipart
-boundary lives there) and throws a `TypeError` without one.
+boundary lives there) and, without one, cancels the body and throws a `TypeError`.
 `@spy4x/server/http/bounded-body` re-exports this same function.
 
 ## IP addresses and ranges
@@ -4939,8 +4967,10 @@ address. `releaseKeyEmail` does the same without deleting the key: it takes the 
 keeps signing in, by its `subject`, while the old address stops naming the account. An unproven
 address is dropped too, since the next person to prove it would otherwise delete the key.
 
-**Addresses are compared in one form.** `normalizeEmail` trims and lower-cases, and accepts only
-what `@spy4x/email` will send to. The store refuses a key whose `email` is not already in that form.
+**Addresses are compared in one form.** `normalizeEmail` is `parseBareAddress` of `@spy4x/email`:
+it trims, checks the shape (a local part of at most 64 characters, no look-alike such as the Kelvin
+sign), then lower-cases, so it accepts only what `@spy4x/email` will send to. The store refuses a
+key whose `email` is not already in that form.
 
 **A challenge counts guesses.** `issueChallenge` stores the hash of a code for a
 `(purpose, subject)`. Asking for a new code replaces the hash and the expiry but keeps the guess
@@ -5150,9 +5180,12 @@ used by then, so the person asks for a new one.
   email-code provider's `proveAddress`, to keep it.
 - **It does not limit how often a verification code is asked for.** Every `requestVerification`
   call is a mail; rate-limit its route like the reset route.
-- **It does not cancel the address's other reset codes.** A successful reset leaves every other
-  unexpired reset code for that address working until it expires (`resetTtlMinutes`), so keep the
-  lifetime short.
+- **It cancels the address's other reset codes only with a store that can.** Once a code matches,
+  the provider deletes the address's other reset codes through the store's optional
+  `deleteChallenges`, which both stores of this package have. A store of your own without it leaves
+  every other unexpired code for that address working until it expires (`resetTtlMinutes`), so keep
+  the lifetime short. Codes issued by 1.82 or earlier still work after the upgrade, until they
+  expire, and are not cancelled.
 
 ## `server/auth/email-code`
 
@@ -6859,6 +6892,13 @@ guesser a fresh budget every time the owner signs in. While a lock runs, every c
 correct one included, so someone who can reach the check can keep the owner out of it for up to the
 maximum lock.
 
+**Pass the pool.** On a pool each update runs in its own transaction and is committed at once.
+`createPostgresLockoutStore` also takes the `tx` of the app's own `sql.begin`; each update then runs
+in a savepoint, and the count commits or rolls back with the app's transaction. A rollback after a
+wrong guess erases that guess's count: an app that refuses a wrong code by throwing inside its
+transaction is never locked out, however many guesses it gets. A refused guess must commit, so pass
+a transaction handle only when that transaction commits whatever the guess was.
+
 **The Postgres store takes the caller's table.** Table, schema and column names must be lower-case
 identifiers; they are validated and sent through the driver's identifier quoting, never spliced
 into the SQL. The subject column must be unique. With `createMissing` (the default) an unknown
@@ -7584,20 +7624,22 @@ was rewritten, and every bug fixed over either source.
 
 # `@spy4x/tasks`
 
-The to-do model that the CalDAV task apps share: the task a screen shows, the list views, the
-quick-add syntax and the runner that sends reminders. A domain model, not a general helper, which
-is why it has a package of its own instead of a general name in `@spy4x/platform` or `@spy4x/time`.
+The to-do model that the CalDAV task apps share: the task a screen shows, writing it back, which
+reminders are due, the list views, the quick-add syntax and the runner that sends reminders. A
+domain model, not a general helper, which is why it has a package of its own instead of a general
+name in `@spy4x/platform` or `@spy4x/time`.
 
 | Entry point                    | Exports                                                                                                                                                   |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@spy4x/tasks/model`           | The `Task` a screen shows, read from a CalDAV resource: `parseTask`, `priorityBand`, `PriorityBand`, `TaskStatus`, `isOpen`, `dateInstant`, `dateDay`     |
+| `@spy4x/tasks/edit`            | Writing a task back: `createTask`, `editTask`, `completeTask`, `reopenTask`, `rebaseEdit`, `keepMine`, `keepMineText`, `collisions`                       |
+| `@spy4x/tasks/reminders`       | `dueReminders`: the reminders of one task that fall in a time window                                                                                      |
 | `@spy4x/tasks/view`            | List screens for that `Task`: `SortMode`, `sortTasks`, `reorderTask`, `buildTree`, `flattenTree`, `searchTasks`, `todayView`, `upcomingView`, `isOverdue` |
 | `@spy4x/tasks/quick-add`       | `parseQuickAdd`: one task line to title, tags, contexts, due date, priority and token spans                                                               |
 | `@spy4x/tasks/reminder-runner` | `createReminderRunner`, `ReminderStatePort`, `ReminderRunnerState`, `ReminderNotifyResult`: sends the task reminders that came due since the last run     |
 
-Reading, patching and completing the iCalendar text of a task stays in `@spy4x/time`
-(`time/ical-tasks`, `time/ical-tasks-edit`, `time/ical-tasks-reminders`), and talking to the server
-in `@spy4x/caldav`.
+The low-level iCalendar reading and patching of a VTODO stays in `@spy4x/time/ical-tasks`, and
+talking to the server in `@spy4x/caldav`.
 
 ## Install
 
@@ -7635,6 +7677,22 @@ a throw: one odd resource must not take the whole list down. `priorityBand` turn
 `PRIORITY` (0 to 9) into the band a screen shows, `isOpen` says whether a task still needs doing,
 and `dateInstant` and `dateDay` turn a task's date into a moment or a `YYYY-MM-DD` day in the
 viewer's time zone.
+
+## Writing a task back
+
+`createTask` builds the text of a new task or subtask and the `href` to create it at; the caller
+passes the new `UID` and the clock. `editTask` applies what the editor changed as a patch of the
+original text, so lines another app wrote survive, and says where a task moved to another list
+goes. `completeTask` completes a task or moves a repeating one to its next occurrence, with the
+text to write back for an undo; `reopenTask` reopens a completed one. After a 412 on `If-Match`,
+`rebaseEdit`, `keepMine` and `keepMineText` re-apply the edit to the server's fresh copy.
+
+## Due reminders
+
+`dueReminders` reads one task's `VALARM`s and snooze and returns the reminders whose moment falls
+after `after` and up to `upTo`, each with a key that is the same on every read. It never throws for
+a task it cannot read; such a task has no reminders. `createReminderRunner` below calls it on a
+timer.
 
 ## The views
 
@@ -7679,12 +7737,14 @@ runner.start()
 
 ## The old import paths
 
-Before this package, the four entry points had general names. Those paths keep working until 2.0
+Before this package, these entry points had general names. Those paths keep working until 2.0
 and hand out the very same values, so an app can move one import at a time:
 
 | Old path, kept until 2.0                    | Import from                    |
 | ------------------------------------------- | ------------------------------ |
 | `@spy4x/time/ical-tasks-model`              | `@spy4x/tasks/model`           |
+| `@spy4x/time/ical-tasks-edit`               | `@spy4x/tasks/edit`            |
+| `@spy4x/time/ical-tasks-reminders`          | `@spy4x/tasks/reminders`       |
 | `@spy4x/platform/universal/ical-tasks-view` | `@spy4x/tasks/view`            |
 | `@spy4x/platform/universal/quick-add`       | `@spy4x/tasks/quick-add`       |
 | `@spy4x/platform/server/reminder-runner`    | `@spy4x/tasks/reminder-runner` |

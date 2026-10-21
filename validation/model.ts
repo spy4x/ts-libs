@@ -13,6 +13,7 @@
  */
 
 import { Type } from "arktype"
+import { flatIssues } from "./flat-issues.ts"
 import { isArkErrors } from "./validate.ts"
 
 /**
@@ -98,6 +99,9 @@ export function setFieldIssue<M extends object>(
  * the value not being an object in the first place — is filed under {@link FORM_FIELD} instead of
  * being dropped, so it still makes the model invalid. Several issues on one field (or on
  * `FORM_FIELD`) are joined into one message.
+ *
+ * It reads the same issues `validate` puts in `errors`, one per failed constraint; each message keeps
+ * its path (`"address.city must be a string"`), because the row it renders in is the top-level field.
  */
 export function schemaIssues<S extends Type>(
   schema: S,
@@ -107,8 +111,8 @@ export function schemaIssues<S extends Type>(
   if (!isArkErrors(outcome)) return {}
 
   const issues: Record<string, FieldValidation> = {}
-  for (const issue of outcome.issues) {
-    const field = issue.path.length > 0 ? String(issue.path[0]) : FORM_FIELD
+  for (const issue of flatIssues(outcome)) {
+    const field = issue.field ?? FORM_FIELD
     const previous = issues[field]?.[ValidationType.SCHEMA]?.message
     issues[field] = {
       [ValidationType.SCHEMA]: {
@@ -124,7 +128,8 @@ export function schemaIssues<S extends Type>(
  *
  * Only {@link ValidationType.SCHEMA} is written: a field that now passes has that entry cleared,
  * and an application's own issue types survive untouched, so a domain check does not have to be
- * re-run to avoid being erased by the next keystroke.
+ * re-run to avoid being erased by the next keystroke. A field left with no issue at all is dropped,
+ * as {@link setFieldIssue} drops it, so `vl.name` reads `undefined` rather than `{}`.
  */
 export function validateSchema<S extends Type, M extends object>(
   schema: S,
@@ -135,10 +140,13 @@ export function validateSchema<S extends Type, M extends object>(
   let next: ValidationModel<M> = { ...vl }
 
   for (const field of new Set([...Object.keys(vl), ...Object.keys(issues)])) {
-    const current = { ...next[field] }
     const message = issues[field]?.[ValidationType.SCHEMA]?.message
-    current[ValidationType.SCHEMA] = message === undefined ? undefined : { message }
-    next = { ...next, [field]: pruned(current) }
+    const current = pruned({
+      ...next[field],
+      [ValidationType.SCHEMA]: message === undefined ? undefined : { message },
+    })
+    if (Object.keys(current).length === 0) delete next[field]
+    else next = { ...next, [field]: current }
   }
   return next
 }

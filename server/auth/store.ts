@@ -83,9 +83,24 @@ export interface AuthStore {
    * compare at most M guesses.
    */
   attemptChallenge(input: AttemptChallengeInput): Promise<ChallengeOutcome>
+  /**
+   * Deletes every challenge of `purpose` whose subject starts with `subjectPrefix`, live or
+   * expired. The password provider calls it after a reset code matched, to cancel the address's
+   * other reset codes.
+   *
+   * Optional, so a store written before it existed still type-checks: without it, a successful
+   * reset leaves the address's other unexpired reset codes working until they expire.
+   */
+  deleteChallenges?(purpose: string, subjectPrefix: string): Promise<void>
 }
 
-/** The method names of {@link AuthStore}, sorted. The contract suite checks both stores against it. */
+/**
+ * The names of the required methods of {@link AuthStore}, sorted. It does not list
+ * {@link AuthStore.deleteChallenges}, which is optional.
+ *
+ * @deprecated No app needs it: the `AuthStore` interface is the list, and TypeScript checks a store
+ *     against it. It will be removed in 2.0.
+ */
 export const AUTH_STORE_METHODS: readonly string[] = [
   "addKey",
   "attemptChallenge",

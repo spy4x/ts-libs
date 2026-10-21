@@ -1082,6 +1082,70 @@ describe("refundPayment", () => {
       },
     })
   })
+
+  const alreadyRefunded = () =>
+    json(
+      { error: { message: "Charge ch_1 has already been refunded." } },
+      400,
+    )
+
+  it("answers the refund a retry finds already made, once Stripe's key window has passed", async () => {
+    const { calls, fetcher } = scripted([
+      alreadyRefunded(),
+      json({
+        id: "pi_paid",
+        latest_charge: { id: "ch_1", amount: 2700, amount_refunded: 2700, refunded: true },
+      }),
+      json({ object: "list", data: [refund()] }),
+    ])
+    const result = await billing({ fetch: fetcher }).refundPayment({
+      paymentId: "pi_paid",
+      idempotencyKey: "key-1",
+    })
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        id: "re_1",
+        paymentId: "pi_paid",
+        amount: 2700,
+        currency: "EUR",
+        decimals: 2,
+        status: RefundStatus.Succeeded,
+      },
+    })
+    expect(calls.map((call) => [call.init.method, call.url])).toEqual([
+      ["POST", "https://api.stripe.com/v1/refunds"],
+      ["GET", "https://api.stripe.com/v1/payment_intents/pi_paid?expand[]=latest_charge"],
+      ["GET", "https://api.stripe.com/v1/refunds?payment_intent=pi_paid&limit=1"],
+    ])
+  })
+
+  it("reports the refusal when the payment read back still has money left to refund", async () => {
+    const { calls, fetcher } = scripted([
+      alreadyRefunded(),
+      json({ id: "ch_old", amount: 1500, amount_refunded: 500, refunded: false }),
+      json({ object: "list", data: [refund()] }),
+    ])
+    const result = await billing({ fetch: fetcher }).refundPayment({
+      paymentId: "ch_old",
+      idempotencyKey: "key-1",
+    })
+    expect(!result.ok && result.error.status).toBe(400)
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://api.stripe.com/v1/refunds",
+      "https://api.stripe.com/v1/charges/ch_old",
+    ])
+  })
+
+  it("reports a Stripe server error on a refund without reading the payment back", async () => {
+    const { calls, fetcher } = scripted([json({ error: { message: "down" } }, 503)])
+    const result = await billing({ fetch: fetcher }).refundPayment({
+      paymentId: "pi_paid",
+      idempotencyKey: "key-1",
+    })
+    expect(!result.ok && result.error.status).toBe(503)
+    expect(calls.length).toBe(1)
+  })
 })
 
 describe("setTrialEnd", () => {

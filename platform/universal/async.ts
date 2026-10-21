@@ -12,13 +12,16 @@ export function sleep(ms: number): Promise<void> {
  * where the runtime supports it, so a pending debounce never keeps a Deno process alive — an
  * improvement over the source, which held the event loop open for the full delay.
  *
- * `cancel()` drops a pending call, and `pending()` reports whether one is queued, which is what
- * makes the behaviour assertable without sleeping.
+ * `cancel()` drops a pending call, `flush()` runs it now, and `pending()` reports whether one is
+ * queued, which is what makes the behaviour assertable without sleeping. Call `flush()` before a
+ * page unloads or a process exits, or the last call is lost with the timer.
  */
 export interface Debounced<Params extends unknown[]> {
   (...args: Params): void
   /** Drop a queued invocation. */
   cancel(): void
+  /** Run a queued invocation now, with its arguments, instead of when the timer fires. */
+  flush(): void
   /** Whether an invocation is queued. */
   pending(): boolean
 }
@@ -29,13 +32,20 @@ export function debounce<Params extends unknown[]>(
   delay = DEFAULT_DEBOUNCE_DELAY,
 ): Debounced<Params> {
   let timer: ReturnType<typeof setTimeout> | null = null
+  let queued: Params | null = null
+
+  const run = () => {
+    if (timer !== null) clearTimeout(timer)
+    timer = null
+    const args = queued
+    queued = null
+    if (args !== null) fn(...args)
+  }
 
   const debounced = (...args: Params) => {
     if (timer !== null) clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = null
-      fn(...args)
-    }, delay)
+    queued = args
+    timer = setTimeout(run, delay)
     // Deno and Node expose `unref`; browsers do not.
     const handle = timer as unknown as { unref?: () => void }
     handle.unref?.()
@@ -44,7 +54,9 @@ export function debounce<Params extends unknown[]>(
   debounced.cancel = () => {
     if (timer !== null) clearTimeout(timer)
     timer = null
+    queued = null
   }
+  debounced.flush = run
   debounced.pending = () => timer !== null
   return debounced
 }

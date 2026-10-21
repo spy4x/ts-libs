@@ -369,8 +369,10 @@ Given a raw RFC 5322 message and a DKIM public key, `verifyDkim` answers one
 question: **does this message's `DKIM-Signature` verify against this key?**
 
 - Signature-header parsing (`parseDkimSignature`), including folded values.
-- `simple` and `relaxed` canonicalization, for headers and for bodies
-  (`canonicalizeHeader`, `canonicalizeBody`).
+- `simple` and `relaxed` canonicalization, for headers and for bodies.
+  `canonicalizeHeader`, `canonicalizeBody`, `splitMessage`, `sha256Base64` and
+  `refuseHeaderLineEndings` are deprecated: they are internal steps of
+  `verifyDkim` and go in 2.0.
 - The body hash (`bh=`), computed over the canonicalized body truncated to the
   `l=` bound when one is present, as RFC 6376 §3.7 step 1 requires. Canonicalized
   and hashed at most once per distinct `(c=, l=)` combination for the whole
@@ -545,10 +547,11 @@ which propagates the resolver's rejection instead of reporting it.
   contained and rejected the lower-case signer. `relaxed` lower-cases the name
   (§3.4.2), so there the case carries no information and a renamed field still
   verifies.
-- **`h=` must NOT list `dkim-signature`.** §3.5 forbids it, and §3.7 adds that
-  field to the header hash as its own unconditional step. Requiring it — as an
-  earlier revision of this file did — rejects every standard signer, RFC 6376's
-  own examples included.
+- **`h=` may list `dkim-signature`, but never reaches the field being
+  verified.** §3.5 forbids signing the field being created or verified, and §3.7
+  adds that field to the header hash as its own step, so it is left out of the
+  `h=` selection. Other `DKIM-Signature` fields are selected like any header:
+  that is how a mailing list re-signs and covers the author's signature.
 - **Tags after `b=` are verified, not refused.** §3.7 deletes only the _value_ of
   `b=`, so everything after it stays inside the signed bytes. A signature ending
   `…; b=SIG; x=1800000000` is valid and its `x=` is authenticated, and appending

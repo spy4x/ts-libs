@@ -20,7 +20,7 @@
  * extend.
  */
 import { type Out, type Type, type } from "arktype"
-import type { Default } from "arktype/internal/attributes.ts"
+import type { Default } from "./default.ts"
 
 import { DateNullableSchema, dateSchema } from "./date.ts"
 
