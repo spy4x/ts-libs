@@ -33,6 +33,7 @@ import {
   type CheckoutSession,
   type PaidPayment,
   type ParseEventResult,
+  type Payment,
   type PlanRef,
   type PortalSession,
   type QuantityRequest,
@@ -260,6 +261,23 @@ const stripeRefundSchema = type({
   currency: "string == 3",
   status: "string | null",
 })
+
+/** One page of Stripe's refund list, newest first. */
+const stripeRefundListSchema = type({ data: stripeRefundSchema.array() })
+
+/** Maps a Stripe refund of `paymentId` to the provider-neutral {@link Refund}. */
+const toRefund = (refund: typeof stripeRefundSchema.infer, paymentId: string): Refund => {
+  const currency = refund.currency.toUpperCase()
+  return {
+    id: refund.id,
+    paymentId,
+    amount: refund.amount,
+    currency,
+    decimals: stripeDecimals(currency),
+    // Stripe made the refund; a status it adds later must not read as "nothing changed".
+    status: REFUND_STATUS.get(refund.status ?? "") ?? RefundStatus.Pending,
+  }
+}
 
 /** Stripe's refund statuses; `requires_action` waits on the customer's bank like `pending`. */
 const REFUND_STATUS = new Map<string, RefundStatus>(Object.entries({
@@ -491,6 +509,32 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
   }
 
   /**
+   * Maps a verified Stripe invoice to the payment of a payment event, or explains why it cannot.
+   * A succeeded payment carries what was paid; a failed one what was due.
+   */
+  const toPayment = (paymentType: BillingEventType, object: unknown): Result<Payment, string> => {
+    const invoice = stripeInvoiceSchema(object)
+    if (invoice instanceof type.errors) return { ok: false, error: invoice.summary }
+    const currency = invoice.currency.toUpperCase()
+    const parent = invoice.parent
+    return {
+      ok: true,
+      value: {
+        invoiceId: invoice.id,
+        customerId: invoice.customer,
+        subscriptionId: parent?.type === "subscription_details"
+          ? parent.subscription_details?.subscription ?? null
+          : null,
+        amount: paymentType === BillingEventType.PaymentSucceeded
+          ? invoice.amount_paid
+          : invoice.amount_due,
+        currency,
+        decimals: stripeDecimals(currency),
+      },
+    }
+  }
+
+  /**
    * POSTs a change to a subscription and returns the subscription after it. The path is built from
    * an ID that already passed {@link STRIPE_ID}.
    */
@@ -529,6 +573,24 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
       ok: true,
       value: { amountRefunded: charge.amount_refunded, refunded: charge.refunded },
     }
+  }
+
+  /**
+   * The newest refund of a payment that has nothing left to refund, or `null` when money is still
+   * left on it or Stripe cannot be read. Only a full refund is offered, so a fully refunded
+   * payment is what a refund that went through leaves behind.
+   */
+  const readDoneRefund = async (paymentId: string): Promise<Refund | null> => {
+    const state = await readRefundState(paymentId)
+    if (!state.ok || !state.value.refunded) return null
+    const query = new URLSearchParams()
+    query.set(paymentId.startsWith("pi_") ? "payment_intent" : "charge", paymentId)
+    query.set("limit", "1")
+    const answer = await send("GET", `/refunds?${query}`, undefined, undefined)
+    if (!answer.ok) return null
+    const list = stripeRefundListSchema(answer.value)
+    const newest = list instanceof type.errors ? undefined : list.data[0]
+    return newest === undefined ? null : toRefund(newest, paymentId)
   }
 
   return {
@@ -657,22 +719,21 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
       const form = new URLSearchParams()
       form.set(checked.paymentId.startsWith("pi_") ? "payment_intent" : "charge", checked.paymentId)
       const answer = await send("POST", "/refunds", form, checked.idempotencyKey)
-      if (!answer.ok) return answer
+      if (!answer.ok) {
+        // A retry after Stripe's 24-hour key window is a new request, which Stripe refuses because
+        // the payment is refunded already. Read it back, so a refund that went through answers
+        // success.
+        if (answer.error.code !== "provider_error" || (answer.error.status ?? 500) >= 500) {
+          return answer
+        }
+        const done = await readDoneRefund(checked.paymentId)
+        return done === null ? answer : { ok: true, value: done }
+      }
       const refund = stripeRefundSchema(answer.value)
       if (refund instanceof type.errors) {
         return failure("malformed_response", `Stripe's refund: ${refund.summary}`)
       }
-      const currency = refund.currency.toUpperCase()
-      const value: Refund = {
-        id: refund.id,
-        paymentId: checked.paymentId,
-        amount: refund.amount,
-        currency,
-        decimals: stripeDecimals(currency),
-        // Stripe made the refund; a status it adds later must not read as "nothing changed".
-        status: REFUND_STATUS.get(refund.status ?? "") ?? RefundStatus.Pending,
-      }
-      return { ok: true, value }
+      return { ok: true, value: toRefund(refund, checked.paymentId) }
     },
 
     async setTrialEnd(request) {
@@ -782,28 +843,13 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
 
       const paymentType = PAYMENT_EVENTS.get(event.type)
       if (paymentType !== undefined) {
-        const invoice = stripeInvoiceSchema(event.data.object)
-        if (invoice instanceof type.errors) return malformed(`${event.type}: ${invoice.summary}`)
-        const currency = invoice.currency.toUpperCase()
-        const amount = paymentType === BillingEventType.PaymentSucceeded
-          ? invoice.amount_paid
-          : invoice.amount_due
-        const parent = invoice.parent
-        const subscriptionId = parent?.type === "subscription_details"
-          ? parent.subscription_details?.subscription ?? null
-          : null
+        const payment = toPayment(paymentType, event.data.object)
+        if (!payment.ok) return malformed(`${event.type}: ${payment.error}`)
         const parsed: BillingEvent = {
           id: event.id,
           type: paymentType as BillingEventType.PaymentSucceeded | BillingEventType.PaymentFailed,
           occurredAt,
-          payment: {
-            invoiceId: invoice.id,
-            customerId: invoice.customer,
-            subscriptionId,
-            amount,
-            currency,
-            decimals: stripeDecimals(currency),
-          },
+          payment: payment.value,
         }
         return { ok: true, event: parsed }
       }
