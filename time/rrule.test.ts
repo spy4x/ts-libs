@@ -950,3 +950,12 @@ Deno.test(`formatRrule refuses a rule the parser would refuse instead of writing
     assertEquals(result.error.code, code)
   }
 })
+
+Deno.test(`nextOccurrence finds no occurrence after an instant past the year 9999`, () => {
+  const start: IcalDateValue = { kind: IcalDateKind.Date, date: `2024-02-29` }
+  const result = nextOccurrence(rule(`FREQ=DAILY`), {
+    start,
+    after: new Date(`+010000-01-01T00:00:00Z`),
+  })
+  assertEquals(result, { success: true, output: null, error: null })
+})

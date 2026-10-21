@@ -23,6 +23,8 @@
  */
 
 import { IcalDateKind, type IcalDateValue, resolveInstant } from "./ical.ts"
+import { formatIsoDate, parseIsoDate } from "./date.ts"
+import { wallMs } from "./ical-timezone.ts"
 import { isoDateInTz, isValidTimeZone } from "./tz.ts"
 
 /** How often the rule repeats. Hourly and finer frequencies are outside the subset. */
@@ -343,11 +345,12 @@ function parseUntil(raw: string): IcalDateValue | undefined {
 // ---- day arithmetic on the proleptic Gregorian calendar, in days since 1970-01-01 -------------
 
 const MS_PER_DAY = 86_400_000
+/** The first and the last day an occurrence can fall on: 0001-01-01 and 9999-12-31. */
+const FIRST_DAY = parseIsoDate("0001-01-01") / MS_PER_DAY
+const LAST_DAY = parseIsoDate("9999-12-31") / MS_PER_DAY
 
 function toDays(year: number, month: number, day: number): number {
-  const t = new Date(0)
-  t.setUTCFullYear(year, month - 1, day)
-  return Math.round(t.getTime() / MS_PER_DAY)
+  return wallMs(year, month, day) / MS_PER_DAY
 }
 
 function fromDays(days: number): { year: number; month: number; day: number } {
@@ -365,17 +368,18 @@ function daysInMonth(year: number, month: number): number {
     toDays(year, month, 1)
 }
 
-function pad(n: number, width: number): string {
-  return String(n).padStart(width, `0`)
-}
-
+/** `YYYY-MM-DD` of a day number, or `undefined` outside {@link FIRST_DAY}…{@link LAST_DAY}. */
 function isoDate(days: number): string | undefined {
-  const { year, month, day } = fromDays(days)
-  return year < 1 || year > 9999 ? undefined : `${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}`
+  return days < FIRST_DAY || days > LAST_DAY ? undefined : formatIsoDate(days * MS_PER_DAY)
 }
 
-function parseIsoDate(date: string): number {
-  return toDays(Number(date.slice(0, 4)), Number(date.slice(5, 7)), Number(date.slice(8, 10)))
+/** The day number of a `YYYY-MM-DD` date, or `undefined` when the calendar has no such day. */
+function dayNumber(date: string): number | undefined {
+  try {
+    return parseIsoDate(date) / MS_PER_DAY
+  } catch {
+    return undefined
+  }
 }
 
 // ---- candidate days of one period --------------------------------------------------------------
@@ -561,8 +565,8 @@ export function nextOccurrence(
   if (!zone || !isValidTimeZone(zone) || Number.isNaN(after.getTime())) {
     return fail(RruleErrorCode.InvalidStart, `unknown time zone or invalid instant`)
   }
-  const startDays = parseIsoDate(start.date)
-  if (isoDate(startDays) !== start.date) {
+  const startDays = dayNumber(start.date)
+  if (startDays === undefined || isoDate(startDays) === undefined) {
     return fail(RruleErrorCode.InvalidStart, `${start.date} is not a calendar date`)
   }
 
@@ -579,7 +583,8 @@ export function nextOccurrence(
     return instant !== undefined && instant.getTime() > after.getTime()
   }
   const until = rule.until
-  const untilDays = until ? parseIsoDate(until.date) : 0
+  // `parseUntil` has checked that the date exists.
+  const untilDays = until ? dayNumber(until.date)! : 0
   const withinUntil = (date: string, days: number): boolean => {
     if (!until) return true
     if (until.kind === IcalDateKind.Utc) {
@@ -595,7 +600,10 @@ export function nextOccurrence(
   // COUNT needs every occurrence from the start counted; otherwise skip to near `after`.
   // `afterDate` is `after` read in `zone`, while a UTC or floating start's wall clock may lie up
   // to a day away from that; two days back is certainly before `after` whatever the kind.
-  const refDays = parseIsoDate(afterDate) - 2
+  const afterDays = dayNumber(afterDate)
+  // `after` reads past 9999-12-31 in `zone`: no occurrence comes after it.
+  if (afterDays === undefined) return ok(null)
+  const refDays = afterDays - 2
   let k = rule.count === undefined ? firstPeriod(rule, startDays, refDays) : 0
   let seen = 0
   let emptyRun = 0

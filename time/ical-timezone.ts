@@ -31,7 +31,7 @@ const WEEKDAYS = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"]
 const RULE_PARTS = new Set(["FREQ", "INTERVAL", "BYMONTH", "BYDAY", "BYMONTHDAY", "UNTIL", "WKST"])
 
 /** A wall clock as if it were UTC, in epoch milliseconds. Years below 100 stay what they say. */
-function wallMs(year: number, month: number, day: number, h = 0, m = 0, s = 0): number {
+export function wallMs(year: number, month: number, day: number, h = 0, m = 0, s = 0): number {
   const date = new Date(0)
   date.setUTCFullYear(year, month - 1, day)
   date.setUTCHours(h, m, s, 0)

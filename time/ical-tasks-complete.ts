@@ -63,6 +63,8 @@ import {
   type TodoPatch,
   TodoStatus,
 } from "./ical-tasks.ts"
+import { formatIsoDate, parseIsoDate } from "./date.ts"
+import { formatIcsUtc } from "./ics-core.ts"
 import { nextOccurrence, parseRrule, type Rrule, RruleFreq } from "./rrule.ts"
 import { hhmmInTz, isoDateInTz, isValidTimeZone } from "./tz.ts"
 
@@ -154,34 +156,36 @@ function zoneOf(value: IcalDateValue): string | undefined {
   return zone && isValidTimeZone(zone) ? zone : undefined
 }
 
-function isoDays(date: string): number {
-  return Date.parse(`${date}T00:00:00Z`) / DAY_MS
+/** `date` moved by `ms` (whole days), or `undefined` when that leaves the years 0000–9999. */
+function addToDate(date: string, ms: number): string | undefined {
+  try {
+    return formatIsoDate(parseIsoDate(date) + ms)
+  } catch {
+    return undefined
+  }
 }
 
-function isoFromDays(days: number): string {
-  return new Date(days * DAY_MS).toISOString().slice(0, 10)
-}
+const OUT_OF_RANGE = `the date would move past the year 9999`
 
 /**
  * `value` moved by the offset between two due values, the way Tasks.org adds the due offset to
- * the start: in milliseconds, so a zoned wall clock follows the clock change like it does.
+ * the start: in milliseconds, so a zoned wall clock follows the clock change like it does. A
+ * string says why it cannot move.
  */
 function shift(
   value: IcalDateValue,
   from: IcalDateValue,
   to: IcalDateValue,
-): IcalDateValue | undefined {
+): IcalDateValue | string {
   if (value.kind === IcalDateKind.Date) {
-    return {
-      ...value,
-      date: isoFromDays(isoDays(value.date) + isoDays(to.date) - isoDays(from.date)),
-    }
+    const date = addToDate(value.date, parseIsoDate(to.date) - parseIsoDate(from.date))
+    return date ? { ...value, date } : OUT_OF_RANGE
   }
   const zone = zoneOf(value)
   const a = resolveInstant(from, FLOATING)
   const b = resolveInstant(to, FLOATING)
   const v = resolveInstant(value, FLOATING)
-  if (!zone || !a || !b || !v) return undefined
+  if (!zone || !a || !b || !v) return `DTSTART has no usable time zone`
   const moved = new Date(v.getTime() + b.getTime() - a.getTime())
   const seconds = String(moved.getUTCSeconds()).padStart(2, `0`)
   return { ...value, date: isoDateInTz(moved, zone), time: `${hhmmInTz(moved, zone)}:${seconds}` }
@@ -195,8 +199,6 @@ function lowerCount(rrule: string): string {
   )
 }
 
-const pad = (n: number) => String(n).padStart(2, `0`)
-
 /** Shift absolute alarm triggers written in UTC, and drop the snooze. */
 function moveReminders(todo: IcalComponent, deltaMs: number) {
   removeProperty(todo, `X-MOZ-SNOOZE-TIME`)
@@ -207,8 +209,7 @@ function moveReminders(todo: IcalComponent, deltaMs: number) {
       const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(trigger.value)
       if (!m) continue
       const at = new Date(Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!) + deltaMs)
-      trigger.value = `${at.getUTCFullYear()}${pad(at.getUTCMonth() + 1)}${pad(at.getUTCDate())}` +
-        `T${pad(at.getUTCHours())}${pad(at.getUTCMinutes())}${pad(at.getUTCSeconds())}Z`
+      trigger.value = formatIcsUtc(at)
     }
   }
 }
@@ -251,10 +252,10 @@ function completionAnchor(
  * does (`RepeatTaskHelper.handleWeeklyRepeatAfterComplete`), not the weeks RFC 5545 would count
  * from the start. `COUNT` needs no care: it is 2 or more here, and the caller lowers it.
  */
-function fromCompletion(rule: Rrule, anchor: IcalDateValue): [Rrule, IcalDateValue] {
+function fromCompletion(rule: Rrule, anchor: IcalDateValue): [Rrule, IcalDateValue] | string {
   if (rule.freq !== RruleFreq.Weekly || rule.byDay.length === 0) return [rule, anchor]
-  const date = isoFromDays(isoDays(anchor.date) + 7 * (rule.interval - 1))
-  return [{ ...rule, interval: 1 }, { ...anchor, date }]
+  const date = addToDate(anchor.date, 7 * (rule.interval - 1) * DAY_MS)
+  return date ? [{ ...rule, interval: 1 }, { ...anchor, date }] : OUT_OF_RANGE
 }
 
 function isCompleted(todo: Todo): boolean {
@@ -318,7 +319,9 @@ export function completeTodo(
   if (counted) {
     const anchor = completionAnchor(due, options.now, options.timeZone)
     if (typeof anchor === `string`) return refuse(CompleteTodoErrorCode.UnusableDate, anchor)
-    from = fromCompletion(rule, anchor)
+    const restarted = fromCompletion(rule, anchor)
+    if (typeof restarted === `string`) return refuse(CompleteTodoErrorCode.UnusableDate, restarted)
+    from = restarted
   }
   const [series, start] = from!
   const after = resolveInstant(start, FLOATING)
@@ -335,9 +338,7 @@ export function completeTodo(
   const patch: TodoPatch = { due: newDue }
   if (todo.start && due) {
     const start = shift(todo.start, due, newDue)
-    if (!start) {
-      return refuse(CompleteTodoErrorCode.UnusableDate, `DTSTART has no usable time zone`)
-    }
+    if (typeof start === `string`) return refuse(CompleteTodoErrorCode.UnusableDate, start)
     patch.start = start
   }
   if (rule.count !== undefined) patch.rrule = lowerCount(todo.rrule!)
