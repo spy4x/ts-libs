@@ -115,8 +115,18 @@ const RULES: Record<SortMode, SortRule<Key>[]> = {
  * - Title: case-insensitive, with `item 2` before `item 10`.
  */
 export function sortTasks(tasks: readonly Task[], mode: SortMode, zone: string): Task[] {
+  return sortBy(tasks, mode, zone, (task) => documentFor(task, task.due, task.created))
+}
+
+/** {@link sortTasks} with the parsed document of each task from `rootOf`, so a view parses once. */
+function sortBy(
+  tasks: readonly Task[],
+  mode: SortMode,
+  zone: string,
+  rootOf: (task: Task) => IcalComponent | undefined,
+): Task[] {
   const rows: Row[] = tasks.map((task) => {
-    const root = documentFor(task, task.due, task.created)
+    const root = rootOf(task)
     return {
       task,
       position: manualPosition(task, zone, root),
@@ -263,14 +273,18 @@ export function todayView(tasks: readonly Task[], now: Date, zone: string): Toda
   const todayDate = isoDateInTz(now, zone)
   const overdue: Task[] = []
   const today: Task[] = []
+  const roots = new Map<Task, IcalComponent | undefined>()
   for (const task of tasks) {
     if (!isOpen(task) || !task.due) continue
-    if (isOverdue(task.due, now, zone, documentFor(task, task.due))) overdue.push(task)
-    else if (dateDay(task.due, zone) === todayDate) today.push(task)
+    const root = documentFor(task, task.due, task.created)
+    roots.set(task, root)
+    if (isOverdue(task.due, now, zone, root)) overdue.push(task)
+    else if (dateDay(task.due, zone, root) === todayDate) today.push(task)
   }
+  const rootOf = (task: Task) => roots.get(task)
   return {
-    overdue: sortTasks(overdue, SortMode.Due, zone),
-    today: sortTasks(today, SortMode.Due, zone),
+    overdue: sortBy(overdue, SortMode.Due, zone, rootOf),
+    today: sortBy(today, SortMode.Due, zone, rootOf),
   }
 }
 
@@ -282,15 +296,18 @@ export function upcomingView(tasks: readonly Task[], now: Date, zone: string): U
   const first = addDays(isoDateInTz(now, zone), 1)
   const last = addDays(first, UPCOMING_DAYS - 1)
   const byDay = new Map<string, Task[]>()
+  const roots = new Map<Task, IcalComponent | undefined>()
   for (const task of tasks) {
     if (!isOpen(task) || !task.due) continue
-    const day = dateDay(task.due, zone)
+    const root = documentFor(task, task.due, task.created)
+    const day = dateDay(task.due, zone, root)
     if (day < first || day > last) continue
+    roots.set(task, root)
     byDay.set(day, [...(byDay.get(day) ?? []), task])
   }
   return [...byDay.keys()].sort().map((date) => ({
     date,
-    tasks: sortTasks(byDay.get(date)!, SortMode.Due, zone),
+    tasks: sortBy(byDay.get(date)!, SortMode.Due, zone, (task) => roots.get(task)),
   }))
 }
 

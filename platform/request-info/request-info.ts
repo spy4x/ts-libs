@@ -65,6 +65,13 @@ export interface RequestInfoOptions {
    * {@link clientIp} when no trusted forwarding header applies.
    */
   remoteAddr?: string
+  /**
+   * CIDR ranges of the proxies allowed to set the trusted header, as `clientIp`'s option of the same
+   * name: the header is read only when {@link remoteAddr} lies inside one of them. Pass the list the
+   * rate limiter gets (`trustedProxies` in `@spy4x/platform/rate-limit/hono`), so a log line names
+   * the same client the limiter counted. Left out, the header is trusted from any peer.
+   */
+  trustedProxies?: readonly string[]
 }
 
 /**
@@ -89,7 +96,9 @@ export function requestInfoFromContext<E extends Env = Record<string, never>>(
   options: RequestInfoOptions = {},
 ): RequestInfo {
   const trustedProxy = options.trustedProxy ?? false
-  const ip = clientIp(c.req.raw, options.remoteAddr, trustedProxy)
+  const ip = clientIp(c.req.raw, options.remoteAddr, trustedProxy, {
+    trustedProxies: options.trustedProxies,
+  })
   return {
     requestId: readRequestId(c),
     ip: ip === UNKNOWN_CLIENT_IP ? undefined : ip,

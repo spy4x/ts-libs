@@ -9,11 +9,11 @@
 
 import { Hono } from "hono"
 import type { Context } from "hono"
-import { encodeBase64Url } from "@std/encoding/base64url"
 import { escapeHtml } from "@spy4x/email/html"
 import { parseBoundedFormData } from "@spy4x/net/bounded-body"
 import { constantTimeEqualsText, randomBase64Url, sha256Hex } from "@spy4x/platform/tokens"
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
+import { pkceChallenge } from "../auth/oauth.ts"
 import { createSameOriginCheck } from "../http/same-origin.ts"
 import type { PasswordHasher } from "../sign-in/password.ts"
 import { APPROVAL_CODE_SHAPE } from "./approval-code.ts"
@@ -119,6 +119,11 @@ export interface OwnerPassword {
    * approval is refused with `429`: the ceiling against guessing spread over many addresses. Must
    * be more than `maxFailures`, so one locked address never locks the owner out. Defaults to ten
    * times `maxFailures`.
+   *
+   * About ten addresses reach the default ceiling in a minute and keep every approval refused for
+   * the rest of `totalWindowMs`, 24 hours by default. The owner's way back in is a one-time code
+   * from `createApprovalCode`, typed in place of the password: the lockout does not apply to
+   * it. The README, "Approving while the limit is reached", has the details.
    */
   maxTotalFailures?: number
   /** The window `maxTotalFailures` counts over, in milliseconds. Defaults to 24 hours. */
@@ -248,12 +253,6 @@ function readParams(entries: Iterable<[string, FormDataEntryValue]>): Params | u
 
 function hostOf(url: string): string {
   return new URL(url).host
-}
-
-/** The S256 code challenge of a verifier (RFC 7636 section 4.2). */
-async function s256(verifier: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))
-  return encodeBase64Url(new Uint8Array(digest))
 }
 
 /** The built-in consent page: what asks, where the code goes, and two buttons. */
@@ -767,7 +766,7 @@ export function createAuthorizationServer(
       if (resource !== undefined && resource !== record.resource) {
         return tokenError(c, "invalid_target", "code was issued for another resource")
       }
-      if (!(await constantTimeEqualsText(await s256(verifier), record.codeChallenge))) {
+      if (!(await constantTimeEqualsText(await pkceChallenge(verifier), record.codeChallenge))) {
         return tokenError(c, "invalid_grant", "code_verifier does not match")
       }
       return await issueTokens(c, record, record.scope, true)

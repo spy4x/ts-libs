@@ -22,6 +22,7 @@ import type { SessionCookie } from "./cookie.ts"
 import {
   type NewSessionFields,
   SecondFactorStatus,
+  type SessionDevice,
   type SessionManager,
   type SessionRecord,
 } from "./session.ts"
@@ -75,8 +76,12 @@ export interface Auth<S extends SessionRecord, U> {
   isAuthorized(
     check: (auth: AuthState<S, U>) => boolean | Promise<boolean>,
   ): MiddlewareHandler<AuthEnv<S, U>>
-  /** Creates a session and sets its cookie. For a sign-in route, after the credentials checked out. */
-  startSession(c: Context, fields: NewSessionFields<S>): Promise<S>
+  /**
+   * Creates a session and sets its cookie. For a sign-in route, after the credentials checked out.
+   * `device` is what the user's list of signed-in devices shows for it, as in
+   * {@link SessionManager.create}.
+   */
+  startSession(c: Context, fields: NewSessionFields<S>, device?: SessionDevice): Promise<S>
   /** Signs out the session in the request's cookie, if any, and clears the cookie. */
   endSession(c: Context<AuthEnv<S, U>>): Promise<void>
 }
@@ -147,8 +152,12 @@ export function createAuth<S extends SessionRecord, U>(options: AuthOptions<S, U
       await next()
     })
 
-  const startSession = async (c: Context, fields: NewSessionFields<S>): Promise<S> => {
-    const { session, cookieValue } = await sessions.create(fields)
+  const startSession = async (
+    c: Context,
+    fields: NewSessionFields<S>,
+    device?: SessionDevice,
+  ): Promise<S> => {
+    const { session, cookieValue } = await sessions.create(fields, device)
     await cookie.set(c, session, cookieValue)
     return session
   }

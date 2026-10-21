@@ -12,13 +12,13 @@
  * so the canonicalisation pass and the digest each run at most once per
  * distinct combination the message actually asks for.
  *
- * Split out of `dkim-verify.ts` — which documents "zero imports" for
+ * Split out of `dkim-verify.ts` — which keeps its imports few for
  * itself — so this caching seam has a name a test can import directly
  * without widening the package's public surface: this file is not listed in
  * `email/deno.json`'s `exports` map, and `mod.ts` does not re-export it, so
  * nothing outside `email/` can reach it. `dkim-verify.ts` imports it as an
  * ordinary sibling module of the same package, not an external dependency —
- * the "zero imports" rule that file states for itself is about that, not
+ * the import rule that file states for itself is about that, not
  * about splitting one package across two files.
  */
 
@@ -55,32 +55,6 @@ export interface BodyHashCache {
   get(algorithm: BodyCanonicalization, bodyLength: number | undefined): Promise<BodyHashResult>
 }
 
-let canonicalizationPasses = 0
-let hashPasses = 0
-
-/**
- * Test-only: how many times a body was actually canonicalised — a cache
- * miss, not a hit — across every cache this module has created since the
- * last reset. Not part of the package's public surface; see the module note.
- */
-export function canonicalizationPassesForTests(): number {
-  return canonicalizationPasses
-}
-
-/**
- * Test-only: how many times a canonical body was actually hashed — a cache
- * miss for a `(mode, l=)` pair, not a hit — since the last reset.
- */
-export function hashPassesForTests(): number {
-  return hashPasses
-}
-
-/** Test-only: zero both counters. */
-export function resetBodyHashCountersForTests(): void {
-  canonicalizationPasses = 0
-  hashPasses = 0
-}
-
 /**
  * Build one cache for one message. `deps.canonicalize` runs at most once per
  * distinct `algorithm` value that {@link BodyHashCache.get} is called with,
@@ -98,7 +72,6 @@ export function createBodyHashCache(deps: BodyHashDependencies): BodyHashCache {
   function bytesFor(algorithm: BodyCanonicalization): Uint8Array {
     let bytes = canonicalBytes.get(algorithm)
     if (bytes === undefined) {
-      canonicalizationPasses++
       bytes = deps.encode(deps.canonicalize(algorithm))
       canonicalBytes.set(algorithm, bytes)
     }
@@ -110,7 +83,6 @@ export function createBodyHashCache(deps: BodyHashDependencies): BodyHashCache {
       const key = `${algorithm}:${bodyLength ?? "*"}`
       let pending = results.get(key)
       if (pending === undefined) {
-        hashPasses++
         pending = (async () => {
           const canonical = bytesFor(algorithm)
           const signedOctets = bodyLength === undefined

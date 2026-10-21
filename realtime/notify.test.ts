@@ -169,6 +169,48 @@ describe("AggregateNotifier", () => {
     expect(fanout.calls).toEqual([])
   })
 
+  it("answers failed instead of rejecting when the fan-out throws", async () => {
+    const failures: string[] = []
+    const notifier = new AggregateNotifier({
+      fanout: {
+        sendToUsers() {
+          throw new Error("socket table locked")
+        },
+      },
+      resolvers: new Map([["invoice", () => ["user-1"]]]),
+      onError: (_change, error) => failures.push(error.message),
+    })
+
+    const outcome = await notifier.notify(change("invoice"))
+
+    expect(outcome.status).toBe(NotifyStatus.Failed)
+    expect(outcome.error).toBe("socket table locked")
+    expect(failures).toEqual(["socket table locked"])
+  })
+
+  it("still answers when the onError or onUnknownAggregate hook throws", async () => {
+    const notifier = new AggregateNotifier({
+      fanout: new RecordingFanout({ "user-1": 1 }),
+      resolvers: new Map([["invoice", () => {
+        throw new Error("lookup failed")
+      }]]),
+      onError: () => {
+        throw new Error("alerting is down")
+      },
+      onUnknownAggregate: () => {
+        throw new Error("alerting is down")
+      },
+    })
+
+    const logged = await withSilencedErrors(async () => [
+      (await notifier.notify(change("invoice"))).status,
+      (await notifier.notify(change("payment"))).status,
+    ])
+
+    expect(logged.result).toEqual([NotifyStatus.Failed, NotifyStatus.UnknownAggregate])
+    expect(logged.count).toBe(2)
+  })
+
   it("waits for an asynchronous resolver before sending", async () => {
     const fanout = new RecordingFanout({ "user-1": 1 })
     const notifier = new AggregateNotifier({
@@ -198,3 +240,17 @@ describe("AggregateNotifier", () => {
     expect(notifier.aggregates()).toEqual(["invoice", "payment"])
   })
 })
+
+/** Runs `action` with `console.error` captured, so a hook's logged throw stays out of the run. */
+async function withSilencedErrors<T>(
+  action: () => Promise<T>,
+): Promise<{ result: T; count: number }> {
+  const original = console.error
+  let count = 0
+  console.error = () => count++
+  try {
+    return { result: await action(), count }
+  } finally {
+    console.error = original
+  }
+}

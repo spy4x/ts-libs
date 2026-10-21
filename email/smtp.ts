@@ -33,6 +33,7 @@
 import type { SendMailOptions, SMTPTransportOptions } from "nodemailer"
 import { decodeBase64, encodeBase64 } from "@std/encoding"
 import { type EmailAddress, parseAddress } from "./address.ts"
+import { cacheUntilRejected } from "./cache-until-rejected.ts"
 import { type MessageAddresses, parseMessageAddresses } from "./message-addresses.ts"
 import {
   assertSendableMessage,
@@ -133,15 +134,11 @@ export function createSmtpSender(
   const matcher = credentialMatcher(options)
 
   // Per-sender, not per-module: one transport belongs to this configuration and is
-  // built on the first send, so constructing a sender opens nothing.
-  let transport: Promise<SmtpTransport> | undefined
-
-  function resolveTransport(): Promise<SmtpTransport> {
-    transport ??= factory === undefined
-      ? loadNodemailerTransport(config)
-      : Promise.resolve(factory(config))
-    return transport
-  }
+  // built on the first send, so constructing a sender opens nothing. A failed load
+  // is not kept, so the next send tries again instead of failing until a restart.
+  const resolveTransport = cacheUntilRejected(() =>
+    factory === undefined ? loadNodemailerTransport(config) : Promise.resolve(factory(config))
+  )
 
   return {
     async send(message: EmailMessage): Promise<SendResult> {

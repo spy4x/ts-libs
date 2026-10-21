@@ -38,8 +38,9 @@ export type NormalizeUrlShapeResult = UrlShapeOk | UrlShapeError
 /**
  * Narrow a `normalizeUrlShape` result to its success branch.
  *
- * Exported so `net/url-policy` — which forks the shape rules it needs to keep —
- * can assert the shape contract on the input it shares with this module.
+ * Nothing in this library calls it.
+ *
+ * @deprecated Read `result.ok` instead: it narrows the result the same way. Removed in 2.0.
  */
 export function isUrlShapeOk(result: NormalizeUrlShapeResult): result is UrlShapeOk {
   return result.ok
@@ -57,7 +58,12 @@ export const ALLOWED_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"
  */
 export const EXPLICIT_SCHEME: RegExp = /^([a-z][a-z0-9+.-]*):/i
 
-/** A hostname that is a plain DNS label run: no `:`, no brackets, no dots. */
+/**
+ * A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
+ *
+ * @deprecated Nothing in this library uses it; write the pattern where it is needed. Removed in
+ * 2.0.
+ */
 export const PLAIN_HOSTNAME: RegExp = /^[a-z0-9_-]+$/i
 
 /** Whitespace and control characters that make a URL input invalid. */

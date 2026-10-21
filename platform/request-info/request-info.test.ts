@@ -83,6 +83,28 @@ describe("requestInfoFromContext — trust boundary", () => {
   })
 })
 
+describe("requestInfoFromContext — trustedProxies", () => {
+  const forged = { "x-real-ip": "198.51.100.7" }
+
+  it("reads the trusted header when the peer is inside trustedProxies", async () => {
+    const options = {
+      trustedProxy: "x-real-ip" as const,
+      remoteAddr: "192.0.2.10",
+      trustedProxies: ["192.0.2.0/24"],
+    }
+    expect((await call(buildApp(options), forged)).ip).toBe("198.51.100.7")
+  })
+
+  it("ignores the trusted header from a peer outside trustedProxies, as the rate limiter does", async () => {
+    const options = {
+      trustedProxy: "x-real-ip" as const,
+      remoteAddr: "203.0.113.5",
+      trustedProxies: ["192.0.2.0/24"],
+    }
+    expect((await call(buildApp(options), forged)).ip).toBe("203.0.113.5")
+  })
+})
+
 describe("requestInfoFromContext — requestId and userAgent", () => {
   it("reads requestId from the context variable when the app set one", async () => {
     const info = await call(buildApp(undefined, "req-1"))
