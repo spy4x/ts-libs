@@ -26,9 +26,8 @@ This repo is a Deno workspace: one package per top-level directory.
 ## Adding a package
 
 `deno.jsonc` already lists **every** package directory in `"workspace"`. **Do not edit the workspace
-array, and do not edit root `deno.jsonc` at all from a package PR.** Deno skips a listed member whose
-directory does not exist yet — one `Skipping.` line on stderr per missing member, exit 0 — so a
-package joins the workspace the moment you create its own config:
+array.** Deno skips a listed member whose directory does not exist yet — one `Skipping.` line
+on stderr per missing member, exit 0 — so a package joins the workspace the moment you create its own config:
 
 ```bash
 mkdir <dir>
