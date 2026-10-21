@@ -23,6 +23,7 @@
     "./auth/oauth-github": "./auth/oauth-github.ts",
     "./sign-in": "./sign-in/mod.ts",
     "./sign-in/password-hash": "./sign-in/password-hash.ts",
+    "./webauthn": "./webauthn/mod.ts",
     "./config": "./config/index.ts",
     "./config/env": "./config/env.ts",
     "./request-log": "./request-log/log.ts",
