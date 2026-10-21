@@ -15,6 +15,12 @@
 
 </div>
 
+<p align="center">
+  <a href="https://antonshubin.com/tools/ts-libs">
+    <img src="media/demo/poster.webp" width="640" alt="Demo video: three ts-libs packages, each a short file and its real output in a terminal (a meeting time in three time zones, money in three formats, form errors per field), then deno add from JSR.">
+  </a>
+</p>
+
 ```ts
 import { type } from "arktype"
 import { validate } from "@spy4x/validation"
