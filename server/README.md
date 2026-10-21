@@ -1326,16 +1326,21 @@ work factor should use `fromHexKey` with a key its own key management produced.
 
 `createUserSecretStore`, `UserSecretError`, `UserSecretErrorCode`, `UserSecretPort`,
 `StoredUserSecret`, `SaveUserSecretInput`, `UserSecretSummary`, `UserSecretStoreOptions`,
-`PROVIDER_PATTERN`, `MIN_API_KEY_LENGTH`, `MAX_API_KEY_LENGTH`, `MAX_PROVIDER_LENGTH`.
+`PROVIDER_PATTERN`, `MIN_API_KEY_LENGTH`, `MAX_API_KEY_LENGTH`, `MAX_PROVIDER_LENGTH`,
+`MAX_MODEL_LENGTH`.
 
 The BYOK pattern: validate → `cipher.encrypt` at rest → keep `maskKey`'s hint → upsert per
 `(user, provider)` → delete, with persistence behind an injected `UserSecretPort` (no SQL, no driver)
 and the cipher behind `SecretCipher`. `save` returns a summary, `list` returns summaries only — the
 ciphertext has no field to travel in — and `openSecret` is the single call that yields a plaintext,
-for the outbound provider request. The port's `upsert` contract is the source's
+for the outbound provider request. The port's `upsert` contract is an SQL
 `ON CONFLICT (user_id, provider) DO UPDATE`: replace the secret and hint, force `isActive`, bump
 `updatedAt`, preserve `createdAt`. Neither the cipher nor the mask is re-implemented here; both come
 from `server/crypto.ts`.
+
+A `model` longer than `MAX_MODEL_LENGTH` (256) or carrying a control character is refused as
+`InvalidModel`. A cipher that rejects while encrypting is `EncryptionFailed`, while decrypting
+`DecryptionFailed`; a port that rejects is `PortFailure`.
 
 **A base URL is an outbound destination, so it is checked like one.** A non-empty `baseUrl` must be
 an absolute `http:`/`https:` URL with no user name or password and no control characters — the
@@ -2021,8 +2026,9 @@ turns it off for a non-TTY or `NO_COLOR` environment, so nothing new needs decid
 `MIN_REQUEST_ID_MAX_LENGTH`.
 
 Ported from `template/apps/api/base-middleware.ts`. The app-specific parts became options:
-`requestIdMaxLength` (default 128; a longer `X-Request-Id` is replaced by a generated 8-character
-id, so it cannot overflow a database column), `skipLogPaths` (the template's hardcoded
+`requestIdMaxLength` (default 128; a longer `X-Request-Id` is replaced by a generated id, so it
+cannot overflow a database column; the id is a version 7 UUID, or 8 random URL-safe characters
+when the cap is below 36), `skipLogPaths` (the template's hardcoded
 `/api/health`; default none), `parseAuth` (optional) and `reportError` (optional, takes the
 `ReportContext` of `@spy4x/platform`'s error reporter). The app type is generic (`Hono<E>`), where
 the template named its own `APIContext`.
@@ -2032,8 +2038,8 @@ the request id, the method and the path, never the query, a header or a body, in
 route's own `onError` answered (that answer stays). An `HTTPException` below 500 is an answer, not
 a failure, and is not reported. A throw inside `reportError`, or a promise it returns that rejects, is swallowed.
 
-`requestIdMaxLength` must be an integer of at least `MIN_REQUEST_ID_MAX_LENGTH` (8, the length of a
-generated id); anything else throws a `RangeError` when `applyBaseMiddleware` is called.
+`requestIdMaxLength` must be an integer of at least `MIN_REQUEST_ID_MAX_LENGTH` (8, the length of
+the shortest generated id); anything else throws a `RangeError` when `applyBaseMiddleware` is called.
 
 ## `server/config`
 
@@ -2523,11 +2529,12 @@ const processor = new OutboxProcessor(
 
 `createIdempotencyMiddleware`, `fingerprint`, `isIdempotencyKey`, `IdempotencyError`,
 `IdempotencyStore`, `PostgresIdempotencyStore`, `IDEMPOTENCY_POSTGRES_SCHEMA`,
-`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`,
+`IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`, `IDEMPOTENCY_POSTGRES_USER_ID_TEXT`, `IdempotencyUserId`,
 `MemoryIdempotencyStore`, `IDEMPOTENCY_LEASE_SECONDS`, `IDEMPOTENCY_RETENTION_DAYS`. Extracted from
 `template/libs/server/idempotency/` (#313).
 
 A command whose data carries an `idempotencyKey` and an `actor.userId` runs once per (user, key).
+The user id is a number or a non-empty string, such as a version 7 UUID.
 A repeat returns the first run's result as JSON and changes nothing. Register the middleware on the
 `CommandBus` from `@spy4x/platform/cqrs`:
 
@@ -2559,6 +2566,8 @@ it, and its result, for the full retention.
 **The table.** `IDEMPOTENCY_POSTGRES_SCHEMA` is the SQL for `idempotency_keys`; run it as one of
 your migrations. It has no foreign key on `user_id`, because this library does not own your users
 table; add `REFERENCES users (id) ON DELETE CASCADE` if you want rows to go with the user.
+`user_id` is an `integer`. An app whose user ids are strings also runs
+`IDEMPOTENCY_POSTGRES_USER_ID_TEXT`, which widens it to `text`, before it opens the store's pool.
 
 **Fencing.** `begin` returns `{ status: "claimed", token }`; `complete` and `release` take that token
 and change nothing when it is not the key's current one. A run that outlives its lease and loses its
@@ -2875,14 +2884,17 @@ const result = await sendIssue({
 - Each link is minted with the row's stored key, so it survives a rotation. Marks are read under the
   current and every previous secret, and written under the current one, so a rotation between runs
   does not mail anyone twice.
-- A row that is not a bare address, a link that cannot be built and a send that throws each count
-  as one failure, and the run goes on. The log names a row by its number, and a relay error is
+- A link that cannot be built and a send that throws each count as one failure, and the run goes
+  on. A row that is not a bare address is logged and counted as skipped, so it cannot keep the issue
+  open forever. The log names a row by its number, and a relay error is
   redacted before it is logged. The send log holds marks, never addresses.
 - An empty list answers `no-subscribers` and records nothing: it usually means the store could not
   be read.
 
 `describeSendLogContract` in `send-log-contract.test.ts` is the contract every adapter runs. The
-file log reads and writes antonshubin.com's `newsletter-log.json` unchanged. A file that does not
+file log reads and writes antonshubin.com's `newsletter-log.json` unchanged. During a send it
+appends each recipient to `<path>.journal` rather than rewriting the file per mail; the next write
+of the file folds the journal in and removes it. A file that does not
 parse, or is not an array, is left alone and every call throws, so a corrupt log stops a send
 instead of allowing a second one.
 

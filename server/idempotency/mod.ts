@@ -16,6 +16,7 @@ export {
   type IdempotencyErrorCode,
   type IdempotencyOptions,
   type IdempotencyStore,
+  type IdempotencyUserId,
   isIdempotencyKey,
   MAX_IDEMPOTENCY_COMMAND_NAME_LENGTH,
   MAX_IDEMPOTENCY_KEY_LENGTH,
@@ -24,6 +25,7 @@ export { MemoryIdempotencyStore, type MemoryIdempotencyStoreOptions } from "./me
 export {
   IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT,
   IDEMPOTENCY_POSTGRES_SCHEMA,
+  IDEMPOTENCY_POSTGRES_USER_ID_TEXT,
   PostgresIdempotencyStore,
   type PostgresIdempotencyStoreOptions,
 } from "./postgres.ts"

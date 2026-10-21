@@ -304,7 +304,7 @@ describe("sendIssue", () => {
       return accepted(to)
     })
     const result = await sendIssue(input(subscribers, { sender: relay.sender }), log)
-    expect(result).toEqual({ status: "sent", sent: 1, failed: 3, skipped: 0 })
+    expect(result).toEqual({ status: "sent", sent: 1, failed: 2, skipped: 1 })
     const everything = JSON.stringify([lines, await log.find("a-post")])
     expect(lines.length).toBeGreaterThanOrEqual(4)
     expect(everything.toLowerCase()).not.toContain("example.com")
@@ -312,7 +312,7 @@ describe("sendIssue", () => {
     expect(everything).toContain("<REDACTED:EMAIL>")
   })
 
-  it("counts a row that is not a bare address as failed and never mails it", async () => {
+  it("skips a row that is not a bare address and still closes the issue", async () => {
     const { log, input } = setup()
     const relay = fakeSender()
     const result = await sendIssue(
@@ -325,9 +325,9 @@ describe("sendIssue", () => {
       ),
       log,
     )
-    expect(result).toEqual({ status: "sent", sent: 1, failed: 1, skipped: 0 })
+    expect(result).toEqual({ status: "sent", sent: 1, failed: 0, skipped: 1 })
     expect(relay.recipients()).toEqual([ONE])
-    expect((await log.find("a-post"))?.completedAt).toBeUndefined()
+    expect((await log.find("a-post"))?.completedAt).toEqual(new Date(NOW))
   })
 
   it("refuses an empty list and records nothing, so the real send can still happen", async () => {

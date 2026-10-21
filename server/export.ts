@@ -9,15 +9,10 @@
  * caller supplies a `user` value and a list of collections, each with the loader
  * that reads it. That keeps the envelope stable while products change shape.
  *
- * The filename's calendar day is the **local** day (`getFullYear`/`getMonth`/
- * `getDate`), not the UTC day. `toISOString().slice(0, 10)` — what the `northstar`
- * source used — normalises to UTC, so a user at UTC+05:00 downloading at 04:30
- * local on the 10th was handed `northstar-export-2026-03-09.json`, a day off from
- * the date they see. Positive offsets are therefore the dangerous ones, and the
- * offset is a property of the *server's* clock: a container running `TZ=UTC` names
- * the file for the server's day, not the user's, in either direction. There is no
- * fix for that beyond taking the user's timezone as input; what this module fixes
- * is the silent UTC shift, and it pins the local getters with a test.
+ * The filename's calendar day is the **local** day of the server's clock
+ * (`getFullYear`/`getMonth`/`getDate`), never the UTC day of `toISOString()`. A
+ * container running `TZ=UTC` still names the file for the server's day, not the
+ * user's; only taking the user's timezone as input would fix that.
  *
  * @module
  */
@@ -94,7 +89,14 @@ export async function buildExportEnvelope<TUser>(
   }
 
   for (const collection of collections) {
-    envelope[collection.name] = await collection.load(userId)
+    // Defined, not assigned: assigning to `__proto__` would replace the envelope's prototype, and
+    // the collection would vanish from the JSON.
+    Object.defineProperty(envelope, collection.name, {
+      value: await collection.load(userId),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
   }
 
   return envelope
@@ -104,11 +106,9 @@ export async function buildExportEnvelope<TUser>(
  * Format the calendar day of a date as `YYYY-MM-DD` from the **local** getters.
  *
  * "Local" is the *process's* timezone, not the user's: this function removes the
- * UTC shift (see the module header), it does not discover the reader's timezone.
- * A server on `TZ=UTC` therefore names a file for the server's day — the residual
- * documented at the top of this module, which needs the user's zone as input to
- * fix. What is guaranteed here is the honest half: the day is the one the date
- * object reports locally, never `toISOString()`'s UTC day.
+ * UTC shift (see the module header), it does not discover the reader's timezone:
+ * the day is the one the date object reports locally, never `toISOString()`'s UTC
+ * day.
  */
 export function formatLocalDate(date: Date): string {
   const year = String(date.getFullYear()).padStart(4, "0")

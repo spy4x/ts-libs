@@ -12,7 +12,7 @@ import {
 } from "./idempotency.ts"
 
 interface RenamePayload {
-  actor: { userId: number }
+  actor: { userId: number | string }
   name: string
   requestId?: string
   idempotencyKey?: string
@@ -141,6 +141,21 @@ describe("idempotency middleware", () => {
     await run(command({ actor: { userId: 2 } }), next)
 
     expect(runs).toBe(2)
+  })
+
+  it("runs a command once per key for a user whose id is a UUID", async () => {
+    const store = new SpyStore()
+    const run = createIdempotencyMiddleware({ store })
+    let runs = 0
+    const next = () => Promise.resolve(++runs)
+    const actor = { userId: "01929b2c-6f00-7000-8000-000000000001" }
+
+    await run(command({ actor }), next)
+    await run(command({ actor }), next)
+    await run(command({ actor: { userId: "01929b2c-6f00-7000-8000-000000000002" } }), next)
+
+    expect(runs).toBe(2)
+    expect(store.begun[0]).toBe(`${actor.userId}:k1`)
   })
 
   it("refuses a key reused for different input", async () => {
@@ -351,6 +366,16 @@ describe("idempotency middleware", () => {
     const anonymous = new RenameCommand({ name: "Team", idempotencyKey: "k1" } as RenamePayload)
 
     const error = await refusal(run(anonymous, () => Promise.resolve(1)))
+
+    expect(error.code).toBe("INVALID_KEY")
+    expect(store.begun.length).toBe(0)
+  })
+
+  it("refuses a key from an actor whose user id is an empty string", async () => {
+    const store = new SpyStore()
+    const run = createIdempotencyMiddleware({ store })
+
+    const error = await refusal(run(command({ actor: { userId: "" } }), () => Promise.resolve(1)))
 
     expect(error.code).toBe("INVALID_KEY")
     expect(store.begun.length).toBe(0)

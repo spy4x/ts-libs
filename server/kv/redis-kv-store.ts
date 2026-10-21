@@ -259,19 +259,12 @@ export class RedisKvStore {
    * Opens one Redis connection, authenticates it with `AUTH` when a password was given, and
    * confirms it with `PING`.
    *
-   * Shared by {@link connect} and {@link #doReconnect}, which need the identical
-   * steps: connect (bounded by {@link CONNECT_TIMEOUT_MS}, so a host that never
-   * answers fails like one that refuses rather than hanging every caller), wrap the
-   * writable half so a failed write is recorded rather than an unhandled rejection
-   * (see {@link trapWriteErrors}), and confirm the connection actually speaks Redis
-   * before handing it back — `AUTH` and `PING` together are bounded by the same
-   * {@link CONNECT_TIMEOUT_MS}, because a server that accepts the TCP connection and
-   * then never answers (a frozen Redis, a proxy whose backend is down) would
-   * otherwise hang here forever even though `Deno.connect` itself already
-   * succeeded. On any failure the socket this function opened is closed before it
-   * throws — the ported original never closed here, so a `PING` that threw (an
-   * error reply such as `NOAUTH`, or a connection that died before it answered) left
-   * a socket open with nothing left holding a reference to it.
+   * Shared by {@link connect} and {@link #doReconnect}. The connect, and then `AUTH` and `PING`
+   * together, are each bounded by {@link CONNECT_TIMEOUT_MS}, so a host that never answers, or a
+   * server that accepts the connection and then stays silent, fails instead of hanging every
+   * caller. The writable half is wrapped so a failed write is recorded rather than an unhandled
+   * rejection (see {@link trapWriteErrors}). On any failure the socket opened here is closed
+   * before the error is thrown.
    */
   static async #openConnection(
     hostname: string,

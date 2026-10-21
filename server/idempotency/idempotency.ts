@@ -17,9 +17,15 @@ export const MAX_IDEMPOTENCY_COMMAND_NAME_LENGTH = 100
 /** The longest key the stores accept; the Postgres column is `VARCHAR(128)`. */
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 
+/**
+ * A user id as the stores key on it: a number, or a string such as a version 7 UUID. The Postgres
+ * table keys on an `integer` until `IDEMPOTENCY_POSTGRES_USER_ID_TEXT` widens it.
+ */
+export type IdempotencyUserId = number | string
+
 /** The user, key and input a command was sent with. */
-export interface IdempotencyClaim {
-  userId: number
+export interface IdempotencyClaim<UserId extends IdempotencyUserId = number> {
+  userId: UserId
   key: string
   /** The command's class name; a key belongs to one kind of command. */
   commandName: string
@@ -42,20 +48,23 @@ export type BeginOutcome =
   /** The key was used for a different command or different input. */
   | { status: "reused" }
 
-/** Keeps the outcome of every command that carried an idempotency key. */
-export interface IdempotencyStore {
+/**
+ * Keeps the outcome of every command that carried an idempotency key. `UserId` is the user id type
+ * the store keys on; the stores in this package take both.
+ */
+export interface IdempotencyStore<UserId extends IdempotencyUserId = number> {
   /** Claims the key for the caller, or says what the earlier claim left. */
-  begin(claim: IdempotencyClaim): Promise<BeginOutcome>
+  begin(claim: IdempotencyClaim<UserId>): Promise<BeginOutcome>
   /**
    * Stores the result of a claimed run, so the next `begin` answers `replay`. Does nothing when
    * `token` is not the key's current claim token.
    */
-  complete(userId: number, key: string, token: string, result: unknown): Promise<void>
+  complete(userId: UserId, key: string, token: string, result: unknown): Promise<void>
   /**
    * Gives up an unfinished claim, so a retry may run the command. Does nothing when `token` is not
    * the key's current claim token.
    */
-  release(userId: number, key: string, token: string): Promise<void>
+  release(userId: UserId, key: string, token: string): Promise<void>
   /** Removes keys older than the retention. Returns how many were removed. */
   sweep(): Promise<number>
 }
@@ -159,7 +168,8 @@ function stableStringify(value: unknown): string | undefined {
 
 /** What {@link createIdempotencyMiddleware} needs. */
 export interface IdempotencyOptions {
-  store: IdempotencyStore
+  /** Gets the actor's `userId` as it is: a number, or a non-empty string such as a UUID. */
+  store: IdempotencyStore<IdempotencyUserId>
   /** How long a retry waits for a run that is still in flight before it is refused. */
   waitMs?: number
   /** How often a waiting retry looks again. */
@@ -216,7 +226,7 @@ export function createIdempotencyMiddleware(options: IdempotencyOptions): CqrsMi
       throw new IdempotencyError("INVALID_KEY", "The idempotency key must be 1 to 128 characters")
     }
     const userId = data?.actor?.userId
-    if (typeof userId !== "number") {
+    if (typeof userId !== "number" && (typeof userId !== "string" || userId === "")) {
       throw new IdempotencyError("INVALID_KEY", "An idempotency key needs a signed-in user")
     }
     const commandName = message.constructor.name
@@ -226,7 +236,7 @@ export function createIdempotencyMiddleware(options: IdempotencyOptions): CqrsMi
         `The command name is longer than ${MAX_IDEMPOTENCY_COMMAND_NAME_LENGTH} characters`,
       )
     }
-    const claim: IdempotencyClaim = {
+    const claim: IdempotencyClaim<IdempotencyUserId> = {
       userId,
       key,
       commandName,

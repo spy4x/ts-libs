@@ -15,6 +15,7 @@ import type { SecretCipher } from "./crypto.ts"
 import {
   createUserSecretStore,
   MAX_API_KEY_LENGTH,
+  MAX_MODEL_LENGTH,
   MAX_PROVIDER_LENGTH,
   type StoredUserSecret,
   UserSecretError,
@@ -577,6 +578,56 @@ describe("save validation", () => {
     )
   })
 
+  it("rejects a model that is not a string as InvalidModel", async () => {
+    const { store, port } = createHarness()
+
+    await rejectionWith(
+      () =>
+        store.save(USER_ID, {
+          provider: PROVIDER,
+          apiKey: FAKE_API_KEY,
+          model: 42 as unknown as string,
+        }),
+      UserSecretErrorCode.InvalidModel,
+    )
+    assertEquals(port.rows.length, 0)
+  })
+
+  it("rejects a model longer than MAX_MODEL_LENGTH", async () => {
+    const { store, port } = createHarness()
+
+    await store.save(USER_ID, {
+      provider: PROVIDER,
+      apiKey: FAKE_API_KEY,
+      model: "m".repeat(MAX_MODEL_LENGTH),
+    })
+    await rejectionWith(
+      () =>
+        store.save(USER_ID, {
+          provider: OTHER_PROVIDER,
+          apiKey: FAKE_API_KEY,
+          model: "m".repeat(MAX_MODEL_LENGTH + 1),
+        }),
+      UserSecretErrorCode.InvalidModel,
+    )
+    assertEquals(port.rows.length, 1)
+  })
+
+  it("rejects a model carrying a control character", async () => {
+    const { store, port } = createHarness()
+
+    await rejectionWith(
+      () =>
+        store.save(USER_ID, {
+          provider: PROVIDER,
+          apiKey: FAKE_API_KEY,
+          model: "gpt\r\nX-Injected: 1",
+        }),
+      UserSecretErrorCode.InvalidModel,
+    )
+    assertEquals(port.rows.length, 0)
+  })
+
   it("rejects a non-http(s) baseUrl", async () => {
     const { store } = createHarness()
 
@@ -633,14 +684,14 @@ describe("save validation", () => {
 // ── Save: port and cipher failures carry no secret ───────────────────────────────────────────
 
 describe("save failures", () => {
-  it("reports PortFailure without the plaintext when the cipher cannot encrypt", async () => {
+  it("reports EncryptionFailed without the plaintext when the cipher cannot encrypt", async () => {
     const failure = new Error(`cipher exploded on ${FAKE_API_KEY}`)
     failure.name = "CryptoError"
     const { store } = createHarness(new FailingCipher(failure))
 
     const error = await rejectionWith(
       () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY }),
-      UserSecretErrorCode.PortFailure,
+      UserSecretErrorCode.EncryptionFailed,
     )
 
     assertNoKeyMaterial(error.message)
@@ -655,7 +706,7 @@ describe("save failures", () => {
 
     const error = await rejectionWith(
       () => store.save(USER_ID, { provider: PROVIDER, apiKey: FAKE_API_KEY }),
-      UserSecretErrorCode.PortFailure,
+      UserSecretErrorCode.EncryptionFailed,
     )
 
     assertEquals(error.rejectionName, "CryptoError")

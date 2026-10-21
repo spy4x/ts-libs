@@ -5,6 +5,7 @@ import {
   IDEMPOTENCY_RETENTION_DAYS,
   type IdempotencyClaim,
   type IdempotencyStore,
+  type IdempotencyUserId,
 } from "./idempotency.ts"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
@@ -20,7 +21,7 @@ export interface MemoryIdempotencyStoreOptions {
 
 interface Row {
   token: string
-  claim: IdempotencyClaim
+  claim: IdempotencyClaim<IdempotencyUserId>
   done: boolean
   result: unknown
   createdAt: number
@@ -32,7 +33,7 @@ interface Row {
  * follows the same rules as `PostgresIdempotencyStore` (the shared contract suite holds both to
  * them), but forgets everything when the process ends.
  */
-export class MemoryIdempotencyStore implements IdempotencyStore {
+export class MemoryIdempotencyStore implements IdempotencyStore<IdempotencyUserId> {
   private readonly rows = new Map<string, Row>()
   private readonly leaseMs: number
   private readonly retentionMs: number
@@ -48,7 +49,7 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     this.now = options.now ?? Date.now
   }
 
-  begin(claim: IdempotencyClaim): Promise<BeginOutcome> {
+  begin(claim: IdempotencyClaim<IdempotencyUserId>): Promise<BeginOutcome> {
     const id = rowId(claim.userId, claim.key)
     const now = this.now()
     let row = this.rows.get(id)
@@ -75,7 +76,7 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     return Promise.resolve({ status: "claimed", token: row.token })
   }
 
-  complete(userId: number, key: string, token: string, result: unknown): Promise<void> {
+  complete(userId: IdempotencyUserId, key: string, token: string, result: unknown): Promise<void> {
     const row = this.rows.get(rowId(userId, key))
     if (row && !row.done && row.token === token) {
       row.done = true
@@ -85,7 +86,7 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     return Promise.resolve()
   }
 
-  release(userId: number, key: string, token: string): Promise<void> {
+  release(userId: IdempotencyUserId, key: string, token: string): Promise<void> {
     const id = rowId(userId, key)
     const row = this.rows.get(id)
     if (row?.done === false && row.token === token) this.rows.delete(id)
@@ -105,8 +106,10 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
   }
 }
 
-function rowId(userId: number, key: string): string {
-  return `${userId}:${key}`
+/** One row per (user, key). JSON keeps the user `1` apart from `"1"`, and a `:` in either part
+ * from the boundary between them. */
+function rowId(userId: IdempotencyUserId, key: string): string {
+  return JSON.stringify([userId, key])
 }
 
 /** What a JSON column would hold: the value as JSON, `undefined` as `null`. */

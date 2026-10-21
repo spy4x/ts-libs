@@ -237,7 +237,12 @@ export function unsubscribeTokenVersion(token: string): number | undefined {
   return typeof version === "number" ? version : undefined
 }
 
-/** Trim, then lowercase: one inbox, one form. */
+/**
+ * Trim, then lowercase: one inbox, one form. For every address `parseBareAddress` accepts this is
+ * the value it returns. It is not an address check, and must not become one: keys, marks and token
+ * contexts of rows already stored are derived from this form, so it has to answer for any string a
+ * store holds rather than fail on it.
+ */
 function normalize(email: string): string {
   return email.trim().toLowerCase()
 }
