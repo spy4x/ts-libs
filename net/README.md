@@ -217,6 +217,24 @@ redirect refused by the policy, and a `Location` the URL parser cannot read,
 both raise `UrlValidationError` with code `invalid_redirect` or `non_public_ip`
 — never a bare `TypeError` — after the redirect body has been cancelled.
 
+A request body goes in `body`, in any shape the platform `fetch` takes, and is
+refused with `GET` or `HEAD`. A redirect that turns the request into a `GET`
+drops the body and its `Content-Type`, `Content-Encoding`, `Content-Language`
+and `Content-Location` headers. A 307 or 308 sends the body again only to the
+same origin, and only when it can be read twice: a string, `Blob`,
+`ArrayBuffer`, typed array or `DataView`, `FormData` or `URLSearchParams`. A
+307 or 308 to another origin, or with any other body (a `ReadableStream`, an
+async or sync iterable, which are read once), is refused with code
+`invalid_redirect`. A custom `Fetcher` must forward `init.body`.
+
+```ts
+const { response } = await safeFetch("https://push.example.com/send", {
+  method: SafeFetchMethod.Post,
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ title: "Hello" }),
+})
+```
+
 Two things about that rule are worth knowing before you rely on it:
 
 - **`headers` is parsed by the platform `Headers` before anything reads it**, so
@@ -259,11 +277,16 @@ failure cancels the body, including a refusal on the declared `Content-Length`
 before a byte is read, so a refused response does not keep its connection open.
 A reader, once taken, is unlocked on every exit path.
 
+A server that answers `PayloadTooLargeError` with a 413 sets `connection: close`
+on that response itself. Cancelling the request body is what makes `Deno.serve`
+(checked on 2.9.7) leave that header out: without it, the client is not told
+that the rest of its upload will not be read on that connection.
+
 `parseBoundedFormData(request, options)` reads a `multipart/form-data` or
 url-encoded request under the same two limits, then parses it, so an over-cap
 upload is rejected at `maxBytes` rather than buffered in full the way
 `request.formData()` would. It needs a `content-type` header (the multipart
-boundary lives there) and throws a `TypeError` without one.
+boundary lives there) and, without one, cancels the body and throws a `TypeError`.
 `@spy4x/server/http/bounded-body` re-exports this same function.
 
 ## IP addresses and ranges
