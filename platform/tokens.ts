@@ -17,17 +17,25 @@
 //    once the stdlib package is pinned.
 
 import { encodeBase64Url } from "@std/encoding/base64url"
+import { encodeHex } from "@std/encoding/hex"
 import { timingSafeEqual } from "@std/crypto/timing-safe-equal"
 import { assertUsableSecret } from "./token-secret.ts"
 
+import { monotonicUlid as stdMonotonicUlid } from "@std/ulid"
+
 /**
- * Monotonic ULID generator, re-exported from `@std/ulid`.
+ * Monotonic ULID generator, the one from `@std/ulid`.
  *
  * Shares its monotonic state with every other caller in the process — that is what makes ids
  * process-wide monotonic — and accepts an optional seed time for a caller that wants a
  * deterministic timestamp component.
+ *
+ * @deprecated Every new id is a version 7 UUID: use `uuidV7` from `@spy4x/platform/universal/uuid`.
+ * This export stays until 2.0.
  */
-export { monotonicUlid } from "@std/ulid"
+export function monotonicUlid(seedTime?: number): string {
+  return stdMonotonicUlid(seedTime)
+}
 
 /** Length of a ULID string: 26 Crockford base32 characters. */
 export const ULID_LENGTH = 26
@@ -166,10 +174,7 @@ export async function constantTimeEqualsText(a: string, b: string): Promise<bool
  * mismatch — normalise at the storage boundary, not here.
  */
 export async function sha256Hex(input: string): Promise<string> {
-  const digest = await sha256Bytes(new TextEncoder().encode(input))
-  let hex = ""
-  for (const byte of digest) hex += byte.toString(16).padStart(2, "0")
-  return hex
+  return encodeHex(await sha256Bytes(new TextEncoder().encode(input)))
 }
 
 /** The HKDF salt {@link deriveSecret} uses. Fixed, so a secret and a label always give one key. */
@@ -212,9 +217,7 @@ export async function deriveSecret(secret: string, label: string): Promise<strin
     key,
     256,
   )
-  let hex = ""
-  for (const byte of new Uint8Array(bits)) hex += byte.toString(16).padStart(2, "0")
-  return hex
+  return encodeHex(new Uint8Array(bits))
 }
 
 /**

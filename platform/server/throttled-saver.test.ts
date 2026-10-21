@@ -502,3 +502,39 @@ describe("ThrottledJsonSaver", () => {
     }
   })
 })
+
+describe("ThrottledJsonSaver defaults", () => {
+  it("logs a timer-driven failure to console.error when no onFlushError is given", async () => {
+    const fs = fakeFs()
+    const logged: unknown[][] = []
+    const original = console.error
+    console.error = (...args: unknown[]) => logged.push(args)
+    try {
+      const saver = new ThrottledJsonSaver({
+        fs,
+        path: "/s.json",
+        serialize: () => ({}),
+        clock: fakeClock(),
+        timers: fakeTimers(),
+        pid: 1,
+        flushBatchSize: 1,
+      })
+      fs.failWrites.add("/s.json.1.0.tmp")
+      saver.markDirty()
+      await drain()
+    } finally {
+      console.error = original
+    }
+    expect(logged.length).toBe(1)
+    expect(String(logged[0][1])).toContain("write refused")
+  })
+
+  it("names the temp file after this process's id when no pid is given", async () => {
+    const fs = fakeFs()
+    const saver = new ThrottledJsonSaver({ fs, path: "/s.json", serialize: () => ({}) })
+    saver.markDirty()
+    await saver.flush()
+    const renamed = fs.calls.find((call) => call.op === "rename")
+    expect(renamed?.path).toBe(`/s.json.${Deno.pid}.0.tmp`)
+  })
+})

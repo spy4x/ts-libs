@@ -7,7 +7,7 @@
  * The limits match the `CHECK` constraints in `AUTH_POSTGRES_SCHEMA`.
  */
 
-import { type } from "arktype"
+import { type ArkErrors, type } from "arktype"
 import { validate } from "@spy4x/validation"
 import { type NewAuthKey, normalizeEmail } from "./model.ts"
 import type { AttemptChallengeInput, IssueChallengeInput } from "./store.ts"
@@ -62,6 +62,8 @@ const issueChallengeInput = type({
   now: validDate,
 })
 
+const deleteChallengesInput = type({ purpose: method, subjectPrefix: subject })
+
 const attemptChallengeInput = type({
   purpose: method,
   subject,
@@ -93,7 +95,7 @@ export function isStoreId(value: unknown): value is number {
  */
 export function checkNewKey(value: NewAuthKey): NewAuthKey {
   const { error, data } = validate(newAuthKey, value)
-  if (error) throw new TypeError(`invalid new auth key: ${error.description}`)
+  if (error) throw new TypeError(`invalid new auth key: ${rulesBroken(error.details)}`)
   return {
     method: data.method,
     subject: data.subject,
@@ -106,27 +108,70 @@ export function checkNewKey(value: NewAuthKey): NewAuthKey {
 /** @throws {TypeError} When `secret` is not a string of 1 to {@link MAX_SECRET_LENGTH} characters. */
 export function checkSecret(value: string): string {
   const { error, data } = validate(secret, value)
-  if (error) throw new TypeError(`invalid key secret: ${error.description}`)
+  if (error) throw new TypeError(`invalid key secret: ${rulesBroken(error.details)}`)
   return data
 }
 
 /** @throws {TypeError} When the value is not a valid `Date`; `name` goes into the message. */
 export function checkDate(value: Date, name: string): Date {
   const { error, data } = validate(validDate, value)
-  if (error) throw new TypeError(`invalid ${name}: ${error.description}`)
+  if (error) throw new TypeError(`invalid ${name}: ${rulesBroken(error.details)}`)
   return data
 }
 
 /** @throws {TypeError} When a field is missing or out of range. */
 export function checkIssueChallenge(value: IssueChallengeInput): IssueChallengeInput {
   const { error, data } = validate(issueChallengeInput, value)
-  if (error) throw new TypeError(`invalid challenge: ${error.description}`)
+  if (error) throw new TypeError(`invalid challenge: ${rulesBroken(error.details)}`)
   return data
+}
+
+/** @throws {TypeError} When `purpose` or `subjectPrefix` is not text either store can hold. */
+export function checkDeleteChallenges(purpose: string, subjectPrefix: string): void {
+  const { error } = validate(deleteChallengesInput, { purpose, subjectPrefix })
+  if (error) throw new TypeError(`invalid challenge deletion: ${rulesBroken(error.details)}`)
 }
 
 /** @throws {TypeError} When a field is missing or out of range. */
 export function checkAttemptChallenge(value: AttemptChallengeInput): AttemptChallengeInput {
   const { error, data } = validate(attemptChallengeInput, value)
-  if (error) throw new TypeError(`invalid challenge guess: ${error.description}`)
+  if (error) throw new TypeError(`invalid challenge guess: ${rulesBroken(error.details)}`)
   return data
+}
+
+/**
+ * `value` when it is an integer from 1 to `max`; otherwise throws `ErrorType` naming the option.
+ * The one range check for the numeric options of every sign-in factory in this folder.
+ *
+ * `ErrorType` is there only because `createOAuthSignIn` documents a `TypeError` for a bad number
+ * option while the email-code and password factories document a `RangeError`; both are public.
+ *
+ * @throws {RangeError} By default, when `value` is not a safe integer from 1 to `max`.
+ */
+export function positiveInteger(
+  value: unknown,
+  name: string,
+  max: number = Number.MAX_SAFE_INTEGER,
+  ErrorType: new (message: string) => Error = RangeError,
+): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > max) {
+    const rule = max === Number.MAX_SAFE_INTEGER
+      ? "a positive integer"
+      : `an integer from 1 to ${max}`
+    throw new ErrorType(`${name} must be ${rule}`)
+  }
+  return value as number
+}
+
+/**
+ * Each broken rule as "<field> must be <rule>", without the rejected value.
+ *
+ * arktype's own summary appends `(was …)`, and the value it quotes can be a key secret or a
+ * challenge hash: an error message reaches logs, so it names the field and the rule only, as
+ * `server/user-secrets.ts` does.
+ */
+function rulesBroken(errors: ArkErrors): string {
+  return errors.map((error) => `${error.propString || "value"} must be ${error.expected}`).join(
+    "; ",
+  )
 }

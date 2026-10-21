@@ -144,6 +144,13 @@ describe("responseError", () => {
     expect(error.message).toBe("quota exceeded")
   })
 
+  it("reads the server's message from an { error: { message } } body, as apiFetch does", async () => {
+    const error = await responseError(
+      Response.json({ error: { code: "x", message: "nested" } }, { status: 400 }),
+    )
+    expect(error.message).toBe("nested")
+  })
+
   it("falls back to the status text when the body is not JSON", async () => {
     const error = await responseError(
       new Response("<html>oops</html>", { status: 502, statusText: "Bad Gateway" }),
