@@ -65,6 +65,26 @@ describe("matchEntry", () => {
     expect(matchEntry("тост", { label: "Toast" })?.how).toBe("typo")
   })
 
+  it("matches no Latin entry for a letter with no Latin spelling, typed or from the layout", () => {
+    for (const query of ["m", "mmmm", "ь", "]"]) {
+      for (const label of ["Toast", "Dialog", "Settings"]) {
+        expect(matchEntry(query, { label })).toBeNull()
+      }
+    }
+  })
+
+  it("does not transliterate a query of one or two letters read in the other layout", () => {
+    expect(matchEntry("x", { label: "Checkbox" })).toBeNull()
+    expect(matchEntry("q", { label: "Invoices" })).toBeNull()
+    expect(matchEntry("xt", { label: "Checkbox" })).toBeNull()
+    expect(matchEntry("ytw", { label: "Nets" })?.how).toBe("layout")
+  })
+
+  it("reads punctuation typed in the English layout as a Russian word", () => {
+    expect(matchEntry("[];'", { label: "хъжэ" })?.how).toBe("layout")
+    expect(matchEntry("[];'", { label: "Toast" })).toBeNull()
+  })
+
   it("matches every entry on an empty query", () => {
     expect(matchEntry("  ", { label: "Toast" })).toEqual({ how: "prefix", score: 0 })
   })
@@ -127,6 +147,10 @@ describe("searchEntries", () => {
 
   it("returns at most limit matches", () => {
     expect(searchEntries("", entries, { limit: 2 })).toHaveLength(2)
+  })
+
+  it("refuses a negative limit", () => {
+    expect(() => searchEntries("toast", entries, { limit: -1 })).toThrow(RangeError)
   })
 
   it("returns nothing for an unrelated query", () => {

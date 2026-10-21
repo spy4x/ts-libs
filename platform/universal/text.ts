@@ -488,7 +488,7 @@ export interface SearchMatch<E extends SearchEntry> extends EntryMatch {
 
 /** Options for {@link searchEntries}. */
 export interface SearchEntriesOptions {
-  /** Return at most this many matches, the best first. Default: all of them. */
+  /** Return at most this many matches, the best first; zero or more. Default: all of them. */
   limit?: number
 }
 
@@ -548,9 +548,10 @@ function prepare(folded: string, maxWords = Infinity): Prepared {
 /** The same words in Latin letters, or `undefined` when there was nothing to transliterate. */
 function latinOf(prepared: Prepared): Prepared | undefined {
   if (!/[а-яґєі]/.test(prepared.compact)) return undefined
+  // `ь` and `ъ` have no Latin spelling, so a word of only those letters disappears.
   const words = prepared.words.map((word) =>
     word.replace(CYRILLIC_LETTER, (letter) => LATIN_SPELLINGS[CYRILLIC_LETTERS.indexOf(letter)])
-  )
+  ).filter(Boolean)
   return { words, compact: words.join("") }
 }
 
@@ -580,6 +581,7 @@ function nearPrefix(query: string, word: string): boolean {
 
 /** The strongest shape in which `query` matches `name`, or `undefined`. */
 function shapeOf(query: Prepared, name: Prepared): Shape | undefined {
+  if (query.words.length === 0) return undefined
   if (query.compact === name.compact) return "exact"
   if (name.compact.startsWith(query.compact)) return "prefix"
   let shape: Shape = "words"
@@ -605,17 +607,35 @@ function nearSome(words: string[], query: string): boolean {
 interface Spelling {
   plain: Prepared
   latin: Prepared | undefined
+  /** Whether this is the query read in the other keyboard layout. */
+  layout?: boolean
 }
 
 function spell(prepared: Prepared): Spelling {
   return { plain: prepared, latin: latinOf(prepared) }
 }
 
-/** The query as typed, then as meant in the other keyboard layout when that differs. */
+/** Letters a query in the other layout needs before it is transliterated as well. */
+const MIN_LAYOUT_TRANSLIT_LETTERS = 3
+
+/**
+ * The query as typed, then as meant in the other keyboard layout when that differs, leaving out a
+ * spelling with no words. An empty list means the query is empty. Punctuation typed in the wrong
+ * layout, such as `"[];'"` for `"хъжэ"`, is read as that layout's word.
+ */
 function querySpellings(query: string): Spelling[] {
   const typed = prepare(fold(query), MAX_SEARCH_WORDS)
   const swapped = prepare(fold(swapLayout(query)), MAX_SEARCH_WORDS)
-  return swapped.compact === typed.compact ? [spell(typed)] : [spell(typed), spell(swapped)]
+  const spellings = typed.words.length > 0 ? [spell(typed)] : []
+  if (swapped.words.length > 0 && swapped.compact !== typed.compact) {
+    // A short query read in the other layout and then transliterated matches too much: "q" is
+    // "й", which spells "i" and would find every word starting with it.
+    const latin = swapped.compact.length >= MIN_LAYOUT_TRANSLIT_LETTERS
+      ? latinOf(swapped)
+      : undefined
+    spellings.push({ plain: swapped, latin, layout: true })
+  }
+  return spellings
 }
 
 /** Each entry's names, prepared once and reused while its label and aliases stay the same. */
@@ -657,7 +677,7 @@ function bestMatch(queries: Spelling[], entry: SearchEntry): EntryMatch | null {
         if (!shape) continue
         let how: SearchMatchKind = shape
         if (n > 0) how = weakest(how, "alias")
-        if (q > 0) how = weakest(how, "layout")
+        if (query.layout) how = weakest(how, "layout")
         if (t > 0) how = weakest(how, "translit")
         const score = KIND_SCORE[how] + (how === shape ? 0 : SHAPE_BONUS[shape])
         if (!best || score > best.score) best = { how, score }
@@ -683,7 +703,7 @@ function bestMatch(queries: Spelling[], entry: SearchEntry): EntryMatch | null {
  */
 export function matchEntry(query: string, entry: SearchEntry): EntryMatch | null {
   const queries = querySpellings(query)
-  if (queries[0].plain.words.length === 0) return { how: "prefix", score: 0 }
+  if (queries.length === 0) return { how: "prefix", score: 0 }
   return bestMatch(queries, entry)
 }
 
@@ -695,6 +715,8 @@ export function matchEntry(query: string, entry: SearchEntry): EntryMatch | null
  * entry in its order. Only the first 16 query words count. Each entry's label and aliases are
  * prepared once and reused while they stay the same, so a list of a few hundred entries can be
  * ranked on every keystroke.
+ *
+ * @throws {RangeError} When `limit` is negative or not a number.
  *
  * @example
  * ```ts
@@ -708,9 +730,13 @@ export function searchEntries<E extends SearchEntry>(
   entries: readonly E[],
   options?: SearchEntriesOptions,
 ): SearchMatch<E>[] {
+  const limit = options?.limit
+  if (limit !== undefined && !(limit >= 0)) {
+    throw new RangeError(`limit must be zero or more, got ${limit}`)
+  }
   const queries = querySpellings(query)
   const matches: SearchMatch<E>[] = []
-  if (queries[0].plain.words.length === 0) {
+  if (queries.length === 0) {
     for (const entry of entries) matches.push({ entry, how: "prefix", score: 0 })
   } else {
     for (const entry of entries) {
@@ -719,5 +745,5 @@ export function searchEntries<E extends SearchEntry>(
     }
     matches.sort((a, b) => b.score - a.score)
   }
-  return options?.limit === undefined ? matches : matches.slice(0, options.limit)
+  return limit === undefined ? matches : matches.slice(0, limit)
 }
