@@ -38,6 +38,7 @@ import {
   writeText,
 } from "./ical.ts"
 import { icsEscape } from "./ics-core.ts"
+import { isIsoDuration, isRfcDuration, readDuration } from "./ical-duration.ts"
 import { formatInstantLong } from "./tz.ts"
 
 /** The STATUS of a task. */
@@ -122,7 +123,6 @@ export interface DescribeAlarmTriggerOptions {
   timeZone?: string
 }
 
-const TRIGGER_DURATION = /^([+-]?)P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i
 const TRIGGER_UNITS = ["week", "day", "hour", "minute", "second"]
 
 /**
@@ -157,12 +157,10 @@ export function describeAlarmTrigger(
       return undefined
     }
   }
-  const match = TRIGGER_DURATION.exec(trigger.duration.trim())
-  if (!match || match.slice(2).every((part) => part === undefined)) return undefined
-  // A `T` with nothing after it (`P1DT`) is not in the grammar.
-  if (/T$/i.test(trigger.duration.trim())) return undefined
+  const duration = readDuration(trigger.duration)
+  if (!duration) return undefined
   const parts = TRIGGER_UNITS.flatMap((unit, index) => {
-    const count = Number(match[index + 2] ?? 0)
+    const count = duration.units[index] ?? 0
     return count === 0 ? [] : [`${count} ${unit}${count === 1 ? "" : "s"}`]
   })
   const anchor = trigger.related === AlarmRelated.Start
@@ -171,7 +169,7 @@ export function describeAlarmTrigger(
     ? "end"
     : "due"
   if (parts.length === 0) return `at ${anchor}`
-  return `${parts.join(" ")} ${match[1] === "-" ? "before" : "after"} ${anchor}`
+  return `${parts.join(" ")} ${duration.negative ? "before" : "after"} ${anchor}`
 }
 
 /** A link to another task (RELATED-TO). */
@@ -667,10 +665,6 @@ function writeRelatedTo(
   return undefined
 }
 
-const DURATION_TIME = String.raw`T(?:\d+H(?:\d+M(?:\d+S)?)?|\d+M(?:\d+S)?|\d+S)`
-/** RFC 5545 `dur-value`: `P` then weeks, or days with an optional time, or a time. */
-const DURATION = new RegExp(`^[+-]?P(?:\\d+W|\\d+D(?:${DURATION_TIME})?|${DURATION_TIME})$`)
-
 interface WantedAlarm {
   action: "DISPLAY" | "AUDIO"
   trigger: AlarmTrigger
@@ -697,7 +691,7 @@ function wantedAlarms(value: unknown): IcalResult<WantedAlarm[]> {
     const trigger = entry.trigger
     let parsed: AlarmTrigger
     if (trigger.kind === AlarmTriggerKind.Relative) {
-      if (typeof trigger.duration !== "string" || !DURATION.test(trigger.duration)) {
+      if (typeof trigger.duration !== "string" || !isRfcDuration(trigger.duration)) {
         return fail(IcalErrorCode.InvalidValue, "alarm trigger must be an RFC 5545 duration")
       }
       if (
@@ -1231,7 +1225,7 @@ function applyEvent(
   }
   if (
     patch.duration != null &&
-    !/^[+-]?P(?:\d+W|(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+S)?)?)$/.test(patch.duration)
+    !isIsoDuration(patch.duration)
   ) {
     return fail(IcalErrorCode.InvalidValue, "DURATION must be an ISO 8601 duration")
   }
