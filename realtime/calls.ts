@@ -26,8 +26,9 @@
  * @module
  */
 
-import { backoffDelay, sleep } from "@spy4x/platform/universal/async"
+import { isRecord } from "@spy4x/platform/universal/is-record"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
+import { retryDelay } from "./backoff.ts"
 import {
   type CallOptions,
   type CommandOptions,
@@ -77,14 +78,27 @@ export interface AvailableCallPort extends CallPort {
   isAvailable(): boolean
 }
 
-/** Rejects with the signal's reason when it aborts first; otherwise passes `promise` through. */
-function raceAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+/**
+ * Rejects with the signal's reason when it aborts first; otherwise passes `promise` through.
+ * `onAbort` runs on that abort, so the caller can stop the work behind `promise` (a timer, say).
+ */
+function raceAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  onAbort?: () => void,
+): Promise<T> {
   if (signal === undefined) return promise
-  if (signal.aborted) return Promise.reject(signal.reason)
+  if (signal.aborted) {
+    onAbort?.()
+    return Promise.reject(signal.reason)
+  }
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason)
-    signal.addEventListener("abort", onAbort, { once: true })
-    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort))
+    const abort = () => {
+      onAbort?.()
+      reject(signal.reason)
+    }
+    signal.addEventListener("abort", abort, { once: true })
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
   })
 }
 
@@ -176,10 +190,6 @@ function codeForStatus(status: number): RealtimeErrorCode | undefined {
       return "conflict"
   }
   return status >= 400 && !isForeignAnswer(status) ? "bad_request" : undefined
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
 }
 
 /** Reads the nested `{ error: { code, message, details? } }` body. `null` when it is not one. */
@@ -453,7 +463,7 @@ export interface RetryOptions {
   jitterRatio?: number
   /** Uniform source in `[0, 1)` for the jitter. Injected so tests are deterministic. */
   random?: () => number
-  /** Waits `ms`. Defaults to the platform's `sleep`; a test passes a fake. */
+  /** Waits `ms`. Defaults to a timer that an abort of `signal` clears; a test passes a fake. */
   sleep?: (ms: number) => Promise<void>
   /** Makes the key a command is sent with; called once per command, never per try. */
   newKey?: () => string
@@ -463,19 +473,9 @@ export interface RetryOptions {
 
 /** Waits `ms`; an abort of `signal` ends the wait at once and clears its timer. */
 function cancellableSleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
-  if (signal === undefined) return sleep(ms)
-  if (signal.aborted) return Promise.reject(signal.reason)
-  return new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer)
-      reject(signal.reason)
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort)
-      resolve()
-    }, ms)
-    signal.addEventListener("abort", onAbort, { once: true })
-  })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const elapsed = new Promise<void>((resolve) => timer = setTimeout(resolve, ms))
+  return raceAbort(elapsed, signal, () => clearTimeout(timer))
 }
 
 const DEFAULT_ATTEMPTS = 4
@@ -511,22 +511,21 @@ export function isUnknownOutcome(error: unknown): boolean {
 
 async function withRetry<T>(run: () => Promise<T>, options: RetryOptions): Promise<T> {
   const attempts = options.attempts ?? DEFAULT_ATTEMPTS
-  const wait = options.sleep ?? ((ms: number) => cancellableSleep(ms, options.signal))
+  const { signal, sleep } = options
+  const wait = (ms: number) =>
+    sleep === undefined ? cancellableSleep(ms, signal) : raceAbort(sleep(ms), signal)
   for (let attempt = 1;; attempt++) {
     try {
       return await run()
     } catch (error) {
-      if (attempt >= attempts || !isRetryable(error) || options.signal?.aborted) throw error
-      await raceAbort(
-        wait(backoffDelay({
-          rawMs: (options.delayMs ?? DEFAULT_DELAY_MS) * 2 ** (attempt - 1),
-          maxMs: options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS,
-          jitterRatio: options.jitterRatio ?? DEFAULT_JITTER_RATIO,
-          mode: "downward",
-          ...(options.random === undefined ? {} : { random: options.random }),
-        })),
-        options.signal,
-      )
+      if (attempt >= attempts || !isRetryable(error) || signal?.aborted) throw error
+      await wait(retryDelay({
+        attempt: attempt - 1,
+        baseMs: options.delayMs ?? DEFAULT_DELAY_MS,
+        maxMs: options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS,
+        jitterRatio: options.jitterRatio ?? DEFAULT_JITTER_RATIO,
+        random: options.random,
+      }))
     }
   }
 }
