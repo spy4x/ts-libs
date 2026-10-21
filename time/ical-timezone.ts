@@ -31,7 +31,7 @@ const WEEKDAYS = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"]
 const RULE_PARTS = new Set(["FREQ", "INTERVAL", "BYMONTH", "BYDAY", "BYMONTHDAY", "UNTIL", "WKST"])
 
 /** A wall clock as if it were UTC, in epoch milliseconds. Years below 100 stay what they say. */
-function wallMs(year: number, month: number, day: number, h = 0, m = 0, s = 0): number {
+export function wallMs(year: number, month: number, day: number, h = 0, m = 0, s = 0): number {
   const date = new Date(0)
   date.setUTCFullYear(year, month - 1, day)
   date.setUTCHours(h, m, s, 0)
@@ -66,8 +66,8 @@ function property(component: IcalComponent, name: string): IcalProperty | undefi
   return component.properties.find((item) => item.name.toUpperCase() === name)
 }
 
-/** The `VTIMEZONE` under `root` whose `TZID` is `tzid`. */
-function findTimezone(root: IcalComponent, tzid: string): IcalComponent | undefined {
+/** The `VTIMEZONE` under `root` (or `root` itself) whose `TZID` is `tzid`. */
+export function findTimezone(root: IcalComponent, tzid: string): IcalComponent | undefined {
   if (root.name.toUpperCase() === "VTIMEZONE" && property(root, "TZID")?.value === tzid) return root
   for (const child of root.components) {
     const found = findTimezone(child, tzid)

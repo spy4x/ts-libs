@@ -338,4 +338,39 @@ describe("dueReminders: a TZID the resource's own VTIMEZONE defines", () => {
     ])
     expect(moments(ics)).toEqual(["2026-10-12T00:00:00.000Z", "2026-10-13T00:00:00.000Z"])
   })
+
+  // Reminders at 09:00 and 11:00 Head Office Time (00:00 and 02:00 UTC), acknowledged at 10:00 in
+  // that zone (01:00 UTC): only the 11:00 one is left. Read in the given zone, Kiritimati at
+  // +14:00, the acknowledgement would fall before both and drop neither.
+  const KIRITIMATI: DueRemindersOptions = { zone: "Pacific/Kiritimati" }
+  const NINE = "TRIGGER;VALUE=DATE-TIME;TZID=Head Office Time:20261012T090000"
+  const ELEVEN = alarm("TRIGGER;VALUE=DATE-TIME;TZID=Head Office Time:20261012T110000")
+
+  it("reads the task's X-MOZ-LASTACK in that zone", () => {
+    const ics = headOffice([
+      "DUE:20261020T090000Z",
+      "X-MOZ-LASTACK;TZID=Head Office Time:20261012T100000",
+      ...alarm(NINE),
+      ...ELEVEN,
+    ])
+    expect(moments(ics, KIRITIMATI)).toEqual(["2026-10-12T02:00:00.000Z"])
+  })
+
+  it("reads an alarm's X-MOZ-LASTACK in that zone", () => {
+    const ics = headOffice([
+      "DUE:20261020T090000Z",
+      ...alarm(NINE, ["X-MOZ-LASTACK;TZID=Head Office Time:20261012T100000"]),
+      ...ELEVEN,
+    ])
+    expect(moments(ics, KIRITIMATI)).toEqual(["2026-10-12T02:00:00.000Z"])
+  })
+
+  it("reads an alarm's ACKNOWLEDGED in that zone", () => {
+    const ics = headOffice([
+      "DUE:20261020T090000Z",
+      ...alarm(NINE, ["ACKNOWLEDGED;TZID=Head Office Time:20261012T100000"]),
+      ...ELEVEN,
+    ])
+    expect(moments(ics, KIRITIMATI)).toEqual(["2026-10-12T02:00:00.000Z"])
+  })
 })

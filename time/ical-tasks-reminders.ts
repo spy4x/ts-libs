@@ -48,6 +48,7 @@ import {
   TodoStatus,
 } from "./ical-tasks.ts"
 import { dateInstant } from "./ical-tasks-model.ts"
+import { durationMs, readDuration } from "./ical-duration.ts"
 
 /** A half-open stretch of time: after `after`, up to and including `upTo`. */
 export interface ReminderWindow {
@@ -83,22 +84,7 @@ export interface DueReminder {
   key: string
 }
 
-const DURATION = /^([+-]?)P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i
-/** Milliseconds per captured unit of {@link DURATION}: week, day, hour, minute, second. */
-const UNIT_MS = [604_800_000, 86_400_000, 3_600_000, 60_000, 1_000]
 const TIME_OF_DAY = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
-
-/** An RFC 5545 duration in milliseconds, or `undefined` when it is not one. */
-function durationMs(text: string): number | undefined {
-  const value = text.trim()
-  const match = DURATION.exec(value)
-  // A duration needs at least one unit, and a `T` needs a time part after it.
-  if (!match || /T$/i.test(value) || match.slice(2).every((part) => part === undefined)) {
-    return undefined
-  }
-  const total = UNIT_MS.reduce((sum, unit, index) => sum + Number(match[index + 2] ?? 0) * unit, 0)
-  return match[1] === "-" ? -total : total
-}
 
 /** The instant of a UTC or zoned date-time property of `component`, such as `X-MOZ-LASTACK`. */
 function instantOf(
@@ -138,9 +124,9 @@ function triggerMoment(
     return resolveInstant(trigger.at, { zone, root })?.getTime()
   }
   const anchor = trigger.related === AlarmRelated.End ? todo.due : todo.start
-  const offset = durationMs(trigger.duration)
-  if (!anchor || offset === undefined) return undefined
-  return anchorInstant(anchor, zone, dateOnlyTime, root) + offset
+  const duration = readDuration(trigger.duration)
+  if (!anchor || !duration) return undefined
+  return anchorInstant(anchor, zone, dateOnlyTime, root) + durationMs(duration)
 }
 
 function normaliseTimeOfDay(value: string | undefined): string {
