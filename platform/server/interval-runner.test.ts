@@ -215,4 +215,78 @@ describe("startIntervalRunner", () => {
       ).toThrow(RangeError)
     }
   })
+
+  it("with tickTimeoutMs, reports a task that never settles and runs the next tick", async () => {
+    const timers = fakeTimers()
+    const reported: unknown[] = []
+    let runs = 0
+    startIntervalRunner({
+      task: () => {
+        runs++
+        return new Promise(() => {})
+      },
+      intervalMs: HOUR,
+      tickTimeoutMs: 60_000,
+      onError: (error) => reported.push(error),
+      timers,
+    })
+
+    timers.runAll()
+    await settle()
+    expect(runs).toBe(1)
+    expect(timers.scheduled).toEqual([HOUR, 60_000])
+    timers.runAll()
+    await settle()
+    expect((reported[0] as Error).message).toContain("did not settle within 60000 ms")
+    timers.runAll()
+    await settle()
+    expect(runs).toBe(2)
+  })
+
+  it("with tickTimeoutMs, clears the timeout of a tick that settles in time", async () => {
+    const timers = fakeTimers()
+    const reported: unknown[] = []
+    startIntervalRunner({
+      task: () => {},
+      intervalMs: HOUR,
+      tickTimeoutMs: 60_000,
+      onError: (error) => reported.push(error),
+      timers,
+    })
+
+    timers.runAll()
+    await settle()
+    // Only the next tick is pending; the finished tick's timeout is gone.
+    expect(timers.pending).toBe(1)
+    expect(reported).toEqual([])
+  })
+
+  it("stop clears the timeout of a running tick", async () => {
+    const timers = fakeTimers()
+    const stop = startIntervalRunner({
+      task: () => new Promise(() => {}),
+      intervalMs: HOUR,
+      tickTimeoutMs: 60_000,
+      onError: () => {},
+      timers,
+    })
+    timers.runAll()
+    await settle()
+    stop()
+    expect(timers.pending).toBe(0)
+  })
+
+  it("refuses a tickTimeoutMs that is not positive or does not fit a timer", () => {
+    for (const tickTimeoutMs of [0, -1, Number.NaN, Infinity, 2_147_483_648]) {
+      expect(() =>
+        startIntervalRunner({
+          task: () => {},
+          intervalMs: HOUR,
+          tickTimeoutMs,
+          onError: () => {},
+          timers: fakeTimers(),
+        })
+      ).toThrow(RangeError)
+    }
+  })
 })

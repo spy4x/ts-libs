@@ -61,10 +61,17 @@ function setup(
   app.onError((_error, c) => c.text("internal error", 500)) // keeps the expected failure quiet
   if (options.mountParseAuth !== false) app.use("*", auth.parseAuth)
   app.post("/sign-in/:userId/:secondFactor", async (c) => {
-    const session = await auth.startSession(c, {
-      userId: Number(c.req.param("userId")),
-      secondFactor: Number(c.req.param("secondFactor")) as SecondFactorStatus,
-    })
+    const session = await auth.startSession(
+      c,
+      {
+        userId: Number(c.req.param("userId")),
+        secondFactor: Number(c.req.param("secondFactor")) as SecondFactorStatus,
+      },
+      c.req.query("device") === undefined ? undefined : {
+        deviceName: c.req.query("device") as string,
+        ipHint: "203.0.113.x",
+      },
+    )
     return c.json({ id: session.id })
   })
   app.post("/sign-out", async (c) => {
@@ -336,6 +343,20 @@ describe("startSession and endSession", () => {
     expect(session).toContain(`Max-Age=${DURATION_MINUTES * 60}`)
     expect(session).toContain("HttpOnly")
     expect(session).toContain("Secure")
+  })
+
+  it("record the device a sign-in route passes, and none when it passes nothing", async () => {
+    const { app, details, createArguments } = setup()
+    const withDevice = await app.request(
+      `/sign-in/7/${SecondFactorStatus.NotRequired}?device=Firefox%20on%20Linux`,
+      { method: "POST" },
+    )
+    const { id } = await withDevice.json()
+    expect(details.get(id)?.deviceName).toBe("Firefox on Linux")
+    expect(details.get(id)?.ipHint).toBe("203.0.113.x")
+
+    await signIn(app, 7, SecondFactorStatus.NotRequired)
+    expect(createArguments.map((args) => args.length)).toEqual([2, 1])
   })
 
   it("sign out the session, clear the cookie, and make the old cookie worthless", async () => {

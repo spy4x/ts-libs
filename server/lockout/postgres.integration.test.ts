@@ -142,6 +142,35 @@ describe("Postgres lockout store on a table of its caller's", () => {
     }
   })
 
+  it("counts inside the caller's transaction and rolls back with it", async () => {
+    const db = await openDatabase()
+    try {
+      await db
+        .sql`CREATE TABLE lockouts (subject TEXT PRIMARY KEY, failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until TIMESTAMPTZ, last_failure_at TIMESTAMPTZ)`
+      const counted = await db.sql.begin(async (tx) => {
+        const lockout = createLockout({
+          store: createPostgresLockoutStore({ sql: tx, table: "lockouts" }),
+          clock: { now: () => NOW },
+        })
+        await lockout.begin("ann@example.com")
+        await lockout.fail("ann@example.com")
+        const [row] = await tx`SELECT failed_attempts FROM lockouts`.values()
+        return row[0]
+      })
+      expect(counted).toBe(1)
+
+      await expect(db.sql.begin(async (tx) => {
+        const store = createPostgresLockoutStore({ sql: tx, table: "lockouts" })
+        await createLockout({ store, clock: { now: () => NOW } }).begin("bob@example.com")
+        throw new Error("caller rolls back")
+      })).rejects.toThrow("caller rolls back")
+      const subjects = await db.sql`SELECT subject FROM lockouts ORDER BY subject`.values()
+      expect(subjects.map((row) => row[0])).toEqual(["ann@example.com"])
+    } finally {
+      await db.close()
+    }
+  })
+
   it("runs only the free checks and one more when far more guesses than connections race", async () => {
     const db = await openDatabase()
     try {

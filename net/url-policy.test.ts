@@ -689,6 +689,39 @@ describe("isPublicIpv4", () => {
     }
   })
 
+  it("refuses both ends of every non-public range and accepts the address next to each end", () => {
+    // [first, last, below, above] per range; `null` where the neighbour belongs to the range
+    // beside it or does not exist.
+    const ranges: [string, string, string | null, string | null][] = [
+      ["0.0.0.0", "0.255.255.255", null, "1.0.0.0"],
+      ["10.0.0.0", "10.255.255.255", "9.255.255.255", "11.0.0.0"],
+      ["100.64.0.0", "100.127.255.255", "100.63.255.255", "100.128.0.0"],
+      ["127.0.0.0", "127.255.255.255", "126.255.255.255", "128.0.0.0"],
+      ["169.254.0.0", "169.254.255.255", "169.253.255.255", "169.255.0.0"],
+      ["172.16.0.0", "172.31.255.255", "172.15.255.255", "172.32.0.0"],
+      ["192.0.0.0", "192.0.0.255", "191.255.255.255", "192.0.1.0"],
+      ["192.0.2.0", "192.0.2.255", "192.0.1.255", "192.0.3.0"],
+      ["192.88.99.0", "192.88.99.255", "192.88.98.255", "192.88.100.0"],
+      ["192.168.0.0", "192.168.255.255", "192.167.255.255", "192.169.0.0"],
+      ["198.18.0.0", "198.19.255.255", "198.17.255.255", "198.20.0.0"],
+      ["198.51.100.0", "198.51.100.255", "198.51.99.255", "198.51.101.0"],
+      ["203.0.113.0", "203.0.113.255", "203.0.112.255", "203.0.114.0"],
+      ["224.0.0.0", "239.255.255.255", "223.255.255.255", null],
+      ["240.0.0.0", "255.255.255.255", null, null],
+    ]
+    for (const [first, last, below, above] of ranges) {
+      assertEquals(isPublicIpv4(first), false, first)
+      assertEquals(isPublicIpv4(last), false, last)
+      if (below) assertEquals(isPublicIpv4(below), true, below)
+      if (above) assertEquals(isPublicIpv4(above), true, above)
+    }
+  })
+
+  it("classifies an octet with a leading zero by its value", () => {
+    assertEquals(isPublicIpv4("010.0.0.1"), false)
+    assertEquals(isPublicIpv4("001.2.3.4"), true)
+  })
+
   it("rejects malformed and non-canonical spellings", () => {
     for (
       const addr of [
@@ -827,6 +860,27 @@ describe("DENY_NET_ADDRESSES", () => {
     for (const entry of DENY_NET_ADDRESSES) {
       assertEquals(isPublicAddress(entry.split("/")[0]), false, entry)
     }
+  })
+
+  it("lists every non-public IPv4 range except 0.0.0.0/8, then the two IPv6 addresses", () => {
+    assertEquals(DENY_NET_ADDRESSES, [
+      "10.0.0.0/8",
+      "100.64.0.0/10",
+      "127.0.0.0/8",
+      "169.254.0.0/16",
+      "172.16.0.0/12",
+      "192.0.0.0/24",
+      "192.0.2.0/24",
+      "192.88.99.0/24",
+      "192.168.0.0/16",
+      "198.18.0.0/15",
+      "198.51.100.0/24",
+      "203.0.113.0/24",
+      "224.0.0.0/4",
+      "240.0.0.0/4",
+      "[::1]",
+      "[::]",
+    ])
   })
 
   it("covers the ranges a rebind would aim at", () => {

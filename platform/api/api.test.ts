@@ -472,6 +472,17 @@ describe("apiFetch — error body shapes", () => {
     expect(await errorFor({ error: null })).toEqual({ status: 502, message: "Request failed" })
   })
 
+  it("reads the message from a { detail } body, as responseError does", async () => {
+    expect(await errorFor({ detail: "gone" }, 410)).toEqual({ status: 410, message: "gone" })
+  })
+
+  it("reads the message from a bare JSON string body, as responseError does", async () => {
+    expect(await errorFor("quota exceeded", 429)).toEqual({
+      status: 429,
+      message: "quota exceeded",
+    })
+  })
+
   it("leaves code absent when the body has none", async () => {
     const error = await errorFor({ error: "not found" }, 404)
     expect("code" in error).toBe(false)

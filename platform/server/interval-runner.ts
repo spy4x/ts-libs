@@ -25,6 +25,13 @@ export interface IntervalRunnerOptions {
    * `intervalMs` would otherwise never run the task. Defaults to `false`.
    */
   runFirstTickNow?: boolean
+  /**
+   * Give up waiting on a tick after this many milliseconds: `onError` gets an error saying so, and
+   * the next tick is scheduled. Without it, a task that never settles stops the runner for good.
+   * The abandoned task is not cancelled, so if it settles later it may overlap a newer tick.
+   * Positive and at most 2 147 483 647. Defaults to no limit.
+   */
+  tickTimeoutMs?: number
 }
 
 /**
@@ -55,14 +62,43 @@ export interface IntervalRunnerOptions {
  *   days), the longest delay a timer takes.
  */
 export function startIntervalRunner(options: IntervalRunnerOptions): () => void {
-  const { task, intervalMs, onError } = options
+  const { task, intervalMs, onError, tickTimeoutMs } = options
   const timers = options.timers ?? systemTimerPort
   // A longer delay does not fit a timer: runtimes fire it after 1 ms instead.
-  if (!(intervalMs > 0 && intervalMs <= 2_147_483_647)) {
+  if (!fitsTimer(intervalMs)) {
     throw new RangeError("intervalMs must be from 1 to 2147483647 (about 24.8 days)")
+  }
+  if (tickTimeoutMs !== undefined && !fitsTimer(tickTimeoutMs)) {
+    throw new RangeError("tickTimeoutMs must be from 1 to 2147483647 (about 24.8 days)")
   }
   let stopped = false
   let handle: number | undefined
+  let timeoutHandle: number | undefined
+
+  /** The tick's task, rejected after `tickTimeoutMs` when it has not settled by then. */
+  const run = (): Promise<unknown> => {
+    // The executor runs synchronously, so the first tick still starts before this function returns,
+    // and a synchronous throw becomes a rejection.
+    const work = new Promise((resolve) => resolve(task()))
+    if (tickTimeoutMs === undefined) return work
+    return new Promise((resolve, reject) => {
+      timeoutHandle = timers.set(() => {
+        timeoutHandle = undefined
+        reject(new Error(`interval task did not settle within ${tickTimeoutMs} ms`))
+      }, tickTimeoutMs)
+      const settle = () => {
+        if (timeoutHandle !== undefined) timers.clear(timeoutHandle)
+        timeoutHandle = undefined
+      }
+      work.then((value) => {
+        settle()
+        resolve(value)
+      }, (error) => {
+        settle()
+        reject(error)
+      })
+    })
+  }
 
   const schedule = () => {
     handle = timers.set(tick, intervalMs)
@@ -70,7 +106,7 @@ export function startIntervalRunner(options: IntervalRunnerOptions): () => void 
   const tick = async () => {
     handle = undefined
     try {
-      await task()
+      await run()
     } catch (error) {
       try {
         onError(error)
@@ -87,5 +123,12 @@ export function startIntervalRunner(options: IntervalRunnerOptions): () => void 
     stopped = true
     if (handle !== undefined) timers.clear(handle)
     handle = undefined
+    if (timeoutHandle !== undefined) timers.clear(timeoutHandle)
+    timeoutHandle = undefined
   }
+}
+
+/** Whether `ms` is a delay a timer can hold: positive and at most 2 147 483 647. */
+function fitsTimer(ms: number): boolean {
+  return ms > 0 && ms <= 2_147_483_647
 }

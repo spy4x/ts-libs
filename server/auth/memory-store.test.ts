@@ -1,6 +1,7 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { MemoryAuthStore } from "./memory-store.ts"
+import { ChallengeOutcome } from "./model.ts"
 import { describeAuthStoreContract, emailKey, NOW } from "./store-contract.test.ts"
 
 describeAuthStoreContract("MemoryAuthStore", () =>
@@ -20,6 +21,26 @@ describe("MemoryAuthStore", () => {
     now += 1000
     await store.updateKeySecret(key.id, "hash-2")
     expect((await store.findKeyById(key.id))?.updatedAt.getTime()).toBe(NOW.getTime() + 1000)
+  })
+
+  it("drops the challenges that expired by the time a new one is issued", async () => {
+    const store = new MemoryAuthStore()
+    const minute = 60_000
+    const expiresAt = new Date(NOW.getTime() + minute)
+    const challenge = { purpose: "password-reset", secretHash: "hash" }
+    await store.issueChallenge({ ...challenge, subject: "old", expiresAt, now: NOW })
+    const later = new Date(expiresAt.getTime())
+    const laterExpiry = new Date(later.getTime() + minute)
+    await store.issueChallenge({ ...challenge, subject: "new", expiresAt: laterExpiry, now: later })
+
+    // Asked about with a time before its expiry, a kept row would still match: it is gone.
+    const guess = { ...challenge, maxAttempts: 5, now: NOW }
+    expect(await store.attemptChallenge({ ...guess, subject: "old" })).toBe(
+      ChallengeOutcome.Missing,
+    )
+    expect(await store.attemptChallenge({ ...guess, subject: "new" })).toBe(
+      ChallengeOutcome.Matched,
+    )
   })
 
   it("hands out copies, so a caller cannot edit a stored row", async () => {
