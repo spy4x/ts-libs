@@ -1,6 +1,7 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { Type, type } from "arktype"
+import { validate } from "./validate.ts"
 import {
   FORM_FIELD,
   isValid,
@@ -32,7 +33,7 @@ const wrong = (model: Record<string, unknown>): Person => model as unknown as Pe
 
 /**
  * An object with arktype's public rejection shape — an array of issues with a `summary` string,
- * a `throw` method, and the `issues` array {@link schemaIssues} iterates — but no `ArkErrors` in
+ * a `throw` method, and the `flatByPath` record {@link schemaIssues} reads — but no `ArkErrors` in
  * its prototype chain.
  *
  * Stands in for a rejection built by a second, differently-loaded copy of arktype: same shape,
@@ -46,6 +47,7 @@ function foreignRejection(issues: Array<{ path: PropertyKey[]; message: string }
       throw new Error("ArkErrors.throw")
     },
     issues,
+    flatByPath: Object.fromEntries(issues.map((issue) => [issue.path.join("."), [issue]])),
   })
 }
 
@@ -134,6 +136,19 @@ describe("schemaIssues", () => {
     expect(issues.name?.[ValidationType.SCHEMA]?.message).toContain("name must be non-empty")
   })
 
+  it("describes a failed intersection with the same issues validate reports", () => {
+    const codeSchema = type({ code: "string.alpha & /^a/" })
+    const value = { code: "1" }
+    const { error } = validate(codeSchema, value)
+    if (error === null) throw new Error("expected a validation error")
+
+    const reported = error.errors.code ?? []
+    expect(reported).toHaveLength(2)
+    expect(schemaIssues(codeSchema, value).code?.[ValidationType.SCHEMA]?.message).toBe(
+      reported.map((issue) => `${issue.path} ${issue.message}`).join(" "),
+    )
+  })
+
   it("reports every failing field of a multi-field model", () => {
     const issues = schemaIssues(personSchema, { name: "", age: "old", address: { city: "L" } })
 
@@ -186,7 +201,7 @@ describe("validateSchema", () => {
     expect(validated.name?.[ValidationType.SCHEMA]).toBeUndefined()
   })
 
-  it("clears only the field that now passes", () => {
+  it("drops a field that is left with no issue, rather than leaving an empty record", () => {
     const invalid = validateSchema(
       personSchema,
       wrong({ name: "", age: "old", address: { city: "L" } }),
@@ -201,10 +216,9 @@ describe("validateSchema", () => {
       invalid,
     )
 
-    // Unlike `setFieldIssue`, `validateSchema` keeps the field as an empty record rather than
-    // deleting it — ported as-is, and both reads (`isValid`, `sameValidation`) treat it as clean.
-    expect(partial.name).toEqual({})
-    expect(partial.name?.[ValidationType.SCHEMA]).toBeUndefined()
+    // Like `setFieldIssue`, a field whose only issue was cleared is gone, not `{}`.
+    expect(partial.name).toBeUndefined()
+    expect("name" in partial).toBe(false)
     expect(partial.age?.[ValidationType.SCHEMA]?.message).toContain("age must be a number")
     expect(isValid(partial)).toBe(false)
   })

@@ -164,6 +164,16 @@ describe("credentials", () => {
     }
   })
 
+  it("calls the given fetch without a receiver, as the browser's own fetch requires", async () => {
+    // The browser's `fetch` throws "Illegal invocation" when called with any `this` but the window.
+    const unbound = function (this: unknown) {
+      if (this !== undefined) return Promise.reject(new TypeError("Illegal invocation"))
+      return Promise.resolve(new Response(ICS, { headers: { ETag: `"1"` } }))
+    } as typeof fetch
+    const client = createCalDavClient({ serverUrl: SERVER, auth: AUTH, fetch: unbound })
+    assertEquals(output(await client.getObject(TASK)).etag, `"1"`)
+  })
+
   it("refuses an http: serverUrl before sending anything, naming the allowHttp option", () => {
     let sent = 0
     const counting: typeof fetch = () => {

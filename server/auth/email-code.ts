@@ -73,6 +73,7 @@ import {
   normalizeEmail,
 } from "./model.ts"
 import type { Clock } from "@spy4x/platform/universal/time"
+import { positiveInteger } from "./input.ts"
 import type { ProviderDeps, SignInResult } from "./provider.ts"
 import type { AuthStore } from "./store.ts"
 
@@ -228,10 +229,10 @@ export interface EmailCodeSignIn {
  */
 export function createEmailCodeSignIn(deps: EmailCodeSignInDeps): Required<EmailCodeSignIn> {
   const ttlMinutes = positiveInteger(
-    "codeTtlMinutes",
     deps.codeTtlMinutes ?? DEFAULT_CODE_TTL_MINUTES,
+    "codeTtlMinutes",
   )
-  const maxAttempts = positiveInteger("maxAttempts", deps.maxAttempts ?? DEFAULT_CODE_MAX_ATTEMPTS)
+  const maxAttempts = positiveInteger(deps.maxAttempts ?? DEFAULT_CODE_MAX_ATTEMPTS, "maxAttempts")
   const clock = deps.clock ?? systemClock
   const { store, sessions } = deps
 
@@ -365,10 +366,10 @@ export interface EmailProof {
  */
 export function createEmailProof(deps: EmailProofDeps): EmailProof {
   const ttlMinutes = positiveInteger(
-    "codeTtlMinutes",
     deps.codeTtlMinutes ?? DEFAULT_CODE_TTL_MINUTES,
+    "codeTtlMinutes",
   )
-  const maxAttempts = positiveInteger("maxAttempts", deps.maxAttempts ?? DEFAULT_CODE_MAX_ATTEMPTS)
+  const maxAttempts = positiveInteger(deps.maxAttempts ?? DEFAULT_CODE_MAX_ATTEMPTS, "maxAttempts")
   const clock = deps.clock ?? systemClock
   const { store } = deps
 
@@ -522,11 +523,4 @@ function refusalOf(outcome: ChallengeOutcome): EmailCodeErrorReason {
   if (outcome === ChallengeOutcome.WrongGuess) return "wrong-code"
   if (outcome === ChallengeOutcome.LockedOut) return "locked-out"
   return "no-code"
-}
-
-function positiveInteger(name: string, value: number): number {
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new RangeError(`${name} must be a positive integer`)
-  }
-  return value
 }

@@ -76,6 +76,7 @@ export {
   type ConnectionHandle,
   ConnectionRegistry,
   type ConnectionRegistryOptions,
+  type EncodeFailure,
   type FrameContext,
   type FrameHandler,
   type MalformedFrame,
@@ -148,6 +149,7 @@ export {
 
 export {
   adaptWebSocket,
+  type AdaptWebSocketOptions,
   createWebSocketFactory,
   mapReadyState,
   type NativeSocketLike,

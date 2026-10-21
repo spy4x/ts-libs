@@ -1293,6 +1293,7 @@ CursorTracker	class	@spy4x/realtime	In-memory per-group cursor arithmetic.
 DEFAULT_BACKOFF	constant	@spy4x/realtime	Defaults used when a caller does not override them.
 DEFAULT_MAX_CALL_BYTES	constant	@spy4x/realtime	The default cap on a call's body, the same as the socket's default frame cap.
 DecodeResult	type	@spy4x/realtime	Outcome of decoding one text frame.
+EncodeFailure	interface	@spy4x/realtime	The frame ConnectionRegistryOptions.onEncodeError is told about.
 FrameContext	interface	@spy4x/realtime	A client frame the registry does not own, handed to the application.
 FrameHandler	type	@spy4x/realtime	
 GapReport	interface	@spy4x/realtime	A non-contiguous sequence, with the cursor a pull must resume from.
@@ -1507,6 +1508,7 @@ CloseHandler	type	@spy4x/realtime/registry
 CloseReason	enum	@spy4x/realtime/registry	Why a connection left the registry.
 ConnectionHandle	interface	@spy4x/realtime/registry	Identifies one socket of one user.
 ConnectionRegistry	class	@spy4x/realtime/registry	Every live socket, indexed by user and by socket id.
+EncodeFailure	interface	@spy4x/realtime/registry	The frame ConnectionRegistryOptions.onEncodeError is told about.
 FrameContext	interface	@spy4x/realtime/registry	A client frame the registry does not own, handed to the application.
 FrameHandler	type	@spy4x/realtime/registry	
 MalformedFrame	interface	@spy4x/realtime/registry	A frame that could not be decoded, or arrived in the wrong direction.
@@ -1534,7 +1536,7 @@ NativeSocketLike	interface	@spy4x/realtime/web-socket	The subset of the platform
 adaptWebSocket	function	@spy4x/realtime/web-socket	Wraps a platform `WebSocket` (or anything shaped like one) so it satisfies ManagedSocket.
 createWebSocketFactory	function	@spy4x/realtime/web-socket	SocketFactory over the platform `WebSocket` constructor.
 mapReadyState	function	@spy4x/realtime/web-socket	Maps one native `readyState` value to this package's SocketState.
-AUTH_STORE_METHODS	constant	@spy4x/server/auth	The method names of AuthStore, sorted.
+AUTH_STORE_METHODS	constant	@spy4x/server/auth	Deprecated: No app needs it: the `AuthStore` interface is the list, and TypeScript checks a store against it. The names of the required methods of AuthStore, sorted.
 AttemptChallengeInput	interface	@spy4x/server/auth	Input of AuthStore.attemptChallenge.
 AuthConflictError	class	@spy4x/server/auth	Thrown by the store when a write would break a uniqueness rule.
 AuthConflictReason	type	@spy4x/server/auth	Which uniqueness rule a refused write would have broken.
@@ -1548,7 +1550,7 @@ MAX_EMAIL_LENGTH	constant	@spy4x/server/auth	Longest address normalizeEmail acce
 NewAuthKey	interface	@spy4x/server/auth	The fields a caller supplies for a new key.
 ProviderDeps	interface	@spy4x/server/auth	What every provider needs, injected by the app.
 SignInResult	interface	@spy4x/server/auth	What a provider returns after a successful sign-up or sign-in.
-normalizeEmail	function	@spy4x/server/auth	Lower-cases and trims an address and checks its shape; null when it is not an address.
+normalizeEmail	function	@spy4x/server/auth	Trims an address, checks its shape, then lower-cases it; null when it is not an address.
 DEFAULT_CODE_MAX_ATTEMPTS	constant	@spy4x/server/auth/email-code	Default number of guesses one challenge allows.
 DEFAULT_CODE_TTL_MINUTES	constant	@spy4x/server/auth/email-code	Default lifetime of a code.
 EMAIL_CODE_BYTES	constant	@spy4x/server/auth/email-code	Random bytes in a code: 48 bits, rendered as 8 base64url characters.
@@ -2178,6 +2180,33 @@ UserSecretPort	interface	@spy4x/server/user-secrets	The injected persistence por
 UserSecretStore	interface	@spy4x/server/user-secrets	
 UserSecretSummary	interface	@spy4x/server/user-secrets	What a list/UI may see: metadata plus a hint.
 createUserSecretStore	function	@spy4x/server/user-secrets	Builds a store over an injected port and cipher.
+COMPLETE_REFUSED_BY_RULE	constant	@spy4x/tasks/edit	The codes that mean the repeat rule or the dates are outside what can be reproduced, as opposed to a broken text.
+CompleteError	interface	@spy4x/tasks/edit	Why completeTask or reopenTask refused.
+CompleteKind	enum	@spy4x/tasks/edit	What a successful change did to the task.
+CompleteOutput	interface	@spy4x/tasks/edit	A completed, advanced or reopened task, its text and the text that undoes it.
+CompleteResult	type	@spy4x/tasks/edit	The result of completeTask and reopenTask.
+CreateOutput	interface	@spy4x/tasks/edit	A new task's text and where to create it.
+CreateResult	type	@spy4x/tasks/edit	The result of createTask.
+EditField	enum	@spy4x/tasks/edit	The task fields the editor changes.
+EditOutput	interface	@spy4x/tasks/edit	An edited task, its patched text and, for a move, the list it goes to.
+EditResult	type	@spy4x/tasks/edit	The result of editTask.
+KeepMineError	interface	@spy4x/tasks/edit	Why keepMineText refused, and at which step.
+KeepMineOutput	interface	@spy4x/tasks/edit	The server's task with my changes on it, and its text.
+KeepMineResult	type	@spy4x/tasks/edit	The result of keepMineText.
+KeepMineStep	enum	@spy4x/tasks/edit	The step of keepMineText that refused.
+NewTaskContext	interface	@spy4x/tasks/edit	What createTask needs besides the fields: the identity, the clock and the list.
+NewTaskFields	interface	@spy4x/tasks/edit	The fields a new task can start with.
+RebaseKind	enum	@spy4x/tasks/edit	Whether rebaseEdit applied the edit or found a collision.
+RebaseResult	type	@spy4x/tasks/edit	The result of rebaseEdit: the applied edit, or the fields that collided.
+TaskEdit	interface	@spy4x/tasks/edit	What the editor changed.
+collisions	function	@spy4x/tasks/edit	The fields both sides changed, to different values.
+completeTask	function	@spy4x/tasks/edit	Completes `task`; a repeating task moves to its next occurrence instead.
+createTask	function	@spy4x/tasks/edit	Builds the text for a new task.
+editTask	function	@spy4x/tasks/edit	Patches `task.ics` with `edit`.
+keepMine	function	@spy4x/tasks/edit	"Keep mine": applies the fields `edit` really changed (against `base`) to `theirs`, overwriting the server's value where both changed the same field and leaving every other server change alone.
+keepMineText	function	@spy4x/tasks/edit	"Keep mine" for a change that is stored as whole text: a write that waited in a queue while the server's copy changed.
+rebaseEdit	function	@spy4x/tasks/edit	Re-applies `edit`, made on `base`, to `theirs`, the fresh copy from the server.
+reopenTask	function	@spy4x/tasks/edit	Reopens a completed task.
 ParseTaskResult	type	@spy4x/tasks/model	The result of parseTask: the task, or a message that says why there is none.
 PriorityBand	enum	@spy4x/tasks/model	How Tasks.org groups the iCalendar priority numbers 1 to 9 (0 is none).
 RepeatFrom	enum	@spy4x/tasks/model	Which date the next occurrence of a repeating task is counted from when it is completed.
@@ -2209,6 +2238,9 @@ ReminderRunnerState	interface	@spy4x/tasks/reminder-runner	What the runner remem
 ReminderRunnerStep	type	@spy4x/tasks/reminder-runner	Which part of a tick failed, as ReminderRunnerOptions.onError is told.
 ReminderStatePort	interface	@spy4x/tasks/reminder-runner	Where the runner keeps its ReminderRunnerState.
 createReminderRunner	function	@spy4x/tasks/reminder-runner	Builds a runner; nothing runs until ReminderRunner.start or ReminderRunner.tick.
+DueReminder	interface	@spy4x/tasks/reminders	One reminder of one task, placed in time.
+ReminderWindow	interface	@spy4x/tasks/reminders	A half-open stretch of time: after `after`, up to and including `upTo`.
+dueReminders	function	@spy4x/tasks/reminders	The reminders of the task in `ics` whose moment falls in `window`: after `window.after`, up to and including `window.upTo`, earliest first.
 SortMode	enum	@spy4x/tasks/view	How a list shows its tasks.
 SortOrderChange	interface	@spy4x/tasks/view	A new `X-APPLE-SORT-ORDER` to write for one task.
 TodayView	interface	@spy4x/tasks/view	The Today view.
@@ -2470,4 +2502,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 ad0331705711ecf44a5889529b982f8bc4a03b4dcb5ffb104dbf731ea550f3de
+# export surface: sha256 2e8cf64061144c0fadeac5cb50bea7fc233d309c168063985869c1159295eec9
