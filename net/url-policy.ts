@@ -30,6 +30,8 @@
  * @module
  */
 
+import { parseIpv6Groups } from "./_ipv6.ts"
+import { ipInRanges } from "./ip.ts"
 import {
   ALLOWED_PROTOCOLS,
   detectScheme,
@@ -48,6 +50,8 @@ export type { NormalizeUrlShapeResult, UrlShapeError, UrlShapeOk } from "./url-s
  * shape-only entry point without a second import specifier.
  */
 export { normalizeUrlShape } from "./url-shape.ts"
+
+export { parseIpv6Groups } from "./_ipv6.ts"
 
 /**
  * Machine-readable rejection reason.
@@ -278,6 +282,31 @@ export async function validatePublicUrl(
   return parsed.href
 }
 
+/** `0.0.0.0/8`, "this network": refused by the classifier, never denied at connect time. */
+const THIS_NETWORK = "0.0.0.0/8"
+
+/**
+ * Every IPv4 range that is not globally routable: the one table behind both
+ * `isPublicIpv4` and `DENY_NET_ADDRESSES`, so the two cannot drift apart.
+ */
+const NON_PUBLIC_IPV4_RANGES: readonly string[] = [
+  THIS_NETWORK,
+  "10.0.0.0/8", // private (RFC 1918)
+  "100.64.0.0/10", // carrier-grade NAT (RFC 6598)
+  "127.0.0.0/8", // loopback
+  "169.254.0.0/16", // link-local, including the cloud metadata address
+  "172.16.0.0/12", // private (RFC 1918)
+  "192.0.0.0/24", // IETF protocol assignments
+  "192.0.2.0/24", // documentation (TEST-NET-1)
+  "192.88.99.0/24", // 6to4 relay anycast, decommissioned
+  "192.168.0.0/16", // private (RFC 1918)
+  "198.18.0.0/15", // benchmarking (RFC 2544)
+  "198.51.100.0/24", // documentation (TEST-NET-2)
+  "203.0.113.0/24", // documentation (TEST-NET-3)
+  "224.0.0.0/4", // multicast
+  "240.0.0.0/4", // reserved, including the broadcast address
+]
+
 // ────────────────────────────────────────────────────────────────────────────
 // The second layer: address ranges the runtime should refuse to dial
 // ────────────────────────────────────────────────────────────────────────────
@@ -315,20 +344,8 @@ export async function validatePublicUrl(
  * is the shorter of the two.
  */
 export const DENY_NET_ADDRESSES: readonly string[] = [
-  "10.0.0.0/8", // private (RFC 1918)
-  "100.64.0.0/10", // carrier-grade NAT (RFC 6598)
-  "127.0.0.0/8", // loopback
-  "169.254.0.0/16", // link-local, including the cloud metadata address
-  "172.16.0.0/12", // private (RFC 1918)
-  "192.0.0.0/24", // IETF protocol assignments
-  "192.0.2.0/24", // documentation (TEST-NET-1)
-  "192.88.99.0/24", // 6to4 relay anycast, decommissioned
-  "192.168.0.0/16", // private (RFC 1918)
-  "198.18.0.0/15", // benchmarking (RFC 2544)
-  "198.51.100.0/24", // documentation (TEST-NET-2)
-  "203.0.113.0/24", // documentation (TEST-NET-3)
-  "224.0.0.0/4", // multicast
-  "240.0.0.0/4", // reserved, including the broadcast address
+  // Every IPv4 range the classifier refuses, except `0.0.0.0/8`: see "The gap it leaves" above.
+  ...NON_PUBLIC_IPV4_RANGES.filter((range) => range !== THIS_NETWORK),
   // The two IPv6 addresses the flag can express. `[::]` is the IPv6 spelling of
   // "this machine" and is safe to deny: unlike `0.0.0.0`, denying it does not
   // stop `Deno.serve` binding its default address.
@@ -397,40 +414,9 @@ export function isPublicIpv4(addr: string): boolean {
   if (!m) return false
   const octets = [m[1], m[2], m[3], m[4]].map(Number)
   if (octets.some((n) => n < 0 || n > 255)) return false
-  const [a, b, c] = octets
-
-  // 0.0.0.0/8 — "this network"
-  if (a === 0) return false
-  // 10.0.0.0/8 — RFC1918 private
-  if (a === 10) return false
-  // 100.64.0.0/10 — CGNAT (RFC 6598)
-  if (a === 100 && b >= 64 && b <= 127) return false
-  // 127.0.0.0/8 — loopback
-  if (a === 127) return false
-  // 169.254.0.0/16 — link-local (incl. AWS/GCP/Azure metadata 169.254.169.254)
-  if (a === 169 && b === 254) return false
-  // 172.16.0.0/12 — RFC1918
-  if (a === 172 && b >= 16 && b <= 31) return false
-  // 192.0.0.0/24 — IETF protocol assignments
-  if (a === 192 && b === 0 && c === 0) return false
-  // 192.0.2.0/24 — TEST-NET-1 documentation
-  if (a === 192 && b === 0 && c === 2) return false
-  // 192.88.99.0/24 — 6to4 anycast (decommissioned)
-  if (a === 192 && b === 88 && c === 99) return false
-  // 192.168.0.0/16 — RFC1918
-  if (a === 192 && b === 168) return false
-  // 198.18.0.0/15 — benchmarking (RFC 2544)
-  if (a === 198 && (b === 18 || b === 19)) return false
-  // 198.51.100.0/24 — TEST-NET-2 documentation
-  if (a === 198 && b === 51 && c === 100) return false
-  // 203.0.113.0/24 — TEST-NET-3 documentation
-  if (a === 203 && b === 0 && c === 113) return false
-  // 224.0.0.0/4 — multicast
-  if (a >= 224 && a <= 239) return false
-  // 240.0.0.0/4 — reserved (incl. 255.255.255.255 broadcast)
-  if (a >= 240) return false
-
-  return true
+  // Rebuilt from the numbers: `010.0.0.1` is 10.0.0.1 here, and `ipInRanges`
+  // refuses a leading zero, so the written form would read as no range at all.
+  return !ipInRanges(octets.join("."), NON_PUBLIC_IPV4_RANGES)
 }
 
 /** True if the IPv6 address (with optional embedded IPv4) is globally routable. */
@@ -442,8 +428,7 @@ export function isPublicIpv6(addr: string): boolean {
 
   // IPv4-mapped IPv6: ::ffff:a.b.c.d  → first 80 bits zero, then 0xffff
   if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0xffff) {
-    const ipv4 = `${(g >> 8) & 0xff}.${g & 0xff}.${(h >> 8) & 0xff}.${h & 0xff}`
-    return isPublicIpv4(ipv4)
+    return isPublicIpv4(embeddedIpv4(g, h))
   }
 
   // ::ffff:0:0:0/96 — IPv4-translated (RFC 2765 §2.1, dropped by RFC 6145). It
@@ -464,13 +449,11 @@ export function isPublicIpv6(addr: string): boolean {
   // Delegate to the IPv4 classifier so private/loopback/link-local/etc.
   // variants are rejected identically.
   if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0 && (g !== 0 || h !== 0)) {
-    const ipv4 = `${(g >> 8) & 0xff}.${g & 0xff}.${(h >> 8) & 0xff}.${h & 0xff}`
-    return isPublicIpv4(ipv4)
+    return isPublicIpv4(embeddedIpv4(g, h))
   }
   // NAT64: 64:ff9b::/96 → last 32 bits are IPv4
   if (a === 0x0064 && b === 0xff9b && c === 0 && d === 0 && e === 0 && f === 0) {
-    const ipv4 = `${(g >> 8) & 0xff}.${g & 0xff}.${(h >> 8) & 0xff}.${h & 0xff}`
-    return isPublicIpv4(ipv4)
+    return isPublicIpv4(embeddedIpv4(g, h))
   }
   // 64:ff9b:1::/48 — local-use NAT64 (RFC 8215). Unlike the well-known prefix
   // above it is chosen by whoever runs the network, and what it translates to is
@@ -508,78 +491,7 @@ export function isPublicIpv6(addr: string): boolean {
   return true
 }
 
-/**
- * Parse an IPv6 address into 8 groups of 16-bit unsigned ints.
- * Accepts `::` compression and dotted-quad suffix (`::ffff:127.0.0.1`).
- * Returns null on malformed input.
- */
-export function parseIpv6Groups(addr: string): number[] | null {
-  if (!addr) return null
-  // Strip zone IDs (`fe80::1%eth0`) — we don't make policy decisions on them.
-  const pct = addr.indexOf("%")
-  const clean = pct === -1 ? addr : addr.slice(0, pct)
-  if (!clean) return null
-
-  // Promote embedded IPv4 to two 16-bit groups in hex form so the rest of
-  // the parser only has to deal with plain hex groups.
-  let normalised = clean
-  if (clean.includes(".")) {
-    const lastColon = clean.lastIndexOf(":")
-    if (lastColon === -1) return null
-    const ipv4 = clean.slice(lastColon + 1)
-    const octets = ipv4.split(".")
-    if (octets.length !== 4) return null
-    const nums: number[] = []
-    for (const o of octets) {
-      if (!/^\d+$/.test(o)) return null
-      const n = Number(o)
-      if (n < 0 || n > 255) return null
-      nums.push(n)
-    }
-    const hi = (nums[0] << 8) | nums[1]
-    const lo = (nums[2] << 8) | nums[3]
-    normalised = clean.slice(0, lastColon + 1) +
-      hi.toString(16) + ":" + lo.toString(16)
-  }
-
-  const dc = normalised.indexOf("::")
-  if (dc !== -1) {
-    if (normalised.indexOf("::", dc + 1) !== -1) return null
-    const left = normalised.slice(0, dc)
-    const right = normalised.slice(dc + 2)
-    const leftGroups = left === "" ? [] : left.split(":")
-    const rightGroups = right === "" ? [] : right.split(":")
-    if (leftGroups.length + rightGroups.length > 7) return null
-    const out: number[] = new Array(8).fill(0)
-    let i = 0
-    for (const g of leftGroups) {
-      const n = parseHexGroup(g)
-      if (n === null) return null
-      out[i++] = n
-    }
-    const skip = 8 - leftGroups.length - rightGroups.length
-    i += skip
-    for (const g of rightGroups) {
-      const n = parseHexGroup(g)
-      if (n === null) return null
-      out[i++] = n
-    }
-    return out
-  }
-
-  const parts = normalised.split(":")
-  if (parts.length !== 8) return null
-  const out: number[] = []
-  for (const p of parts) {
-    const n = parseHexGroup(p)
-    if (n === null) return null
-    out.push(n)
-  }
-  return out
-}
-
-function parseHexGroup(g: string): number | null {
-  if (g.length === 0 || g.length > 4) return null
-  if (!/^[0-9a-fA-F]+$/.test(g)) return null
-  return parseInt(g, 16)
+/** The IPv4 address carried in the last two groups of an IPv6 address. */
+function embeddedIpv4(g: number, h: number): string {
+  return `${g >> 8}.${g & 0xff}.${h >> 8}.${h & 0xff}`
 }

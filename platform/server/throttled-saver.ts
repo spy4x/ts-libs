@@ -15,6 +15,7 @@
 import { atomicWriteJson, type TempPathOptions } from "./atomic-json.ts"
 import { DEFAULT_FLUSH_INTERVAL_MS } from "../universal/constants.ts"
 import type { FileSystemPort } from "./ports.ts"
+import { processId } from "./process.ts"
 import type { Clock } from "../universal/time.ts"
 
 /** Scheduling primitives a {@link ThrottledJsonSaver} needs. */
@@ -39,7 +40,9 @@ export interface ThrottledJsonSaverOptions {
   serialize: () => unknown
   /** Sequence source for temp paths. Defaults to a monotonic counter. */
   nextSequence?: () => number
-  /** Process id for temp paths. Defaults to `Deno.pid`. */
+  /**
+   * Process id for temp paths. Defaults to {@link processId}, or `0` on a runtime without one.
+   */
   pid?: number
   clock?: Clock
   timers?: TimerPort
@@ -51,7 +54,8 @@ export interface ThrottledJsonSaverOptions {
   space?: number
   /**
    * Called when a timer-driven flush rejects, so it cannot become an unhandled rejection. An error
-   * this handler throws is rethrown as an uncaught error.
+   * this handler throws is rethrown as an uncaught error. Defaults to `console.error`, so a save
+   * that failed with nobody waiting on it still leaves a trace.
    */
   onFlushError?: (error: unknown) => void
 }
@@ -100,8 +104,9 @@ export class ThrottledJsonSaver {
     this.#serialize = options.serialize
     this.#clock = options.clock ?? { now: () => Date.now() }
     this.#timers = options.timers ?? systemTimerPort
-    this.#onFlushError = options.onFlushError ?? (() => {})
-    this.#pid = options.pid ?? Deno.pid
+    this.#onFlushError = options.onFlushError ??
+      ((error) => console.error("ThrottledJsonSaver: a timer-driven save failed", error))
+    this.#pid = options.pid ?? processId() ?? 0
     this.#nextSequence = options.nextSequence ?? null
     this.#space = options.space ?? 2
     this.#flushIntervalMs = options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS

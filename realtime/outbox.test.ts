@@ -457,6 +457,31 @@ describe("outbox merging edits of one entity", () => {
     expect(entry.conflict?.server).toEqual(item("n", 3, "Theirs"))
   })
 
+  it("sends my version as an update, never as the create, after I keep mine over a conflict", async () => {
+    const { outbox, sent, state } = harness()
+    state.server = () => {
+      throw new ConnectionLostError("closed after the send")
+    }
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("Mine") })
+    state.server = () => {
+      throw refused("VERSION_CONFLICT")
+    }
+    state.current = item("n", 3, "Theirs")
+    await outbox.submit({ kind: "update", entityId: "n", payload: text("Edited"), version: 0 })
+    // The server's copy is gone by the time mine is sent again: that is a conflict to show, not a
+    // reason to create the entity again, because the person saw the server's copy and kept theirs.
+    state.server = () => {
+      throw refused("NOTE_NOT_FOUND")
+    }
+    state.current = null
+    sent.length = 0
+
+    await outbox.keepMine(outbox.entries()[0])
+
+    expect(sent.map((s) => [s.command.kind, s.command.baseVersion])).toEqual([["update", 3]])
+    expect(outbox.entries()[0].conflict?.reason).toBe("gone")
+  })
+
   it("gives a delete of an unconfirmed create every payload that create was sent with, oldest first", async () => {
     const { outbox, sent, state } = harness()
     state.server = () => {
@@ -750,6 +775,60 @@ describe("outbox conflicts found after a reconnect", () => {
     expect(entry.conflict?.reason).toBe("version")
     expect(entry.conflict?.server?.title).toBe("Theirs")
     expect(entry.payload.title).toBe("Mine")
+  })
+
+  it("sends an edit made while a conflict waits, instead of keeping it behind the conflict", async () => {
+    const { outbox, sent, state } = await staleUpdate()
+    state.server = () => item("n", 3, "Again")
+    sent.length = 0
+
+    const outcome = await outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Again"),
+      version: 2,
+    })
+
+    expect(outcome).toEqual({ kind: "sent", server: item("n", 3, "Again") })
+    expect(sent.map((s) => s.command.payload.title)).toEqual(["Again"])
+    expect(outbox.entries()).toEqual([])
+  })
+
+  it("does not overwrite another creator's entity with an edit made during an already-exists conflict", async () => {
+    const { outbox, sent, state, offline } = harness()
+    offline()
+    await outbox.submit({ kind: "create", entityId: "n", payload: text("Mine") })
+    let serverCopy: Item = item("n", 1, "Theirs")
+    state.current = serverCopy
+    state.online = true
+    state.server = ({ command }) => {
+      if (command.kind === "create") throw refused("ID_ALREADY_EXISTS")
+      if (command.baseVersion !== serverCopy.version) throw refused("VERSION_CONFLICT")
+      serverCopy = { id: "n", version: serverCopy.version + 1, title: command.payload.title }
+      state.current = serverCopy
+      return serverCopy
+    }
+    await outbox.flush()
+    expect(outbox.entries()[0]).toMatchObject({
+      status: "conflict",
+      conflict: { reason: "version" },
+    })
+    sent.length = 0
+
+    await outbox.submit({
+      kind: "update",
+      entityId: "n",
+      payload: text("Mine, edited"),
+      version: 0,
+    })
+
+    expect(serverCopy.title).toBe("Theirs")
+    expect(sent.map((s) => [s.command.kind, s.command.baseVersion])).toEqual([["create", 0]])
+    expect(outbox.entries()[0]).toMatchObject({
+      kind: "create",
+      status: "conflict",
+      payload: text("Mine, edited"),
+    })
   })
 
   it("does not send a conflicted write again on its own", async () => {
@@ -1835,6 +1914,37 @@ describe("outbox ports for a group of outboxes", () => {
     held = false
     await outbox.flush()
     expect(outbox.entries()[0].status).toBe("conflict")
+
+    await outbox.useTheirs(outbox.entries()[0])
+
+    expect(told).toEqual([])
+  })
+
+  it("does not tell about a create when the person chose the server's side over a delete of it", async () => {
+    const told: string[] = []
+    let held = false
+    let createLost = true
+    const { outbox } = grouped({
+      ready: () => !held,
+      onAbandoned: (entry, reason) => {
+        told.push(`${entry.entityId}:${reason}`)
+      },
+      server: (command) => {
+        if (command.kind === "create" && createLost) {
+          throw new ConnectionLostError("closed after the send")
+        }
+        if (command.kind === "delete") throw refused("ROLE_INSUFFICIENT")
+        return item(command.entityId)
+      },
+    })
+    await outbox.submit(create("a"))
+    createLost = false
+    held = true
+    await outbox.submit({ kind: "update", entityId: "a", payload: text("a2"), version: 0 })
+    await outbox.submit({ kind: "delete", entityId: "a", payload: text("a2"), version: 1 })
+    held = false
+    await outbox.flush()
+    expect(outbox.entries()[0]).toMatchObject({ kind: "delete", status: "conflict" })
 
     await outbox.useTheirs(outbox.entries()[0])
 

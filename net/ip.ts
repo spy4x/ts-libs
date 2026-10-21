@@ -11,7 +11,7 @@
  * Pure: no DNS, no I/O, no permissions.
  */
 
-import { parseIpv6Groups } from "./url-policy.ts"
+import { parseIpv6Groups } from "./_ipv6.ts"
 
 /** An address that {@link parseIp} accepted. */
 export interface ParsedIp {

@@ -22,6 +22,7 @@ import {
 import {
   type AlarmTrigger,
   AlarmTriggerKind,
+  findMaster,
   readTodo,
   RepeatFrom,
   type Todo,
@@ -170,11 +171,9 @@ function toTask(todo: Todo, uid: string, source: TaskSource, root: IcalComponent
   return task
 }
 
-/** The `DTSTAMP` of the task's VTODO, which `readTodo` does not return. */
+/** The `DTSTAMP` of the task's master VTODO, which `readTodo` does not return. */
 function stampOf(root: IcalComponent): TaskDate | undefined {
-  const todo = root.name.toUpperCase() === `VTODO`
-    ? root
-    : root.components.find((component) => component.name.toUpperCase() === `VTODO`)
+  const todo = findMaster(root, `VTODO`)
   const stamp = todo && getProperty(todo, `DTSTAMP`)
   return stamp ? readDate(stamp) : undefined
 }
@@ -227,8 +226,11 @@ export function dateInstant(value: TaskDate, zone: string, root?: IcalComponent)
  * The calendar day (`YYYY-MM-DD`) on which a due or start value falls for a viewer in `zone`.
  * A date and a floating time stay on the day they are written; a UTC or zoned time is converted
  * to `zone`.
+ *
+ * @param root The parsed document the value was read from. Pass it so a `TZID` that the
+ *   document's own `VTIMEZONE` defines, as Outlook writes, resolves by that definition.
  */
-export function dateDay(value: TaskDate, zone: string): string {
+export function dateDay(value: TaskDate, zone: string, root?: IcalComponent): string {
   if (value.kind === IcalDateKind.Date || value.kind === IcalDateKind.Floating) return value.date
-  return isoDateInTz(dateInstant(value, zone), zone)
+  return isoDateInTz(dateInstant(value, zone, root), zone)
 }

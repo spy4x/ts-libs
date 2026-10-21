@@ -44,7 +44,7 @@
  * @module
  */
 
-import { type BackoffConfig, DEFAULT_BACKOFF, nextBackoffDelay } from "./backoff.ts"
+import { type BackoffConfig, DEFAULT_BACKOFF, retryDelay } from "./backoff.ts"
 import type { Clock, TimerHandle } from "./clock.ts"
 import {
   type ClientMessage,
@@ -960,7 +960,7 @@ export class ClientTransport {
       return
     }
     this.#clearReconnectTimer()
-    const delay = nextBackoffDelay({
+    const delay = retryDelay({
       ...this.#backoff,
       attempt: this.#attempt,
       random: this.#random,
