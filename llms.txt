@@ -1534,7 +1534,7 @@ NativeSocketLike	interface	@spy4x/realtime/web-socket	The subset of the platform
 adaptWebSocket	function	@spy4x/realtime/web-socket	Wraps a platform `WebSocket` (or anything shaped like one) so it satisfies ManagedSocket.
 createWebSocketFactory	function	@spy4x/realtime/web-socket	SocketFactory over the platform `WebSocket` constructor.
 mapReadyState	function	@spy4x/realtime/web-socket	Maps one native `readyState` value to this package's SocketState.
-AUTH_STORE_METHODS	constant	@spy4x/server/auth	The method names of AuthStore, sorted.
+AUTH_STORE_METHODS	constant	@spy4x/server/auth	Deprecated: No app needs it: the `AuthStore` interface is the list, and TypeScript checks a store against it. The names of the required methods of AuthStore, sorted.
 AttemptChallengeInput	interface	@spy4x/server/auth	Input of AuthStore.attemptChallenge.
 AuthConflictError	class	@spy4x/server/auth	Thrown by the store when a write would break a uniqueness rule.
 AuthConflictReason	type	@spy4x/server/auth	Which uniqueness rule a refused write would have broken.
@@ -1548,7 +1548,7 @@ MAX_EMAIL_LENGTH	constant	@spy4x/server/auth	Longest address normalizeEmail acce
 NewAuthKey	interface	@spy4x/server/auth	The fields a caller supplies for a new key.
 ProviderDeps	interface	@spy4x/server/auth	What every provider needs, injected by the app.
 SignInResult	interface	@spy4x/server/auth	What a provider returns after a successful sign-up or sign-in.
-normalizeEmail	function	@spy4x/server/auth	Lower-cases and trims an address and checks its shape; null when it is not an address.
+normalizeEmail	function	@spy4x/server/auth	Trims an address, checks its shape, then lower-cases it; null when it is not an address.
 DEFAULT_CODE_MAX_ATTEMPTS	constant	@spy4x/server/auth/email-code	Default number of guesses one challenge allows.
 DEFAULT_CODE_TTL_MINUTES	constant	@spy4x/server/auth/email-code	Default lifetime of a code.
 EMAIL_CODE_BYTES	constant	@spy4x/server/auth/email-code	Random bytes in a code: 48 bits, rendered as 8 base64url characters.
@@ -2470,4 +2470,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 cb60279a2a65b6b9b218e351127a542c5960f8ea9f3f06390d553756003b1ae9
+# export surface: sha256 5c918dd55b507d437992c23adc5707e6a999fbaf514a5c4f5909c1f275636ffb

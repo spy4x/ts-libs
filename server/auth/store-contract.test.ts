@@ -9,7 +9,7 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { AuthConflictError, ChallengeOutcome, type NewAuthKey } from "./model.ts"
-import { AUTH_STORE_METHODS, type AuthStore } from "./store.ts"
+import type { AuthStore } from "./store.ts"
 
 /** A fresh, empty store and how to dispose of it. */
 export interface StoreFixture {
@@ -80,7 +80,22 @@ export function describeAuthStoreContract(
         const methods = Object.getOwnPropertyNames(prototype)
           .filter((name) => name !== "constructor")
           .sort()
-        expect(methods).toEqual([...AUTH_STORE_METHODS])
+        expect(methods).toEqual([
+          "addKey",
+          "attemptChallenge",
+          "createUserWithKey",
+          "deleteChallenges",
+          "deleteKey",
+          "findKey",
+          "findKeyById",
+          "findUser",
+          "findUserIdByProvenEmail",
+          "issueChallenge",
+          "listKeys",
+          "proveKey",
+          "releaseKeyEmail",
+          "updateKeySecret",
+        ])
         for (const name of methods) expect(typeof prototype[name]).toBe("function")
         expect(Object.keys(store)).toEqual([])
         return Promise.resolve()
@@ -786,6 +801,29 @@ export function describeAuthStoreContract(
         }
         // Still unused before its expiry: the late guesses did not count and did not consume it.
         expect(await store.attemptChallenge(guess("right", 1))).toBe(ChallengeOutcome.Matched)
+      }))
+
+    it("deletes the challenges of one purpose whose subject starts with a prefix, and no others", () =>
+      withStore(async (store) => {
+        const deleteChallenges = store.deleteChallenges
+        if (deleteChallenges === undefined) throw new Error("the store has no deleteChallenges")
+        await store.issueChallenge({ ...issue("one"), subject: "abc.1" })
+        await store.issueChallenge({ ...issue("other"), subject: "abd.1" })
+        await store.issueChallenge({ ...issue("purpose"), purpose: "reset", subject: "abc.3" })
+
+        await deleteChallenges.call(store, "email-code", "abc.")
+
+        const at = (subject: string, secretHash: string, purpose = "email-code") =>
+          store.attemptChallenge({ ...guess(secretHash, 5, NOW), purpose, subject })
+        expect(await at("abc.1", "one")).toBe(ChallengeOutcome.Missing)
+        expect(await at("abd.1", "other")).toBe(ChallengeOutcome.Matched)
+        expect(await at("abc.3", "purpose", "reset")).toBe(ChallengeOutcome.Matched)
+      }))
+
+    it("refuses a challenge deletion with invalid input", () =>
+      withStore(async (store) => {
+        await expectRejects(store.deleteChallenges!("", "abc."), TypeError)
+        await expectRejects(store.deleteChallenges!("email-code", "a\u0000"), TypeError)
       }))
 
     it("a challenge that was never issued is Missing", () =>
