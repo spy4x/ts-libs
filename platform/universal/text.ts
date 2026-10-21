@@ -2,7 +2,9 @@
  * Small, dependency-free text helpers: accent and case folding (`fold`), a list filter
  * (`searchWords`, `search`, `filterRows`), a naive English pluraliser (`pluralize`), a
  * kebab-case converter (`convertToKebabCase`), edit distance and a normalised similarity score
- * (`levenshtein`, `similarity`), a UTF-8 byte-length count (`utf8ByteLength`), a name's
+ * (`levenshtein`, `similarity`), a forgiving ranked search over labels and aliases that allows
+ * any word order, prefixes, one typo, the wrong keyboard layout and Cyrillic or Latin spelling
+ * (`searchEntries`, `matchEntry`), a UTF-8 byte-length count (`utf8ByteLength`), a name's
  * initials in any script (`initials`), a check for control and invisible characters in typed
  * text (`hasUnsafeTextCharacters`), and a check for the characters no database text column can
  * store (`hasUnstorableTextCharacters`).
@@ -441,4 +443,307 @@ function maskDomain(domain: string): string {
   const ending = domain.slice(domain.lastIndexOf(".") + 1)
   if (ending.length > MAX_KEPT_DOMAIN_LABEL_LENGTH) return EMAIL_MASK
   return `${maskLabel(domain.slice(0, firstDot))}.${ending}`
+}
+
+/** Something {@link searchEntries} can find: a label and, optionally, other names for it. */
+export interface SearchEntry {
+  /** The name a person sees, such as `"Date picker"`. */
+  label: string
+  /** Other names that should find the entry, such as `["calendar", "календарь"]`. */
+  aliases?: readonly string[]
+}
+
+/**
+ * How a query matched an entry, from the strongest to the weakest:
+ *
+ * - `exact`: the label, ignoring case, accents, spaces and punctuation.
+ * - `prefix`: the start of the label.
+ * - `words`: every query word starts a word of the label, in any order.
+ * - `alias`: one of the aliases, by any of the three above.
+ * - `layout`: the query was typed in the other keyboard layout (ЙЦУКЕН and QWERTY).
+ * - `translit`: the query and the entry are in different scripts (Cyrillic and Latin).
+ * - `typo`: a query word needed one typo fixed.
+ */
+export type SearchMatchKind =
+  | "exact"
+  | "prefix"
+  | "words"
+  | "alias"
+  | "layout"
+  | "translit"
+  | "typo"
+
+/** How well a query matched one entry. */
+export interface EntryMatch {
+  /** The weakest step the match needed (see {@link SearchMatchKind}). */
+  how: SearchMatchKind
+  /** Higher is better. Compare scores only between matches of the same query. */
+  score: number
+}
+
+/** One result of {@link searchEntries}. */
+export interface SearchMatch<E extends SearchEntry> extends EntryMatch {
+  entry: E
+}
+
+/** Options for {@link searchEntries}. */
+export interface SearchEntriesOptions {
+  /** Return at most this many matches, the best first; zero or more. Default: all of them. */
+  limit?: number
+}
+
+const KIND_SCORE: Record<SearchMatchKind, number> = {
+  exact: 70,
+  prefix: 60,
+  words: 50,
+  alias: 40,
+  layout: 30,
+  translit: 30,
+  typo: 10,
+}
+/** Bonus inside a tier for the shape of the match, so an exact alias beats a word-start one. */
+const SHAPE_BONUS = { exact: 3, prefix: 2, words: 1, typo: 0 } as const
+type Shape = keyof typeof SHAPE_BONUS
+
+/** Keys of the same physical keyboard position, QWERTY then ЙЦУКЕН. */
+const LATIN_KEYS = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`"
+const CYRILLIC_KEYS = "йцукенгшщзхъфывапролджэячсмитьбюё"
+let layoutSwap: Map<string, string> | undefined
+
+/** The text a person meant when they typed `value` in the other keyboard layout. */
+function swapLayout(value: string): string {
+  if (!layoutSwap) {
+    layoutSwap = new Map()
+    for (let i = 0; i < LATIN_KEYS.length; i++) {
+      layoutSwap.set(LATIN_KEYS[i], CYRILLIC_KEYS[i])
+      layoutSwap.set(CYRILLIC_KEYS[i], LATIN_KEYS[i])
+    }
+  }
+  let swapped = ""
+  for (const char of value.toLowerCase()) swapped += layoutSwap.get(char) ?? char
+  return swapped
+}
+
+/** Cyrillic letters that {@link fold} leaves (`й` and `ё` fold to `и` and `е`) and their Latin spelling. */
+const CYRILLIC_LETTERS = "абвгґдеєжзиіклмнопрстуфхцчшщъыьэюя"
+const LATIN_SPELLINGS =
+  "a b v g g d e e zh z i i k l m n o p r s t u f h ts ch sh shch _ y _ e yu ya"
+    .replaceAll("_", "").split(" ")
+const CYRILLIC_LETTER = /[а-яґєі]/g
+
+/** A query or a name, folded and split into words. */
+interface Prepared {
+  words: string[]
+  /** The words joined with nothing between them. */
+  compact: string
+}
+
+const NON_WORD = /[^\p{L}\p{N}]+/u
+
+function prepare(folded: string, maxWords = Infinity): Prepared {
+  const words = folded.split(NON_WORD).filter(Boolean).slice(0, maxWords)
+  return { words, compact: words.join("") }
+}
+
+/** The same words in Latin letters, or `undefined` when there was nothing to transliterate. */
+function latinOf(prepared: Prepared): Prepared | undefined {
+  if (!/[а-яґєі]/.test(prepared.compact)) return undefined
+  // `ь` and `ъ` have no Latin spelling, so a word of only those letters disappears.
+  const words = prepared.words.map((word) =>
+    word.replace(CYRILLIC_LETTER, (letter) => LATIN_SPELLINGS[CYRILLIC_LETTERS.indexOf(letter)])
+  ).filter(Boolean)
+  return { words, compact: words.join("") }
+}
+
+/** A name ready to match: `"DatePicker"` gives the words `date`, `picker` and `datepicker`. */
+function prepareName(name: string): Prepared {
+  const prepared = prepare(fold(name.replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2")))
+  if (prepared.words.length > 1) prepared.words.push(prepared.compact)
+  return prepared
+}
+
+/** Whether `query` from index `q` on is a prefix of `word` from index `w` on. */
+function restMatches(query: string, q: number, word: string, w: number): boolean {
+  for (; q < query.length; q++, w++) if (query[q] !== word[w]) return false
+  return true
+}
+
+/** Whether `query` is one edit (insert, delete, substitute, transpose) from a prefix of `word`. */
+function nearPrefix(query: string, word: string): boolean {
+  let i = 0
+  while (i < query.length && query[i] === word[i]) i++
+  return i === query.length ||
+    restMatches(query, i + 1, word, i + 1) || // a wrong letter
+    restMatches(query, i + 1, word, i) || // a letter too many
+    restMatches(query, i, word, i + 1) || // a letter missing
+    (query[i] === word[i + 1] && query[i + 1] === word[i] && restMatches(query, i + 2, word, i + 2))
+}
+
+/** The strongest shape in which `query` matches `name`, or `undefined`. */
+function shapeOf(query: Prepared, name: Prepared): Shape | undefined {
+  if (query.words.length === 0) return undefined
+  if (query.compact === name.compact) return "exact"
+  if (name.compact.startsWith(query.compact)) return "prefix"
+  let shape: Shape = "words"
+  for (const word of query.words) {
+    if (startsSome(name.words, word)) continue
+    if (word.length < 4 || !nearSome(name.words, word)) return undefined
+    shape = "typo"
+  }
+  return shape
+}
+
+function startsSome(words: string[], query: string): boolean {
+  for (const word of words) if (word.startsWith(query)) return true
+  return false
+}
+
+function nearSome(words: string[], query: string): boolean {
+  for (const word of words) if (nearPrefix(query, word)) return true
+  return false
+}
+
+/** A query or a name, with its Latin spelling when it has Cyrillic letters. */
+interface Spelling {
+  plain: Prepared
+  latin: Prepared | undefined
+  /** Whether this is the query read in the other keyboard layout. */
+  layout?: boolean
+}
+
+function spell(prepared: Prepared): Spelling {
+  return { plain: prepared, latin: latinOf(prepared) }
+}
+
+/** Letters a query in the other layout needs before it is transliterated as well. */
+const MIN_LAYOUT_TRANSLIT_LETTERS = 3
+
+/**
+ * The query as typed, then as meant in the other keyboard layout when that differs, leaving out a
+ * spelling with no words. An empty list means the query is empty. Punctuation typed in the wrong
+ * layout, such as `"[];'"` for `"хъжэ"`, is read as that layout's word.
+ */
+function querySpellings(query: string): Spelling[] {
+  const typed = prepare(fold(query), MAX_SEARCH_WORDS)
+  const swapped = prepare(fold(swapLayout(query)), MAX_SEARCH_WORDS)
+  const spellings = typed.words.length > 0 ? [spell(typed)] : []
+  if (swapped.words.length > 0 && swapped.compact !== typed.compact) {
+    // A short query read in the other layout and then transliterated matches too much: "q" is
+    // "й", which spells "i" and would find every word starting with it.
+    const latin = swapped.compact.length >= MIN_LAYOUT_TRANSLIT_LETTERS
+      ? latinOf(swapped)
+      : undefined
+    spellings.push({ plain: swapped, latin, layout: true })
+  }
+  return spellings
+}
+
+/** Each entry's names, prepared once and reused while its label and aliases stay the same. */
+const nameCache = new WeakMap<
+  SearchEntry,
+  { label: string; aliases: string[]; spellings: Spelling[] }
+>()
+
+function nameSpellings(entry: SearchEntry): Spelling[] {
+  const aliases = entry.aliases ?? []
+  const cached = nameCache.get(entry)
+  if (
+    cached?.label === entry.label && cached.aliases.length === aliases.length &&
+    cached.aliases.every((alias, i) => alias === aliases[i])
+  ) return cached.spellings
+  const spellings = [entry.label, ...aliases].map((name) => spell(prepareName(name)))
+  nameCache.set(entry, { label: entry.label, aliases: [...aliases], spellings })
+  return spellings
+}
+
+/** The weakest of the steps a match needed. */
+function weakest(a: SearchMatchKind, b: SearchMatchKind): SearchMatchKind {
+  return KIND_SCORE[b] < KIND_SCORE[a] ? b : a
+}
+
+function bestMatch(queries: Spelling[], entry: SearchEntry): EntryMatch | null {
+  let best: EntryMatch | null = null
+  const names = nameSpellings(entry)
+  for (let n = 0; n < names.length; n++) {
+    const name = names[n]
+    for (let q = 0; q < queries.length; q++) {
+      const query = queries[q]
+      // Transliterate only across scripts: two Cyrillic spellings already met as typed.
+      const across = !name.latin !== !query.latin
+      for (let t = 0; t < (across ? 2 : 1); t++) {
+        const shape = t === 0
+          ? shapeOf(query.plain, name.plain)
+          : shapeOf(query.latin ?? query.plain, name.latin ?? name.plain)
+        if (!shape) continue
+        let how: SearchMatchKind = shape
+        if (n > 0) how = weakest(how, "alias")
+        if (query.layout) how = weakest(how, "layout")
+        if (t > 0) how = weakest(how, "translit")
+        const score = KIND_SCORE[how] + (how === shape ? 0 : SHAPE_BONUS[shape])
+        if (!best || score > best.score) best = { how, score }
+      }
+    }
+  }
+  return best
+}
+
+/**
+ * How well `query` matches one entry, or `null` when it does not.
+ *
+ * The match forgives what people get wrong in a search box. Case and accents are ignored
+ * ({@link fold}). Words count in any order, and each query word only has to start a word of the
+ * label or of an alias, so `"picker date"` finds `"Date picker"`; a name written as `"DatePicker"`
+ * has the words `date` and `picker`. A query word of four letters or more may carry one typo (a
+ * letter added, missing, wrong or two swapped): `"combobx"` finds `"Combobox"`. A query typed in
+ * the other keyboard layout is read in both directions, so `"ещфые"` finds `"Toast"` and `"njcn"`
+ * finds `"Тост"`. Cyrillic and Latin are compared through a Latin transliteration, so
+ * `"GosUslugi"` finds `"ГосУслуги"`, and `"тост"` finds `"Toast"` through `"tost"` and one typo.
+ *
+ * An empty query matches every entry with score `0` and `how: "prefix"`.
+ */
+export function matchEntry(query: string, entry: SearchEntry): EntryMatch | null {
+  const queries = querySpellings(query)
+  if (queries.length === 0) return { how: "prefix", score: 0 }
+  return bestMatch(queries, entry)
+}
+
+/**
+ * The entries that `query` matches, the best first (see {@link matchEntry} for what matches).
+ *
+ * The order is exact, then prefix, then words in any order, then alias, then the other layout or
+ * script, then a typo; equal scores keep the order of `entries`. An empty query returns every
+ * entry in its order. Only the first 16 query words count. Each entry's label and aliases are
+ * prepared once and reused while they stay the same, so a list of a few hundred entries can be
+ * ranked on every keystroke.
+ *
+ * @throws {RangeError} When `limit` is negative or not a number.
+ *
+ * @example
+ * ```ts
+ * const commands = [{ label: "Toast" }, { label: "Date picker", aliases: ["calendar"] }]
+ * searchEntries("picker date", commands)[0].entry.label // "Date picker"
+ * searchEntries("ещфые", commands)[0].how // "layout"
+ * ```
+ */
+export function searchEntries<E extends SearchEntry>(
+  query: string,
+  entries: readonly E[],
+  options?: SearchEntriesOptions,
+): SearchMatch<E>[] {
+  const limit = options?.limit
+  if (limit !== undefined && !(limit >= 0)) {
+    throw new RangeError(`limit must be zero or more, got ${limit}`)
+  }
+  const queries = querySpellings(query)
+  const matches: SearchMatch<E>[] = []
+  if (queries.length === 0) {
+    for (const entry of entries) matches.push({ entry, how: "prefix", score: 0 })
+  } else {
+    for (const entry of entries) {
+      const match = bestMatch(queries, entry)
+      if (match) matches.push({ entry, ...match })
+    }
+    matches.sort((a, b) => b.score - a.score)
+  }
+  return limit === undefined ? matches : matches.slice(0, limit)
 }
