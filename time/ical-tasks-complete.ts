@@ -62,7 +62,7 @@ import {
   type Todo,
   type TodoPatch,
   TodoStatus,
-} from "./ical-tasks.ts"
+} from "./ical-tasks-todo.ts"
 import { formatIsoDate, parseIsoDate } from "./date.ts"
 import { formatIcsUtc } from "./ics-core.ts"
 import { nextOccurrence, parseRrule, type Rrule, RruleFreq } from "./rrule.ts"
