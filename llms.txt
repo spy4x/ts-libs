@@ -2180,6 +2180,33 @@ UserSecretPort	interface	@spy4x/server/user-secrets	The injected persistence por
 UserSecretStore	interface	@spy4x/server/user-secrets	
 UserSecretSummary	interface	@spy4x/server/user-secrets	What a list/UI may see: metadata plus a hint.
 createUserSecretStore	function	@spy4x/server/user-secrets	Builds a store over an injected port and cipher.
+COMPLETE_REFUSED_BY_RULE	constant	@spy4x/tasks/edit	The codes that mean the repeat rule or the dates are outside what can be reproduced, as opposed to a broken text.
+CompleteError	interface	@spy4x/tasks/edit	Why completeTask or reopenTask refused.
+CompleteKind	enum	@spy4x/tasks/edit	What a successful change did to the task.
+CompleteOutput	interface	@spy4x/tasks/edit	A completed, advanced or reopened task, its text and the text that undoes it.
+CompleteResult	type	@spy4x/tasks/edit	The result of completeTask and reopenTask.
+CreateOutput	interface	@spy4x/tasks/edit	A new task's text and where to create it.
+CreateResult	type	@spy4x/tasks/edit	The result of createTask.
+EditField	enum	@spy4x/tasks/edit	The task fields the editor changes.
+EditOutput	interface	@spy4x/tasks/edit	An edited task, its patched text and, for a move, the list it goes to.
+EditResult	type	@spy4x/tasks/edit	The result of editTask.
+KeepMineError	interface	@spy4x/tasks/edit	Why keepMineText refused, and at which step.
+KeepMineOutput	interface	@spy4x/tasks/edit	The server's task with my changes on it, and its text.
+KeepMineResult	type	@spy4x/tasks/edit	The result of keepMineText.
+KeepMineStep	enum	@spy4x/tasks/edit	The step of keepMineText that refused.
+NewTaskContext	interface	@spy4x/tasks/edit	What createTask needs besides the fields: the identity, the clock and the list.
+NewTaskFields	interface	@spy4x/tasks/edit	The fields a new task can start with.
+RebaseKind	enum	@spy4x/tasks/edit	Whether rebaseEdit applied the edit or found a collision.
+RebaseResult	type	@spy4x/tasks/edit	The result of rebaseEdit: the applied edit, or the fields that collided.
+TaskEdit	interface	@spy4x/tasks/edit	What the editor changed.
+collisions	function	@spy4x/tasks/edit	The fields both sides changed, to different values.
+completeTask	function	@spy4x/tasks/edit	Completes `task`; a repeating task moves to its next occurrence instead.
+createTask	function	@spy4x/tasks/edit	Builds the text for a new task.
+editTask	function	@spy4x/tasks/edit	Patches `task.ics` with `edit`.
+keepMine	function	@spy4x/tasks/edit	"Keep mine": applies the fields `edit` really changed (against `base`) to `theirs`, overwriting the server's value where both changed the same field and leaving every other server change alone.
+keepMineText	function	@spy4x/tasks/edit	"Keep mine" for a change that is stored as whole text: a write that waited in a queue while the server's copy changed.
+rebaseEdit	function	@spy4x/tasks/edit	Re-applies `edit`, made on `base`, to `theirs`, the fresh copy from the server.
+reopenTask	function	@spy4x/tasks/edit	Reopens a completed task.
 ParseTaskResult	type	@spy4x/tasks/model	The result of parseTask: the task, or a message that says why there is none.
 PriorityBand	enum	@spy4x/tasks/model	How Tasks.org groups the iCalendar priority numbers 1 to 9 (0 is none).
 RepeatFrom	enum	@spy4x/tasks/model	Which date the next occurrence of a repeating task is counted from when it is completed.
@@ -2211,6 +2238,9 @@ ReminderRunnerState	interface	@spy4x/tasks/reminder-runner	What the runner remem
 ReminderRunnerStep	type	@spy4x/tasks/reminder-runner	Which part of a tick failed, as ReminderRunnerOptions.onError is told.
 ReminderStatePort	interface	@spy4x/tasks/reminder-runner	Where the runner keeps its ReminderRunnerState.
 createReminderRunner	function	@spy4x/tasks/reminder-runner	Builds a runner; nothing runs until ReminderRunner.start or ReminderRunner.tick.
+DueReminder	interface	@spy4x/tasks/reminders	One reminder of one task, placed in time.
+ReminderWindow	interface	@spy4x/tasks/reminders	A half-open stretch of time: after `after`, up to and including `upTo`.
+dueReminders	function	@spy4x/tasks/reminders	The reminders of the task in `ics` whose moment falls in `window`: after `window.after`, up to and including `window.upTo`, earliest first.
 SortMode	enum	@spy4x/tasks/view	How a list shows its tasks.
 SortOrderChange	interface	@spy4x/tasks/view	A new `X-APPLE-SORT-ORDER` to write for one task.
 TodayView	interface	@spy4x/tasks/view	The Today view.
@@ -2472,4 +2502,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 aac222af3a3100c986406a11c1aef48dac776f6e96a22efeaf43fce920836f55
+# export surface: sha256 3b5aea32ba8dc8915170d60149f0533db68bf3e1dfdea620fc38e5bcce289745

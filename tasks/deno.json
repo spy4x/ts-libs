@@ -3,6 +3,8 @@
   "version": "1.83.0",
   "exports": {
     "./model": "./model.ts",
+    "./edit": "./edit.ts",
+    "./reminders": "./reminders.ts",
     "./view": "./view.ts",
     "./quick-add": "./quick-add.ts",
     "./reminder-runner": "./reminder-runner.ts"
