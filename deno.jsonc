@@ -158,7 +158,12 @@
 
     // The official TypeScript age implementation (#173, `server/env-age64`): does the age
     // encryption in-process, so the module needs no `age` binary and no `--allow-run`.
-    "@age/age-encryption": "jsr:@age/age-encryption@0.3.1"
+    "@age/age-encryption": "jsr:@age/age-encryption@0.3.1",
+
+    // Passkeys for `server/webauthn` (spy4x/seed#222): the CBOR, COSE-key, authenticator-data and
+    // signature parsing is security-critical and well solved, so it comes from SimpleWebAuthn's
+    // helpers. The checks themselves are written out in `server/webauthn/mod.ts`.
+    "@simplewebauthn/server": "jsr:@simplewebauthn/server@14.0.3"
   },
   "compilerOptions": {
     // An explicit "lib" replaces Deno's default lib set, so "deno.ns" has to be
